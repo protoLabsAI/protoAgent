@@ -135,7 +135,7 @@ async def test_both_attempts_ratelimited(monkeypatch, no_sleep):
     assert no_sleep == [lg._DDGS_RETRY_BACKOFF_S]
 
 
-async def test_both_attempts_report_no_results(monkeypatch, no_sleep):
+async def test_both_attempts_ambiguous_no_results(monkeypatch, no_sleep):
     calls: list[dict] = []
     behaviors = [
         DDGSException("No results found."),
@@ -146,13 +146,40 @@ async def test_both_attempts_report_no_results(monkeypatch, no_sleep):
     out = await web_search.ainvoke({"query": "obscure query", "max_results": 2})
 
     assert len(calls) == 2
-    # Unverified wording — ddgs reports throttling the same way, so this may be a rate limit.
-    assert out == (
-        "No results (DuckDuckGo reported none on two attempts; it reports "
-        "throttling the same way, so this may be a rate limit)."
-    )
-    # NOT the confident bare empty-result form.
-    assert "No results for 'obscure query'" not in out
+    # Both attempts RAISED, so the search never completed: this MUST read as a failure, not
+    # an empty result. The "Error:" prefix is what AuditMiddleware keys on — a both-fail reply
+    # without it would be logged as a successful empty search (the #4578 regression).
+    assert out.startswith("Error:")
+    # Worded as unverified — ddgs reports throttling the same way it reports an empty result.
+    assert "could not be verified" in out
+    assert "NOT a confirmed empty result" in out
+    # NEVER the bare empty-result form, confident or otherwise.
+    assert "No results for" not in out
+    assert not out.startswith("No results")
+    assert no_sleep == [lg._DDGS_RETRY_BACKOFF_S]
+
+
+async def test_both_attempts_generic_failure(monkeypatch, no_sleep):
+    """Two failures that are neither ratelimit nor 'no results' still report as a failure."""
+    calls: list[dict] = []
+    behaviors = [
+        DDGSException("backend returned 503"),
+        TimeoutError("read timed out"),
+    ]
+    monkeypatch.setattr("ddgs.DDGS", _make_ddgs(behaviors, calls))
+
+    out = await web_search.ainvoke({"query": "flaky backend", "max_results": 5})
+
+    assert len(calls) == 2
+    assert out.startswith("Error:")
+    assert "rate-limited or failed" in out
+    assert "tried twice" in out
+    assert "NOT an empty result" in out
+    # Surfaces the underlying reason so operators can see what actually broke.
+    assert "read timed out" in out
+    # Must never collapse into the empty-result wording.
+    assert "No results for" not in out
+    assert not out.startswith("No results")
     assert no_sleep == [lg._DDGS_RETRY_BACKOFF_S]
 
 

@@ -391,20 +391,26 @@ async def web_search(query: str, max_results: int = 5) -> str:
                 await asyncio.sleep(_DDGS_RETRY_BACKOFF_S)
 
     if results is None:
-        # Both attempts raised — say plainly the search did NOT complete; this is the bug
-        # we're fixing (#4578), so it must never read as an empty result.
+        # Both attempts RAISED — the search never completed, so this must read as a failure,
+        # never an empty result (#4578). The "Error:" prefix is load-bearing: AuditMiddleware
+        # and wait_yield both record a tool reply as a *failed* call iff it startswith("Error")
+        # (see src/graph/middleware/audit.py), so EVERY both-attempts failure — including
+        # ddgs's ambiguous 'No results found.' — keeps the prefix or a failed search is logged
+        # as a success and callers read it as an empty result all over again.
         reason = str(last_error).strip() or type(last_error).__name__
         if rate_limited:
             return (
                 f"Error: web search was rate-limited (tried twice: {reason}); "
                 "this is NOT an empty result — retry later."
             )
-        # ddgs reports throttling with the same 'No results found.' it uses for an empty
-        # result, so an ambiguous miss on BOTH tries is reported as unverified, not empty.
         if "no results" in reason.lower():
+            # ddgs reports throttling with the SAME 'No results found.' it uses for a genuine
+            # empty result, so an ambiguous miss on BOTH tries is unverified — not a confirmed
+            # empty. Still an Error, so the audit trail doesn't score it as a successful empty.
             return (
-                "No results (DuckDuckGo reported none on two attempts; it reports "
-                "throttling the same way, so this may be a rate limit)."
+                f"Error: web search could not be verified (tried twice: {reason}); "
+                "DuckDuckGo reports throttling the same way it reports an empty result, so "
+                "this is NOT a confirmed empty result — retry later."
             )
         return (
             f"Error: web search was rate-limited or failed (tried twice: {reason}); "
