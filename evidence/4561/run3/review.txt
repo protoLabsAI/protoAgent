@@ -1,0 +1,50 @@
+protoagent
+protoLabs.studio
+Chat
+Knowledge
+Memory
+Docs
+Friction
+New chat
+Try one of these
+Take a quick tour
+Summarise a web page
+Remember my preferences
+Ask Claude Code to add a test
+Needs Claude Code installed
+protolabs/reasoning
+Goals
+0
+No active goals
+set one here, or in chat with /goal …
+Goal
+Watches
+0
+No watches
+Watch something the agent doesn't move — a deploy, CI, a metric.
+Watch
+Tasks
+0
+No open tasks
+add one, or the agent will file its own
+Task
+Schedule
+0
+Nothing scheduled
+give the agent a timed run
+Schedule
+Work
+Artifact
+Notes
+You're all set
+
+Review & finish
+
+Agent · Acceptance Audit
+No model connected — you can add one any time in Settings ▸ Model.
+Persona · Basic
+
+Finishing writes your config and starts the agent. Tools, knowledge, and plugins are all in Settings.
+
+Back
+Finish

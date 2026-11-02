@@ -1,0 +1,59 @@
+{
+  "flow": "acceptance",
+  "version": 1,
+  "base_url": "http://127.0.0.1:54888",
+  "mode": "live",
+  "started_at": "2026-11-01T20:42:04.557Z",
+  "ok": false,
+  "steps": [
+    {
+      "name": "Open fresh console",
+      "status": "pass",
+      "ms": 1314,
+      "screenshot": "01-open-fresh-console.png"
+    },
+    {
+      "name": "Welcome Next",
+      "status": "pass",
+      "ms": 151,
+      "screenshot": "02-welcome-next.png"
+    },
+    {
+      "name": "Choose Claude subscription",
+      "status": "fail",
+      "ms": 60002,
+      "screenshot": null,
+      "error": "Step timeout of 60000ms exceeded."
+    },
+    {
+      "name": "Reach Claude sign in",
+      "status": "skipped",
+      "ms": 0,
+      "screenshot": null
+    },
+    {
+      "name": "Explore without a model",
+      "status": "skipped",
+      "ms": 0,
+      "screenshot": null
+    },
+    {
+      "name": "Name agent",
+      "status": "skipped",
+      "ms": 0,
+      "screenshot": null
+    },
+    {
+      "name": "Review",
+      "status": "skipped",
+      "ms": 0,
+      "screenshot": null
+    },
+    {
+      "name": "Finish without model",
+      "status": "skipped",
+      "ms": 0,
+      "screenshot": null
+    }
+  ]
+}

@@ -1,0 +1,122 @@
+{
+  "task": "4561 acceptance pre-check",
+  "tested_at": "2026-11-01",
+  "version": "0.225.0",
+  "install_command": "uvx --refresh --from protolabs-agent protoagent serve --port 54888",
+  "launcher": "launch.py",
+  "port": 54888,
+  "mode": "live",
+  "ok": false,
+  "verdict": "action budget fails; no-model checks pass; human OAuth/reply pending",
+  "path_a": {
+    "count": 14,
+    "target_max": 6,
+    "status": "fail",
+    "count_basis": "entire OAuth ceremony counted as one; remainder after handoff source-derived",
+    "actions": [
+      {
+        "number": 1,
+        "action": "Open GitHub README",
+        "status": "observed"
+      },
+      {
+        "number": 2,
+        "action": "Click Download the desktop app",
+        "status": "observed"
+      },
+      {
+        "number": 3,
+        "action": "Run uvx --refresh --from protolabs-agent protoagent serve --port 54888",
+        "status": "observed"
+      },
+      {
+        "number": 4,
+        "action": "Open isolated console",
+        "status": "observed"
+      },
+      {
+        "number": 5,
+        "action": "Click Welcome Next",
+        "status": "observed"
+      },
+      {
+        "number": 6,
+        "action": "Click Claude subscription",
+        "status": "observed"
+      },
+      {
+        "number": 7,
+        "action": "OAuth ceremony (one action; live stopped at sign-in handoff)",
+        "status": "handoff observed; remainder human"
+      },
+      {
+        "number": 8,
+        "action": "Click Load models",
+        "status": "source-derived"
+      },
+      {
+        "number": 9,
+        "action": "Click model Next after automatic test",
+        "status": "source-derived"
+      },
+      {
+        "number": 10,
+        "action": "Fill Agent name (Basic preselected)",
+        "status": "source-derived"
+      },
+      {
+        "number": 11,
+        "action": "Click agent Next",
+        "status": "source-derived"
+      },
+      {
+        "number": 12,
+        "action": "Click Finish",
+        "status": "source-derived"
+      },
+      {
+        "number": 13,
+        "action": "Fill first chat message",
+        "status": "source-derived"
+      },
+      {
+        "number": 14,
+        "action": "Click Send",
+        "status": "source-derived"
+      }
+    ],
+    "mechanical_count_oauth_controls_separate": 17,
+    "first_reply_verified": false
+  },
+  "path_b": {
+    "wizard_completes": "pass",
+    "missing_model_banner": "pass",
+    "link_reaches_model_setup": "pass"
+  },
+  "dead_ends": {
+    "next_after_failed_connection": "fixed (live assertion)",
+    "raw_errno_on_finish": "fixed on no-model path; authenticated finish untested",
+    "empty_chat_text": "fixed (live assertion)",
+    "cli_implying_subscription_copy": "fixed (live copy)"
+  },
+  "flows": [
+    "run3/acceptance/summary.json",
+    "final-verify/no-model-verification/summary.json",
+    "negative/failed-connection/summary.json"
+  ],
+  "teardown": {
+    "terminated_server_pid": 55410,
+    "previous_attempt_pid": 52522,
+    "removed_homes": [
+      "/Users/<operator>/dev/protoAgent-team/.worktrees/feat-bd-v8cp-4561-acceptance-pre-check-fresh-uvx-inst/evidence/4561/home.qUqVlD",
+      "/Users/<operator>/dev/protoAgent-team/.worktrees/feat-bd-v8cp-4561-acceptance-pre-check-fresh-uvx-inst/evidence/4561/home.gukTIl"
+    ],
+    "home_removal_verified": true
+  },
+  "port_listener_after_teardown": false,
+  "epic_closed": false,
+  "committed": false,
+  "pushed": false,
+  "board_work_location_tool": "unavailable; evidence kept in assigned checkout",
+  "report": "report.md"
+}

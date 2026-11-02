@@ -1,0 +1,40 @@
+
+Running 1 test using 1 worker
+
+(node:61330) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+  ✘  1 apps/web/e2e/flows/runner.ts:78:7 › no-model-verification v1 (5.4s)
+
+
+  1) apps/web/e2e/flows/runner.ts:78:7 › no-model-verification v1 ──────────────────────────────────
+
+    Error: expect(locator).toBeVisible() failed
+
+    Locator: getByText('No model connected. The agent can\'t reply yet.', { exact: true })
+    Expected: visible
+    Timeout: 5000ms
+    Error: element(s) not found
+
+    Call log:
+      - Expect "toBeVisible" with timeout 5000ms
+      - waiting for getByText('No model connected. The agent can\'t reply yet.', { exact: true })
+
+
+    expect(received).toBe(expected) // Object.is equality
+
+    Expected: true
+    Received: false
+
+      81 |       baseURL: baseURL!, mode: process.env.FLOW_BASE_URL ? "live" : "mock", token: process.env.FLOW_TOKEN,
+      82 |     });
+    > 83 |     expect(summary.ok, summary.steps.find((step) => step.error)?.error).toBe(true);
+         |                                                                         ^
+      84 |   });
+      85 | }
+      86 |
+        at /Users/<operator>/dev/protoAgent-team/.worktrees/feat-bd-v8cp-4561-acceptance-pre-check-fresh-uvx-inst/apps/web/e2e/flows/runner.ts:83:73
+
+    Error Context: evidence/4561/test-results/verify.flow.ts-no-model-verification-v1/error-context.md
+
+  1 failed
+    apps/web/e2e/flows/runner.ts:78:7 › no-model-verification v1 ───────────────────────────────────

@@ -1,0 +1,69 @@
+Skip to content
+protoAgent
+beta
+Features
+Use cases
+Docs
+Plugins
+Download
+GitHub
+
+DOWNLOAD
+
+protoAgent on your desktop
+v0.225.0
+beta
+2026-11-01
+Download for macOS (.dmg)
+Windows (setup.exe)
+
+107 MB · Apple Silicon · signed & notarized · updates itself in place.
+
+SYSTEM REQUIREMENTS — MACOS
+
+—
+Apple Silicon (M1 or later)
+—
+macOS 13 Ventura or newer
+—
+A supported model subscription, hosted API connection, or local model endpoint
+
+INSTALLATION
+
+1
+Download the .dmg above.
+2
+Open it and drag protoAgent to Applications.
+3
+Launch protoAgent — its server and console are bundled. Python and Node are not required to chat; some optional tools need an additional runtime.
+4
+The setup wizard connects your model and you’re live.
+Signed & notarized by Apple
+The macOS release is signed and notarized. protoAgent is in public beta and updates itself in place. If it does not launch, follow the startup troubleshooting guide.
+
+GET RELEASE ANNOUNCEMENTS
+
+The desktop app ships for macOS, Windows, and Linux. Follow new releases and fixes. Leave your email if you’d rather hear about releases than watch the changelog.
+
+Email
+Subscribe
+
+No spam — release announcements only. Unsubscribe anytime.
+
+PREFER TO RUN IT YOURSELF?
+
+With uv installed, run uvx --from protolabs-agent protoagent serve and open http://localhost:7870. Keep the terminal running. The first-agent tutorial covers this package route and the complete source-checkout setup, including the console build. For deployment, authentication, and backups, use the operator guide.
+
+View full release history →
+
+protoAgent
+An AI workspace for your models, tools, and work.
+© 2026 · MIT · built by protoLabs.studio
+Features
+Use cases
+Docs
+Plugins
+Roadmap
+Changelog
+Download
+GitHub

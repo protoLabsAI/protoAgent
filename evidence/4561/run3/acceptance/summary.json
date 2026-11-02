@@ -1,0 +1,58 @@
+{
+  "flow": "acceptance",
+  "version": 1,
+  "base_url": "http://127.0.0.1:54888",
+  "mode": "live",
+  "started_at": "2026-11-01T20:42:58.747Z",
+  "ok": true,
+  "steps": [
+    {
+      "name": "Open fresh console",
+      "status": "pass",
+      "ms": 517,
+      "screenshot": "01-open-fresh-console.png"
+    },
+    {
+      "name": "Welcome Next",
+      "status": "pass",
+      "ms": 139,
+      "screenshot": "02-welcome-next.png"
+    },
+    {
+      "name": "Choose Claude subscription",
+      "status": "pass",
+      "ms": 99,
+      "screenshot": "03-choose-claude-subscription.png"
+    },
+    {
+      "name": "Reach Claude sign in",
+      "status": "pass",
+      "ms": 2068,
+      "screenshot": "04-reach-claude-sign-in.png"
+    },
+    {
+      "name": "Explore without a model",
+      "status": "pass",
+      "ms": 89,
+      "screenshot": "05-explore-without-a-model.png"
+    },
+    {
+      "name": "Name agent",
+      "status": "pass",
+      "ms": 51,
+      "screenshot": "06-name-agent.png"
+    },
+    {
+      "name": "Review",
+      "status": "pass",
+      "ms": 80,
+      "screenshot": "07-review.png"
+    },
+    {
+      "name": "Finish without model",
+      "status": "pass",
+      "ms": 3077,
+      "screenshot": "08-finish-without-model.png"
+    }
+  ]
+}

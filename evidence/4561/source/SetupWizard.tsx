@@ -1,0 +1,1450 @@
+import { useQuery } from "@tanstack/react-query";
+import { DropdownSelect, FormField, Input, RadioCard, RadioCardGroup, SecretInput } from "@protolabsai/ui/forms";
+import { Button, Callout } from "@protolabsai/ui/primitives";
+import { Alert, Spinner } from "@protolabsai/ui/data";
+import { useToast } from "@protolabsai/ui/overlays";
+import {
+  Bot,
+  Check,
+  ChevronLeft,
+  ChevronRight,
+  Cpu,
+  HardDrive,
+  KeyRound,
+  Search,
+  Settings2,
+  ShieldCheck,
+  Sparkles,
+} from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import type { ReactNode } from "react";
+
+import { TestConnectionButton } from "../app/ui-kit";
+import { api } from "../lib/api";
+import { errMsg } from "../lib/format";
+import { pythonRuntimeView } from "../app/pythonRuntime";
+import { archetypesQuery, pythonRuntimeQuery } from "../lib/queries";
+import {
+  archetypeConfigFields,
+  isMissingRequiredBundleConfig,
+  requiresToolsNotice,
+  splitConfigValues,
+} from "../lib/archetypeConfig";
+import { suggestedAgentName } from "../lib/archetypeFlow";
+import { HARD_GATE_HINT_WIZARD } from "../lib/pickerCopy";
+import type { AgentConfig, Archetype, ConfigPayload } from "../lib/types";
+import { ArchetypePicker } from "./ArchetypePicker";
+import { ArchetypeSetupForm } from "./ArchetypeSetupForm";
+import { needyPlugins } from "./depsReport";
+import { useOauthLifecycle } from "../oauth/OAuthAccount";
+import { namedSoul, personaSoul } from "./persona";
+
+// One row of the post-install dependency report (finish step): a just-enabled
+// plugin that declares pip deps the runtime doesn't have yet.
+type PostInstallRow = {
+  id: string;
+  name: string;
+  deps: string[];
+  state: "pending" | "busy" | "done" | "error";
+  error: string;
+};
+
+// Four steps: welcome, a working model, identity + archetype configuration, then
+// a summary. The picker and form are shared with the fleet New-agent panel.
+// Progress bar + Back/Next remain app-local until the DS grows a stepper.
+type Step = "welcome" | "brain" | "agent" | "finish";
+
+// Two former steps were dropped — they're all sensible defaults a new user shouldn't
+// have to reason about; the values flow straight through finishSetup:
+//   • Workspace (project dir / allowed dirs / knowledge db / top-K / tasks-init):
+//     blank project dir = the protoAgent dir, blank knowledge db = default location,
+//     top-K 5, no tasks init (do that from the Tasks view when there's a board).
+//   • Tools (middleware toggles + researcher turns): all middleware on, 40 turns —
+//     tune later in Settings.
+export const steps: Step[] = ["welcome", "brain", "agent", "finish"];
+
+export function agentStepReady(name: string, missingHard: boolean, peekMissing: boolean): boolean {
+  return Boolean(name.trim()) && !missingHard && !peekMissing;
+}
+
+
+type WizardState = {
+  agentName: string;
+  operatorName: string;
+  // Where turns run. "native" = the LangGraph loop below; "acp" = hand each turn to the
+  // chosen CLI coding agent (agent_runtime: acp:<acpAgent>) — ADR 0033.
+  runtimeKind: "native" | "acp";
+  // For the native runtime: which provider authenticates it (ADR 0097). "openai" = the
+  // gateway (api_base + key); "anthropic-oauth" / "openai-codex" = a Claude / ChatGPT
+  // subscription (no gateway key — the model list + test route through the OAuth path).
+  provider: string;
+  // Which brain CARD the operator picked (#4572). Only distinguishes "local" from
+  // "gateway" — both are the openai provider underneath, so without this a local pick
+  // would read back as a plain gateway. All other kinds are recoverable from
+  // provider/runtimeKind; this is UI state only (never persisted).
+  brainChoice: BrainKind;
+  acpAgent: string;
+  apiBase: string;
+  apiKey: string;
+  modelName: string;
+  temperature: number;
+  maxTokens: number;
+  maxIterations: number;
+  soul: string;
+  // The archetype whose base SOUL seeded the editor (ADR 0042) — "basic" by
+  // default. Picking a card in the persona step seeds `soul` from it.
+  archetype: string;
+  middleware: AgentConfig["middleware"];
+  researcherTurns: number;
+  knowledgePath: string;
+  knowledgeTopK: number;
+  allowedDirs: string;
+  initTasks: boolean;
+};
+
+// The dataclass default `model.api_base` (src/graph/config.py) — what an unconfigured
+// instance reports. Treated as "not set" by the first-run wizard.
+export const UNCONFIGURED_API_BASE = "http://gateway:4000/v1";
+
+export function defaultState(): WizardState {
+  return {
+    agentName: "protoagent",
+    operatorName: "",
+    runtimeKind: "native",
+    provider: "openai",
+    brainChoice: "gateway",
+    acpAgent: "proto",
+    // Blank, not a protoLabs-internal default (#B8): a stranger's first screen must not
+    // show a URL they can't reach. The fields carry example placeholders instead.
+    apiBase: "",
+    apiKey: "",
+    modelName: "",
+    temperature: 0.2,
+    maxTokens: 32768,
+    maxIterations: 2000,
+    soul: "",
+    archetype: "basic",
+    middleware: {
+      knowledge: true,
+      audit: true,
+      memory: true,
+      scheduler: true,
+    },
+    researcherTurns: 40,
+    knowledgePath: "",
+    knowledgeTopK: 5,
+    allowedDirs: "",
+    initTasks: false,
+  };
+}
+
+// Every section is read defensively: the current server always emits them (config_to_dict
+// is schema-driven), but a proxied fleet member on an older core, or any partial
+// payload, must not crash the first-run render — a missing section or key falls back to
+// the same value defaultState() starts with.
+export function hydrateState(payload: ConfigPayload): WizardState {
+  const d = defaultState();
+  const config: Partial<ConfigPayload["config"]> = payload?.config ?? {};
+  const identity: Partial<ConfigPayload["config"]["identity"]> = config.identity ?? {};
+  const rawModel: Partial<ConfigPayload["config"]["model"]> = config.model ?? {};
+  // A fresh install's config still carries the code-level example endpoint (an in-cluster
+  // LiteLLM hostname) and its model alias. Neither means anything to a new user, so the
+  // Brain step starts blank rather than pre-filled with an unreachable URL.
+  const unconfigured = rawModel.api_base === UNCONFIGURED_API_BASE;
+  const model: Partial<ConfigPayload["config"]["model"]> = unconfigured
+    ? { ...rawModel, api_base: "", name: "" }
+    : rawModel;
+  const rt = String(config.agent_runtime || "native");
+  return {
+    agentName: identity.name || d.agentName,
+    operatorName: identity.operator || d.operatorName,
+    runtimeKind: rt.startsWith("acp:") ? "acp" : "native",
+    provider: String(model.provider || d.provider),
+    // A saved config can't record "local" (it's an openai gateway on disk), so a hydrated
+    // state always starts on the gateway card — the operator re-picks Local to re-detect.
+    brainChoice: d.brainChoice,
+    acpAgent: rt.startsWith("acp:") ? rt.slice(4) || d.acpAgent : d.acpAgent,
+    apiBase: model.api_base || d.apiBase,
+    apiKey: "",
+    modelName: model.name || d.modelName,
+    temperature: Number(model.temperature ?? d.temperature),
+    maxTokens: Number(model.max_tokens ?? d.maxTokens),
+    maxIterations: Number(model.max_iterations ?? d.maxIterations),
+    // Start blank in the wizard (first-run-only flow): /api/config returns the
+    // server's GENERIC default SOUL, not a user persona — the persona step seeds
+    // the editor from the selected archetype instead. Leaving it blank lets that
+    // seed run (a non-empty value here would suppress it).
+    soul: "",
+    archetype: d.archetype,
+    middleware: {
+      knowledge: Boolean(config.middleware?.knowledge ?? d.middleware.knowledge),
+      audit: Boolean(config.middleware?.audit ?? d.middleware.audit),
+      memory: Boolean(config.middleware?.memory ?? d.middleware.memory),
+      scheduler: Boolean(config.middleware?.scheduler ?? d.middleware.scheduler),
+    },
+    researcherTurns: Number(config.subagents?.researcher?.max_turns ?? d.researcherTurns),
+    knowledgePath: config.knowledge?.db_path || d.knowledgePath,
+    knowledgeTopK: Number(config.knowledge?.top_k ?? d.knowledgeTopK),
+    allowedDirs: (config.operator?.allowed_dirs || []).join("\n"),
+    initTasks: false,
+  };
+}
+
+// Native OAuth-subscription providers (ADR 0097) — auth from a Claude Code / Codex
+// token instead of a gateway key, so the brain step hides api_base/api_key for them.
+const OAUTH_PROVIDERS = ["anthropic-oauth", "openai-codex"] as const;
+function isOAuthProvider(provider: string): boolean {
+  return (OAUTH_PROVIDERS as readonly string[]).includes(provider);
+}
+
+// A connection test is bound to the exact inputs it ran against. The key folds the
+// provider/runtime axes and the three credential fields (trimmed) into one string: a
+// stored `tested` result whose key no longer matches the live inputs counts as "not
+// tested", so editing the endpoint/key/model/provider silently invalidates an earlier
+// pass or failure instead of letting a stale verdict unlock Next.
+export function testKey(
+  s: Pick<WizardState, "provider" | "runtimeKind" | "apiBase" | "apiKey" | "modelName">,
+): string {
+  return JSON.stringify([s.provider, s.runtimeKind, s.apiBase.trim(), s.apiKey.trim(), s.modelName.trim()]);
+}
+
+// Whether the brain step may advance (the Next gate), pulled out pure so it can be
+// unit-tested in isolation (#4562):
+//   • ACP (legacy) — the coding agent IS the brain; there's nothing here to gate.
+//   • gateway — needs an api_base + a model AND a passing test for the current inputs.
+//   • OAuth subscription — needs a model, a signed-in account, AND a passing test.
+// `tested` is the last probe result; it only counts when its key matches the live inputs,
+// so a verdict left over from earlier edits never unlocks Next.
+export function brainStepReady(args: {
+  runtimeKind: WizardState["runtimeKind"];
+  provider: string;
+  apiBase: string;
+  modelName: string;
+  signedIn: boolean;
+  currentKey: string;
+  tested: { ok: boolean; key: string } | null;
+}): boolean {
+  if (args.runtimeKind === "acp") return true;
+  const oauth = isOAuthProvider(args.provider);
+  const fieldsFilled = oauth
+    ? Boolean(args.modelName.trim())
+    : Boolean(args.apiBase.trim() && args.modelName.trim());
+  if (!fieldsFilled) return false;
+  // A subscription brain also needs the account signed in (ADR 0097).
+  if (oauth && !args.signedIn) return false;
+  return Boolean(args.tested && args.tested.ok && args.tested.key === args.currentKey);
+}
+
+// The brain step presents ONE choice with four cards; each maps to a (runtimeKind,
+// provider) pair. Keeping the two config axes separate underneath (ADR 0033/0047) while
+// the UI is a single "what's your brain?" pick. "local" is the gateway provider pointed
+// at a local Ollama / LM Studio server (#4572) — identical config underneath, so it can't
+// be told apart from "gateway" by provider/base alone; the live pick is tracked in
+// `brainChoice` so brainKindOf can distinguish the two cards.
+type BrainKind = "gateway" | "local" | "claude" | "codex" | "acp";
+function brainKindOf(s: Pick<WizardState, "runtimeKind" | "provider" | "brainChoice">): BrainKind {
+  if (s.runtimeKind === "acp") return "acp";
+  if (s.provider === "anthropic-oauth") return "claude";
+  if (s.provider === "openai-codex") return "codex";
+  // Both local and gateway are the openai-compatible provider — only the in-session
+  // pick separates them (a saved config always reads back as the plain gateway).
+  return s.brainChoice === "local" ? "local" : "gateway";
+}
+function brainKindPatch(kind: BrainKind): Partial<WizardState> {
+  switch (kind) {
+    case "acp":
+      return { runtimeKind: "acp", brainChoice: kind };
+    case "claude":
+      return { runtimeKind: "native", provider: "anthropic-oauth", brainChoice: kind };
+    case "codex":
+      return { runtimeKind: "native", provider: "openai-codex", brainChoice: kind };
+    case "local":
+      return { runtimeKind: "native", provider: "openai", brainChoice: kind };
+    default:
+      return { runtimeKind: "native", provider: "openai", brainChoice: "gateway" };
+  }
+}
+
+// One probed local model server (#4572) — the row shape POST /api/config/local-models
+// returns per endpoint. `found` is reachability; `error` carries the reason when it's
+// unreachable OR the "running, but no models pulled" note when it answered empty.
+export type LocalEndpoint = {
+  id: string;
+  label: string;
+  base_url: string;
+  found: boolean;
+  models: string[];
+  error: string;
+};
+
+// The endpoint the wizard auto-selects: the first that's reachable AND actually offers
+// models, so a running Ollama/LM Studio fills in the base URL + model with no typing.
+// A server that's up but has nothing pulled (found, empty list) is deliberately skipped
+// — there's nothing to run yet. Null when nothing is usable (→ the "start a server" hint).
+export function pickLocalEndpoint(endpoints: LocalEndpoint[]): LocalEndpoint | null {
+  return endpoints.find((e) => e.found && e.models.length > 0) ?? null;
+}
+const OAUTH_LABEL: Record<string, string> = {
+  "anthropic-oauth": "Claude subscription",
+  "openai-codex": "ChatGPT / Codex subscription",
+};
+
+// A probe/test against a possibly-wrong or slow gateway must never hang the wizard —
+// race it against a timeout so `busy` always clears and the step never locks (which
+// would disable Next, trapping the user on the runtime step).
+export function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<T>((_resolve, reject) => {
+    timer = setTimeout(
+      () => reject(new Error(`${label} timed out after ${Math.round(ms / 1000)}s — check the endpoint URL and key`)),
+      ms,
+    );
+  });
+  // Repeated model probes / connection tests would otherwise accumulate uncleared
+  // timers until each one's own `ms` elapsed — clear on whichever side settles first.
+  return Promise.race([p, timeout]).finally(() => clearTimeout(timer));
+}
+
+export function finishModelConfig(state: WizardState, exploreWithoutModel: boolean) {
+  // ACP runs on whatever provider is configured elsewhere; a native brain carries
+  // its provider (gateway "openai", or a native OAuth provider — ADR 0097).
+  const provider = state.runtimeKind === "acp" ? state.provider || "openai" : state.provider;
+  const oauth = isOAuthProvider(provider);
+  // Setup writes ONE CONNECTION (ADR 0106), not the provider/base/key triple. The id
+  // is the lane name the qualified grammar already used — `gateway` for an
+  // OpenAI-compatible endpoint, the provider's own name for a subscription — so a
+  // config written here is indistinguishable from a migrated one, and first run never
+  // has to ask someone to invent an identifier.
+  const connectionId = oauth ? provider : "gateway";
+  const connection: NonNullable<AgentConfig["providers"]>[number] = {
+    id: connectionId,
+    type: oauth ? provider : "openai-compat",
+  };
+  // A subscription authenticates from a credential store, so it carries no endpoint.
+  if (!oauth) connection.base_url = state.apiBase.trim();
+  if (!oauth && state.apiKey.trim()) connection.api_key = state.apiKey.trim();
+  const model: AgentConfig["model"] = {
+    // Qualified from the start: the primary model names its connection like every
+    // other slot, so there is no lead provider to fall out of step with.
+    name: exploreWithoutModel ? "" : `${connectionId}:${state.modelName.trim()}`,
+    temperature: Number(state.temperature),
+    max_tokens: Number(state.maxTokens),
+    max_iterations: Number(state.maxIterations),
+  };
+  return {
+    agent_runtime: exploreWithoutModel ? "native" : state.runtimeKind === "acp" ? `acp:${state.acpAgent}` : "native",
+    providers: exploreWithoutModel ? [] : [connection],
+    model,
+  };
+}
+
+// The gateway API-key field's placeholder. Only promise "blank keeps a saved one" when a
+// key is actually stored: a fresh install has none, and the key is redacted everywhere
+// (config_to_dict blanks every secret to ""), so the connection registry's `has_key`
+// flag — read in the load effect below — is the only signal there's one to keep. Pulled
+// out pure so the saved/not-saved copy can be unit-tested in isolation (#4568).
+export function apiKeyPlaceholder(hasSavedKey: boolean): string {
+  return hasSavedKey
+    ? "Your endpoint's key (blank keeps a saved one)"
+    : "Paste your API key (leave blank if your endpoint needs none)";
+}
+
+export function SetupWizard({
+  open,
+  projectPath,
+  onProjectPathChange,
+  onFinished,
+}: {
+  open: boolean;
+  projectPath: string;
+  onProjectPathChange: (value: string) => void;
+  onFinished: () => void;
+}) {
+  const [exploreWithoutModel, setExploreWithoutModel] = useState(false);
+  const [step, setStep] = useState<Step>("welcome");
+  const [state, setState] = useState<WizardState>(() => defaultState());
+  const [moreArchetypes, setMoreArchetypes] = useState(false);
+  // The name the operator typed on the agent step. Until then the name follows the
+  // picked archetype (its suggested name; Basic/Custom keep the configured identity).
+  const [agentNameTouched, setAgentNameTouched] = useState(false);
+  const hydratedName = useRef("protoagent");
+  // Starter archetypes (the archetype-catalog: Basic + Custom, plus any installed bundle
+  // that self-registers) — the same GET /api/archetypes source the fleet new-agent picker
+  // uses. Each carries a base SOUL the persona step seeds when picked (ADR 0042).
+  const archetypes = useQuery(archetypesQuery());
+  // Set-up step answers for a bundle archetype's config_inputs (#2934) + MCP inputs +
+  // declared secrets — NewAgentPanel parity (#2714), same shared form. Blank answers
+  // fall back to this host's environment / the declared defaults.
+  const [configValues, setConfigValues] = useState<Record<string, string>>({});
+  const [models, setModels] = useState<string[]>([]);
+  // Local model discovery (#4572): the probed endpoints (null = not probed yet, so no
+  // list and no "nothing found" hint until the first detection), plus a dedicated busy
+  // flag so re-checking spins only the Re-check button — not the whole step like `busy`.
+  const [localEndpoints, setLocalEndpoints] = useState<LocalEndpoint[] | null>(null);
+  const [localBusy, setLocalBusy] = useState(false);
+  const [localError, setLocalError] = useState("");
+  // Flips true once the initial config load finishes. The persona seed waits on it
+  // so the async load() (which replaces the whole state) can't clobber the seed.
+  const [loaded, setLoaded] = useState(false);
+  // Whether any stored connection already carries a key (ADR 0106 `has_key`). The key is
+  // redacted out of /api/config, so the connection registry is the only signal — it drives
+  // the API-key placeholder so a fresh install isn't told it can "keep a saved one" (#4568).
+  const [savedApiKey, setSavedApiKey] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const [message, setMessage] = useState("");
+  // Result of the last "Test connection" probe (a real completion). null = not yet
+  // tested. The `key` binds the verdict to the inputs it ran against (see testKey): a
+  // result whose key doesn't match the live inputs is treated as "not tested", so Next
+  // never unlocks on a stale pass.
+  const [tested, setTested] = useState<null | { ok: boolean; error: string; key: string }>(null);
+  // True while a connection test (manual or auto) is in flight — drives the "Testing
+  // connection…" indicator and the Test button spinner, kept separate from `busy` so an
+  // auto-test triggered by typing doesn't lock the whole step (Back/Probe).
+  const [testing, setTesting] = useState(false);
+  // The key of the most recently LAUNCHED test. A result is only applied / clears the
+  // spinner when it's still the active one, so a slow in-flight probe for older inputs
+  // can never overwrite the verdict for the newer inputs the user has moved on to.
+  const activeTestKey = useRef("");
+  // Native OAuth lifecycle (ADR 0097 / #2460) — the SHARED hook Settings ▸ Model
+  // also consumes, so wizard and Settings behavior can never drift. Wizard-specific
+  // side effects (clear the stale model list so the new account's models fetch
+  // fresh) ride the callbacks.
+  const {
+    status: oauthStatus,
+    refreshStatus: refreshOauthStatus,
+    login,
+    loginCode,
+    setLoginCode,
+    loginBusy,
+    loginError,
+    statusBusy: oauthStatusBusy,
+    statusError: oauthStatusError,
+    startSignIn,
+    completeSignIn,
+    cancelSignIn,
+    disconnect: disconnectProvider,
+  } = useOauthLifecycle({
+    onSignedIn: () => {
+      setModels([]);
+      autoProbedBase.current = "";
+    },
+    onDisconnected: () => {
+      setModels([]);
+      autoProbedBase.current = "";
+    },
+  });
+  // Post-install dependency report: set when the archetype bundle installed fine
+  // but some members declare pip deps the runtime lacks. Non-null = the finish
+  // step stays up showing one-click installs instead of unmounting to a toast.
+  const [postInstall, setPostInstall] = useState<PostInstallRow[] | null>(null);
+  // The bundle-install outcome is surfaced as a toast (not an in-wizard Callout): finishing
+  // setup unmounts the wizard, so a Callout would vanish before it's read.
+  const toast = useToast();
+
+  const index = steps.indexOf(step);
+
+  useEffect(() => {
+    if (!open) return;
+    let alive = true;
+    async function load() {
+      setBusy(true);
+      setError("");
+      try {
+        const config = await api.config();
+        if (!alive) return;
+        const hydrated = hydrateState(config);
+        hydratedName.current = hydrated.agentName;
+        setState(hydrated);
+        setLoaded(true);
+      } catch (exc) {
+        if (alive) setError(errMsg(exc));
+      } finally {
+        if (alive) setBusy(false);
+      }
+    }
+    // Best-effort: does any stored connection already hold a key (ADR 0106)? The key is
+    // redacted everywhere, so the registry's `has_key` is the only signal. A failure
+    // (absent/legacy endpoint) just leaves the placeholder in its fresh-install form.
+    async function loadSavedKey() {
+      try {
+        const { providers } = await api.providers();
+        if (alive) setSavedApiKey(providers.some((p) => p.has_key));
+      } catch {
+        // ignore — treat as no saved key
+      }
+    }
+    void load();
+    void loadSavedKey();
+    return () => {
+      alive = false;
+    };
+  }, [open]);
+
+  // A changed key/base/model/provider invalidates a prior connection test — handled by
+  // keying the `tested` verdict (testKey) rather than nulling it: a verdict whose key
+  // no longer matches the live inputs reads as "not tested" (see shownTest / canGoNext),
+  // which also lets an identical re-entry of the same inputs reuse a prior pass.
+
+  // Switching the brain (provider or native↔acp) clears the stale model list + probe
+  // marker so the new provider's models are fetched fresh.
+  useEffect(() => {
+    setModels([]);
+    autoProbedBase.current = "";
+    cancelSignIn();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [state.provider, state.runtimeKind]);
+
+  // Refresh OAuth sign-in status when the brain step is entered (the user may have
+  // signed into Claude Code / Codex out-of-band since the wizard opened).
+  useEffect(() => {
+    if (step === "brain") {
+      setExploreWithoutModel(false);
+      void refreshOauthStatus();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [step]);
+
+  // Brain step derived view (ADR 0097): the selected card + whether it's an OAuth
+  // provider + that provider's sign-in status. Derived up here (not just before render)
+  // because the Next gate below reads the sign-in state.
+  const brainKind = brainKindOf(state);
+  const oauthProvider = isOAuthProvider(state.provider) ? state.provider : "";
+  const oauthState = oauthProvider ? oauthStatus[oauthProvider] : undefined;
+
+  // The key the live inputs would test under, and the last verdict as it applies to
+  // THOSE inputs (null if the stored verdict was for different inputs).
+  const currentTestKey = testKey(state);
+  const shownTest = tested && tested.key === currentTestKey ? tested : null;
+
+  const canGoNext = useMemo(() => {
+    // Brain step: a passing connection test now gates Next (#4562) — a gateway needs
+    // base + model + pass; an OAuth subscription needs model + signed-in + pass; ACP
+    // (legacy) advances freely. The rule lives in the pure brainStepReady.
+    if (step === "brain") {
+      return brainStepReady({
+        runtimeKind: state.runtimeKind,
+        provider: state.provider,
+        apiBase: state.apiBase,
+        modelName: state.modelName,
+        signedIn: Boolean(oauthState?.signed_in),
+        currentKey: currentTestKey,
+        tested,
+      });
+    }
+    // Agent step: a blank name has nothing to call the agent. (The required-answer
+    // gate, #2977, is applied at the Next button — it's derived further down.)
+    if (step === "agent") return Boolean(state.agentName.trim());
+    return true;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [state.apiBase, state.modelName, state.runtimeKind, state.provider, state.agentName, oauthState?.signed_in, currentTestKey, tested, step]);
+
+  // A short reason shown under a disabled Next on the brain step (#4562) so the gate
+  // never looks broken — why can't I continue? ACP never blocks here.
+  const brainNextHint = ((): string => {
+    if (step !== "brain" || state.runtimeKind === "acp" || canGoNext) return "";
+    const oauth = isOAuthProvider(state.provider);
+    if (oauth && !oauthState?.signed_in) return "Sign in to continue.";
+    const fieldsFilled = oauth
+      ? Boolean(state.modelName.trim())
+      : Boolean(state.apiBase.trim() && state.modelName.trim());
+    if (!fieldsFilled) return oauth ? "Enter a model to continue." : "Enter an endpoint and model to continue.";
+    if (testing) return "Testing the connection…";
+    if (shownTest && !shownTest.ok) return "Connection failed — fix it to continue.";
+    return "Test the connection to continue.";
+  })();
+
+  function update(patch: Partial<WizardState>) {
+    setState((current) => ({ ...current, ...patch }));
+  }
+
+  async function probeModels(opts?: { silent?: boolean }) {
+    const silent = opts?.silent === true;
+    if (!silent) setBusy(true);
+    setError("");
+    if (!silent) setModels([]);
+    try {
+      const response = await withTimeout(
+        // Always send the SELECTED provider so the endpoint doesn't fall back to the
+        // saved config mid-wizard (a gateway probe must not route through a saved
+        // openai-codex, and vice-versa). "openai" → gateway path server-side.
+        api.models(state.apiBase, state.apiKey, state.provider),
+        15000,
+        "Load models",
+      );
+      if (response.error) {
+        if (!silent) setError(response.error); // auto-probe stays quiet — the user may still be typing creds
+        return;
+      }
+      setModels(response.models);
+      // Auto-select a valid model when the current one isn't offered by this provider
+      // (blank after a brain switch, or a stale model from the previous provider — e.g.
+      // 'gpt-5.5' left over when switching to Claude). A model that IS in the list is
+      // kept, so a hydrated/typed choice survives.
+      if (response.models.length && (!state.modelName.trim() || !response.models.includes(state.modelName))) {
+        update({ modelName: response.models[0] });
+      }
+    } catch (exc) {
+      if (!silent) setError(errMsg(exc));
+    } finally {
+      if (!silent) setBusy(false);
+    }
+  }
+
+  // Fill the endpoint + model fields from a detected local server (#4572). Local servers
+  // need no key, so it's blanked; the picked endpoint's own model list drives the datalist
+  // and seeds the model (blank when the server is up but has nothing pulled yet). The
+  // auto-test (#4562) then fires off the filled inputs and unlocks Next with no typing.
+  function selectLocalEndpoint(endpoint: LocalEndpoint) {
+    setModels(endpoint.models);
+    update({ apiBase: endpoint.base_url, apiKey: "", modelName: endpoint.models[0] ?? "" });
+  }
+
+  // Probe for local model servers — on picking the Local card and from Re-check. Bounded
+  // by withTimeout so a wedged probe can never hang the step (the server already caps each
+  // endpoint, but the thread/transport is still network I/O). Auto-selects the first usable
+  // endpoint; a timeout/error surfaces inline and leaves an empty list so the "start a
+  // server" hint shows.
+  async function detectLocalModels() {
+    setLocalBusy(true);
+    setLocalError("");
+    try {
+      const r = await withTimeout(api.localModels(), 8000, "Local model detection");
+      const endpoints = r.endpoints ?? [];
+      setLocalEndpoints(endpoints);
+      const pick = pickLocalEndpoint(endpoints);
+      if (pick) selectLocalEndpoint(pick);
+    } catch (exc) {
+      setLocalError(errMsg(exc));
+      setLocalEndpoints([]);
+    } finally {
+      setLocalBusy(false);
+    }
+  }
+
+  // Auto-populate the model dropdown when the user reaches the model step with a
+  // gateway base already filled (native runtime only — ACP needs no gateway), so
+  // the picker is ready without a manual "Probe" click. Fires once per base;
+  // silent so a not-yet-entered key doesn't flash an error. (bd-hbf)
+  const autoProbedBase = useRef("");
+  useEffect(() => {
+    if (step !== "brain" || state.runtimeKind !== "native") return;
+    // OAuth providers probe the subscription account (no gateway base needed); the
+    // gateway probes when a base is filled. Fire once per (provider, base) key.
+    const oauth = isOAuthProvider(state.provider);
+    const base = state.apiBase.trim();
+    if (!oauth && !base) return;
+    const probeKey = oauth ? `oauth:${state.provider}` : base;
+    if (autoProbedBase.current === probeKey || models.length > 0) return;
+    autoProbedBase.current = probeKey;
+    void probeModels({ silent: true });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [step, state.runtimeKind, state.provider, state.apiBase]);
+
+  // The real auth check: a 1-token completion down the same path as chat, so a
+  // bad key / wrong model is caught here in the UI rather than as a failed turn.
+  // Runs on the manual "Test connection" button AND the auto-test debounce below.
+  async function testConnection() {
+    const key = testKey(state);
+    // Mark this the active test. A newer launch moves the marker, so a slow in-flight
+    // probe for older inputs is discarded instead of overwriting the newer verdict.
+    activeTestKey.current = key;
+    setTesting(true);
+    setError("");
+    try {
+      const r = await withTimeout(
+        api.testModel(
+          state.apiBase.trim(),
+          state.apiKey.trim(),
+          state.modelName.trim(),
+          // Send the selected provider (not "") so the test can't fall back to the
+          // saved config's provider mid-wizard. "openai" → gateway path server-side.
+          state.provider,
+        ),
+        25000,
+        "Test connection",
+      );
+      if (activeTestKey.current !== key) return; // superseded — don't apply a stale result
+      setTested({ ok: r.ok, error: r.error || "", key });
+    } catch (exc) {
+      if (activeTestKey.current !== key) return;
+      setTested({ ok: false, error: errMsg(exc), key });
+    } finally {
+      // Only the test that's still active owns the spinner — a superseded one leaves it
+      // to the newer launch so "Testing…" stays up across back-to-back edits.
+      if (activeTestKey.current === key) setTesting(false);
+    }
+  }
+
+  // Auto-test (#4562): once the required fields for a native brain are present, verify
+  // the connection automatically after an ~800ms debounce so Next unlocks without the
+  // user hunting for the Test button — and re-runs whenever those inputs change. A
+  // verdict already exists for the current inputs (pass OR fail) → skip, so a failing
+  // test isn't retried in a loop; the user changes something (new key) to re-probe.
+  useEffect(() => {
+    if (step !== "brain" || state.runtimeKind !== "native") return;
+    const oauth = isOAuthProvider(state.provider);
+    const ready = oauth
+      ? Boolean(state.modelName.trim() && oauthState?.signed_in)
+      : Boolean(state.apiBase.trim() && state.modelName.trim());
+    if (!ready || tested?.key === currentTestKey) return;
+    const timer = setTimeout(() => void testConnection(), 800);
+    return () => clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [step, currentTestKey, oauthState?.signed_in, tested]);
+
+  // Picking an archetype card seeds the editor with that archetype's base SOUL
+  // — the same archetypes the fleet new-agent picker offers. The textarea stays
+  // freely editable below; this is an explicit "load this persona" action. A bundle
+  // archetype may ship no inline persona, so fall back to the base SOUL rather than
+  // blanking the editor (see personaSoul).
+  function pickArchetype(a: Archetype) {
+    if (a.id === state.archetype) return; // re-picking the same card (after Back) keeps everything
+    const patch: Partial<WizardState> = { archetype: a.id, soul: personaSoul(a, archetypeList) };
+    // An untouched name follows the pick: a bundle archetype suggests its own name;
+    // Basic/Custom go back to the configured identity.
+    if (!agentNameTouched) patch.agentName = a.bundle ? suggestedAgentName(a) : hydratedName.current;
+    update(patch);
+    setConfigValues({}); // a token typed for one archetype must not carry into the next
+  }
+
+  // Pre-fill the editor once with the default archetype's base SOUL so the persona
+  // step isn't blank. Gated on `loaded` so it runs AFTER load() hydrates state —
+  // otherwise load()'s full-state replace would clobber the seed and the guard would
+  // block a retry, leaving it blank until the user toggles a card. Never clobbers an
+  // in-session edit (soul already non-empty).
+  const archetypeList = archetypes.data?.archetypes ?? [];
+  const seededSoul = useRef(false);
+  useEffect(() => {
+    if (!loaded || seededSoul.current || !archetypeList.length || state.soul.trim()) return;
+    const a = archetypeList.find((x) => x.id === state.archetype) ?? archetypeList[0];
+    seededSoul.current = true;
+    update({ archetype: a.id, soul: personaSoul(a, archetypeList) });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loaded, archetypeList, state.soul, state.archetype]);
+
+  // The picked archetype drives the finish summary AND (Plan C) the bundle install:
+  // an archetype with a bundle (e.g. Project Manager → project-manager-archetype) installs its plugins
+  // into this host on finish, so the persona arrives WITH its tools.
+  const pickedArchetype = archetypeList.find((a) => a.id === state.archetype);
+
+  // The picked archetype's read-only peek — the Configure form's fields (its bundle's
+  // MCP inputs, declared secrets, and config_inputs #2934), NewAgentPanel parity
+  // (#2714). Shares the preview dialog's cache key; only fetched for bundle-backed
+  // archetypes.
+  const archetypePeek = useQuery({
+    queryKey: ["archetype-preview", state.archetype],
+    queryFn: () => api.archetypePreview(state.archetype),
+    enabled: Boolean(pickedArchetype?.bundle),
+    staleTime: 10 * 60 * 1000,
+    retry: 1,
+  });
+  const configFields = useMemo(() => archetypeConfigFields(archetypePeek.data), [archetypePeek.data]);
+  // Until the peek lands the bundle's questions are unknown (no fields → `missingHard`
+  // false), so Next on the agent step would skip past required answers and Finish would
+  // disable later with nothing on screen to explain it. Hold Next until the peek's DATA is
+  // here — a failed peek isn't loading either, and holds too (with an inline Retry).
+  const bundlePicked = Boolean(pickedArchetype?.bundle);
+  const peekLoading = bundlePicked && archetypePeek.isLoading;
+  const peekMissing = bundlePicked && !archetypePeek.data;
+  // Hard gate (#2977): a required bundle config_inputs answer has no env fallback — the host
+  // install refuses to activate without it, so the agent step's Next (and Finish) wait for it.
+  const missingHard = isMissingRequiredBundleConfig(configFields, configValues);
+  const contractNotice = pickedArchetype ? requiresToolsNotice(pickedArchetype.label, pickedArchetype.requires_tools) : null;
+
+  // Runtime requirement at CHOOSE-time (#2186): same affordance as NewAgentPanel —
+  // the wizard's first-run pick of Cowork on a runtime-less desktop otherwise ends at
+  // silently no-op document skills. Host runtime state is exactly what setup targets.
+  const pyRuntime = pythonRuntimeView(useQuery(pythonRuntimeQuery()).data);
+  const runtimeWarning =
+    pickedArchetype?.requires?.includes("python_runtime") && pyRuntime.kind === "action" && !pyRuntime.stale
+      ? pyRuntime.installing
+        ? `Python runtime is installing — ${pickedArchetype.label}'s document skills will work when it finishes.`
+        : `${pickedArchetype.label} needs the managed Python runtime for its document skills — you can finish setup now and install it later in Settings ▸ Tools.`
+      : null;
+  const personaLabel = pickedArchetype?.label ?? state.archetype;
+  const pickedBundle = pickedArchetype?.bundle ?? null;
+
+  async function finishSetup() {
+    setBusy(true);
+    setError("");
+    setMessage("");
+    try {
+      // The project you're setting up should be operable, so fold its path
+      // into the allowlist automatically — otherwise picking a project path
+      // outside the (empty) allowlist silently makes tasks/notes unusable
+      // for it. Extra dirs from the textarea are merged and de-duped.
+      const allowedDirs = Array.from(
+        new Set(
+          [
+            ...state.allowedDirs.split("\n").map((dir) => dir.trim()),
+            projectPath.trim(),
+          ].filter(Boolean),
+        ),
+      );
+      const response = await api.finishSetup(
+        {
+          ...finishModelConfig(state, exploreWithoutModel),
+          identity: {
+            name: state.agentName.trim() || "protoagent",
+            operator: state.operatorName.trim(),
+          },
+          middleware: state.middleware,
+          subagents: {
+            researcher: {
+              enabled: true,
+              tools: ["current_time", "web_search", "fetch_url", "memory_recall", "memory_list"],
+              max_turns: Number(state.researcherTurns),
+            },
+          },
+          knowledge: {
+            db_path: state.knowledgePath.trim(),
+            // Match the code default + what the protoLabs gateway serves. A model the
+            // gateway can't access 401s every embed and silently degrades recall to
+            // keyword-only — the Settings▸Knowledge field is a gateway-model dropdown.
+            embed_model: "qwen3-embedding",
+            top_k: Number(state.knowledgeTopK),
+          },
+          operator: {
+            // The project dir is authoritative — the server's tasks/notes root
+            // resolves to it (server._resolve_operator_project_root reads
+            // operator.project_dir). Blank = the protoAgent dir. It's also folded
+            // into allowed_dirs above so it's always operable.
+            project_dir: projectPath.trim(),
+            allowed_dirs: allowedDirs,
+          },
+          // Discord is managed in System → Settings, not the setup wizard. It's
+          // omitted here so finishing setup leaves any existing integration config
+          // untouched (the YAML write merges, never replaces).
+        },
+        namedSoul(state.soul, state.agentName, pickedArchetype ? personaSoul(pickedArchetype, archetypeList) : ""),
+        // The archetype's capability contract (ADR 0100) — recorded host-side so the
+        // operator-status banner can check it against the tools that actually bound,
+        // exactly as a member created from POST /api/fleet gets (#2277).
+        pickedArchetype?.requires_tools ?? [],
+      );
+      if (!response.ok) {
+        setError(response.message);
+        return;
+      }
+      // The tasks store is agent-global and always ready, so this is a no-op
+      // confirmation now (kept so the setup step still feels acknowledged).
+      if (state.initTasks) {
+        await api.initTasks();
+      }
+      // Plan C: if the chosen archetype carries a plugin bundle (e.g. Project
+      // Manager → project-manager-archetype), install it into THIS host on finish — so the new user
+      // gets the persona AND its tools/board in one shot, not just the prose.
+      // installPlugin auto-enables + hot-reloads the bundle's plugins (no restart).
+      // A failure is non-fatal: setup is already written, so we finish anyway and
+      // point the user at Settings ▸ Plugins.
+      // Surface the outcome as a TOAST, not an in-wizard Callout: onFinished() below
+      // unmounts the wizard (setup_complete flips true), so a Callout would vanish before
+      // it's read — especially the enable/failure guidance the user needs to act on. The
+      // in-progress "Setting up…" message stays inline (the wizard is still open during the
+      // install await).
+      if (pickedBundle) {
+        setMessage(`Setting up the ${personaLabel} tools — this can take a few seconds…`);
+        try {
+          // Collected set-up answers ride the install (#2714) — the same seed channels
+          // POST /api/fleet uses (#2041/#2934). Blank answers are dropped → env-only /
+          // declared defaults for whatever was skipped.
+          const { inputs, secrets, config } = splitConfigValues(configFields, configValues);
+          const r = await api.installPlugin(pickedBundle, undefined, undefined, {
+            inputs: Object.keys(inputs).length ? inputs : undefined,
+            secrets: secrets.length ? secrets : undefined,
+            config_inputs: Object.keys(config).length ? config : undefined,
+          });
+          const failedLoad = Object.keys(r.load_errors ?? {});
+          // Consent gate (#2721) — only reachable when a fork's catalog points an
+          // archetype at a source outside its own sources.official (the shipped
+          // catalog is all-official). Setup is already written: finish (fall through
+          // to onFinished below), and send the operator to the Plugins panel where
+          // the TrustAckDialog handles the confirm.
+          if (r.needs_ack) {
+            toast({
+              tone: "info",
+              title: "Setup complete",
+              message: `${personaLabel} tools come from an untrusted source (${r.source ?? pickedBundle}) — install them from Settings ▸ Plugins to review and confirm.`,
+            });
+          } else if (r.enable_error) {
+            toast({
+              tone: "info",
+              title: "Setup complete",
+              message: `${personaLabel} tools installed but couldn't auto-enable (${r.enable_error}) — turn them on in Settings ▸ Plugins.`,
+            });
+          } else if (failedLoad.length) {
+            // Enabled but not running (#2716) — same toast-not-Callout reasoning as above.
+            toast({
+              tone: "info",
+              title: "Setup complete",
+              message: `${personaLabel} tools installed but ${failedLoad.join(", ")} failed to load — check Settings ▸ Plugins.`,
+            });
+          } else {
+            toast({ tone: "success", title: "Setup complete", message: `${personaLabel} tools are ready.` });
+            // If any just-enabled member declares pip deps the runtime lacks, keep the
+            // wizard open on a one-click dependency report instead of unmounting —
+            // previously this was an "install manually" advisory buried in a toast.
+            try {
+              // Both sources (#3450): /api/plugins/installed has no row for a BUNDLED
+              // plugin, so the loader's runtime meta is the only place a bundled pack's
+              // missing deps show up — which is the Cowork archetype's whole case.
+              // allSettled: one source failing must not drop the rows the other still has.
+              const [inst, status] = await Promise.allSettled([api.installedPlugins(), api.runtimeStatus()]);
+              const needy = needyPlugins(
+                r.enabled,
+                inst.status === "fulfilled" ? inst.value.plugins : [],
+                status.status === "fulfilled" ? (status.value.plugins ?? []) : [],
+              );
+              if (needy.length) {
+                setMessage("");
+                setPostInstall(needy.map((p) => ({ ...p, state: "pending" as const, error: "" })));
+                return;
+              }
+            } catch {
+              // advisory only — a failed report check must never block finishing
+            }
+          }
+        } catch (exc) {
+          toast({
+            tone: "error",
+            title: "Setup complete",
+            message: `Installing the ${personaLabel} tools failed (${errMsg(exc)}). Add them later in Settings ▸ Plugins.`,
+          });
+        }
+      } else {
+        // The server's message is an operator log line ("config saved • SOUL saved (1 path) •
+        // … • model=…") — fine in Settings, jargon on a first-run toast (#B9).
+        toast({ tone: "success", title: "Setup complete", message: `${state.agentName.trim() || "Your agent"} is ready — say hello.` });
+      }
+      onFinished();
+    } catch (exc) {
+      setError(errMsg(exc));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  // One dependency install per environment at a time (the server 409s a second), so while
+  // one row installs, the others wait instead of offering a click that can only be refused.
+  const depsBusy = (postInstall ?? []).some((r) => r.state === "busy");
+
+  async function installDepsFor(id: string) {
+    setPostInstall((rows) => rows?.map((r) => (r.id === id ? { ...r, state: "busy" as const } : r)) ?? null);
+    try {
+      const res = await api.installPluginDeps(id);
+      // Optional deps fail soft server-side (#3450): an empty install is not "done".
+      const failed = res.failed ?? [];
+      if (res.ok === false || failed.length) {
+        const error = `${failed.join(", ") || "Nothing"} didn't install — check the server log (no pip, or the package index is unreachable).`;
+        setPostInstall((rows) => rows?.map((r) => (r.id === id ? { ...r, state: "error" as const, error } : r)) ?? null);
+        return;
+      }
+      setPostInstall((rows) => rows?.map((r) => (r.id === id ? { ...r, state: "done" as const } : r)) ?? null);
+    } catch (exc) {
+      setPostInstall(
+        (rows) =>
+          rows?.map((r) => (r.id === id ? { ...r, state: "error" as const, error: errMsg(exc) } : r)) ?? null,
+      );
+    }
+  }
+
+  if (!open) return null;
+
+  return (
+    <div className="setup-overlay" role="dialog" aria-modal="true" aria-label="Setup">
+      <div className="setup-frame">
+        <div className="setup-progress" aria-label="Setup progress">
+          {steps.map((item, itemIndex) => (
+            <span
+              key={item}
+              className={itemIndex < index ? "done" : itemIndex === index ? "active" : ""}
+            />
+          ))}
+        </div>
+
+        <section className="setup-card">
+          {step === "welcome" ? (
+            <StepBody icon={<Bot size={20} />} title="protoAgent" kicker="Welcome">
+              <p className="setup-intro">
+                A local-first AI agent that runs on your own machine. Your chats, files, and
+                the agent&apos;s memory stay here — nothing leaves except the requests you send
+                to the model gateway you choose.
+              </p>
+              <div className="setup-summary">
+                <StatusLine icon={<HardDrive size={15} />} label="Local-first — runs on this machine" />
+                <StatusLine icon={<ShieldCheck size={15} />} label="Private — you control its access" />
+                <StatusLine icon={<KeyRound size={15} />} label="Bring your own model gateway" />
+              </div>
+              <p className="setup-intro setup-intro-foot">
+                Takes a minute — everything here can be changed later in Settings.
+              </p>
+            </StepBody>
+          ) : null}
+
+          {step === "agent" ? (
+            <StepBody icon={<Settings2 size={20} />} title={`Set up ${personaLabel}`} kicker="Name & settings">
+              <ArchetypeSetupForm
+                key={state.archetype}
+                nameLabel="Agent name"
+                name={state.agentName}
+                onNameChange={(value) => {
+                  setAgentNameTouched(true);
+                  update({ agentName: value });
+                }}
+                identityExtra={
+                  <>
+                    <FormField label="Operator" hint="Your name, so the agent knows who it's working for.">
+                      <Input value={state.operatorName} onChange={(event) => update({ operatorName: event.target.value })} />
+                    </FormField>
+                    <p className="setup-hint">An archetype is a starting persona plus the tools it comes with.</p>
+                    <ArchetypePicker
+                      archetypes={archetypeList}
+                      primaryIds={moreArchetypes ? undefined : ["basic"]}
+                      value={state.archetype}
+                      onPick={pickArchetype}
+                      notices={[runtimeWarning, contractNotice].filter((n): n is string => Boolean(n))}
+                    />
+                    <Button type="button" variant="ghost" aria-expanded={moreArchetypes} onClick={() => setMoreArchetypes((open) => !open)}>
+                      {moreArchetypes ? "Fewer archetypes" : "More archetypes…"}
+                    </Button>
+                  </>
+                }
+                fields={configFields}
+                values={configValues}
+                onValueChange={(id, value) => setConfigValues((v) => ({ ...v, [id]: value }))}
+                soul={state.soul}
+                onSoulChange={(soul) => update({ soul })}
+                hardGateHint={HARD_GATE_HINT_WIZARD}
+                loading={peekLoading}
+                loadError={bundlePicked && archetypePeek.isError ? errMsg(archetypePeek.error) : null}
+                onRetry={() => void archetypePeek.refetch()}
+                advancedDefaultOpen={state.archetype === "custom"}
+              />
+            </StepBody>
+          ) : null}
+
+          {step === "brain" ? (
+            <StepBody
+              icon={<Cpu size={20} />}
+              title="Model"
+              kicker={
+                brainKind === "acp"
+                  ? "coding agent over ACP (deprecated)"
+                  : brainKind === "gateway"
+                    ? "Your own API key or endpoint"
+                    : brainKind === "local"
+                      ? "Ollama or LM Studio on this machine"
+                      : `${OAUTH_LABEL[state.provider]} — your own plan`
+              }
+            >
+              {/* One choice, four brains: a gateway (api key), your own Claude / ChatGPT
+                  subscription over OAuth (ADR 0097), or a CLI coding agent over ACP (ADR
+                  0033). A radiogroup, so it gets a plain label (not a FormField <label>). */}
+              <div className="pl-field">
+                <span className="pl-field__label">How this agent thinks</span>
+                <RadioCardGroup
+                  name="brain"
+                  value={brainKind}
+                  onValueChange={(value) => {
+                    const kind = value as BrainKind;
+                    // Clear the model on a brain switch so a provider's model id never
+                    // carries into another provider (the auto-probe picks a valid one).
+                    update({ ...brainKindPatch(kind), modelName: "" });
+                    // Picking Local kicks off detection immediately so the endpoint +
+                    // model fill in without a click (#4572); Re-check re-runs it.
+                    if (kind === "local") void detectLocalModels();
+                  }}
+                >
+                  <RadioCard value="gateway" title="API key" blurb="OpenAI, OpenRouter, or any OpenAI-compatible endpoint." />
+                  <RadioCard
+                    value="claude"
+                    title="Claude subscription"
+                    blurb="Sign in with your Claude Pro/Max account. No API key needed."
+                  />
+                  <RadioCard
+                    value="codex"
+                    title="ChatGPT / Codex subscription"
+                    blurb="Sign in with your ChatGPT Plus/Pro account. No API key needed."
+                  />
+                  <RadioCard
+                    value="local"
+                    title="Local model"
+                    blurb="Use Ollama or LM Studio running on this machine. No account needed."
+                  />
+                  {/* The ACP brain card is deliberately GONE (deprecated 2026-08-11):
+                      ACP survives for delegates only. A legacy acp:* config parses,
+                      shows the deprecated kicker, and escapes by picking a brain here
+                      (the wizard writes agent_runtime explicitly, so the old value is
+                      overwritten, not merged around). */}
+                </RadioCardGroup>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  style={{ textDecoration: "underline" }}
+                  disabled={busy}
+                  onClick={() => {
+                    setExploreWithoutModel(true);
+                    setError("");
+                    setStep("agent");
+                  }}
+                >
+                  Explore without a model
+                </Button>
+              </div>
+              {oauthProvider ? (
+                <>
+                  {/* Native OAuth (ADR 0097): no gateway base/key — sign in from here,
+                      pick a model from the subscription account, run a real test turn. */}
+                  {oauthState?.signed_in ? (
+                    <Callout tone="success">
+                      <ShieldCheck size={15} /> Signed in — {oauthState.detail || "credentials found"}.{" "}
+                      <Button type="button" onClick={() => void refreshOauthStatus()} disabled={oauthStatusBusy}>
+                        {oauthStatusBusy ? <Spinner size={15} /> : null}
+                        {oauthStatusBusy ? "Checking…" : "Re-check"}
+                      </Button>{" "}
+                      <Button
+                        type="button"
+                        onClick={() => void disconnectProvider(state.provider)}
+                        disabled={loginBusy}
+                        title="Remove protoAgent's stored sign-in for this provider"
+                      >
+                        {loginBusy ? <Spinner size={15} /> : null} Disconnect
+                      </Button>
+                    </Callout>
+                  ) : login && login.provider === state.provider ? (
+                    <Callout tone="warning">
+                      {login.mode === "device" ? (
+                        <>
+                          <KeyRound size={15} /> In the tab that opened, enter code{" "}
+                          <code>{login.userCode}</code> at{" "}
+                          <a href={login.verifyUri} target="_blank" rel="noopener noreferrer">
+                            {login.verifyUri}
+                          </a>
+                          . <Spinner size={13} /> Waiting for approval…{" "}
+                          <Button type="button" onClick={cancelSignIn}>
+                            Cancel
+                          </Button>
+                        </>
+                      ) : (
+                        <div className="setup-grid model-row">
+                          <FormField label="Approve in the opened tab, then paste the code shown">
+                            <Input
+                              value={loginCode}
+                              onChange={(event) => setLoginCode(event.target.value)}
+                              placeholder="paste the code (looks like abc123#xyz)"
+                            />
+                          </FormField>
+                          <Button
+                            type="button"
+                            onClick={() => void completeSignIn()}
+                            disabled={loginBusy || !loginCode.trim()}
+                          >
+                            {loginBusy ? <Spinner size={15} /> : <ShieldCheck size={15} />}
+                            Complete sign-in
+                          </Button>
+                          <Button type="button" onClick={cancelSignIn}>
+                            Cancel
+                          </Button>
+                        </div>
+                      )}
+                    </Callout>
+                  ) : (
+                    <Callout tone="warning">
+                      <KeyRound size={15} /> Not signed in.{" "}
+                      <Button
+                        type="button"
+                        onClick={() => void startSignIn(state.provider)}
+                        disabled={loginBusy}
+                      >
+                        {loginBusy ? <Spinner size={15} /> : <ShieldCheck size={15} />}
+                        Sign in with {OAUTH_LABEL[state.provider]?.replace(" subscription", "")}
+                      </Button>{" "}
+                      <Button type="button" onClick={() => void refreshOauthStatus()} disabled={oauthStatusBusy}>
+                        {oauthStatusBusy ? <Spinner size={15} /> : null}
+                        {oauthStatusBusy ? "Checking…" : "Re-check"}
+                      </Button>
+                      <div className="setup-hint">
+                        Sign-in happens right here in the browser — no command-line tool and no separate login needed.
+                      </div>
+                    </Callout>
+                  )}
+                  {oauthStatusError ? <Alert status="error">{oauthStatusError}</Alert> : null}
+                  {loginError ? <Alert status="error">{loginError}</Alert> : null}
+                  <div className="setup-grid model-row">
+                    <FormField label="Model">
+                      <Input list="model-options" value={state.modelName} onChange={(event) => update({ modelName: event.target.value })} />
+                      <datalist id="model-options">
+                        {models.map((model) => (
+                          <option key={model} value={model} />
+                        ))}
+                      </datalist>
+                    </FormField>
+                    <Button type="button" onClick={() => void probeModels()} disabled={busy}>
+                      {busy ? <Spinner size={15} /> : <Search size={15} />}
+                      Load models
+                    </Button>
+                    <TestConnectionButton
+                      onClick={() => void testConnection()}
+                      pending={testing}
+                      disabled={!state.modelName.trim() || testing}
+                    />
+                  </div>
+                  {testing ? (
+                    <Alert status="info">
+                      <Spinner size={15} /> Testing connection…
+                    </Alert>
+                  ) : shownTest ? (
+                    <Alert status={shownTest.ok ? "success" : "error"}>
+                      {shownTest.ok
+                        ? "Connection OK — the model responded on your subscription."
+                        : `Connection failed — ${shownTest.error || "the model did not respond."}`}
+                    </Alert>
+                  ) : null}
+                </>
+              ) : (
+                <>
+                  {/* Gateway / Local config — both are the openai-compatible provider, so
+                      they share the base + model + test row below; Local just adds the
+                      detection panel and drops the API key (local servers need none).
+                      Temperature / max-tokens / max-turns are sensible defaults a new user
+                      shouldn't have to tune — they flow through finishSetup; tweak later in
+                      Settings. */}
+                  {brainKind === "local" ? (
+                    <>
+                      <div className="pl-field setup-local">
+                        <span className="pl-field__label">Detected on this machine</span>
+                        {localBusy && !localEndpoints ? (
+                          <Alert status="info">
+                            <Spinner size={15} /> Looking for local model servers…
+                          </Alert>
+                        ) : null}
+                        {(localEndpoints ?? []).map((ep) => {
+                          const usable = ep.found && ep.models.length > 0;
+                          const selected = state.apiBase.trim() === ep.base_url;
+                          return (
+                            <div key={ep.id} className="setup-local-row">
+                              <div className="setup-local-info">
+                                <strong>{ep.label}</strong>
+                                <span>{ep.base_url}</span>
+                                <span className={usable ? "setup-local-ok" : "setup-local-miss"}>
+                                  {usable
+                                    ? `${ep.models.length} model${ep.models.length === 1 ? "" : "s"} available`
+                                    : ep.found
+                                      ? ep.error || "running — no models pulled yet"
+                                      : ep.error || "not reachable"}
+                                </span>
+                              </div>
+                              <Button type="button" onClick={() => selectLocalEndpoint(ep)} disabled={localBusy}>
+                                {selected ? "Selected ✓" : "Use"}
+                              </Button>
+                            </div>
+                          );
+                        })}
+                        <Button type="button" onClick={() => void detectLocalModels()} disabled={localBusy}>
+                          {localBusy ? <Spinner size={15} /> : <Search size={15} />}
+                          Re-check
+                        </Button>
+                      </div>
+                      {localError ? <Alert status="error">{localError}</Alert> : null}
+                      {localEndpoints && !pickLocalEndpoint(localEndpoints) ? (
+                        <Callout tone="warning">
+                          No local model server found. Start Ollama (<code>ollama serve</code>, then{" "}
+                          <code>ollama pull llama3.2</code>) or LM Studio&apos;s local server, then Re-check.
+                        </Callout>
+                      ) : null}
+                    </>
+                  ) : null}
+                  <div className={brainKind === "local" ? "setup-grid" : "setup-grid two"}>
+                    <FormField label={brainKind === "local" ? "Endpoint" : "Endpoint URL"}>
+                      <Input
+                        value={state.apiBase}
+                        onChange={(event) => update({ apiBase: event.target.value })}
+                        placeholder={
+                          brainKind === "local" ? "e.g. http://127.0.0.1:11434/v1" : "e.g. https://api.openai.com/v1"
+                        }
+                        autoComplete="off"
+                      />
+                    </FormField>
+                    {brainKind === "local" ? null : (
+                      <FormField label="API key">
+                        <SecretInput
+                          value={state.apiKey}
+                          onChange={(event) => update({ apiKey: event.target.value })}
+                          autoComplete="off"
+                          placeholder={apiKeyPlaceholder(savedApiKey)}
+                        />
+                      </FormField>
+                    )}
+                  </div>
+                  <div className="setup-grid model-row">
+                    <FormField label="Model">
+                      <Input
+                        list="model-options"
+                        value={state.modelName}
+                        onChange={(event) => update({ modelName: event.target.value })}
+                        placeholder="Load models lists your endpoint's models"
+                      />
+                      <datalist id="model-options">
+                        {models.map((model) => (
+                          <option key={model} value={model} />
+                        ))}
+                      </datalist>
+                    </FormField>
+                    <Button type="button" onClick={() => void probeModels()} disabled={busy || !state.apiBase.trim()}>
+                      {busy ? <Spinner size={15} /> : <Search size={15} />}
+                      Load models
+                    </Button>
+                    <TestConnectionButton
+                      onClick={() => void testConnection()}
+                      pending={testing}
+                      disabled={!state.apiBase.trim() || !state.modelName.trim() || testing}
+                    />
+                  </div>
+                  {testing ? (
+                    <Alert status="info">
+                      <Spinner size={15} /> Testing connection…
+                    </Alert>
+                  ) : shownTest ? (
+                    <Alert status={shownTest.ok ? "success" : "error"}>
+                      {shownTest.ok
+                        ? "Connection OK — the model responded."
+                        : `Connection failed — ${shownTest.error || "the model did not respond."}`}
+                    </Alert>
+                  ) : null}
+                </>
+              )}
+            </StepBody>
+          ) : null}
+
+
+          {step === "finish" ? (
+            <StepBody icon={<Check size={20} />} title="You're all set" kicker="Review & finish">
+              <div className="finish-list">
+                <StatusLine icon={<Bot size={15} />} label={`Agent · ${state.agentName || "protoagent"}`} />
+                {exploreWithoutModel ? (
+                  <StatusLine icon={<KeyRound size={15} />} label="No model connected — you can add one any time in Settings ▸ Model." />
+                ) : brainKind === "acp" ? (
+                  <StatusLine icon={<KeyRound size={15} />} label={`Runtime · acp:${state.acpAgent} (deprecated)`} />
+                ) : oauthProvider ? (
+                  <StatusLine
+                    icon={<ShieldCheck size={15} />}
+                    label={`${OAUTH_LABEL[state.provider]} · ${state.modelName || "—"}`}
+                  />
+                ) : brainKind === "local" ? (
+                  <StatusLine icon={<HardDrive size={15} />} label={`Local model · ${state.modelName || "—"}`} />
+                ) : (
+                  <StatusLine icon={<KeyRound size={15} />} label={`Model · ${state.modelName || "—"}`} />
+                )}
+                <StatusLine icon={<Sparkles size={15} />} label={`Persona · ${personaLabel}`} />
+              </div>
+              {postInstall ? (
+                <div className="setup-postinstall">
+                  <p className="setup-hint">
+                    Your tools are installed. A few need Python packages before their skills can run — install them
+                    now, or later from Settings ▸ Plugins.
+                  </p>
+                  {postInstall.map((row) => (
+                    <div key={row.id} className="setup-postinstall-row">
+                      <div className="setup-postinstall-info">
+                        <strong>{row.name}</strong>
+                        <span>{row.deps.join(", ")}</span>
+                        {row.state === "error" ? <span className="setup-postinstall-error">{row.error}</span> : null}
+                      </div>
+                      <Button
+                        type="button"
+                        onClick={() => void installDepsFor(row.id)}
+                        disabled={row.state === "busy" || row.state === "done" || depsBusy}
+                      >
+                        {row.state === "busy" ? <Spinner size={14} /> : null}
+                        {row.state === "done" ? "Installed ✓" : row.state === "error" ? "Retry" : "Install"}
+                      </Button>
+                    </div>
+                  ))}
+                  <p className="setup-hint">
+                    Next, in Settings: add your work folders (Tools) so files land where you expect, and install
+                    plugins (Plugins).
+                  </p>
+                </div>
+              ) : (
+                <p className="setup-intro setup-intro-foot">
+                  Finishing writes your config and starts the agent. Tools, knowledge, and
+                  plugins are all in Settings.
+                </p>
+              )}
+              {message ? <Callout>{message}</Callout> : null}
+            </StepBody>
+          ) : null}
+
+          {error ? <Callout tone="error">{error}</Callout> : null}
+
+          <div className="setup-actions">
+            <Button
+              type="button"
+              onClick={() => setStep(steps[Math.max(0, index - 1)])}
+              disabled={index === 0 || busy || Boolean(postInstall)}
+            >
+              <ChevronLeft size={15} />
+              Back
+            </Button>
+            {step === "finish" ? (
+              postInstall ? (
+                // Setup is already written and the bundle installed — this just closes
+                // the report. Pending deps are re-installable from Settings ▸ Plugins.
+                <Button variant="primary" type="button" onClick={onFinished} disabled={postInstall.some((r) => r.state === "busy")}>
+                  <Check size={15} />
+                  Open console
+                </Button>
+              ) : (
+                <Button variant="primary" type="button" onClick={() => void finishSetup()} disabled={busy || missingHard}>
+                  {busy ? <Spinner size={15} /> : <Check size={15} />}
+                  Finish
+                </Button>
+              )
+            ) : (
+              <Button variant="primary" type="button" onClick={() => setStep(steps[Math.min(steps.length - 1, index + 1)])} disabled={!canGoNext || busy || (step === "agent" && !agentStepReady(state.agentName, missingHard, peekMissing))}>
+                Next
+                <ChevronRight size={15} />
+              </Button>
+            )}
+          </div>
+          {brainNextHint ? <p className="setup-hint setup-next-hint">{brainNextHint}</p> : null}
+        </section>
+      </div>
+    </div>
+  );
+}
+
+function StepBody({
+  icon,
+  title,
+  kicker,
+  children,
+}: {
+  icon: ReactNode;
+  title: string;
+  kicker: string;
+  children: ReactNode;
+}) {
+  return (
+    <div className="setup-step">
+      <div className="setup-heading">
+        <div className="setup-icon">{icon}</div>
+        <div>
+          <h1>{title}</h1>
+          <p>{kicker}</p>
+        </div>
+      </div>
+      {children}
+    </div>
+  );
+}
+
+function StatusLine({ icon, label }: { icon: React.ReactNode; label: string }) {
+  return (
+    <div className="status-line">
+      {icon}
+      <span>{label}</span>
+    </div>
+  );
+}

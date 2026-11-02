@@ -1,0 +1,5 @@
+Metadata-Version: 2.5
+Name: protolabs-agent
+Version: 0.225.0
+Summary: protoAgent — LangGraph + A2A template for spawning protoLabs agents
+License-Expression: MIT

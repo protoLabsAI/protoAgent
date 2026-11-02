@@ -1,0 +1,62 @@
+protoagent
+protoLabs.studio
+Chat
+Knowledge
+Memory
+Docs
+Friction
+New chat
+Try one of these
+Take a quick tour
+Summarise a web page
+Remember my preferences
+Ask Claude Code to add a test
+Needs Claude Code installed
+protolabs/reasoning
+Goals
+0
+No active goals
+set one here, or in chat with /goal …
+Goal
+Watches
+0
+No watches
+Watch something the agent doesn't move — a deploy, CI, a metric.
+Watch
+Tasks
+0
+No open tasks
+add one, or the agent will file its own
+Task
+Schedule
+0
+Nothing scheduled
+give the agent a timed run
+Schedule
+Work
+Artifact
+Notes
+Model
+
+Claude subscription — your own plan
+
+HOW THIS AGENT THINKS
+API key
+OpenAI, OpenRouter, or any OpenAI-compatible endpoint.
+Claude subscription
+Sign in with your Claude Pro/Max account. No API key needed.
+ChatGPT / Codex subscription
+Sign in with your ChatGPT Plus/Pro account. No API key needed.
+Local model
+Use Ollama or LM Studio running on this machine. No account needed.
+Explore without a model
+APPROVE IN THE OPENED TAB, THEN PASTE THE CODE SHOWN
+Complete sign-in
+Cancel
+MODEL
+Load models
+Test connection
+Back
+Next
+
+Sign in to continue.

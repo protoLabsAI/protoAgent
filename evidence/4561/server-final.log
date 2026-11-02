@@ -1,0 +1,340 @@
+Downloading cpython-3.11.15-macos-aarch64-none (download) (25.8MiB)
+ Downloaded cpython-3.11.15-macos-aarch64-none (download)
+Downloading pydantic-core (2.0MiB)
+Downloading openai (2.3MiB)
+Downloading anthropic (2.1MiB)
+Downloading pygments (1.2MiB)
+Downloading cryptography (3.7MiB)
+Downloading protolabs-agent (16.8MiB)
+Downloading sqlalchemy (2.4MiB)
+Downloading zeroconf (1.1MiB)
+Downloading primp (5.7MiB)
+Downloading pillow (4.6MiB)
+Downloading lxml (8.2MiB)
+ Downloaded zeroconf
+ Downloaded pygments
+ Downloaded pydantic-core
+ Downloaded sqlalchemy
+ Downloaded openai
+ Downloaded anthropic
+ Downloaded cryptography
+ Downloaded pillow
+ Downloaded primp
+ Downloaded lxml
+ Downloaded protolabs-agent
+Installed 124 packages in 380ms
+2026-11-01 12:41:52,733 INFO protoagent.config_io [config] seeded live config /Users/<operator>/dev/protoAgent-team/.worktrees/feat-bd-v8cp-4561-acceptance-pre-check-fresh-uvx-inst/evidence/4561/home.gukTIl/.protoagent/default/config/langgraph-config.yaml from langgraph-config.example.yaml
+2026-11-01 12:41:54,941 INFO protoagent.server [checkpointer] persistent chat history at /Users/<operator>/dev/protoAgent-team/.worktrees/feat-bd-v8cp-4561-acceptance-pre-check-fresh-uvx-inst/evidence/4561/home.gukTIl/.protoagent/default/checkpoints.db
+2026-11-01 12:41:54,952 INFO protoagent.server [metrics] plugin metric store ready at /Users/<operator>/dev/protoAgent-team/.worktrees/feat-bd-v8cp-4561-acceptance-pre-check-fresh-uvx-inst/evidence/4561/home.gukTIl/.protoagent/default/metrics.db
+2026-11-01 12:41:54,958 INFO protoagent.server [ledger] store ready at /Users/<operator>/dev/protoAgent-team/.worktrees/feat-bd-v8cp-4561-acceptance-pre-check-fresh-uvx-inst/evidence/4561/home.gukTIl/.protoagent/default/ledger.db
+2026-11-01 12:41:55,436 INFO protoagent.plugins [plugins] loaded artifact: 9 tool(s), 2 skill dir(s), 2 route(s), 0 surface(s), 0 subagent(s), 0 middleware, 0 mcp server(s), 0 chat command(s)
+2026-11-01 12:41:55,439 INFO protoagent.plugins.cowork [cowork] registered
+2026-11-01 12:41:55,442 INFO protoagent.plugins [plugins] cowork: optional packages not installed (openpyxl, python-pptx, reportlab); the features that use them stay unavailable until you run: protoagent plugin install-deps cowork
+2026-11-01 12:41:55,442 INFO protoagent.plugins [plugins] loaded cowork: 0 tool(s), 2 skill dir(s), 0 route(s), 0 surface(s), 0 subagent(s), 0 middleware, 0 mcp server(s), 0 chat command(s)
+2026-11-01 12:41:55,444 INFO protoagent.plugins [plugins] loaded craft: 0 tool(s), 2 skill dir(s), 0 route(s), 0 surface(s), 1 subagent(s), 0 middleware, 0 mcp server(s), 0 chat command(s)
+2026-11-01 12:41:55,658 INFO protoagent.plugins [plugins] loaded delegates: 1 tool(s), 0 skill dir(s), 1 route(s), 1 surface(s), 0 subagent(s), 0 middleware, 0 mcp server(s), 0 chat command(s)
+2026-11-01 12:41:55,959 INFO protoagent.plugins.docs [docs] indexed 252 doc(s)
+2026-11-01 12:41:55,961 INFO protoagent.plugins [plugins] loaded docs: 2 tool(s), 1 skill dir(s), 2 route(s), 0 surface(s), 0 subagent(s), 0 middleware, 0 mcp server(s), 0 chat command(s)
+2026-11-01 12:41:55,968 INFO protoagent.plugins [plugins] loaded execute_code: 0 tool(s), 0 skill dir(s), 0 route(s), 0 surface(s), 0 subagent(s), 0 middleware, 0 mcp server(s), 0 chat command(s)
+2026-11-01 12:41:56,007 INFO protoagent.plugins [plugins] loaded friction: 6 tool(s), 2 skill dir(s), 3 route(s), 0 surface(s), 2 subagent(s), 1 middleware, 0 mcp server(s), 1 chat command(s)
+2026-11-01 12:41:56,020 INFO protoagent.plugins [plugins] loaded notes: 6 tool(s), 0 skill dir(s), 2 route(s), 0 surface(s), 0 subagent(s), 0 middleware, 0 mcp server(s), 0 chat command(s)
+2026-11-01 12:41:56,021 INFO protoagent.server [plugins] loaded 8 plugin(s): artifact, cowork, craft, delegates, docs, execute_code, friction, notes
+2026-11-01 12:41:56,021 INFO protoagent.server [plugins] registered subagent: skill_writer
+2026-11-01 12:41:56,021 INFO protoagent.server [plugins] registered subagent: friction_triage
+2026-11-01 12:41:56,021 INFO protoagent.server [plugins] registered subagent: eval_regression_triage
+2026-11-01 12:41:56,021 INFO protoagent.server Setup wizard has not been completed — graph not compiled (plugin routes/surfaces still mounted). Open the UI to finish setup (or run headless: --ui none / --setup).
+2026-11-01 12:41:56,021 INFO protoagent.server [boot] phase timings: checkpointer=0.03s (total 0.03s)
+2026-11-01 12:41:59,882 INFO protoagent.server [plugins] mounted router from artifact at /plugins/artifact
+2026-11-01 12:41:59,888 INFO protoagent.server [plugins] mounted router from artifact at /api/plugins/artifact
+2026-11-01 12:41:59,890 INFO protoagent.server [plugins] mounted router from delegates at /
+2026-11-01 12:41:59,890 INFO protoagent.server [plugins] mounted router from docs at /plugins/docs
+2026-11-01 12:41:59,891 INFO protoagent.server [plugins] mounted router from docs at /api/plugins/docs
+2026-11-01 12:41:59,894 INFO protoagent.server [plugins] mounted router from friction at /api/plugins/friction
+2026-11-01 12:41:59,898 INFO protoagent.server [plugins] mounted router from friction at /
+2026-11-01 12:41:59,899 INFO protoagent.server [plugins] mounted router from friction at /plugins/friction
+2026-11-01 12:41:59,899 INFO protoagent.server [plugins] mounted router from notes at /plugins/notes
+2026-11-01 12:41:59,901 INFO protoagent.server [plugins] mounted router from notes at /api/plugins/notes
+2026-11-01 12:42:00,491 INFO protoagent.server [telemetry] store ready at /Users/<operator>/dev/protoAgent-team/.worktrees/feat-bd-v8cp-4561-acceptance-pre-check-fresh-uvx-inst/evidence/4561/home.gukTIl/.protoagent/default/telemetry.db
+2026-11-01 12:42:00,494 INFO a2a_impl.auth [a2a] 9 plugin-declared auth-exempt path(s): /plugins/artifact/vendor/, /plugins/artifact/shell.js, /plugins/artifact/media/, /plugins/artifact/view, /plugins/docs/view, /plugins/friction/view, /plugins/notes/vendor/, /plugins/notes/view, /plugins/notes/quick
+2026-11-01 12:42:00,501 INFO a2a_impl.auth [a2a] A2A auth token not configured — endpoint is open
+2026-11-01 12:42:00,501 INFO a2a_impl.auth [a2a] A2A_ALLOWED_ORIGINS not set — origin verification disabled
+2026-11-01 12:42:00,572 INFO protoagent.server [a2a] durable stores ready (tasks=/Users/<operator>/dev/protoAgent-team/.worktrees/feat-bd-v8cp-4561-acceptance-pre-check-fresh-uvx-inst/evidence/4561/home.gukTIl/.protoagent/default/a2a-tasks.db, push=/Users/<operator>/dev/protoAgent-team/.worktrees/feat-bd-v8cp-4561-acceptance-pre-check-fresh-uvx-inst/evidence/4561/home.gukTIl/.protoagent/default/a2a-push.db)
+2026-11-01 12:42:00,593 INFO protoagent.server [a2a] a2a-sdk routes mounted (JSON-RPC at /a2a + v0.3 compat, card at /.well-known/agent-card.json)
+2026-11-01 12:42:00,598 INFO protoagent.server React operator console mounted at /app
+2026-11-01 12:42:00,599 INFO protoagent.server Starting protoagent (ui=console) on http://127.0.0.1:54888
+INFO:     Started server process [55410]
+INFO:     Waiting for application startup.
+2026-11-01 12:42:00,636 INFO protoagent.plugins.delegates [delegates/health] prober started (tick 120s; per-delegate 120–900s healthy, up to 960s when failing)
+2026-11-01 12:42:00,636 INFO protoagent.server [plugins] started surface: delegate-health
+2026-11-01 12:42:00,639 INFO graph.fleet.discovery [discovery] mDNS disabled (fleet.discovery.mdns=false) — not advertising protoagent
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://127.0.0.1:54888 (Press CTRL+C to quit)
+[metrics] Prometheus metrics initialized (prefix=protoagent_)
+[tracing] Langfuse not configured. Tracing disabled.
+[trace_export] fleet trace export disabled.
+Console ready → http://127.0.0.1:54888/app
+2026-11-01 12:42:03,641 INFO graph.fleet.discovery [discovery] boot sweep cached 12 peer(s)
+INFO:     127.0.0.1:55851 - "GET /app/ HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55851 - "GET /app/assets/index-BfMqT0LR.js HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55852 - "GET /app/assets/index-B_VKV88M.css HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55852 - "GET /app/assets/engine-compile-DfiHsFJc.js HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55851 - "GET /app/assets/mermaid-GHXKKRXX-B5fkag4b.js HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55862 - "GET /api/goals HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55852 - "GET /app/assets/pin-off-BTGQggfz.js HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55851 - "GET /app/assets/lucide-react-BgEcyMQa.js HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55852 - "GET /api/sse-token HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55852 - "GET /api/chat/commands HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55852 - "GET /api/chat/mentions HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55863 - "GET /api/flags HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55864 - "GET /api/archetypes HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55862 - "GET /api/config HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55852 - "GET /api/config/providers HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55864 - "GET /api/theme HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55864 - "GET /api/sse-token HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55865 - "GET /api/settings/schema HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55852 - "GET /api/plugins/updates HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55864 - "GET /api/watches HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55865 - "GET /api/events HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55864 - "GET /api/chat/attend?session=chat-1793565724860-w0f7p1 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55862 - "GET /api/tasks/issues HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55852 - "GET /api/config/oauth-status HTTP/1.1" 200 OK
+2026-11-01 12:42:06,077 WARNING protoagent.server [chat] parked session index read failed: (sqlite3.OperationalError) table chat_session_tombstones already exists
+[SQL: 
+CREATE TABLE chat_session_tombstones (
+	context_id VARCHAR(255) NOT NULL, 
+	deleted_at DATETIME NOT NULL, 
+	PRIMARY KEY (context_id)
+)
+
+]
+(Background on this error at: https://sqlalche.me/e/21/e3q8)
+INFO:     127.0.0.1:55863 - "GET /api/chat/sessions?limit=20&parked=true HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55862 - "GET /api/chat/sessions?limit=50 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55936 - "GET /app/ HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55936 - "GET /app/assets/index-BfMqT0LR.js HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55937 - "GET /app/assets/index-B_VKV88M.css HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55936 - "GET /app/assets/mermaid-GHXKKRXX-B5fkag4b.js HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55937 - "GET /app/assets/engine-compile-DfiHsFJc.js HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55937 - "GET /app/assets/lucide-react-BgEcyMQa.js HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55936 - "GET /app/assets/pin-off-BTGQggfz.js HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55947 - "GET /api/goals HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55947 - "GET /api/sse-token HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55947 - "GET /api/chat/commands HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55948 - "GET /api/chat/mentions HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55949 - "GET /api/flags HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55947 - "GET /api/sse-token HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55936 - "GET /api/archetypes HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55948 - "GET /api/config HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55949 - "GET /api/config/providers HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55936 - "GET /api/theme HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55936 - "GET /api/events HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55949 - "GET /api/plugins/updates HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55947 - "GET /api/watches HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55949 - "GET /api/chat/attend?session=chat-1793565740641-fphi1t HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55948 - "GET /api/tasks/issues HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55950 - "GET /api/settings/schema HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55948 - "GET /api/chat/sessions?limit=50 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55947 - "GET /api/chat/sessions?limit=20&parked=true HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56048 - "GET /app/ HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56048 - "GET /app/assets/index-BfMqT0LR.js HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56049 - "GET /app/assets/index-B_VKV88M.css HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56049 - "GET /app/assets/engine-compile-DfiHsFJc.js HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56048 - "GET /app/assets/mermaid-GHXKKRXX-B5fkag4b.js HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56048 - "GET /app/assets/lucide-react-BgEcyMQa.js HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56049 - "GET /app/assets/pin-off-BTGQggfz.js HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56054 - "GET /api/goals HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56054 - "GET /api/sse-token HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56054 - "GET /api/chat/commands HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56055 - "GET /api/chat/mentions HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56056 - "GET /api/flags HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56054 - "GET /api/sse-token HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56049 - "GET /api/archetypes HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56055 - "GET /api/config HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56056 - "GET /api/config/providers HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56049 - "GET /api/theme HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56049 - "GET /api/events HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56054 - "GET /api/watches HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56056 - "GET /api/plugins/updates HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56055 - "GET /api/chat/attend?session=chat-1793565764336-k5qy6n HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56056 - "GET /api/tasks/issues HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56057 - "GET /api/settings/schema HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56054 - "GET /api/config/oauth-status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56056 - "GET /api/chat/sessions?limit=50 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56048 - "GET /api/chat/sessions?limit=20&parked=true HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56116 - "GET /app/ HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56116 - "GET /app/assets/index-BfMqT0LR.js HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56117 - "GET /app/assets/index-B_VKV88M.css HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56116 - "GET /app/assets/mermaid-GHXKKRXX-B5fkag4b.js HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56117 - "GET /app/assets/engine-compile-DfiHsFJc.js HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56123 - "GET /api/goals HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56117 - "GET /app/assets/lucide-react-BgEcyMQa.js HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56116 - "GET /app/assets/pin-off-BTGQggfz.js HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56116 - "GET /api/sse-token HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56116 - "GET /api/chat/commands HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56124 - "GET /api/chat/mentions HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56125 - "GET /api/flags HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56116 - "GET /api/archetypes HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56123 - "GET /api/config HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56124 - "GET /api/config/providers HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56116 - "GET /api/theme HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56116 - "GET /api/watches HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56124 - "GET /api/plugins/updates HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56116 - "GET /api/sse-token HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56124 - "GET /api/events HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56116 - "GET /api/chat/attend?session=chat-1793565779006-tllncf HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56123 - "GET /api/tasks/issues HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56126 - "GET /api/settings/schema HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56125 - "GET /api/config/oauth-status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56123 - "GET /api/chat/sessions?limit=50 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56117 - "GET /api/chat/sessions?limit=20&parked=true HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56126 - "POST /api/config/models HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56126 - "POST /api/config/oauth/start HTTP/1.1" 200 OK
+2026-11-01 12:43:01,875 INFO graph.middleware.memory [memory] session persistence enabled
+2026-11-01 12:43:01,907 INFO protoagent.server [knowledge] tier=scoped into /Users/<operator>/dev/protoAgent-team/.worktrees/feat-bd-v8cp-4561-acceptance-pre-check-fresh-uvx-inst/evidence/4561/home.gukTIl/.protoagent/default/knowledge/agent.db
+2026-11-01 12:43:01,955 INFO protoagent.plugins [plugins] loaded artifact: 9 tool(s), 2 skill dir(s), 2 route(s), 0 surface(s), 0 subagent(s), 0 middleware, 0 mcp server(s), 0 chat command(s)
+2026-11-01 12:43:01,956 INFO protoagent.plugins.cowork [cowork] registered
+2026-11-01 12:43:01,959 INFO protoagent.plugins [plugins] cowork: optional packages not installed (openpyxl, python-pptx, reportlab); the features that use them stay unavailable until you run: protoagent plugin install-deps cowork
+2026-11-01 12:43:01,959 INFO protoagent.plugins [plugins] loaded cowork: 0 tool(s), 2 skill dir(s), 0 route(s), 0 surface(s), 0 subagent(s), 0 middleware, 0 mcp server(s), 0 chat command(s)
+2026-11-01 12:43:01,961 INFO protoagent.plugins [plugins] loaded craft: 0 tool(s), 2 skill dir(s), 0 route(s), 0 surface(s), 1 subagent(s), 0 middleware, 0 mcp server(s), 0 chat command(s)
+2026-11-01 12:43:01,998 INFO protoagent.plugins [plugins] loaded delegates: 1 tool(s), 0 skill dir(s), 1 route(s), 1 surface(s), 0 subagent(s), 0 middleware, 0 mcp server(s), 0 chat command(s)
+2026-11-01 12:43:02,372 INFO protoagent.plugins.docs [docs] indexed 252 doc(s)
+2026-11-01 12:43:02,374 INFO protoagent.plugins [plugins] loaded docs: 2 tool(s), 1 skill dir(s), 2 route(s), 0 surface(s), 0 subagent(s), 0 middleware, 0 mcp server(s), 0 chat command(s)
+2026-11-01 12:43:02,374 INFO protoagent.plugins [plugins] loaded execute_code: 0 tool(s), 0 skill dir(s), 0 route(s), 0 surface(s), 0 subagent(s), 0 middleware, 0 mcp server(s), 0 chat command(s)
+2026-11-01 12:43:02,388 INFO protoagent.plugins [plugins] loaded friction: 6 tool(s), 2 skill dir(s), 3 route(s), 0 surface(s), 2 subagent(s), 1 middleware, 0 mcp server(s), 1 chat command(s)
+2026-11-01 12:43:02,396 INFO protoagent.plugins [plugins] loaded notes: 6 tool(s), 0 skill dir(s), 2 route(s), 0 surface(s), 0 subagent(s), 0 middleware, 0 mcp server(s), 0 chat command(s)
+2026-11-01 12:43:02,397 INFO protoagent.server [plugins] loaded 8 plugin(s): artifact, cowork, craft, delegates, docs, execute_code, friction, notes
+2026-11-01 12:43:02,405 INFO protoagent.server [plugins] registered subagent: skill_writer
+2026-11-01 12:43:02,405 INFO protoagent.server [plugins] registered subagent: friction_triage
+2026-11-01 12:43:02,405 INFO protoagent.server [plugins] registered subagent: eval_regression_triage
+2026-11-01 12:43:02,406 INFO protoagent.server [plugins] 1 middleware contributed
+2026-11-01 12:43:02,427 INFO graph.skills.index [skills] schema created at /Users/<operator>/dev/protoAgent-team/.worktrees/feat-bd-v8cp-4561-acceptance-pre-check-fresh-uvx-inst/evidence/4561/home.gukTIl/.protoagent/default/skills.db
+2026-11-01 12:43:02,490 INFO graph.skills.index [skills] seeded 21 disk skill(s)
+2026-11-01 12:43:02,490 INFO protoagent.server [skills] tier=scoped — indexed 21 SKILL.md skill(s) into /Users/<operator>/dev/protoAgent-team/.worktrees/feat-bd-v8cp-4561-acceptance-pre-check-fresh-uvx-inst/evidence/4561/home.gukTIl/.protoagent/default/skills.db
+2026-11-01 12:43:02,498 INFO protoagent.config_io [config] host model group mirrored to the Host layer (/Users/<operator>/dev/protoAgent-team/.worktrees/feat-bd-v8cp-4561-acceptance-pre-check-fresh-uvx-inst/evidence/4561/home.gukTIl/.protoagent/host-config.yaml)
+2026-11-01 12:43:02,531 INFO scheduler.local [scheduler] local backend started: agent=protoagent db=/Users/<operator>/dev/protoAgent-team/.worktrees/feat-bd-v8cp-4561-acceptance-pre-check-fresh-uvx-inst/evidence/4561/home.gukTIl/.protoagent/default/scheduler/agent/jobs.db
+2026-11-01 12:43:02,539 INFO a2a_impl.auth [a2a] 9 plugin-declared auth-exempt path(s): /plugins/artifact/vendor/, /plugins/artifact/shell.js, /plugins/artifact/media/, /plugins/artifact/view, /plugins/docs/view, /plugins/friction/view, /plugins/notes/vendor/, /plugins/notes/view, /plugins/notes/quick
+2026-11-01 12:43:02,540 INFO protoagent.server [reload] no model connected — config reloaded, graph not compiled (explore mode)
+INFO:     127.0.0.1:56126 - "POST /api/config/setup HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56123 - "GET /api/theme HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56123 - "GET /api/flags HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56125 - "GET /api/plugins/updates HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56125 - "GET /api/chat/commands HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56125 - "GET /api/goals HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56117 - "GET /api/chat/mentions HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56117 - "GET /api/archetypes HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56126 - "GET /api/watches HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56117 - "GET /api/tasks/issues HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56125 - "GET /api/settings/schema HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56048 - "GET /api/sse-token HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56174 - "GET /api/goals HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56175 - "GET /api/chat/commands HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56048 - "GET /api/watches HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56176 - "GET /api/chat/mentions HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56176 - "GET /api/archetypes HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56174 - "GET /api/tasks/issues HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56048 - "GET /api/theme HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56174 - "GET /api/chat/attend?session=chat-1793565764336-k5qy6n HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56226 - "GET /app/ HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56226 - "GET /app/assets/index-BfMqT0LR.js HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56227 - "GET /app/assets/index-B_VKV88M.css HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56226 - "GET /app/assets/mermaid-GHXKKRXX-B5fkag4b.js HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56227 - "GET /app/assets/engine-compile-DfiHsFJc.js HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56226 - "GET /app/assets/lucide-react-BgEcyMQa.js HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56227 - "GET /app/assets/pin-off-BTGQggfz.js HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56227 - "GET /api/goals HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56227 - "GET /api/sse-token HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56227 - "GET /api/chat/commands HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56238 - "GET /api/chat/mentions HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56227 - "GET /api/flags HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56239 - "GET /api/archetypes HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56238 - "GET /api/sse-token HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56227 - "GET /api/theme HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56237 - "GET /api/plugins/updates HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56240 - "GET /api/settings/schema HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56227 - "GET /api/events HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56237 - "GET /api/watches HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56226 - "GET /api/chat/attend?session=chat-1793565800511-hy7qvh HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56239 - "GET /api/tasks/issues HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56239 - "GET /api/chat/sessions?limit=50 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56238 - "GET /api/chat/sessions?limit=20&parked=true HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56298 - "GET /app/ HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56298 - "GET /app/assets/index-BfMqT0LR.js HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56299 - "GET /app/assets/index-B_VKV88M.css HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56299 - "GET /app/assets/engine-compile-DfiHsFJc.js HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56298 - "GET /app/assets/mermaid-GHXKKRXX-B5fkag4b.js HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56299 - "GET /app/assets/pin-off-BTGQggfz.js HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56298 - "GET /app/assets/lucide-react-BgEcyMQa.js HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56299 - "GET /api/goals HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56299 - "GET /api/sse-token HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56299 - "GET /api/chat/commands HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56309 - "GET /api/chat/mentions HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56310 - "GET /api/flags HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56299 - "GET /api/archetypes HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56309 - "GET /api/sse-token HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56310 - "GET /api/theme HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56311 - "GET /api/settings/schema HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56310 - "GET /api/events HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56311 - "GET /api/watches HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56308 - "GET /api/plugins/updates HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56311 - "GET /api/chat/attend?session=chat-1793565825699-dm96cw HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56299 - "GET /api/config/providers HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56308 - "GET /api/tasks/issues HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56298 - "GET /api/chat/sessions?limit=20&parked=true HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56309 - "GET /api/chat/sessions?limit=50 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56387 - "GET /app/ HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56387 - "GET /app/assets/index-BfMqT0LR.js HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56389 - "GET /app/assets/index-B_VKV88M.css HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56389 - "GET /app/assets/engine-compile-DfiHsFJc.js HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56387 - "GET /app/assets/mermaid-GHXKKRXX-B5fkag4b.js HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56389 - "GET /app/assets/pin-off-BTGQggfz.js HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56387 - "GET /app/assets/lucide-react-BgEcyMQa.js HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56389 - "GET /api/goals HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56387 - "GET /api/sse-token HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56399 - "GET /api/chat/commands HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56387 - "GET /api/chat/mentions HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56396 - "GET /api/flags HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56397 - "GET /api/archetypes HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56399 - "GET /api/config HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56389 - "GET /api/config/providers HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56396 - "GET /api/sse-token HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56398 - "GET /api/settings/schema HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56397 - "GET /api/theme HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56398 - "GET /api/watches HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56389 - "GET /api/plugins/updates HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56397 - "GET /api/events HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56398 - "GET /api/chat/attend?session=chat-1793565854036-p3gjry HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56389 - "GET /api/tasks/issues HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56396 - "GET /api/config/oauth-status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56396 - "GET /api/chat/sessions?limit=50 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56387 - "GET /api/chat/sessions?limit=20&parked=true HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56387 - "POST /api/config/models HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56387 - "POST /api/config/test-model HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56639 - "GET /app/ HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56639 - "GET /app/assets/index-BfMqT0LR.js HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56640 - "GET /app/assets/index-B_VKV88M.css HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56640 - "GET /app/assets/engine-compile-DfiHsFJc.js HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56639 - "GET /app/assets/mermaid-GHXKKRXX-B5fkag4b.js HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56639 - "GET /app/assets/lucide-react-BgEcyMQa.js HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56640 - "GET /app/assets/pin-off-BTGQggfz.js HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56640 - "GET /api/goals HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56639 - "GET /api/sse-token HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56639 - "GET /api/sse-token HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56649 - "GET /api/chat/commands HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56646 - "GET /api/chat/mentions HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56639 - "GET /api/flags HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56647 - "GET /api/archetypes HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56640 - "GET /api/theme HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56640 - "GET /api/watches HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56648 - "GET /api/settings/schema HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56639 - "GET /api/plugins/updates HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56649 - "GET /api/events HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56640 - "GET /api/chat/attend?session=chat-1793565897769-t1ha0e HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56639 - "GET /api/tasks/issues HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56647 - "GET /api/chat/sessions?limit=50 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56639 - "GET /api/chat/sessions?limit=20&parked=true HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56639 - "GET /api/config/providers HTTP/1.1" 200 OK
+INFO:     Shutting down
+INFO:     Waiting for application shutdown.
+2026-11-01 12:45:25,431 INFO scheduler.local [scheduler] local backend stopped
+INFO:     Application shutdown complete.
+INFO:     Finished server process [55410]

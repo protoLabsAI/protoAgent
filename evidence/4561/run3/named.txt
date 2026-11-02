@@ -1,0 +1,55 @@
+protoagent
+protoLabs.studio
+Chat
+Knowledge
+Memory
+Docs
+Friction
+New chat
+Try one of these
+Take a quick tour
+Summarise a web page
+Remember my preferences
+Ask Claude Code to add a test
+Needs Claude Code installed
+protolabs/reasoning
+Goals
+0
+No active goals
+set one here, or in chat with /goal …
+Goal
+Watches
+0
+No watches
+Watch something the agent doesn't move — a deploy, CI, a metric.
+Watch
+Tasks
+0
+No open tasks
+add one, or the agent will file its own
+Task
+Schedule
+0
+Nothing scheduled
+give the agent a timed run
+Schedule
+Work
+Artifact
+Notes
+Set up Basic
+
+Name & settings
+
+AGENT NAME
+OPERATOR
+Your name, so the agent knows who it's working for.
+
+An archetype is a starting persona plus the tools it comes with.
+
+Basic
+A blank-slate agent — the core loop and built-in tools (chat artifacts, notes, docs); add more from Discover.
+What's included →
+More archetypes…
+Advanced
+Back
+Next
