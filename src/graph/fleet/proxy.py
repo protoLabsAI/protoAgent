@@ -132,7 +132,7 @@ _READ_TIMEOUT = httpx.Timeout(20.0, connect=5.0)  # views, API reads — the pol
 _STREAM_PATHS = frozenset({"a2a", "api/events"})
 _TURN_PATHS = frozenset({"api/chat"})
 # Chat-session operations that can run model calls are turn-sized too: deleting a chat with
-# "save to memory" summarizes the whole thread first, and compact/publish do the same. Under
+# "save to memory" summarizes the whole thread first, and compact does the same. Under
 # the 20s view lane the hub answered 504 while the member was still working (and went on to
 # succeed), and the operator's retry then raced the first delete for the checkpoint DB lock.
 # Only MUTATIONS take this lane: the GET polls under api/chat/ (attend, turns) are exactly the

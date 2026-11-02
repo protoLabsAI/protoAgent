@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { findSlashCommand, registeredSlashCommands } from "../ext/slashRegistry";
+import { findSlashCommand, registerSlashCommand, registeredSlashCommands } from "../ext/slashRegistry";
 import "./coreSlashCommands"; // side-effect: registers /new, /clear, /effort
 
 import type { ComposerFormSpec, SlashContext } from "../ext/slashRegistry";
@@ -32,10 +32,9 @@ describe("core slash commands (dogfood the seam, ADR 0061)", () => {
 
   it("/compact is untagged — generally available since #2785 (ADR 0101 D5)", () => {
     // Registration is unconditional; the HOST (ChatSessionSlot) hides + skips dispatch of a
-    // flag-tagged command while its flag is off. /publish keeps a tag, so the gating
-    // contract still has a live subject; /compact shed its expired dev flag.
+    // flag-tagged command while its flag is off. No core command carries a tag now; the
+    // help-card test below keeps the gating contract honest with a throwaway subject.
     expect(findSlashCommand("compact")!.flag).toBeUndefined();
-    expect(findSlashCommand("publish")!.flag).toBe("chat.publish");
     expect(findSlashCommand("new")!.flag).toBeUndefined(); // shipped commands stay untagged
   });
 
@@ -44,35 +43,35 @@ describe("core slash commands (dogfood the seam, ADR 0061)", () => {
   // visible slot has no session, and the ADR + changelog quote its numbers. In the composer
   // a false is visible (the token falls through to the draft and gets sent as text); from a
   // palette the same false is a silent no-op, so those numbers are a contract, not trivia.
-  // These three tests are what stops the note from going stale behind the 17th command.
+  // These three tests are what stops the note from going stale behind the next command.
 
   const DECLINE_WITHOUT_SESSION = [
-    "clear", "export", "publish", "btw", "trajectory", "prompt", "perf", "usage",
+    "clear", "export", "btw", "trajectory", "prompt", "perf", "usage",
     "compact", "effort", "model", "incognito", "help", "bypass",
   ];
 
-  it("exactly 14 core commands return false (→ fall through) without a session", () => {
+  it("exactly 13 core commands return false (→ fall through) without a session", () => {
     for (const name of DECLINE_WITHOUT_SESSION) {
       expect.soft(findSlashCommand(name)!.run(ctx()), `/${name} without a session`).toBe(false);
     }
     // The count itself is quoted in slashDispatch.ts, ADR 0061 and the changelog.
-    expect(DECLINE_WITHOUT_SESSION).toHaveLength(14);
+    expect(DECLINE_WITHOUT_SESSION).toHaveLength(13);
   });
 
   it("pins the core inventory, so a new command has to face the session question", () => {
-    // An 18th command changes the "14 of the 17" arithmetic every one of those docs cites.
+    // A 17th command changes the "13 of the 16" arithmetic every one of those docs cites.
     // If this trips: decide whether the command needs a session, add it to the list above
     // (or not), and update the note in chat/slashDispatch.ts.
     expect(registeredSlashCommands().map((c) => c.name).sort()).toEqual(
       [
         "btw", "bypass", "clear", "compact", "effort", "export", "goal", "help",
-        "incognito", "model", "new", "perf", "prompt", "publish", "trajectory", "usage", "watch",
+        "incognito", "model", "new", "perf", "prompt", "trajectory", "usage", "watch",
       ],
     );
   });
 
   it("a `true` from a session-less command is NOT proof it did anything visible", () => {
-    // The reason a caller can't just treat "not in the 14" as the safe subset. /new is the
+    // The reason a caller can't just treat "not in the 13" as the safe subset. /new is the
     // only command that genuinely works with no session; /goal (and /watch) claim the token
     // and answer through noteToThread — which the host itself no-ops without a session, so
     // outside the composer the operator sees nothing at all.
@@ -179,15 +178,22 @@ describe("/help — the live command/shortcut reference card (#1700)", () => {
   });
 
   it("respects the host's flag gate: a flag-tagged command is listed only while its flag is ON", () => {
-    // /publish is tagged chat.publish (/compact shed its flag in #2785). Fail-closed
-    // with no predicate at all…
-    expect(helpCard()).not.toContain("`/publish`");
-    // …hidden while the flag resolves off…
-    expect(helpCard({ flagOn: () => false })).not.toContain("`/publish`");
-    // …listed while it resolves on (same predicate the slash menu uses).
-    expect(helpCard({ flagOn: (id) => id === "chat.publish" })).toContain("`/publish`");
-    // Un-gated commands list regardless of the predicate.
-    expect(helpCard({ flagOn: () => false })).toContain("`/compact`");
+    // No core command is flag-tagged today, so the subject is a throwaway one, removed again
+    // so the inventory pins above stay exact.
+    const commands = registeredSlashCommands();
+    registerSlashCommand({ name: "zzflagged", description: "flag-gated", flag: "zz-flag", run: () => true });
+    try {
+      // Fail-closed with no predicate at all…
+      expect(helpCard()).not.toContain("`/zzflagged`");
+      // …hidden while the flag resolves off…
+      expect(helpCard({ flagOn: () => false })).not.toContain("`/zzflagged`");
+      // …listed while it resolves on (same predicate the slash menu uses).
+      expect(helpCard({ flagOn: (id) => id === "zz-flag" })).toContain("`/zzflagged`");
+      // Un-gated commands list regardless of the predicate.
+      expect(helpCard({ flagOn: () => false })).toContain("`/compact`");
+    } finally {
+      commands.splice(commands.findIndex((c) => c.name === "zzflagged"), 1);
+    }
   });
 
   it("lists the host's server commands (installed plugins) and dedupes client-claimed tokens", () => {

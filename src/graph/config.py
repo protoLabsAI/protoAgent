@@ -1839,18 +1839,6 @@ class LangGraphConfig:
     secrets_manager_override_env: bool = False
     secrets_manager_timeout_seconds: float = 10.0
 
-    # Hosted chat-thread publishing (#2179 P2, #2683) — POST a redacted bundle
-    # (graph.chat_bundle) to a hosted viewer service and get back a public link. Empty
-    # host is the expected default until the hosted service (#2685, a separate,
-    # not-yet-started repo) exists: publish then reports "not configured" rather than
-    # erroring or silently no-opping. Behind the chat.publish developer flag (ADR 0068).
-    publish_endpoint_url: str = ""
-    publish_timeout_seconds: float = 15.0
-    # Revocation (#2684) — a SEPARATE configured endpoint, not a path convention off
-    # endpoint_url: presuming a URL shape on a service that doesn't exist yet would be a
-    # guess dressed up as a contract. See infra/publish/client.py's revoke_bundle.
-    publish_revoke_endpoint_url: str = ""
-
     def __post_init__(self):
         # PROTOAGENT_MODEL wins over the YAML/default model so an eval sweep can
         # boot the same agent against different models without editing config
@@ -2128,7 +2116,6 @@ class LangGraphConfig:
         tracing = data.get("tracing", {})
         secret_tracing_public_key = secrets.get("tracing", {}).get("public_key")
         secret_tracing_secret_key = secrets.get("tracing", {}).get("secret_key")
-        publish = data.get("publish", {}) or {}
         # `or {}`: an operator who comments out every knob under `room:` leaves the key
         # parsed as None, and the reads below would raise on it (same reason as `soul` /
         # `fleet` above). The docs page hands people a `room:` block to edit, so this is
@@ -2439,11 +2426,6 @@ class LangGraphConfig:
             ),
             secrets_manager_timeout_seconds=float(
                 secrets_manager.get("timeout_seconds", cls.secrets_manager_timeout_seconds) or 10.0
-            ),
-            publish_endpoint_url=str(publish.get("endpoint_url", cls.publish_endpoint_url) or ""),
-            publish_timeout_seconds=float(publish.get("timeout_seconds", cls.publish_timeout_seconds) or 15.0),
-            publish_revoke_endpoint_url=str(
-                publish.get("revoke_endpoint_url", cls.publish_revoke_endpoint_url) or ""
             ),
             autostart_on_boot=runtime.get("autostart_on_boot", cls.autostart_on_boot),
             stay_awake=runtime.get("stay_awake", cls.stay_awake),

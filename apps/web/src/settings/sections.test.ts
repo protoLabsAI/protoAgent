@@ -202,7 +202,6 @@ describe("section ids and order are a contract", () => {
       "knowledge",
       "tracing",
       "secrets",
-      "publish",
       "plugins",
       "snapshot",
       "tools",

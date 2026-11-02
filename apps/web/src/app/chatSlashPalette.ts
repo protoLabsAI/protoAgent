@@ -85,8 +85,8 @@
 // one of three buckets, on ONE question: does it need THIS chat, or merely A thread?
 //
 //   NEEDS THIS CHAT → the row is DISABLED with the reason in `hint`.
-//     /clear /export /publish /btw /trajectory /prompt /perf /compact /bypass /incognito
-//     The first eight read or rewrite accumulated history; auto-creating a blank tab to run
+//     /clear /export /btw /trajectory /prompt /perf /compact /bypass /incognito
+//     The first seven read or rewrite accumulated history; auto-creating a blank tab to run
 //     them would be theater (exporting an empty transcript "succeeds" and tells the operator
 //     nothing). The last two are per-TAB modes: their row's whole value is naming the current
 //     one, and there is no current one without a tab. Disabled-and-explaining beats hidden
@@ -184,7 +184,6 @@ const ROWS: Record<string, RowSpec> = {
     find: ["wipe", "reset", "erase", "empty", "delete history", "start over"],
   },
   export: { needsThisChat: true, find: ["download", "save", "transcript", "file", "markdown"] },
-  publish: { needsThisChat: true, find: ["share", "link", "public", "read-only"] },
   // Dispatched bare, `/btw` posts its own "ask a side question after /btw" note and stops: it
   // needs a question, and a palette row has no way to ask for one. So it DRAFTS, landing the
   // operator in the composer with the token typed — exactly what picking it from the `/` menu
@@ -398,7 +397,7 @@ function clientRows(
       disabled: !!reason,
       // Carried, never evaluated here: the host resolves it per render, so a row gated on a
       // flag still in flight appears when `/api/flags` lands instead of being hidden for the
-      // life of the window (ADR 0068's fail-closed window). `/publish` is the live case.
+      // life of the window (ADR 0068's fail-closed window).
       flag: cmd.flag,
       run: (ctx) => {
         ctx.close();

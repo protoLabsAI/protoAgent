@@ -88,12 +88,6 @@ export const AGENT_SECTIONS = [
   // Flag-off: `shown()` drops it from the nav AND from id resolution, so a persisted "secrets"
   // id falls back to the first visible section instead of a blank pane.
   { id: "secrets", label: "Secrets", icon: "Lock", flag: "secrets-panel" },
-  // Publishing a chat thread to the hosted viewer (#2179 P2, #2682-#2684) — schema fields
-  // (endpoint URLs) + the published-links list/revoke card, same footer-seam pattern as
-  // Secrets above. Behind `chat.publish` (ADR 0068), off by default: the hosted service
-  // (#2685) doesn't exist yet, so there's nothing for this panel to manage until an
-  // operator has a real endpoint to configure.
-  { id: "publish", label: "Publish", icon: "Share2", flag: "chat.publish" },
   { id: "plugins", label: "Plugins", icon: "Puzzle" },
   // Last in the group on purpose: a snapshot exports what every section above configures
   // (identity, model, behavior, plugins) — it IS this agent's definition (ADR 0091).

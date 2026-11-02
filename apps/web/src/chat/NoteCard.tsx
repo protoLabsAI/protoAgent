@@ -4,7 +4,7 @@ import { CircleAlert, CircleCheck, Info, TriangleAlert, type LucideIcon } from "
 import type { ChatMessage, SystemNoteTone } from "../lib/types";
 import { Markdown } from "./LazyMarkdown";
 
-// A local SYSTEM NOTE (noteToThread, a background-job one-liner, an export/publish
+// A local SYSTEM NOTE (noteToThread, a background-job one-liner, an export
 // confirmation) rendered as a card in the thread: the same Card shell as /usage and the
 // HITL response card, with a tone icon + title header over the markdown body. It replaced
 // the toned left-accent banner, which read like quoted text instead of a status the

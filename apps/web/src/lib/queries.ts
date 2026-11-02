@@ -130,9 +130,6 @@ export const queryKeys = {
   get secretsStatus() {
     return ns("secrets", "status");
   },
-  get publishedLinks() {
-    return ns("publish", "links");
-  },
   // Memory inspector (ADR 0069 D7) — subtree so one invalidate refreshes all panels.
   get memory() {
     return ns("memory");
@@ -187,14 +184,6 @@ export const secretsStatusQuery = () =>
     queryKey: queryKeys.secretsStatus,
     queryFn: () => api.secretsStatus(),
     refetchInterval: 30_000,
-  });
-
-// Published chat threads (#2684) — no poll; a publish/revoke mutation invalidates
-// this key directly, same as the other manager lists (devices, watches).
-export const publishedLinksQuery = () =>
-  queryOptions({
-    queryKey: queryKeys.publishedLinks,
-    queryFn: () => api.publishedLinks(),
   });
 
 // Archetypes for the new-agent picker (Basic + installed bundles) — config, not live.

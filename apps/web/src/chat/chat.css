@@ -608,7 +608,7 @@
 .chat-session-slot .pl-message--system .pl-message__content .markdown > :first-child { margin-top: 0; }
 .chat-session-slot .pl-message--system .pl-message__content .markdown > :last-child { margin-bottom: 0; }
 
-/* Local SYSTEM NOTE (noteToThread, background one-liners, export/publish confirmations).
+/* Local SYSTEM NOTE (noteToThread, background one-liners, export confirmations).
    The note renders as a NoteCard (NoteCard.tsx): the DS Card shell /usage and the HITL
    response card use, with a tone icon + title header over the markdown body. The message
    wrapper is neutralized like .chat-note-card below, so the card sits full-width in the

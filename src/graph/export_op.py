@@ -11,7 +11,7 @@ The pass, for one thread:
 3. **Render** — roles as headings, tool calls summarized, content preserved verbatim.
 
 **Redaction is load-bearing here, not decoration.** An exported thread is meant to
-*leave the machine*, and #2179 (P2) publishes this same bundle to a public URL. The
+*leave the machine*. The
 existing ``config_io.strip_secrets_from_doc`` / ``secret_paths`` machinery cannot help:
 it is **config-shaped** — it strips known secret *keys* out of structured YAML. A chat
 thread's secrets are **unstructured**: a token pasted into a message, an ``env`` dump in

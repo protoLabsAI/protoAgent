@@ -16,7 +16,7 @@ export const FS_ROOTS_QUERY_KEY = ["fs-roots"] as const;
  *  output mounts this, so a chat with no file work never fetches the roots.
  *
  *  Passes the console's singleton QueryClient explicitly rather than relying on a provider —
- *  tool cards also mount in isolated trees (render tests, the publish preview) where no
+ *  tool cards also mount in isolated trees (render tests) where no
  *  QueryClientProvider sits above them; with one present it is the same client anyway. */
 export function useEditorLinker(): EditorLinker | null {
   const editor = useEditorPref();

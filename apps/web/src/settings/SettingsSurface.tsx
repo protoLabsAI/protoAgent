@@ -33,7 +33,6 @@ import { developerPanelVisible, useDeveloperChannel } from "../flags/flags";
 import { OverviewPanel } from "./OverviewPanel";
 import { DevicesPanel } from "./DevicesPanel";
 import { SecretsPanel } from "./SecretsPanel";
-import { PublishedLinksSection } from "./PublishedLinksSection";
 import { ProvidersPanel } from "./ProvidersPanel";
 import { SettingsCategoryPanel } from "./SettingsCategory";
 import { ThemeSurface } from "./ThemeSurface";
@@ -122,7 +121,6 @@ const RENDERERS: Record<SettingsSectionId, () => ReactNode> = {
   // other category here renders an empty panel (#3017).
   tracing: () => <SettingsCategoryPanel category="Observability" title="Tracing" />,
   secrets: () => <SecretsPanel />,
-  publish: () => <SettingsCategoryPanel category="Publish" title="Publish" footer={<PublishedLinksSection />} />,
   plugins: () => <PluginSettingsHome />,
   snapshot: () => <SnapshotPanel />,
   tools: () => <ToolsPanel />,

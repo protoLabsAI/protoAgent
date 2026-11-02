@@ -116,14 +116,11 @@ test("the generated rows cover the table, carry their nav heading, and honour th
     "Settings: Chat",
     "Settings: Keyboard",
   ]);
-  // Absent, and the absences are the assertion. Publish (`chat.publish`) is flag-OFF even on
-  // this dev channel. Developer is the interesting one:
-  // it IS in the dialog's rail here (settings.spec.ts pins that), and SETTINGS_PALETTE_EXCLUDED
-  // still drops its row, because its visibility is a CHANNEL decision — neither of the two
-  // axes a row gate can express — so an ungated row would list it to production operators.
-  for (const gated of ["Publish", "Developer"]) {
-    expect(labels).not.toContain(`Settings: ${gated}`);
-  }
+  // Absent, and the absence is the assertion. Developer IS in the dialog's rail here
+  // (settings.spec.ts pins that), and SETTINGS_PALETTE_EXCLUDED still drops its row, because
+  // its visibility is a CHANNEL decision — neither of the two axes a row gate can express —
+  // so an ungated row would list it to production operators.
+  expect(labels).not.toContain("Settings: Developer");
   // The nav heading rides as the trailing hint, and is searchable.
   await searchBox(page).fill("capabilities");
   expect(await rows(page).locator(".pl-cmdk-commands__label").allInnerTexts()).toEqual([
@@ -139,8 +136,24 @@ test("a flag-gated section's row appears — and works — once the flag is on",
   // The gates ride the row as DATA and are resolved per render, so a late `/api/flags` answer
   // (or a ?flag: override) reveals the row rather than it having been filtered out at module
   // load — the fail-closed trap settingsPalette.ts's header describes.
-  await page.goto("/app/?flag:chat.publish=on", { waitUntil: "load" });
+  // The mock serves `secrets-panel` ON (its real dev tier), so force the server's answer OFF
+  // first: the row must be absent, and the override must be what brings it back.
+  await page.route("**/api/flags", (route) =>
+    route.fulfill({
+      json: {
+        channel: "dev",
+        flags: [{ id: "secrets-panel", description: "", tier: "dev", owner: "kj", remove_by: "", enabled: false, source: "channel" }],
+      },
+    }),
+  );
+  await page.goto("/app/", { waitUntil: "load" });
   await expect(page.getByPlaceholder(/Message protoAgent/i)).toBeVisible();
-  await runFirstMatch(page, "settings: publish");
-  await expect(activeSection(page)).toHaveText("Publish");
+  await openPalette(page);
+  await searchBox(page).fill("settings: secrets");
+  await expect(rows(page).filter({ hasText: "Settings: Secrets" })).toHaveCount(0);
+
+  await page.goto("/app/?flag:secrets-panel=on", { waitUntil: "load" });
+  await expect(page.getByPlaceholder(/Message protoAgent/i)).toBeVisible();
+  await runFirstMatch(page, "settings: secrets");
+  await expect(activeSection(page)).toHaveText("Secrets");
 });

@@ -36,38 +36,6 @@ test("slash menu opens and lists the client + server commands", async ({ page })
   expect(names.filter((n) => n === "/clear")).toHaveLength(1);
 });
 
-test("the ?flag: override reveals a flag-gated command (/publish, ADR 0068)", async ({ page }) => {
-  // The ?flag: query override is the shareable "try this build" layer — here it turns the
-  // chat.publish flag ON over its default-off tier, so /publish must list. (/compact was
-  // this test's previous subject; #2785 / ADR 0101 D5 made it generally available.)
-  await page.goto("/app/?flag:chat.publish=on", { waitUntil: "load" });
-  const composer = page.getByPlaceholder(/Message protoAgent/i);
-  await composer.fill("/");
-
-  const menu = page.locator(".slash-menu");
-  await expect(menu).toBeVisible();
-  const names = await menu.locator(".slash-name").allInnerTexts();
-  expect(names).toContain("/publish");
-  expect(names.filter((n) => n === "/compact")).toHaveLength(1); // un-gated since #2785
-});
-
-test("a chat.publish=off command (#2179 P2, #2683) is absent by default and appears when forced on", async ({ page }) => {
-  // Default channel: chat.publish is tier "off" (the hosted service, #2685, doesn't exist
-  // yet), so /publish must NOT be in the base list already asserted above — this test only
-  // needs to confirm the reveal path (a shareable ?flag: link) actually works.
-  await page.goto("/app/?flag:chat.publish=on", { waitUntil: "load" });
-  const composer = page.getByPlaceholder(/Message protoAgent/i);
-  await composer.fill("/");
-
-  const menu = page.locator(".slash-menu");
-  await expect(menu).toBeVisible();
-  const names = await menu.locator(".slash-name").allInnerTexts();
-  expect(names).toContain("/publish");
-  // Registered right after /export in coreSlashCommands.ts — pin the position too, not
-  // just presence, so a future reorder is caught.
-  expect(names.indexOf("/publish")).toBe(names.indexOf("/export") + 1);
-});
-
 test("filtering narrows the menu and selecting completes the command", async ({ page }) => {
   const composer = page.getByPlaceholder(/Message protoAgent/i);
   await composer.fill("/go");

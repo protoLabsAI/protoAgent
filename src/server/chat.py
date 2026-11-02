@@ -152,19 +152,15 @@ from server.turn_control import (  # noqa: F401 — re-export
     submit_server_turn_interjection,
 )
 
-# Session ops (/compact, export, publish, /btw, rewind, fork) moved to
+# Session ops (/compact, export, /btw, rewind, fork) moved to
 # server/chat_session_ops.py and the non-streaming usage/telemetry helpers to
 # server/turn_telemetry.py (#3810). Re-exported so ``from server.chat import …`` and
 # operator_api.chat_routes keep resolving. These are COPIES of the bindings: patch the
 # defining module, never these names (tests/test_chat_session_ops_seam.py guards it).
 from server.chat_session_ops import (  # noqa: F401 — re-export
-    _artifact_resolver,
-    _build_bundle,
     _compaction_message,
     _export_message,
     _fork_message,
-    _publish_message,
-    _publish_preview_message,
     _rewind_message,
     aside_session,
     compact_session,
@@ -172,9 +168,6 @@ from server.chat_session_ops import (  # noqa: F401 — re-export
     forget_delegate_conversations,
     forget_delegate_conversations_for_session,
     fork_session,
-    publish_preview,
-    publish_session,
-    revoke_published_link,
     rewind_session,
 )
 # The streaming turn event loop (``_run_turn_stream``) and the helpers only it uses moved to

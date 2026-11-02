@@ -26,7 +26,7 @@ import { settingsPaletteCommands } from "./settingsPalette";
 import "../chat/coreSlashCommands"; // side-effect: registers the client commands
 import { registerSlashDispatcher } from "../chat/slashDispatch";
 import type { SlashDispatchTarget } from "../chat/slashDispatch";
-import { registeredSlashCommands } from "../ext/slashRegistry";
+import { registerSlashCommand, registeredSlashCommands } from "../ext/slashRegistry";
 import type { Command } from "@protolabsai/ui/command-palette";
 import type { PaletteCommand } from "../ext/paletteRegistry";
 import type { SlashCommand } from "../lib/types";
@@ -180,12 +180,19 @@ describe("client slash command rows", () => {
     expect(row("chat-slash:effort").keywords?.join(" ")).toContain("max");
   });
 
-  it("carries /publish's flag onto the row instead of evaluating it", () => {
+  it("carries a command's flag onto the row instead of evaluating it", () => {
     // Evaluating a flag here would run during the fail-closed window while /api/flags is in
     // flight (ADR 0068) and hide the row for the life of the window. The host resolves it
-    // per render, so a late answer reveals it.
-    expect(row("chat-slash:publish").flag).toBe("chat.publish");
-    expect(row("chat-slash:new").flag).toBeUndefined();
+    // per render, so a late answer reveals it. No core command is flag-tagged today, so the
+    // subject is a throwaway one; a fork's commands take this path.
+    const commands = registeredSlashCommands();
+    registerSlashCommand({ name: "zzflagged", description: "flag-gated", flag: "zz-flag", run: () => true });
+    try {
+      expect(row("chat-slash:zzflagged").flag).toBe("zz-flag");
+      expect(row("chat-slash:new").flag).toBeUndefined();
+    } finally {
+      commands.splice(commands.findIndex((c) => c.name === "zzflagged"), 1);
+    }
   });
 
   it("advertises a keybinding by ID, and leaves the hint free so the LIVE combo renders", () => {
@@ -236,7 +243,7 @@ describe("a per-tab MODE is never a one-Enter row", () => {
 
 describe("session semantics — the decision, per command", () => {
   const THIS_CHAT = [
-    "clear", "export", "publish", "btw", "trajectory", "prompt", "perf", "usage", "compact",
+    "clear", "export", "btw", "trajectory", "prompt", "perf", "usage", "compact",
     "bypass", "incognito",
   ];
   const THREAD_ONLY = ["help", "effort", "model", "goal", "watch"];
@@ -416,7 +423,6 @@ describe("what an operator types finds the row they mean", () => {
     ["wipe", "chat-slash:clear"],
     ["start over", "chat-slash:clear"],
     ["download transcript", "chat-slash:export"],
-    ["share link", "chat-slash:publish"],
     ["what the agent saw", "chat-slash:trajectory"],
     ["system prompt", "chat-slash:prompt"],
     ["latency", "chat-slash:perf"],

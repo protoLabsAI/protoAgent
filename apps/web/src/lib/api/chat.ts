@@ -1,6 +1,6 @@
 /**
  * Chat: the turn (streaming A2A + desktop fallback), session ops (delete/compact/export/
- * publish/rewind/fork), steering, task reconcile/resume, slash commands, mentions, inbox.
+ * rewind/fork), steering, task reconcile/resume, slash commands, mentions, inbox.
  *
  * One domain slice of the console `api` object (#3822). `lib/api.ts` composes every slice
  * into the single `api` object importers, `vi.mock` and `vi.spyOn(api, …)` all use — so
@@ -8,12 +8,10 @@
  * (cross-domain orchestration stays in `lib/api.ts`, where it goes through `api.`).
  */
 import type {
-  ChatBundleManifest,
   ChatMessage,
   HitlPayload,
   InboxItem,
   MentionTarget,
-  PublishedLink,
   SlashCommand,
 } from "../types";
 import { notifyAuthRequired } from "../auth";
@@ -184,53 +182,6 @@ export const chatApi = {
       reason: string;
       message: string;
     }>(`/api/chat/sessions/${encodeURIComponent(sessionId)}/export${q}`, { method: "GET" });
-  },
-
-  // Build the structured chat-bundle for the pre-publish review (#2179 P2, #2682) —
-  // read-only, sends nothing anywhere. Behind the `chat.publish` developer flag.
-  fetchPublishPreview(sessionId: string, title?: string) {
-    const q = title ? `?title=${encodeURIComponent(title)}` : "";
-    return request<{
-      found: boolean;
-      manifest: ChatBundleManifest | null;
-      message_count: number;
-      redactions: string[];
-      reason: string;
-      message: string;
-    }>(`/api/chat/sessions/${encodeURIComponent(sessionId)}/publish/preview${q}`, { method: "GET" });
-  },
-
-  // Publish a chat thread to the hosted viewer (#2179 P2, #2683). Rebuilds the bundle
-  // server-side fresh — never sends the client-side preview back up — so `published:
-  // false` with `reason: "not_configured"` is the expected state until the hosted
-  // service (#2685) exists and an operator points `publish.endpoint_url` at it.
-  publishChatSession(sessionId: string, title?: string) {
-    return request<{
-      published: boolean;
-      link_id?: string | null;
-      public_url?: string;
-      revoke_token?: string;
-      expires_at?: string | null;
-      redactions?: string[];
-      artifact_notes?: string[];
-      reason?: string;
-      message: string;
-    }>(`/api/chat/sessions/${encodeURIComponent(sessionId)}/publish`, { method: "POST", body: { title } });
-  },
-
-  // Everything this instance has published (#2684) — never includes the revoke token,
-  // which stays server-internal (presented to the hosted service by the revoke call
-  // below, never sent back to the browser after the initial publish).
-  publishedLinks() {
-    return request<{ links: PublishedLink[] }>("/api/chat/publish/links");
-  },
-  // `ok: false` with `reason: "not_configured"` when no revoke endpoint is set — same
-  // honest-state shape as publishing itself, not an error status.
-  revokePublishedLink(id: string) {
-    return request<{ ok: boolean; reason?: string; error?: string }>(
-      `/api/chat/publish/links/${encodeURIComponent(id)}/revoke`,
-      { method: "POST" },
-    );
   },
 
   // `/btw` (#2180): ask a side question about this session's context WITHOUT changing

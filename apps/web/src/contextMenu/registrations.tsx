@@ -1,4 +1,4 @@
-import { ArrowLeftRight, ChevronDown, ChevronsLeft, ChevronsRight, ChevronUp, Download, Eye, EyeOff, Pencil, Plus, Puzzle, RefreshCw, Share2, SlidersHorizontal, SquareArrowOutUpRight, Trash2, X } from "lucide-react";
+import { ArrowLeftRight, ChevronDown, ChevronsLeft, ChevronsRight, ChevronUp, Download, Eye, EyeOff, Pencil, Plus, Puzzle, RefreshCw, SlidersHorizontal, SquareArrowOutUpRight, Trash2, X } from "lucide-react";
 
 import { openView } from "../app/usePaletteRegistry";
 import { useUI } from "../state/uiStore";
@@ -224,7 +224,6 @@ registerContextMenu({
     onToggleIncognito?: () => void;
     onRename?: () => void;
     onExport?: () => void;
-    onPublish?: () => void;
     onContinueInZed?: () => void;
     onClose?: () => void;
     onCloseOthers?: () => void;
@@ -250,9 +249,6 @@ registerContextMenu({
       });
       if (ctx.onExport) {
         out.push({ id: "export", label: "Export as Markdown", icon: <Download size={14} />, run: () => ctx.onExport?.() });
-      }
-      if (ctx.onPublish) {
-        out.push({ id: "publish", label: "Publish…", icon: <Share2 size={14} />, run: () => ctx.onPublish?.() });
       }
       // Present only while the external editor is Zed (ChatSurface passes it only then).
       if (ctx.onContinueInZed) {

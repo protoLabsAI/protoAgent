@@ -2,6 +2,16 @@
 
 Status: **Proposed**
 
+> **Amended 2026-11-01: the hosted publish parts were removed (#2683).** The hosted viewer
+> service (#2685) doesn't exist and isn't planned, so `chat.publish` could never graduate.
+> Gone: D7's `infra/publish` client, D8's preview and publish routes, D9's `PublishDialog`,
+> D10/D11's published-links store and revoke route, D12's Settings ▸ Publish section, and the
+> `publish.*` config fields. What stays is the format itself (D1-D6): `graph/chat_bundle.py`,
+> `tests/test_chat_bundle.py`, and `plugins.artifact.resolve_for_bundle`. Nothing calls
+> `graph.chat_bundle` in production now; `/export` is the Markdown path (D2) and never used
+> it. The text below is the original decision, kept as history. A leftover `publish:` section
+> in `config.yaml` is ignored, and an on-disk `published_links.json` is left alone.
+
 ## Context
 
 P1 (#2158/#2181) exports a thread as a single self-contained Markdown string
