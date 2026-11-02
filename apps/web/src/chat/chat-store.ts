@@ -10,7 +10,7 @@ import {
   turnBubbleIndexes,
 } from "./turnText";
 import { readKey, writeKey } from "../lib/storage";
-import { validThumbnails } from "./imageThumbnails";
+import { attachmentDisplay, validThumbnails } from "./imageThumbnails";
 import { persistBlocked } from "../lib/storageReset";
 
 export const MAX_SESSIONS = 50;
@@ -313,7 +313,8 @@ function id(prefix: string) {
 export const DEFAULT_SESSION_TITLE = "New chat";
 
 function titleFromMessages(messages: ChatMessage[]) {
-  const text = messages.find((message) => message.role === "user")?.content.trim();
+  const first = messages.find((message) => message.role === "user");
+  const text = first?.content.trim() || attachmentDisplay("", first?.attachments?.map((a) => a.name) ?? []);
   if (!text) return DEFAULT_SESSION_TITLE;
   return text.length > 52 ? `${text.slice(0, 49)}...` : text;
 }
@@ -662,8 +663,9 @@ function persist(state: ChatState) {
       for (const message of session.messages) {
         if (result.ok || result.reason !== "quota") return;
         if (!message.attachments?.length) continue;
+        message.content = attachmentDisplay(message.content, message.attachments.map((a) => a.name));
         delete message.attachments;
-        result = writeKey("local", STORAGE_KEY, JSON.stringify(payload));
+        result = writeKey("local", STORAGE_KEY, JSON.stringify(payload), { retryReduced: true });
       }
     }
   } catch {

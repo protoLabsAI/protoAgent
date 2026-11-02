@@ -1065,18 +1065,18 @@ function MessageImages({ attachments }: { attachments: ChatMessage["attachments"
   const thumbnails = validThumbnails(attachments);
   if (!thumbnails.length) return null;
   return <>
-    <div style={{ display: "flex", flexWrap: "wrap", gap: "var(--pl-space-2)" }}>
+    <div className="chat-message-images">
       {thumbnails.map((attachment, index) => (
         <button key={index} type="button" aria-label={`Preview ${attachment.name}`}
           onClick={() => setPreview(attachment)}
-          style={{ padding: 0, border: 0, background: "transparent", cursor: "zoom-in", maxWidth: "100%" }}>
+          className="chat-message-images__button">
           <img src={attachment.thumb} alt={attachment.name}
-            style={{ display: "block", width: 200, maxWidth: "100%", height: "auto", borderRadius: "var(--pl-radius-md)" }} />
+            className="chat-message-images__thumbnail" />
         </button>
       ))}
     </div>
     {preview ? <Dialog open onClose={() => setPreview(null)} title={preview.name} width="min(640px, 96vw)">
-      <img src={preview.thumb} alt={preview.name} style={{ display: "block", width: "100%", maxHeight: "75vh", objectFit: "contain" }} />
+      <img src={preview.thumb} alt={preview.name} className="chat-message-images__preview" />
     </Dialog> : null}
   </>;
 }

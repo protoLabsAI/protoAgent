@@ -353,8 +353,12 @@ export function readKey(area: StorageArea, key: string): string | null {
 }
 
 /** Write a key. Never throws. On a localStorage quota error: evict once, retry once, then
- *  latch `failing`. While latched, evictable keys fail fast without touching storage. */
-export function writeKey(area: StorageArea, key: string, value: string): WriteResult {
+ *  latch `failing`. While latched, evictable keys fail fast without touching storage.
+ *  A caller dropping optional data may opt into a strictly smaller retry of a failed key. */
+export function writeKey(
+  area: StorageArea, key: string, value: string,
+  options: { retryReduced?: boolean } = {},
+): WriteResult {
   const s = store(area);
   if (!s) return { ok: false, reason: "unavailable" };
   const bytes = entryBytes(key, value);
@@ -371,10 +375,12 @@ export function writeKey(area: StorageArea, key: string, value: string): WriteRe
   const shrinking = prevBytes !== null && bytes < prevBytes;
   const latched = area === "local" && _pressure.state === "failing";
   const evictable = matchKey(area, key)?.spec.evictable ?? false;
-  if (latched && evictable && !nonGrowing) return { ok: false, reason: "quota" };
+  const failed = _failedBytes.get(key);
+  const reducedRetry = latched && options.retryReduced === true && failed !== undefined && bytes < failed;
+  if (latched && evictable && !nonGrowing && !reducedRetry) return { ok: false, reason: "quota" };
   try {
     rawSet(area, s, key, value);
-    if (area === "local" && shrinking) releaseLatch(); // only a strictly smaller write proves space came back
+    if (area === "local" && (shrinking || reducedRetry)) releaseLatch();
     return { ok: true };
   } catch (err) {
     if (!isQuotaError(err)) return { ok: false, reason: "unavailable" };
@@ -384,11 +390,11 @@ export function writeKey(area: StorageArea, key: string, value: string): WriteRe
   // While latched, don't re-run eviction for a write this size (or larger) of a key that
   // already failed after one — the hook found nothing then, and nothing has changed since
   // (any removal, storage event or successful eviction releases the latch and clears this).
-  const failed = _failedBytes.get(key);
   if (!(latched && failed !== undefined && bytes >= failed)) {
     runEviction(key, bytes);
     try {
       rawSet(area, s, key, value);
+      if (reducedRetry) releaseLatch();
       return { ok: true };
     } catch (err) {
       if (!isQuotaError(err)) return { ok: false, reason: "unavailable" };

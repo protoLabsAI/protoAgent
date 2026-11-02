@@ -37,10 +37,8 @@ export function validThumbnails(value: unknown): ImageThumbnail[] {
     .map(({ name, mime, thumb }) => ({ name, mime, thumb }));
 }
 
-/** The text shown in — and persisted for — a user bubble: the caption, plus an
- *  "Attached: …" line naming the given attachments (deduped, order preserved). Images with
- *  a usable preview are rendered inline by MessageImages and are NOT named here; piped files
- *  and preview-less images are, so the bubble still signals them. */
+/** Build a caption plus an "Attached: …" line for the supplied names (deduped, order
+ *  preserved). Callers choose names for visible bubble text or durable fallback text. */
 export function attachmentDisplay(text: string, names: string[]): string {
   const listed = [...new Set(names.filter(Boolean))].join(", ");
   return listed ? [text, `Attached: ${listed}`].filter(Boolean).join("\n\n") : text;

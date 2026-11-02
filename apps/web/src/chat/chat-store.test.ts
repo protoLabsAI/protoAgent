@@ -234,11 +234,13 @@ const msg = (content: string) =>
 
 describe("persist debouncing", () => {
   let setItem: ReturnType<typeof vi.spyOn>;
+  let originalSet: Storage["setItem"];
 
   beforeEach(() => {
     vi.useFakeTimers();
     window.localStorage.clear();
     vi.resetModules(); // fresh module-level store + timer state per test
+    originalSet = Storage.prototype.setItem;
     setItem = vi.spyOn(Storage.prototype, "setItem");
   });
 
@@ -267,17 +269,33 @@ describe("persist debouncing", () => {
       .toEqual([{ name: "photo", mime: "image/png", thumb: attachment.thumb }]);
   });
 
+  it("titles image-only sends consistently with durable fallback and preserves the title on reload", async () => {
+    const { chatStore, flushChatPersist } = await freshStore();
+    const { sentAttachments } = await import("./imageThumbnails");
+    const id = chatStore.getSnapshot().currentSessionId!;
+    const sent = sentAttachments("", [{ name: "photo.png", mime: "image/png", thumb: "data:image/jpeg;base64,YQ==" }], []);
+    const message: ChatMessage = { role: "user", content: sent.bubble, attachments: sent.previews };
+    chatStore.updateMessages(id, [message]);
+    expect(chatStore.getSnapshot().sessions.find((s) => s.id === id)!.title).toBe(sent.durable);
+    chatStore.updateMessages(id, [message, { role: "user", content: "Later question" }]);
+    flushChatPersist();
+    vi.resetModules();
+    const reloaded = await import("./chat-store");
+    const session = reloaded.chatStore.getSnapshot().sessions.find((s) => s.id === id)!;
+    expect(session.title).toBe("Attached: photo.png");
+    expect(session.messages[0].content).toBe("");
+    expect(session.messages[0].attachments).toEqual(sent.previews);
+  });
+
   it("retries quota failures without previews and leaves live messages intact", async () => {
     const { chatStore, flushChatPersist } = await freshStore();
     const id = chatStore.getSnapshot().currentSessionId!;
-    chatStore.updateMessages(id, [{ role: "user", content: "Before",
-      attachments: [{ name: "photo", mime: "image/png", thumb: "data:image/jpeg;base64," + "A".repeat(1000) }] }]);
+    chatStore.updateMessages(id, [{ role: "user", content: "Before" }]);
     flushChatPersist();
     setItem.mockClear();
-    const originalSet = setItem.getMockImplementation();
     setItem.mockImplementation(function (this: Storage, key: string, value: string) {
       if (value.includes("data:image/")) throw new DOMException("full", "QuotaExceededError");
-      return originalSet?.call(this, key, value);
+      return originalSet.call(this, key, value);
     });
     const attachments = [{ name: "photo", mime: "image/png", thumb: "data:image/jpeg;base64,YQ==" }];
     chatStore.updateMessages(id, [{ role: "user", content: "Keep the text", attachments }]);
@@ -285,6 +303,13 @@ describe("persist debouncing", () => {
     const written: string[] = setItem.mock.calls.map((call: unknown[]) => String(call[1]));
     expect(written.some((value) => value.includes("Keep the text") && !value.includes("data:image/"))).toBe(true);
     expect(chatStore.getSnapshot().sessions.find((s) => s.id === id)!.messages[0].attachments).toEqual(attachments);
+    expect(JSON.parse(localStorage.getItem("protoagent.chat.sessions")!).sessions.find((s: ChatSession) => s.id === id).messages[0])
+      .toMatchObject({ content: "Keep the text\n\nAttached: photo" });
+    const { storagePressure } = await import("../lib/storage");
+    expect(storagePressure().state).toBe("ok");
+    chatStore.updateMessages(id, [{ role: "user", content: "A later, longer transcript still saves normally" }]);
+    flushChatPersist();
+    expect(localStorage.getItem("protoagent.chat.sessions")).toContain("A later, longer transcript");
   });
 
   it("coalesces many rapid streamed updates into ONE write", async () => {

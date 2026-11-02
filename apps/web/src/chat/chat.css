@@ -1134,3 +1134,32 @@
   font-style: italic;
   color: var(--pl-color-fg-muted);
 }
+
+.chat-message-images {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--pl-space-2);
+}
+
+.chat-message-images__button {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  cursor: zoom-in;
+  max-width: 100%;
+}
+
+.chat-message-images__thumbnail {
+  display: block;
+  width: 200px;
+  max-width: 100%;
+  height: auto;
+  border-radius: var(--pl-radius-md);
+}
+
+.chat-message-images__preview {
+  display: block;
+  width: 100%;
+  max-height: 75vh;
+  object-fit: contain;
+}
