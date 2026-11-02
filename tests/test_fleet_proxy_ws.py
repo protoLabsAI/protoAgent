@@ -13,6 +13,7 @@ from fastapi.testclient import TestClient
 from starlette.websockets import WebSocketDisconnect
 
 from graph.fleet import proxy
+from tests._ws_server import start_ws_server
 
 
 @pytest.fixture(autouse=True)
@@ -26,32 +27,12 @@ def _testserver_is_a_trusted_host(monkeypatch):
 def _echo_ws_server():
     """A real echo WebSocket server on a free port, in a background thread.
     Returns (port, stop) — proves forward_ws relays frames BOTH ways over real sockets."""
-    import websockets
-
-    holder: dict = {}
-    ready = threading.Event()
-    loop = asyncio.new_event_loop()
-
     async def _echo(conn):
         async for msg in conn:
             await conn.send(msg)  # echo text or binary
 
-    async def _main():
-        server = await websockets.serve(_echo, "127.0.0.1", 0)
-        holder["port"] = server.sockets[0].getsockname()[1]
-        ready.set()
-        await asyncio.Future()  # serve forever
-
-    def _run():
-        asyncio.set_event_loop(loop)
-        try:
-            loop.run_until_complete(_main())
-        except (asyncio.CancelledError, RuntimeError):
-            pass
-
-    threading.Thread(target=_run, daemon=True).start()
-    assert ready.wait(5), "echo ws server didn't start"
-    return holder["port"], (lambda: loop.call_soon_threadsafe(loop.stop))
+    server = start_ws_server(_echo)
+    return server.port, server.stop
 
 
 def _ws_app() -> FastAPI:
@@ -176,12 +157,6 @@ def _recording_ws_server(subprotocols=None):
     ``{path, authorization, subprotocol, headers}``. Returns (port, stop)."""
     import json
 
-    import websockets
-
-    holder: dict = {}
-    ready = threading.Event()
-    loop = asyncio.new_event_loop()
-
     async def _handler(conn):
         req = conn.request
         await conn.send(
@@ -198,22 +173,8 @@ def _recording_ws_server(subprotocols=None):
         async for msg in conn:
             await conn.send(msg)
 
-    async def _main():
-        server = await websockets.serve(_handler, "127.0.0.1", 0, subprotocols=subprotocols)
-        holder["port"] = server.sockets[0].getsockname()[1]
-        ready.set()
-        await asyncio.Future()
-
-    def _run():
-        asyncio.set_event_loop(loop)
-        try:
-            loop.run_until_complete(_main())
-        except (asyncio.CancelledError, RuntimeError):
-            pass
-
-    threading.Thread(target=_run, daemon=True).start()
-    assert ready.wait(5), "recording ws server didn't start"
-    return holder["port"], (lambda: loop.call_soon_threadsafe(loop.stop))
+    server = start_ws_server(_handler, subprotocols=subprotocols)
+    return server.port, server.stop
 
 
 def _closed_hub(monkeypatch):
@@ -643,3 +604,31 @@ def test_local_member_ws_has_no_host_gate(monkeypatch, real_open_hub):
             assert ws.receive_text() == "ping"
     finally:
         stop()
+
+
+def test_stopping_a_ws_server_leaves_no_task_behind():
+    """A leaked connection task gets finalized by GC inside some later test, where it
+    cancelled that test's asyncio.run (test_parked_sessions_query, on three CI runs)."""
+    import websockets.sync.client
+
+    seen = []
+
+    async def _held(conn):
+        seen.append(asyncio.current_task())
+        await conn.wait_closed()
+
+    server = start_ws_server(_held)
+    client = websockets.sync.client.connect(f"ws://127.0.0.1:{server.port}/")
+    try:
+        for _ in range(200):
+            if seen:
+                break
+            threading.Event().wait(0.01)
+        assert seen, "the handler never ran"
+        server.stop()
+    finally:
+        client.close()
+
+    assert server.loop.is_closed()
+    assert seen[0].done()
+    assert not asyncio.all_tasks(server.loop)
