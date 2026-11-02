@@ -103,7 +103,8 @@ restructure" AC).
 
 Graduating a flag to `on` and then **deleting the flag + the old code path in one PR** is the intended
 end state (the AC). Each `Flag` carries `owner` + optional `remove_by`; a test (`tests/test_flags.py`)
-**fails when a flag is past its `remove_by`**, so stale gates are visible debt rather than silent
+**warns when a flag is past its `remove_by`** (it failed CI until 2026-11, when two dates passing
+turned every PR red with no code change), so stale gates are visible debt rather than silent
 accretion. A flag is a loan against future cleanup — the registry makes the loan book auditable.
 
 ### D7 — Why a flag is neither a plugin nor a setting (the overlap the reviewer will ask about)
