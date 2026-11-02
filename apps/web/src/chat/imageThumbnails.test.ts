@@ -1,5 +1,12 @@
 import { afterEach, expect, it, vi } from "vitest";
-import { attachmentDisplay, imageThumbnail, MAX_THUMB_LENGTH, sentAttachments, validThumbnails } from "./imageThumbnails";
+import {
+  attachmentDisplay,
+  displayWithoutThumbnailNames,
+  imageThumbnail,
+  MAX_THUMB_LENGTH,
+  sentAttachments,
+  validThumbnails,
+} from "./imageThumbnails";
 
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 
@@ -55,6 +62,22 @@ it("shows previewable images inline but names piped files, preview-less images, 
   expect(r3.previews).toEqual([]);
   expect(r3.bubble).toBe("Attached: broken.gif");
   expect(r3.durable).toBe("Attached: broken.gif");
+});
+
+it("drops a restored thumbnail's name from the bubble text so a rebuild matches the live send", () => {
+  // The durable display names EVERY image (the fallback), so once a thumbnail is restored
+  // inline its name must come off the "Attached:" line — otherwise the rebuilt bubble shows
+  // the picture AND "Attached: photo.png". Names with no thumbnail stay; with none left the
+  // whole line is dropped, mirroring sentAttachments' live bubble.
+  expect(displayWithoutThumbnailNames("Look\n\nAttached: notes.txt, photo.png", ["photo.png"]))
+    .toBe("Look\n\nAttached: notes.txt");
+  expect(displayWithoutThumbnailNames("Attached: photo.png", ["photo.png"])).toBe("");
+  expect(displayWithoutThumbnailNames("Look\n\nAttached: a.png, b.png", ["a.png", "b.png"])).toBe("Look");
+  // No thumbnails, or no attachment line, or an unmatched name: the display is returned as-is.
+  expect(displayWithoutThumbnailNames("Look\n\nAttached: notes.txt", [])).toBe("Look\n\nAttached: notes.txt");
+  expect(displayWithoutThumbnailNames("just text", ["photo.png"])).toBe("just text");
+  expect(displayWithoutThumbnailNames("Look\n\nAttached: notes.txt", ["photo.png"]))
+    .toBe("Look\n\nAttached: notes.txt");
 });
 
 it("rejects full-size, malformed, and non-image previews", () => {

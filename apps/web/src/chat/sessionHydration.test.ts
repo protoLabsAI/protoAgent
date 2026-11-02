@@ -24,6 +24,7 @@ import {
   sessionFromDurableTurns,
 } from "./sessionHydration";
 import { MAX_SESSIONS } from "./chat-store";
+import { MAX_THUMB_LENGTH } from "./imageThumbnails";
 import { applyText, applyToolEvent } from "./turnReducers";
 import { foldPlan, textRuns } from "./parts";
 import { normaliseMediaText, utf16Fnv1a } from "../lib/api/a2aStream";
@@ -533,6 +534,81 @@ describe("durable turn conversion", () => {
     const [user] = messagesFromDurableTurn(attached);
     expect(user).toMatchObject({ role: "user", content: "Summarize it\n\nAttached: notes.txt" });
     expect(sessionFromDurableTurns(summary(), [attached])?.title).toBe("Summarize it\n\nAttached: notes.txt");
+  });
+
+  // ── Image thumbnails survive a rebuild from durable server state (bd-62xi) ──────────────
+  const THUMB = "data:image/jpeg;base64,YQ==";
+
+  it("restores stored thumbnails onto the rebuilt bubble and strips their names from its text", () => {
+    // A chat reopened in another browser rebuilds from durable state (ADR 0104): the stored
+    // thumbnails come back inline, and the names it now SHOWS drop off the "Attached:" line so
+    // the bubble reads as it did live — never naming an image it also shows.
+    const attached = turn({
+      history: [{
+        role: "ROLE_USER",
+        parts: [{ text: "[image bytes elided]\n\nWhat's in this?" }],
+        metadata: {
+          display: "What's in this?\n\nAttached: notes.txt, mug-desk-snapshot.png",
+          thumbnails: [{ name: "mug-desk-snapshot.png", mime: "image/png", thumb: THUMB }],
+        },
+      }],
+    });
+    const [user] = messagesFromDurableTurn(attached);
+    expect(user).toMatchObject({
+      role: "user",
+      // the thumbnailed image's name is gone; the piped file (no thumbnail) stays named
+      content: "What's in this?\n\nAttached: notes.txt",
+      attachments: [{ name: "mug-desk-snapshot.png", mime: "image/png", thumb: THUMB }],
+    });
+  });
+
+  it("rebuilds an image-only send as its thumbnail, titled from the attachment name", () => {
+    const imageOnly = turn({
+      history: [{
+        role: "ROLE_USER",
+        parts: [{ text: "" }],
+        metadata: { display: "Attached: photo.png", thumbnails: [{ name: "photo.png", mime: "image/png", thumb: THUMB }] },
+      }],
+    });
+    const [user] = messagesFromDurableTurn(imageOnly);
+    // The picture is shown inline, so the bubble text is empty — not a redundant "Attached:" line.
+    expect(user).toMatchObject({ role: "user", content: "", attachments: [{ name: "photo.png", mime: "image/png", thumb: THUMB }] });
+    // …and the tab titles from the attachment name rather than falling back to "New chat".
+    expect(sessionFromDurableTurns(summary(), [imageOnly])?.title).toBe("Attached: photo.png");
+  });
+
+  it("keeps the 'Attached: name' text fallback for a turn that stored no thumbnail (older chats)", () => {
+    // A chat from before this shipped, or one whose preview failed, has no durable thumbnail:
+    // the display names the image, that text stands, and no inline preview is invented.
+    const legacy = turn({
+      history: [{
+        role: "ROLE_USER",
+        parts: [{ text: "[image bytes elided]\n\nWhat's in this?" }],
+        metadata: { display: "What's in this?\n\nAttached: mug-desk-snapshot.png" },
+      }],
+    });
+    const [user] = messagesFromDurableTurn(legacy);
+    expect(user).toMatchObject({ role: "user", content: "What's in this?\n\nAttached: mug-desk-snapshot.png" });
+    expect(user.attachments).toBeUndefined();
+  });
+
+  it("ignores a full-size or malformed stored preview, falling back to the name text", () => {
+    // validThumbnails is the client's own backstop: an oversized data URL (a full image that
+    // somehow reached the metadata) or a non-image value is dropped, and the name text stands.
+    const huge = `data:image/jpeg;base64,${"A".repeat(MAX_THUMB_LENGTH)}`;
+    const bad = turn({
+      history: [{
+        role: "ROLE_USER",
+        parts: [{ text: "x" }],
+        metadata: {
+          display: "look\n\nAttached: big.png",
+          thumbnails: [{ name: "big.png", mime: "image/png", thumb: huge }],
+        },
+      }],
+    });
+    const [user] = messagesFromDurableTurn(bad);
+    expect(user.attachments).toBeUndefined();
+    expect(user).toMatchObject({ content: "look\n\nAttached: big.png" });
   });
 
   it("recovers incognito from the newest OPERATOR message, not a later server-fired one", () => {

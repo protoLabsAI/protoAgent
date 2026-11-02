@@ -21,6 +21,7 @@ import {
   type SessionReconcile,
 } from "./chat-store";
 import { applyDelegateProgressTo } from "./delegateProgress";
+import { attachmentDisplay, displayWithoutThumbnailNames, validThumbnails } from "./imageThumbnails";
 import { rendersText, replaceText, textRuns } from "./parts";
 import { isEmptyPlaceholder, replyClaimsAnswer, roomReplyBubble } from "./roomBubble";
 import { isTaskCanceled, isTaskFailed, isTaskPaused, isTaskTerminal } from "./taskState";
@@ -76,6 +77,18 @@ function operatorPrompt(turn: DurableChatTurn): string {
   return typeof display === "string" ? display : textFromParts(user.parts);
 }
 
+/** The bounded image thumbnails the operator's send carried, kept on the durable turn
+ *  (ADR 0104, bd-62xi) and restored onto the rebuilt user bubble so a chat opened in
+ *  another browser shows the same inline previews. `[]` when the turn stored none (older
+ *  chats, a preview that failed, a hidden send): the `display` text names every image, so
+ *  that "Attached: <name>" fallback stands. `validThumbnails` re-checks the bound + the
+ *  data-URL shape here too, so a hand-edited or oversized entry never reaches render. */
+function operatorThumbnails(turn: DurableChatTurn): ChatMessage["attachments"] {
+  const user = (turn.history ?? []).find(isOperatorMessage);
+  if (!user || user.metadata?.hidden === true) return [];
+  return validThumbnails(user.metadata?.thumbnails);
+}
+
 /** Incognito is per operator message and therefore must be recovered from the
  * newest durable OPERATOR frame — hidden sends included (the console stamps every
  * send), server-fired ones not (they never carry the flag). Defaulting a recovered
@@ -104,8 +117,24 @@ export function messagesFromDurableTurn(turn: DurableChatTurn): ChatMessage[] {
   // borrowed one (the sent-time footer shows nothing for them instead of the wrong time).
   const repliedAt = recordedAt(turn.last_updated);
   const prompt = operatorPrompt(turn);
+  // Restored thumbnails are SHOWN inline, so strip their names from the bubble text — the
+  // rebuilt bubble then reads exactly as the live one did (typed text + inline previews)
+  // instead of naming an image it also shows. With no thumbnails this is a no-op and the
+  // "Attached: <name>" text stands as the fallback.
+  const thumbnails = operatorThumbnails(turn);
+  const content = thumbnails?.length
+    ? displayWithoutThumbnailNames(prompt, thumbnails.map((t) => t.name))
+    : prompt;
   const messages: ChatMessage[] = prompt
-    ? [{ id: `durable-${turn.task_id}-user`, role: "user", content: prompt, status: "done" }]
+    ? [
+        {
+          id: `durable-${turn.task_id}-user`,
+          role: "user",
+          content,
+          status: "done",
+          ...(thumbnails?.length ? { attachments: thumbnails } : {}),
+        },
+      ]
     : [];
   const anchorId = `durable-${turn.task_id}-assistant`;
   const fresh = (): ChatMessage => ({
@@ -356,7 +385,12 @@ export function sessionFromDurableTurns(
   if (!messages.length) return null;
   const createdAt = timestamp(turns[0]?.last_updated ?? summary.last_updated);
   const updatedAt = timestamp(summary.last_updated);
-  const firstPrompt = messages.find((message) => message.role === "user")?.content ?? "";
+  // An image-only send shows its thumbnail inline, so its bubble content is empty — title
+  // it from the attachment names instead, exactly as the live store's `titleFromMessages`
+  // does, so a rebuilt image chat reads "Attached: <name>" rather than "New chat".
+  const firstUser = messages.find((message) => message.role === "user");
+  const firstPrompt =
+    firstUser?.content.trim() || attachmentDisplay("", firstUser?.attachments?.map((a) => a.name) ?? []);
   return {
     id: summary.session_id,
     title: titleFromPrompt(firstPrompt),

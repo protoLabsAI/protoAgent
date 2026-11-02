@@ -262,6 +262,13 @@ export const chatApi = {
       // text when the sent text differs from it (attachment context prepended).
       hidden?: boolean;
       display?: string;
+      // Bounded image previews (small data URLs, longest edge ≤ 320px — never full-size
+      // bytes) the server stores on this turn's durable user message alongside `display`
+      // (ADR 0104, bd-62xi), so a chat rebuilt in another browser restores the same inline
+      // thumbnails rather than only the "Attached: <name>" text. The server ignores them for
+      // the turn itself (it rides the live image parts); they ride into the stored history,
+      // where the executor bounds how many/how large are kept.
+      thumbnails?: { name: string; mime: string; thumb: string }[];
       // Stream to a SPECIFIC fleet member (Fleet Room DM) instead of THIS window's agent:
       // the turn runs on that member via the hub proxy (/agents/<slug>/a2a). "host" = this
       // instance. Omitted → normal chat with the focused agent (apiUrl slug-routing).
@@ -299,7 +306,8 @@ export const chatApi = {
             opts.incognito ||
             opts.hitlResume ||
             opts.hidden ||
-            opts.display !== undefined)
+            opts.display !== undefined ||
+            opts.thumbnails?.length)
             ? {
                 metadata: {
                   ...(opts.model ? { model: opts.model } : {}),
@@ -309,6 +317,7 @@ export const chatApi = {
                   ...(opts.hitlResume ? { hitl_resume: true } : {}),
                   ...(opts.hidden ? { hidden: true } : {}),
                   ...(opts.display !== undefined ? { display: opts.display } : {}),
+                  ...(opts.thumbnails?.length ? { thumbnails: opts.thumbnails } : {}),
                 },
               }
             : {}),

@@ -1600,6 +1600,11 @@ export function ChatSessionSlot({
           : opts.formResponse
             ? formResponseText(opts.formResponse)
             : (opts.display ?? (content !== sent ? content : undefined)),
+        // The bubble's inline image previews ride into the durable turn alongside `display`
+        // (ADR 0104) so a chat rebuilt elsewhere shows the same thumbnails, not just the
+        // "Attached:" names. Bounded data URLs only — the executor caps how many/how large it
+        // keeps; a hidden send drew no bubble, so it carries none.
+        thumbnails: opts.hidden ? undefined : opts.attachments,
       });
       // Stream returned: reveal any withheld tail NOW, before the reconcile
       // below — flushing after it would append the tail on top of the
