@@ -1578,6 +1578,15 @@ _TRANSCRIPT_PROMPT_MAX_CHARS = 16_000
 _TRANSCRIPT_METADATA_KEYS = ("incognito", "hidden", "hitl_resume", "origin")
 _TRANSCRIPT_SHORT_MAX_CHARS = 256  # a kept metadata string, a filename, a media type
 _TRANSCRIPT_URL_MAX_CHARS = 2048  # a plain link is kept; anything longer is a payload
+# Bounded image previews a VISIBLE send carries into the durable turn (bd-62xi): the console
+# restores them onto the rebuilt user bubble so a chat reopened in another browser (ADR 0104)
+# shows the same inline thumbnails, not just the "Attached: <name>" text. Kept FEW and SMALL —
+# a downscaled ``data:`` URL far under the full image, at most a handful — because the SDK
+# re-saves the WHOLE task on every frame; a full-size image would be rewritten hundreds of
+# times a turn. Anything over the cap (a full-size payload, a malformed entry) is dropped, not
+# stored: the live turn takes its images off the request, never off this copy.
+_TRANSCRIPT_MAX_THUMBS = 4
+_TRANSCRIPT_THUMB_MAX_CHARS = 64_000  # one bounded preview URL (the console caps its own < 60_000)
 
 
 def _transcript_opening(message: Message | None, *, server_fired: bool) -> list[Message]:
@@ -1619,6 +1628,53 @@ def _hint(message: Message, key: str) -> bool | str | None:
     return None
 
 
+def _struct_string(fields: Any, key: str) -> str | None:
+    """A string value from a Struct's ``fields`` map, or None — read without serializing
+    the Struct (one non-finite number anywhere in it makes ``MessageToDict`` raise)."""
+    value = fields.get(key)
+    if value is None or value.WhichOneof("kind") != "string_value":
+        return None
+    return value.string_value
+
+
+def _transcript_thumbnails(message: Message) -> list[dict[str, str]]:
+    """The bounded image previews a visible send carried, kept for the durable turn so a
+    rebuilt chat (ADR 0104) shows the same inline thumbnails. Each entry is a short name and
+    media type plus a small ``data:`` URL — a full-size image is dropped, never stored: the
+    console only ever sends the downscaled preview, and the caps here are a hard backstop so
+    bulky or malformed bytes can neither bloat every save nor reach the store. At most
+    ``_TRANSCRIPT_MAX_THUMBS`` are kept. Read field by field (never ``MessageToDict``), so a
+    non-finite number elsewhere in the metadata can't make it raise."""
+    if not message.HasField("metadata"):
+        return []
+    value = message.metadata.fields.get("thumbnails")
+    if value is None or value.WhichOneof("kind") != "list_value":
+        return []
+    out: list[dict[str, str]] = []
+    for entry in value.list_value.values:
+        if entry.WhichOneof("kind") != "struct_value":
+            continue
+        fields = entry.struct_value.fields
+        name = _struct_string(fields, "name")
+        mime = _struct_string(fields, "mime")
+        thumb = _struct_string(fields, "thumb")
+        if not name or not mime or not thumb:
+            continue
+        # Only the console's small preview — never the full-size bytes, by any spelling.
+        if not thumb.startswith("data:image/") or len(thumb) > _TRANSCRIPT_THUMB_MAX_CHARS:
+            continue
+        out.append(
+            {
+                "name": name[:_TRANSCRIPT_SHORT_MAX_CHARS],
+                "mime": mime[:_TRANSCRIPT_SHORT_MAX_CHARS],
+                "thumb": thumb,
+            }
+        )
+        if len(out) >= _TRANSCRIPT_MAX_THUMBS:
+            break
+    return out
+
+
 def _transcript_copy(message: Message) -> Message:
     """The transcript's copy of ``message``, built field by field rather than copied, so
     it is bounded and serializable whatever the client sent: ids and role, the metadata
@@ -1657,6 +1713,11 @@ def _transcript_copy(message: Message) -> Message:
             budget -= len(text)
         kept.parts.append(Part(text=text))
     kept.parts.extend(_attachment_shell(p) for p in message.parts if p.WhichOneof("content") != "text")
+    # The bounded inline previews the bubble showed, restored onto the rebuilt user bubble
+    # (ADR 0104) so a chat reopened elsewhere shows the thumbnails, not just the names.
+    thumbnails = _transcript_thumbnails(message)
+    if thumbnails:
+        kept.metadata.update({"thumbnails": thumbnails})
     return kept
 
 

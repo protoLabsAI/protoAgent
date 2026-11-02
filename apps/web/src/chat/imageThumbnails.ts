@@ -44,6 +44,32 @@ export function attachmentDisplay(text: string, names: string[]): string {
   return listed ? [text, `Attached: ${listed}`].filter(Boolean).join("\n\n") : text;
 }
 
+/** The bubble text for a turn rebuilt from durable state (ADR 0104) once its stored
+ *  thumbnails are restored inline: the durable `display` with the names now SHOWN as
+ *  thumbnails removed from its trailing "Attached:" line — so the rebuilt bubble reads
+ *  exactly as the live one did (typed text + inline previews), never naming an image it
+ *  also shows. Names with no thumbnail (piped files, a failed preview) stay on the line;
+ *  with none left the whole line is dropped. The durable display is the fallback, so when
+ *  nothing was restored this is a no-op and every name still shows as text. */
+export function displayWithoutThumbnailNames(display: string, thumbNames: string[]): string {
+  if (!thumbNames.length) return display;
+  const strip = new Set(thumbNames);
+  const marker = "Attached: ";
+  let prefix: string;
+  let listStart: number;
+  if (display.startsWith(marker)) {
+    prefix = "";
+    listStart = marker.length;
+  } else {
+    const at = display.lastIndexOf(`\n\n${marker}`);
+    if (at === -1) return display; // no attachment line to trim
+    prefix = display.slice(0, at);
+    listStart = at + 2 + marker.length;
+  }
+  const remaining = display.slice(listStart).split(", ").filter((name) => !strip.has(name));
+  return attachmentDisplay(prefix, remaining);
+}
+
 /** Resolve one composer send with attachments into what the turn needs: the inline image
  *  `previews` for the bubble, the local `bubble` text, and the `durable` display persisted
  *  server-side (ADR 0104). A previewable image is SHOWN inline, so it's named only in

@@ -1161,7 +1161,11 @@ export type QueuedSteer = ConsumedSteer & {
 };
 
 export type ChatMessage = {
-  /** Bounded previews only; originals travel via the API. */
+  /** Bounded image previews only (small data URLs, longest edge ≤ 320px); originals travel
+   *  via the API, never here. A visible attachment send carries these into the turn's durable
+   *  history alongside its `display` text (ADR 0104, bd-62xi), so a chat rebuilt in another
+   *  browser restores the same inline thumbnails — falling back to the "Attached: <name>" text
+   *  when a turn stored none (older chats, a preview that failed, or dropped under quota). */
   attachments?: { name: string; mime: string; thumb: string }[];
   id?: string;
   role: "user" | "assistant" | "system";
