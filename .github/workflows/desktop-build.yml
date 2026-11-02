@@ -442,7 +442,15 @@ jobs:
             exit 1
           fi
 
-          xcrun stapler staple "$DMG"
+          # Apple's ticket server (CloudKit) drops connections from CI runners, and stapler
+          # has no retry of its own. notarytool has already said Accepted at this point, so
+          # a failure here is the network, not the artifact.
+          for attempt in 1 2 3 4 5; do
+            if xcrun stapler staple "$DMG"; then break; fi
+            if [ "$attempt" = 5 ]; then exit 1; fi
+            echo "::warning::stapler staple failed (attempt $attempt/5) — retrying in 30s"
+            sleep 30
+          done
 
       - name: Verify macOS artifact
         if: runner.os == 'macOS'
@@ -453,7 +461,14 @@ jobs:
           set -euo pipefail
           FLAG=""
           if [ "${{ steps.build.outputs.signed }}" = "true" ]; then FLAG="--require-signed"; fi
-          scripts/verify-macos-desktop.sh $FLAG dist-desktop/*.dmg
+          # Its stapler checks reach the same flaky ticket server as the staple step. The
+          # script is repeatable, and a bad artifact still fails on every attempt.
+          for attempt in 1 2 3 4; do
+            if scripts/verify-macos-desktop.sh $FLAG dist-desktop/*.dmg; then break; fi
+            if [ "$attempt" = 4 ]; then exit 1; fi
+            echo "::warning::macOS artifact check failed (attempt $attempt/4) — retrying in 30s"
+            sleep 30
+          done
 
       - name: Upload test-build artifact
         # No tag → a test build: bundles are downloadable workflow artifacts only.
