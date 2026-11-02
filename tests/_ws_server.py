@@ -18,6 +18,9 @@ def start_ws_server(handler: Callable, **serve_kwargs) -> SimpleNamespace:
     """Serve ``handler``. Returns a namespace with ``port``, ``loop`` and ``stop()``."""
     import websockets
 
+    # A peer that's already gone never answers the close frame, so keep this well under
+    # the join below. The websockets default is 10s.
+    serve_kwargs.setdefault("close_timeout", 0.5)
     ready = threading.Event()
     state = SimpleNamespace(port=0, loop=asyncio.new_event_loop(), stop=None)
     shutdown: dict = {}

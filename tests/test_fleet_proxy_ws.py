@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import asyncio
 import threading
+import time
 
 import pytest
 from fastapi import FastAPI, WebSocket
@@ -623,7 +624,7 @@ def test_stopping_a_ws_server_leaves_no_task_behind():
         for _ in range(200):
             if seen:
                 break
-            threading.Event().wait(0.01)
+            time.sleep(0.01)
         assert seen, "the handler never ran"
         server.stop()
     finally:
