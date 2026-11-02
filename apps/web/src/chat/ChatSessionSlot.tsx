@@ -44,7 +44,7 @@ import {
 import { BackgroundWorkStrip } from "./BackgroundWorkStrip";
 import { GoalRunStrip } from "./GoalRunStrip";
 import { messageId } from "./messageId";
-import { attachmentDisplay } from "./imageThumbnails";
+import { sentAttachments } from "./imageThumbnails";
 import { readyNativeAttachments, readyNativeImages, useAttachments } from "./useAttachments";
 import { useSlashAutocomplete } from "./useSlashAutocomplete";
 import { formResponseText, useHitl } from "./useHitl";
@@ -763,14 +763,17 @@ export function ChatSessionSlot({
       return;
     }
     const images = readyNativeImages(attachments);
-    // The model gets the pipeline context prepended + the images natively; the
-    // user bubble shows text, image previews, and piped filenames (never raw context).
+    // The model gets the pipeline context prepended + the images natively. The user bubble
+    // shows text + inline image previews; piped filenames (and any image whose preview
+    // failed) stay on the "Attached:" line so the bubble is never blank. The DURABLE display
+    // persisted server-side names every image too — a chat rebuilt elsewhere (ADR 0104) has
+    // no cached thumbnail, so without the name an image-only turn would come back blank and
+    // fall back to the default session title (never raw context in either).
     const sent = [...piped.map((a) => a.context as string), text].join("\n\n").trim();
-    const display = attachmentDisplay(text, piped);
-    const previews = nativeImgs.flatMap((a) => a.thumb
-      ? [{ name: a.name, mime: a.mime || "image/png", thumb: a.thumb }] : []);
+    const pipedNames = piped.filter((a) => !a.native).map((a) => a.name);
+    const { bubble, durable, previews } = sentAttachments(text, nativeImgs, pipedNames);
     setAttachments([]);
-    void runTurn(display, { sendAs: sent, images, attachments: previews });
+    void runTurn(bubble, { sendAs: sent, images, attachments: previews, display: durable });
   }
 
   // ↑ on an empty composer: pull the newest queued steer OUT of the turn and back into the
@@ -1026,6 +1029,11 @@ export function ChatSessionSlot({
       attachments?: ChatMessage["attachments"];
       hidden?: boolean;
       sendAs?: string;
+      // What this turn looks like in a chat rebuilt from durable server state (ADR 0104) —
+      // it has no cached thumbnails, so a send with inline image previews passes a display
+      // that still NAMES the images here. Falls back to `content` (when it differs from the
+      // model-facing `sendAs`) for callers that don't set it.
+      display?: string;
       images?: { b64: string; mime: string; name: string }[];
       resumeMessageId?: string;
       // This message answers the pending HITL interrupt (#1560) — see resumeHitl.
@@ -1592,9 +1600,7 @@ export function ChatSessionSlot({
           ? undefined
           : opts.formResponse
             ? formResponseText(opts.formResponse)
-            : content !== sent
-              ? content
-              : undefined,
+            : (opts.display ?? (content !== sent ? content : undefined)),
       });
       // Stream returned: reveal any withheld tail NOW, before the reconcile
       // below — flushing after it would append the tail on top of the

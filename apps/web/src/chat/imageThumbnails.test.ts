@@ -1,5 +1,5 @@
 import { afterEach, expect, it, vi } from "vitest";
-import { attachmentDisplay, imageThumbnail, MAX_THUMB_LENGTH, validThumbnails } from "./imageThumbnails";
+import { attachmentDisplay, imageThumbnail, MAX_THUMB_LENGTH, sentAttachments, validThumbnails } from "./imageThumbnails";
 
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 
@@ -24,11 +24,37 @@ it.each([[1600, 800, 320, 160], [600, 1200, 160, 320], [80, 40, 80, 40]])(
   },
 );
 
-it("lists only piped files, including when an image also has description context", () => {
-  expect(attachmentDisplay("Look", [{ name: "photo.png", native: true }, { name: "notes.txt" }]))
-    .toBe("Look\n\nAttached: notes.txt");
-  expect(attachmentDisplay("", [{ name: "photo.png", native: true }])).toBe("");
-  expect(attachmentDisplay("", [{ name: "notes.txt" }])).toBe("Attached: notes.txt");
+it("appends a deduped Attached line only when names are present", () => {
+  expect(attachmentDisplay("Look", ["notes.txt"])).toBe("Look\n\nAttached: notes.txt");
+  expect(attachmentDisplay("", [])).toBe("");
+  expect(attachmentDisplay("", ["notes.txt"])).toBe("Attached: notes.txt");
+  expect(attachmentDisplay("Look", ["a.txt", "a.txt", "b.txt"])).toBe("Look\n\nAttached: a.txt, b.txt");
+});
+
+it("shows previewable images inline but names piped files, preview-less images, and every image durably", () => {
+  const withThumb = { name: "photo.png", mime: "image/png", thumb: "data:image/jpeg;base64,YQ==" };
+  const noThumb = { name: "broken.gif", mime: "image/gif" }; // thumbnail generation failed
+
+  // Caption + a previewable image + a piped file: the image is SHOWN (not named in the
+  // bubble) but the durable display, which rebuilds with no cached thumbnail, names it too.
+  const r1 = sentAttachments("Look", [withThumb], ["notes.txt"]);
+  expect(r1.previews).toEqual([withThumb]);
+  expect(r1.bubble).toBe("Look\n\nAttached: notes.txt");
+  expect(r1.durable).toBe("Look\n\nAttached: notes.txt, photo.png");
+
+  // Image-only send with a working preview: blank caption, no "Attached:" line locally, but
+  // the durable display still names the image so the turn (and its title) survive a rebuild.
+  const r2 = sentAttachments("", [withThumb], []);
+  expect(r2.previews).toEqual([withThumb]);
+  expect(r2.bubble).toBe("");
+  expect(r2.durable).toBe("Attached: photo.png");
+
+  // Thumbnail FAILED: no preview, so the image falls back to the "Attached:" line in BOTH
+  // the bubble and the durable display — an image-only send is never a blank message.
+  const r3 = sentAttachments("", [noThumb], []);
+  expect(r3.previews).toEqual([]);
+  expect(r3.bubble).toBe("Attached: broken.gif");
+  expect(r3.durable).toBe("Attached: broken.gif");
 });
 
 it("rejects full-size, malformed, and non-image previews", () => {

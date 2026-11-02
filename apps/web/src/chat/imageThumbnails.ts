@@ -37,7 +37,35 @@ export function validThumbnails(value: unknown): ImageThumbnail[] {
     .map(({ name, mime, thumb }) => ({ name, mime, thumb }));
 }
 
-export function attachmentDisplay(text: string, piped: { name: string; native?: boolean }[]): string {
-  const names = [...new Set(piped.filter((a) => !a.native).map((a) => a.name))].join(", ");
-  return names ? [text, `Attached: ${names}`].filter(Boolean).join("\n\n") : text;
+/** The text shown in — and persisted for — a user bubble: the caption, plus an
+ *  "Attached: …" line naming the given attachments (deduped, order preserved). Images with
+ *  a usable preview are rendered inline by MessageImages and are NOT named here; piped files
+ *  and preview-less images are, so the bubble still signals them. */
+export function attachmentDisplay(text: string, names: string[]): string {
+  const listed = [...new Set(names.filter(Boolean))].join(", ");
+  return listed ? [text, `Attached: ${listed}`].filter(Boolean).join("\n\n") : text;
+}
+
+/** Resolve one composer send with attachments into what the turn needs: the inline image
+ *  `previews` for the bubble, the local `bubble` text, and the `durable` display persisted
+ *  server-side (ADR 0104). A previewable image is SHOWN inline, so it's named only in
+ *  `durable` — a chat rebuilt in another browser (or after a cleared cache / dropped preview)
+ *  has no cached thumbnail, so without the name it would come back blank. An image whose
+ *  preview failed, and every piped file, are named in BOTH so the local bubble is never
+ *  blank and an image-only turn never saves as empty text (which would lose the turn, and
+ *  its title, on rebuild). */
+export function sentAttachments(
+  text: string,
+  images: { name: string; mime?: string; thumb?: string }[],
+  pipedNames: string[],
+): { previews: ImageThumbnail[]; bubble: string; durable: string } {
+  const previews = images.flatMap((a) =>
+    a.thumb ? [{ name: a.name, mime: a.mime || "image/png", thumb: a.thumb }] : [],
+  );
+  const unpreviewable = images.filter((a) => !a.thumb).map((a) => a.name);
+  return {
+    previews,
+    bubble: attachmentDisplay(text, [...pipedNames, ...unpreviewable]),
+    durable: attachmentDisplay(text, [...pipedNames, ...images.map((a) => a.name)]),
+  };
 }
