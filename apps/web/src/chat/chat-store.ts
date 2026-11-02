@@ -10,6 +10,7 @@ import {
   turnBubbleIndexes,
 } from "./turnText";
 import { readKey, writeKey } from "../lib/storage";
+import { validThumbnails } from "./imageThumbnails";
 import { persistBlocked } from "../lib/storageReset";
 
 export const MAX_SESSIONS = 50;
@@ -651,7 +652,20 @@ function persist(state: ChatState) {
       ),
       currentSessionId: state.currentSessionId,
     };
-    writeKey("local", STORAGE_KEY, JSON.stringify(payload));
+    // Only bounded preview fields enter the durable cache.
+    payload.sessions = payload.sessions.map((s) => ({ ...s, messages: s.messages.map((m) =>
+      m.attachments ? { ...m, attachments: validThumbnails(m.attachments) } : m) }));
+    let result = writeKey("local", STORAGE_KEY, JSON.stringify(payload));
+    // Under quota pressure, discard oldest previews while retaining transcript text.
+    const oldest = [...payload.sessions].sort((a, b) => a.updatedAt - b.updatedAt);
+    for (const session of oldest) {
+      for (const message of session.messages) {
+        if (result.ok || result.reason !== "quota") return;
+        if (!message.attachments?.length) continue;
+        delete message.attachments;
+        result = writeKey("local", STORAGE_KEY, JSON.stringify(payload));
+      }
+    }
   } catch {
     // Storage can be unavailable in hardened browser contexts.
   }

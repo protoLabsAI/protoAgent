@@ -254,6 +254,39 @@ describe("persist debouncing", () => {
     return mod;
   }
 
+  it("reloads bounded thumbnails and strips extra original image bytes", async () => {
+    const { chatStore, flushChatPersist } = await freshStore();
+    const id = chatStore.getSnapshot().currentSessionId!;
+    const attachment = { name: "photo", mime: "image/png", thumb: "data:image/jpeg;base64,YQ==", b64: "ORIGINAL" };
+    chatStore.updateMessages(id, [{ role: "user", content: "Photo", attachments: [attachment] }]);
+    flushChatPersist();
+    expect(localStorage.getItem("protoagent.chat.sessions")).not.toContain("ORIGINAL");
+    vi.resetModules();
+    const reloaded = await import("./chat-store");
+    expect(reloaded.chatStore.getSnapshot().sessions.find((s) => s.id === id)!.messages[0].attachments)
+      .toEqual([{ name: "photo", mime: "image/png", thumb: attachment.thumb }]);
+  });
+
+  it("retries quota failures without previews and leaves live messages intact", async () => {
+    const { chatStore, flushChatPersist } = await freshStore();
+    const id = chatStore.getSnapshot().currentSessionId!;
+    chatStore.updateMessages(id, [{ role: "user", content: "Before",
+      attachments: [{ name: "photo", mime: "image/png", thumb: "data:image/jpeg;base64," + "A".repeat(1000) }] }]);
+    flushChatPersist();
+    setItem.mockClear();
+    const originalSet = setItem.getMockImplementation();
+    setItem.mockImplementation(function (this: Storage, key: string, value: string) {
+      if (value.includes("data:image/")) throw new DOMException("full", "QuotaExceededError");
+      return originalSet?.call(this, key, value);
+    });
+    const attachments = [{ name: "photo", mime: "image/png", thumb: "data:image/jpeg;base64,YQ==" }];
+    chatStore.updateMessages(id, [{ role: "user", content: "Keep the text", attachments }]);
+    flushChatPersist();
+    const written: string[] = setItem.mock.calls.map((call: unknown[]) => String(call[1]));
+    expect(written.some((value) => value.includes("Keep the text") && !value.includes("data:image/"))).toBe(true);
+    expect(chatStore.getSnapshot().sessions.find((s) => s.id === id)!.messages[0].attachments).toEqual(attachments);
+  });
+
   it("coalesces many rapid streamed updates into ONE write", async () => {
     const { chatStore, PERSIST_DEBOUNCE_MS } = await freshStore();
     const sessionId = chatStore.getSnapshot().currentSessionId!;

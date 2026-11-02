@@ -4,6 +4,7 @@ import type React from "react";
 import { api } from "../lib/api";
 import type { ChatImagePart } from "../lib/api/chat";
 import { errMsg } from "../lib/format";
+import { imageThumbnail } from "./imageThumbnails";
 import { messageId } from "./messageId";
 import { filesFromTransfer, isLargePaste, pastedTextFile } from "./paste";
 
@@ -35,6 +36,7 @@ export type PendingAttachment = {
   // Native-vision images skip the pipeline: their base64 + mime ride the turn as
   // a multimodal A2A part straight to the model (no `context`).
   native?: boolean;
+  thumb?: string;
   b64?: string;
   mime?: string;
 };
@@ -85,10 +87,12 @@ export function useAttachments({ sessionId, onError, visionModel, imageDescribe 
     if (kind === "image") {
       try {
         const b64 = await fileToBase64(file);
+        // Preview failure must not block formats the model can read.
+        const thumb = await imageThumbnail(b64, file.type).catch(() => undefined);
         setAttachments((a) =>
           a.map((x) =>
             x.id === id
-              ? { ...x, status: "ready", native: true, b64, mime: file.type || "image/png", mode: "inline" }
+              ? { ...x, status: "ready", native: true, b64, thumb, mime: file.type || "image/png", mode: "inline" }
               : x,
           ),
         );

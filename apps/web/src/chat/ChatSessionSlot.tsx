@@ -44,6 +44,7 @@ import {
 import { BackgroundWorkStrip } from "./BackgroundWorkStrip";
 import { GoalRunStrip } from "./GoalRunStrip";
 import { messageId } from "./messageId";
+import { attachmentDisplay } from "./imageThumbnails";
 import { readyNativeAttachments, readyNativeImages, useAttachments } from "./useAttachments";
 import { useSlashAutocomplete } from "./useSlashAutocomplete";
 import { formResponseText, useHitl } from "./useHitl";
@@ -763,14 +764,13 @@ export function ChatSessionSlot({
     }
     const images = readyNativeImages(attachments);
     // The model gets the pipeline context prepended + the images natively; the
-    // user bubble shows only the typed text + a 📎 list (never a raw doc/data dump).
+    // user bubble shows text, image previews, and piped filenames (never raw context).
     const sent = [...piped.map((a) => a.context as string), text].join("\n\n").trim();
-    // Set-dedupe: a text-only-model image with a describe model is BOTH piped
-    // (context) and native (#1969) — list its name once.
-    const names = [...new Set([...piped, ...nativeImgs].map((a) => a.name))].join(", ");
-    const display = text ? `${text}\n\nAttached: ${names}` : `Attached: ${names}`;
+    const display = attachmentDisplay(text, piped);
+    const previews = nativeImgs.flatMap((a) => a.thumb
+      ? [{ name: a.name, mime: a.mime || "image/png", thumb: a.thumb }] : []);
     setAttachments([]);
-    void runTurn(display, { sendAs: sent, images });
+    void runTurn(display, { sendAs: sent, images, attachments: previews });
   }
 
   // ↑ on an empty composer: pull the newest queued steer OUT of the turn and back into the
@@ -1023,6 +1023,7 @@ export function ChatSessionSlot({
   async function runTurn(
     content: string,
     opts: {
+      attachments?: ChatMessage["attachments"];
       hidden?: boolean;
       sendAs?: string;
       images?: { b64: string; mime: string; name: string }[];
@@ -1057,6 +1058,7 @@ export function ChatSessionSlot({
       content,
       createdAt: Date.now(),
       status: "done",
+      ...(opts.attachments?.length ? { attachments: opts.attachments } : {}),
       ...(opts.sentVia ? { sentVia: opts.sentVia } : {}),
       ...(opts.formResponse ? { formResponse: opts.formResponse } : {}),
     };

@@ -1208,6 +1208,8 @@ export type QueuedSteer = ConsumedSteer & {
 };
 
 export type ChatMessage = {
+  /** Bounded previews only; originals travel via the API. */
+  attachments?: { name: string; mime: string; thumb: string }[];
   id?: string;
   role: "user" | "assistant" | "system";
   content: string;
