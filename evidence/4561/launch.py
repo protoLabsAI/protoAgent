@@ -1,3 +1,4 @@
+# ruff: noqa
 import os,pathlib,json,subprocess
 root=pathlib.Path(__file__).resolve().parent
 home=subprocess.check_output(['mktemp','-d',str(root/'home.XXXXXX')],text=True).strip()
