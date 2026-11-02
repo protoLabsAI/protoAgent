@@ -168,3 +168,37 @@ test("converted utility-bar buttons are DS xs icon buttons (>=24x24 target proxy
     await expect(btn).toHaveClass(/pl-btn--icon/);
   }
 });
+
+test("a saved right-panel width wider than the window stays inside it and survives (#4686)", async ({ page }) => {
+  // The reported shape: a panel dragged wide on a big window, then the window shrinks below
+  // rightWidth + rails. The DS bounds the column when it RENDERS; the stored width stays
+  // verbatim (PROTO.md), so widening the window gives the operator their size back.
+  const saved = 884;
+  await page.addInitScript((rightWidth) => {
+    if (sessionStorage.getItem("seeded-4686")) return;
+    sessionStorage.setItem("seeded-4686", "1");
+    localStorage.setItem(
+      "protoagent.ui",
+      JSON.stringify({ state: { rightWidth, rightCollapsed: false }, version: 14 }),
+    );
+  }, saved);
+
+  await page.setViewportSize({ width: 900, height: 800 });
+  await page.goto("/app/", { waitUntil: "load" });
+
+  const right = page.locator(".pl-appshell__col--right");
+  const left = page.locator(".pl-appshell__col--left");
+  await expect(right).toBeVisible();
+
+  // Nothing runs off the right edge, and Chat keeps a usable column.
+  await expect.poll(async () => {
+    const r = (await right.boundingBox())!;
+    return r.x + r.width;
+  }).toBeLessThanOrEqual(900);
+  expect((await left.boundingBox())!.width).toBeGreaterThanOrEqual(200); // minLeftWidth in App.tsx
+  expect((await right.boundingBox())!.width).toBeLessThan(saved);
+
+  // The bound is render-only: on a window with room the saved width comes back.
+  await page.setViewportSize({ width: 1600, height: 800 });
+  await expect.poll(async () => (await right.boundingBox())!.width).toBeGreaterThan(saved - 8);
+});
