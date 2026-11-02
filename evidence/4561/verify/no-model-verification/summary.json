@@ -1,0 +1,23 @@
+{
+  "flow": "no-model-verification",
+  "version": 1,
+  "base_url": "http://127.0.0.1:54888",
+  "mode": "live",
+  "started_at": "2026-11-01T20:43:20.278Z",
+  "ok": false,
+  "steps": [
+    {
+      "name": "Open completed console and assert missing model banner",
+      "status": "fail",
+      "ms": 5306,
+      "screenshot": "01-open-completed-console-and-assert-missing-model-banner.png",
+      "error": "\u001b[2mexpect(\u001b[22m\u001b[31mlocator\u001b[39m\u001b[2m).\u001b[22mtoBeVisible\u001b[2m(\u001b[22m\u001b[2m)\u001b[22m failed\n\nLocator: getByText('No model connected. The agent can\\'t reply yet.', { exact: true })\nExpected: visible\nTimeout: 5000ms\nError: element(s) not found\n\nCall log:\n\u001b[2m  - Expect \"toBeVisible\" with timeout 5000ms\u001b[22m\n\u001b[2m  - waiting for getByText('No model connected. The agent can\\'t reply yet.', { exact: true })\u001b[22m\n"
+    },
+    {
+      "name": "Follow Connect a model to model setup",
+      "status": "skipped",
+      "ms": 0,
+      "screenshot": null
+    }
+  ]
+}

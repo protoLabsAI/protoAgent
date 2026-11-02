@@ -1,0 +1,22 @@
+{
+  "flow": "no-model-verification",
+  "version": 1,
+  "base_url": "http://127.0.0.1:54888",
+  "mode": "live",
+  "started_at": "2026-11-01T20:44:57.580Z",
+  "ok": true,
+  "steps": [
+    {
+      "name": "Open completed console and assert missing model banner",
+      "status": "pass",
+      "ms": 548,
+      "screenshot": "01-open-completed-console-and-assert-missing-model-banner.png"
+    },
+    {
+      "name": "Follow Connect a model to model setup",
+      "status": "pass",
+      "ms": 134,
+      "screenshot": "02-follow-connect-a-model-to-model-setup.png"
+    }
+  ]
+}

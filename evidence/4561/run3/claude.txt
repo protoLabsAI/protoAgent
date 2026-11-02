@@ -1,0 +1,43 @@
+protoagent
+protoLabs.studio
+Chat
+Knowledge
+Memory
+Docs
+Friction
+New chat
+Try one of these
+Take a quick tour
+Summarise a web page
+Remember my preferences
+Ask Claude Code to add a test
+Needs Claude Code installed
+protolabs/reasoning
+Loading work…
+Work
+Artifact
+Notes
+Model
+
+Claude subscription — your own plan
+
+HOW THIS AGENT THINKS
+API key
+OpenAI, OpenRouter, or any OpenAI-compatible endpoint.
+Claude subscription
+Sign in with your Claude Pro/Max account. No API key needed.
+ChatGPT / Codex subscription
+Sign in with your ChatGPT Plus/Pro account. No API key needed.
+Local model
+Use Ollama or LM Studio running on this machine. No account needed.
+Explore without a model
+ Not signed in. 
+Sign in with Claude Re-check
+Sign-in happens right here in the browser — no command-line tool and no separate login needed.
+MODEL
+Load models
+Test connection
+Back
+Next
+
+Sign in to continue.

@@ -1,0 +1,54 @@
+2026-11-01 12:41:05,982 WARNING protoagent.server [instance] running UNSCOPED — stores share /Users/<operator>/dev/protoAgent-team/.worktrees/feat-bd-v8cp-4561-acceptance-pre-check-fresh-uvx-inst/evidence/4561/home.qUqVlD/.protoagent and can clobber a co-located instance (#706). Set PROTOAGENT_AUTO_SCOPE=1 (scope per working dir) or PROTOAGENT_INSTANCE=<id> to isolate.
+2026-11-01 12:41:06,784 INFO protoagent.server [checkpointer] persistent chat history at /Users/<operator>/dev/protoAgent-team/.worktrees/feat-bd-v8cp-4561-acceptance-pre-check-fresh-uvx-inst/evidence/4561/home.qUqVlD/.protoagent/default/checkpoints.db
+2026-11-01 12:41:06,786 INFO protoagent.server [metrics] plugin metric store ready at /Users/<operator>/dev/protoAgent-team/.worktrees/feat-bd-v8cp-4561-acceptance-pre-check-fresh-uvx-inst/evidence/4561/home.qUqVlD/.protoagent/default/metrics.db
+2026-11-01 12:41:06,788 INFO protoagent.server [ledger] store ready at /Users/<operator>/dev/protoAgent-team/.worktrees/feat-bd-v8cp-4561-acceptance-pre-check-fresh-uvx-inst/evidence/4561/home.qUqVlD/.protoagent/default/ledger.db
+2026-11-01 12:41:07,057 INFO protoagent.plugins [plugins] loaded artifact: 9 tool(s), 2 skill dir(s), 2 route(s), 0 surface(s), 0 subagent(s), 0 middleware, 0 mcp server(s), 0 chat command(s)
+2026-11-01 12:41:07,060 INFO protoagent.plugins.cowork [cowork] registered
+2026-11-01 12:41:07,064 INFO protoagent.plugins [plugins] cowork: optional packages not installed (openpyxl, python-pptx, reportlab); the features that use them stay unavailable until you run: protoagent plugin install-deps cowork
+2026-11-01 12:41:07,064 INFO protoagent.plugins [plugins] loaded cowork: 0 tool(s), 2 skill dir(s), 0 route(s), 0 surface(s), 0 subagent(s), 0 middleware, 0 mcp server(s), 0 chat command(s)
+2026-11-01 12:41:07,066 INFO protoagent.plugins [plugins] loaded craft: 0 tool(s), 2 skill dir(s), 0 route(s), 0 surface(s), 1 subagent(s), 0 middleware, 0 mcp server(s), 0 chat command(s)
+2026-11-01 12:41:07,122 INFO protoagent.plugins [plugins] loaded delegates: 1 tool(s), 0 skill dir(s), 1 route(s), 1 surface(s), 0 subagent(s), 0 middleware, 0 mcp server(s), 0 chat command(s)
+2026-11-01 12:41:07,498 INFO protoagent.plugins.docs [docs] indexed 252 doc(s)
+2026-11-01 12:41:07,500 INFO protoagent.plugins [plugins] loaded docs: 2 tool(s), 1 skill dir(s), 2 route(s), 0 surface(s), 0 subagent(s), 0 middleware, 0 mcp server(s), 0 chat command(s)
+2026-11-01 12:41:07,509 INFO protoagent.plugins [plugins] loaded execute_code: 0 tool(s), 0 skill dir(s), 0 route(s), 0 surface(s), 0 subagent(s), 0 middleware, 0 mcp server(s), 0 chat command(s)
+2026-11-01 12:41:07,538 INFO protoagent.plugins [plugins] loaded friction: 6 tool(s), 2 skill dir(s), 3 route(s), 0 surface(s), 2 subagent(s), 1 middleware, 0 mcp server(s), 1 chat command(s)
+2026-11-01 12:41:07,547 INFO protoagent.plugins [plugins] loaded notes: 6 tool(s), 0 skill dir(s), 2 route(s), 0 surface(s), 0 subagent(s), 0 middleware, 0 mcp server(s), 0 chat command(s)
+2026-11-01 12:41:07,548 INFO protoagent.server [plugins] loaded 8 plugin(s): artifact, cowork, craft, delegates, docs, execute_code, friction, notes
+2026-11-01 12:41:07,548 INFO protoagent.server [plugins] registered subagent: skill_writer
+2026-11-01 12:41:07,548 INFO protoagent.server [plugins] registered subagent: friction_triage
+2026-11-01 12:41:07,548 INFO protoagent.server [plugins] registered subagent: eval_regression_triage
+2026-11-01 12:41:07,548 INFO protoagent.server Setup wizard has not been completed — graph not compiled (plugin routes/surfaces still mounted). Open the UI to finish setup (or run headless: --ui none / --setup).
+2026-11-01 12:41:07,548 INFO protoagent.server [boot] phase timings: checkpointer=0.01s (total 0.01s)
+2026-11-01 12:41:11,066 INFO protoagent.server [plugins] mounted router from artifact at /plugins/artifact
+2026-11-01 12:41:11,070 INFO protoagent.server [plugins] mounted router from artifact at /api/plugins/artifact
+2026-11-01 12:41:11,073 INFO protoagent.server [plugins] mounted router from delegates at /
+2026-11-01 12:41:11,074 INFO protoagent.server [plugins] mounted router from docs at /plugins/docs
+2026-11-01 12:41:11,075 INFO protoagent.server [plugins] mounted router from docs at /api/plugins/docs
+2026-11-01 12:41:11,076 INFO protoagent.server [plugins] mounted router from friction at /api/plugins/friction
+2026-11-01 12:41:11,078 INFO protoagent.server [plugins] mounted router from friction at /
+2026-11-01 12:41:11,078 INFO protoagent.server [plugins] mounted router from friction at /plugins/friction
+2026-11-01 12:41:11,079 INFO protoagent.server [plugins] mounted router from notes at /plugins/notes
+2026-11-01 12:41:11,081 INFO protoagent.server [plugins] mounted router from notes at /api/plugins/notes
+2026-11-01 12:41:11,385 INFO protoagent.server [telemetry] store ready at /Users/<operator>/dev/protoAgent-team/.worktrees/feat-bd-v8cp-4561-acceptance-pre-check-fresh-uvx-inst/evidence/4561/home.qUqVlD/.protoagent/default/telemetry.db
+2026-11-01 12:41:11,387 INFO a2a_impl.auth [a2a] 9 plugin-declared auth-exempt path(s): /plugins/artifact/vendor/, /plugins/artifact/shell.js, /plugins/artifact/media/, /plugins/artifact/view, /plugins/docs/view, /plugins/friction/view, /plugins/notes/vendor/, /plugins/notes/view, /plugins/notes/quick
+2026-11-01 12:41:11,392 INFO a2a_impl.auth [a2a] A2A_ALLOWED_ORIGINS not set — origin verification disabled
+2026-11-01 12:41:11,442 INFO protoagent.server [a2a] durable stores ready (tasks=/Users/<operator>/dev/protoAgent-team/.worktrees/feat-bd-v8cp-4561-acceptance-pre-check-fresh-uvx-inst/evidence/4561/home.qUqVlD/.protoagent/default/a2a-tasks.db, push=/Users/<operator>/dev/protoAgent-team/.worktrees/feat-bd-v8cp-4561-acceptance-pre-check-fresh-uvx-inst/evidence/4561/home.qUqVlD/.protoagent/default/a2a-push.db)
+2026-11-01 12:41:11,461 INFO protoagent.server [a2a] a2a-sdk routes mounted (JSON-RPC at /a2a + v0.3 compat, card at /.well-known/agent-card.json)
+2026-11-01 12:41:11,463 INFO protoagent.server React operator console mounted at /app
+2026-11-01 12:41:11,464 INFO protoagent.server Starting projectManager (ui=console) on http://127.0.0.1:54888
+INFO:     Started server process [52522]
+INFO:     Waiting for application startup.
+2026-11-01 12:41:11,491 INFO protoagent.plugins.delegates [delegates/health] prober started (tick 120s; per-delegate 120–900s healthy, up to 960s when failing)
+2026-11-01 12:41:11,491 INFO protoagent.server [plugins] started surface: delegate-health
+2026-11-01 12:41:11,494 INFO graph.fleet.discovery [discovery] mDNS disabled (fleet.discovery.mdns=false) — not advertising projectManager
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://127.0.0.1:54888 (Press CTRL+C to quit)
+[metrics] Prometheus metrics initialized (prefix=projectmanager_)
+[tracing] Langfuse not configured. Tracing disabled.
+[trace_export] fleet trace export disabled.
+Console ready → http://127.0.0.1:54888/app
+2026-11-01 12:41:14,044 INFO graph.fleet.discovery [discovery] boot sweep cached 15 peer(s)
+INFO:     Shutting down
+INFO:     Waiting for application shutdown.
+INFO:     Application shutdown complete.
+INFO:     Finished server process [52522]

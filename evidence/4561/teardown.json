@@ -1,0 +1,9 @@
+{
+  "terminated_server_pid": 55410,
+  "previous_attempt_pid": 52522,
+  "removed_homes": [
+    "/Users/<operator>/dev/protoAgent-team/.worktrees/feat-bd-v8cp-4561-acceptance-pre-check-fresh-uvx-inst/evidence/4561/home.qUqVlD",
+    "/Users/<operator>/dev/protoAgent-team/.worktrees/feat-bd-v8cp-4561-acceptance-pre-check-fresh-uvx-inst/evidence/4561/home.gukTIl"
+  ],
+  "home_removal_verified": true
+}

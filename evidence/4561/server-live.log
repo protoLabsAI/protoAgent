@@ -1,0 +1,31 @@
+Downloading cpython-3.11.15-macos-aarch64-none (download) (25.8MiB)
+ Downloaded cpython-3.11.15-macos-aarch64-none (download)
+Downloading anthropic (2.1MiB)
+Downloading pygments (1.2MiB)
+Downloading pydantic-core (2.0MiB)
+Downloading lxml (8.2MiB)
+Downloading openai (2.3MiB)
+Downloading primp (5.7MiB)
+Downloading pillow (4.6MiB)
+Downloading cryptography (3.7MiB)
+Downloading sqlalchemy (2.4MiB)
+Downloading zeroconf (1.1MiB)
+Downloading protolabs-agent (16.8MiB)
+ Downloaded pygments
+ Downloaded zeroconf
+ Downloaded pydantic-core
+ Downloaded anthropic
+ Downloaded openai
+ Downloaded sqlalchemy
+ Downloaded cryptography
+ Downloaded pillow
+ Downloaded primp
+ Downloaded lxml
+ Downloaded protolabs-agent
+Installed 124 packages in 381ms
+2026-11-01 12:40:47,342 INFO protoagent.config_io [config] seeded live config /Users/<operator>/dev/protoAgent-team/.worktrees/feat-bd-v8cp-4561-acceptance-pre-check-fresh-uvx-inst/evidence/4561/home.qUqVlD/.protoagent/default/config/langgraph-config.yaml from langgraph-config.example.yaml
+2026-11-01 12:40:48,861 INFO protoagent.server [checkpointer] persistent chat history at /Users/<operator>/dev/protoAgent-team/.worktrees/feat-bd-v8cp-4561-acceptance-pre-check-fresh-uvx-inst/evidence/4561/home.qUqVlD/.protoagent/default/checkpoints.db
+2026-11-01 12:40:48,865 INFO protoagent.server [metrics] plugin metric store ready at /Users/<operator>/dev/protoAgent-team/.worktrees/feat-bd-v8cp-4561-acceptance-pre-check-fresh-uvx-inst/evidence/4561/home.qUqVlD/.protoagent/default/metrics.db
+2026-11-01 12:40:48,870 INFO protoagent.server [ledger] store ready at /Users/<operator>/dev/protoAgent-team/.worktrees/feat-bd-v8cp-4561-acceptance-pre-check-fresh-uvx-inst/evidence/4561/home.qUqVlD/.protoagent/default/ledger.db
+2026-11-01 12:40:48,870 ERROR protoagent.server Headless setup cannot complete: no model api_key — set model.api_key in config/secrets.yaml or the OPENAI_API_KEY env var
+[metrics] Prometheus metrics initialized (prefix=projectmanager_)

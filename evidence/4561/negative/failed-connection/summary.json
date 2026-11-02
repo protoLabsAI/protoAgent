@@ -1,0 +1,28 @@
+{
+  "flow": "failed-connection",
+  "version": 1,
+  "base_url": "http://127.0.0.1:54888",
+  "mode": "live",
+  "started_at": "2026-11-01T20:44:13.760Z",
+  "ok": true,
+  "steps": [
+    {
+      "name": "Reopen isolated wizard for negative test",
+      "status": "pass",
+      "ms": 644,
+      "screenshot": "01-reopen-isolated-wizard-for-negative-test.png"
+    },
+    {
+      "name": "Enter unreachable endpoint",
+      "status": "pass",
+      "ms": 56,
+      "screenshot": "02-enter-unreachable-endpoint.png"
+    },
+    {
+      "name": "Enter model and wait for failed automatic test",
+      "status": "pass",
+      "ms": 878,
+      "screenshot": "03-enter-model-and-wait-for-failed-automatic-test.png"
+    }
+  ]
+}

@@ -1,0 +1,52 @@
+protoagent
+protoLabs.studio
+Chat
+Knowledge
+Memory
+Docs
+Friction
+New chat
+Try one of these
+Take a quick tour
+Summarise a web page
+Remember my preferences
+Ask Claude Code to add a test
+Needs Claude Code installed
+protolabs/reasoning
+Goals
+0
+No active goals
+set one here, or in chat with /goal …
+Goal
+Watches
+0
+No watches
+Watch something the agent doesn't move — a deploy, CI, a metric.
+Watch
+Tasks
+0
+No open tasks
+add one, or the agent will file its own
+Task
+Schedule
+0
+Nothing scheduled
+give the agent a timed run
+Schedule
+Work
+Artifact
+Notes
+protoAgent
+
+Welcome
+
+A local-first AI agent that runs on your own machine. Your chats, files, and the agent's memory stay here — nothing leaves except the requests you send to the model gateway you choose.
+
+Local-first — runs on this machine
+Private — you control its access
+Bring your own model gateway
+
+Takes a minute — everything here can be changed later in Settings.
+
+Back
+Next

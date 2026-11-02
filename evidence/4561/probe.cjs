@@ -1,0 +1,2 @@
+const {chromium}=require('playwright');const fs=require('fs');
+(async()=>{const b=await chromium.launch(); const p=await b.newPage({viewport:{width:1280,height:1000}});await p.goto('http://127.0.0.1:54888/app/');await p.waitForTimeout(2000);fs.writeFileSync(__dirname+'/initial.txt',await p.locator('body').innerText());await p.screenshot({path:__dirname+'/initial.png',fullPage:true});console.log(await p.locator('body').innerText());await b.close()})().catch(e=>{console.error(e);process.exitCode=1});

@@ -1,0 +1,8 @@
+
+Running 1 test using 1 worker
+
+(node:62655) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+  ✓  1 apps/web/e2e/flows/runner.ts:78:7 › no-model-verification v1 (1.7s)
+
+  1 passed (3.1s)

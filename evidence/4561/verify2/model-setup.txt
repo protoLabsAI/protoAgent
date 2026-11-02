@@ -1,0 +1,79 @@
+Acceptance Audit
+protoLabs.studio
+Chat
+Knowledge
+Memory
+Docs
+Friction
+New chat
+Try one of these
+Take a quick tour
+Summarise a web page
+Remember my preferences
+Ask Claude Code to add a test
+Needs Claude Code installed
+No model connected. The agent can't reply yet.Connect a model
+Goals
+0
+No active goals
+set one here, or in chat with /goal …
+Goal
+Watches
+0
+No watches
+Watch something the agent doesn't move — a deploy, CI, a metric.
+Watch
+Tasks
+0
+No open tasks
+add one, or the agent will file its own
+Task
+Schedule
+0
+Nothing scheduled
+give the agent a timed run
+Schedule
+Work
+Artifact
+Notes
+Settings
+host · box defaults
+×
+AGENT
+Identity
+Operator & access
+Devices
+Model
+Behavior
+Knowledge
+Tracing
+Plugins
+Snapshot
+CAPABILITIES
+Tools
+MCP
+Skills
+Subagents
+Delegates
+BOX
+Overview
+Fleet
+Telemetry
+THIS CONSOLE
+Theme
+Chat
+Keyboard
+APPLIES ON SAVE
+Model & routing
+Discard
+Save & apply
+Connections
+
+Every model source this agent can use. Model slots pick from all of them — there is no default to switch between.
+
+Add a connection
+Model & runtime
+Favorite models
+Routing
+Caching
+Model passthrough
