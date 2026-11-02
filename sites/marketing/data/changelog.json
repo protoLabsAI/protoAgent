@@ -1,5 +1,22 @@
 [
   {
+    "version": "v0.226.0",
+    "date": "2026-11-02",
+    "changes": [
+      "Chat image attachment previews (#1969).",
+      "The local model setup step is shorter, and big models get time to load (#4561).",
+      "web_search now retries a throttled DuckDuckGo query instead of silently reporting it empty (#4578).",
+      "Pinned a flaky test_manager_resolves_the_registry_allowlist that only failed in a single-process full-suite run (#4617).",
+      "A scheduled retry no longer ends the turn with a silent \"I'll pick this back up\" (#4651).",
+      "Chat exports return during running turns (#4652).",
+      "Isolate cache-warmer test patches (#4667).",
+      "Plugin reload leak tests ignore dead weakref proxies (#4685).",
+      "Right panel stays inside the window (#4693).",
+      "Knowledge writes no longer get lost when the database is busy (#4705).",
+      "Removed the pre-release hosted chat publishing feature and its chat.publish developer flag (#2683)."
+    ]
+  },
+  {
     "version": "v0.225.0",
     "date": "2026-11-01",
     "changes": [
