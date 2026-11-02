@@ -21,6 +21,8 @@ from types import SimpleNamespace
 import pytest
 from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
 
+from tests._ws_server import start_ws_server
+
 # Writes devices.json (chmod + os.replace) through security.devices.
 pytestmark = pytest.mark.platform_sensitive
 
@@ -272,11 +274,8 @@ def test_presented_device_id_names_only_device_credentials(auth, devices, clock,
 def _member_ws_server():
     """A real echo WebSocket "member" in a background thread. Records the query each
     connection arrived with and sets ``closed`` when the hub hangs up on it."""
-    import websockets
-
     holder: dict = {"queries": []}
-    ready, closed = threading.Event(), threading.Event()
-    loop = asyncio.new_event_loop()
+    closed = threading.Event()
 
     async def _echo(conn):
         holder["queries"].append(conn.request.path)
@@ -286,22 +285,9 @@ def _member_ws_server():
         finally:
             closed.set()
 
-    async def _main():
-        server = await websockets.serve(_echo, "127.0.0.1", 0)
-        holder["port"] = server.sockets[0].getsockname()[1]
-        ready.set()
-        await asyncio.Future()
-
-    def _run():
-        asyncio.set_event_loop(loop)
-        try:
-            loop.run_until_complete(_main())
-        except (asyncio.CancelledError, RuntimeError):
-            pass
-
-    threading.Thread(target=_run, daemon=True).start()
-    assert ready.wait(5), "member ws server didn't start"
-    return holder, closed, (lambda: loop.call_soon_threadsafe(loop.stop))
+    server = start_ws_server(_echo)
+    holder["port"] = server.port
+    return holder, closed, server.stop
 
 
 def _hub_app(auth):
