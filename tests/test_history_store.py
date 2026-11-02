@@ -212,3 +212,48 @@ def test_boot_reload_plugin_and_disabled(tmp_path, monkeypatch, backend):
     finally:
         for name, value in saved.items():
             setattr(STATE, name, value)
+
+
+def _kb_with_timeout(store, monkeypatch, timeout_ms):
+    kb = KnowledgeStore(store.path)
+    real_connect = kb._connect
+
+    def short_timeout():
+        db = real_connect()
+        db.execute(f"PRAGMA busy_timeout={timeout_ms}")
+        return db
+
+    monkeypatch.setattr(kb, "_connect", short_timeout)
+    return kb
+
+
+def test_a_chunk_write_waits_out_a_lock_held_past_busy_timeout(store, monkeypatch):
+    """add_chunk logs and returns None on failure, so losing the race loses the memory."""
+    import threading
+
+    kb = _kb_with_timeout(store, monkeypatch, 20)
+    holder = sqlite3.connect(str(store.path), isolation_level=None, check_same_thread=False)
+    holder.execute("BEGIN IMMEDIATE")
+    release = threading.Timer(0.25, lambda: holder.execute("COMMIT"))
+    release.start()
+    try:
+        chunk_id = kb.add_chunk("written after the lock frees")
+    finally:
+        release.join()
+        holder.close()
+    assert chunk_id is not None
+    with closing(store._connect()) as db:
+        row = db.execute("SELECT content FROM chunks WHERE id = ?", (chunk_id,)).fetchone()
+    assert row[0] == "written after the lock frees"
+
+
+def test_a_chunk_write_gives_up_without_raising_when_the_lock_never_frees(store, monkeypatch):
+    kb = _kb_with_timeout(store, monkeypatch, 1)
+    monkeypatch.setattr("knowledge.store._WRITE_LOCK_RETRY_S", (0.01, 0.01))
+    holder = sqlite3.connect(str(store.path), isolation_level=None)
+    holder.execute("BEGIN IMMEDIATE")
+    try:
+        assert kb.add_chunk("never lands") is None
+    finally:
+        holder.execute("ROLLBACK")
+        holder.close()

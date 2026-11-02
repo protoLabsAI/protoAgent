@@ -33,6 +33,7 @@ import os
 import re
 import shutil
 import sqlite3
+import time
 from collections.abc import Callable
 from dataclasses import dataclass, fields
 from datetime import UTC, datetime, timedelta
@@ -42,6 +43,26 @@ from typing import Any
 from knowledge.trust import trust_tier
 
 log = logging.getLogger(__name__)
+
+# Waits between attempts to take the write lock, on top of ``busy_timeout``.
+_WRITE_LOCK_RETRY_S = (0.1, 0.3, 0.9)
+
+
+def _begin_immediate(db: sqlite3.Connection) -> None:
+    """Take the write lock before writing, with bounded retries.
+
+    Contention then surfaces here, where nothing has been written and a retry is safe,
+    not mid-INSERT. Concurrent writers on short-lived connections can outlast
+    ``busy_timeout`` on Windows CI, and a failed chunk write is memory silently lost."""
+    for delay in (*_WRITE_LOCK_RETRY_S, None):
+        try:
+            db.execute("BEGIN IMMEDIATE")
+            return
+        except sqlite3.OperationalError as exc:
+            if delay is None or "locked" not in str(exc):
+                raise
+            time.sleep(delay)
+
 
 DEFAULT_DB_PATH = "/sandbox/knowledge/agent.db"
 
@@ -1124,6 +1145,7 @@ class KnowledgeStore:
         if db is None:
             return None
         try:
+            _begin_immediate(db)
             now = _now_iso()
             cur = db.execute(
                 "INSERT INTO chunks "
