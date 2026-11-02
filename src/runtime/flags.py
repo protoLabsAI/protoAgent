@@ -66,7 +66,7 @@ FLAGS: list[Flag] = [
         ),
         tier="dev",
         owner="kj",
-        remove_by="2026-11-01",
+        remove_by="2027-02-01",
     ),
 ]
 
