@@ -55,3 +55,19 @@ def test_every_desktop_leg_runs_the_frozen_fleet_deck() -> None:
     assert "if" not in step, "the deck smoke must run on every leg, not one platform"
     assert not step.get("continue-on-error")
     assert 'BIN="apps/desktop/src-tauri/binaries/protoagent-server-${{ matrix.target }}"' in step["run"]
+
+
+def test_apple_ticket_steps_retry_a_dropped_connection() -> None:
+    """stapler has no retry, and CloudKit dropped the connection on both v0.226.0 attempts
+    after notarization had already passed."""
+    workflow = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))
+    steps = {s.get("name"): s for s in workflow["jobs"]["build"]["steps"]}
+
+    for name, command in (
+        ("Notarize + staple the DMG container", 'xcrun stapler staple "$DMG"'),
+        ("Verify macOS artifact", "scripts/verify-macos-desktop.sh $FLAG"),
+    ):
+        run = steps[name]["run"]
+        assert f"if {command}" in run, name
+        assert "for attempt in" in run, name
+        assert "exit 1" in run, name  # the last attempt still fails the leg
