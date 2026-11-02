@@ -42,8 +42,8 @@
 // carries `hostOnly`. Both are DATA the host resolves per render
 // (`visiblePaletteCommands(flagOn, isHostConsole())`, ADR 0061), which is the whole point:
 // `useFlagPredicate` fails CLOSED while `/api/flags` is in flight, so a gate evaluated HERE
-// — at module load, before the request has even been made — would hide Secrets, Devices and
-// Publish forever, on every channel, in a way no test that stubs the flags would reproduce.
+// — at module load, before the request has even been made — would hide Secrets forever,
+// on every channel, in a way no test that stubs the flags would reproduce.
 //
 // That per-render gate is also what keeps a gated row from POISONING state. A deep-link
 // applies its section id through `openGlobalSettings`, which writes it into the PERSISTED
@@ -114,7 +114,6 @@ const SECTION_KEYWORDS: Record<SettingsSectionId, string[]> = {
   knowledge: ["rag", "recall", "memory", "embeddings", "retrieval", "ingestion", "index", "documents", "history"],
   tracing: ["trace", "langfuse", "spans", "observability", "debug"],
   secrets: ["vault", "credentials", "keys", "manager", "external"],
-  publish: ["share", "link", "public", "hosted", "viewer", "transcript"],
   plugins: ["extensions", "integrations", "install", "uninstall", "enable", "disable", "addons", "marketplace"],
   snapshot: ["export", "import", "backup", "restore", "clone", "migrate", "portable"],
   tools: ["toolset", "allowlist", "functions", "python", "runtime", "execute code", "filesystem", "work folders"],

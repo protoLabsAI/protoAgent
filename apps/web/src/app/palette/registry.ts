@@ -194,7 +194,7 @@ _link(
 // Registered UNCONDITIONALLY, gates and all: each row carries the section's own
 // `flag`/`hostOnly` as DATA, and `visiblePaletteCommands` applies them per render below. That
 // ordering is the point — resolving a flag HERE, at module load, would read the fail-closed
-// answer `/api/flags` hasn't returned yet and hide Secrets/Devices/Publish permanently.
+// answer `/api/flags` hasn't returned yet and hide Secrets permanently.
 for (const cmd of settingsPaletteCommands(navigate)) registerPaletteCommand(cmd);
 registerKeybindingCommands(navigate);
 
@@ -708,7 +708,7 @@ export function usePaletteRegistry(
     // untyped list, and registered STATICALLY so a row is client-filtered against the query
     // on screen (see the note where `chatSig` is read). Flag-gated here rather than in the
     // row builder, exactly as the seam's statics are: a row gated on a flag still in flight
-    // (`/publish`) appears when `/api/flags` lands instead of being hidden for the life of
+    // appears when `/api/flags` lands instead of being hidden for the life of
     // the window.
     const chatRows = chatSlashPaletteRows(navigate, { reachable: builtInChat, skills });
     const offChatRows = chatRows.length

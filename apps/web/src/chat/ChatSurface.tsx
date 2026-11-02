@@ -25,8 +25,6 @@ import { brandName } from "../lib/brand";
 import { queryClient } from "../lib/queryClient";
 import { isCodePaneEnabled } from "../codeviewer/enabled";
 import { useCodeViewer } from "../codeviewer/store";
-import { openPublishDialog } from "./publishDialogStore";
-import { useFlag } from "../flags/flags";
 import { useServerTurnSessions } from "./server-turn-store";
 import { useSessionsWithBackgroundWork } from "./backgroundJobStore";
 import { ADD_SELECTOR, isIncognitoAddClick, trackShiftHeld } from "./shiftCue";
@@ -93,9 +91,6 @@ export function ChatSurface({
   const closingGoal = pendingClose
     ? goalSessions.find((g) => g.session_id === pendingClose && g.status === "active")
     : undefined;
-  // Pre-release (chat.publish, ADR 0068) — gates the tab context-menu item; the /publish
-  // slash command gates itself via its own `flag:` tag through the registry.
-  const publishEnabled = useFlag("chat.publish");
   // "Continue in Zed" (tab menu) — offered only while the operator's external editor is Zed:
   // the hand-off is claimed by the Zed ACP shim, nothing else reads it.
   const editorPref = useEditorPref();
@@ -332,9 +327,6 @@ export function ChatSurface({
       onToggleIncognito: () => chatStore.setSessionIncognito(id, !target?.incognito),
       onRename: () => tabEl?.dispatchEvent(new MouseEvent("dblclick", { bubbles: true })),
       onExport: () => void exportChatToFile(id),
-      // Pre-release (chat.publish, ADR 0068): the menu item is simply absent while the
-      // flag is off, same pattern as the flag-tagged slash commands below.
-      onPublish: publishEnabled ? () => openPublishDialog(id) : undefined,
       // Hidden for incognito chats: a Zed thread would continue them WITHOUT the incognito
       // flag (the shim sends ordinary turns), silently writing the chat to memory.
       onContinueInZed: editorPref === "zed" && !target?.incognito ? () => handOffToZed(id) : undefined,

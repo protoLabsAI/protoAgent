@@ -193,7 +193,7 @@ destructive overwrites.
   `(messages) => messages`, and the array-replacing form is removed. Callers that
   move to updaters:
   - the scheduled, background, resume and server-turn watches;
-  - `reattach.ts`, `exportChat.ts` and `publishChat.ts`;
+  - `reattach.ts` and `exportChat.ts`;
   - `chat/coreSlashCommands.ts`, including `/compact`'s `[summary, ...kept]`;
   - every `ChatSurface.tsx` site: clear, rewind, fork seed, dismiss and the stream
     loop.

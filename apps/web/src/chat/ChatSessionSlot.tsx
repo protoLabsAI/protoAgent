@@ -24,7 +24,6 @@ import {
   sessionCast,
   type SessionStatus,
 } from "./chat-store";
-import { PublishDialog } from "./PublishDialog";
 import { findSlashCommand } from "../ext/slashRegistry";
 import { continueRun, leadingRun, runHas, toggleMention } from "./mentionRun";
 import { insertRoomBubble, replyClaimsAnswer, roomReplyBubble } from "./roomBubble";
@@ -2160,8 +2159,6 @@ export function ChatSessionSlot({
           This will discard everything below this message — cannot be undone.
         </p>
       </ConfirmDialog>
-
-      <PublishDialog />
     </div>
   );
 }

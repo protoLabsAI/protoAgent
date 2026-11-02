@@ -13,8 +13,8 @@
 // CONSUMED on read (`takeKnowledgeSearchSeed`) for the same reason — replaying it on every
 // remount would fight whatever the operator typed since.
 //
-// A tiny external store, the shape `chat/publishDialogStore.ts` already uses for the same
-// job (a trigger with no reference into the component it has to reach). The subscription is
+// A tiny external store (the job: a trigger with no reference into the component it has to
+// reach). The subscription is
 // what covers BOTH arrival orders: the seed is usually set before the surface mounts (the
 // palette routes to it), but it can also land while the surface is already open. The
 // `useSyncExternalStore` wiring stays in here — the surface takes a hook, not three exports

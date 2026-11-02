@@ -29,13 +29,9 @@ _MOVED = {
     **{
         name: session_ops
         for name in (
-            "_artifact_resolver",
-            "_build_bundle",
             "_compaction_message",
             "_export_message",
             "_fork_message",
-            "_publish_message",
-            "_publish_preview_message",
             "_rewind_message",
             "aside_session",
             "compact_session",
@@ -43,9 +39,6 @@ _MOVED = {
             "forget_delegate_conversations",
             "forget_delegate_conversations_for_session",
             "fork_session",
-            "publish_preview",
-            "publish_session",
-            "revoke_published_link",
             "rewind_session",
         )
     },
@@ -81,7 +74,7 @@ def test_the_route_module_binds_the_real_session_ops():
     what it binds must be the live function, not a stale copy."""
     import operator_api.chat_routes as cr
 
-    for name in ("compact_session", "export_session", "publish_session", "rewind_session", "fork_session"):
+    for name in ("compact_session", "export_session", "rewind_session", "fork_session"):
         assert getattr(cr, name) is getattr(session_ops, name), name
 
 

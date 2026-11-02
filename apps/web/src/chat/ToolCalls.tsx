@@ -242,9 +242,8 @@ export function ToolCalls({
       </div>
     ) : null;
 
-  // Inside the WorkBlock timeline / publish preview: just the plain cards, in order — no
-  // fold, no bg chip (the whole timeline is already behind one disclosure, and the publish
-  // preview renders history 1:1).
+  // Inside the WorkBlock timeline: just the plain cards, in order — no fold, no bg chip (the
+  // whole timeline is already behind one disclosure).
   if (flat) {
     return <ToolCardList className="tool-calls">{top.map(group)}</ToolCardList>;
   }

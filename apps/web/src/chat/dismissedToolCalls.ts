@@ -5,7 +5,7 @@
 // the transcript. These helpers give exactly that one case a dismiss (×): dismissed ids
 // persist in localStorage (same design as the report/scheduled chips' sets in
 // ChatMessageView, #2923/#2990) and the cards are filtered out of THIS client's view at
-// render time — the backend history is never mutated, so a reload, /export, publish, and
+// render time — the backend history is never mutated, so a reload, /export, and
 // every other client still hold the full turn.
 
 import type { ChatMessage, ToolCall } from "../lib/types";

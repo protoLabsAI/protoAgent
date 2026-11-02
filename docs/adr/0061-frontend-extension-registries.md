@@ -213,7 +213,7 @@ navigated away": the built-in chat slot is mounted for the app's lifetime (#613)
 registered across rail switches, which is what lets the palette reach chat from any surface. It means
 there is no built-in chat slot in this window at all — the frameless desktop launcher (ADR
 0057), or a fork surface / plugin iframe holding the `chat` slot ahead of the built-in one.
-And a `sessionId` of `null` disqualifies the whole set, not just part of it: 14 of the 17
+And a `sessionId` of `null` disqualifies the whole set, not just part of it: 13 of the 16
 core commands `return false`, while `/goal` and `/watch` return `true` and answer through
 `noteToThread`, which the host itself no-ops without a session. Only `/new` does real work.
 So the caller's rule is "create or focus a session first", not "allowlist the three that
@@ -277,8 +277,8 @@ content or its per-tab mode — or merely A thread?** Outside the composer a `re
 silent no-op — there is no draft for the token to fall into — so a row that would decline
 must not look runnable:
 
-- **Needs this chat** (`/clear /export /publish /btw /trajectory /prompt /perf /compact
-  /bypass /incognito`) — the row is `disabled` with the reason in `hint`. The first eight read
+- **Needs this chat** (`/clear /export /btw /trajectory /prompt /perf /compact
+  /bypass /incognito`) — the row is `disabled` with the reason in `hint`. The first seven read
   or rewrite accumulated history, and auto-creating a blank tab to export an empty transcript
   or compact nothing would "succeed" and tell the operator nothing; the last two are per-tab
   modes whose row exists to name the current one. Disabled-and-explaining keeps it
