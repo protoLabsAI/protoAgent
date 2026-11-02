@@ -18,8 +18,7 @@ def start_ws_server(handler: Callable, **serve_kwargs) -> SimpleNamespace:
     """Serve ``handler``. Returns a namespace with ``port``, ``loop`` and ``stop()``."""
     import websockets
 
-    # A peer that's already gone never answers the close frame, so keep this well under
-    # the join below. The websockets default is 10s.
+    # A peer that's already gone never answers the close frame. The default is 10s.
     serve_kwargs.setdefault("close_timeout", 0.5)
     ready = threading.Event()
     state = SimpleNamespace(port=0, loop=asyncio.new_event_loop(), stop=None)
@@ -32,11 +31,19 @@ def start_ws_server(handler: Callable, **serve_kwargs) -> SimpleNamespace:
         ready.set()
         await shutdown["event"].wait()
         server.close()
-        await server.wait_closed()
+        try:
+            await asyncio.wait_for(server.wait_closed(), 1)
+        except TimeoutError:
+            pass  # wait_closed can hang on a peer that's gone; the cancel below ends it
+        pending = asyncio.all_tasks() - {asyncio.current_task()}
+        for task in pending:
+            task.cancel()
+        await asyncio.gather(*pending, return_exceptions=True)
 
     def _run():
         asyncio.set_event_loop(state.loop)
         state.loop.run_until_complete(_main())
+        state.loop.run_until_complete(state.loop.shutdown_asyncgens())
 
     thread = threading.Thread(target=_run, daemon=True)
     thread.start()

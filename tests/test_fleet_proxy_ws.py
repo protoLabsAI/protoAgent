@@ -5,7 +5,6 @@ traverses the hub instead of showing "Disconnected" behind the HTTP-only proxy."
 from __future__ import annotations
 
 import asyncio
-import threading
 import time
 
 import pytest
