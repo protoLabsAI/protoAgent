@@ -1784,11 +1784,30 @@ def list_gateway_models(
     return ids, ""
 
 
+# A hosted API answers in seconds. A local server may have to load the model first.
+_MODEL_TEST_TIMEOUT_S = 20.0
+_LOCAL_MODEL_TEST_TIMEOUT_S = 120.0
+
+
+def _model_test_timeout(api_base: str) -> float:
+    import ipaddress
+    from urllib.parse import urlparse
+
+    host = (urlparse(api_base or "").hostname or "").lower()
+    if host == "localhost":
+        return _LOCAL_MODEL_TEST_TIMEOUT_S
+    try:
+        is_local = ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        is_local = False
+    return _LOCAL_MODEL_TEST_TIMEOUT_S if is_local else _MODEL_TEST_TIMEOUT_S
+
+
 def validate_model_connection(
     api_base: str,
     api_key: str = "",
     model: str = "",
-    timeout: float = 20.0,
+    timeout: float | None = None,
     allow_env_key: bool = True,
 ) -> tuple[bool, str]:
     """Probe the model with a minimal real completion — the *true* auth check.
@@ -1802,6 +1821,8 @@ def validate_model_connection(
     chat turn. Returns ``(ok, error_message)`` with actionable hints for common
     failures, without including upstream response bodies.
     """
+    if timeout is None:
+        timeout = _model_test_timeout(api_base)
     import httpx
 
     if not api_base:

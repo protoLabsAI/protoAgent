@@ -238,8 +238,8 @@ describe("SetupWizard — subscription copy (#4565)", () => {
   it("both subscription cards say sign-in-with-your-plan and no API key — never 'CLI login'", async () => {
     await mountToBrain();
     const text = container.textContent ?? "";
-    expect(text).toContain("Sign in with your Claude Pro/Max account. No API key needed.");
-    expect(text).toContain("Sign in with your ChatGPT Plus/Pro account. No API key needed.");
+    expect(radioFor("claude")?.closest(".pl-radiocard")?.textContent).toContain("Sign in. No API key needed.");
+    expect(radioFor("codex")?.closest(".pl-radiocard")?.textContent).toContain("Sign in. No API key needed.");
     expect(text).not.toContain("Claude Code login");
     expect(text).not.toContain("Codex CLI login");
   });
@@ -389,12 +389,12 @@ describe("SetupWizard — the Local model card (#4572)", () => {
     [...container.querySelectorAll<HTMLLabelElement>("label.pl-field")]
       .find((l) => l.querySelector(".pl-field__label")?.textContent === "Endpoint")
       ?.querySelector("input") ?? null;
-  const modelInput = () => container.querySelector<HTMLInputElement>('input[list="model-options"]');
+  const modelInput = () => container.querySelector<HTMLInputElement>('.setup-advanced input[placeholder="e.g. llama3.2"]');
 
   it("offers a Local model card with the no-account blurb", async () => {
     await mountToBrain();
     expect(radioFor("local")).toBeDefined();
-    expect(container.textContent).toContain("Use Ollama or LM Studio running on this machine. No account needed.");
+    expect(container.textContent).toContain("Ollama or LM Studio. No account.");
   });
 
   it("picking it fills the endpoint + model from the detected server, and the test unlocks Next", async () => {
@@ -410,11 +410,17 @@ describe("SetupWizard — the Local model card (#4572)", () => {
     expect(api.localModels).toHaveBeenCalled();
     expect(endpointInput()?.value).toBe("http://127.0.0.1:11434/v1");
     expect(modelInput()?.value).toBe("llama3.2");
-    // The reachable server with models reads as available; the unreachable one as its error.
-    expect(container.textContent).toContain("2 models available");
-    expect(container.textContent).toContain("connection refused");
-    // bd-jq56.1's auto-test / Next gate applies unchanged — a passing test unlocks Next.
-    await click(button(/^Test connection/));
+    // Only what's usable shows: the server with models, and nothing about the one that isn't up.
+    expect(container.textContent).toContain("2 models");
+    expect(container.textContent).not.toContain("LM Studio running");
+    expect(container.querySelectorAll(".setup-local-row")).toHaveLength(1);
+    expect(container.textContent).not.toContain("connection refused");
+    expect(container.querySelector<HTMLDetailsElement>(".setup-advanced")?.open).toBe(false);
+    // The auto-test runs by itself: a passing test unlocks Next with no button to find.
+    expect(button(/^Test connection/)).toBeUndefined();
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 900)); // past the auto-test debounce
+    });
     await tick(() => !button(/^Next/)?.disabled);
     expect(button(/^Next/)?.disabled).toBe(false);
     expect(api.testModel).toHaveBeenCalledWith("http://127.0.0.1:11434/v1", "", "llama3.2", "openai");
@@ -429,9 +435,11 @@ describe("SetupWizard — the Local model card (#4572)", () => {
     } as never);
     await mountToBrain();
     await click(radioFor("local"));
-    await tick(() => Boolean(container.textContent?.includes("No local model server found")));
-    expect(container.textContent).toContain("No local model server found");
+    await tick(() => Boolean(container.textContent?.includes("No local model ready")));
+    expect(container.textContent).toContain("No local model ready");
     expect(button(/Re-check/)).toBeDefined();
+    // Nothing detected, so the manual address is open instead of tucked away.
+    expect(container.querySelector<HTMLDetailsElement>(".setup-advanced")?.open).toBe(true);
     // No model was auto-picked, so the gate still blocks (nothing to run).
     expect(modelInput()?.value).toBe("");
     expect(button(/^Next/)?.disabled).toBe(true);

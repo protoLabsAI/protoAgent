@@ -541,6 +541,7 @@ export function SetupWizard({
 
   // A short reason shown under a disabled Next on the brain step (#4562) so the gate
   // never looks broken — why can't I continue? ACP never blocks here.
+  const usableLocal = (localEndpoints ?? []).filter((ep) => ep.found && ep.models.length > 0);
   const brainNextHint = ((): string => {
     if (step !== "brain" || state.runtimeKind === "acp" || canGoNext) return "";
     const oauth = isOAuthProvider(state.provider);
@@ -550,7 +551,7 @@ export function SetupWizard({
       : Boolean(state.apiBase.trim() && state.modelName.trim());
     if (!fieldsFilled) return oauth ? "Enter a model to continue." : "Enter an endpoint and model to continue.";
     if (testing) return "Testing the connection…";
-    if (shownTest && !shownTest.ok) return "Connection failed — fix it to continue.";
+    if (shownTest && !shownTest.ok) return ""; // the error above already says so
     return "Test the connection to continue.";
   })();
 
@@ -661,7 +662,8 @@ export function SetupWizard({
           // saved config's provider mid-wizard. "openai" → gateway path server-side.
           state.provider,
         ),
-        25000,
+        // A cold local model loads into memory first; the server allows it two minutes.
+        brainKind === "local" ? 130000 : 25000,
         "Test connection",
       );
       if (activeTestKey.current !== key) return; // superseded — don't apply a stale result
@@ -1045,6 +1047,7 @@ export function SetupWizard({
                 <span className="pl-field__label">How this agent thinks</span>
                 <RadioCardGroup
                   name="brain"
+                  min="150px"
                   value={brainKind}
                   onValueChange={(value) => {
                     const kind = value as BrainKind;
@@ -1056,21 +1059,21 @@ export function SetupWizard({
                     if (kind === "local") void detectLocalModels();
                   }}
                 >
-                  <RadioCard value="gateway" title="API key" blurb="OpenAI, OpenRouter, or any OpenAI-compatible endpoint." />
+                  <RadioCard value="gateway" title="API key" blurb="Any OpenAI-compatible endpoint." />
                   <RadioCard
                     value="claude"
                     title="Claude subscription"
-                    blurb="Sign in with your Claude Pro/Max account. No API key needed."
+                    blurb="Sign in. No API key needed."
                   />
                   <RadioCard
                     value="codex"
                     title="ChatGPT / Codex subscription"
-                    blurb="Sign in with your ChatGPT Plus/Pro account. No API key needed."
+                    blurb="Sign in. No API key needed."
                   />
                   <RadioCard
                     value="local"
                     title="Local model"
-                    blurb="Use Ollama or LM Studio running on this machine. No account needed."
+                    blurb="Ollama or LM Studio. No account."
                   />
                   {/* The ACP brain card is deliberately GONE (deprecated 2026-08-11):
                       ACP survives for delegates only. A legacy acp:* config parses,
@@ -1213,60 +1216,89 @@ export function SetupWizard({
                   {brainKind === "local" ? (
                     <>
                       <div className="pl-field setup-local">
-                        <span className="pl-field__label">Detected on this machine</span>
-                        {localBusy && !localEndpoints ? (
-                          <Alert status="info">
-                            <Spinner size={15} /> Looking for local model servers…
-                          </Alert>
-                        ) : null}
-                        {(localEndpoints ?? []).map((ep) => {
-                          const usable = ep.found && ep.models.length > 0;
+                        <div className="setup-local-head">
+                          <span className="pl-field__label">On this machine</span>
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => void detectLocalModels()}
+                            disabled={localBusy}
+                          >
+                            {localBusy ? <Spinner size={15} /> : <Search size={15} />}
+                            Re-check
+                          </Button>
+                        </div>
+                        {usableLocal.map((ep) => {
                           const selected = state.apiBase.trim() === ep.base_url;
                           return (
                             <div key={ep.id} className="setup-local-row">
-                              <div className="setup-local-info">
-                                <strong>{ep.label}</strong>
-                                <span>{ep.base_url}</span>
-                                <span className={usable ? "setup-local-ok" : "setup-local-miss"}>
-                                  {usable
-                                    ? `${ep.models.length} model${ep.models.length === 1 ? "" : "s"} available`
-                                    : ep.found
-                                      ? ep.error || "running — no models pulled yet"
-                                      : ep.error || "not reachable"}
-                                </span>
-                              </div>
-                              <Button type="button" onClick={() => selectLocalEndpoint(ep)} disabled={localBusy}>
-                                {selected ? "Selected ✓" : "Use"}
-                              </Button>
+                              <strong>{ep.label}</strong>
+                              <span className="setup-local-ok">
+                                {`${ep.models.length} model${ep.models.length === 1 ? "" : "s"}`}
+                              </span>
+                              {usableLocal.length > 1 ? (
+                                <Button type="button" size="sm" onClick={() => selectLocalEndpoint(ep)} disabled={localBusy}>
+                                  {selected ? "Selected ✓" : "Use"}
+                                </Button>
+                              ) : null}
                             </div>
                           );
                         })}
-                        <Button type="button" onClick={() => void detectLocalModels()} disabled={localBusy}>
-                          {localBusy ? <Spinner size={15} /> : <Search size={15} />}
-                          Re-check
-                        </Button>
                       </div>
                       {localError ? <Alert status="error">{localError}</Alert> : null}
                       {localEndpoints && !pickLocalEndpoint(localEndpoints) ? (
                         <Callout tone="warning">
-                          No local model server found. Start Ollama (<code>ollama serve</code>, then{" "}
+                          No local model ready. Start Ollama (<code>ollama serve</code>, then{" "}
                           <code>ollama pull llama3.2</code>) or LM Studio&apos;s local server, then Re-check.
                         </Callout>
                       ) : null}
                     </>
                   ) : null}
-                  <div className={brainKind === "local" ? "setup-grid" : "setup-grid two"}>
-                    <FormField label={brainKind === "local" ? "Endpoint" : "Endpoint URL"}>
-                      <Input
-                        value={state.apiBase}
-                        onChange={(event) => update({ apiBase: event.target.value })}
-                        placeholder={
-                          brainKind === "local" ? "e.g. http://127.0.0.1:11434/v1" : "e.g. https://api.openai.com/v1"
-                        }
-                        autoComplete="off"
-                      />
-                    </FormField>
-                    {brainKind === "local" ? null : (
+                  {brainKind === "local" ? (
+                    <>
+                      {models.length > 0 ? (
+                        <FormField label="Model">
+                          <DropdownSelect
+                            aria-label="Model"
+                            value={state.modelName}
+                            onValueChange={(value) => update({ modelName: value })}
+                            options={models.map((model) => ({ value: model, label: model }))}
+                          />
+                        </FormField>
+                      ) : null}
+                      <details className="setup-advanced" open={localEndpoints !== null && usableLocal.length === 0}>
+                        <summary>Use a different address</summary>
+                        <div className="setup-advanced-body">
+                          <FormField label="Endpoint">
+                            <Input
+                              value={state.apiBase}
+                              onChange={(event) => update({ apiBase: event.target.value })}
+                              placeholder="e.g. http://127.0.0.1:11434/v1"
+                              autoComplete="off"
+                            />
+                          </FormField>
+                          <FormField label="Model">
+                            <Input
+                              value={state.modelName}
+                              onChange={(event) => update({ modelName: event.target.value })}
+                              placeholder="e.g. llama3.2"
+                            />
+                          </FormField>
+                        </div>
+                      </details>
+                    </>
+                  ) : (
+                    <>
+                    <div className="setup-grid two">
+                      <FormField label="Endpoint URL">
+                        <Input
+                          value={state.apiBase}
+                          onChange={(event) => update({ apiBase: event.target.value })}
+                          placeholder="e.g. https://api.openai.com/v1"
+                          autoComplete="off"
+                        />
+                      </FormField>
                       <FormField label="API key">
                         <SecretInput
                           value={state.apiKey}
@@ -1275,41 +1307,53 @@ export function SetupWizard({
                           placeholder={apiKeyPlaceholder(savedApiKey)}
                         />
                       </FormField>
-                    )}
-                  </div>
-                  <div className="setup-grid model-row">
-                    <FormField label="Model">
-                      <Input
-                        list="model-options"
-                        value={state.modelName}
-                        onChange={(event) => update({ modelName: event.target.value })}
-                        placeholder="Load models lists your endpoint's models"
+                    </div>
+                    <div className="setup-grid model-row">
+                      <FormField label="Model">
+                        <Input
+                          list="model-options"
+                          value={state.modelName}
+                          onChange={(event) => update({ modelName: event.target.value })}
+                          placeholder="Load models lists your endpoint's models"
+                        />
+                        <datalist id="model-options">
+                          {models.map((model) => (
+                            <option key={model} value={model} />
+                          ))}
+                        </datalist>
+                      </FormField>
+                      <Button type="button" onClick={() => void probeModels()} disabled={busy || !state.apiBase.trim()}>
+                        {busy ? <Spinner size={15} /> : <Search size={15} />}
+                        Load models
+                      </Button>
+                      <TestConnectionButton
+                        onClick={() => void testConnection()}
+                        pending={testing}
+                        disabled={!state.apiBase.trim() || !state.modelName.trim() || testing}
                       />
-                      <datalist id="model-options">
-                        {models.map((model) => (
-                          <option key={model} value={model} />
-                        ))}
-                      </datalist>
-                    </FormField>
-                    <Button type="button" onClick={() => void probeModels()} disabled={busy || !state.apiBase.trim()}>
-                      {busy ? <Spinner size={15} /> : <Search size={15} />}
-                      Load models
-                    </Button>
-                    <TestConnectionButton
-                      onClick={() => void testConnection()}
-                      pending={testing}
-                      disabled={!state.apiBase.trim() || !state.modelName.trim() || testing}
-                    />
-                  </div>
+                    </div>
+                    </>
+                  )}
                   {testing ? (
                     <Alert status="info">
-                      <Spinner size={15} /> Testing connection…
+                      <Spinner size={15} />{" "}
+                      {brainKind === "local"
+                        ? `Loading ${state.modelName}. The first time can take a minute.`
+                        : "Testing connection…"}
                     </Alert>
                   ) : shownTest ? (
                     <Alert status={shownTest.ok ? "success" : "error"}>
                       {shownTest.ok
                         ? "Connection OK — the model responded."
                         : `Connection failed — ${shownTest.error || "the model did not respond."}`}
+                      {!shownTest.ok && brainKind === "local" ? (
+                        <>
+                          {" "}
+                          <Button type="button" variant="ghost" size="sm" onClick={() => void testConnection()}>
+                            Try again
+                          </Button>
+                        </>
+                      ) : null}
                     </Alert>
                   ) : null}
                 </>
