@@ -10,7 +10,14 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
-from knowledge.store import FORGET_PENDING_PREFIX, FORGET_PREV_SEP, _history_forget_where, _now_iso, _resolve_path
+from knowledge.store import (
+    _WRITE_LOCK_RETRY_S,
+    FORGET_PENDING_PREFIX,
+    FORGET_PREV_SEP,
+    _history_forget_where,
+    _now_iso,
+    _resolve_path,
+)
 
 
 # "Held by marker": exactly it, or ``marker|prev:<reason>`` (an already-invalidated row).
@@ -57,10 +64,6 @@ CREATE TRIGGER IF NOT EXISTS history_au AFTER UPDATE OF heading, content ON hist
     INSERT INTO history_fts(rowid, heading, content) VALUES (new.id, new.heading, new.content);
 END;
 """
-
-
-#: Pauses between attempts to take the write lock, each attempt already waiting busy_timeout.
-_WRITE_LOCK_RETRY_S = (0.1, 0.3, 0.9)
 
 
 @dataclass
