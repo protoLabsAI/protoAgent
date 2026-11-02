@@ -1424,3 +1424,34 @@ def test_model_probe_status_hints_never_echo_body(monkeypatch, probe, status):
         assert err == fallback
     assert "upstream-secret" not in err
     fake_response.json.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    ("base", "seconds"),
+    [
+        ("http://127.0.0.1:11434/v1", 120.0),
+        ("http://localhost:1234/v1", 120.0),
+        ("http://[::1]:11434/v1", 120.0),
+        ("https://api.openai.com/v1", 20.0),
+        ("https://127.0.0.1.example.com/v1", 20.0),
+    ],
+)
+def test_a_local_model_gets_time_to_load_before_the_connection_test_gives_up(monkeypatch, base, seconds):
+    """A 9 GB model takes longer than a hosted API's limit to load from cold."""
+    from graph import config_io
+
+    seen = {}
+    fake_response = MagicMock()
+    fake_response.status_code = 200
+    fake_client = MagicMock()
+    fake_client.__enter__ = lambda self: fake_client
+    fake_client.__exit__ = lambda *args: None
+    fake_client.post.return_value = fake_response
+
+    def _client(**kw):
+        seen.update(kw)
+        return fake_client
+
+    monkeypatch.setattr("httpx.Client", _client)
+    config_io.validate_model_connection(base, api_key="k", model="m")
+    assert seen["timeout"] == seconds

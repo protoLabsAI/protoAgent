@@ -136,3 +136,83 @@ test("both required answers unlock Next; config_inputs ride the bundle install o
   await expect.poll(() => setup).not.toBeNull();
   expect(setup?.requires_tools).toEqual(["github_create_issue"]);
 });
+
+test("the local model step stays short and shows only what's usable", async ({ page }) => {
+  await page.route("**/api/config/local-models", (route) =>
+    route.fulfill({
+      json: {
+        endpoints: [
+          { id: "ollama", label: "Ollama", base_url: "http://127.0.0.1:11434/v1", found: true, models: ["qwen3:14b"], error: "" },
+          {
+            id: "lmstudio",
+            label: "LM Studio",
+            base_url: "http://127.0.0.1:1234/v1",
+            found: false,
+            models: [],
+            error: "Nothing is answering at http://127.0.0.1:1234/v1/models.",
+          },
+        ],
+      },
+    }),
+  );
+  await page.route("**/api/config/test-model", (route) => route.fulfill({ json: { ok: true, error: "" } }));
+  await routeSnapshot(page, "/api/runtime/status", (json) => {
+    json.setup_complete = false;
+  });
+  await page.setViewportSize({ width: 1280, height: 720 });
+  await page.goto("/app/", { waitUntil: "load" });
+
+  const wizard = page.getByRole("dialog", { name: "Setup" });
+  await wizard.getByRole("button", { name: "Next" }).click();
+  await wizard.locator(".pl-radiocard", { hasText: "Local model" }).click();
+
+  // The test runs by itself and unlocks Next: no button to hunt for.
+  await expect(wizard.getByText("Connection OK")).toBeVisible();
+  await expect(wizard.getByRole("button", { name: "Next" })).toBeEnabled();
+  await expect(wizard.getByRole("button", { name: "Test connection", exact: true })).toHaveCount(0);
+  await expect(wizard.getByRole("button", { name: "Load models" })).toHaveCount(0);
+
+  await expect(wizard.locator(".setup-local-row")).toHaveCount(1);
+  await expect(wizard.locator(".setup-local-row")).toContainText("Ollama");
+  await expect(wizard.getByText("LM Studio", { exact: true })).toHaveCount(0);
+  await expect(wizard.getByText("Nothing is answering")).toHaveCount(0);
+  await expect(wizard.getByPlaceholder("e.g. http://127.0.0.1:11434/v1")).toBeHidden();
+
+  // All four cards share a row, and the whole step fits with its actions on screen.
+  const tops = await wizard.locator(".pl-radiocard").evaluateAll((cards) => cards.map((c) => c.getBoundingClientRect().top));
+  expect(new Set(tops).size).toBe(1);
+  const next = (await wizard.getByRole("button", { name: "Next" }).boundingBox())!;
+  expect(next.y + next.height).toBeLessThanOrEqual(720);
+});
+
+test("a local model that fails its test offers Try again without resending anything by itself", async ({ page }) => {
+  await page.route("**/api/config/local-models", (route) =>
+    route.fulfill({
+      json: {
+        endpoints: [
+          { id: "ollama", label: "Ollama", base_url: "http://127.0.0.1:11434/v1", found: true, models: ["qwen3:14b"], error: "" },
+        ],
+      },
+    }),
+  );
+  let calls = 0;
+  await page.route("**/api/config/test-model", (route) => {
+    calls += 1;
+    return route.fulfill({ json: calls === 1 ? { ok: false, error: "The endpoint didn't answer in time. (timeout)" } : { ok: true, error: "" } });
+  });
+  await routeSnapshot(page, "/api/runtime/status", (json) => {
+    json.setup_complete = false;
+  });
+  await page.goto("/app/", { waitUntil: "load" });
+
+  const wizard = page.getByRole("dialog", { name: "Setup" });
+  await wizard.getByRole("button", { name: "Next" }).click();
+  await wizard.locator(".pl-radiocard", { hasText: "Local model" }).click();
+
+  await expect(wizard.getByText("Connection failed")).toBeVisible();
+  await expect(wizard.getByText("fix it to continue")).toHaveCount(0);
+  expect(calls).toBe(1);
+  await wizard.getByRole("button", { name: "Try again" }).click();
+  await expect(wizard.getByText("Connection OK")).toBeVisible();
+  await expect(wizard.getByRole("button", { name: "Next" })).toBeEnabled();
+});
