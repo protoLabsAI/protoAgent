@@ -118,6 +118,30 @@ describe("the quota latch: evict → retry → latch", () => {
     expect(readKey("local", "protoagent.authToken")).toBe("tok");
   });
 
+  it("allows an explicitly reduced fallback to grow stored text and releases pressure", () => {
+    const key = "protoagent.chat.sessions";
+    expect(writeKey("local", key, big(20)).ok).toBe(true);
+    expect(writeKey("local", key, big(1000)).ok).toBe(false);
+    const calls = local.setCalls;
+    expect(writeKey("local", key, big(1000), { retryReduced: true }).ok).toBe(false);
+    expect(writeKey("local", "protoagent.ui:new", "{}", { retryReduced: true }).ok).toBe(false);
+    expect(local.setCalls).toBe(calls);
+    expect(writeKey("local", key, big(100), { retryReduced: true }).ok).toBe(true);
+    expect(readKey("local", key)).toBe(big(100));
+    expect(storagePressure().state).toBe("ok");
+    expect(writeKey("local", key, big(200)).ok).toBe(true);
+  });
+
+  it("keeps pressure latched when a reduced fallback also exceeds quota", () => {
+    const key = "protoagent.chat.sessions";
+    expect(writeKey("local", key, big(1000)).ok).toBe(false);
+    expect(writeKey("local", key, big(900), { retryReduced: true }).ok).toBe(false);
+    expect(storagePressure().state).toBe("failing");
+    const calls = local.setCalls;
+    expect(writeKey("local", key, big(900), { retryReduced: true }).ok).toBe(false);
+    expect(local.setCalls).toBe(calls);
+  });
+
   it("releases the latch on a removal", () => {
     local.setItem("plugin.hog", big(480));
     expect(writeKey("local", "protoagent.chat.sessions", big(100)).ok).toBe(false);

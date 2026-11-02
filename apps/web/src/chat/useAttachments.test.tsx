@@ -13,6 +13,8 @@ import { fileToBase64, useAttachments, type UseAttachmentsOptions } from "./useA
 
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
+vi.mock("./imageThumbnails", () => ({ imageThumbnail: vi.fn().mockResolvedValue("data:image/jpeg;base64,YQ==") }));
+
 type HookResult = ReturnType<typeof useAttachments>;
 
 let container: HTMLElement;

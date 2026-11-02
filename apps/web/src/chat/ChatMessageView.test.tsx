@@ -375,3 +375,22 @@ describe("ChatMessageView — a local system note renders a structured component
     expect(card.querySelector(".note-card__body")!.textContent).toContain("ingested 3 files");
   });
 });
+
+it("renders persisted thumbnails and opens a larger preview", async () => {
+  const { chatStore, flushChatPersist, sanitizePersisted } = await import("./chat-store");
+  const sessionId = chatStore.getSnapshot().currentSessionId!;
+  const message: ChatMessage = {
+    id: "image-message", role: "user", content: "Look at this",
+    attachments: [{ name: "photo.png", mime: "image/png", thumb: "data:image/jpeg;base64,YQ==" }],
+  };
+  chatStore.updateMessages(sessionId, [message]);
+  flushChatPersist();
+  const saved = JSON.parse(localStorage.getItem("protoagent.chat.sessions")!);
+  const restored = sanitizePersisted(saved)!.sessions.find((s) => s.id === sessionId)!.messages[0];
+  render(restored);
+  expect(container.querySelector("img")?.getAttribute("src")).toBe(message.attachments![0].thumb);
+  expect(container.textContent).toContain("Look at this");
+  expect(container.textContent).not.toContain("Attached:");
+  act(() => container.querySelector<HTMLButtonElement>('button[aria-label="Preview photo.png"]')!.click());
+  expect(document.querySelector('[role="dialog"] img')?.getAttribute("src")).toBe(message.attachments![0].thumb);
+});

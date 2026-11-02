@@ -1,6 +1,6 @@
 import { Button, Card } from "@protolabsai/ui/primitives";
 import { Message, MessageAction, MessageActions } from "@protolabsai/ui/ai";
-import { Tooltip } from "@protolabsai/ui/overlays";
+import { Dialog, Tooltip } from "@protolabsai/ui/overlays";
 import { Spinner } from "@protolabsai/ui/data";
 import { Input } from "@protolabsai/ui/forms";
 import { ArrowDownToLine, ArrowRight, Bot, CalendarClock, Check, ChevronDown, CircleSlash, Clock, Coins, Copy, FileText, GitBranch, Gauge, History, PauseCircle, RotateCcw, Sparkles, Timer, ThumbsUp, ThumbsDown, X } from "lucide-react";
@@ -40,6 +40,7 @@ import { rendersAsResultCard, serverResultLabel, serverResultPreview } from "./s
 import { useBackgroundJob } from "./backgroundJobStore";
 import { STATE_LABEL, briefSummary, delegationState } from "./delegation";
 import type { SessionFeedbackActions } from "./useSessionFeedback";
+import { validThumbnails } from "./imageThumbnails";
 import { readKey, writeKey } from "../lib/storage";
 
 // Optional per-message action row (copy / fork / regenerate). Omit it (e.g. the palette
@@ -228,6 +229,7 @@ export function ChatMessageView({
               : undefined
       }
     >
+      {message.role === "user" ? <MessageImages attachments={message.attachments} /> : null}
       {/* An `@<name>`-addressed answer (#3042) is this participant's own words, not the
           lead agent's paraphrase of them — say whose. The role stays "assistant" so every
           other renderer is untouched; the chip is the only thing that changes. */}
@@ -1056,4 +1058,25 @@ function UsageFooter({ usage, context }: { usage?: TurnUsage; context?: ContextW
       </div>
     </Tooltip>
   );
+}
+
+function MessageImages({ attachments }: { attachments: ChatMessage["attachments"] }) {
+  const [preview, setPreview] = useState<NonNullable<ChatMessage["attachments"]>[number] | null>(null);
+  const thumbnails = validThumbnails(attachments);
+  if (!thumbnails.length) return null;
+  return <>
+    <div className="chat-message-images">
+      {thumbnails.map((attachment, index) => (
+        <button key={index} type="button" aria-label={`Preview ${attachment.name}`}
+          onClick={() => setPreview(attachment)}
+          className="chat-message-images__button">
+          <img src={attachment.thumb} alt={attachment.name}
+            className="chat-message-images__thumbnail" />
+        </button>
+      ))}
+    </div>
+    {preview ? <Dialog open onClose={() => setPreview(null)} title={preview.name} width="min(640px, 96vw)">
+      <img src={preview.thumb} alt={preview.name} className="chat-message-images__preview" />
+    </Dialog> : null}
+  </>;
 }
