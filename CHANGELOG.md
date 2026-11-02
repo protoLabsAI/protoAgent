@@ -15,6 +15,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.226.0] - 2026-11-02
+
+### Fixed
+- **Chat image attachment previews (#1969).** Sent images appear as compact, persisted thumbnails with a larger preview on click. File attachments retain their filename labels; full-size image bytes are never saved in the transcript. Image-only chats retain automatic titles, and storage pressure drops previews while preserving transcript text and filename fallbacks.
+
+- **`web_search` now retries a throttled DuckDuckGo query instead of silently reporting it empty (#4578).** `ddgs` raises the same `DDGSException('No results found.')` whether the web is genuinely empty or a backend is rate-limited — so a daily sweep logged "nothing found" for three days without ever having searched. The tool now retries once after a short async backoff (on an alternate backend when the installed `ddgs` supports `backend=`), and when both attempts fail it says plainly the search was rate-limited or failed and is **not** an empty result — reserving "No results for …" for a search that actually completed with zero rows. The retry stays off the event loop (`asyncio.to_thread` + `asyncio.sleep`).
+
+- **Pinned a flaky `test_manager_resolves_the_registry_allowlist` that only failed in a single-process full-suite run (#4617).** The test compares the detached-subagent fence resolved by `background.manager._subagent_fence("researcher")` against `SUBAGENT_REGISTRY["researcher"].tools`, and intermittently saw the two diverge when an earlier test in the same process left the shared registry entry mutated. The test now pins every input the resolution reads (`STATE.graph`, `STATE.graph_config`, and a defensive snapshot of the registry tools) and asserts the full lists with a clear diff message instead of a truncated equality, so a future leak names the offending list rather than a `[current_tim…] == [current_tim…]` ellipsis.
+
+- **A scheduled retry no longer ends the turn with a silent "I'll pick this back up" (#4651).**
+  When the agent schedules a retry after a tool call failed (e.g. image generation hitting a
+  gateway 524), it's now told to say what happened and what will run before the turn ends,
+  instead of yielding on a bare "I'll pick this back up in 5 minutes" that leaves the user
+  unaware anything went wrong. For `schedule_task` the guidance rides the success result (the
+  model is re-invoked after it and reads it; recurring cron schedules get lighter "say what was
+  scheduled" wording). For `wait` — which ends the turn the moment it succeeds, so the model
+  never reads its result that turn — the guidance lives in the tool's description, which the
+  model reads before it calls `wait`. The machine confirmation the operator sees on a silent
+  turn stays clean ("Scheduled job … next at …" / "I'll pick this back up in …"): the model-only
+  instructions are stripped from that fallback. Scheduling behaviour is unchanged.
+
+- **Chat exports return during running turns (#4652).** Export the latest committed checkpoint immediately with an `in_progress` flag, omit unanswered trailing tool calls, and mark the transcript as still running. Idle exports and publishing retain their locked reads.
+
+- **Isolate cache-warmer test patches (#4667).** Restore real module attributes after the cache-warmer test and import `show_component` directly in its code-reference refusal test to avoid dependence on shared tool-registry state.
+
+- **Plugin reload leak tests ignore dead weakref proxies (#4685).** The module scan skips proxies left on the heap by earlier tests, preventing unrelated `ReferenceError` failures.
+
+- **Right panel stays inside the window (#4693).** A right panel saved wider than the window now renders at what fits, and it returns to its saved width when the window widens.
+
+### Removed
+- **Removed the pre-release hosted chat publishing feature and its `chat.publish` developer flag (#2683).** The hosted viewer service it needed (#2685) doesn't exist and isn't planned, so the flag could never graduate. Gone: the `/publish` command, the tab menu item, Settings ▸ Publish, the four publish and published-links routes, `infra/publish`, and the `publish.endpoint_url`, `publish.timeout_seconds` and `publish.revoke_endpoint_url` config fields. `/export` is unchanged and the chat-bundle format stays. A leftover `publish:` section in `config.yaml` is ignored and preserved on save, and any existing `published_links.json` is left on disk.
+
 ## [0.225.0] - 2026-11-01
 
 ### Changed
