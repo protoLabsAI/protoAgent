@@ -788,6 +788,7 @@ def _member_chase_env(tmp_path, monkeypatch):
         return {"id": url.rsplit("/", 1)[-1]}
 
     monkeypatch.setattr(installer, "install", fake_install)
+    monkeypatch.setattr(installer, "_check_candidate_host", lambda *a: "a" * 40)
     return calls
 
 

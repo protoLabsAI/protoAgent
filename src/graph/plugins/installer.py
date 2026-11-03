@@ -283,6 +283,10 @@ class InstallError(RuntimeError):
     """A plugin install/uninstall/sync failed (bad URL, manifest, git, collision)."""
 
 
+class IncompatibleHostError(InstallError):
+    """The staged plugin requires a newer host; the live copy is untouched."""
+
+
 class DepsInstallBusy(InstallError):
     """Another dependency install is already running into the same Python environment.
     Refused at once rather than queued (see ``deps_install_lock``); the console route
@@ -1000,6 +1004,26 @@ def _frozen_install_missing_deps(
     log.info("[plugins] %s: installed %d missing dep(s) into the managed runtime", pid, len(to_install))
 
 
+def _check_candidate_host(url: str, ref: str | None, allow: list[str] | None) -> str:
+    """Check a bundle member without writes and return the checked commit."""
+    _validate_url(url)
+    if ref:
+        _validate_ref(ref)
+    if not _source_allowed(url, allow):
+        raise InstallError(f"source {url!r} is not on plugins.sources.allow")
+    with tempfile.TemporaryDirectory(prefix="pa-plugin-check-") as tmp:
+        staging = Path(tmp) / "repo"
+        sha = _fetch(url, ref, staging)
+        manifest = load_manifest(staging)
+        if manifest is not None:
+            from graph.plugins.loader import _min_version_gate
+
+            refusal = _min_version_gate(manifest)
+            if refusal:
+                raise IncompatibleHostError(f"{manifest.id} {manifest.version} {refusal}")
+        return sha
+
+
 def install(
     url: str,
     ref: str | None = None,
@@ -1008,6 +1032,7 @@ def install(
     by: str = "cli",
     allow: list[str] | None = None,
     install_runtime_deps: bool = False,
+    _resolved_sha: str | None = None,
 ) -> dict:
     """Clone a plugin from ``url`` (at ``ref``) into the live plugins dir, pinned
     to its resolved SHA, and record it in ``plugins.lock``. Does NOT enable it or
@@ -1030,6 +1055,8 @@ def install(
     _validate_url(url)
     if ref:
         _validate_ref(ref)  # before it reaches git or the GitHub API URL (PR #1140 QA)
+    if _resolved_sha:
+        _validate_ref(_resolved_sha)
     bundled = superseding_plugin(url)
     if bundled is not None:
         log.info(
@@ -1055,7 +1082,8 @@ def install(
 
     with tempfile.TemporaryDirectory(prefix="pa-plugin-") as tmp:
         staging = Path(tmp) / "repo"
-        sha = _fetch(url, ref, staging)
+        # Bundle preflight pins the checked commit, while ref retains provenance.
+        sha = _fetch(url, _resolved_sha or ref, staging)
 
         # A bundle repo (protoagent.bundle.yaml) carries no code — it names a set of
         # plugin repos to install together. Fan out to per-plugin install().
@@ -1076,6 +1104,14 @@ def install(
         # dir (e.g. a __pycache__ leftover) is not a built-in and must not block.
         if _is_builtin(pid):
             raise InstallError(f"plugin id {pid!r} is a built-in — cannot install over it.")
+
+        # Use the loader's exact policy, against the fetched candidate, before any
+        # dependency installation, live-tree swap, or lock write.
+        from graph.plugins.loader import _min_version_gate
+
+        refusal = _min_version_gate(manifest)
+        if refusal:
+            raise IncompatibleHostError(f"{pid} {manifest.version} {refusal}")
 
         # Frozen runtime (desktop): no host pip. A missing hard dep used to be a flat
         # ADR 0058 D2 refusal, then (#2226) was pip'd into the managed Python runtime

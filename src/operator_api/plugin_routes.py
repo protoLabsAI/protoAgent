@@ -38,6 +38,7 @@ import re
 from collections.abc import Iterable
 
 from fastapi import HTTPException
+from fastapi.responses import JSONResponse
 
 from graph.plugins import installer
 from graph.plugins.manifest import load_manifest
@@ -543,6 +544,11 @@ def register_plugin_routes(app) -> None:
                 # arrive as a bool); the seed helper coerces per declared type.
                 config_inputs=_config_inputs_from(body),
             )
+        except installer.IncompatibleHostError as exc:
+            return JSONResponse(
+                status_code=400,
+                content={"ok": False, "reloaded": False, "error": str(exc), "detail": str(exc)},
+            )
         except installer.InstallError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -560,10 +566,13 @@ def register_plugin_routes(app) -> None:
             log.warning("[plugins] installed but auto-enable reload failed: %s", result.enable_error)
         for pid, err in result.load_errors.items():
             log.warning("[plugins] %s installed + enabled but FAILED to load: %s", pid, err)
+        error = result.enable_error or "; ".join(f"{pid}: {err}" for pid, err in result.load_errors.items())
         return {
+            "ok": not bool(error),
+            "error": error or None,
             "installed": result.summary,
             "enabled": result.enabled,  # the ids now live
-            "reloaded": result.reloaded,
+            "reloaded": result.reloaded and not bool(error),
             "restart_recommended": restart,
             "enable_error": result.enable_error,
             # Per-plugin import failures from the post-enable reload (#2716) — an id in
@@ -846,6 +855,11 @@ def register_plugin_routes(app) -> None:
             summary = await asyncio.to_thread(
                 installer.install, source_url, ref, force=True, by="console", allow=_sources_allowlist()
             )
+        except installer.IncompatibleHostError as exc:
+            return JSONResponse(
+                status_code=400,
+                content={"ok": False, "reloaded": False, "error": str(exc), "detail": str(exc)},
+            )
         except installer.InstallError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -853,6 +867,7 @@ def register_plugin_routes(app) -> None:
         is_enabled = plugin_id in (getattr(cfg, "plugins_enabled", []) or [])
 
         reloaded = False
+        load_errors = {}
         if is_enabled:
             # Force a genuinely fresh import of the just-pulled code before the
             # reload — what makes UPDATE deliver fresh code for a multi-file plugin
@@ -867,19 +882,31 @@ def register_plugin_routes(app) -> None:
             ok, messages = await asyncio.to_thread(_apply_settings_changes, config=_current_plugin_lists)
             if not ok:
                 raise HTTPException(status_code=500, detail="; ".join(messages) or "reload failed")
-            reloaded = True
+            load_errors = {
+                plugin_id: str(m["error"])
+                for m in (STATE.plugin_meta or [])
+                if m.get("id") == plugin_id and m.get("error")
+            }
+            reloaded = not bool(load_errors)
 
         # The reload re-mounted the router with the new code (ADR 0096) and reconciled the
         # surfaces; only one it couldn't replace asks for a restart. With no reload (not in
         # plugins.enabled), a plugin that is nonetheless live keeps running the old code.
-        return {
-            "ok": True,
+        response = {
+            "ok": not bool(load_errors),
+            "error": "; ".join(f"{pid}: {err}" for pid, err in load_errors.items()) or None,
+            "load_errors": load_errors,
             "id": plugin_id,
             "version": summary.get("version"),
             "resolved_sha": summary.get("resolved_sha"),
             "reloaded": reloaded,
-            "restart_recommended": await _restart_needed([plugin_id]) if reloaded else _is_live(plugin_id),
+            "restart_recommended": await _restart_needed([plugin_id]) if is_enabled else _is_live(plugin_id),
         }
+
+        # Installation already committed the files and lock entry. As with install,
+        # return load diagnostics in the body so clients refresh the changed inventory
+        # even when the plugin needs configuration/dependencies before it can load.
+        return response
 
     @app.delete("/api/plugins/{plugin_id}")
     async def _uninstall(plugin_id: str, purge: bool = False):

@@ -229,6 +229,7 @@ def _install_bundle(
     skipped: list[str] = []
     superseded: list[str] = []
     bundle_warnings: list[str] = []
+    candidates: list[tuple[str, str | None, str]] = []
     for entry in bundle.get("plugins") or []:
         if not isinstance(entry, dict):
             continue
@@ -303,10 +304,29 @@ def _install_bundle(
             except Exception:  # noqa: BLE001 — best-effort; fall back to the manifest pin
                 pass
 
+        # Check every member before installing ANY member. An automatic tag chase
+        # may exceed the host's capabilities even inside the caret range; in that
+        # case retain the declared floor. An incompatible floor refuses the whole
+        # bundle without leaving a partial install or stale bundle provenance.
+        try:
+            member_sha = _inst()._check_candidate_host(str(purl), member_ref, allow)
+        except _inst().IncompatibleHostError as exc:
+            pinned_ref = entry.get("ref")
+            if member_ref == pinned_ref:
+                raise
+            member_sha = _inst()._check_candidate_host(str(purl), pinned_ref, allow)
+            warn = f"{exc}; using bundle pin {pinned_ref} instead of {member_ref}."
+            bundle_warnings.append(warn)
+            _inst().log.warning("[plugins] bundle %s: %s", bid, warn)
+            member_ref = pinned_ref
+        candidates.append((str(purl), member_ref, member_sha))
+
+    for purl, member_ref, member_sha in candidates:
         installed.append(
             _inst().install(
                 str(purl),
                 member_ref,
+                _resolved_sha=member_sha,
                 force=force,
                 by=f"bundle:{bid}",
                 allow=allow,
