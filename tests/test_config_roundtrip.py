@@ -1291,3 +1291,21 @@ def test_stay_awake_settings_schema():
         "(on battery the computer sleeps as usual), and a closed laptop lid can still "
         "sleep it. Off = the computer sleeps normally."
     )
+
+
+def test_migrated_null_endpoint_round_trip(tmp_path, monkeypatch):
+    """Explicit null is an SDK default, distinct from an absent/empty connection URL."""
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    path = _write_yaml(tmp_path, "model:\n  api_base:\n  api_key: test-key\n")
+    cfg = LangGraphConfig.from_yaml(path)
+    expected = [{"id": "gateway", "type": "openai-compat", "label": "Gateway", "base_url": None}]
+    data = config_to_dict(cfg)
+    # Connections use their dedicated serializer, outside the FIELDS-driven settings.
+    data["providers"] = [provider.as_dict() for provider in cfg.providers]
+    assert data["providers"] == expected
+    doc = {}
+    apply_updates_to_yaml(doc, data)
+    save_yaml_doc(doc, path)
+    reloaded = LangGraphConfig.from_yaml(path)
+    assert reloaded.provider_by_id("gateway").base_url is None
+    assert [provider.as_dict() for provider in reloaded.providers] == expected

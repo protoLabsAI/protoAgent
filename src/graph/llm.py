@@ -893,7 +893,10 @@ def _gateway_configured(config: LangGraphConfig, provider: "Provider | None" = N
         # is the requirement — a key is optional (local endpoints want none) — and neither
         # is ever borrowed from another connection or from the legacy fields. Accepting a
         # key alone would let the build fall through to the legacy endpoint.
-        return bool(resolve_model_route(config, provider).base_url)
+        route = resolve_model_route(config, provider)
+        # Explicit null preserves the SDK default used by migrated legacy configs;
+        # an absent/empty endpoint still fails rather than borrowing the legacy URL.
+        return bool(route.base_url) or (route.base_url is None and bool(route.api_key))
     return bool(resolve_model_route(config).api_key)
 
 

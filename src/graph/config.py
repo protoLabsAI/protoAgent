@@ -237,7 +237,7 @@ class Provider:
     id: str
     type: str = PROVIDER_TYPE_OPENAI_COMPAT
     label: str = ""
-    base_url: str = ""
+    base_url: str | None = ""  # explicit null lets the OpenAI SDK choose its default
     api_key: str = ""  # overlaid from secrets.yaml, like model.api_key was
 
     def display(self) -> str:
@@ -247,7 +247,7 @@ class Provider:
         out = {"id": self.id, "type": self.type}
         if self.label:
             out["label"] = self.label
-        if self.base_url:
+        if self.base_url or self.base_url is None:
             out["base_url"] = self.base_url
         if self.api_key and not redact:
             out["api_key"] = self.api_key
@@ -282,7 +282,7 @@ def _parse_providers(entries, secrets: dict) -> list[Provider]:
                 id=pid,
                 type=ptype,
                 label=str(entry.get("label", "") or ""),
-                base_url=str(entry.get("base_url", "") or "").strip(),
+                base_url=None if entry.get("base_url", "") is None else str(entry.get("base_url", "") or "").strip(),
                 # Secret overlay mirrors model.api_key: secrets.yaml wins over inline.
                 api_key=str((secret_keys or {}).get(pid) or entry.get("api_key", "") or ""),
             )
@@ -312,7 +312,7 @@ def _parse_providers(entries, secrets: dict) -> list[Provider]:
 class ModelRoute:
     """Where an OpenAI-compatible call goes and what it authenticates with."""
 
-    #: ``None`` only on the default route when ``model.api_base`` is null (a bare
+    #: ``None`` when the endpoint is explicitly null, including migrated connections (a bare
     #: ``api_base:``): the client then gets ``base_url=None`` and the OpenAI SDK applies its
     #: own default, exactly as before this resolver existed.
     base_url: str | None
@@ -332,7 +332,7 @@ def resolve_model_route(config, connection: Provider | None = None) -> ModelRout
     """
     if connection is not None:
         return ModelRoute(
-            base_url=str(connection.base_url or "").strip(),
+            base_url=None if connection.base_url is None else str(connection.base_url or "").strip(),
             api_key=str(connection.api_key or "").strip(),
             connection=connection.id,
         )
@@ -415,7 +415,7 @@ def _migrated_providers(config) -> list[Provider]:
     # strictly from its own fields — nothing downstream may borrow a global key on its
     # behalf (that is how one connection's credential reaches another's endpoint).
     route = resolve_model_route(config)
-    base, key = route.base_url or "", route.api_key
+    base, key = route.base_url, route.api_key
     if base or key:
         out.append(Provider(id="gateway", type=PROVIDER_TYPE_OPENAI_COMPAT, label="Gateway", base_url=base, api_key=key))
     lead = (getattr(config, "model_provider", "") or "").strip().lower()
@@ -526,7 +526,7 @@ def to_registry_shape(layer: dict | None, *, host: dict | None = None) -> tuple[
     * ``doc`` — the layer. ``model.api_key`` and each connection's ``api_key`` are lifted
       out; everything else in a connection entry passes through as the layer had it (a
       caller that must ship nothing secret still strips and sweeps the rest). No provider
-      field is emitted blank.
+      field is emitted blank, except an explicit null endpoint (the SDK default).
     * ``credentials`` — each non-blank key lifted, by the name a snapshot asks for it under:
       ``providers.<id>`` for a connection's key; for the retired ``model.api_key``,
       ``providers.gateway`` exactly when it IS that connection's key (below), else
@@ -574,7 +574,10 @@ def to_registry_shape(layer: dict | None, *, host: dict | None = None) -> tuple[
             key = entry.get("api_key")
             if pid and isinstance(key, str) and key.strip():
                 credentials.setdefault(f"providers.{pid}", key.strip())  # first duplicate wins, as at load
-            cleaned.append({k: v for k, v in entry.items() if k != "api_key" and v not in ("", None)})
+            cleaned.append({
+                k: v for k, v in entry.items()
+                if k != "api_key" and (v not in ("", None) or (k == "base_url" and v is None))
+            })
         doc["providers"] = cleaned
     elif migrates and base:
         # Exactly what `_migrated_providers` builds from this layer at load: the endpoint
