@@ -26,4 +26,8 @@ paths = [
   # Fleet-diagnostics tool redaction (#3170) — sixth file with the same job, on both the
   # success and the error path.
   '''^tests/test_fleet_diagnostics_tool\.py$''',
+  # pytest-split timing files (#4714): their keys are test IDs, and parametrised redaction
+  # tests put the fake ghp_/curl-auth fixtures above into those IDs. Timings only.
+  '''^tests/(windows_)?test_durations\.json$''',
+  '''^\.test_durations$''',
 ]
