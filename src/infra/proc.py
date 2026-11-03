@@ -146,7 +146,7 @@ _CREDENTIAL_EXACT = frozenset(
 
 def scrub_agent_env(env: Mapping[str, str], passthrough=()) -> dict[str, str]:
     """``env`` minus the running agent's identity/instance vars and credential-shaped vars —
-    for a command the agent runs inside a project (its tests, build, scripts), which must
+    for a project command or spawned coder (its tests, build, scripts), which must
     not act as, or write into, the live agent. ``passthrough`` names survive (exact,
     case-sensitive). PATH, HOME, locale and toolchain vars are untouched."""
     keep = {str(n) for n in passthrough or () if str(n).strip()}

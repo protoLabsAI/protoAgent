@@ -107,6 +107,10 @@ def _cache_key(spec: dict) -> tuple:
         tuple(sorted((spec.get("env") or {}).items())),
         tuple(sorted(spec.get("env_remove") or ())),  # sorted: order-insensitive identity
     )
+    passthrough = tuple(sorted(spec.get("env_passthrough") or ()))
+    # Keep historical keys for delegates without exceptions; isolate opted-in clients.
+    if passthrough:
+        base = (*base, ("env_passthrough", passthrough))
     ceiling = str(spec.get("permissions_ceiling") or "")
     conversation = str(spec.get("conversation_key") or "")
     if not ceiling and not conversation:
@@ -141,10 +145,8 @@ def _client_for(spec: dict) -> AcpClient:
             spec["args"],
             cwd=spec["workdir"],
             env=spec["env"],
-            # Subtractive env seam (#2117): strip host identity/credential vars from the
-            # spawned coder WITHOUT mutating os.environ. `.get` so a spec that predates the
-            # field (or an ad-hoc caller) is byte-identical — no removal, full inheritance.
             env_remove=spec.get("env_remove"),
+            env_passthrough=spec.get("env_passthrough"),
             name=spec["name"],
             permission=_make_permission(spec),
             session_id_path=_session_id_path(spec),
@@ -277,6 +279,7 @@ def _delegate_spec(delegate) -> dict:
             "workdir": str(getattr(delegate, "workdir", "") or ""),
             "env": getattr(delegate, "env", None) or None,
             "env_remove": list(getattr(delegate, "env_remove", None) or []),
+            "env_passthrough": list(getattr(delegate, "env_passthrough", None) or []),
             "permissions": str(getattr(delegate, "permissions", "") or "auto"),
             "allow_kinds": list(getattr(delegate, "allow_kinds", None) or []),
             "deny_kinds": list(getattr(delegate, "deny_kinds", None) or []),
@@ -290,6 +293,7 @@ def _delegate_spec(delegate) -> dict:
     spec.setdefault("args", [])
     spec.setdefault("env", None)
     spec.setdefault("env_remove", [])
+    spec.setdefault("env_passthrough", [])
     spec.setdefault("permissions", "auto")
     spec.setdefault("allow_kinds", [])
     spec.setdefault("deny_kinds", [])
@@ -329,6 +333,7 @@ def _tapped_client(spec: dict) -> tuple[tuple, AcpClient]:
         cwd=spec["workdir"],
         env=spec["env"],
         env_remove=spec.get("env_remove"),
+        env_passthrough=spec.get("env_passthrough"),
         name=spec["name"],
         permission=_make_permission(spec),
         session_id_path=None,  # fresh session/new, and nothing persisted to resume

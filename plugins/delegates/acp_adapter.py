@@ -81,6 +81,13 @@ class AcpAdapter(Adapter):
     def config_schema(self) -> list[FieldSpec]:
         return [
             FieldSpec(
+                "env_passthrough",
+                "Inherited environment exceptions",
+                "args",
+                advanced=True,
+                help="Exact host variable names to inherit despite the default identity and credential scrub. Empty by default; env_remove still applies.",
+            ),
+            FieldSpec(
                 "command",
                 "Command",
                 "text",
@@ -225,6 +232,7 @@ class AcpAdapter(Adapter):
             "workdir": d.workdir,
             "env": d.env or None,
             "env_remove": d.env_remove,
+            "env_passthrough": d.env_passthrough,
             "permissions": d.permissions,
             "allow_kinds": d.allow_kinds,
             "deny_kinds": d.deny_kinds,

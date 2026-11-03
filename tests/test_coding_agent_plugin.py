@@ -320,7 +320,7 @@ def test_launch_env_strips_env_remove_prefix_and_exact(monkeypatch):
     env = _launch_env(None, ["PROTOAGENT_", "A2A_AUTH_TOKEN"])
     assert "PROTOAGENT_HOME" not in env and "PROTOAGENT_INSTANCE" not in env  # prefix stripped
     assert "A2A_AUTH_TOKEN" not in env  # exact-name stripped
-    assert env["AGENT_NAME"] == "hub"  # not listed ⇒ inherited
+    assert "AGENT_NAME" not in env  # default identity scrub
     assert env["PATH"] == "/usr/bin:/bin" and env["HOME"] == "/home/u"  # host essentials kept
 
 
@@ -334,9 +334,8 @@ def test_launch_env_additive_overlay_applies_after_removal(monkeypatch):
     assert env["PROTOAGENT_HOME"] == "/override"  # removed, then re-set by the overlay
 
 
-def test_launch_env_without_env_remove_is_byte_identical(monkeypatch):
-    """No env_remove ⇒ behavior is unchanged: everything inherited, only the hardcoded
-    CLAUDECODE markers stripped (acceptance #4 — no regression)."""
+def test_launch_env_without_env_remove_scrubs_host_identity(monkeypatch):
+    """Default scrubbing requires no delegate-specific removal list."""
     monkeypatch.setattr(acp_client, "_discovered_node_dirs", lambda: ())
     monkeypatch.setattr(
         os,
@@ -344,7 +343,7 @@ def test_launch_env_without_env_remove_is_byte_identical(monkeypatch):
         {"PROTOAGENT_HOME": "/srv/pa", "A2A_AUTH_TOKEN": "sek", "PATH": "/usr/bin", "CLAUDECODE": "1"},
     )
     env = _launch_env(None)  # env_remove defaults to None
-    assert env["PROTOAGENT_HOME"] == "/srv/pa" and env["A2A_AUTH_TOKEN"] == "sek"  # fully inherited
+    assert "PROTOAGENT_HOME" not in env and "A2A_AUTH_TOKEN" not in env
     assert "CLAUDECODE" not in env  # hardcoded invariant still strips
 
 
@@ -388,10 +387,12 @@ while True:
 """
 
 
-async def test_env_remove_strips_host_vars_from_spawned_child(tmp_path, monkeypatch):
-    """End-to-end: an AcpClient with env_remove spawns a child whose env lacks every
-    PROTOAGENT_* var and A2A_AUTH_TOKEN while PATH/HOME (and un-listed AGENT_NAME)
-    survive — the projectBoard-plugin sanitize case, WITHOUT mutating os.environ."""
+@pytest.mark.parametrize("env_remove", [None, ["PROTOAGENT_", "A2A_AUTH_TOKEN"]])
+@pytest.mark.parametrize("env_passthrough", [[], ["AGENT_NAME"]])
+async def test_env_remove_strips_host_vars_from_spawned_child(tmp_path, monkeypatch, env_remove, env_passthrough):
+    """Subprocesses scrub host identity by default, with optional extra removals.
+    PATH/HOME survive; AGENT_NAME survives only with explicit passthrough.
+    The live host environment is never mutated."""
     script = tmp_path / "env_remove_agent.py"
     script.write_text(_ENV_REMOVE_AGENT, encoding="utf-8")
     marker = tmp_path / "present.marker"
@@ -406,7 +407,8 @@ async def test_env_remove_strips_host_vars_from_spawned_child(tmp_path, monkeypa
         cwd=str(tmp_path),
         name="envrm",
         env={"ENV_MARKER": str(marker)},
-        env_remove=["PROTOAGENT_", "A2A_AUTH_TOKEN"],
+        env_remove=env_remove,
+        env_passthrough=env_passthrough,
     )
     try:
         await client.handshake()
@@ -415,7 +417,7 @@ async def test_env_remove_strips_host_vars_from_spawned_child(tmp_path, monkeypa
     present = json.loads(marker.read_text(encoding="utf-8"))
     assert "PROTOAGENT_HOME" not in present and "PROTOAGENT_INSTANCE" not in present  # prefix stripped
     assert "A2A_AUTH_TOKEN" not in present  # exact-name stripped
-    assert "AGENT_NAME" in present  # not listed ⇒ inherited
+    assert ("AGENT_NAME" in present) == ("AGENT_NAME" in env_passthrough)
     assert "PATH" in present and "HOME" in present  # host essentials survive
     # The live host's os.environ is untouched — the whole point of the seam (#2117).
     assert os.environ["PROTOAGENT_HOME"] == "/srv/pa" and os.environ["A2A_AUTH_TOKEN"] == "sek"
