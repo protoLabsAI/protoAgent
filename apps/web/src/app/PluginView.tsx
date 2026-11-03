@@ -4,6 +4,7 @@ import { AlertTriangle, SlidersHorizontal } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import { apiUrl, authToken } from "../lib/api";
+import { withViewQuery } from "../lib/viewDeepLink";
 import { PLUGIN_FRAME_ALLOW, postInit, scheduleInitReposts, usePluginFrameThemeSync } from "./pluginFrameHandshake";
 import { registerContextMenu } from "../contextMenu/registry";
 import { useContextMenuStore } from "../contextMenu/store";
@@ -99,8 +100,8 @@ export function PluginView({
   const [activeTab, setActiveTab] = useState(tabs[0]?.id ?? "");
   const src = useMemo(() => {
     const t = tabs.find((x) => x.id === activeTab);
-    return t?.path ?? view.path;
-  }, [tabs, activeTab, view.path]);
+    return withViewQuery(t?.path ?? view.path, view.deepLinkQuery);
+  }, [tabs, activeTab, view.path, view.deepLinkQuery]);
 
   const [loaded, setLoaded] = useState(false);
   // null = no error; a string = an actionable failure message to show in the panel.

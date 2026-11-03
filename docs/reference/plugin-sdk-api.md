@@ -29,7 +29,7 @@ the module's own.
 
 **Delivering a file with the answer (#4252)** — [`attach_file()`](#sdk-attach-file)
 
-**The agent's own console URL (#4256)** — [`console_url()`](#sdk-console-url)
+**The agent's own console URL + plugin-view deep links (#4256)** — [`console_url()`](#sdk-console-url), [`view_url()`](#sdk-view-url)
 
 **Model in-flight priority (the plugin↔limiter channel, ADR 0115 D6)** — [`llm_lanes()`](#sdk-llm-lanes), [`llm_priority()`](#sdk-llm-priority)
 
@@ -281,7 +281,7 @@ delivered with the answer of the turn that resumes it. Guard with
 `getattr(sdk, "attach_file", None)` on cores older than this seam (`ttl_s` needs a
 core with [#4258](https://github.com/protoLabsAI/protoAgent/issues/4258)).
 
-## The agent's own console URL (#4256)
+## The agent's own console URL + plugin-view deep links (#4256)
 
 ### `sdk.console_url` {#sdk-console-url}
 
@@ -317,6 +317,39 @@ hub and any local recorder). A member given an explicit `A2A_PUBLIC_URL` of any 
 shape keeps it.
 
 Guard with `getattr(sdk, "console_url", None)` on cores older than this seam.
+
+### `sdk.view_url` {#sdk-view-url}
+
+```python
+sdk.view_url(plugin_id: str, view_id: str | None = None, params: Any = None) -> str | None
+```
+
+An absolute console link that opens one of this agent's plugin views and hands the page
+`params` in its own `location.search` — for a QR label, a notification, an email::
+
+    url = sdk.view_url("inventory", "view", {"bin": "B07"})
+    # → "https://hub.example.ts.net/app/agent/merchantAgent-6604/?plugin=inventory&view=view&vp=bin%3DB07"
+
+The console reads `?plugin=<id>&view=<view_id>&vp=<urlencoded params>` on load (the same
+`{plugin, view}` pair as the `ui.navigate` intent; a blank view = the plugin's first),
+opens that view on desktop or the mobile shell, appends `vp` to the view's iframe src and
+strips the keys from the address bar. The path the frame loads always comes from the view
+the plugin declared, never from the link.
+
+The base is the address a person can actually open:
+
+1. on a hub-spawned fleet member (`A2A_PUBLIC_URL` = `{hub}/agents/<id>`) — the hub's
+   slug window for this member, `{hub}/app/agent/<id>/`, since the member's own loopback
+   port is unreachable from a phone;
+2. else the declared public console (`network.public_console_url`) — `{origin}/app/`;
+3. else `console_url` — `{base}/app/`;
+4. else `None` (no server in this process).
+
+`params` is a mapping (or a list of pairs, or an already-encoded query string) of plain
+query data, at most 2048 encoded characters. Raises `ValueError` on an id the console would
+refuse or an oversized query, so a bad label fails when it's minted, not when it's scanned.
+
+Guard with `getattr(sdk, "view_url", None)` on cores older than this seam.
 
 ## Model in-flight priority (the plugin↔limiter channel, ADR 0115 D6)
 
