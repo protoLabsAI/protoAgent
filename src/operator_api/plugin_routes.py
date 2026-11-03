@@ -903,8 +903,9 @@ def register_plugin_routes(app) -> None:
             "restart_recommended": await _restart_needed([plugin_id]) if is_enabled else _is_live(plugin_id),
         }
 
-        if load_errors:
-            return JSONResponse(status_code=500, content={**response, "detail": response["error"]})
+        # Installation already committed the files and lock entry. As with install,
+        # return load diagnostics in the body so clients refresh the changed inventory
+        # even when the plugin needs configuration/dependencies before it can load.
         return response
 
     @app.delete("/api/plugins/{plugin_id}")
