@@ -1995,16 +1995,21 @@ def validate_for_headless(config) -> tuple[bool, str]:
     # A native subscription lane needs no key here; a registered connection needs its own
     # endpoint (a keyless one — a local vLLM — runs with a placeholder key, as `create_llm`
     # sends it). Only an unqualified name falls through to the legacy default route.
-    from graph.llm import resolve_slot_target
+    from graph.llm import _gateway_configured, resolve_slot_target
 
     slot_id, entry, ptype, _ = resolve_slot_target(getattr(config, "model_name", ""), config)
     if slot_id:
         if is_native_oauth_provider(ptype):
             return True, "ok"
         if entry is not None:
-            if not resolve_model_route(config, entry).base_url:
-                return False, f"provider {slot_id!r} has no base_url"
-            return True, "ok"
+            # Usable on the SAME rule `create_llm` builds by (`_gateway_configured`): the
+            # connection's own endpoint, OR — for the `gateway` the loader migrated from a
+            # null `model.api_base` (#4597) — the SDK default with its key. --setup and the
+            # boot-time auto-complete then agree with what the runtime can actually compile,
+            # while a declared blank endpoint still fails loudly.
+            if _gateway_configured(config, entry):
+                return True, "ok"
+            return False, f"provider {slot_id!r} has no base_url"
 
     route = resolve_model_route(config)
     if not route.base_url:

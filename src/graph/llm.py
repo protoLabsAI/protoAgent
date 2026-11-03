@@ -893,7 +893,15 @@ def _gateway_configured(config: LangGraphConfig, provider: "Provider | None" = N
         # is the requirement — a key is optional (local endpoints want none) — and neither
         # is ever borrowed from another connection or from the legacy fields. Accepting a
         # key alone would let the build fall through to the legacy endpoint.
-        return bool(resolve_model_route(config, provider).base_url)
+        route = resolve_model_route(config, provider)
+        if route.base_url:
+            return True
+        # A ``None`` endpoint is the OpenAI SDK default (#4597) — whether the loader migrated
+        # it from a pre-registry null `model.api_base` or an operator DECLARED the explicit
+        # `sdk-default` sentinel (both parse to `base_url is None`). Usable with a key; the SDK
+        # resolves its own default at call time. A blank/absent endpoint ("") still fails, as
+        # before — `_parse_providers` keeps it "", so it is never mistaken for the SDK default.
+        return bool(route.base_url is None and route.api_key)
     return bool(resolve_model_route(config).api_key)
 
 

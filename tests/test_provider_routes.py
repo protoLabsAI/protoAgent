@@ -182,6 +182,28 @@ def test_patch_without_a_key_leaves_the_stored_one_alone(client, monkeypatch):
     assert client.written["secrets"] == {}
 
 
+def test_patch_the_migrated_gateway_label_keeps_its_endpoint_and_key(client, monkeypatch):
+    """#4597: the migrated gateway has a null endpoint (the SDK default) and its key in the
+    legacy `model.api_key`. A console label edit must not strand either — the GET lists its
+    endpoint as the explicit `sdk-default` sentinel, so the panel round-trips that (not "",
+    which used to remove it), and the write lifts the key into `secrets.providers.gateway`.
+    The env (`OPENAI_BASE_URL`) never leaks into the saved endpoint."""
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.setenv("OPENAI_BASE_URL", "https://wrong-host.example/v1")  # must NOT be persisted
+    _install(monkeypatch, model={"name": "gateway:gpt-4o", "api_base": None, "api_key": "test-key"})
+
+    # The GET the panel seeds its draft from shows the sentinel, never a blank or a URL.
+    listed = client.get("/api/config/providers").json()["providers"][0]
+    assert listed["base_url"] == "sdk-default"
+
+    r = client.patch("/api/config/providers/gateway", json={"label": "My gateway"})
+    assert r.status_code == 200
+    written = {e["id"]: e for e in client.written["entries"]}
+    assert written["gateway"]["label"] == "My gateway"
+    assert written["gateway"]["base_url"] == "sdk-default"  # endpoint survives as the sentinel
+    assert client.written["secrets"] == {"gateway": "test-key"}  # key preserved, not stranded
+
+
 def test_delete_refuses_a_connection_a_slot_still_names(client, monkeypatch):
     _install(monkeypatch, **BASE)
     r = client.delete("/api/config/providers/prod-gateway")

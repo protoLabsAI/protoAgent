@@ -221,6 +221,16 @@ class SubagentDef:
 PROVIDER_TYPE_OPENAI_COMPAT = "openai-compat"
 PROVIDER_TYPES = (PROVIDER_TYPE_OPENAI_COMPAT, "anthropic-oauth", "openai-codex")
 
+#: The one declarable value for a connection's endpoint that means "no explicit URL — let
+#: the OpenAI SDK resolve its own default at call time" (#4597). It parses to ``base_url
+#: is None`` and serializes back to this exact string, so "use the SDK default" survives a
+#: console write as an EXPLICIT choice. This is deliberately NOT a resolved URL: the SDK
+#: reads its env (``OPENAI_BASE_URL`` / ``OPENAI_API_BASE``) only at call time, so pinning a
+#: concrete URL at save time would snapshot one host and later drift from where the key
+#: actually goes. A blank/absent ``base_url`` is NOT this — it still fails loudly ("needs an
+#: endpoint"), so only the operator (or the loader migrating a legacy null route) opts in.
+SDK_DEFAULT_BASE_URL = "sdk-default"
+
 # No colon (it separates id from model in the slot grammar) and no slash (gateway
 # aliases contain them), so `split_slot_target` stays unambiguous by construction.
 _PROVIDER_ID_RE = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
@@ -237,7 +247,15 @@ class Provider:
     id: str
     type: str = PROVIDER_TYPE_OPENAI_COMPAT
     label: str = ""
-    base_url: str = ""
+    #: ``None`` means "the OpenAI SDK default endpoint" (#4597) — the client gets
+    #: ``base_url=None`` and the SDK resolves its own default at call time. Two things
+    #: produce it: the ``gateway`` the loader migrates in from a pre-registry config whose
+    #: default route had a null ``model.api_base``, and an operator who DECLARES
+    #: ``base_url: sdk-default`` (the ``SDK_DEFAULT_BASE_URL`` sentinel). A blank/absent
+    #: endpoint stays ``""`` — ``_parse_providers`` coerces it, and a connection with no
+    #: endpoint still fails loudly ("needs an endpoint"), never routing its key to the SDK
+    #: default. So ``None`` means "SDK default" unambiguously, never "unset".
+    base_url: str | None = ""
     api_key: str = ""  # overlaid from secrets.yaml, like model.api_key was
 
     def display(self) -> str:
@@ -247,11 +265,31 @@ class Provider:
         out = {"id": self.id, "type": self.type}
         if self.label:
             out["label"] = self.label
-        if self.base_url:
+        # A ``None`` endpoint means "the OpenAI SDK default" (#4597). It serializes to the
+        # explicit ``sdk-default`` sentinel — NOT a resolved URL — so a console add/patch/
+        # delete round-trips the choice faithfully: it reloads as ``None`` again (via
+        # ``_parse_providers``) and the SDK resolves its own default at CALL time, instead of
+        # snapshotting one host at save time that later drifts from where the key goes. A
+        # written ``base_url: null``/blank would coerce back to "" and fail every call, which
+        # is why the sentinel is required to keep the #4597 fix alive across the write. A real
+        # endpoint is emitted verbatim; "" stays omitted (a declared connection with no
+        # endpoint still fails loudly — it is not the SDK default).
+        if self.base_url is None:
+            out["base_url"] = SDK_DEFAULT_BASE_URL
+        elif self.base_url:
             out["base_url"] = self.base_url
         if self.api_key and not redact:
             out["api_key"] = self.api_key
         return out
+
+
+def _parse_base_url(raw) -> str | None:
+    """A declared connection's ``base_url`` value → the stored endpoint. The explicit
+    ``sdk-default`` sentinel (``SDK_DEFAULT_BASE_URL``) maps to ``None`` — "use the OpenAI
+    SDK default" (#4597); everything else is stripped to a string, so a blank/null stays
+    ``""`` and still fails loudly. Case/whitespace-tolerant, like the id and type parsers."""
+    text = str(raw or "").strip()
+    return None if text.lower() == SDK_DEFAULT_BASE_URL else text
 
 
 def _parse_providers(entries, secrets: dict) -> list[Provider]:
@@ -282,7 +320,12 @@ def _parse_providers(entries, secrets: dict) -> list[Provider]:
                 id=pid,
                 type=ptype,
                 label=str(entry.get("label", "") or ""),
-                base_url=str(entry.get("base_url", "") or "").strip(),
+                # The explicit ``sdk-default`` sentinel is the ONE declared value that maps to
+                # None — "use the OpenAI SDK default endpoint" (#4597). Every other blank/null
+                # endpoint stays "": a connection with no endpoint must fail loudly ("needs an
+                # endpoint"), never route its key to the SDK default. (The loader's migrated
+                # `gateway`, built in `_migrated_providers`, also carries None — same meaning.)
+                base_url=_parse_base_url(entry.get("base_url", "")),
                 # Secret overlay mirrors model.api_key: secrets.yaml wins over inline.
                 api_key=str((secret_keys or {}).get(pid) or entry.get("api_key", "") or ""),
             )
@@ -312,9 +355,13 @@ def _parse_providers(entries, secrets: dict) -> list[Provider]:
 class ModelRoute:
     """Where an OpenAI-compatible call goes and what it authenticates with."""
 
-    #: ``None`` only on the default route when ``model.api_base`` is null (a bare
-    #: ``api_base:``): the client then gets ``base_url=None`` and the OpenAI SDK applies its
-    #: own default, exactly as before this resolver existed.
+    #: ``None`` means the OpenAI SDK default endpoint (#4597): the client gets
+    #: ``base_url=None`` and the SDK applies its own default at call time, exactly as before
+    #: this resolver existed. It arises on the unqualified default route when
+    #: ``model.api_base`` is null (a bare ``api_base:``), on the ``gateway`` the loader
+    #: migrates in from exactly that null route, and on a connection that DECLARES the
+    #: ``sdk-default`` sentinel. A blank/absent endpoint reaches here as ``""`` — never
+    #: ``None`` — so ``None`` unambiguously means the SDK default, not "unset".
     base_url: str | None
     #: Never in the repr — a route is exactly the kind of object that ends up in a log line.
     api_key: str = field(repr=False)
@@ -332,7 +379,7 @@ def resolve_model_route(config, connection: Provider | None = None) -> ModelRout
     """
     if connection is not None:
         return ModelRoute(
-            base_url=str(connection.base_url or "").strip(),
+            base_url=None if connection.base_url is None else str(connection.base_url or "").strip(),
             api_key=str(connection.api_key or "").strip(),
             connection=connection.id,
         )
@@ -415,7 +462,7 @@ def _migrated_providers(config) -> list[Provider]:
     # strictly from its own fields — nothing downstream may borrow a global key on its
     # behalf (that is how one connection's credential reaches another's endpoint).
     route = resolve_model_route(config)
-    base, key = route.base_url or "", route.api_key
+    base, key = route.base_url, route.api_key
     if base or key:
         out.append(Provider(id="gateway", type=PROVIDER_TYPE_OPENAI_COMPAT, label="Gateway", base_url=base, api_key=key))
     lead = (getattr(config, "model_provider", "") or "").strip().lower()
@@ -526,7 +573,8 @@ def to_registry_shape(layer: dict | None, *, host: dict | None = None) -> tuple[
     * ``doc`` — the layer. ``model.api_key`` and each connection's ``api_key`` are lifted
       out; everything else in a connection entry passes through as the layer had it (a
       caller that must ship nothing secret still strips and sweeps the rest). No provider
-      field is emitted blank.
+      field is emitted blank — a null ``base_url`` included, so the merge inherits the Host
+      endpoint rather than letting a bare ``base_url:`` null it out (#3425).
     * ``credentials`` — each non-blank key lifted, by the name a snapshot asks for it under:
       ``providers.<id>`` for a connection's key; for the retired ``model.api_key``,
       ``providers.gateway`` exactly when it IS that connection's key (below), else
@@ -546,9 +594,12 @@ def to_registry_shape(layer: dict | None, *, host: dict | None = None) -> tuple[
       it — unless the layer sets no ``model.name``, where it also decides whether the Host's
       model is inherited; then it stays.
     * ``model.api_base``: dropped when the ``gateway`` entry here has exactly that endpoint
-      (a migrating layer gets one built from it); dropped when blank. Otherwise it stays —
-      the endpoint of the default route and the gateway-only readers, which no connection
-      in the registry is.
+      (a migrating layer gets one built from it); dropped when blank (``""``). A migrating
+      layer's NULL endpoint (a bare ``api_base:``) is KEPT verbatim, though — it carries no
+      URL to build a connection from, so the snapshot stays pre-registry and re-migrates to
+      the SDK-default ``gateway`` on import (#4597), rather than popping it and routing a
+      migrated key to the importer's box default. Otherwise it stays — the endpoint of the
+      default route and the gateway-only readers, which no connection in the registry is.
     * ``model.api_key``: never in ``doc``.
 
     Idempotent for the same ``host``. PURE — never mutates ``layer``.
@@ -603,7 +654,19 @@ def to_registry_shape(layer: dict | None, *, host: dict | None = None) -> tuple[
                 ),
                 None,
             )
-            if not base:
+            if migrates and model.get("api_base") is None:
+                # #4597: a MIGRATING layer whose default route ran on a NULL ``api_base``
+                # (a bare ``api_base:``) stays pre-registry — keep the null verbatim so the
+                # import re-migrates it to the ``gateway`` connection with the SDK-default
+                # endpoint, exactly as this box does. (The migrating ``elif ... and base``
+                # above builds no connection for a null endpoint, so there is nothing to
+                # alias it to; popping it would route a migrated key to the importer's
+                # box/App-default endpoint instead.) The key stays ``model.api_key`` (no
+                # alias), which the import migrates alongside it. ``is None`` not ``not base``
+                # so a blank ``api_base: ""`` still drops (it never carried a route); and it
+                # survives the key-lift above, so a re-export of this doc is idempotent.
+                pass
+            elif not base:
                 model.pop("api_base")  # a blank REPLACES the box endpoint; absent inherits it
             elif gateway is not None and str(gateway.get("base_url") or "").strip() == base:
                 model.pop("api_base")

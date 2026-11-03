@@ -1291,3 +1291,42 @@ def test_stay_awake_settings_schema():
         "(on battery the computer sleeps as usual), and a closed laptop lid can still "
         "sleep it. Off = the computer sleeps normally."
     )
+
+
+def test_migrated_null_endpoint_round_trip(tmp_path, monkeypatch):
+    """A legacy null ``model.api_base`` (#4597) migrates to a ``gateway`` connection whose
+    in-memory ``base_url`` is ``None`` — the OpenAI SDK default, distinct from an
+    absent/empty URL — and that ``None`` survives a raw load → save → reload because the
+    config stays PRE-REGISTRY (no declared ``providers:`` list): the null endpoint is kept
+    verbatim and re-migrates to the same ``None`` gateway on reload.
+
+    Serialized into a DECLARED list (the console write path), the ``None`` is written as the
+    explicit ``sdk-default`` sentinel, NOT a resolved URL — so it reloads as ``None`` again
+    and the SDK resolves its own default at call time, instead of pinning one host at save
+    time that later drifts from where the key actually goes. The environment
+    (``OPENAI_BASE_URL`` / ``OPENAI_API_BASE``) therefore never changes what is saved."""
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.setenv("OPENAI_BASE_URL", "https://wrong-host.example/v1")  # must NOT leak into save
+    monkeypatch.setenv("OPENAI_API_BASE", "https://also-wrong.example/v1")
+    path = _write_yaml(tmp_path, "model:\n  api_base:\n  api_key: test-key\n")
+    cfg = LangGraphConfig.from_yaml(path)
+    assert cfg.providers_declared is False
+    assert cfg.api_base is None  # the null legacy endpoint is kept as None, not coerced to ""
+    gateway = cfg.provider_by_id("gateway")
+    assert gateway is not None and gateway.base_url is None
+    # Serialized for a declared registry, the None becomes the sentinel — never a URL, and
+    # never the misleading env hosts above.
+    assert gateway.as_dict() == {
+        "id": "gateway",
+        "type": "openai-compat",
+        "label": "Gateway",
+        "base_url": "sdk-default",
+    }
+
+    # A raw load → save → reload keeps the config pre-registry, so the null endpoint survives
+    # and re-migrates to the same None gateway (not the App-default URL, not "").
+    doc = load_yaml_doc(Path(path))
+    save_yaml_doc(doc, Path(path))
+    reloaded = LangGraphConfig.from_yaml(path)
+    assert reloaded.providers_declared is False
+    assert reloaded.provider_by_id("gateway").base_url is None

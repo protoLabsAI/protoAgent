@@ -464,6 +464,9 @@ function ProviderConnectionDialog({
                 onChange={(event) => setDraft({ ...draft, base_url: event.target.value })}
                 placeholder="https://api.example.com/v1"
               />
+              <small className="muted">
+                Leave blank to require an endpoint. <code>sdk-default</code> uses the OpenAI SDK default.
+              </small>
             </label>
             <label className="field">
               <span>API key</span>
