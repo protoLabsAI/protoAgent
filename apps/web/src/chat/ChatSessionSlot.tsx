@@ -8,6 +8,7 @@ import { useKbIntents } from "../keybindings/intents";
 import { api } from "../lib/api";
 import { CHAT_ATTACH_ACCEPT } from "../lib/attachTypes";
 import { errMsg } from "../lib/format";
+import { brandName } from "../lib/brand";
 import { needsModelBanner } from "./modelBanner";
 import { hasNoteLede } from "./NoteCard";
 import { regenerateBlocked } from "./regenerateGuard";
@@ -343,6 +344,10 @@ export function ChatSessionSlot({
   // Deliberately signed out of the native OAuth provider (#2513): the send path
   // would only fail locally, so the composer swaps for a reconnect strip instead.
   const signedOut = Boolean(runtime?.graph_auth_error) && !runtime?.graph_loaded;
+  // The agent's display name for the idle composer placeholder — same source the header and
+  // PaletteChat use (App.tsx's chatAgentName), so a renamed agent no longer reads "Message
+  // protoAgent…" in the composer.
+  const chatAgentName = brandName(runtime?.identity?.name);
   const openGlobalSettings = useUI((st) => st.openGlobalSettings);
   const visionModel = Boolean(runtime?.model?.vision);
   // A configured vision model can DESCRIBE images for a text-only chat model (#1381), so an
@@ -2051,7 +2056,7 @@ export function ChatSessionSlot({
           placeholder={
             serverTurnControl
               ? "Interject into the running server task…"
-              : composerPlaceholder(status, steerQueue.length)
+              : composerPlaceholder(status, steerQueue.length, chatAgentName)
           }
           inputRef={textareaRef}
           onKeyDown={onComposerKeyDown}
