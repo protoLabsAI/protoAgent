@@ -18,10 +18,12 @@
 
 export const DEEP_LINK_KEYS = ["plugin", "view", "vp"] as const;
 
-// Same shape as the manifest's plugin-id rule (graph/plugins/manifest.py _VALID_PLUGIN_ID);
-// view ids are free-form in manifests, so allow the usual slug characters plus `.`.
+// Same shape as the manifest's plugin-id rule (graph/plugins/manifest.py _VALID_PLUGIN_ID).
+// View ids are free-form in manifests (`sales:daily` is legal), and a view id is only ever
+// compared to a declared view's key, never used as a path, so any short id without whitespace
+// or control characters is accepted.
 const PLUGIN_ID = /^[A-Za-z0-9][A-Za-z0-9_-]{0,99}$/;
-const VIEW_ID = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,99}$/;
+const VIEW_ID = /^[^\s\u0000-\u001f\u007f]{1,100}$/;
 // A QR code or a pasted link — a few hundred bytes is plenty; cap so a hostile link can't
 // stuff an unbounded query into a plugin page.
 export const MAX_VIEW_QUERY = 2048;

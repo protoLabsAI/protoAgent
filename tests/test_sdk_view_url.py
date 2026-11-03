@@ -82,9 +82,22 @@ def test_bad_plugin_id_raises(bad):
         sdk.view_url(bad)
 
 
-def test_bad_view_id_raises():
+@pytest.mark.parametrize("bad", ["a b", "a\nb", "x" * 101])
+def test_bad_view_id_raises(bad):
     with pytest.raises(ValueError):
-        sdk.view_url("inventory", "a/b")
+        sdk.view_url("inventory", bad)
+
+
+def test_view_ids_are_free_form_like_the_manifest():
+    assert _q(sdk.view_url("sales", "sales:daily"))["view"] == "sales:daily"
+
+
+def test_a_tenant_shaped_url_on_a_non_member_is_not_rewritten(monkeypatch):
+    # console_url() only treats {hub}/agents/<id> as a hub tenant for a real fleet member.
+    monkeypatch.setenv("A2A_PUBLIC_URL", "https://hub.example.ts.net/agents/solo")
+    url = sdk.view_url("inventory")
+    assert "/app/agent/" not in url
+    assert url == "https://hub.example.ts.net/agents/solo/app/?plugin=inventory"
 
 
 def test_oversized_params_raise():

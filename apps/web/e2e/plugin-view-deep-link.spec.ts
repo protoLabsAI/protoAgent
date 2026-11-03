@@ -34,6 +34,8 @@ test("no view named → the plugin's first view", async ({ page }) => {
 test("a right-dock view opens in the right dock", async ({ page }) => {
   await page.goto("/app/?plugin=boardy&view=scratch&vp=a%3D1", { waitUntil: "load" });
   await expect(frame(page)).toHaveAttribute("src", /\/plugins\/boardy\/scratch\?a=1$/);
+  // …in the RIGHT dock, not routed to the left one (the reconcile race this gate exists for).
+  await expect(page.locator(".pl-rail--right").getByRole("button", { name: "Scratch", exact: true })).toBeVisible();
 });
 
 test("an unknown plugin leaves the normal console and says why", async ({ page }) => {

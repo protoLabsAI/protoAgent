@@ -42,7 +42,12 @@ describe("parseViewDeepLink", () => {
     expect(parseViewDeepLink("?plugin=../etc")).toHaveProperty("error");
     expect(parseViewDeepLink("?plugin=")).toHaveProperty("error");
     expect(parseViewDeepLink("?plugin=https://evil.example")).toHaveProperty("error");
-    expect(parseViewDeepLink("?plugin=ok&view=a/b")).toHaveProperty("error");
+    expect(parseViewDeepLink("?plugin=ok&view=a%20b")).toHaveProperty("error");
+    expect(parseViewDeepLink("?plugin=ok&view=a%0Ab")).toHaveProperty("error");
+  });
+
+  it("accepts any manifest-legal view id, e.g. with a colon", () => {
+    expect(parseViewDeepLink("?plugin=sales&view=sales%3Adaily")).toMatchObject({ view: "sales:daily" });
   });
 
   it("refuses an oversized forwarded query", () => {

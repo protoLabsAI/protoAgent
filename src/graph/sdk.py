@@ -375,10 +375,11 @@ def console_url() -> str | None:
     return console_base_url() or None
 
 
-# A plugin id as the manifest accepts it (graph/plugins/manifest.py _VALID_PLUGIN_ID); view ids
-# also allow `.`. Mirrors apps/web/src/lib/viewDeepLink.ts, which refuses anything else.
+# A plugin id as the manifest accepts it (graph/plugins/manifest.py _VALID_PLUGIN_ID); a view id
+# is free-form there (only ever matched against declared views), so anything short without
+# whitespace/control characters. Mirrors apps/web/src/lib/viewDeepLink.ts.
 _VIEW_LINK_PLUGIN_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,99}$")
-_VIEW_LINK_VIEW_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,99}$")
+_VIEW_LINK_VIEW_ID = re.compile(r"^[^\s\x00-\x1f\x7f]{1,100}$")  # free-form in manifests
 _VIEW_LINK_MAX_QUERY = 2048  # the console's MAX_VIEW_QUERY
 
 
@@ -431,6 +432,16 @@ def view_url(plugin_id: str, view_id: str | None = None, params: Any = None) -> 
 
     public = configured_public_url()
     tenant = _HUB_TENANT_PATH.search(urlsplit(public).path or "") if public else None
+    if tenant:
+        # Only a hub-spawned member gets the hub's slug window — the same rule console_url()
+        # applies to this URL shape. Anyone else with such an A2A_PUBLIC_URL keeps the plain base.
+        try:
+            from graph.workspaces.manager import is_workspace_member
+
+            if not is_workspace_member():
+                tenant = None
+        except Exception:  # noqa: BLE001 — no workspace record readable: not a member
+            tenant = None
     if tenant:
         slug = tenant.group(0).rsplit("/", 1)[-1]
         base = f"{public[: len(public) - len(tenant.group(0))]}/app/agent/{quote(slug, safe='')}/"
