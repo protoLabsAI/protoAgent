@@ -486,6 +486,10 @@ def _build_middleware(
             # is the default.
             window_resolver=lambda state: context_window_for_turn(config, state),
             default_window=_window,
+            # A lower ceiling applied ONLY on background ``system:*`` threads (#4625):
+            # the middleware OR-es it with the trigger per-thread, so scheduled wakes
+            # compact early while chat threads are untouched. 0 = off.
+            system_thread_max_tokens=_compaction_system_ceiling(config),
         )
         try:
             mw = CountingSummarizationMiddleware(
@@ -632,6 +636,16 @@ def _compaction_ceiling(config) -> int:
     """``compaction.max_tokens`` as a positive int, or 0 (no ceiling)."""
     try:
         return max(0, int(getattr(config, "compaction_max_tokens", 0) or 0))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _compaction_system_ceiling(config) -> int:
+    """``compaction.system_thread_max_tokens`` as a positive int, or 0 (no separate
+    system-thread ceiling). Applied only on background ``system:*`` threads (#4625) —
+    the middleware OR-es it with the trigger the same way ``max_tokens`` is."""
+    try:
+        return max(0, int(getattr(config, "compaction_system_thread_max_tokens", 0) or 0))
     except (TypeError, ValueError):
         return 0
 

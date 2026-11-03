@@ -301,6 +301,10 @@ compaction:
   enabled: true
   trigger: "fraction:0.8"
   max_tokens: 200000
+  # Lower ceiling for background system:* threads (e.g. scheduled wakes on
+  # system:activity), so they compact early instead of resending the whole
+  # accumulated thread. Chat threads are unaffected. 0 = off.
+  system_thread_max_tokens: 30000
   keep_messages: 20
   # model: protolabs/fast
 

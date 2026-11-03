@@ -985,6 +985,15 @@ class LangGraphConfig:
     compaction_trigger: str = "fraction:0.8"
     compaction_keep_messages: int = 20
     compaction_max_tokens: int = 200_000
+    # A much lower absolute ceiling for background ``system:*`` threads (ADR 0003's
+    # Activity thread, #4625). Scheduled wakes run on ``system:activity`` and resend
+    # the whole accumulated thread every time; it sits just under the chat trigger and
+    # never resets, so a wake re-sent ~141k tokens of context (p50, 500 wakes). OR-ed
+    # with the trigger exactly like ``max_tokens`` — on a system thread the effective
+    # threshold is min(trigger, this) — so wakes compact early and run at a small,
+    # bounded context. Applied ONLY on ``system:*`` threads; chat threads are
+    # unchanged. 0 = no separate system-thread ceiling (the chat trigger applies).
+    compaction_system_thread_max_tokens: int = 30_000
     # In-history tool-result pruning (#2782, ADR 0101 D3) — the near-lossless
     # step BEFORE compaction's lossy summarize: at ``at_fraction`` of the model's
     # context window, tool results older than the newest ``keep_messages`` are
@@ -2242,6 +2251,9 @@ class LangGraphConfig:
             compaction_trigger=data.get("compaction", {}).get("trigger", cls.compaction_trigger),
             compaction_keep_messages=data.get("compaction", {}).get("keep_messages", cls.compaction_keep_messages),
             compaction_max_tokens=data.get("compaction", {}).get("max_tokens", cls.compaction_max_tokens),
+            compaction_system_thread_max_tokens=data.get("compaction", {}).get(
+                "system_thread_max_tokens", cls.compaction_system_thread_max_tokens
+            ),
             pruning_enabled=data.get("pruning", {}).get("enabled", cls.pruning_enabled),
             pruning_at_fraction=data.get("pruning", {}).get("at_fraction", cls.pruning_at_fraction),
             pruning_keep_messages=data.get("pruning", {}).get("keep_messages", cls.pruning_keep_messages),

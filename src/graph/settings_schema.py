@@ -393,6 +393,17 @@ FIELDS: list[Field] = [
         minimum=0,
     ),
     Field(
+        "compaction.system_thread_max_tokens",
+        "compaction_system_thread_max_tokens",
+        "System-thread token ceiling",
+        "number",
+        "Compaction",
+        "A much lower ceiling applied ONLY on background system:* threads (e.g. scheduled wakes "
+        "on system:activity), OR-ed with the trigger so they compact early and run at a small, "
+        "bounded context. Chat threads are unaffected. 0 = no separate system-thread ceiling.",
+        minimum=0,
+    ),
+    Field(
         "compaction.keep_messages",
         "compaction_keep_messages",
         "Keep last N messages",

@@ -340,6 +340,7 @@ compaction:
   enabled: true
   trigger: "fraction:0.8"   # or "tokens:120000" / "messages:80"
   max_tokens: 200000         # absolute ceiling OR-ed with the trigger; 0 = none
+  system_thread_max_tokens: 30000  # lower ceiling for background system:* threads; 0 = none
   keep_messages: 20          # most-recent messages kept verbatim
   model: ""                  # blank = summarize with the main model; or a cheaper one
 ```
@@ -347,7 +348,8 @@ compaction:
 | Key | Default | What |
 |---|---|---|
 | `trigger` | `"fraction:0.8"` | When to summarize: a fraction of the context window, an absolute token count, or a message count. |
-| `max_tokens` | `200000` | Absolute token ceiling, OR-ed with `trigger`: compaction fires at **min(fraction × window, max_tokens)**. Without it a 1M-window model waited for 800k tokens, re-sending a huge prompt on every call. `0` disables the ceiling. |
+| `max_tokens` | `200000` | Absolute token ceiling, OR-ed with `trigger`: on a chat thread compaction fires at **min(fraction × window, max_tokens)**. Without it a 1M-window model waited for 800k tokens, re-sending a huge prompt on every call. `0` disables the ceiling. |
+| `system_thread_max_tokens` | `30000` | A much lower absolute ceiling applied **only** on background `system:*` threads (e.g. scheduled wakes on `system:activity`), OR-ed with `trigger` the same way `max_tokens` is — so on a system thread the effective trigger is **min(fraction × window, max_tokens, system_thread_max_tokens)** — so wakes compact early and run at a small, bounded context instead of re-sending the whole accumulated thread. Chat threads are unaffected. To avoid re-compacting every step once the kept tail already clears this low ceiling, a system compaction fires only when it would summarize away at least `system_thread_max_tokens // 4` tokens of history. `0` disables the separate system-thread ceiling. |
 | `keep_messages` | `20` | Most-recent messages kept verbatim. |
 | `model` | `""` | Summarizer model. Blank = `routing.aux_model`, then the main model. |
 

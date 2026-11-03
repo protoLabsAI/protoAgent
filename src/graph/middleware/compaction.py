@@ -124,6 +124,25 @@ def _thread_id() -> str | None:
     return str(tid) if tid else None
 
 
+def _is_system_thread(state) -> bool:
+    """Whether this turn runs on a background ``system:*`` thread (#4625).
+
+    ADR 0003's reactive producers — the scheduler's wakes, the inbox — route their turns
+    into the single durable Activity context ``system:activity`` (``events.ACTIVITY_CONTEXT``);
+    any future ``system:*`` context is treated the same. These accumulate and resend the
+    whole thread every wake, so they get a much lower compaction ceiling than a chat thread.
+
+    Keyed off the state's ``session_id`` (the clean ``system:activity``) as the reliable
+    signal, with the checkpointer ``thread_id`` as a fallback — that carries a transport
+    prefix (``a2a:system:activity``, see ``server/maintenance_loops.py``), so match the
+    ``system:`` segment either at the start or right after one ``<transport>:`` prefix."""
+    session_id = str((state or {}).get("session_id") or "")
+    if session_id.startswith("system:"):
+        return True
+    tid = _thread_id() or ""
+    return tid.startswith("system:") or ":system:" in tid
+
+
 def _count() -> None:
     try:
         from observability import metrics
@@ -157,6 +176,12 @@ _SUMMARY_RETRY_DELAY_S = 1.0
 _BACKOFF_BASE_S = 60.0
 _BACKOFF_MAX_S = 30 * 60.0
 _BACKOFF_MAX_ENTRIES = 1024
+
+# Hysteresis for the system-thread ceiling (#4625): the minimum amount of removable
+# history, as a fraction (``ceiling // this``) of the ceiling, before a ``system:*``
+# thread (re)compacts. The gap between the trigger and the post-compaction size — stops a
+# thread whose kept tail already exceeds the low ceiling from re-compacting every step.
+_SYSTEM_HYSTERESIS_DIVISOR = 4
 
 
 def _status_of(exc: BaseException) -> int | None:
@@ -233,15 +258,27 @@ class CompactionFailedContextOverflow(_OverflowBase):
 # attribute: one middleware instance serves every concurrent session's turns.
 _TURN_WINDOW: contextvars.ContextVar[int | None] = contextvars.ContextVar("compaction_turn_window", default=None)
 
+# Whether THIS call runs on a background ``system:*`` thread (#4625). Same rationale as
+# ``_TURN_WINDOW``: one instance serves every concurrent session, and ``_should_summarize``
+# (called deep inside the parent's before_model) has no access to ``state`` — so the hook
+# resolves it once from ``state`` and stashes it here for the override to read.
+_TURN_SYSTEM: contextvars.ContextVar[bool] = contextvars.ContextVar("compaction_turn_system_thread", default=False)
+
 
 class CountingSummarizationMiddleware(SummarizationMiddleware):
     """``SummarizationMiddleware`` + archive-first (#2784) + a compaction counter."""
 
-    def __init__(self, *args, knowledge_store=None, history_store=_DEFAULT_HISTORY_STORE, window_resolver=None, default_window: int | None = None, **kwargs):
+    def __init__(self, *args, knowledge_store=None, history_store=_DEFAULT_HISTORY_STORE, window_resolver=None, default_window: int | None = None, system_thread_max_tokens: int = 0, **kwargs):
         # Set BEFORE the parent's __init__: it validates a ``fraction`` trigger by asking
         # ``_get_profile_limits``, which reads these.
         self._window_resolver = window_resolver
         self._default_window = default_window if isinstance(default_window, int) and default_window > 0 else None
+        # A separate, lower token ceiling applied ONLY on background ``system:*`` threads
+        # (#4625), OR-ed with the configured trigger (see ``_should_summarize``). 0 = off.
+        try:
+            self._system_thread_max_tokens = max(0, int(system_thread_max_tokens or 0))
+        except (TypeError, ValueError):
+            self._system_thread_max_tokens = 0
         super().__init__(*args, **kwargs)
         self._knowledge_store = knowledge_store
         self._history_store = history_store
@@ -270,6 +307,69 @@ class CountingSummarizationMiddleware(SummarizationMiddleware):
             except Exception:  # noqa: BLE001 — sizing never breaks a turn; fall back
                 log.debug("[compaction] per-turn window resolution failed", exc_info=True)
         return _TURN_WINDOW.set(win if isinstance(win, int) and win > 0 else None)
+
+    # ── system-thread early compaction (#4625) ────────────────────────────────
+
+    def _should_summarize(self, messages, total_tokens) -> bool:  # type: ignore[override]
+        """The configured trigger, OR a much lower ceiling on ``system:*`` threads.
+
+        A background wake resends its whole accumulated thread every time, so it needs to
+        compact far earlier than a chat thread. The system ceiling is OR-ed with the
+        parent's trigger exactly as ``compaction.max_tokens`` is (graph/agent.py): the
+        effective threshold on a system thread is min(trigger, this). Chat threads only
+        ever see the parent's decision, so their behaviour is unchanged. The system-thread
+        flag is resolved once per hook (``before_model``) and read from ``_TURN_SYSTEM``.
+
+        **Hysteresis (round-1 fix).** Compaction is keep-tail: it always preserves the
+        newest ``keep`` messages whatever their size, plus the summary. So the kept tail +
+        summary can themselves sit at or above the (low) system ceiling — and the ceiling
+        also fires on the provider-*reported* total, which carries system-prompt and
+        tool-schema overhead on top of the messages. With no gap between the trigger and
+        the post-compaction size, a thread stuck there would re-compact on EVERY
+        ``before_model`` of a wake — one summariser call, one archive entry and one
+        compaction count per step — while trimming only the 1–2 newest messages. So the
+        ceiling fires only when a compaction would actually shrink the thread by a
+        meaningful margin (:meth:`_system_compaction_would_shrink`), measured from the
+        real message tokens. The parent's own trigger and the absolute ``max_tokens``
+        overflow valve are never gated this way — if either is met we always compact."""
+        if super()._should_summarize(messages, total_tokens):
+            return True
+        ceiling = getattr(self, "_system_thread_max_tokens", 0)
+        if not (ceiling and _TURN_SYSTEM.get()):
+            return False
+        # Mirror the ``max_tokens`` ceiling: fire on the computed OR the provider-reported
+        # total. Either one only *proposes* a system compaction here; the shrink gate below
+        # decides, so system-prompt/tool-schema overhead in the reported total can't by
+        # itself force a churn.
+        over_ceiling = total_tokens >= ceiling or self._should_summarize_based_on_reported_tokens(
+            messages, float(ceiling)
+        )
+        return bool(over_ceiling) and self._system_compaction_would_shrink(messages, ceiling)
+
+    def _system_compaction_would_shrink(self, messages, ceiling: int) -> bool:
+        """The hysteresis gate: would compacting a ``system:*`` thread right now summarise
+        away enough to be worth the cost?
+
+        A keep-tail compaction summarises ``messages[:cutoff]`` and keeps the rest; the
+        tokens it removes are those of that head. Once a thread has been compacted, the
+        only thing ahead of the kept tail is the previous summary (a few hundred tokens),
+        so re-compacting would remove almost nothing — the churn the round-1 review found.
+        Require the removable head to clear ``ceiling // _SYSTEM_HYSTERESIS_DIVISOR``: far
+        larger than a leftover summary, so a just-compacted thread won't re-fire until it
+        has accrued that much new history, yet small enough that the thread stays bounded
+        near the ceiling. Measured from real message tokens, never the reported total."""
+        try:
+            cutoff = self._determine_cutoff_index(messages)
+        except Exception:  # noqa: BLE001 — parent internals moved; don't disable the valve
+            return True
+        if cutoff <= 0:
+            # The parent would compute the same cutoff and no-op, so there is nothing to do.
+            return False
+        try:
+            removable = self.token_counter(messages[:cutoff])
+        except Exception:  # noqa: BLE001 — the full count already succeeded; be conservative
+            return True
+        return removable >= max(1, ceiling // _SYSTEM_HYSTERESIS_DIVISOR)
 
     # ── failure backoff ──────────────────────────────────────────────────────
 
@@ -430,16 +530,20 @@ class CountingSummarizationMiddleware(SummarizationMiddleware):
 
     def before_model(self, state, runtime):  # type: ignore[override]
         token = self._bind_turn_window(state)
+        sys_token = _TURN_SYSTEM.set(_is_system_thread(state))
         try:
             return self._before_model(state, runtime)
         finally:
+            _TURN_SYSTEM.reset(sys_token)
             _TURN_WINDOW.reset(token)
 
     async def abefore_model(self, state, runtime):  # type: ignore[override]
         token = self._bind_turn_window(state)
+        sys_token = _TURN_SYSTEM.set(_is_system_thread(state))
         try:
             return await self._abefore_model(state, runtime)
         finally:
+            _TURN_SYSTEM.reset(sys_token)
             _TURN_WINDOW.reset(token)
 
     def _before_model(self, state, runtime):
