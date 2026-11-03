@@ -1295,27 +1295,34 @@ def test_stay_awake_settings_schema():
 
 def test_migrated_null_endpoint_round_trip(tmp_path, monkeypatch):
     """A legacy null ``model.api_base`` (#4597) migrates to a ``gateway`` connection whose
-    ``base_url`` is ``None`` — the OpenAI SDK default, distinct from an absent/empty URL —
-    and that ``None`` survives a load → save → reload.
+    in-memory ``base_url`` is ``None`` — the OpenAI SDK default, distinct from an
+    absent/empty URL — and that ``None`` survives a raw load → save → reload because the
+    config stays PRE-REGISTRY (no declared ``providers:`` list): the null endpoint is kept
+    verbatim and re-migrates to the same ``None`` gateway on reload.
 
-    The config stays PRE-REGISTRY across the round trip (no declared ``providers:`` list):
-    the null ``model.api_base`` is preserved verbatim and re-migrates to the same ``None``
-    gateway on reload. It is NOT persisted as a declared ``base_url: null`` — that would
-    reload as a declared *blank* endpoint, coerced to "" and rejected (an operator-declared
-    connection with no endpoint must fail loudly, never route its key to the SDK default),
-    which is why the dedicated serializer below omits a ``None`` ``base_url`` entirely."""
+    Serializing the registry into a DECLARED list (the console write path) can't carry that
+    ``None`` — a declared ``base_url: null`` would reload as a blank, coerced to "" and
+    rejected (an operator-declared connection with no endpoint must fail loudly) — so
+    ``as_dict`` MATERIALIZES it to the concrete SDK-default URL, pinning the connection's
+    key to exactly where it already went rather than reviving the #4597 blank."""
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
     path = _write_yaml(tmp_path, "model:\n  api_base:\n  api_key: test-key\n")
     cfg = LangGraphConfig.from_yaml(path)
     assert cfg.providers_declared is False
     assert cfg.api_base is None  # the null legacy endpoint is kept as None, not coerced to ""
     gateway = cfg.provider_by_id("gateway")
     assert gateway is not None and gateway.base_url is None
-    # None is the SDK default; a connection serializer omits it (there is no URL to write).
-    assert gateway.as_dict() == {"id": "gateway", "type": "openai-compat", "label": "Gateway"}
+    # Serialized for a declared registry, the None resolves to the concrete SDK default.
+    assert gateway.as_dict() == {
+        "id": "gateway",
+        "type": "openai-compat",
+        "label": "Gateway",
+        "base_url": "https://api.openai.com/v1",
+    }
 
-    # A load → save → reload that keeps the config pre-registry preserves the null endpoint,
-    # so the reload re-migrates to the same None gateway (not the App-default URL, not "").
+    # A raw load → save → reload keeps the config pre-registry, so the null endpoint survives
+    # and re-migrates to the same None gateway (not the App-default URL, not "").
     doc = load_yaml_doc(Path(path))
     save_yaml_doc(doc, Path(path))
     reloaded = LangGraphConfig.from_yaml(path)

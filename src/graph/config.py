@@ -230,6 +230,15 @@ def valid_provider_id(pid: str) -> bool:
     return bool(_PROVIDER_ID_RE.match((pid or "").strip()))
 
 
+def _sdk_default_base_url() -> str:
+    """The concrete endpoint the OpenAI SDK falls back to when given no ``base_url`` — the
+    one a migrated gateway's null endpoint has always run on (#4597). Resolved the way the
+    SDK resolves it (``OPENAI_BASE_URL`` env, else ``https://api.openai.com/v1``), so when
+    that implicit migrated connection is PERSISTED into a declared registry its key is
+    pinned to exactly where it already went, not to a declared blank that fails every call."""
+    return (os.environ.get("OPENAI_BASE_URL") or "https://api.openai.com/v1").strip()
+
+
 @dataclass
 class Provider:
     """One configured connection to a model source."""
@@ -253,12 +262,17 @@ class Provider:
         out = {"id": self.id, "type": self.type}
         if self.label:
             out["label"] = self.label
-        # A migrated gateway's ``None`` (the SDK default) is NOT emitted: there is no URL to
-        # write, and persisting it as a declared ``base_url: null`` would reload as a declared
-        # blank — coerced to "" and rejected. A snapshot keeps such a config pre-registry
-        # instead (its null ``model.api_base`` re-migrates on load).
-        if self.base_url:
-            out["base_url"] = self.base_url
+        # The migrated gateway's ``None`` means "the OpenAI SDK default endpoint" (#4597). A
+        # SERIALIZED registry is a DECLARED one, and a declared connection can't carry that
+        # ``None`` — ``_parse_providers`` coerces a written ``base_url: null``/blank to "",
+        # which then fails every call ("needs an endpoint"). So the ``None`` is MATERIALIZED
+        # to the concrete URL the SDK would have used: a console add/patch/delete persists a
+        # connection pinned to exactly where its key already went, and the #4597 fix survives
+        # the write instead of coming back as a declared blank. A real endpoint (including
+        # "", which stays omitted) is emitted verbatim — only the migrated ``None`` resolves.
+        base_url = _sdk_default_base_url() if self.base_url is None else self.base_url
+        if base_url:
+            out["base_url"] = base_url
         if self.api_key and not redact:
             out["api_key"] = self.api_key
         return out
@@ -564,9 +578,12 @@ def to_registry_shape(layer: dict | None, *, host: dict | None = None) -> tuple[
       it — unless the layer sets no ``model.name``, where it also decides whether the Host's
       model is inherited; then it stays.
     * ``model.api_base``: dropped when the ``gateway`` entry here has exactly that endpoint
-      (a migrating layer gets one built from it); dropped when blank. Otherwise it stays —
-      the endpoint of the default route and the gateway-only readers, which no connection
-      in the registry is.
+      (a migrating layer gets one built from it); dropped when blank (``""``). A migrating
+      layer's NULL endpoint (a bare ``api_base:``) is KEPT verbatim, though — it carries no
+      URL to build a connection from, so the snapshot stays pre-registry and re-migrates to
+      the SDK-default ``gateway`` on import (#4597), rather than popping it and routing a
+      migrated key to the importer's box default. Otherwise it stays — the endpoint of the
+      default route and the gateway-only readers, which no connection in the registry is.
     * ``model.api_key``: never in ``doc``.
 
     Idempotent for the same ``host``. PURE — never mutates ``layer``.
@@ -624,7 +641,19 @@ def to_registry_shape(layer: dict | None, *, host: dict | None = None) -> tuple[
                 ),
                 None,
             )
-            if not base:
+            if migrates and model.get("api_base") is None:
+                # #4597: a MIGRATING layer whose default route ran on a NULL ``api_base``
+                # (a bare ``api_base:``) stays pre-registry — keep the null verbatim so the
+                # import re-migrates it to the ``gateway`` connection with the SDK-default
+                # endpoint, exactly as this box does. (The migrating ``elif ... and base``
+                # above builds no connection for a null endpoint, so there is nothing to
+                # alias it to; popping it would route a migrated key to the importer's
+                # box/App-default endpoint instead.) The key stays ``model.api_key`` (no
+                # alias), which the import migrates alongside it. ``is None`` not ``not base``
+                # so a blank ``api_base: ""`` still drops (it never carried a route); and it
+                # survives the key-lift above, so a re-export of this doc is idempotent.
+                pass
+            elif not base:
                 model.pop("api_base")  # a blank REPLACES the box endpoint; absent inherits it
             elif gateway is not None and str(gateway.get("base_url") or "").strip() == base:
                 model.pop("api_base")

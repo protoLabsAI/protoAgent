@@ -223,6 +223,27 @@ async def _apply_providers(
         extra = extra_updates(current) if callable(extra_updates) else (extra_updates or {})
         return _nest_updates(extra)
 
+    def _preserved_secrets(current, entries) -> dict[str, str]:
+        """A MIGRATED connection (its route ``base_url`` is ``None`` → the OpenAI SDK
+        default, #4597) keeps its key in the legacy ``model.api_key``, not under
+        ``secrets.providers.<id>``. Writing the registry as a DECLARED list would strand
+        that key — a declared connection never borrows the legacy pair — so lift it into the
+        secrets overlay for any migrated connection that survives THIS write and the request
+        isn't already re-keying. ``Provider.as_dict`` materializes the endpoint; this keeps
+        the key (resolved through the same route resolver everything else uses), so the
+        connection stays usable after the reload instead of reviving #4597 keyless."""
+        from graph.config import resolve_model_route
+
+        out = dict(secret_updates)
+        written = {str(e.get("id", "")) for e in entries}
+        for p in getattr(current, "providers", None) or []:
+            if p.id not in written or p.id in out:
+                continue
+            route = resolve_model_route(current, p)
+            if route.base_url is None and route.api_key:
+                out[p.id] = route.api_key
+        return out
+
     if HOST.apply_settings is None:
         # Route-only tests: the narrow disk writer, under the same lock.
         from graph.config_io import CONFIG_WRITE_LOCK
@@ -234,15 +255,17 @@ async def _apply_providers(
                     entries, nested = build(current), _extra(current)
                 except ValueError as exc:
                     raise HTTPException(status_code=400, detail=str(exc)) from exc
-                _write_providers(entries, secret_updates, nested)
+                _write_providers(entries, _preserved_secrets(current, entries), nested)
 
         await asyncio.to_thread(_write_current)
         return
 
     def _patch(current) -> dict:
-        updates = [dict(entry) for entry in build(current)]
+        entries = build(current)
+        preserved = _preserved_secrets(current, entries)
+        updates = [dict(entry) for entry in entries]
         for entry in updates:
-            secret = secret_updates.get(str(entry.get("id", "")))
+            secret = preserved.get(str(entry.get("id", "")))
             if secret:
                 entry["api_key"] = secret
         return {"providers": updates, **_extra(current)}
