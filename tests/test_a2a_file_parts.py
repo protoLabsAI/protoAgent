@@ -44,7 +44,6 @@ def _isolated(tmp_path, monkeypatch):
     monkeypatch.setenv("PROTOAGENT_HOME", str(tmp_path / "instance"))
     monkeypatch.setenv("A2A_PUBLIC_URL", BASE + "/")
     monkeypatch.setattr(rs.STATE, "graph_config", None, raising=False)
-    monkeypatch.setattr("a2a_impl.registry.FLUSH_GRACE_S", 0.02)
     set_terminal_hook(None)
     set_progress_hook(None)
     yield

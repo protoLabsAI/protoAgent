@@ -297,7 +297,6 @@ async def test_tool_args_frames_ride_working_dataframes_never_the_terminal_artif
     from tests._a2a_app import A2A_HEADERS, drain_handlers
     from tests._a2a_app import build_app as _build_app
 
-    monkeypatch.setattr("a2a_impl.registry.FLUSH_GRACE_S", 0.02)
     set_terminal_hook(None)
     set_progress_hook(None)
 

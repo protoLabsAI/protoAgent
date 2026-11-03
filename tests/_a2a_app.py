@@ -20,12 +20,11 @@ from fastapi import FastAPI
 
 import protolabs_a2a as pa
 from a2a_impl.executor import ProtoAgentExecutor
-from a2a_impl.registry import harden_active_task_registry
 
 A2A_HEADERS = {"A2A-Version": "1.0"}
 
 # Handlers built by build_app during the current test — drained at teardown (drain_handlers)
-# so their retire-then-remove cleanup tasks (#1713) finish inside the test's event loop
+# so their registry cleanup tasks finish inside the test's event loop
 # instead of being destroyed pending when pytest closes it.
 HANDLERS: list = []
 
@@ -50,9 +49,6 @@ def build_app(stream_fn, *, bearer=None, api_key="", allowed_origins=None, task_
         agent_card=card,
         push_config_store=InMemoryPushNotificationConfigStore(),
     )
-    # Mirror production wiring (#1713): every test turn runs through the
-    # owned-producer registry, exactly like server/__init__.py mounts it.
-    assert harden_active_task_registry(handler)
     HANDLERS.append(handler)
     app = FastAPI()
     app.state.a2a_handler = handler

@@ -130,8 +130,6 @@ async def test_turn_survives_sse_consumer_disconnect(monkeypatch):
         yield ("text", "second")
         yield ("done", "first second")
 
-    # Shrink the hardened registry's 0.5s retire grace so waiting past it is cheap.
-    monkeypatch.setattr("a2a_impl.registry.FLUSH_GRACE_S", 0.02)
     app = _build_app(stream)
     task_id = await _stream_then_disconnect(app)
 
@@ -164,10 +162,9 @@ async def test_disconnected_turn_tool_frames_land_in_task_history(monkeypatch):
         yield ("tool_end", {"id": "t1", "name": "file_bug", "output": "BUG-9"})
         yield ("done", "filed")
 
-    monkeypatch.setattr("a2a_impl.registry.FLUSH_GRACE_S", 0.02)
     app = _build_app(stream)
     task_id = await _stream_then_disconnect(app)
-    await asyncio.sleep(0.1)  # past the (shrunk) retire grace
+    await asyncio.sleep(0.1)  # let the turn's teardown run
     gate.set()
 
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test", timeout=10) as c:

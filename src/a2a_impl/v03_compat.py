@@ -11,8 +11,8 @@ treats a missing task as a server fault.
 The fix is host-side and narrow: wrap the adapter instance's non-streaming step so an
 ``A2AError`` is rendered through the SDK's OWN v1 mapping (``build_error_response`` +
 ``JSON_RPC_ERROR_CODE_MAP``) — the exact codes the v1 path returns — and anything else
-still falls through to the adapter's existing -32603 handling. Like
-:mod:`a2a_impl.registry`, it reaches one private attribute (``_v03_adapter``) because the
+still falls through to the adapter's existing -32603 handling. It reaches one
+private attribute (``_v03_adapter``) because the
 dispatcher is built inside ``create_jsonrpc_routes`` with no seam; every access is
 guarded, so an SDK that moves it degrades to a logged warning + stock behavior. Re-verify
 (ideally delete) when bumping past a2a-sdk 1.1.0.

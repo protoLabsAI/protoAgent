@@ -1192,8 +1192,8 @@ export function ChatSessionSlot({
     // Stalled-stream watchdog (hung-workblock fix). The chat's only "turn done"
     // signal is the SSE stream closing (onDone) — there is no standalone terminal
     // event. If the stream stalls open mid-turn — a large answer whose terminal
-    // frames were stranded when the server's producer got cancelled on teardown
-    // (a2a_impl/registry.py), or a proxy/tailnet buffer — the reader blocks
+    // frames were stranded when the server's producer got cancelled on teardown,
+    // or a proxy/tailnet buffer — the reader blocks
     // forever, so onDone, the post-stream reconcile below, and `finally` never
     // run, and the bubble spins "Working…" until reload. Guard it: after
     // WATCHDOG_IDLE_MS with no frames, consult the durable task (tasks/get). If

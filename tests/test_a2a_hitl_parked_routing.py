@@ -9,7 +9,7 @@ fresh browser as a spinning ``ask_human`` card. A composer message held behind t
 re-parked on a second task the same way.
 
 Pinned here, through a real a2a-sdk ``DefaultRequestHandler`` wired like production
-(``harden_active_task_registry`` + ``install_parked_task_routing``):
+(``install_parked_task_routing``):
 
 - a ``hitl_resume`` answer with no task id continues the parked task (resume=True) and
   leaves no input-required task behind;
@@ -43,7 +43,6 @@ from a2a.types import (
 import protolabs_a2a as pa
 from a2a_impl import hitl_routing
 from a2a_impl.executor import ProtoAgentExecutor, set_progress_hook, set_terminal_hook
-from a2a_impl.registry import harden_active_task_registry
 
 CTX = "chat-3930"
 _HANDLERS: list = []
@@ -53,7 +52,6 @@ _HANDLERS: list = []
 def _hooks(monkeypatch):
     set_terminal_hook(None)
     set_progress_hook(None)
-    monkeypatch.setattr("a2a_impl.registry.FLUSH_GRACE_S", 0.02)
     yield
     set_terminal_hook(None)
     set_progress_hook(None)
@@ -87,7 +85,6 @@ def _handler(stream_fn, *, routing: bool = True):
         agent_card=card,
         push_config_store=InMemoryPushNotificationConfigStore(),
     )
-    assert harden_active_task_registry(handler)
     router = hitl_routing.install_parked_task_routing(handler) if routing else None
     if routing:
         assert router is not None
