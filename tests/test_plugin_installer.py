@@ -541,6 +541,7 @@ def test_frozen_bundle_passes_the_opt_in_to_every_member(env, monkeypatch):
         return real_install(url, ref, **k)
 
     monkeypatch.setattr(installer, "install", _spy)
+    monkeypatch.setattr(installer, "_check_candidate_host", lambda *a: "a" * 40)
     bundle = {"id": "stack", "plugins": [{"id": "m", "url": "https://github.com/acme/member"}]}
     installer._install_bundle(bundle, "https://github.com/acme/stack", "a" * 40, None, force=False, by="t", allow=None,
                               install_runtime_deps=True)

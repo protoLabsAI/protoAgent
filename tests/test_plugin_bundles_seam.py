@@ -102,6 +102,7 @@ def test_patches_on_installer_intercept_install_bundle(monkeypatch):
         return {"id": url.rsplit("/", 1)[1]}
 
     monkeypatch.setattr(installer, "install", fake_install)
+    monkeypatch.setattr(installer, "_check_candidate_host", lambda *a: "a" * 40)
     bundle = {"id": "stack", "plugins": [{"id": "a", "url": "https://example.com/a", "ref": "v0.1.0"}]}
     res = bundles._install_bundle(bundle, "https://example.com/stack", "f" * 40, None, force=False, by="t", allow=None)
     assert res["installed"] == [{"id": "a"}]

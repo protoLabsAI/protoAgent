@@ -93,3 +93,70 @@ def test_compatible_candidate_reports_actual_load_result(candidate, monkeypatch,
             assert body["load_errors"] == {}
     finally:
         loader.purge_plugin_modules("protobanana")
+
+
+@pytest.mark.parametrize("existing", [False, True])
+@pytest.mark.parametrize("compatible_pin", [False, True])
+def test_bundle_host_preflight(candidate, env, monkeypatch, existing, compatible_pin):  # noqa: F811
+    """Chased releases fall back; an incompatible floor cannot leave a partial bundle."""
+    from tests.test_plugin_installer import _make_bundle_repo, _set_bundle_member_refs
+
+    first = _make_plugin_repo(env, pid="first", tag="v0.1.0")
+    last = _make_plugin_repo(env, pid="last", tag="v0.1.0")
+    # A newer tag within the pin's caret range, but requiring a newer host.
+    _git(candidate, "tag", "v0.1.1")
+    bundle = _make_bundle_repo(env, [first, candidate, last])
+    _set_bundle_member_refs(bundle, "v0.1.0")
+    monkeypatch.setattr(installer, "check_plugin_update", lambda entry: {"latest_ref": entry["requested_ref"]})
+    if existing:
+        installer.install(str(bundle))
+    if not compatible_pin:
+        import yaml
+
+        manifest = bundle / "protoagent.bundle.yaml"
+        data = yaml.safe_load(manifest.read_text())
+        data["plugins"][2]["ref"] = "v0.1.1"
+        manifest.write_text(yaml.safe_dump(data))
+        _git(bundle, "add", "-A")
+        _git(bundle, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "incompatible floor")
+    monkeypatch.setattr(
+        installer, "check_plugin_update",
+        lambda entry: {"latest_ref": "v0.1.1" if entry["source_url"] == str(candidate) else "v0.1.0"},
+    )
+    root = installer.live_plugins_dir()
+    before = {str(p.relative_to(root)): p.read_bytes() for p in root.rglob("*") if p.is_file()}
+    lock = installer.lock_path()
+    before_lock = lock.read_bytes() if lock.exists() else None
+    if compatible_pin:
+        result = installer.install(str(bundle), force=existing)
+        assert [s["id"] for s in result["installed"]] == ["first", "protobanana", "last"]
+        assert result["installed"][1]["version"] == "0.1.0"
+        assert "using bundle pin v0.1.0" in result["warnings"][0]
+        assert "requires protoAgent >= 0.223.0" in result["warnings"][0]
+        assert installer._read_lock()["bundles"][0]["plugins"] == ["first", "protobanana", "last"]
+    else:
+        with pytest.raises(installer.IncompatibleHostError, match="requires protoAgent >= 0.223.0"):
+            installer.install(str(bundle), force=existing)
+        assert {str(p.relative_to(root)): p.read_bytes() for p in root.rglob("*") if p.is_file()} == before
+        assert (lock.read_bytes() if lock.exists() else None) == before_lock
+
+
+def test_bundle_installs_the_preflighted_commit(candidate, monkeypatch):
+    """A moving tag cannot replace a checked candidate between preflight and install."""
+    original_check = installer._check_candidate_host
+
+    def check_then_move(url, ref, allow):
+        sha = original_check(url, ref, allow)
+        _git(candidate, "tag", "-f", "v0.1.0", "v0.5.0")
+        return sha
+
+    monkeypatch.setattr(installer, "_check_candidate_host", check_then_move)
+    monkeypatch.setattr(installer, "check_plugin_update", lambda entry: {"latest_ref": "v0.1.0"})
+    result = installer._install_bundle(
+        {"id": "stack", "plugins": [{"url": str(candidate), "ref": "v0.1.0"}]},
+        "bundle-source", "a" * 40, None, force=False, by="test", allow=None,
+    )
+    assert result["installed"][0]["version"] == "0.1.0"
+    entry = installer._read_lock()["plugins"][0]
+    assert entry["requested_ref"] == "v0.1.0"
+    assert entry["resolved_sha"] == result["installed"][0]["resolved_sha"]
