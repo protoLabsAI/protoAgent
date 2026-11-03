@@ -894,9 +894,18 @@ def _gateway_configured(config: LangGraphConfig, provider: "Provider | None" = N
         # is ever borrowed from another connection or from the legacy fields. Accepting a
         # key alone would let the build fall through to the legacy endpoint.
         route = resolve_model_route(config, provider)
-        # Explicit null preserves the SDK default used by migrated legacy configs;
-        # an absent/empty endpoint still fails rather than borrowing the legacy URL.
-        return bool(route.base_url) or (route.base_url is None and bool(route.api_key))
+        if route.base_url:
+            return True
+        # A null endpoint is the OpenAI SDK default — but ONLY for the `gateway` the loader
+        # migrates in from a pre-registry config whose default route had a null
+        # `model.api_base` (#4597), never for an operator-DECLARED connection. Two things pin
+        # that: `_parse_providers` coerces a declared blank endpoint to "" (so `base_url is
+        # None` reaches here only on the migrated gateway), and `providers_declared` is False
+        # exactly when the loader migrated (a declared registry keeps the 'needs an endpoint'
+        # failure rather than sending the connection's key to api.openai.com). An absent/empty
+        # endpoint ("") still fails, as before — it is not the SDK default.
+        migrated = route.base_url is None and not getattr(config, "providers_declared", False)
+        return bool(migrated and route.api_key)
     return bool(resolve_model_route(config).api_key)
 
 
