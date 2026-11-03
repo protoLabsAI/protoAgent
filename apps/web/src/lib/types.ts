@@ -199,6 +199,10 @@ export type PluginView = {
   // state upward (a `background: true` subscribe → the ui store, #1640). Optional:
   // absent on raw manifest-shaped views that never passed through App's mapping.
   key?: string;
+  // A deep link's forwarded query (`?plugin=…&vp=<query>`, lib/viewDeepLink.ts), stamped on by
+  // App for the view the link opened. The host appends it to the frame src (also a tab's), so
+  // the plugin page reads it from its own `location.search`. Normalised query data, never a path.
+  deepLinkQuery?: string;
   tabs?: { id: string; label: string; path: string }[];
   // "rail" (default) = a left-rail surface; "right" = a right-sidebar panel
   // alongside Notes/Tasks/Goals/Schedule (ADR 0026); "bottom" = the bottom dock.

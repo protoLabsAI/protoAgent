@@ -324,7 +324,7 @@ def attach_file(ref: Any, *, name: str = "", mime: str = "", ttl_s: int | None =
     return _attach(ref, name=name, mime=mime, ttl_s=ttl_s)
 
 
-# ── the agent's own console URL (#4256) ─────────────────────────────────────────────────
+# ── the agent's own console URL + plugin-view deep links (#4256) ────────────────────────
 
 # The hub's per-member tenant path (``{hub}/agents/<workspace id>``) — what the fleet supervisor
 # injects as a spawned member's ``A2A_PUBLIC_URL`` so its CARD is dial-able through the hub.
@@ -373,6 +373,95 @@ def console_url() -> str | None:
         if member:
             return bound_base_url() or None
     return console_base_url() or None
+
+
+# A plugin id as the manifest accepts it (graph/plugins/manifest.py _VALID_PLUGIN_ID); a view id
+# is free-form there (only ever matched against declared views), so anything short without
+# whitespace/control characters. Mirrors apps/web/src/lib/viewDeepLink.ts.
+_VIEW_LINK_PLUGIN_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,99}$")
+_VIEW_LINK_VIEW_ID = re.compile(r"^[^\s\x00-\x1f\x7f]{1,100}$")  # free-form in manifests
+_VIEW_LINK_MAX_QUERY = 2048  # the console's MAX_VIEW_QUERY
+
+
+def view_url(plugin_id: str, view_id: str | None = None, params: Any = None) -> str | None:
+    """An absolute console link that opens one of this agent's plugin views and hands the page
+    ``params`` in its own ``location.search`` — for a QR label, a notification, an email::
+
+        url = sdk.view_url("inventory", "view", {"bin": "B07"})
+        # → "https://hub.example.ts.net/app/agent/merchantAgent-6604/?plugin=inventory&view=view&vp=bin%3DB07"
+
+    The console reads ``?plugin=<id>&view=<view_id>&vp=<urlencoded params>`` on load (the same
+    ``{plugin, view}`` pair as the ``ui.navigate`` intent; a blank view = the plugin's first),
+    opens that view on desktop or the mobile shell, appends ``vp`` to the view's iframe src and
+    strips the keys from the address bar. The path the frame loads always comes from the view
+    the plugin declared, never from the link.
+
+    The base is the address a person can actually open:
+
+    1. on a hub-spawned fleet member (``A2A_PUBLIC_URL`` = ``{hub}/agents/<id>``) — the hub's
+       slug window for this member, ``{hub}/app/agent/<id>/``, since the member's own loopback
+       port is unreachable from a phone;
+    2. else the declared public console (``network.public_console_url``) — ``{origin}/app/``;
+    3. else :func:`console_url` — ``{base}/app/``;
+    4. else ``None`` (no server in this process).
+
+    ``params`` is a mapping (or a list of pairs, or an already-encoded query string) of plain
+    query data, at most 2048 encoded characters. Raises ``ValueError`` on an id the console would
+    refuse or an oversized query, so a bad label fails when it's minted, not when it's scanned.
+
+    Guard with ``getattr(sdk, "view_url", None)`` on cores older than this seam."""
+    from urllib.parse import parse_qsl, quote, urlencode
+
+    from infra.media import configured_public_url
+
+    pid = str(plugin_id or "").strip()
+    if not _VIEW_LINK_PLUGIN_ID.match(pid):
+        raise ValueError(f"view_url: {plugin_id!r} is not a plugin id")
+    vid = str(view_id or "").strip()
+    if vid and not _VIEW_LINK_VIEW_ID.match(vid):
+        raise ValueError(f"view_url: {view_id!r} is not a view id")
+    if params is None or params == "":
+        vp = ""
+    elif isinstance(params, str):
+        vp = urlencode(parse_qsl(params.lstrip("?"), keep_blank_values=True))
+    else:
+        pairs = params.items() if hasattr(params, "items") else params
+        vp = urlencode([(str(k), "" if v is None else str(v)) for k, v in pairs])
+    if len(vp) > _VIEW_LINK_MAX_QUERY:
+        raise ValueError(f"view_url: params encode to {len(vp)} characters; the console takes {_VIEW_LINK_MAX_QUERY}")
+
+    public = configured_public_url()
+    tenant = _HUB_TENANT_PATH.search(urlsplit(public).path or "") if public else None
+    if tenant:
+        # Only a hub-spawned member gets the hub's slug window — the same rule console_url()
+        # applies to this URL shape. Anyone else with such an A2A_PUBLIC_URL keeps the plain base.
+        try:
+            from graph.workspaces.manager import is_workspace_member
+
+            if not is_workspace_member():
+                tenant = None
+        except Exception:  # noqa: BLE001 — no workspace record readable: not a member
+            tenant = None
+    if tenant:
+        slug = tenant.group(0).rsplit("/", 1)[-1]
+        base = f"{public[: len(public) - len(tenant.group(0))]}/app/agent/{quote(slug, safe='')}/"
+    else:
+        try:
+            from security.public_console import public_origin
+
+            origin = public_origin()
+        except Exception:  # noqa: BLE001 — no public console module state
+            origin = ""
+        root = origin or console_url()
+        if not root:
+            return None
+        base = f"{root.rstrip('/')}/app/"
+    query = [("plugin", pid)]
+    if vid:
+        query.append(("view", vid))
+    if vp:
+        query.append(("vp", vp))
+    return f"{base}?{urlencode(query)}"
 
 
 # ── model in-flight priority (the plugin↔limiter channel, ADR 0115 D6) ──────────────────

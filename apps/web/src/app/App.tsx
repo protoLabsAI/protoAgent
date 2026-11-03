@@ -31,6 +31,7 @@ import { AuthGate } from "./AuthGate";
 import { authRequired, subscribeAuth } from "../lib/auth";
 import { pluginViewIcon } from "../lib/pluginIcon";
 import { isNavigablePluginView } from "../lib/pluginViews";
+import { parseViewDeepLink, resolveViewDeepLink, stripViewDeepLink } from "../lib/viewDeepLink";
 import { armNavigateCatchUp } from "../lib/pluginNavigateCatchUp";
 import { TenantGuard } from "./TenantGuard";
 import { SessionHistoryHydrator } from "./SessionHistoryHydrator";
@@ -432,12 +433,22 @@ function WorkspaceApp({ runtime }: { runtime: RuntimeStatus | null }) {
   // the rail into a full registry.
   // A plugin view declares its placement: "rail" (default — a left-rail surface) or
   // "right" (a right-sidebar panel, alongside Notes/Tasks/Goals/Schedule — ADR 0026).
+  // Plugin-view deep link (`?plugin=<id>&view=<view>&vp=<query>`, lib/viewDeepLink.ts): read
+  // ONCE from the boot URL (a pure parse, so StrictMode's double initializer is harmless);
+  // applied by the effect below once the runtime's views resolve. The forwarded query is kept
+  // per view key and rides on the view object, so every PluginView mount appends it.
+  const [bootDeepLink] = useState(() =>
+    typeof window === "undefined" ? null : parseViewDeepLink(window.location.search),
+  );
+  const deepLinkDone = useRef(false);
+  const [deepLinkQuery, setDeepLinkQuery] = useState<Record<string, string>>({});
   const allDeclaredViews = (runtime?.plugins ?? [])
     .filter((p) => p.enabled && p.views?.length)
     .flatMap((p) =>
       (p.views ?? []).map((v) => ({
         ...v,
         key: `plugin:${p.id}:${v.id}`,
+        deepLinkQuery: deepLinkQuery[`plugin:${p.id}:${v.id}`],
         // Carry the owning plugin's load state so PluginView can phrase a real error
         // (enabled-but-not-loaded ⇒ missing env / bad deps / mount race; `error` is the
         // loader's exact diagnostic) instead of a blank "no details" panel.
@@ -537,6 +548,47 @@ function WorkspaceApp({ runtime }: { runtime: RuntimeStatus | null }) {
   // toast, not an inline strip — the console toast convention. Global, so an error from
   // a chat docked on the right/bottom shows too (the old strip only rendered on the left);
   // an empty string is a no-op (the strip's clear-on-success is moot once toasts auto-dismiss).
+  // Apply a boot-URL plugin-view deep link (see bootDeepLink above) once the runtime has
+  // resolved — unknown ≠ empty, so never judge the link against a still-loading view list.
+  // Routes through openView (desktop dock AND the mobile shell's `mobileActive`), then strips
+  // the link keys from the address bar so a reload or Back doesn't re-apply it. A link that
+  // names nothing navigable leaves the normal console and says why — never a blank pane.
+  useEffect(() => {
+    if (!bootDeepLink || deepLinkDone.current || !runtime) return;
+    // A known target must first be reconciled onto a dock (the railOrder effect below runs
+    // after runtime resolves): opening it earlier routes a right/bottom view to the LEFT dock,
+    // where the stale-surface fallback then bounces it to chat. Wait for the next render.
+    const pending = "error" in bootDeepLink ? null : resolveViewDeepLink(bootDeepLink, allPluginViews);
+    if (
+      pending &&
+      ![...railOrder.left, ...railOrder.right, ...railOrder.bottom, ...(railOrder.hidden ?? [])].includes(pending.key)
+    )
+      return;
+    deepLinkDone.current = true;
+    try {
+      const { pathname, search, hash } = window.location;
+      window.history.replaceState(window.history.state, "", pathname + stripViewDeepLink(search) + hash);
+    } catch {
+      /* no history API (embedded webview) — the link just stays in the bar */
+    }
+    if ("error" in bootDeepLink) {
+      toast({ tone: "warning", title: "Couldn't open that link", message: bootDeepLink.error });
+      return;
+    }
+    const target = resolveViewDeepLink(bootDeepLink, allPluginViews);
+    if (!target) {
+      const what = bootDeepLink.view ? `the “${bootDeepLink.view}” view of “${bootDeepLink.plugin}”` : `“${bootDeepLink.plugin}”`;
+      toast({
+        tone: "warning",
+        title: "Couldn't open that link",
+        message: `This agent has no ${what} view. The plugin may be off, removed, or installed on a different agent.`,
+      });
+      return;
+    }
+    if (bootDeepLink.query) setDeepLinkQuery((q) => ({ ...q, [target.key]: bootDeepLink.query }));
+    openView(target.key);
+  }, [bootDeepLink, runtime, allPluginViews, railOrder, toast]);
+
   const onChatError = useCallback(
     (msg: string) => {
       if (msg) toast({ tone: "error", message: msg });

@@ -261,6 +261,35 @@ The contract, and what the host enforces:
 A page that renders untrusted content should build the text itself (e.g. from the element it
 selected), never forward a string an embedded frame supplied.
 
+## Deep links into a view — `?plugin=…&vp=…` {#deep-links}
+
+Not a message: a console URL that opens your view on load and hands your page query data, for a
+QR label, a notification or an email. Mint it server-side with
+[`sdk.view_url(plugin_id, view_id, params)`](/reference/plugin-sdk-api#sdk-view-url):
+
+```
+https://hub.example.ts.net/app/agent/<agent>/?plugin=inventory&view=view&vp=bin%3DB07
+```
+
+| Key | Meaning |
+|---|---|
+| `plugin` | your plugin id (required) |
+| `view` | the view id; omitted = your plugin's first navigable view (the same rule as `ui.navigate`) |
+| `vp` | a URL-encoded query string, at most 2048 characters |
+
+On load the console resolves the view, opens it (desktop dock or the mobile shell), appends `vp`
+to your view's iframe `src` (after any view-tab query), and strips the three keys from the address
+bar. So your page reads its params the ordinary way, after the usual `init` handshake:
+
+```js
+const bin = new URLSearchParams(location.search).get("bin");
+```
+
+The params stay on the frame for the rest of that page load. The frame path always comes from the
+view you declared; a link cannot point the frame anywhere else. `vp` is re-encoded, so it is only
+ever query data. A link naming an unknown plugin or view, or a malformed id, leaves the normal
+console with a toast saying why. Treat every param as untrusted input: anyone can type a URL.
+
 ## The kit
 
 `/_ds/plugin-kit.js` is served same-origin by the console and wraps the handshake, theming, and
