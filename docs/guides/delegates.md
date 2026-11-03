@@ -77,6 +77,32 @@ delegates:
 To apply delegate edits from the app, use **Settings → Delegates → Save**.
 The roster rebuilds live without a restart.
 
+## Coding agent environment
+
+ACP coders (including board lanes and `delegate_to`) start with the host's
+`PROTOAGENT_*`, `AGENT_NAME`, `A2A_AUTH_TOKEN`, and credential-shaped variables
+removed. `PATH`, `HOME`, and CLI configuration locations remain available, so
+the ACP CLI can use its own login/configuration and keychain. The agent's own
+ACP brain and auxiliary model retain their inherited environment, including
+provider authentication; this scrub applies to spawned coders.
+
+For a coder that requires an inherited variable, set `env_passthrough` on that
+delegate (or use **Inherited environment exceptions** in its Advanced settings):
+
+```yaml
+env_passthrough: [OPENAI_API_KEY]  # explicit opt-in; default is []
+env_remove: [PROJECT_PRIVATE_]   # trailing underscore matches a prefix
+env:
+  PROJECT_MODE: test
+```
+
+Passthrough names are exact and case-sensitive; they do not expand prefixes.
+Only opt in to variables the coder needs: passing an agent identity/path or token
+restores access to that live instance. `env_remove` applies after passthrough,
+alongside the nested-Claude marker removal. The explicit `env` map is applied
+last, preserving deliberate remove-then-set overrides. Values are literal, with
+no `${VAR}` expansion. None of these operations changes the host's environment.
+
 ## Let the agent propose one (`propose_delegate`)
 
 Ask the agent to propose a delegate, for example:

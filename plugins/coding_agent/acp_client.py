@@ -43,7 +43,7 @@ from typing import Any, Awaitable, Callable
 from infra import clock
 from infra.node_runtime import _version_sort_key  # noqa: F401 — re-export (tests, callers)
 from infra.node_runtime import discovered_node_dirs as _discovered_node_dirs
-from infra.proc import child_env, group_kwargs, signal_tree, track_tree, untrack_tree
+from infra.proc import child_env, group_kwargs, scrub_agent_env, signal_tree, track_tree, untrack_tree
 
 # A repeated chunk shorter than this is plausibly deliberate ("...", a bullet, a short
 # chant), so only a substantial verbatim repeat is treated as the emit-side doubling.
@@ -340,19 +340,21 @@ def _split_env_remove(env_remove: list[str] | None) -> tuple[frozenset[str], tup
     return frozenset(exact), tuple(prefixes)
 
 
-def _launch_env(extra: dict[str, str] | None, env_remove: list[str] | None = None) -> dict[str, str]:
-    """Build the subprocess environment for an ACP agent: the server's own ``os.environ``,
-    minus the hardcoded nested-Claude markers (a host-side invariant, see above) AND minus
-    the delegate's ``env_remove`` matches, then the delegate's additive ``env`` overlaid LAST.
+def _launch_env(
+    extra: dict[str, str] | None,
+    env_remove: list[str] | None = None,
+    env_passthrough: list[str] | None = None,
+    *,
+    scrub_env: bool = True,
+) -> dict[str, str]:
+    """Scrub host identity and credentials, allowing exact-name passthrough exceptions.
 
-    ``env_remove`` is a per-delegate *subtractive* seam (#2117): a caller can strip the host's
-    identity/credential vars (``PROTOAGENT_*``, ``A2A_AUTH_TOKEN``, ``AGENT_NAME``) from the
-    spawned coder WITHOUT mutating ``os.environ`` in place — the earlier in-place scrub cost
-    the live host its ``PROTOAGENT_HOME`` and re-execed a graceful restart as the default
-    instance. Removal happens FIRST and the additive overlay LAST, so a var can be deliberately
-    removed-then-set, and an operator who *deliberately* sets a stripped marker in the delegate
-    env still wins. Finally, if ``node`` isn't resolvable on the resulting PATH, append the
-    discovered node version-manager dirs so a service-launched server can still find npx."""
+    The agent brain and auxiliary model opt out of the coder scrub to retain
+    their own inherited identity and provider authentication.
+    Nested-Claude markers and env_remove matches are removed next; the explicit
+    delegate env overlay applies LAST, preserving remove-then-set behavior.
+    Node discovery augments PATH when needed. The host environment is untouched.
+    """
     exact_removals, prefix_removals = _split_env_remove(env_remove)
 
     def _strip(k: str) -> bool:
@@ -365,7 +367,10 @@ def _launch_env(extra: dict[str, str] | None, env_remove: list[str] | None = Non
         return any(k.startswith(p) for p in prefix_removals)
 
     # child_env: never hand an agent a frozen build's _MEIPASS paths (infra.proc).
-    env = {k: v for k, v in child_env().items() if not _strip(k)}
+    inherited = child_env()
+    if scrub_env:
+        inherited = scrub_agent_env(inherited, passthrough=env_passthrough)
+    env = {k: v for k, v in inherited.items() if not _strip(k)}
     env.update(extra or {})  # additive overlay AFTER removal (remove-then-set wins)
 
     path = env.get("PATH") or os.defpath
@@ -468,6 +473,8 @@ class AcpClient:
         cwd: str,
         env: dict[str, str] | None = None,
         env_remove: list[str] | None = None,
+        env_passthrough: list[str] | None = None,
+        scrub_env: bool = True,
         name: str = "acp",
         permission: Callable[[dict], str | None] | None = None,
         mcp_servers: list[dict] | None = None,
@@ -483,6 +490,9 @@ class AcpClient:
         # spawned coder's inherited environment (see ``_launch_env``). Additive ``env``
         # above is overlaid AFTER this removal, so a var can be removed-then-set.
         self.env_remove = list(env_remove or [])
+        self.env_passthrough = list(env_passthrough or [])
+        # Coders are scrubbed by default; runtime brain/aux clients retain inheritance.
+        self.scrub_env = scrub_env
         # Export the coding agent's own OTel spans into our trace through the local relay
         # (#3742). None = auto: on for Claude Code agents while tracing is enabled.
         self.native_tracing = native_tracing
@@ -702,11 +712,14 @@ class AcpClient:
                 stdin=asyncio.subprocess.PIPE,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
-                # Strip the inherited nested-Claude markers (CLAUDECODE / CLAUDE_CODE_*)
-                # AND the delegate's env_remove matches (#2117) so a spawned backend
-                # doesn't inherit host identity/credentials or refuse to launch "inside
-                # another Claude Code session" (#1296); the delegate's env is overlaid last.
-                env=_launch_env({**(self.env or {}), **self._native_tracing_env()} or None, self.env_remove),
+                # Scrub coders, then remove nested-Claude markers and env_remove
+                # matches for all clients; explicit env is overlaid last.
+                env=_launch_env(
+                    {**(self.env or {}), **self._native_tracing_env()} or None,
+                    self.env_remove,
+                    self.env_passthrough,
+                    scrub_env=self.scrub_env,
+                ),
                 # Anchor the agent as its OWN tree root so teardown can kill the
                 # WHOLE tree (the adapter *and* the backend it spawns). Without
                 # this, terminate() signals only the adapter; its child reparents

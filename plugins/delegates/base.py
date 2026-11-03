@@ -109,10 +109,12 @@ class Delegate:
     env: dict[str, str] = field(default_factory=dict)
     # Subtractive env seam (#2117): host var names/prefixes to strip from the spawned
     # coder's inherited environment (trailing ``_`` ⇒ prefix-match, else exact-name),
-    # applied BEFORE the additive ``env`` overlay in acp_client `_launch_env`. Lets a
-    # caller sanitize host identity/credentials (``PROTOAGENT_*``, ``A2A_AUTH_TOKEN``)
-    # WITHOUT mutating ``os.environ``. Names are not secrets — no redaction needed.
+    # applied on top of the default identity/credential scrub and passthrough, BEFORE
+    # the additive ``env`` overlay in acp_client `_launch_env`, without mutating
+    # ``os.environ``. Names are not secrets — no redaction needed.
     env_remove: list[str] = field(default_factory=list)
+    # Exact inherited variable names exempted from the default coder scrub (#4629).
+    env_passthrough: list[str] = field(default_factory=list)
     # Default 1800s (30 min), not 600 (#3091): implementation-shaped ACP delegates
     # (a full TDD cycle, venv setup, a CI gate run) routinely need more than 10 min.
     # Still per-delegate configurable, and overridable per-call via delegate_to(timeout=…).
@@ -218,13 +220,13 @@ def _env_fields() -> list[FieldSpec]:
 
 
 def _parse_env(raw: dict, d: Delegate) -> None:
-    """Parse ``env`` / ``env_remove`` off a raw config dict onto ``d``. Shared by
+    """Parse delegate environment overrides, removals, and passthrough names. Shared by
     every adapter so the console-authored env round-trips for all types (the
-    ``Delegate`` dataclass already carries both fields)."""
+    ``Delegate`` dataclass already carries these fields)."""
     env = raw.get("env") if isinstance(raw.get("env"), dict) else {}
     d.env = {str(k): str(v) for k, v in env.items()}
-    # Subtractive env seam (#2117): host var names/prefixes to strip from the spawned
-    # coder before the additive ``env`` overlay applies (acp_client `_launch_env`).
+    passthrough = raw.get("env_passthrough")
+    d.env_passthrough = [str(x) for x in passthrough if str(x)] if isinstance(passthrough, (list, tuple)) else []
     env_remove = raw.get("env_remove")
     d.env_remove = [str(x) for x in env_remove if str(x)] if isinstance(env_remove, (list, tuple)) else []
 

@@ -465,6 +465,8 @@ class AcpRuntime:
             spec.get("args"),
             cwd=self.cwd,
             name=self.agent,
+            # The brain needs its own inherited provider auth and instance identity.
+            scrub_env=False,
             mcp_servers=[mcp] if mcp else [],
             # This client drives the agent's OWN chat turn, not a coder dispatch. On the
             # streaming/A2A path that turn is already booked under the same `acp:<agent>`
@@ -640,7 +642,10 @@ async def _aux_prompt(agent: str, config, text: str) -> str:
         # fact extraction) for an ACP-only setup with no gateway. Recording it under a
         # `coder:` key would put an internal housekeeping call in the coder-run count
         # (#3015). It is unmetered either way — a separate row shape, if anyone wants it.
-        client = AcpClient(spec["command"], spec.get("args"), cwd=os.getcwd(), name=f"{agent}-aux", record_runs=False)
+        client = AcpClient(
+            spec["command"], spec.get("args"), cwd=os.getcwd(), name=f"{agent}-aux",
+            record_runs=False, scrub_env=False,  # Own auxiliary model: retain inherited auth.
+        )
         _AUX_CLIENTS[agent] = client
     return await client.prompt(text)
 
