@@ -109,9 +109,9 @@ class Delegate:
     env: dict[str, str] = field(default_factory=dict)
     # Subtractive env seam (#2117): host var names/prefixes to strip from the spawned
     # coder's inherited environment (trailing ``_`` ⇒ prefix-match, else exact-name),
-    # applied BEFORE the additive ``env`` overlay in acp_client `_launch_env`. Lets a
-    # caller sanitize host identity/credentials (``PROTOAGENT_*``, ``A2A_AUTH_TOKEN``)
-    # WITHOUT mutating ``os.environ``. Names are not secrets — no redaction needed.
+    # applied on top of the default identity/credential scrub and passthrough, BEFORE
+    # the additive ``env`` overlay in acp_client `_launch_env`, without mutating
+    # ``os.environ``. Names are not secrets — no redaction needed.
     env_remove: list[str] = field(default_factory=list)
     # Exact inherited variable names exempted from the default coder scrub (#4629).
     env_passthrough: list[str] = field(default_factory=list)

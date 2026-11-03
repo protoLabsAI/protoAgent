@@ -82,7 +82,9 @@ The roster rebuilds live without a restart.
 ACP coders (including board lanes and `delegate_to`) start with the host's
 `PROTOAGENT_*`, `AGENT_NAME`, `A2A_AUTH_TOKEN`, and credential-shaped variables
 removed. `PATH`, `HOME`, and CLI configuration locations remain available, so
-the ACP CLI can use its own login/configuration and keychain.
+the ACP CLI can use its own login/configuration and keychain. The agent's own
+ACP brain and auxiliary model retain their inherited environment, including
+provider authentication; this scrub applies to spawned coders.
 
 For a coder that requires an inherited variable, set `env_passthrough` on that
 delegate (or use **Inherited environment exceptions** in its Advanced settings):

@@ -81,13 +81,6 @@ class AcpAdapter(Adapter):
     def config_schema(self) -> list[FieldSpec]:
         return [
             FieldSpec(
-                "env_passthrough",
-                "Inherited environment exceptions",
-                "args",
-                advanced=True,
-                help="Exact host variable names to inherit despite the default identity and credential scrub. Empty by default; env_remove still applies.",
-            ),
-            FieldSpec(
                 "command",
                 "Command",
                 "text",
@@ -182,6 +175,13 @@ class AcpAdapter(Adapter):
                 advanced=True,
                 help="Unmanaged git: when delegate_to(project=…) sends this coder into a registered "
                 "git project, append what it changed (stat + unified diff, capped) to its reply.",
+            ),
+            FieldSpec(
+                "env_passthrough",
+                "Inherited environment exceptions",
+                "args",
+                advanced=True,
+                help="Exact host variable names to inherit despite the default identity and credential scrub. Empty by default; env_remove still applies.",
             ),
             *_env_fields(),
         ]

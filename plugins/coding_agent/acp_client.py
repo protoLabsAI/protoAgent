@@ -344,9 +344,13 @@ def _launch_env(
     extra: dict[str, str] | None,
     env_remove: list[str] | None = None,
     env_passthrough: list[str] | None = None,
+    *,
+    scrub_env: bool = True,
 ) -> dict[str, str]:
     """Scrub host identity and credentials, allowing exact-name passthrough exceptions.
 
+    The agent brain and auxiliary model opt out of the coder scrub to retain
+    their own inherited identity and provider authentication.
     Nested-Claude markers and env_remove matches are removed next; the explicit
     delegate env overlay applies LAST, preserving remove-then-set behavior.
     Node discovery augments PATH when needed. The host environment is untouched.
@@ -363,7 +367,9 @@ def _launch_env(
         return any(k.startswith(p) for p in prefix_removals)
 
     # child_env: never hand an agent a frozen build's _MEIPASS paths (infra.proc).
-    inherited = scrub_agent_env(child_env(), passthrough=env_passthrough)
+    inherited = child_env()
+    if scrub_env:
+        inherited = scrub_agent_env(inherited, passthrough=env_passthrough)
     env = {k: v for k, v in inherited.items() if not _strip(k)}
     env.update(extra or {})  # additive overlay AFTER removal (remove-then-set wins)
 
@@ -468,6 +474,7 @@ class AcpClient:
         env: dict[str, str] | None = None,
         env_remove: list[str] | None = None,
         env_passthrough: list[str] | None = None,
+        scrub_env: bool = True,
         name: str = "acp",
         permission: Callable[[dict], str | None] | None = None,
         mcp_servers: list[dict] | None = None,
@@ -484,6 +491,8 @@ class AcpClient:
         # above is overlaid AFTER this removal, so a var can be removed-then-set.
         self.env_remove = list(env_remove or [])
         self.env_passthrough = list(env_passthrough or [])
+        # Coders are scrubbed by default; runtime brain/aux clients retain inheritance.
+        self.scrub_env = scrub_env
         # Export the coding agent's own OTel spans into our trace through the local relay
         # (#3742). None = auto: on for Claude Code agents while tracing is enabled.
         self.native_tracing = native_tracing
@@ -703,14 +712,13 @@ class AcpClient:
                 stdin=asyncio.subprocess.PIPE,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
-                # Strip the inherited nested-Claude markers (CLAUDECODE / CLAUDE_CODE_*)
-                # AND the delegate's env_remove matches (#2117) so a spawned backend
-                # doesn't inherit host identity/credentials or refuse to launch "inside
-                # another Claude Code session" (#1296); the delegate's env is overlaid last.
+                # Scrub coders, then remove nested-Claude markers and env_remove
+                # matches for all clients; explicit env is overlaid last.
                 env=_launch_env(
                     {**(self.env or {}), **self._native_tracing_env()} or None,
                     self.env_remove,
                     self.env_passthrough,
+                    scrub_env=self.scrub_env,
                 ),
                 # Anchor the agent as its OWN tree root so teardown can kill the
                 # WHOLE tree (the adapter *and* the backend it spawns). Without

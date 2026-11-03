@@ -82,3 +82,59 @@ def test_delegate_passthrough_reaches_both_launch_paths(tmp_path, monkeypatch):
     pooled = coding_agent._client_for(spec)
     _, tapped = coding_agent._tapped_client(coding_agent._delegate_spec(delegate))
     assert pooled.env_passthrough == tapped.env_passthrough == ["AGENT_NAME"]
+
+
+@pytest.mark.parametrize("role", ["brain", "aux", "pooled-coder", "tapped-coder"])
+async def test_launch_roles_preserve_runtime_auth_but_scrub_coders(host_env, tmp_path, monkeypatch, role):
+    """Exercise the real factories through the subprocess boundary, without a CLI."""
+    from types import SimpleNamespace
+
+    from runtime import acp_runtime
+
+    auth_vars = ("ANTHROPIC_API_KEY", "GEMINI_API_KEY", "OPENAI_API_KEY", "GITHUB_TOKEN")
+    for name in auth_vars:
+        monkeypatch.setenv(name, "inherited-provider-auth")
+    captured = {}
+
+    async def capture_spawn(*args, **kwargs):
+        captured.update(kwargs["env"])
+        raise FileNotFoundError("probe stops before spawning")
+
+    monkeypatch.setattr(acp_client.asyncio, "create_subprocess_exec", capture_spawn)
+    monkeypatch.setattr(acp_client.AcpClient, "_native_tracing_env", lambda self: {})
+    monkeypatch.setattr(acp_runtime, "operator_mcp_server_spec", lambda config: None)
+    monkeypatch.setattr(acp_runtime, "_AUX_CLIENTS", {})
+    monkeypatch.setattr(coding_agent, "_CLIENTS", {})
+    monkeypatch.setattr(coding_agent, "_session_id_path", lambda spec: tmp_path / "session.json")
+    config = SimpleNamespace(agent_runtime="acp:codex", acp_agents={})
+
+    async def probe_prompt(self, text):
+        await self.handshake()
+
+    with pytest.raises(acp_client.AcpError, match="agent binary not found"):
+        if role == "aux":
+            monkeypatch.setattr(acp_client.AcpClient, "prompt", probe_prompt)
+            await acp_runtime._aux_prompt("codex", config, "probe")
+        else:
+            if role == "brain":
+                runtime = acp_runtime.AcpRuntime(config, cwd=str(tmp_path), context=object())
+                client = runtime._default_client_factory()
+            else:
+                delegate = ADAPTERS["acp"].parse({
+                    "name": "coder", "type": "acp", "command": "proto", "workdir": str(tmp_path),
+                })
+                spec = coding_agent._delegate_spec(delegate)
+                if role == "pooled-coder":
+                    client = coding_agent._client_for(spec)
+                else:
+                    _, client = coding_agent._tapped_client(spec)
+            await client.handshake()
+
+    for name in (*HOST_VARS, *auth_vars):
+        if role in ("brain", "aux"):
+            assert captured[name] == os.environ[name]
+        else:
+            assert name not in captured
+    for name in ("PATH", "HOME", "XDG_CONFIG_HOME"):
+        assert captured[name] == host_env[name]
+    assert "CLAUDECODE" not in captured and "CLAUDE_CODE_ENTRYPOINT" not in captured
