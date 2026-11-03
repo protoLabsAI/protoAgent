@@ -96,6 +96,87 @@ async def test_system_thread_compacts_on_the_async_path():
     assert _compacted(await mw.abefore_model(state, None))
 
 
+# ── hysteresis: no re-compaction once the kept tail already clears the ceiling ──
+#
+# Compaction is keep-tail, so the summary + the newest ``keep`` messages can themselves
+# sit at/above the low system ceiling. Without a gap between the trigger and that
+# post-compaction size, every later ``before_model`` of a wake would compact again —
+# a summariser call + archive + count per step, trimming almost nothing. These use a
+# REAL per-message token counter (the fixed counter above can't vary by slice) so the
+# removable-head size actually depends on the messages, which is what the gate measures.
+
+
+def _len_counter(msgs) -> int:
+    """~4 chars/token, content-length based — so a slice counts proportionally to its
+    messages (unlike the pinned counter the other tests use)."""
+    return sum(len(str(getattr(m, "content", ""))) for m in msgs) // 4
+
+
+def _hysteresis_mw(ceiling: int = 30_000) -> CountingSummarizationMiddleware:
+    mw = CountingSummarizationMiddleware(
+        model=FakeMessagesListChatModel(responses=[AIMessage(content="noop")]),
+        trigger=("tokens", 1_000_000),  # chat trigger far out of reach
+        keep=("messages", 2),
+        token_counter=_len_counter,
+        system_thread_max_tokens=ceiling,
+        history_store=None,
+    )
+    mw._create_summary = lambda _msgs: "SUMMARY"  # avoid a real summariser call
+    return mw
+
+
+def test_system_thread_does_not_recompact_when_the_kept_tail_already_clears_the_ceiling():
+    """Regression for the round-1 no-hysteresis finding. The post-compaction shape is
+    ``[summary, *kept tail]``; here the tail alone is ~40k, so the whole thread is well
+    over the 30k ceiling — yet the only summarisable head is the ~1k leftover summary, so
+    a second ``before_model`` must NOT compact again."""
+    mw = _hysteresis_mw(30_000)
+    summary = HumanMessage(content="x" * 4_000)  # ~1k tokens — a leftover summary
+    tail_a = HumanMessage(content="y" * 80_000)  # ~20k tokens — a kept tail message
+    tail_b = AIMessage(content="z" * 80_000)  # ~20k tokens — a kept tail message
+    state = {"messages": [summary, tail_a, tail_b], "session_id": "system:activity"}
+    # Over the ceiling (≈41k ≥ 30k), but keep=2 leaves only the ~1k summary to remove.
+    assert _len_counter(state["messages"]) >= 30_000
+    assert mw.before_model(state, None) is None
+
+
+def test_system_thread_recompacts_once_enough_new_history_accrues():
+    """The other side of the hysteresis gap: when enough fresh history has accumulated
+    ahead of the kept tail (here ~15k, above the ceiling//4 margin), the thread compacts
+    again — so the bound is maintained, it just isn't re-triggered on every step."""
+    mw = _hysteresis_mw(30_000)
+    summary = HumanMessage(content="x" * 4_000)  # ~1k — old summary
+    accrued = HumanMessage(content="z" * 60_000)  # ~15k — new summarisable history
+    tail_a = HumanMessage(content="y" * 80_000)  # ~20k — kept tail
+    tail_b = AIMessage(content="y" * 80_000)  # ~20k — kept tail
+    state = {"messages": [summary, accrued, tail_a, tail_b], "session_id": "system:activity"}
+    # keep=2 → removable head = [summary, accrued] ≈ 16k ≥ 30k//4 → compacts.
+    assert _compacted(mw.before_model(state, None))
+
+
+def test_a_small_head_over_the_ceiling_does_not_compact():
+    """Directly on the gate: over the ceiling but with a removable head below ceiling//4
+    (≈7.5k for a 30k ceiling), no compaction fires."""
+    mw = _hysteresis_mw(30_000)
+    small_head = HumanMessage(content="x" * 8_000)  # ~2k — below the ~7.5k margin
+    tail_a = HumanMessage(content="y" * 80_000)  # ~20k
+    tail_b = AIMessage(content="z" * 80_000)  # ~20k
+    state = {"messages": [small_head, tail_a, tail_b], "session_id": "system:activity"}
+    assert _len_counter(state["messages"]) >= 30_000
+    assert mw.before_model(state, None) is None
+
+
+def test_chat_thread_never_sees_the_hysteresis_gate():
+    """The gate is system-only: a chat thread with the same shape still answers purely to
+    the parent's trigger (unreachable here), so it does not compact — behaviour unchanged."""
+    mw = _hysteresis_mw(30_000)
+    accrued = HumanMessage(content="z" * 60_000)
+    tail_a = HumanMessage(content="y" * 80_000)
+    tail_b = AIMessage(content="y" * 80_000)
+    state = {"messages": [accrued, tail_a, tail_b], "session_id": "sess-chat-123"}
+    assert mw.before_model(state, None) is None
+
+
 # ── thread detection ──────────────────────────────────────────────────────────
 
 
