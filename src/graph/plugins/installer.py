@@ -283,6 +283,10 @@ class InstallError(RuntimeError):
     """A plugin install/uninstall/sync failed (bad URL, manifest, git, collision)."""
 
 
+class IncompatibleHostError(InstallError):
+    """The staged plugin requires a newer host; the live copy is untouched."""
+
+
 class DepsInstallBusy(InstallError):
     """Another dependency install is already running into the same Python environment.
     Refused at once rather than queued (see ``deps_install_lock``); the console route
@@ -1076,6 +1080,14 @@ def install(
         # dir (e.g. a __pycache__ leftover) is not a built-in and must not block.
         if _is_builtin(pid):
             raise InstallError(f"plugin id {pid!r} is a built-in — cannot install over it.")
+
+        # Use the loader's exact policy, against the fetched candidate, before any
+        # dependency installation, live-tree swap, or lock write.
+        from graph.plugins.loader import _min_version_gate
+
+        refusal = _min_version_gate(manifest)
+        if refusal:
+            raise IncompatibleHostError(f"{pid} {manifest.version} {refusal}")
 
         # Frozen runtime (desktop): no host pip. A missing hard dep used to be a flat
         # ADR 0058 D2 refusal, then (#2226) was pip'd into the managed Python runtime

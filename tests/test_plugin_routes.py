@@ -431,7 +431,8 @@ def test_install_surfaces_load_errors(monkeypatch):
     )
     monkeypatch.setattr(installer, "install", lambda url, ref=None, **k: {"id": "broken"})
     body = _client().post("/api/plugins/install", json={"url": "https://x/broken"}).json()
-    assert body["reloaded"] is True and body["enabled"] == ["broken"]
+    assert body["reloaded"] is False and body["enabled"] == ["broken"]
+    assert body["ok"] is False
     assert body["load_errors"] == {"broken": "No module named 'leftpad'"}
 
 
