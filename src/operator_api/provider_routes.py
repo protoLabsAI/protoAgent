@@ -229,9 +229,10 @@ async def _apply_providers(
         ``secrets.providers.<id>``. Writing the registry as a DECLARED list would strand
         that key — a declared connection never borrows the legacy pair — so lift it into the
         secrets overlay for any migrated connection that survives THIS write and the request
-        isn't already re-keying. ``Provider.as_dict`` materializes the endpoint; this keeps
-        the key (resolved through the same route resolver everything else uses), so the
-        connection stays usable after the reload instead of reviving #4597 keyless."""
+        isn't already re-keying. ``Provider.as_dict`` serializes the endpoint to the
+        ``sdk-default`` sentinel (so the endpoint round-trips); this keeps the key (resolved
+        through the same route resolver everything else uses), so the connection stays usable
+        after the reload instead of reviving #4597 keyless."""
         from graph.config import resolve_model_route
 
         out = dict(secret_updates)

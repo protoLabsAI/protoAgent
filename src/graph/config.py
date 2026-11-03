@@ -221,6 +221,16 @@ class SubagentDef:
 PROVIDER_TYPE_OPENAI_COMPAT = "openai-compat"
 PROVIDER_TYPES = (PROVIDER_TYPE_OPENAI_COMPAT, "anthropic-oauth", "openai-codex")
 
+#: The one declarable value for a connection's endpoint that means "no explicit URL — let
+#: the OpenAI SDK resolve its own default at call time" (#4597). It parses to ``base_url
+#: is None`` and serializes back to this exact string, so "use the SDK default" survives a
+#: console write as an EXPLICIT choice. This is deliberately NOT a resolved URL: the SDK
+#: reads its env (``OPENAI_BASE_URL`` / ``OPENAI_API_BASE``) only at call time, so pinning a
+#: concrete URL at save time would snapshot one host and later drift from where the key
+#: actually goes. A blank/absent ``base_url`` is NOT this — it still fails loudly ("needs an
+#: endpoint"), so only the operator (or the loader migrating a legacy null route) opts in.
+SDK_DEFAULT_BASE_URL = "sdk-default"
+
 # No colon (it separates id from model in the slot grammar) and no slash (gateway
 # aliases contain them), so `split_slot_target` stays unambiguous by construction.
 _PROVIDER_ID_RE = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
@@ -230,15 +240,6 @@ def valid_provider_id(pid: str) -> bool:
     return bool(_PROVIDER_ID_RE.match((pid or "").strip()))
 
 
-def _sdk_default_base_url() -> str:
-    """The concrete endpoint the OpenAI SDK falls back to when given no ``base_url`` — the
-    one a migrated gateway's null endpoint has always run on (#4597). Resolved the way the
-    SDK resolves it (``OPENAI_BASE_URL`` env, else ``https://api.openai.com/v1``), so when
-    that implicit migrated connection is PERSISTED into a declared registry its key is
-    pinned to exactly where it already went, not to a declared blank that fails every call."""
-    return (os.environ.get("OPENAI_BASE_URL") or "https://api.openai.com/v1").strip()
-
-
 @dataclass
 class Provider:
     """One configured connection to a model source."""
@@ -246,12 +247,14 @@ class Provider:
     id: str
     type: str = PROVIDER_TYPE_OPENAI_COMPAT
     label: str = ""
-    #: ``None`` ONLY on the ``gateway`` the loader migrates in from a pre-registry
-    #: config whose default route had a null ``model.api_base`` (#4597) — it means "the
-    #: OpenAI SDK default endpoint", exactly as that legacy route did. An operator-DECLARED
-    #: connection never holds ``None``: ``_parse_providers`` coerces a blank/null
-    #: ``base_url`` to ``""`` (a declared connection with no endpoint still fails loudly),
-    #: so ``base_url is None`` is the authoritative "this is the migrated gateway" signal.
+    #: ``None`` means "the OpenAI SDK default endpoint" (#4597) — the client gets
+    #: ``base_url=None`` and the SDK resolves its own default at call time. Two things
+    #: produce it: the ``gateway`` the loader migrates in from a pre-registry config whose
+    #: default route had a null ``model.api_base``, and an operator who DECLARES
+    #: ``base_url: sdk-default`` (the ``SDK_DEFAULT_BASE_URL`` sentinel). A blank/absent
+    #: endpoint stays ``""`` — ``_parse_providers`` coerces it, and a connection with no
+    #: endpoint still fails loudly ("needs an endpoint"), never routing its key to the SDK
+    #: default. So ``None`` means "SDK default" unambiguously, never "unset".
     base_url: str | None = ""
     api_key: str = ""  # overlaid from secrets.yaml, like model.api_key was
 
@@ -262,20 +265,31 @@ class Provider:
         out = {"id": self.id, "type": self.type}
         if self.label:
             out["label"] = self.label
-        # The migrated gateway's ``None`` means "the OpenAI SDK default endpoint" (#4597). A
-        # SERIALIZED registry is a DECLARED one, and a declared connection can't carry that
-        # ``None`` — ``_parse_providers`` coerces a written ``base_url: null``/blank to "",
-        # which then fails every call ("needs an endpoint"). So the ``None`` is MATERIALIZED
-        # to the concrete URL the SDK would have used: a console add/patch/delete persists a
-        # connection pinned to exactly where its key already went, and the #4597 fix survives
-        # the write instead of coming back as a declared blank. A real endpoint (including
-        # "", which stays omitted) is emitted verbatim — only the migrated ``None`` resolves.
-        base_url = _sdk_default_base_url() if self.base_url is None else self.base_url
-        if base_url:
-            out["base_url"] = base_url
+        # A ``None`` endpoint means "the OpenAI SDK default" (#4597). It serializes to the
+        # explicit ``sdk-default`` sentinel — NOT a resolved URL — so a console add/patch/
+        # delete round-trips the choice faithfully: it reloads as ``None`` again (via
+        # ``_parse_providers``) and the SDK resolves its own default at CALL time, instead of
+        # snapshotting one host at save time that later drifts from where the key goes. A
+        # written ``base_url: null``/blank would coerce back to "" and fail every call, which
+        # is why the sentinel is required to keep the #4597 fix alive across the write. A real
+        # endpoint is emitted verbatim; "" stays omitted (a declared connection with no
+        # endpoint still fails loudly — it is not the SDK default).
+        if self.base_url is None:
+            out["base_url"] = SDK_DEFAULT_BASE_URL
+        elif self.base_url:
+            out["base_url"] = self.base_url
         if self.api_key and not redact:
             out["api_key"] = self.api_key
         return out
+
+
+def _parse_base_url(raw) -> str | None:
+    """A declared connection's ``base_url`` value → the stored endpoint. The explicit
+    ``sdk-default`` sentinel (``SDK_DEFAULT_BASE_URL``) maps to ``None`` — "use the OpenAI
+    SDK default" (#4597); everything else is stripped to a string, so a blank/null stays
+    ``""`` and still fails loudly. Case/whitespace-tolerant, like the id and type parsers."""
+    text = str(raw or "").strip()
+    return None if text.lower() == SDK_DEFAULT_BASE_URL else text
 
 
 def _parse_providers(entries, secrets: dict) -> list[Provider]:
@@ -306,11 +320,12 @@ def _parse_providers(entries, secrets: dict) -> list[Provider]:
                 id=pid,
                 type=ptype,
                 label=str(entry.get("label", "") or ""),
-                # A DECLARED connection's blank/null endpoint is "", never None: a declared
-                # connection with no endpoint must fail loudly ("needs an endpoint"), never
-                # route its key to the SDK default. Only the loader's migrated `gateway`
-                # (built in `_migrated_providers`, not here) carries None (#4597).
-                base_url=str(entry.get("base_url", "") or "").strip(),
+                # The explicit ``sdk-default`` sentinel is the ONE declared value that maps to
+                # None — "use the OpenAI SDK default endpoint" (#4597). Every other blank/null
+                # endpoint stays "": a connection with no endpoint must fail loudly ("needs an
+                # endpoint"), never route its key to the SDK default. (The loader's migrated
+                # `gateway`, built in `_migrated_providers`, also carries None — same meaning.)
+                base_url=_parse_base_url(entry.get("base_url", "")),
                 # Secret overlay mirrors model.api_key: secrets.yaml wins over inline.
                 api_key=str((secret_keys or {}).get(pid) or entry.get("api_key", "") or ""),
             )
@@ -340,12 +355,13 @@ def _parse_providers(entries, secrets: dict) -> list[Provider]:
 class ModelRoute:
     """Where an OpenAI-compatible call goes and what it authenticates with."""
 
-    #: ``None`` on the unqualified default route when ``model.api_base`` is null (a bare
-    #: ``api_base:``), and on the ``gateway`` connection the loader migrates in from exactly
-    #: that null default route (#4597): the client then gets ``base_url=None`` and the OpenAI
-    #: SDK applies its own default, exactly as before this resolver existed. A declared
-    #: connection never reaches here with ``None`` — ``_parse_providers`` coerced its blank
-    #: endpoint to ``""`` — so ``None`` unambiguously means the SDK default, not "unset".
+    #: ``None`` means the OpenAI SDK default endpoint (#4597): the client gets
+    #: ``base_url=None`` and the SDK applies its own default at call time, exactly as before
+    #: this resolver existed. It arises on the unqualified default route when
+    #: ``model.api_base`` is null (a bare ``api_base:``), on the ``gateway`` the loader
+    #: migrates in from exactly that null route, and on a connection that DECLARES the
+    #: ``sdk-default`` sentinel. A blank/absent endpoint reaches here as ``""`` — never
+    #: ``None`` — so ``None`` unambiguously means the SDK default, not "unset".
     base_url: str | None
     #: Never in the repr — a route is exactly the kind of object that ends up in a log line.
     api_key: str = field(repr=False)
@@ -609,10 +625,7 @@ def to_registry_shape(layer: dict | None, *, host: dict | None = None) -> tuple[
             key = entry.get("api_key")
             if pid and isinstance(key, str) and key.strip():
                 credentials.setdefault(f"providers.{pid}", key.strip())  # first duplicate wins, as at load
-            cleaned.append({
-                k: v for k, v in entry.items()
-                if k != "api_key" and v not in ("", None)
-            })
+            cleaned.append({k: v for k, v in entry.items() if k != "api_key" and v not in ("", None)})
         doc["providers"] = cleaned
     elif migrates and base:
         # Exactly what `_migrated_providers` builds from this layer at load: the endpoint

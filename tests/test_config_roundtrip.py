@@ -1300,25 +1300,27 @@ def test_migrated_null_endpoint_round_trip(tmp_path, monkeypatch):
     config stays PRE-REGISTRY (no declared ``providers:`` list): the null endpoint is kept
     verbatim and re-migrates to the same ``None`` gateway on reload.
 
-    Serializing the registry into a DECLARED list (the console write path) can't carry that
-    ``None`` — a declared ``base_url: null`` would reload as a blank, coerced to "" and
-    rejected (an operator-declared connection with no endpoint must fail loudly) — so
-    ``as_dict`` MATERIALIZES it to the concrete SDK-default URL, pinning the connection's
-    key to exactly where it already went rather than reviving the #4597 blank."""
+    Serialized into a DECLARED list (the console write path), the ``None`` is written as the
+    explicit ``sdk-default`` sentinel, NOT a resolved URL — so it reloads as ``None`` again
+    and the SDK resolves its own default at call time, instead of pinning one host at save
+    time that later drifts from where the key actually goes. The environment
+    (``OPENAI_BASE_URL`` / ``OPENAI_API_BASE``) therefore never changes what is saved."""
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
-    monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
+    monkeypatch.setenv("OPENAI_BASE_URL", "https://wrong-host.example/v1")  # must NOT leak into save
+    monkeypatch.setenv("OPENAI_API_BASE", "https://also-wrong.example/v1")
     path = _write_yaml(tmp_path, "model:\n  api_base:\n  api_key: test-key\n")
     cfg = LangGraphConfig.from_yaml(path)
     assert cfg.providers_declared is False
     assert cfg.api_base is None  # the null legacy endpoint is kept as None, not coerced to ""
     gateway = cfg.provider_by_id("gateway")
     assert gateway is not None and gateway.base_url is None
-    # Serialized for a declared registry, the None resolves to the concrete SDK default.
+    # Serialized for a declared registry, the None becomes the sentinel — never a URL, and
+    # never the misleading env hosts above.
     assert gateway.as_dict() == {
         "id": "gateway",
         "type": "openai-compat",
         "label": "Gateway",
-        "base_url": "https://api.openai.com/v1",
+        "base_url": "sdk-default",
     }
 
     # A raw load → save → reload keeps the config pre-registry, so the null endpoint survives
