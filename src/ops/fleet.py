@@ -188,6 +188,51 @@ def order_sync(order: object) -> list[str]:
     return supervisor.set_roster_order(order)
 
 
+# ── switcher groups + pins (fleet-switcher spec) — hub-only, gated like fleet.order ──
+
+
+def group_create_sync(name: object) -> dict:
+    from graph.fleet import supervisor
+
+    return supervisor.create_group(name)
+
+
+def group_rename_sync(group_id: str, name: object) -> dict:
+    from graph.fleet import supervisor
+
+    return supervisor.rename_group(group_id, name)
+
+
+def group_reorder_sync(order: object) -> list[dict]:
+    from graph.fleet import supervisor
+
+    return supervisor.reorder_groups(order)
+
+
+def group_delete_sync(group_id: str) -> dict:
+    from graph.fleet import supervisor
+
+    return supervisor.delete_group(group_id)
+
+
+def agent_group_sync(agent_id: str, group: object) -> dict:
+    from graph.fleet import supervisor
+
+    return supervisor.set_agent_group(agent_id, group)
+
+
+def pin_sync(agent_id: str) -> dict:
+    from graph.fleet import supervisor
+
+    return supervisor.pin_agent(agent_id)
+
+
+def unpin_sync(agent_id: str) -> dict:
+    from graph.fleet import supervisor
+
+    return supervisor.unpin_agent(agent_id)
+
+
 @op(name="fleet.create", mutates=True, summary="Create a fleet member (blank, or from a bundle archetype), inheriting the host's model connections by default, and start it.")
 async def create(
     name: str,
@@ -256,3 +301,38 @@ async def remotes_remove(ident: str) -> dict:
 @op(name="fleet.order", mutates=True, summary="Persist the fleet roster's display order — a complete permutation of the current member ids.")
 async def order(order: list[str]) -> list[str]:
     return await asyncio.to_thread(order_sync, order)
+
+
+@op(name="fleet.groups.create", mutates=True, summary="Create an operator switcher group (appended last). Rejects a blank, reserved ('Remote') or duplicate name.")
+async def groups_create(name: str) -> dict:
+    return await asyncio.to_thread(group_create_sync, name)
+
+
+@op(name="fleet.groups.rename", mutates=True, summary="Rename a switcher group in place (its id, and every agent assigned to it, are unchanged).")
+async def groups_rename(group_id: str, name: str) -> dict:
+    return await asyncio.to_thread(group_rename_sync, group_id, name)
+
+
+@op(name="fleet.groups.reorder", mutates=True, summary="Persist the switcher group display order — a complete permutation of the current group ids.")
+async def groups_reorder(order: list[str]) -> list[dict]:
+    return await asyncio.to_thread(group_reorder_sync, order)
+
+
+@op(name="fleet.groups.delete", mutates=True, summary="Delete a switcher group; its agents become ungrouped (no agent is removed).")
+async def groups_delete(group_id: str) -> dict:
+    return await asyncio.to_thread(group_delete_sync, group_id)
+
+
+@op(name="fleet.agent.group", mutates=True, summary="Assign an agent to a switcher group (or none). Remote agents are grouped by their machine and can't be assigned.")
+async def agent_group(agent_id: str, group: str | None = None) -> dict:
+    return await asyncio.to_thread(agent_group_sync, agent_id, group)
+
+
+@op(name="fleet.agent.pin", mutates=True, summary="Pin an agent to the top of the switcher (idempotent; keeps its original pin time).")
+async def agent_pin(agent_id: str) -> dict:
+    return await asyncio.to_thread(pin_sync, agent_id)
+
+
+@op(name="fleet.agent.unpin", mutates=True, summary="Unpin an agent from the top of the switcher.")
+async def agent_unpin(agent_id: str) -> dict:
+    return await asyncio.to_thread(unpin_sync, agent_id)

@@ -15,6 +15,7 @@ import type {
   DiagnosticsTask,
   DiscoveredAgent,
   FleetAgent,
+  FleetGroup,
   RemoteAuth,
   FleetStatus,
 } from "../types";
@@ -40,6 +41,61 @@ export const fleetApi = {
       method: "PUT",
       body: { order },
     });
+  },
+  // ── switcher groups + pins (fleet-switcher spec, docs/design/fleet-switcher-groups.md) ──
+  // Operator-defined switcher sections and per-agent pins, stored with the fleet roster (hub,
+  // shared by every browser). Hub paths under /api/fleet, so `isHubPath` keeps them HUB-scoped
+  // like every other fleet control call. The server owns validation and 400s with the spec's
+  // plain copy (a blank/reserved/duplicate group name), which `request` surfaces as `detail`.
+  createFleetGroup(name: string) {
+    return request<{ ok: boolean; group: FleetGroup }>("/api/fleet/groups", {
+      method: "POST",
+      body: { name },
+    });
+  },
+  renameFleetGroup(groupId: string, name: string) {
+    // The id never changes on a rename, so open windows + agent assignments survive.
+    return request<{ ok: boolean; group: FleetGroup }>(`/api/fleet/groups/${encodeURIComponent(groupId)}`, {
+      method: "PATCH",
+      body: { name },
+    });
+  },
+  // A COMPLETE permutation of the current group ids (array order = switcher order); the server
+  // 400s a duplicate / unknown / missing / malformed list without touching the saved groups.
+  reorderFleetGroups(order: string[]) {
+    return request<{ ok: boolean; groups: FleetGroup[] }>("/api/fleet/groups/order", {
+      method: "PUT",
+      body: { order },
+    });
+  },
+  // Deleting a group ungroups its agents (none is removed); `ungrouped` is how many moved out.
+  deleteFleetGroup(groupId: string) {
+    return request<{ ok: boolean; id: string; removed: boolean; ungrouped: number }>(
+      `/api/fleet/groups/${encodeURIComponent(groupId)}`,
+      { method: "DELETE" },
+    );
+  },
+  // Assign an agent (by immutable id) to a group, or `null` to clear it. A remote agent is 400
+  // (grouped automatically by its machine); an unknown member or group is 400 too.
+  setFleetAgentGroup(agentId: string, group: string | null) {
+    return request<{ ok: boolean; id: string; group: string | null }>(
+      `/api/fleet/agents/${encodeURIComponent(agentId)}/group`,
+      { method: "PUT", body: { group } },
+    );
+  },
+  // Pin / unpin an agent to the top of the switcher (by immutable id). Pins live with the
+  // roster, so every browser sees the same ones; a remote agent can be pinned like any other.
+  pinFleetAgent(agentId: string) {
+    return request<{ ok: boolean; id: string; pinned: boolean; pinned_at: string }>(
+      `/api/fleet/agents/${encodeURIComponent(agentId)}/pin`,
+      { method: "PUT" },
+    );
+  },
+  unpinFleetAgent(agentId: string) {
+    return request<{ ok: boolean; id: string; pinned: boolean }>(
+      `/api/fleet/agents/${encodeURIComponent(agentId)}/pin`,
+      { method: "DELETE" },
+    );
   },
   discoverAgents() {
     return request<{ discovered: DiscoveredAgent[] }>("/api/fleet/discover");

@@ -33,9 +33,18 @@ def register_fleet_routes(app) -> None:
     async def _list_fleet():
         """Every workspace agent + remote member + live status. The focused agent is the URL
         slug now (ADR 0042 slug routing) — no server-side 'active' pointer. Remote probes are
-        TTL-cached + refreshed off the loop, so the 3s console poll stays cheap."""
+        TTL-cached + refreshed off the loop, so the 3s console poll stays cheap.
+
+        Each agent also carries its saved switcher metadata (fleet-switcher spec,
+        docs/design/fleet-switcher-groups.md): ``group`` (a FleetGroup id; omitted for remotes
+        and for ungrouped agents), ``pinned`` / ``pinned_at``, and ``machine`` on remotes. The
+        top-level ``groups`` is the operator's group list in switcher order. All of these are
+        optional, so an older hub (no roster metadata) still returns today's flat shape."""
         await asyncio.to_thread(supervisor.refresh_remote_probes)
-        return {"agents": await asyncio.to_thread(supervisor.status)}
+        return {
+            "agents": await asyncio.to_thread(supervisor.status),
+            "groups": await asyncio.to_thread(supervisor.roster_groups),
+        }
 
     @app.put("/api/fleet/order")
     async def _set_fleet_order(req: dict):
@@ -51,6 +60,80 @@ def register_fleet_routes(app) -> None:
         except supervisor.FleetError as exc:
             raise HTTPException(400, str(exc))
         return {"ok": True, "order": order}
+
+    # ── switcher groups + pins (fleet-switcher spec, docs/design/fleet-switcher-groups.md) ──
+    # Operator-defined switcher sections and per-agent pins, stored with the roster order in
+    # roster.json. Hub-only and gated EXACTLY like PUT /api/fleet/order above: hub-only by
+    # construction (a member runs PROTOAGENT_INSTANCE-scoped, so its own roster.json is its
+    # own), domain errors degrade to a readable 400 the Fleet settings cards toast inline.
+
+    @app.post("/api/fleet/groups")
+    async def _create_group(req: dict):
+        """Create an operator switcher group. Body ``{name}`` — 400 (spec copy) for a blank,
+        reserved ("Remote") or duplicate name; 200 with the new ``{id, name}`` otherwise."""
+        try:
+            group = await fleet_ops.groups_create((req or {}).get("name"))
+        except supervisor.FleetError as exc:
+            raise HTTPException(400, str(exc))
+        return {"ok": True, "group": group}
+
+    @app.put("/api/fleet/groups/order")
+    async def _reorder_groups(req: dict):
+        """Persist the group DISPLAY order. Body ``{order: [<group id>, ...]}`` — a COMPLETE
+        permutation of the current group ids; a duplicate / unknown / missing / malformed
+        list is a 400 that leaves the saved groups untouched. Declared BEFORE the ``{group_id}``
+        routes so the literal ``order`` is matched first."""
+        try:
+            groups = await fleet_ops.groups_reorder((req or {}).get("order"))
+        except supervisor.FleetError as exc:
+            raise HTTPException(400, str(exc))
+        return {"ok": True, "groups": groups}
+
+    @app.patch("/api/fleet/groups/{group_id}")
+    async def _rename_group(group_id: str, req: dict):
+        """Rename a group in place (its id, and every agent assigned to it, never change).
+        Body ``{name}`` — 400 for an unknown id or an invalid name (spec copy)."""
+        try:
+            group = await fleet_ops.groups_rename(group_id, (req or {}).get("name"))
+        except supervisor.FleetError as exc:
+            raise HTTPException(400, str(exc))
+        return {"ok": True, "group": group}
+
+    @app.delete("/api/fleet/groups/{group_id}")
+    async def _delete_group(group_id: str):
+        """Delete a group; its agents become ungrouped (no agent is removed). 400 for an
+        unknown id."""
+        try:
+            return {"ok": True, **await fleet_ops.groups_delete(group_id)}
+        except supervisor.FleetError as exc:
+            raise HTTPException(400, str(exc))
+
+    @app.put("/api/fleet/agents/{agent_id}/group")
+    async def _set_agent_group(agent_id: str, req: dict):
+        """Assign an agent (by immutable id) to a switcher group, or clear it. Body
+        ``{group: <group id> | null}``. 400 for an unknown member, an unknown group, or a
+        remote member (remotes are grouped by their machine)."""
+        try:
+            return {"ok": True, **await fleet_ops.agent_group(agent_id, (req or {}).get("group"))}
+        except supervisor.FleetError as exc:
+            raise HTTPException(400, str(exc))
+
+    @app.put("/api/fleet/agents/{agent_id}/pin")
+    async def _pin_agent(agent_id: str):
+        """Pin an agent to the top of the switcher (by immutable id; idempotent). 400 for an
+        unknown member. A remote member can be pinned like any other."""
+        try:
+            return {"ok": True, **await fleet_ops.agent_pin(agent_id)}
+        except supervisor.FleetError as exc:
+            raise HTTPException(400, str(exc))
+
+    @app.delete("/api/fleet/agents/{agent_id}/pin")
+    async def _unpin_agent(agent_id: str):
+        """Unpin an agent (by immutable id). 400 for an unknown member."""
+        try:
+            return {"ok": True, **await fleet_ops.agent_unpin(agent_id)}
+        except supervisor.FleetError as exc:
+            raise HTTPException(400, str(exc))
 
     @app.post("/api/fleet/remotes")
     async def _add_remote(req: dict):
