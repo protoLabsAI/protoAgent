@@ -314,6 +314,7 @@ FROM_YAML_EXAMPLE_FIELDS = {
     "telemetry_db_path": "/sandbox/telemetry.db",
     "telemetry_enabled": True,
     "telemetry_retention_days": 90,
+    "ledger_retention_days": 0,
     # Langfuse tracing (#3017). The example ships no `tracing:` block, so all four
     # resolve to their dataclass defaults — off, with a blank host that init() reads
     # as "use the compose default". The two keys are secrets: pinned "" here (like

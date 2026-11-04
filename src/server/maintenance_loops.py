@@ -201,6 +201,17 @@ async def _checkpoint_prune_loop() -> None:
                     log.info("[telemetry-prune] removed %d turn(s) older than %dd", removed, keep_days)
             except Exception:
                 log.exception("[telemetry-prune] sweep failed")
+        # Delegation-ledger retention (#4726). Default 0 keeps the whole history; `prune`
+        # existed but nothing called it, so a configured window did nothing.
+        ledger_keep = getattr(cfg, "ledger_retention_days", 0) if cfg else 0
+        ledger_store = getattr(STATE, "ledger_store", None)
+        if ledger_store is not None and ledger_keep > 0:
+            try:
+                removed = await asyncio.to_thread(ledger_store.prune, ledger_keep)
+                if removed:
+                    log.info("[ledger-prune] removed %d edge(s) older than %dd", removed, ledger_keep)
+            except Exception:
+                log.exception("[ledger-prune] sweep failed")
         # Inbox retention — delete delivered items older than the configured window
         # so the inbox DB can't grow unbounded. Pending (undelivered) items are never
         # pruned. 0 = keep all.

@@ -57,6 +57,24 @@ including a background job's own turn, and any delegations still in flight. You 
 pass a workflow run id, a background job id or a coding-agent run's task id. The route
 finds the run that work belongs to and says so in `resolved_from`. Delegations recorded
 before this field existed have no run and don't appear.
+### How long a run is kept
+
+A run's parts live in different stores, and each one keeps its own window. A run's tree
+can outlive its full transcript.
+
+| Part of a run | Store | Kept for | Setting |
+|---|---|---|---|
+| Full turn detail: messages, tool calls, the delegate reply timeline | A2A task store | 24 hours. A turn paused for approval is kept until it's answered. | Fixed |
+| Turn outcome, tokens, cost, duration, trace link | `telemetry.db` | 90 days | `telemetry.retention_days` |
+| Delegations and each run's tree | `ledger.db` | Forever | `telemetry.ledger_retention_days` |
+| Workflow runs and their step output | `workflows/.runs/*.json` | The newest 200 finished runs. Running and paused runs are never pruned. | `workflow_runs.max_runs` |
+| Background jobs and their results | Background job store | Until cleared. Dismissing hides a job without deleting it. | None |
+| Activity feed entries | Activity store | 90 days | `activity.retention_days` |
+| Prompt snapshots | `prompt-snapshots.db` | 30 days or 5000 calls, whichever comes first | `prompts.retention_days`, `prompts.max_calls` |
+| Langfuse traces | Your Langfuse instance | Langfuse's own retention | In Langfuse |
+
+The chat transcript in the console browser keeps its own copy after the server's 24-hour
+task window closes.
 
 Plugin numeric series from `sdk.record_metric` live separately in `metrics.db`.
 They remain enabled when turn telemetry is off because watches and other plugin

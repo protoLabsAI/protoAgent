@@ -150,6 +150,7 @@ HOST_SCOPED_KEYS = {
     "prompt_cache.warm.interval_seconds",
     "telemetry.enabled",
     "telemetry.retention_days",
+    "telemetry.ledger_retention_days",
     "prompts.capture",
     "prompts.retention_days",
     "prompts.max_calls",
