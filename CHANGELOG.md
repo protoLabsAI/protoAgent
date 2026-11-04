@@ -68,7 +68,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   run, finished or still running, and returns the trace link template. Plugin views can open
   the drawer with the new `protoagent:run:open` bridge message.
 
-- **Fleet settings has a group editor for the agent switcher (#4731, #4732).**
+- **Fleet settings has a group editor for the agent switcher (#4735).**
   Settings ▸ Fleet now has a Groups view (docs/design/fleet-switcher-groups.md) that organizes the
   agent switcher into sections — the console half of the groups + pins the roster already stores.
   Each operator group is a card holding its agents, in switcher order, followed by a "No group"
@@ -83,7 +83,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   it's one column with the drag handles off, the Group picker on its own line and 44px targets. The
   editor is read-only in a directly-reached member window, like the rest of Fleet settings.
 
-- **The fleet roster now stores operator switcher groups and per-agent pins (#4727).**
+- **The fleet roster now stores operator switcher groups and per-agent pins (#4731).**
   Groundwork for the approved fleet-switcher redesign (docs/design/fleet-switcher-groups.md):
   the hub persists an ordered list of named groups and, keyed by each agent's immutable id, its
   group assignment and pin (with the time it was pinned) alongside the roster order in
@@ -93,9 +93,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   shape. New hub-only writes create, rename, reorder and delete a group, assign an agent to a
   group, and pin or unpin — gated like the existing Fleet settings order write. Remote agents
   are grouped automatically by their machine and can't be assigned to a group, but can be
-  pinned; deleting a group ungroups its agents. No console UI yet — that lands in a later card.
+  pinned; deleting a group ungroups its agents. The switcher (#4732) and the Fleet settings group
+  editor (#4735) use these fields.
 
-- **The agent switcher groups, pins, filters and remembers recent agents (#4731).**
+- **The agent switcher groups, pins, filters and remembers recent agents (#4732).**
   The top-left agent menu is no longer one flat list. Agents are sorted into sections — the
   one you're on, your pinned favourites, the few you switched to most recently, your own named
   groups, and a single Remote section for agents on paired machines — and once a fleet reaches
@@ -144,7 +145,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the list right away and ignored a server error, so a refused action looked done. The
   list now rolls back and a toast names what failed.
 
-- **A repeat scheduled-task chip is no longer a dead end — it expands to the full result (#4726).**
+- **A repeat scheduled-task chip is no longer a dead end — it expands to the full result (#4724).**
   After a schedule's first fire in a chat (which gets the full ScheduledReportCard), later fires
   collapse to a compact one-line chip so an hourly job can't fill the thread with cards (#2990).
   That one-liner used to be the only affordance — the run's result was reachable only through a
