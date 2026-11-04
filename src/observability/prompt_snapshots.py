@@ -30,6 +30,8 @@ import sqlite3
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
+from observability.sqlite_migrate import add_missing_columns
+
 log = logging.getLogger(__name__)
 
 # Defaults for the in-write retention cap: ``prompts.retention_days`` overrides
@@ -109,9 +111,10 @@ class PromptSnapshotStore:
             # store picks the index up on its next open, like the ALTERs below.
             db.execute("CREATE INDEX IF NOT EXISTS ix_calls_stable_hash ON calls(stable_hash)")
             # Lightweight migrations for stores created before a column existed
-            # (the TelemetryStore idiom): each ALTER fires once on an older DB and
-            # no-ops after. `sections` (#2243 P2) hold JSON [{label, chars}] — on
+            # (the TelemetryStore idiom): only the missing columns are ALTERed, and a
+            # failed ALTER raises. `sections` (#2243 P2) hold JSON [{label, chars}] — on
             # stable_blobs for the deduped prefix, per call for the dynamic tail.
+            _by_table: dict[str, list[tuple[str, str]]] = {}
             for _table, _col in (
                 ("stable_blobs", "sections"),
                 ("calls", "context_sections"),
@@ -132,10 +135,9 @@ class PromptSnapshotStore:
                 # the key it finds a turn's subagents by.
                 ("calls", "turn_task_id"),
             ):
-                try:
-                    db.execute(f"ALTER TABLE {_table} ADD COLUMN {_col} TEXT")
-                except sqlite3.OperationalError:
-                    pass  # column already present
+                _by_table.setdefault(_table, []).append((_col, "TEXT"))
+            for _table, _cols in _by_table.items():
+                add_missing_columns(db, _table, _cols)
             db.execute("CREATE INDEX IF NOT EXISTS ix_calls_parent ON calls(parent_task_id)")
             db.execute("CREATE INDEX IF NOT EXISTS ix_calls_turn ON calls(turn_task_id)")
             db.commit()

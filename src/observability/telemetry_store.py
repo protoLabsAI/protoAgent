@@ -29,6 +29,8 @@ from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
+from observability.sqlite_migrate import add_missing_columns
+
 log = logging.getLogger(__name__)
 
 _COLUMNS = (
@@ -144,23 +146,23 @@ class TelemetryStore:
                 """
             )
             db.execute("CREATE INDEX IF NOT EXISTS ix_turns_ended ON turns(ended_at)")
-            # Lightweight migrations for stores created before a column existed. Each ALTER is
-            # idempotent-guarded by the try/except (fires once on an older DB, no-ops after).
-            for _col, _type in (
-                ("provider_id", "TEXT"),
-                ("account_key", "TEXT"),
-                ("models", "TEXT"),  # ADR 0006 4b
-                ("soul_rev", "TEXT"),  # #1691
-                ("trace_id", "TEXT"),  # console→Langfuse pivot
-                ("tool_durations", "TEXT"),  # #2697
-                ("context_tokens", "INTEGER DEFAULT 0"),  # #2773 / ADR 0101 D6
-                ("run_id", "TEXT"),  # #4726
-                ("error", "TEXT"),  # #4726
-            ):
-                try:
-                    db.execute(f"ALTER TABLE turns ADD COLUMN {_col} {_type}")
-                except sqlite3.OperationalError:
-                    pass  # column already present
+            # Lightweight migrations for stores created before a column existed. Only the
+            # missing columns are ALTERed; a failed ALTER raises rather than passing as done.
+            add_missing_columns(
+                db,
+                "turns",
+                (
+                    ("provider_id", "TEXT"),
+                    ("account_key", "TEXT"),
+                    ("models", "TEXT"),  # ADR 0006 4b
+                    ("soul_rev", "TEXT"),  # #1691
+                    ("trace_id", "TEXT"),  # console→Langfuse pivot
+                    ("tool_durations", "TEXT"),  # #2697
+                    ("context_tokens", "INTEGER DEFAULT 0"),  # #2773 / ADR 0101 D6
+                    ("run_id", "TEXT"),  # #4726
+                    ("error", "TEXT"),  # #4726
+                ),
+            )
             self._migrate_to_row_id(db)  # #3001 — must run after the ADD COLUMNs above
             db.execute("CREATE INDEX IF NOT EXISTS ix_turns_task ON turns(task_id)")
             db.execute("CREATE INDEX IF NOT EXISTS ix_turns_run ON turns(run_id)")

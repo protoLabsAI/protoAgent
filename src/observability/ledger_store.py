@@ -39,6 +39,8 @@ from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
+from observability.sqlite_migrate import add_missing_columns
+
 log = logging.getLogger(__name__)
 
 #: Bounds on free text, so one runaway prompt can't dominate the table. The ledger stores
@@ -129,18 +131,18 @@ class LedgerStore:
             # park/resume shares one across legs, and a fan-out shares a parent — so
             # keying on it would silently overwrite edges, which is exactly the defect
             # the telemetry store had to migrate away from (#3001).
-            # #4726: the tree links. Idempotent ALTERs for a DB created before them.
-            for _col, _type in (
-                ("edge_uuid", "TEXT"),
-                ("parent_uuid", "TEXT"),
-                ("run_id", "TEXT"),
-                ("completion", "TEXT"),  # the completion check's verdict (#4726)
-                ("nudges", "INTEGER DEFAULT 0"),
-            ):
-                try:
-                    db.execute(f"ALTER TABLE delegations ADD COLUMN {_col} {_type}")
-                except sqlite3.OperationalError:
-                    pass  # column already present
+            # #4726: the tree links, added to a DB created before them.
+            add_missing_columns(
+                db,
+                "delegations",
+                (
+                    ("edge_uuid", "TEXT"),
+                    ("parent_uuid", "TEXT"),
+                    ("run_id", "TEXT"),
+                    ("completion", "TEXT"),  # the completion check's verdict (#4726)
+                    ("nudges", "INTEGER DEFAULT 0"),
+                ),
+            )
             db.execute("CREATE INDEX IF NOT EXISTS ix_deleg_at ON delegations(at)")
             db.execute("CREATE INDEX IF NOT EXISTS ix_deleg_run ON delegations(run_id)")
             db.execute("CREATE INDEX IF NOT EXISTS ix_deleg_uuid ON delegations(edge_uuid)")
