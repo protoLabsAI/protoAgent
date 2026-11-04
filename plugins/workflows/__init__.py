@@ -172,23 +172,32 @@ async def _run_prepared(
         return run_store.pause(step_id, completed)
 
     try:
-        # One trace per run: every step's `subagent:` span nests under it, instead of each
-        # becoming its own root trace when the run has no turn around it (Studio, REST).
-        async with sdk.trace_run(
-            f"workflow:{name}", run_id=run_id, input=resolved, metadata={"workflow": name}
-        ) as traced:
-            result = await execute_workflow(
-                recipe,
-                resolved,
-                run_step=_run_step,
-                # Caller default only — a recipe declaring its own fan-out width wins inside
-                # the engine (a 5-step parallel stage must not be serialized by a cap of 4).
-                max_concurrency=getattr(sdk.config(), "subagent_max_concurrency", 3),
-                gate_check=_gate_check,
-                pause_fn=_pause,
-                seed_outputs=seed_outputs,
-            )
-            _trace_outcome(traced, result)
+        # The run is an edge in the delegation ledger (#4726), keyed by its run_id, so its
+        # steps nest under it and the run file joins the ledger on `task_id = run_id`.
+        # Inside a turn it hangs off the turn's run; from Studio or REST it is a root.
+        with sdk.delegation(
+            to_kind="workflow", to_name=name, what=f"workflow {name}", origin="workflow", task_id=run_id
+        ) as edge:
+            # One trace per run: every step's `subagent:` span nests under it, instead of each
+            # becoming its own root trace when the run has no turn around it (Studio, REST).
+            async with sdk.trace_run(
+                f"workflow:{name}", run_id=run_id, input=resolved, metadata={"workflow": name}
+            ) as traced:
+                result = await execute_workflow(
+                    recipe,
+                    resolved,
+                    run_step=_run_step,
+                    # Caller default only — a recipe declaring its own fan-out width wins inside
+                    # the engine (a 5-step parallel stage must not be serialized by a cap of 4).
+                    max_concurrency=getattr(sdk.config(), "subagent_max_concurrency", 3),
+                    gate_check=_gate_check,
+                    pause_fn=_pause,
+                    seed_outputs=seed_outputs,
+                )
+                _trace_outcome(traced, result)
+            if result.get("failed"):  # the engine returns failed steps; it doesn't raise
+                edge.outcome = "failed"
+                edge.error = "failed steps: " + ", ".join(str(x) for x in result["failed"])
     except asyncio.CancelledError:
         _finish_stopped(run_store)
         raise

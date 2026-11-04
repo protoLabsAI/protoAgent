@@ -32,6 +32,18 @@ from ``graph.delegate_progress``) → ``delegation.finished``. All three are liv
 so a view opened mid-run catches up from ``live_edges()`` (``GET /api/ledger/live``)
 instead. An edge opened inside another (a subagent that delegates to a coder) names it as
 ``parent_id``, so the chain of who-asked-whom survives into the view.
+
+**And it is what makes a finished run rebuildable (#4726).** The edge id and its parent are
+written to the durable row as ``edge_uuid`` / ``parent_uuid``, with a ``run_id`` naming the
+root of the tree: the A2A task id of the turn the work started in, or, for work started
+outside any turn (a board review, a scheduled workflow), the root edge's own id. Without
+them the nesting existed only in the live registry and was gone the moment an edge closed.
+
+A turn (or any other entry point) declares what it is with ``run_scope``; every edge opened
+inside it inherits the session, the turn's task id as ``run_id``, and an optional parent
+edge. A background job's turn arrives over HTTP, so it cannot inherit the spawning turn's
+context; its executor looks the job's edge up with ``link_for_task`` and scopes itself
+under it, which keeps the job's subagents in the run that spawned the job.
 """
 
 from __future__ import annotations
@@ -52,6 +64,9 @@ _LIVE_MAX = 256
 _LIVE_BY_TASK: dict[str, str] = {}
 #: The open edge the current task is working inside, for nesting and for progress.
 _CURRENT: contextvars.ContextVar[str | None] = contextvars.ContextVar("ledger_current_edge", default=None)
+#: The run the current task belongs to (#4726): ``session_id``, ``run_id`` and an optional
+#: ``parent_uuid``, set by ``run_scope`` at a turn or another entry point.
+_SCOPE: contextvars.ContextVar[dict | None] = contextvars.ContextVar("ledger_run_scope", default=None)
 #: What the caller ASKED, when the text a funnel dispatches wraps it (``describing``).
 _DESCRIBING: contextvars.ContextVar[str | None] = contextvars.ContextVar("ledger_describing", default=None)
 #: Bus payload caps — every frame is fanned out to every open console.
@@ -92,6 +107,72 @@ def current_edge_id() -> str | None:
     return _CURRENT.get()
 
 
+def begin_run_scope(*, session_id: str = "", run_id: str = "", parent_uuid: str = "") -> contextvars.Token:
+    """Declare the run the calling task belongs to, for every edge opened inside it.
+
+    An empty field inherits from an enclosing scope, so a workflow scoped inside a chat turn
+    keeps the turn's session and run. Pair with ``end_run_scope``; ``run_scope`` is the
+    context-manager form."""
+    outer = _SCOPE.get() or {}
+    scope = {
+        "session_id": str(session_id or outer.get("session_id") or ""),
+        "run_id": str(run_id or outer.get("run_id") or ""),
+        "parent_uuid": str(parent_uuid or outer.get("parent_uuid") or ""),
+    }
+    return _SCOPE.set(scope)
+
+
+def end_run_scope(token: contextvars.Token) -> None:
+    """Undo ``begin_run_scope``. Safe when torn down in another context (an async generator
+    closed by a different task): the contextvar resets itself when that context exits."""
+    try:
+        _SCOPE.reset(token)
+    except (ValueError, RuntimeError):
+        pass
+
+
+@contextmanager
+def run_scope(*, session_id: str = "", run_id: str = "", parent_uuid: str = ""):
+    """Context-manager form of ``begin_run_scope`` / ``end_run_scope``."""
+    token = begin_run_scope(session_id=session_id, run_id=run_id, parent_uuid=parent_uuid)
+    try:
+        yield
+    finally:
+        end_run_scope(token)
+
+
+def current_run_id() -> str:
+    """The run the calling task belongs to: the open edge's run, else the scope's, else ""."""
+    edge = _LIVE.get(_CURRENT.get() or "")
+    if edge and edge.get("run_id"):
+        return str(edge["run_id"])
+    return str((_SCOPE.get() or {}).get("run_id") or "")
+
+
+def link_for_task(task_id: str) -> dict:
+    """``{"edge_uuid", "run_id"}`` of the edge recorded under ``task_id`` (a background job
+    id), from the live registry or, after a restart, the durable row. Empty when unknown.
+
+    How a background job's own turn, which arrives over HTTP and so inherits nothing, finds
+    the edge that spawned it."""
+    if not task_id:
+        return {}
+    edge = _LIVE.get(_LIVE_BY_TASK.get(task_id) or "")
+    if edge:
+        return {"edge_uuid": edge["id"], "run_id": str(edge.get("run_id") or "")}
+    store = _store()
+    if store is None:
+        return {}
+    try:
+        row = store.by_task(task_id)
+    except Exception:  # noqa: BLE001 — a missing link must never break the turn
+        log.debug("[ledger] link_for_task failed", exc_info=True)
+        return {}
+    if not row or not row.get("edge_uuid"):
+        return {}
+    return {"edge_uuid": str(row["edge_uuid"]), "run_id": str(row.get("run_id") or "")}
+
+
 def open_edge(
     *,
     to_kind: str,
@@ -104,9 +185,19 @@ def open_edge(
     origin: str = "",
 ) -> str:
     """Register a delegation as in flight and announce ``delegation.started``. Never raises;
-    returns the edge id (the key ``delegation.progress`` / ``.finished`` carry)."""
+    returns the edge id (the key ``delegation.progress`` / ``.finished`` carry).
+
+    The parent is the edge the caller is dispatching inside, else the scope's parent. The
+    run is the parent's run, else the scope's, else this edge's own id (it is a root). An
+    empty ``session_id`` is taken from the scope, which is how a ``task`` call made inside a
+    tool body, where the session isn't in reach, still records the turn's session."""
     edge_id = uuid.uuid4().hex[:16]
     try:
+        scope = _SCOPE.get() or {}
+        parent_id = _CURRENT.get() or scope.get("parent_uuid") or ""
+        parent = _LIVE.get(parent_id) if parent_id else None
+        run_id = str((parent or {}).get("run_id") or scope.get("run_id") or edge_id)
+        session_id = session_id or (parent or {}).get("session_id") or scope.get("session_id") or ""
         try:
             from graph.middleware.redaction import redact
 
@@ -115,7 +206,8 @@ def open_edge(
             what = ""
         edge = {
             "id": edge_id,
-            "parent_id": _CURRENT.get() or "",
+            "parent_id": parent_id,
+            "run_id": run_id,
             "from": _agent_name(),
             "to_kind": to_kind,
             "to_name": to_name,
@@ -167,6 +259,7 @@ def close_edge(
             {
                 "id": edge_id,
                 "parent_id": edge.get("parent_id", ""),
+                "run_id": edge.get("run_id", ""),
                 "from": edge.get("from", ""),
                 "to_kind": edge.get("to_kind", ""),
                 "to_name": edge.get("to_name", ""),
@@ -193,6 +286,30 @@ def note_progress(edge_id: str, snapshot: dict) -> None:
         _publish("delegation.progress", {"id": edge_id, "to_name": edge.get("to_name", ""), "progress": progress})
     except Exception:  # noqa: BLE001
         log.debug("[ledger] note_progress failed", exc_info=True)
+
+
+def edge_link(edge_id: str) -> dict:
+    """The durable link fields of an open edge, for a producer that records its own row
+    (``record_delegation``) instead of using ``dispatch``. Empty when the edge is unknown."""
+    edge = _LIVE.get(edge_id or "")
+    if not edge:
+        return {}
+    return {
+        "edge_uuid": edge["id"],
+        "parent_uuid": str(edge.get("parent_id") or ""),
+        "run_id": str(edge.get("run_id") or ""),
+        "session_id": str(edge.get("session_id") or ""),
+    }
+
+
+def note_task_id(edge_id: str, task_id: str) -> None:
+    """Attach the task id a delegate's work was recorded under, once the producer knows it
+    (an ACP coder run's telemetry key), so the edge's row joins that ``turns`` row."""
+    edge = _LIVE.get(edge_id or "")
+    if edge is None or not task_id:
+        return
+    edge["task_id"] = str(task_id)
+    _LIVE_BY_TASK[str(task_id)] = edge_id
 
 
 def live_edges() -> list[dict]:
@@ -240,6 +357,9 @@ def record_delegation(
     cost_usd: float | None = None,
     origin: str = "",
     from_agent: str = "",
+    edge_uuid: str = "",
+    parent_uuid: str = "",
+    run_id: str = "",
 ) -> int | None:
     """Record one delegation edge. Never raises.
 
@@ -265,6 +385,9 @@ def record_delegation(
             duration_ms=duration_ms,
             cost_usd=cost_usd,
             origin=origin,
+            edge_uuid=edge_uuid,
+            parent_uuid=parent_uuid,
+            run_id=run_id,
         )
     except Exception:  # noqa: BLE001 — the record must never break the dispatch
         log.exception("[ledger] record_delegation failed")
@@ -324,7 +447,9 @@ def dispatch(
     stopping a turn says nothing about the delegate, and collapsing the two would put a red
     mark on a healthy coder every time someone hit stop.
 
-    The yielded handle carries fields the caller only learns *during* the dispatch:
+    The yielded handle carries fields the caller only learns *during* the dispatch
+    (``cost_usd``, ``task_id``, ``to_instance``, and ``outcome`` / ``error`` for work that
+    reports failure without raising):
 
         with ledger.dispatch(to_kind="acp", to_name="protoCoder") as edge:
             reply = await adapter.dispatch(...)
@@ -341,7 +466,7 @@ def dispatch(
     # A SimpleNamespace, not a class body: a class body does not close over the enclosing
     # function's locals, so `task_id = task_id` inside one raises NameError rather than
     # seeding the default from the argument.
-    edge = SimpleNamespace(cost_usd=None, task_id=task_id, to_instance=to_instance)
+    edge = SimpleNamespace(cost_usd=None, task_id=task_id, to_instance=to_instance, outcome=None, error="")
     outcome, error = "ok", ""
     edge.id = open_edge(
         to_kind=to_kind,
@@ -353,6 +478,8 @@ def dispatch(
         task_id=task_id,
         origin=origin,
     )
+    link = edge_link(edge.id)
+    session_id = link.get("session_id") or session_id
     token = _CURRENT.set(edge.id)
     try:
         yield edge
@@ -362,9 +489,19 @@ def dispatch(
     except Exception as exc:  # noqa: BLE001 — re-raised below; we only observe it
         outcome, error = "failed", str(exc) or type(exc).__name__
         raise
+    else:
+        # The block finished without raising, but the caller may know better: a workflow
+        # whose run failed returns its envelope rather than raising (#4726).
+        if edge.outcome in ("ok", "failed", "cancelled"):
+            outcome = edge.outcome
+        error = str(edge.error or "")
     finally:
         _CURRENT.reset(token)
         elapsed_ms = int((time.monotonic() - started) * 1000)
+        # A producer may have learned the delegate's task id mid-dispatch (note_task_id).
+        late_task = str((_LIVE.get(edge.id) or {}).get("task_id") or "")
+        if late_task and not edge.task_id:
+            edge.task_id = late_task
         close_edge(edge.id, outcome=outcome, duration_ms=elapsed_ms, error=error, cost_usd=edge.cost_usd)
         record_delegation(
             to_kind=to_kind,
@@ -379,4 +516,7 @@ def dispatch(
             duration_ms=elapsed_ms,
             cost_usd=edge.cost_usd,
             origin=origin,
+            edge_uuid=link.get("edge_uuid", ""),
+            parent_uuid=link.get("parent_uuid", ""),
+            run_id=link.get("run_id", ""),
         )

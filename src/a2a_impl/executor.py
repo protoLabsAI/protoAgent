@@ -428,6 +428,38 @@ def _text_part(text: str) -> Part:
     return Part(text=text)
 
 
+def _begin_run_scope(context_id: str, task_id: str):
+    """Declare this turn as a run in the delegation ledger (#4726), so every edge opened
+    inside it records the session and the turn's task id as its ``run_id``.
+
+    A background job's turn arrives over HTTP in a ``background:<job_id>`` context and
+    inherits nothing from the turn that spawned it, so it joins that turn's run instead,
+    under the job's own edge. Never raises: a missing link costs the record, not the turn."""
+    try:
+        from graph import ledger
+
+        run_id, parent = task_id, ""
+        if context_id.startswith("background:"):
+            link = ledger.link_for_task(context_id.split(":", 1)[1])
+            run_id = link.get("run_id") or run_id
+            parent = link.get("edge_uuid") or ""
+        return ledger.begin_run_scope(session_id=context_id, run_id=run_id, parent_uuid=parent)
+    except Exception:  # noqa: BLE001
+        logger.debug("[a2a] run scope failed", exc_info=True)
+        return None
+
+
+def _end_run_scope(token) -> None:
+    if token is None:
+        return
+    try:
+        from graph import ledger
+
+        ledger.end_run_scope(token)
+    except Exception:  # noqa: BLE001
+        logger.debug("[a2a] run scope reset failed", exc_info=True)
+
+
 def _begin_turn_files(carry: str = "", principal: str = "", *, principal_kind: str = "unknown", task_id: str = ""):
     def claim_mismatch(parked_kind: str, count: int) -> bool:
         if principal_kind == "operator" and parked_kind in ("scheduler", "operator"):
@@ -913,6 +945,7 @@ class ProtoAgentExecutor(AgentExecutor):
             carry=str(context.context_id or "") if touches_pause else "", principal=_turn_principal,
             principal_kind=_turn_principal_kind, task_id=str(context.task_id or ""),
         )
+        run_token = _begin_run_scope(str(context.context_id or ""), str(context.task_id or ""))
 
         # Live answer streaming: forward each text delta as an incremental
         # artifact-update (append) frame so the console fills the bubble as the
@@ -1474,6 +1507,7 @@ class ProtoAgentExecutor(AgentExecutor):
             # input_required park — the resumed execute() re-arms with the parked files.
             _end_knowledge_ops(knowledge_token)
             _end_turn_files(files_token)
+            _end_run_scope(run_token)
             if touches_pause:
                 hitl_routing.schedule_settle_siblings(
                     context.context_id, context.task_id, getattr(context, "call_context", None)

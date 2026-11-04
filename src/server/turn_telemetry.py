@@ -184,6 +184,15 @@ def _turn_account(model: str, requested: str) -> tuple[str, str]:
         return "", ""
 
 
+def _current_run_id() -> str:
+    try:
+        from graph import ledger
+
+        return ledger.current_run_id()
+    except Exception:  # noqa: BLE001 — a missing link must never lose a turn
+        return ""
+
+
 def record_turn(
     *,
     task_id: str,
@@ -302,6 +311,9 @@ def record_turn(
         "tool_durations": json.dumps(tool_durations) if tool_durations else None,
         # Peak single-call prompt size = context-window fill (#2773, ADR 0101 D6).
         "context_tokens": int(context_tokens or 0),
+        # The run this leg belongs to (#4726): the turn's own task id, the spawning turn's
+        # run for a background job, or the edge's run for a coder dispatch.
+        "run_id": _current_run_id(),
     }
 
     if publish_usage_event:

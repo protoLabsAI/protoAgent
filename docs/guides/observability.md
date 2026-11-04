@@ -38,6 +38,26 @@ never changes configuration. Its reasons identify the baseline used: latency
 compares like models or kinds of work, while cost compares priced turns.
 `/api/telemetry/export` downloads CSV.
 
+### Look up one run
+
+Every delegation (a subagent, a background job, a workflow run and its steps, a coding
+agent, a peer agent) is recorded in `<instance_root>/ledger.db` with the run it belongs
+to and the delegation it was started from. A run is named by the A2A task id of the turn
+it started in. Work started outside a turn, such as a workflow run from Studio, is its own
+run, named by its first delegation.
+
+```bash
+curl -H "Authorization: Bearer $PROTOAGENT_TOKEN" \
+  http://localhost:7870/api/runs/<task-id>
+```
+
+The response lists the run's delegations, oldest first, with `edge_uuid` and
+`parent_uuid` to rebuild the tree. It also lists the turns that ran inside the run,
+including a background job's own turn, and any delegations still in flight. You can also
+pass a workflow run id, a background job id or a coding-agent run's task id. The route
+finds the run that work belongs to and says so in `resolved_from`. Delegations recorded
+before this field existed have no run and don't appear.
+
 Plugin numeric series from `sdk.record_metric` live separately in `metrics.db`.
 They remain enabled when turn telemetry is off because watches and other plugin
 features depend on their history. See the
