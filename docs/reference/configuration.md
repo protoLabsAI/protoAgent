@@ -430,6 +430,10 @@ telemetry:
 |---|---|---|
 | `enabled` | `true` | Write a per-turn row at terminal time. `false` → no store; endpoints return `{enabled:false}`. |
 | `db_path` | `/sandbox/telemetry.db` | SQLite path; the legacy `/sandbox` default resolves to `<instance_root>/telemetry.db`. |
+| `retention_days` | `90` | Prune turn rows older than this (`0` = keep forever). |
+| `ledger_retention_days` | `0` | Prune delegation-ledger rows older than this (`0` = keep forever). The ledger is one small row per delegation, and the org chart's lifetime stats read all of it. |
+
+How long each part of a run is kept is listed in [Monitor traces, metrics, and logs](/guides/observability#how-long-a-run-is-kept).
 
 ## `tracing`
 

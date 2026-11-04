@@ -820,6 +820,7 @@ def _main():
         if _cfg is not None and (
             (STATE.checkpoint_path and _cfg.checkpoint_prune_interval_hours > 0)
             or getattr(_cfg, "telemetry_retention_days", 0) > 0
+            or getattr(_cfg, "ledger_retention_days", 0) > 0
         ):
             import asyncio
 

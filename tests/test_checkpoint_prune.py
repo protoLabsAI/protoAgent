@@ -7,6 +7,8 @@ import sqlite3
 import time
 from pathlib import Path
 
+import pytest
+
 from langchain_core.messages import AIMessage, HumanMessage
 from langgraph.graph import END, START, MessagesState, StateGraph
 
@@ -644,3 +646,62 @@ def test_sweep_reclaims_a_bloated_db_even_when_it_deleted_nothing(tmp_path, monk
 
     pages_after = sqlite3.connect(db).execute("PRAGMA page_count").fetchone()[0]
     assert pages_after < pages_before / 2
+
+
+def _run_one_maintenance_pass(monkeypatch, cfg, **state):
+    import server.maintenance_loops as ml
+    from runtime.state import STATE
+
+    base = {
+        "graph_config": cfg,
+        "checkpoint_path": None,
+        "checkpointer": None,
+        "knowledge_store": None,
+        "telemetry_store": None,
+        "inbox_store": None,
+        "activity_log": None,
+        "a2a_task_engine": None,
+        "ledger_store": None,
+    }
+    for name, value in {**base, **state}.items():
+        monkeypatch.setattr(STATE, name, value, raising=False)
+
+    async def _noop():
+        return None
+
+    monkeypatch.setattr(ml, "_sweep_orphaned_forgets", _noop)
+    monkeypatch.setattr(ml, "_maybe_run_soul_drift_pass", lambda cfg: None)
+
+    class _Stop(Exception):
+        pass
+
+    calls = []
+
+    async def _sleep(seconds):
+        calls.append(seconds)
+        if len(calls) > 1:
+            raise _Stop
+
+    monkeypatch.setattr(asyncio, "sleep", _sleep)
+    try:
+        asyncio.run(ml._checkpoint_prune_loop())
+    except _Stop:
+        pass
+
+
+@pytest.mark.parametrize(("keep_days", "left"), [(30, ["new"]), (0, ["new", "old"])])
+def test_the_maintenance_pass_prunes_the_ledger_only_when_a_window_is_set(tmp_path, monkeypatch, keep_days, left):
+    # #4726: `LedgerStore.prune` existed but nothing called it, so no setting could cap
+    # the ledger. 0 keeps everything, the default.
+    from types import SimpleNamespace
+
+    from observability.ledger_store import LedgerStore
+
+    store = LedgerStore(str(tmp_path / "ledger.db"))
+    store.record(from_agent="a", to_kind="subagent", to_name="old", at="2020-01-01T00:00:00+00:00")
+    store.record(from_agent="a", to_kind="subagent", to_name="new")
+    cfg = SimpleNamespace(checkpoint_prune_interval_hours=0, ledger_retention_days=keep_days)
+
+    _run_one_maintenance_pass(monkeypatch, cfg, ledger_store=store)
+
+    assert sorted(r["to_name"] for r in store.recent()) == left

@@ -1316,6 +1316,19 @@ FIELDS: list[Field] = [
         restart=True,
         scope="host",
     ),
+    Field(
+        "telemetry.ledger_retention_days",
+        "ledger_retention_days",
+        "Delegation history retention (days)",
+        "number",
+        "Telemetry",
+        "Auto-prune delegation-ledger rows (who handed what work to whom, and each run's "
+        "tree) older than this. 0 = keep forever, the default; the org chart's lifetime "
+        "stats read the whole history.",
+        minimum=0,
+        restart=True,
+        scope="host",
+    ),
     # ── Tracing (Langfuse deep traces — ADR 0006's other half, #3017) ─────────
     # Its OWN section, not shared with telemetry.* above, and the reason is reachability
     # rather than taxonomy. `telemetry.*` is host-scoped box config, so the console files

@@ -143,7 +143,7 @@ the corresponding items in §7.
    | `model.name` | the box's default model — this IS today's "model-only inheritance", now via the cascade; **agents override freely** (their own `model.name` in the leaf wins) |
    | `routing.aux_model`, `routing.fallback_models` | gateway routing |
    | `prompt_cache.enabled/ttl/warm.enabled/warm.interval_seconds` | cache tier is gateway/deployment-dependent |
-   | `telemetry.enabled`, `telemetry.retention_days` | observability is machine-wide |
+   | `telemetry.enabled`, `telemetry.retention_days`, `telemetry.ledger_retention_days` | observability is machine-wide |
    | `prompts.capture`, `prompts.retention_days`, `prompts.max_calls` | prompt-snapshot capture (#2243) is the same machine-wide observability posture as telemetry; both retention caps (#3019) sit with it |
    | `identity.org` | white-label org branding is deployment-wide (`identity.name`/`operator` stay per-agent) |
    | `egress.allowed_hosts` | box-wide outbound network policy (ADR 0008); sits at the Host layer beside the inbound `network.bind` (D8) |

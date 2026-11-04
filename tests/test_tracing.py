@@ -1037,6 +1037,7 @@ def test_telemetry_surface_chips_every_telemetry_section_field():
         "telemetry.fleet_trace_export",
         "telemetry.enabled",
         "telemetry.retention_days",
+        "telemetry.ledger_retention_days",
         "prompts.capture",
         "prompts.retention_days",
         "prompts.max_calls",

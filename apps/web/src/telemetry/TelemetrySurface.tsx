@@ -104,12 +104,13 @@ function TelemetryBody() {
         actions={
           <>
             {/* Keep each shortcut single-scope (#3032): QuickSetting deliberately makes one
-                settings write. These five are box-shared, while fleet trace export below is
+                settings write. These six are box-shared, while fleet trace export below is
                 the focused agent's own toggle. */}
             <QuickSetting
               keys={[
                 "telemetry.enabled",
                 "telemetry.retention_days",
+                "telemetry.ledger_retention_days",
                 "prompts.capture",
                 "prompts.retention_days",
                 "prompts.max_calls",
