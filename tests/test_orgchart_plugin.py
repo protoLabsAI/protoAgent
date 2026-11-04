@@ -939,3 +939,20 @@ def test_closing_the_drawer_never_focuses_a_node_that_is_leaving():
     assert 'document.querySelector("#mode [aria-pressed=\\"true\\"]")?.focus();' in close
     leave = js[js.index("function leaveNode(id, h) {") : js.index("function render() {")]
     assert 'h.g.setAttribute("tabindex", "-1");' in leave and 'h.g.setAttribute("tabindex", "0");' in leave
+
+
+def test_view_run_asks_the_console_for_our_own_runs_only():
+    """#4726: the drawer's history rows and live cards offer "View run", which asks the console
+    to open its run inspector over the plugin bridge. A peer's run lives in the peer's ledger
+    (and its live edges are whitelisted without a run id), so only our own rows carry it."""
+    js, css, _html = _view_files()
+    assert 'parent.postMessage({ type: "protoagent:run:open", run_id: String(id) }, "*")' in js
+    # History: our ledger's rows only, by their run id or (the route resolves it) edge uuid.
+    assert "hist.map((r) => histRow(r, owner === SELF))" in js
+    assert 'own ? runButton(r.run_id || r.edge_uuid) : ""' in js
+    # Live cards: our own in-flight edges only.
+    assert "if (!e.owner || e.owner === SELF) parts.push(runButton(e.run_id || e.id));" in js
+    # The button is the DS kit's, bound once on the drawer body (it is re-rendered via innerHTML).
+    assert 'class="pl-btn pl-btn--sm pl-btn--ghost run-open"' in js
+    assert '$("d-body").addEventListener("click"' in js
+    assert ".run-open" in css
