@@ -212,6 +212,17 @@ async def _checkpoint_prune_loop() -> None:
                     log.info("[ledger-prune] removed %d edge(s) older than %dd", removed, ledger_keep)
             except Exception:
                 log.exception("[ledger-prune] sweep failed")
+        # Background-job retention (#4726). Only finished jobs whose result was already
+        # delivered go; a running job or an undelivered result is never pruned. 0 = keep all.
+        bg_keep = getattr(cfg, "background_retention_days", 0) if cfg else 0
+        bg_store = getattr(getattr(STATE, "background_mgr", None), "store", None)
+        if bg_store is not None and bg_keep > 0:
+            try:
+                removed = await asyncio.to_thread(bg_store.prune, bg_keep)
+                if removed:
+                    log.info("[background-prune] removed %d delivered job(s) older than %dd", removed, bg_keep)
+            except Exception:
+                log.exception("[background-prune] sweep failed")
         # Inbox retention — delete delivered items older than the configured window
         # so the inbox DB can't grow unbounded. Pending (undelivered) items are never
         # pruned. 0 = keep all.

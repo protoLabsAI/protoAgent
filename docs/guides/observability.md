@@ -68,7 +68,7 @@ can outlive its full transcript.
 | Turn outcome, tokens, cost, duration, trace link | `telemetry.db` | 90 days | `telemetry.retention_days` |
 | Delegations and each run's tree | `ledger.db` | Forever | `telemetry.ledger_retention_days` |
 | Workflow runs and their step output | `workflows/.runs/*.json` | The newest 200 finished runs. Running and paused runs are never pruned. | `workflow_runs.max_runs` |
-| Background jobs and their results | Background job store | Until cleared. Dismissing hides a job without deleting it. | None |
+| Background jobs and their results | Background job store | 90 days after the job finishes, once its result has been delivered. Running jobs and undelivered results are never pruned. Dismissing hides a job without deleting it. | `background.retention_days` |
 | Activity feed entries | Activity store | 90 days | `activity.retention_days` |
 | Prompt snapshots | `prompt-snapshots.db` | 30 days or 5000 calls, whichever comes first | `prompts.retention_days`, `prompts.max_calls` |
 | Langfuse traces | Your Langfuse instance | Langfuse's own retention | In Langfuse |

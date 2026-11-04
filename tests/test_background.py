@@ -10,7 +10,7 @@ doesn't need a running A2A endpoint — same approach as the scheduler tests.
 from __future__ import annotations
 
 import asyncio
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -138,6 +138,53 @@ class TestStore:
         assert s.dismiss_finished("s1") == 1
         assert {j.id for j in s.list()} == {b}  # only s2 still shown
         assert s.get(a) is not None  # a retained, just hidden
+
+    # ── retention (#4726) ─────────────────────────────────────────────────────
+
+    def _job(self, s, session="s1", *, status=None, completed=None, drain=False):
+        jid = s.create(agent_name="a", origin_session=session, subagent_type="researcher", description="d", prompt="p")
+        if status is not None:
+            s.mark_complete(jid, status, "r", now=completed)
+        if drain:
+            s.drain_pending(session)
+        return jid
+
+    def test_prune_deletes_an_old_delivered_finished_job(self, tmp_path):
+        s = _store(tmp_path)
+        old = datetime.now(UTC) - timedelta(days=100)
+        done = self._job(s, status="completed", completed=old, drain=True)
+        failed = self._job(s, "s2", status="failed", completed=old, drain=True)
+        canceled = self._job(s, "s3", status="canceled", completed=old, drain=True)
+        s.dismiss(canceled)  # dismissed or not doesn't matter
+        assert s.prune(90) == 3
+        assert all(s.get(j) is None for j in (done, failed, canceled))
+
+    def test_prune_keeps_a_running_job(self, tmp_path):
+        s = _store(tmp_path)
+        old = datetime.now(UTC) - timedelta(days=100)
+        running = s.create(
+            agent_name="a", origin_session="s1", subagent_type="researcher", description="d", prompt="p", now=old
+        )
+        assert s.prune(90) == 0
+        assert s.get(running) is not None
+
+    def test_prune_keeps_an_undelivered_result(self, tmp_path):
+        s = _store(tmp_path)
+        pending = self._job(s, status="completed", completed=datetime.now(UTC) - timedelta(days=100))
+        assert s.prune(90) == 0
+        assert s.get(pending).notified is False
+
+    def test_prune_keeps_a_recent_delivered_job(self, tmp_path):
+        s = _store(tmp_path)
+        recent = self._job(s, status="completed", completed=datetime.now(UTC) - timedelta(days=10), drain=True)
+        assert s.prune(90) == 0
+        assert s.get(recent) is not None
+
+    def test_prune_zero_keeps_everything(self, tmp_path):
+        s = _store(tmp_path)
+        old = self._job(s, status="completed", completed=datetime.now(UTC) - timedelta(days=1000), drain=True)
+        assert s.prune(0) == 0
+        assert s.get(old) is not None
 
     # ── fan-out batches (#1766) ───────────────────────────────────────────────
 

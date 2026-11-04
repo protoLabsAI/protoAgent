@@ -950,11 +950,13 @@ Background subagent jobs (`task(run_in_background=true)`, [ADR 0050](/adr/0050-b
 ```yaml
 background:
   auto_resume: true
+  retention_days: 90
 ```
 
 | Key | Default | What |
 |---|---|---|
 | `auto_resume` | `true` | When a background job finishes, immediately run a turn in the session that spawned it — its `<task-notification>` drains into that turn and the agent briefs the operator. `false` restores pull-only delivery (the report waits for the session's next manual turn; the ADR 0050 Activity idle-wake covers autonomous reaction instead). Never fires for canceled jobs, incognito-spawned jobs, or jobs spawned from another background turn. |
+| `retention_days` | `90` | Delete a finished job (completed, failed or canceled) and its report once it is older than this and its result has been delivered to the session that spawned it. Running jobs and undelivered results are never deleted; dismissing a job doesn't affect this. Matches `telemetry.retention_days`, so a job ages out with its turn rows. `0` = keep forever. |
 
 ## `workflows`
 
