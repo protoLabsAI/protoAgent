@@ -1853,6 +1853,7 @@ def delegation(
     what: str = "",
     session_id: str = "",
     origin: str = "",
+    task_id: str = "",
 ):
     """Wrap a plugin's own dispatch so it is on the record WHILE it runs, not just after.
 
@@ -1879,8 +1880,31 @@ def delegation(
         what=what,
         session_id=session_id,
         origin=origin,
+        task_id=task_id,
     ) as edge:
         yield edge
+
+
+@contextlib.contextmanager
+def run_scope(*, run_id: str = "", session_id: str = ""):
+    """Group a plugin's work outside any turn into one run in the delegation ledger (#4726).
+
+    Every edge opened inside the block records ``run_id`` as its run (and ``session_id``
+    when given), so separate dispatches that belong together (a board card's coder run and
+    its review) read back as one tree instead of unrelated roots. Inside a turn, prefer
+    nothing: the turn already scopes its work. Empty arguments inherit the enclosing scope.
+    """
+    from graph import ledger
+
+    with ledger.run_scope(run_id=run_id, session_id=session_id):
+        yield
+
+
+def current_run_id() -> str:
+    """The delegation-ledger run the calling code belongs to, or "" outside any (#4726)."""
+    from graph import ledger
+
+    return ledger.current_run_id()
 
 
 # ── subscription usage (the plugin↔quota channel, ADR 0122 D6/D7/D8) ────────────────────

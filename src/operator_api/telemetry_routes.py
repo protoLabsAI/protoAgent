@@ -421,6 +421,32 @@ def register_telemetry_routes(app) -> None:
 
         return {"now": _time.time(), "edges": ledger.live_edges()}
 
+    @app.get("/api/runs/{run_id}")
+    async def _api_run(run_id: str):
+        """Everything recorded for one run (#4726): its delegation edges (rebuild the tree
+        from ``edge_uuid`` / ``parent_uuid``), the turn legs that ran inside it, and any of
+        its edges still in flight.
+
+        ``run_id`` is the run's root id (the A2A task id of the turn it started in), but any
+        id an edge was recorded under also resolves: a workflow run id, a background job id
+        or a coder run's task id finds the run that work belongs to. ``resolved_from`` says
+        when that happened."""
+        from graph import ledger
+
+        rid = run_id.strip()
+        store = getattr(STATE, "ledger_store", None)
+        edges = await asyncio.to_thread(store.run, rid) if store is not None else []
+        resolved_from = ""
+        if not edges and store is not None:
+            row = await asyncio.to_thread(store.by_task, rid)
+            if row and row.get("run_id") and row["run_id"] != rid:
+                resolved_from, rid = rid, str(row["run_id"])
+                edges = await asyncio.to_thread(store.run, rid)
+        tstore = getattr(STATE, "telemetry_store", None)
+        turns = await asyncio.to_thread(tstore.by_run, rid) if tstore is not None else []
+        live = [e for e in ledger.live_edges() if e.get("run_id") == rid]
+        return {"run_id": rid, "resolved_from": resolved_from, "edges": edges, "turns": turns, "live": live}
+
     @app.get("/api/telemetry/export")
     async def _api_telemetry_export(since: str | None = None):
         """Download every recorded turn as CSV, streamed in chunks from a

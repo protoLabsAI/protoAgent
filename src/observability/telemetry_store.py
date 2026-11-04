@@ -54,6 +54,7 @@ _COLUMNS = (
     "trace_id",  # Langfuse trace for this turn — lets the console deep-link to the trace tree
     "tool_durations",  # JSON {tool_name: [ms, ...]} for this turn's calls (#2697)
     "context_tokens",  # peak single-call prompt size = context-window fill (#2773, ADR 0101 D6)
+    "run_id",  # the delegation-ledger run this leg belongs to (#4726); "" before it
 )
 
 #: How many sampled turns a model needs before `outliers()` compares its rows against
@@ -134,7 +135,8 @@ class TelemetryStore:
                     tool_durations               TEXT,
                     provider_id                 TEXT,
                     account_key                 TEXT,
-                    context_tokens              INTEGER DEFAULT 0
+                    context_tokens              INTEGER DEFAULT 0,
+                    run_id                      TEXT
                 )
                 """
             )
@@ -149,6 +151,7 @@ class TelemetryStore:
                 ("trace_id", "TEXT"),  # console→Langfuse pivot
                 ("tool_durations", "TEXT"),  # #2697
                 ("context_tokens", "INTEGER DEFAULT 0"),  # #2773 / ADR 0101 D6
+                ("run_id", "TEXT"),  # #4726
             ):
                 try:
                     db.execute(f"ALTER TABLE turns ADD COLUMN {_col} {_type}")
@@ -156,6 +159,7 @@ class TelemetryStore:
                     pass  # column already present
             self._migrate_to_row_id(db)  # #3001 — must run after the ADD COLUMNs above
             db.execute("CREATE INDEX IF NOT EXISTS ix_turns_task ON turns(task_id)")
+            db.execute("CREATE INDEX IF NOT EXISTS ix_turns_run ON turns(run_id)")
             # Per-turn user feedback (ADR 0126 E2 / D3): a thumbs rating on one turn,
             # keyed by (session_id, trace_id). trace_id is the turn's Langfuse id — the
             # same stable handle the console joins a rendered message to via the turns
@@ -236,7 +240,8 @@ class TelemetryStore:
                 tool_durations              TEXT,
                 provider_id                 TEXT,
                 account_key                 TEXT,
-                context_tokens              INTEGER DEFAULT 0
+                context_tokens              INTEGER DEFAULT 0,
+                run_id                      TEXT
             )
             """
         )
@@ -276,6 +281,23 @@ class TelemetryStore:
                 (account_key, since, until, model, model),
             ).fetchone()
             return max(0, int(row[0]))
+        finally:
+            db.close()
+
+    def by_run(self, run_id: str, limit: int = 500) -> list[dict]:
+        """Every turn leg recorded under one delegation-ledger run (#4726), oldest first."""
+        if not run_id:
+            return []
+        db = self._connect()
+        try:
+            rows = db.execute(
+                "SELECT * FROM turns WHERE run_id = ? ORDER BY created_at, row_id LIMIT ?",
+                (run_id, max(1, min(int(limit), 5000))),
+            ).fetchall()
+            return [dict(r) for r in rows]
+        except sqlite3.Error:
+            log.exception("[telemetry] read failed")
+            return []
         finally:
             db.close()
 

@@ -21,6 +21,11 @@ agents were invisible to turn telemetry for months (#3015) precisely for want of
 Rows join to ``turns`` on ``task_id`` / ``session_id``, which is what lets "what did this
 delegation cost" be answered without duplicating the token accounting.
 
+Rows also join to EACH OTHER (#4726): ``edge_uuid`` is the live edge id, ``parent_uuid``
+the edge it was opened inside, and ``run_id`` the root of the tree (the A2A task id of the
+turn it started in, or the root edge's own id). That is what lets a finished run's tree be
+rebuilt after the live registry is gone. Rows written before #4726 have them empty.
+
 Instance-scoped via the path the host resolves (ADR 0004). Best-effort: a write failure
 never breaks a dispatch. No TTL — history is the point; ``prune`` exists for hosts that
 want to cap retention.
@@ -67,6 +72,9 @@ _COLUMNS = (
     "duration_ms",
     "cost_usd",
     "origin",
+    "edge_uuid",
+    "parent_uuid",
+    "run_id",
 )
 
 
@@ -119,7 +127,15 @@ class LedgerStore:
             # park/resume shares one across legs, and a fan-out shares a parent — so
             # keying on it would silently overwrite edges, which is exactly the defect
             # the telemetry store had to migrate away from (#3001).
+            # #4726: the tree links. Idempotent ALTERs for a DB created before them.
+            for _col in ("edge_uuid", "parent_uuid", "run_id"):
+                try:
+                    db.execute(f"ALTER TABLE delegations ADD COLUMN {_col} TEXT")
+                except sqlite3.OperationalError:
+                    pass  # column already present
             db.execute("CREATE INDEX IF NOT EXISTS ix_deleg_at ON delegations(at)")
+            db.execute("CREATE INDEX IF NOT EXISTS ix_deleg_run ON delegations(run_id)")
+            db.execute("CREATE INDEX IF NOT EXISTS ix_deleg_uuid ON delegations(edge_uuid)")
             db.execute("CREATE INDEX IF NOT EXISTS ix_deleg_task ON delegations(task_id)")
             db.execute("CREATE INDEX IF NOT EXISTS ix_deleg_session ON delegations(session_id)")
             db.execute("CREATE INDEX IF NOT EXISTS ix_deleg_to ON delegations(to_kind, to_name)")
@@ -144,6 +160,9 @@ class LedgerStore:
         cost_usd: float | None = None,
         origin: str = "",
         at: str | None = None,
+        edge_uuid: str = "",
+        parent_uuid: str = "",
+        run_id: str = "",
     ) -> int | None:
         """Append one delegation edge. Returns its ``edge_id``, or None on failure.
 
@@ -167,6 +186,9 @@ class LedgerStore:
             "duration_ms": int(duration_ms or 0),
             "cost_usd": None if cost_usd is None else float(cost_usd),
             "origin": str(origin or ""),
+            "edge_uuid": str(edge_uuid or ""),
+            "parent_uuid": str(parent_uuid or ""),
+            "run_id": str(run_id or ""),
         }
         db = self._connect()
         try:
@@ -261,6 +283,42 @@ class LedgerStore:
         db = self._connect()
         try:
             return [dict(r) for r in db.execute(sql, args).fetchall()]
+        except sqlite3.Error:
+            log.exception("[ledger] read failed")
+            return []
+        finally:
+            db.close()
+
+    def by_task(self, task_id: str) -> dict | None:
+        """The newest edge recorded under ``task_id`` (a background job id), or None."""
+        if not task_id:
+            return None
+        db = self._connect()
+        try:
+            row = db.execute(
+                "SELECT * FROM delegations WHERE task_id = ? ORDER BY edge_id DESC LIMIT 1", (task_id,)
+            ).fetchone()
+            return dict(row) if row else None
+        except sqlite3.Error:
+            log.exception("[ledger] read failed")
+            return None
+        finally:
+            db.close()
+
+    def run(self, run_id: str, *, limit: int = 1000) -> list[dict]:
+        """Every edge of one run, oldest first. The tree is rebuilt from ``edge_uuid`` /
+        ``parent_uuid``; a row whose parent isn't in the list hangs off the run's root."""
+        if not run_id:
+            return []
+        limit = max(1, min(int(limit), 5000))
+        db = self._connect()
+        try:
+            return [
+                dict(r)
+                for r in db.execute(
+                    "SELECT * FROM delegations WHERE run_id = ? ORDER BY edge_id LIMIT ?", (run_id, limit)
+                ).fetchall()
+            ]
         except sqlite3.Error:
             log.exception("[ledger] read failed")
             return []

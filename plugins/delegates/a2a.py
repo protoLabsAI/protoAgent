@@ -1126,6 +1126,12 @@ class A2aAdapter(Adapter):
                 result = await _rpc_tracked(client, "SendMessage", send_params)
             task = result.get("task", result) or {}
             task_id = task.get("id")
+            if task_id:
+                # The peer's task id is its turn's id on ITS ledger and telemetry: recorded
+                # on our edge, it is the join across the two instances (#4726).
+                from graph import ledger
+
+                ledger.note_task_id(ledger.current_edge_id() or "", str(task_id))
             state = (task.get("status") or {}).get("state")
             # Answer eligibility is decided by STATE, not by "is there text" (#3362). A
             # synchronous peer answers SendMessage INLINE, and its result can be a terminal

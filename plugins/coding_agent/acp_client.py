@@ -2078,13 +2078,18 @@ class AcpClient:
             # Lazily, inside the call: `plugins` is outside the import-layering contract,
             # but importing the server package at plugin import time would still drag the
             # whole app in for a module that only ever needs it mid-dispatch.
+            from graph import ledger
             from graph.delegation_usage import acp_usage
             from server.turn_telemetry import local_task_id, record_turn
 
+            # `coder:<delegate>` origin prefix (#3000's convention) so a coder run is
+            # distinguishable from a console or /v1 turn by its key alone.
+            coder_task_id = local_task_id(f"coder:{self.name}")
+            # The delegation edge this run is dispatched inside learns the key, so its
+            # ledger row joins this telemetry row on task_id (#4726).
+            ledger.note_task_id(ledger.current_edge_id() or "", coder_task_id)
             record_turn(
-                # `coder:<delegate>` origin prefix (#3000's convention) so a coder run is
-                # distinguishable from a console or /v1 turn by its key alone.
-                task_id=local_task_id(f"coder:{self.name}"),
+                task_id=coder_task_id,
                 **acp_usage(self.name, usage),
                 # The ACP session is the run's stable thread id across turns; empty when
                 # THIS run never opened one (the failure-before-handshake case). Passed

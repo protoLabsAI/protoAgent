@@ -202,7 +202,10 @@ class BackgroundManager:
         try:
             from graph import ledger
 
-            ledger.record_delegation(
+            # In flight until the store settles it (`settle_delegation` closes it by job id).
+            # Opened FIRST so the durable row carries the live edge's id, parent and run
+            # (#4726): the job's own turn finds this edge by job id and nests under it.
+            edge_id = ledger.open_edge(
                 to_kind="subagent",
                 to_name=subagent_type,
                 what=description,
@@ -211,15 +214,18 @@ class BackgroundManager:
                 task_id=job_id,
                 origin="background",
             )
-            # In flight until the store settles it (`settle_delegation` closes it by job id).
-            ledger.open_edge(
+            link = ledger.edge_link(edge_id)
+            ledger.record_delegation(
                 to_kind="subagent",
                 to_name=subagent_type,
                 what=description,
-                session_id=origin_session or "",
+                session_id=link.get("session_id") or origin_session or "",
                 parent_task_id=batch_id or "",
                 task_id=job_id,
                 origin="background",
+                edge_uuid=link.get("edge_uuid", ""),
+                parent_uuid=link.get("parent_uuid", ""),
+                run_id=link.get("run_id", ""),
             )
         except Exception:  # noqa: BLE001 — the record must never break the spawn
             log.exception("[background] ledger record failed for %s", job_id)

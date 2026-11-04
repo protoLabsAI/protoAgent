@@ -49,7 +49,7 @@ the module's own.
 
 **Run tracing (one Langfuse trace per multi-step plugin run)** — [`trace_attributes()`](#sdk-trace-attributes), [`trace_run()`](#sdk-trace-run)
 
-**Delegation ledger (who handed what work to whom)** — [`delegation()`](#sdk-delegation), [`record_delegation()`](#sdk-record-delegation)
+**Delegation ledger (who handed what work to whom)** — [`current_run_id()`](#sdk-current-run-id), [`delegation()`](#sdk-delegation), [`record_delegation()`](#sdk-record-delegation), [`run_scope()`](#sdk-run-scope)
 
 **Subscription usage (the plugin↔quota channel, ADR 0122 D6/D7/D8)** — [`provider_usage()`](#sdk-provider-usage)
 
@@ -986,7 +986,7 @@ Returns the new `edge_id`, or None when no store is wired or the write failed.
 ### `sdk.delegation` {#sdk-delegation}
 
 ```python
-sdk.delegation(*, to_kind: str, to_name: str, to_instance: str = '', what: str = '', session_id: str = '', origin: str = '')
+sdk.delegation(*, to_kind: str, to_name: str, to_instance: str = '', what: str = '', session_id: str = '', origin: str = '', task_id: str = '')
 ```
 
 Wrap a plugin's own dispatch so it is on the record WHILE it runs, not just after.
@@ -1004,6 +1004,27 @@ funnels, such as a board loop's coder run::
 
 The yielded handle takes `cost_usd`, `task_id` and `to_instance` for what the
 caller only learns during the dispatch. A ledger failure never breaks the block.
+
+### `sdk.run_scope` {#sdk-run-scope}
+
+```python
+sdk.run_scope(*, run_id: str = '', session_id: str = '')
+```
+
+Group a plugin's work outside any turn into one run in the delegation ledger ([#4726](https://github.com/protoLabsAI/protoAgent/issues/4726)).
+
+Every edge opened inside the block records `run_id` as its run (and `session_id`
+when given), so separate dispatches that belong together (a board card's coder run and
+its review) read back as one tree instead of unrelated roots. Inside a turn, prefer
+nothing: the turn already scopes its work. Empty arguments inherit the enclosing scope.
+
+### `sdk.current_run_id` {#sdk-current-run-id}
+
+```python
+sdk.current_run_id() -> str
+```
+
+The delegation-ledger run the calling code belongs to, or "" outside any ([#4726](https://github.com/protoLabsAI/protoAgent/issues/4726)).
 
 ## Subscription usage (the plugin↔quota channel, ADR 0122 D6/D7/D8)
 
