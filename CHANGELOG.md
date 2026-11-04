@@ -15,6 +15,58 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.227.0] - 2026-11-04
+
+### Added
+- **A link can open a plugin view and hand it data (#4712).** A console URL
+  `?plugin=<id>&view=<view>&vp=<query>` opens that plugin view on load: on the desktop docks or the
+  mobile shell, in the host window or a fleet member's slug window. It appends `vp` to the view's
+  page so the plugin reads it from its own `location.search`, then cleans the address bar. A link to
+  a plugin or view the agent doesn't have leaves the normal console with a toast saying why. Plugins
+  mint these links with the new `sdk.view_url(plugin_id, view_id, params)`, which uses the hub's
+  address for a fleet member so a phone can open it. The first use is QR labels on inventory bins.
+
+### Fixed
+- **A migrated gateway keeps the SDK-default endpoint (#4597).** A pre-registry config with a null `model.api_base` (a bare `api_base:`) and a key now migrates into a `gateway` connection that still falls back to the OpenAI SDK default endpoint it ran on before, instead of an empty URL that failed every call. "Use the SDK default" is now a declarable value — set a connection's `base_url` to `sdk-default` — so it survives a console write too: editing any connection persists the migrated gateway as `sdk-default` (keeping its key), and the SDK resolves its own default at call time rather than freezing one host at save time. An operator-declared connection with a blank endpoint still fails loudly, so a connection's key never reaches the SDK default unless it opted in.
+
+- **Background `system:*` threads compact at a much lower token threshold (#4625).** Scheduled wakes run on the single durable Activity thread (`system:activity`) and resend the whole accumulated thread every turn, which sat just under the chat compaction point and never reset (p50 ~141k tokens of context per wake). A new `compaction.system_thread_max_tokens` (default 30000) is applied only on `system:*` threads, OR-ed with the existing trigger exactly like `compaction.max_tokens`, so wakes compact early and run at a small, bounded context while chat threads are unchanged. Set it to 0 to disable the separate system-thread ceiling.
+
+- **Preserve working plugins on incompatible upgrades (#4669).** Install and update check the candidate's minimum protoAgent version before replacing files or lock entries. Refusals show the required and running host versions, and post-install or update load failures no longer report a successful reload. Completed updates return load diagnostics without an HTTP failure so the console refreshes the installed version even when configuration or dependencies are missing. Bundle installs preflight every member, fall back to the declared pin when a chased release needs a newer host, and refuse incompatible pins before changing any member.
+
+- **Finished A2A turns no longer pile up in memory on the desktop app (#4720).** Every
+  turn logged `AttributeError: 'str' object has no attribute 'task_id'` from
+  `a2a_impl/registry.py`, and the finished task was never removed from the SDK's
+  active-task registry. The registry subclass patched an a2a-sdk 1.1.0 teardown bug
+  (#1713) that upstream fixed in 1.1.5, and it broke when a2a-sdk 1.3.0 changed the
+  private `_remove_task` signature. The subclass is gone; the stock registry handles
+  teardown, and a test pins the upstream guarantee.
+
+- **The desktop app now ships the dependency versions CI tests (#4720, #4722).** The
+  sidecar build resolved straight from `pyproject.toml`, so the app picked up whatever
+  was newest. It shipped a2a-sdk 1.3.0 while CI tested the locked 1.2.1, and an
+  override of a private SDK method failed on every turn. Every sidecar `pip install`
+  is now constrained to `uv.lock`.
+
+- **Image thumbnails in a user's chat bubble survive a rebuild from server state (#4700).**
+  Attached-image thumbnails persisted only in the browser's local chat store, so opening the
+  same chat in another browser profile or device — where the console rebuilds the transcript
+  from durable server state (ADR 0104) — dropped them and fell back to the bare
+  "Attached: `<name>`" text. The small bounded previews (the same data URLs, longest edge ≤ 320px
+  — never the full image) now ride the durable user message and are restored onto the rebuilt
+  bubble, capped at four thumbnails per message. Chats with no stored thumbnail (older chats, or
+  a preview that failed) keep the "Attached: `<name>`" text fallback.
+
+- **The chat composer's idle placeholder names the actual agent (#4713).** The main chat
+  composer hard-coded "Message protoAgent…" regardless of how the agent was named, so a renamed
+  agent (whose header and ⌘⇧K palette chat already read its own name) still said "Message
+  protoAgent…" in its composer. The idle placeholder now reads "Message `<agent name>`…" using the
+  same display name the header and palette chat use (`brandName` of the runtime identity), falling
+  back to "Message the agent…" when no name is known. The mid-turn "Steer the agent…" and ↑-recall
+  queued-steer hints are unchanged.
+
+### Security
+- **Scrub spawned coder environments (#4629).** Coding agents no longer inherit the host agent's instance paths, identity, or credentials by default. Preserve CLI configuration access and explicit delegate environment overrides, with an opt-in per-delegate `env_passthrough` list for required inherited variables. The agent's own ACP brain and auxiliary model retain inherited authentication and identity.
+
 ## [0.226.0] - 2026-11-02
 
 ### Fixed
