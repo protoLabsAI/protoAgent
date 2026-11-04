@@ -267,12 +267,17 @@ class TelemetryStore:
         values = [row.get(c) for c in _COLUMNS]
         placeholders = ",".join("?" for _ in _COLUMNS)
         cols = ",".join(_COLUMNS)
-        db = self._connect()
+        # Best-effort, like every telemetry write: a failed insert (a locked db, a store
+        # whose migration did not land) is logged and dropped, never raised into a turn.
         try:
-            db.execute(f"INSERT INTO turns ({cols}) VALUES ({placeholders})", values)
-            db.commit()
-        finally:
-            db.close()
+            db = self._connect()
+            try:
+                db.execute(f"INSERT INTO turns ({cols}) VALUES ({placeholders})", values)
+                db.commit()
+            finally:
+                db.close()
+        except sqlite3.Error:
+            log.warning("[telemetry] could not record turn %s", row.get("task_id"), exc_info=True)
 
     def attributed_tokens(self, account_key: str, since: str, until: str, model: str | None = None) -> int:
         """Bounded aggregate over one account/window; no turn content leaves the store."""

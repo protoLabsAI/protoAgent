@@ -387,3 +387,13 @@ def test_the_background_routes_redact_an_error_stored_before_redaction():
     out = _bg_job_out(job)
     assert _SECRET not in out["error"] and out["result"] == "r"
     assert _bg_job_out(types.SimpleNamespace(to_dict=lambda: {"id": "bg-2", "error": ""}))["error"] == ""
+
+
+def test_a_failed_telemetry_insert_is_logged_not_raised(tmp_path):
+    # A store whose `error` migration did not land: the insert names a missing column.
+    s = TelemetryStore(str(tmp_path / "t.db"))
+    db = sqlite3.connect(s.path)
+    db.execute("ALTER TABLE turns DROP COLUMN error")
+    db.commit()
+    db.close()
+    s.record(_row("x", state="failed", error="boom"))  # must not raise
