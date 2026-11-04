@@ -2361,9 +2361,7 @@ class LangGraphConfig:
                 "background_keep", cls.checkpoint_background_keep
             ),
             background_auto_resume=data.get("background", {}).get("auto_resume", cls.background_auto_resume),
-            background_retention_days=data.get("background", {}).get(
-                "retention_days", cls.background_retention_days
-            ),
+            background_retention_days=data.get("background", {}).get("retention_days", cls.background_retention_days),
             checkpoint_max_age_days=data.get("checkpoint", {}).get("max_age_days", cls.checkpoint_max_age_days),
             checkpoint_prune_interval_hours=data.get("checkpoint", {}).get(
                 "prune_interval_hours", cls.checkpoint_prune_interval_hours

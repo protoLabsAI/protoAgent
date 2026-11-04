@@ -107,3 +107,53 @@ def test_store_open_raises_when_migration_fails(tmp_path, monkeypatch, store_cls
     monkeypatch.setattr(store_cls, "_connect", _locked_connect)
     with pytest.raises(sqlite3.OperationalError, match="database is locked"):
         store_cls(str(path))
+
+
+# The scheduler and activity stores catch a schema-init failure and log it, so a failed
+# migration surfaces as that error log instead of passing silently as "already present".
+
+
+def _drop_and_lock(monkeypatch, cls, path, table, column):
+    db = sqlite3.connect(path)
+    db.execute(f"ALTER TABLE {table} DROP COLUMN {column}")
+    db.commit()
+    db.close()
+    real_connect = cls._connect
+
+    def _locked_connect(self):
+        return _FailingAlter(real_connect(self), "database is locked")
+
+    monkeypatch.setattr(cls, "_connect", _locked_connect)
+
+
+def test_scheduler_store_logs_a_failed_migration(tmp_path, monkeypatch, caplog):
+    from scheduler.local import LocalScheduler
+
+    s = LocalScheduler("mig-test", invoke_url="", db_dir=tmp_path)
+    _drop_and_lock(monkeypatch, LocalScheduler, s.path, "jobs", "fence")
+    with caplog.at_level("ERROR"):
+        LocalScheduler("mig-test", invoke_url="", db_dir=tmp_path)
+    assert "schema init failed" in caplog.text and "database is locked" in caplog.text
+
+
+def test_scheduler_store_adds_a_missing_column(tmp_path):
+    from scheduler.local import LocalScheduler
+
+    s = LocalScheduler("mig-test", invoke_url="", db_dir=tmp_path)
+    db = sqlite3.connect(s.path)
+    db.execute("ALTER TABLE jobs DROP COLUMN fence")
+    db.commit()
+    db.close()
+    LocalScheduler("mig-test", invoke_url="", db_dir=tmp_path)
+    assert "fence" in _cols(sqlite3.connect(s.path), "jobs")
+
+
+def test_activity_store_logs_a_failed_migration(tmp_path, monkeypatch, caplog):
+    from activity.store import ActivityLog
+
+    path = tmp_path / "activity.db"
+    ActivityLog(str(path))
+    _drop_and_lock(monkeypatch, ActivityLog, path, "activity", "stimulus")
+    with caplog.at_level("ERROR"):
+        ActivityLog(str(path))
+    assert "schema init failed" in caplog.text and "database is locked" in caplog.text

@@ -15,6 +15,8 @@ import sqlite3
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
+from observability.sqlite_migrate import add_missing_columns
+
 log = logging.getLogger(__name__)
 
 _SCHEMA = """
@@ -51,13 +53,9 @@ class ActivityLog:
             db = self._connect()
             db.executescript(_SCHEMA)
             # Additive migration: `stimulus` (the triggering input text, so a response can be
-            # shown as "in response to X") was added after the table shipped. ALTER is a no-op
-            # on a fresh DB (the column is already in _SCHEMA) and "duplicate column" on a
-            # migrated one — both fine.
-            try:
-                db.execute("ALTER TABLE activity ADD COLUMN stimulus TEXT")
-            except sqlite3.OperationalError:
-                pass
+            # shown as "in response to X") was added after the table shipped. Only ALTERed
+            # when missing, and a failed ALTER raises instead of passing as done.
+            add_missing_columns(db, "activity", (("stimulus", "TEXT"),))
             db.commit()
             db.close()
         except sqlite3.DatabaseError:
