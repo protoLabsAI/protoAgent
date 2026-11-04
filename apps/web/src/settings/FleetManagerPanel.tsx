@@ -27,7 +27,12 @@ import { errMsg } from "../lib/format";
 import { fleetQuery, queryKeys, settingsSchemaQuery } from "../lib/queries";
 import type { DiscoveredAgent, FleetAgent, FleetGroup, FleetStatus, SettingsGroup } from "../lib/types";
 import { useIsMobile } from "../lib/useIsMobile";
-import { fleetSettingsDisabledReason } from "../app/fleetSettingsGate";
+import {
+  FLEET_GROUPS_UNSUPPORTED_NOTE,
+  fleetHasGroupsApi,
+  fleetSettingsDisabledReason,
+  fleetWriteErrorMessage,
+} from "../app/fleetSettingsGate";
 
 /** The manual add-remote form is submittable only with a name and an http(s) URL. Exported
  * (pure) so the enable rule is unit-tested without rendering the panel. The server does the
@@ -1162,6 +1167,10 @@ export function FleetGroupsPanel({ onBack }: { onBack?: () => void }) {
   // Non-null only on a spawned member reached DIRECTLY on its own port (#1708/#1999): there is no
   // hub roster to write to, so the editor is read-only there, like Fleet settings' other writes.
   const blocked = fleetSettingsDisabledReason(agents);
+  // A hub that predates the groups API (#4731) returns the roster with no `groups` field — every
+  // write here would 404/405 (the "clicking Add group does nothing" report). Show an update note
+  // instead of the editor. Only decided once the roster has loaded; `fleet.isLoading` renders first.
+  const groupsSupported = fleetHasGroupsApi(fleet.data);
   const canDrag = !phone && !blocked; // touch has no reliable drag; the picker is its path
 
   const groupIds = useMemo(() => new Set(groups.map((g) => g.id)), [groups]);
@@ -1182,31 +1191,42 @@ export function FleetGroupsPanel({ onBack }: { onBack?: () => void }) {
     if (savedTimer.current != null) clearTimeout(savedTimer.current);
   }, []);
 
+  // ── rename state (declared here so a create's onSuccess can open the new card's name field) ──
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [renameErr, setRenameErr] = useState<string | null>(null);
+
   // ── roster writes (hub, shared by every browser) — optimistic patch then invalidate, exactly as
   // the switcher does. The 3s poll stays authoritative and rolls back a rejected write. ──
   const invalidate = useCallback(() => qc.invalidateQueries({ queryKey: queryKeys.fleet }), [qc]);
   // Runs as a mutation's onMutate: cancel the in-flight fleet fetch FIRST (a 3s poll that started
   // before the write could otherwise resolve AFTER the patch and restore the pre-write roster until
-  // the mutation settles), then patch. The request is sent only after onMutate resolves, so the
+  // the mutation settles), then patch — and keep the pre-write roster so a REJECTED write rolls its
+  // optimistic change straight back (`rollback`, in each onError) instead of lingering on screen
+  // until the onSettled refetch lands. The request is sent only after onMutate resolves, so the
   // patch cannot race it.
   const optimisticPatch = useCallback(
-    async (apply: (cur: FleetStatus) => FleetStatus) => {
+    async (apply: (cur: FleetStatus) => FleetStatus): Promise<{ prev?: FleetStatus }> => {
       await qc.cancelQueries({ queryKey: queryKeys.fleet });
+      const prev = qc.getQueryData<FleetStatus>(queryKeys.fleet);
       qc.setQueryData<FleetStatus>(queryKeys.fleet, (cur) => (cur ? apply(cur) : cur));
+      return { prev };
     },
     [qc],
   );
-  const onWrite = useMemo(
-    () => ({
-      onSuccess: markSaved,
-      onSettled: invalidate,
-      // A rejected group write (other than a 401 the global auth gate handles) otherwise reverts on
-      // the next poll with no word to the operator. Show the panel's standard error toast.
-      onError: (e: unknown) =>
-        toast({ tone: "error", title: "Couldn't save the group change", message: errMsg(e) }),
-    }),
-    [markSaved, invalidate, toast],
+  const rollback = useCallback(
+    (ctx: { prev?: FleetStatus } | undefined) => {
+      if (ctx?.prev) qc.setQueryData(queryKeys.fleet, ctx.prev); // put the optimistic change back
+    },
+    [qc],
   );
+  // A rejected group/pin write must never revert in silence (this card). Surface the hub's own copy
+  // for a rejected NAME (a blank/reserved/duplicate 4xx), else the generic copy — via the panel's
+  // toast, the same error surface the rest of Fleet settings already uses.
+  const reportWriteError = useCallback(
+    (e: unknown) => toast({ tone: "error", message: fleetWriteErrorMessage(e) }),
+    [toast],
+  );
+  const onWrite = useMemo(() => ({ onSuccess: markSaved, onSettled: invalidate }), [markSaved, invalidate]);
   // Overlapping writes are serialized at their SOURCE, per-control: a reorder blocks a second reorder
   // (shouldSubmitOrder/reorderMut.isPending), `assign` refuses a second pick while one is in flight,
   // and the pin star disables on the row whose write is pending — so a fast double-submit of the same
@@ -1214,30 +1234,44 @@ export function FleetGroupsPanel({ onBack }: { onBack?: () => void }) {
   // pin/assign concurrently (one slow write must not freeze the rest of the editor).
   const createMut = useMutation({
     mutationFn: (name: string) => api.createFleetGroup(name),
-    ...onWrite,
-    // Add the created group to the cache now (as reorder/assign patches do): mutateAsync resolves
-    // only after the onSettled refetch, and a FAILED refetch still resolves, so without this addGroup
-    // could set editingId to a group `groups` doesn't yet hold — "Saved", but no card/name field. The
-    // following invalidation replaces this entry with the server state.
+    onSettled: invalidate,
+    onError: reportWriteError, // a rejected create (e.g. a name race) is reported, not swallowed
+    // Add the created group to the cache now, then open its name field focused to overtype. A FAILED
+    // create never reaches here (reportWriteError surfaces it, and nothing was added to roll back);
+    // the following invalidation replaces this cache entry with the server state.
     onSuccess: (res) => {
       qc.setQueryData<FleetStatus>(queryKeys.fleet, (cur) =>
         cur ? { ...cur, groups: [...(cur.groups ?? []), res.group] } : cur,
       );
       markSaved();
+      setRenameErr(null);
+      setEditingId(res.group.id);
     },
   });
-  const renameMut = useMutation({ mutationFn: (v: { id: string; name: string }) => api.renameFleetGroup(v.id, v.name), ...onWrite });
+  const renameMut = useMutation({
+    mutationFn: (v: { id: string; name: string }) => api.renameFleetGroup(v.id, v.name),
+    ...onWrite,
+    onError: reportWriteError,
+  });
   const reorderMut = useMutation({
     mutationFn: (order: string[]) => api.reorderFleetGroups(order),
     onMutate: (order: string[]) => optimisticPatch((cur) => ({ ...cur, groups: orderAgentsByIds(cur.groups ?? [], order) })),
     ...onWrite,
+    onError: (e, _order, ctx) => {
+      rollback(ctx);
+      reportWriteError(e);
+    },
   });
-  const deleteMut = useMutation({ mutationFn: (id: string) => api.deleteFleetGroup(id), ...onWrite });
+  const deleteMut = useMutation({ mutationFn: (id: string) => api.deleteFleetGroup(id), ...onWrite, onError: reportWriteError });
   const assignMut = useMutation({
     mutationFn: (v: { id: string; group: string | null }) => api.setFleetAgentGroup(v.id, v.group),
     onMutate: (v: { id: string; group: string | null }) =>
       optimisticPatch((cur) => ({ ...cur, agents: cur.agents.map((a) => (a.id === v.id ? { ...a, group: v.group } : a)) })),
     ...onWrite,
+    onError: (e, _v, ctx) => {
+      rollback(ctx);
+      reportWriteError(e);
+    },
   });
   const pinMut = useMutation({
     mutationFn: (v: { id: string; pinned: boolean }) => (v.pinned ? api.pinFleetAgent(v.id) : api.unpinFleetAgent(v.id)),
@@ -1249,11 +1283,13 @@ export function FleetGroupsPanel({ onBack }: { onBack?: () => void }) {
         ),
       })),
     ...onWrite,
+    onError: (e, _v, ctx) => {
+      rollback(ctx);
+      reportWriteError(e);
+    },
   });
 
-  // ── rename ──
-  const [editingId, setEditingId] = useState<string | null>(null);
-  const [renameErr, setRenameErr] = useState<string | null>(null);
+  // ── rename ── (editingId / renameErr state is declared above the writes, so a create can open it)
   const beginRename = useCallback((g: FleetGroup) => {
     setRenameErr(null);
     setEditingId(g.id);
@@ -1278,17 +1314,11 @@ export function FleetGroupsPanel({ onBack }: { onBack?: () => void }) {
     [groups, renameMut],
   );
 
-  // ── add group: create with a unique default, then open its field focused to overtype ──
-  const addGroup = useCallback(async () => {
-    try {
-      const res = await createMut.mutateAsync(defaultGroupName(groups));
-      setRenameErr(null);
-      setEditingId(res.group.id);
-    } catch {
-      // A rejected create (e.g. a name race another browser just made) leaves the list unchanged;
-      // createMut.onError already surfaced the error toast, and the invalidation reconciles. The
-      // default name is locally unique, so this is rare. The catch only keeps the rejection handled.
-    }
+  // ── add group: create with a unique default; createMut.onSuccess opens its field focused to
+  // overtype, and createMut.onError surfaces a rejection (no silent empty-catch swallow — the bug
+  // this card fixes). On a hub without the groups API the button is never rendered (note shows). ──
+  const addGroup = useCallback(() => {
+    createMut.mutate(defaultGroupName(groups));
   }, [groups, createMut]);
 
   // ── reorder (drag handle + Move up / Move down), reusing the roster-reorder core ──
@@ -1575,6 +1605,11 @@ export function FleetGroupsPanel({ onBack }: { onBack?: () => void }) {
           // The initial fleet read failed, so there is no roster to edit. Showing the empty "No
           // groups yet" state would invite an Add group that then fails silently; say so instead.
           <Empty title="Couldn't load the fleet" description="Try again in a moment." />
+        ) : !groupsSupported ? (
+          // The hub predates the groups API (#4731) — every write here would 404/405 ("clicking Add
+          // group does nothing"). Show the update note instead of the editor (copy verbatim, the
+          // card); the switcher hides its star / Pin / Move controls on the same hub.
+          <Empty>{FLEET_GROUPS_UNSUPPORTED_NOTE}</Empty>
         ) : (
           <div className={`fleet-groups${phone ? " is-phone" : ""}`} ref={rootRef}>
             <p className="fleet-groups-legend">

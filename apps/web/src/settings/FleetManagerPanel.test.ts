@@ -4,9 +4,10 @@ import { createRoot, type Root } from "react-dom/client";
 import { ToastProvider } from "@protolabsai/ui/overlays";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { api } from "../lib/api";
+import { api, ApiError } from "../lib/api";
 import type { FleetAgent, FleetStatus } from "../lib/types";
 import fleetCss from "../fleet/fleet.css?raw";
+import fleetPanelSrc from "./FleetManagerPanel.tsx?raw";
 import {
   BOX_RUNTIME_KEYS,
   canAddRemote,
@@ -100,6 +101,11 @@ function roster(over: Partial<FleetStatus> = {}): FleetStatus {
   };
 }
 
+// A hub that predates the groups API (#4731): /api/fleet carries NO `groups` field at all.
+function rosterNoGroups(): FleetStatus {
+  return { agents: roster().agents }; // `groups` omitted entirely
+}
+
 let container: HTMLElement;
 let root: Root;
 
@@ -134,7 +140,7 @@ async function settle() {
   for (let i = 0; i < 4; i++) await flush();
 }
 
-const toastTitle = () => document.querySelector(".pl-toast__title")?.textContent || "";
+const toastTitle = () => document.querySelector(".pl-toast__msg")?.textContent || "";
 // The pin star for a named agent, whatever its current pinned/label state (its aria-label flips
 // between "Pin"/"Unpin" as the row toggles, so find it by the row the name sits in).
 const starFor = (name: string) =>
@@ -806,7 +812,7 @@ describe("FleetGroupsPanel — write behaviour (PR #4735 review)", () => {
     await flush();
     clickEl(pickerItem("Work")!);
     await settle();
-    expect(toastTitle()).toContain("Couldn't save the group change");
+    expect(toastTitle()).toContain("Couldn't save that change. Try again.");
   });
 
   it("shows the error toast when creating a group is rejected (:1202, addGroup no longer silent)", async () => {
@@ -814,7 +820,7 @@ describe("FleetGroupsPanel — write behaviour (PR #4735 review)", () => {
     await mount();
     clickEl(byText("Add group")!);
     await settle();
-    expect(toastTitle()).toContain("Couldn't save the group change");
+    expect(toastTitle()).toContain("Couldn't save that change. Try again.");
   });
 
   it("a press that begins on the pin star does not arm a row drag (:1362)", async () => {
@@ -836,6 +842,72 @@ describe("FleetGroupsPanel — write behaviour (PR #4735 review)", () => {
     expect(container.textContent).toContain("Couldn't load the fleet");
     expect(container.textContent).not.toContain("No groups yet"); // the empty editor is NOT shown
     expect(byText("Add group")).toBeFalsy(); // and there is nothing to add into
+  });
+});
+
+// ── This card: a hub without the groups API shows an update note; a rejected write rolls back and
+// is reported, never swallowed by a silent catch. ──
+describe("FleetGroupsPanel — hub without the groups API (#4731)", () => {
+  const UPDATE_NOTE =
+    "Groups need a newer protoAgent on this machine. Update protoAgent, then come back here to set up groups.";
+
+  it("shows the update note instead of the editor, with no Add group and no group cards", async () => {
+    await mount(rosterNoGroups());
+    expect(container.textContent).toContain(UPDATE_NOTE);
+    expect(document.querySelector(".fleet-groups")).toBeFalsy(); // the editor body is not rendered
+    expect(byText("Add group")).toBeFalsy();
+    expect(document.querySelector('[aria-label="Work group"]')).toBeFalsy();
+  });
+});
+
+describe("FleetGroupsPanel — a rejected write rolls back and shows the error copy (this card)", () => {
+  const GENERIC = "Couldn't save that change. Try again.";
+
+  it("rolls a rejected assign back to its card and shows the generic copy", async () => {
+    (api.setFleetAgentGroup as ReturnType<typeof vi.fn>).mockRejectedValue(new Error("405 method not allowed"));
+    await mount();
+    openPicker("Group for orion"); // orion (n2) is ungrouped
+    await flush();
+    clickEl(pickerItem("Work")!);
+    await settle();
+    expect(toastTitle()).toContain(GENERIC);
+    // Rolled back: orion is NOT in Work — it is back in No group.
+    expect(document.querySelector('[aria-label="Work group"]')!.textContent).not.toContain("orion");
+    expect(document.querySelector('[aria-label="No group"]')!.textContent).toContain("orion");
+  });
+
+  it("rolls a rejected pin back to unpinned and shows the generic copy", async () => {
+    (api.pinFleetAgent as ReturnType<typeof vi.fn>).mockRejectedValue(new Error("405 method not allowed"));
+    await mount();
+    clickEl(starFor("nova")!); // nova starts unpinned
+    await settle();
+    expect(toastTitle()).toContain(GENERIC);
+    // Rolled back: nova is unpinned again (the star offers Pin, aria-pressed false).
+    const star = starFor("nova")!;
+    expect(star.getAttribute("aria-label")).toBe("Pin nova");
+    expect(star.getAttribute("aria-pressed")).toBe("false");
+  });
+
+  it("surfaces the hub's own message when a rename is rejected (a 409 duplicate from another browser)", async () => {
+    (api.renameFleetGroup as ReturnType<typeof vi.fn>).mockRejectedValue(
+      new ApiError(409, 'There\'s already a group called "QA".'),
+    );
+    await mount();
+    clickEl([...document.querySelectorAll<HTMLElement>(".fleet-gname-btn")].find((b) => b.textContent === "Work")!);
+    await flush();
+    const input = document.querySelector('input[aria-label="Group name"]') as HTMLInputElement;
+    setInput(input, "QA"); // clears the local rules; the hub still rejects it
+    keydown(input, "Enter");
+    await settle();
+    expect(api.renameFleetGroup).toHaveBeenCalledWith("g-work", "QA");
+    expect(toastTitle()).toContain('There\'s already a group called "QA".');
+    // The rename was never applied optimistically — the card keeps its old name.
+    expect(document.querySelector('[aria-label="Work group"]')).toBeTruthy();
+  });
+
+  it("never swallows a failed fleet write in an empty catch block (addGroup's `catch {}` is gone)", () => {
+    // The bug this card fixes was a silent `catch {}`. Guard the source so one can't creep back.
+    expect(fleetPanelSrc).not.toMatch(/catch\s*(\([^)]*\))?\s*\{\s*\}/);
   });
 });
 

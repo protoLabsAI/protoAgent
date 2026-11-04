@@ -3,17 +3,17 @@ import { ArrowLeft, Check, ChevronDown, ChevronRight, Folder, Plus, Settings, St
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState, type ReactNode } from "react";
 
 import { Menu, MenuFilter, MenuGroup, MenuItem, MenuLabel, MenuSeparator, type MenuHandle } from "@protolabsai/ui/menu";
-import { Drawer, Tooltip } from "@protolabsai/ui/overlays";
+import { Drawer, Tooltip, useToast } from "@protolabsai/ui/overlays";
 import { Input } from "@protolabsai/ui/forms";
 import { Badge, Button } from "@protolabsai/ui/primitives";
 import { StatusDot } from "@protolabsai/ui/data";
 
-import { agentHref, api, ApiError, currentSlug } from "../lib/api";
+import { agentHref, api, currentSlug } from "../lib/api";
 import { queryKeys } from "../lib/queries";
 import { readKey, writeKey } from "../lib/storage";
 import type { FleetAgent, FleetStatus } from "../lib/types";
 import { useIsMobile } from "../lib/useIsMobile";
-import { fleetSettingsDisabledReason } from "./fleetSettingsGate";
+import { fleetHasGroupsApi, fleetSettingsDisabledReason, fleetWriteErrorMessage } from "./fleetSettingsGate";
 
 // The URL slug is the agent's STABLE id, never its (editable) display name — renaming an agent
 // must not change its URL/bookmarks. `host` is the reserved slug for this instance. Group/pin
@@ -63,6 +63,7 @@ export function FleetSwitcher({
   onManageFleet?: () => void;
 }) {
   const qc = useQueryClient();
+  const toast = useToast();
   // Poll so the switcher reflects the fleet live (a newly-added agent, a pin from another browser).
   const fleet = useQuery({ queryKey: queryKeys.fleet, queryFn: () => api.fleet(), retry: false, refetchInterval: 3_000 });
   const isMobile = useIsMobile();
@@ -74,7 +75,13 @@ export function FleetSwitcher({
   // Non-null only on a spawned member reached DIRECTLY on its own port (#1708/#1999): there is no
   // hub roster to write to, so the row actions (pin / move) are hidden there, like Fleet settings.
   const fleetSettingsBlocked = fleetSettingsDisabledReason(agents);
-  const canWrite = !fleetSettingsBlocked;
+  // A hub that predates the groups/pins API (#4731) returns the flat roster with no `groups` field:
+  // its pin/group routes 404/405, so the write controls (star, Pin, Move) are hidden there too and
+  // the plain Ungrouped + Remote list shows (groups is []). The filter and recents are per browser,
+  // so they stay. Once the roster has loaded (fleet.data present) and carried no `groups`, it's a
+  // legacy hub; while still loading we don't yet know, so don't flash the controls off.
+  const groupsSupported = !fleet.data || fleetHasGroupsApi(fleet.data);
+  const canWrite = !fleetSettingsBlocked && groupsSupported;
 
   const [filter, setFilter] = useState("");
   const [collapsed, setCollapsed] = useState<string[]>(() => readIds(COLLAPSED_KEY));
@@ -108,31 +115,54 @@ export function FleetSwitcher({
     [qc],
   );
   const invalidateFleet = useCallback(() => qc.invalidateQueries({ queryKey: queryKeys.fleet }), [qc]);
+  // Optimistically patch one agent and keep the pre-write roster so a REJECTED pin/move can roll the
+  // row back at once — the 3s poll would also restore it, but not before the operator sees the wrong
+  // state stick (the silent-failure this card fixes). Cancels the in-flight poll first so a fetch
+  // that started before the write can't resolve over the patch.
+  const optimisticAgent = useCallback(
+    async (id: string, patch: Partial<FleetAgent>): Promise<{ prev?: FleetStatus }> => {
+      await qc.cancelQueries({ queryKey: queryKeys.fleet });
+      const prev = qc.getQueryData<FleetStatus>(queryKeys.fleet);
+      patchAgent(id, patch);
+      return { prev };
+    },
+    [qc, patchAgent],
+  );
+  // A rejected pin/move: put the roster back AND tell the operator — never a silent revert on the
+  // next poll. A name the hub rejected carries its own copy; anything else gets the generic copy.
+  const onWriteError = useCallback(
+    (e: unknown, ctx: { prev?: FleetStatus } | undefined) => {
+      if (ctx?.prev) qc.setQueryData(queryKeys.fleet, ctx.prev);
+      toast({ tone: "error", message: fleetWriteErrorMessage(e) });
+    },
+    [qc, toast],
+  );
   const pinMut = useMutation({
     mutationFn: ({ id, pinned }: { id: string; pinned: boolean }) => (pinned ? api.pinFleetAgent(id) : api.unpinFleetAgent(id)),
+    onMutate: ({ id, pinned }) => optimisticAgent(id, { pinned, pinned_at: pinned ? new Date().toISOString() : undefined }),
+    onError: (e, _v, ctx) => onWriteError(e, ctx),
     onSettled: invalidateFleet,
   });
   const moveMut = useMutation({
     mutationFn: ({ id, group }: { id: string; group: string | null }) => api.setFleetAgentGroup(id, group),
+    onMutate: ({ id, group }) => optimisticAgent(id, { group }),
+    onError: (e, _v, ctx) => onWriteError(e, ctx),
     onSettled: invalidateFleet,
   });
   const createGroupMut = useMutation({ mutationFn: (name: string) => api.createFleetGroup(name), onSettled: invalidateFleet });
 
   const togglePin = useCallback(
     (a: FleetAgent) => {
-      const pinned = !a.pinned;
-      patchAgent(a.id, { pinned, pinned_at: pinned ? new Date().toISOString() : undefined });
-      pinMut.mutate({ id: a.id, pinned });
+      pinMut.mutate({ id: a.id, pinned: !a.pinned }); // the optimistic patch + rollback live in the mutation
     },
-    [patchAgent, pinMut],
+    [pinMut],
   );
   const moveToGroup = useCallback(
     (a: FleetAgent, group: string | null) => {
-      patchAgent(a.id, { group });
       if (group) setCollapsedState(collapsed.filter((k) => k !== group)); // show where it lands
-      moveMut.mutate({ id: a.id, group });
+      moveMut.mutate({ id: a.id, group }); // the optimistic patch + rollback live in the mutation
     },
-    [patchAgent, collapsed, setCollapsedState, moveMut],
+    [collapsed, setCollapsedState, moveMut],
   );
   // 1–40 chars, trimmed, unique ignoring case; "Remote" is reserved. Copy verbatim from the spec.
   const validateGroupName = useCallback(
@@ -151,16 +181,16 @@ export function FleetSwitcher({
       if (err) return err;
       // The server owns the authoritative name check, so a name that clears the local rules can
       // still be rejected here — e.g. a duplicate created from another browser that the 3s poll
-      // hasn't picked up yet (a 400). Return the server's plain copy (`ApiError.message` is its
-      // `detail`) instead of rejecting into the caller: a bare reject would skip the error UI,
-      // leave the phone sheet stuck, and log an unhandled rejection. Every caller renders the
-      // returned string. On success the mutation's invalidation reconciles the roster.
+      // hasn't picked up yet (a 400). Return the hub's plain copy for a rejected NAME, else the
+      // generic copy (`fleetWriteErrorMessage`) — instead of rejecting into the caller: a bare
+      // reject would skip the error UI, leave the phone sheet stuck, and log an unhandled rejection.
+      // Every caller renders the returned string. On success the mutation's invalidation reconciles.
       try {
         const res = await createGroupMut.mutateAsync(raw.trim());
         moveToGroup(a, res.group.id);
         return null;
       } catch (e) {
-        return e instanceof ApiError && e.message ? e.message : "Couldn't create the group. Try again.";
+        return fleetWriteErrorMessage(e);
       }
     },
     [validateGroupName, createGroupMut, moveToGroup],

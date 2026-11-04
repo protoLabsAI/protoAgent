@@ -27,7 +27,8 @@
 //       no signal it was registered anywhere, and it is a full independent instance
 //       that may legitimately run its OWN fleet.
 
-import type { FleetAgent } from "../lib/types";
+import { ApiError } from "../lib/api";
+import type { FleetAgent, FleetStatus } from "../lib/types";
 
 /** Tooltip copy for the disabled item (also the e2e/unit hook). */
 export const FLEET_SETTINGS_MEMBER_TOOLTIP = "Fleet settings are managed from the host instance";
@@ -41,4 +42,40 @@ export function fleetSettingsDisabledReason(agents: FleetAgent[]): string | null
   const self = agents.find((a) => a.host);
   if (self?.member) return FLEET_SETTINGS_MEMBER_TOOLTIP; // spawned member, reached directly
   return null; // host, sister-agent slug window, standalone, or a remote's own console
+}
+
+// ── Switcher-groups API capability + write-error copy (docs/design/fleet-switcher-groups.md) ──
+// The groups/pins write API (#4731 — create/rename/reorder/delete a group, set an agent's group,
+// pin/unpin) is OPTIONAL by design: every switcher field on /api/fleet is optional, so a hub that
+// predates it returns the flat roster with NO `groups` key at all (spec, Data). On such a hub the
+// switcher hides its write controls (star, Pin, Move to group) and renders the plain Ungrouped +
+// Remote list, and the Fleet settings group editor shows an update note instead of the editor —
+// because POST/PUT/PATCH on the groups/pin routes 404/405 there and would otherwise fail silently
+// (this card). A groups-aware hub with no groups yet sends `groups: []`, which reads as supported.
+
+/** True when this hub serves the switcher-groups write API — /api/fleet carried a `groups` array
+ *  (even empty). A hub that predates the API omits the field entirely, so `groups` is `undefined`. */
+export function fleetHasGroupsApi(fleet: Pick<FleetStatus, "groups"> | undefined): boolean {
+  return Array.isArray(fleet?.groups);
+}
+
+/** The note shown in Fleet settings ▸ Groups when the hub predates the groups API (verbatim copy). */
+export const FLEET_GROUPS_UNSUPPORTED_NOTE =
+  "Groups need a newer protoAgent on this machine. Update protoAgent, then come back here to set up groups.";
+
+/** The generic inline-error / toast copy for a rejected group or pin write with no usable hub
+ *  message (verbatim copy). */
+export const FLEET_WRITE_ERROR = "Couldn't save that change. Try again.";
+
+/** What to tell the operator when a group or pin write is rejected — a group/pin write must never
+ *  roll its optimistic change back in silence. A NAME the hub rejected comes back as a 4xx whose
+ *  message is already the spec's copy (blank / reserved / duplicate — the server owns the
+ *  authoritative check and 400/409/422s with that plain copy); surface it verbatim. Anything else —
+ *  a legacy hub's 404/405, a 5xx, a dropped connection — gets the generic copy, never a raw
+ *  "Method Not Allowed". Shared by the switcher and the settings editor so both read identically. */
+export function fleetWriteErrorMessage(e: unknown): string {
+  if (e instanceof ApiError && e.message && (e.status === 400 || e.status === 409 || e.status === 422)) {
+    return e.message;
+  }
+  return FLEET_WRITE_ERROR;
 }

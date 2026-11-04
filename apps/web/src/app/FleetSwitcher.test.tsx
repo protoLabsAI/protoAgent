@@ -4,12 +4,14 @@
 // UI suites use (FleetRoom.test.tsx). The DS Menu and Drawer portal to <body>, so open content is
 // queried from `document`, not the mount container.
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { ToastProvider } from "@protolabsai/ui/overlays";
 import { act, createElement as h } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { FleetAgent, FleetStatus } from "../lib/types";
 import { FleetSwitcher } from "./FleetSwitcher";
+import switcherSrc from "./FleetSwitcher.tsx?raw";
 import themeCss from "./theme.css?raw";
 
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -106,6 +108,13 @@ function roster(): FleetStatus {
   };
 }
 
+// A hub that predates the groups API (#4731): /api/fleet carries NO `groups` field at all (all the
+// switcher fields are optional by design). The leftover `group` ids on agents point at groups the
+// roster no longer lists, so every one of them falls back to Ungrouped — the plain list.
+function rosterNoGroups(): FleetStatus {
+  return { agents: roster().agents }; // `groups` omitted entirely
+}
+
 let container: HTMLElement;
 let root: Root;
 
@@ -118,10 +127,19 @@ async function flush() {
 async function mount() {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   act(() => {
-    root.render(h(QueryClientProvider, { client }, h(FleetSwitcher, { fallbackName: "protoagent" })));
+    // The switcher toasts a rejected pin/move (it no longer fails silently), so it renders inside a
+    // ToastProvider — as it does in the app (AppToasts wraps <App/>). useToast() throws without one.
+    root.render(
+      h(QueryClientProvider, { client }, h(ToastProvider, null, h(FleetSwitcher, { fallbackName: "protoagent" }))),
+    );
   });
   await flush();
 }
+// A few flushes: a rejected write settles through onError → rollback → onSettled invalidate → refetch.
+async function settle() {
+  for (let i = 0; i < 4; i++) await flush();
+}
+const toastText = () => document.querySelector(".pl-toast__msg")?.textContent || "";
 
 function pointer(type: string, el: Element) {
   const Ctor = (globalThis as unknown as { PointerEvent?: typeof MouseEvent }).PointerEvent ?? MouseEvent;
@@ -417,6 +435,75 @@ describe("FleetSwitcher — desktop dropdown", () => {
     await flush();
     const move = itemByText(rowMenu(), "Move to group…")!;
     expect(move.hasAttribute("data-disabled")).toBe(true);
+  });
+});
+
+// ── This card: a hub that predates the groups API, and writes that no longer fail silently. ──
+describe("FleetSwitcher — hub without the groups API (#4731)", () => {
+  it("hides the star and the Pin/Move items, shows the plain list, and keeps the filter + recents", async () => {
+    localStorage.setItem("protoagent.fleet.switcherRecent", JSON.stringify(["n1"])); // nova
+    (api.fleet as ReturnType<typeof vi.fn>).mockResolvedValue(rosterNoGroups());
+    await mount();
+    await openMenu();
+    // No write controls: the trailing pin star and the right-click Pin/Move menu are gone.
+    expect(document.querySelector('[aria-label^="Pin "]')).toBeFalsy();
+    expect(document.querySelector('[aria-label^="Unpin "]')).toBeFalsy();
+    const nameSpan = [...document.querySelectorAll(".fleet-switcher-name")].find((el) =>
+      (el.textContent || "").includes("nova"),
+    )!;
+    act(() => nameSpan.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true })));
+    await flush();
+    expect(rowMenu()).toBeFalsy(); // the row-actions menu isn't even rendered on a legacy hub
+    // The plain list: every agent falls into Ungrouped + Remote — no operator-group sections.
+    const t = mainMenu()!.textContent || "";
+    expect(t).not.toContain("Demos");
+    expect(t).not.toContain("Personal");
+    expect(t).toContain("Remote");
+    expect(t).toContain("nova");
+    expect(t).toContain("vega"); // was group:g-demos, now Ungrouped (the group no longer exists)
+    // Per-browser affordances stay: the filter (≥ 10 agents) and the Recent section.
+    expect(document.querySelector('input[placeholder="Find an agent"]')).toBeTruthy();
+    expect(t).toContain("Recent");
+  });
+});
+
+describe("FleetSwitcher — a rejected write never fails silently (this card)", () => {
+  it("rolls back the optimistic pin and shows the error copy when a pin is rejected", async () => {
+    (api.pinFleetAgent as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error("405 method not allowed"));
+    await mount();
+    await openMenu();
+    clickOnly(document.querySelector('[aria-label="Pin nova to top"]')!);
+    await settle();
+    expect(api.pinFleetAgent).toHaveBeenCalledWith("n1");
+    // Rolled back: nova is unpinned again (its star still offers "Pin", not "Unpin").
+    expect(document.querySelector('[aria-label="Pin nova to top"]')).toBeTruthy();
+    expect(document.querySelector('[aria-label="Unpin nova"]')).toBeFalsy();
+    // …and the operator was told, with the card's generic copy (a 405 carries no useful message).
+    expect(toastText()).toContain("Couldn't save that change. Try again.");
+  });
+
+  it("surfaces the hub's own message when a move is rejected by name (a 409)", async () => {
+    (api.setFleetAgentGroup as ReturnType<typeof vi.fn>).mockRejectedValueOnce(
+      new ApiError(409, 'There\'s already a group called "Demos".'),
+    );
+    await mount();
+    await openMenu();
+    const nameSpan = [...document.querySelectorAll(".fleet-switcher-name")].find((el) =>
+      (el.textContent || "").includes("nova"),
+    )!;
+    act(() => nameSpan.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true })));
+    await flush();
+    clickEl(itemByText(rowMenu(), "Move to group…")!);
+    await flush();
+    clickEl(itemByText(rowMenu(), "Demos")!);
+    await settle();
+    expect(api.setFleetAgentGroup).toHaveBeenCalledWith("n1", "g-demos");
+    expect(toastText()).toContain('There\'s already a group called "Demos".');
+  });
+
+  it("never swallows a failed fleet write in an empty catch block", () => {
+    // The bug this card fixes was a silent `catch {}`. Guard the source so one can't creep back.
+    expect(switcherSrc).not.toMatch(/catch\s*(\([^)]*\))?\s*\{\s*\}/);
   });
 });
 
