@@ -757,3 +757,73 @@ def test_the_thinking_off_switch_reaches_the_gateway_request_body(monkeypatch):
     plain = llm._get_request_payload([HumanMessage("hi")])
     assert plain["extra_body"]["thinking"] == {"type": "enabled"}
     assert "enable_thinking" not in (plain["extra_body"].get("chat_template_kwargs") or {})
+
+
+# --- the verdict lands on the ledger row (#4726) -----------------------------------------
+# Before, the guard's outcome existed only as the text prefix above and log lines: the
+# ledger said `ok` either way, and nothing could count how often a lane came back empty.
+
+
+@pytest.fixture
+def ledger_db(tmp_path, monkeypatch):
+    import runtime.state as rs
+    from graph import ledger
+    from observability.ledger_store import LedgerStore
+
+    store = LedgerStore(str(tmp_path / "ledger.db"))
+    monkeypatch.setattr(rs.STATE, "ledger_store", store, raising=False)
+    monkeypatch.setattr(rs.STATE, "graph_config", None, raising=False)
+    monkeypatch.setattr(ledger, "_LIVE", {})
+    monkeypatch.setattr(ledger, "_LIVE_BY_TASK", {})
+    return store
+
+
+def _verdict(store) -> tuple[str, str, int]:
+    row = store.recent()[0]
+    return row["outcome"], row["completion"], row["nudges"]
+
+
+async def test_a_lane_the_nudges_did_not_rescue_is_recorded_incomplete(probe, ledger_db):
+    ping, _ = probe([AIMessage(content=NARRATION)])  # never recovers
+    await _run(ping)
+    # The dispatch itself was fine; the work it returned was not the deliverable.
+    assert _verdict(ledger_db) == ("ok", "incomplete", 2)
+
+
+async def test_a_lane_rescued_by_a_nudge_is_recorded_complete_with_its_nudge(probe, ledger_db):
+    ping, _ = probe([_call(0), AIMessage(content=NARRATION), AIMessage(content=DELIVERABLE)])
+    await _run(ping)
+    assert _verdict(ledger_db) == ("ok", "complete", 1)
+
+
+async def test_a_lane_that_delivered_first_time_is_complete_with_no_nudges(probe, ledger_db):
+    ping, _ = probe([_call(0), AIMessage(content=DELIVERABLE)])
+    await _run(ping)
+    assert _verdict(ledger_db) == ("ok", "complete", 0)
+
+
+async def test_a_lane_with_no_contract_has_no_verdict(probe, ledger_db):
+    ping, _ = probe([AIMessage(content=NARRATION)], marker="")
+    await _run(ping)
+    assert _verdict(ledger_db) == ("ok", "", 0)
+
+
+async def test_a_lane_that_hard_stopped_is_recorded_partial(probe, ledger_db):
+    ping, _ = probe([_call(0)], max_turns=1)  # only ever calls tools: runs out of turns
+    out = await _run(ping)
+    assert "hard-stopped" in out.splitlines()[0]
+    assert _verdict(ledger_db)[1] == "partial"
+
+
+async def test_the_completion_record_is_countable_per_subagent(probe, ledger_db):
+    ping, _ = probe([AIMessage(content=NARRATION)])
+    await _run(ping)
+    ping, _ = probe([_call(0), AIMessage(content=NARRATION), AIMessage(content=DELIVERABLE)])
+    await _run(ping)
+    ping, _ = probe([_call(0), AIMessage(content=DELIVERABLE)])
+    await _run(ping)
+
+    (stats,) = ledger_db.completion_stats()
+    assert stats["to_name"] == PROBE
+    assert (stats["checked"], stats["complete"], stats["rescued"], stats["incomplete"]) == (3, 2, 1, 1)
+    assert stats["nudges"] == 3

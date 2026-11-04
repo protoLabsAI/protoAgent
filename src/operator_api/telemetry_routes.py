@@ -409,6 +409,16 @@ def register_telemetry_routes(app) -> None:
             return {"enabled": False, "edges": []}
         return {"enabled": True, "edges": store.edges(since_days=days)}
 
+    @app.get("/api/ledger/completion")
+    def _api_ledger_completion(days: int | None = None, to_name: str = ""):
+        """The completion check's record per subagent type (#4726): checked runs, how many
+        delivered, how many needed a nudge first (``rescued``), and how many ended
+        ``incomplete`` or ``partial``. Rows recorded before #4726 carry no verdict."""
+        store = getattr(STATE, "ledger_store", None)
+        if store is None:
+            return {"enabled": False, "subagents": []}
+        return {"enabled": True, "subagents": store.completion_stats(since_days=days, to_name=to_name.strip())}
+
     @app.get("/api/ledger/live")
     async def _api_ledger_live():
         """Every delegation in flight right now, oldest first, each with its latest progress

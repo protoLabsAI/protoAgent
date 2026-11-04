@@ -1290,18 +1290,29 @@ async def _run_subagent_inner(
                 body = msg.content if isinstance(msg.content, str) else msg.text
                 break
 
+        def _completion(verdict: str) -> None:
+            # The guard's outcome as fields on the delegation's ledger row (#4726), not only
+            # as the text prefix below: countable, and measurable after the fact.
+            from graph import ledger
+            from graph.middleware.completion_guard import nudges_sent
+
+            ledger.note_completion(ledger.current_edge_id() or "", verdict, nudges=nudges_sent(messages))
+
         if body is None:
             if hard_stop:
+                _completion("partial")
                 return (
                     f"[{subagent_type} hard-stopped at max_turns: {description}] -- no salvageable "
                     "output; treat this lane as a Gap, not a verdict."
                 )
             if delivered is not None:
                 # No output at all is the emptiest way to end without the deliverable.
+                _completion("incomplete")
                 return (
                     f"[{subagent_type} ended without its deliverable: {description}] -- no output "
                     "produced; treat this lane as a Gap, not a verdict."
                 )
+            _completion("")
             return f"[{subagent_type} completed: {description}] -- no output produced."
 
         # Judged on the whole answer: a fan-out's `truncate` may cut the deliverable off.
@@ -1313,6 +1324,7 @@ async def _run_subagent_inner(
             body = body[:truncate] + f"\n\n…[truncated to {truncate} chars]"
 
         if hard_stop:
+            _completion("partial")
             return (
                 f"[{subagent_type} hard-stopped at max_turns: {description} — PARTIAL output; "
                 f"unverified remainder is a Gap]\n\n{body}"
@@ -1321,10 +1333,12 @@ async def _run_subagent_inner(
             # The guard's nudges did not rescue it. Say so: "completed" over a run
             # that never produced its deliverable is how a dead lane passed for a
             # clean one (#3552).
+            _completion("incomplete")
             return (
                 f"[{subagent_type} ended without its deliverable: {description} — INCOMPLETE output; "
                 f"treat this lane as a Gap, not a verdict]\n\n{body}"
             )
+        _completion("complete" if delivered is not None else "")
         return f"[{subagent_type} completed: {description}]\n\n{body}"
     except Exception as e:
         # Surface a hard subagent failure as a tool ERROR (X) rather than a green

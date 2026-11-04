@@ -260,6 +260,8 @@ def close_edge(
                 "id": edge_id,
                 "parent_id": edge.get("parent_id", ""),
                 "run_id": edge.get("run_id", ""),
+                "completion": edge.get("completion", ""),
+                "nudges": int(edge.get("nudges") or 0),
                 "from": edge.get("from", ""),
                 "to_kind": edge.get("to_kind", ""),
                 "to_name": edge.get("to_name", ""),
@@ -300,6 +302,25 @@ def edge_link(edge_id: str) -> dict:
         "run_id": str(edge.get("run_id") or ""),
         "session_id": str(edge.get("session_id") or ""),
     }
+
+
+#: A subagent's completion-check verdict (#4726). ``complete``: its deliverable arrived
+#: (``nudges`` > 0 means the guard had to ask for it). ``incomplete``: the nudges didn't
+#: rescue it. ``partial``: it hard-stopped at max_turns. "" when no contract was checked.
+COMPLETIONS = ("complete", "incomplete", "partial")
+
+
+def note_completion(edge_id: str, verdict: str, *, nudges: int = 0) -> None:
+    """Record a subagent's completion-check verdict and nudge count on its open edge.
+
+    The edge's ``outcome`` stays what the dispatch did (``ok`` / ``failed`` /
+    ``cancelled``); this says whether the work it returned was the deliverable. A lane that
+    ran fine and came back without its findings is ``ok`` and ``incomplete``."""
+    edge = _LIVE.get(edge_id or "")
+    if edge is None:
+        return
+    edge["completion"] = verdict if verdict in COMPLETIONS else ""
+    edge["nudges"] = max(0, int(nudges or 0))
 
 
 def note_task_id(edge_id: str, task_id: str) -> None:
@@ -360,6 +381,8 @@ def record_delegation(
     edge_uuid: str = "",
     parent_uuid: str = "",
     run_id: str = "",
+    completion: str = "",
+    nudges: int = 0,
 ) -> int | None:
     """Record one delegation edge. Never raises.
 
@@ -388,6 +411,8 @@ def record_delegation(
             edge_uuid=edge_uuid,
             parent_uuid=parent_uuid,
             run_id=run_id,
+            completion=completion,
+            nudges=nudges,
         )
     except Exception:  # noqa: BLE001 — the record must never break the dispatch
         log.exception("[ledger] record_delegation failed")
@@ -499,9 +524,11 @@ def dispatch(
         _CURRENT.reset(token)
         elapsed_ms = int((time.monotonic() - started) * 1000)
         # A producer may have learned the delegate's task id mid-dispatch (note_task_id).
-        late_task = str((_LIVE.get(edge.id) or {}).get("task_id") or "")
+        live = _LIVE.get(edge.id) or {}
+        late_task = str(live.get("task_id") or "")
         if late_task and not edge.task_id:
             edge.task_id = late_task
+        completion, nudges = str(live.get("completion") or ""), int(live.get("nudges") or 0)
         close_edge(edge.id, outcome=outcome, duration_ms=elapsed_ms, error=error, cost_usd=edge.cost_usd)
         record_delegation(
             to_kind=to_kind,
@@ -519,4 +546,6 @@ def dispatch(
             edge_uuid=link.get("edge_uuid", ""),
             parent_uuid=link.get("parent_uuid", ""),
             run_id=link.get("run_id", ""),
+            completion=completion,
+            nudges=nudges,
         )
