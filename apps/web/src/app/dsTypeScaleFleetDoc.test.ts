@@ -27,7 +27,9 @@ const EXPECTED: Record<string, readonly string[]> = {
   "docviewer.css": ["var(--pl-font-size-xs)", "var(--pl-font-size-base)"],
   // .fleet-meta, .fleet-autostart-toggle (12→xs); .fleet-section-label (11→2xs);
   // .fleet-purge, .fleet-add-remote-title (13→sm); .fleet-add-remote .field > span,
-  // .fleet-pair-form .field > span (12→xs); .fleet-pair-code (18→xl)
+  // .fleet-pair-form .field > span (12→xs); .fleet-pair-code (18→xl). Then the group editor
+  // (docs/design/fleet-switcher-groups.md), all xs: .fleet-saved, .fleet-groups-legend,
+  // .fleet-grename-err, .fleet-gnote, .fleet-zone-empty, .fleet-remote-where.
   "fleet/fleet.css": [
     "var(--pl-font-size-xs)",
     "var(--pl-font-size-xs)",
@@ -37,6 +39,12 @@ const EXPECTED: Record<string, readonly string[]> = {
     "var(--pl-font-size-xs)",
     "var(--pl-font-size-xs)",
     "var(--pl-font-size-xl)",
+    "var(--pl-font-size-xs)",
+    "var(--pl-font-size-xs)",
+    "var(--pl-font-size-xs)",
+    "var(--pl-font-size-xs)",
+    "var(--pl-font-size-xs)",
+    "var(--pl-font-size-xs)",
   ],
 };
 

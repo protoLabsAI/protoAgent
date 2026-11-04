@@ -240,3 +240,214 @@
 .fleet-insecure p {
   margin: 0 0 var(--pl-space-2);
 }
+
+/* ── Fleet settings group editor (docs/design/fleet-switcher-groups.md) ──────────────────────
+   A card per operator group in switcher order, then a "No group" card and a read-only "Remote"
+   card. Live save: the small inline "Saved" next to the title, no Save button. */
+.fleet-groups-title {
+  display: inline-flex;
+  align-items: baseline;
+  gap: var(--pl-space-2);
+}
+.fleet-saved {
+  font-size: var(--pl-font-size-xs);
+  font-weight: 400;
+  color: var(--pl-color-fg-muted);
+}
+.fleet-groups-legend {
+  margin: 0 0 var(--pl-space-3);
+  font-size: var(--pl-font-size-xs);
+  color: var(--pl-color-fg-muted);
+}
+
+/* A group card: header (handle, name, count, Move up/down, Delete) + agent rows (a drop zone). */
+.fleet-gcard {
+  padding: 0;
+  margin-bottom: var(--pl-space-3);
+}
+.fleet-gcard.dragging {
+  opacity: 0.5;
+}
+/* The slot a dragged group card would land before. */
+.fleet-gcard.drop-before {
+  box-shadow: 0 calc(-1 * var(--pl-space-0_5)) 0 var(--pl-color-accent);
+}
+.fleet-ghead {
+  display: flex;
+  align-items: center;
+  gap: var(--pl-space-2);
+  padding: var(--pl-space-2) var(--pl-space-3);
+  border-bottom: 1px solid var(--pl-color-border);
+}
+.fleet-ghandle {
+  display: inline-flex;
+  align-items: center;
+  color: var(--pl-color-fg-subtle);
+  cursor: grab;
+}
+.fleet-ghandle:active {
+  cursor: grabbing;
+}
+.fleet-gname {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+/* The name is a button that opens inline rename on click (the rename chrome is the DS Input). */
+.fleet-gname-btn {
+  max-width: 100%;
+  padding: var(--pl-space-1);
+  margin: calc(-1 * var(--pl-space-1));
+  border: 0;
+  background: none;
+  border-radius: var(--pl-radius);
+  color: var(--pl-color-fg);
+  font: inherit;
+  font-weight: 600;
+  cursor: text;
+  text-align: left;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.fleet-gname-btn:hover:not(:disabled) {
+  background: var(--pl-color-bg-hover);
+}
+.fleet-gname-btn:focus-visible {
+  outline: 2px solid var(--pl-color-focus);
+  outline-offset: 0;
+}
+/* The "No group" / "Remote" cards' fixed (non-editable) headings. */
+.fleet-gname-fixed {
+  font-weight: 600;
+}
+.fleet-grename {
+  display: flex;
+  flex-direction: column;
+  gap: var(--pl-space-1);
+}
+.fleet-grename-input {
+  max-width: 16rem;
+  font-weight: 600;
+}
+.fleet-grename-input.is-invalid {
+  border-color: var(--pl-color-status-error);
+}
+.fleet-grename-err {
+  font-size: var(--pl-font-size-xs);
+  color: var(--pl-color-status-error);
+}
+.fleet-gnote {
+  margin: 0;
+  padding: var(--pl-space-2) var(--pl-space-3) 0;
+  font-size: var(--pl-font-size-xs);
+  color: var(--pl-color-fg-muted);
+}
+
+/* The card body: the agent rows, and the drop zone a dragged agent lands in. */
+.fleet-zone {
+  list-style: none;
+  margin: 0;
+  padding: var(--pl-space-1) 0;
+  min-height: var(--pl-space-8);
+}
+.fleet-zone.is-over {
+  background: color-mix(in oklch, var(--pl-color-accent) 10%, transparent);
+  outline: 1px dashed var(--pl-color-accent);
+  outline-offset: calc(-1 * var(--pl-space-1));
+}
+.fleet-zone-empty {
+  padding: var(--pl-space-2) var(--pl-space-3);
+  font-size: var(--pl-font-size-xs);
+  color: var(--pl-color-fg-muted);
+}
+.fleet-arow {
+  display: flex;
+  align-items: center;
+  gap: var(--pl-space-2);
+  padding: var(--pl-space-1) var(--pl-space-3);
+}
+.fleet-arow[draggable="true"] {
+  cursor: grab;
+}
+.fleet-arow.dragging {
+  opacity: 0.4;
+}
+/* A brief highlight so the operator sees where a just-assigned row landed. */
+.fleet-arow.landed {
+  background: color-mix(in oklch, var(--pl-color-accent) 18%, transparent);
+}
+.fleet-aname {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: var(--pl-space-1_5);
+}
+.fleet-aname-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.fleet-group-picker {
+  width: 9.5rem;
+}
+.fleet-remote-where {
+  width: 9.5rem;
+  font-size: var(--pl-font-size-xs);
+  color: var(--pl-color-fg-muted);
+}
+/* The pin star — a toggle (aria-pressed) on every agent row, remote included. */
+.fleet-star {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: var(--pl-space-6);
+  min-height: var(--pl-space-6);
+  border: 0;
+  background: none;
+  border-radius: var(--pl-radius);
+  color: var(--pl-color-fg-subtle);
+  cursor: pointer;
+}
+.fleet-star:hover:not(:disabled) {
+  background: var(--pl-color-bg-hover);
+  color: var(--pl-color-fg);
+}
+.fleet-star.is-pinned {
+  color: var(--pl-color-accent);
+}
+.fleet-star:focus-visible {
+  outline: 2px solid var(--pl-color-focus);
+  outline-offset: 0;
+}
+.fleet-groups-add {
+  margin: var(--pl-space-1) 0 var(--pl-space-5);
+}
+
+/* ── Phone (below the console's 767px breakpoint): one column, drag off, 44px targets, the
+   Group picker on its own line (spec: Mobile). jsdom computes no layout, so the 44px rules are
+   source-asserted in the unit test — keep the literal `44px` here. ── */
+.fleet-groups.is-phone .fleet-ghandle {
+  display: none;
+}
+.fleet-groups.is-phone .fleet-arow {
+  flex-wrap: wrap;
+  row-gap: var(--pl-space-1);
+  padding: var(--pl-space-2) var(--pl-space-3);
+}
+.fleet-groups.is-phone .fleet-group-picker,
+.fleet-groups.is-phone .fleet-remote-where {
+  width: 100%;
+  flex-basis: 100%;
+}
+.fleet-groups.is-phone .fleet-group-picker,
+.fleet-groups.is-phone .fleet-star,
+.fleet-groups.is-phone .fleet-ghead .pl-btn,
+.fleet-groups.is-phone .fleet-groups-add .pl-btn,
+.fleet-groups.is-phone .fleet-gname-btn {
+  min-height: 44px;
+}
+.fleet-groups.is-phone .fleet-star,
+.fleet-groups.is-phone .fleet-ghead .pl-btn--icon {
+  min-width: 44px;
+}

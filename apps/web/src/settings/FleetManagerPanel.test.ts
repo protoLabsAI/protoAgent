@@ -1,15 +1,29 @@
-import { describe, it, expect } from "vitest";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { act, createElement as h } from "react";
+import { createRoot, type Root } from "react-dom/client";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { api } from "../lib/api";
+import type { FleetAgent, FleetStatus } from "../lib/types";
+import fleetCss from "../fleet/fleet.css?raw";
 import {
   BOX_RUNTIME_KEYS,
   canAddRemote,
   canMove,
+  defaultGroupName,
+  deleteGroupConfirm,
   fleetAutostartRoster,
+  FleetGroupsPanel,
   fleetOrderIds,
+  GROUP_NAME_MAX,
+  groupHomeKey,
+  groupNameError,
+  groupPickerOptions,
   memberAutostarts,
   moveAnnouncement,
   moveInList,
   orderAgentsByIds,
+  pluralAgents,
   reorderLabel,
   reorderByDrag,
   sameOrder,
@@ -17,6 +31,150 @@ import {
   slugOf,
   updateAutostartRoster,
 } from "./FleetManagerPanel";
+
+(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+
+// The group editor branches on the mobile breakpoint (drag on/off, the picker's second line); a
+// hoisted ref lets a test flip it, exactly as FleetSwitcher.test.tsx drives the switcher's.
+const mobileRef = vi.hoisted(() => ({ value: false }));
+vi.mock("../lib/useIsMobile", () => ({ useIsMobile: () => mobileRef.value }));
+
+// Radix (the DS DropdownSelect + the ConfirmDialog focus-trap) touches layout + pointer-capture
+// APIs jsdom lacks; stub them so the picker can open and the confirm can render — the same gap the
+// sibling ProvidersPanel.ui / FleetSwitcher suites fill.
+Element.prototype.hasPointerCapture ??= () => false;
+Element.prototype.releasePointerCapture ??= () => {};
+Element.prototype.setPointerCapture ??= () => {};
+Element.prototype.scrollIntoView ??= () => {};
+if (!(globalThis as unknown as { ResizeObserver?: unknown }).ResizeObserver) {
+  (globalThis as unknown as { ResizeObserver: unknown }).ResizeObserver = class {
+    observe() {}
+    unobserve() {}
+    disconnect() {}
+  };
+}
+if (!window.matchMedia) {
+  window.matchMedia = ((q: string) => ({
+    matches: false,
+    media: q,
+    onchange: null,
+    addEventListener() {},
+    removeEventListener() {},
+    addListener() {},
+    removeListener() {},
+    dispatchEvent() {
+      return false;
+    },
+  })) as typeof window.matchMedia;
+}
+
+const GROUPS = [
+  { id: "g-work", name: "Work" },
+  { id: "g-personal", name: "Personal" },
+];
+
+// A fleet in switcher order: host (ungrouped), two more ungrouped, a member per group (one pinned),
+// and a remote on a named machine. Enough to exercise every card and both the picker + star paths.
+function roster(over: Partial<FleetStatus> = {}): FleetStatus {
+  const a = (id: string, name: string, extra: Partial<FleetAgent> = {}): FleetAgent => ({
+    id,
+    name,
+    port: 7800,
+    pid: 1,
+    running: false,
+    bundle: "",
+    ...extra,
+  });
+  return {
+    groups: GROUPS,
+    agents: [
+      a("host-id", "atlas", { host: true, running: true }),
+      a("n1", "nova", { group: "g-work" }),
+      a("n2", "orion"),
+      a("n3", "vega", { group: "g-personal", pinned: true, pinned_at: "2026-11-01T00:00:00Z" }),
+      a("r1", "pulsar", { remote: true, machine: "mac-studio", running: true }),
+    ],
+    ...over,
+  };
+}
+
+let container: HTMLElement;
+let root: Root;
+
+async function flush() {
+  await act(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  });
+}
+
+async function mount(status?: FleetStatus) {
+  (api.fleet as ReturnType<typeof vi.fn>).mockResolvedValue(status ?? roster());
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  act(() => {
+    root.render(h(QueryClientProvider, { client }, h(FleetGroupsPanel, { onBack: () => {} })));
+  });
+  await flush();
+  await flush();
+}
+
+const PointerCtor = (globalThis as unknown as { PointerEvent?: typeof MouseEvent }).PointerEvent ?? MouseEvent;
+function pointer(type: string, el: Element, opts: MouseEventInit = {}) {
+  el.dispatchEvent(new PointerCtor(type, { bubbles: true, cancelable: true, button: 0, ...opts }));
+}
+function clickEl(el: Element) {
+  act(() => {
+    pointer("pointerdown", el);
+    pointer("pointerup", el);
+    el.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, button: 0 }));
+  });
+}
+function setInput(el: HTMLInputElement, value: string) {
+  const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!;
+  act(() => {
+    setter.call(el, value);
+    el.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+}
+function keydown(el: Element, key: string) {
+  act(() => {
+    el.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true }));
+  });
+}
+// The DS DropdownSelect defers opening until click (#4534), and its options render as
+// `menuitemradio`, not `option` (the ProvidersPanel.ui recipe).
+function openPicker(label: string) {
+  const trigger = document.querySelector(`[aria-label="${label}"]`) as HTMLElement;
+  act(() => pointer("pointerdown", trigger, { pointerType: "touch" } as MouseEventInit));
+  act(() => {
+    pointer("pointerup", trigger, { pointerType: "touch" } as MouseEventInit);
+    trigger.click();
+  });
+}
+const pickerItem = (text: string) =>
+  [...document.querySelectorAll<HTMLElement>('[role="menuitemradio"]')].find((o) => (o.textContent || "").trim() === text);
+const byText = (text: string) => [...document.querySelectorAll("button")].find((b) => (b.textContent || "").trim() === text);
+const savedText = () => document.querySelector(".fleet-saved")?.textContent || "";
+
+beforeEach(() => {
+  mobileRef.value = false;
+  vi.spyOn(api, "fleet").mockResolvedValue(roster());
+  vi.spyOn(api, "createFleetGroup").mockResolvedValue({ ok: true, group: { id: "g-new", name: "New group" } });
+  vi.spyOn(api, "renameFleetGroup").mockResolvedValue({ ok: true, group: { id: "g-work", name: "QA" } });
+  vi.spyOn(api, "reorderFleetGroups").mockResolvedValue({ ok: true, groups: GROUPS });
+  vi.spyOn(api, "deleteFleetGroup").mockResolvedValue({ ok: true, id: "g-work", removed: false, ungrouped: 1 });
+  vi.spyOn(api, "setFleetAgentGroup").mockResolvedValue({ ok: true, id: "x", group: null });
+  vi.spyOn(api, "pinFleetAgent").mockResolvedValue({ ok: true, id: "x", pinned: true, pinned_at: "" });
+  vi.spyOn(api, "unpinFleetAgent").mockResolvedValue({ ok: true, id: "x", pinned: false });
+  container = document.createElement("div");
+  document.body.appendChild(container);
+  root = createRoot(container);
+});
+
+afterEach(() => {
+  act(() => root.unmount());
+  container.remove();
+  vi.restoreAllMocks();
+});
 
 describe("canAddRemote — manual add-remote submit gate (ADR 0042 §I)", () => {
   it("requires a non-empty name", () => {
@@ -273,5 +431,296 @@ describe("orderAgentsByIds — failure-safe reconciliation (no row is ever lost)
     const ranked = orderAgentsByIds(agents, ["roxy", "ava", "host"]);
     expect(ranked).toHaveLength(agents.length);
     expect(new Set(ranked)).toEqual(new Set(agents)); // same objects, just reordered
+  });
+});
+
+// ── Fleet settings group editor (docs/design/fleet-switcher-groups.md) — the pure core ─────────
+// The name rules + their copy, the delete confirm's wording, the picker options, the per-agent
+// home key and the count label are pure, so they're unit-tested without the DOM — exactly as the
+// roster-reorder core above is. Copy is verbatim from the spec (and matches the switcher's).
+
+describe("groupNameError — the spec's rename rules + error copy", () => {
+  const groups = [
+    { id: "g-work", name: "Work" },
+    { id: "g-personal", name: "Personal" },
+  ];
+
+  it("accepts a fresh, trimmed, in-range name", () => {
+    expect(groupNameError("Demos", groups)).toBeNull();
+    expect(groupNameError("  Demos  ", groups)).toBeNull();
+  });
+
+  it("rejects a blank name with the spec's copy", () => {
+    expect(groupNameError("", groups)).toBe("Give the group a name.");
+    expect(groupNameError("   ", groups)).toBe("Give the group a name.");
+  });
+
+  it("reserves 'Remote' (case-insensitive) for paired machines", () => {
+    expect(groupNameError("Remote", groups)).toBe('"Remote" is reserved for agents on paired machines.');
+    expect(groupNameError("remote", groups)).toBe('"Remote" is reserved for agents on paired machines.');
+  });
+
+  it("rejects a duplicate (case-insensitive) with the name echoed back", () => {
+    expect(groupNameError("work", groups)).toBe('There\'s already a group called "work".');
+    expect(groupNameError("Personal", groups)).toBe('There\'s already a group called "Personal".');
+  });
+
+  it("excludes the group being renamed from the duplicate check (a no-op rename is allowed)", () => {
+    expect(groupNameError("Work", groups, "g-work")).toBeNull();
+    // …but it still clashes with a DIFFERENT group.
+    expect(groupNameError("Personal", groups, "g-work")).toBe('There\'s already a group called "Personal".');
+  });
+
+  it("caps the field at 40 characters (spec: 1–40)", () => {
+    expect(GROUP_NAME_MAX).toBe(40);
+  });
+});
+
+describe("pluralAgents — the card count + confirm label", () => {
+  it("is singular only for one", () => {
+    expect(pluralAgents(0)).toBe("0 agents");
+    expect(pluralAgents(1)).toBe("1 agent");
+    expect(pluralAgents(5)).toBe("5 agents");
+  });
+});
+
+describe("deleteGroupConfirm — the spec's confirm copy (verbatim from the approved preview)", () => {
+  it("names the group in the title and says the agents move to No group, none removed", () => {
+    expect(deleteGroupConfirm("Work", 3)).toEqual({
+      title: 'Delete the group "Work"?',
+      body: "Its 3 agents move to No group. No agents are removed.",
+    });
+  });
+
+  it("uses the singular count for one agent", () => {
+    expect(deleteGroupConfirm("Work", 1).body).toBe("Its 1 agent move to No group. No agents are removed.");
+  });
+
+  it("reads differently for an empty group", () => {
+    expect(deleteGroupConfirm("Work", 0).body).toBe("It has no agents. No agents are removed.");
+  });
+});
+
+describe("groupPickerOptions — the Group picker (No group, then each group in order)", () => {
+  it("leads with No group (empty value) then the groups in switcher order", () => {
+    expect(groupPickerOptions(GROUPS_FIXTURE)).toEqual([
+      { value: "", label: "No group" },
+      { value: "g-work", label: "Work" },
+      { value: "g-personal", label: "Personal" },
+    ]);
+  });
+});
+const GROUPS_FIXTURE = [
+  { id: "g-work", name: "Work" },
+  { id: "g-personal", name: "Personal" },
+];
+
+describe("groupHomeKey — which editor card an agent lives in", () => {
+  const ids = new Set(["g-work", "g-personal"]);
+  it("sends remote agents to the Remote card regardless of any group field", () => {
+    expect(groupHomeKey({ remote: true, group: "g-work" }, ids)).toBe("remote");
+  });
+  it("uses the group when it still exists, else No group", () => {
+    expect(groupHomeKey({ group: "g-work" }, ids)).toBe("g-work");
+    expect(groupHomeKey({ group: "g-gone" }, ids)).toBe("ungrouped"); // a stale id is ungrouped
+    expect(groupHomeKey({ group: null }, ids)).toBe("ungrouped");
+    expect(groupHomeKey({}, ids)).toBe("ungrouped");
+  });
+});
+
+describe("defaultGroupName — Add group lands a unique, overtypeable name", () => {
+  it("is 'New group' when free, else the first unused 'New group N'", () => {
+    expect(defaultGroupName([])).toBe("New group");
+    expect(defaultGroupName([{ id: "a", name: "New group" }])).toBe("New group 2");
+    expect(defaultGroupName([
+      { id: "a", name: "New group" },
+      { id: "b", name: "New group 2" },
+    ])).toBe("New group 3");
+  });
+});
+
+// ── FleetGroupsPanel — the rendered editor (createRoot/act + QueryClientProvider, the console UI
+// idiom; the DS Menu/DropdownSelect/ConfirmDialog portal to <body>, so queried from `document`). ──
+describe("FleetGroupsPanel — desktop group cards", () => {
+  it("renders a card per group in switcher order, then No group and Remote, with the help + counts", async () => {
+    await mount();
+    const text = container.textContent || "";
+    expect(text).toContain("Groups organize the agent switcher. They don't change what agents can do.");
+    // Cards in order: Work, Personal, then the fixed No group + Remote.
+    const order = ["Work", "Personal", "No group", "Remote"];
+    const pos = order.map((label) => text.indexOf(label));
+    expect(pos.every((p) => p >= 0)).toBe(true);
+    expect(pos).toEqual([...pos].sort((x, y) => x - y));
+    // The read-only Remote card carries its automatic note and the machine name.
+    expect(text).toContain("Agents from paired machines are grouped automatically.");
+    expect(text).toContain("On mac-studio");
+    // The No group card's heading note.
+    expect(text).toContain("These sit near the top of the switcher, without a heading.");
+    // Count badges: Work has nova (1).
+    const work = document.querySelector('[aria-label="Work group"]')!;
+    expect(work.textContent).toContain("1 agent");
+  });
+
+  it("adds a group (default name) and saves live", async () => {
+    await mount();
+    clickEl(byText("Add group")!);
+    await flush();
+    expect(api.createFleetGroup).toHaveBeenCalledWith("New group");
+    expect(savedText()).toBe("Saved"); // the inline live-save note
+  });
+
+  it("renames inline: Enter saves the new name, a no-op rename hits nothing", async () => {
+    await mount();
+    clickEl([...document.querySelectorAll<HTMLElement>(".fleet-gname-btn")].find((b) => b.textContent === "Work")!);
+    await flush();
+    const input = document.querySelector('input[aria-label="Group name"]') as HTMLInputElement;
+    expect(input.value).toBe("Work");
+    setInput(input, "QA");
+    keydown(input, "Enter");
+    await flush();
+    expect(api.renameFleetGroup).toHaveBeenCalledWith("g-work", "QA");
+    expect(savedText()).toBe("Saved");
+  });
+
+  it("shows the spec's rename errors (blank, reserved, duplicate) and never writes", async () => {
+    await mount();
+    clickEl([...document.querySelectorAll<HTMLElement>(".fleet-gname-btn")].find((b) => b.textContent === "Work")!);
+    await flush();
+    const input = document.querySelector('input[aria-label="Group name"]') as HTMLInputElement;
+    const err = () => document.querySelector(".fleet-grename-err")?.textContent || "";
+
+    setInput(input, "   ");
+    keydown(input, "Enter");
+    await flush();
+    expect(err()).toBe("Give the group a name.");
+
+    setInput(input, "Remote");
+    keydown(input, "Enter");
+    await flush();
+    expect(err()).toBe('"Remote" is reserved for agents on paired machines.');
+
+    setInput(input, "Personal");
+    keydown(input, "Enter");
+    await flush();
+    expect(err()).toBe('There\'s already a group called "Personal".');
+
+    expect(api.renameFleetGroup).not.toHaveBeenCalled(); // every attempt was rejected locally
+  });
+
+  it("cancels an inline rename on Escape without writing", async () => {
+    await mount();
+    clickEl([...document.querySelectorAll<HTMLElement>(".fleet-gname-btn")].find((b) => b.textContent === "Work")!);
+    await flush();
+    const input = document.querySelector('input[aria-label="Group name"]') as HTMLInputElement;
+    setInput(input, "QA");
+    keydown(input, "Escape");
+    await flush();
+    expect(document.querySelector('input[aria-label="Group name"]')).toBeFalsy(); // back to the label
+    expect(api.renameFleetGroup).not.toHaveBeenCalled();
+  });
+
+  it("reorders with Move up / Move down, disables them at the boundaries, and saves the full order", async () => {
+    await mount();
+    // Work is first → its Move up is disabled; Personal is last → its Move down is disabled.
+    const workUp = document.querySelector('[data-gmove="up"][data-gid="g-work"]') as HTMLButtonElement;
+    const personalDown = document.querySelector('[data-gmove="down"][data-gid="g-personal"]') as HTMLButtonElement;
+    expect(workUp.disabled).toBe(true);
+    expect(personalDown.disabled).toBe(true);
+    // Move Work down → the complete group-id permutation is PUT.
+    clickEl(document.querySelector('[data-gmove="down"][data-gid="g-work"]')!);
+    await flush();
+    expect(api.reorderFleetGroups).toHaveBeenCalledWith(["g-personal", "g-work"]);
+    expect(savedText()).toBe("Saved");
+  });
+
+  it("deletes a group through the spec's confirm", async () => {
+    await mount();
+    clickEl(document.querySelector('[aria-label="Delete Work"]')!);
+    await flush();
+    const dialog = document.querySelector('[role="alertdialog"], [role="dialog"]')!;
+    expect(dialog.textContent).toContain('Delete the group "Work"?');
+    expect(dialog.textContent).toContain("move to No group. No agents are removed.");
+    clickEl(byText("Delete group")!); // the destructive confirm button
+    await flush();
+    expect(api.deleteFleetGroup).toHaveBeenCalledWith("g-work");
+  });
+
+  it("assigns an agent from its row Group picker", async () => {
+    await mount();
+    openPicker("Group for orion"); // orion is ungrouped
+    await flush();
+    clickEl(pickerItem("Work")!);
+    await flush();
+    expect(api.setFleetAgentGroup).toHaveBeenCalledWith("n2", "g-work");
+    expect(savedText()).toBe("Saved");
+  });
+
+  it("pins and unpins any agent — the host, a member and a remote", async () => {
+    await mount();
+    clickEl(document.querySelector('[aria-label="Pin nova"]')!);
+    await flush();
+    expect(api.pinFleetAgent).toHaveBeenCalledWith("n1");
+    clickEl(document.querySelector('[aria-label="Unpin vega"]')!); // vega starts pinned
+    await flush();
+    expect(api.unpinFleetAgent).toHaveBeenCalledWith("n3");
+    clickEl(document.querySelector('[aria-label="Pin pulsar"]')!); // a remote can be pinned
+    await flush();
+    expect(api.pinFleetAgent).toHaveBeenCalledWith("r1");
+  });
+
+  it("leaves Remote read-only: the machine shows, there is no group picker, the star stays", async () => {
+    await mount();
+    const remoteCard = document.querySelector('[aria-label="Remote"]')!;
+    expect(remoteCard.textContent).toContain("On mac-studio");
+    expect(document.querySelector('[aria-label="Group for pulsar"]')).toBeFalsy(); // no picker
+    expect(document.querySelector('[aria-label="Pin pulsar"]')).toBeTruthy(); // but still pinnable
+    // The star carries aria-pressed so it reads as a toggle.
+    expect(document.querySelector('[aria-label="Pin pulsar"]')!.getAttribute("aria-pressed")).toBe("false");
+    expect(document.querySelector('[aria-label="Unpin vega"]')!.getAttribute("aria-pressed")).toBe("true");
+  });
+
+  it("wires the desktop drag path: member rows + card handles drag, remote rows do not", async () => {
+    await mount();
+    expect(document.querySelectorAll(".fleet-arow[draggable='true']").length).toBeGreaterThan(0);
+    expect(document.querySelectorAll(".fleet-ghandle").length).toBe(2); // one per operator group
+    // The remote row is not draggable.
+    const remoteCard = document.querySelector('[aria-label="Remote"]')!;
+    expect(remoteCard.querySelector(".fleet-arow[draggable='true']")).toBeFalsy();
+  });
+});
+
+describe("FleetGroupsPanel — phone (one column, drag off, 44px targets)", () => {
+  beforeEach(() => {
+    mobileRef.value = true;
+  });
+
+  it("drops the drag affordances and marks the phone layout", async () => {
+    await mount();
+    expect(document.querySelector(".fleet-groups.is-phone")).toBeTruthy();
+    expect(document.querySelectorAll(".fleet-ghandle").length).toBe(0); // no drag handles on touch
+    expect(document.querySelectorAll(".fleet-arow[draggable='true']").length).toBe(0); // rows not draggable
+    // The picker is still the assign path on touch.
+    expect(document.querySelector('[aria-label="Group for orion"]')).toBeTruthy();
+    // 44px targets ship in the stylesheet (jsdom computes no layout).
+    expect(fleetCss).toContain("min-height: 44px");
+    expect(fleetCss).toContain(".fleet-groups.is-phone .fleet-ghandle");
+  });
+});
+
+describe("FleetGroupsPanel — gated like the rest of Fleet settings", () => {
+  it("is read-only in a directly-reached member window (no cards, no Add group)", async () => {
+    // The host entry self-reports `member: true` — a spawned member reached directly on its own
+    // port, where there is no hub roster to write to (fleetSettingsDisabledReason).
+    await mount(
+      roster({
+        agents: [
+          { id: "host-id", name: "atlas", port: 7800, pid: 1, running: true, bundle: "", host: true, member: true },
+          { id: "n1", name: "nova", port: 7801, pid: 2, running: false, bundle: "", group: "g-work" },
+        ],
+      }),
+    );
+    expect(container.textContent).toContain("Fleet settings are managed from the host instance");
+    expect(document.querySelector(".fleet-groups")).toBeFalsy(); // the editor body is not rendered
+    expect(byText("Add group")).toBeFalsy();
   });
 });
