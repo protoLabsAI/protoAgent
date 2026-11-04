@@ -26,12 +26,13 @@ import { RefreshButton } from "../app/ui-kit";
 import { PanelHeader, Tabs } from "@protolabsai/ui/navigation";
 import { QuickSetting } from "../settings/QuickSetting";
 import { api } from "../lib/api";
+import { copyText } from "../lib/clipboard";
 import { localStamp, localStampTitle, ms, pct, tokens, usd } from "../lib/format";
 import { fleetTelemetryQuery, telemetryQuery } from "../lib/queries";
 import { coldLaneLabel, laneCacheHit } from "./cacheLanes";
 import { FleetTelemetrySection } from "./FleetTelemetrySection";
 import { defaultTelemetryTab, hasTelemetryViews, telemetryTabItems } from "./telemetryTabs";
-import { traceCellState } from "./traceUrl";
+import { traceCellState, traceCopyToast } from "./traceUrl";
 
 import type { TelemetryTabId } from "./telemetryTabs";
 
@@ -184,8 +185,7 @@ function TelemetryBody() {
                 turns={turns}
                 traceUrlTemplate={traceUrlTemplate}
                 tracingEnabled={tracingEnabled}
-                onTraceCopied={() =>
-                  toast({ title: "Trace id copied", message: "Paste it into Langfuse's search." })}
+                onTraceCopied={(ok, traceId) => toast(traceCopyToast(ok, traceId))}
               />
             )}
           </>
@@ -324,7 +324,7 @@ function RecentTurnsPanel({
   turns: TelemetryTurn[];
   traceUrlTemplate: string | null;
   tracingEnabled: boolean;
-  onTraceCopied: () => void;
+  onTraceCopied: (ok: boolean, traceId: string) => void;
 }) {
   if (!turns.length) return <Empty className="telemetry-empty">{NO_TURNS}</Empty>;
   return (
@@ -414,7 +414,7 @@ export function TelemetrySurface() {
 // fleet ran 336 turns with tracing dark and nothing in the product said so.
 // The four-way decision itself lives in traceCellState (traceUrl.ts) so it can be
 // unit-tested — the console has no component-rendering suite.
-function TraceCell({
+export function TraceCell({
   turn,
   template,
   tracingEnabled,
@@ -423,7 +423,7 @@ function TraceCell({
   turn: TelemetryTurn;
   template: string | null;
   tracingEnabled: boolean;
-  onCopied: () => void;
+  onCopied: (ok: boolean, traceId: string) => void;
 }) {
   const state = traceCellState(template, turn.trace_id, tracingEnabled);
 
@@ -439,7 +439,7 @@ function TraceCell({
       return (
         <Button type="button" variant="ghost" size="sm" className="trace-copy"
                 title={`Copy trace id ${state.traceId}`} data-testid="telemetry-trace-copy"
-                onClick={() => { void navigator.clipboard?.writeText(state.traceId); onCopied(); }}>
+                onClick={() => { void copyText(state.traceId).then((ok) => onCopied(ok, state.traceId)); }}>
           <Copy size={13} aria-hidden /> {state.short}
         </Button>
       );
