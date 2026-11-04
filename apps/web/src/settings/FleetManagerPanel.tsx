@@ -1,12 +1,13 @@
 import "../fleet/fleet.css";
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { GripVertical, KeyRound, Link2, Pencil, Play, Plus, Radar, Server, Square, Trash2, Unlink2 } from "lucide-react";
-import { useState } from "react";
+import { ArrowLeft, ChevronDown, ChevronUp, Folder, GripVertical, KeyRound, Link2, Pencil, Play, Plus, Radar, Server, Square, Star, Trash2, Unlink2 } from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-import { Badge, Button, Empty } from "@protolabsai/ui/primitives";
+import { Badge, Button, Card, Empty } from "@protolabsai/ui/primitives";
 import { Alert, StatusDot } from "@protolabsai/ui/data";
-import { Checkbox, EditableText, Input, SecretInput, Switch } from "@protolabsai/ui/forms";
+import { Checkbox, DropdownSelect, EditableText, Input, SecretInput, Switch } from "@protolabsai/ui/forms";
+import type { DropdownSelectOption } from "@protolabsai/ui/forms";
 import { ConfirmDialog, useToast } from "@protolabsai/ui/overlays";
 import { PanelHeader } from "@protolabsai/ui/navigation";
 
@@ -24,7 +25,9 @@ import {
 import { agentHref, api, currentSlug } from "../lib/api";
 import { errMsg } from "../lib/format";
 import { fleetQuery, queryKeys, settingsSchemaQuery } from "../lib/queries";
-import type { DiscoveredAgent, FleetAgent, FleetStatus, SettingsGroup } from "../lib/types";
+import type { DiscoveredAgent, FleetAgent, FleetGroup, FleetStatus, SettingsGroup } from "../lib/types";
+import { useIsMobile } from "../lib/useIsMobile";
+import { fleetSettingsDisabledReason } from "../app/fleetSettingsGate";
 
 /** The manual add-remote form is submittable only with a name and an http(s) URL. Exported
  * (pure) so the enable rule is unit-tested without rendering the panel. The server does the
@@ -122,6 +125,15 @@ export function reorderByDrag(ids: string[], from: number, to: number): string[]
   return next;
 }
 
+/** The target slot for a drop onto an item's "before" marker. `reorderByDrag` removes the dragged id
+ *  FIRST, so a forward move (dragging past a later target) shifts that target one slot left — the drop
+ *  must then insert one slot earlier to actually land BEFORE the target. A backward move (or a same
+ *  slot) is unaffected. Pairs with `reorderByDrag`; exported so the drop-before math is unit-tested
+ *  without a real HTML5 drag (which jsdom can't drive). */
+export function dropBeforeIndex(from: number, to: number): number {
+  return from < to ? to - 1 : to;
+}
+
 /** Can the row at `index` still move in `dir`? False at the matching list boundary — the
  *  keyboard path announces the boundary rather than moving silently (`moveAnnouncement`). */
 export function canMove(index: number, dir: "up" | "down", length: number): boolean {
@@ -173,10 +185,71 @@ export function orderAgentsByIds<T extends { id: string }>(agents: T[], order: s
   return ranked;
 }
 
+// ── Fleet settings group editor (docs/design/fleet-switcher-groups.md) ───────────────────────
+// Operator-defined switcher sections, edited as a card per group (plus a "No group" card and a
+// read-only "Remote" card). The pure core — the name rules + their copy, the delete confirm's
+// wording, the picker options, the per-agent home key and the count label — is exported so it is
+// unit-tested without the DOM, exactly as the roster-reorder core above is. Group reorder reuses
+// the generic `fleetOrderIds` / `moveInList` / `reorderByDrag` / `canMove` / `orderAgentsByIds`
+// helpers (a group is just `{ id }`), so the drag + Move up/down math has one tested home.
+
+/** The name field's limit (spec: 1–40 characters). */
+export const GROUP_NAME_MAX = 40;
+
+/** Which editor card an agent lives in: remote machines are grouped automatically, a group id no
+ *  current group has is treated as ungrouped (same rule as the switcher's `homeOf`). */
+export function groupHomeKey(a: Pick<FleetAgent, "remote" | "group">, groupIds: Set<string>): string {
+  if (a.remote) return "remote";
+  return a.group && groupIds.has(a.group) ? a.group : "ungrouped";
+}
+
+/** The spec's rename rules: 1–40 chars, trimmed, unique ignoring case; "Remote" is reserved.
+ *  Returns the spec's error copy, or `null` when the name is acceptable. `exceptId` excludes the
+ *  group being renamed from the duplicate check. Copy is verbatim from the spec (and matches the
+ *  switcher's `validateGroupName`, so the two surfaces reject identically). */
+export function groupNameError(raw: string, groups: readonly { id: string; name: string }[], exceptId?: string): string | null {
+  const name = raw.trim();
+  if (!name) return "Give the group a name.";
+  if (name.toLowerCase() === "remote") return '"Remote" is reserved for agents on paired machines.';
+  if (groups.some((g) => g.id !== exceptId && g.name.toLowerCase() === name.toLowerCase()))
+    return `There's already a group called "${name}".`;
+  return null;
+}
+
+/** "N agent" / "N agents" — the card count Badge and the delete confirm both read off it. */
+export function pluralAgents(n: number): string {
+  return `${n} agent${n === 1 ? "" : "s"}`;
+}
+
+/** The delete confirm's title + body, verbatim from the approved preview: the agents move to No
+ *  group, none is removed. A group with no agents says so instead of "Its 0 agents move…". */
+export function deleteGroupConfirm(name: string, count: number): { title: string; body: string } {
+  return {
+    title: `Delete the group "${name}"?`,
+    body: count
+      ? `Its ${pluralAgents(count)} ${count === 1 ? "moves" : "move"} to No group. No agents are removed.`
+      : "It has no agents. No agents are removed.",
+  };
+}
+
+/** The Group picker's options: "No group" (empty value) then every group in switcher order. The
+ *  empty value maps back to `null` on assign (clear the group). */
+export function groupPickerOptions(groups: readonly { id: string; name: string }[]): DropdownSelectOption[] {
+  return [{ value: "", label: "No group" }, ...groups.map((g) => ({ value: g.id, label: g.name }))];
+}
+
+/** A first unused "New group" / "New group N" default so Add group lands a usable, unique name the
+ *  operator can immediately overtype (the field opens focused). */
+export function defaultGroupName(groups: readonly { id: string; name: string }[]): string {
+  let name = "New group";
+  for (let n = 2; groupNameError(name, groups) !== null; n++) name = `New group ${n}`;
+  return name;
+}
+
 // Fleet manager (ADR 0042) — Settings → Agents. Lists the workspace agents with live
 // status (the query polls every 3s, so a crashed agent flips to stopped on its own) and
 // per-row start / stop / remove. "+ New agent" opens the archetype picker via `onNew`.
-export function FleetManagerPanel({ onNew }: { onNew?: () => void }) {
+export function FleetManagerPanel({ onNew, onGroups }: { onNew?: () => void; onGroups?: () => void }) {
   const qc = useQueryClient();
   const fleet = useQuery(fleetQuery());
   // fleet.autostart belongs to the HUB's host layer. Force both this read and the
@@ -545,6 +618,13 @@ export function FleetManagerPanel({ onNew }: { onNew?: () => void }) {
               label="Box runtime settings"
               icon={<Server size={15} />}
             />
+            {/* The group editor (docs/design/fleet-switcher-groups.md): organize the switcher into
+                sections. A sibling view of the roster, so it rides the same FleetSurface toggle. */}
+            {onGroups ? (
+              <Button variant="default" onClick={onGroups}>
+                <Folder size={15} /> Groups
+              </Button>
+            ) : null}
             <Button variant="primary" onClick={onNew}>
               <Plus size={15} /> New agent
             </Button>
@@ -1053,5 +1133,553 @@ export function FleetManagerPanel({ onNew }: { onNew?: () => void }) {
         />
       </ConfirmDialog>
     </section>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────────────────────
+// Fleet settings group editor (docs/design/fleet-switcher-groups.md) — Settings ▸ Fleet ▸ Groups.
+// A card per operator group in switcher order, then a "No group" card and a read-only "Remote"
+// card. Every change saves at once (a small inline "Saved", no Save button). Supports: Add group
+// (opens a name field focused), rename inline (Enter saves / Escape cancels, with the spec's error
+// copy), reorder (the drag handle AND keyboard-reachable Move up / Move down), delete (the spec's
+// confirm), assign an agent (drag between cards OR the per-row Group picker) and pin / unpin any
+// agent — remote included. The reorder + assign + pin writes are the SAME hub API the switcher
+// uses (one roster field, so a pin here shows in the switcher and vice-versa), optimistically
+// patched then reconciled by the 3s poll. All writes are hub-only and gated by
+// `fleetSettingsDisabledReason` like the rest of Fleet settings. Phone (below 767px, `useIsMobile`):
+// one column, drag OFF (no handles), the Group picker on its own line, Move up / Move down for
+// reorder, 44px targets, the confirm fits 390px — all via the `fleet-groups.is-phone` CSS; the
+// component itself only drops `draggable`.
+export function FleetGroupsPanel({ onBack }: { onBack?: () => void }) {
+  const qc = useQueryClient();
+  const fleet = useQuery(fleetQuery());
+  const phone = useIsMobile();
+  const rootRef = useRef<HTMLDivElement>(null);
+  const toast = useToast();
+
+  const agents = useMemo(() => fleet.data?.agents ?? [], [fleet.data]);
+  const groups = useMemo(() => fleet.data?.groups ?? [], [fleet.data]);
+  // Non-null only on a spawned member reached DIRECTLY on its own port (#1708/#1999): there is no
+  // hub roster to write to, so the editor is read-only there, like Fleet settings' other writes.
+  const blocked = fleetSettingsDisabledReason(agents);
+  const canDrag = !phone && !blocked; // touch has no reliable drag; the picker is its path
+
+  const groupIds = useMemo(() => new Set(groups.map((g) => g.id)), [groups]);
+  const membersOf = useCallback(
+    (key: string) => agents.filter((a) => groupHomeKey(a, groupIds) === key),
+    [agents, groupIds],
+  );
+
+  // ── live-save feedback: a small inline "Saved" per change, no Save button ──
+  const [saved, setSaved] = useState("");
+  const savedTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const markSaved = useCallback(() => {
+    setSaved("Saved");
+    if (savedTimer.current) clearTimeout(savedTimer.current);
+    savedTimer.current = setTimeout(() => setSaved(""), 2000);
+  }, []);
+  useEffect(() => () => {
+    if (savedTimer.current != null) clearTimeout(savedTimer.current);
+  }, []);
+
+  // ── roster writes (hub, shared by every browser) — optimistic patch then invalidate, exactly as
+  // the switcher does. The 3s poll stays authoritative and rolls back a rejected write. ──
+  const invalidate = useCallback(() => qc.invalidateQueries({ queryKey: queryKeys.fleet }), [qc]);
+  // Runs as a mutation's onMutate: cancel the in-flight fleet fetch FIRST (a 3s poll that started
+  // before the write could otherwise resolve AFTER the patch and restore the pre-write roster until
+  // the mutation settles), then patch. The request is sent only after onMutate resolves, so the
+  // patch cannot race it.
+  const optimisticPatch = useCallback(
+    async (apply: (cur: FleetStatus) => FleetStatus) => {
+      await qc.cancelQueries({ queryKey: queryKeys.fleet });
+      qc.setQueryData<FleetStatus>(queryKeys.fleet, (cur) => (cur ? apply(cur) : cur));
+    },
+    [qc],
+  );
+  const onWrite = useMemo(
+    () => ({
+      onSuccess: markSaved,
+      onSettled: invalidate,
+      // A rejected group write (other than a 401 the global auth gate handles) otherwise reverts on
+      // the next poll with no word to the operator. Show the panel's standard error toast.
+      onError: (e: unknown) =>
+        toast({ tone: "error", title: "Couldn't save the group change", message: errMsg(e) }),
+    }),
+    [markSaved, invalidate, toast],
+  );
+  // Overlapping writes are serialized at their SOURCE, per-control: a reorder blocks a second reorder
+  // (shouldSubmitOrder/reorderMut.isPending), `assign` refuses a second pick while one is in flight,
+  // and the pin star disables on the row whose write is pending — so a fast double-submit of the same
+  // kind can't reach the hub out of order and store the earlier choice last. Different agents still
+  // pin/assign concurrently (one slow write must not freeze the rest of the editor).
+  const createMut = useMutation({
+    mutationFn: (name: string) => api.createFleetGroup(name),
+    ...onWrite,
+    // Add the created group to the cache now (as reorder/assign patches do): mutateAsync resolves
+    // only after the onSettled refetch, and a FAILED refetch still resolves, so without this addGroup
+    // could set editingId to a group `groups` doesn't yet hold — "Saved", but no card/name field. The
+    // following invalidation replaces this entry with the server state.
+    onSuccess: (res) => {
+      qc.setQueryData<FleetStatus>(queryKeys.fleet, (cur) =>
+        cur ? { ...cur, groups: [...(cur.groups ?? []), res.group] } : cur,
+      );
+      markSaved();
+    },
+  });
+  const renameMut = useMutation({ mutationFn: (v: { id: string; name: string }) => api.renameFleetGroup(v.id, v.name), ...onWrite });
+  const reorderMut = useMutation({
+    mutationFn: (order: string[]) => api.reorderFleetGroups(order),
+    onMutate: (order: string[]) => optimisticPatch((cur) => ({ ...cur, groups: orderAgentsByIds(cur.groups ?? [], order) })),
+    ...onWrite,
+  });
+  const deleteMut = useMutation({ mutationFn: (id: string) => api.deleteFleetGroup(id), ...onWrite });
+  const assignMut = useMutation({
+    mutationFn: (v: { id: string; group: string | null }) => api.setFleetAgentGroup(v.id, v.group),
+    onMutate: (v: { id: string; group: string | null }) =>
+      optimisticPatch((cur) => ({ ...cur, agents: cur.agents.map((a) => (a.id === v.id ? { ...a, group: v.group } : a)) })),
+    ...onWrite,
+  });
+  const pinMut = useMutation({
+    mutationFn: (v: { id: string; pinned: boolean }) => (v.pinned ? api.pinFleetAgent(v.id) : api.unpinFleetAgent(v.id)),
+    onMutate: (v: { id: string; pinned: boolean }) =>
+      optimisticPatch((cur) => ({
+        ...cur,
+        agents: cur.agents.map((a) =>
+          a.id === v.id ? { ...a, pinned: v.pinned, pinned_at: v.pinned ? new Date().toISOString() : undefined } : a,
+        ),
+      })),
+    ...onWrite,
+  });
+
+  // ── rename ──
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [renameErr, setRenameErr] = useState<string | null>(null);
+  const beginRename = useCallback((g: FleetGroup) => {
+    setRenameErr(null);
+    setEditingId(g.id);
+  }, []);
+  const cancelRename = useCallback(() => {
+    setEditingId(null);
+    setRenameErr(null);
+  }, []);
+  const commitRename = useCallback(
+    (g: FleetGroup, raw: string): boolean => {
+      const err = groupNameError(raw, groups, g.id);
+      if (err) {
+        setRenameErr(err); // stay in edit, show the spec's copy, nothing changed
+        return false;
+      }
+      const name = raw.trim();
+      if (name !== g.name) renameMut.mutate({ id: g.id, name });
+      setEditingId(null);
+      setRenameErr(null);
+      return true;
+    },
+    [groups, renameMut],
+  );
+
+  // ── add group: create with a unique default, then open its field focused to overtype ──
+  const addGroup = useCallback(async () => {
+    try {
+      const res = await createMut.mutateAsync(defaultGroupName(groups));
+      setRenameErr(null);
+      setEditingId(res.group.id);
+    } catch {
+      // A rejected create (e.g. a name race another browser just made) leaves the list unchanged;
+      // createMut.onError already surfaced the error toast, and the invalidation reconciles. The
+      // default name is locally unique, so this is rare. The catch only keeps the rejection handled.
+    }
+  }, [groups, createMut]);
+
+  // ── reorder (drag handle + Move up / Move down), reusing the roster-reorder core ──
+  const focusAfterMove = useRef<{ id: string; dir: "up" | "down" } | null>(null);
+  const reorderGroups = useCallback(
+    (order: string[]) => {
+      if (!shouldSubmitOrder(order, fleetOrderIds(groups), reorderMut.isPending)) return;
+      reorderMut.mutate(order); // the optimistic patch now lives in reorderMut.onMutate (cancel-first)
+    },
+    [groups, reorderMut],
+  );
+  const moveGroup = useCallback(
+    (g: FleetGroup, dir: "up" | "down") => {
+      const ids = fleetOrderIds(groups);
+      const i = ids.indexOf(g.id);
+      if (!canMove(i, dir, ids.length) || reorderMut.isPending) return;
+      focusAfterMove.current = { id: g.id, dir }; // keep the keyboard path on the control after the move
+      reorderGroups(moveInList(ids, i, dir));
+    },
+    [groups, reorderMut, reorderGroups],
+  );
+  // A Move up/down at a NEW boundary disables the pressed button (focus would be lost): land focus
+  // on it if still enabled, else its sibling — the DS buttons keep stable keys so the others stay put.
+  useEffect(() => {
+    const want = focusAfterMove.current;
+    if (!want || !rootRef.current) return;
+    focusAfterMove.current = null;
+    const btns = [...rootRef.current.querySelectorAll<HTMLButtonElement>("[data-gmove][data-gid]")].filter(
+      (b) => b.dataset.gid === want.id,
+    );
+    const pick = (d: string) => btns.find((b) => b.dataset.gmove === d);
+    const primary = pick(want.dir);
+    (primary && !primary.disabled ? primary : pick(want.dir === "up" ? "down" : "up"))?.focus();
+  });
+
+  // ── assign (drag into a card's zone, or the per-row Group picker) ──
+  const [landedId, setLandedId] = useState<string | null>(null);
+  const landTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => () => {
+    if (landTimer.current != null) clearTimeout(landTimer.current);
+  }, []);
+  const assign = useCallback(
+    (a: FleetAgent, group: string | null) => {
+      if (a.remote || (a.group ?? null) === group) return; // remote is automatic; skip a no-op
+      if (assignMut.isPending) return; // one write already in flight; a second pick would race it
+      setLandedId(a.id); // a brief highlight so the operator sees where it landed
+      if (landTimer.current) clearTimeout(landTimer.current);
+      landTimer.current = setTimeout(() => setLandedId(null), 1200);
+      assignMut.mutate({ id: a.id, group }); // the optimistic patch now lives in assignMut.onMutate
+    },
+    [assignMut],
+  );
+
+  // ── pin / unpin (any agent, remote included) ──
+  const togglePin = useCallback(
+    (a: FleetAgent) => {
+      pinMut.mutate({ id: a.id, pinned: !a.pinned }); // the optimistic patch now lives in pinMut.onMutate
+    },
+    [pinMut],
+  );
+
+  // ── delete (the spec's confirm; the agents become ungrouped, none is removed) ──
+  const [confirmDelete, setConfirmDelete] = useState<FleetGroup | null>(null);
+  const doDelete = useCallback(() => {
+    const g = confirmDelete;
+    setConfirmDelete(null);
+    if (!g) return;
+    if (editingId === g.id) cancelRename();
+    deleteMut.mutate(g.id);
+  }, [confirmDelete, editingId, cancelRename, deleteMut]);
+
+  // ── native HTML5 drag: group cards reorder, agent rows move between cards (desktop only) ──
+  const [drag, setDrag] = useState<{ kind: "group" | "agent"; id: string } | null>(null);
+  const [dropGroupId, setDropGroupId] = useState<string | null>(null);
+  const [dropZone, setDropZone] = useState<string | null>(null);
+  // A row is the drag source, but a press that BEGINS on the row's pin star must not start a row
+  // drag: the drag would suppress the star's click (so the pin never toggles) and could drop the
+  // agent into whatever zone it was released over. Setting draggable=false on the star itself does
+  // nothing — the row, not the star, is the source — so while a star press is down the ROW drops its
+  // draggable, and rearms on release. (True only for the star: the explicit control the reviewer hit.)
+  const [controlPress, setControlPress] = useState(false);
+  const clearDrag = useCallback(() => {
+    setDrag(null);
+    setDropGroupId(null);
+    setDropZone(null);
+  }, []);
+  const dropGroupBefore = useCallback(
+    (targetId: string) => {
+      if (drag?.kind === "group" && drag.id !== targetId) {
+        const ids = fleetOrderIds(groups);
+        const from = ids.indexOf(drag.id);
+        const to = ids.indexOf(targetId);
+        reorderGroups(reorderByDrag(ids, from, dropBeforeIndex(from, to)));
+      }
+      clearDrag();
+    },
+    [drag, groups, reorderGroups, clearDrag],
+  );
+  const dropOnZone = useCallback(
+    (zoneKey: string) => {
+      if (drag?.kind === "agent" && zoneKey !== "remote") {
+        const a = agents.find((x) => x.id === drag.id);
+        if (a) assign(a, zoneKey === "ungrouped" ? null : zoneKey);
+      }
+      clearDrag();
+    },
+    [drag, agents, assign, clearDrag],
+  );
+
+  // ── rows ──
+  const confirmCopy = confirmDelete ? deleteGroupConfirm(confirmDelete.name, membersOf(confirmDelete.id).length) : null;
+
+  const agentRow = (a: FleetAgent) => {
+    const name = a.label ?? a.name;
+    const draggable = canDrag && !a.remote;
+    return (
+      <li
+        key={a.id}
+        className={`fleet-arow${a.id === landedId ? " landed" : ""}${drag?.kind === "agent" && drag.id === a.id ? " dragging" : ""}`}
+        draggable={draggable && !controlPress ? true : undefined}
+        onDragStart={
+          draggable
+            ? (e) => {
+                setDrag({ kind: "agent", id: a.id });
+                e.dataTransfer.effectAllowed = "move";
+                e.dataTransfer.setData("text/plain", a.id);
+              }
+            : undefined
+        }
+        onDragEnd={draggable ? clearDrag : undefined}
+      >
+        <span role="img" aria-label={a.running ? "running" : "stopped"}>
+          <StatusDot status={a.running ? "success" : "neutral"} pulse={a.running} />
+        </span>
+        <span className="fleet-aname">
+          <span className="fleet-aname-text">{name}</span>
+          {a.host ? <Badge status="neutral">this instance</Badge> : null}
+        </span>
+        <button
+          type="button"
+          className={`fleet-star${a.pinned ? " is-pinned" : ""}`}
+          aria-pressed={a.pinned ?? false}
+          aria-label={`${a.pinned ? "Unpin" : "Pin"} ${name}`}
+          title={a.pinned ? "Pinned to the top of the switcher" : "Pin to the top of the switcher"}
+          disabled={!!blocked || (pinMut.isPending && pinMut.variables?.id === a.id)}
+          onPointerDown={() => setControlPress(true)}
+          onPointerUp={() => setControlPress(false)}
+          onPointerCancel={() => setControlPress(false)}
+          onClick={() => togglePin(a)}
+        >
+          <Star size={15} fill={a.pinned ? "currentColor" : "none"} aria-hidden />
+        </button>
+        {a.remote ? (
+          // Remote agents are grouped automatically by their machine — read-only, no picker (spec).
+          <span className="fleet-remote-where">On {a.machine ?? "a paired machine"}</span>
+        ) : (
+          <DropdownSelect
+            className="fleet-group-picker"
+            aria-label={`Group for ${name}`}
+            value={a.group && groupIds.has(a.group) ? a.group : ""}
+            options={groupPickerOptions(groups)}
+            disabled={!!blocked}
+            onValueChange={(v) => assign(a, v || null)}
+          />
+        )}
+      </li>
+    );
+  };
+
+  const zone = (key: string, rows: FleetAgent[], emptyText: string, readOnly = false) => (
+    <ul
+      className={`fleet-zone${!readOnly && drag?.kind === "agent" && dropZone === key ? " is-over" : ""}`}
+      data-zone={key}
+      aria-label="Agents"
+      onDragOver={
+        !readOnly
+          ? (e) => {
+              if (drag?.kind !== "agent") return;
+              e.preventDefault();
+              e.dataTransfer.dropEffect = "move";
+              if (dropZone !== key) setDropZone(key);
+            }
+          : undefined
+      }
+      onDrop={!readOnly ? () => dropOnZone(key) : undefined}
+    >
+      {rows.length ? rows.map(agentRow) : <li className="fleet-zone-empty">{emptyText}</li>}
+    </ul>
+  );
+
+  const groupCard = (g: FleetGroup, i: number) => {
+    const rows = membersOf(g.id);
+    return (
+      <Card
+        key={g.id}
+        className={`fleet-gcard${drag?.kind === "group" && drag.id === g.id ? " dragging" : ""}${
+          drag?.kind === "group" && dropGroupId === g.id && drag.id !== g.id ? " drop-before" : ""
+        }`}
+        aria-label={`${g.name} group`}
+        onDragOver={
+          canDrag
+            ? (e) => {
+                if (drag?.kind !== "group") return;
+                e.preventDefault();
+                if (dropGroupId !== g.id) setDropGroupId(g.id);
+              }
+            : undefined
+        }
+        onDrop={canDrag ? () => dropGroupBefore(g.id) : undefined}
+      >
+        <div className="fleet-ghead">
+          {canDrag ? (
+            <span
+              className="fleet-ghandle"
+              draggable
+              aria-hidden
+              title="Drag to reorder"
+              onDragStart={(e) => {
+                setDrag({ kind: "group", id: g.id });
+                e.dataTransfer.effectAllowed = "move";
+                e.dataTransfer.setData("text/plain", g.id);
+                const card = (e.currentTarget as HTMLElement).closest(".fleet-gcard");
+                if (card) {
+                  const box = card.getBoundingClientRect();
+                  e.dataTransfer.setDragImage(card, e.clientX - box.left, e.clientY - box.top);
+                }
+              }}
+              onDragEnd={clearDrag}
+            >
+              <GripVertical size={15} />
+            </span>
+          ) : null}
+          <div className="fleet-gname">
+            {editingId === g.id ? (
+              <GroupRenameField initial={g.name} error={renameErr} onCommit={(v) => commitRename(g, v)} onCancel={cancelRename} />
+            ) : (
+              <button type="button" className="fleet-gname-btn" title="Rename" disabled={!!blocked} onClick={() => beginRename(g)}>
+                {g.name}
+              </button>
+            )}
+          </div>
+          <Badge status="neutral">{pluralAgents(rows.length)}</Badge>
+          <Button icon variant="ghost" size="sm" data-gmove="up" data-gid={g.id} aria-label={`Move ${g.name} up`} title="Move up" disabled={i === 0 || !!blocked} onClick={() => moveGroup(g, "up")}>
+            <ChevronUp size={15} />
+          </Button>
+          <Button icon variant="ghost" size="sm" data-gmove="down" data-gid={g.id} aria-label={`Move ${g.name} down`} title="Move down" disabled={i === groups.length - 1 || !!blocked} onClick={() => moveGroup(g, "down")}>
+            <ChevronDown size={15} />
+          </Button>
+          <Button icon variant="ghost" size="sm" aria-label={`Delete ${g.name}`} title="Delete" disabled={!!blocked} onClick={() => setConfirmDelete(g)}>
+            <Trash2 size={15} />
+          </Button>
+        </div>
+        {zone(g.id, rows, "No agents yet. Drag one here, or pick this group from an agent's menu.")}
+      </Card>
+    );
+  };
+
+  return (
+    <section className="panel stage-panel">
+      <PanelHeader
+        title={
+          <span className="fleet-groups-title">
+            Groups
+            <span className="fleet-saved" role="status" aria-live="polite">
+              {saved}
+            </span>
+          </span>
+        }
+        kicker="Groups organize the agent switcher. They don't change what agents can do."
+        actions={
+          onBack ? (
+            <Button variant="default" onClick={onBack}>
+              <ArrowLeft size={15} /> Agents
+            </Button>
+          ) : undefined
+        }
+      />
+      <div className="stage-body">
+        {blocked ? (
+          <Empty title="Managed from the host instance" description={blocked} />
+        ) : fleet.isLoading ? (
+          <Empty>Loading the fleet…</Empty>
+        ) : fleet.isError && !fleet.data ? (
+          // The initial fleet read failed, so there is no roster to edit. Showing the empty "No
+          // groups yet" state would invite an Add group that then fails silently; say so instead.
+          <Empty title="Couldn't load the fleet" description="Try again in a moment." />
+        ) : (
+          <div className={`fleet-groups${phone ? " is-phone" : ""}`} ref={rootRef}>
+            <p className="fleet-groups-legend">
+              {phone ? "Pick a group from an agent's menu to move it." : "Drag an agent to another group, or pick one from its menu."} The
+              star pins an agent to the top of the switcher.
+            </p>
+            {groups.length === 0 ? (
+              <Empty>No groups yet. Add one to sort the switcher into sections.</Empty>
+            ) : (
+              groups.map((g, i) => groupCard(g, i))
+            )}
+            <div className="fleet-groups-add">
+              <Button variant="default" size="sm" onClick={() => void addGroup()} disabled={createMut.isPending}>
+                <Plus size={15} /> Add group
+              </Button>
+            </div>
+            {/* "No group" card — the ungrouped agents that sit near the top of the switcher. */}
+            <Card className="fleet-gcard fleet-gcard--fixed" aria-label="No group">
+              <div className="fleet-ghead">
+                <div className="fleet-gname">
+                  <span className="fleet-gname-fixed">No group</span>
+                </div>
+                <Badge status="neutral">{pluralAgents(membersOf("ungrouped").length)}</Badge>
+              </div>
+              <p className="fleet-gnote">These sit near the top of the switcher, without a heading.</p>
+              {zone("ungrouped", membersOf("ungrouped"), "Every agent has a group.")}
+            </Card>
+            {/* Remote card — read-only; paired-machine agents are grouped automatically (spec). */}
+            <Card className="fleet-gcard fleet-gcard--fixed" aria-label="Remote">
+              <div className="fleet-ghead">
+                <div className="fleet-gname">
+                  <span className="fleet-gname-fixed">Remote</span>
+                </div>
+                <Badge status="neutral">{pluralAgents(membersOf("remote").length)}</Badge>
+              </div>
+              <p className="fleet-gnote">Agents from paired machines are grouped automatically.</p>
+              {zone("remote", membersOf("remote"), "No paired machines yet.", true)}
+            </Card>
+          </div>
+        )}
+      </div>
+
+      <ConfirmDialog
+        open={confirmDelete !== null}
+        title={confirmCopy?.title ?? ""}
+        confirmLabel="Delete group"
+        destructive
+        onConfirm={doDelete}
+        onClose={() => setConfirmDelete(null)}
+      >
+        <p>{confirmCopy?.body ?? ""}</p>
+      </ConfirmDialog>
+    </section>
+  );
+}
+
+// The inline rename field (spec: Enter saves, Escape cancels, blur saves best-effort). Its own draft
+// state keeps the parent card re-render cheap; the parent owns the error so an invalid name stays in
+// edit with the spec's copy. `stopPropagation` keeps the key events off any ancestor list handlers.
+function GroupRenameField({
+  initial,
+  error,
+  onCommit,
+  onCancel,
+}: {
+  initial: string;
+  error: string | null;
+  onCommit: (value: string) => boolean;
+  onCancel: () => void;
+}) {
+  const [value, setValue] = useState(initial);
+  const done = useRef(false); // a resolved Enter/Escape suppresses the unmount blur's re-commit
+  return (
+    <div className="fleet-grename" onKeyDown={(e) => e.stopPropagation()}>
+      <Input
+        value={value}
+        autoFocus
+        autoComplete="off"
+        spellCheck={false}
+        maxLength={GROUP_NAME_MAX}
+        aria-label="Group name"
+        aria-invalid={error ? true : undefined}
+        aria-describedby={error ? "fleet-grename-err" : undefined}
+        className={`fleet-grename-input${error ? " is-invalid" : ""}`}
+        onChange={(e) => setValue(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") {
+            e.preventDefault();
+            if (onCommit(value)) done.current = true;
+          } else if (e.key === "Escape") {
+            e.preventDefault();
+            done.current = true;
+            onCancel();
+          }
+        }}
+        onBlur={() => {
+          if (done.current) return;
+          onCommit(value);
+        }}
+      />
+      {error ? (
+        <div className="fleet-grename-err" id="fleet-grename-err" role="alert">
+          {error}
+        </div>
+      ) : null}
+    </div>
   );
 }
