@@ -2062,13 +2062,33 @@ export type FleetAgent = {
    *  `unknown`: not probed yet; `none`: no token stored. Absent on local members and on hubs
    *  that predate pairing. */
   auth?: RemoteAuth;
+  // ── switcher metadata (fleet-switcher spec, docs/design/fleet-switcher-groups.md) ──
+  // Stored with the fleet roster (hub, shared by every browser); all optional, so an older
+  // hub that predates groups still returns today's flat shape and nothing here breaks.
+  /** The `FleetGroup.id` this agent is assigned to. Ignored (and omitted) when `remote` —
+   *  remote agents are grouped automatically by their machine. A group id no current group
+   *  has is treated as ungrouped (the server omits it). */
+  group?: string | null;
+  /** Pinned to the top of the switcher. */
+  pinned?: boolean;
+  /** ISO time the pin was set — gives the Pinned section its order (oldest pin first). */
+  pinned_at?: string;
+  /** Remote only: the paired machine's display name (falls back to the url host) — the
+   *  badge each row in the switcher's single "Remote" section carries. */
+  machine?: string;
 };
 
 /** See `FleetAgent.auth`. */
 export type RemoteAuth = "ok" | "rejected" | "unknown" | "none" | "open";
 
+/** An operator-defined switcher section (fleet-switcher spec). Stored with the fleet roster;
+ *  array order on `FleetStatus.groups` is the switcher display order. The `id` is stable — a
+ *  rename never changes it, and each `FleetAgent.group` points at it by id. */
+export type FleetGroup = { id: string; name: string };
+
 // The focused agent is the URL slug now (ADR 0042 slug routing) — no server-side 'active'.
-export type FleetStatus = { agents: FleetAgent[] };
+// `groups` is the operator's switcher group list in display order (absent/[] on an older hub).
+export type FleetStatus = { agents: FleetAgent[]; groups?: FleetGroup[] };
 
 // Member diagnostics contract (#3168) — the two read-only, operator-tier, redacted,
 // bounded reads every member serves under /api/diagnostics/*, reached for an arbitrary

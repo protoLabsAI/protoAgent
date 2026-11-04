@@ -104,3 +104,41 @@ def test_management_ops_are_registered_as_mutating():
     reg = registry()
     for name in ("fleet.create", "fleet.remove", "fleet.rename", "fleet.remotes.add", "fleet.remotes.update", "fleet.remotes.remove", "fleet.remotes.pair", "fleet.order"):
         assert reg[name].mutates is True, name
+
+
+# ── switcher groups + pins (fleet-switcher spec): hub-only ops, gated like fleet.order ──
+
+
+async def test_group_and_pin_ops_wrap_the_supervisor(monkeypatch):
+    from ops.fleet import agent_group, agent_pin, agent_unpin, groups_create, groups_delete, groups_rename, groups_reorder
+
+    seen: list = []
+    monkeypatch.setattr(supervisor, "create_group", lambda name: (seen.append(("create", name)) or {"id": "g-1", "name": name}))
+    monkeypatch.setattr(supervisor, "rename_group", lambda gid, name: (seen.append(("rename", gid, name)) or {"id": gid, "name": name}))
+    monkeypatch.setattr(supervisor, "reorder_groups", lambda order: (seen.append(("reorder", order)) or [{"id": x, "name": x} for x in order]))
+    monkeypatch.setattr(supervisor, "delete_group", lambda gid: (seen.append(("delete", gid)) or {"id": gid, "removed": True, "ungrouped": 2}))
+    monkeypatch.setattr(supervisor, "set_agent_group", lambda aid, group: (seen.append(("group", aid, group)) or {"id": aid, "group": group}))
+    monkeypatch.setattr(supervisor, "pin_agent", lambda aid: (seen.append(("pin", aid)) or {"id": aid, "pinned": True, "pinned_at": "t"}))
+    monkeypatch.setattr(supervisor, "unpin_agent", lambda aid: (seen.append(("unpin", aid)) or {"id": aid, "pinned": False}))
+
+    assert await groups_create("Writers") == {"id": "g-1", "name": "Writers"}
+    assert await groups_rename("g-1", "Editors") == {"id": "g-1", "name": "Editors"}
+    assert await groups_reorder(["g-2", "g-1"]) == [{"id": "g-2", "name": "g-2"}, {"id": "g-1", "name": "g-1"}]
+    assert await groups_delete("g-1") == {"id": "g-1", "removed": True, "ungrouped": 2}
+    assert await agent_group("ava-1", "g-1") == {"id": "ava-1", "group": "g-1"}
+    assert await agent_group("ava-1", None) == {"id": "ava-1", "group": None}  # clear
+    assert await agent_pin("ava-1") == {"id": "ava-1", "pinned": True, "pinned_at": "t"}
+    assert await agent_unpin("ava-1") == {"id": "ava-1", "pinned": False}
+    assert seen == [
+        ("create", "Writers"), ("rename", "g-1", "Editors"), ("reorder", ["g-2", "g-1"]),
+        ("delete", "g-1"), ("group", "ava-1", "g-1"), ("group", "ava-1", None), ("pin", "ava-1"), ("unpin", "ava-1"),
+    ]
+
+
+def test_group_and_pin_ops_are_registered_as_mutating():
+    reg = registry()
+    for name in (
+        "fleet.groups.create", "fleet.groups.rename", "fleet.groups.reorder", "fleet.groups.delete",
+        "fleet.agent.group", "fleet.agent.pin", "fleet.agent.unpin",
+    ):
+        assert reg[name].mutates is True, name

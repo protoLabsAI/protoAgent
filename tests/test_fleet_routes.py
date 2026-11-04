@@ -1122,3 +1122,193 @@ def test_settings_restart_checks_idle_and_audits_actor(client, monkeypatch):
     upstream.get.side_effect = OSError("offline")
     assert client.post("/api/fleet/member/stop", json=body).status_code == 409
     stop.assert_not_called()
+
+
+# ── fleet switcher groups + pins (fleet-switcher spec, docs/design/fleet-switcher-groups.md) ──
+# The DATA layer for the approved fleet-switcher redesign: operator groups and per-agent pins
+# stored with the roster (keyed by immutable agent id), exposed on GET /api/fleet, written
+# through hub-only routes gated like PUT /api/fleet/order. No UI — these pin the wire contract.
+
+
+def _agent_id(client, name):
+    return next(a["id"] for a in client.get("/api/fleet").json()["agents"] if a["name"] == name)
+
+
+def test_create_rename_reorder_delete_group(client):
+    g1 = client.post("/api/fleet/groups", json={"name": "Writers"}).json()["group"]
+    assert g1["name"] == "Writers" and g1["id"]
+    g2 = client.post("/api/fleet/groups", json={"name": "Coders"}).json()["group"]
+
+    # Listed on GET /api/fleet, in creation (switcher) order.
+    assert [g["id"] for g in client.get("/api/fleet").json()["groups"]] == [g1["id"], g2["id"]]
+
+    # Rename keeps the id (so agent assignments and open windows survive).
+    r = client.patch(f"/api/fleet/groups/{g1['id']}", json={"name": "Editors"})
+    assert r.status_code == 200 and r.json()["group"] == {"id": g1["id"], "name": "Editors"}
+
+    # Reorder — a complete permutation of the current group ids.
+    assert client.put("/api/fleet/groups/order", json={"order": [g2["id"], g1["id"]]}).status_code == 200
+    assert [g["id"] for g in client.get("/api/fleet").json()["groups"]] == [g2["id"], g1["id"]]
+
+    # Delete removes just that group.
+    assert client.delete(f"/api/fleet/groups/{g1['id']}").json()["ok"]
+    assert [g["id"] for g in client.get("/api/fleet").json()["groups"]] == [g2["id"]]
+    assert client.patch(f"/api/fleet/groups/{g1['id']}", json={"name": "x"}).status_code == 400  # gone
+
+
+def test_group_name_validation_uses_spec_copy(client):
+    client.post("/api/fleet/groups", json={"name": "Writers"})
+    empty = client.post("/api/fleet/groups", json={"name": "   "})
+    assert empty.status_code == 400 and empty.json()["detail"] == "Give the group a name."
+    reserved = client.post("/api/fleet/groups", json={"name": "remote"})  # case-insensitive
+    assert reserved.status_code == 400
+    assert reserved.json()["detail"] == '"Remote" is reserved for agents on paired machines.'
+    dup = client.post("/api/fleet/groups", json={"name": "writers"})  # case-insensitive
+    assert dup.status_code == 400 and dup.json()["detail"] == 'There\'s already a group called "writers".'
+    # A rename runs the same validation (reserved name rejected, with the same copy).
+    gid = client.get("/api/fleet").json()["groups"][0]["id"]
+    assert client.patch(f"/api/fleet/groups/{gid}", json={"name": "Remote"}).json()["detail"] == (
+        '"Remote" is reserved for agents on paired machines.'
+    )
+
+
+def test_group_reorder_rejects_bad_payloads_without_touching_saved_order(client):
+    g1 = client.post("/api/fleet/groups", json={"name": "A"}).json()["group"]["id"]
+    g2 = client.post("/api/fleet/groups", json={"name": "B"}).json()["group"]["id"]
+    good = [g2, g1]
+    assert client.put("/api/fleet/groups/order", json={"order": good}).status_code == 200
+    assert client.put("/api/fleet/groups/order", json={"order": [g1]}).status_code == 400  # missing
+    assert client.put("/api/fleet/groups/order", json={"order": [g1, g2, "ghost"]}).status_code == 400  # unknown
+    assert client.put("/api/fleet/groups/order", json={"order": [g1, g1]}).status_code == 400  # duplicate
+    assert client.put("/api/fleet/groups/order", json={"order": "nope"}).status_code == 400  # malformed
+    assert [g["id"] for g in client.get("/api/fleet").json()["groups"]] == good  # untouched
+
+
+def test_set_agent_group_and_delete_ungroups_its_agents(client):
+    client.post("/api/fleet", json={"name": "alpha", "start": False})
+    aid = _agent_id(client, "alpha")
+    gid = client.post("/api/fleet/groups", json={"name": "Writers"}).json()["group"]["id"]
+
+    r = client.put(f"/api/fleet/agents/{aid}/group", json={"group": gid})
+    assert r.status_code == 200 and r.json()["group"] == gid
+    assert next(a for a in client.get("/api/fleet").json()["agents"] if a["id"] == aid)["group"] == gid
+
+    assert client.put(f"/api/fleet/agents/{aid}/group", json={"group": "ghost-0000"}).status_code == 400  # no group
+    assert client.put("/api/fleet/agents/ghost-0000/group", json={"group": gid}).status_code == 400  # no member
+
+    # Deleting the group ungroups the agent — the agent itself is NOT removed.
+    body = client.delete(f"/api/fleet/groups/{gid}").json()
+    assert body["ungrouped"] == 1
+    agent = next(a for a in client.get("/api/fleet").json()["agents"] if a["id"] == aid)
+    assert "group" not in agent and agent["name"] == "alpha"
+
+    # Clearing an assignment with null leaves the agent ungrouped (no `group` key).
+    gid2 = client.post("/api/fleet/groups", json={"name": "Coders"}).json()["group"]["id"]
+    client.put(f"/api/fleet/agents/{aid}/group", json={"group": gid2})
+    assert client.put(f"/api/fleet/agents/{aid}/group", json={"group": None}).json()["group"] is None
+    assert "group" not in next(a for a in client.get("/api/fleet").json()["agents"] if a["id"] == aid)
+
+
+def test_pin_and_unpin_persist_keyed_by_id_and_survive_restart(client):
+    import json
+
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from graph.fleet import supervisor
+    from operator_api.fleet_routes import register_fleet_routes
+
+    client.post("/api/fleet", json={"name": "alpha", "start": False})
+    aid = _agent_id(client, "alpha")
+
+    pin = client.put(f"/api/fleet/agents/{aid}/pin").json()
+    assert pin["pinned"] is True and pin["pinned_at"]
+    # Idempotent — re-pinning keeps the original pin time (the Pinned order is by pin time).
+    assert client.put(f"/api/fleet/agents/{aid}/pin").json()["pinned_at"] == pin["pinned_at"]
+
+    agent = next(a for a in client.get("/api/fleet").json()["agents"] if a["id"] == aid)
+    assert agent["pinned"] is True and agent["pinned_at"] == pin["pinned_at"]
+
+    # Really on disk in the hub-scoped roster.json, keyed by the immutable agent id.
+    roster = json.loads(supervisor._roster_path().read_text())
+    assert roster["agents"][aid] == {"pinned": True, "pinned_at": pin["pinned_at"]}
+
+    # A fresh hub process (new app on the same workspaces dir) still sees it — survives restart.
+    app2 = FastAPI()
+    register_fleet_routes(app2)
+    agent2 = next(a for a in TestClient(app2).get("/api/fleet").json()["agents"] if a["id"] == aid)
+    assert agent2["pinned"] is True and agent2["pinned_at"] == pin["pinned_at"]
+
+    # Unpin drops both keys.
+    assert client.delete(f"/api/fleet/agents/{aid}/pin").json()["pinned"] is False
+    final = next(a for a in client.get("/api/fleet").json()["agents"] if a["id"] == aid)
+    assert "pinned" not in final and "pinned_at" not in final
+
+
+def test_remote_carries_machine_and_can_be_pinned_but_not_grouped(client, monkeypatch):
+    import httpx
+
+    from graph.fleet import supervisor
+
+    supervisor._probe_cache.clear()
+    monkeypatch.setattr(
+        httpx, "get", lambda url, timeout, **kw: type("C", (), {"status_code": 200, "json": lambda s: {"name": "ava"}})()
+    )
+    rid = client.post("/api/fleet/remotes", json={"name": "ava", "url": "http://ava.tail:7871"}).json()["agent"]["id"]
+
+    remote = next(a for a in client.get("/api/fleet").json()["agents"] if a.get("remote"))
+    assert remote["machine"] == "ava.tail"  # the paired machine's display name, from the url host
+
+    # A remote CAN be pinned like any other agent.
+    assert client.put(f"/api/fleet/agents/{rid}/pin").json()["pinned"] is True
+    assert next(a for a in client.get("/api/fleet").json()["agents"] if a["id"] == rid)["pinned"] is True
+
+    # …but it CANNOT be assigned to an operator group — it's grouped by its machine.
+    gid = client.post("/api/fleet/groups", json={"name": "Writers"}).json()["group"]["id"]
+    blocked = client.put(f"/api/fleet/agents/{rid}/group", json={"group": gid})
+    assert blocked.status_code == 400 and "machine" in blocked.json()["detail"]
+    assert "group" not in next(a for a in client.get("/api/fleet").json()["agents"] if a["id"] == rid)
+
+
+def test_older_roster_without_metadata_returns_todays_shape(client):
+    """All switcher fields are optional: with nothing saved, GET /api/fleet looks exactly as it
+    did before — `groups: []` and no group/pinned/pinned_at keys on any agent. A legacy roster
+    holding a BARE order list still loads (order preserved), so nothing older breaks."""
+    import json
+
+    from graph.fleet import supervisor
+
+    client.post("/api/fleet", json={"name": "alpha", "start": False})
+    body = client.get("/api/fleet").json()
+    assert body["groups"] == []
+    for a in body["agents"]:
+        assert not ({"group", "pinned", "pinned_at"} & a.keys())
+
+    ids = [a["id"] for a in body["agents"]]
+    supervisor._roster_path().write_text(json.dumps(list(reversed(ids))))  # legacy bare-list roster
+    out = client.get("/api/fleet").json()
+    assert [a["id"] for a in out["agents"]] == list(reversed(ids))
+    assert out["groups"] == []
+
+
+def test_order_and_groups_share_one_hub_roster_and_order_write_preserves_them(client):
+    """Groups + pins live in the SAME hub-scoped roster.json as the order and are written the
+    same way (gated like PUT /api/fleet/order) — and an order write must NOT drop the groups or
+    pins just written (additive, like the rest of the roster control plane)."""
+    import json
+
+    from graph.fleet import supervisor
+
+    client.post("/api/fleet", json={"name": "alpha", "start": False})
+    ids = [a["id"] for a in client.get("/api/fleet").json()["agents"]]  # [host, alpha]
+    gid = client.post("/api/fleet/groups", json={"name": "Writers"}).json()["group"]["id"]
+    client.put(f"/api/fleet/agents/{ids[0]}/pin")  # the host is pinnable like any agent
+    client.put(f"/api/fleet/agents/{ids[1]}/group", json={"group": gid})
+
+    assert client.put("/api/fleet/order", json={"order": list(reversed(ids))}).status_code == 200
+
+    roster = json.loads(supervisor._roster_path().read_text())
+    assert roster["order"] == list(reversed(ids))
+    assert [g["id"] for g in roster["groups"]] == [gid]
+    assert roster["agents"][ids[0]]["pinned"] is True
+    assert roster["agents"][ids[1]]["group"] == gid

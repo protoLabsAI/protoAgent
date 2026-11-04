@@ -1331,32 +1331,102 @@ def _roster_path() -> Path:
     return manager.workspaces_root() / "roster.json"
 
 
-def _load_roster_order() -> list[str]:
-    """The saved roster order as a list of member ids (``[]`` when unsaved). Tolerant:
-    a missing / corrupt / non-UTF-8 / wrong-shaped file reads as unsaved rather than
-    raising on the ``status()`` read path that every console fleet surface goes through —
-    matching the posture ``_load_state`` / ``_load_remotes`` / ``_load_archetype_catalog``
-    already take for their own files. ``read_text()`` on invalid UTF-8 raises
-    ``UnicodeDecodeError`` (not ``JSONDecodeError``), so it is caught explicitly here —
-    otherwise a byte-corrupt roster.json would 500 both ``status()`` and GET /api/fleet."""
+def _default_roster() -> dict:
+    """The empty roster doc: no saved order, no groups, no per-agent metadata."""
+    return {"order": [], "groups": [], "agents": {}}
+
+
+def _sanitize_group(raw: object) -> dict | None:
+    """One stored group coerced to ``{id, name}``, or ``None`` if unusable — the id must be a
+    non-blank string (it keys each agent's ``group``), the name any string."""
+    if not isinstance(raw, dict):
+        return None
+    gid = raw.get("id")
+    name = raw.get("name")
+    if not isinstance(gid, str) or not gid.strip() or not isinstance(name, str):
+        return None
+    return {"id": gid, "name": name}
+
+
+def _sanitize_agent_meta(raw: object) -> dict[str, dict]:
+    """The per-agent roster metadata (``{id: {group?, pinned?, pinned_at?}}``), every
+    malformed entry dropped — keyed by the immutable agent id, never a name. Only the known
+    keys survive, so a hand-edited file can't smuggle junk onto the /api/fleet payload."""
+    if not isinstance(raw, dict):
+        return {}
+    out: dict[str, dict] = {}
+    for aid, meta in raw.items():
+        if not isinstance(aid, str) or not aid or not isinstance(meta, dict):
+            continue
+        entry: dict = {}
+        group = meta.get("group")
+        if isinstance(group, str) and group.strip():
+            entry["group"] = group
+        if meta.get("pinned") is True:
+            entry["pinned"] = True
+            pinned_at = meta.get("pinned_at")
+            if isinstance(pinned_at, str) and pinned_at:
+                entry["pinned_at"] = pinned_at
+        if entry:
+            out[aid] = entry
+    return out
+
+
+def _load_roster() -> dict:
+    """The saved roster doc — ``{order: [ids], groups: [{id, name}], agents: {id: meta}}`` —
+    always fully shaped. Tolerant: a missing / corrupt / non-UTF-8 / wrong-shaped file (or a
+    legacy bare ``[ids]`` order) reads as the empty roster rather than raising on the
+    ``status()`` read path every console fleet surface goes through — matching the posture
+    ``_load_state`` / ``_load_remotes`` / ``_load_archetype_catalog`` already take for their
+    own files. ``read_text()`` on invalid UTF-8 raises ``UnicodeDecodeError`` (not
+    ``JSONDecodeError``), caught explicitly so a byte-corrupt roster.json can't 500
+    ``status()`` or GET /api/fleet."""
     p = _roster_path()
     if not p.exists():
-        return []
+        return _default_roster()
     try:
         d = json.loads(p.read_text())
     except (OSError, UnicodeDecodeError, json.JSONDecodeError) as e:
-        log.warning("[fleet] %s unreadable (%s) — roster order treated as unsaved", p, e)
-        return []
-    order = d.get("order") if isinstance(d, dict) else d
-    if not isinstance(order, list):
-        return []
-    return [x for x in order if isinstance(x, str) and x]
+        log.warning("[fleet] %s unreadable (%s) — roster treated as unsaved", p, e)
+        return _default_roster()
+    # A legacy roster was a bare order list; today's is a dict carrying order + groups + agents.
+    order_raw = d if isinstance(d, list) else (d.get("order") if isinstance(d, dict) else None)
+    order = [x for x in order_raw if isinstance(x, str) and x] if isinstance(order_raw, list) else []
+    groups: list[dict] = []
+    seen: set[str] = set()
+    for g in (d.get("groups") or []) if isinstance(d, dict) else []:
+        clean = _sanitize_group(g)
+        if clean and clean["id"] not in seen:
+            seen.add(clean["id"])
+            groups.append(clean)
+    agents = _sanitize_agent_meta(d.get("agents")) if isinstance(d, dict) else {}
+    return {"order": order, "groups": groups, "agents": agents}
+
+
+def _save_roster(roster: dict) -> None:
+    """Persist the roster doc atomically — only the known keys, in a stable shape."""
+    from infra.paths import atomic_write
+
+    doc = {
+        "order": [x for x in roster.get("order") or [] if isinstance(x, str) and x],
+        "groups": [{"id": g["id"], "name": g["name"]} for g in roster.get("groups") or []],
+        "agents": {aid: dict(meta) for aid, meta in (roster.get("agents") or {}).items() if meta},
+    }
+    atomic_write(_roster_path(), json.dumps(doc, indent=2) + "\n")
+
+
+def _load_roster_order() -> list[str]:
+    """The saved roster order as a list of member ids (``[]`` when unsaved) — see
+    ``_load_roster`` for the full doc and its tolerance guarantees."""
+    return _load_roster()["order"]
 
 
 def _save_roster_order(order: list[str]) -> None:
-    from infra.paths import atomic_write
-
-    atomic_write(_roster_path(), json.dumps({"order": order}, indent=2) + "\n")
+    """Persist just the roster ORDER, preserving the saved groups + per-agent metadata —
+    an order change must never drop a pin or a group assignment."""
+    roster = _load_roster()
+    roster["order"] = order
+    _save_roster(roster)
 
 
 def _known_member_ids() -> list[str]:
@@ -1430,6 +1500,230 @@ def set_roster_order(order: object) -> list[str]:
     return ids
 
 
+# ── fleet groups + pins (fleet-switcher spec, docs/design/fleet-switcher-groups.md) ──
+# Operator-defined switcher sections and per-agent pins, stored ALONGSIDE the roster order
+# in roster.json (hub-scoped like the rest of the registry). Groups are an ordered
+# [{id, name}] list (array order = switcher order); the per-agent metadata is keyed by the
+# immutable agent id, never the editable name. Writes are hub-only by construction, exactly
+# like set_roster_order: a member runs PROTOAGENT_INSTANCE-scoped, so its own roster.json is
+# its own. All read-modify-write goes through the existing supervisor state lock.
+
+#: "Remote" is the switcher's automatic section for paired-machine agents — an operator group
+#: can't take that name (case-insensitive).
+_RESERVED_GROUP_NAMES = {"remote"}
+
+
+def roster_groups() -> list[dict]:
+    """The saved fleet groups as ``[{id, name}]`` in display order (``[]`` when none)."""
+    return _load_roster()["groups"]
+
+
+def _validate_group_name(name: object, groups: list[dict], *, exclude_id: str | None = None) -> str:
+    """The trimmed group name, or a ``FleetError`` carrying the spec's plain copy: a blank
+    name, the reserved "Remote", or a case-insensitive duplicate of another group is rejected."""
+    clean = name.strip() if isinstance(name, str) else ""
+    if not clean:
+        raise FleetError("Give the group a name.")
+    if clean.lower() in _RESERVED_GROUP_NAMES:
+        raise FleetError('"Remote" is reserved for agents on paired machines.')
+    if any(g["id"] != exclude_id and g["name"].strip().lower() == clean.lower() for g in groups):
+        raise FleetError(f'There\'s already a group called "{clean}".')
+    return clean
+
+
+def _mint_group_id(name: str, groups: list[dict]) -> str:
+    """An opaque, stable group id (``<slug>-<4hex>``) unique among current groups — the id
+    never changes on a rename, mirroring a workspace id (``manager._new_id``)."""
+    import uuid
+
+    base = manager._slugify_display(name)[:24].strip("_-") or "group"
+    existing = {g["id"] for g in groups}
+    while True:
+        cand = f"{base}-{uuid.uuid4().hex[:4]}"
+        if cand not in existing:
+            return cand
+
+
+def _remote_ids() -> set[str]:
+    """The ids of every registered remote member — remotes are grouped automatically by
+    their machine, so they can never be assigned to an operator group."""
+    return {rec["id"] for rec in list_remotes()}
+
+
+def _set_agent_meta(roster: dict, aid: str, meta: dict) -> None:
+    """Store ``meta`` for an agent, or drop its entry entirely when it's now empty — so
+    clearing the last field never leaves a ``{}`` husk behind in roster.json."""
+    if meta:
+        roster["agents"][aid] = meta
+    else:
+        roster["agents"].pop(aid, None)
+
+
+def create_group(name: object) -> dict:
+    """Create an operator group and append it last in switcher order. Returns ``{id, name}``.
+    ``FleetError`` (spec copy) on a blank / reserved / duplicate name."""
+    with _state_lock():
+        roster = _load_roster()
+        clean = _validate_group_name(name, roster["groups"])
+        group = {"id": _mint_group_id(clean, roster["groups"]), "name": clean}
+        roster["groups"].append(group)
+        _save_roster(roster)
+    log.info("[fleet] group created: %s (%s)", group["name"], group["id"])
+    return dict(group)
+
+
+def rename_group(group_id: object, name: object) -> dict:
+    """Rename a group in place — the id (and every agent's ``group`` pointing at it) is
+    unchanged. ``FleetError`` for an unknown id or an invalid name (spec copy)."""
+    gid = str(group_id or "")
+    with _state_lock():
+        roster = _load_roster()
+        group = next((g for g in roster["groups"] if g["id"] == gid), None)
+        if group is None:
+            raise FleetError(f"no fleet group {gid!r}")
+        group["name"] = _validate_group_name(name, roster["groups"], exclude_id=gid)
+        _save_roster(roster)
+    return dict(group)
+
+
+def reorder_groups(order: object) -> list[dict]:
+    """Persist the group DISPLAY order — a COMPLETE permutation of the current group ids.
+    Validated under the state lock like ``set_roster_order``: a non-list, a blank/duplicate
+    id, or an unknown/missing group id is rejected WITHOUT touching the saved groups. Returns
+    the groups in the new order."""
+    if not isinstance(order, list):
+        raise FleetError("group order must be a list of group ids")
+    ids = list(order)
+    if not all(isinstance(x, str) and x.strip() for x in ids):
+        raise FleetError("group order must be non-blank group id strings")
+    if len(ids) != len(set(ids)):
+        raise FleetError("group order has duplicate group ids")
+    with _state_lock():
+        roster = _load_roster()
+        current = {g["id"] for g in roster["groups"]}
+        submitted = set(ids)
+        unknown = submitted - current
+        if unknown:
+            raise FleetError(f"group order names unknown group(s): {', '.join(sorted(unknown))}")
+        missing = current - submitted
+        if missing:
+            raise FleetError(f"group order is missing current group(s): {', '.join(sorted(missing))}")
+        rank = {gid: i for i, gid in enumerate(ids)}
+        roster["groups"].sort(key=lambda g: rank[g["id"]])
+        _save_roster(roster)
+        return [dict(g) for g in roster["groups"]]
+
+
+def delete_group(group_id: object) -> dict:
+    """Delete a group and clear ``group`` on every agent that was in it (they become
+    ungrouped — no agent is removed). ``FleetError`` for an unknown id."""
+    gid = str(group_id or "")
+    with _state_lock():
+        roster = _load_roster()
+        if not any(g["id"] == gid for g in roster["groups"]):
+            raise FleetError(f"no fleet group {gid!r}")
+        roster["groups"] = [g for g in roster["groups"] if g["id"] != gid]
+        ungrouped = 0
+        for aid, meta in list(roster["agents"].items()):
+            if meta.get("group") == gid:
+                meta.pop("group", None)
+                ungrouped += 1
+                _set_agent_meta(roster, aid, meta)
+        _save_roster(roster)
+    log.info("[fleet] group deleted: %s (%d agent(s) ungrouped)", gid, ungrouped)
+    return {"id": gid, "removed": True, "ungrouped": ungrouped}
+
+
+def set_agent_group(agent_id: object, group_id: object) -> dict:
+    """Move an agent into a group (``group_id`` = a FleetGroup id) or out of every group
+    (``group_id`` None / blank). Keyed by the immutable agent id. ``FleetError`` for an
+    unknown member, an unknown group, or a remote member (remotes are grouped by machine)."""
+    aid = str(agent_id or "")
+    gid = group_id.strip() if isinstance(group_id, str) and group_id.strip() else None
+    with _state_lock():
+        roster = _load_roster()
+        if aid not in set(_known_member_ids()):
+            raise FleetError(f"no fleet member {aid!r}")
+        if aid in _remote_ids():
+            raise FleetError("Remote agents are grouped by their machine.")
+        if gid is not None and not any(g["id"] == gid for g in roster["groups"]):
+            raise FleetError(f"no fleet group {gid!r}")
+        meta = dict(roster["agents"].get(aid) or {})
+        if gid is None:
+            meta.pop("group", None)
+        else:
+            meta["group"] = gid
+        _set_agent_meta(roster, aid, meta)
+        _save_roster(roster)
+    return {"id": aid, "group": gid}
+
+
+def pin_agent(agent_id: object) -> dict:
+    """Pin an agent to the top of the switcher. Idempotent — an already-pinned agent keeps
+    its original ``pinned_at`` (the Pinned order is by pin time). ``FleetError`` for an
+    unknown member. A remote member can be pinned like any other."""
+    aid = str(agent_id or "")
+    with _state_lock():
+        roster = _load_roster()
+        if aid not in set(_known_member_ids()):
+            raise FleetError(f"no fleet member {aid!r}")
+        meta = dict(roster["agents"].get(aid) or {})
+        if not meta.get("pinned"):
+            meta["pinned"] = True
+            meta["pinned_at"] = datetime.now(timezone.utc).isoformat()
+        roster["agents"][aid] = meta
+        _save_roster(roster)
+    return {"id": aid, "pinned": True, "pinned_at": roster["agents"][aid]["pinned_at"]}
+
+
+def unpin_agent(agent_id: object) -> dict:
+    """Unpin an agent. ``FleetError`` for an unknown member; a no-op on an already-unpinned
+    one (still a clean result)."""
+    aid = str(agent_id or "")
+    with _state_lock():
+        roster = _load_roster()
+        if aid not in set(_known_member_ids()):
+            raise FleetError(f"no fleet member {aid!r}")
+        meta = dict(roster["agents"].get(aid) or {})
+        meta.pop("pinned", None)
+        meta.pop("pinned_at", None)
+        _set_agent_meta(roster, aid, meta)
+        _save_roster(roster)
+    return {"id": aid, "pinned": False}
+
+
+def _remote_machine(rec: dict, url: str) -> str:
+    """The paired machine's display name for a remote row — a stored ``machine`` if present,
+    else the url host (the spec's fallback). ``""`` when neither is knowable."""
+    machine = str(rec.get("machine") or "").strip()
+    if machine:
+        return machine
+    from urllib.parse import urlsplit
+
+    try:
+        return (urlsplit(url).hostname or "").strip()
+    except ValueError:
+        return ""
+
+
+def _attach_agent_meta(entry: dict, roster: dict, *, remote: bool) -> None:
+    """Decorate a ``status()`` entry with its saved pin + group metadata — all optional, so
+    an older roster (no metadata) leaves today's shape untouched. ``group`` is skipped for a
+    remote (grouped by machine) and for a stored group id no current group has (treated as
+    ungrouped, per the spec)."""
+    meta = roster["agents"].get(str(entry.get("id")))
+    if not meta:
+        return
+    if meta.get("pinned") is True:
+        entry["pinned"] = True
+        if meta.get("pinned_at"):
+            entry["pinned_at"] = meta["pinned_at"]
+    if not remote:
+        gid = meta.get("group")
+        if gid and any(g["id"] == gid for g in roster["groups"]):
+            entry["group"] = gid
+
+
 def _remote_a2a(rid: str, url: str, hub_port: int | None) -> str | None:
     """The A2A endpoint a remote member is ADVERTISED at — the one "Add as delegate" and any
     ``delegate_to`` wiring should use (ADR 0113 D4): the hub's own loopback proxy,
@@ -1468,34 +1762,38 @@ def status() -> list[dict]:
                 dirty = True
         if dirty:
             _save_state(state)
+    # Load the saved roster ONCE: its groups + per-agent pin/group metadata decorate every
+    # entry below, and its order sorts the result at the end.
+    roster = _load_roster()
     host = _host_entry()
+    _attach_agent_meta(host, roster, remote=False)
     out: list[dict] = [host]
     for ws in manager.list_workspaces():
         rec = state.get(ws["id"]) or {}  # state is keyed by the immutable id
         running = _alive(rec.get("pid"))
         port = ws.get("port")
-        out.append(
-            {
-                "name": ws["name"],
-                "label": ws.get("label") or ws["name"],
-                "id": ws.get("id", ws["name"]),
-                "port": port,
-                "pid": rec.get("pid") if running else None,
-                "running": running,
-                "bundle": ws.get("bundle", ""),
-                # The version the member was SPAWNED at (stamped in start()) —
-                # the console compares it against the host entry's version so a
-                # local member left behind by an app update shows the same skew
-                # badge a drifted remote does. Empty while stopped (a stopped
-                # member runs whatever binary the next start() spawns).
-                "version": rec.get("version", "") if running else "",
-                # Direct A2A endpoint — every agent is an independent endpoint on its
-                # own port (ADR 0042), reachable regardless of console focus, so a
-                # focused agent can `delegate_to` an unfocused sibling here. Live only
-                # while running, but the address is stable.
-                "a2a": f"http://127.0.0.1:{port}/a2a" if port else None,
-            }
-        )
+        entry = {
+            "name": ws["name"],
+            "label": ws.get("label") or ws["name"],
+            "id": ws.get("id", ws["name"]),
+            "port": port,
+            "pid": rec.get("pid") if running else None,
+            "running": running,
+            "bundle": ws.get("bundle", ""),
+            # The version the member was SPAWNED at (stamped in start()) —
+            # the console compares it against the host entry's version so a
+            # local member left behind by an app update shows the same skew
+            # badge a drifted remote does. Empty while stopped (a stopped
+            # member runs whatever binary the next start() spawns).
+            "version": rec.get("version", "") if running else "",
+            # Direct A2A endpoint — every agent is an independent endpoint on its
+            # own port (ADR 0042), reachable regardless of console focus, so a
+            # focused agent can `delegate_to` an unfocused sibling here. Live only
+            # while running, but the address is stable.
+            "a2a": f"http://127.0.0.1:{port}/a2a" if port else None,
+        }
+        _attach_agent_meta(entry, roster, remote=False)
+        out.append(entry)
     for rec in list_remotes():
         rid = rec["id"]  # list_remotes() recovers it from the registry key
         # Every other field is read defensively. The roster is the FIRST thing
@@ -1507,30 +1805,37 @@ def status() -> list[dict]:
         # ``reachable: false`` entry in the telemetry rollup rather than a 500.
         url = str(rec.get("url") or "")
         alive = _probe_cache.get(rid, (False, 0.0))[0]
-        out.append(
-            {
-                "name": rec.get("name") or rid,
-                "label": rec.get("label") or rec.get("name") or rid,
-                "id": rid,
-                "port": None,
-                "pid": None,
-                "running": alive,
-                "bundle": "",
-                "remote": True,
-                "url": url,
-                # Last-probed remote version (from its A2A card) — NEVER the token.
-                "version": rec.get("version", ""),
-                "a2a": _remote_a2a(rid, url, host.get("port")),
-                # Whether the stored token is accepted (ADR 0113 D5) — the VERDICT, never
-                # the token: ok | rejected | unknown | none (no token stored).
-                "auth": remote_auth(rec),
-            }
-        )
+        entry = {
+            "name": rec.get("name") or rid,
+            "label": rec.get("label") or rec.get("name") or rid,
+            "id": rid,
+            "port": None,
+            "pid": None,
+            "running": alive,
+            "bundle": "",
+            "remote": True,
+            "url": url,
+            # Last-probed remote version (from its A2A card) — NEVER the token.
+            "version": rec.get("version", ""),
+            "a2a": _remote_a2a(rid, url, host.get("port")),
+            # Whether the stored token is accepted (ADR 0113 D5) — the VERDICT, never
+            # the token: ok | rejected | unknown | none (no token stored).
+            "auth": remote_auth(rec),
+        }
+        # The paired machine's display name (spec: falls back to the url host) — what the
+        # switcher's one "Remote" section badges each remote row with. Omitted when neither
+        # a stored machine name nor a url host is knowable.
+        machine = _remote_machine(rec, url)
+        if machine:
+            entry["machine"] = machine
+        # Remotes are pinnable like any other agent (group is skipped — grouped by machine).
+        _attach_agent_meta(entry, roster, remote=True)
+        out.append(entry)
     # Apply the saved roster display order (ADR 0042 hub control-plane), reconciling live
     # membership: ordered members first in the saved order, any member added since (or never
     # ordered) keeps discovery order and follows. Unsaved → the default host/local/remote
     # order built above. A plain, tolerant read — no lock, like list_remotes on this path.
-    return _apply_roster_order(out, _load_roster_order())
+    return _apply_roster_order(out, roster["order"])
 
 
 def up(names: list[str] | None = None) -> list[dict]:
