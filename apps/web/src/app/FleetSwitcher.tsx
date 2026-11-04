@@ -8,7 +8,7 @@ import { Input } from "@protolabsai/ui/forms";
 import { Badge, Button } from "@protolabsai/ui/primitives";
 import { StatusDot } from "@protolabsai/ui/data";
 
-import { agentHref, api, currentSlug } from "../lib/api";
+import { agentHref, api, ApiError, currentSlug } from "../lib/api";
 import { queryKeys } from "../lib/queries";
 import { readKey, writeKey } from "../lib/storage";
 import type { FleetAgent, FleetStatus } from "../lib/types";
@@ -149,9 +149,19 @@ export function FleetSwitcher({
     async (a: FleetAgent, raw: string): Promise<string | null> => {
       const err = validateGroupName(raw);
       if (err) return err;
-      const res = await createGroupMut.mutateAsync(raw.trim());
-      moveToGroup(a, res.group.id);
-      return null;
+      // The server owns the authoritative name check, so a name that clears the local rules can
+      // still be rejected here — e.g. a duplicate created from another browser that the 3s poll
+      // hasn't picked up yet (a 400). Return the server's plain copy (`ApiError.message` is its
+      // `detail`) instead of rejecting into the caller: a bare reject would skip the error UI,
+      // leave the phone sheet stuck, and log an unhandled rejection. Every caller renders the
+      // returned string. On success the mutation's invalidation reconciles the roster.
+      try {
+        const res = await createGroupMut.mutateAsync(raw.trim());
+        moveToGroup(a, res.group.id);
+        return null;
+      } catch (e) {
+        return e instanceof ApiError && e.message ? e.message : "Couldn't create the group. Try again.";
+      }
     },
     [validateGroupName, createGroupMut, moveToGroup],
   );
@@ -362,7 +372,6 @@ export function FleetSwitcher({
         slug={slug}
         isCollapsed={isCollapsed}
         toggleCollapsed={toggleCollapsed}
-        collapsed={collapsed}
         canWrite={canWrite}
         groups={groups}
         doSwitch={doSwitch}
@@ -542,7 +551,11 @@ const RowMenu = forwardRef<
             if (e.key === "Enter") {
               e.preventDefault();
               const err = await createAndMove(target, newName);
+              // On success close the menu (onOpenChange resets view/target), so re-opening
+              // starts clean — otherwise the 'new' view lingers with the typed name and a
+              // second Enter after the refetch shows a false "already a group" error.
               if (err) setNewErr(err);
+              else ref.current?.close();
             } else if (e.key === "Escape") {
               e.preventDefault();
               setView("move");
@@ -597,7 +610,6 @@ type PhoneProps = {
   slug: string;
   isCollapsed: (key: string) => boolean;
   toggleCollapsed: (key: string) => void;
-  collapsed: string[];
   canWrite: boolean;
   groups: { id: string; name: string }[];
   doSwitch: (a: FleetAgent) => void;

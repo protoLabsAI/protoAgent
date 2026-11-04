@@ -18,19 +18,35 @@ import themeCss from "./theme.css?raw";
 const mobileRef = vi.hoisted(() => ({ value: false }));
 vi.mock("../lib/useIsMobile", () => ({ useIsMobile: () => mobileRef.value }));
 
-vi.mock("../lib/api", () => ({
-  agentHref: vi.fn((slug: string) => `/app/agent/${slug}/`),
-  currentSlug: vi.fn(() => "host"),
-  api: {
-    fleet: vi.fn(),
-    pinFleetAgent: vi.fn(),
-    unpinFleetAgent: vi.fn(),
-    setFleetAgentGroup: vi.fn(),
-    createFleetGroup: vi.fn(),
-  },
-}));
+vi.mock("../lib/api", () => {
+  // The real ApiError (carries the server's `detail` as its message). The component does
+  // `e instanceof ApiError` to decide whether to surface the server's copy, so the mock must
+  // export the SAME class the test rejects with for that check to hold.
+  class ApiError extends Error {
+    constructor(
+      readonly status: number,
+      message: string,
+      readonly code?: string,
+    ) {
+      super(message);
+      this.name = "ApiError";
+    }
+  }
+  return {
+    ApiError,
+    agentHref: vi.fn((slug: string) => `/app/agent/${slug}/`),
+    currentSlug: vi.fn(() => "host"),
+    api: {
+      fleet: vi.fn(),
+      pinFleetAgent: vi.fn(),
+      unpinFleetAgent: vi.fn(),
+      setFleetAgentGroup: vi.fn(),
+      createFleetGroup: vi.fn(),
+    },
+  };
+});
 
-import { agentHref, api } from "../lib/api";
+import { agentHref, api, ApiError } from "../lib/api";
 
 // Radix (DropdownMenu/Popper/Drawer focus-trap) touches layout + pointer-capture APIs jsdom lacks.
 Element.prototype.hasPointerCapture ??= () => false;
@@ -281,6 +297,94 @@ describe("FleetSwitcher — desktop dropdown", () => {
     expect(api.setFleetAgentGroup).toHaveBeenCalledWith("n2", "g-qa");
   });
 
+  // Walk the New group… field through each validateGroupName rejection — the server is never
+  // called because all three fail the local rules; a regression in the copy or the reserved-name
+  // rule would show here. Copy is verbatim from the spec's Rename rules.
+  it("shows the group-name validation errors (blank, reserved, duplicate)", async () => {
+    await mount();
+    await openMenu();
+    const nameSpan = [...document.querySelectorAll(".fleet-switcher-name")].find((el) =>
+      (el.textContent || "").includes("orion"),
+    )!;
+    act(() => nameSpan.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true })));
+    await flush();
+    clickEl(itemByText(rowMenu(), "Move to group…")!);
+    await flush();
+    clickEl(itemByText(rowMenu(), "New group…")!);
+    await flush();
+    const input = rowMenu()!.querySelector('input[aria-label="New group name"]') as HTMLInputElement;
+    const errText = () => rowMenu()!.querySelector(".fleet-newgroup-err")?.textContent || "";
+
+    setInput(input, "   "); // trims to blank
+    keydown(input, "Enter");
+    await flush();
+    expect(errText()).toContain("Give the group a name.");
+
+    setInput(input, "Remote"); // reserved, case-insensitive
+    keydown(input, "Enter");
+    await flush();
+    expect(errText()).toContain('"Remote" is reserved for agents on paired machines.');
+
+    setInput(input, "Demos"); // already a group in the roster
+    keydown(input, "Enter");
+    await flush();
+    expect(errText()).toContain('There\'s already a group called "Demos".');
+
+    // All three were rejected locally — nothing hit the server.
+    expect(api.createFleetGroup).not.toHaveBeenCalled();
+    expect(api.setFleetAgentGroup).not.toHaveBeenCalled();
+  });
+
+  it("surfaces the server's error when a group create is rejected, without an unhandled rejection", async () => {
+    // A name that clears the local rules but the server still 400s (a duplicate another browser
+    // just made). createAndMove must catch it and return the server's copy, not reject.
+    (api.createFleetGroup as ReturnType<typeof vi.fn>).mockRejectedValueOnce(
+      new ApiError(400, 'There\'s already a group called "QA".'),
+    );
+    await mount();
+    await openMenu();
+    const nameSpan = [...document.querySelectorAll(".fleet-switcher-name")].find((el) =>
+      (el.textContent || "").includes("orion"),
+    )!;
+    act(() => nameSpan.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true })));
+    await flush();
+    clickEl(itemByText(rowMenu(), "Move to group…")!);
+    await flush();
+    clickEl(itemByText(rowMenu(), "New group…")!);
+    await flush();
+    const input = rowMenu()!.querySelector('input[aria-label="New group name"]') as HTMLInputElement;
+    setInput(input, "QA");
+    keydown(input, "Enter");
+    await flush();
+    expect(api.createFleetGroup).toHaveBeenCalledWith("QA");
+    expect(api.setFleetAgentGroup).not.toHaveBeenCalled(); // the move never ran
+    // The server's message shows inline and the menu stays open (it didn't close or crash).
+    expect(rowMenu()!.querySelector(".fleet-newgroup-err")?.textContent).toContain(
+      'There\'s already a group called "QA".',
+    );
+  });
+
+  it("closes the row menu after a group is created so re-opening starts clean", async () => {
+    await mount();
+    await openMenu();
+    const nameSpan = [...document.querySelectorAll(".fleet-switcher-name")].find((el) =>
+      (el.textContent || "").includes("orion"),
+    )!;
+    act(() => nameSpan.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true })));
+    await flush();
+    clickEl(itemByText(rowMenu(), "Move to group…")!);
+    await flush();
+    clickEl(itemByText(rowMenu(), "New group…")!);
+    await flush();
+    const input = rowMenu()!.querySelector('input[aria-label="New group name"]') as HTMLInputElement;
+    setInput(input, "QA");
+    keydown(input, "Enter");
+    await flush();
+    expect(api.createFleetGroup).toHaveBeenCalledWith("QA");
+    // The 'new' view no longer lingers with the typed name — the menu closed on success.
+    expect(document.querySelector('input[aria-label="New group name"]')).toBeFalsy();
+  });
+
   it("focuses the filter on open so the operator can start typing", async () => {
     await mount();
     await openMenu();
@@ -365,6 +469,33 @@ describe("FleetSwitcher — phone bottom sheet", () => {
     clickEl(demos);
     await flush();
     expect(api.setFleetAgentGroup).toHaveBeenCalledWith("n2", "g-demos");
+  });
+
+  it("surfaces the server's error in the new-group sheet and keeps it open when the create is rejected", async () => {
+    (api.createFleetGroup as ReturnType<typeof vi.fn>).mockRejectedValueOnce(
+      new ApiError(400, 'There\'s already a group called "QA".'),
+    );
+    await mount();
+    clickEl(document.querySelector('[data-testid="fleet-switcher"]')!);
+    await flush();
+    clickEl(document.querySelector('[aria-label="More for orion"]')!);
+    await flush();
+    const moveBtn = [...document.querySelectorAll("button")].find((b) => (b.textContent || "").includes("Move to group…"))!;
+    clickEl(moveBtn);
+    await flush();
+    const newBtn = [...document.querySelectorAll("button")].find((b) => (b.textContent || "").includes("New group…"))!;
+    clickEl(newBtn);
+    await flush();
+    const input = document.querySelector('input[aria-label="New group name"]') as HTMLInputElement;
+    setInput(input, "QA");
+    const createBtn = [...document.querySelectorAll("button")].find((b) => (b.textContent || "").trim() === "Create")!;
+    clickEl(createBtn);
+    await flush();
+    expect(api.createFleetGroup).toHaveBeenCalledWith("QA");
+    expect(api.setFleetAgentGroup).not.toHaveBeenCalled();
+    // The sheet stays on the new-group view with the server's copy — it didn't go back or crash.
+    expect(document.querySelector(".fleet-newgroup-err")?.textContent).toContain('There\'s already a group called "QA".');
+    expect(document.querySelector('input[aria-label="New group name"]')).toBeTruthy();
   });
 
   it("a remote agent's actions sheet disables Move with the spec's reason as plain text", async () => {
