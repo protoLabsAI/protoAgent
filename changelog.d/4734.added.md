@@ -1,0 +1,7 @@
+- **Finished background jobs are pruned after a retention window (#4726, #PRNUM).**
+  The background job store used to keep every job forever. The maintenance loop now
+  deletes a completed, failed or canceled job once its result has been delivered to the
+  session that spawned it and it finished more than `background.retention_days` ago. The
+  default is 90 days, the same as `telemetry.retention_days`, so a job ages out with its
+  turn rows. Running jobs and undelivered results are never deleted, and `0` keeps
+  everything.

@@ -1430,6 +1430,10 @@ class LangGraphConfig:
     # immediately and the agent briefs the operator — instead of the report waiting
     # for that session's next manual turn. False restores pull-only delivery.
     background_auto_resume: bool = True
+    # Background-job retention (#4726): a finished job whose result was already delivered
+    # is deleted once it is older than this. Matches `telemetry_retention_days`, so a job
+    # ages out with its turn rows. 0 = keep forever.
+    background_retention_days: int = 90
     checkpoint_max_age_days: int = 30
     checkpoint_prune_interval_hours: int = 6
     # When a session is retired (aged out or deleted), summarize it into the
@@ -2365,6 +2369,9 @@ class LangGraphConfig:
                 "background_keep", cls.checkpoint_background_keep
             ),
             background_auto_resume=data.get("background", {}).get("auto_resume", cls.background_auto_resume),
+            background_retention_days=data.get("background", {}).get(
+                "retention_days", cls.background_retention_days
+            ),
             checkpoint_max_age_days=data.get("checkpoint", {}).get("max_age_days", cls.checkpoint_max_age_days),
             checkpoint_prune_interval_hours=data.get("checkpoint", {}).get(
                 "prune_interval_hours", cls.checkpoint_prune_interval_hours

@@ -662,6 +662,7 @@ def _run_one_maintenance_pass(monkeypatch, cfg, **state):
         "activity_log": None,
         "a2a_task_engine": None,
         "ledger_store": None,
+        "background_mgr": None,
     }
     for name, value in {**base, **state}.items():
         monkeypatch.setattr(STATE, name, value, raising=False)
@@ -705,3 +706,32 @@ def test_the_maintenance_pass_prunes_the_ledger_only_when_a_window_is_set(tmp_pa
     _run_one_maintenance_pass(monkeypatch, cfg, ledger_store=store)
 
     assert sorted(r["to_name"] for r in store.recent()) == left
+
+
+@pytest.mark.parametrize(("keep_days", "left"), [(90, {"recent", "running", "undelivered"}), (0, None)])
+def test_the_maintenance_pass_prunes_delivered_background_jobs(tmp_path, monkeypatch, keep_days, left):
+    # #4726: the background job store was never pruned. The pass now drops a finished job
+    # once its result was delivered and it is past the window; 0 keeps everything.
+    from datetime import UTC, datetime, timedelta
+    from types import SimpleNamespace
+
+    from background.store import BackgroundStore
+
+    store = BackgroundStore(str(tmp_path / "background" / "jobs.db"))
+    old = datetime.now(UTC) - timedelta(days=200)
+    ids = {}
+    for name, session in (("old", "s-old"), ("recent", "s-recent"), ("running", "s-run"), ("undelivered", "s-und")):
+        ids[name] = store.create(
+            agent_name="a", origin_session=session, subagent_type="researcher", description=name, prompt="p", now=old
+        )
+    store.mark_complete(ids["old"], "completed", "r", now=old)
+    store.mark_complete(ids["recent"], "completed", "r")
+    store.mark_complete(ids["undelivered"], "completed", "r", now=old)
+    store.drain_pending("s-old")
+    store.drain_pending("s-recent")
+    cfg = SimpleNamespace(checkpoint_prune_interval_hours=0, background_retention_days=keep_days)
+
+    _run_one_maintenance_pass(monkeypatch, cfg, background_mgr=SimpleNamespace(store=store))
+
+    remaining = {j.description for j in store.list(include_dismissed=True)}
+    assert remaining == (left if left is not None else set(ids))

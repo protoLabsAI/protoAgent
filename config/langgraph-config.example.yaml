@@ -372,8 +372,11 @@ checkpoint:
 # auto_resume: when a job finishes, immediately run a turn in the session that
 # spawned it so the agent reviews the report and briefs the operator; false
 # restores pull-only delivery (the report drains on that session's next turn).
+# retention_days: delete a finished job once its result was delivered and it is
+# older than this; running jobs and undelivered results are kept. 0 = keep forever.
 background:
   auto_resume: true
+  retention_days: 90
 
 # Model routing / failover.
 #   aux_model: ONE cheap/fast alias for the non-reasoning calls — context

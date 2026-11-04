@@ -103,6 +103,7 @@ FROM_YAML_EXAMPLE_FIELDS = {
     "memory_ceiling_mb": 0,
     "aux_model": "",
     "background_auto_resume": True,
+    "background_retention_days": 90,
     "bind_host": "127.0.0.1",
     "network_trusted_proxies": [],
     "public_console_url": "",

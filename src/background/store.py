@@ -17,7 +17,7 @@ import logging
 import sqlite3
 import uuid
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 log = logging.getLogger("protoagent.background")
@@ -483,6 +483,30 @@ class BackgroundStore:
             ):
                 reconciled += 1
         return reconciled
+
+    def prune(self, older_than_days: int, *, now: datetime | None = None) -> int:
+        """Delete finished jobs whose result was already delivered, once they are older
+        than ``older_than_days`` (#4726). Returns rows removed. ``0`` keeps everything.
+
+        Only a terminal job with ``notified = 1`` and a ``completed_at`` before the cutoff
+        goes. A running job, or a finished one whose result hasn't drained into its
+        session yet, is never touched. Dismissed or not doesn't matter: dismissing only
+        hides a job from the panel."""
+        if older_than_days <= 0:
+            return 0
+        cutoff = ((now or datetime.now(UTC)) - timedelta(days=older_than_days)).isoformat()
+        marks = ", ".join("?" for _ in _TERMINAL)
+        db = self._connect()
+        try:
+            cur = db.execute(
+                f"DELETE FROM background_jobs WHERE status IN ({marks}) AND notified = 1 "
+                "AND completed_at IS NOT NULL AND completed_at < ?",
+                (*_TERMINAL, cutoff),
+            )
+            db.commit()
+            return cur.rowcount
+        finally:
+            db.close()
 
     # ── reads ───────────────────────────────────────────────────────────────
 

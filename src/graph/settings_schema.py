@@ -1541,6 +1541,18 @@ FIELDS: list[Field] = [
         "spawned it so the agent reviews the report and briefs the operator (ADR 0070). "
         "Off = the report waits for that session's next manual turn.",
     ),
+    Field(
+        "background.retention_days",
+        "background_retention_days",
+        "Finished job retention (days)",
+        "number",
+        "Background",
+        "Delete a finished background job and its report once it is older than this and "
+        "its result has been delivered to the session that spawned it. Running jobs and "
+        "undelivered results are never deleted. 0 = keep forever.",
+        minimum=0,
+        restart=True,
+    ),
     # ── Runtime (restart) ────────────────────────────────────────────────────
     Field(
         "runtime.autostart_on_boot",
