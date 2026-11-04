@@ -340,3 +340,59 @@ async def test_the_run_route_resolves_a_job_id_to_the_run_it_belongs_to(ledger_d
     assert body["run_id"] == "task-1" and body["resolved_from"] == "bg-1"
     assert [e["edge_uuid"] for e in body["edges"]] == ["e1"]
     assert [t["task_id"] for t in body["turns"]] == ["task-1"]
+
+
+def _run_client():
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from operator_api import telemetry_routes
+
+    app = FastAPI()
+    telemetry_routes.register_telemetry_routes(app)
+    return TestClient(app)
+
+
+async def test_the_run_route_resolves_an_edge_uuid_deep_inside_a_run(ledger_db, tmp_path, monkeypatch):
+    # The run inspector links to one edge (the org chart's history rows carry an edge, not
+    # its run), so a non-root edge's uuid has to find the run it belongs to.
+    import runtime.state as rs
+
+    monkeypatch.setattr(rs.STATE, "telemetry_store", None, raising=False)
+    ledger_db.record(from_agent="a", to_kind="subagent", to_name="r", edge_uuid="e1", run_id="task-1")
+    ledger_db.record(from_agent="a", to_kind="acp", to_name="c", edge_uuid="e2", parent_uuid="e1", run_id="task-1")
+
+    body = _run_client().get("/api/runs/e2").json()
+
+    assert body["run_id"] == "task-1" and body["resolved_from"] == "e2"
+    assert [e["edge_uuid"] for e in body["edges"]] == ["e1", "e2"]
+    assert "langfuse_trace_url_template" in body and "tracing_enabled" in body
+
+
+async def test_the_run_route_resolves_an_edge_still_in_flight(ledger_db, monkeypatch):
+    # A live edge has no durable row until it closes, so its id resolves from the live
+    # registry, and the run's own id answers with it in `live` and no resolution.
+    import runtime.state as rs
+
+    monkeypatch.setattr(rs.STATE, "telemetry_store", None, raising=False)
+    with ledger.run_scope(session_id="s1", run_id="turn-9"):
+        edge_id = ledger.open_edge(to_kind="subagent", to_name="planner", task_id="job-9")
+    try:
+        client = _run_client()
+        by_edge = client.get(f"/api/runs/{edge_id}").json()
+        by_job = client.get("/api/runs/job-9").json()
+        by_run = client.get("/api/runs/turn-9").json()
+    finally:
+        ledger.close_edge(edge_id, outcome="ok")
+
+    assert (by_edge["run_id"], by_edge["resolved_from"]) == ("turn-9", edge_id)
+    assert (by_job["run_id"], by_job["resolved_from"]) == ("turn-9", "job-9")
+    assert by_run["resolved_from"] == "" and [e["id"] for e in by_run["live"]] == [edge_id]
+
+
+async def test_an_unknown_run_id_answers_empty_not_an_error(ledger_db, monkeypatch):
+    import runtime.state as rs
+
+    monkeypatch.setattr(rs.STATE, "telemetry_store", None, raising=False)
+    body = _run_client().get("/api/runs/nope").json()
+    assert (body["run_id"], body["resolved_from"], body["edges"], body["turns"], body["live"]) == ("nope", "", [], [], [])
