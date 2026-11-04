@@ -75,6 +75,8 @@ _COLUMNS = (
     "edge_uuid",
     "parent_uuid",
     "run_id",
+    "completion",
+    "nudges",
 )
 
 
@@ -128,9 +130,15 @@ class LedgerStore:
             # keying on it would silently overwrite edges, which is exactly the defect
             # the telemetry store had to migrate away from (#3001).
             # #4726: the tree links. Idempotent ALTERs for a DB created before them.
-            for _col in ("edge_uuid", "parent_uuid", "run_id"):
+            for _col, _type in (
+                ("edge_uuid", "TEXT"),
+                ("parent_uuid", "TEXT"),
+                ("run_id", "TEXT"),
+                ("completion", "TEXT"),  # the completion check's verdict (#4726)
+                ("nudges", "INTEGER DEFAULT 0"),
+            ):
                 try:
-                    db.execute(f"ALTER TABLE delegations ADD COLUMN {_col} TEXT")
+                    db.execute(f"ALTER TABLE delegations ADD COLUMN {_col} {_type}")
                 except sqlite3.OperationalError:
                     pass  # column already present
             db.execute("CREATE INDEX IF NOT EXISTS ix_deleg_at ON delegations(at)")
@@ -163,6 +171,8 @@ class LedgerStore:
         edge_uuid: str = "",
         parent_uuid: str = "",
         run_id: str = "",
+        completion: str = "",
+        nudges: int = 0,
     ) -> int | None:
         """Append one delegation edge. Returns its ``edge_id``, or None on failure.
 
@@ -189,6 +199,8 @@ class LedgerStore:
             "edge_uuid": str(edge_uuid or ""),
             "parent_uuid": str(parent_uuid or ""),
             "run_id": str(run_id or ""),
+            "completion": str(completion or ""),
+            "nudges": int(nudges or 0),
         }
         db = self._connect()
         try:
@@ -343,6 +355,8 @@ class LedgerStore:
                    SUM(CASE WHEN outcome = 'ok' THEN 1 ELSE 0 END) AS ok,
                    SUM(CASE WHEN outcome = 'failed' THEN 1 ELSE 0 END) AS failed,
                    SUM(CASE WHEN outcome = 'cancelled' THEN 1 ELSE 0 END) AS cancelled,
+                   SUM(CASE WHEN completion IN ('incomplete', 'partial') THEN 1 ELSE 0 END) AS incomplete,
+                   SUM(CASE WHEN COALESCE(nudges, 0) > 0 THEN 1 ELSE 0 END) AS nudged,
                    SUM(COALESCE(duration_ms, 0))                   AS duration_ms,
                    SUM(cost_usd)                                   AS cost_usd,
                    SUM(CASE WHEN cost_usd IS NOT NULL THEN 1 ELSE 0 END) AS priced,
@@ -354,6 +368,42 @@ class LedgerStore:
             sql += " WHERE at >= ?"
             args.append((datetime.now(UTC) - timedelta(days=int(since_days))).isoformat())
         sql += " GROUP BY to_kind, to_name, to_instance ORDER BY dispatches DESC"
+        db = self._connect()
+        try:
+            return [dict(r) for r in db.execute(sql, args).fetchall()]
+        except sqlite3.Error:
+            log.exception("[ledger] aggregate failed")
+            return []
+        finally:
+            db.close()
+
+    def completion_stats(self, *, since_days: int | None = None, to_name: str = "") -> list[dict]:
+        """The completion check's record per subagent type (#4726): how many checked runs
+        delivered, how many of those needed a nudge first, and how many ended incomplete
+        or hard-stopped. Only rows with a verdict count; a run with no contract has none.
+
+        ``rescued`` (delivered after at least one nudge) is the guard's effect; ``incomplete``
+        plus ``partial`` over ``checked`` is the rate it didn't fix."""
+        sql = """
+            SELECT to_name,
+                   COUNT(*)                                                             AS checked,
+                   SUM(CASE WHEN completion = 'complete' THEN 1 ELSE 0 END)             AS complete,
+                   SUM(CASE WHEN completion = 'complete' AND nudges > 0 THEN 1 ELSE 0 END) AS rescued,
+                   SUM(CASE WHEN completion = 'incomplete' THEN 1 ELSE 0 END)           AS incomplete,
+                   SUM(CASE WHEN completion = 'partial' THEN 1 ELSE 0 END)              AS partial,
+                   SUM(COALESCE(nudges, 0))                                             AS nudges,
+                   MIN(at) AS first_at, MAX(at) AS last_at
+            FROM delegations
+            WHERE to_kind = 'subagent' AND COALESCE(completion, '') != ''
+        """
+        args: list[object] = []
+        if since_days is not None:
+            sql += " AND at >= ?"
+            args.append((datetime.now(UTC) - timedelta(days=int(since_days))).isoformat())
+        if to_name:
+            sql += " AND lower(to_name) = lower(?)"
+            args.append(to_name)
+        sql += " GROUP BY to_name ORDER BY checked DESC"
         db = self._connect()
         try:
             return [dict(r) for r in db.execute(sql, args).fetchall()]

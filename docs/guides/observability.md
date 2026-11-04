@@ -58,6 +58,24 @@ pass a workflow run id, a background job id or a coding-agent run's task id. The
 finds the run that work belongs to and says so in `resolved_from`. Delegations recorded
 before this field existed have no run and don't appear.
 
+### Count completion-check outcomes
+
+A subagent with a completion contract (the review lanes, the verifier) is checked when it
+ends. If it stopped without its deliverable, it gets up to two nudges to finish. Each
+ledger row records the check's verdict in `completion` (`complete`, `incomplete`, or
+`partial` for a hard stop at `max_turns`) and the nudges it took in `nudges`. A lane can
+be `outcome: ok` and `completion: incomplete`: the dispatch worked, but what it returned
+wasn't the deliverable.
+
+```bash
+curl -H "Authorization: Bearer $PROTOAGENT_TOKEN" \
+  'http://localhost:7870/api/ledger/completion?days=7'
+```
+
+For each subagent type it returns the runs checked, how many delivered, how many of
+those needed a nudge first (`rescued`), and how many ended `incomplete` or `partial`.
+Runs recorded before the verdict existed aren't counted.
+
 Plugin numeric series from `sdk.record_metric` live separately in `metrics.db`.
 They remain enabled when turn telemetry is off because watches and other plugin
 features depend on their history. See the
