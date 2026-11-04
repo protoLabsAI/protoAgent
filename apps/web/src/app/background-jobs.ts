@@ -92,3 +92,26 @@ export function jobFailureReason(job: Pick<BackgroundJobDTO, "status" | "error">
   if (job.status === "running" || job.status === "completed") return "";
   return (job.error || "").trim();
 }
+
+/** Undo an optimistic cancel the server refused: put the job back to the status it had,
+ *  unless a later event already moved it off "canceled" (a real completion wins). */
+export function revertCancel(
+  jobs: Record<string, BackgroundJobDTO>,
+  jobId: string,
+  prevStatus: BackgroundJobDTO["status"],
+): Record<string, BackgroundJobDTO> {
+  const j = jobs[jobId];
+  if (!j || j.status !== "canceled") return jobs;
+  return { ...jobs, [jobId]: { ...j, status: prevStatus } };
+}
+
+/** Undo an optimistic remove the server refused: re-add each removed job, unless a
+ *  hydrate or bus event has already put a fresher copy back. */
+export function restoreRemoved(
+  jobs: Record<string, BackgroundJobDTO>,
+  removed: Record<string, BackgroundJobDTO>,
+): Record<string, BackgroundJobDTO> {
+  const missing = Object.entries(removed).filter(([id]) => !(id in jobs));
+  if (!missing.length) return jobs;
+  return { ...jobs, ...Object.fromEntries(missing) };
+}

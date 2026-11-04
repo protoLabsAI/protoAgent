@@ -1,4 +1,4 @@
-import { Dialog, Tooltip } from "@protolabsai/ui/overlays";
+import { Dialog, Tooltip, useToast } from "@protolabsai/ui/overlays";
 import { ToolCard, ToolCardList, ToolSection } from "@protolabsai/ui/tool-card";
 import { Spinner } from "@protolabsai/ui/data";
 import { Accordion, AccordionItem } from "@protolabsai/ui/navigation";
@@ -10,6 +10,8 @@ import { jobIdOf } from "../chat/backgroundJobStore";
 import { chatStore } from "../chat/chat-store";
 import { Markdown } from "../chat/LazyMarkdown";
 import { api } from "../lib/api";
+import { copyText } from "../lib/clipboard";
+import { errMsg } from "../lib/format";
 import { onConnectionChange, onTopic } from "../lib/events";
 import type { BackgroundJobDTO } from "../lib/types";
 import { useUI } from "../state/uiStore";
@@ -19,6 +21,8 @@ import {
   fmtElapsed,
   jobFailureReason,
   nowIso,
+  restoreRemoved,
+  revertCancel,
   unreadJobIds,
   type ProgressTool,
 } from "./background-jobs";
@@ -62,6 +66,7 @@ export function BackgroundJobs() {
   const [open, setOpen] = useState(false);
   const [seen, setSeen] = useState<Set<string>>(() => seenSet());
   const [, setTick] = useState(0); // re-render for live elapsed while open
+  const toast = useToast();
 
   // Pull the durable registry — every job's FULL result. The live bus only carries a
   // trimmed ~2k preview (so a still-open chat can render the outcome without a refetch),
@@ -211,18 +216,24 @@ export function BackgroundJobs() {
     return () => clearInterval(t);
   }, [open, running]);
 
+  // The three row actions below update optimistically. When the server refuses, the
+  // change is rolled back and a toast says so: a row that stays "canceled" while the job
+  // keeps running, or vanishes only to return on the next hydrate, reads as done.
   async function stop(jobId: string) {
     // Optimistic — flip to canceled immediately; the bus completion confirms.
+    const prevStatus = jobs[jobId]?.status ?? "running";
     setJobs((m) => (m[jobId] ? { ...m, [jobId]: { ...m[jobId], status: "canceled" } } : m));
     try {
       await api.stopBackground(jobId);
-    } catch {
-      /* best-effort; the registry stays source of truth */
+    } catch (e) {
+      setJobs((m) => revertCancel(m, jobId, prevStatus));
+      toast({ tone: "error", title: "Couldn't stop the background agent", message: errMsg(e) });
     }
   }
 
   // Delete a single finished entry — optimistic remove; the registry is source of truth.
   async function del(jobId: string) {
+    const removed = jobs[jobId] ? { [jobId]: jobs[jobId] } : {};
     setJobs((m) => {
       const next = { ...m };
       delete next[jobId];
@@ -230,8 +241,9 @@ export function BackgroundJobs() {
     });
     try {
       await api.deleteBackground(jobId);
-    } catch {
-      /* best-effort */
+    } catch (e) {
+      setJobs((m) => restoreRemoved(m, removed));
+      toast({ tone: "error", title: "Couldn't remove the background job", message: errMsg(e) });
     }
   }
 
@@ -247,11 +259,13 @@ export function BackgroundJobs() {
 
   // Clear all finished entries at once (running jobs stay).
   async function clearFinished() {
+    const removed = Object.fromEntries(Object.entries(jobs).filter(([, j]) => j.status !== "running"));
     setJobs((m) => Object.fromEntries(Object.entries(m).filter(([, j]) => j.status === "running")));
     try {
       await api.clearFinishedBackground();
-    } catch {
-      /* best-effort */
+    } catch (e) {
+      setJobs((m) => restoreRemoved(m, removed));
+      toast({ tone: "error", title: "Couldn't clear finished jobs", message: errMsg(e) });
     }
   }
 
@@ -488,17 +502,20 @@ export function BgJobRow({
  * to paste a coder's diff into a review, or keep a research report. Selecting several
  * thousand words out of a scrolling markdown pane by hand is the friction.
  */
-function CopyResult({ text }: { text: string }) {
-  const [copied, setCopied] = useState(false);
+export function CopyResult({ text }: { text: string }) {
+  // "failed" covers both a missing Clipboard API (plain-http access) and a rejected write.
+  const [outcome, setOutcome] = useState<"idle" | "copied" | "failed">("idle");
   const copy = () => {
-    void navigator.clipboard.writeText(text).then(() => {
-      setCopied(true);
-      window.setTimeout(() => setCopied(false), 1500);
+    void copyText(text).then((ok) => {
+      setOutcome(ok ? "copied" : "failed");
+      window.setTimeout(() => setOutcome("idle"), ok ? 1500 : 3000);
     });
   };
+  const icon = outcome === "copied" ? <Check size={12} /> : outcome === "failed" ? <XCircle size={12} /> : <Copy size={12} />;
+  const label = outcome === "copied" ? "Copied" : outcome === "failed" ? "Copy failed" : "Copy";
   return (
-    <Button size="sm" variant="ghost" onClick={copy} aria-label="Copy result to clipboard">
-      {copied ? <Check size={12} /> : <Copy size={12} />} {copied ? "Copied" : "Copy"}
+    <Button size="sm" variant="ghost" onClick={copy} aria-label="Copy result to clipboard" data-copy-outcome={outcome}>
+      {icon} {label}
     </Button>
   );
 }

@@ -47,3 +47,14 @@ export function traceCellState(
   const href = langfuseTraceUrl(template, id);
   return href ? { kind: "link", href, short } : { kind: "copy", traceId: id, short };
 }
+
+// The toast after a trace-id copy. Success only once the clipboard write resolved; a
+// failure says so and carries the id itself, so the operator can still select it.
+export function traceCopyToast(
+  ok: boolean,
+  traceId: string,
+): { tone?: "error"; title: string; message: string } {
+  return ok
+    ? { title: "Trace id copied", message: "Paste it into Langfuse's search." }
+    : { tone: "error", title: "Couldn't copy the trace id", message: traceId };
+}
