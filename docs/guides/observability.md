@@ -55,8 +55,44 @@ The response lists the run's delegations, oldest first, with `edge_uuid` and
 `parent_uuid` to rebuild the tree. It also lists the turns that ran inside the run,
 including a background job's own turn, and any delegations still in flight. You can also
 pass a workflow run id, a background job id or a coding-agent run's task id. The route
-finds the run that work belongs to and says so in `resolved_from`. Delegations recorded
-before this field existed have no run and don't appear.
+finds the run that work belongs to and says so in `resolved_from`. So does the
+`edge_uuid` of any delegation inside a run, whether it has finished or is still running.
+Delegations recorded before this field existed have no run and don't appear.
+
+### Inspect a run in the console
+
+The console draws the same record as a tree in the run drawer. You open it with a
+**View run** link, which you'll find in four places. In chat it sits next to **View prompt**
+under an assistant answer. On the Telemetry surface each row of the recent turns table has one. In the
+Background agents dialog each job row has a View run icon. The Org Chart plugin puts one on
+the history rows and live cards in its node drawer.
+
+The top of the drawer shows the run id, the overall outcome, the total cost and how long the
+run took from its first start to its last end. When the run started from a subagent or
+workflow that the completion check looked at, the verdict and the number of nudges are
+shown too. If you opened the drawer from a job, a workflow run or one delegation inside the
+run, it says which.
+
+Below that, each delegation is one node in the tree, nested under the one that started it.
+A node shows what kind of work it was, its target and task, the outcome, the cost and the
+duration. A subagent's completion verdict is shown as a badge, and `incomplete` and
+`partial` are called out in the header. When a delegation failed, its error is shown on one
+line, and tapping it shows the full text. Expand a node to see the turns recorded for it,
+with the model, token counts and model and tool call counts, plus links to the trace and the
+exact prompts. A background job node also links to the job's report. Work still in flight
+shows a live dot and its latest progress, and the drawer refreshes every few seconds until
+nothing is running.
+
+The tree supports the keyboard. The up and down arrows move between nodes, the right arrow
+expands a node or moves into it, the left arrow collapses it or moves to its parent, and
+Enter toggles it.
+
+**Copy link** in the drawer copies a console URL ending in `?run=<id>`. Opening that URL
+opens the drawer on the run, and the console then removes `run` from the address bar so a
+reload doesn't open it again. The id can be anything the route above resolves. If nothing
+was recorded under it, for example because the run is older than the retention window
+below, the drawer says so.
+
 ### How long a run is kept
 
 A run's parts live in different stores, and each one keeps its own window. A run's tree

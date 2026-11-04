@@ -721,6 +721,26 @@ function handleApiGet(
       return { enabled: true, call: PROMPT_CALL };
     case "/api/prompts/task-e2e-1": // the canned A2A turn's taskId
       return { enabled: true, calls: [PROMPT_CALL] };
+    case "/api/runs/task-e2e-1": // the canned A2A turn's run (#4726): a subagent with a failed coder under it
+      return {
+        run_id: "task-e2e-1",
+        resolved_from: "",
+        edges: [
+          { edge_id: 1, at: "2026-11-01T10:00:40Z", from_agent: "protoAgent", to_kind: "subagent", to_name: "research", what: "find the sources",
+            session_id: "s", task_id: "", outcome: "ok", error: "", duration_ms: 30000, cost_usd: 0.21, origin: "task",
+            edge_uuid: "e2e-edge-1", parent_uuid: "", run_id: "task-e2e-1", completion: "complete", nudges: 1 },
+          { edge_id: 2, at: "2026-11-01T10:00:35Z", from_agent: "protoAgent", to_kind: "acp", to_name: "codex", what: "patch the parser",
+            session_id: "s", task_id: "coder:codex:1", outcome: "failed", error: "timed out after 600s", duration_ms: 20000, cost_usd: 0.13,
+            origin: "delegate_to", edge_uuid: "e2e-edge-2", parent_uuid: "e2e-edge-1", run_id: "task-e2e-1", completion: "", nudges: 0 },
+        ],
+        turns: [{ task_id: "task-e2e-1", session_id: "s", state: "completed", success: 1, model: "mock-model", input_tokens: 1200,
+          output_tokens: 300, total_tokens: 1500, cache_read_input_tokens: 0, cache_creation_input_tokens: 0, cost_usd: 0.08,
+          duration_ms: 4000, llm_calls: 2, tool_calls: 5, created_at: "2026-11-01T10:00:00Z", ended_at: "2026-11-01T10:03:12Z",
+          trace_id: "", run_id: "task-e2e-1" }],
+        live: [],
+        langfuse_trace_url_template: null,
+        tracing_enabled: false,
+      };
     case "/api/telemetry/summary":
       return telemetryOff ? { enabled: false, summary: null } : { enabled: true, summary: TELEMETRY_SUMMARY };
     case "/api/telemetry/recent":

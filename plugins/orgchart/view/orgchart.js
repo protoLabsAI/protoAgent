@@ -1020,7 +1020,7 @@ function renderDrawer() {
   const ownerName = owner !== SELF ? GRAPH.nodes.get(owner)?.name : "";
   sec.push(`<section class="sec"><h3>Recent work${ownerName ? ` <span class="quiet">· from ${esc(ownerName)}</span>` : ""}</h3>${
     hist == null ? `<p class="quiet">Loading…</p>`
-    : hist.length ? `<ul class="hist">${hist.map(histRow).join("")}</ul>`
+    : hist.length ? `<ul class="hist">${hist.map((r) => histRow(r, owner === SELF)).join("")}</ul>`
     : `<p class="quiet">No delegations recorded${n.kind === "self" ? "" : " to " + esc(n.name)} yet.</p>`}</section>`);
   sec.push(factsSection(n));
   body.innerHTML = sec.join("");
@@ -1045,14 +1045,26 @@ function nowCard(e, showTarget) {
   }
   if (p.text) parts.push(`<div class="narr">${esc(clip(p.text, 300))}</div>`);
   if (!e.progress && e.to_kind !== "acp") parts.push(`<div class="quiet">This delegate doesn't stream its steps. It shows here until it answers.</div>`);
+  if (!e.owner || e.owner === SELF) parts.push(runButton(e.run_id || e.id));
   parts.push("</div>");
   return `<section class="sec"><h3>Now</h3>${parts.join("")}</section>`;
 }
 
-function histRow(r) {
+function histRow(r, own) {
   const st = r.origin === "background" && !r.duration_ms && r.outcome === "ok" ? "dispatched" : r.outcome;
   const meta = [r.duration_ms ? dur(r.duration_ms / 1000) : "", r.cost_usd != null ? money(Number(r.cost_usd)) : "", ago(r.at)].filter(Boolean).join(" · ");
-  return `<li>${statusIcon(st)}<span class="w">${esc(clip(r.what, 220)) || "<span class=quiet>(no description)</span>"}</span><span class="m">${esc(meta)}</span>${r.error ? `<span class="err-line">${esc(clip(r.error, 180))}</span>` : ""}</li>`;
+  return `<li>${statusIcon(st)}<span class="w">${esc(clip(r.what, 220)) || "<span class=quiet>(no description)</span>"}</span><span class="m">${esc(meta)}</span>${r.error ? `<span class="err-line">${esc(clip(r.error, 180))}</span>` : ""}${own ? runButton(r.run_id || r.edge_uuid) : ""}</li>`;
+}
+
+// "View run" (#4726): the console's run inspector opens the whole run this edge belongs to.
+// Only for OUR edges — a peer's run lives in the peer's ledger, which this console can't read
+// — and only when the row carries an id (rows from before the run columns don't). The
+// console resolves any id inside a run, so an edge uuid is enough.
+function runButton(id) {
+  return id ? `<button class="pl-btn pl-btn--sm pl-btn--ghost run-open" type="button" data-run="${esc(id)}">View run</button>` : "";
+}
+function openRun(id) {
+  if (id) parent.postMessage({ type: "protoagent:run:open", run_id: String(id) }, "*");
 }
 
 function factsSection(n) {
@@ -1098,7 +1110,8 @@ function finishLive(d) {
   Object.assign(e, { status: d.outcome || "ok", duration_ms: ms, cost_usd: d.cost_usd, error: d.error, endedAt: now() });
   // The finished edge is recorded now — add it to the history the feed + drawer read,
   // without waiting for the next ledger poll.
-  RECENT.unshift({ edge_id: "live-" + e.id, _live: e.id, at: new Date().toISOString(), from_agent: e.from, to_kind: e.to_kind,
+  RECENT.unshift({ edge_id: "live-" + e.id, _live: e.id, edge_uuid: e.owner && e.owner !== SELF ? "" : e.id, run_id: e.owner && e.owner !== SELF ? "" : e.run_id || "",
+    at: new Date().toISOString(), from_agent: e.from, to_kind: e.to_kind,
     to_name: e.to_name, what: e.what, outcome: e.status, duration_ms: e.duration_ms, cost_usd: e.cost_usd, error: e.error, origin: e.origin });
   if (GRAPH) {
     const n = targetOf(e.to_kind, e.to_name, GRAPH.index, e.owner && GRAPH.nodes.has(e.owner) ? e.owner : SELF);
@@ -1244,6 +1257,11 @@ async function boot() {
 function tickNodes() {
   for (const c of document.querySelectorAll(".node .clock[data-start]")) c.textContent = dur(serverNow() - Number(c.dataset.start));
 }
+
+$("d-body").addEventListener("click", (e) => {
+  const b = e.target.closest("button[data-run]");
+  if (b) openRun(b.dataset.run);
+});
 
 $("refresh").addEventListener("click", async () => {
   const b = $("refresh");

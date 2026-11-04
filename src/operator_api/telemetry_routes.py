@@ -439,23 +439,43 @@ def register_telemetry_routes(app) -> None:
 
         ``run_id`` is the run's root id (the A2A task id of the turn it started in), but any
         id an edge was recorded under also resolves: a workflow run id, a background job id
-        or a coder run's task id finds the run that work belongs to. ``resolved_from`` says
-        when that happened."""
+        or a coder run's task id finds the run that work belongs to, and so does the uuid of
+        any edge inside it, recorded or still in flight. ``resolved_from`` says when that
+        happened."""
         from graph import ledger
 
         rid = run_id.strip()
         store = getattr(STATE, "ledger_store", None)
         edges = await asyncio.to_thread(store.run, rid) if store is not None else []
+        in_flight = ledger.live_edges()
         resolved_from = ""
-        if not edges and store is not None:
-            row = await asyncio.to_thread(store.by_task, rid)
-            if row and row.get("run_id") and row["run_id"] != rid:
-                resolved_from, rid = rid, str(row["run_id"])
-                edges = await asyncio.to_thread(store.run, rid)
+        if not edges and not any(e.get("run_id") == rid for e in in_flight):
+            # Not a run id. Try it as the id of one edge inside a run: a job, workflow run
+            # or coder task id (``task_id``), or an edge's own uuid, durable or still live.
+            target = ""
+            if store is not None:
+                row = await asyncio.to_thread(store.by_task, rid) or await asyncio.to_thread(store.by_edge, rid)
+                target = str((row or {}).get("run_id") or "")
+            if not target:
+                hit = next((e for e in in_flight if rid in (e.get("id"), e.get("task_id"))), None)
+                target = str((hit or {}).get("run_id") or "")
+            if target and target != rid:
+                resolved_from, rid = rid, target
+                edges = await asyncio.to_thread(store.run, rid) if store is not None else []
         tstore = getattr(STATE, "telemetry_store", None)
         turns = await asyncio.to_thread(tstore.by_run, rid) if tstore is not None else []
-        live = [e for e in ledger.live_edges() if e.get("run_id") == rid]
-        return {"run_id": rid, "resolved_from": resolved_from, "edges": edges, "turns": turns, "live": live}
+        live = [e for e in in_flight if e.get("run_id") == rid]
+        return {
+            "run_id": rid,
+            "resolved_from": resolved_from,
+            "edges": edges,
+            "turns": turns,
+            "live": live,
+            # The same pair /api/telemetry/recent carries, so the run inspector can link
+            # each turn's trace without a second request.
+            "langfuse_trace_url_template": await _trace_url_template(),
+            "tracing_enabled": _tracing_enabled(),
+        }
 
     @app.get("/api/telemetry/export")
     async def _api_telemetry_export(since: str | None = None):

@@ -318,6 +318,23 @@ class LedgerStore:
         finally:
             db.close()
 
+    def by_edge(self, edge_uuid: str) -> dict | None:
+        """The edge recorded under ``edge_uuid``, or None. How a link to one edge deep inside
+        a run (not its root) finds the run it belongs to."""
+        if not edge_uuid:
+            return None
+        db = self._connect()
+        try:
+            row = db.execute(
+                "SELECT * FROM delegations WHERE edge_uuid = ? ORDER BY edge_id DESC LIMIT 1", (edge_uuid,)
+            ).fetchone()
+            return dict(row) if row else None
+        except sqlite3.Error:
+            log.exception("[ledger] read failed")
+            return None
+        finally:
+            db.close()
+
     def run(self, run_id: str, *, limit: int = 1000) -> list[dict]:
         """Every edge of one run, oldest first. The tree is rebuilt from ``edge_uuid`` /
         ``parent_uuid``; a row whose parent isn't in the list hangs off the run's root."""

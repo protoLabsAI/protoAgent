@@ -87,3 +87,43 @@ export function resolveViewDeepLink<V extends { key: string }>(link: ViewDeepLin
   if (!link.view) return own[0] ?? null;
   return own.find((v) => v.key === `plugin:${link.plugin}:${link.view}`) ?? null;
 }
+
+// Run deep links (#4726): `<console>/?run=<id>` opens the run inspector drawer on that run.
+// The id is any id the run route resolves (a turn's task id, an edge uuid, a job id,
+// `board:<fid>`), so it is only shape-checked here: short, no whitespace or control
+// characters. It only ever goes into an encoded API path, never a navigation.
+export const RUN_LINK_KEY = "run";
+const RUN_ID = /^[^\s\u0000-\u001f\u007f]{1,200}$/;
+
+/** A string the console will treat as a run id: short, no whitespace or control characters. */
+export function isRunId(id: string): boolean {
+  return RUN_ID.test(id);
+}
+
+/** The `run` id in a `location.search` string, or null when there is none or it's malformed. */
+export function parseRunDeepLink(search: string): string | null {
+  let q: URLSearchParams;
+  try {
+    q = new URLSearchParams(search);
+  } catch {
+    return null;
+  }
+  const id = (q.get(RUN_LINK_KEY) ?? "").trim();
+  return id && isRunId(id) ? id : null;
+}
+
+/** `search` without the `run` key, keeping every other param. "" or a string starting `?`. */
+export function stripRunDeepLink(search: string): string {
+  const q = new URLSearchParams(search);
+  q.delete(RUN_LINK_KEY);
+  const rest = q.toString();
+  return rest ? `?${rest}` : "";
+}
+
+/** The shareable link to a run: this console's own path (so the agent slug rides along)
+ *  with `?run=<id>`, keeping unrelated params and dropping any other deep link. */
+export function runDeepLinkUrl(runId: string, loc: Pick<Location, "origin" | "pathname" | "search"> = window.location): string {
+  const q = new URLSearchParams(stripRunDeepLink(stripViewDeepLink(loc.search)));
+  q.set(RUN_LINK_KEY, runId);
+  return `${loc.origin}${loc.pathname}?${q.toString()}`;
+}

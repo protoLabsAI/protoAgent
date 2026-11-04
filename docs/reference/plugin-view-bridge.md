@@ -35,6 +35,7 @@ URL escapes that origin and the handshake silently never completes — which is 
 | `protoagent:contextmenu:action` | host → page | `{ itemId: string }` |
 | `protoagent:code:open` | page → host | `{ project: string, path: string, line?: number, end_line?: number, note?: string, open_in?: "pane" \| "editor" }` |
 | `protoagent:chat:compose` | page → host | `{ text: string }` — plain text, ≤ 4 KB; **drafts**, never sends |
+| `protoagent:run:open` | page → host | `{ run_id: string }` — opens the run inspector drawer on that run |
 
 Plugin pages may send `{type: "protoagent:restart-request"}` to open the host's restart
 confirmation. The host validates the frame source and origin, checks active work, and
@@ -260,6 +261,23 @@ The contract, and what the host enforces:
 
 A page that renders untrusted content should build the text itself (e.g. from the element it
 selected), never forward a string an embedded frame supplied.
+
+## Open a run — `protoagent:run:open` {#run-open}
+
+A page asks the console to show the operator one run in the run inspector drawer, the same
+drawer the chat's **View run** opens. `run_id` is any id the `GET /api/runs/{id}` route resolves:
+a run's root id, the uuid of any edge inside it, a background job id, a workflow run id or a
+coder task id. The host accepts it only from the view's own iframe at the page's origin, and only
+an id of at most 200 characters with no whitespace or control characters. Opening it is
+read-only and the operator closes the drawer as they would any other. The org chart uses it for
+the **View run** buttons on its drawer's history rows and live cards.
+
+```js
+parent.postMessage({ type: "protoagent:run:open", run_id: edge.edge_uuid }, hostOrigin);
+```
+
+Only send ids from this agent's own ledger. A peer's run lives in the peer's ledger, so this
+console would answer that it has no run under that id.
 
 ## Deep links into a view — `?plugin=…&vp=…` {#deep-links}
 

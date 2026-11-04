@@ -33,6 +33,8 @@ import { createPluginChatComposer, defaultComposeDeps } from "./pluginChatCompos
 import { applyNavIntent } from "./palette/nav";
 import { parseForwardedKey, parsePluginKeybindings } from "../lib/pluginKeybindings";
 import { RestartNow } from "../settings/RestartNow";
+import { parsePluginRunOpen } from "../runs/fromPlugin";
+import { openRunInspector } from "../runs/store";
 import { useUI } from "../state/uiStore";
 import { Tabs } from "@protolabsai/ui/navigation";
 import type { PluginView as PluginViewType } from "../lib/types";
@@ -493,6 +495,11 @@ export function PluginView({
           const notice = codeOpenNotice(target, outcome, deps);
           if (toast && notice) toast({ tone: "info", ...notice });
         });
+      } else if (m.type === "protoagent:run:open") {
+        // "Show the operator this run" (the org chart's View run, #4726): open the run
+        // inspector drawer. Read-only, operator-dismissable; the id is shape-checked.
+        const runId = parsePluginRunOpen(m);
+        if (runId) openRunInspector(runId);
       } else if (m.type === "protoagent:chat:compose") {
         // "Ask the agent about this" — prefill the visible chat composer and focus it; the
         // operator sends. Same trust as above (this iframe, its own origin); bounded, plain

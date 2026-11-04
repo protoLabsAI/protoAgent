@@ -9,6 +9,7 @@
 import type {
   ActivityHistory,
   FleetTelemetry,
+  RunRecord,
   TelemetryInsights,
   TelemetrySummary,
   TelemetryTurn,
@@ -50,6 +51,12 @@ export const telemetryApi = {
       langfuse_trace_url_template?: string | null;
       tracing_enabled?: boolean;
     }>(`/api/telemetry/recent?limit=${limit}`);
+  },
+
+  // Everything recorded for one run (#4726): its delegation edges, the turns inside it and
+  // the edges still in flight. Any id inside the run resolves (see `resolved_from`).
+  runRecord(runId: string) {
+    return request<RunRecord>(`/api/runs/${encodeURIComponent(runId)}`);
   },
 
   telemetryInsights() {
