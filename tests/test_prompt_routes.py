@@ -146,6 +146,20 @@ def test_task_detail_carries_subagents_and_prev(monkeypatch):
     assert c.get("/api/prompts/turn-1").json()["prev"] is None
 
 
+def test_task_detail_finds_subagents_keyed_the_way_capture_writes_them(monkeypatch):
+    # The test above writes the TURN id as the parent. Real capture writes the delegating
+    # tool-call id there (agent.py passes `parent_task_id=tool_call_id`), and the route
+    # can't know it, so a real turn's subagents never showed (#4726). Capture now also
+    # records the turn the call ran inside, and the route finds them by that.
+    c = _client(monkeypatch)
+    store = prompt_snapshots()
+    store.record(task_id="turn-9", session_id="s-9", stable_text="LEAD")
+    store.record(parent_task_id="call_abc", subagent_type="researcher", turn_task_id="turn-9", stable_text="SUB")
+    store.record(parent_task_id="call_other", subagent_type="verifier", turn_task_id="turn-8", stable_text="X")
+    body = c.get("/api/prompts/turn-9").json()
+    assert [s["subagent_type"] for s in body["subagents"]] == ["researcher"]
+
+
 def test_preview_runs_compose_without_recording(monkeypatch):
     import runtime.state as rs
 

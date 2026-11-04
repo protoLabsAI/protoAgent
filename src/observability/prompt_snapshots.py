@@ -127,12 +127,17 @@ class PromptSnapshotStore:
                 # working state) delivered ephemerally via wrap_model_call.
                 ("calls", "projected_context"),
                 ("calls", "projected_sections"),
+                # #4726: the A2A turn a subagent call ran inside. `parent_task_id` is the
+                # delegating tool-call id, which the task route can't know, so this is
+                # the key it finds a turn's subagents by.
+                ("calls", "turn_task_id"),
             ):
                 try:
                     db.execute(f"ALTER TABLE {_table} ADD COLUMN {_col} TEXT")
                 except sqlite3.OperationalError:
                     pass  # column already present
             db.execute("CREATE INDEX IF NOT EXISTS ix_calls_parent ON calls(parent_task_id)")
+            db.execute("CREATE INDEX IF NOT EXISTS ix_calls_turn ON calls(turn_task_id)")
             db.commit()
         finally:
             db.close()
@@ -159,6 +164,7 @@ class PromptSnapshotStore:
         wire_text: str | None = None,
         projected_context: str | None = None,
         projected_sections: list | None = None,
+        turn_task_id: str = "",
     ) -> None:
         """Append one snapshot row and trim to the retention caps in the same
         transaction. Best-effort — never raises (a capture write must not break
@@ -210,8 +216,8 @@ class PromptSnapshotStore:
                 "INSERT INTO calls (task_id, session_id, trace_id, call_index, ts, stable_hash,"
                 " context_text, model, input_tokens, output_tokens, cache_read_tokens,"
                 " cache_creation_tokens, context_sections, parent_task_id, subagent_type, wire_text,"
-                " projected_context, projected_sections)"
-                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                " projected_context, projected_sections, turn_task_id)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     task_id or "",
                     session_id or "",
@@ -231,6 +237,7 @@ class PromptSnapshotStore:
                     wire_text,  # None = faithful; '' = nothing delivered (#2527)
                     projected_context,  # None = no projection (#3191)
                     json.dumps(projected_sections) if projected_sections else None,
+                    turn_task_id or "",
                 ),
             )
             trimmed = 0
@@ -300,16 +307,21 @@ class PromptSnapshotStore:
         return [self._decode(r) for r in rows]
 
     def calls_for_parent(self, parent_task_id: str) -> list[dict]:
-        """Every subagent call nested under one turn's delegating tool-call ids,
-        grouped by type then call order (#2388 P3). Empty when none captured."""
+        """Every subagent call nested under one turn, grouped by type then call order
+        (#2388 P3). Empty when none captured.
+
+        Matches the A2A task id the call ran inside (``turn_task_id``, #4726) or a
+        delegating tool-call id (``parent_task_id``). The task route passes the former; a
+        row stores the tool-call id as its parent, so matching on that alone never found
+        a turn's subagents."""
         if not parent_task_id:
             return []
         db = self._connect()
         try:
             rows = db.execute(
-                f"{self._CALL_SELECT} WHERE c.parent_task_id = ?"
+                f"{self._CALL_SELECT} WHERE c.turn_task_id = ? OR c.parent_task_id = ?"
                 " ORDER BY c.subagent_type ASC, c.call_index ASC, c.id ASC",
-                (parent_task_id,),
+                (parent_task_id, parent_task_id),
             ).fetchall()
         except sqlite3.DatabaseError as exc:
             log.warning("[prompt-snapshots] calls_for_parent failed: %s", exc)
