@@ -1612,6 +1612,69 @@ export type TelemetryTurn = {
   /** Why a failed or canceled turn ended, redacted and clipped server-side (#4726).
    *  Empty/absent for completed turns and rows recorded before the column existed. */
   error?: string | null;
+  /** The delegation-ledger run this turn ran in (#4726): the chat turn's own task id for a
+   *  top-level turn, the spawning turn's for a background job's. Absent on older rows. */
+  run_id?: string | null;
+};
+
+/** One durable delegation edge of a run (`delegations` row, observability/ledger_store.py).
+ *  `at` is when the row was written: the end of a dispatch, or the spawn of a background job
+ *  (`origin: "background"`), whose duration is settled onto the row later. */
+export type RunEdgeRow = {
+  edge_id: number;
+  at: string;
+  from_agent: string;
+  to_kind: string;
+  to_name: string;
+  to_instance?: string;
+  what: string;
+  session_id: string;
+  parent_task_id?: string;
+  task_id: string;
+  outcome: string;
+  error?: string | null;
+  duration_ms: number;
+  cost_usd: number | null;
+  origin: string;
+  edge_uuid: string;
+  parent_uuid: string;
+  run_id: string;
+  /** The completion check's verdict for a subagent: complete / incomplete / partial, "" unchecked. */
+  completion?: string | null;
+  nudges?: number | null;
+};
+
+/** One edge still in flight (graph/ledger.py `_LIVE`). Its `id` is the `edge_uuid` the
+ *  durable row will carry once it closes; `started_at` is epoch seconds. */
+export type RunLiveEdge = {
+  id: string;
+  parent_id: string;
+  run_id: string;
+  from?: string;
+  to_kind: string;
+  to_name: string;
+  to_instance?: string;
+  what?: string;
+  session_id?: string;
+  task_id?: string;
+  origin?: string;
+  started_at: number;
+  status?: string;
+  completion?: string;
+  nudges?: number;
+  progress?: Record<string, unknown> | null;
+};
+
+/** `GET /api/runs/{id}` (#4726). `resolved_from` is the id asked for when the route had to
+ *  resolve it (a job, workflow run, coder task or edge id) to the run it belongs to. */
+export type RunRecord = {
+  run_id: string;
+  resolved_from: string;
+  edges: RunEdgeRow[];
+  turns: TelemetryTurn[];
+  live: RunLiveEdge[];
+  langfuse_trace_url_template?: string | null;
+  tracing_enabled?: boolean;
 };
 
 export type TelemetryInsights = {

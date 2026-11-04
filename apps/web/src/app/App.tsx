@@ -32,6 +32,8 @@ import { authRequired, subscribeAuth } from "../lib/auth";
 import { pluginViewIcon } from "../lib/pluginIcon";
 import { isNavigablePluginView } from "../lib/pluginViews";
 import { parseViewDeepLink, resolveViewDeepLink, stripViewDeepLink } from "../lib/viewDeepLink";
+import { RunInspector } from "../runs/RunInspector";
+import { applyRunDeepLink } from "../runs/deepLink";
 import { armNavigateCatchUp } from "../lib/pluginNavigateCatchUp";
 import { TenantGuard } from "./TenantGuard";
 import { SessionHistoryHydrator } from "./SessionHistoryHydrator";
@@ -588,6 +590,13 @@ function WorkspaceApp({ runtime }: { runtime: RuntimeStatus | null }) {
     if (bootDeepLink.query) setDeepLinkQuery((q) => ({ ...q, [target.key]: bootDeepLink.query }));
     openView(target.key);
   }, [bootDeepLink, runtime, allPluginViews, railOrder, toast]);
+
+  // Run deep link (`?run=<id>`, #4726): open the run inspector on it at boot and strip the
+  // key, the same once-and-forget as the plugin-view link above. Needs no runtime: the drawer
+  // fetches the run itself and says so when there is none.
+  useEffect(() => {
+    applyRunDeepLink();
+  }, []);
 
   const onChatError = useCallback(
     (msg: string) => {
@@ -1444,6 +1453,8 @@ function WorkspaceApp({ runtime }: { runtime: RuntimeStatus | null }) {
     {/* Full-screen document reader (ADR 0062) — one root host; opened from anywhere via
         openDocument() (chat background-report card, Activity feed, future views). */}
     <DocumentViewer />
+    {/* The run inspector drawer (#4726) — one root host, opened via openRunInspector(). */}
+    <RunInspector />
     {/* The header drawer (hamburger) — global actions + (on mobile) surface nav. */}
     <AppDrawer
       open={drawerOpen}

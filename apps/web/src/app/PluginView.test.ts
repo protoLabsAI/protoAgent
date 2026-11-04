@@ -23,6 +23,7 @@ import { postToPluginView, resetPluginViewInbox, takePluginViewMessages } from "
 import { consoleTheme, PL_TOKEN_VARS, PluginView, pluginIdFromView, pluginMenuType } from "./PluginView";
 import { routePluginCodeOpen } from "../codeviewer/fromPlugin";
 import { registerSlashDispatcher } from "../chat/slashDispatch";
+import { closeRunInspector, useRunInspector } from "../runs/store";
 
 // The code-open router is exercised on its own (codeviewer/fromPlugin.test.ts); here only the
 // bridge's gate — which messages reach it — is under test.
@@ -858,5 +859,60 @@ describe("PluginView — protoagent:chat:compose", () => {
     await post(frame.contentWindow, "https://foreign.example", MSG);
     await post(frame.contentWindow, window.location.origin, { ...MSG, text: "x".repeat(4097) });
     expect(prefill).not.toHaveBeenCalled();
+  });
+});
+
+// `protoagent:run:open` (#4726) — the org chart's "View run". Same gate as the others: THIS
+// iframe at its page's origin; the id is shape-checked before the run drawer opens on it.
+describe("PluginView — protoagent:run:open", () => {
+  let container: HTMLElement;
+  let root: Root;
+  const view: PluginViewType = {
+    id: "orgchart", label: "Org chart", path: "/plugins/orgchart/view", key: "plugin:orgchart:orgchart",
+  };
+  const MSG = { type: "protoagent:run:open", run_id: "e2" };
+
+  beforeEach(() => {
+    vi.stubGlobal("fetch", vi.fn(async () => ({ ok: true, status: 200 })));
+    closeRunInspector();
+    container = document.createElement("div");
+    document.body.appendChild(container);
+    root = createRoot(container);
+  });
+
+  afterEach(() => {
+    act(() => root.unmount());
+    container.remove();
+    vi.unstubAllGlobals();
+    closeRunInspector();
+  });
+
+  async function mountFrame() {
+    await act(async () => {
+      root.render(h(PluginView, { view }));
+    });
+    for (let i = 0; i < 10 && !container.querySelector("iframe"); i++) {
+      await act(async () => Promise.resolve());
+    }
+    return container.querySelector("iframe")!;
+  }
+  const post = (source: MessageEventSource | null, origin: string, data: unknown) =>
+    act(async () => {
+      window.dispatchEvent(new MessageEvent("message", { source, origin, data }));
+    });
+
+  it("opens the run inspector on the id its own frame names", async () => {
+    const frame = await mountFrame();
+    await post(frame.contentWindow, window.location.origin, MSG);
+    expect(useRunInspector.getState().runId).toBe("e2");
+  });
+
+  it("ignores another window, a foreign origin, and an id that isn't one", async () => {
+    const frame = await mountFrame();
+    await post(window, window.location.origin, MSG);
+    await post(frame.contentWindow, "https://foreign.example", MSG);
+    await post(frame.contentWindow, window.location.origin, { ...MSG, run_id: "has space" });
+    await post(frame.contentWindow, window.location.origin, { ...MSG, run_id: 42 });
+    expect(useRunInspector.getState().runId).toBeNull();
   });
 });

@@ -59,6 +59,8 @@ export const queryKeys = {
   get telemetry() {
     return ns("telemetry");
   },
+  // One run's record for the run inspector — a subkey of telemetry, refreshed with it.
+  run: (runId: string) => ns("telemetry", "run", runId),
   // Hub-side fleet rollup — a subkey of telemetry so a telemetry invalidation refreshes it too.
   get fleetTelemetry() {
     return ns("telemetry", "fleet");
@@ -322,6 +324,16 @@ export const telemetryQuery = () =>
         insights: i.insights,
       };
     },
+  });
+
+// One run (#4726) for the run inspector drawer. Polls every RUN_POLL_MS while any of its
+// edges is still in flight and stops the moment none is; a finished run never polls.
+export const RUN_POLL_MS = 3000;
+export const runQuery = (runId: string) =>
+  queryOptions({
+    queryKey: queryKeys.run(runId),
+    queryFn: () => api.runRecord(runId),
+    refetchInterval: (q) => ((q.state.data?.live?.length ?? 0) > 0 ? RUN_POLL_MS : false),
   });
 
 // The hub-side fleet rollup (ADR 0006 fleet extension) feeding the Telemetry

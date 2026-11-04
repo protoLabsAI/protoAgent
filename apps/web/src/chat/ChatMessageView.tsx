@@ -3,7 +3,7 @@ import { Message, MessageAction, MessageActions } from "@protolabsai/ui/ai";
 import { Dialog, Tooltip } from "@protolabsai/ui/overlays";
 import { Spinner } from "@protolabsai/ui/data";
 import { Input } from "@protolabsai/ui/forms";
-import { ArrowDownToLine, ArrowRight, Bot, CalendarClock, Check, ChevronDown, CircleSlash, Clock, Coins, Copy, FileText, GitBranch, Gauge, History, PauseCircle, RotateCcw, Sparkles, Timer, ThumbsUp, ThumbsDown, X } from "lucide-react";
+import { ArrowDownToLine, ArrowRight, Bot, CalendarClock, Check, ChevronDown, CircleSlash, Clock, Coins, Copy, FileText, GitBranch, Gauge, History, PauseCircle, RotateCcw, Sparkles, Timer, ThumbsUp, ThumbsDown, Workflow, X } from "lucide-react";
 import { useState } from "react";
 
 import { useQuery } from "@tanstack/react-query";
@@ -31,6 +31,7 @@ import { Markdown } from "./LazyMarkdown";
 import { NoteCard } from "./NoteCard";
 import { openEvalCaseEditor } from "./EvalCaseEditor";
 import { openPromptViewer } from "./PromptViewer";
+import { openRunInspector } from "../runs/store";
 import { ReasoningCard } from "./ReasoningCard";
 import { useRevealedText } from "./revealText";
 import { ToolCalls } from "./ToolCalls";
@@ -463,6 +464,15 @@ export function ChatMessageView({
               label="View prompt"
               icon={<FileText size={14} />}
               onClick={() => openPromptViewer(message.taskId!, actions.sessionId)}
+            />
+          ) : null}
+          {/* The turn's task id IS its run's root id (#4726): the drawer shows every
+              delegation the turn made, with cost, outcome and the why of any failure. */}
+          {message.taskId && !actions.incognito ? (
+            <MessageAction
+              label="View run"
+              icon={<Workflow size={14} />}
+              onClick={() => openRunInspector(message.taskId!)}
             />
           ) : null}
           {actions.onRegenerate && message.id === actions.lastAssistantId ? (

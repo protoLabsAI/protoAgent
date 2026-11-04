@@ -3,7 +3,7 @@ import { ToolCard, ToolCardList, ToolSection } from "@protolabsai/ui/tool-card";
 import { Spinner } from "@protolabsai/ui/data";
 import { Accordion, AccordionItem } from "@protolabsai/ui/navigation";
 import { Button } from "@protolabsai/ui/primitives";
-import { ArrowUpRight, Bot, Check, CheckCircle2, Copy, Square, Trash2, XCircle } from "lucide-react";
+import { ArrowUpRight, Bot, Check, CheckCircle2, Copy, Square, Trash2, Workflow, XCircle } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { jobIdOf } from "../chat/backgroundJobStore";
@@ -13,6 +13,7 @@ import { api } from "../lib/api";
 import { onConnectionChange, onTopic } from "../lib/events";
 import type { BackgroundJobDTO } from "../lib/types";
 import { useUI } from "../state/uiStore";
+import { openRunInspector } from "../runs/store";
 import {
   applyProgress,
   byRecency,
@@ -435,6 +436,20 @@ export function BgJobRow({
           <ArrowUpRight size={12} />
         </Button>
       ) : null}
+      {/* The job's run (#4726): the route resolves a job id to the run that spawned it,
+          so the drawer shows the job in place among everything else that turn did. It
+          opens above this dialog, and closing it comes back here. */}
+      <Button
+        icon
+        size="sm"
+        variant="ghost"
+        onClick={() => openRunInspector(job.id)}
+        title="View the run this job belongs to"
+        aria-label="View run"
+        data-testid="background-job-view-run"
+      >
+        <Workflow size={12} />
+      </Button>
       {running ? (
         <Button
           icon

@@ -18,6 +18,7 @@ import {
   ExternalLink,
   Hash,
   Layers,
+  Workflow,
   Wrench,
 } from "lucide-react";
 
@@ -25,6 +26,7 @@ import { StagePanel } from "../app/ErrorBoundary";
 import { RefreshButton } from "../app/ui-kit";
 import { PanelHeader, Tabs } from "@protolabsai/ui/navigation";
 import { QuickSetting } from "../settings/QuickSetting";
+import { openRunInspector } from "../runs/store";
 import { api } from "../lib/api";
 import { localStamp, localStampTitle, ms, pct, tokens, usd } from "../lib/format";
 import { fleetTelemetryQuery, telemetryQuery } from "../lib/queries";
@@ -333,7 +335,7 @@ function RecentTurnsPanel({
         <THead>
           <Tr>
             <Th>Ended</Th><Th>Model</Th><Th>Tokens (in→out)</Th>
-            <Th>Context</Th><Th>Cache</Th><Th>Cost</Th><Th>Duration</Th><Th>LLM/Tool</Th><Th>State</Th><Th>Trace</Th>
+            <Th>Context</Th><Th>Cache</Th><Th>Cost</Th><Th>Duration</Th><Th>LLM/Tool</Th><Th>State</Th><Th>Trace</Th><Th>Run</Th>
           </Tr>
         </THead>
         <TBody>
@@ -359,6 +361,7 @@ function RecentTurnsPanel({
               <Td>{t.llm_calls}/{t.tool_calls}</Td>
               <Td><TurnStateCell turn={t} /></Td>
               <Td><TraceCell turn={t} template={traceUrlTemplate} tracingEnabled={tracingEnabled} onCopied={onTraceCopied} /></Td>
+              <Td><RunCell turn={t} /></Td>
             </Tr>
           ))}
         </TBody>
@@ -393,6 +396,20 @@ export function TurnStateCell({ turn }: { turn: Pick<TelemetryTurn, "state" | "e
         </button>
       ) : null}
     </span>
+  );
+}
+
+// Open the run this turn ran in (#4726). A top-level turn's run id is its own task id, and
+// a row recorded before the column existed has none, so the task id is the fallback: the
+// run route resolves it when it can and says there is no run when it can't.
+export function RunCell({ turn }: { turn: Pick<TelemetryTurn, "run_id" | "task_id"> }) {
+  const id = (turn.run_id || turn.task_id || "").trim();
+  if (!id) return <span className="trace-none">—</span>;
+  return (
+    <Button type="button" variant="ghost" size="sm" className="trace-copy" title="Open this turn's run"
+            aria-label="View run" data-testid="telemetry-view-run" onClick={() => openRunInspector(id)}>
+      <Workflow size={13} aria-hidden /> View
+    </Button>
   );
 }
 
