@@ -23,16 +23,22 @@ def _run_hold_block(hook, call, config):
     tree = ast.parse(source.read_text(encoding="utf-8"))
     handler = next(n for n in ast.walk(tree) if isinstance(n, ast.AsyncFunctionDef) and n.name == hook)
     statements = [
-        statement for statement in handler.body
-        if any(isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
-               and n.func.attr == call for n in ast.walk(statement))
+        statement
+        for statement in handler.body
+        if any(
+            isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute) and n.func.attr == call
+            for n in ast.walk(statement)
+        )
     ]
     assert len(statements) == 1
     block = ast.Module(body=statements, type_ignores=[])
-    exec(compile(block, str(source), "exec"), {
-        "STATE": SimpleNamespace(graph_config=config),
-        "log": logging.getLogger("test.server.stay_awake"),
-    })
+    exec(
+        compile(block, str(source), "exec"),
+        {
+            "STATE": SimpleNamespace(graph_config=config),
+            "log": logging.getLogger("test.server.stay_awake"),
+        },
+    )
 
 
 @pytest.mark.parametrize("enabled", [None, False, True])
@@ -56,10 +62,13 @@ def test_shutdown_always_releases(monkeypatch, config):
     stop.assert_called_once_with()
 
 
-@pytest.mark.parametrize("phase,call", [
-    ("startup", "start_serving_hold"),
-    ("shutdown", "stop_serving_hold"),
-])
+@pytest.mark.parametrize(
+    "phase,call",
+    [
+        ("startup", "start_serving_hold"),
+        ("shutdown", "stop_serving_hold"),
+    ],
+)
 def test_hold_errors_are_logged_and_do_not_escape(monkeypatch, caplog, phase, call):
     failing = Mock(side_effect=RuntimeError("hold failed"))
     monkeypatch.setattr(keep_awake, call, failing)

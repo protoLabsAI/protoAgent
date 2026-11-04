@@ -366,9 +366,25 @@ async def run_mention(
     # thread record is bookkeeping on top of that, and losing the bookkeeping must never
     # cost them the answer. Without a graph there is simply no room to read or write.
     if registry is None:
-        return {"ok": False, "author": target, "reply": "", "error": "no_registry", "catchup": 0, "truncated": False, "silent": False}
+        return {
+            "ok": False,
+            "author": target,
+            "reply": "",
+            "error": "no_registry",
+            "catchup": 0,
+            "truncated": False,
+            "silent": False,
+        }
     if not (message or "").strip():
-        return {"ok": False, "author": target, "reply": "", "error": "empty_message", "catchup": 0, "truncated": False, "silent": False}
+        return {
+            "ok": False,
+            "author": target,
+            "reply": "",
+            "error": "empty_message",
+            "catchup": 0,
+            "truncated": False,
+            "silent": False,
+        }
 
     lg_config = {"configurable": {"thread_id": thread_id}}
 
@@ -451,13 +467,25 @@ async def dispatch_into_room(
     """
     if registry is None:
         return {
-            "ok": False, "author": target, "reply": "", "error": "no_registry",
-            "catchup": 0, "truncated": False, "silent": False, "messages": [],
+            "ok": False,
+            "author": target,
+            "reply": "",
+            "error": "no_registry",
+            "catchup": 0,
+            "truncated": False,
+            "silent": False,
+            "messages": [],
         }
     if not (message or "").strip():
         return {
-            "ok": False, "author": target, "reply": "", "error": "empty_message",
-            "catchup": 0, "truncated": False, "silent": False, "messages": [],
+            "ok": False,
+            "author": target,
+            "reply": "",
+            "error": "empty_message",
+            "catchup": 0,
+            "truncated": False,
+            "silent": False,
+            "messages": [],
         }
 
     from langchain_core.messages import HumanMessage

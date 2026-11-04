@@ -129,7 +129,9 @@ def test_budget_derives_from_window_and_pct(monkeypatch):
     assert ProjectionOptions.from_config(cfg).budget_chars == int(128_000 * 0.08 * 4)
     # A missing attribute → the documented 8% default; 0 → unbounded.
     assert ProjectionOptions.from_config(SimpleNamespace(api_base="http://gw")).budget_chars == int(128_000 * 0.08 * 4)
-    assert ProjectionOptions.from_config(SimpleNamespace(api_base="http://gw", context_budget_pct=0)).budget_chars is None
+    assert (
+        ProjectionOptions.from_config(SimpleNamespace(api_base="http://gw", context_budget_pct=0)).budget_chars is None
+    )
     # 2.5% of 128k = 12 800 chars — below the floor, so the floor applies.
     from graph.projection import _MIN_BUDGET_CHARS
 
@@ -139,16 +141,19 @@ def test_budget_derives_from_window_and_pct(monkeypatch):
         == _MIN_BUDGET_CHARS
     )
     # 20% of 128k = 102 400 chars — above the floor, the percentage rules.
-    assert ProjectionOptions.from_config(SimpleNamespace(api_base="http://gw", context_budget_pct=20)).budget_chars == int(
-        128_000 * 0.20 * 4
-    )
+    assert ProjectionOptions.from_config(
+        SimpleNamespace(api_base="http://gw", context_budget_pct=20)
+    ).budget_chars == int(128_000 * 0.20 * 4)
 
 
 def test_no_window_means_no_budget(monkeypatch):
     import graph.model_window as mwin
 
     monkeypatch.setattr(mwin, "context_window_for", lambda config, model_name=None: None)
-    assert ProjectionOptions.from_config(SimpleNamespace(api_base="http://gw", context_budget_pct=8.0)).budget_chars is None
+    assert (
+        ProjectionOptions.from_config(SimpleNamespace(api_base="http://gw", context_budget_pct=8.0)).budget_chars
+        is None
+    )
     assert ProjectionOptions.from_config(None).budget_chars is None
     assert ProjectionOptions().budget_chars is None
 
@@ -225,7 +230,11 @@ def test_skills_shrink_to_what_fits_before_the_floor(quiet):
     assert "a fairly long description" in p.text  # some descriptions kept
     assert all(f'name="skill-{i}"' in p.text for i in range(6))
     assert p.overflow == [
-        {"label": "Skills index", "dropped_items": p.overflow[0]["dropped_items"], "dropped_chars": p.overflow[0]["dropped_chars"]}
+        {
+            "label": "Skills index",
+            "dropped_items": p.overflow[0]["dropped_items"],
+            "dropped_chars": p.overflow[0]["dropped_chars"],
+        }
     ]
     assert 0 < p.overflow[0]["dropped_items"] < 6
     assert len(p.text) <= len(full.text) - 200
@@ -527,7 +536,12 @@ def test_inert_budget_is_logged_once(quiet, monkeypatch, caplog):
     monkeypatch.setattr(mwin, "context_window_for", lambda config, model_name=None: None)
     with caplog.at_level(logging.WARNING, logger="graph.projection"):
         for _ in range(3):
-            assert ProjectionOptions.from_config(SimpleNamespace(api_base="http://gw", context_budget_pct=8.0)).budget_chars is None
+            assert (
+                ProjectionOptions.from_config(
+                    SimpleNamespace(api_base="http://gw", context_budget_pct=8.0)
+                ).budget_chars
+                is None
+            )
     inert = [r for r in caplog.records if "inert" in r.getMessage()]
     assert len(inert) == 1 and "unbounded" in inert[0].getMessage()
 
@@ -694,9 +708,7 @@ def test_pruning_threshold_follows_the_turns_model(two_model_gateway):
     from graph.model_window import context_window_for
 
     cfg = two_model_gateway
-    mw = ToolResultPrunerMiddleware(
-        max_input_tokens=context_window_for(cfg), at_fraction=0.6, config=cfg
-    )
+    mw = ToolResultPrunerMiddleware(max_input_tokens=context_window_for(cfg), at_fraction=0.6, config=cfg)
     assert mw._threshold_tokens({}) == int(196608 * 0.6)
     assert mw._threshold_tokens({"model": "protolabs/fast"}) == int(32768 * 0.6)
     # Unknown/absent model, or no config: the constructed window stands.

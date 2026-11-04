@@ -29,7 +29,13 @@ STEP = {
     "schema": {
         "type": "object",
         "properties": {
-            "env": {"type": "string", "oneOf": [{"const": "prod", "title": "Production", "description": "live"}, {"const": "stage", "title": "Staging"}]},
+            "env": {
+                "type": "string",
+                "oneOf": [
+                    {"const": "prod", "title": "Production", "description": "live"},
+                    {"const": "stage", "title": "Staging"},
+                ],
+            },
             "regions": {"type": "array", "items": {"enum": ["eu", "us"]}},
             "dry": {"type": "boolean", "default": False},
             "count": {"type": "integer", "default": 2},
@@ -44,7 +50,15 @@ STEP = {
 
 def test_form_rules_mirror_the_console():
     fields = deckhitl.fields_of(STEP)
-    assert [(k, r) for k, _, r in fields] == [("env", True), ("regions", False), ("dry", False), ("count", True), ("why", True), ("note", False), ("tag", False)]
+    assert [(k, r) for k, _, r in fields] == [
+        ("env", True),
+        ("regions", False),
+        ("dry", False),
+        ("count", True),
+        ("why", True),
+        ("note", False),
+        ("tag", False),
+    ]
     env = STEP["schema"]["properties"]["env"]
     assert deckhitl.options_of(env) == [("prod", "Production", "live"), ("stage", "Staging", "")]
     assert deckhitl.options_of(STEP["schema"]["properties"]["regions"]) == [("eu", "eu", ""), ("us", "us", "")]
@@ -57,12 +71,16 @@ def test_form_rules_mirror_the_console():
     assert deckhitl.is_visible(STEP["schema"]["properties"]["why"], {"env": "prod"})
     assert deckhitl.is_visible(STEP["schema"]["properties"]["note"], {"regions": ["eu"]})
     assert not deckhitl.is_visible(STEP["schema"]["properties"]["note"], {"regions": ["us"]})
-    assert deckhitl.is_visible(STEP["schema"]["properties"]["tag"], {"dry": True}) and not deckhitl.is_visible(STEP["schema"]["properties"]["tag"], {"dry": False})
+    assert deckhitl.is_visible(STEP["schema"]["properties"]["tag"], {"dry": True}) and not deckhitl.is_visible(
+        STEP["schema"]["properties"]["tag"], {"dry": False}
+    )
     # required gating skips hidden fields; a boolean is always answered; a multi needs one
     assert deckhitl.missing_in_step(STEP, {"count": 2}) == ["env"]
     assert deckhitl.missing_in_step(STEP, {"env": "prod", "count": 2}) == ["why"]
     assert deckhitl.missing_in_step(STEP, {"env": "stage", "count": 2}) == []
-    assert deckhitl.any_step_missing([STEP, {"schema": {"properties": {"x": {"type": "string"}}, "required": ["x"]}}], {"env": "stage", "count": 2})
+    assert deckhitl.any_step_missing(
+        [STEP, {"schema": {"properties": {"x": {"type": "string"}}, "required": ["x"]}}], {"env": "stage", "count": 2}
+    )
     assert deckhitl.has_value({"type": "array"}, []) is False and deckhitl.has_value({"type": "boolean"}, False) is True
     # coercion from widget text
     assert deckhitl.coerce({"type": "integer"}, " 3 ") == 3 and deckhitl.coerce({"type": "number"}, "1.5") == 1.5
@@ -72,18 +90,33 @@ def test_form_rules_mirror_the_console():
     # kinds and the wire text
     assert deckhitl.kind_of({"question": "hm?"}) == "question" and deckhitl.kind_of(None) == "question"
     assert deckhitl.kind_of({"kind": "approval", "title": "Approve?"}) == "approval"
-    assert deckhitl.kind_of({"kind": "form", "steps": [STEP]}) == "form" and deckhitl.kind_of({"kind": "form", "steps": []}) == "question"
+    assert (
+        deckhitl.kind_of({"kind": "form", "steps": [STEP]}) == "form"
+        and deckhitl.kind_of({"kind": "form", "steps": []}) == "question"
+    )
     assert deckhitl.kind_of({"plugin_callback_id": "cb", "steps": [STEP]}) == "form"
-    assert deckhitl.kind_of({"plugin_callback_id": "cb", "steps": []}) == "form"  # no fields: still a form to redeem ({}), never a question
-    assert deckhitl.prompt_of({"kind": "approval", "title": "Approve?"}) == "Approve?" and deckhitl.prompt_of({}) == "input required"
-    assert json.loads(deckhitl.answer_text("form", {"a": 1})) == {"a": 1} and deckhitl.answer_text("question", "yes") == "yes"
+    assert (
+        deckhitl.kind_of({"plugin_callback_id": "cb", "steps": []}) == "form"
+    )  # no fields: still a form to redeem ({}), never a question
+    assert (
+        deckhitl.prompt_of({"kind": "approval", "title": "Approve?"}) == "Approve?"
+        and deckhitl.prompt_of({}) == "input required"
+    )
+    assert (
+        json.loads(deckhitl.answer_text("form", {"a": 1})) == {"a": 1}
+        and deckhitl.answer_text("question", "yes") == "yes"
+    )
 
 
 # ── fakes ──
 
 
 def park_frame(cid: str, hitl: dict, text: str = "Input required.") -> dict:
-    return status("TASK_STATE_INPUT_REQUIRED", parts=[{"text": text}, {"data": hitl, "metadata": {"mimeType": a2a.HITL_MIME}}], cid=cid)
+    return status(
+        "TASK_STATE_INPUT_REQUIRED",
+        parts=[{"text": text}, {"data": hitl, "metadata": {"mimeType": a2a.HITL_MIME}}],
+        cid=cid,
+    )
 
 
 class Parking(FakeA2A):
@@ -133,7 +166,11 @@ def _stalled(ex) -> bool:
     """The live exchange has been silent past the (test-shrunk) stall threshold."""
     from deck import talk as talkmod
 
-    return ex is not None and bool(ex.turn.task_id) and time.monotonic() - max(ex.turn.last_frame_at, ex.started_at) >= talkmod.STALL_IDLE_S
+    return (
+        ex is not None
+        and bool(ex.turn.task_id)
+        and time.monotonic() - max(ex.turn.last_frame_at, ex.started_at) >= talkmod.STALL_IDLE_S
+    )
 
 
 def _resume_call(fake: FakeA2A, *, hidden: bool = False) -> dict:
@@ -141,7 +178,9 @@ def _resume_call(fake: FakeA2A, *, hidden: bool = False) -> dict:
     `hidden` for a silent (approval / dismiss) resume."""
     assert len(fake.sent) == 2, fake.sent
     call = fake.sent[1]
-    assert call["task_id"] == "t1" and call["metadata"] == ({"hitl_resume": True, "hidden": True} if hidden else {"hitl_resume": True})
+    assert call["task_id"] == "t1" and call["metadata"] == (
+        {"hitl_resume": True, "hidden": True} if hidden else {"hitl_resume": True}
+    )
     return call
 
 
@@ -150,7 +189,14 @@ def _resume_call(fake: FakeA2A, *, hidden: bool = False) -> dict:
 
 @pytest.mark.asyncio
 async def test_approval_modal_resumes_the_parked_task_silently():
-    fake = Parking({"kind": "approval", "title": "Approve shell command?", "detail": "rm -rf build\n\nruns via: /bin/zsh", "project": "web"})
+    fake = Parking(
+        {
+            "kind": "approval",
+            "title": "Approve shell command?",
+            "detail": "rm -rf build\n\nruns via: /bin/zsh",
+            "project": "web",
+        }
+    )
     be = TalkBackend(a2a_client=fake)
     app = FleetDeck(be, poll_s=0)
     async with app.run_test(size=(120, 36)) as pilot:
@@ -188,7 +234,9 @@ async def test_deny_and_escape_in_the_approval_modal():
         await pilot.press("escape")  # leaves it parked
         assert await _until(pilot, lambda: isinstance(app.screen, ConversationScreen))
         await _settle(app, pilot)  # negative: escape resumes nothing
-        assert isinstance(app.screen, ConversationScreen) and app.screen.convo.parked is not None and len(fake.sent) == 1
+        assert (
+            isinstance(app.screen, ConversationScreen) and app.screen.convo.parked is not None and len(fake.sent) == 1
+        )
         await pilot.press("ctrl+r")
         assert await _until(pilot, lambda: isinstance(app.screen, ApprovalModal))
         await pilot.press("d")
@@ -272,8 +320,24 @@ async def test_question_modal_carries_the_draft_and_ctrl_d_dismisses_with_the_se
 @pytest.mark.asyncio
 async def test_form_wizard_gates_required_fields_reveals_conditional_ones_and_submits_json():
     steps = [
-        {"title": "who", "schema": {"properties": {"name": {"type": "string", "title": "Name"}, "count": {"type": "integer", "default": 2}}, "required": ["name"]}},
-        {"title": "how", "schema": {"properties": {"mode": {"enum": ["fast", "safe"]}, "notes": {"type": "string", "format": "textarea", "showWhen": {"field": "mode", "equals": "safe"}}, "confirm": {"type": "boolean"}}, "required": ["mode"]}},
+        {
+            "title": "who",
+            "schema": {
+                "properties": {"name": {"type": "string", "title": "Name"}, "count": {"type": "integer", "default": 2}},
+                "required": ["name"],
+            },
+        },
+        {
+            "title": "how",
+            "schema": {
+                "properties": {
+                    "mode": {"enum": ["fast", "safe"]},
+                    "notes": {"type": "string", "format": "textarea", "showWhen": {"field": "mode", "equals": "safe"}},
+                    "confirm": {"type": "boolean"},
+                },
+                "required": ["mode"],
+            },
+        },
     ]
     fake = Parking({"kind": "form", "title": "Release", "description": "fill me", "steps": steps})
     be = TalkBackend(a2a_client=fake)
@@ -328,9 +392,23 @@ async def test_form_wizard_gates_required_fields_reveals_conditional_ones_and_su
 
 @pytest.mark.asyncio
 async def test_a_plugin_form_is_redeemed_on_the_submit_route_and_a_returned_form_is_the_next_step():
-    fake = Parking({"kind": "form", "title": "Post?", "plugin_callback_id": "cb1", "steps": [{"schema": {"properties": {"text": {"type": "string"}}, "required": ["text"]}}]})
+    fake = Parking(
+        {
+            "kind": "form",
+            "title": "Post?",
+            "plugin_callback_id": "cb1",
+            "steps": [{"schema": {"properties": {"text": {"type": "string"}}, "required": ["text"]}}],
+        }
+    )
     be = TalkBackend(a2a_client=fake)
-    be.form_result = {"form": {"kind": "form", "title": "Where?", "steps": [{"schema": {"properties": {"channel": {"enum": ["x", "y"]}}}}]}, "callback_id": "cb2"}
+    be.form_result = {
+        "form": {
+            "kind": "form",
+            "title": "Where?",
+            "steps": [{"schema": {"properties": {"channel": {"enum": ["x", "y"]}}}}],
+        },
+        "callback_id": "cb2",
+    }
     app = FleetDeck(be, poll_s=0)
     async with app.run_test(size=(120, 40)) as pilot:
         await _open_talk(be, pilot, app)
@@ -343,7 +421,9 @@ async def test_a_plugin_form_is_redeemed_on_the_submit_route_and_a_returned_form
         assert any(c[0] == "submit_form" and c[2] == "cb1" and c[3] == {"text": "hello"} for c in be.calls)
         assert len(fake.sent) == 1  # never resumed the graph
         # the wizard's next step opened by itself, carrying the new callback id
-        assert await _until(pilot, lambda: isinstance(app.screen, FormModal) and app.screen.hitl.get("plugin_callback_id") == "cb2")
+        assert await _until(
+            pilot, lambda: isinstance(app.screen, FormModal) and app.screen.hitl.get("plugin_callback_id") == "cb2"
+        )
         be.form_result = {"reply": "posted"}
         modal = app.screen
         modal.query_one("#in-channel", Select).value = "y"
@@ -370,7 +450,9 @@ async def test_up_takes_the_newest_queued_steer_back_and_unread_steers_are_resen
         await _type(app, pilot, "three")
         assert await _until(pilot, lambda: sum(1 for c in be.calls if c[0] == "steer") == 2)
         ids = [c[2] for c in be.calls if c[0] == "steer"]
-        assert len(app.screen.query(".steer-msg")) == 2 and "2 queued" in str(app.screen.query_one("#talk-status", Static).content)
+        assert len(app.screen.query(".steer-msg")) == 2 and "2 queued" in str(
+            app.screen.query_one("#talk-status", Static).content
+        )
         # up on the EMPTY composer pulls the newest one back to edit
         comp = app.screen.query_one("#composer", Input)
         comp.focus()
@@ -398,15 +480,27 @@ async def test_a_folded_in_steer_settles_on_its_frame_and_a_park_keeps_the_rest_
 
         def stream(self, text, *, context_id, task_id=None, metadata=None):
             self.sent.append({"text": text, "context_id": context_id, "task_id": task_id, "metadata": metadata})
-            yield {"result": {"task": {"id": "t1", "contextId": context_id, "status": {"state": "TASK_STATE_SUBMITTED"}}}}
+            yield {
+                "result": {"task": {"id": "t1", "contextId": context_id, "status": {"state": "TASK_STATE_SUBMITTED"}}}
+            }
             assert self._wait(lambda: sum(1 for c in be.calls if c[0] == "steer") >= 2), "steers never arrived"
             first = [c for c in be.calls if c[0] == "steer"][0]
-            yield status(parts=[{"data": {"items": [{"id": first[2], "text": first[3]}]}, "metadata": {"mimeType": a2a.STEER_CONSUMED_MIME}}], cid=context_id)
+            yield status(
+                parts=[
+                    {
+                        "data": {"items": [{"id": first[2], "text": first[3]}]},
+                        "metadata": {"mimeType": a2a.STEER_CONSUMED_MIME},
+                    }
+                ],
+                cid=context_id,
+            )
             yield park_frame(context_id, {"question": "and now?"})
 
     fake = Consuming()
     be._a2a = fake
-    be.steer_pending = lambda agent, sid: [{"id": c[2], "text": c[3]} for c in be.calls if c[0] == "steer"][1:]  # all but the first were never read
+    be.steer_pending = lambda agent, sid: [{"id": c[2], "text": c[3]} for c in be.calls if c[0] == "steer"][
+        1:
+    ]  # all but the first were never read
     app = FleetDeck(be, poll_s=0)
     async with app.run_test(size=(120, 36)) as pilot:
         await _open_talk(be, pilot, app)
@@ -419,7 +513,9 @@ async def test_a_folded_in_steer_settles_on_its_frame_and_a_park_keeps_the_rest_
         def bubbles():
             return [b.render().plain for b in app.screen.query(".steer-msg")]
 
-        assert await _until(pilot, lambda: len(bubbles()) == 2 and "folded in" in bubbles()[0] and "queued" in bubbles()[1]), bubbles()
+        assert await _until(
+            pilot, lambda: len(bubbles()) == 2 and "folded in" in bubbles()[0] and "queued" in bubbles()[1]
+        ), bubbles()
         assert len(fake.sent) == 1  # a parked turn keeps the unread steer for after the answer
 
 
@@ -445,11 +541,22 @@ async def test_a_server_fired_turn_on_the_bus_is_attached_and_takes_interjection
         for f in fake.sub_frames[1:]:
             f["result"]["statusUpdate"]["taskId"] = "t7"
         # the scheduler's own turn.started names only the session (no task id) — nothing to attach to yet
-        fe.pending.append(ev("protoEngineer-ba4c", "turn.started", session_id=sid, origin="scheduler", trigger="daily-report"))
+        fe.pending.append(
+            ev("protoEngineer-ba4c", "turn.started", session_id=sid, origin="scheduler", trigger="daily-report")
+        )
         await _drained(app, pilot, fe)  # negative: the event was consumed and attached nothing
         assert fake.subscribed == [] and app.screen.convo.live is None
         # the chat.progress `turn_started` frame carries the task id and the control block: attach
-        fe.pending.append(ev("protoEngineer-ba4c", "chat.progress", session_id=sid, task_id="t7", phase="turn_started", control={"operator_controllable": False, "origin": "scheduler", "trigger": "daily-report"}))
+        fe.pending.append(
+            ev(
+                "protoEngineer-ba4c",
+                "chat.progress",
+                session_id=sid,
+                task_id="t7",
+                phase="turn_started",
+                control={"operator_controllable": False, "origin": "scheduler", "trigger": "daily-report"},
+            )
+        )
         assert await _until(pilot, lambda: fake.subscribed == ["t7"])
         assert await _until(pilot, lambda: app.screen.convo.live is not None and app.screen.convo.live.attached)
         live = app.screen.convo.live
@@ -464,7 +571,18 @@ async def test_a_server_fired_turn_on_the_bus_is_attached_and_takes_interjection
         await _quiet(app, pilot)  # negative: no interject worker ran
         assert comp.value == "look at #12 too" and not any(c[0] == "interject" for c in be.calls)
         # the bus says the operator may interject (attended session) → the composer interjects
-        fe.pending.append(ev("protoEngineer-ba4c", "chat.progress", session_id=sid, task_id="t7", phase="tool_start", tool="read_board", tool_call_id="c1", control={"operator_controllable": True, "origin": "scheduler"}))
+        fe.pending.append(
+            ev(
+                "protoEngineer-ba4c",
+                "chat.progress",
+                session_id=sid,
+                task_id="t7",
+                phase="tool_start",
+                tool="read_board",
+                tool_call_id="c1",
+                control={"operator_controllable": True, "origin": "scheduler"},
+            )
+        )
         assert await _until(pilot, lambda: app.screen.convo.live is not None and app.screen.convo.live.controllable)
         assert "type to interject" in str(app.screen.query_one("#talk-status", Static).content)
         await pilot.press("enter")
@@ -474,16 +592,29 @@ async def test_a_server_fired_turn_on_the_bus_is_attached_and_takes_interjection
         assert "interjection" in app.screen.query(".steer-msg").first().render().plain
         await pilot.press("escape")  # detach (abort the subscription) — the server's turn goes on
         await _settle(app, pilot)
-        assert fake.cancelled == [] and fake.aborted and live.detached and not live.live  # never CancelTask somebody else's turn
+        assert (
+            fake.cancelled == [] and fake.aborted and live.detached and not live.live
+        )  # never CancelTask somebody else's turn
         assert not isinstance(app.screen, ConversationScreen)
 
 
 @pytest.mark.asyncio
 async def test_opening_a_session_with_a_turn_in_flight_attaches_to_it():
     sid = "chat-1700000000000-abc"
-    row = {"task_id": "t9", "status": {"state": "TASK_STATE_WORKING"}, "history": [{"role": "ROLE_USER", "parts": [{"text": "from the console"}]}], "artifacts": []}
+    row = {
+        "task_id": "t9",
+        "status": {"state": "TASK_STATE_WORKING"},
+        "history": [{"role": "ROLE_USER", "parts": [{"text": "from the console"}]}],
+        "artifacts": [],
+    }
     sub = [{"result": {"task": {"id": "t9", "contextId": sid, "status": {"state": "TASK_STATE_WORKING"}}}}] + [
-        {**f, "result": {"statusUpdate": {**f["result"]["statusUpdate"], "taskId": "t9"}}} if "statusUpdate" in f["result"] else ({**f, "result": {"artifactUpdate": {**f["result"]["artifactUpdate"], "taskId": "t9"}}} if "artifactUpdate" in f["result"] else f)
+        {**f, "result": {"statusUpdate": {**f["result"]["statusUpdate"], "taskId": "t9"}}}
+        if "statusUpdate" in f["result"]
+        else (
+            {**f, "result": {"artifactUpdate": {**f["result"]["artifactUpdate"], "taskId": "t9"}}}
+            if "artifactUpdate" in f["result"]
+            else f
+        )
         for f in canned_frames(sid)[1:]
     ]
     fake = FakeA2A(sub_frames=sub)
@@ -497,12 +628,21 @@ async def test_opening_a_session_with_a_turn_in_flight_attaches_to_it():
         assert await _until(pilot, lambda: fake.subscribed == ["t9"])
         # `turn.done` flips in the stream reader BEFORE the UI thread's finish step renders the
         # status — wait for that step (`finished`), then for the render, never a fixed moment
-        assert await _until(pilot, lambda: app.screen.convo.latest is not None and app.screen.convo.latest.turn.done and app.screen.convo.latest.finished)
+        assert await _until(
+            pilot,
+            lambda: (
+                app.screen.convo.latest is not None
+                and app.screen.convo.latest.turn.done
+                and app.screen.convo.latest.finished
+            ),
+        )
         ex = app.screen.convo.latest
         assert ex.attached and ex.origin == "in flight" and ex.user == "from the console"
         assert "Three PRs are open." in str(app.screen.query(Markdown).first().source)
         assert "◇ in flight" in str(app.screen.query(".turn-meta").first().content)
-        assert await _until(pilot, lambda: "idle" in str(app.screen.query_one("#talk-status", Static).content)), str(app.screen.query_one("#talk-status", Static).content)
+        assert await _until(pilot, lambda: "idle" in str(app.screen.query_one("#talk-status", Static).content)), str(
+            app.screen.query_one("#talk-status", Static).content
+        )
 
 
 @pytest.mark.asyncio
@@ -510,15 +650,29 @@ async def test_attaching_to_a_task_that_just_finished_finalizes_from_the_durable
     """Live finding: SubscribeToTask on a finished task is refused with a JSON-RPC error
     ("already in a terminal state") — that is a completion to show, not a failure."""
     sid = "chat-1700000000000-fin"
-    row = {"task_id": "t9", "status": {"state": "TASK_STATE_WORKING"}, "history": [{"role": "ROLE_USER", "parts": [{"text": "hi"}]}], "artifacts": []}
-    fake = FakeA2A(sub_frames=[{"jsonrpc": "2.0", "id": "1", "error": {"code": -32602, "message": "Task t9 is in terminal state: 3"}}])
+    row = {
+        "task_id": "t9",
+        "status": {"state": "TASK_STATE_WORKING"},
+        "history": [{"role": "ROLE_USER", "parts": [{"text": "hi"}]}],
+        "artifacts": [],
+    }
+    fake = FakeA2A(
+        sub_frames=[
+            {"jsonrpc": "2.0", "id": "1", "error": {"code": -32602, "message": "Task t9 is in terminal state: 3"}}
+        ]
+    )
     be = TalkBackend(a2a_client=fake, turns={sid: [row]})
     app = FleetDeck(be, poll_s=0)
     async with app.run_test(size=(120, 36)) as pilot:
         await _settle(app, pilot)
         app.open_member("protoEngineer-ba4c", sid)
         await _settle(app, pilot)
-        assert await _until(pilot, lambda: fake.subscribed == ["t9"] and app.screen.convo.latest is not None and app.screen.convo.latest.turn.done)
+        assert await _until(
+            pilot,
+            lambda: (
+                fake.subscribed == ["t9"] and app.screen.convo.latest is not None and app.screen.convo.latest.turn.done
+            ),
+        )
         ex = app.screen.convo.latest
         assert not ex.error and "finalized from the task" in str(app.screen.query(Markdown).first().source)
         assert "idle" in str(app.screen.query_one("#talk-status", Static).content)
@@ -533,7 +687,17 @@ async def test_ctrl_x_on_a_running_task_card_cancels_that_delegation_only():
     frames = [
         {"result": {"task": {"id": "t1", "contextId": "s", "status": {"state": "TASK_STATE_SUBMITTED"}}}},
         status(metadata={TOOL: {"toolCallId": "d1", "name": "task", "phase": "started", "args": "review PR"}}),
-        status(metadata={TOOL: {"toolCallId": "c2", "name": "run_command", "phase": "started", "args": "gh pr diff", "parentToolCallId": "d1"}}),
+        status(
+            metadata={
+                TOOL: {
+                    "toolCallId": "c2",
+                    "name": "run_command",
+                    "phase": "started",
+                    "args": "gh pr diff",
+                    "parentToolCallId": "d1",
+                }
+            }
+        ),
         status("TASK_STATE_COMPLETED", final=True),
     ]
     fake = FakeA2A(frames=None, hang=True)
@@ -583,7 +747,12 @@ async def test_attendance_follows_the_open_session_and_is_released_on_leave():
         await pilot.press("ctrl+n")
         assert await _until(pilot, lambda: len([c for c in be.calls if c[0] == "attend"]) == 2)
         attends = [c for c in be.calls if c[0] == "attend"]
-        assert len(attends) == 2 and attends[0][2].closed and attends[1][1] == app.screen.convo.session_id and not attends[1][2].closed
+        assert (
+            len(attends) == 2
+            and attends[0][2].closed
+            and attends[1][1] == app.screen.convo.session_id
+            and not attends[1][2].closed
+        )
         await pilot.press("escape")
         await _settle(app, pilot)
         assert attends[1][2].closed
@@ -610,22 +779,55 @@ def test_activity_tracks_parks_from_the_bus_and_the_live_server_turn_per_session
     # block arrive on the chat.progress `turn_started` frame (server/a2a.py)
     act.apply(ev("x", "turn.started", session_id="chat-1", origin="scheduler", trigger="daily"))
     assert act.server_turn("x", "chat-1") is None and act.turn_cell("x") == "⟳ running"
-    act.apply(ev("x", "chat.progress", session_id="chat-1", task_id="t1", phase="turn_started", control={"operator_controllable": False, "origin": "scheduler", "trigger": "daily"}))
-    assert act.server_turn("x", "chat-1") == {"task_id": "t1", "origin": "scheduler", "trigger": "daily", "controllable": False}
-    act.apply(ev("x", "chat.progress", session_id="chat-1", task_id="t1", phase="tool_start", tool="t", tool_call_id="c", control={"operator_controllable": True, "origin": "scheduler", "trigger": "daily"}))
+    act.apply(
+        ev(
+            "x",
+            "chat.progress",
+            session_id="chat-1",
+            task_id="t1",
+            phase="turn_started",
+            control={"operator_controllable": False, "origin": "scheduler", "trigger": "daily"},
+        )
+    )
+    assert act.server_turn("x", "chat-1") == {
+        "task_id": "t1",
+        "origin": "scheduler",
+        "trigger": "daily",
+        "controllable": False,
+    }
+    act.apply(
+        ev(
+            "x",
+            "chat.progress",
+            session_id="chat-1",
+            task_id="t1",
+            phase="tool_start",
+            tool="t",
+            tool_call_id="c",
+            control={"operator_controllable": True, "origin": "scheduler", "trigger": "daily"},
+        )
+    )
     assert act.server_turn("x", "chat-1")["controllable"] is True
     act.apply(ev("x", "turn.input_required", context_id="chat-1", task_id="t1", prompt="Approve shell command?"))
     assert act.turn_cell("x") == "⚑ needs you" and act.state["x"].parked["chat-1"].task_id == "t1"
     assert act.server_turn("x", "chat-1") is None  # parked → not addressable any more
-    assert act.rows[-1].kind == "needs-you" and act.rows[-1].session == "chat-1" and act.ring_due() == [("x", "chat-1", "Approve shell command?")]
+    assert (
+        act.rows[-1].kind == "needs-you"
+        and act.rows[-1].session == "chat-1"
+        and act.ring_due() == [("x", "chat-1", "Approve shell command?")]
+    )
     act.apply(ev("x", "turn.resumed", context_id="chat-1", task_id="t1"))
     assert act.turn_cell("x") == "⟳ running" and act.state["x"].parked == {}  # answered: running again
     act.apply(ev("x", "turn.usage", task_id="t1", context_id="chat-1", state="TASK_STATE_COMPLETED"))
     assert act.turn_cell("x") == "idle"
-    act.apply(ev("x", "chat.progress", session_id="chat-2", task_id="t2", phase="turn_started", control={"origin": "inbox"}))
+    act.apply(
+        ev("x", "chat.progress", session_id="chat-2", task_id="t2", phase="turn_started", control={"origin": "inbox"})
+    )
     act.apply(ev("x", "turn.usage", task_id="t2", context_id="chat-2", state="TASK_STATE_COMPLETED"))
     assert act.server_turn("x", "chat-2") is None
-    act.apply(ev("x", "chat.progress", session_id="chat-3", task_id="t3", phase="turn_started", control={"origin": "watch"}))
+    act.apply(
+        ev("x", "chat.progress", session_id="chat-3", task_id="t3", phase="turn_started", control={"origin": "watch"})
+    )
     act.apply(ev("x", "turn.finished", session_id="chat-3", task_id="t3", ok=True))
     assert act.server_turn("x", "chat-3") is None and act.server_turn("nobody", "chat-3") is None
 
@@ -648,14 +850,35 @@ async def test_the_decks_own_park_on_the_bus_does_not_reload_the_session_under_t
     async with app.run_test(size=(120, 36)) as pilot:
         await _open_talk(be, pilot, app)
         sid = app.screen.convo.session_id
-        be._turns[sid] = [{"task_id": "t1", "status": {"state": "TASK_STATE_INPUT_REQUIRED", "message": {"role": "ROLE_AGENT", "parts": [{"text": "Input required."}, {"data": {"kind": "approval", "title": "Approve?"}, "metadata": {"mimeType": a2a.HITL_MIME}}]}}, "history": [{"role": "ROLE_USER", "parts": [{"text": "clean"}]}], "artifacts": []}]
+        be._turns[sid] = [
+            {
+                "task_id": "t1",
+                "status": {
+                    "state": "TASK_STATE_INPUT_REQUIRED",
+                    "message": {
+                        "role": "ROLE_AGENT",
+                        "parts": [
+                            {"text": "Input required."},
+                            {
+                                "data": {"kind": "approval", "title": "Approve?"},
+                                "metadata": {"mimeType": a2a.HITL_MIME},
+                            },
+                        ],
+                    },
+                },
+                "history": [{"role": "ROLE_USER", "parts": [{"text": "clean"}]}],
+                "artifacts": [],
+            }
+        ]
         await _send(app, pilot, "clean")
         convo_screen = app.screen
         old = convo_screen.convo.parked
         reads = len(be.turn_reads)
         await pilot.press("ctrl+r")
         assert await _until(pilot, lambda: isinstance(app.screen, ApprovalModal))
-        fe.pending.append(ev("protoEngineer-ba4c", "turn.input_required", context_id=sid, task_id="t1", prompt="Approve?"))
+        fe.pending.append(
+            ev("protoEngineer-ba4c", "turn.input_required", context_id=sid, task_id="t1", prompt="Approve?")
+        )
         await _drained(app, pilot, fe)  # negative: the event was consumed and started no reload
         assert convo_screen.convo.parked is old and len(be.turn_reads) == reads  # known park: no reload
         await pilot.press("a")
@@ -666,10 +889,24 @@ async def test_the_decks_own_park_on_the_bus_does_not_reload_the_session_under_t
         await _settle(app, pilot)  # negative: no modal, no resume worker
         assert isinstance(app.screen, ConversationScreen) and len(fake.sent) == 2  # nothing to answer twice
         # a park we did NOT watch happen (another client's turn in this session) still reloads
-        be._turns[sid].append({"task_id": "t2", "status": {"state": "TASK_STATE_INPUT_REQUIRED", "message": {"role": "ROLE_AGENT", "parts": [{"text": "Which?"}]}}, "history": [{"role": "ROLE_USER", "parts": [{"text": "from the console"}]}], "artifacts": []})
-        fe.pending.append(ev("protoEngineer-ba4c", "turn.input_required", context_id=sid, task_id="t2", prompt="Which?"))
+        be._turns[sid].append(
+            {
+                "task_id": "t2",
+                "status": {
+                    "state": "TASK_STATE_INPUT_REQUIRED",
+                    "message": {"role": "ROLE_AGENT", "parts": [{"text": "Which?"}]},
+                },
+                "history": [{"role": "ROLE_USER", "parts": [{"text": "from the console"}]}],
+                "artifacts": [],
+            }
+        )
+        fe.pending.append(
+            ev("protoEngineer-ba4c", "turn.input_required", context_id=sid, task_id="t2", prompt="Which?")
+        )
         assert await _until(pilot, lambda: len(be.turn_reads) == reads + 1)
-        assert await _until(pilot, lambda: app.screen.convo.parked is not None and app.screen.convo.parked.turn.task_id == "t2")
+        assert await _until(
+            pilot, lambda: app.screen.convo.parked is not None and app.screen.convo.parked.turn.task_id == "t2"
+        )
         _t.sleep(0)
 
 
@@ -731,7 +968,9 @@ async def test_a_stall_finalize_marks_the_turn_done_before_waking_the_reader(mon
         await _type(app, pilot, "go", until=lambda: _stalled(app.screen.convo.live))
         app.screen._check_stall()
         await _settle(app, pilot)  # the probe and the reader are workers
-        assert await _until(pilot, lambda: app.screen.convo.exchanges[-1].turn.done and app.screen.convo.exchanges[-1].finished)
+        assert await _until(
+            pilot, lambda: app.screen.convo.exchanges[-1].turn.done and app.screen.convo.exchanges[-1].finished
+        )
         ex = app.screen.convo.exchanges[-1]
         assert ex.turn.done and not ex.error and "✗" not in str(app.screen.query(".turn-meta").first().content)
 
@@ -780,7 +1019,9 @@ async def test_a_reconcile_that_lands_after_a_session_switch_or_an_answer_sends_
             if metadata and metadata.get("hitl_resume"):
                 yield from canned_frames(context_id)
                 return
-            yield {"result": {"task": {"id": "t1", "contextId": context_id, "status": {"state": "TASK_STATE_SUBMITTED"}}}}
+            yield {
+                "result": {"task": {"id": "t1", "contextId": context_id, "status": {"state": "TASK_STATE_SUBMITTED"}}}
+            }
             assert self._wait(lambda: any(c[0] == "steer" for c in be2.calls)), "the steer never arrived"
             yield park_frame(context_id, self.hitl)
 
@@ -813,7 +1054,14 @@ async def test_a_reconcile_that_lands_after_a_session_switch_or_an_answer_sends_
 async def test_a_form_field_that_reveals_a_sibling_keeps_focus_and_the_caret():
     """Major: revealing a `showWhen` sibling re-rendered the step and dropped focus onto
     the scroll container — every following keystroke was lost."""
-    steps = [{"schema": {"properties": {"name": {"type": "string"}, "tag": {"type": "string", "showWhen": {"field": "name"}}}, "required": ["name"]}}]
+    steps = [
+        {
+            "schema": {
+                "properties": {"name": {"type": "string"}, "tag": {"type": "string", "showWhen": {"field": "name"}}},
+                "required": ["name"],
+            }
+        }
+    ]
     fake = Parking({"kind": "form", "title": "F", "steps": steps})
     be = TalkBackend(a2a_client=fake)
     app = FleetDeck(be, poll_s=0)
@@ -821,12 +1069,16 @@ async def test_a_form_field_that_reveals_a_sibling_keeps_focus_and_the_caret():
         await _open_talk(be, pilot, app)
         await _send(app, pilot, "go")
         await pilot.press("ctrl+r")
-        assert await _until(pilot, lambda: isinstance(app.screen, FormModal) and getattr(app.screen.focused, "id", None) == "in-name")
+        assert await _until(
+            pilot, lambda: isinstance(app.screen, FormModal) and getattr(app.screen.focused, "id", None) == "in-name"
+        )
         modal = app.screen
         assert isinstance(modal, FormModal) and getattr(modal.focused, "id", None) == "in-name"
         await pilot.press("b")
         # the sibling is revealed AND focus is back on the field (a dropped focus never returns)
-        assert await _until(pilot, lambda: bool(modal.query("#field-tag")) and getattr(modal.focused, "id", None) == "in-name")
+        assert await _until(
+            pilot, lambda: bool(modal.query("#field-tag")) and getattr(modal.focused, "id", None) == "in-name"
+        )
         await pilot.press(*"ob")
         assert await _until(pilot, lambda: modal.values.get("name") == "bob")
         assert modal.query_one("#in-name", Input).value == "bob" and modal.values["name"] == "bob"
@@ -850,7 +1102,16 @@ async def test_an_attached_server_turn_is_not_reported_twice_to_the_feed_and_a_r
             msg = {"role": "ROLE_AGENT", "messageId": "m", "parts": []}
             if meta:
                 msg["metadata"] = meta
-            return {"result": {"statusUpdate": {"taskId": "t7", "contextId": sid, "status": {"state": state, "message": msg}, "final": final}}}
+            return {
+                "result": {
+                    "statusUpdate": {
+                        "taskId": "t7",
+                        "contextId": sid,
+                        "status": {"state": state, "message": msg},
+                        "final": final,
+                    }
+                }
+            }
 
         fake.sub_frames = [
             {"result": {"task": {"id": "t7", "contextId": sid, "status": {"state": "TASK_STATE_WORKING"}}}},
@@ -858,20 +1119,80 @@ async def test_an_attached_server_turn_is_not_reported_twice_to_the_feed_and_a_r
             su({TOOL: {"toolCallId": "c1", "name": "read_board", "phase": "completed", "result": "ok"}}),
             su(state="TASK_STATE_COMPLETED", final=True),
         ]
-        fe.pending.append(ev("protoEngineer-ba4c", "chat.progress", session_id=sid, task_id="t7", phase="turn_started", control={"origin": "scheduler"}))
-        fe.pending.append(ev("protoEngineer-ba4c", "chat.progress", session_id=sid, task_id="t7", phase="tool_start", tool="read_board", tool_call_id="c1", control={"origin": "scheduler"}))
-        fe.pending.append(ev("protoEngineer-ba4c", "chat.progress", session_id=sid, task_id="t7", phase="tool_end", tool="read_board", tool_call_id="c1", output="ok", control={"origin": "scheduler"}))
+        fe.pending.append(
+            ev(
+                "protoEngineer-ba4c",
+                "chat.progress",
+                session_id=sid,
+                task_id="t7",
+                phase="turn_started",
+                control={"origin": "scheduler"},
+            )
+        )
+        fe.pending.append(
+            ev(
+                "protoEngineer-ba4c",
+                "chat.progress",
+                session_id=sid,
+                task_id="t7",
+                phase="tool_start",
+                tool="read_board",
+                tool_call_id="c1",
+                control={"origin": "scheduler"},
+            )
+        )
+        fe.pending.append(
+            ev(
+                "protoEngineer-ba4c",
+                "chat.progress",
+                session_id=sid,
+                task_id="t7",
+                phase="tool_end",
+                tool="read_board",
+                tool_call_id="c1",
+                output="ok",
+                control={"origin": "scheduler"},
+            )
+        )
         assert await _until(pilot, lambda: app.screen.convo.latest is not None and app.screen.convo.latest.turn.done)
         await _drained(app, pilot, fe)  # negative: every bus row landed, none doubled the attached turn's
         await _settle(app, pilot)
-        assert [(r.glyph, r.label) for r in app.activity.rows if r.tool_id == "c1"] == [("⟳", "read_board"), ("✓", "read_board")]
+        assert [(r.glyph, r.label) for r in app.activity.rows if r.tool_id == "c1"] == [
+            ("⟳", "read_board"),
+            ("✓", "read_board"),
+        ]
     # a turn in flight when the session opens: the durable copy is replaced by the snapshot, not doubled
     sid2 = "chat-1700000000000-abc"
-    hist = [{"role": "ROLE_USER", "parts": [{"text": "q"}]}, {"role": "ROLE_AGENT", "parts": [{"data": {"text": "thinking hard"}, "metadata": {"mimeType": a2a.REASONING_MIME}}]}]
+    hist = [
+        {"role": "ROLE_USER", "parts": [{"text": "q"}]},
+        {
+            "role": "ROLE_AGENT",
+            "parts": [{"data": {"text": "thinking hard"}, "metadata": {"mimeType": a2a.REASONING_MIME}}],
+        },
+    ]
     row = {"task_id": "t9", "status": {"state": "TASK_STATE_WORKING"}, "history": hist, "artifacts": []}
     sub = [
-        {"result": {"task": {"id": "t9", "contextId": sid2, "status": {"state": "TASK_STATE_WORKING"}, "history": hist, "artifacts": []}}},
-        {"result": {"statusUpdate": {"taskId": "t9", "contextId": sid2, "status": {"state": "TASK_STATE_COMPLETED"}, "final": True}}},
+        {
+            "result": {
+                "task": {
+                    "id": "t9",
+                    "contextId": sid2,
+                    "status": {"state": "TASK_STATE_WORKING"},
+                    "history": hist,
+                    "artifacts": [],
+                }
+            }
+        },
+        {
+            "result": {
+                "statusUpdate": {
+                    "taskId": "t9",
+                    "contextId": sid2,
+                    "status": {"state": "TASK_STATE_COMPLETED"},
+                    "final": True,
+                }
+            }
+        },
     ]
     fake2 = FakeA2A(sub_frames=sub)
     be2 = TalkBackend(a2a_client=fake2, turns={sid2: [row]})
@@ -897,7 +1218,6 @@ async def test_attendance_that_gave_up_is_said_once():
         app.screen._check_stall()
         app.screen._check_stall()
         assert len([m for m in seen if "NOT attended" in m]) == 1
-
 
 
 # ── round-2 review reproducers ──
@@ -928,7 +1248,9 @@ async def test_a_park_answered_elsewhere_follows_the_bus_instead_of_sending_a_st
         assert app.screen.convo.parked is None and "idle" in str(app.screen.query_one("#talk-status", Static).content)
         assert "Three PRs are open." in str(app.screen.query(Markdown).first().source)
         await pilot.press("ctrl+z")  # a re-render must not re-park the roster
-        fe.pending.append(ev("protoEngineer-ba4c", "turn.usage", task_id="t1", context_id=sid, state="TASK_STATE_COMPLETED"))
+        fe.pending.append(
+            ev("protoEngineer-ba4c", "turn.usage", task_id="t1", context_id=sid, state="TASK_STATE_COMPLETED")
+        )
         await _drained(app, pilot, fe)  # negative: consumed without re-parking or ringing
         await _settle(app, pilot)
         assert app.activity.turn_cell("protoEngineer-ba4c") == "idle" and rings == []
@@ -945,10 +1267,35 @@ async def test_a_park_answered_elsewhere_follows_the_bus_instead_of_sending_a_st
         sid = app2.screen.convo.session_id
         await _send(app2, pilot, "ship it")
         assert app2.screen.convo.parked is not None
-        be2._turns[sid] = [{"task_id": "t1", "status": {"state": "TASK_STATE_COMPLETED"}, "history": [{"role": "ROLE_USER", "parts": [{"text": "ship it"}]}], "artifacts": [{"parts": [{"text": "Shipped from the console."}]}]}]
-        fe2.pending.append(ev("protoEngineer-ba4c", "turn.usage", task_id="t1", context_id=sid, state="TASK_STATE_COMPLETED", cost_usd=0.1))
-        assert await _until(pilot, lambda: app2.screen.convo.parked is None and app2.screen.convo.latest is not None and app2.screen.convo.latest.turn.done)
-        assert await _until(pilot, lambda: "Shipped from the console." in str(app2.screen.query(Markdown).first().source))
+        be2._turns[sid] = [
+            {
+                "task_id": "t1",
+                "status": {"state": "TASK_STATE_COMPLETED"},
+                "history": [{"role": "ROLE_USER", "parts": [{"text": "ship it"}]}],
+                "artifacts": [{"parts": [{"text": "Shipped from the console."}]}],
+            }
+        ]
+        fe2.pending.append(
+            ev(
+                "protoEngineer-ba4c",
+                "turn.usage",
+                task_id="t1",
+                context_id=sid,
+                state="TASK_STATE_COMPLETED",
+                cost_usd=0.1,
+            )
+        )
+        assert await _until(
+            pilot,
+            lambda: (
+                app2.screen.convo.parked is None
+                and app2.screen.convo.latest is not None
+                and app2.screen.convo.latest.turn.done
+            ),
+        )
+        assert await _until(
+            pilot, lambda: "Shipped from the console." in str(app2.screen.query(Markdown).first().source)
+        )
         assert len(fake2.sent) == 1
         # a modal that was open across the answer refuses to send and hands the text back
         fake3 = Parking({"question": "Which?"})
@@ -963,7 +1310,14 @@ async def test_a_park_answered_elsewhere_follows_the_bus_instead_of_sending_a_st
         await pilot.press("ctrl+r")
         assert await _until(pilot, lambda: isinstance(app3.screen, QuestionModal))
         await pilot.press(*"main")
-        be3._turns[sid] = [{"task_id": "t1", "status": {"state": "TASK_STATE_COMPLETED"}, "history": [], "artifacts": [{"parts": [{"text": "took develop"}]}]}]
+        be3._turns[sid] = [
+            {
+                "task_id": "t1",
+                "status": {"state": "TASK_STATE_COMPLETED"},
+                "history": [],
+                "artifacts": [{"parts": [{"text": "took develop"}]}],
+            }
+        ]
         fe3.pending.append(ev("protoEngineer-ba4c", "turn.finished", session_id=sid, task_id="t1", ok=True))
         # Wait for the deck to have SEEN the park end — not a fixed sleep. Under CI load the
         # event wasn't consumed within 0.8 s, the modal still thought the task was parked, and
@@ -977,11 +1331,44 @@ async def test_a_park_answered_elsewhere_follows_the_bus_instead_of_sending_a_st
 @pytest.mark.asyncio
 async def test_a_server_turn_the_bus_showed_continues_its_in_flight_durable_row():
     sid = "chat-1700000000000-srv"
-    row = {"task_id": "t7", "status": {"state": "TASK_STATE_WORKING"}, "history": [{"role": "ROLE_USER", "parts": [{"text": "daily report"}]}], "artifacts": [{"parts": [{"text": "so far"}]}]}
+    row = {
+        "task_id": "t7",
+        "status": {"state": "TASK_STATE_WORKING"},
+        "history": [{"role": "ROLE_USER", "parts": [{"text": "daily report"}]}],
+        "artifacts": [{"parts": [{"text": "so far"}]}],
+    }
     sub = [
-        {"result": {"task": {"id": "t7", "contextId": sid, "status": {"state": "TASK_STATE_WORKING"}, "history": row["history"], "artifacts": row["artifacts"]}}},
-        {"result": {"artifactUpdate": {"taskId": "t7", "contextId": sid, "artifact": {"artifactId": "a", "parts": [{"text": "so far, and done."}]}, "lastChunk": True}}},
-        {"result": {"statusUpdate": {"taskId": "t7", "contextId": sid, "status": {"state": "TASK_STATE_COMPLETED"}, "final": True}}},
+        {
+            "result": {
+                "task": {
+                    "id": "t7",
+                    "contextId": sid,
+                    "status": {"state": "TASK_STATE_WORKING"},
+                    "history": row["history"],
+                    "artifacts": row["artifacts"],
+                }
+            }
+        },
+        {
+            "result": {
+                "artifactUpdate": {
+                    "taskId": "t7",
+                    "contextId": sid,
+                    "artifact": {"artifactId": "a", "parts": [{"text": "so far, and done."}]},
+                    "lastChunk": True,
+                }
+            }
+        },
+        {
+            "result": {
+                "statusUpdate": {
+                    "taskId": "t7",
+                    "contextId": sid,
+                    "status": {"state": "TASK_STATE_COMPLETED"},
+                    "final": True,
+                }
+            }
+        },
     ]
     fake = FakeA2A(sub_frames=sub)
     be = TalkBackend(a2a_client=fake, turns={sid: [row]})
@@ -989,16 +1376,29 @@ async def test_a_server_turn_the_bus_showed_continues_its_in_flight_durable_row(
     app = FleetDeck(be, poll_s=0, events=fe)
     async with app.run_test(size=(120, 36)) as pilot:
         await _settle(app, pilot)
-        fe.pending.append(ev("protoEngineer-ba4c", "chat.progress", session_id=sid, task_id="t7", phase="turn_started", control={"origin": "scheduler", "trigger": "daily", "operator_controllable": True}))
+        fe.pending.append(
+            ev(
+                "protoEngineer-ba4c",
+                "chat.progress",
+                session_id=sid,
+                task_id="t7",
+                phase="turn_started",
+                control={"origin": "scheduler", "trigger": "daily", "operator_controllable": True},
+            )
+        )
         # wait for the bus row to be RECORDED, not a fixed 0.7 s — opening before it lands
         # reads the turn as not operator-controllable
-        assert await _until(pilot, lambda: app.activity._st("protoEngineer-ba4c").server_turns.get(sid, {}).get("task_id") == "t7")
+        assert await _until(
+            pilot, lambda: app.activity._st("protoEngineer-ba4c").server_turns.get(sid, {}).get("task_id") == "t7"
+        )
         app.open_member("protoEngineer-ba4c", sid)
         await _settle(app, pilot)
         assert await _until(pilot, lambda: fake.subscribed == ["t7"] and app.screen.convo.live is None)
         exs = app.screen.convo.exchanges
         assert [e.turn.task_id for e in exs] == ["t7"] and exs[0].turn.done and exs[0].controllable
-        assert "1 turn" in str(app.screen.query_one("#talk-head", Static).content) and len(app.screen.query(Markdown)) == 1
+        assert (
+            "1 turn" in str(app.screen.query_one("#talk-head", Static).content) and len(app.screen.query(Markdown)) == 1
+        )
         assert "so far, and done." in str(app.screen.query(Markdown).first().source)
 
 
@@ -1008,7 +1408,14 @@ async def test_a_plugin_form_cannot_be_reopened_while_its_submit_is_in_flight():
     answers and sent them to the A2A task as a hitl_resume carrying a dict repr."""
     import threading
 
-    fake = Parking({"kind": "form", "title": "Post?", "plugin_callback_id": "cb1", "steps": [{"schema": {"properties": {"text": {"type": "string"}}, "required": ["text"]}}]})
+    fake = Parking(
+        {
+            "kind": "form",
+            "title": "Post?",
+            "plugin_callback_id": "cb1",
+            "steps": [{"schema": {"properties": {"text": {"type": "string"}}, "required": ["text"]}}],
+        }
+    )
     be = TalkBackend(a2a_client=fake)
     orig = be.submit_form
     # The submit roundtrip is held open until the test releases it (a fixed 0.9 s sleep made
@@ -1029,7 +1436,13 @@ async def test_a_plugin_form_cannot_be_reopened_while_its_submit_is_in_flight():
             assert await _until(pilot, lambda: isinstance(app.screen, FormModal))
             app.screen.query_one("#in-text", Input).focus()
             await pilot.press(*"hello", "ctrl+s")
-            assert await _until(pilot, lambda: isinstance(app.screen, ConversationScreen) and "submitting the form" in str(app.screen.query_one("#talk-status", Static).content))
+            assert await _until(
+                pilot,
+                lambda: (
+                    isinstance(app.screen, ConversationScreen)
+                    and "submitting the form" in str(app.screen.query_one("#talk-status", Static).content)
+                ),
+            )
             await pilot.press("ctrl+r")
             await pilot.pause(0.1)  # negative: no modal is pushed (the refusal is synchronous)
             assert isinstance(app.screen, ConversationScreen)  # refused while in flight
@@ -1044,12 +1457,23 @@ async def test_a_plugin_form_cannot_be_reopened_while_its_submit_is_in_flight():
         release.set()
 
 
-
 @pytest.mark.asyncio
 async def test_form_keys_that_are_not_valid_widget_ids_still_render_and_round_trip():
     """CodeRabbit: a schema key with a dot, a colon, a space or a leading digit is not a
     Textual id — the modal must not raise, and the answers keep the original keys."""
-    steps = [{"schema": {"properties": {"user.name": {"type": "string"}, "1st": {"type": "string"}, "a b": {"type": "boolean"}, "x:y": {"enum": ["p", "q"]}}, "required": ["user.name"]}}]
+    steps = [
+        {
+            "schema": {
+                "properties": {
+                    "user.name": {"type": "string"},
+                    "1st": {"type": "string"},
+                    "a b": {"type": "boolean"},
+                    "x:y": {"enum": ["p", "q"]},
+                },
+                "required": ["user.name"],
+            }
+        }
+    ]
     fake = Parking({"kind": "form", "title": "Odd keys", "steps": steps})
     be = TalkBackend(a2a_client=fake)
     app = FleetDeck(be, poll_s=0)
@@ -1093,7 +1517,9 @@ async def test_a_steer_whose_enqueue_is_in_flight_when_the_turn_ends_is_not_mark
         return orig_steer(agent, sid, msg_id, text)
 
     be.steer = held_steer  # type: ignore[method-assign]
-    be.steer_pending = lambda agent, sid: [{"id": c[2], "text": c[3]} for c in be.calls if c[0] == "steer"]  # the member holds whatever was accepted
+    be.steer_pending = lambda agent, sid: [
+        {"id": c[2], "text": c[3]} for c in be.calls if c[0] == "steer"
+    ]  # the member holds whatever was accepted
     app = FleetDeck(be, poll_s=0)
     try:
         async with app.run_test(size=(120, 36)) as pilot:
@@ -1156,5 +1582,7 @@ async def test_a_plugin_form_with_no_fields_is_redeemed_as_an_empty_form():
         assert isinstance(app.screen, FormModal) and not app.screen.query(".hitl-field")
         assert not app.screen.query_one("#submit", Button).disabled
         await pilot.press("ctrl+s")
-        assert await _until(pilot, lambda: any(c[0] == "submit_form" and c[2] == "cb1" and c[3] == {} for c in be.calls))
+        assert await _until(
+            pilot, lambda: any(c[0] == "submit_form" and c[2] == "cb1" and c[3] == {} for c in be.calls)
+        )
         assert len(fake.sent) == 1

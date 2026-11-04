@@ -766,7 +766,9 @@ def _fit_to_budget(c: _Candidates, opts: ProjectionOptions, skills_index, summar
     return _finish(d, budget, overflow=overflow, memory_shed=memory_shed, skills_shed=skills_shed)
 
 
-def _finish(d: _Delivered, budget: int | None, *, overflow: list[dict], memory_shed: bool, skills_shed: bool) -> _Delivered:
+def _finish(
+    d: _Delivered, budget: int | None, *, overflow: list[dict], memory_shed: bool, skills_shed: bool
+) -> _Delivered:
     """Attach the budget bookkeeping and build the :class:`ProjectedContext`."""
     sections = []
     for s in d.sections:

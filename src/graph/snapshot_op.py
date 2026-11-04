@@ -399,7 +399,9 @@ def discover_plugin_requirements() -> list[SecretRequirement]:
                     )
                 )
     except Exception:  # noqa: BLE001 — discovery is best-effort; the config strip already covers set values
-        log.warning("[snapshot] plugin secret discovery failed — manifest-declared secrets may be missing", exc_info=True)
+        log.warning(
+            "[snapshot] plugin secret discovery failed — manifest-declared secrets may be missing", exc_info=True
+        )
     return out
 
 
@@ -574,7 +576,7 @@ def render_review(
             "> **This snapshot carries a knowledge seed — do NOT treat it as publishable.**",
             f"> {total} chunk(s) of this agent's knowledge travel with it, as text.",
             "> Secret-free is not the same as safe-to-share: none of it is a credential, and",
-            "> all of it may be private. The usual \"you could push this to a public gist\"",
+            '> all of it may be private. The usual "you could push this to a public gist"',
             "> property does **not** hold for this file. Share it the way you would share the",
             "> source documents themselves.",
             "",
@@ -598,7 +600,7 @@ def render_review(
             lines.append(f"| `{r.name}` | {r.kind} | {'yes' if r.was_set else 'no'} |")
         lines += [
             "",
-            "*Names only — no values travel. \"Set on source\" says whether the exporting agent",
+            '*Names only — no values travel. "Set on source" says whether the exporting agent',
             "actually had one, so an unset row is a credential the plugin declares but nobody",
             "filled in.*",
         ]

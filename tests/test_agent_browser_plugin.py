@@ -64,12 +64,26 @@ RETIRED_REPO = "https://github.com/protoLabsAI/agent-browser-plugin"
 LAST_STANDALONE_VERSION = (0, 6, 5)
 
 EXPECTED_TOOLS = {
-    "browser_open", "browser_back", "browser_forward", "browser_reload",
-    "browser_snapshot", "browser_get_text", "browser_get_html", "browser_get_value",
+    "browser_open",
+    "browser_back",
+    "browser_forward",
+    "browser_reload",
+    "browser_snapshot",
+    "browser_get_text",
+    "browser_get_html",
+    "browser_get_value",
     "browser_form_read",
-    "browser_click", "browser_fill", "browser_type", "browser_select", "browser_upload",
-    "browser_press", "browser_hover",
-    "browser_eval", "browser_screenshot", "browser_pdf", "browser_close",
+    "browser_click",
+    "browser_fill",
+    "browser_type",
+    "browser_select",
+    "browser_upload",
+    "browser_press",
+    "browser_hover",
+    "browser_eval",
+    "browser_screenshot",
+    "browser_pdf",
+    "browser_close",
 }
 
 
@@ -205,10 +219,21 @@ async def test_open_passes_url_and_curated_launch_flags(monkeypatch):
     t = _toolmap({"binary": "ab", "allowed_domains": "x.com", "max_output": 500})
     out = await t["browser_open"].ainvoke({"url": "https://x.com"})
     assert "OPENED" in out
-    anti = ("--disable-backgrounding-occluded-windows,--disable-renderer-backgrounding,"
-            "--disable-background-timer-throttling")
-    assert rec[-1] == ["ab", "--allowed-domains", "x.com", "--max-output", "500",
-                       "--args", anti, "open", "https://x.com"]
+    anti = (
+        "--disable-backgrounding-occluded-windows,--disable-renderer-backgrounding,"
+        "--disable-background-timer-throttling"
+    )
+    assert rec[-1] == [
+        "ab",
+        "--allowed-domains",
+        "x.com",
+        "--max-output",
+        "500",
+        "--args",
+        anti,
+        "open",
+        "https://x.com",
+    ]
 
 
 async def test_open_blank_url_omits_it(monkeypatch):
@@ -323,17 +348,29 @@ async def test_output_at_the_cap_is_not_truncated(monkeypatch):
 # ── #3451 (a): the setup gap — a missing CLI is an operator banner, not a log line ──
 
 
-def _probe_env(monkeypatch, *, which=None, chrome="pass", chrome_msg="Chrome 149 at /x",
-               version="agent-browser 0.27.1", doctor_rc=0, doctor_out=None):
+def _probe_env(
+    monkeypatch,
+    *,
+    which=None,
+    chrome="pass",
+    chrome_msg="Chrome 149 at /x",
+    version="agent-browser 0.27.1",
+    doctor_rc=0,
+    doctor_out=None,
+):
     """Point ``preflight`` at a synthetic CLI: ``which`` is what PATH resolution
     returns (None = missing), and ``doctor --json`` answers with one Chrome check."""
     monkeypatch.setattr(preflight.shutil, "which", lambda name: which)
     payload = doctor_out
     if payload is None:
-        payload = json.dumps({"checks": [
-            {"category": "Environment", "id": "env.version", "status": "pass", "message": "…"},
-            {"category": "Chrome", "id": "chrome.installed", "status": chrome, "message": chrome_msg},
-        ]})
+        payload = json.dumps(
+            {
+                "checks": [
+                    {"category": "Environment", "id": "env.version", "status": "pass", "message": "…"},
+                    {"category": "Chrome", "id": "chrome.installed", "status": chrome, "message": chrome_msg},
+                ]
+            }
+        )
 
     def _run(args, **kw):
         if args[1:2] == ["--version"]:
@@ -379,26 +416,33 @@ def test_the_cli_gap_carries_a_config_action_the_host_actually_keeps(monkeypatch
         [gap] = setup_gaps.active()
         # survived sanitizing WITH their labels, step and highlighted field — the real contract
         assert gap["actions"] == [
-            {"kind": "plugin_setup", "target": "agent_browser", "step": "download-cli",
-             "label": "Download agent-browser"},
-            {"kind": "plugin_config", "target": "agent_browser", "label": "Set the CLI path", "fields": ["binary"]}]
+            {
+                "kind": "plugin_setup",
+                "target": "agent_browser",
+                "step": "download-cli",
+                "label": "Download agent-browser",
+            },
+            {"kind": "plugin_config", "target": "agent_browser", "label": "Set the CLI path", "fields": ["binary"]},
+        ]
         assert setup_gaps.warnings() == ["Agent Browser: cli missing"]
     finally:
         setup_gaps.reset()
 
 
 def test_preflight_reports_chrome_separately_from_the_cli(monkeypatch):
-    _probe_env(monkeypatch, which="/usr/local/bin/agent-browser", chrome="fail",
-               chrome_msg="No Chrome install found")
+    _probe_env(monkeypatch, which="/usr/local/bin/agent-browser", chrome="fail", chrome_msg="No Chrome install found")
     reg = FakeRegistry({}, plugin_id="agent_browser", plugin_dir=ROOT)
     probe = preflight.report(reg, reg.config)
     assert probe.cli_ok is True and probe.chrome == "missing"
-    assert preflight.CLI_GAP not in reg.setup_gaps          # the CLI is fine
+    assert preflight.CLI_GAP not in reg.setup_gaps  # the CLI is fine
     chrome_msg = reg.setup_gaps[preflight.CHROME_GAP]
     assert "agent-browser install" in chrome_msg and "No Chrome install found" in chrome_msg
     # the Chrome fix is a CLI command — now a button that runs it (a `plugin_setup` step)
     assert reg.setup_gap_actions[preflight.CHROME_GAP] == {
-        "kind": "plugin_setup", "step": preflight.STEP_INSTALL_CHROME, "label": "Install Chrome"}
+        "kind": "plugin_setup",
+        "step": preflight.STEP_INSTALL_CHROME,
+        "label": "Install Chrome",
+    }
 
 
 def test_preflight_clears_both_gaps_when_everything_resolves(monkeypatch):
@@ -406,7 +450,7 @@ def test_preflight_clears_both_gaps_when_everything_resolves(monkeypatch):
     reg = FakeRegistry({}, plugin_id="agent_browser", plugin_dir=ROOT)
     probe = preflight.report(reg, reg.config)
     assert (probe.cli_ok, probe.chrome, probe.cli_version) == (True, "ok", "agent-browser 0.27.1")
-    assert reg.setup_gaps == {}   # reporting None is what makes the banner self-heal
+    assert reg.setup_gaps == {}  # reporting None is what makes the banner self-heal
 
 
 def test_preflight_gap_self_heals_across_probes(monkeypatch):
@@ -414,9 +458,9 @@ def test_preflight_gap_self_heals_across_probes(monkeypatch):
     _probe_env(monkeypatch, which=None)
     preflight.report(reg, reg.config)
     assert preflight.CLI_GAP in reg.setup_gaps
-    _probe_env(monkeypatch, which="/opt/ab")          # operator installed it
+    _probe_env(monkeypatch, which="/opt/ab")  # operator installed it
     preflight.report(reg, reg.config)
-    assert reg.setup_gaps == {}                        # banner gone, no restart
+    assert reg.setup_gaps == {}  # banner gone, no restart
 
 
 @pytest.mark.parametrize("doctor", ["not json at all", json.dumps({"checks": []}), ""])
@@ -441,14 +485,14 @@ def test_a_wedged_binary_cannot_stall_boot_past_the_preflight_budget(monkeypatch
 
     def wedged(args, **kw):
         given.append(kw["timeout"])
-        clock["t"] += kw["timeout"]   # burns every second it was allowed
+        clock["t"] += kw["timeout"]  # burns every second it was allowed
         raise subprocess.TimeoutExpired(cmd=args[0], timeout=kw["timeout"])
 
     monkeypatch.setattr(preflight.subprocess, "run", wedged)
     probe = preflight.probe({})
-    assert probe.cli_ok and probe.chrome == "unknown"          # degraded, never raised
+    assert probe.cli_ok and probe.chrome == "unknown"  # degraded, never raised
     assert sum(given) <= preflight.PREFLIGHT_BUDGET_S + 1e-9, given
-    assert preflight.PREFLIGHT_BUDGET_S <= 10                   # a boot-time budget, not a leash
+    assert preflight.PREFLIGHT_BUDGET_S <= 10  # a boot-time budget, not a leash
 
 
 def test_preflight_never_raises_when_the_probe_explodes(monkeypatch):
@@ -458,7 +502,7 @@ def test_preflight_never_raises_when_the_probe_explodes(monkeypatch):
         raise OSError("exec format error")
 
     monkeypatch.setattr(preflight.subprocess, "run", boom)
-    probe = preflight.probe({})                                  # degraded, never raised…
+    probe = preflight.probe({})  # degraded, never raised…
     # …and an OSError from STARTING the binary is a real gap, not "healthy": a CLI that
     # can't be exec'd is as useless as a missing one (#3451 round 3)
     # cli_path is the RESOLVED location, so it is platform-native (`\opt\ab` on Windows):
@@ -469,8 +513,9 @@ def test_preflight_never_raises_when_the_probe_explodes(monkeypatch):
     assert "can't be started" in preflight.hint(probe)
 
 
-@pytest.mark.parametrize("configured", ["C:/Tools/agent-browser.exe", r"C:\Tools\agent-browser.exe",
-                                        "~/bin/agent browser"])
+@pytest.mark.parametrize(
+    "configured", ["C:/Tools/agent-browser.exe", r"C:\Tools\agent-browser.exe", "~/bin/agent browser"]
+)
 def test_the_operators_configured_binary_is_echoed_verbatim(monkeypatch, configured):
     """The one path the plugin must NOT normalise is the operator's own `binary` setting:
     the banner quotes it back so they can recognise — and fix — exactly what they typed.
@@ -490,8 +535,9 @@ def test_preflight_resolves_an_operator_pinned_absolute_path(monkeypatch, tmp_pa
     pinned.parent.mkdir()
     pinned.write_text("#!/bin/sh\n", encoding="utf-8")
     pinned.chmod(0o755)
-    monkeypatch.setattr(preflight.subprocess, "run",
-                        lambda args, **kw: types.SimpleNamespace(returncode=1, stdout="", stderr=""))
+    monkeypatch.setattr(
+        preflight.subprocess, "run", lambda args, **kw: types.SimpleNamespace(returncode=1, stdout="", stderr="")
+    )
     assert preflight.resolve_binary(str(pinned)) == str(pinned.resolve())
     assert preflight.resolve_binary(str(tmp_path / "bin" / "nope")) == ""
     assert preflight.resolve_binary("") == ""
@@ -522,13 +568,13 @@ async def test_a_tool_run_refreshes_the_gap_when_the_cli_vanishes(monkeypatch):
     out = await t["browser_snapshot"].ainvoke({})
     assert calls == ["refresh"] and "setup banner" in out
     await t["browser_snapshot"].ainvoke({})
-    assert calls == ["refresh"]                         # a failing LOOP probes once, not per call
+    assert calls == ["refresh"]  # a failing LOOP probes once, not per call
 
     monkeypatch.setattr(tools.subprocess, "Popen", fake_popen(out="tree"))
     assert await t["browser_snapshot"].ainvoke({}) == "tree"
-    assert calls == ["refresh", "refresh"]              # cleared on the first success
+    assert calls == ["refresh", "refresh"]  # cleared on the first success
     await t["browser_snapshot"].ainvoke({})
-    assert calls == ["refresh", "refresh"]              # …and not re-run every call
+    assert calls == ["refresh", "refresh"]  # …and not re-run every call
 
 
 async def test_a_nonzero_exit_also_refreshes_the_gap_so_chrome_can_self_heal(monkeypatch):
@@ -542,9 +588,9 @@ async def test_a_nonzero_exit_also_refreshes_the_gap_so_chrome_can_self_heal(mon
     out = await t["browser_open"].ainvoke({"url": "https://x.com"})
     assert out.startswith("Error:") and calls == ["refresh"]
 
-    monkeypatch.setattr(tools.subprocess, "Popen", fake_popen(out="ok"))   # operator ran the install
+    monkeypatch.setattr(tools.subprocess, "Popen", fake_popen(out="ok"))  # operator ran the install
     await t["browser_open"].ainvoke({"url": "https://x.com"})
-    assert calls == ["refresh", "refresh"]              # the Chrome banner clears on the next call
+    assert calls == ["refresh", "refresh"]  # the Chrome banner clears on the next call
 
 
 async def test_a_steady_state_success_never_re_probes(monkeypatch):
@@ -553,7 +599,7 @@ async def test_a_steady_state_success_never_re_probes(monkeypatch):
     t = _toolmap({"binary": "ab"}, refresh_gaps=lambda: calls.append("refresh"))
     for _ in range(3):
         await t["browser_snapshot"].ainvoke({})
-    assert calls == []   # nothing was ever wrong — no preflight subprocesses per call
+    assert calls == []  # nothing was ever wrong — no preflight subprocesses per call
 
 
 async def test_a_banner_raised_at_boot_clears_on_the_first_good_call(monkeypatch):
@@ -566,7 +612,7 @@ async def test_a_banner_raised_at_boot_clears_on_the_first_good_call(monkeypatch
     await t["browser_snapshot"].ainvoke({})
     assert calls == ["refresh"]
     await t["browser_snapshot"].ainvoke({})
-    assert calls == ["refresh"]   # cleared: steady state again
+    assert calls == ["refresh"]  # cleared: steady state again
 
 
 @pytest.mark.parametrize("boot", ["cli", "chrome"])
@@ -580,11 +626,11 @@ async def test_register_seeds_the_tools_with_the_boot_gap_end_to_end(monkeypatch
     reg = _registry({"binary": "ab"})
     _PKG.register(reg)
     assert reg.setup_gaps, "boot should have raised a banner"
-    _probe_env(monkeypatch, which="/opt/ab", chrome="pass")         # fixed before any call
+    _probe_env(monkeypatch, which="/opt/ab", chrome="pass")  # fixed before any call
     monkeypatch.setattr(tools.subprocess, "Popen", fake_popen(out="ok"))
     tool = next(x for x in reg.tools if x.name == "browser_snapshot")
     assert await tool.ainvoke({}) == "ok"
-    assert reg.setup_gaps == {}                                   # cleared, no restart
+    assert reg.setup_gaps == {}  # cleared, no restart
 
 
 async def test_routine_failures_do_not_re_probe_on_every_call(monkeypatch):
@@ -602,7 +648,7 @@ async def test_routine_failures_do_not_re_probe_on_every_call(monkeypatch):
     t = _toolmap({"binary": "ab"}, refresh_gaps=lambda: calls.append("r") or healthy)
     for _ in range(20):
         await t["browser_click"].ainvoke({"selector": "@e9"})
-    assert calls == ["r"]   # one look, then the probe's "fine" verdict holds
+    assert calls == ["r"]  # one look, then the probe's "fine" verdict holds
 
 
 async def test_a_vanished_cli_bypasses_the_failure_rate_limit(monkeypatch):
@@ -610,14 +656,14 @@ async def test_a_vanished_cli_bypasses_the_failure_rate_limit(monkeypatch):
     healthy = preflight.Probe(binary="ab", cli_path="/opt/ab", chrome="ok")
     monkeypatch.setattr(tools.subprocess, "Popen", fake_popen(rc=1, err="no element"))
     t = _toolmap({"binary": "ab"}, refresh_gaps=lambda: calls.append("r") or healthy)
-    await t["browser_click"].ainvoke({"selector": "@e9"})         # routine failure: one look
+    await t["browser_click"].ainvoke({"selector": "@e9"})  # routine failure: one look
     assert calls == ["r"]
 
     def boom(argv, **kw):
         raise FileNotFoundError()
 
     monkeypatch.setattr(tools.subprocess, "Popen", boom)
-    await t["browser_click"].ainvoke({"selector": "@e9"})         # inside the window, but unambiguous
+    await t["browser_click"].ainvoke({"selector": "@e9"})  # inside the window, but unambiguous
     assert calls == ["r", "r"]
 
 
@@ -629,7 +675,9 @@ async def test_a_failing_gap_refresh_never_breaks_the_tool(monkeypatch):
         raise RuntimeError("registry gone")
 
     monkeypatch.setattr(tools.subprocess, "Popen", boom)
-    out = await _toolmap({"binary": "no-such-agent-browser"}, refresh_gaps=explode)["browser_click"].ainvoke({"selector": "x"})
+    out = await _toolmap({"binary": "no-such-agent-browser"}, refresh_gaps=explode)["browser_click"].ainvoke(
+        {"selector": "x"}
+    )
     assert "not on PATH" in out
 
 
@@ -650,7 +698,7 @@ def test_capture_root_is_this_plugin_s_own_instance_store():
 
     root = storage.capture_root()
     assert root == instance_paths().store("agent_browser") / "captures"
-    assert root.is_dir()   # created on demand
+    assert root.is_dir()  # created on demand
 
 
 def test_a_bare_filename_lands_in_the_fence():
@@ -669,14 +717,17 @@ def test_a_relative_subdirectory_is_created_inside_the_fence():
     assert p.is_relative_to(root) and p.parent.is_dir()
 
 
-@pytest.mark.parametrize("bad", [
-    "../escape.png",
-    "../../../../etc/passwd",
-    "a/../../escape.png",
-    "/etc/passwd",
-    "~/.ssh/authorized_keys",
-    ".",
-])
+@pytest.mark.parametrize(
+    "bad",
+    [
+        "../escape.png",
+        "../../../../etc/passwd",
+        "a/../../escape.png",
+        "/etc/passwd",
+        "~/.ssh/authorized_keys",
+        ".",
+    ],
+)
 def test_traversal_and_absolute_paths_are_refused(bad):
     with pytest.raises(ValueError) as e:
         storage.resolve_capture_path(bad, default_name="page.png")
@@ -706,12 +757,13 @@ def _writing_popen(data=b"bytes", record=None, rc=0, url="https://example.test/"
     """A scripted CLI. `get url` answers `url` (a page is open); `screenshot` / `pdf`
     WRITE `data` to the requested path (None = write nothing — even on a failing run, to
     model a partial write) and exit `rc`. So the post-run checks see what a real run leaves."""
+
     def _popen(argv, **kw):
         if record is not None:
             record.append(list(argv))
         if argv[1:3] == ["get", "url"]:
             return _FakeProc(argv, out=url.encode())
-        if argv[1] == "eval":   # the page-has-content check
+        if argv[1] == "eval":  # the page-has-content check
             return _FakeProc(argv, out=content.encode())
         if argv[1] in ("screenshot", "pdf"):
             if data is not None:
@@ -728,13 +780,13 @@ async def test_screenshot_passes_the_fenced_path_to_the_cli(monkeypatch):
     out = await _toolmap({"binary": "ab"})["browser_screenshot"].ainvoke({"path": "shot.png"})
     root = storage.capture_root().resolve()
     assert rec[-1][:2] == ["ab", "screenshot"]
-    written = Path(rec[-1][2])     # the CLI writes a short temp name beside the target…
+    written = Path(rec[-1][2])  # the CLI writes a short temp name beside the target…
     assert written.parent == root and written.suffix == ".png" and written.name.startswith(".")
-    assert (root / "shot.png").is_file() and not written.exists()   # …swapped into place
+    assert (root / "shot.png").is_file() and not written.exists()  # …swapped into place
     # browser_screenshot returns a multimodal envelope now; the saved path lives in its text
     # part. Assert against the decoded text — the raw envelope is JSON, which escapes the
     # backslashes in a Windows path and would never match a bare `str(path)` substring.
-    assert str(root / "shot.png") in parse_multimodal_result(out)["text"]   # for save_file_artifact
+    assert str(root / "shot.png") in parse_multimodal_result(out)["text"]  # for save_file_artifact
 
 
 async def test_screenshot_attaches_saved_image_and_preserves_artifact_warning(monkeypatch):
@@ -777,7 +829,7 @@ async def test_screenshot_refuses_an_escaping_path_without_running_the_cli(monke
     monkeypatch.setattr(tools.subprocess, "Popen", fake_popen(record=rec))
     out = await _toolmap({"binary": "ab"})["browser_screenshot"].ainvoke({"path": "/tmp/x.png"})
     assert out.startswith("Error:") and "refusing to write outside" in out
-    assert rec == []   # the fence runs BEFORE the subprocess — Chrome never sees the path
+    assert rec == []  # the fence runs BEFORE the subprocess — Chrome never sees the path
 
 
 async def test_a_failed_capture_command_is_not_reported_as_saved(monkeypatch):
@@ -792,7 +844,7 @@ async def test_a_failed_capture_command_is_not_reported_as_saved(monkeypatch):
 async def test_a_silent_no_write_is_reported_as_an_error_not_a_save(monkeypatch):
     """Exit 0, no file. Reporting success sent the agent to save_file_artifact, which
     answered "No file at … write the file first" — a dead end two tools from the cause."""
-    monkeypatch.setattr(tools.subprocess, "Popen", fake_popen(out="(ok)"))   # writes nothing
+    monkeypatch.setattr(tools.subprocess, "Popen", fake_popen(out="(ok)"))  # writes nothing
     out = await _toolmap({"binary": "ab"})["browser_pdf"].ainvoke({"path": "silent.pdf"})
     assert out.startswith("Error:") and "wrote no file" in out
     assert "Saved to" not in out and "browser_open" in out
@@ -804,8 +856,8 @@ async def test_a_zero_byte_capture_is_refused_and_cleaned_up(monkeypatch):
     monkeypatch.setattr(tools.subprocess, "Popen", _writing_popen(data=b""))
     out = await _toolmap({"binary": "ab"})["browser_pdf"].ainvoke({"path": "empty.pdf"})
     assert out.startswith("Error:") and "an empty file" in out
-    assert not (storage.capture_root().resolve() / "empty.pdf").exists()   # never swapped in
-    assert not [p for p in storage.capture_root().iterdir() if p.name.startswith(".")]   # temp dropped
+    assert not (storage.capture_root().resolve() / "empty.pdf").exists()  # never swapped in
+    assert not [p for p in storage.capture_root().iterdir() if p.name.startswith(".")]  # temp dropped
 
 
 async def test_a_failed_run_does_not_delete_a_pre_existing_file(monkeypatch):
@@ -817,7 +869,7 @@ async def test_a_failed_run_does_not_delete_a_pre_existing_file(monkeypatch):
     monkeypatch.setattr(tools.subprocess, "Popen", _writing_popen(data=b"partial", rc=1))
     out = await _toolmap({"binary": "ab"})["browser_pdf"].ainvoke({"path": "keep.pdf"})
     assert out.startswith("Error:") and keep.read_bytes() == b"%PDF-1.4 previous"
-    assert not [p for p in keep.parent.iterdir() if p.name.startswith(".")]   # no temp left behind
+    assert not [p for p in keep.parent.iterdir() if p.name.startswith(".")]  # no temp left behind
 
 
 async def test_a_re_export_that_writes_nothing_is_not_passed_off_as_the_old_file(monkeypatch):
@@ -826,10 +878,10 @@ async def test_a_re_export_that_writes_nothing_is_not_passed_off_as_the_old_file
     said "Saved to …/resume.pdf" over last time's page."""
     target = storage.capture_root().resolve() / "resume.pdf"
     target.write_bytes(b"%PDF-1.4 OLD-PAGE")
-    monkeypatch.setattr(tools.subprocess, "Popen", _writing_popen(data=None))   # exit 0, writes nothing
+    monkeypatch.setattr(tools.subprocess, "Popen", _writing_popen(data=None))  # exit 0, writes nothing
     out = await _toolmap({"binary": "ab"})["browser_pdf"].ainvoke({"path": "resume.pdf"})
     assert out.startswith("Error:") and "wrote no file" in out and "Saved to" not in out
-    assert target.read_bytes() == b"%PDF-1.4 OLD-PAGE"          # the previous capture survives
+    assert target.read_bytes() == b"%PDF-1.4 OLD-PAGE"  # the previous capture survives
     assert not [p for p in target.parent.iterdir() if p.name.startswith(".")]
 
 
@@ -839,7 +891,7 @@ async def test_a_successful_re_export_replaces_the_old_file(monkeypatch):
     monkeypatch.setattr(tools.subprocess, "Popen", _writing_popen(data=b"%PDF-1.4 NEW-PAGE"))
     out = await _toolmap({"binary": "ab"})["browser_pdf"].ainvoke({"path": "resume.pdf"})
     assert "Saved to" in out and target.read_bytes() == b"%PDF-1.4 NEW-PAGE"
-    assert not [p for p in target.parent.iterdir() if p.name.startswith(".")]   # no temp left behind
+    assert not [p for p in target.parent.iterdir() if p.name.startswith(".")]  # no temp left behind
 
 
 async def test_printing_an_empty_blank_page_is_refused_before_printing(monkeypatch):
@@ -851,15 +903,14 @@ async def test_printing_an_empty_blank_page_is_refused_before_printing(monkeypat
     assert out.startswith("Error:") and "blank" in out
     # the way through for an agent that has HTML but no URL
     assert "browser_open" in out and "data:text/html" in out and "file://" in out and "browser_eval" in out
-    assert [a[1] for a in rec] == ["get", "eval"]                # never reached `pdf`
+    assert [a[1] for a in rec] == ["get", "eval"]  # never reached `pdf`
     assert not (storage.capture_root().resolve() / "blank.pdf").exists()
 
 
 async def test_a_blank_page_the_agent_wrote_content_into_is_printed(monkeypatch):
     """The misfire: open a blank page, write a report into it with browser_eval, print it.
     The URL is still about:blank, but the page is not empty — so it must print."""
-    monkeypatch.setattr(tools.subprocess, "Popen",
-                        _writing_popen(url="about:blank", content="1", data=b"%PDF report"))
+    monkeypatch.setattr(tools.subprocess, "Popen", _writing_popen(url="about:blank", content="1", data=b"%PDF report"))
     out = await _toolmap({"binary": "ab"})["browser_pdf"].ainvoke({"path": "report.pdf"})
     assert "Saved to" in out
     assert (storage.capture_root().resolve() / "report.pdf").read_bytes() == b"%PDF report"
@@ -892,7 +943,7 @@ async def test_captures_are_pruned_to_the_retention_budget(monkeypatch):
     out = await _toolmap({"binary": "ab"})["browser_screenshot"].ainvoke({"path": "fresh.png"})
     assert "Saved to" in out
     remaining = sorted(p.name for p in root.iterdir() if p.is_file())
-    assert len(remaining) == 3 and "fresh.png" in remaining   # oldest-first, newest kept
+    assert len(remaining) == 3 and "fresh.png" in remaining  # oldest-first, newest kept
 
 
 def test_pruning_never_raises_on_an_unreadable_store(monkeypatch):
@@ -949,23 +1000,26 @@ async def test_pdf_is_fenced_exactly_like_screenshot(monkeypatch):
 # the option grammar (a dash, then a letter), not "any leading dash".
 
 
-@pytest.mark.parametrize(("name", "args"), [
-    ("browser_open", {"url": "--auto-connect"}),
-    ("browser_click", {"selector": "--help"}),
-    ("browser_fill", {"selector": "--help", "text": "hi"}),
-    ("browser_fill", {"selector": "#q", "text": "--allow-file-access"}),
-    ("browser_type", {"selector": "#q", "text": "-x"}),
-    ("browser_press", {"key": "--help"}),
-    ("browser_hover", {"selector": "-a"}),
-    ("browser_get_text", {"selector": "--help"}),
-    ("browser_get_html", {"selector": "--help"}),
-    ("browser_get_value", {"selector": "--help"}),
-    ("browser_eval", {"expression": "--help"}),
-    ("browser_fill", {"selector": "#q", "text": "--headed"}),
-    ("browser_type", {"selector": "#q", "text": "-h"}),
-    ("browser_select", {"field": "--help", "option_text": "x"}),
-    ("browser_select", {"field": "#c", "option_text": "--allow-file-access"}),
-])
+@pytest.mark.parametrize(
+    ("name", "args"),
+    [
+        ("browser_open", {"url": "--auto-connect"}),
+        ("browser_click", {"selector": "--help"}),
+        ("browser_fill", {"selector": "--help", "text": "hi"}),
+        ("browser_fill", {"selector": "#q", "text": "--allow-file-access"}),
+        ("browser_type", {"selector": "#q", "text": "-x"}),
+        ("browser_press", {"key": "--help"}),
+        ("browser_hover", {"selector": "-a"}),
+        ("browser_get_text", {"selector": "--help"}),
+        ("browser_get_html", {"selector": "--help"}),
+        ("browser_get_value", {"selector": "--help"}),
+        ("browser_eval", {"expression": "--help"}),
+        ("browser_fill", {"selector": "#q", "text": "--headed"}),
+        ("browser_type", {"selector": "#q", "text": "-h"}),
+        ("browser_select", {"field": "--help", "option_text": "x"}),
+        ("browser_select", {"field": "#c", "option_text": "--allow-file-access"}),
+    ],
+)
 async def test_an_operand_that_reads_as_a_flag_is_refused_before_the_subprocess(monkeypatch, name, args):
     rec = []
     monkeypatch.setattr(tools.subprocess, "Popen", fake_popen(record=rec))
@@ -974,18 +1028,21 @@ async def test_an_operand_that_reads_as_a_flag_is_refused_before_the_subprocess(
     assert rec == [], "the refusal must happen before the CLI runs"
 
 
-@pytest.mark.parametrize(("name", "args", "argv_tail"), [
-    ("browser_fill", {"selector": "#amount", "text": "-5"}, ["fill", "#amount", "-5"]),
-    ("browser_fill", {"selector": "#amount", "text": "-$50.00"}, ["fill", "#amount", "-$50.00"]),
-    ("browser_type", {"selector": "#todo", "text": "- buy milk"}, ["type", "#todo", "- buy milk"]),
-    ("browser_fill", {"selector": "#q", "text": "-"}, ["fill", "#q", "-"]),
-    ("browser_fill", {"selector": "#q", "text": "--"}, ["fill", "#q", "--"]),
-    ("browser_fill", {"selector": "@e2", "text": "a -5% drop"}, ["fill", "@e2", "a -5% drop"]),
-    ("browser_press", {"key": "-"}, ["press", "-"]),
-    ("browser_press", {"key": "Control+a"}, ["press", "Control+a"]),
-    # browser_eval's dash-value pass-through is covered by the stdin tests below (the
-    # expression rides stdin now, not argv, so there is no argv tail to assert here).
-])
+@pytest.mark.parametrize(
+    ("name", "args", "argv_tail"),
+    [
+        ("browser_fill", {"selector": "#amount", "text": "-5"}, ["fill", "#amount", "-5"]),
+        ("browser_fill", {"selector": "#amount", "text": "-$50.00"}, ["fill", "#amount", "-$50.00"]),
+        ("browser_type", {"selector": "#todo", "text": "- buy milk"}, ["type", "#todo", "- buy milk"]),
+        ("browser_fill", {"selector": "#q", "text": "-"}, ["fill", "#q", "-"]),
+        ("browser_fill", {"selector": "#q", "text": "--"}, ["fill", "#q", "--"]),
+        ("browser_fill", {"selector": "@e2", "text": "a -5% drop"}, ["fill", "@e2", "a -5% drop"]),
+        ("browser_press", {"key": "-"}, ["press", "-"]),
+        ("browser_press", {"key": "Control+a"}, ["press", "Control+a"]),
+        # browser_eval's dash-value pass-through is covered by the stdin tests below (the
+        # expression rides stdin now, not argv, so there is no argv tail to assert here).
+    ],
+)
 async def test_dash_values_the_cli_does_not_swallow_pass_through(monkeypatch, name, args, argv_tail):
     """Negative amounts (finance, merchantAgent), list bullets and the minus key — all of
     which the first version of the guard refused, though the CLI handles them fine."""
@@ -996,11 +1053,14 @@ async def test_dash_values_the_cli_does_not_swallow_pass_through(monkeypatch, na
     assert rec[-1] == ["ab", *argv_tail]
 
 
-@pytest.mark.parametrize(("name", "args", "hint"), [
-    ("browser_fill", {"selector": "#q", "text": "--foo"}, "browser_eval"),
-    ("browser_press", {"key": "-a"}, "Minus"),
-    ("browser_eval", {"expression": "-a"}, "(-a)"),
-])
+@pytest.mark.parametrize(
+    ("name", "args", "hint"),
+    [
+        ("browser_fill", {"selector": "#q", "text": "--foo"}, "browser_eval"),
+        ("browser_press", {"key": "-a"}, "Minus"),
+        ("browser_eval", {"expression": "-a"}, "(-a)"),
+    ],
+)
 async def test_a_refusal_says_how_to_do_it_anyway(monkeypatch, name, args, hint):
     """Flag-shaped text the CLI happens not to know (`--foo`) is refused on purpose — the
     rule is the grammar, so an option upstream adds tomorrow is covered today. The message
@@ -1022,8 +1082,8 @@ async def test_eval_sends_the_script_over_stdin_not_argv(monkeypatch):
     monkeypatch.setattr(tools.subprocess, "Popen", fake_popen(out="42", record=rec, procs=procs))
     out = await _toolmap({"binary": "ab"})["browser_eval"].ainvoke({"expression": "40 + 2"})
     assert out == "42"
-    assert rec[-1] == ["ab", "eval", "--stdin"]           # the script is NOT an argv item…
-    assert procs[-1].stdin.getvalue() == b"40 + 2"        # …it arrives on stdin
+    assert rec[-1] == ["ab", "eval", "--stdin"]  # the script is NOT an argv item…
+    assert procs[-1].stdin.getvalue() == b"40 + 2"  # …it arrives on stdin
 
 
 async def test_a_100k_eval_script_stays_under_the_windows_command_line_limit(monkeypatch):
@@ -1032,12 +1092,12 @@ async def test_a_100k_eval_script_stays_under_the_windows_command_line_limit(mon
     script rides stdin, not argv."""
     rec, procs = [], []
     monkeypatch.setattr(tools.subprocess, "Popen", fake_popen(out="ok", record=rec, procs=procs))
-    script = "1;" + "a".ljust(100_000, "a")               # 100,002 non-flag-shaped chars
+    script = "1;" + "a".ljust(100_000, "a")  # 100,002 non-flag-shaped chars
     await _toolmap({"binary": "ab"})["browser_eval"].ainvoke({"expression": script})
     argv = rec[-1]
-    assert argv == ["ab", "eval", "--stdin"] and script not in argv    # never on the command line
-    assert len(subprocess.list2cmdline(argv)) < 32_767               # Windows CreateProcess cap
-    assert procs[-1].stdin.getvalue() == script.encode()             # delivered via stdin
+    assert argv == ["ab", "eval", "--stdin"] and script not in argv  # never on the command line
+    assert len(subprocess.list2cmdline(argv)) < 32_767  # Windows CreateProcess cap
+    assert procs[-1].stdin.getvalue() == script.encode()  # delivered via stdin
 
 
 async def test_eval_dash_values_pass_the_guard_and_ride_stdin(monkeypatch):
@@ -1060,7 +1120,7 @@ async def test_the_capture_content_probe_uses_stdin(monkeypatch):
     def _popen(argv, **kw):
         if argv[1:3] == ["get", "url"]:
             return _FakeProc(argv, out=b"about:blank")
-        p = _FakeProc(argv, out=b"0")            # eval → page empty → capture refused up front
+        p = _FakeProc(argv, out=b"0")  # eval → page empty → capture refused up front
         if argv[1] == "eval":
             seen.append((list(argv), p))
         return p
@@ -1100,31 +1160,114 @@ def test_pdf_tells_the_model_about_the_artifact_handoff():
 # radio group is TWO per-option entries (what the JS now emits so each option is independently
 # addressable); the read renderer folds them back into one radio-group row.
 _FORM_FIELDS = [
-    {"idx": 0, "label": "First name", "labels": ["First name", "first_name"], "kind": "text",
-     "name": "first_name", "id": "fn", "required": True, "value": "Ada", "selector": '[data-ab-field="0"]'},
-    {"idx": 1, "label": "Email", "labels": ["Email", "email"], "kind": "email",
-     "name": "email", "id": "em", "required": True, "value": "ada@x.io", "selector": '[data-ab-field="1"]'},
-    {"idx": 2, "label": "Country", "labels": ["Country"], "kind": "combobox",
-     "name": "country", "id": "cty", "required": False, "value": "United States", "selector": '[data-ab-field="2"]'},
-    {"idx": 3, "label": "Role", "labels": ["Role"], "kind": "native-select",
-     "name": "role", "id": "role", "required": False, "value": "Engineer",
-     "options": ["", "Engineer", "Manager"], "selector": '[data-ab-field="3"]'},
-    {"idx": 4, "label": "Junior", "labels": ["Junior", "Seniority", "sen"], "kind": "radio-group",
-     "name": "sen", "id": "sen_j", "required": True, "value": "Junior", "selector": '[data-ab-field="4"]',
-     "group": "sen", "groupLabel": "Seniority", "optionLabel": "Junior", "checked": False},
-    {"idx": 5, "label": "Senior", "labels": ["Senior", "Seniority", "sen"], "kind": "radio-group",
-     "name": "sen", "id": "sen_s", "required": True, "value": "Senior", "selector": '[data-ab-field="5"]',
-     "group": "sen", "groupLabel": "Seniority", "optionLabel": "Senior", "checked": True},
-    {"idx": 6, "label": "Résumé", "labels": ["Résumé", "resume"], "kind": "file",
-     "name": "resume", "id": "rz", "required": False, "value": "cv.pdf", "selector": '[data-ab-field="6"]'},
-    {"idx": 7, "label": "Subscribe", "labels": ["Subscribe", "subscribe"], "kind": "checkbox",
-     "name": "sub", "id": "sb", "required": False, "value": True, "selector": '[data-ab-field="7"]'},
+    {
+        "idx": 0,
+        "label": "First name",
+        "labels": ["First name", "first_name"],
+        "kind": "text",
+        "name": "first_name",
+        "id": "fn",
+        "required": True,
+        "value": "Ada",
+        "selector": '[data-ab-field="0"]',
+    },
+    {
+        "idx": 1,
+        "label": "Email",
+        "labels": ["Email", "email"],
+        "kind": "email",
+        "name": "email",
+        "id": "em",
+        "required": True,
+        "value": "ada@x.io",
+        "selector": '[data-ab-field="1"]',
+    },
+    {
+        "idx": 2,
+        "label": "Country",
+        "labels": ["Country"],
+        "kind": "combobox",
+        "name": "country",
+        "id": "cty",
+        "required": False,
+        "value": "United States",
+        "selector": '[data-ab-field="2"]',
+    },
+    {
+        "idx": 3,
+        "label": "Role",
+        "labels": ["Role"],
+        "kind": "native-select",
+        "name": "role",
+        "id": "role",
+        "required": False,
+        "value": "Engineer",
+        "options": ["", "Engineer", "Manager"],
+        "selector": '[data-ab-field="3"]',
+    },
+    {
+        "idx": 4,
+        "label": "Junior",
+        "labels": ["Junior", "Seniority", "sen"],
+        "kind": "radio-group",
+        "name": "sen",
+        "id": "sen_j",
+        "required": True,
+        "value": "Junior",
+        "selector": '[data-ab-field="4"]',
+        "group": "sen",
+        "groupLabel": "Seniority",
+        "optionLabel": "Junior",
+        "checked": False,
+    },
+    {
+        "idx": 5,
+        "label": "Senior",
+        "labels": ["Senior", "Seniority", "sen"],
+        "kind": "radio-group",
+        "name": "sen",
+        "id": "sen_s",
+        "required": True,
+        "value": "Senior",
+        "selector": '[data-ab-field="5"]',
+        "group": "sen",
+        "groupLabel": "Seniority",
+        "optionLabel": "Senior",
+        "checked": True,
+    },
+    {
+        "idx": 6,
+        "label": "Résumé",
+        "labels": ["Résumé", "resume"],
+        "kind": "file",
+        "name": "resume",
+        "id": "rz",
+        "required": False,
+        "value": "cv.pdf",
+        "selector": '[data-ab-field="6"]',
+    },
+    {
+        "idx": 7,
+        "label": "Subscribe",
+        "labels": ["Subscribe", "subscribe"],
+        "kind": "checkbox",
+        "name": "sub",
+        "id": "sb",
+        "required": False,
+        "value": True,
+        "selector": '[data-ab-field="7"]',
+    },
 ]
 
 
 def _field(label, labels=None, kind="text", name="", selector=None, **kw):
-    d = {"label": label, "labels": labels if labels is not None else [label], "kind": kind,
-         "name": name, "selector": selector or f"[sel-{label}]"}
+    d = {
+        "label": label,
+        "labels": labels if labels is not None else [label],
+        "kind": kind,
+        "name": name,
+        "selector": selector or f"[sel-{label}]",
+    }
     d.update(kw)
     return d
 
@@ -1132,31 +1275,57 @@ def _field(label, labels=None, kind="text", name="", selector=None, **kw):
 # ── forms.classify / normalize — pure string routing ──────────────────────────────
 
 
-@pytest.mark.parametrize(("field", "kind"), [
-    ("@e5", "ref"), ("@e123", "ref"), ("  @e9 ", "ref"),
-    ("#email", "css"), (".form-control", "css"), ("[name='email']", "css"),
-    # a combinator routes to CSS only when it ANCHORS real compound chains on both sides —
-    # `div`/`input`/`a`/`b`/`li` are HTML tags, so these are genuine selectors.
-    ("div > input", "css"), ("a + b", "css"), ("li ~ a", "css"), ("input+label", "css"),
-    (".parent > .child", "css"), ("input > .foo", "css"),
-    # tag-led selectors that worked before this plugin learned labels must still reach the CLI
-    # as CSS — not be mistaken for a label the form has no field for (#4032 review).
-    ("button[type=submit]", "css"), ("input[name='email']", "css"), ("textarea", "css"),
-    ("select#country", "css"), ("form input", "css"), ("input:checked", "css"), ("*", "css"),
-    # a space inside an attribute value must not fracture the selector into "label words"
-    ('input[aria-label="First name"]', "css"),
-    ("Email", "label"), ("First name", "label"), ("Résumé", "label"), ("  Email  ", "label"),
-    # a combinator CHARACTER inside a visible label must NOT route to CSS off a bare substring —
-    # the Greenhouse tech-job fields the PR exists to fill ("C++ experience") were being passed
-    # to the CLI as broken selectors (#4032 review, blocking). An unanchored combinator (no real
-    # compound on one side, or a non-tag word beside it) stays a LABEL.
-    ("C++ experience", "label"), ("C++", "label"), ("Years of C++", "label"),
-    ("Rust > Go preference", "label"), ("~5 years", "label"), ("Pros + Cons", "label"),
-    ("x ~ y", "label"),   # `x`/`y` are not HTML tags → not a real sibling selector
-    # labels that happen to collide with a tag name stay LABELS (tag match is case-sensitive,
-    # so a capitalised word is never a bare type selector) — the regression the review caught.
-    ("Address", "label"), ("Time", "label"), ("Select one", "label"), ("Full name", "label"),
-])
+@pytest.mark.parametrize(
+    ("field", "kind"),
+    [
+        ("@e5", "ref"),
+        ("@e123", "ref"),
+        ("  @e9 ", "ref"),
+        ("#email", "css"),
+        (".form-control", "css"),
+        ("[name='email']", "css"),
+        # a combinator routes to CSS only when it ANCHORS real compound chains on both sides —
+        # `div`/`input`/`a`/`b`/`li` are HTML tags, so these are genuine selectors.
+        ("div > input", "css"),
+        ("a + b", "css"),
+        ("li ~ a", "css"),
+        ("input+label", "css"),
+        (".parent > .child", "css"),
+        ("input > .foo", "css"),
+        # tag-led selectors that worked before this plugin learned labels must still reach the CLI
+        # as CSS — not be mistaken for a label the form has no field for (#4032 review).
+        ("button[type=submit]", "css"),
+        ("input[name='email']", "css"),
+        ("textarea", "css"),
+        ("select#country", "css"),
+        ("form input", "css"),
+        ("input:checked", "css"),
+        ("*", "css"),
+        # a space inside an attribute value must not fracture the selector into "label words"
+        ('input[aria-label="First name"]', "css"),
+        ("Email", "label"),
+        ("First name", "label"),
+        ("Résumé", "label"),
+        ("  Email  ", "label"),
+        # a combinator CHARACTER inside a visible label must NOT route to CSS off a bare substring —
+        # the Greenhouse tech-job fields the PR exists to fill ("C++ experience") were being passed
+        # to the CLI as broken selectors (#4032 review, blocking). An unanchored combinator (no real
+        # compound on one side, or a non-tag word beside it) stays a LABEL.
+        ("C++ experience", "label"),
+        ("C++", "label"),
+        ("Years of C++", "label"),
+        ("Rust > Go preference", "label"),
+        ("~5 years", "label"),
+        ("Pros + Cons", "label"),
+        ("x ~ y", "label"),  # `x`/`y` are not HTML tags → not a real sibling selector
+        # labels that happen to collide with a tag name stay LABELS (tag match is case-sensitive,
+        # so a capitalised word is never a bare type selector) — the regression the review caught.
+        ("Address", "label"),
+        ("Time", "label"),
+        ("Select one", "label"),
+        ("Full name", "label"),
+    ],
+)
 def test_classify_routes_refs_css_and_labels(field, kind):
     assert forms.classify(field) == kind
     assert forms.is_ref(field) == (kind == "ref")
@@ -1181,7 +1350,7 @@ def test_match_exact_beats_prefix_and_resolves_uniquely():
 def test_match_prefix_beats_substring():
     fields = [_field("Please enter your email"), _field("Email address", selector="[addr]")]
     m = forms.match_fields("Email", fields)
-    assert m.ok and m.selector == "[addr]"   # prefix (tier 1) wins over substring (tier 2)
+    assert m.ok and m.selector == "[addr]"  # prefix (tier 1) wins over substring (tier 2)
 
 
 def test_match_falls_back_to_non_primary_label_sources():
@@ -1201,7 +1370,7 @@ def test_match_ambiguous_at_the_best_tier_is_an_error_that_names_them():
     m = forms.match_fields("Email", fields)
     assert not m.ok and m.error.startswith("Error:")
     assert "2 fields" in m.error and "name=a" in m.error and "name=b" in m.error
-    assert m.selector == ""   # SHALL NOT act on any
+    assert m.selector == ""  # SHALL NOT act on any
 
 
 def test_match_zero_is_an_error_listing_the_closest_candidates():
@@ -1212,10 +1381,9 @@ def test_match_zero_is_an_error_listing_the_closest_candidates():
 
 
 def test_closest_labels_ranks_by_similarity_and_caps_at_five():
-    fields = [_field(x) for x in ["Email", "E-mail address", "Emergency contact",
-                                  "First name", "Last name", "Phone"]]
+    fields = [_field(x) for x in ["Email", "E-mail address", "Emergency contact", "First name", "Last name", "Phone"]]
     close = forms.closest_labels(fields, "email", n=5)
-    assert len(close) == 5 and close[0] == "Email"   # the nearest label first
+    assert len(close) == 5 and close[0] == "Email"  # the nearest label first
 
 
 # ── forms.match_fields — a radio group is enumerated per option, so each is addressable ──
@@ -1223,19 +1391,38 @@ def test_closest_labels_ranks_by_similarity_and_caps_at_five():
 # clicked by its own text, and the group's legend silently acted on the first member. Each
 # option is now its own descriptor, and the legend rides every member's labels.
 _RADIO_OPTIONS = [
-    {"label": "Junior", "labels": ["Junior", "Seniority", "sen"], "kind": "radio-group",
-     "name": "sen", "selector": '[data-ab-field="0"]', "group": "sen", "groupLabel": "Seniority",
-     "optionLabel": "Junior", "checked": False},
-    {"label": "Senior", "labels": ["Senior", "Seniority", "sen"], "kind": "radio-group",
-     "name": "sen", "selector": '[data-ab-field="1"]', "group": "sen", "groupLabel": "Seniority",
-     "optionLabel": "Senior", "checked": True},
+    {
+        "label": "Junior",
+        "labels": ["Junior", "Seniority", "sen"],
+        "kind": "radio-group",
+        "name": "sen",
+        "selector": '[data-ab-field="0"]',
+        "group": "sen",
+        "groupLabel": "Seniority",
+        "optionLabel": "Junior",
+        "checked": False,
+    },
+    {
+        "label": "Senior",
+        "labels": ["Senior", "Seniority", "sen"],
+        "kind": "radio-group",
+        "name": "sen",
+        "selector": '[data-ab-field="1"]',
+        "group": "sen",
+        "groupLabel": "Seniority",
+        "optionLabel": "Senior",
+        "checked": True,
+    },
 ]
 
 
-@pytest.mark.parametrize(("option", "selector"), [
-    ("Senior", '[data-ab-field="1"]'),   # a LATER option resolves to its own radio, not the first
-    ("Junior", '[data-ab-field="0"]'),
-])
+@pytest.mark.parametrize(
+    ("option", "selector"),
+    [
+        ("Senior", '[data-ab-field="1"]'),  # a LATER option resolves to its own radio, not the first
+        ("Junior", '[data-ab-field="0"]'),
+    ],
+)
 def test_match_resolves_a_specific_radio_option_by_its_own_label(option, selector):
     m = forms.match_fields(option, _RADIO_OPTIONS)
     assert m.ok and m.selector == selector and m.label == option
@@ -1257,7 +1444,7 @@ def test_resolve_js_passes_refs_and_css_through_without_walking_the_dom():
     for field in ("@e7", "#email", ".foo", "div > input"):
         js = forms.resolve_js(field)
         assert "mode:'pass'" in js and json.dumps(field.strip()) in js
-        assert "abEnumerate" not in js   # a pass-through never enumerates
+        assert "abEnumerate" not in js  # a pass-through never enumerates
 
 
 def test_resolve_js_for_a_label_enumerates_the_page():
@@ -1272,17 +1459,18 @@ def test_resolve_js_treats_combinator_bearing_labels_as_labels_not_css(field):
     matches nothing. The previous substring check routed `"C++ experience"` to CSS."""
     js = forms.resolve_js(field)
     assert "abEnumerate(document)" in js and "mode:'enumerate'" in js
-    assert "mode:'pass'" not in js   # NOT a CSS/ref pass-through
+    assert "mode:'pass'" not in js  # NOT a CSS/ref pass-through
 
 
 def test_resolve_target_round_trips_a_ref_pass_through_unchanged():
     m = forms.resolve_target("@e3", forms.parse_resolve(json.dumps({"mode": "pass", "target": "@e3"})))
-    assert m.ok and m.selector == "@e3"   # r1: the ref reaches the CLI unchanged
+    assert m.ok and m.selector == "@e3"  # r1: the ref reaches the CLI unchanged
 
 
 def test_resolve_target_resolves_a_label_against_enumerated_fields():
-    out = json.dumps({"mode": "enumerate", "fields": [
-        {"label": "Email", "labels": ["Email"], "selector": "[s]", "kind": "email"}]})
+    out = json.dumps(
+        {"mode": "enumerate", "fields": [{"label": "Email", "labels": ["Email"], "selector": "[s]", "kind": "email"}]}
+    )
     m = forms.resolve_target("Email", forms.parse_resolve(out))
     assert m.ok and m.selector == "[s]" and m.kind == "email"
 
@@ -1327,9 +1515,9 @@ async def test_fill_resolves_a_label_in_the_page_then_acts(monkeypatch):
     monkeypatch.setattr(tools.subprocess, "Popen", _resolving_popen(fields, record=rec, procs=procs))
     out = await _toolmap({"binary": "ab"})["browser_fill"].ainvoke({"selector": "Email", "text": "ada@x.io"})
     assert not out.startswith("Error:"), out
-    assert rec[0] == ["ab", "eval", "--stdin"]                       # r7: resolve rides stdin
-    assert "abEnumerate" in procs[0].stdin.getvalue().decode()       # the shared forms resolver
-    assert rec[1] == ["ab", "fill", '[data-ab-field="1"]', "ada@x.io"]   # then act on the match
+    assert rec[0] == ["ab", "eval", "--stdin"]  # r7: resolve rides stdin
+    assert "abEnumerate" in procs[0].stdin.getvalue().decode()  # the shared forms resolver
+    assert rec[1] == ["ab", "fill", '[data-ab-field="1"]', "ada@x.io"]  # then act on the match
 
 
 async def test_parallel_fills_on_one_session_do_not_interleave(monkeypatch):
@@ -1349,7 +1537,7 @@ async def test_parallel_fills_on_one_session_do_not_interleave(monkeypatch):
 
     class _SlowProc(_FakeProc):
         def wait(self, timeout=None):
-            time.sleep(0.03)               # hold the "page" long enough for a racer to arrive
+            time.sleep(0.03)  # hold the "page" long enough for a racer to arrive
             with gate:
                 state["active"] -= 1
             return super().wait(timeout)
@@ -1363,8 +1551,7 @@ async def test_parallel_fills_on_one_session_do_not_interleave(monkeypatch):
 
     monkeypatch.setattr(tools.subprocess, "Popen", _popen)
     t = _toolmap({"binary": "ab"})
-    calls = [("Email", "ada@x.io"), ("Phone", "555-0100"), ("LinkedIn", "linkedin.com/in/ada"),
-             ("Location", "London")]
+    calls = [("Email", "ada@x.io"), ("Phone", "555-0100"), ("LinkedIn", "linkedin.com/in/ada"), ("Location", "London")]
     outs = await asyncio.gather(*(t["browser_fill"].ainvoke({"selector": s, "text": v}) for s, v in calls))
     assert all(not o.startswith("Error:") for o in outs), outs
     assert state["max"] == 1, f"{state['max']} CLI calls overlapped"
@@ -1395,20 +1582,22 @@ async def test_different_sessions_are_not_serialised_against_each_other(monkeypa
 def _popen_capturing(records, out=b"(ok)"):
     """A Popen stand-in that records ``(argv, env)`` per call — the session-scope tests need
     the ``env=`` kwarg the arg-recording ``fake_popen`` deliberately swallows."""
+
     def _popen(argv, **kw):
         records.append((list(argv), kw.get("env")))
         return _FakeProc(argv, out=out)
+
     return _popen
 
 
 def test_derived_session_name_is_deterministic_and_cli_safe():
     """r5: the per-session name is a pure function of the chat id and lands in [a-z0-9-]."""
     a = tools._session_name_for("session-XYZ/•weird id")
-    assert a == tools._session_name_for("session-XYZ/•weird id")          # deterministic
-    assert a != tools._session_name_for("another session")               # id-sensitive
+    assert a == tools._session_name_for("session-XYZ/•weird id")  # deterministic
+    assert a != tools._session_name_for("another session")  # id-sensitive
     for sid in ["", "A", "chat-123", "sess/with spaces", "🙂", "sid:colon", "s" * 500]:
         name = tools._session_name_for(sid)
-        assert re.fullmatch(r"[a-z0-9-]+", name), name                   # CLI-safe charset
+        assert re.fullmatch(r"[a-z0-9-]+", name), name  # CLI-safe charset
         assert name.startswith("pa-") and len(name) == len("pa-") + 12
 
 
@@ -1429,8 +1618,8 @@ async def test_shared_scope_leaves_argv_and_env_exactly_as_today(monkeypatch, cf
     monkeypatch.setattr(tools.subprocess, "Popen", _popen_capturing(records))
     await _toolmap(cfg)["browser_snapshot"].ainvoke({})
     argv, env = records[-1]
-    assert argv == ["ab", "snapshot"]            # argv unchanged
-    assert env is None                           # env inherited verbatim — no override kwarg
+    assert argv == ["ab", "snapshot"]  # argv unchanged
+    assert env is None  # env inherited verbatim — no override kwarg
     # the lock key is the shared env name, exactly as before (no in-flight call sets it)
     assert tools._session_key() == "default"
     monkeypatch.setenv("AGENT_BROWSER_SESSION", "opname")
@@ -1452,7 +1641,7 @@ async def test_per_session_passes_a_distinct_derived_env_per_chat(monkeypatch):
         await t["browser_snapshot"].ainvoke({})
     argv_b, env_b = records[-1]
 
-    assert argv_a == argv_b == ["ab", "snapshot"]                        # argv identical
+    assert argv_a == argv_b == ["ab", "snapshot"]  # argv identical
     assert env_a["AGENT_BROWSER_SESSION"] == tools._session_name_for("chat-A")
     assert env_b["AGENT_BROWSER_SESSION"] == tools._session_name_for("chat-B")
     assert env_a["AGENT_BROWSER_SESSION"] != env_b["AGENT_BROWSER_SESSION"]
@@ -1479,7 +1668,7 @@ async def test_per_session_runs_two_chats_concurrently_but_serialises_within_one
             self._name = name
 
         def wait(self, timeout=None):
-            time.sleep(0.03)                   # hold the "session" so a racer can arrive
+            time.sleep(0.03)  # hold the "session" so a racer can arrive
             with gate:
                 active[self._name] -= 1
                 cross["active"] -= 1
@@ -1509,19 +1698,31 @@ async def test_per_session_runs_two_chats_concurrently_but_serialises_within_one
             builder.add_node("tools", ToolNode(list(t.values())))
             builder.add_edge(START, "tools")
             builder.add_edge("tools", END)
-            return await builder.compile().ainvoke({
-                "session_id": sid,
-                "messages": [AIMessage(content="", tool_calls=[{
-                    "name": "browser_snapshot", "args": {}, "id": "snapshot", "type": "tool_call",
-                }])],
-            })
+            return await builder.compile().ainvoke(
+                {
+                    "session_id": sid,
+                    "messages": [
+                        AIMessage(
+                            content="",
+                            tool_calls=[
+                                {
+                                    "name": "browser_snapshot",
+                                    "args": {},
+                                    "id": "snapshot",
+                                    "type": "tool_call",
+                                }
+                            ],
+                        )
+                    ],
+                }
+            )
         async with tracing.trace_session(sid):
             return await t["browser_snapshot"].ainvoke({})
 
     await asyncio.gather(call("A"), call("A"), call("B"), call("B"))
     name_a, name_b = tools._session_name_for("A"), tools._session_name_for("B")
-    assert peak[name_a] == 1 and peak[name_b] == 1    # same session → serialised
-    assert cross["max"] == 2                           # different sessions → NOT serialised
+    assert peak[name_a] == 1 and peak[name_b] == 1  # same session → serialised
+    assert cross["max"] == 2  # different sessions → NOT serialised
 
 
 async def test_per_session_with_an_empty_id_falls_back_to_the_shared_name(monkeypatch):
@@ -1533,7 +1734,7 @@ async def test_per_session_with_an_empty_id_falls_back_to_the_shared_name(monkey
 
     monkeypatch.setenv("AGENT_BROWSER_SESSION", "opname")
     await t["browser_snapshot"].ainvoke({})
-    assert records[-1][1]["AGENT_BROWSER_SESSION"] == "opname"   # the shared env name, no pa- hash
+    assert records[-1][1]["AGENT_BROWSER_SESSION"] == "opname"  # the shared env name, no pa- hash
 
     monkeypatch.delenv("AGENT_BROWSER_SESSION", raising=False)
     records.clear()
@@ -1549,7 +1750,7 @@ async def test_a_tool_call_never_mutates_os_environ(monkeypatch):
     before = dict(os.environ)
     async with tracing.trace_session("chat-A"):
         await _toolmap({"binary": "ab", "session_scope": "per_session"})["browser_snapshot"].ainvoke({})
-    assert "AGENT_BROWSER_SESSION" not in os.environ   # the override rode the child env only
+    assert "AGENT_BROWSER_SESSION" not in os.environ  # the override rode the child env only
     assert dict(os.environ) == before
 
 
@@ -1583,22 +1784,31 @@ async def test_graph_turn_uses_injected_browser_session(monkeypatch, scope, trac
     browser_tools = _toolmap({"binary": "ab", "session_scope": scope})
     for browser_tool in browser_tools.values():
         assert "state" not in browser_tool.tool_call_schema.model_json_schema()["properties"]
-    model = BrowserModel(messages=iter([
-        AIMessage(content="", tool_calls=[
-            {"name": name, "args": {}, "id": name, "type": "tool_call"}
-            for name in ("browser_snapshot", "browser_close")
-        ]),
-        AIMessage(content="done"),
-    ]))
+    model = BrowserModel(
+        messages=iter(
+            [
+                AIMessage(
+                    content="",
+                    tool_calls=[
+                        {"name": name, "args": {}, "id": name, "type": "tool_call"}
+                        for name in ("browser_snapshot", "browser_close")
+                    ],
+                ),
+                AIMessage(content="done"),
+            ]
+        )
+    )
     graph = create_agent(model, tools=list(browser_tools.values()), state_schema=ProtoAgentState)
     records = []
     monkeypatch.setenv("AGENT_BROWSER_SESSION", "operator-browser")
     monkeypatch.setattr(tools.subprocess, "Popen", _popen_capturing(records))
     async with tracing.trace_session(trace_id):
-        result = await graph.ainvoke({
-            "messages": [HumanMessage(content="Inspect and close my browser")],
-            "session_id": session_id,
-        })
+        result = await graph.ainvoke(
+            {
+                "messages": [HumanMessage(content="Inspect and close my browser")],
+                "session_id": session_id,
+            }
+        )
     replies = [m for m in result["messages"] if isinstance(m, ToolMessage)]
     assert len(replies) == 2
     assert all(m.content == "(ok)" for m in replies)
@@ -1632,14 +1842,16 @@ async def test_click_addresses_a_specific_radio_option_not_the_group_first_membe
     t = _toolmap({"binary": "ab"})
     out = await t["browser_click"].ainvoke({"selector": "Senior"})
     assert not out.startswith("Error:"), out
-    assert rec[-1] == ["ab", "click", '[data-ab-field="1"]']        # the Senior radio, not Junior
+    assert rec[-1] == ["ab", "click", '[data-ab-field="1"]']  # the Senior radio, not Junior
     rec.clear()
     out = await t["browser_click"].ainvoke({"selector": "Seniority"})
     assert out.startswith("Error:") and "Junior" in out and "Senior" in out
-    assert rec == [["ab", "eval", "--stdin"]]                        # resolved, then refused — no click
+    assert rec == [["ab", "eval", "--stdin"]]  # resolved, then refused — no click
 
 
-@pytest.mark.parametrize("name", ["browser_click", "browser_fill", "browser_type", "browser_hover", "browser_get_value"])
+@pytest.mark.parametrize(
+    "name", ["browser_click", "browser_fill", "browser_type", "browser_hover", "browser_get_value"]
+)
 async def test_action_tools_still_pass_refs_and_css_straight_through(monkeypatch, name):
     """r1 / back-compat: a `@eN` ref or a CSS selector reaches the CLI unchanged, with NO
     in-page resolve eval — the pre-label behaviour, preserved exactly."""
@@ -1649,7 +1861,7 @@ async def test_action_tools_still_pass_refs_and_css_straight_through(monkeypatch
     if name in ("browser_fill", "browser_type"):
         args["text"] = "hi"
     await _toolmap({"binary": "ab"})[name].ainvoke(args)
-    assert rec[-1][1] != "eval"                       # a ref never triggers an in-page resolve
+    assert rec[-1][1] != "eval"  # a ref never triggers an in-page resolve
     assert "@e2" in rec[-1]
     # a CSS selector takes the same straight-through path
     rec.clear()
@@ -1658,9 +1870,12 @@ async def test_action_tools_still_pass_refs_and_css_straight_through(monkeypatch
     assert rec[-1][1] != "eval" and "#q" in rec[-1]
 
 
-@pytest.mark.parametrize("name", ["browser_click", "browser_fill", "browser_type", "browser_hover", "browser_get_value"])
-@pytest.mark.parametrize("sel", ["button[type=submit]", "input[name='email']", "textarea",
-                                 "select#country", "form input"])
+@pytest.mark.parametrize(
+    "name", ["browser_click", "browser_fill", "browser_type", "browser_hover", "browser_get_value"]
+)
+@pytest.mark.parametrize(
+    "sel", ["button[type=submit]", "input[name='email']", "textarea", "select#country", "form input"]
+)
 async def test_tag_led_css_selectors_reach_the_cli_unchanged(monkeypatch, name, sel):
     """#4032 review regression: a selector that leads with a tag name (`button[type=submit]`,
     `textarea`, `form input`, …) is a CSS selector that worked before this plugin learned
@@ -1673,29 +1888,33 @@ async def test_tag_led_css_selectors_reach_the_cli_unchanged(monkeypatch, name, 
         args["text"] = "hi"
     out = await _toolmap({"binary": "ab"})[name].ainvoke(args)
     assert not out.startswith("Error:"), out
-    assert rec[-1][1] != "eval" and sel in rec[-1]   # no in-page resolve; the selector reaches the CLI
+    assert rec[-1][1] != "eval" and sel in rec[-1]  # no in-page resolve; the selector reaches the CLI
 
 
 async def test_a_label_matching_no_field_is_an_error_and_never_acts(monkeypatch):
     """r3: zero matches → an Error naming the closest candidates, and the CLI never acts."""
-    fields = [{"label": "First name", "labels": ["First name"], "selector": '[data-ab-field="0"]', "kind": "text"},
-              {"label": "Last name", "labels": ["Last name"], "selector": '[data-ab-field="1"]', "kind": "text"}]
+    fields = [
+        {"label": "First name", "labels": ["First name"], "selector": '[data-ab-field="0"]', "kind": "text"},
+        {"label": "Last name", "labels": ["Last name"], "selector": '[data-ab-field="1"]', "kind": "text"},
+    ]
     rec = []
     monkeypatch.setattr(tools.subprocess, "Popen", _resolving_popen(fields, record=rec))
     out = await _toolmap({"binary": "ab"})["browser_fill"].ainvoke({"selector": "Email", "text": "x"})
     assert out.startswith("Error:") and "no form field matches" in out
-    assert rec == [["ab", "eval", "--stdin"]]        # resolved, then stopped — never filled
+    assert rec == [["ab", "eval", "--stdin"]]  # resolved, then stopped — never filled
 
 
 async def test_a_label_matching_two_fields_at_the_best_tier_refuses_to_act(monkeypatch):
     """r4: more than one match at the best tier → an Error listing them, and SHALL NOT act."""
-    fields = [{"label": "Email", "labels": ["Email"], "selector": '[data-ab-field="0"]', "kind": "email", "name": "a"},
-              {"label": "Email", "labels": ["Email"], "selector": '[data-ab-field="1"]', "kind": "text", "name": "b"}]
+    fields = [
+        {"label": "Email", "labels": ["Email"], "selector": '[data-ab-field="0"]', "kind": "email", "name": "a"},
+        {"label": "Email", "labels": ["Email"], "selector": '[data-ab-field="1"]', "kind": "text", "name": "b"},
+    ]
     rec = []
     monkeypatch.setattr(tools.subprocess, "Popen", _resolving_popen(fields, record=rec))
     out = await _toolmap({"binary": "ab"})["browser_click"].ainvoke({"selector": "Email"})
     assert out.startswith("Error:") and "2 fields" in out and "name=a" in out and "name=b" in out
-    assert rec == [["ab", "eval", "--stdin"]]        # never clicked either one
+    assert rec == [["ab", "eval", "--stdin"]]  # never clicked either one
 
 
 async def test_a_flag_shaped_label_is_refused_before_any_resolve_eval(monkeypatch):
@@ -1716,8 +1935,7 @@ async def test_a_flag_shaped_label_is_refused_before_any_resolve_eval(monkeypatc
 # return canned bytes and the test reads the issued argv + stdin.
 
 
-def _click_fallback_popen(fingerprints, record=None, procs=None, click_out=b"(ok)",
-                          jsclick=b'{"ok":true}'):
+def _click_fallback_popen(fingerprints, record=None, procs=None, click_out=b"(ok)", jsclick=b'{"ok":true}'):
     """A scripted CLI for ``browser_click(js_fallback=True)`` against a CSS selector (no label
     resolve eval): the Nth `eval --stdin` returns ``fingerprints[N]`` while any remain, then
     the js-click eval returns ``jsclick``; the `click` verb returns ``click_out``. So the call
@@ -1760,10 +1978,10 @@ async def test_js_fallback_dispatches_an_in_page_click_when_nothing_changed(monk
     in-page click on the resolved element and says `(JS fallback)`."""
     rec, procs = [], []
     fp = b'{"n":100,"ae":"BODY#.:","exp":"false"}'
-    monkeypatch.setattr(tools.subprocess, "Popen",
-                        _click_fallback_popen([fp, fp], record=rec, procs=procs))
+    monkeypatch.setattr(tools.subprocess, "Popen", _click_fallback_popen([fp, fp], record=rec, procs=procs))
     out = await _toolmap({"binary": "ab"})["browser_click"].ainvoke(
-        {"selector": "#enter-manually", "js_fallback": True})
+        {"selector": "#enter-manually", "js_fallback": True}
+    )
     # fingerprint-before, click, fingerprint-after, THEN the fallback js-click
     assert [a[1] for a in rec] == ["eval", "click", "eval", "eval"]
     assert out == "Clicked #enter-manually (JS fallback)"
@@ -1777,10 +1995,16 @@ async def test_js_fallback_does_not_dispatch_when_the_click_changed_the_page(mon
     """r3: the fingerprint moved (the textarea opened, element count grew), so the click
     worked — the tool must NOT dispatch a second click."""
     rec = []
-    monkeypatch.setattr(tools.subprocess, "Popen", _click_fallback_popen(
-        [b'{"n":100,"ae":"A","exp":"false"}', b'{"n":140,"ae":"TEXTAREA","exp":"true"}'], record=rec))
+    monkeypatch.setattr(
+        tools.subprocess,
+        "Popen",
+        _click_fallback_popen(
+            [b'{"n":100,"ae":"A","exp":"false"}', b'{"n":140,"ae":"TEXTAREA","exp":"true"}'], record=rec
+        ),
+    )
     out = await _toolmap({"binary": "ab"})["browser_click"].ainvoke(
-        {"selector": "#enter-manually", "js_fallback": True})
+        {"selector": "#enter-manually", "js_fallback": True}
+    )
     # fingerprint-before, click, fingerprint-after — and then STOP (no third eval)
     assert [a[1] for a in rec] == ["eval", "click", "eval"]
     assert out == "(ok)" and "JS fallback" not in out
@@ -1797,14 +2021,13 @@ async def test_js_fallback_suppressed_when_a_fingerprint_cannot_be_read(monkeypa
         if argv[1:2] == ["eval"]:
             seen["evals"] += 1
             if seen["evals"] == 2:
-                return _FakeProc(argv, out=b"", err=b"page gone", rc=1)   # fingerprint-after fails
+                return _FakeProc(argv, out=b"", err=b"page gone", rc=1)  # fingerprint-after fails
             return _FakeProc(argv, out=b'{"n":100,"ae":"","exp":""}')
         return _FakeProc(argv, out=b"(ok)")
 
     monkeypatch.setattr(tools.subprocess, "Popen", _popen)
-    out = await _toolmap({"binary": "ab"})["browser_click"].ainvoke(
-        {"selector": "#x", "js_fallback": True})
-    assert [a[1] for a in rec] == ["eval", "click", "eval"]   # no fallback js-click
+    out = await _toolmap({"binary": "ab"})["browser_click"].ainvoke({"selector": "#x", "js_fallback": True})
+    assert [a[1] for a in rec] == ["eval", "click", "eval"]  # no fallback js-click
     assert out == "(ok)"
 
 
@@ -1817,13 +2040,12 @@ async def test_js_fallback_does_not_fire_when_the_cli_click_itself_errors(monkey
         rec.append(list(argv))
         if argv[1:2] == ["eval"]:
             return _FakeProc(argv, out=b'{"n":1,"ae":"","exp":""}')
-        return _FakeProc(argv, out=b"", err=b"no such element", rc=2)   # the click fails
+        return _FakeProc(argv, out=b"", err=b"no such element", rc=2)  # the click fails
 
     monkeypatch.setattr(tools.subprocess, "Popen", _popen)
-    out = await _toolmap({"binary": "ab"})["browser_click"].ainvoke(
-        {"selector": "#missing", "js_fallback": True})
+    out = await _toolmap({"binary": "ab"})["browser_click"].ainvoke({"selector": "#missing", "js_fallback": True})
     assert out.startswith("Error:") and "no such element" in out
-    assert [a[1] for a in rec] == ["eval", "click"]   # fingerprint-before, click, then stop
+    assert [a[1] for a in rec] == ["eval", "click"]  # fingerprint-before, click, then stop
 
 
 async def test_js_fallback_resolves_a_label_through_the_shared_locator(monkeypatch):
@@ -1831,8 +2053,9 @@ async def test_js_fallback_resolves_a_label_through_the_shared_locator(monkeypat
     resolve eval enumerates, and the fingerprint/click/fallback all act on the resolved
     `[data-ab-field]` selector, never a stale ref."""
     rec, procs = [], []
-    fields = [{"label": "Enter manually", "labels": ["Enter manually"],
-               "selector": '[data-ab-field="3"]', "kind": "other"}]
+    fields = [
+        {"label": "Enter manually", "labels": ["Enter manually"], "selector": '[data-ab-field="3"]', "kind": "other"}
+    ]
     enum = json.dumps({"mode": "enumerate", "fields": fields}).encode()
     fp = b'{"n":80,"ae":"","exp":"false"}'
     state = {"evals": 0}
@@ -1850,14 +2073,13 @@ async def test_js_fallback_resolves_a_label_through_the_shared_locator(monkeypat
         return p
 
     monkeypatch.setattr(tools.subprocess, "Popen", _popen)
-    out = await _toolmap({"binary": "ab"})["browser_click"].ainvoke(
-        {"selector": "Enter manually", "js_fallback": True})
+    out = await _toolmap({"binary": "ab"})["browser_click"].ainvoke({"selector": "Enter manually", "js_fallback": True})
     # resolve(eval) → fingerprint(eval) → click → fingerprint(eval) → js-click(eval)
     assert [a[1] for a in rec] == ["eval", "eval", "click", "eval", "eval"]
-    assert "abEnumerate" in procs[0].stdin.getvalue().decode()        # the shared resolver
-    assert rec[2] == ["ab", "click", '[data-ab-field="3"]']           # clicked the resolved selector
+    assert "abEnumerate" in procs[0].stdin.getvalue().decode()  # the shared resolver
+    assert rec[2] == ["ab", "click", '[data-ab-field="3"]']  # clicked the resolved selector
     assert json.dumps('[data-ab-field="3"]') in procs[-1].stdin.getvalue().decode()
-    assert out == "Clicked Enter manually (JS fallback)"              # reported by the model's label
+    assert out == "Clicked Enter manually (JS fallback)"  # reported by the model's label
 
 
 async def test_js_fallback_refuses_a_ref_without_running_the_cli(monkeypatch):
@@ -1868,14 +2090,12 @@ async def test_js_fallback_refuses_a_ref_without_running_the_cli(monkeypatch):
     / browser_upload / browser_form_read refuse refs), before ANY subprocess."""
     rec = []
     monkeypatch.setattr(tools.subprocess, "Popen", fake_popen(out="(ok)", record=rec))
-    out = await _toolmap({"binary": "ab"})["browser_click"].ainvoke(
-        {"selector": "@e5", "js_fallback": True})
+    out = await _toolmap({"binary": "ab"})["browser_click"].ainvoke({"selector": "@e5", "js_fallback": True})
     assert out.startswith("Error:") and "@ref" in out
-    assert rec == []   # a ref can't drive an in-page click — refuse before the CLI runs
+    assert rec == []  # a ref can't drive an in-page click — refuse before the CLI runs
     # but the SAME ref still clicks fine on the plain CLI path (js_fallback off), unchanged
     rec.clear()
-    out = await _toolmap({"binary": "ab"})["browser_click"].ainvoke(
-        {"selector": "@e5", "js_fallback": False})
+    out = await _toolmap({"binary": "ab"})["browser_click"].ainvoke({"selector": "@e5", "js_fallback": False})
     assert out == "(ok)" and rec == [["ab", "click", "@e5"]]
 
 
@@ -1889,12 +2109,15 @@ def test_fingerprint_js_and_js_click_js_ride_stdin_and_carry_the_selector():
     assert json.dumps("#go") in click and "mousedown" in click and "el.click()" in click
 
 
-@pytest.mark.parametrize(("before", "after", "changed"), [
-    ('{"n":1}', '{"n":1}', False),            # identical → nothing moved
-    ('{"n":1}', '{"n":2}', True),             # element count grew → the click did something
-    ("Error: boom", '{"n":1}', True),         # unreadable → treated as changed (suppress fallback)
-    ('{"n":1}', "", True),                    # empty → suppress
-])
+@pytest.mark.parametrize(
+    ("before", "after", "changed"),
+    [
+        ('{"n":1}', '{"n":1}', False),  # identical → nothing moved
+        ('{"n":1}', '{"n":2}', True),  # element count grew → the click did something
+        ("Error: boom", '{"n":1}', True),  # unreadable → treated as changed (suppress fallback)
+        ('{"n":1}', "", True),  # empty → suppress
+    ],
+)
 def test_fingerprint_changed_is_strict_and_fails_safe(before, after, changed):
     assert forms.fingerprint_changed(before, after) is changed
 
@@ -1918,8 +2141,15 @@ async def test_form_read_returns_public_json_in_document_order(monkeypatch):
     assert rec[-1] == ["ab", "eval", "--stdin"]
     assert "abEnumerate" in procs[-1].stdin.getvalue().decode()
     data = json.loads(out)
-    assert [f["label"] for f in data] == ["First name", "Email", "Country", "Role",
-                                          "Seniority", "Résumé", "Subscribe"]   # r5: document order
+    assert [f["label"] for f in data] == [
+        "First name",
+        "Email",
+        "Country",
+        "Role",
+        "Seniority",
+        "Résumé",
+        "Subscribe",
+    ]  # r5: document order
     # the internal addressing keys never surface
     assert all("labels" not in f and "selector" not in f and "idx" not in f for f in data)
     first = data[0]
@@ -1946,20 +2176,35 @@ def test_render_folds_radio_options_into_one_group_at_the_first_members_position
     for the read view: `options` is the member labels, `value` the checked one, `required` true
     if any member is, placed where the first member appeared."""
     fields = [
-        {"label": "Size", "labels": ["Size"], "kind": "text", "name": "size", "id": "",
-         "required": False, "value": ""},
-        {"label": "Red", "kind": "radio-group", "name": "color", "group": "color",
-         "groupLabel": "Colour", "optionLabel": "Red", "checked": False, "required": True,
-         "selector": "[a]"},
-        {"label": "Green", "kind": "radio-group", "name": "color", "group": "color",
-         "groupLabel": "Colour", "optionLabel": "Green", "checked": True, "required": False,
-         "selector": "[b]"},
+        {"label": "Size", "labels": ["Size"], "kind": "text", "name": "size", "id": "", "required": False, "value": ""},
+        {
+            "label": "Red",
+            "kind": "radio-group",
+            "name": "color",
+            "group": "color",
+            "groupLabel": "Colour",
+            "optionLabel": "Red",
+            "checked": False,
+            "required": True,
+            "selector": "[a]",
+        },
+        {
+            "label": "Green",
+            "kind": "radio-group",
+            "name": "color",
+            "group": "color",
+            "groupLabel": "Colour",
+            "optionLabel": "Green",
+            "checked": True,
+            "required": False,
+            "selector": "[b]",
+        },
     ]
     out = json.loads(forms.render_form_read(json.dumps({"ok": True, "fields": fields})))
-    assert [f["label"] for f in out] == ["Size", "Colour"]       # folded, at the group's slot
+    assert [f["label"] for f in out] == ["Size", "Colour"]  # folded, at the group's slot
     grp = out[1]
     assert grp["kind"] == "radio-group" and grp["options"] == ["Red", "Green"]
-    assert grp["value"] == "Green" and grp["required"] is True   # checked option; any-required
+    assert grp["value"] == "Green" and grp["required"] is True  # checked option; any-required
     assert set(grp) == {"label", "kind", "name", "id", "required", "value", "options"}
 
 
@@ -1967,8 +2212,8 @@ def test_form_read_js_extracts_the_committed_combobox_value_not_typed_text():
     """r6 is produced in-page; the script must read the rendered single-value, and must
     skip a combobox's inner search input so half-typed text is never surfaced as a field."""
     js = forms.read_form_js("")
-    assert "single-value" in js and "singleValue" in js   # the committed selection
-    assert "abInCombo" in js and "select__control" in js   # the inner input is skipped
+    assert "single-value" in js and "singleValue" in js  # the committed selection
+    assert "abInCombo" in js and "select__control" in js  # the inner input is skipped
 
 
 # The enumeration JS is DOM logic, so the combobox de-duplication is exercised against a real
@@ -1999,15 +2244,15 @@ def _run_enumerate_js(html: str):
     """Run forms._JS_LIB's ``abEnumerate`` against a real DOM and return the field list."""
     if not NODE:
         pytest.skip("node not on PATH")
-    probe = subprocess.run([NODE, "-e", "require.resolve('jsdom')"], cwd=REPO,
-                           capture_output=True, text=True)
+    probe = subprocess.run([NODE, "-e", "require.resolve('jsdom')"], cwd=REPO, capture_output=True, text=True)
     if probe.returncode != 0:
         pytest.skip("jsdom not installed (run npm ci in apps/web or the repo root)")
     harness = (
         "const { JSDOM } = require('jsdom');\n"
         "const dom = new JSDOM(" + json.dumps(html) + ");\n"
         "global.window = dom.window; global.document = dom.window.document; global.CSS = dom.window.CSS;\n"
-        + forms._JS_LIB + "\n"
+        + forms._JS_LIB
+        + "\n"
         "console.log(JSON.stringify(abEnumerate(document)));\n"
     )
     out = subprocess.run([NODE, "-e", harness], cwd=REPO, capture_output=True, text=True, timeout=60)
@@ -2021,14 +2266,14 @@ def test_enumerate_collapses_a_react_select_combobox_to_one_labelled_field():
     value and a labelled entry whose value was always ''. It must be ONE field, labelled
     (from the inner input) AND carrying the committed selection."""
     fields = _run_enumerate_js(_REACT_SELECT_HTML)
-    assert [f["kind"] for f in fields] == ["combobox", "email"]   # document order, no twin
+    assert [f["kind"] for f in fields] == ["combobox", "email"]  # document order, no twin
     combos = [f for f in fields if f["kind"] == "combobox"]
-    assert len(combos) == 1                                       # not two
+    assert len(combos) == 1  # not two
     c = combos[0]
-    assert c["label"] == "Country"                               # labelled (merged from inner)
-    assert c["value"] == "United States"                        # committed selection, not typed
-    assert c["name"] == "country" and c["id"] == "rs-country-input"   # inner identity adopted
-    assert "" not in [f["label"] for f in fields]               # no phantom unlabelled entry
+    assert c["label"] == "Country"  # labelled (merged from inner)
+    assert c["value"] == "United States"  # committed selection, not typed
+    assert c["name"] == "country" and c["id"] == "rs-country-input"  # inner identity adopted
+    assert "" not in [f["label"] for f in fields]  # no phantom unlabelled entry
 
 
 def test_enumerate_keeps_a_bare_aria_combobox_as_a_single_field():
@@ -2068,12 +2313,12 @@ def test_enumerate_folds_a_react_select_required_shadow_input_into_the_combobox(
     id-less, required "text" row after the combobox. abEnumerate now folds its `required` onto the
     labelled combobox row and emits no phantom field — a real labelled input (Email) is untouched."""
     fields = _run_enumerate_js(_REACT_SELECT_SHADOW_HTML)
-    assert [f["kind"] for f in fields] == ["combobox", "email"]   # no phantom "text" row, no twin
-    assert "" not in [f["label"] for f in fields]                 # no unlabelled entry survives
+    assert [f["kind"] for f in fields] == ["combobox", "email"]  # no phantom "text" row, no twin
+    assert "" not in [f["label"] for f in fields]  # no unlabelled entry survives
     combo = [f for f in fields if f["kind"] == "combobox"][0]
     assert combo["label"] == "Work authorization"
-    assert combo["required"] is True                              # folded from the hidden shadow
-    assert combo["value"] == "Yes"                                # committed value still read
+    assert combo["required"] is True  # folded from the hidden shadow
+    assert combo["value"] == "Yes"  # committed value still read
 
 
 def test_enumerate_keeps_a_visible_unlabelled_input_beside_a_combobox():
@@ -2127,11 +2372,11 @@ def test_enumerate_lists_every_radio_option_as_its_own_addressable_field():
     the group hits every option), and the read renderer folds the members into one row."""
     fields = _run_enumerate_js(_RADIO_HTML)
     radios = [f for f in fields if f["kind"] == "radio-group"]
-    assert len(radios) == 2                                        # one entry PER option, not collapsed
+    assert len(radios) == 2  # one entry PER option, not collapsed
     assert [r["label"] for r in radios] == ["Junior", "Senior"]
-    assert radios[0]["selector"] != radios[1]["selector"]         # each independently addressable
+    assert radios[0]["selector"] != radios[1]["selector"]  # each independently addressable
     assert all(r["selector"].startswith('[data-ab-field="') for r in radios)
-    assert all("Seniority" in r["labels"] for r in radios)        # legend (asterisk stripped) on each
+    assert all("Seniority" in r["labels"] for r in radios)  # legend (asterisk stripped) on each
     assert radios[1]["checked"] is True and radios[1]["optionLabel"] == "Senior"
     # the read renderer folds the two options back into one radio-group row
     folded = [f for f in forms.collapse_radio_groups(fields) if f["kind"] == "radio-group"]
@@ -2142,8 +2387,7 @@ def test_enumerate_lists_every_radio_option_as_its_own_addressable_field():
 
 async def test_form_read_scope_css_is_embedded_as_a_query_root(monkeypatch):
     procs = []
-    monkeypatch.setattr(tools.subprocess, "Popen",
-                        fake_popen(out=json.dumps({"ok": True, "fields": []}), procs=procs))
+    monkeypatch.setattr(tools.subprocess, "Popen", fake_popen(out=json.dumps({"ok": True, "fields": []}), procs=procs))
     await _toolmap({"binary": "ab"})["browser_form_read"].ainvoke({"scope": "#application"})
     script = procs[-1].stdin.getvalue().decode()
     assert 'abScopeRoot("#application", true)' in script
@@ -2151,8 +2395,7 @@ async def test_form_read_scope_css_is_embedded_as_a_query_root(monkeypatch):
 
 async def test_form_read_scope_label_is_passed_as_a_container_name(monkeypatch):
     procs = []
-    monkeypatch.setattr(tools.subprocess, "Popen",
-                        fake_popen(out=json.dumps({"ok": True, "fields": []}), procs=procs))
+    monkeypatch.setattr(tools.subprocess, "Popen", fake_popen(out=json.dumps({"ok": True, "fields": []}), procs=procs))
     await _toolmap({"binary": "ab"})["browser_form_read"].ainvoke({"scope": "Work history"})
     assert 'abScopeRoot("Work history", false)' in procs[-1].stdin.getvalue().decode()
 
@@ -2162,12 +2405,13 @@ async def test_form_read_refuses_a_ref_scope_without_running_the_cli(monkeypatch
     monkeypatch.setattr(tools.subprocess, "Popen", fake_popen(record=rec))
     out = await _toolmap({"binary": "ab"})["browser_form_read"].ainvoke({"scope": "@e5"})
     assert out.startswith("Error:") and "@ref" in out
-    assert rec == []   # a ref can't be resolved in an eval — refuse before the subprocess
+    assert rec == []  # a ref can't be resolved in an eval — refuse before the subprocess
 
 
 async def test_form_read_reports_an_unmatched_scope(monkeypatch):
-    monkeypatch.setattr(tools.subprocess, "Popen",
-                        fake_popen(out=json.dumps({"ok": False, "error": "scope-not-found"})))
+    monkeypatch.setattr(
+        tools.subprocess, "Popen", fake_popen(out=json.dumps({"ok": False, "error": "scope-not-found"}))
+    )
     out = await _toolmap({"binary": "ab"})["browser_form_read"].ainvoke({"scope": "#nope"})
     assert out.startswith("Error:") and "#nope" in out
 
@@ -2175,7 +2419,7 @@ async def test_form_read_reports_an_unmatched_scope(monkeypatch):
 async def test_form_read_degrades_on_unreadable_output_instead_of_raising(monkeypatch):
     monkeypatch.setattr(tools.subprocess, "Popen", fake_popen(out="not json at all"))
     out = await _toolmap({"binary": "ab"})["browser_form_read"].ainvoke({})
-    assert out.startswith("Error:")   # r8: no new tool raises
+    assert out.startswith("Error:")  # r8: no new tool raises
 
 
 async def test_form_read_surfaces_an_eval_error(monkeypatch):
@@ -2222,13 +2466,11 @@ def _select_popen(result, fields=None, record=None, procs=None):
     return _popen
 
 
-async def _select(monkeypatch, result, field="#country", option_text="United States",
-                  record=None, procs=None):
+async def _select(monkeypatch, result, field="#country", option_text="United States", record=None, procs=None):
     """Drive browser_select against a CSS field (no resolver eval) with a canned engine result."""
     payload = result if isinstance(result, str) else json.dumps(result)
     monkeypatch.setattr(tools.subprocess, "Popen", fake_popen(out=payload, record=record, procs=procs))
-    return await _toolmap({"binary": "ab"})["browser_select"].ainvoke(
-        {"field": field, "option_text": option_text})
+    return await _toolmap({"binary": "ab"})["browser_select"].ainvoke({"field": field, "option_text": option_text})
 
 
 def test_select_js_dispatches_to_each_widget_branch_in_one_script():
@@ -2243,7 +2485,7 @@ def test_select_js_dispatches_to_each_widget_branch_in_one_script():
     assert "abFire(el, 'input')" in js and "abFire(el, 'change')" in js and "bubbles:true" in js
     # react-select combobox: role=option menu, the select__/-container/aria-autocomplete signature
     assert 'role="option"' in js and "select__control" in js
-    assert "aria-autocomplete" in js and '-container' in js
+    assert "aria-autocomplete" in js and "-container" in js
     # intl-tel-input: the country list + the selected-flag read-back
     assert "iti__country" in js and "iti__country-name" in js
     assert "selected-flag" in js and ("title" in js and "aria-label" in js)
@@ -2255,8 +2497,8 @@ def test_select_combobox_clears_before_typing_and_commits_by_click_never_enter()
     event is an ArrowDown to OPEN the menu (#4032 fix round) — Enter is never pressed, so the
     highlighted-wrong-option commit (#4032) cannot happen."""
     js = forms.select_js("#country", "United States")
-    assert "abSetNativeValue(input, '')" in js            # clear first, never append
-    assert "abClickOption" in js                           # commit by clicking the option element
+    assert "abSetNativeValue(input, '')" in js  # clear first, never append
+    assert "abClickOption" in js  # commit by clicking the option element
     # ArrowDown is an OPEN signal, not a commit; Enter/keypress is never dispatched to commit.
     assert "ArrowDown" in js and "keypress" not in js
     assert "'Enter'" not in js and '"Enter"' not in js
@@ -2267,15 +2509,16 @@ def _run_select_lib_js(html: str, expr: str):
     return the JSON it produces — the host-free way to prove the in-page option scoping."""
     if not NODE:
         pytest.skip("node not on PATH")
-    probe = subprocess.run([NODE, "-e", "require.resolve('jsdom')"], cwd=REPO,
-                           capture_output=True, text=True)
+    probe = subprocess.run([NODE, "-e", "require.resolve('jsdom')"], cwd=REPO, capture_output=True, text=True)
     if probe.returncode != 0:
         pytest.skip("jsdom not installed (run npm ci in apps/web or the repo root)")
     harness = (
         "const { JSDOM } = require('jsdom');\n"
         "const dom = new JSDOM(" + json.dumps(html) + ");\n"
         "global.window = dom.window; global.document = dom.window.document; global.CSS = dom.window.CSS;\n"
-        + forms._JS_LIB + forms._SELECT_LIB + "\n"
+        + forms._JS_LIB
+        + forms._SELECT_LIB
+        + "\n"
         "console.log(JSON.stringify((function(){ return " + expr + "; })()));\n"
     )
     out = subprocess.run([NODE, "-e", harness], cwd=REPO, capture_output=True, text=True, timeout=60)
@@ -2329,10 +2572,13 @@ _COMBO_OPTIONS_EXPR = (
 )
 
 
-@pytest.mark.parametrize(("html", "expected"), [
-    (_SCOPED_COMBO_ARIA_HTML, ["United States", "United Kingdom"]),
-    (_SCOPED_COMBO_CONTAINER_HTML, ["Canada", "Cambodia"]),
-])
+@pytest.mark.parametrize(
+    ("html", "expected"),
+    [
+        (_SCOPED_COMBO_ARIA_HTML, ["United States", "United Kingdom"]),
+        (_SCOPED_COMBO_CONTAINER_HTML, ["Canada", "Cambodia"]),
+    ],
+)
 def test_combobox_options_are_scoped_to_this_controls_menu(html, expected):
     """#4032 review: the combobox branch read `[role="option"]` from the WHOLE document, and
     the poll returns on its first non-empty read — so a menu already open elsewhere (here an
@@ -2340,18 +2586,22 @@ def test_combobox_options_are_scoped_to_this_controls_menu(html, expected):
     come only from THIS control's menu (via aria-controls, else its own container wrapper)."""
     opts = _run_select_lib_js(html, _COMBO_OPTIONS_EXPR)
     assert opts == expected
-    assert "Afghanistan" not in opts     # the other widget's open menu is never seen
+    assert "Afghanistan" not in opts  # the other widget's open menu is never seen
 
 
 async def test_select_native_success_reads_back_and_reports(monkeypatch):
     """r1: a successful native selection reports the committed read-back value and label."""
     rec, procs = [], []
-    out = await _select(monkeypatch,
-                        {"ok": True, "kind": "native-select", "label": "Role",
-                         "chosen": "Engineer", "committed": "Engineer"},
-                        field="#role", option_text="Engineer", record=rec, procs=procs)
+    out = await _select(
+        monkeypatch,
+        {"ok": True, "kind": "native-select", "label": "Role", "chosen": "Engineer", "committed": "Engineer"},
+        field="#role",
+        option_text="Engineer",
+        record=rec,
+        procs=procs,
+    )
     assert out == 'Selected "Engineer" in Role'
-    assert rec[-1] == ["ab", "eval", "--stdin"]            # r6: the engine rides eval --stdin
+    assert rec[-1] == ["ab", "eval", "--stdin"]  # r6: the engine rides eval --stdin
     assert "abSelectKind" in procs[-1].stdin.getvalue().decode()
 
 
@@ -2360,29 +2610,50 @@ async def test_select_reuses_the_bd12mo1_label_locator_before_the_engine(monkeyp
     the resolved `[data-ab-field]` selector is what the select engine then acts on — two evals,
     both on stdin, no second locator."""
     rec, procs = [], []
-    fields = [{"label": "Country", "labels": ["Country"], "selector": '[data-ab-field="0"]',
-               "kind": "combobox"}]
-    monkeypatch.setattr(tools.subprocess, "Popen",
-                        _select_popen({"ok": True, "kind": "combobox", "label": "Country",
-                                       "chosen": "United States", "committed": "United States"},
-                                      fields=fields, record=rec, procs=procs))
+    fields = [{"label": "Country", "labels": ["Country"], "selector": '[data-ab-field="0"]', "kind": "combobox"}]
+    monkeypatch.setattr(
+        tools.subprocess,
+        "Popen",
+        _select_popen(
+            {
+                "ok": True,
+                "kind": "combobox",
+                "label": "Country",
+                "chosen": "United States",
+                "committed": "United States",
+            },
+            fields=fields,
+            record=rec,
+            procs=procs,
+        ),
+    )
     out = await _toolmap({"binary": "ab"})["browser_select"].ainvoke(
-        {"field": "Country", "option_text": "United States"})
+        {"field": "Country", "option_text": "United States"}
+    )
     assert out == 'Selected "United States" in Country'
     assert rec == [["ab", "eval", "--stdin"], ["ab", "eval", "--stdin"]]
-    assert "abEnumerate" in procs[0].stdin.getvalue().decode()        # the resolver
+    assert "abEnumerate" in procs[0].stdin.getvalue().decode()  # the resolver
     select_script = procs[1].stdin.getvalue().decode()
-    assert "abSelectKind" in select_script                            # the engine
-    assert json.dumps('[data-ab-field="0"]') in select_script         # on the RESOLVED selector
+    assert "abSelectKind" in select_script  # the engine
+    assert json.dumps('[data-ab-field="0"]') in select_script  # on the RESOLVED selector
 
 
 async def test_select_mismatch_on_read_back_is_a_hard_error(monkeypatch):
     """r5: the field reading back a different value than was chosen is an Error naming both —
     never a success. This is the guard against committing the wrong option silently (#4032)."""
-    out = await _select(monkeypatch,
-                        {"ok": False, "reason": "mismatch", "kind": "combobox", "label": "Visa",
-                         "wanted": "No", "actual": "Yes, Ireland Highly Skilled Worker Visa"},
-                        field="#visa", option_text="No")
+    out = await _select(
+        monkeypatch,
+        {
+            "ok": False,
+            "reason": "mismatch",
+            "kind": "combobox",
+            "label": "Visa",
+            "wanted": "No",
+            "actual": "Yes, Ireland Highly Skilled Worker Visa",
+        },
+        field="#visa",
+        option_text="No",
+    )
     assert out.startswith("Error:") and "Selected" not in out
     assert "Visa" in out and "No" in out
     assert "Yes, Ireland Highly Skilled Worker Visa" in out
@@ -2391,10 +2662,18 @@ async def test_select_mismatch_on_read_back_is_a_hard_error(monkeypatch):
 
 async def test_select_no_matching_option_lists_the_available_ones(monkeypatch):
     """r4: zero matches → an Error listing the available options, and nothing is committed."""
-    out = await _select(monkeypatch,
-                        {"ok": False, "reason": "no-option", "kind": "native-select",
-                         "label": "Role", "options": ["Engineer", "Manager", "Designer"]},
-                        field="#role", option_text="Astronaut")
+    out = await _select(
+        monkeypatch,
+        {
+            "ok": False,
+            "reason": "no-option",
+            "kind": "native-select",
+            "label": "Role",
+            "options": ["Engineer", "Manager", "Designer"],
+        },
+        field="#role",
+        option_text="Astronaut",
+    )
     assert out.startswith("Error:") and "Astronaut" in out
     assert "Engineer" in out and "Manager" in out and "Designer" in out
     assert "Selected" not in out
@@ -2402,10 +2681,18 @@ async def test_select_no_matching_option_lists_the_available_ones(monkeypatch):
 
 async def test_select_ambiguous_option_is_an_error_not_a_guess(monkeypatch):
     """r4: more than one candidate at the winning tier → an Error (never a silent pick)."""
-    out = await _select(monkeypatch,
-                        {"ok": False, "reason": "ambiguous", "kind": "combobox", "label": "Country",
-                         "options": ["United States", "United States Minor Outlying Islands"]},
-                        field="#country", option_text="United")
+    out = await _select(
+        monkeypatch,
+        {
+            "ok": False,
+            "reason": "ambiguous",
+            "kind": "combobox",
+            "label": "Country",
+            "options": ["United States", "United States Minor Outlying Islands"],
+        },
+        field="#country",
+        option_text="United",
+    )
     assert out.startswith("Error:") and "more than one" in out
     assert "United States" in out and "Selected" not in out
 
@@ -2414,8 +2701,8 @@ def test_select_render_caps_the_listed_options_at_ten():
     """r4: the available-options listing is bounded at 10, however long the real list."""
     opts = [f"Country {i}" for i in range(25)]
     out = forms.render_select(
-        json.dumps({"ok": False, "reason": "no-option", "label": "Country", "options": opts}),
-        "#country", "Nowhere")
+        json.dumps({"ok": False, "reason": "no-option", "label": "Country", "options": opts}), "#country", "Nowhere"
+    )
     assert out.startswith("Error:")
     assert "Country 0" in out and "Country 9" in out
     assert "Country 10" not in out and "Country 24" not in out
@@ -2423,8 +2710,7 @@ def test_select_render_caps_the_listed_options_at_ten():
 
 async def test_select_not_found_points_at_form_read(monkeypatch):
     """A locator that matches no element in the page is a clear Error, never a success."""
-    out = await _select(monkeypatch, {"ok": False, "reason": "not-found"},
-                        field="#missing", option_text="x")
+    out = await _select(monkeypatch, {"ok": False, "reason": "not-found"}, field="#missing", option_text="x")
     assert out.startswith("Error:") and "browser_form_read" in out and "Selected" not in out
 
 
@@ -2435,29 +2721,30 @@ async def test_select_refuses_a_ref_field_without_running_the_cli(monkeypatch):
     front (as browser_form_read does), before any subprocess."""
     rec = []
     monkeypatch.setattr(tools.subprocess, "Popen", fake_popen(record=rec))
-    out = await _toolmap({"binary": "ab"})["browser_select"].ainvoke(
-        {"field": "@e5", "option_text": "United States"})
+    out = await _toolmap({"binary": "ab"})["browser_select"].ainvoke({"field": "@e5", "option_text": "United States"})
     assert out.startswith("Error:") and "@ref" in out
-    assert rec == []   # a ref can't be resolved in an eval — refuse before the CLI runs
+    assert rec == []  # a ref can't be resolved in an eval — refuse before the CLI runs
 
 
 async def test_select_on_a_non_choice_field_is_refused(monkeypatch):
     """A plain text field isn't a choice widget — say so rather than pretend to select."""
-    out = await _select(monkeypatch, {"ok": False, "reason": "unsupported", "kind": "other",
-                                      "label": "First name"},
-                        field="#first", option_text="x")
+    out = await _select(
+        monkeypatch,
+        {"ok": False, "reason": "unsupported", "kind": "other", "label": "First name"},
+        field="#first",
+        option_text="x",
+    )
     assert out.startswith("Error:") and "browser_fill" in out
 
 
 async def test_select_degrades_on_unreadable_output_instead_of_raising(monkeypatch):
     out = await _select(monkeypatch, "not json at all", field="#country", option_text="x")
-    assert out.startswith("Error:")   # never raises
+    assert out.startswith("Error:")  # never raises
 
 
 async def test_select_surfaces_an_eval_error(monkeypatch):
     monkeypatch.setattr(tools.subprocess, "Popen", fake_popen(rc=1, err="no page open"))
-    out = await _toolmap({"binary": "ab"})["browser_select"].ainvoke(
-        {"field": "#country", "option_text": "x"})
+    out = await _toolmap({"binary": "ab"})["browser_select"].ainvoke({"field": "#country", "option_text": "x"})
     assert out.startswith("Error:") and "no page open" in out
 
 
@@ -2472,10 +2759,16 @@ async def test_select_phone_country_is_the_iti_branch_and_fill_follows_it(monkey
     assert "abSetNativeValue" not in iti_src and ".value" not in iti_src
 
     rec = []
-    monkeypatch.setattr(tools.subprocess, "Popen",
-                        fake_popen(out=json.dumps({"ok": True, "kind": "iti", "label": "Phone",
-                                                   "chosen": "United States",
-                                                   "committed": "United States"}), record=rec))
+    monkeypatch.setattr(
+        tools.subprocess,
+        "Popen",
+        fake_popen(
+            out=json.dumps(
+                {"ok": True, "kind": "iti", "label": "Phone", "chosen": "United States", "committed": "United States"}
+            ),
+            record=rec,
+        ),
+    )
     t = _toolmap({"binary": "ab"})
     picked = await t["browser_select"].ainvoke({"field": "#phone", "option_text": "United States"})
     assert picked == 'Selected "United States" in Phone'
@@ -2509,7 +2802,7 @@ def test_resolve_upload_path_accepts_a_file_inside_the_fence():
     f = root / "cv.pdf"
     f.write_bytes(b"%PDF-1.4 resume")
     assert storage.resolve_upload_path("cv.pdf") == f
-    assert storage.resolve_upload_path(str(f)) == f   # an absolute path already inside the fence
+    assert storage.resolve_upload_path(str(f)) == f  # an absolute path already inside the fence
 
 
 def test_resolve_upload_path_accepts_a_relative_subdirectory_file():
@@ -2520,14 +2813,17 @@ def test_resolve_upload_path_accepts_a_relative_subdirectory_file():
     assert storage.resolve_upload_path("out/resume.pdf") == (sub / "resume.pdf").resolve()
 
 
-@pytest.mark.parametrize("bad", [
-    "/etc/passwd",
-    "../../escape.pdf",
-    "a/../../escape.pdf",
-    "~/.ssh/id_rsa",
-    "",
-    ".",
-])
+@pytest.mark.parametrize(
+    "bad",
+    [
+        "/etc/passwd",
+        "../../escape.pdf",
+        "a/../../escape.pdf",
+        "~/.ssh/id_rsa",
+        "",
+        ".",
+    ],
+)
 def test_resolve_upload_path_refuses_paths_outside_the_fence(bad):
     with pytest.raises(ValueError):
         storage.resolve_upload_path(bad)
@@ -2537,10 +2833,10 @@ def test_resolve_upload_path_requires_an_existing_non_empty_file():
     root = storage.capture_root().resolve()
     (root / "empty.pdf").write_bytes(b"")
     with pytest.raises(ValueError) as e_empty:
-        storage.resolve_upload_path("empty.pdf")      # inside the fence, but zero bytes
+        storage.resolve_upload_path("empty.pdf")  # inside the fence, but zero bytes
     assert "empty" in str(e_empty.value)
     with pytest.raises(ValueError):
-        storage.resolve_upload_path("missing.pdf")    # inside the fence, but absent
+        storage.resolve_upload_path("missing.pdf")  # inside the fence, but absent
 
 
 def test_resolve_upload_path_refuses_a_symlink_escaping_the_fence(tmp_path):
@@ -2553,7 +2849,7 @@ def test_resolve_upload_path_refuses_a_symlink_escaping_the_fence(tmp_path):
     except (OSError, NotImplementedError):
         pytest.skip("symlinks unavailable on this host")
     with pytest.raises(ValueError):
-        storage.resolve_upload_path("linked.pdf")     # resolves (and exists) OUTSIDE the root
+        storage.resolve_upload_path("linked.pdf")  # resolves (and exists) OUTSIDE the root
 
 
 # ── the tool: fence refusals run BEFORE any subprocess ─────────────────────────────
@@ -2565,10 +2861,9 @@ async def test_upload_refuses_a_path_outside_the_fence_without_running_the_cli(m
     the fence is resolved before any subprocess, exactly like a capture."""
     rec = []
     monkeypatch.setattr(tools.subprocess, "Popen", fake_popen(record=rec))
-    out = await _toolmap({"binary": "ab"})["browser_upload"].ainvoke(
-        {"field": "#resume", "file_path": bad})
+    out = await _toolmap({"binary": "ab"})["browser_upload"].ainvoke({"field": "#resume", "file_path": bad})
     assert out.startswith("Error:")
-    assert rec == []   # nothing reached agent-browser
+    assert rec == []  # nothing reached agent-browser
 
 
 async def test_upload_refuses_a_symlink_escape_without_running_the_cli(monkeypatch, tmp_path):
@@ -2583,8 +2878,7 @@ async def test_upload_refuses_a_symlink_escape_without_running_the_cli(monkeypat
         pytest.skip("symlinks unavailable on this host")
     rec = []
     monkeypatch.setattr(tools.subprocess, "Popen", fake_popen(record=rec))
-    out = await _toolmap({"binary": "ab"})["browser_upload"].ainvoke(
-        {"field": "#resume", "file_path": "linked.pdf"})
+    out = await _toolmap({"binary": "ab"})["browser_upload"].ainvoke({"field": "#resume", "file_path": "linked.pdf"})
     assert out.startswith("Error:") and "outside" in out
     assert rec == []
 
@@ -2599,7 +2893,7 @@ async def test_upload_refuses_a_missing_or_empty_file_without_running_the_cli(mo
     out_missing = await t["browser_upload"].ainvoke({"field": "#resume", "file_path": "nope.pdf"})
     out_empty = await t["browser_upload"].ainvoke({"field": "#resume", "file_path": "empty.pdf"})
     assert out_missing.startswith("Error:") and out_empty.startswith("Error:")
-    assert rec == []   # neither reached the CLI
+    assert rec == []  # neither reached the CLI
 
 
 async def test_upload_refuses_a_ref_field_without_running_the_cli(monkeypatch):
@@ -2609,8 +2903,7 @@ async def test_upload_refuses_a_ref_field_without_running_the_cli(monkeypatch):
     (root / "cv.pdf").write_bytes(b"%PDF")
     rec = []
     monkeypatch.setattr(tools.subprocess, "Popen", fake_popen(record=rec))
-    out = await _toolmap({"binary": "ab"})["browser_upload"].ainvoke(
-        {"field": "@e5", "file_path": "cv.pdf"})
+    out = await _toolmap({"binary": "ab"})["browser_upload"].ainvoke({"field": "@e5", "file_path": "cv.pdf"})
     assert out.startswith("Error:") and "@ref" in out
     assert rec == []
 
@@ -2651,12 +2944,17 @@ async def test_upload_attaches_a_fenced_file_and_verifies_the_readback(monkeypat
     resume = root / "cv.pdf"
     resume.write_bytes(b"%PDF-1.4 resume")
     rec, procs = [], []
-    monkeypatch.setattr(tools.subprocess, "Popen", _upload_popen(
-        {"ok": True, "selector": '[data-pa-upload="abc123"]', "label": "Résumé", "name": "resume"},
-        {"ok": True, "name": "cv.pdf", "error": ""},
-        record=rec, procs=procs))
-    out = await _toolmap({"binary": "ab"})["browser_upload"].ainvoke(
-        {"field": "#resume", "file_path": "cv.pdf"})
+    monkeypatch.setattr(
+        tools.subprocess,
+        "Popen",
+        _upload_popen(
+            {"ok": True, "selector": '[data-pa-upload="abc123"]', "label": "Résumé", "name": "resume"},
+            {"ok": True, "name": "cv.pdf", "error": ""},
+            record=rec,
+            procs=procs,
+        ),
+    )
+    out = await _toolmap({"binary": "ab"})["browser_upload"].ainvoke({"field": "#resume", "file_path": "cv.pdf"})
     assert out == "Uploaded cv.pdf to Résumé"
     # locate(eval) → upload → verify(eval): a CSS field skips the label resolver
     assert [a[1] for a in rec] == ["eval", "upload", "eval"]
@@ -2694,11 +2992,10 @@ async def test_upload_resolves_a_label_through_the_bd12mo1_locator_first(monkeyp
         return p
 
     monkeypatch.setattr(tools.subprocess, "Popen", _popen)
-    out = await _toolmap({"binary": "ab"})["browser_upload"].ainvoke(
-        {"field": "Résumé", "file_path": "cv.pdf"})
+    out = await _toolmap({"binary": "ab"})["browser_upload"].ainvoke({"field": "Résumé", "file_path": "cv.pdf"})
     assert out == "Uploaded cv.pdf to Résumé"
     assert [a[1] for a in rec] == ["eval", "eval", "upload", "eval"]
-    assert "abEnumerate" in procs[0].stdin.getvalue().decode()           # the resolver runs first
+    assert "abEnumerate" in procs[0].stdin.getvalue().decode()  # the resolver runs first
     assert json.dumps('[data-ab-field="6"]') in procs[1].stdin.getvalue().decode()  # tagged the match
     assert rec[2] == ["ab", "upload", '[data-pa-upload="n"]', str(resume)]
 
@@ -2725,10 +3022,9 @@ async def test_upload_marks_the_file_in_flight_so_a_prune_cannot_take_it(monkeyp
         return _FakeProc(argv, out=out)
 
     monkeypatch.setattr(tools.subprocess, "Popen", _popen)
-    out = await _toolmap({"binary": "ab"})["browser_upload"].ainvoke(
-        {"field": "#resume", "file_path": "cv.pdf"})
+    out = await _toolmap({"binary": "ab"})["browser_upload"].ainvoke({"field": "#resume", "file_path": "cv.pdf"})
     assert out == "Uploaded cv.pdf to Résumé"
-    assert seen["survived"] is True   # the in-flight source was shielded from the prune
+    assert seen["survived"] is True  # the in-flight source was shielded from the prune
 
 
 # ── the tool: verify failures and locate errors are hard errors ────────────────────
@@ -2739,11 +3035,15 @@ async def test_upload_readback_mismatch_is_a_hard_error(monkeypatch):
     both — never a success. This is the guard against a silent non-attach."""
     root = storage.capture_root().resolve()
     (root / "cv.pdf").write_bytes(b"%PDF resume")
-    monkeypatch.setattr(tools.subprocess, "Popen", _upload_popen(
-        {"ok": True, "selector": '[data-pa-upload="x"]', "label": "Résumé"},
-        {"ok": True, "name": "stale-old-file.pdf", "error": ""}))
-    out = await _toolmap({"binary": "ab"})["browser_upload"].ainvoke(
-        {"field": "#resume", "file_path": "cv.pdf"})
+    monkeypatch.setattr(
+        tools.subprocess,
+        "Popen",
+        _upload_popen(
+            {"ok": True, "selector": '[data-pa-upload="x"]', "label": "Résumé"},
+            {"ok": True, "name": "stale-old-file.pdf", "error": ""},
+        ),
+    )
+    out = await _toolmap({"binary": "ab"})["browser_upload"].ainvoke({"field": "#resume", "file_path": "cv.pdf"})
     assert out.startswith("Error:") and "Uploaded" not in out
     assert "stale-old-file.pdf" in out and "cv.pdf" in out
 
@@ -2755,11 +3055,15 @@ async def test_upload_empty_readback_is_a_hard_error_and_surfaces_validation(mon
     (root / "cv.pdf").write_bytes(b"%PDF resume")
     monkeypatch.setattr(tools, "_UPLOAD_SETTLE_S", 0.05)
     monkeypatch.setattr(tools, "_UPLOAD_POLL_S", 0.01)
-    monkeypatch.setattr(tools.subprocess, "Popen", _upload_popen(
-        {"ok": True, "selector": '[data-pa-upload="x"]', "label": "Résumé"},
-        {"ok": True, "name": "", "error": "Résumé is required"}))
-    out = await _toolmap({"binary": "ab"})["browser_upload"].ainvoke(
-        {"field": "#resume", "file_path": "cv.pdf"})
+    monkeypatch.setattr(
+        tools.subprocess,
+        "Popen",
+        _upload_popen(
+            {"ok": True, "selector": '[data-pa-upload="x"]', "label": "Résumé"},
+            {"ok": True, "name": "", "error": "Résumé is required"},
+        ),
+    )
+    out = await _toolmap({"binary": "ab"})["browser_upload"].ainvoke({"field": "#resume", "file_path": "cv.pdf"})
     assert out.startswith("Error:") and "nothing is attached" in out
     assert "Résumé is required" in out
 
@@ -2790,11 +3094,16 @@ async def test_upload_rechecks_an_empty_readback_until_the_chip_shows(monkeypatc
     monkeypatch.setattr(tools, "_UPLOAD_POLL_S", 0.01)
     empty = {"ok": True, "name": "", "displayed": False, "error": ""}
     rec = []
-    monkeypatch.setattr(tools.subprocess, "Popen", _settling_popen(
-        {"ok": True, "selector": '[data-pa-upload="x"]', "label": "Résumé"},
-        [empty, empty, {"ok": True, "name": "", "displayed": True, "error": ""}], rec))
-    out = await _toolmap({"binary": "ab"})["browser_upload"].ainvoke(
-        {"field": "#resume", "file_path": "cv.pdf"})
+    monkeypatch.setattr(
+        tools.subprocess,
+        "Popen",
+        _settling_popen(
+            {"ok": True, "selector": '[data-pa-upload="x"]', "label": "Résumé"},
+            [empty, empty, {"ok": True, "name": "", "displayed": True, "error": ""}],
+            rec,
+        ),
+    )
+    out = await _toolmap({"binary": "ab"})["browser_upload"].ainvoke({"field": "#resume", "file_path": "cv.pdf"})
     assert out == "Uploaded cv.pdf to Résumé (verified via the field's displayed filename)"
     assert [a[1] for a in rec] == ["eval", "upload", "eval", "eval", "eval"]
 
@@ -2807,16 +3116,21 @@ async def test_upload_empty_readback_errors_after_the_bounded_wait(monkeypatch):
     monkeypatch.setattr(tools, "_UPLOAD_SETTLE_S", 0.2)
     monkeypatch.setattr(tools, "_UPLOAD_POLL_S", 0.02)
     rec = []
-    monkeypatch.setattr(tools.subprocess, "Popen", _settling_popen(
-        {"ok": True, "selector": '[data-pa-upload="x"]', "label": "Résumé"},
-        [{"ok": True, "name": "", "displayed": False, "error": ""}], rec))
+    monkeypatch.setattr(
+        tools.subprocess,
+        "Popen",
+        _settling_popen(
+            {"ok": True, "selector": '[data-pa-upload="x"]', "label": "Résumé"},
+            [{"ok": True, "name": "", "displayed": False, "error": ""}],
+            rec,
+        ),
+    )
     t0 = time.monotonic()
-    out = await _toolmap({"binary": "ab"})["browser_upload"].ainvoke(
-        {"field": "#resume", "file_path": "cv.pdf"})
+    out = await _toolmap({"binary": "ab"})["browser_upload"].ainvoke({"field": "#resume", "file_path": "cv.pdf"})
     elapsed = time.monotonic() - t0
     assert out.startswith("Error:") and "nothing is attached" in out
     assert 0.2 <= elapsed < 2.0, elapsed
-    assert sum(a[1] == "eval" for a in rec) > 2          # locate + several verify re-checks
+    assert sum(a[1] == "eval" for a in rec) > 2  # locate + several verify re-checks
 
 
 def test_upload_settling_only_while_there_is_no_evidence():
@@ -2838,12 +3152,22 @@ async def test_upload_confirms_via_the_displayed_filename_after_a_rerender(monke
     that displayed filename, instead of the old 'could not be found to verify' error."""
     root = storage.capture_root().resolve()
     (root / "cv.pdf").write_bytes(b"%PDF resume")
-    monkeypatch.setattr(tools.subprocess, "Popen", _upload_popen(
-        {"ok": True, "selector": '[data-pa-upload="x"]', "label": "Résumé",
-         "id": "resume", "name": "resume", "container": "#resume_block"},
-        {"ok": True, "name": "", "displayed": True, "error": ""}))
-    out = await _toolmap({"binary": "ab"})["browser_upload"].ainvoke(
-        {"field": "#resume", "file_path": "cv.pdf"})
+    monkeypatch.setattr(
+        tools.subprocess,
+        "Popen",
+        _upload_popen(
+            {
+                "ok": True,
+                "selector": '[data-pa-upload="x"]',
+                "label": "Résumé",
+                "id": "resume",
+                "name": "resume",
+                "container": "#resume_block",
+            },
+            {"ok": True, "name": "", "displayed": True, "error": ""},
+        ),
+    )
+    out = await _toolmap({"binary": "ab"})["browser_upload"].ainvoke({"field": "#resume", "file_path": "cv.pdf"})
     assert out == "Uploaded cv.pdf to Résumé (verified via the field's displayed filename)"
 
 
@@ -2854,32 +3178,45 @@ async def test_upload_verify_script_carries_the_id_name_and_container(monkeypatc
     resume = root / "cv.pdf"
     resume.write_bytes(b"%PDF resume")
     procs = []
-    monkeypatch.setattr(tools.subprocess, "Popen", _upload_popen(
-        {"ok": True, "selector": '[data-pa-upload="n"]', "label": "Résumé",
-         "id": "resume", "name": "resume", "container": "#resume_block"},
-        {"ok": True, "name": "cv.pdf", "error": ""}, procs=procs))
-    out = await _toolmap({"binary": "ab"})["browser_upload"].ainvoke(
-        {"field": "#resume", "file_path": "cv.pdf"})
+    monkeypatch.setattr(
+        tools.subprocess,
+        "Popen",
+        _upload_popen(
+            {
+                "ok": True,
+                "selector": '[data-pa-upload="n"]',
+                "label": "Résumé",
+                "id": "resume",
+                "name": "resume",
+                "container": "#resume_block",
+            },
+            {"ok": True, "name": "cv.pdf", "error": ""},
+            procs=procs,
+        ),
+    )
+    out = await _toolmap({"binary": "ab"})["browser_upload"].ainvoke({"field": "#resume", "file_path": "cv.pdf"})
     assert out == "Uploaded cv.pdf to Résumé"
     verify_script = procs[-1].stdin.getvalue().decode()
-    assert '"resume"' in verify_script            # the input's id + name, to re-find it fresh
-    assert "resume_block" in verify_script        # the field container, for the displayed-text check
-    assert "cv.pdf" in verify_script              # the basename to look for in the container
+    assert '"resume"' in verify_script  # the input's id + name, to re-find it fresh
+    assert "resume_block" in verify_script  # the field container, for the displayed-text check
+    assert "cv.pdf" in verify_script  # the basename to look for in the container
 
 
 def test_render_upload_confirms_via_the_displayed_filename():
     """bug 3: input re-rendered empty (name='') but the field shows the filename (displayed=true)
     → success naming the evidence used."""
-    out = forms.render_upload(json.dumps({"ok": True, "name": "", "displayed": True, "error": ""}),
-                              "#resume", "cv.pdf", label="Résumé")
+    out = forms.render_upload(
+        json.dumps({"ok": True, "name": "", "displayed": True, "error": ""}), "#resume", "cv.pdf", label="Résumé"
+    )
     assert out == "Uploaded cv.pdf to Résumé (verified via the field's displayed filename)"
 
 
 def test_render_upload_prefers_a_read_back_name_over_the_display():
     """(a)/(b): a re-found input that actually carries the file wins — the success line does NOT
     claim the displayed-filename evidence."""
-    out = forms.render_upload(json.dumps({"ok": True, "name": "cv.pdf", "displayed": True, "error": ""}),
-                              "#resume", "cv.pdf", label="Résumé")
+    out = forms.render_upload(
+        json.dumps({"ok": True, "name": "cv.pdf", "displayed": True, "error": ""}), "#resume", "cv.pdf", label="Résumé"
+    )
     assert out == "Uploaded cv.pdf to Résumé"
 
 
@@ -2888,7 +3225,10 @@ def test_render_upload_empty_and_not_displayed_is_a_hard_error():
     and any field validation text is surfaced."""
     out = forms.render_upload(
         json.dumps({"ok": True, "name": "", "displayed": False, "error": "The file could not be attached"}),
-        "#transcript", "cv.pdf", label="Transcript")
+        "#transcript",
+        "cv.pdf",
+        label="Transcript",
+    )
     assert out.startswith("Error:") and "nothing is attached" in out
     assert "could not be attached" in out
 
@@ -2899,13 +3239,14 @@ async def test_upload_no_file_input_in_container_is_an_error(monkeypatch):
     root = storage.capture_root().resolve()
     (root / "cv.pdf").write_bytes(b"%PDF")
     rec = []
-    monkeypatch.setattr(tools.subprocess, "Popen", _upload_popen(
-        {"ok": False, "reason": "no-file-input", "label": "Cover letter"},
-        {"ok": True}, record=rec))
-    out = await _toolmap({"binary": "ab"})["browser_upload"].ainvoke(
-        {"field": "#cover", "file_path": "cv.pdf"})
+    monkeypatch.setattr(
+        tools.subprocess,
+        "Popen",
+        _upload_popen({"ok": False, "reason": "no-file-input", "label": "Cover letter"}, {"ok": True}, record=rec),
+    )
+    out = await _toolmap({"binary": "ab"})["browser_upload"].ainvoke({"field": "#cover", "file_path": "cv.pdf"})
     assert out.startswith("Error:") and "file input" in out
-    assert not any(a[1:2] == ["upload"] for a in rec)   # located, then stopped — never uploaded
+    assert not any(a[1:2] == ["upload"] for a in rec)  # located, then stopped — never uploaded
 
 
 async def test_upload_multiple_file_inputs_in_container_is_an_error(monkeypatch):
@@ -2913,11 +3254,12 @@ async def test_upload_multiple_file_inputs_in_container_is_an_error(monkeypatch)
     root = storage.capture_root().resolve()
     (root / "cv.pdf").write_bytes(b"%PDF")
     rec = []
-    monkeypatch.setattr(tools.subprocess, "Popen", _upload_popen(
-        {"ok": False, "reason": "multiple", "label": "Documents", "count": 2},
-        {"ok": True}, record=rec))
-    out = await _toolmap({"binary": "ab"})["browser_upload"].ainvoke(
-        {"field": "#docs", "file_path": "cv.pdf"})
+    monkeypatch.setattr(
+        tools.subprocess,
+        "Popen",
+        _upload_popen({"ok": False, "reason": "multiple", "label": "Documents", "count": 2}, {"ok": True}, record=rec),
+    )
+    out = await _toolmap({"binary": "ab"})["browser_upload"].ainvoke({"field": "#docs", "file_path": "cv.pdf"})
     assert out.startswith("Error:") and "ambiguous" in out and "2" in out
     assert not any(a[1:2] == ["upload"] for a in rec)
 
@@ -2929,15 +3271,15 @@ async def test_upload_surfaces_a_cli_upload_error(monkeypatch):
 
     def _popen(argv, **kw):
         if argv[1:2] == ["eval"]:
-            return _FakeProc(argv, out=json.dumps(
-                {"ok": True, "selector": '[data-pa-upload="x"]', "label": "Résumé"}).encode())
+            return _FakeProc(
+                argv, out=json.dumps({"ok": True, "selector": '[data-pa-upload="x"]', "label": "Résumé"}).encode()
+            )
         if argv[1:2] == ["upload"]:
             return _FakeProc(argv, out=b"", err=b"no element", rc=1)
         return _FakeProc(argv, out=b"(ok)")
 
     monkeypatch.setattr(tools.subprocess, "Popen", _popen)
-    out = await _toolmap({"binary": "ab"})["browser_upload"].ainvoke(
-        {"field": "#resume", "file_path": "cv.pdf"})
+    out = await _toolmap({"binary": "ab"})["browser_upload"].ainvoke({"field": "#resume", "file_path": "cv.pdf"})
     assert out.startswith("Error:") and "no element" in out
 
 
@@ -2945,17 +3287,15 @@ async def test_upload_degrades_on_unreadable_locate_output_instead_of_raising(mo
     root = storage.capture_root().resolve()
     (root / "cv.pdf").write_bytes(b"%PDF")
     monkeypatch.setattr(tools.subprocess, "Popen", _upload_popen("not json at all", {"ok": True}))
-    out = await _toolmap({"binary": "ab"})["browser_upload"].ainvoke(
-        {"field": "#resume", "file_path": "cv.pdf"})
-    assert out.startswith("Error:")   # never raises
+    out = await _toolmap({"binary": "ab"})["browser_upload"].ainvoke({"field": "#resume", "file_path": "cv.pdf"})
+    assert out.startswith("Error:")  # never raises
 
 
 async def test_upload_flag_shaped_field_is_refused_before_anything(monkeypatch):
     """The argv guard fires first: a flag-shaped field never reaches the fence or the CLI."""
     rec = []
     monkeypatch.setattr(tools.subprocess, "Popen", fake_popen(record=rec))
-    out = await _toolmap({"binary": "ab"})["browser_upload"].ainvoke(
-        {"field": "--headed", "file_path": "cv.pdf"})
+    out = await _toolmap({"binary": "ab"})["browser_upload"].ainvoke({"field": "--headed", "file_path": "cv.pdf"})
     assert out.startswith("Error:") and "looks like a command-line option" in out
     assert rec == []
 
@@ -2968,8 +3308,7 @@ def _run_upload_js(html: str, selector: str, nonce: str = "n1"):
     it produces — the only host-free way to prove the file-input container resolution."""
     if not NODE:
         pytest.skip("node not on PATH")
-    probe = subprocess.run([NODE, "-e", "require.resolve('jsdom')"], cwd=REPO,
-                           capture_output=True, text=True)
+    probe = subprocess.run([NODE, "-e", "require.resolve('jsdom')"], cwd=REPO, capture_output=True, text=True)
     if probe.returncode != 0:
         pytest.skip("jsdom not installed (run npm ci in apps/web or the repo root)")
     harness = (
@@ -2977,7 +3316,7 @@ def _run_upload_js(html: str, selector: str, nonce: str = "n1"):
         "const dom = new JSDOM(" + json.dumps(html) + ");\n"
         "global.window = dom.window; global.document = dom.window.document; global.CSS = dom.window.CSS;\n"
         "const script = " + json.dumps(forms.upload_js(selector, nonce)) + ";\n"
-        "console.log((0, eval)(script));\n"   # upload_js returns a JSON string
+        "console.log((0, eval)(script));\n"  # upload_js returns a JSON string
     )
     out = subprocess.run([NODE, "-e", harness], cwd=REPO, capture_output=True, text=True, timeout=60)
     assert out.returncode == 0, out.stderr
@@ -3012,9 +3351,7 @@ def test_upload_js_tags_a_file_input_addressed_directly():
 
 
 def test_upload_js_refuses_more_than_one_file_input_in_the_container():
-    html = ('<form><div id="box">'
-            '<input type="file" name="a"/><input type="file" name="b"/>'
-            '</div></form>')
+    html = '<form><div id="box"><input type="file" name="a"/><input type="file" name="b"/></div></form>'
     res = _run_upload_js(html, "#box", nonce="z")
     assert res["ok"] is False and res["reason"] == "multiple" and res["count"] == 2
 
@@ -3036,14 +3373,16 @@ def test_upload_js_also_returns_the_input_id_and_a_container_selector():
     the nonce tag rides off with the discarded node."""
     res = _run_upload_js(_ATTACH_BUTTON_HTML, "#resume-field", nonce="n1")
     assert res["ok"] is True and res["name"] == "resume"
-    assert res["container"] == "#resume-field"        # the nearest ancestor carrying an id
+    assert res["container"] == "#resume-field"  # the nearest ancestor carrying an id
 
 
 def test_upload_js_resolves_a_bare_or_hashed_id_file_input_directly():
     """r2: a `#id` OR a bare id that names an input[type=file] resolves to THAT input directly —
     no container climb — even when it is hidden behind an "Attach" button."""
-    html = ('<form><div id="wrap"><button type="button">Attach</button>'
-            '<input id="resume" type="file" name="resume" style="display:none"/></div></form>')
+    html = (
+        '<form><div id="wrap"><button type="button">Attach</button>'
+        '<input id="resume" type="file" name="resume" style="display:none"/></div></form>'
+    )
     for sel in ("#resume", "resume"):
         res = _run_upload_js(html, sel, nonce="z")
         assert res["ok"] is True, (sel, res)
@@ -3068,16 +3407,16 @@ def _run_upload_verify_js(html, selector, input_id="", input_name="", container=
     id/name, read the container's filename chip)."""
     if not NODE:
         pytest.skip("node not on PATH")
-    probe = subprocess.run([NODE, "-e", "require.resolve('jsdom')"], cwd=REPO,
-                           capture_output=True, text=True)
+    probe = subprocess.run([NODE, "-e", "require.resolve('jsdom')"], cwd=REPO, capture_output=True, text=True)
     if probe.returncode != 0:
         pytest.skip("jsdom not installed (run npm ci in apps/web or the repo root)")
     harness = (
         "const { JSDOM } = require('jsdom');\n"
         "const dom = new JSDOM(" + json.dumps(html) + ");\n"
         "global.window = dom.window; global.document = dom.window.document; global.CSS = dom.window.CSS;\n"
-        "const script = " + json.dumps(
-            forms.upload_verify_js(selector, input_id, input_name, container, basename)) + ";\n"
+        "const script = "
+        + json.dumps(forms.upload_verify_js(selector, input_id, input_name, container, basename))
+        + ";\n"
         "console.log((0, eval)(script));\n"
     )
     out = subprocess.run([NODE, "-e", harness], cwd=REPO, capture_output=True, text=True, timeout=60)
@@ -3089,23 +3428,31 @@ def test_upload_verify_js_confirms_via_the_chip_after_a_rerender():
     """bug 3: the nonce node is gone (re-rendered away) and the fresh input is empty, but the field
     container still SHOWS the filename as a chip — verify reports displayed=true (the chip's remove
     button stripped), so the attach is confirmed rather than reported missing."""
-    res = _run_upload_verify_js(_RERENDER_HTML, '[data-pa-upload="gone"]',
-                                input_id="resume", input_name="resume",
-                                container="#resume_block", basename="live_resume.pdf")
+    res = _run_upload_verify_js(
+        _RERENDER_HTML,
+        '[data-pa-upload="gone"]',
+        input_id="resume",
+        input_name="resume",
+        container="#resume_block",
+        basename="live_resume.pdf",
+    )
     assert res["ok"] is True
-    assert res["name"] == ""              # the re-rendered input carries no files
-    assert res["displayed"] is True       # but the field shows the filename
+    assert res["name"] == ""  # the re-rendered input carries no files
+    assert res["displayed"] is True  # but the field shows the filename
     assert res["error"] == ""
 
 
 def test_upload_verify_js_surfaces_a_rejection_message_with_no_filename():
     """r4: a rejecting widget clears the input and shows a validation message — verify returns an
     empty name, displayed=false, and surfaces the message."""
-    html = ('<form><div id="box"><label for="t">Transcript</label>'
-            '<input id="t" type="file" name="t"/>'
-            '<div class="field-error" role="alert">The file could not be attached</div></div></form>')
-    res = _run_upload_verify_js(html, '[data-pa-upload="gone"]', input_id="t", input_name="t",
-                                container="#box", basename="rejected.pdf")
+    html = (
+        '<form><div id="box"><label for="t">Transcript</label>'
+        '<input id="t" type="file" name="t"/>'
+        '<div class="field-error" role="alert">The file could not be attached</div></div></form>'
+    )
+    res = _run_upload_verify_js(
+        html, '[data-pa-upload="gone"]', input_id="t", input_name="t", container="#box", basename="rejected.pdf"
+    )
     assert res["ok"] is True and res["name"] == "" and res["displayed"] is False
     assert "could not be attached" in res["error"]
 
@@ -3120,22 +3467,34 @@ def _run_upload_flow_js(html, selector, fake_name, nonce="n1", pre_js=""):
     Returns ``(info, verify_raw, form_raw)``."""
     if not NODE:
         pytest.skip("node not on PATH")
-    probe = subprocess.run([NODE, "-e", "require.resolve('jsdom')"], cwd=REPO,
-                           capture_output=True, text=True)
+    probe = subprocess.run([NODE, "-e", "require.resolve('jsdom')"], cwd=REPO, capture_output=True, text=True)
     if probe.returncode != 0:
         pytest.skip("jsdom not installed (run npm ci in apps/web or the repo root)")
     harness = (
         "const { JSDOM } = require('jsdom');\n"
         "const dom = new JSDOM(" + json.dumps(html) + ", {runScripts: 'dangerously'});\n"
         "global.window = dom.window; global.document = dom.window.document; global.CSS = dom.window.CSS;\n"
-        + pre_js + "\n"
+        + pre_js
+        + "\n"
         "const info = JSON.parse((0, eval)(" + json.dumps(forms.upload_js(selector, nonce)) + "));\n"
         "const inp = document.querySelector(info.selector);\n"
         "inp.setAttribute('data-fake-name', " + json.dumps(fake_name) + ");\n"
         "inp.dispatchEvent(new dom.window.Event('change', {bubbles: true}));\n"
-        "const verifyTpl = " + json.dumps(forms.upload_verify_js(
-            "@@SEL@@", "@@ID@@", "@@NAME@@", "@@CONTAINER@@", fake_name, "@@LFOR@@", "@@LTEXT@@",
-            "@@FBOX@@", "@@GLABEL@@")) + ";\n"
+        "const verifyTpl = "
+        + json.dumps(
+            forms.upload_verify_js(
+                "@@SEL@@",
+                "@@ID@@",
+                "@@NAME@@",
+                "@@CONTAINER@@",
+                fake_name,
+                "@@LFOR@@",
+                "@@LTEXT@@",
+                "@@FBOX@@",
+                "@@GLABEL@@",
+            )
+        )
+        + ";\n"
         "const sub = {SEL: info.selector, ID: info.id, NAME: info.name, CONTAINER: info.container,\n"
         "  LFOR: info.label_for, LTEXT: info.label_text, FBOX: info.field_box, GLABEL: info.group_label};\n"
         "let v = verifyTpl; for (const k in sub) v = v.split(JSON.stringify('@@' + k + '@@')).join(JSON.stringify(sub[k] || ''));\n"
@@ -3168,11 +3527,13 @@ def test_upload_verifies_via_the_field_box_alone_when_the_group_label_is_missing
     """Review: the group-label text fallback alone also found the chip, so the test above passed
     with the field-box lookup disabled. Strip the group's label so ONLY the field box captured
     before the attach can lead the verify (and form_read) to the chip."""
-    pre = ("var g=document.querySelector('[aria-labelledby=\"upload-label-resume\"]');"
-           "g.removeAttribute('aria-labelledby');"
-           "document.getElementById('upload-label-resume').remove();")
+    pre = (
+        "var g=document.querySelector('[aria-labelledby=\"upload-label-resume\"]');"
+        "g.removeAttribute('aria-labelledby');"
+        "document.getElementById('upload-label-resume').remove();"
+    )
     info, verify, form = _run_upload_flow_js(_GH_CHIP_HTML, "#resume", "resume-gitlab.pdf", pre_js=pre)
-    assert info["group_label"] == "Attach"           # no group label → the text fallback can't match
+    assert info["group_label"] == "Attach"  # no group label → the text fallback can't match
     out = forms.render_upload(verify, "#resume", "resume-gitlab.pdf", label=info["label"])
     assert out.startswith("Uploaded resume-gitlab.pdf to"), out
     assert "verified via the field's displayed filename" in out
@@ -3227,7 +3588,7 @@ def test_neighbours_chip_never_falsely_verifies_a_same_named_upload():
     out = forms.render_upload(verify, "#resume", "cv.pdf", label=info["label"])
     assert out.startswith("Error:") and "nothing is attached" in out, out
     read = forms.render_form_read(form)
-    assert read == "No form fields found.", read     # NOT a resume row borrowing "cv.pdf"
+    assert read == "No form fields found.", read  # NOT a resume row borrowing "cv.pdf"
 
 
 def test_form_read_reports_the_removed_greenhouse_input_under_its_id():
@@ -3275,7 +3636,7 @@ def test_register_preflights_so_a_broken_setup_is_visible_before_the_first_call(
     _probe_env(monkeypatch, which=None)
     reg = _registry()
     _PKG.register(reg)
-    assert preflight.CLI_GAP in reg.setup_gaps          # the banner is up at load time
+    assert preflight.CLI_GAP in reg.setup_gaps  # the banner is up at load time
     assert {t.name for t in reg.tools} == EXPECTED_TOOLS  # …and the tools still register
 
 
@@ -3295,12 +3656,12 @@ def test_the_real_loader_finds_the_bundled_plugin_and_honours_enabled_false(monk
 
     monkeypatch.setattr(loader, "_plugin_roots", lambda config: [REPO / "plugins"])
     off = loader.load_plugins(LangGraphConfig(plugins_enabled=[]))
-    assert not any(t.name.startswith("browser_") for t in off.tools)   # ships disabled
+    assert not any(t.name.startswith("browser_") for t in off.tools)  # ships disabled
 
     _probe_env(monkeypatch, which="/opt/ab")
     on = loader.load_plugins(LangGraphConfig(plugins_enabled=["agent_browser"]))
     assert EXPECTED_TOOLS <= {t.name for t in on.tools}
-    assert "/plugins/agent_browser/panel" in on.public_paths   # the view page is public chrome
+    assert "/plugins/agent_browser/panel" in on.public_paths  # the view page is public chrome
 
 
 # ── manifest / catalog coherence + settings ──────────────────────────────────────
@@ -3343,9 +3704,21 @@ def test_the_import_dropped_the_standalone_repo_scaffolding():
     with the release)."""
     m = _manifest()
     assert "repository" not in m and "min_protoagent_version" not in m
-    for gone in ("pyproject.toml", "requirements.txt", "requirements-dev.txt", ".gitignore",
-                 "PROTO.md", "CLAUDE.md", "AGENTS.md", "CHANGELOG.md", ".github", ".beads",
-                 ".ruff_cache", "tests", "conftest.py"):
+    for gone in (
+        "pyproject.toml",
+        "requirements.txt",
+        "requirements-dev.txt",
+        ".gitignore",
+        "PROTO.md",
+        "CLAUDE.md",
+        "AGENTS.md",
+        "CHANGELOG.md",
+        ".github",
+        ".beads",
+        ".ruff_cache",
+        "tests",
+        "conftest.py",
+    ):
         assert not (ROOT / gone).exists(), f"{gone} should not be vendored"
     # the repo's tests/ came across as tests/test_agent_browser_plugin.py, which runs in
     # the host suite — a vendored tests/ dir would be collected twice and drift
@@ -3432,7 +3805,7 @@ def test_a_server_note_is_escaped_before_it_reaches_innerhtml():
 
     html = TestClient(_app({})).get("/plugins/agent_browser/panel").text
     assert "function esc(" in html
-    assert "esc(note)" in html   # the note is escaped, not concatenated raw
+    assert "esc(note)" in html  # the note is escaped, not concatenated raw
 
 
 def test_stream_ticket_route_mints_a_ticket():
@@ -3458,8 +3831,7 @@ def test_stream_ws_accepts_valid_ticket_then_reports_no_page(monkeypatch):
 
     # resolve returns no page → the handler accepts, sends an error frame, and closes
     # (exercises the ticket gate + accept path without a real browser/CDP).
-    monkeypatch.setattr(bp.browser_stream, "resolve_page_target",
-                        lambda binary, timeout: (None, "no page open"))
+    monkeypatch.setattr(bp.browser_stream, "resolve_page_target", lambda binary, timeout: (None, "no page open"))
     c = TestClient(_app())
     ticket = c.post("/api/plugins/agent_browser/stream-ticket").json()["ticket"]
     with c.websocket_connect(f"/api/plugins/agent_browser/stream?ticket={ticket}") as ws:
@@ -3471,8 +3843,9 @@ def test_stream_ws_turns_a_missing_binary_into_the_setup_sentence(monkeypatch):
     the tools gave the model. It now says what to do, matching the operator banner."""
     from fastapi.testclient import TestClient
 
-    monkeypatch.setattr(bp.browser_stream, "resolve_page_target",
-                        lambda binary, timeout: (None, "'agent-browser' not on PATH"))
+    monkeypatch.setattr(
+        bp.browser_stream, "resolve_page_target", lambda binary, timeout: (None, "'agent-browser' not on PATH")
+    )
     _probe_env(monkeypatch, which=None)
     c = TestClient(_app())
     ticket = c.post("/api/plugins/agent_browser/stream-ticket").json()["ticket"]
@@ -3487,8 +3860,8 @@ def test_stream_ticket_is_single_use():
 
     c = TestClient(_app())
     ticket = c.post("/api/plugins/agent_browser/stream-ticket").json()["ticket"]
-    assert bp.browser_stream.consume_ticket(ticket) is True   # burn it directly
-    with pytest.raises(WebSocketDisconnect):                  # replay is rejected
+    assert bp.browser_stream.consume_ticket(ticket) is True  # burn it directly
+    with pytest.raises(WebSocketDisconnect):  # replay is rejected
         with c.websocket_connect(f"/api/plugins/agent_browser/stream?ticket={ticket}"):
             pass
 
@@ -3562,7 +3935,7 @@ def test_the_dash_alias_and_its_cookie_gate_are_not_vendored():
     protected when it is not."""
     from fastapi.testclient import TestClient
 
-    c = TestClient(_app({"require_auth": True}))   # the key that used to arm it
+    c = TestClient(_app({"require_auth": True}))  # the key that used to arm it
     assert c.get("/plugins/agent_browser/panel/dash").status_code == 404
     assert c.post("/api/plugins/agent_browser/dash-session").status_code == 404
     # and the page no longer makes the two extra round-trips per connect
@@ -3582,7 +3955,7 @@ def test_a_view_path_exemption_is_a_prefix_so_the_page_was_never_the_boundary():
     auth.set_public_prefixes(m.public_paths)
     try:
         assert auth._is_public("/plugins/agent_browser/panel") is True
-        assert auth._is_public("/plugins/agent_browser/panel/dash") is True    # the same door
+        assert auth._is_public("/plugins/agent_browser/panel/dash") is True  # the same door
         assert auth._is_public("/api/plugins/agent_browser/stream-ticket") is False
         assert auth._is_public("/api/plugins/agent_browser/nav") is False
     finally:
@@ -3603,8 +3976,7 @@ def test_the_capability_routes_are_the_ones_under_api():
 
 
 def test_http_base_from_ws_url():
-    assert bs._http_base_from_ws(
-        "ws://127.0.0.1:52886/devtools/browser/4580bed9") == "http://127.0.0.1:52886"
+    assert bs._http_base_from_ws("ws://127.0.0.1:52886/devtools/browser/4580bed9") == "http://127.0.0.1:52886"
 
 
 def _t(type_, url, ws="ws://x"):
@@ -3638,7 +4010,8 @@ def test_pick_page_none_when_no_pages():
 
 def test_mouse_down_maps_to_pressed_with_button_and_count():
     method, p = bs.input_to_cdp(
-        {"t": "mouse", "action": "down", "x": 10, "y": 20, "button": "left", "clickCount": 2, "buttons": 1})
+        {"t": "mouse", "action": "down", "x": 10, "y": 20, "button": "left", "clickCount": 2, "buttons": 1}
+    )
     assert method == "Input.dispatchMouseEvent"
     assert p["type"] == "mousePressed" and p["x"] == 10.0 and p["y"] == 20.0
     assert p["button"] == "left" and p["clickCount"] == 2 and p["buttons"] == 1
@@ -3662,8 +4035,7 @@ def test_wheel_maps_to_mousewheel_deltas():
 
 
 def test_key_down_with_text_carries_text_and_vkey():
-    method, p = bs.input_to_cdp(
-        {"t": "key", "action": "down", "key": "a", "code": "KeyA", "text": "a", "keyCode": 65})
+    method, p = bs.input_to_cdp({"t": "key", "action": "down", "key": "a", "code": "KeyA", "text": "a", "keyCode": 65})
     assert method == "Input.dispatchKeyEvent" and p["type"] == "keyDown"
     assert p["text"] == "a" and p["key"] == "a" and p["code"] == "KeyA"
     assert p["windowsVirtualKeyCode"] == 65 and p["nativeVirtualKeyCode"] == 65
@@ -3711,8 +4083,8 @@ def test_resolve_finds_active_page(monkeypatch):
 
 def test_ticket_mint_then_consume_is_single_use():
     t = bs.mint_ticket()
-    assert bs.consume_ticket(t) is True    # first use validates
-    assert bs.consume_ticket(t) is False   # replay is burned
+    assert bs.consume_ticket(t) is True  # first use validates
+    assert bs.consume_ticket(t) is False  # replay is burned
 
 
 def test_consume_rejects_unknown_and_empty():
@@ -3724,7 +4096,7 @@ def test_ticket_expires_after_ttl(monkeypatch):
     clock = {"t": 1000.0}
     monkeypatch.setattr(bs.time, "monotonic", lambda: clock["t"])
     t = bs.mint_ticket()
-    clock["t"] += bs._TICKET_TTL + 1     # advance past the TTL
+    clock["t"] += bs._TICKET_TTL + 1  # advance past the TTL
     assert bs.consume_ticket(t) is False
 
 
@@ -3752,10 +4124,14 @@ def test_viewport_metrics_floors_degenerate():
 # backgrounded/occluded/unfocused page — including every headless one, since headless is
 # the default and "unfocused" by definition — reports visibilityState "hidden" and has its
 # timers + requestAnimationFrame throttled, so rAF animations never start.
-_ANTI_THROTTLE = {"--disable-backgrounding-occluded-windows", "--disable-renderer-backgrounding",
-                  "--disable-background-timer-throttling"}
-_ANTI_THROTTLE_ARGS = ("--disable-backgrounding-occluded-windows,"
-                       "--disable-renderer-backgrounding,--disable-background-timer-throttling")
+_ANTI_THROTTLE = {
+    "--disable-backgrounding-occluded-windows",
+    "--disable-renderer-backgrounding",
+    "--disable-background-timer-throttling",
+}
+_ANTI_THROTTLE_ARGS = (
+    "--disable-backgrounding-occluded-windows,--disable-renderer-backgrounding,--disable-background-timer-throttling"
+)
 
 
 def test_headless_default_injects_anti_throttle_args():
@@ -3770,11 +4146,29 @@ def test_headless_default_injects_anti_throttle_args():
 
 def test_curated_flags_stable_order():
     # headless now also appends the anti-throttle --args, after the curated flags (#4510)
-    f = rt.launch_flags({"profile": "P", "device": "iPhone 16 Pro",
-                         "allowed_domains": "x.com", "confirm_actions": "nav", "max_output": 500})
-    assert f == ["--profile", "P", "--device", "iPhone 16 Pro",
-                 "--allowed-domains", "x.com", "--confirm-actions", "nav", "--max-output", "500",
-                 "--args", _ANTI_THROTTLE_ARGS]
+    f = rt.launch_flags(
+        {
+            "profile": "P",
+            "device": "iPhone 16 Pro",
+            "allowed_domains": "x.com",
+            "confirm_actions": "nav",
+            "max_output": 500,
+        }
+    )
+    assert f == [
+        "--profile",
+        "P",
+        "--device",
+        "iPhone 16 Pro",
+        "--allowed-domains",
+        "x.com",
+        "--confirm-actions",
+        "nav",
+        "--max-output",
+        "500",
+        "--args",
+        _ANTI_THROTTLE_ARGS,
+    ]
 
 
 def test_headed_injects_anti_throttle_args():
@@ -3887,8 +4281,9 @@ def _skill_text() -> str:
 
 
 def _workflow_docs() -> list[tuple[str, dict]]:
-    return [(p.name, yaml.safe_load(p.read_text(encoding="utf-8")))
-            for p in sorted((ROOT / "workflows").glob("*.yaml"))]
+    return [
+        (p.name, yaml.safe_load(p.read_text(encoding="utf-8"))) for p in sorted((ROOT / "workflows").glob("*.yaml"))
+    ]
 
 
 def test_the_sweep_actually_finds_this_plugin_s_tools():
@@ -3904,7 +4299,7 @@ def test_every_tool_the_skill_declares_exists():
     declared = set(skill.tools_used or [])
     assert declared, "the web-browse skill should declare its tools"
     assert declared <= EXPECTED_TOOLS, sorted(declared - EXPECTED_TOOLS)
-    assert "browser_pdf" in declared   # the new capability is discoverable
+    assert "browser_pdf" in declared  # the new capability is discoverable
 
 
 def test_the_skill_frontmatter_lists_the_form_filling_tools():
@@ -3925,12 +4320,12 @@ def test_the_skill_has_a_filling_forms_section_with_the_form_doctrine():
     assert "## Filling forms" in text
     assert "browser_form_read" in text and "browser_select" in text and "browser_upload" in text
     low = text.lower()
-    assert "label" in low and "@en" in low                       # address by label, not @eN
-    assert "never" in low and "type" in low and "enter" in low   # never type-and-Enter for selects
-    assert "country" in low and "number" in low                  # country before the number
-    assert "browser_pdf" in text                                 # upload a file made with browser_pdf
-    assert "js_fallback" in low                                  # the click fallback is taught
-    assert "submit" in low and ("captcha" in low or "login" in low)   # consent + human steps
+    assert "label" in low and "@en" in low  # address by label, not @eN
+    assert "never" in low and "type" in low and "enter" in low  # never type-and-Enter for selects
+    assert "country" in low and "number" in low  # country before the number
+    assert "browser_pdf" in text  # upload a file made with browser_pdf
+    assert "js_fallback" in low  # the click fallback is taught
+    assert "submit" in low and ("captcha" in low or "login" in low)  # consent + human steps
 
 
 def test_every_backticked_identifier_in_the_skill_is_a_real_tool():
@@ -3966,12 +4361,19 @@ def test_the_workflows_are_loader_valid_recipes():
 
 def test_the_bundled_plugin_ships_a_readme_that_names_the_setup_and_the_fence():
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
-    assert "npm i -g agent-browser" in readme          # the one external requirement
-    assert "setup gap" in readme                        # (a)
-    assert "fence" in readme                            # (c)
-    assert "browser_pdf" in readme                      # (d)
-    for f in ("tools.py", "browser_panel.py", "browser_stream.py", "runtime.py",
-              "storage.py", "preflight.py", "__init__.py"):
+    assert "npm i -g agent-browser" in readme  # the one external requirement
+    assert "setup gap" in readme  # (a)
+    assert "fence" in readme  # (c)
+    assert "browser_pdf" in readme  # (d)
+    for f in (
+        "tools.py",
+        "browser_panel.py",
+        "browser_stream.py",
+        "runtime.py",
+        "storage.py",
+        "preflight.py",
+        "__init__.py",
+    ):
         assert f in readme, f"the README should list {f}"
 
 
@@ -3983,8 +4385,9 @@ def test_the_docs_guide_exists_and_is_in_the_sidebar():
     reference = (REPO / "docs" / "reference" / "browser-automation.md").read_text(encoding="utf-8")
     assert "agent-browser install" in reference and "browser_pdf" in reference
     navigation = json.loads((REPO / "docs" / ".vitepress" / "navigation.json").read_text(encoding="utf-8"))
-    links = {item["link"] for sidebar in navigation["sidebars"]
-             for group in sidebar["groups"] for item in group["items"]}
+    links = {
+        item["link"] for sidebar in navigation["sidebars"] for group in sidebar["groups"] for item in group["items"]
+    }
     assert {"/guides/browser-automation", "/reference/browser-automation"} <= links
 
 
@@ -3992,10 +4395,10 @@ def test_the_plugin_directory_row_is_bundled_and_the_catalog_is_regenerated():
     directory = yaml.safe_load((REPO / "config" / "plugin-directory.yaml").read_text(encoding="utf-8"))
     row = next(r for r in directory["plugins"] if r["id"] == "agent_browser")
     assert row["bundled"] is True
-    assert "repo" not in row      # a bundled row's source link is derived from the tree
+    assert "repo" not in row  # a bundled row's source link is derived from the tree
     catalog = json.loads((REPO / "config" / "plugin-catalog.json").read_text(encoding="utf-8"))
     entry = next(p for p in catalog["plugins"] if p["id"] == "agent_browser")
-    assert RETIRED_REPO not in json.dumps(entry)   # no install-from-the-retired-repo link
+    assert RETIRED_REPO not in json.dumps(entry)  # no install-from-the-retired-repo link
 
 
 def test_the_readme_and_tool_reference_list_the_bundled_plugin():
@@ -4017,14 +4420,37 @@ def test_the_real_cli_still_has_every_subcommand_and_flag_the_plugin_sends():
     """Upstream is a separately-released native binary; the standalone CI mocked it
     entirely, so a renamed subcommand would have shipped green. Read its own help."""
     help_text = subprocess.run([CLI, "--help"], capture_output=True, text=True, timeout=60).stdout
-    for verb in ("open", "back", "forward", "reload", "snapshot", "click", "fill", "type",
-                 "press", "hover", "eval", "screenshot", "pdf", "upload", "close"):
+    for verb in (
+        "open",
+        "back",
+        "forward",
+        "reload",
+        "snapshot",
+        "click",
+        "fill",
+        "type",
+        "press",
+        "hover",
+        "eval",
+        "screenshot",
+        "pdf",
+        "upload",
+        "close",
+    ):
         assert re.search(rf"^\s+{re.escape(verb)}\b", help_text, re.M), f"CLI lost `{verb}`"
     # `get <what>` is documented as its own group, and the plugin sends text/html/value
     assert "agent-browser get <what>" in help_text
     assert re.search(r"^\s+text, html, value\b", help_text, re.M), "CLI changed `get` subjects"
-    for flag in ("--headed", "--profile", "--device", "--allowed-domains", "--confirm-actions",
-                 "--max-output", "--user-agent", "--args"):
+    for flag in (
+        "--headed",
+        "--profile",
+        "--device",
+        "--allowed-domains",
+        "--confirm-actions",
+        "--max-output",
+        "--user-agent",
+        "--args",
+    ):
         assert flag in help_text, f"CLI lost {flag} (runtime.launch_flags would fail)"
 
 
@@ -4034,6 +4460,7 @@ def test_the_real_cli_really_does_eat_a_leading_dash_operand():
     CLI scans the WHOLE argv for options, so a third-positional `--help` is consumed as
     one, and there is no `--` end-of-options escape. If upstream ever fixes that, this
     test is where we find out (and the guard can relax)."""
+
     def run(*args):
         env = {**os.environ, "AGENT_BROWSER_SESSION": f"protoagent-argv-{os.getpid()}"}
         return subprocess.run([CLI, *args], capture_output=True, text=True, timeout=60, env=env).stdout
@@ -4052,8 +4479,7 @@ async def test_the_real_cli_prints_us_letter_and_ignores_css_page_size(monkeypat
     pypdf = pytest.importorskip("pypdf")
     monkeypatch.setenv("AGENT_BROWSER_SESSION", f"protoagent-pagesize-{os.getpid()}")
     page = tmp_path / "a4.html"
-    page.write_text("<!doctype html><style>@page { size: A4; margin: 0 }</style><h1>A4 probe</h1>",
-                    encoding="utf-8")
+    page.write_text("<!doctype html><style>@page { size: A4; margin: 0 }</style><h1>A4 probe</h1>", encoding="utf-8")
     t = _toolmap({"binary": "agent-browser", "timeout_s": 120})
     try:
         opened = await t["browser_open"].ainvoke({"url": page.as_uri()})
@@ -4140,7 +4566,7 @@ async def test_the_real_cli_prints_a_real_pdf_into_the_fence(monkeypatch):
 
 posix_only = pytest.mark.skipif(os.name == "nt", reason="drives an executable #! fake CLI (POSIX exec)")
 
-_FAKE_CLI = '''#!{python} -S
+_FAKE_CLI = """#!{python} -S
 import os, sys, time, pathlib
 ST = pathlib.Path({state!r})
 
@@ -4188,7 +4614,7 @@ if verb in ("pdf", "screenshot"):
         (ST / ("done_" + verb)).write_text("1")
     sys.exit(0)
 print("ok")
-'''
+"""
 
 
 class _FakeCLI:
@@ -4251,8 +4677,8 @@ async def test_m1_a_cancelled_re_export_never_loses_the_last_good_file(fake_cli)
     task.cancel()
     with pytest.raises(asyncio.CancelledError):
         await task
-    assert (root / "resume.pdf").read_bytes() == b"%PDF-1.4 LAST-GOOD"   # right where it was
-    await fake_cli.reached("done_pdf")                                    # let the orphan finish
+    assert (root / "resume.pdf").read_bytes() == b"%PDF-1.4 LAST-GOOD"  # right where it was
+    await fake_cli.reached("done_pdf")  # let the orphan finish
     fake_cli.set("mode", "write")
     fake_cli.set("tag", "NEXT")
     assert "Saved to" in await t["browser_pdf"].ainvoke({"path": "resume.pdf"})
@@ -4293,13 +4719,13 @@ async def test_m2_a_kill_9_mid_capture_never_loses_the_last_good_file(fake_cli, 
     """)
     proc = subprocess.Popen([sys.executable, "-c", child], cwd=str(REPO), env=dict(os.environ))
     try:
-        await fake_cli.reached("started_pdf", timeout=90)   # the child is mid-capture…
-        proc.kill()                                           # …and dies without cleanup
+        await fake_cli.reached("started_pdf", timeout=90)  # the child is mid-capture…
+        proc.kill()  # …and dies without cleanup
         proc.wait(timeout=30)
     finally:
         if proc.poll() is None:
             proc.kill()
-    assert seen.read_text() == str(root)                     # the child used THIS instance
+    assert seen.read_text() == str(root)  # the child used THIS instance
     assert (root / "resume.pdf").read_bytes() == b"%PDF-1.4 LAST-GOOD"
     await fake_cli.reached("done_pdf", timeout=30)
     fake_cli.set("mode", "write")
@@ -4320,11 +4746,11 @@ async def test_m3_a_failing_concurrent_export_never_deletes_the_winners_file(fak
     fake_cli.clear("started_pdf", "lock_first")
     fake_cli.set("mode", "first-slowfail-else-write")
     a = asyncio.create_task(t["browser_pdf"].ainvoke({"path": "report.pdf"}))
-    await fake_cli.reached("started_pdf")                         # A is rendering (and will fail)
-    rb = await t["browser_pdf"].ainvoke({"path": "report.pdf"})   # B finishes first
+    await fake_cli.reached("started_pdf")  # A is rendering (and will fail)
+    rb = await t["browser_pdf"].ainvoke({"path": "report.pdf"})  # B finishes first
     ra = await a
     assert "Saved to" in rb and ra.startswith("Error:"), (ra, rb)
-    assert (root / "report.pdf").read_bytes() == b"%PDF-1.4 B-BYTES"   # B's output stands
+    assert (root / "report.pdf").read_bytes() == b"%PDF-1.4 B-BYTES"  # B's output stands
     assert _hidden(root) == []
 
 
@@ -4359,19 +4785,19 @@ async def test_m4_another_captures_prune_never_takes_a_file_mid_re_export(fake_c
     fake_cli.set("tag", "LAST-GOOD-RESUME")
     await t["browser_pdf"].ainvoke({"path": "resume.pdf"})
     day_ago = time.time() - 86400
-    os.utime(root / "resume.pdf", (day_ago, day_ago))            # yesterday: the OLDEST capture
+    os.utime(root / "resume.pdf", (day_ago, day_ago))  # yesterday: the OLDEST capture
     for i in range(2):
         await t["browser_screenshot"].ainvoke({"path": f"shot{i}.png"})
     monkeypatch.setattr(storage, "MAX_CAPTURE_FILES", 3)
     fake_cli.clear("started_pdf")
     fake_cli.set("mode_pdf", "slowfail")
     fake_cli.set("mode_screenshot", "write")
-    a = asyncio.create_task(t["browser_pdf"].ainvoke({"path": "resume.pdf"}))   # will fail
+    a = asyncio.create_task(t["browser_pdf"].ainvoke({"path": "resume.pdf"}))  # will fail
     await fake_cli.reached("started_pdf")
     # Calls on ONE session are serialised, so the racing capture comes from ANOTHER session
     # sharing the capture store (a second agent / subagent) — still a live prune mid-export.
     monkeypatch.setenv("AGENT_BROWSER_SESSION", "m4-other-session")
-    assert "Saved to" in await t["browser_screenshot"].ainvoke({"path": "shot2.png"})   # prunes now
+    assert "Saved to" in await t["browser_screenshot"].ainvoke({"path": "shot2.png"})  # prunes now
     assert (await a).startswith("Error:")
     assert (root / "resume.pdf").read_bytes() == b"%PDF-1.4 LAST-GOOD-RESUME"
     assert _hidden(root) == []
@@ -4395,7 +4821,7 @@ async def test_a_name_near_the_filesystem_limit_can_be_re_exported(fake_cli):
 def test_temp_names_are_short_fixed_and_keep_the_extension():
     temp = storage.temp_path_for(Path("/x") / ("r" * 250 + ".pdf"))
     assert temp.parent == Path("/x") and temp.suffix == ".pdf" and storage.is_temp(temp)
-    assert len(temp.name) <= 32                      # never embeds the (long) stem
+    assert len(temp.name) <= 32  # never embeds the (long) stem
 
 
 async def test_orphaned_temps_are_swept_and_live_ones_are_left_alone(monkeypatch):
@@ -4454,7 +4880,7 @@ async def test_an_unstartable_binary_raises_the_banner_at_boot_and_stops_re_prob
     tool = next(x for x in reg.tools if x.name == "browser_snapshot")
     for _ in range(5):
         assert "could not be started" in await tool.ainvoke({})
-    assert probes == []                     # the banner is up: no re-probe per call
+    assert probes == []  # the banner is up: no re-probe per call
 
 
 @needs_cli
@@ -4501,14 +4927,15 @@ def test_nav_uses_the_same_grammar_not_any_leading_dash(monkeypatch):
     monkeypatch.setattr(bp.subprocess, "run", fake_run(record=rec))
     body = TestClient(_app()).post("/api/plugins/agent_browser/nav", json={"action": "open", "url": "-1"}).json()
     assert body["ok"] is True and rec[-1][-2:] == ["open", "-1"]
-    assert bp.bad_operand is rt.bad_operand is tools.bad_operand   # ONE guard, not two copies
+    assert bp.bad_operand is rt.bad_operand is tools.bad_operand  # ONE guard, not two copies
 
 
 def test_whitespace_only_cdp_output_returns_a_note_not_an_exception(monkeypatch):
-    monkeypatch.setattr(bs.subprocess, "run",
-                        lambda args, **kw: types.SimpleNamespace(returncode=0, stdout="\n", stderr=""))
+    monkeypatch.setattr(
+        bs.subprocess, "run", lambda args, **kw: types.SimpleNamespace(returncode=0, stdout="\n", stderr="")
+    )
     ws, note = bs.resolve_page_target("ab")
-    assert ws is None and note          # the documented (None, note) — never IndexError
+    assert ws is None and note  # the documented (None, note) — never IndexError
 
 
 def test_the_panel_stream_reports_a_blank_cdp_answer_instead_of_dropping_the_socket(monkeypatch):
@@ -4516,8 +4943,9 @@ def test_the_panel_stream_reports_a_blank_cdp_answer_instead_of_dropping_the_soc
     reach the client as a closed socket instead of the {"t": "error"} note."""
     from fastapi.testclient import TestClient
 
-    monkeypatch.setattr(bs.subprocess, "run",
-                        lambda args, **kw: types.SimpleNamespace(returncode=0, stdout="\n", stderr=""))
+    monkeypatch.setattr(
+        bs.subprocess, "run", lambda args, **kw: types.SimpleNamespace(returncode=0, stdout="\n", stderr="")
+    )
     c = TestClient(_app())
     ticket = c.post("/api/plugins/agent_browser/stream-ticket").json()["ticket"]
     with c.websocket_connect(f"/api/plugins/agent_browser/stream?ticket={ticket}") as ws:
@@ -4610,8 +5038,9 @@ async def test_a_timed_out_cli_whose_children_hold_the_pipes_cannot_pin_a_worker
     in its own session and a timeout kills the whole group."""
     pids = tmp_path / "pids"
     cli = tmp_path / "hangs"
-    cli.write_text(f"#!/bin/sh\nsleep 300 &\necho $! >> '{pids}'\nsleep 300 &\necho $! >> '{pids}'\nwait\n",
-                   encoding="utf-8")
+    cli.write_text(
+        f"#!/bin/sh\nsleep 300 &\necho $! >> '{pids}'\nsleep 300 &\necho $! >> '{pids}'\nwait\n", encoding="utf-8"
+    )
     cli.chmod(0o755)
     t = _toolmap({"binary": str(cli), "timeout_s": 1})
     started = time.monotonic()
@@ -4621,7 +5050,7 @@ async def test_a_timed_out_cli_whose_children_hold_the_pipes_cannot_pin_a_worker
         assert "timed out" in out and time.monotonic() - started < 15
         recorded = [int(x) for x in pids.read_text().split()]
         deadline = time.monotonic() + 5
-        while True:                                   # the group kill reached the sleeps too
+        while True:  # the group kill reached the sleeps too
             alive = []
             for pid in recorded:
                 try:
@@ -4651,7 +5080,8 @@ async def test_a_cli_that_exits_but_leaves_a_descendant_holding_the_pipes_still_
         "g = subprocess.Popen([sys.executable, '-S', '-c', 'import time; time.sleep(300)'], start_new_session=True)\n"
         f"pathlib.Path({str(pidfile)!r}).write_text(str(g.pid))\n"
         "print('hello')\n",
-        encoding="utf-8")
+        encoding="utf-8",
+    )
     cli.chmod(0o755)
     t = _toolmap({"binary": str(cli), "timeout_s": 30})
     try:

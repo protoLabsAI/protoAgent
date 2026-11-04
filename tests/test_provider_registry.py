@@ -210,9 +210,7 @@ def test_two_gateways_build_against_their_own_endpoints():
         ("codex", "openai-codex", "gpt-5.6-sol"),
     ],
 )
-def test_registered_subscription_ids_dispatch_to_their_provider_type(
-    monkeypatch, connection_id, provider_type, model
-):
+def test_registered_subscription_ids_dispatch_to_their_provider_type(monkeypatch, connection_id, provider_type, model):
     """The operator chooses an id, but the client builder must route on its TYPE.
 
     This covers the exact add-connection shape: friendly ids such as ``claude`` and

@@ -224,7 +224,9 @@ def test_incognito_and_goal_turns_never_invoke_the_loader(monkeypatch, policy):
     loader, calls = _spy_loader()
     opts = ProjectionOptions(prior_sessions_policy=policy)
 
-    p = compose_projected_context("q", None, None, {}, incognito=True, record=False, options=opts, prior_sessions=loader)
+    p = compose_projected_context(
+        "q", None, None, {}, incognito=True, record=False, options=opts, prior_sessions=loader
+    )
     assert calls["n"] == 0 and "prior_sessions" not in p.sources
 
     monkeypatch.setattr("graph.projection._in_goal_turn", lambda: True)
@@ -236,8 +238,13 @@ def test_off_never_invokes_the_loader_and_emits_no_source(monkeypatch):
     _quiet_working_state(monkeypatch)
     loader, calls = _spy_loader()
     p = compose_projected_context(
-        "q", None, None, {}, record=False,
-        options=ProjectionOptions(prior_sessions_policy="off"), prior_sessions=loader,
+        "q",
+        None,
+        None,
+        {},
+        record=False,
+        options=ProjectionOptions(prior_sessions_policy="off"),
+        prior_sessions=loader,
     )
     assert calls["n"] == 0
     assert "prior_sessions" not in p.sources and "<prior_sessions" not in p.text
@@ -252,8 +259,13 @@ def test_newest_default_invokes_the_loader_with_query_and_active_sid(monkeypatch
         return DigestResult(render_digest(_entries(1)), _entries(1))
 
     p = compose_projected_context(
-        "what changed?", None, None, {"session_id": "sess-42"}, record=False,
-        options=ProjectionOptions(), prior_sessions=loader,
+        "what changed?",
+        None,
+        None,
+        {"session_id": "sess-42"},
+        record=False,
+        options=ProjectionOptions(),
+        prior_sessions=loader,
     )
     assert seen == {"query": "what changed?", "exclude_session_id": "sess-42"}
     assert p.digest_ids == ["s1"] and "prior_sessions" in p.sources
@@ -269,13 +281,20 @@ def test_budget_sheds_digest_entries_from_the_end_then_the_section(monkeypatch):
     entries = _entries(3)
     loader = lambda **kw: DigestResult(render_digest(entries), list(entries))  # noqa: E731
 
-    full = compose_projected_context("", None, None, {}, record=False, options=ProjectionOptions(), prior_sessions=loader)
+    full = compose_projected_context(
+        "", None, None, {}, record=False, options=ProjectionOptions(), prior_sessions=loader
+    )
     assert full.digest_ids == ["s1", "s2", "s3"]
 
     two = render_digest(entries[:2])
     p = compose_projected_context(
-        "", None, None, {}, record=False,
-        options=ProjectionOptions(budget_chars=len(full.text) - 1), prior_sessions=loader,
+        "",
+        None,
+        None,
+        {},
+        record=False,
+        options=ProjectionOptions(budget_chars=len(full.text) - 1),
+        prior_sessions=loader,
     )
     # Oldest (the END of keep-first ordering) dropped first; the header survives.
     assert p.digest_ids == ["s1", "s2"]
@@ -288,8 +307,13 @@ def test_budget_sheds_digest_entries_from_the_end_then_the_section(monkeypatch):
 
     # A budget below every entry drops the whole section.
     tiny = compose_projected_context(
-        "", None, None, {}, record=False,
-        options=ProjectionOptions(budget_chars=1), prior_sessions=loader,
+        "",
+        None,
+        None,
+        {},
+        record=False,
+        options=ProjectionOptions(budget_chars=1),
+        prior_sessions=loader,
     )
     assert tiny.digest_ids == [] and "<prior_sessions" not in tiny.text
     assert tiny.overflow[0]["label"] == "Prior sessions" and tiny.overflow[0]["dropped_items"] == 3
@@ -300,14 +324,25 @@ def test_legacy_two_tuple_loader_still_sheds_as_one_unit(monkeypatch):
     block = render_digest(_entries(3))
     loader = lambda: (block, ["s1", "s2", "s3"])  # noqa: E731 — zero-arg legacy shape
 
-    full = compose_projected_context("", None, None, {}, record=False, options=ProjectionOptions(), prior_sessions=loader)
+    full = compose_projected_context(
+        "", None, None, {}, record=False, options=ProjectionOptions(), prior_sessions=loader
+    )
     assert full.digest_ids == ["s1", "s2", "s3"]
     p = compose_projected_context(
-        "", None, None, {}, record=False,
-        options=ProjectionOptions(budget_chars=len(full.text) - 1), prior_sessions=loader,
+        "",
+        None,
+        None,
+        {},
+        record=False,
+        options=ProjectionOptions(budget_chars=len(full.text) - 1),
+        prior_sessions=loader,
     )
     assert p.digest_ids == [] and "<prior_sessions" not in p.text
-    assert p.overflow[0] == {"label": "Prior sessions", "dropped_items": 3, "dropped_chars": len(full.text) - len(p.text)}
+    assert p.overflow[0] == {
+        "label": "Prior sessions",
+        "dropped_items": 3,
+        "dropped_chars": len(full.text) - len(p.text),
+    }
 
 
 def test_render_digest_round_trips_the_loader_bytes(tmp_path):
@@ -374,8 +409,13 @@ def test_bare_off_reaches_the_projection_as_off():
 
 
 def test_from_config_reads_and_normalizes_the_policy():
-    assert ProjectionOptions.from_config(SimpleNamespace(context_prior_sessions=" RELEVANT ")).prior_sessions_policy == "relevant"
-    assert ProjectionOptions.from_config(SimpleNamespace(context_prior_sessions="bogus")).prior_sessions_policy == "newest"
+    assert (
+        ProjectionOptions.from_config(SimpleNamespace(context_prior_sessions=" RELEVANT ")).prior_sessions_policy
+        == "relevant"
+    )
+    assert (
+        ProjectionOptions.from_config(SimpleNamespace(context_prior_sessions="bogus")).prior_sessions_policy == "newest"
+    )
     assert ProjectionOptions.from_config(SimpleNamespace()).prior_sessions_policy == "newest"
 
 
@@ -412,9 +452,7 @@ def test_middleware_digest_refills_when_the_active_session_is_dropped(tmp_path):
     mw._prior_sessions_loaded_at = time.monotonic()
 
     def _ids(session_id: str) -> list[str]:
-        mw.compose_context(
-            {"messages": [HumanMessage(content="hi")], "session_id": session_id}, record=False
-        )
+        mw.compose_context({"messages": [HumanMessage(content="hi")], "session_id": session_id}, record=False)
         return list(mw._prior_sessions_ids)
 
     mine = _ids("active")
@@ -438,9 +476,7 @@ def test_modern_loader_raising_typeerror_is_not_retried_bare(monkeypatch):
         calls["n"] += 1
         raise TypeError("boom inside the loader")
 
-    p = compose_projected_context(
-        "q", None, None, {}, record=False, options=ProjectionOptions(), prior_sessions=loader
-    )
+    p = compose_projected_context("q", None, None, {}, record=False, options=ProjectionOptions(), prior_sessions=loader)
     assert calls["n"] == 1  # invoked once, not retried
     assert p.digest_ids == [] and "<prior_sessions" not in p.text
 
@@ -457,8 +493,13 @@ def test_off_policy_holds_when_constructed_uppercase(monkeypatch):
     _quiet_working_state(monkeypatch)
     loader, calls = _spy_loader()
     compose_projected_context(
-        "q", None, None, {}, record=False,
-        options=ProjectionOptions(prior_sessions_policy="OFF"), prior_sessions=loader,
+        "q",
+        None,
+        None,
+        {},
+        record=False,
+        options=ProjectionOptions(prior_sessions_policy="OFF"),
+        prior_sessions=loader,
     )
     assert calls["n"] == 0
 

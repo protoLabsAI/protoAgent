@@ -118,7 +118,8 @@ def test_manager_resolves_the_config_allowlist(monkeypatch):
     registry_tools = list(SUBAGENT_REGISTRY["researcher"].tools)
     monkeypatch.setattr(STATE, "graph", None)
     monkeypatch.setattr(
-        STATE, "graph_config",
+        STATE,
+        "graph_config",
         SimpleNamespace(researcher=SimpleNamespace(tools=["current_time"])),
     )
 

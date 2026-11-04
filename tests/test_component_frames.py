@@ -122,13 +122,13 @@ def test_fake_registry_raises_on_a_frame_the_host_would_refuse(frame, public_pat
 # the registry without them. These exercise the real loader so a frame that the manifest
 # exposes survives end-to-end (and one it doesn't is still refused + its kind dropped).
 
-_FRAME_PLUGIN = '''
+_FRAME_PLUGIN = """
 def _v(props):
     return None
 
 def register(registry):
     registry.register_component("thing-ref", _v, frame="component.html")
-'''
+"""
 
 
 def _make_frame_plugin(root: Path, pid: str, *, public_paths: list[str]) -> None:

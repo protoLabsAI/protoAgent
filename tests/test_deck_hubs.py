@@ -19,7 +19,15 @@ from deck.hubs import HubRow, HubTreeScreen
 from tests.test_deck_app import FakeBackend, _settle, _until
 
 
-def _hub_root(base: Path, name: str, *, members: int = 0, running_pids: list[int] | None = None, remotes: int = 0, server_pid: dict | None = None) -> Path:
+def _hub_root(
+    base: Path,
+    name: str,
+    *,
+    members: int = 0,
+    running_pids: list[int] | None = None,
+    remotes: int = 0,
+    server_pid: dict | None = None,
+) -> Path:
     root = base / name
     ws = root / "workspaces"
     ws.mkdir(parents=True)
@@ -32,7 +40,9 @@ def _hub_root(base: Path, name: str, *, members: int = 0, running_pids: list[int
         fleet[f"m{i}-{name}"] = {"pid": pid, "port": 7900 + i}
     (ws / "fleet.json").write_text(json.dumps(fleet))
     if remotes:
-        (ws / "remotes.json").write_text(json.dumps({f"r-{i}": {"name": f"r{i}", "url": f"https://r{i}:7870"} for i in range(remotes)}))
+        (ws / "remotes.json").write_text(
+            json.dumps({f"r-{i}": {"name": f"r{i}", "url": f"https://r{i}:7870"} for i in range(remotes)})
+        )
     if server_pid is not None:
         (root / "server.pid").write_text(json.dumps(server_pid))
     return root
@@ -45,17 +55,37 @@ def box(tmp_path, monkeypatch):
     own instance pointing somewhere unrelated."""
     home = tmp_path / "home"
     home.mkdir()
-    running = _hub_root(home, "main", members=2, running_pids=[4242], remotes=1, server_pid={"pid": 111, "port": 7870, "version": "0.165.0"})
+    running = _hub_root(
+        home,
+        "main",
+        members=2,
+        running_pids=[4242],
+        remotes=1,
+        server_pid={"pid": 111, "port": 7870, "version": "0.165.0"},
+    )
     (home / ".instances").mkdir()
-    (home / ".instances" / "111.json").write_text(json.dumps({"pid": 111, "port": 7870, "identity": "protoagent", "instance_root": str(running)}))
+    (home / ".instances" / "111.json").write_text(
+        json.dumps({"pid": 111, "port": 7870, "identity": "protoagent", "instance_root": str(running)})
+    )
     stopped = _hub_root(home, "dev", members=3, remotes=0, server_pid={"pid": 999, "port": 7871, "version": "0.164.0"})
     member = home / "main" / "workspaces" / "m0-main"  # already a member dir
     assert (member / "workspace.yaml").is_file()
     desktop = tmp_path / "desktop"
     _hub_root(tmp_path, "desktop", members=1)
     (desktop / ".instances").mkdir()
-    (desktop / ".instances" / "222.json").write_text(json.dumps({"pid": 222, "port": 7872, "identity": "studio", "instance_root": str(desktop)}))
-    (desktop / ".instances" / "333.json").write_text(json.dumps({"pid": 333, "port": 7875, "identity": "protoEngineer", "instance_root": str(desktop / "workspaces" / "m0-desktop")}))
+    (desktop / ".instances" / "222.json").write_text(
+        json.dumps({"pid": 222, "port": 7872, "identity": "studio", "instance_root": str(desktop)})
+    )
+    (desktop / ".instances" / "333.json").write_text(
+        json.dumps(
+            {
+                "pid": 333,
+                "port": 7875,
+                "identity": "protoEngineer",
+                "instance_root": str(desktop / "workspaces" / "m0-desktop"),
+            }
+        )
+    )
     own = tmp_path / "own"
     own.mkdir()
 
@@ -72,11 +102,27 @@ def box(tmp_path, monkeypatch):
 
 
 def test_enumerate_finds_running_and_stopped_hubs_skips_members_and_counts_from_disk(box):
-    rows = hubs.enumerate_hubs(peers=[{"name": "ava", "url": "https://ava.tail:7870", "host": "ava.tail", "port": 7870}, {"url": "http://127.0.0.1:7870"}])
+    rows = hubs.enumerate_hubs(
+        peers=[
+            {"name": "ava", "url": "https://ava.tail:7870", "host": "ava.tail", "port": 7870},
+            {"url": "http://127.0.0.1:7870"},
+        ]
+    )
     by = {r.name: r for r in rows}
-    assert set(by) == {"protoagent", "studio", "dev", "ava"}  # the member heartbeat (7875) is not a hub; the loopback peer is the running hub, deduped
+    assert set(by) == {
+        "protoagent",
+        "studio",
+        "dev",
+        "ava",
+    }  # the member heartbeat (7875) is not a hub; the loopback peer is the running hub, deduped
     main = by["protoagent"]
-    assert (main.presence, main.launcher, main.port, main.pid, main.source) == ("running", "protoagent up", 7870, 111, "heartbeat")
+    assert (main.presence, main.launcher, main.port, main.pid, main.source) == (
+        "running",
+        "protoagent up",
+        7870,
+        111,
+        "heartbeat",
+    )
     assert (main.members, main.running, main.remotes) == (2, 1, 1) and main.root == box["running"]
     studio = by["studio"]
     assert (studio.presence, studio.launcher, studio.port) == ("running", "desktop app", 7872) and studio.members == 1
@@ -84,9 +130,17 @@ def test_enumerate_finds_running_and_stopped_hubs_skips_members_and_counts_from_
     assert (dev.presence, dev.launcher, dev.port, dev.version, dev.source) == ("stopped", "", 7871, "0.164.0", "root")
     assert (dev.members, dev.running, dev.remotes) == (3, 0, 0) and dev.url == "http://127.0.0.1:7871"
     ava = by["ava"]
-    assert (ava.presence, ava.launcher, ava.source, ava.root, ava.candidate.url) == ("unreachable", "peer", "peer", None, "https://ava.tail:7870")
+    assert (ava.presence, ava.launcher, ava.source, ava.root, ava.candidate.url) == (
+        "unreachable",
+        "peer",
+        "peer",
+        None,
+        "https://ava.tail:7870",
+    )
     assert ava.candidate.trusted is False  # an off-box peer discovery reported: never sent a credential
-    assert all(r.candidate.trusted for r in rows if r.candidate is not None and r is not ava)  # this box's own listeners are
+    assert all(
+        r.candidate.trusted for r in rows if r.candidate is not None and r is not ava
+    )  # this box's own listeners are
     assert all(not r.note for r in rows)
 
 
@@ -120,7 +174,15 @@ def test_probe_tells_unauthorized_from_unreachable_and_reads_a_hub(box, monkeypa
     def silent(*, candidates, token=None, insecure_http=False):
         raise deckhub.NoHub([candidates[0].url], [], None, None)
 
-    peer = HubRow(name="ava", root=None, url="https://ava.tail:7870", port=7870, presence="unreachable", source="peer", candidate=deckhub.HubCandidate("https://ava.tail:7870", "peer"))
+    peer = HubRow(
+        name="ava",
+        root=None,
+        url="https://ava.tail:7870",
+        port=7870,
+        presence="unreachable",
+        source="peer",
+        candidate=deckhub.HubCandidate("https://ava.tail:7870", "peer"),
+    )
     monkeypatch.setattr(deckhub, "connect", silent)
     hubs.probe(peer, token="tok")
     assert peer.presence == "unreachable" and peer.note == "no answer"
@@ -137,7 +199,14 @@ def test_probe_tells_unauthorized_from_unreachable_and_reads_a_hub(box, monkeypa
 
     def ok(*, candidates, token=None, insecure_http=False):
         roster = [
-            {"name": "protoagent", "label": "protoagent", "id": "protoagent", "host": True, "running": True, "version": "0.165.0"},
+            {
+                "name": "protoagent",
+                "label": "protoagent",
+                "id": "protoagent",
+                "host": True,
+                "running": True,
+                "version": "0.165.0",
+            },
             {"name": "a", "id": "a-1", "running": True},
             {"name": "b", "id": "b-1", "running": False},
             {"name": "r", "id": "r-1", "remote": True, "running": False},
@@ -147,7 +216,14 @@ def test_probe_tells_unauthorized_from_unreachable_and_reads_a_hub(box, monkeypa
     monkeypatch.setattr(deckhub, "connect", ok)
     row.note = ""
     hubs.probe(row)
-    assert (row.presence, row.version, row.members, row.running, row.remotes, row.token) == ("running", "0.165.0", 2, 1, 1, "fleet-token")
+    assert (row.presence, row.version, row.members, row.running, row.remotes, row.token) == (
+        "running",
+        "0.165.0",
+        2,
+        1,
+        1,
+        "fleet-token",
+    )
 
 
 def test_wait_for_port_returns_false_when_nothing_answers(monkeypatch):
@@ -187,9 +263,39 @@ class _TreeApp:
 
 @pytest.mark.asyncio
 async def test_h_opens_the_tree_enter_attaches_and_u_brings_a_hub_up(monkeypatch):
-    running = HubRow(name="studio", root=Path("/tmp/desktop"), url="http://127.0.0.1:7872", port=7872, presence="running", launcher="desktop app", version="0.165.0", source="heartbeat", candidate=deckhub.HubCandidate("http://127.0.0.1:7872", "heartbeat"))
-    stopped = HubRow(name="dev", root=Path("/tmp/dev"), url="http://127.0.0.1:7871", port=7871, presence="stopped", source="root", members=3, running=0, remotes=0)
-    unauthorized = HubRow(name="ava", root=None, url="https://ava.tail:7870", port=7870, presence="unauthorized", launcher="peer", source="peer", note="answers, but every credential was refused — pass --token", candidate=deckhub.HubCandidate("https://ava.tail:7870", "peer"))
+    running = HubRow(
+        name="studio",
+        root=Path("/tmp/desktop"),
+        url="http://127.0.0.1:7872",
+        port=7872,
+        presence="running",
+        launcher="desktop app",
+        version="0.165.0",
+        source="heartbeat",
+        candidate=deckhub.HubCandidate("http://127.0.0.1:7872", "heartbeat"),
+    )
+    stopped = HubRow(
+        name="dev",
+        root=Path("/tmp/dev"),
+        url="http://127.0.0.1:7871",
+        port=7871,
+        presence="stopped",
+        source="root",
+        members=3,
+        running=0,
+        remotes=0,
+    )
+    unauthorized = HubRow(
+        name="ava",
+        root=None,
+        url="https://ava.tail:7870",
+        port=7870,
+        presence="unauthorized",
+        launcher="peer",
+        source="peer",
+        note="answers, but every credential was refused — pass --token",
+        candidate=deckhub.HubCandidate("https://ava.tail:7870", "peer"),
+    )
     tree = _TreeApp([running, stopped, unauthorized])
     monkeypatch.setattr("deck.app._enumerate_hubs", tree.enumerate)
     monkeypatch.setattr("deck.app._probe_hub", lambda row, **kw: row)
@@ -207,7 +313,12 @@ async def test_h_opens_the_tree_enter_attaches_and_u_brings_a_hub_up(monkeypatch
 
     def fake_connect(*, candidates, token=None, insecure_http=False):
         attached.append((candidates[0].url, token))
-        return deckhub.Connection(client=_Client(candidates[0].url), candidate=candidates[0], card={"name": "studio"}, roster=[{"name": "studio", "id": "studio", "host": True, "running": True, "port": 7872}])
+        return deckhub.Connection(
+            client=_Client(candidates[0].url),
+            candidate=candidates[0],
+            card={"name": "studio"},
+            roster=[{"name": "studio", "id": "studio", "host": True, "running": True, "port": 7872}],
+        )
 
     monkeypatch.setattr(deckhub, "connect", fake_connect)
     swapped: list = []
@@ -227,16 +338,26 @@ async def test_h_opens_the_tree_enter_attaches_and_u_brings_a_hub_up(monkeypatch
     monkeypatch.setattr(deckdata, "LiveBackend", _Live)
     launched: list = []
     be = FakeBackend()
-    app = FleetDeck(be, poll_s=0, peers=lambda: [{"name": "ava", "url": "https://ava.tail:7870"}], launcher=lambda row: launched.append(row.root))
+    app = FleetDeck(
+        be,
+        poll_s=0,
+        peers=lambda: [{"name": "ava", "url": "https://ava.tail:7870"}],
+        launcher=lambda row: launched.append(row.root),
+    )
     async with app.run_test(size=(120, 36)) as pilot:
         await _settle(app, pilot)
         await pilot.press("H")
         await _settle(app, pilot)
-        assert isinstance(app.screen, HubTreeScreen) and tree.peers_seen == [{"name": "ava", "url": "https://ava.tail:7870"}]
+        assert isinstance(app.screen, HubTreeScreen) and tree.peers_seen == [
+            {"name": "ava", "url": "https://ava.tail:7870"}
+        ]
         table = app.screen.query_one("#hubs", DataTable)
         assert [str(table.get_row_at(i)[1]) for i in range(table.row_count)] == ["studio", "dev", "ava"]
         assert [str(table.get_row_at(i)[2]) for i in range(table.row_count)] == ["running", "stopped", "unauthorized"]
-        assert "pass --token" in str(table.get_row_at(2)[7]) and "3 found · 1 running" in str(app.screen.query_one("#hubs-head", Static).content)
+        assert "pass --token" in str(table.get_row_at(2)[7]) and "3 found · 1 running" in str(
+            app.screen.query_one("#hubs-head", Static).content
+        )
+
         # the footer offers what applies — the RENDERED bindings, not just check_action
         # (`enter` belongs to the focused table, whose row-selected event attaches; `u` is the screen's)
         def footer_keys():
@@ -251,7 +372,9 @@ async def test_h_opens_the_tree_enter_attaches_and_u_brings_a_hub_up(monkeypatch
         await _settle(app, pilot)
         assert launched == [Path("/tmp/dev")]
         assert attached and attached[-1][0] == "http://127.0.0.1:7871"
-        assert isinstance(app.screen, RosterScreen) and swapped and swapped[-1] == "http://127.0.0.1:7871"  # the roster polls the hub that was brought up
+        assert (
+            isinstance(app.screen, RosterScreen) and swapped and swapped[-1] == "http://127.0.0.1:7871"
+        )  # the roster polls the hub that was brought up
         assert be.closed  # the previous hub's client was closed on the switch
         # enter on a running hub from the tree attaches to it
         await pilot.press("H")
@@ -286,14 +409,31 @@ def test_a_listener_found_by_port_is_folded_into_the_root_it_runs_from_and_membe
     desktop = box["desktop"]
     (desktop / ".instances" / "222.json").unlink()  # no heartbeat for the desktop hub any more
     peers = [
-        {"name": "protoagent", "url": "http://127.0.0.1:7872", "host": "127.0.0.1", "port": 7872},  # the desktop hub, by port
+        {
+            "name": "protoagent",
+            "url": "http://127.0.0.1:7872",
+            "host": "127.0.0.1",
+            "port": 7872,
+        },  # the desktop hub, by port
         {"name": "Roxy", "url": "http://127.0.0.1:7877", "host": "127.0.0.1", "port": 7877},  # a member
         {"name": "hermes", "url": "http://127.0.0.1:7903", "host": "127.0.0.1", "port": 7903},  # not a protoAgent hub
-        {"name": "pve01", "url": "http://pve01.tail:7880", "host": "pve01.tail", "port": 7880},  # a tailnet peer, no bearer
+        {
+            "name": "pve01",
+            "url": "http://pve01.tail:7880",
+            "host": "pve01.tail",
+            "port": 7880,
+        },  # a tailnet peer, no bearer
     ]
     rows = hubs.enumerate_hubs(peers=peers)
-    assert [r.name for r in rows if r.root == desktop] == ["desktop"] and next(r for r in rows if r.root == desktop).presence == "stopped"
-    assert [(r.name, r.source) for r in rows if r.root is None] == [("protoagent", "local"), ("Roxy", "local"), ("hermes", "local"), ("pve01", "peer")]
+    assert [r.name for r in rows if r.root == desktop] == ["desktop"] and next(
+        r for r in rows if r.root == desktop
+    ).presence == "stopped"
+    assert [(r.name, r.source) for r in rows if r.root is None] == [
+        ("protoagent", "local"),
+        ("Roxy", "local"),
+        ("hermes", "local"),
+        ("pve01", "peer"),
+    ]
 
     class _Client:
         def __init__(self, url, root):
@@ -308,8 +448,23 @@ def test_a_listener_found_by_port_is_folded_into_the_root_it_runs_from_and_membe
     def fake_connect(*, candidates, token=None, insecure_http=False):
         url = candidates[0].url
         if url.endswith(":7872") or url.endswith(":7870"):  # the desktop hub (by port) and the heartbeat-backed hub
-            roster = [{"name": "protoagent", "label": "protoagent", "id": "protoagent", "host": True, "running": True, "version": "0.165.0"}, {"name": "m", "id": "m-1", "running": True}]
-            return deckhub.Connection(client=_Client(url, str(desktop) if url.endswith(":7872") else str(box["running"])), candidate=candidates[0], card={}, roster=roster)
+            roster = [
+                {
+                    "name": "protoagent",
+                    "label": "protoagent",
+                    "id": "protoagent",
+                    "host": True,
+                    "running": True,
+                    "version": "0.165.0",
+                },
+                {"name": "m", "id": "m-1", "running": True},
+            ]
+            return deckhub.Connection(
+                client=_Client(url, str(desktop) if url.endswith(":7872") else str(box["running"])),
+                candidate=candidates[0],
+                card={},
+                roster=roster,
+            )
         if url.endswith(":7877"):
             raise deckhub.NoHub([url], [], [url], None)  # a member: a fleet of itself
         if url.endswith(":7903"):
@@ -322,14 +477,27 @@ def test_a_listener_found_by_port_is_folded_into_the_root_it_runs_from_and_membe
             hubs.probe(r)
     rows = hubs.reconcile(rows)
     names = [(r.name, r.presence, r.launcher, r.port) for r in rows]
-    assert ("protoagent", "running", "desktop app", 7872) in names  # the desktop root's row, now running, named by its identity
+    assert (
+        "protoagent",
+        "running",
+        "desktop app",
+        7872,
+    ) in names  # the desktop root's row, now running, named by its identity
     assert not any(r.root is None and r.source == "local" for r in rows)  # every local listener was folded or dropped
     assert ("pve01", "unauthorized", "peer", 7880) in names
     pve = next(r for r in rows if r.name == "pve01")
-    assert pve.candidate.trusted is False and "never sent a credential" in pve.note and "--hub <url> --token" in pve.note
+    assert (
+        pve.candidate.trusted is False and "never sent a credential" in pve.note and "--hub <url> --token" in pve.note
+    )
     assert not any(n[0] in ("Roxy", "hermes") for n in names)
     desk = next(r for r in rows if r.root == desktop)
-    assert (desk.members, desk.running, desk.version, desk.token, desk.url) == (1, 1, "0.165.0", "tok", "http://127.0.0.1:7872")
+    assert (desk.members, desk.running, desk.version, desk.token, desk.url) == (
+        1,
+        1,
+        "0.165.0",
+        "tok",
+        "http://127.0.0.1:7872",
+    )
     # a heartbeat-backed running row is never overwritten by its own listener
     running = next(r for r in rows if r.root == box["running"])
     assert running.presence == "running" and running.source == "heartbeat"
@@ -362,7 +530,9 @@ async def test_a_rediscover_during_a_bring_up_keeps_the_starting_row_and_a_timeo
         # the rediscover has landed (settling would wait on the launcher the gate holds)
         assert await _until(pilot, lambda: not any(w.group == "hubs" and not w.is_finished for w in app.workers))
         await pilot.pause()
-        assert str(app.screen.query_one("#hubs", DataTable).get_row_at(0)[2]) == "starting"  # the in-flight row survives
+        assert (
+            str(app.screen.query_one("#hubs", DataTable).get_row_at(0)[2]) == "starting"
+        )  # the in-flight row survives
         assert app.screen.check_action("bring_up", ()) is False  # no second launch offered
         gate.set()
         await _settle(app, pilot)
@@ -376,7 +546,16 @@ async def test_reopening_the_tree_mid_discovery_still_says_working(monkeypatch):
     import threading
 
     gate = threading.Event()
-    row = HubRow(name="ava", root=None, url="https://ava.tail:7870", port=7870, presence="unreachable", launcher="peer", source="peer", candidate=deckhub.HubCandidate("https://ava.tail:7870", "peer"))
+    row = HubRow(
+        name="ava",
+        root=None,
+        url="https://ava.tail:7870",
+        port=7870,
+        presence="unreachable",
+        launcher="peer",
+        source="peer",
+        candidate=deckhub.HubCandidate("https://ava.tail:7870", "peer"),
+    )
     monkeypatch.setattr("deck.app._enumerate_hubs", lambda *, peers=None: [HubRow(**row.__dict__)])
 
     def slow_probe(r, **kw):
@@ -390,12 +569,24 @@ async def test_reopening_the_tree_mid_discovery_still_says_working(monkeypatch):
     async with app.run_test(size=(120, 36)) as pilot:
         await _settle(app, pilot)
         await pilot.press("H")
-        assert await _until(pilot, lambda: isinstance(app.screen, HubTreeScreen) and "working" in str(app.screen.query_one("#hubs-head", Static).content))
+        assert await _until(
+            pilot,
+            lambda: (
+                isinstance(app.screen, HubTreeScreen)
+                and "working" in str(app.screen.query_one("#hubs-head", Static).content)
+            ),
+        )
         await pilot.press("escape")
         assert await _until(pilot, lambda: isinstance(app.screen, RosterScreen))
         await pilot.press("H")
         # the discovery is still held by the gate, so a correct head says so from its first render
-        assert await _until(pilot, lambda: isinstance(app.screen, HubTreeScreen) and "working" in str(app.screen.query_one("#hubs-head", Static).content))
+        assert await _until(
+            pilot,
+            lambda: (
+                isinstance(app.screen, HubTreeScreen)
+                and "working" in str(app.screen.query_one("#hubs-head", Static).content)
+            ),
+        )
         assert "working" in str(app.screen.query_one("#hubs-head", Static).content)  # re-opened: still discovering
         gate.set()
         await _settle(app, pilot)
@@ -417,7 +608,9 @@ def test_the_loose_box_root_is_never_a_hub_row_but_its_default_child_is(box):
     names = [(r.name, r.root) for r in hubs.enumerate_hubs()]
     assert (home.name, home) not in names and not any(r == home for _, r in names)
     assert ("default", home / "default") in names
-    assert hubs._is_loose_box_root(home) and not hubs._is_loose_box_root(box["desktop"])  # the desktop's root is an instance of its own
+    assert hubs._is_loose_box_root(home) and not hubs._is_loose_box_root(
+        box["desktop"]
+    )  # the desktop's root is an instance of its own
 
 
 def test_a_recycled_pid_in_a_stopped_hubs_fleet_json_is_not_a_running_member(box, monkeypatch):
@@ -426,20 +619,41 @@ def test_a_recycled_pid_in_a_stopped_hubs_fleet_json_is_not_a_running_member(box
 
 
 def test_failures_are_told_apart_insecure_unreadable_not_a_hub():
-    assert hubs._classify_failure("http://x:7870 refuses to send a credential over plain http — use an https:// hub URL, or pass --insecure-http for a link you know is encrypted")[0] == "insecure"
+    assert (
+        hubs._classify_failure(
+            "http://x:7870 refuses to send a credential over plain http — use an https:// hub URL, or pass --insecure-http for a link you know is encrypted"
+        )[0]
+        == "insecure"
+    )
     assert hubs._classify_failure("HTTP 404: Not Found") == ("unreachable", "not a hub: HTTP 404: Not Found", True)
     p, n, d = hubs._classify_failure("http://x:7870 did not answer (ReadTimeout)")
     assert p == "unreadable" and "roster did not" in n and d is False
-    assert hubs._classify_failure("a live server process (pid 5) did not answer its agent card") == ("unreachable", "a live server process (pid 5) did not answer its agent card", False)
+    assert hubs._classify_failure("a live server process (pid 5) did not answer its agent card") == (
+        "unreachable",
+        "a live server process (pid 5) did not answer its agent card",
+        False,
+    )
 
 
 def test_local_listeners_are_matched_to_roots_on_disk_before_any_request(box, monkeypatch):
     """A member's port is in its hub's fleet.json → never a hub row, whatever it would
     refuse; a hub's port in its server.pid → that root's own fleet token is in the chain."""
     calls: list = []
-    monkeypatch.setattr(deckhub, "connect", lambda **kw: (calls.append(kw["candidates"][0]) or (_ for _ in ()).throw(deckhub.NoHub([kw["candidates"][0].url], [kw["candidates"][0].url], None, None))))
+    monkeypatch.setattr(
+        deckhub,
+        "connect",
+        lambda **kw: (
+            calls.append(kw["candidates"][0])
+            or (_ for _ in ()).throw(deckhub.NoHub([kw["candidates"][0].url], [kw["candidates"][0].url], None, None))
+        ),
+    )
     peers = [
-        {"name": "m0", "url": "http://127.0.0.1:7900", "host": "127.0.0.1", "port": 7900},  # main's member (fleet.json port 7900)
+        {
+            "name": "m0",
+            "url": "http://127.0.0.1:7900",
+            "host": "127.0.0.1",
+            "port": 7900,
+        },  # main's member (fleet.json port 7900)
         {"name": "devhub", "url": "http://127.0.0.1:7871", "host": "127.0.0.1", "port": 7871},  # dev's server.pid port
     ]
     rows = hubs.enumerate_hubs(peers=peers)
@@ -450,7 +664,9 @@ def test_local_listeners_are_matched_to_roots_on_disk_before_any_request(box, mo
     assert calls[0].instance_root == box["stopped"]  # its own root's token is what the chain reads first
     rows = hubs.reconcile(rows)
     dev = next(r for r in rows if r.root == box["stopped"])
-    assert dev.presence == "unauthorized" and dev.port == 7871 and "refused" in dev.note  # one row, the root's, wearing the word
+    assert (
+        dev.presence == "unauthorized" and dev.port == 7871 and "refused" in dev.note
+    )  # one row, the root's, wearing the word
     assert not any(r.root is None and r.port == 7871 for r in rows)
 
 
@@ -463,6 +679,7 @@ def test_a_refused_loopback_listener_is_retried_with_every_hub_roots_own_token(b
         cand = candidates[0]
         seen.append(cand.instance_root)
         if cand.instance_root == dev:
+
             class _C:
                 url, _token = cand.url, "dev-token"
 
@@ -472,17 +689,38 @@ def test_a_refused_loopback_listener_is_retried_with_every_hub_roots_own_token(b
                 def close(self):
                     pass
 
-            return deckhub.Connection(client=_C(), candidate=cand, card={}, roster=[{"name": "dev", "id": "dev", "host": True, "running": True, "version": "0.1"}])
+            return deckhub.Connection(
+                client=_C(),
+                candidate=cand,
+                card={},
+                roster=[{"name": "dev", "id": "dev", "host": True, "running": True, "version": "0.1"}],
+            )
         raise deckhub.NoHub([cand.url], [cand.url], None, None)
 
     monkeypatch.setattr(deckhub, "connect", fake_connect)
-    row = HubRow(name="?", root=None, url="http://127.0.0.1:7871", port=7871, presence="unreachable", source="local", candidate=deckhub.HubCandidate("http://127.0.0.1:7871", "peer"))
+    row = HubRow(
+        name="?",
+        root=None,
+        url="http://127.0.0.1:7871",
+        port=7871,
+        presence="unreachable",
+        source="local",
+        candidate=deckhub.HubCandidate("http://127.0.0.1:7871", "peer"),
+    )
     hubs.probe(row, roots=hubs.instance_roots())
     assert seen[0] is None and dev in seen  # the default chain first, then each root that has a token
     assert (row.presence, row.token, row.seen_root) == ("running", "dev-token", dev)
     # a tailnet peer is never retried with local tokens
     seen.clear()
-    peer = HubRow(name="ava", root=None, url="https://ava.tail:7870", port=7870, presence="unreachable", source="peer", candidate=deckhub.HubCandidate("https://ava.tail:7870", "peer"))
+    peer = HubRow(
+        name="ava",
+        root=None,
+        url="https://ava.tail:7870",
+        port=7870,
+        presence="unreachable",
+        source="peer",
+        candidate=deckhub.HubCandidate("https://ava.tail:7870", "peer"),
+    )
     hubs.probe(peer, roots=hubs.instance_roots())
     assert seen == [None] and peer.presence == "unauthorized"
 
@@ -506,14 +744,29 @@ async def test_a_poll_of_the_hub_the_deck_just_left_never_paints_the_new_roster(
             return super().snapshot()
 
     old = SlowOld()
-    new = FakeBackend(roster=[{"name": "newhub", "id": "newhub", "port": 7872, "pid": 9, "running": True, "host": True, "version": "0.165.0"}, {"name": "nm", "id": "nm-1", "port": 7901, "pid": 10, "running": True, "version": "0.165.0"}])
+    new = FakeBackend(
+        roster=[
+            {
+                "name": "newhub",
+                "id": "newhub",
+                "port": 7872,
+                "pid": 9,
+                "running": True,
+                "host": True,
+                "version": "0.165.0",
+            },
+            {"name": "nm", "id": "nm-1", "port": 7901, "pid": 10, "running": True, "version": "0.165.0"},
+        ]
+    )
     app = FleetDeck(old, poll_s=0)
     landed: list = []  # the backend each poll result was FOR, as it reaches the UI thread
     orig_apply = app._apply
     app._apply = lambda snap, backend=None: (landed.append(backend), orig_apply(snap, backend))  # type: ignore[method-assign]
     async with app.run_test(size=(120, 36)) as pilot:
         assert await _until(pilot, polling.is_set)  # the first poll is out, blocked on the gate
-        row = HubRow(name="newhub", root=None, url="http://127.0.0.1:7872", port=7872, presence="running", source="peer")
+        row = HubRow(
+            name="newhub", root=None, url="http://127.0.0.1:7872", port=7872, presence="running", source="peer"
+        )
         app._switch_backend(new, row)  # attach while the old poll is still out
         assert await _until(pilot, lambda: any(b is new for b in landed))  # the new hub's poll painted first
         gate.set()
@@ -534,7 +787,9 @@ def test_a_listener_that_names_another_root_is_rehomed_and_the_disowned_root_rea
     and `u` on it would have started a second server for its root."""
     home = box["home"]
     other = _hub_root(home, "other", members=1)
-    (home / ".instances" / "100.json").write_text(json.dumps({"pid": 100, "port": 7877, "identity": "dev-hub", "instance_root": str(box["stopped"])}))
+    (home / ".instances" / "100.json").write_text(
+        json.dumps({"pid": 100, "port": 7877, "identity": "dev-hub", "instance_root": str(box["stopped"])})
+    )
     monkeypatch.setattr(deckhub, "pid_alive", lambda pid: pid in (100, 111, 222, 333, 4242))
     monkeypatch.setattr(deckhub, "is_protoagent_pid", lambda pid: pid in (100, 111, 222, 333, 4242))
     rows = hubs.enumerate_hubs()
@@ -554,10 +809,25 @@ def test_a_listener_that_names_another_root_is_rehomed_and_the_disowned_root_rea
     def fake_connect(*, candidates, token=None, insecure_http=False):
         url = candidates[0].url
         if url.endswith(":7877"):
-            roster = [{"name": "other-hub", "label": "other-hub", "id": "other-hub", "host": True, "running": True, "version": "0.165.0"}, {"name": "m", "id": "m-1", "running": True}]
+            roster = [
+                {
+                    "name": "other-hub",
+                    "label": "other-hub",
+                    "id": "other-hub",
+                    "host": True,
+                    "running": True,
+                    "version": "0.165.0",
+                },
+                {"name": "m", "id": "m-1", "running": True},
+            ]
             return deckhub.Connection(client=_Client(url, str(other)), candidate=candidates[0], card={}, roster=roster)
         if url.endswith(":7870") or url.endswith(":7872"):
-            return deckhub.Connection(client=_Client(url, None), candidate=candidates[0], card={}, roster=[{"name": "h", "id": "h", "host": True, "running": True}])
+            return deckhub.Connection(
+                client=_Client(url, None),
+                candidate=candidates[0],
+                card={},
+                roster=[{"name": "h", "id": "h", "host": True, "running": True}],
+            )
         raise deckhub.NoHub([url], [], None, None)
 
     monkeypatch.setattr(deckhub, "connect", fake_connect)
@@ -566,8 +836,17 @@ def test_a_listener_that_names_another_root_is_rehomed_and_the_disowned_root_rea
             hubs.probe(r, roots=hubs.instance_roots())
     rows = hubs.reconcile(rows)
     by_root = {r.root.name: r for r in rows if r.root is not None}
-    assert (by_root["other"].presence, by_root["other"].name, by_root["other"].port, by_root["other"].token) == ("running", "other-hub", 7877, "token-other")
-    assert by_root["dev"].presence == "stopped" and "another instance" in by_root["dev"].note and by_root["dev"].members == 3
+    assert (by_root["other"].presence, by_root["other"].name, by_root["other"].port, by_root["other"].token) == (
+        "running",
+        "other-hub",
+        7877,
+        "token-other",
+    )
+    assert (
+        by_root["dev"].presence == "stopped"
+        and "another instance" in by_root["dev"].note
+        and by_root["dev"].members == 3
+    )
     assert [r.root.name for r in rows if r.root is not None].count("dev") == 1
 
 
@@ -597,13 +876,28 @@ async def test_member_detail_open_while_an_attach_lands_does_not_kill_the_deck(m
             self.gate.set()
 
     old = TornOld()
-    new = FakeBackend(roster=[{"name": "newhub", "id": "newhub", "port": 7872, "pid": 9, "running": True, "host": True, "version": "0.165.0"}, {"name": "nm", "id": "nm-1", "port": 7901, "pid": 10, "running": True, "version": "0.165.0"}])
+    new = FakeBackend(
+        roster=[
+            {
+                "name": "newhub",
+                "id": "newhub",
+                "port": 7872,
+                "pid": 9,
+                "running": True,
+                "host": True,
+                "version": "0.165.0",
+            },
+            {"name": "nm", "id": "nm-1", "port": 7901, "pid": 10, "running": True, "version": "0.165.0"},
+        ]
+    )
     app = FleetDeck(old, poll_s=0)
     async with app.run_test(size=(120, 36)) as pilot:
         await _settle(app, pilot)
         await pilot.press("i")
         assert await _until(pilot, old.entered.is_set)  # the detail worker is out, blocked on the gate
-        row = HubRow(name="newhub", root=None, url="http://127.0.0.1:7872", port=7872, presence="running", source="peer")
+        row = HubRow(
+            name="newhub", root=None, url="http://127.0.0.1:7872", port=7872, presence="running", source="peer"
+        )
         app._switch_backend(new, row)  # the attach lands: closes `old` under that worker
         assert await _until(pilot, old.raised.is_set)
         # negative: the raise must not take the deck down. The popped screen's worker is
@@ -639,7 +933,14 @@ async def test_the_last_attach_the_operator_chose_wins(monkeypatch):
         url = candidates[0].url
         connecting.append(url[-4:])
         gates[url[-4:]].wait(5)
-        return deckhub.Connection(client=_Client(url), candidate=candidates[0], card={}, roster=[{"name": f"hub{url[-4:]}", "id": f"hub{url[-4:]}", "host": True, "running": True, "port": int(url[-4:])}])
+        return deckhub.Connection(
+            client=_Client(url),
+            candidate=candidates[0],
+            card={},
+            roster=[
+                {"name": f"hub{url[-4:]}", "id": f"hub{url[-4:]}", "host": True, "running": True, "port": int(url[-4:])}
+            ],
+        )
 
     class _Live(deckdata.LiveBackend):
         def snapshot(self):
@@ -653,8 +954,24 @@ async def test_the_last_attach_the_operator_chose_wins(monkeypatch):
 
     monkeypatch.setattr(deckhub, "connect", gated_connect)
     monkeypatch.setattr(deckdata, "LiveBackend", _Live)
-    a = HubRow(name="A", root=None, url="http://127.0.0.1:7871", port=7871, presence="running", source="peer", candidate=deckhub.HubCandidate("http://127.0.0.1:7871", "peer"))
-    b = HubRow(name="B", root=None, url="http://127.0.0.1:7872", port=7872, presence="running", source="peer", candidate=deckhub.HubCandidate("http://127.0.0.1:7872", "peer"))
+    a = HubRow(
+        name="A",
+        root=None,
+        url="http://127.0.0.1:7871",
+        port=7871,
+        presence="running",
+        source="peer",
+        candidate=deckhub.HubCandidate("http://127.0.0.1:7871", "peer"),
+    )
+    b = HubRow(
+        name="B",
+        root=None,
+        url="http://127.0.0.1:7872",
+        port=7872,
+        presence="running",
+        source="peer",
+        candidate=deckhub.HubCandidate("http://127.0.0.1:7872", "peer"),
+    )
     app = FleetDeck(FakeBackend(), poll_s=0)
     notes: list[str] = []
     async with app.run_test(size=(120, 36)) as pilot:
@@ -664,7 +981,13 @@ async def test_the_last_attach_the_operator_chose_wins(monkeypatch):
         assert await _until(pilot, lambda: "7871" in connecting)  # A's connect is on the wire
         app.attach_hub(b)  # the operator gave up on A
         gates["7872"].set()
-        assert await _until(pilot, lambda: getattr(getattr(app.backend, "conn", None), "client", None) is not None and app.backend.conn.client.url.endswith(":7872"))
+        assert await _until(
+            pilot,
+            lambda: (
+                getattr(getattr(app.backend, "conn", None), "client", None) is not None
+                and app.backend.conn.client.url.endswith(":7872")
+            ),
+        )
         assert app.backend.conn.client.url.endswith(":7872")
         gates["7871"].set()  # A's connect returns late
         await _settle(app, pilot)
@@ -680,12 +1003,23 @@ async def test_the_last_attach_the_operator_chose_wins(monkeypatch):
 async def test_offline_deck_tree_lists_disk_and_probes_nothing(monkeypatch):
     """Round 2: `--offline` documented "skips the scan and the probes", but the deck's tree
     still probed every running row with this box's fleet tokens."""
-    running = HubRow(name="studio", root=Path("/tmp/desktop"), url="http://127.0.0.1:7872", port=7872, presence="running", launcher="desktop app", source="heartbeat", candidate=deckhub.HubCandidate("http://127.0.0.1:7872", "heartbeat"))
+    running = HubRow(
+        name="studio",
+        root=Path("/tmp/desktop"),
+        url="http://127.0.0.1:7872",
+        port=7872,
+        presence="running",
+        launcher="desktop app",
+        source="heartbeat",
+        candidate=deckhub.HubCandidate("http://127.0.0.1:7872", "heartbeat"),
+    )
     probed: list = []
     monkeypatch.setattr("deck.app._enumerate_hubs", lambda *, peers=None: [HubRow(**running.__dict__)])
     monkeypatch.setattr("deck.app._probe_hub", lambda row, **kw: probed.append(row.url) or row)
     monkeypatch.setattr("deck.app._instance_roots", lambda: [])
-    app = FleetDeck(FakeBackend(mode="offline"), poll_s=0, peers=None, launcher=lambda row: None, start_on_hubs=True, offline=True)
+    app = FleetDeck(
+        FakeBackend(mode="offline"), poll_s=0, peers=None, launcher=lambda row: None, start_on_hubs=True, offline=True
+    )
     async with app.run_test(size=(120, 36)) as pilot:
         await _settle(app, pilot)
         assert await _until(pilot, lambda: isinstance(app.screen, HubTreeScreen) and not app.screen.busy)
@@ -715,7 +1049,18 @@ def test_row_text_is_the_one_place_the_cli_and_the_tree_derive_their_cells():
     """QA panel (S5, minor): the members/where formatting was duplicated verbatim between
     `_cmd_hubs` and `HubTreeScreen.render_rows`. One helper now; and every control
     character a peer or hub can plant is stripped before the CLI prints it."""
-    r = HubRow(name="x", root=None, url="https://user:s3cret@ava.tail:7870", port=7870, presence="unauthorized", source="peer", members=3, running=1, remotes=2, note="refused")
+    r = HubRow(
+        name="x",
+        root=None,
+        url="https://user:s3cret@ava.tail:7870",
+        port=7870,
+        presence="unauthorized",
+        source="peer",
+        members=3,
+        running=1,
+        remotes=2,
+        note="refused",
+    )
     assert hubs.row_text(r) == ("1/3 up · 2 remote", "https://***@ava.tail:7870 — refused")
     r2 = HubRow(name="y", root=Path("/tmp/dev"), url=None, port=None, presence="stopped", source="root", members=2)
     assert hubs.row_text(r2) == ("2", str(Path("/tmp/dev")))
@@ -734,8 +1079,28 @@ async def test_a_superseded_discovery_never_paints_over_the_newer_one(monkeypatc
         calls.append(n)
         if n == 1:
             gate.wait(5)  # the first discovery is slow…
-            return [HubRow(name="stale-peer", root=None, url="https://old.tail:7870", port=7870, presence="unreachable", launcher="peer", source="peer")]
-        return [HubRow(name="fresh-peer", root=None, url="https://new.tail:7870", port=7870, presence="unreachable", launcher="peer", source="peer")]
+            return [
+                HubRow(
+                    name="stale-peer",
+                    root=None,
+                    url="https://old.tail:7870",
+                    port=7870,
+                    presence="unreachable",
+                    launcher="peer",
+                    source="peer",
+                )
+            ]
+        return [
+            HubRow(
+                name="fresh-peer",
+                root=None,
+                url="https://new.tail:7870",
+                port=7870,
+                presence="unreachable",
+                launcher="peer",
+                source="peer",
+            )
+        ]
 
     monkeypatch.setattr("deck.app._enumerate_hubs", enumerate)
     monkeypatch.setattr("deck.app._probe_hub", lambda row, **kw: row)
@@ -755,6 +1120,7 @@ async def test_a_superseded_discovery_never_paints_over_the_newer_one(monkeypatc
         assert await _until(pilot, lambda: (1, False) in shown)
         assert [r.name for r in app.hub_rows] == ["fresh-peer"] and not app.screen.busy
 
+
 @pytest.mark.asyncio
 async def test_a_roster_built_beside_a_hub_that_answered_drives_nothing_from_disk():
     """S6 (#3473): `fleet --all` opens the tree past a hub that refused this shell — the
@@ -763,14 +1129,28 @@ async def test_a_roster_built_beside_a_hub_that_answered_drives_nothing_from_dis
     from deck import data as deckdata
 
     calls: list = []
-    be = deckdata.OfflineBackend(status=lambda: [{"name": "scout", "id": "scout-1", "port": 7901, "pid": None, "running": False}], start=lambda n: calls.append(("start", n)), stop=lambda n: calls.append(("stop", n)), fleet_json=Path("/tmp/fleet.json"), reason="a hub answered at http://127.0.0.1:7870 but rejected every credential", lifecycle=False)
-    assert be.start("scout") == {"ok": False, "agent": {"name": "scout"}, "reason": deckdata.OfflineBackend._HELD} and calls == []
+    be = deckdata.OfflineBackend(
+        status=lambda: [{"name": "scout", "id": "scout-1", "port": 7901, "pid": None, "running": False}],
+        start=lambda n: calls.append(("start", n)),
+        stop=lambda n: calls.append(("stop", n)),
+        fleet_json=Path("/tmp/fleet.json"),
+        reason="a hub answered at http://127.0.0.1:7870 but rejected every credential",
+        lifecycle=False,
+    )
+    assert (
+        be.start("scout") == {"ok": False, "agent": {"name": "scout"}, "reason": deckdata.OfflineBackend._HELD}
+        and calls == []
+    )
     app = FleetDeck(be, poll_s=0)
     async with app.run_test(size=(120, 36)) as pilot:
         await _settle(app, pilot)
         scr = app.screen
         assert isinstance(scr, RosterScreen) and scr.selected() is not None and scr.selected()["name"] == "scout"
-        assert scr.check_action("start", ()) is False and scr.check_action("stop", ()) is False and scr.check_action("restart", ()) is False
+        assert (
+            scr.check_action("start", ()) is False
+            and scr.check_action("stop", ()) is False
+            and scr.check_action("restart", ()) is False
+        )
         assert "start/stop refused" in app.snapshot.label and "rejected every credential" in app.snapshot.label
         status = str(scr.query_one("#status", Static).content)
         assert "nothing is driven from disk" in status and "only start/stop are available" not in status
@@ -786,9 +1166,21 @@ def test_a_listener_on_a_stopped_members_recorded_port_is_still_probed(box):
     read `stopped` and `u` would start a second server on it. A listener on a stopped
     member's port can never be that member: it is probed like any other listener. A
     started member's port (fleet.json) is still skipped."""
-    rows = hubs.enumerate_hubs(peers=[
-        {"name": "hub-on-a-recorded-port", "url": "http://127.0.0.1:7902", "host": "127.0.0.1", "port": 7902},  # dev's m2 records 7902, stopped
-        {"name": "a-started-member", "url": "http://127.0.0.1:7900", "host": "127.0.0.1", "port": 7900},  # main's m0 runs on 7900 (fleet.json)
-    ])
+    rows = hubs.enumerate_hubs(
+        peers=[
+            {
+                "name": "hub-on-a-recorded-port",
+                "url": "http://127.0.0.1:7902",
+                "host": "127.0.0.1",
+                "port": 7902,
+            },  # dev's m2 records 7902, stopped
+            {
+                "name": "a-started-member",
+                "url": "http://127.0.0.1:7900",
+                "host": "127.0.0.1",
+                "port": 7900,
+            },  # main's m0 runs on 7900 (fleet.json)
+        ]
+    )
     local = {r.port for r in rows if r.source == "local"}
     assert 7902 in local and 7900 not in local

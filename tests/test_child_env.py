@@ -52,9 +52,19 @@ def _bundle_env() -> dict[str, str]:
 
 def test_frozen_drops_bundle_paths_keeps_the_rest(frozen):
     env = child_env(_bundle_env())
-    for gone in ("SSL_CERT_FILE", "REQUESTS_CA_BUNDLE", "CURL_CA_BUNDLE", "SSL_CERT_DIR", "DYLD_LIBRARY_PATH",
-                 "_PYI_ARCHIVE_FILE", "_PYI_APPLICATION_HOME_DIR", "_PYI_PARENT_PROCESS_LEVEL", "_MEIPASS2",
-                 "TCL_LIBRARY", "LD_LIBRARY_PATH_ORIG"):
+    for gone in (
+        "SSL_CERT_FILE",
+        "REQUESTS_CA_BUNDLE",
+        "CURL_CA_BUNDLE",
+        "SSL_CERT_DIR",
+        "DYLD_LIBRARY_PATH",
+        "_PYI_ARCHIVE_FILE",
+        "_PYI_APPLICATION_HOME_DIR",
+        "_PYI_PARENT_PROCESS_LEVEL",
+        "_MEIPASS2",
+        "TCL_LIBRARY",
+        "LD_LIBRARY_PATH_ORIG",
+    ):
         assert gone not in env, gone
     # Loader path restored from PyInstaller's *_ORIG save, not just dropped.
     assert env["LD_LIBRARY_PATH"] == "/opt/lib"

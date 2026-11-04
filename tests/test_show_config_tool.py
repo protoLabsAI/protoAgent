@@ -34,9 +34,7 @@ def show_config():
             "headers": {"Authorization": "Bearer sk-live-abc"},
         },
     ]
-    cfg.plugin_config = {
-        "project_board": {"repo": "protoLabsAI/protoAgent", "api_token": "pbt_live"}
-    }
+    cfg.plugin_config = {"project_board": {"repo": "protoLabsAI/protoAgent", "api_token": "pbt_live"}}
     return build_config_tools(cfg)[0]
 
 
@@ -69,9 +67,7 @@ def test_agent_can_see_how_its_plugin_is_bound(show_config):
 
 
 def test_dotted_selector_reads_nested_value(show_config_with_projects):
-    out = show_config_with_projects.invoke(
-        {"section": "project_board.projects.proj-003"}
-    )
+    out = show_config_with_projects.invoke({"section": "project_board.projects.proj-003"})
 
     assert json.loads(out)["project_board.projects.proj-003"]["repo"] == "org/repo-003"
 
@@ -98,9 +94,7 @@ def test_dotted_selector_reports_missing_path(show_config_with_projects):
 
 
 def test_nested_map_can_be_reconstructed_from_deterministic_pages(show_config_with_projects):
-    first = json.loads(
-        show_config_with_projects.invoke({"section": "project_board.projects", "limit": 3})
-    )
+    first = json.loads(show_config_with_projects.invoke({"section": "project_board.projects", "limit": 3}))
     second = json.loads(
         show_config_with_projects.invoke(
             {
@@ -167,11 +161,7 @@ def test_large_nested_map_exceeding_cap_is_readable_across_pages():
     reconstructed = {}
     offset = 0
     while True:
-        page = json.loads(
-            show_config.invoke(
-                {"section": "project_board.projects", "offset": offset, "limit": 10}
-            )
-        )
+        page = json.loads(show_config.invoke({"section": "project_board.projects", "offset": offset, "limit": 10}))
         reconstructed.update(page["value"])
         if page["pagination"]["next_offset"] is None:
             break
@@ -222,9 +212,7 @@ def test_parent_with_one_oversized_child_points_instead_of_dead_ending():
     offset = 0
     while True:
         child_page = json.loads(
-            show_config.invoke(
-                {"section": "project_board.projects", "offset": offset, "limit": 10}
-            )
+            show_config.invoke({"section": "project_board.projects", "offset": offset, "limit": 10})
         )
         reconstructed.update(child_page["value"])
         if child_page["pagination"]["next_offset"] is None:
@@ -279,11 +267,7 @@ def test_oversized_child_with_dotted_key_stays_addressable():
     reconstructed = {}
     offset = 0
     while True:
-        cp = json.loads(
-            show_config.invoke(
-                {"section": pointer["read_with"], "offset": offset, "limit": 100}
-            )
-        )
+        cp = json.loads(show_config.invoke({"section": pointer["read_with"], "offset": offset, "limit": 100}))
         reconstructed.update(cp["value"])
         if cp["pagination"]["next_offset"] is None:
             break
@@ -310,11 +294,7 @@ def test_oversized_child_with_empty_key_stays_addressable():
     reconstructed = {}
     offset = 0
     while True:
-        cp = json.loads(
-            show_config.invoke(
-                {"section": pointer["read_with"], "offset": offset, "limit": 100}
-            )
-        )
+        cp = json.loads(show_config.invoke({"section": pointer["read_with"], "offset": offset, "limit": 100}))
         reconstructed.update(cp["value"])
         if cp["pagination"]["next_offset"] is None:
             break
@@ -328,9 +308,7 @@ def test_dotted_key_child_reads_directly_via_escaped_selector():
     """A nested key containing a dot is reachable head-on with an escaped selector, not
     only via a drill-in pointer."""
     cfg = LangGraphConfig()
-    cfg.plugin_config = {
-        "project_board": {"registry": {"scope.one": {"repo": "org/dotted"}}}
-    }
+    cfg.plugin_config = {"project_board": {"registry": {"scope.one": {"repo": "org/dotted"}}}}
     show_config = build_config_tools(cfg)[0]
 
     out = show_config.invoke({"section": r"project_board.registry.scope\.one"})
@@ -378,9 +356,7 @@ def test_large_selected_string_is_paged_without_truncated_json():
 
 
 def test_nested_page_redacts_secret_shaped_values(show_config_with_projects):
-    out = show_config_with_projects.invoke(
-        {"section": "project_board.projects", "limit": 2}
-    )
+    out = show_config_with_projects.invoke({"section": "project_board.projects", "limit": 2})
 
     assert "pbt_project_" not in out
     page = json.loads(out)
@@ -611,12 +587,15 @@ def test_operator_can_turn_it_off():
         set_disabled_tools([])
 
 
-@pytest.mark.parametrize("value", [
-    ["synthetic-secret"],
-    [["synthetic-secret"]],
-    [{"value": "synthetic-secret"}],
-    {"primary": "synthetic-secret", "nested": ["synthetic-secret"]},
-])
+@pytest.mark.parametrize(
+    "value",
+    [
+        ["synthetic-secret"],
+        [["synthetic-secret"]],
+        [{"value": "synthetic-secret"}],
+        {"primary": "synthetic-secret", "nested": ["synthetic-secret"]},
+    ],
+)
 def test_sensitive_container_is_masked_without_mutating_config(value):
     import copy
 
@@ -636,19 +615,22 @@ def test_unset_sensitive_containers_remain_unset(empty):
 
 def test_show_config_masks_secret_containers_before_selection_and_pagination():
     cfg = LangGraphConfig()
-    cfg.plugin_config = {"future_plugin": {
-        "api_keys": ["synthetic-secret"],
-        "credentials": {"primary": "synthetic-secret"},
-        "endpoint": "https://example.com",
-    }}
+    cfg.plugin_config = {
+        "future_plugin": {
+            "api_keys": ["synthetic-secret"],
+            "credentials": {"primary": "synthetic-secret"},
+            "endpoint": "https://example.com",
+        }
+    }
     tool = build_config_tools(cfg)[0]
-    for args in ({}, {"section": "future_plugin"},
-                 {"section": "future_plugin", "limit": 1},
-                 {"section": "future_plugin.api_keys"},
-                 {"section": "future_plugin.api_keys.0"},
-                 {"section": "future_plugin.credentials.primary"}):
+    for args in (
+        {},
+        {"section": "future_plugin"},
+        {"section": "future_plugin", "limit": 1},
+        {"section": "future_plugin.api_keys"},
+        {"section": "future_plugin.api_keys.0"},
+        {"section": "future_plugin.credentials.primary"},
+    ):
         result = tool.invoke(args)
         assert "synthetic-secret" not in result
-    assert json.loads(tool.invoke({"section": "future_plugin.api_keys"})) == {
-        "future_plugin.api_keys": _REDACTED
-    }
+    assert json.loads(tool.invoke({"section": "future_plugin.api_keys"})) == {"future_plugin.api_keys": _REDACTED}

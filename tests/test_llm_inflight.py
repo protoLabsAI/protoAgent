@@ -228,9 +228,7 @@ async def test_queue_timeout_raises_gateway_queue_timeout_and_is_not_retried():
         return gen()
 
     task_a = asyncio.create_task(
-        _drain(_guarded_reconnecting_stream(
-            make_a, timeout=None, max_retries=0, label="a", lane="L", sleep=_no_sleep
-        ))
+        _drain(_guarded_reconnecting_stream(make_a, timeout=None, max_retries=0, label="a", lane="L", sleep=_no_sleep))
     )
     await asyncio.wait_for(a_started.wait(), 2.0)
 
@@ -383,9 +381,7 @@ async def test_codex_subclass_acquires_through_inheritance(monkeypatch):
 
     monkeypatch.setattr(ChatOpenAI, "_astream", fake_astream, raising=True)
 
-    client = CodexChatOpenAI(
-        model="gpt-5-codex", api_key="k", base_url="https://chatgpt.com/backend-api/codex"
-    )
+    client = CodexChatOpenAI(model="gpt-5-codex", api_key="k", base_url="https://chatgpt.com/backend-api/codex")
     out = [c async for c in client._astream([])]
 
     assert [c.message.content for c in out] == ["cx"]
@@ -447,9 +443,7 @@ async def test_anthropic_oauth_agenerate_holds_a_slot(monkeypatch):
     monkeypatch.setattr(ChatAnthropic, "_agenerate", fake_agenerate, raising=True)
     monkeypatch.setattr(ao, "current_oauth_token", lambda **_k: "tok-abc")
 
-    client = ao._OAuthChatAnthropic(
-        model="claude-opus-5-5", api_key="oauth-via-auth-token", oauth_token="tok-abc"
-    )
+    client = ao._OAuthChatAnthropic(model="claude-opus-5-5", api_key="oauth-via-auth-token", oauth_token="tok-abc")
     assert await client._agenerate([]) == "R"
     assert [e.kind for e in events] == ["enqueued", "acquired", "released"]
     assert events[0].lane == "anthropic-oauth|claude-opus-5-5"
@@ -513,9 +507,7 @@ def test_create_llm_pushes_inflight_config_to_the_limiter():
     from graph.config import LangGraphConfig
     from graph.llm import create_llm
 
-    cfg = LangGraphConfig(
-        llm_max_inflight=5, llm_inflight_queue_timeout=42.0, llm_inflight_interactive_reserve=2
-    )
+    cfg = LangGraphConfig(llm_max_inflight=5, llm_inflight_queue_timeout=42.0, llm_inflight_interactive_reserve=2)
     with contextlib.suppress(Exception):  # a keyless build may raise AFTER configure() runs
         create_llm(cfg)
 

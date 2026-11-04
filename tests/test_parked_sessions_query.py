@@ -84,9 +84,7 @@ async def _old_newest_turn_summary(conn, session_id):
 
     agg = (
         await conn.execute(
-            select(func.count(TaskModel.id), func.max(TaskModel.last_updated)).where(
-                TaskModel.context_id == session_id
-            )
+            select(func.count(TaskModel.id), func.max(TaskModel.last_updated)).where(TaskModel.context_id == session_id)
         )
     ).first()
     count = int(agg[0] or 0) if agg else 0
@@ -203,8 +201,18 @@ def test_parked_index_follows_creation_order_not_last_updated(tmp_path):
 
     rows = [
         {"id": "a1", "context_id": "chat-reparked", "state": "TASK_STATE_INPUT_REQUIRED", "at": T0},
-        {"id": "a2", "context_id": "chat-reparked", "state": "TASK_STATE_INPUT_REQUIRED", "at": T0 + timedelta(seconds=1)},
-        {"id": "b1", "context_id": "chat-ran-past", "state": "TASK_STATE_INPUT_REQUIRED", "at": T0 + timedelta(minutes=9)},
+        {
+            "id": "a2",
+            "context_id": "chat-reparked",
+            "state": "TASK_STATE_INPUT_REQUIRED",
+            "at": T0 + timedelta(seconds=1),
+        },
+        {
+            "id": "b1",
+            "context_id": "chat-ran-past",
+            "state": "TASK_STATE_INPUT_REQUIRED",
+            "at": T0 + timedelta(minutes=9),
+        },
         {"id": "b2", "context_id": "chat-ran-past", "state": "TASK_STATE_COMPLETED", "at": T0 + timedelta(minutes=1)},
     ]
     rows[0]["state"] = "TASK_STATE_COMPLETED"
@@ -226,7 +234,7 @@ def test_session_summary_reads_the_store_once_and_matches(store, monkeypatch):
 
     engine, rows = store
     monkeypatch.setattr(rs.STATE, "a2a_task_engine", engine, raising=False)
-    contexts = sorted({r["context_id"] for r in rows})[:: 40]
+    contexts = sorted({r["context_id"] for r in rows})[::40]
 
     async def _old(sid):
         async with engine.begin() as conn:
@@ -259,7 +267,10 @@ def test_non_sqlite_stores_rank_by_last_change():
         return " ".join(str(select(ranked).compile(dialect=dialect)).split())
 
     pg = _sql("postgresql", postgresql.dialect())
-    assert "row_number() OVER (PARTITION BY tasks.context_id ORDER BY tasks.last_updated DESC NULLS LAST, tasks.id DESC)" in pg
+    assert (
+        "row_number() OVER (PARTITION BY tasks.context_id ORDER BY tasks.last_updated DESC NULLS LAST, tasks.id DESC)"
+        in pg
+    )
     assert "rowid" not in pg
     lite = _sql("sqlite", sqlite.dialect())
     assert "row_number() OVER (PARTITION BY tasks.context_id ORDER BY tasks.rowid DESC)" in lite

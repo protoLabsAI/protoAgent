@@ -42,7 +42,15 @@ from deck import hub as deckhub
 
 FLEET_JSON = "fleet.json"
 REMOTES_JSON = "remotes.json"
-PRESENCE_GLYPH = {"running": "●", "unauthorized": "◐", "insecure": "◐", "unreadable": "◐", "unreachable": "◌", "stopped": "○", "starting": "◍"}
+PRESENCE_GLYPH = {
+    "running": "●",
+    "unauthorized": "◐",
+    "insecure": "◐",
+    "unreadable": "◐",
+    "unreachable": "◌",
+    "stopped": "○",
+    "starting": "◍",
+}
 _CONTROL_RE = re.compile(r"[\x00-\x1f\x7f-\x9f]")
 
 
@@ -58,7 +66,12 @@ def row_text(r: HubRow) -> tuple[str, str]:
     """The two derived cells the CLI table and the deck's tree both show: ``members``
     (``2/3 up · 1 remote``) and ``where`` (the instance root, or the redacted url — with
     the note folded in for a row that has no root). One place, so they cannot drift."""
-    members = "—" if r.members is None else (f"{r.running}/{r.members} up" if r.running is not None else f"{r.members}") + (f" · {r.remotes} remote" if r.remotes else "")
+    members = (
+        "—"
+        if r.members is None
+        else (f"{r.running}/{r.members} up" if r.running is not None else f"{r.members}")
+        + (f" · {r.remotes} remote" if r.remotes else "")
+    )
     place = str(r.root) if r.root is not None else (deckhub.redact_url(r.url) if r.url else "")
     where = f"{place} — {r.note}" if r.note and r.root is None else (r.note or place)
     return members, where
@@ -99,7 +112,9 @@ class HubRow:
     token: str | None = field(default=None, repr=False)  # the credential that opened it (never rendered)
     seen_root: Path | None = field(default=None, repr=False)  # the instance root a probed listener said it runs from
     drop: bool = field(default=False, repr=False)  # a listener that is not a hub row (a member, a non-hub service)
-    disowned_root: Path | None = field(default=None, repr=False)  # the root a heartbeat/pidfile claimed, when the listener said it runs from another
+    disowned_root: Path | None = field(
+        default=None, repr=False
+    )  # the root a heartbeat/pidfile claimed, when the listener said it runs from another
 
     @property
     def key(self) -> str:
@@ -149,7 +164,9 @@ def count_members(root: Path) -> tuple[int, int, int]:
             for rec in fleet.values():
                 if isinstance(rec, dict):
                     try:
-                        if deckhub.is_protoagent_pid(int(rec.get("pid") or 0)):  # a stopped hub's fleet.json outlives reboots: a recycled pid is not a running member
+                        if deckhub.is_protoagent_pid(
+                            int(rec.get("pid") or 0)
+                        ):  # a stopped hub's fleet.json outlives reboots: a recycled pid is not a running member
                             running += 1
                     except (TypeError, ValueError):
                         pass
@@ -309,7 +326,22 @@ def enumerate_hubs(*, peers: list[dict] | None = None) -> list[HubRow]:
         except (ValueError, IndexError):
             pass
         local, running, remotes = count_members(root) if root is not None and _is_hub_root(root) else (None, None, None)
-        rows.append(HubRow(name=c.identity or (root.name if root is not None else f"hub :{port}"), root=root, url=c.url, port=port, presence="running", launcher=launcher_of(root, c.pid), pid=c.pid, source=c.source, members=local, running=running, remotes=remotes, candidate=c))
+        rows.append(
+            HubRow(
+                name=c.identity or (root.name if root is not None else f"hub :{port}"),
+                root=root,
+                url=c.url,
+                port=port,
+                presence="running",
+                launcher=launcher_of(root, c.pid),
+                pid=c.pid,
+                source=c.source,
+                members=local,
+                running=running,
+                remotes=remotes,
+                candidate=c,
+            )
+        )
     roots = instance_roots()
     member_ports, hub_ports = _ports_on_disk(roots)
     for root in roots:
@@ -322,7 +354,21 @@ def enumerate_hubs(*, peers: list[dict] | None = None) -> list[HubRow]:
         except (TypeError, ValueError):
             pass
         local, running, remotes = count_members(root)
-        rows.append(HubRow(name=_root_name(root), root=root, url=deckhub._loopback(port) if port else None, port=port, presence="stopped", launcher="", version=str(rec.get("version") or ""), source="root", members=local, running=running, remotes=remotes))
+        rows.append(
+            HubRow(
+                name=_root_name(root),
+                root=root,
+                url=deckhub._loopback(port) if port else None,
+                port=port,
+                presence="stopped",
+                launcher="",
+                version=str(rec.get("version") or ""),
+                source="root",
+                members=local,
+                running=running,
+                remotes=remotes,
+            )
+        )
     for p in peers or []:
         if not isinstance(p, dict) or not p.get("url"):
             continue
@@ -348,7 +394,19 @@ def enumerate_hubs(*, peers: list[dict] | None = None) -> list[HubRow]:
         known_root = hub_ports.get(port) if local and port else None
         # An off-box peer that discovery reported is never sent a credential (its name is
         # self-reported; a bearer belongs to a hub the operator names with --hub).
-        rows.append(HubRow(name=str(p.get("name") or p.get("host") or url), root=None, url=url, port=port, presence="unreachable", launcher="" if local else "peer", source="local" if local else "peer", candidate=deckhub.HubCandidate(url, "peer", instance_root=known_root, trusted=local), seen_root=known_root))
+        rows.append(
+            HubRow(
+                name=str(p.get("name") or p.get("host") or url),
+                root=None,
+                url=url,
+                port=port,
+                presence="unreachable",
+                launcher="" if local else "peer",
+                source="local" if local else "peer",
+                candidate=deckhub.HubCandidate(url, "peer", instance_root=known_root, trusted=local),
+                seen_root=known_root,
+            )
+        )
     by_port: dict[int, list[HubRow]] = {}
     for r in rows:
         if r.port and r.root is not None:
@@ -376,7 +434,9 @@ def _classify_failure(why: str) -> tuple[str, str, bool]:
     return "unreadable", f"answers, but its roster did not: {why}", False
 
 
-def probe(row: HubRow, *, token: str | None = None, insecure_http: bool = False, roots: list[Path] | None = None) -> HubRow:
+def probe(
+    row: HubRow, *, token: str | None = None, insecure_http: bool = False, roots: list[Path] | None = None
+) -> HubRow:
     """Ask a running hub or a peer what it is: version and member counts through its own
     fleet token (an off-box peer that discovery reported gets open mode only — never
     ``token``; see ``HubCandidate.trusted``). Sets ``presence`` to ``running`` /
@@ -394,7 +454,13 @@ def probe(row: HubRow, *, token: str | None = None, insecure_http: bool = False,
     except deckhub.NoHub as exc:
         if exc.unauthorized and retry:
             for root in retry:
-                cand = deckhub.HubCandidate(row.candidate.url, row.candidate.source, instance_root=root, identity=row.candidate.identity, pid=row.candidate.pid)
+                cand = deckhub.HubCandidate(
+                    row.candidate.url,
+                    row.candidate.source,
+                    instance_root=root,
+                    identity=row.candidate.identity,
+                    pid=row.candidate.pid,
+                )
                 if not any(p.is_file() for p in deckhub.fleet_token_files(cand)[:1]):
                     continue  # that root has no fleet token to offer
                 try:
@@ -423,7 +489,10 @@ def _probe_failed(row: HubRow, exc: deckhub.NoHub) -> HubRow:
     if exc.unauthorized:
         row.presence = "unauthorized"
         if row.candidate is not None and not row.candidate.trusted:
-            row.note = row.note or "answers, but a discovered peer is never sent a credential — name it: protoagent fleet --hub <url> --token …"
+            row.note = (
+                row.note
+                or "answers, but a discovered peer is never sent a credential — name it: protoagent fleet --hub <url> --token …"
+            )
         else:
             row.note = row.note or "answers, but every credential was refused — pass --token"
     elif exc.failed:
@@ -437,7 +506,9 @@ def _probe_failed(row: HubRow, exc: deckhub.NoHub) -> HubRow:
         row.drop = True  # a member is a row under its hub, never a hub row
     else:
         row.presence = "unreachable" if row.source in ("peer", "local") else "stopped"
-        row.note = row.note or ("no answer" if row.source in ("peer", "local") else "its heartbeat is here but it does not answer")
+        row.note = row.note or (
+            "no answer" if row.source in ("peer", "local") else "its heartbeat is here but it does not answer"
+        )
         row.drop = row.source == "local"
     return row
 
@@ -488,9 +559,22 @@ def reconcile(rows: list[HubRow]) -> list[HubRow]:
                     # the listener IS that root's hub — running, or answering but refusing /
                     # unreadable: the root's row carries that word instead of "stopped"
                     target.presence, target.url, target.port = r.presence, r.url, r.port
-                    target.launcher = target.launcher or launcher_of(target.root, None) or ("desktop app" if any(_resolve(target.root) == _resolve(d) for d in deckhub.desktop_box_roots()) else "foreground")
+                    target.launcher = (
+                        target.launcher
+                        or launcher_of(target.root, None)
+                        or (
+                            "desktop app"
+                            if any(_resolve(target.root) == _resolve(d) for d in deckhub.desktop_box_roots())
+                            else "foreground"
+                        )
+                    )
                     if r.presence == "running":
-                        target.version, target.members, target.running, target.remotes = r.version, r.members, r.running, r.remotes
+                        target.version, target.members, target.running, target.remotes = (
+                            r.version,
+                            r.members,
+                            r.running,
+                            r.remotes,
+                        )
                         target.name = r.name if r.name and r.name != r.url else target.name
                         target.note = ""
                     else:
@@ -508,7 +592,21 @@ def reconcile(rows: list[HubRow]) -> list[HubRow]:
         d = r.disowned_root
         if d is not None and not r.drop and d not in listed:
             local, running, remotes = count_members(d)
-            out.append(HubRow(name=_root_name(d), root=d, url=None, port=None, presence="stopped", launcher="", source="root", members=local, running=running, remotes=remotes, note="its heartbeat named a pid that now runs another instance's hub"))
+            out.append(
+                HubRow(
+                    name=_root_name(d),
+                    root=d,
+                    url=None,
+                    port=None,
+                    presence="stopped",
+                    launcher="",
+                    source="root",
+                    members=local,
+                    running=running,
+                    remotes=remotes,
+                    note="its heartbeat named a pid that now runs another instance's hub",
+                )
+            )
             listed.add(d)
     return out
 
@@ -525,4 +623,3 @@ def wait_for_port(url: str, *, timeout_s: float = 30.0, every_s: float = 0.5) ->
             pass
         time.sleep(every_s)
     return False
-

@@ -185,12 +185,7 @@ def _dropped(rounds: Sequence[Sequence[Mapping]]) -> set[str]:
     the delegates seam polls that one task read-only and posts its answer when it settles,
     outside the rounds (``collecting_note``). Nothing here changes for it.
     """
-    return {
-        str(outcome.get("author") or "")
-        for one_round in rounds
-        for outcome in one_round
-        if not outcome.get("ok")
-    }
+    return {str(outcome.get("author") or "") for one_round in rounds for outcome in one_round if not outcome.get("ok")}
 
 
 def plan_round(

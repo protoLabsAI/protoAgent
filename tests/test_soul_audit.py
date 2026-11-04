@@ -38,7 +38,7 @@ def test_a_registered_write_tool_backs_the_commitment():
 
 
 def test_reading_the_queue_is_not_a_commitment_to_file():
-    """"Open issues" is how personas describe the READ side; only file/create/raise
+    """ "Open issues" is how personas describe the READ side; only file/create/raise
     phrasing commits to a write."""
     soul = "Review the open issues each morning and summarize them for the operator."
 

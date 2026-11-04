@@ -204,7 +204,9 @@ def _parse_repo(ref: str) -> RepoRef:
     if m:
         scheme, rest = m.group(1).lower(), m.group(2)
         if scheme == "file":
-            raise RepoRefError("file:// is a local path — register a directory under the root with register_local_project")
+            raise RepoRefError(
+                "file:// is a local path — register a directory under the root with register_local_project"
+            )
         if scheme not in _ALLOWED_SCHEMES:
             raise RepoRefError(f"the {scheme}:// transport is not allowed (use {', '.join(_ALLOWED_SCHEMES)})")
         authority, slash, path = rest.partition("/")
@@ -296,15 +298,11 @@ def _tracking_drift(checkout: Path) -> str:
                 "Tracking drift was not checked — the current branch has no upstream "
                 "tracking branch; it was not fetched."
             )
-        return (
-            "Tracking drift could not be determined — the tracking branch could not be "
-            "resolved; it was not fetched."
-        )
+        return "Tracking drift could not be determined — the tracking branch could not be resolved; it was not fetched."
     upstream = (up.stdout or "").strip()
     if not upstream:
         return (
-            "Tracking drift was not checked — the current branch has no upstream "
-            "tracking branch; it was not fetched."
+            "Tracking drift was not checked — the current branch has no upstream tracking branch; it was not fetched."
         )
 
     # (b) Count ahead/behind against that ref. ``--left-right --count A...HEAD``
@@ -513,11 +511,14 @@ async def _register(
     status = "promoted" if in_fence and not in_registry else "registered"
     from graph.config import LangGraphConfig
 
-    implicit_workspace = isinstance(source, LangGraphConfig) and replace(
-        source,
-        projects=updates.get("projects", registry),
-        filesystem_enabled=(updates.get("filesystem") or {}).get("enabled", source.filesystem_enabled),
-    ).filesystem_workspace_is_implicit
+    implicit_workspace = (
+        isinstance(source, LangGraphConfig)
+        and replace(
+            source,
+            projects=updates.get("projects", registry),
+            filesystem_enabled=(updates.get("filesystem") or {}).get("enabled", source.filesystem_enabled),
+        ).filesystem_workspace_is_implicit
+    )
     return _Registration(status, mirrored=bool(fence) and not in_fence, implicit_workspace=implicit_workspace)
 
 
@@ -983,10 +984,7 @@ def build_onboard_tools(config) -> list:
                 "onboarding ▸ Allowed sources (e.g. github.com/your-org/*)."
             )
         if not any(fnmatch.fnmatch(normalized, pat) for pat in allow):
-            return (
-                f"Refused: {normalized} does not match any allowed source pattern "
-                f"({', '.join(allow)})"
-            )
+            return f"Refused: {normalized} does not match any allowed source pattern ({', '.join(allow)})"
 
         # (2) resolve where this repo lives: an existing registered path if one matches,
         #     else a fresh clone under the root.
@@ -1141,7 +1139,9 @@ def build_onboard_tools(config) -> list:
             f"default branch {default_branch}.{drift} {readers} that registry; no further registration is needed."
         )
 
-    async def _register_outside_root(*, raw: str, target: Path, root_raw: str, name: str | None, write: bool | None) -> str:
+    async def _register_outside_root(
+        *, raw: str, target: Path, root_raw: str, name: str | None, write: bool | None
+    ) -> str:
         """``register_local_project`` for a realpath OUTSIDE the root: hard floor, then the
         operator's approval card, then the shared registry write. Re-entered from the top
         on resume (LangGraph re-runs the tool), so every check below runs again on the
@@ -1256,7 +1256,9 @@ def build_onboard_tools(config) -> list:
             if requested_write != write_effective
             else ""
         )
-        source = f"GitHub {github}" if github else "no GitHub origin remote, so the GitHub plugin's picker won't list it"
+        source = (
+            f"GitHub {github}" if github else "no GitHub origin remote, so the GitHub plugin's picker won't list it"
+        )
         return (
             f"Registered {project_name} ({rw}) at {target} in {_where(reg)} — approved by the operator "
             f"({rw}){overridden}; it is {_outside(root_raw)}, and only this folder was added. "
@@ -1313,9 +1315,7 @@ def build_onboard_tools(config) -> list:
         if not root_raw.strip():
             # No root (a stock install): EVERY folder is "outside", so every registration
             # goes to the operator's card — same floor, same binding, same no-bypass rule.
-            return await _register_outside_root(
-                raw=raw, target=expanded.resolve(), root_raw="", name=name, write=write
-            )
+            return await _register_outside_root(raw=raw, target=expanded.resolve(), root_raw="", name=name, write=write)
         root_resolved = Path(root_raw).expanduser().resolve()
         target = expanded.resolve()
         # Containment BEFORE existence: a path outside the root is refused the same
@@ -1363,7 +1363,9 @@ def build_onboard_tools(config) -> list:
         if reg.status == "error":
             return f"Error: {target} was not registered — {reg.error}."
         verb = "Promoted the existing filesystem.projects entry for" if reg.status == "promoted" else "Registered"
-        source = f"GitHub {github}" if github else "no GitHub origin remote, so the GitHub plugin's picker won't list it"
+        source = (
+            f"GitHub {github}" if github else "no GitHub origin remote, so the GitHub plugin's picker won't list it"
+        )
         return (
             f"{verb} {project_name} ({rw}) at {target} in {_where(reg)} — {source}, default branch "
             f"{default_branch}. Your filesystem tools and the project board read that registry; no further "

@@ -349,5 +349,7 @@ def test_an_update_with_a_partial_map_says_it_replaced_the_stored_links(art):
     assert "REPLACED the stored map" in out and "A, B" in out
     assert set(_latest(art)["links"]) == {"C"}
     # Clearing on purpose ({}) and passing the full map stay quiet.
-    out = art.update_artifact.invoke({"old_string": "--> C", "new_string": "--> C", "links": {"A": _link(), "C": _link()}})
+    out = art.update_artifact.invoke(
+        {"old_string": "--> C", "new_string": "--> C", "links": {"A": _link(), "C": _link()}}
+    )
     assert "REPLACED" not in out

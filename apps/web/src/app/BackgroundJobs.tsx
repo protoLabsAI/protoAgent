@@ -13,7 +13,15 @@ import { api } from "../lib/api";
 import { onConnectionChange, onTopic } from "../lib/events";
 import type { BackgroundJobDTO } from "../lib/types";
 import { useUI } from "../state/uiStore";
-import { applyProgress, byRecency, fmtElapsed, nowIso, unreadJobIds, type ProgressTool } from "./background-jobs";
+import {
+  applyProgress,
+  byRecency,
+  fmtElapsed,
+  jobFailureReason,
+  nowIso,
+  unreadJobIds,
+  type ProgressTool,
+} from "./background-jobs";
 import { readKey, writeKey } from "../lib/storage";
 
 // Background-jobs UtilityBar pill + dialog (ADR 0050 Phase 3 / ADR 0051). Hydrates from
@@ -113,6 +121,7 @@ export function BackgroundJobs() {
           result: patch.result ?? prev?.result,
           created_at: patch.created_at ?? prev?.created_at,
           completed_at: patch.completed_at ?? prev?.completed_at,
+          error: patch.error ?? prev?.error,
         };
         return { ...m, [id]: next };
       });
@@ -313,7 +322,7 @@ export function BackgroundJobs() {
   );
 }
 
-function BgJobRow({
+export function BgJobRow({
   job,
   tools,
   onStop,
@@ -339,6 +348,9 @@ function BgJobRow({
     <CheckCircle2 size={14} className="bg-jobs-ok" />
   );
   const elapsed = fmtElapsed(job.created_at, running ? undefined : job.completed_at);
+  // Why a failed or canceled job ended (#4726). Shown in the row head, not the expandable
+  // body, because a job that failed before producing anything has nothing to expand.
+  const failure = jobFailureReason(job);
   const hasResult = !running && !!job.result;
   const hasTools = tools.length > 0;
   // Expandable when there's a result to read OR a live/historical tool feed to watch —
@@ -363,6 +375,11 @@ function BgJobRow({
           {job.status}
           {elapsed ? ` · ${elapsed}` : ""}
         </span>
+        {failure ? (
+          <span className="bg-jobs-error" data-testid="background-job-error">
+            {failure}
+          </span>
+        ) : null}
         {running && recentTools.length > 0 ? (
           <span className="bg-jobs-tools">
             {recentTools.map((t) => (

@@ -38,8 +38,9 @@ class FakeClock:
 def ok_account(provider_id: str, used: float = 10.0) -> Account:
     acct = Account(provider_id, provider_id, account_key="acct-1")
     acct.status = "ok"
-    acct.windows = [Window(id=f"{provider_id}:0", kind="session", window_seconds=18000,
-                           used_pct=used, resets_at=RESET, status="ok")]
+    acct.windows = [
+        Window(id=f"{provider_id}:0", kind="session", window_seconds=18000, used_pct=used, resets_at=RESET, status="ok")
+    ]
     return acct
 
 
@@ -118,9 +119,7 @@ def test_constructing_store_and_booting_routes_fetches_nothing(tmp_path):
 
         return _fetch
 
-    store = UsageStore(
-        {pid: counting(pid) for pid in usage_store.PROVIDER_IDS}, path=tmp_path / "u.json"
-    )
+    store = UsageStore({pid: counting(pid) for pid in usage_store.PROVIDER_IDS}, path=tmp_path / "u.json")
     usage_store.set_default_store(store)
 
     app = FastAPI()
@@ -137,9 +136,7 @@ def test_route_200_unknown_on_raising_fetcher(tmp_path):
     def boom():
         raise RuntimeError("secret-transport-detail")
 
-    store = UsageStore(
-        {pid: boom for pid in usage_store.PROVIDER_IDS}, path=tmp_path / "u.json"
-    )
+    store = UsageStore({pid: boom for pid in usage_store.PROVIDER_IDS}, path=tmp_path / "u.json")
     usage_store.set_default_store(store)
 
     app = FastAPI()
@@ -199,8 +196,7 @@ def test_merge_windows_keeps_newer_fetched_at_per_window(tmp_path):
     acct = Account("anthropic-oauth", "anthropic-oauth", account_key="acct-1")
 
     def win(used, status="ok"):
-        return Window(id="5h:0", kind="session", window_seconds=18000,
-                      used_pct=used, resets_at=RESET, status=status)
+        return Window(id="5h:0", kind="session", window_seconds=18000, used_pct=used, resets_at=RESET, status=status)
 
     t0 = datetime(2026, 10, 22, 9, 0, tzinfo=UTC)
     t1 = datetime(2026, 10, 22, 10, 0, tzinfo=UTC)
@@ -289,9 +285,7 @@ def test_restart_last_known_survives_failing_first_poll_via_get(tmp_path):
     that poll fails, the reader must still see the disk-loaded last-known windows, not an
     empty ``unknown`` account."""
     path = tmp_path / "u.json"
-    good = UsageStore(
-        {"anthropic-oauth": lambda: ok_account("anthropic-oauth", used=73.0)}, path=path
-    )
+    good = UsageStore({"anthropic-oauth": lambda: ok_account("anthropic-oauth", used=73.0)}, path=path)
     good.get("anthropic-oauth")  # persist a good snapshot
     assert path.exists()
 
@@ -351,8 +345,7 @@ def test_merge_publishes_on_change(tmp_path, monkeypatch):
 
     store = UsageStore({}, path=tmp_path / "u.json")
     acct = Account("openai-codex", "openai-codex", account_key="acct-1")
-    win = Window(id="rate:primary", kind="session", window_seconds=18000,
-                 used_pct=20.0, resets_at=RESET, status="ok")
+    win = Window(id="rate:primary", kind="session", window_seconds=18000, used_pct=20.0, resets_at=RESET, status="ok")
     t = datetime(2026, 10, 22, 11, 0, tzinfo=UTC)
 
     store.merge_windows(acct, [win], "headers", t)
@@ -406,7 +399,9 @@ def test_headers_after_a_poll_update_the_same_windows_not_add_copies(tmp_path):
         "anthropic-ratelimit-unified-7d-reset": "1792756800",
     }
     later = datetime(2099, 1, 1, tzinfo=UTC)
-    store.merge_windows(Account("anthropic-oauth", "anthropic-oauth"), parse_anthropic_headers(headers), "headers", later)
+    store.merge_windows(
+        Account("anthropic-oauth", "anthropic-oauth"), parse_anthropic_headers(headers), "headers", later
+    )
 
     windows = store.cached("anthropic-oauth")["windows"]
     assert len(windows) == len(polled.windows)

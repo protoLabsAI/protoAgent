@@ -240,7 +240,9 @@ async def test_a_model_call_detached_from_a_tool_never_enters_the_lead_answer(mo
             [
                 AIMessage(
                     content="",
-                    tool_calls=[{"name": "ingest_in_background", "args": {"source": "x"}, "id": "c1", "type": "tool_call"}],
+                    tool_calls=[
+                        {"name": "ingest_in_background", "args": {"source": "x"}, "id": "c1", "type": "tool_call"}
+                    ],
                 ),
                 AIMessage(content=_ANSWER),
             ],
@@ -258,7 +260,9 @@ async def test_a_model_call_detached_from_a_tool_never_enters_the_lead_answer(mo
     monkeypatch.setattr(rs.STATE, "graph_config", LangGraphConfig(), raising=False)
 
     streamed, raw = "", None
-    async for kind, payload in _run_turn_stream("ingest x", f"det-{how}", {"configurable": {"thread_id": f"det-{how}"}}):
+    async for kind, payload in _run_turn_stream(
+        "ingest x", f"det-{how}", {"configurable": {"thread_id": f"det-{how}"}}
+    ):
         if kind == "text":
             streamed += payload
         elif kind == "__raw__":
@@ -365,7 +369,12 @@ async def test_a_graph_a_tool_runs_never_enters_the_lead_answer(monkeypatch, det
 
     _install_lead(
         monkeypatch,
-        _SlowLead(messages=itertools.chain([_call("run_steps", goal="g"), AIMessage(content=_ANSWER)], itertools.repeat(AIMessage(content="(extra)")))),
+        _SlowLead(
+            messages=itertools.chain(
+                [_call("run_steps", goal="g"), AIMessage(content=_ANSWER)],
+                itertools.repeat(AIMessage(content="(extra)")),
+            )
+        ),
         tools=[run_steps],
     )
     raw = await _raw_answer("go", f"nested-{detached}")
@@ -386,7 +395,9 @@ async def test_parallel_workflow_steps_never_enter_the_lead_answer(monkeypatch):
     from langchain_core.tools import tool
 
     monkeypatch.setitem(
-        SUBAGENT_REGISTRY, "wfstep", SubagentConfig(name="wfstep", description="a step", system_prompt="Do it.", tools=[])
+        SUBAGENT_REGISTRY,
+        "wfstep",
+        SubagentConfig(name="wfstep", description="a step", system_prompt="Do it.", tools=[]),
     )
 
     @tool
@@ -423,7 +434,11 @@ async def test_the_compaction_summary_never_enters_the_answer(monkeypatch):
 
     cfg = LangGraphConfig(compaction_enabled=True, compaction_trigger="messages:3", compaction_keep_messages=1)
     shared = _word_streamer(
-        [AIMessage(content="First answer."), AIMessage(content="SUMMARY-OF-OLD-HISTORY"), AIMessage(content="Second answer.")]
+        [
+            AIMessage(content="First answer."),
+            AIMessage(content="SUMMARY-OF-OLD-HISTORY"),
+            AIMessage(content="Second answer."),
+        ]
     )
     _install_lead(monkeypatch, shared, config=cfg)
     assert await _raw_answer("hello", "compact") == "First answer."

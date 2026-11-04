@@ -110,13 +110,16 @@ def _select(name: str, specifier: str) -> tuple[str, dict]:
         if v.is_prerelease or (specifier and v not in spec):
             continue
         saw_version = True
-        pure = next((f for f in files if f.get("packagetype") == "bdist_wheel" and _is_pure_wheel(f.get("filename", ""))), None)
+        pure = next(
+            (f for f in files if f.get("packagetype") == "bdist_wheel" and _is_pure_wheel(f.get("filename", ""))), None
+        )
         if pure and (best is None or v > best[0]):
             best = (v, pure)
     if best is None:
         why = (
-            "no version matches the specifier" if not saw_version else
-            "only sdist / platform wheels on PyPI — a pure-Python wheel is required (ADR 0093 P1)"
+            "no version matches the specifier"
+            if not saw_version
+            else "only sdist / platform wheels on PyPI — a pure-Python wheel is required (ADR 0093 P1)"
         )
         raise WheelInstallError(f"{name}{specifier or ''}: {why}")
     return str(best[0]), best[1]
@@ -206,7 +209,9 @@ def _unpack_wheel(data: bytes, dest: Path) -> None:
             target.write_bytes(zf.read(member))
 
 
-def install(plugin_id: str, requirements: list[str], *, already_satisfied: Callable[[str], bool] | None = None) -> list[str]:
+def install(
+    plugin_id: str, requirements: list[str], *, already_satisfied: Callable[[str], bool] | None = None
+) -> list[str]:
     """Resolve + download + unpack ``requirements`` (and their pure-wheel transitive
     deps) into the plugin's deps dir, pin each in ``plugins.lock``, and prepend the dir
     to ``sys.path`` so they import without a restart. Returns ``name==version`` for

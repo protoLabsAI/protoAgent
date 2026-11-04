@@ -387,7 +387,9 @@ async def test_history_and_artifacts_are_bounded(engine, monkeypatch):
     await _insert(
         engine,
         id="task-big",
-        history=[{"role": "user", "messageId": f"m{i}", "parts": [{"kind": "text", "text": f"q{i}"}]} for i in range(6)],
+        history=[
+            {"role": "user", "messageId": f"m{i}", "parts": [{"kind": "text", "text": f"q{i}"}]} for i in range(6)
+        ],
         artifacts=[{"artifactId": f"a{i}", "parts": [{"kind": "text", "text": f"r{i}"}]} for i in range(4)],
     )
     body = _client().get("/api/diagnostics/tasks/task-big").json()
@@ -461,9 +463,7 @@ def test_federation_credential_is_denied_diagnostics():
     async def _ok(_request):
         return JSONResponse({"ok": True})
 
-    auth.configure(
-        bearer_token="op-secret", api_key="", allowed_origins_raw="", federation_token="fed-secret"
-    )
+    auth.configure(bearer_token="op-secret", api_key="", allowed_origins_raw="", federation_token="fed-secret")
     app = Starlette(
         routes=[
             Route("/api/diagnostics/logs", _ok),

@@ -102,7 +102,9 @@ class _TypedStore(_LifecycleStore):
         review_state=None,
         expires_at=None,
     ):
-        self.calls.append(("add", content, domain, heading, epoch, memory_kind, delivery_policy, review_state, expires_at))
+        self.calls.append(
+            ("add", content, domain, heading, epoch, memory_kind, delivery_policy, review_state, expires_at)
+        )
         return 44
 
 

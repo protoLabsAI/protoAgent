@@ -121,7 +121,9 @@ def _imports(tree: ast.Module) -> set[str]:
 def _violations(path: Path) -> list[str]:
     tree = ast.parse(path.read_text(encoding="utf-8"))
     module_marked = any(
-        isinstance(n, ast.Assign) and any(isinstance(t, ast.Name) and t.id == "pytestmark" for t in n.targets) and _is_mark(n.value)
+        isinstance(n, ast.Assign)
+        and any(isinstance(t, ast.Name) and t.id == "pytestmark" for t in n.targets)
+        and _is_mark(n.value)
         for n in tree.body
     )
     if module_marked:
@@ -151,7 +153,9 @@ def _violations(path: Path) -> list[str]:
 
 
 def test_every_os_touching_test_is_marked_platform_sensitive():
-    problems = [v for p in sorted((ROOT / "tests").rglob("test_*.py")) if "integration" not in p.parts for v in _violations(p)]
+    problems = [
+        v for p in sorted((ROOT / "tests").rglob("test_*.py")) if "integration" not in p.parts for v in _violations(p)
+    ]
     assert not problems, "the Windows CI lane would silently skip these:\n" + "\n".join(problems)
 
 

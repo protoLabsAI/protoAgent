@@ -41,15 +41,32 @@ def _history(idx, *entries):
 def test_history_reply_becomes_the_address_bar_state():
     h = _history(1, ("about:blank", ""), ("https://httpbin.org/post", ""), ("https://httpbin.org/get", "get"))
     assert bs.nav_state_from_history(h) == {
-        "url": "https://httpbin.org/post", "title": "", "canBack": True, "canForward": True}
+        "url": "https://httpbin.org/post",
+        "title": "",
+        "canBack": True,
+        "canForward": True,
+    }
     assert bs.nav_state_from_history(_history(0, ("https://a.test/", "A"))) == {
-        "url": "https://a.test/", "title": "A", "canBack": False, "canForward": False}
+        "url": "https://a.test/",
+        "title": "A",
+        "canBack": False,
+        "canForward": False,
+    }
     last = bs.nav_state_from_history(_history(1, ("https://a.test/", "A"), ("https://b.test/", "B")))
     assert last["canBack"] is True and last["canForward"] is False
 
 
-@pytest.mark.parametrize("bad", [None, {}, {"entries": []}, {"currentIndex": 3, "entries": [{}]},
-                                 {"currentIndex": "0", "entries": [{}]}, {"currentIndex": -1, "entries": [{}]}])
+@pytest.mark.parametrize(
+    "bad",
+    [
+        None,
+        {},
+        {"entries": []},
+        {"currentIndex": 3, "entries": [{}]},
+        {"currentIndex": "0", "entries": [{}]},
+        {"currentIndex": -1, "entries": [{}]},
+    ],
+)
 def test_an_unusable_history_reply_is_ignored(bad):
     assert bs.nav_state_from_history(bad) is None
 
@@ -58,10 +75,10 @@ def test_only_top_frame_moves_count_as_tab_navigation():
     top = {"frame": {"id": "MAIN", "url": "https://a.test/"}}
     child = {"frame": {"id": "AD", "parentId": "MAIN", "url": "https://ads.test/"}}
     assert bs.is_top_frame_nav("Page.frameNavigated", top, None)
-    assert not bs.is_top_frame_nav("Page.frameNavigated", child, "MAIN")          # an iframe loading
+    assert not bs.is_top_frame_nav("Page.frameNavigated", child, "MAIN")  # an iframe loading
     assert bs.is_top_frame_nav("Page.navigatedWithinDocument", {"frameId": "MAIN"}, "MAIN")  # pushState / #hash
     assert not bs.is_top_frame_nav("Page.navigatedWithinDocument", {"frameId": "AD"}, "MAIN")
-    assert bs.is_top_frame_nav("Page.loadEventFired", {}, "MAIN")                 # the title has landed
+    assert bs.is_top_frame_nav("Page.loadEventFired", {}, "MAIN")  # the title has landed
     assert not bs.is_top_frame_nav("Page.frameStoppedLoading", {"frameId": "MAIN"}, "MAIN")
     assert not bs.is_top_frame_nav("Page.screencastFrame", {}, "MAIN")
 
@@ -121,7 +138,9 @@ async def test_agent_navigations_reach_nav_cb_with_url_title_and_history_state()
     reader = asyncio.create_task(s._read_loop())
 
     # the agent's browser_open → a top-frame commit → the bridge asks where the tab is
-    sock.feed({"method": "Page.frameNavigated", "params": {"frame": {"id": "MAIN", "url": "https://httpbin.org/forms/post"}}})
+    sock.feed(
+        {"method": "Page.frameNavigated", "params": {"frame": {"id": "MAIN", "url": "https://httpbin.org/forms/post"}}}
+    )
     await _settle()
     (rid,) = sock.history_requests()
     sock.feed({"id": rid, "result": _history(1, ("about:blank", ""), ("https://httpbin.org/forms/post", ""))})
@@ -132,14 +151,25 @@ async def test_agent_navigations_reach_nav_cb_with_url_title_and_history_state()
     sock.feed({"method": "Page.frameNavigated", "params": {"frame": {"id": "MAIN", "url": "https://httpbin.org/post"}}})
     await _settle()
     rid = sock.history_requests()[-1]
-    sock.feed({"id": rid, "result": _history(2, ("about:blank", ""), ("https://httpbin.org/forms/post", ""),
-                                             ("https://httpbin.org/post", ""))})
+    sock.feed(
+        {
+            "id": rid,
+            "result": _history(
+                2, ("about:blank", ""), ("https://httpbin.org/forms/post", ""), ("https://httpbin.org/post", "")
+            ),
+        }
+    )
     await _settle()
     assert seen[-1]["url"] == "https://httpbin.org/post"
 
     # an iframe navigating, or a sub-frame pushState, never asks — nor moves the bar
     n = len(sock.history_requests())
-    sock.feed({"method": "Page.frameNavigated", "params": {"frame": {"id": "AD", "parentId": "MAIN", "url": "https://ads.test/"}}})
+    sock.feed(
+        {
+            "method": "Page.frameNavigated",
+            "params": {"frame": {"id": "AD", "parentId": "MAIN", "url": "https://ads.test/"}},
+        }
+    )
     sock.feed({"method": "Page.navigatedWithinDocument", "params": {"frameId": "AD", "url": "https://ads.test/#x"}})
     await _settle()
     assert len(sock.history_requests()) == n
@@ -148,7 +178,9 @@ async def test_agent_navigations_reach_nav_cb_with_url_title_and_history_state()
     sock.feed({"method": "Page.loadEventFired", "params": {}})
     await _settle()
     rid = sock.history_requests()[-1]
-    back = _history(1, ("about:blank", ""), ("https://httpbin.org/forms/post", "Form"), ("https://httpbin.org/post", ""))
+    back = _history(
+        1, ("about:blank", ""), ("https://httpbin.org/forms/post", "Form"), ("https://httpbin.org/post", "")
+    )
     sock.feed({"id": rid, "result": back})
     sock.feed({"method": "Page.navigatedWithinDocument", "params": {"frameId": "MAIN", "url": "x"}})
     await _settle()
@@ -203,7 +235,7 @@ def test_stream_route_forwards_nav_state_as_a_nav_message(monkeypatch):
             self.nav_cb = nav_cb
 
         async def __aenter__(self):
-            self.reader_task = asyncio.get_running_loop().create_future()   # never dies
+            self.reader_task = asyncio.get_running_loop().create_future()  # never dies
             return self
 
         async def __aexit__(self, *exc):
@@ -222,8 +254,13 @@ def test_stream_route_forwards_nav_state_as_a_nav_message(monkeypatch):
     c = TestClient(app)
     ticket = c.post("/api/plugins/agent_browser/stream-ticket").json()["ticket"]
     with c.websocket_connect(f"/api/plugins/agent_browser/stream?ticket={ticket}") as ws:
-        assert ws.receive_json() == {"t": "nav", "url": "https://httpbin.org/post", "title": "",
-                                     "canBack": True, "canForward": False}
+        assert ws.receive_json() == {
+            "t": "nav",
+            "url": "https://httpbin.org/post",
+            "title": "",
+            "canBack": True,
+            "canForward": False,
+        }
 
 
 # ── the view: paint the bar, never clobber an operator mid-edit (run in node) ────
@@ -252,10 +289,12 @@ def _run_view(script: str):
         "const els={url:{value:'',title:'',id:'url'},back:{disabled:true},fwd:{disabled:true}};"
         "const $=(id)=>els[id]; const document={activeElement:null,title:'Browser'};"
         "let navState={url:'',title:'',canBack:false,canForward:false}, urlDirty=false;"
-        + _js_function(page, "navView") + _js_function(page, "applyNav")
+        + _js_function(page, "navView")
+        + _js_function(page, "applyNav")
         + "const out=[]; const snap=(label)=>out.push({label,value:els.url.value,tip:els.url.title,"
-          "doc:document.title,back:els.back.disabled,fwd:els.fwd.disabled,dirty:urlDirty});"
-        + script + ";console.log(JSON.stringify(out));"
+        "doc:document.title,back:els.back.disabled,fwd:els.fwd.disabled,dirty:urlDirty});"
+        + script
+        + ";console.log(JSON.stringify(out));"
     )
     out = subprocess.run([NODE, "-e", harness], capture_output=True, text=True, timeout=60)
     assert out.returncode == 0, out.stderr
@@ -270,11 +309,11 @@ def test_view_paints_url_title_and_back_forward_state():
         "applyNav({url:'about:blank',title:'',canBack:false,canForward:false}); snap('blank');"
     )
     assert r["open"]["value"] == "https://httpbin.org/forms/post"
-    assert r["open"]["back"] is False and r["open"]["fwd"] is True       # .disabled
+    assert r["open"]["back"] is False and r["open"]["fwd"] is True  # .disabled
     assert r["submit"]["value"] == "https://httpbin.org/post"
     assert r["submit"]["tip"] == "post — https://httpbin.org/post" and r["submit"]["doc"] == "post · Browser"
     assert r["submit"]["fwd"] is False
-    assert r["blank"]["value"] == ""             # about:blank shows the placeholder, like a real bar
+    assert r["blank"]["value"] == ""  # about:blank shows the placeholder, like a real bar
     assert r["blank"]["back"] is True and r["blank"]["fwd"] is True
 
 
@@ -292,7 +331,7 @@ def test_view_never_clobbers_a_focused_edited_bar():
         "applyNav({url:'https://d.test/',title:'D',canBack:true,canForward:false}); snap('blurred');"
     )
     assert r["typing"]["value"] == "my-half-typed" and r["typing"]["dirty"] is True
-    assert r["typing"]["back"] is False          # the buttons + tooltip still track the tab
+    assert r["typing"]["back"] is False  # the buttons + tooltip still track the tab
     assert r["typing"]["tip"] == "B — https://b.test/"
     assert r["focused-clean"]["value"] == "https://c.test/"
     assert r["blurred"]["value"] == "https://d.test/" and r["blurred"]["dirty"] is False
@@ -303,6 +342,6 @@ def test_view_wires_nav_messages_and_edit_tracking():
     assert 'm.t==="nav"){ applyNav(m); }' in page
     assert '$("url").addEventListener("input",()=>{ urlDirty=true; });' in page
     go = _js_function(page, "go")
-    assert "urlDirty=false" in go                # Enter/Go hands the bar back to the tab
-    assert 'e.key==="Escape"' in page            # Escape reverts to the current URL
+    assert "urlDirty=false" in go  # Enter/Go hands the bar back to the tab
+    assert 'e.key==="Escape"' in page  # Escape reverts to the current URL
     assert 'id="back"' in page and 'id="fwd"' in page

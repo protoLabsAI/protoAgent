@@ -48,9 +48,7 @@ def _write_manifest(gen, *rows: tuple[str, str, str]) -> None:
 
 def _env(gen, monkeypatch, mapping: dict[str, str]) -> None:
     """Fake the installed-environment license resolution (keyed by canon name)."""
-    monkeypatch.setattr(
-        gen, "_installed_py_licenses", lambda: {gen._canon(k): v for k, v in mapping.items()}
-    )
+    monkeypatch.setattr(gen, "_installed_py_licenses", lambda: {gen._canon(k): v for k, v in mapping.items()})
 
 
 def test_committed_licenses_parses_only_package_rows(gen):

@@ -159,17 +159,24 @@ def test_restart_auth_audit_and_busy_guard(monkeypatch):
     assert client.get("/api/restart/readiness", headers=headers).status_code == 200
     turn_activity.begin("busy-restart")
     try:
-        response = client.post("/api/restart", headers=headers,
-                               json={"when_idle": True, "reason": "settings: Self update"})
+        response = client.post(
+            "/api/restart", headers=headers, json={"when_idle": True, "reason": "settings: Self update"}
+        )
         assert response.status_code == 409
         assert not STATE.restart_requested
         assert audit.call_args.kwargs["args"] == {
-            "actor": "operator", "reason": "settings: Self update", "target": "self",
+            "actor": "operator",
+            "reason": "settings: Self update",
+            "target": "self",
         }
     finally:
         turn_activity.end("busy-restart")
-    assert client.post("/api/restart", headers=headers,
-                       json={"when_idle": True, "reason": "settings: Self update"}).status_code == 202
+    assert (
+        client.post(
+            "/api/restart", headers=headers, json={"when_idle": True, "reason": "settings: Self update"}
+        ).status_code
+        == 202
+    )
     assert audit.call_count == 2
 
 

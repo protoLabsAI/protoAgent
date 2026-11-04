@@ -286,13 +286,17 @@ async def test_wait_supersede_works_against_a_persisted_wait_across_restart(tmp_
     import logging
 
     s1 = _real_scheduler(tmp_path)
-    await _wait_tool(s1).ainvoke({"seconds": 300, "then": "check ship (pre-restart)", "state": {"session_id": "chat-abc"}})
+    await _wait_tool(s1).ainvoke(
+        {"seconds": 300, "then": "check ship (pre-restart)", "state": {"session_id": "chat-abc"}}
+    )
     del s1  # "restart": a fresh scheduler instance over the same persisted db
 
     s2 = _real_scheduler(tmp_path)
     assert [j.id for j in s2.list_jobs()] == ["wait:chat-abc"]  # survived the restart
     with caplog.at_level(logging.INFO, logger="protoagent.tools"):
-        await _wait_tool(s2).ainvoke({"seconds": 60, "then": "check ship (post-restart)", "state": {"session_id": "chat-abc"}})
+        await _wait_tool(s2).ainvoke(
+            {"seconds": 60, "then": "check ship (post-restart)", "state": {"session_id": "chat-abc"}}
+        )
 
     jobs = s2.list_jobs()
     assert [j.id for j in jobs] == ["wait:chat-abc"]  # exactly one pending — the later one

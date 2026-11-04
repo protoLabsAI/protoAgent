@@ -31,19 +31,19 @@ def _call(tool, updates):
 @pytest.mark.parametrize(
     "key",
     [
-        "filesystem.allow_run",      # shell execution
-        "filesystem.projects",       # the ADR 0007 project fence
-        "operator.allowed_dirs",     # reachable directories
-        "egress.enabled",            # ADR 0008 network fence
-        "plugins.enabled",           # runs code in-process AS the agent
-        "auth.token",                # the operator API's gate
-        "mcp.servers",               # out-of-process capability
-        "soul.self_edit_enabled",    # persona has its own guarded path
+        "filesystem.allow_run",  # shell execution
+        "filesystem.projects",  # the ADR 0007 project fence
+        "operator.allowed_dirs",  # reachable directories
+        "egress.enabled",  # ADR 0008 network fence
+        "plugins.enabled",  # runs code in-process AS the agent
+        "auth.token",  # the operator API's gate
+        "mcp.servers",  # out-of-process capability
+        "soul.self_edit_enabled",  # persona has its own guarded path
         "self_improvement.enabled",  # no self-enabling automatic mutation
-        "tools.self_config_enabled", # no widening its own fence
-        "tools.disabled",            # ...or re-enabling a tool the operator removed
-        "delegates",                 # each entry is an executable the host spawns
-        "runtime.acp",               # per-agent command overrides, same spawn path
+        "tools.self_config_enabled",  # no widening its own fence
+        "tools.disabled",  # ...or re-enabling a tool the operator removed
+        "delegates",  # each entry is an executable the host spawns
+        "runtime.acp",  # per-agent command overrides, same spawn path
         "acp.agents",
     ],
 )
@@ -56,11 +56,11 @@ def test_refuses_the_trust_surface(key):
 @pytest.mark.parametrize(
     "key",
     [
-        "some_plugin.command",       # a plugin section can't be enumerated in advance...
-        "another.nested.executable", # ...so the leaf name is what catches it
+        "some_plugin.command",  # a plugin section can't be enumerated in advance...
+        "another.nested.executable",  # ...so the leaf name is what catches it
         "x.args",
         "y.interpreter",
-        "z.BINARY",                  # case-insensitive
+        "z.BINARY",  # case-insensitive
     ],
 )
 def test_refuses_defining_an_executable_in_any_section(key):

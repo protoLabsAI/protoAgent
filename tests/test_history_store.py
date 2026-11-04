@@ -20,12 +20,30 @@ def store(tmp_path, monkeypatch):
 def test_schema_and_reopen(store):
     with closing(sqlite3.connect(store.path)) as db:
         assert [r[1] for r in db.execute("PRAGMA table_info(history)")] == [
-            "id", "session_id", "thread_id", "surface", "kind", "heading", "content",
-            "span_start", "span_end", "created_at", "namespace", "invalidated_at", "invalidation_reason",
+            "id",
+            "session_id",
+            "thread_id",
+            "surface",
+            "kind",
+            "heading",
+            "content",
+            "span_start",
+            "span_end",
+            "created_at",
+            "namespace",
+            "invalidated_at",
+            "invalidation_reason",
         ]
         tables = {r[0] for r in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
-        assert tables == {"history", "sqlite_sequence", "history_fts", "history_fts_data",
-                          "history_fts_idx", "history_fts_docsize", "history_fts_config"}
+        assert tables == {
+            "history",
+            "sqlite_sequence",
+            "history_fts",
+            "history_fts_data",
+            "history_fts_idx",
+            "history_fts_docsize",
+            "history_fts_config",
+        }
         assert "fts5" in db.execute("SELECT sql FROM sqlite_master WHERE name='history_fts'").fetchone()[0]
     id = store.add("persisted", session_id="s", kind="archive")
     assert HistoryStore(store.path).get(id).content == "persisted"
@@ -35,9 +53,18 @@ def test_schema_and_reopen(store):
 @pytest.mark.parametrize("kind", ["archive", "summary", "report"])
 def test_roundtrip(store, kind):
     content = "complete transcript " * 2000
-    id = store.add(content, session_id="session", thread_id="thread:goal-iter-1", kind=kind,
-                   heading="distinctheading", surface="chat", span_start="start", span_end="end",
-                   created_at="2026-10-28T00:00:00+00:00", namespace="chat-archive:session")
+    id = store.add(
+        content,
+        session_id="session",
+        thread_id="thread:goal-iter-1",
+        kind=kind,
+        heading="distinctheading",
+        surface="chat",
+        span_start="start",
+        span_end="end",
+        created_at="2026-10-28T00:00:00+00:00",
+        namespace="chat-archive:session",
+    )
     entry = store.get(id)
     assert entry.content == content
     assert entry.kind == kind
@@ -71,8 +98,10 @@ def test_external_transaction_invalidation_restore_and_fts_delete(store):
     id = store.add("searchable", session_id="s", kind="archive")
     kb = KnowledgeStore(store.path)
     with closing(kb._connect()) as db, db:
-        db.execute("UPDATE history SET invalidated_at = ?, invalidation_reason = ? WHERE id = ?",
-                   ("2026-10-28T00:00:00+00:00", "forget_pending:s", id))
+        db.execute(
+            "UPDATE history SET invalidated_at = ?, invalidation_reason = ? WHERE id = ?",
+            ("2026-10-28T00:00:00+00:00", "forget_pending:s", id),
+        )
     assert store.search("searchable") == store.list_for_session("s") == []
     assert store.get(id) is None
     with closing(kb._connect()) as db, db:
@@ -91,6 +120,7 @@ def test_external_transaction_invalidation_restore_and_fts_delete(store):
 @pytest.mark.platform_sensitive
 def test_concurrent_knowledge_and_history(store):
     kb = KnowledgeStore(store.path)
+
     def write(i):
         if i % 2:
             return HistoryStore(store.path).add(f"history {i}", session_id="s", kind="report")
@@ -166,8 +196,12 @@ def test_boot_reload_plugin_and_disabled(tmp_path, monkeypatch, backend):
     monkeypatch.delenv("KNOWLEDGE_DB_PATH", raising=False)
     leaf = tmp_path / "config.yaml"
     db_path = tmp_path / "agent.db"
+
     def config(enabled=True):
-        leaf.write_text(f"knowledge:\n  db_path: {db_path}\n  backend: '{backend}'\nmiddleware:\n  knowledge: {str(enabled).lower()}\nscheduler:\n  enabled: false\n")
+        leaf.write_text(
+            f"knowledge:\n  db_path: {db_path}\n  backend: '{backend}'\nmiddleware:\n  knowledge: {str(enabled).lower()}\nscheduler:\n  enabled: false\n"
+        )
+
     config()
     monkeypatch.setattr(cio, "config_yaml_path", lambda: leaf)
     monkeypatch.setattr(cio, "is_setup_complete", lambda: True)

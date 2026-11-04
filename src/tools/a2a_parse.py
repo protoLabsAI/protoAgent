@@ -74,12 +74,7 @@ def _extract_text(result) -> str | None:
     rebuilds the reply exactly as it was streamed; a peer that means a paragraph break
     still sends that newline inside a part's own text, so nothing real is lost."""
     task = _task_of(result)
-    chunks = [
-        p.get("text", "")
-        for art in task.get("artifacts") or []
-        for p in art.get("parts", [])
-        if p.get("text")
-    ]
+    chunks = [p.get("text", "") for art in task.get("artifacts") or [] for p in art.get("parts", []) if p.get("text")]
     if any(chunks):
         return "".join(chunks)
     parts = [p.get("text", "") for p in (task.get("parts") or []) if p.get("text")]

@@ -444,9 +444,10 @@ def test_console_resolve_rejects_an_empty_summary_and_a_bogus_kind(monkeypatch, 
 
     assert client.post("/api/friction/resolve", json={"summary": "  "}).json()["changed"] == 0
     assert "summary is required" in client.post("/api/friction/resolve", json={}).json()["error"]
-    assert "kind must be one of" in client.post(
-        "/api/friction/resolve", json={"summary": "untouched", "kind": "bogus"}
-    ).json()["error"]
+    assert (
+        "kind must be one of"
+        in client.post("/api/friction/resolve", json={"summary": "untouched", "kind": "bogus"}).json()["error"]
+    )
     assert not _recs(tmp_path / "friction.jsonl")[0].get("resolved_at")
 
 
@@ -594,6 +595,7 @@ def test_recording_and_resolving_emit_on_the_bus(wired):
 def test_a_bus_failure_never_breaks_a_tool_call(wired):
     """Friction recording is the system's self-improvement path; it must not be the thing
     that fails a turn."""
+
     def _boom(topic, data=None):
         raise RuntimeError("bus down")
 
@@ -686,16 +688,20 @@ def test_every_seam_this_plugin_claims_is_actually_registered(wired):
     plugin system provides, not through a tool list alone. If one is dropped, say so
     here rather than discovering it as a silently missing surface."""
     assert {getattr(t, "name", "") for t in wired.tools} == {
-        "record_friction", "friction_review", "resolve_friction",
-        "eval_regression_entries", "eval_regression_trace", "eval_rerun_case",
+        "record_friction",
+        "friction_review",
+        "resolve_friction",
+        "eval_regression_entries",
+        "eval_regression_trace",
+        "eval_rerun_case",
     }
-    assert wired.middlewares                      # auto-capture
-    assert wired.routers                          # read API + resolve + the view page
-    assert wired.work_providers                   # ADR 0079 working state
-    assert wired.skill_dirs == ["skills"]         # when to record
-    assert "friction" in wired.chat_commands      # operator control
-    assert wired.subagents                        # triage delegate
-    assert wired.a2a_skills                       # agent card
+    assert wired.middlewares  # auto-capture
+    assert wired.routers  # read API + resolve + the view page
+    assert wired.work_providers  # ADR 0079 working state
+    assert wired.skill_dirs == ["skills"]  # when to record
+    assert "friction" in wired.chat_commands  # operator control
+    assert wired.subagents  # triage delegate
+    assert wired.a2a_skills  # agent card
 
 
 def test_distinct_errors_from_one_tool_are_distinct_signals(ledger):
@@ -712,9 +718,15 @@ def test_distinct_errors_from_one_tool_are_distinct_signals(ledger):
 
 
 def test_an_over_long_report_is_marked_as_clipped_not_cut_mid_word(ledger):
-    asyncio.run(record_friction.ainvoke({
-        "kind": "harness", "summary": "s" * 400, "detail": "d" * 900,
-    }))
+    asyncio.run(
+        record_friction.ainvoke(
+            {
+                "kind": "harness",
+                "summary": "s" * 400,
+                "detail": "d" * 900,
+            }
+        )
+    )
 
     rec = _recs(ledger)[0]
 
@@ -753,8 +765,7 @@ def test_an_existing_pre_instance_ledger_is_adopted_not_orphaned(tmp_path, monke
     monkeypatch.delenv("FRICTION_LOG", raising=False)
     legacy = tmp_path / "legacy" / "friction" / "friction.jsonl"
     legacy.parent.mkdir(parents=True)
-    legacy.write_text('{"ts":"2026-07-22T00:00:00+00:00","kind":"harness","summary":"old signal"}\n',
-                      encoding="utf-8")
+    legacy.write_text('{"ts":"2026-07-22T00:00:00+00:00","kind":"harness","summary":"old signal"}\n', encoding="utf-8")
     new_home = tmp_path / "instance"
     monkeypatch.setattr(friction, "_legacy_ledger_path", lambda: legacy)
     monkeypatch.setattr("infra.paths.instance_paths", lambda: _FakePaths(new_home))
@@ -762,7 +773,7 @@ def test_an_existing_pre_instance_ledger_is_adopted_not_orphaned(tmp_path, monke
     resolved = friction._ledger_path()
 
     assert resolved == new_home / "friction" / "friction.jsonl"
-    assert resolved.is_file() and not legacy.exists()   # moved, not copied or dropped
+    assert resolved.is_file() and not legacy.exists()  # moved, not copied or dropped
     assert "old signal" in resolved.read_text(encoding="utf-8")
 
 
@@ -801,8 +812,7 @@ def test_the_operator_and_the_agent_rank_the_backlog_identically(wired):
     from plugins.friction import _triage_rank, open_friction_work
 
     for n in range(4):
-        asyncio.run(record_friction.ainvoke(
-            {"kind": "harness", "summary": f"repeated {n}", "severity": "minor"}))
+        asyncio.run(record_friction.ainvoke({"kind": "harness", "summary": f"repeated {n}", "severity": "minor"}))
     for _ in range(5):
         _record("harness", "repeated 0")
     asyncio.run(record_friction.ainvoke({"kind": "harness", "summary": "one major", "severity": "major"}))
@@ -874,11 +884,19 @@ def _write_signal_ledger(path: Path, lines: int) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", encoding="utf-8") as fh:
         for i in range(lines):
-            fh.write(json.dumps({
-                "ts": f"2026-08-{(i % 28) + 1:02d}T00:00:00+00:00", "kind": "harness",
-                "summary": f"signal {i % 97}", "severity": "major", "source": "auto",
-                "detail": "d" * 400,
-            }) + "\n")
+            fh.write(
+                json.dumps(
+                    {
+                        "ts": f"2026-08-{(i % 28) + 1:02d}T00:00:00+00:00",
+                        "kind": "harness",
+                        "summary": f"signal {i % 97}",
+                        "severity": "major",
+                        "source": "auto",
+                        "detail": "d" * 400,
+                    }
+                )
+                + "\n"
+            )
 
 
 def test_the_working_state_provider_does_one_pass_over_the_ledger_and_caches_it(wired, monkeypatch):
@@ -946,7 +964,12 @@ def test_the_api_serves_its_own_namespace_and_keeps_the_documented_alias(monkeyp
     assert canonical == legacy
     assert [i["summary"] for i in canonical["items"]] == ["reachable both ways"]
     assert client.post("/api/plugins/friction/resolve", json={"summary": "reachable both ways"}).json()["changed"] == 1
-    assert client.post("/api/friction/resolve", json={"summary": "reachable both ways", "resolved": False}).json()["changed"] == 1
+    assert (
+        client.post("/api/friction/resolve", json={"summary": "reachable both ways", "resolved": False}).json()[
+            "changed"
+        ]
+        == 1
+    )
 
 
 def test_the_view_calls_the_namespaced_api(monkeypatch):
@@ -1023,10 +1046,10 @@ def test_the_view_links_a_prefilled_issue_and_degrades_to_the_clipboard(monkeypa
     page = (_P(friction.__file__).parent / "view.html").read_text(encoding="utf-8")
 
     assert '"https://github.com/" + state.issueRepo + "/issues/new?"' in page
-    assert 'new URLSearchParams({ title: issueTitle(item), body: issueBody(item) })' in page
-    assert 'if (!state.issueRepo) return "";' in page          # no repo → no link
-    assert 'target = "_blank"' in page and 'noopener noreferrer' in page
-    assert "Copy as issue" in page                              # the fallback survives
+    assert "new URLSearchParams({ title: issueTitle(item), body: issueBody(item) })" in page
+    assert 'if (!state.issueRepo) return "";' in page  # no repo → no link
+    assert 'target = "_blank"' in page and "noopener noreferrer" in page
+    assert "Copy as issue" in page  # the fallback survives
 
 
 # ── #2595 acceptance 2: friction per member, without opening files on disk ───
@@ -1042,16 +1065,42 @@ def test_fleet_rollup_merges_by_summary_and_keeps_attribution(monkeypatch, tmp_p
     from plugins import friction
 
     monkeypatch.setenv("FRICTION_LOG", str(tmp_path / "friction.jsonl"))
-    monkeypatch.setattr("graph.fleet.supervisor.list_remotes",
-                        lambda: [_remote("alpha", "http://a"), _remote("beta", "http://b")])
+    monkeypatch.setattr(
+        "graph.fleet.supervisor.list_remotes", lambda: [_remote("alpha", "http://a"), _remote("beta", "http://b")]
+    )
 
     payloads = {
-        "http://a": [{"kind": "harness", "summary": "read_file truncates", "severity": "minor",
-                      "count": 3, "first_seen": "2026-08-01", "last_seen": "2026-08-20", "tool": ""}],
-        "http://b": [{"kind": "harness", "summary": "read_file truncates", "severity": "major",
-                      "count": 1, "first_seen": "2026-08-10", "last_seen": "2026-08-25", "tool": ""},
-                     {"kind": "harness", "summary": "beta only", "severity": "minor", "count": 1,
-                      "first_seen": "2026-08-05", "last_seen": "2026-08-05", "tool": ""}],
+        "http://a": [
+            {
+                "kind": "harness",
+                "summary": "read_file truncates",
+                "severity": "minor",
+                "count": 3,
+                "first_seen": "2026-08-01",
+                "last_seen": "2026-08-20",
+                "tool": "",
+            }
+        ],
+        "http://b": [
+            {
+                "kind": "harness",
+                "summary": "read_file truncates",
+                "severity": "major",
+                "count": 1,
+                "first_seen": "2026-08-10",
+                "last_seen": "2026-08-25",
+                "tool": "",
+            },
+            {
+                "kind": "harness",
+                "summary": "beta only",
+                "severity": "minor",
+                "count": 1,
+                "first_seen": "2026-08-05",
+                "last_seen": "2026-08-05",
+                "tool": "",
+            },
+        ],
     }
 
     async def _fake(client, member):
@@ -1061,12 +1110,12 @@ def test_fleet_rollup_merges_by_summary_and_keeps_attribution(monkeypatch, tmp_p
     out = asyncio.run(friction.fleet_rollup())
 
     shared = next(i for i in out["items"] if i["summary"] == "read_file truncates")
-    assert shared["count"] == 4                                   # summed across members
-    assert shared["severity"] == "major"                          # worst experience wins
+    assert shared["count"] == 4  # summed across members
+    assert shared["severity"] == "major"  # worst experience wins
     assert {a["name"] for a in shared["agents"]} == {"alpha", "beta"}
     assert shared["first_seen"] == "2026-08-01" and shared["last_seen"] == "2026-08-25"
     assert out["members"] == ["alpha", "beta"] and out["unreachable"] == []
-    assert out["items"][0]["summary"] == "read_file truncates"    # worst-first, as elsewhere
+    assert out["items"][0]["summary"] == "read_file truncates"  # worst-first, as elsewhere
 
 
 def test_an_unreachable_member_is_named_not_silently_dropped(monkeypatch, tmp_path):
@@ -1074,8 +1123,9 @@ def test_an_unreachable_member_is_named_not_silently_dropped(monkeypatch, tmp_pa
     from plugins import friction
 
     monkeypatch.setenv("FRICTION_LOG", str(tmp_path / "friction.jsonl"))
-    monkeypatch.setattr("graph.fleet.supervisor.list_remotes",
-                        lambda: [_remote("up", "http://a"), _remote("down", "http://b")])
+    monkeypatch.setattr(
+        "graph.fleet.supervisor.list_remotes", lambda: [_remote("up", "http://a"), _remote("down", "http://b")]
+    )
 
     async def _fake(client, member):
         return {"name": "up", "items": []} if member["url"] == "http://a" else None
@@ -1106,7 +1156,7 @@ def test_the_rollup_asks_members_for_the_LEGACY_path(monkeypatch):
     from plugins import friction
 
     src = _P(friction.__file__).read_text(encoding="utf-8")
-    body = src[src.index("async def _member_friction"): src.index("async def fleet_rollup")]
+    body = src[src.index("async def _member_friction") : src.index("async def fleet_rollup")]
 
     assert 'f"{base}/api/friction"' in body
     assert "/api/plugins/friction" not in body
@@ -1145,8 +1195,10 @@ def test_the_fleet_roster_answers_without_contacting_a_member(monkeypatch, tmp_p
         raise AssertionError("the roster must not fan out to members")
 
     monkeypatch.setattr(friction, "fleet_rollup", _no_rollup)
-    monkeypatch.setattr("graph.fleet.supervisor.list_remotes",
-                        lambda: [{"name": "vera", "url": "http://127.0.0.1:9"}, {"name": "no-url"}])
+    monkeypatch.setattr(
+        "graph.fleet.supervisor.list_remotes",
+        lambda: [{"name": "vera", "url": "http://127.0.0.1:9"}, {"name": "no-url"}],
+    )
     assert client.get("/api/friction/fleet/roster").json() == {"is_hub": True, "members": ["vera"]}
 
     monkeypatch.setattr("graph.fleet.supervisor.list_remotes", lambda: [])
@@ -1166,7 +1218,7 @@ def test_the_view_reveals_the_fleet_tab_from_the_roster_once(monkeypatch):
     from plugins import friction
 
     page = (_P(friction.__file__).parent / "view.html").read_text(encoding="utf-8")
-    body = page[page.index("async function revealFleetToggleIfHub"):]
+    body = page[page.index("async function revealFleetToggleIfHub") :]
     body = body[: body.index("\n  }\n") + 4]
 
     assert '"/api/plugins/friction/fleet/roster"' in body
@@ -1197,7 +1249,7 @@ def test_agent_names_are_not_lowercased_by_the_badge_style(monkeypatch):
     from plugins import friction
 
     page = (_P(friction.__file__).parent / "view.html").read_text(encoding="utf-8")
-    chip = page[page.index("if (Array.isArray(item.agents)"):]
+    chip = page[page.index("if (Array.isArray(item.agents)") :]
     chip = chip[: chip.index("meta.appendChild(chip)")]
     # Ignore the comment that explains the choice — it names the class it rejects.
     code = "\n".join(ln for ln in chip.splitlines() if not ln.strip().startswith("//"))
@@ -1221,7 +1273,7 @@ _ALL_FS = frozenset({"read_file", "search_files", "list_dir", "find_files", "edi
         # real work — never friction
         ("git diff", None),
         ("git log --oneline -5", None),
-        ("git diff | grep TODO", None),               # a pipeline is its FIRST segment
+        ("git diff | grep TODO", None),  # a pipeline is its FIRST segment
         ("mise exec -- npm test", None),
         ("mise exec node@20 -- npx tsc --noEmit", None),
         ("npx vitest run", None),
@@ -1230,7 +1282,7 @@ _ALL_FS = frozenset({"read_file", "search_files", "list_dir", "find_files", "edi
         ("uv run pytest -q", None),
         ("make build", None),
         ("./scripts/dev.sh", None),
-        ("sed -n 1,20p file.py", None),               # a read-only sed is not an edit
+        ("sed -n 1,20p file.py", None),  # a read-only sed is not an edit
         ("awk '{print $1}' f", None),
         ("echo done", None),
         ("git status 2>/dev/null", None),
@@ -1258,7 +1310,7 @@ _ALL_FS = frozenset({"read_file", "search_files", "list_dir", "find_files", "edi
         ("echo hi > out.txt", ("echo", "write_file")),
         ("cat > out.txt <<'EOF'\nhello\nEOF", ("cat", "write_file")),
         ("tee out.txt", ("tee", "write_file")),
-        ("cat 'unbalanced", ("cat", "read_file")),     # bad quoting degrades, never raises
+        ("cat 'unbalanced", ("cat", "read_file")),  # bad quoting degrades, never raises
         ("", None),
     ],
 )
@@ -1351,8 +1403,17 @@ def test_the_manifest_declares_the_exempt_list():
 
 @pytest.mark.parametrize(
     ("count", "bucket"),
-    [(1, "x1"), (3, "x3"), (9, "x9"), (10, "x10+"), (99, "x10+"),
-     (100, "x100+"), (131, "x100+"), (999, "x100+"), (1000, "x1000+")],
+    [
+        (1, "x1"),
+        (3, "x3"),
+        (9, "x9"),
+        (10, "x10+"),
+        (99, "x10+"),
+        (100, "x100+"),
+        (131, "x100+"),
+        (999, "x100+"),
+        (1000, "x1000+"),
+    ],
 )
 def test_count_buckets(count, bucket):
     from plugins.friction import _count_bucket
@@ -1396,8 +1457,10 @@ def test_a_duplicate_hint_says_which_tool_to_use(wired):
 # match that was ALREADY resolved counted as no match at all. The agent concluded the tool
 # was broken. These drive the real record → resolve tool path.
 
-_IFRAME = ("Campaign Studio shot scripts can't target elements inside an iframe; "
-           "plugin rail views (terminal-plugin) render in an iframe")
+_IFRAME = (
+    "Campaign Studio shot scripts can't target elements inside an iframe; "
+    "plugin rail views (terminal-plugin) render in an iframe"
+)
 
 
 def _resolve(**args):
@@ -1405,10 +1468,19 @@ def _resolve(**args):
 
 
 def test_resolving_an_already_resolved_entry_says_so_not_no_match(ledger):
-    asyncio.run(record_friction.ainvoke({"kind": "harness", "summary": _IFRAME, "severity": "major",
-                                         "detail": "wait_for text timed out inside <iframe>"}))
-    first = _resolve(summary="Campaign Studio shot scripts can't target elements inside an iframe",
-                     reason="fixed in v0.2.4")
+    asyncio.run(
+        record_friction.ainvoke(
+            {
+                "kind": "harness",
+                "summary": _IFRAME,
+                "severity": "major",
+                "detail": "wait_for text timed out inside <iframe>",
+            }
+        )
+    )
+    first = _resolve(
+        summary="Campaign Studio shot scripts can't target elements inside an iframe", reason="fixed in v0.2.4"
+    )
     assert first.startswith("resolved 1 entry")
     again = _resolve(summary="iframe", reason="fixed in v0.2.4")
     assert "no matching entries" not in again
@@ -1435,8 +1507,11 @@ def test_resolve_with_the_full_text_of_a_summary_the_ledger_clipped(ledger):
 
 
 def test_resolve_falls_back_to_a_unique_detail_match(ledger):
-    asyncio.run(record_friction.ainvoke({"kind": "harness", "summary": "wait_for timed out",
-                                         "detail": "the target lives in a plugin view iframe"}))
+    asyncio.run(
+        record_friction.ainvoke(
+            {"kind": "harness", "summary": "wait_for timed out", "detail": "the target lives in a plugin view iframe"}
+        )
+    )
     _record("harness", "something unrelated")
     assert _resolve(summary="plugin view iframe").startswith("resolved 1 entry")
     assert [g["summary"] for g in grouped_entries()] == ["something unrelated"]
@@ -1514,19 +1589,30 @@ async def test_real_agent_records_turn_identity_and_score(ledger, monkeypatch, t
     score = MagicMock()
     monkeypatch.setattr(tracing, "score_trace", score)
     assert "state" not in record_friction.tool_call_schema.model_json_schema()["properties"]
-    model = Model(messages=iter([
-        AIMessage(content="", tool_calls=[{
-            "name": "record_friction", "args": {"kind": "model", "summary": "wrong path"},
-            "id": "record", "type": "tool_call",
-        }]),
-        AIMessage(content="done"),
-    ]))
+    model = Model(
+        messages=iter(
+            [
+                AIMessage(
+                    content="",
+                    tool_calls=[
+                        {
+                            "name": "record_friction",
+                            "args": {"kind": "model", "summary": "wrong path"},
+                            "id": "record",
+                            "type": "tool_call",
+                        }
+                    ],
+                ),
+                AIMessage(content="done"),
+            ]
+        )
+    )
     agent = create_agent(model, tools=[record_friction], state_schema=ProtoAgentState)
     # Deliberately different from injected state: never use the ambient session id.
     async with tracing.trace_session("ambient-session"):
         result = await agent.ainvoke({"session_id": "injected-session", "messages": [HumanMessage(content="go")]})
     assert any(isinstance(m, ToolMessage) and "logged" in m.content for m in result["messages"])
-    rec, = _recs(ledger)
+    (rec,) = _recs(ledger)
     assert rec["session_id"] == "injected-session"
     if traced:
         assert rec["trace_id"] == "turn-trace"
@@ -1562,15 +1648,34 @@ async def test_real_tool_runtime_auto_capture_ids(ledger, monkeypatch, sync):
     monkeypatch.setattr(tracing, "score_trace", score)
     mw = FrictionMiddleware(bound_tools={"read_file"})
     builder = StateGraph(ProtoAgentState)
-    builder.add_node("tools", ToolNode([run_command], handle_tool_errors=False,
-                                      wrap_tool_call=mw.wrap_tool_call,
-                                      awrap_tool_call=mw.awrap_tool_call))
+    builder.add_node(
+        "tools",
+        ToolNode(
+            [run_command],
+            handle_tool_errors=False,
+            wrap_tool_call=mw.wrap_tool_call,
+            awrap_tool_call=mw.awrap_tool_call,
+        ),
+    )
     builder.add_edge(START, "tools")
     builder.add_edge("tools", END)
     graph = builder.compile()
-    state = {"session_id": "auto-session", "messages": [AIMessage(content="", tool_calls=[{
-        "name": "run_command", "args": {"command": "cat file"}, "id": "shell", "type": "tool_call",
-    }])]}
+    state = {
+        "session_id": "auto-session",
+        "messages": [
+            AIMessage(
+                content="",
+                tool_calls=[
+                    {
+                        "name": "run_command",
+                        "args": {"command": "cat file"},
+                        "id": "shell",
+                        "type": "tool_call",
+                    }
+                ],
+            )
+        ],
+    }
     async with tracing.trace_session("ambient"):
         with pytest.raises(ValueError, match="broken"):
             if sync:
@@ -1603,11 +1708,11 @@ def test_service_optional_ids_scoring_failure_and_latest_group(ledger, monkeypat
     assert "trace_id" not in _recs(ledger)[0]
     assert record_service("harness", "same", severity="major", session_id="s", trace_id="t")
     score.assert_called_once_with("t", "friction", 0, comment="harness/major: same")
-    row, = grouped_entries()
+    (row,) = grouped_entries()
     assert (row["session_id"], row["trace_id"], row["count"]) == ("s", "t", 2)
     # Latest occurrence has no ids: never borrow another occurrence's trace.
     assert record_service("harness", "same")
-    row, = grouped_entries()
+    (row,) = grouped_entries()
     assert row["session_id"] == row["trace_id"] == ""
     assert set_resolved("same") == 3
     assert grouped_entries() == []
@@ -1641,7 +1746,7 @@ def test_view_renders_trace_links_eval_drafts_and_legacy_rows():
     root = Path(__file__).resolve().parents[1]
     if not shutil.which("node") or not (root / "node_modules/jsdom").exists():
         pytest.skip("view DOM test requires npm ci and Node")
-    script = r'''
+    script = r"""
 import { JSDOM } from "jsdom";
 import { readFileSync } from "node:fs";
 import assert from "node:assert/strict";
@@ -1743,7 +1848,8 @@ assert.equal(doc.querySelectorAll(".entry").length, 3);
 assert(doc.getElementById("list").textContent.includes("trace: trace/42"));
 assert(![...doc.querySelectorAll("a")].some(a => a.textContent === "Trace"));
 dom.window.close();
-'''
-    result = subprocess.run(["node", "--input-type=module"], input=script, text=True,
-                            capture_output=True, cwd=root, timeout=30)
+"""
+    result = subprocess.run(
+        ["node", "--input-type=module"], input=script, text=True, capture_output=True, cwd=root, timeout=30
+    )
     assert result.returncode == 0, result.stdout + result.stderr

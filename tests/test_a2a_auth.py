@@ -202,9 +202,9 @@ def test_plugin_public_prefix_exempts_only_namespaced(monkeypatch):
     try:
         auth.set_public_prefixes(["/plugins/example/status"])
         c = _client_multi()
-        assert c.get("/plugins/example/status").status_code == 200   # now exempt (e.g. a webhook)
+        assert c.get("/plugins/example/status").status_code == 200  # now exempt (e.g. a webhook)
         assert c.post("/plugins/example/status").status_code == 200
-        assert c.get("/api/config").status_code == 401               # core path untouched
+        assert c.get("/api/config").status_code == 401  # core path untouched
         # A plugin cannot exempt a core path — set_public_prefixes drops it.
         auth.set_public_prefixes(["/api/config"])
         assert _client_multi().get("/api/config").status_code == 401
@@ -247,9 +247,7 @@ def test_operator_request_surfaces_operator_tier(monkeypatch):
 
 def test_federation_request_surfaces_federation_tier(monkeypatch):
     monkeypatch.delenv("A2A_AUTH_TOKEN", raising=False)
-    auth.configure(
-        bearer_token=_A_TOKEN, api_key="", allowed_origins_raw="", federation_token=_FED_TOKEN
-    )
+    auth.configure(bearer_token=_A_TOKEN, api_key="", allowed_origins_raw="", federation_token=_FED_TOKEN)
     # /a2a is a consumer surface — the federation credential is accepted there.
     r = _tier_echo_client().post("/a2a", headers={"Authorization": f"Bearer {_FED_TOKEN}"})
     assert r.status_code == 200
@@ -285,9 +283,7 @@ def _tier_calls(monkeypatch) -> list:
 
 def test_classified_requests_forward_tier_to_telemetry(monkeypatch):
     monkeypatch.delenv("A2A_AUTH_TOKEN", raising=False)
-    auth.configure(
-        bearer_token=_A_TOKEN, api_key="", allowed_origins_raw="", federation_token=_FED_TOKEN
-    )
+    auth.configure(bearer_token=_A_TOKEN, api_key="", allowed_origins_raw="", federation_token=_FED_TOKEN)
     calls = _tier_calls(monkeypatch)
     c = _client_multi()
     assert c.post("/api/config", headers={"Authorization": f"Bearer {_A_TOKEN}"}).status_code == 200
@@ -299,9 +295,7 @@ def test_unclassified_requests_do_not_touch_telemetry(monkeypatch):
     """Public / preflight / denied requests are never classified, so prior telemetry
     behavior is preserved — set_trust_tier is not called for any of them (r4)."""
     monkeypatch.delenv("A2A_AUTH_TOKEN", raising=False)
-    auth.configure(
-        bearer_token=_A_TOKEN, api_key="", allowed_origins_raw="", federation_token=_FED_TOKEN
-    )
+    auth.configure(bearer_token=_A_TOKEN, api_key="", allowed_origins_raw="", federation_token=_FED_TOKEN)
     calls = _tier_calls(monkeypatch)
     c = _client_multi()
     # public allowlist path
@@ -318,9 +312,7 @@ def test_unclassified_requests_do_not_touch_telemetry(monkeypatch):
 def test_error_path_response_does_not_leak_the_bearer(monkeypatch):
     """A 401/403 body must never echo the configured or presented credential."""
     monkeypatch.delenv("A2A_AUTH_TOKEN", raising=False)
-    auth.configure(
-        bearer_token=_A_TOKEN, api_key="", allowed_origins_raw="", federation_token=_FED_TOKEN
-    )
+    auth.configure(bearer_token=_A_TOKEN, api_key="", allowed_origins_raw="", federation_token=_FED_TOKEN)
     c = _client_multi()
     presented = "presented-token-should-not-appear"
     r401 = c.post("/api/config", headers={"Authorization": f"Bearer {presented}"})
@@ -503,9 +495,7 @@ def test_request_audit_entries_carry_bounded_tier_without_tokens(tmp_path, monke
         return PlainTextResponse("ok")
 
     monkeypatch.delenv("A2A_AUTH_TOKEN", raising=False)
-    auth.configure(
-        bearer_token=_A_TOKEN, api_key="", allowed_origins_raw="", federation_token=_FED_TOKEN
-    )
+    auth.configure(bearer_token=_A_TOKEN, api_key="", allowed_origins_raw="", federation_token=_FED_TOKEN)
     app = Starlette(
         routes=[
             Route("/api/config", log_route, methods=["POST"]),
@@ -516,14 +506,8 @@ def test_request_audit_entries_carry_bounded_tier_without_tokens(tmp_path, monke
     app.add_middleware(auth.A2AAuthMiddleware)
     c = TestClient(app)
 
-    assert (
-        c.post("/api/config", headers={"Authorization": f"Bearer {_A_TOKEN}"}).status_code
-        == 200
-    )
-    assert (
-        c.post("/a2a", headers={"Authorization": f"Bearer {_FED_TOKEN}"}).status_code
-        == 200
-    )
+    assert c.post("/api/config", headers={"Authorization": f"Bearer {_A_TOKEN}"}).status_code == 200
+    assert c.post("/a2a", headers={"Authorization": f"Bearer {_FED_TOKEN}"}).status_code == 200
     assert c.get("/healthz").status_code == 200
 
     entries = logger.get_recent(3)
@@ -592,9 +576,7 @@ def test_ac9_sse_expired_token(monkeypatch):
 # header) can hold /api/chat/attend open in bearer mode. Without this exemption the console
 # consumer 401s and no session ever registers as attended.
 def _attend_client() -> TestClient:
-    app = Starlette(
-        routes=[Route("/api/chat/attend", lambda r: PlainTextResponse("ok"), methods=["GET"])]
-    )
+    app = Starlette(routes=[Route("/api/chat/attend", lambda r: PlainTextResponse("ok"), methods=["GET"])])
     app.add_middleware(auth.A2AAuthMiddleware)
     return TestClient(app)
 
@@ -619,9 +601,7 @@ def test_sse_attend_accepts_bearer_header(monkeypatch):
     # normal bearer check), exactly like /api/events.
     monkeypatch.delenv("A2A_AUTH_TOKEN", raising=False)
     auth.configure(bearer_token="secret", api_key="", allowed_origins_raw="")
-    r = _attend_client().get(
-        "/api/chat/attend?session=s", headers={"Authorization": "Bearer secret"}
-    )
+    r = _attend_client().get("/api/chat/attend?session=s", headers={"Authorization": "Bearer secret"})
     assert r.status_code == 200
 
 
@@ -1117,9 +1097,7 @@ def test_member_public_bearer_caller_still_passes_gated_paths():
         return False
 
     auth.set_member_public_resolver(resolver)
-    res = _member_client().get(
-        "/agents/matt/plugins/content/view", headers={"Authorization": "Bearer hub-secret"}
-    )
+    res = _member_client().get("/agents/matt/plugins/content/view", headers={"Authorization": "Bearer hub-secret"})
     assert res.status_code == 200  # the console's probe (bearer attached) is unaffected
     assert res.text == "False"
 
@@ -1165,9 +1143,7 @@ def test_the_real_get_still_needs_the_bearer(monkeypatch):
     auth.configure(bearer_token="a-real-token", api_key="", allowed_origins_raw="")
     client = _client_with_options()
     assert client.get("/api/runtime/status").status_code == 401  # no token → still denied
-    assert (
-        client.get("/api/runtime/status", headers={"Authorization": "Bearer a-real-token"}).status_code == 200
-    )
+    assert client.get("/api/runtime/status", headers={"Authorization": "Bearer a-real-token"}).status_code == 200
 
 
 # ── Fleet service token (ADR 0089) ────────────────────────────────────────────
@@ -1194,9 +1170,7 @@ def test_fleet_token_is_operator_tier_not_federation():
     from starlette.routing import Route
     from starlette.testclient import TestClient
 
-    auth.configure(
-        bearer_token="op", api_key="", allowed_origins_raw="", federation_token="fed", fleet_token="fleet"
-    )
+    auth.configure(bearer_token="op", api_key="", allowed_origins_raw="", federation_token="fed", fleet_token="fleet")
     app = Starlette(routes=[Route("/api/x", lambda r: PlainTextResponse("ok"))])
     app.add_middleware(auth.A2AAuthMiddleware)
     c = TestClient(app)
@@ -1211,9 +1185,7 @@ def test_bearer_tier_classifies_every_credential():
     assert auth.bearer_tier("") == "operator"
     assert auth.bearer_tier("anything") == "operator"
     # closed: operator bearer / federation / fleet service token, else None
-    auth.configure(
-        bearer_token="op", api_key="", allowed_origins_raw="", federation_token="fed", fleet_token="fleet"
-    )
+    auth.configure(bearer_token="op", api_key="", allowed_origins_raw="", federation_token="fed", fleet_token="fleet")
     assert auth.bearer_tier("op") == "operator"
     assert auth.bearer_tier("fed") == "federation"
     assert auth.bearer_tier("fleet") == "operator"  # ADR 0089 — fleet token is operator-grade
@@ -1412,7 +1384,12 @@ def test_a_cut_or_stripped_spelling_cannot_make_a_proxied_path_public(monkeypatc
     auth.configure(bearer_token="secret", api_key="", allowed_origins_raw="")
     c = _differential_client()
     assert c.get("/agents/peer/healthz").status_code == 200  # a sister's public file
-    for raw in ("/agents/peer/healthz%3Fx", "/agents/peer/app%23/x", "/agents/peer/_d%09s/x", "/agents/peer/healthz%09"):
+    for raw in (
+        "/agents/peer/healthz%3Fx",
+        "/agents/peer/app%23/x",
+        "/agents/peer/_d%09s/x",
+        "/agents/peer/healthz%09",
+    ):
         assert c.get(raw).status_code == 401, raw
 
 

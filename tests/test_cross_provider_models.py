@@ -21,7 +21,9 @@ def _cfg(**over) -> LangGraphConfig:
 @pytest.fixture
 def lanes(monkeypatch):
     """Gateway configured, Claude signed in, Codex signed out — the mixed real case."""
-    monkeypatch.setattr(discovery, "list_gateway_models", lambda base, key, **kw: (["protolabs/coder"], ""), raising=False)
+    monkeypatch.setattr(
+        discovery, "list_gateway_models", lambda base, key, **kw: (["protolabs/coder"], ""), raising=False
+    )
     monkeypatch.setattr("graph.config_io.list_gateway_models", lambda base, key, **kw: (["protolabs/coder"], ""))
     monkeypatch.setattr(
         discovery,

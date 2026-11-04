@@ -123,9 +123,7 @@ class ThreadedSqliteSaver(SqliteSaver):
         if self.prune_on_write:
             thread_id = str(config["configurable"]["thread_id"])
             try:
-                self._trim(
-                    thread_id, str(config["configurable"].get("checkpoint_ns", "")), written_id=checkpoint["id"]
-                )
+                self._trim(thread_id, str(config["configurable"].get("checkpoint_ns", "")), written_id=checkpoint["id"])
             except sqlite3.Error:
                 log.warning("[checkpointer] retention-on-write trim failed for %s", thread_id, exc_info=True)
         return out

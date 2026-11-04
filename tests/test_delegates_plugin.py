@@ -375,7 +375,9 @@ def test_list_agents_lists_roster_with_health(monkeypatch):
         [{"name": "opus", "type": "openai", "url": "https://g/v1", "model": "m", "description": "a model"}], monkeypatch
     )
     la = next(t for t in r.tools if t.name == "list_agents")
-    monkeypatch.setattr("plugins.delegates.health.health_peek", lambda: {"opus": {"ok": True, "checked_at": H.time.time()}})
+    monkeypatch.setattr(
+        "plugins.delegates.health.health_peek", lambda: {"opus": {"ok": True, "checked_at": H.time.time()}}
+    )
     assert "🟢 opus (openai) — a model" in la.invoke({})
 
 
@@ -771,9 +773,7 @@ def test_acp_timeout_field_default_is_1800():
 
 def test_acp_configured_timeout_still_wins():
     """The raised default is only a default — an explicit per-delegate timeout_s overrides it."""
-    d = ADAPTERS["acp"].parse(
-        {"name": "coder", "type": "acp", "command": "proto", "workdir": "/tmp", "timeout_s": 120}
-    )
+    d = ADAPTERS["acp"].parse({"name": "coder", "type": "acp", "command": "proto", "workdir": "/tmp", "timeout_s": 120})
     assert d.timeout_s == 120.0
 
 
@@ -808,9 +808,7 @@ async def test_acp_dispatch_honors_per_call_timeout(monkeypatch):
     (enforced at ``client.prompt(query, timeout=timeout or d.timeout_s)``)."""
     seen: dict = {}
     _stub_acp_prompt(monkeypatch, seen)
-    d = ADAPTERS["acp"].parse(
-        {"name": "coder", "type": "acp", "command": "proto", "workdir": "/tmp", "timeout_s": 300}
-    )
+    d = ADAPTERS["acp"].parse({"name": "coder", "type": "acp", "command": "proto", "workdir": "/tmp", "timeout_s": 300})
     assert await ADAPTERS["acp"].dispatch(d, "go", timeout=120) == "done"
     assert seen["timeout"] == 120
 
@@ -854,8 +852,7 @@ async def test_acp_teardown_evicts_every_conversation_for_the_workdir_scoped_cli
     assert first.closed is True and second.closed is True
     base_key = CA._cache_key(spec)
     assert not any(
-        key == base_key or (len(key) == len(base_key) + 2 and key[: len(base_key)] == base_key)
-        for key in CA._CLIENTS
+        key == base_key or (len(key) == len(base_key) + 2 and key[: len(base_key)] == base_key) for key in CA._CLIENTS
     )
     assert await ADAPTERS["acp"].teardown(d) is False  # idempotent
 
@@ -1456,15 +1453,14 @@ async def test_successful_dispatch_clears_probe_failure_and_backoff(monkeypatch)
     monkeypatch.setattr(H.time, "time", lambda: 1000)
     reg = _stub_registry(monkeypatch, lambda: "done")
     await reg.dispatch("codex", "go")
-    assert H._HEALTH["codex"] == {
-        "ok": True, "checked_at": 1000, "source": "dispatch", "detail": "dispatch succeeded"
-    }
+    assert H._HEALTH["codex"] == {"ok": True, "checked_at": 1000, "source": "dispatch", "detail": "dispatch succeeded"}
     assert "codex" not in H._FAILURES
     assert H._NEXT_DUE["codex"] == 1000 + H._INTERVAL_S
     tool = P._build_list_agents(reg)
     assert "🟢 codex" in tool.invoke({})
     assert "dispatch succeeded, 0s ago" in tool.invoke({})
     import json
+
     row = json.loads(tool.invoke({"detail": True}))[0]
     assert row["probe"]["error"] == "card timeout"
     assert row["probe"]["age_seconds"] == 100
@@ -1478,7 +1474,7 @@ def test_list_agents_failure_age_staleness_and_cached_detail(monkeypatch, age, b
     from plugins.delegates import status
 
     monkeypatch.setattr(H.time, "time", lambda: 1000)
-    H._HEALTH["opus"] = {"ok": False, "checked_at": 1000-age, "error": "ReadTimeout", "detail": "agent-card"}
+    H._HEALTH["opus"] = {"ok": False, "checked_at": 1000 - age, "error": "ReadTimeout", "detail": "agent-card"}
     H._NEXT_DUE["opus"] = 1300
     status.record_failure("opus", "HTTP 503")
     reg = DelegateRegistry([{"name": "opus", "type": "openai", "url": "https://g/v1", "model": "m"}])

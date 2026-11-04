@@ -170,6 +170,7 @@ from server.chat_session_ops import (  # noqa: F401 — re-export
     fork_session,
     rewind_session,
 )
+
 # The streaming turn event loop (``_run_turn_stream``) and the helpers only it uses moved to
 # server/turn_stream.py (#3874). ``_run_native_turn`` below calls it through the module
 # (``_turn_stream._run_turn_stream``) so a patch there intercepts; these re-exports are
@@ -186,6 +187,7 @@ from server.turn_stream import (  # noqa: F401 — re-export
     _run_turn_stream,
     _speaks_for_the_lead,
 )
+
 # The non-streaming turn driver (``_chat_langgraph_impl``, its lifted ``_native_turn``) and
 # ``_trace_reply_output`` moved to server/turn_sync.py (#3917). ``_chat_langgraph`` below
 # calls it through the module (``_turn_sync._chat_langgraph_impl``) so a patch there
@@ -196,6 +198,7 @@ from server.turn_sync import (  # noqa: F401 — re-export
     _chat_langgraph_impl,
     _trace_reply_output,
 )
+
 # The goal drive loop and the autonomous HITL auto-answer — ONE copy both turn drivers
 # use (#3884). Not re-exported: reach it as ``_goal_loop.<name>`` (tests/test_goal_loop_seam.py).
 from server import goal_loop as _goal_loop
@@ -294,9 +297,7 @@ def _drain_background(session_id: str) -> tuple[list, list[dict]]:
                     },
                 )
             )
-            room_replies.append(
-                {"id": j.id, "author": author, "from": "assistant", "text": text, "ok": ok}
-            )
+            room_replies.append({"id": j.id, "author": author, "from": "assistant", "text": text, "ok": ok})
             continue
         # A deterministic work job's result is the deliverable — deliver it whole (#2363).
         if not getattr(j, "deterministic", False) and len(result) > _BG_RESULT_CAP:
@@ -322,11 +323,9 @@ def _drain_background(session_id: str) -> tuple[list, list[dict]]:
             f"<job-id>{j.id}</job-id>\n"
             f"<subagent>{j.subagent_type}</subagent>\n"
             f"<description>{j.description}</description>\n"
-            f"<status>{j.status}</status>\n"
+            f"<status>{j.status}</status>\n" + (f"<error>{_err}</error>\n" if _err else "") + "<result>\n"
             # Why it failed (#3945), so the agent reports the real cause to the operator
             # instead of guessing from an empty result.
-            + (f"<error>{_err}</error>\n" if _err else "")
-            + "<result>\n"
             f"{result}\n"
             "</result>\n"
             "</task-notification>"
@@ -339,8 +338,6 @@ def _drain_background(session_id: str) -> tuple[list, list[dict]]:
 def _drain_background_messages(session_id: str) -> list:
     """Compatibility view of :func:`_drain_background` for model-facing callers/tests."""
     return _drain_background(session_id)[0]
-
-
 
 
 def _goal_continuation_config(config: dict, goal_state) -> dict:
@@ -608,7 +605,9 @@ def _interrupt_payload(val) -> dict:
     if isinstance(val, dict) and (val.get("question") or val.get("kind") in ("form", "approval")):
         return _carry_display(val)
     if isinstance(val, dict):
-        text = next((val[k] for k in ("prompt", "message", "text") if isinstance(val.get(k), str) and val[k].strip()), "")
+        text = next(
+            (val[k] for k in ("prompt", "message", "text") if isinstance(val.get(k), str) and val[k].strip()), ""
+        )
         if not text:
             # Inert `display` data is never part of the unknown-client prose fallback — it
             # rides only in the vetted slot below, so it's excluded from this JSON dump.
@@ -1085,9 +1084,7 @@ async def _run_native_turn(
     turn: dict = {"raw": "", "paused": False, "last_tool_out": ""}
     with goal_turn(goal_active) as _goal_pass:
         async with contextlib.aclosing(
-            _drive_passes(
-                message, config, resume_value=(message if resume else None), pass_images=images, out=turn
-            )
+            _drive_passes(message, config, resume_value=(message if resume else None), pass_images=images, out=turn)
         ) as _frames:
             async for frame in _frames:
                 yield frame
@@ -1689,7 +1686,7 @@ async def _chat_langgraph_stream_impl(
                                     overflow_retry=True,
                                     fence=_retry_fence,
                                     # Only when there is one: keeps the call shape the seam fakes pin.
-                            **({"model_notice": _model_notice} if _model_notice else {}),
+                                    **({"model_notice": _model_notice} if _model_notice else {}),
                                 )
                             ) as _retry_frames:
                                 async for frame in _retry_frames:
@@ -1858,6 +1855,7 @@ async def _chat_langgraph(
     sink: dict[str, Any] = {}
     result: list[dict[str, Any]] = []
     state = "failed"
+    error = ""  # why a failed turn failed, for the telemetry row (#4726)
     try:
         # ADR 0115 D6 (#3760): a console / operator turn runs under `interactive`; the OpenAI-
         # compat (`v1`) and plugin surfaces stay `default`. Scoped to the turn here (the impl
@@ -1880,14 +1878,31 @@ async def _chat_langgraph(
         # error key — not an exception — is what distinguishes a failed turn.
         # A turn parked at a HITL ask is neither — the impl stamps `input_required` on
         # the sink, the state the A2A surface records for the same park (#3945).
-        if any(isinstance(m, dict) and m.get("error") for m in result):
+        failure = next((m["error"] for m in result if isinstance(m, dict) and m.get("error")), None)
+        if failure is not None:
             state = "failed"
+            error = str(failure.get("message") or "") if isinstance(failure, dict) else str(failure)
         else:
             state = sink.get("state") or "completed"
         return result
     except asyncio.CancelledError:
         state = "canceled" if local_turns.cancellation_requested() else "failed"
+        if state == "failed":
+            # Cancelled from outside with no stop request (a dropped client, a shutdown).
+            # "cancelled" is also the cue for record_turn to prefer a stall reason (#4726).
+            error = "cancelled"
+        raise
+    except Exception as exc:
+        error = str(exc).strip() or type(exc).__name__
         raise
     finally:
         _turn_control._turn_ended(session_id)
-        _turn_telemetry.record_local_turn(sink, session_id=session_id, origin=origin, state=state, started=started)
+        _turn_telemetry.record_local_turn(
+            sink,
+            session_id=session_id,
+            origin=origin,
+            state=state,
+            started=started,
+            error=error,
+            incognito=incognito,
+        )

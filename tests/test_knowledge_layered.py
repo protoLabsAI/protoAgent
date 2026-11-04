@@ -186,7 +186,7 @@ def test_embed_model_mismatch_degrades_commons_to_fts5(tmp_path, monkeypatch):
     from knowledge.store import KnowledgeStore
     from server.agent_init import _build_knowledge_store
 
-    monkeypatch.setattr(gl, "create_embed_fn", lambda cfg: (lambda text: [0.1, 0.2, 0.3]))
+    monkeypatch.setattr(gl, "create_embed_fn", lambda cfg: lambda text: [0.1, 0.2, 0.3])
     monkeypatch.setattr(gl, "create_embed_batch_fn", lambda cfg: None)
     # Pre-stamp the commons with a DIFFERENT model than this agent uses.
     KnowledgeStore(str(tmp_path / "commons" / "knowledge.db"), scoped=False).set_meta("embed_model", "modelX")
@@ -205,7 +205,7 @@ def test_embed_model_match_keeps_commons_hybrid(tmp_path, monkeypatch):
     from knowledge.store import KnowledgeStore
     from server.agent_init import _build_knowledge_store
 
-    monkeypatch.setattr(gl, "create_embed_fn", lambda cfg: (lambda text: [0.1, 0.2, 0.3]))
+    monkeypatch.setattr(gl, "create_embed_fn", lambda cfg: lambda text: [0.1, 0.2, 0.3])
     monkeypatch.setattr(gl, "create_embed_batch_fn", lambda cfg: None)
     # First agent claims the commons with its model; a matching agent gets a hybrid commons.
     KnowledgeStore(str(tmp_path / "commons" / "knowledge.db"), scoped=False).set_meta("embed_model", "modelY")
@@ -220,7 +220,7 @@ def test_first_build_claims_the_commons_stamp(tmp_path, monkeypatch):
     from knowledge.store import KnowledgeStore
     from server.agent_init import _build_knowledge_store
 
-    monkeypatch.setattr(gl, "create_embed_fn", lambda cfg: (lambda text: [0.1, 0.2, 0.3]))
+    monkeypatch.setattr(gl, "create_embed_fn", lambda cfg: lambda text: [0.1, 0.2, 0.3])
     monkeypatch.setattr(gl, "create_embed_batch_fn", lambda cfg: None)
 
     _build_knowledge_store(_cfg(tmp_path))
@@ -380,12 +380,34 @@ def test_search_preserves_same_tier_records_and_provenance():
 
 
 def test_cross_tier_equivalence_requires_matching_provenance():
-    original = {"id": 1, "content": "same", "domain": "reference", "namespace": "a",
-                "source": "one", "source_type": "file", "heading": "title",
-                "finding_type": "fact", "epoch": "2026", "memory_kind": "standing",
-                "subject": "operator", "expires_at": "2027-01-01", "delivery_policy": "retrieval"}
-    for field in ("domain", "namespace", "source", "source_type", "heading", "finding_type",
-                  "epoch", "memory_kind", "subject", "expires_at", "delivery_policy"):
+    original = {
+        "id": 1,
+        "content": "same",
+        "domain": "reference",
+        "namespace": "a",
+        "source": "one",
+        "source_type": "file",
+        "heading": "title",
+        "finding_type": "fact",
+        "epoch": "2026",
+        "memory_kind": "standing",
+        "subject": "operator",
+        "expires_at": "2027-01-01",
+        "delivery_policy": "retrieval",
+    }
+    for field in (
+        "domain",
+        "namespace",
+        "source",
+        "source_type",
+        "heading",
+        "finding_type",
+        "epoch",
+        "memory_kind",
+        "subject",
+        "expires_at",
+        "delivery_policy",
+    ):
         other = {**original, "id": 2, field: "different"}
         hits = LayeredKnowledgeStore(_SearchRows([original]), _SearchRows([other])).search("same")
         assert len(hits) == 2, field
@@ -393,28 +415,39 @@ def test_cross_tier_equivalence_requires_matching_provenance():
 
 
 def test_cross_tier_pairs_are_one_to_one_and_rrf_prefers_shared_evidence():
-    private = _SearchRows([
-        {"id": 1, "content": "private first"},
-        {"id": 2, "content": "shared", "review_state": "pending"},
-        {"id": 3, "content": "shared", "review_state": "pending"},
-    ])
-    commons = _SearchRows([
-        {"id": 7, "content": "commons first"},
-        {"id": 8, "content": "shared", "review_state": "confirmed"},
-    ])
+    private = _SearchRows(
+        [
+            {"id": 1, "content": "private first"},
+            {"id": 2, "content": "shared", "review_state": "pending"},
+            {"id": 3, "content": "shared", "review_state": "pending"},
+        ]
+    )
+    commons = _SearchRows(
+        [
+            {"id": 7, "content": "commons first"},
+            {"id": 8, "content": "shared", "review_state": "confirmed"},
+        ]
+    )
     store = LayeredKnowledgeStore(private, commons)
     hits = store.search("query", k=10)
-    assert [(h["tier"], h["id"]) for h in hits] == [
-        ("private", 2), ("commons", 7), ("private", 1), ("private", 3)]
+    assert [(h["tier"], h["id"]) for h in hits] == [("private", 2), ("commons", 7), ("private", 1), ("private", 3)]
     assert hits[0]["review_state"] == "pending"
     assert store.search("query", k=2) == hits[:2]
 
 
 def test_layered_search_passes_all_filters_to_both_tiers():
     private, commons = _SearchRows([]), _SearchRows([])
-    filters = dict(domain="reference", namespace=["a", "b"], include_invalidated=True,
-                   epoch="2026", memory_kind="standing", review_state="confirmed",
-                   delivery_policy="retrieval", deliverable=True, prefix=True)
+    filters = dict(
+        domain="reference",
+        namespace=["a", "b"],
+        include_invalidated=True,
+        epoch="2026",
+        memory_kind="standing",
+        review_state="confirmed",
+        delivery_policy="retrieval",
+        deliverable=True,
+        prefix=True,
+    )
     assert LayeredKnowledgeStore(private, commons).search("needle", k=9, **filters) == []
     assert private.calls == commons.calls == [("needle", 9, filters)]
 
@@ -422,8 +455,14 @@ def test_layered_search_passes_all_filters_to_both_tiers():
 def test_promoted_search_returns_one_editable_record(tmp_path):
     private, commons = _stores(tmp_path)
     store = LayeredKnowledgeStore(private, commons)
-    cid = private.add_chunk("kestrel launch checklist", domain="reference", namespace="flight",
-                            source="runbook", source_type="file", review_state="pending")
+    cid = private.add_chunk(
+        "kestrel launch checklist",
+        domain="reference",
+        namespace="flight",
+        source="runbook",
+        source_type="file",
+        review_state="pending",
+    )
     assert store.promote(cid) is not None
     hits = store.search("kestrel", namespace="flight", domain="reference")
     assert len(hits) == 1

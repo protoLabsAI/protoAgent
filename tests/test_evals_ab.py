@@ -125,9 +125,7 @@ def ab_run(tmp_path, monkeypatch):
     before = _snapshot(source_root)
 
     _fake_sweep_boundary(monkeypatch)
-    rc = evals_ab.main(
-        ["--ab-learned-from", "source", "--model", "fake/model", "--port-base", "7990", "--keep"]
-    )
+    rc = evals_ab.main(["--ab-learned-from", "source", "--model", "fake/model", "--port-base", "7990", "--keep"])
 
     return types.SimpleNamespace(
         rc=rc,
@@ -230,11 +228,14 @@ def test_arm_reports_are_labelled_with_the_model(tmp_path, monkeypatch):
     assert labels == ["fake/model @ ab-A", "fake/model @ ab-B"]
 
 
-@pytest.mark.parametrize("argv,tasks,category", [
-    ([], None, None),
-    (["--tasks", "fact_recall,memory_list_intent"], "fact_recall,memory_list_intent", None),
-    (["--category", "tool"], None, "tool"),
-])
+@pytest.mark.parametrize(
+    "argv,tasks,category",
+    [
+        ([], None, None),
+        (["--tasks", "fact_recall,memory_list_intent"], "fact_recall,memory_list_intent", None),
+        (["--category", "tool"], None, "tool"),
+    ],
+)
 def test_both_arms_run_the_same_filter(tmp_path, monkeypatch, argv, tasks, category):
     monkeypatch.setattr(sweep, "_RESULTS_DIR", tmp_path / "results")
     _make_source(sweep._instance_root("source"))

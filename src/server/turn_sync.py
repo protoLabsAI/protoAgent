@@ -180,9 +180,7 @@ async def _native_turn(
         if hold is not None and hold is not _turn_control._HITL_RESUME:
             _parked()
             payload = _chat()._interrupt_payload(hold)
-            question = (
-                payload.get("question") or payload.get("title") or "The agent needs input to continue."
-            )
+            question = payload.get("question") or payload.get("title") or "The agent needs input to continue."
             return [
                 {
                     "role": "assistant",
@@ -226,9 +224,7 @@ async def _native_turn(
             # operator here to answer a HITL park — resume (keyed by interrupt id, #3872)
             # with the no-operator sentinel and re-run, bounded, then clear. Attended
             # turns are untouched (they still echo the ask below).
-            result = await auto.settle(
-                config, result, lambda cmd: STATE.graph.ainvoke(cmd, config=config)
-            )
+            result = await auto.settle(config, result, lambda cmd: STATE.graph.ainvoke(cmd, config=config))
         # Read the pending interrupt (handled below) while still holding the thread lock,
         # as the streaming driver does and as the continuation check further down does
         # (#3973). Released first, a queued writer on this thread could resume the ask —
@@ -347,7 +343,9 @@ async def _native_turn(
     # failure return, so telemetry counts it failed and /v1 answers an error status.
     # Unless a goal continuation replaced the text with a real reply.
     if no_reply and response.startswith(no_reply):
-        reply["error"] = _chat().turn_error(None, "the turn produced no reply — it may have stalled or been interrupted; retry it")
+        reply["error"] = _chat().turn_error(
+            None, "the turn produced no reply — it may have stalled or been interrupted; retry it"
+        )
     return [reply]
 
 
@@ -412,7 +410,10 @@ async def _chat_langgraph_impl(
         tracing.trace_session(
             session_id=session_id,
             name="chat",
-            metadata={"soul_rev": soul_revision(), **({} if incognito else {"message_preview": _redact(message[:100])})},
+            metadata={
+                "soul_rev": soul_revision(),
+                **({} if incognito else {"message_preview": _redact(message[:100])}),
+            },
             input=_redact(message),
             incognito=bool(incognito),
         ),
@@ -451,9 +452,7 @@ async def _chat_langgraph_impl(
             delegated_usage: list[dict] = []
             streamed_text = ""
             try:
-                async with contextlib.aclosing(
-                    _chat_dispatch._pre_turn_dispatch(pre, session_id, None)
-                ) as _pre_frames:
+                async with contextlib.aclosing(_chat_dispatch._pre_turn_dispatch(pre, session_id, None)) as _pre_frames:
                     async for frame in _pre_frames:
                         if frame and frame[0] == "usage":
                             # A `/<subagent>` / `/<workflow>` run's model calls (#3957) — this

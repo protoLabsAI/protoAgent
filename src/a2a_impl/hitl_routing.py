@@ -144,9 +144,7 @@ def _register(message_id: str, superseded_by: str, pause_id: str) -> None:
 
 
 def is_settle_message(message: Message | None) -> bool:
-    return bool(
-        message is not None and message.HasField("metadata") and SETTLE_MARKER in message.metadata.fields
-    )
+    return bool(message is not None and message.HasField("metadata") and SETTLE_MARKER in message.metadata.fields)
 
 
 def settle_decision(message: Message | None, current_task: Any) -> tuple[bool, str | None]:
@@ -341,8 +339,10 @@ class ParkedTaskRouter:
         if not _is_hitl_resume(message) or not message.task_id:
             return False
         try:
-            task = result if isinstance(result, Task) else await self._handler.task_store.get(
-                message.task_id, call_context
+            task = (
+                result
+                if isinstance(result, Task)
+                else await self._handler.task_store.get(message.task_id, call_context)
             )
         except Exception:  # noqa: BLE001
             return False

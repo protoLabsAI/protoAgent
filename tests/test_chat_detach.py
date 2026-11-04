@@ -4,6 +4,7 @@ A ``detach=true`` turn runs as a background task that survives the client discon
 shows up in ``/turns`` with ``live_task_id``, and is polled by id. The non-detached path
 keeps its #4205 cancel-on-disconnect behaviour (guarded by tests/test_local_turn_control.py,
 left untouched)."""
+
 import asyncio
 import importlib
 
@@ -31,6 +32,7 @@ def _clean_registries():
 @pytest.fixture
 def app(monkeypatch):
     import operator_api.chat_routes as routes
+
     chat = importlib.import_module("server.chat")
     monkeypatch.setattr(STATE, "graph", object())
     monkeypatch.setattr(STATE, "graph_config", None)
@@ -109,13 +111,20 @@ async def test_detach_in_band_failure_reports_failed(app, monkeypatch):
     async def provider(message, session_id, **kwargs):
         entered.set()
         await release.wait()
-        return [{"role": "assistant", "content": "**Error:** boom",
-                 "error": {"type": "server_error", "message": "boom", "upstream_status": None}}]
+        return [
+            {
+                "role": "assistant",
+                "content": "**Error:** boom",
+                "error": {"type": "server_error", "message": "boom", "upstream_status": None},
+            }
+        ]
 
     monkeypatch.setattr(turn_sync, "_chat_langgraph_impl", provider)
     sid = "det-fail"
     async with _client(app) as client:
-        turn_id = (await client.post("/api/chat", json={"message": "x", "session_id": sid, "detach": True})).json()["turn_id"]
+        turn_id = (await client.post("/api/chat", json={"message": "x", "session_id": sid, "detach": True})).json()[
+            "turn_id"
+        ]
         await asyncio.wait_for(entered.wait(), 5)
         release.set()
         done = await _poll(client, sid, turn_id)
@@ -136,7 +145,9 @@ async def test_detach_raised_exception_reports_failed_with_turn_error_shape(app,
     monkeypatch.setattr(turn_sync, "_chat_langgraph_impl", provider)
     sid = "det-raise"
     async with _client(app) as client:
-        turn_id = (await client.post("/api/chat", json={"message": "x", "session_id": sid, "detach": True})).json()["turn_id"]
+        turn_id = (await client.post("/api/chat", json={"message": "x", "session_id": sid, "detach": True})).json()[
+            "turn_id"
+        ]
         await asyncio.wait_for(entered.wait(), 5)
         release.set()
         done = await _poll(client, sid, turn_id)
@@ -157,7 +168,9 @@ async def test_detach_operator_cancel_reports_canceled(app, monkeypatch):
     monkeypatch.setattr(turn_sync, "_chat_langgraph_impl", provider)
     sid = "det-cancel"
     async with _client(app) as client:
-        turn_id = (await client.post("/api/chat", json={"message": "x", "session_id": sid, "detach": True})).json()["turn_id"]
+        turn_id = (await client.post("/api/chat", json={"message": "x", "session_id": sid, "detach": True})).json()[
+            "turn_id"
+        ]
         await asyncio.wait_for(entered.wait(), 5)
         stopped = await client.post(f"/api/chat/sessions/{sid}/local-turns/{turn_id}/cancel")
         assert stopped.json() == {"stopped": True}
@@ -177,6 +190,7 @@ async def test_unknown_turn_id_is_404(app):
 async def test_non_detached_call_is_unchanged(app, monkeypatch):
     """detach defaults False: the synchronous path still returns the turn body inline, so a
     finished record is NOT kept and the turn is not pollable after it returns (#4205 contract)."""
+
     async def provider(message, session_id, **kwargs):
         return [{"role": "assistant", "content": "inline"}]
 
@@ -220,8 +234,12 @@ async def test_detach_graphless_response_matches_synchronous(app, monkeypatch, a
         assert submitted.status_code == 202
         turn_id = submitted.json()["turn_id"]
         done = await _poll(client, "graphless", turn_id)
-        assert done == {"turn_id": turn_id, "state": "completed",
-                        "response": inline.json()["response"], "messages": inline.json()["messages"]}
+        assert done == {
+            "turn_id": turn_id,
+            "state": "completed",
+            "response": inline.json()["response"],
+            "messages": inline.json()["messages"],
+        }
         assert "SECRET-PROMPT" not in str(done)
         assert not local_turns.snapshot("graphless")
 
@@ -250,11 +268,13 @@ async def test_queued_local_turn_does_not_replace_running_stop_target(app, monke
     monkeypatch.setattr(turn_sync, "_chat_langgraph_impl", provider)
     sid = "queue"
     async with _client(app) as client:
-        first = asyncio.create_task(client.post("/api/chat", json={
-            "message": "first", "session_id": sid, "detach": detach}))
+        first = asyncio.create_task(
+            client.post("/api/chat", json={"message": "first", "session_id": sid, "detach": detach})
+        )
         await asyncio.wait_for(entered.wait(), 5)
-        second = asyncio.create_task(client.post("/api/chat", json={
-            "message": "second", "session_id": sid, "detach": detach}))
+        second = asyncio.create_task(
+            client.post("/api/chat", json={"message": "second", "session_id": sid, "detach": detach})
+        )
         try:
             await asyncio.wait_for(queued.wait(), 5)
             rows = local_turns.snapshot(sid)
@@ -300,8 +320,9 @@ async def test_detached_id_is_registered_and_cancelable_before_driver_starts():
         entered = True
         await asyncio.Event().wait()
 
-    turn_id = local_turns.start_detached(driver(), session_id="early", origin="api-chat",
-                                         error_adapter=lambda exc: {"message": str(exc)})
+    turn_id = local_turns.start_detached(
+        driver(), session_id="early", origin="api-chat", error_adapter=lambda exc: {"message": str(exc)}
+    )
     assert local_turns.get_turn("early", turn_id) == {"turn_id": turn_id, "state": "working"}
     assert await local_turns.cancel("early", turn_id)
     assert not entered
@@ -316,8 +337,7 @@ async def test_detached_failure_before_tracked_graph_driver_is_retained():
     async def driver():
         raise ValueError("before graph")
 
-    turn_id = local_turns.start_detached(driver(), session_id="early-fail", origin="api-chat",
-                                         error_adapter=turn_error)
+    turn_id = local_turns.start_detached(driver(), session_id="early-fail", origin="api-chat", error_adapter=turn_error)
     await asyncio.gather(*local_turns._DETACHED_TASKS)
     done = local_turns.get_turn("early-fail", turn_id)
     assert done["state"] == "failed"
@@ -339,8 +359,9 @@ async def test_detached_child_task_keeps_its_own_registration():
     async def parent():
         return await asyncio.create_task(child("private", "child", origin="plugin"))
 
-    turn_id = local_turns.start_detached(parent(), session_id="parent", origin="api-chat",
-                                         error_adapter=lambda exc: {"message": str(exc)})
+    turn_id = local_turns.start_detached(
+        parent(), session_id="parent", origin="api-chat", error_adapter=lambda exc: {"message": str(exc)}
+    )
     try:
         await asyncio.wait_for(entered.wait(), 5)
         child_rows = local_turns.snapshot("child")
@@ -428,12 +449,14 @@ async def test_start_detached_over_cap_closes_coro_and_reopens_slot(monkeypatch)
         nonlocal ran
         ran = True
 
-    admitted = local_turns.start_detached(busy(), session_id="u1", origin="api-chat",
-                                          error_adapter=lambda e: {"message": str(e)})
+    admitted = local_turns.start_detached(
+        busy(), session_id="u1", origin="api-chat", error_adapter=lambda e: {"message": str(e)}
+    )
     rejected = rejected_body()
     with pytest.raises(local_turns.DetachedAdmissionError):
-        local_turns.start_detached(rejected, session_id="u2", origin="api-chat",
-                                   error_adapter=lambda e: {"message": str(e)})
+        local_turns.start_detached(
+            rejected, session_id="u2", origin="api-chat", error_adapter=lambda e: {"message": str(e)}
+        )
     assert rejected.cr_frame is None  # closed → no un-awaited-coroutine leak
     assert ran is False
     assert len(local_turns._DETACHED_TASKS) == 1
@@ -443,8 +466,9 @@ async def test_start_detached_over_cap_closes_coro_and_reopens_slot(monkeypatch)
     assert local_turns.get_turn("u1", admitted)["state"] == "completed"
 
     # Slot freed (release is already set) → a fresh detached turn is admitted and completes.
-    again = local_turns.start_detached(busy(), session_id="u3", origin="api-chat",
-                                       error_adapter=lambda e: {"message": str(e)})
+    again = local_turns.start_detached(
+        busy(), session_id="u3", origin="api-chat", error_adapter=lambda e: {"message": str(e)}
+    )
     await asyncio.gather(*list(local_turns._DETACHED_TASKS), return_exceptions=True)
     assert local_turns.get_turn("u3", again)["state"] == "completed"
 
@@ -462,8 +486,9 @@ async def test_detach_shutdown_cancellation_reports_canceled(app, monkeypatch):
     monkeypatch.setattr(turn_sync, "_chat_langgraph_impl", provider)
     sid = "det-shutdown"
     async with _client(app) as client:
-        turn_id = (await client.post(
-            "/api/chat", json={"message": "x", "session_id": sid, "detach": True})).json()["turn_id"]
+        turn_id = (await client.post("/api/chat", json={"message": "x", "session_id": sid, "detach": True})).json()[
+            "turn_id"
+        ]
         await asyncio.wait_for(entered.wait(), 5)
         # Shutdown cancels the background task directly; cancel_requested stays False (no Stop).
         turn = local_turns._ACTIVE[turn_id]
@@ -489,8 +514,11 @@ async def test_detach_incognito_outcome_is_content_free(app, monkeypatch):
     monkeypatch.setattr(turn_sync, "_chat_langgraph_impl", provider)
     sid = "incog-ok"
     async with _client(app) as client:
-        turn_id = (await client.post("/api/chat", json={
-            "message": "PRIVATE-PROMPT", "session_id": sid, "incognito": True, "detach": True})).json()["turn_id"]
+        turn_id = (
+            await client.post(
+                "/api/chat", json={"message": "PRIVATE-PROMPT", "session_id": sid, "incognito": True, "detach": True}
+            )
+        ).json()["turn_id"]
         await asyncio.wait_for(entered.wait(), 5)
         release.set()
         done = await _poll(client, sid, turn_id)
@@ -505,15 +533,22 @@ async def test_detach_incognito_outcome_is_content_free(app, monkeypatch):
 async def test_detach_incognito_failure_retains_state_and_error_only(app, monkeypatch):
     """An incognito turn that fails in-band keeps the state and the structured error, but
     never the assistant messages (r3)."""
+
     async def provider(message, session_id, **kwargs):
-        return [{"role": "assistant", "content": "PRIVATE **Error:** boom",
-                 "error": {"type": "server_error", "message": "boom", "upstream_status": None}}]
+        return [
+            {
+                "role": "assistant",
+                "content": "PRIVATE **Error:** boom",
+                "error": {"type": "server_error", "message": "boom", "upstream_status": None},
+            }
+        ]
 
     monkeypatch.setattr(turn_sync, "_chat_langgraph_impl", provider)
     sid = "incog-fail"
     async with _client(app) as client:
-        turn_id = (await client.post("/api/chat", json={
-            "message": "p", "session_id": sid, "incognito": True, "detach": True})).json()["turn_id"]
+        turn_id = (
+            await client.post("/api/chat", json={"message": "p", "session_id": sid, "incognito": True, "detach": True})
+        ).json()["turn_id"]
         done = await _poll(client, sid, turn_id)
         assert done["state"] == "failed"
         assert done["error"]["message"] == "boom"
@@ -536,8 +571,9 @@ async def test_wrong_session_poll_is_404_live_and_finished(app, monkeypatch):
     monkeypatch.setattr(turn_sync, "_chat_langgraph_impl", provider)
     sid = "right"
     async with _client(app) as client:
-        turn_id = (await client.post(
-            "/api/chat", json={"message": "x", "session_id": sid, "detach": True})).json()["turn_id"]
+        turn_id = (await client.post("/api/chat", json={"message": "x", "session_id": sid, "detach": True})).json()[
+            "turn_id"
+        ]
         await asyncio.wait_for(entered.wait(), 5)
         wrong_live = await client.get(f"/api/chat/sessions/wrong/turns/{turn_id}")
         assert wrong_live.status_code == 404 and wrong_live.json()["detail"]["code"] == "not_found"
@@ -553,6 +589,7 @@ async def test_non_detached_turn_cancels_on_client_disconnect(app, monkeypatch):
     """A non-detached /api/chat turn is cancelled and unregistered when its client
     disconnects — the #4205 contract a detached turn deliberately does NOT share (r4)."""
     from operator_api.chat_routes import _run_disconnectable_chat
+
     chat = importlib.import_module("server.chat")
 
     entered = asyncio.Event()
@@ -570,8 +607,7 @@ async def test_non_detached_turn_cancels_on_client_disconnect(app, monkeypatch):
             await gone.wait()
             return {"type": "http.disconnect"}
 
-    pending = asyncio.create_task(
-        _run_disconnectable_chat(Request(), chat.chat("hi", "nd-5", origin="api-chat")))
+    pending = asyncio.create_task(_run_disconnectable_chat(Request(), chat.chat("hi", "nd-5", origin="api-chat")))
     await asyncio.wait_for(entered.wait(), 5)
     assert local_turns.snapshot("nd-5")  # registered as a live local turn
     gone.set()

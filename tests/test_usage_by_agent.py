@@ -1,4 +1,5 @@
 """Host-free attribution: migrations, native/ACP recording, window shares and auth."""
+
 from datetime import UTC, datetime, timedelta
 import json
 import sqlite3
@@ -27,10 +28,8 @@ def store(tmp_path, monkeypatch):
     monkeypatch.setattr(STATE, "graph_config", None)
     # Every credential seam is fake, including the forbidden refresh paths.
     for provider in ("anthropic", "codex"):
-        monkeypatch.setattr(oauth, f"peek_{provider}_access_token",
-                            lambda: SimpleNamespace(account_id="shared"))
-        monkeypatch.setattr(oauth, f"resolve_{provider}_oauth",
-                            lambda: pytest.fail("must not refresh"))
+        monkeypatch.setattr(oauth, f"peek_{provider}_access_token", lambda: SimpleNamespace(account_id="shared"))
+        monkeypatch.setattr(oauth, f"resolve_{provider}_oauth", lambda: pytest.fail("must not refresh"))
     return value
 
 
@@ -45,8 +44,9 @@ def test_migration_preserves_rows_and_is_idempotent(tmp_path, old_primary_key):
             # Reproduce the pre-row_id schema as well as the recent schema.
             db.execute("ALTER TABLE turns RENAME TO original")
             columns = db.execute("PRAGMA table_info(original)").fetchall()
-            declarations = [f'{r[1]} {r[2]}' + (' PRIMARY KEY' if r[1] == 'task_id' else '')
-                            for r in columns if r[1] != 'row_id']
+            declarations = [
+                f"{r[1]} {r[2]}" + (" PRIMARY KEY" if r[1] == "task_id" else "") for r in columns if r[1] != "row_id"
+            ]
             db.execute("CREATE TABLE turns (" + ",".join(declarations) + ")")
             db.execute("DROP TABLE original")
         db.execute("INSERT INTO turns (task_id, total_tokens) VALUES ('old', 123)")
@@ -60,8 +60,14 @@ def test_migration_preserves_rows_and_is_idempotent(tmp_path, old_primary_key):
 def test_turn_identity(store, monkeypatch, provider):
     config = LangGraphConfig.from_dict({"model": {"provider": provider, "name": "model"}})
     monkeypatch.setattr(STATE, "graph_config", config)
-    record_turn(task_id="turn", session_id="s", state="completed", models=["model"],
-                usage={"input_tokens": 20, "output_tokens": 10}, publish_usage_event=False)
+    record_turn(
+        task_id="turn",
+        session_id="s",
+        state="completed",
+        models=["model"],
+        usage={"input_tokens": 20, "output_tokens": 10},
+        publish_usage_event=False,
+    )
     row = store.recent()[0]
     assert row["total_tokens"] == 30
     assert (row["provider_id"], row["account_key"]) == (("", "") if provider == "openai" else (provider, "shared"))
@@ -69,16 +75,28 @@ def test_turn_identity(store, monkeypatch, provider):
 
 def test_explicit_override_and_raising_resolver(store, monkeypatch):
     monkeypatch.setattr(STATE, "graph_config", LangGraphConfig.app_defaults())
-    record_turn(task_id="override", session_id="", state="completed", models=["gpt"],
-                requested_model="openai-codex:gpt", publish_usage_event=False)
+    record_turn(
+        task_id="override",
+        session_id="",
+        state="completed",
+        models=["gpt"],
+        requested_model="openai-codex:gpt",
+        publish_usage_event=False,
+    )
     assert store.recent()[0]["provider_id"] == "openai-codex"
 
     def broken():
         raise RuntimeError("credential unavailable")
 
     monkeypatch.setattr(oauth, "peek_codex_access_token", broken)
-    record_turn(task_id="broken", session_id="", state="completed", models=["openai-codex:gpt"],
-                usage={"input_tokens": 17}, publish_usage_event=False)
+    record_turn(
+        task_id="broken",
+        session_id="",
+        state="completed",
+        models=["openai-codex:gpt"],
+        usage={"input_tokens": 17},
+        publish_usage_event=False,
+    )
     row = store.recent()[0]
     assert row["task_id"] == "broken" and row["total_tokens"] == 17
     assert row["account_key"] == row["provider_id"] == ""
@@ -88,13 +106,26 @@ def test_explicit_override_and_raising_resolver(store, monkeypatch):
 def test_acp_durable_row(store, monkeypatch, resolved):
     from plugins.coding_agent.acp_client import AcpClient
 
-    monkeypatch.setattr(accounts, "_configured_delegates", lambda: [
-        {"name": "coder", "command": "codex-acp" if resolved else "unknown"},
-    ])
+    monkeypatch.setattr(
+        accounts,
+        "_configured_delegates",
+        lambda: [
+            {"name": "coder", "command": "codex-acp" if resolved else "unknown"},
+        ],
+    )
     client = AcpClient("unused", [], name="coder", cwd=".")
-    client._record_run_telemetry("completed", time.monotonic(), 3, "session", {
-        "inputTokens": 10, "outputTokens": 5, "cachedReadTokens": 20, "cachedWriteTokens": 2,
-    })
+    client._record_run_telemetry(
+        "completed",
+        time.monotonic(),
+        3,
+        "session",
+        {
+            "inputTokens": 10,
+            "outputTokens": 5,
+            "cachedReadTokens": 20,
+            "cachedWriteTokens": 2,
+        },
+    )
     rows = store.recent()
     assert len(rows) == 1
     assert rows[0]["cost_usd"] == 0
@@ -104,10 +135,24 @@ def test_acp_durable_row(store, monkeypatch, resolved):
 
 
 def snapshot(key="shared"):
-    return {"accounts": [{"account_key": key, "provider_id": "openai-codex", "status": "ok",
-                           "windows": [{"id": "session", "kind": "session", "used_pct": 40,
-                                        "window_seconds": 18000,
-                                        "resets_at": (datetime.now(UTC) + timedelta(hours=1)).isoformat()}]}]}
+    return {
+        "accounts": [
+            {
+                "account_key": key,
+                "provider_id": "openai-codex",
+                "status": "ok",
+                "windows": [
+                    {
+                        "id": "session",
+                        "kind": "session",
+                        "used_pct": 40,
+                        "window_seconds": 18000,
+                        "resets_at": (datetime.now(UTC) + timedelta(hours=1)).isoformat(),
+                    }
+                ],
+            }
+        ]
+    }
 
 
 def test_window_counts_include_cache_exclude_old_unknown_and_other_models(store):
@@ -120,8 +165,9 @@ def test_window_counts_include_cache_exclude_old_unknown_and_other_models(store)
         ("other", 100, datetime.now(UTC), "gpt"),
         ("shared", 10, datetime.now(UTC), "other"),
     ]:
-        store.record({"task_id": "t", "account_key": key, "total_tokens": tokens,
-                      "ended_at": when.isoformat(), "model": model})
+        store.record(
+            {"task_id": "t", "account_key": key, "total_tokens": tokens, "ended_at": when.isoformat(), "model": model}
+        )
     assert usage.local_attribution(windows)[0]["tokens"] == 40
     windows[0]["model"] = "gpt"
     assert usage.local_attribution(windows)[0]["tokens"] == 30
@@ -130,8 +176,11 @@ def test_window_counts_include_cache_exclude_old_unknown_and_other_models(store)
 def test_merge_shares_redacts_and_marks_unavailable():
     body = snapshot()
     windows = usage.attribution_windows(body["accounts"])
-    members = {"a": {"attribution": [{**windows[0], "tokens": 10, "secret": "secret"}]},
-               "b": {"attribution": [{**windows[0], "tokens": 30}]}, "old": {"accounts": []}}
+    members = {
+        "a": {"attribution": [{**windows[0], "tokens": 10, "secret": "secret"}]},
+        "b": {"attribution": [{**windows[0], "tokens": 30}]},
+        "old": {"accounts": []},
+    }
     usage.merge_attribution(body["accounts"], windows, members)
     result = body["accounts"][0]["by_agent"][0]
     assert [m["share_pct"] for m in result["members"]] == [25, 75]
@@ -148,8 +197,7 @@ def test_merge_shares_redacts_and_marks_unavailable():
 def test_cli_uses_operator_route_and_labels_shares(monkeypatch, capsys, fleet):
     body = snapshot()
     windows = usage.attribution_windows(body["accounts"])
-    usage.merge_attribution(body["accounts"], windows,
-                            {"worker": {"attribution": [{**windows[0], "tokens": 40}]}})
+    usage.merge_attribution(body["accounts"], windows, {"worker": {"attribution": [{**windows[0], "tokens": 40}]}})
     calls = []
 
     def get(slug, path, **params):
@@ -211,9 +259,13 @@ def test_account_helper_failure_never_raises(monkeypatch):
 async def test_acp_prompt_passes_captured_usage_to_recording(store, monkeypatch):
     from plugins.coding_agent.acp_client import AcpClient
 
-    monkeypatch.setattr(accounts, "_configured_delegates", lambda: [
-        {"name": "coder", "command": "claude-agent-acp"},
-    ])
+    monkeypatch.setattr(
+        accounts,
+        "_configured_delegates",
+        lambda: [
+            {"name": "coder", "command": "claude-agent-acp"},
+        ],
+    )
     client = AcpClient("unused", [], name="coder", cwd=".")
 
     async def prompt_locked(*args, **kwargs):
@@ -243,8 +295,9 @@ def test_unknown_identity_and_windows_remain_unknown(store, monkeypatch):
 
 def test_local_route_returns_counts_without_polling_in_cache_mode(store, monkeypatch):
     body = snapshot()
-    store.record({"task_id": "t", "account_key": "shared", "total_tokens": 45,
-                  "ended_at": datetime.now(UTC).isoformat()})
+    store.record(
+        {"task_id": "t", "account_key": "shared", "total_tokens": 45, "ended_at": datetime.now(UTC).isoformat()}
+    )
     calls = []
 
     def read(*args, **kwargs):
@@ -261,12 +314,24 @@ def test_local_route_returns_counts_without_polling_in_cache_mode(store, monkeyp
 
 
 def test_gateway_override_is_not_attributed_to_native_default(store, monkeypatch):
-    monkeypatch.setattr(STATE, "graph_config", LangGraphConfig.from_dict({
-        "model": {"provider": "anthropic-oauth", "name": "claude-sonnet-4-6"},
-    }))
-    record_turn(task_id="gateway", session_id="", state="completed", models=["gpt"],
-                requested_model="gateway:protolabs/smart", usage={"input_tokens": 10},
-                publish_usage_event=False)
+    monkeypatch.setattr(
+        STATE,
+        "graph_config",
+        LangGraphConfig.from_dict(
+            {
+                "model": {"provider": "anthropic-oauth", "name": "claude-sonnet-4-6"},
+            }
+        ),
+    )
+    record_turn(
+        task_id="gateway",
+        session_id="",
+        state="completed",
+        models=["gpt"],
+        requested_model="gateway:protolabs/smart",
+        usage={"input_tokens": 10},
+        publish_usage_event=False,
+    )
     assert store.recent()[0]["account_key"] == ""
 
 

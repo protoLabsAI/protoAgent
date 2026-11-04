@@ -36,7 +36,9 @@ def _answer_from(values: dict) -> str:
         if isinstance(m, AIMessage):
             content = getattr(m, "content", "")
             if isinstance(content, list):  # multi-part → join text blocks
-                content = "\n".join(b.get("text", "") for b in content if isinstance(b, dict) and b.get("type") == "text")
+                content = "\n".join(
+                    b.get("text", "") for b in content if isinstance(b, dict) and b.get("type") == "text"
+                )
             text = str(content).strip()
             if text:
                 return text

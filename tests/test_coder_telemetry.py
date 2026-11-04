@@ -39,7 +39,7 @@ def wired(tmp_path, monkeypatch):
 
 # A minimal ACP agent over stdio. `__SESSION__` is the session id it hands back and
 # `__BODY__` is how it answers `session/prompt` — the only two things these tests vary.
-_AGENT_TMPL = r'''
+_AGENT_TMPL = r"""
 import json, sys, time
 
 def send(obj):
@@ -61,7 +61,7 @@ while True:
         send({"jsonrpc": "2.0", "id": mid, "result": {"sessionId": "__SESSION__"}})
     elif method == "session/prompt":
         __BODY__
-'''
+"""
 
 _CHUNK = (
     'send({"jsonrpc": "2.0", "method": "session/update", "params": {'
@@ -562,7 +562,7 @@ async def test_a_run_that_dies_before_it_starts_books_none_of_the_previous_runs_
 # its own thread precisely because the real failure needs it: a coder that blew its
 # timeout is not paused waiting to be collected, it is still running tools and still
 # writing `session/update` notifications down the same stdout the next run reads.
-_FLOODING_AGENT = r'''
+_FLOODING_AGENT = r"""
 import json, sys, threading, time
 
 _out = threading.Lock()
@@ -619,7 +619,7 @@ while True:
             time.sleep(0.25)
             chunk()
             send({"jsonrpc": "2.0", "id": mid, "result": {"stopReason": "end_turn"}})
-'''
+"""
 
 # A healthy peer coder working the whole time the runaway turn is being abandoned —
 # the board dispatches several coders at once, so attribution has to hold across
@@ -820,9 +820,7 @@ async def test_a_dead_agents_orphaned_backend_neither_charges_nor_kills_the_next
 
     sentinel = tmp_path / "stop-flooding"
     peer = _client(tmp_path, "codex", _PEER_TOOLS_BODY, session="sess-peer-live")
-    client = AcpClient(
-        sys.executable, _orphaning_agent(tmp_path, sentinel), cwd=str(tmp_path), name="claude-code"
-    )
+    client = AcpClient(sys.executable, _orphaning_agent(tmp_path, sentinel), cwd=str(tmp_path), name="claude-code")
     try:
         peer_task = asyncio.create_task(peer.prompt("peer feature", timeout=30.0))
         assert await client.prompt("first feature", timeout=30.0) == "wrote the patch"
@@ -869,7 +867,7 @@ async def test_a_dead_agents_orphaned_backend_neither_charges_nor_kills_the_next
 
 # ── an error the agent answered with is not an abandoned turn (#3040) ────────
 
-_POOLED_ERROR_AGENT = r'''
+_POOLED_ERROR_AGENT = r"""
 import json, os, sys, time
 
 # The session id names the PROCESS, so a respawn is visible in the recorded row: this
@@ -914,7 +912,7 @@ while True:
                 "update": {"sessionUpdate": "agent_message_chunk",
                            "content": {"type": "text", "text": "wrote the patch"}}}})
             send({"jsonrpc": "2.0", "id": mid, "result": {"stopReason": "end_turn"}})
-'''
+"""
 
 
 async def test_an_error_the_agent_reported_keeps_the_pooled_session(wired, tmp_path):

@@ -714,7 +714,8 @@ def _effective_subagent_tools(config, sub_config, tool_map: dict) -> list:
     if missing:
         logging.getLogger(__name__).warning(
             "[subagent] '%s' allowlisted tool(s) %s are not bound on this host",
-            sub_config.name, missing,
+            sub_config.name,
+            missing,
         )
     names = list(sub_config.tools or [])
     if names and getattr(sub_config, "inherit_read_tools", True):
@@ -1052,9 +1053,7 @@ async def _run_subagent_inner(
     # model → the delegating turn's model override → routing.aux_model → main model.
     from graph.subagent_model import resolve_subagent_model
 
-    sub_model = resolve_subagent_model(
-        config, subagent_type, turn_model, pinned=getattr(sub_config, "model", "") or ""
-    )
+    sub_model = resolve_subagent_model(config, subagent_type, turn_model, pinned=getattr(sub_config, "model", "") or "")
     sub_llm = create_llm(config, model_name=sub_model)
 
     # Subagents do real work (tool calls), so the enforcement rail (ADR 0003) should
@@ -1440,9 +1439,7 @@ async def run_manual_subagent(
         return gap
     if self_improvement_run and subagent_type in SUBAGENT_REGISTRY:
         # Keep the manual review boundary policy-filtered, after inheritance.
-        tool_map = {
-            t.name: t for t in _effective_subagent_tools(config, SUBAGENT_REGISTRY[subagent_type], tool_map)
-        }
+        tool_map = {t.name: t for t in _effective_subagent_tools(config, SUBAGENT_REGISTRY[subagent_type], tool_map)}
     available_subagents = ", ".join(SUBAGENT_REGISTRY.keys()) or "(none configured)"
 
     return await _run_subagent(
@@ -1543,7 +1540,9 @@ def split_subagent_only(tools: list, config, *, resolvable: frozenset[str] | Non
     return lead, held
 
 
-def _build_task_tools(config: LangGraphConfig, all_tools: list[BaseTool], background_mgr=None, lead_tool_names=None, lead_tools=None):
+def _build_task_tools(
+    config: LangGraphConfig, all_tools: list[BaseTool], background_mgr=None, lead_tool_names=None, lead_tools=None
+):
     """Build the subagent-delegation tools: single ``task`` and concurrent ``task_batch``.
 
     Subagents share AuditMiddleware so their tool calls land alongside the
@@ -1854,7 +1853,9 @@ def _build_task_tools(config: LangGraphConfig, all_tools: list[BaseTool], backgr
                 return f"Error: task '{desc}' is missing 'prompt'."
             # Fail fast (#4327) per item — the offending task returns inline while its
             # siblings still run; the subagent for this spec is never invoked.
-            gap = _dispatch_tool_gap(config, spec.get("subagent_type", "researcher"), prm, dispatch_tool_map(), lead_vocab)
+            gap = _dispatch_tool_gap(
+                config, spec.get("subagent_type", "researcher"), prm, dispatch_tool_map(), lead_vocab
+            )
             if gap:
                 return gap
             async with sem:

@@ -510,8 +510,18 @@ def test_session_seed_writes_a_summary_the_digest_actually_reads(tmp_path):
     or the case measures the fixture instead of the agent."""
     from graph.middleware.memory import load_prior_sessions
 
-    assert verify.seed_session({"session_id": "chat-newer", "topic": "newer thing", "age_minutes": 10}, memory_dir=str(tmp_path)) is None
-    assert verify.seed_session({"session_id": "chat-older", "topic": "older thing", "age_minutes": 600}, memory_dir=str(tmp_path)) is None
+    assert (
+        verify.seed_session(
+            {"session_id": "chat-newer", "topic": "newer thing", "age_minutes": 10}, memory_dir=str(tmp_path)
+        )
+        is None
+    )
+    assert (
+        verify.seed_session(
+            {"session_id": "chat-older", "topic": "older thing", "age_minutes": 600}, memory_dir=str(tmp_path)
+        )
+        is None
+    )
 
     block = load_prior_sessions(str(tmp_path))
     assert "newer thing" in block and "older thing" in block

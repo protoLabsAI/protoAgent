@@ -34,17 +34,39 @@ IDENTITY = "You are Claude Code, Anthropic's official CLI for Claude."
 
 def _sse_body(text: str = "a summary") -> bytes:
     events = [
-        ("message_start", {"type": "message_start", "message": {
-            "id": "msg_1", "type": "message", "role": "assistant", "model": "claude-opus-5-5",
-            "content": [], "stop_reason": None, "stop_sequence": None,
-            "usage": {"input_tokens": 10, "output_tokens": 0}}}),
-        ("content_block_start", {"type": "content_block_start", "index": 0,
-                                 "content_block": {"type": "text", "text": ""}}),
-        ("content_block_delta", {"type": "content_block_delta", "index": 0,
-                                 "delta": {"type": "text_delta", "text": text}}),
+        (
+            "message_start",
+            {
+                "type": "message_start",
+                "message": {
+                    "id": "msg_1",
+                    "type": "message",
+                    "role": "assistant",
+                    "model": "claude-opus-5-5",
+                    "content": [],
+                    "stop_reason": None,
+                    "stop_sequence": None,
+                    "usage": {"input_tokens": 10, "output_tokens": 0},
+                },
+            },
+        ),
+        (
+            "content_block_start",
+            {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}},
+        ),
+        (
+            "content_block_delta",
+            {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": text}},
+        ),
         ("content_block_stop", {"type": "content_block_stop", "index": 0}),
-        ("message_delta", {"type": "message_delta", "delta": {"stop_reason": "end_turn", "stop_sequence": None},
-                           "usage": {"output_tokens": 3}}),
+        (
+            "message_delta",
+            {
+                "type": "message_delta",
+                "delta": {"stop_reason": "end_turn", "stop_sequence": None},
+                "usage": {"output_tokens": 3},
+            },
+        ),
         ("message_stop", {"type": "message_stop"}),
     ]
     return "".join(f"event: {name}\ndata: {json.dumps(data)}\n\n" for name, data in events).encode()
@@ -59,8 +81,13 @@ def _http_mod(llm):
 
 def _json_body(text: str = "a summary") -> dict:
     return {
-        "id": "msg_1", "type": "message", "role": "assistant", "model": "claude-opus-5-5",
-        "content": [{"type": "text", "text": text}], "stop_reason": "end_turn", "stop_sequence": None,
+        "id": "msg_1",
+        "type": "message",
+        "role": "assistant",
+        "model": "claude-opus-5-5",
+        "content": [{"type": "text", "text": text}],
+        "stop_reason": "end_turn",
+        "stop_sequence": None,
         "usage": {"input_tokens": 10, "output_tokens": 3},
     }
 
@@ -80,7 +107,9 @@ class _Capture:
         self.bodies.append(body)
         if self.fail:
             # The exact fake-429 shape the OAuth enforcement returns (no ratelimit headers).
-            return httpx.Response(429, json={"type": "error", "error": {"type": "rate_limit_error", "message": "Error"}})
+            return httpx.Response(
+                429, json={"type": "error", "error": {"type": "rate_limit_error", "message": "Error"}}
+            )
         if body.get("stream"):
             return httpx.Response(200, content=_sse_body(), headers={"content-type": "text/event-stream"})
         return httpx.Response(200, json=_json_body())
@@ -258,7 +287,10 @@ def test_graph_control_flow_still_propagates_from_compaction(monkeypatch):
         # Not followed by whitespace → a different sentence, never split mid-word.
         (IDENTITY + "ai rules", [{"type": "text", "text": IDENTITY}, {"type": "text", "text": IDENTITY + "ai rules"}]),
         # Remainder is stripped.
-        (IDENTITY + " \n You are Aria. \n", [{"type": "text", "text": IDENTITY}, {"type": "text", "text": "You are Aria."}]),
+        (
+            IDENTITY + " \n You are Aria. \n",
+            [{"type": "text", "text": IDENTITY}, {"type": "text", "text": "You are Aria."}],
+        ),
     ],
 )
 def test_shape_oauth_system_string_edges(system, expected):

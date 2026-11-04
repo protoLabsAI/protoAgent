@@ -212,7 +212,13 @@ def test_offer_then_claim_round_trip(monkeypatch, repo, tmp_path):
     # Zed opened on the PARENT folder still claims it.
     c = client.post("/api/editor/handoff/claim", json={"cwd": str(repo.parent)})
     assert c.status_code == 200
-    assert c.json() == {"session_id": "chat-1", "project": "repo", "path": "src/router.py", "line": 2, "title": "Router bug"}
+    assert c.json() == {
+        "session_id": "chat-1",
+        "project": "repo",
+        "path": "src/router.py",
+        "line": 2,
+        "title": "Router bug",
+    }
     # One-shot.
     assert client.post("/api/editor/handoff/claim", json={"cwd": str(repo)}).status_code == 204
 
@@ -447,9 +453,7 @@ async def test_open_in_editor_in_a_real_graph_offers_the_turn_session(repo, monk
         ],
     )
     fake = _ToolFake(messages=iter([call, AIMessage(content="done")]))
-    cfg = LangGraphConfig(
-        filesystem_editor_command="zed", filesystem_projects=[{"name": "repo", "path": str(repo)}]
-    )
+    cfg = LangGraphConfig(filesystem_editor_command="zed", filesystem_projects=[{"name": "repo", "path": str(repo)}])
     with patch("graph.agent.create_llm", lambda *a, **k: fake):
         from graph.agent import create_agent_graph
 

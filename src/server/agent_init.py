@@ -117,7 +117,6 @@ from server.settings_apply import (  # noqa: E402,F401 — re-export (#3848); pa
 )
 
 
-
 # The value seed_public_url last wrote. The in-app restart is an ``execv`` that keeps the
 # env, so without this marker a seeded URL would read as "explicit" on the next boot and a
 # changed or cleared setting would never apply.
@@ -1463,11 +1462,11 @@ def _reload_langgraph_agent(*, reload_plugins: bool = True) -> tuple[bool, str]:
         # "" (explicitly set to empty) means bearer off: do NOT fall back to env,
         # otherwise auth: {token: ""} silently re-enables auth via the env var (#2691).
         auth.set_bearer_token(
-            new_config.auth_token if new_config.auth_token is not None
-            else (os.environ.get("A2A_AUTH_TOKEN") or None)
+            new_config.auth_token if new_config.auth_token is not None else (os.environ.get("A2A_AUTH_TOKEN") or None)
         )
         auth.set_federation_token(
-            new_config.federation_token if new_config.federation_token is not None
+            new_config.federation_token
+            if new_config.federation_token is not None
             else (os.environ.get("A2A_FEDERATION_TOKEN") or None)
         )
     except ImportError:

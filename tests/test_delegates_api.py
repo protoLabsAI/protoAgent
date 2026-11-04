@@ -482,7 +482,11 @@ def test_list_carries_scope_and_can_share_and_member_mutations_are_403(client, f
     """`scope` rides every row and `can_share` says whether THIS instance may edit the
     host layer; a member editing/deleting a shared entry gets a 403, not a silent
     no-op — and may still register its own (shadowing) entry of the same name."""
-    monkeypatch.setattr(store, "read_host_delegates_raw", lambda: [{"name": "cc", "type": "acp", "command": "/x", "workdir": "/w", "scope": "host"}])
+    monkeypatch.setattr(
+        store,
+        "read_host_delegates_raw",
+        lambda: [{"name": "cc", "type": "acp", "command": "/x", "workdir": "/w", "scope": "host"}],
+    )
     monkeypatch.setattr(store, "can_write_host_layer", lambda: False)
     rows = client.get("/api/delegates").json()
     assert rows["can_share"] is False
@@ -496,7 +500,11 @@ def test_list_carries_scope_and_can_share_and_member_mutations_are_403(client, f
 
 
 def test_hub_create_with_scope_host_is_refused_as_duplicate_when_name_exists(client, fake_io, monkeypatch):
-    monkeypatch.setattr(store, "read_host_delegates_raw", lambda: [{"name": "cc", "type": "acp", "command": "/x", "workdir": "/w", "scope": "host"}])
+    monkeypatch.setattr(
+        store,
+        "read_host_delegates_raw",
+        lambda: [{"name": "cc", "type": "acp", "command": "/x", "workdir": "/w", "scope": "host"}],
+    )
     assert client.get("/api/delegates").json()["can_share"] is True
     r = client.post("/api/delegates", json={"name": "cc", "type": "acp", "command": "/mine", "workdir": "/w"})
     assert r.status_code == 409
@@ -505,8 +513,14 @@ def test_hub_create_with_scope_host_is_refused_as_duplicate_when_name_exists(cli
 def test_scope_classification_is_normalized_everywhere(client, fake_io, monkeypatch):
     """`scope: "Host"` (case/padding) must classify the same in the route layer as in the
     store — the 409 duplicate check and the persisted layer can't disagree."""
-    monkeypatch.setattr(store, "read_host_delegates_raw", lambda: [{"name": "cc", "type": "acp", "command": "/x", "workdir": "/w", "scope": "host"}])
-    r = client.post("/api/delegates", json={"name": "cc", "type": "acp", "command": "/y", "workdir": "/w", "scope": " Host "})
+    monkeypatch.setattr(
+        store,
+        "read_host_delegates_raw",
+        lambda: [{"name": "cc", "type": "acp", "command": "/x", "workdir": "/w", "scope": "host"}],
+    )
+    r = client.post(
+        "/api/delegates", json={"name": "cc", "type": "acp", "command": "/y", "workdir": "/w", "scope": " Host "}
+    )
     assert r.status_code == 409  # same layer as the existing host entry — a dup, not a shadow
 
 

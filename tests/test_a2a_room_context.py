@@ -566,7 +566,7 @@ async def test_rewinding_a_room_forgets_its_peer_contexts(monkeypatch):
 
 
 async def test_a_rewind_that_discarded_nothing_keeps_continuity(monkeypatch):
-    """"That's already the last message" erased nothing, so dropping the participant's
+    """ "That's already the last message" erased nothing, so dropping the participant's
     continuity would be a pure loss with no leak to close."""
     import graph.rewind_op as rop
     from server.chat import rewind_session
@@ -665,7 +665,10 @@ async def test_a_peer_still_working_past_the_deadline_loses_the_pointer(wire, fa
     reg = _registry()
     await reg.dispatch("peer", "hi", conversation_key="thread-1")
 
-    working = {"jsonrpc": "2.0", "result": {"task": {"id": "t9", "contextId": "ctx-room", "status": {"state": "TASK_STATE_WORKING"}}}}
+    working = {
+        "jsonrpc": "2.0",
+        "result": {"task": {"id": "t9", "contextId": "ctx-room", "status": {"state": "TASK_STATE_WORKING"}}},
+    }
     wire(lambda _u, _b: _Resp(working))
     with pytest.raises(DelegateError, match="still running"):
         await reg.dispatch("peer", "run the migration", conversation_key="thread-1")
@@ -710,7 +713,10 @@ async def test_a_terminal_task_with_no_readable_answer_loses_the_pointer(wire):
     reg = _registry()
     await reg.dispatch("peer", "hi", conversation_key="thread-1")
 
-    silent = {"jsonrpc": "2.0", "result": {"task": {"id": "t9", "contextId": "ctx-room", "status": {"state": "TASK_STATE_COMPLETED"}}}}
+    silent = {
+        "jsonrpc": "2.0",
+        "result": {"task": {"id": "t9", "contextId": "ctx-room", "status": {"state": "TASK_STATE_COMPLETED"}}},
+    }
     wire(lambda _u, _b: _Resp(silent))
     with pytest.raises(DelegateError, match="returned no text"):
         await reg.dispatch("peer", "?", conversation_key="thread-1")

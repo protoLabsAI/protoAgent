@@ -108,7 +108,9 @@ def _content_text(message) -> str:
     return str(content).strip()
 
 
-def _resolve_end(messages: list, *, target_index, target_id, target_content, occurrence=None, before=False) -> int | None:
+def _resolve_end(
+    messages: list, *, target_index, target_id, target_content, occurrence=None, before=False
+) -> int | None:
     """Index of the message JUST PAST the target (the naive, pre-safe-cut prefix
     length), or ``None`` if the target can't be located.
 

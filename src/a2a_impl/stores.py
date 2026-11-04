@@ -550,9 +550,7 @@ def tombstoned_chat_sessions(session_ids) -> set[str] | None:
         for i in range(0, len(ids), _TOMBSTONE_QUERY_CHUNK):
             chunk = ids[i : i + _TOMBSTONE_QUERY_CHUNK]
             marks = ",".join("?" * len(chunk))
-            rows = conn.execute(
-                f"SELECT context_id FROM {CHAT_TOMBSTONE_TABLE} WHERE context_id IN ({marks})", chunk
-            )
+            rows = conn.execute(f"SELECT context_id FROM {CHAT_TOMBSTONE_TABLE} WHERE context_id IN ({marks})", chunk)
             found.update(r[0] for r in rows)
         return found
     except sqlite3.Error as exc:

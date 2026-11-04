@@ -152,7 +152,9 @@ def test_an_orphaned_name_is_logged(caplog):
         """No subagent lists me."""
         return ""
 
-    lead, held = split_subagent_only([orphan, media_grab], LangGraphConfig(tools_subagent_only=["orphan", "media_grab"]))
+    lead, held = split_subagent_only(
+        [orphan, media_grab], LangGraphConfig(tools_subagent_only=["orphan", "media_grab"])
+    )
     assert lead == [] and _names(held) == {"orphan", "media_grab"}
     assert "orphan" in caplog.text and "media_grab" not in caplog.text
 

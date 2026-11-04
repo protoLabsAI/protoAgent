@@ -75,7 +75,8 @@ def test_archives_before_a_real_compaction(monkeypatch):
     docs = []
     monkeypatch.setattr(SummarizationMiddleware, "before_model", lambda self, s, r: {"messages": []})
     monkeypatch.setattr(
-        _History, "add",
+        _History,
+        "add",
         lambda store, text, **kw: docs.append({"text": text, **kw}) or 1,
     )
     mw = _instance()
@@ -248,6 +249,9 @@ def test_archive_without_a_trajectory_is_marked_undated_not_new(monkeypatch, tmp
     mw._history_store = _kb()
     mw.before_model({"session_id": "sessY", "messages": [HumanMessage(id="h1", content="old news")]}, None)
     (doc,) = docs
-    assert doc["text"].splitlines() == [f"[Conversation archive: message dates unknown; archived {today}]", "User: old news"]
+    assert doc["text"].splitlines() == [
+        f"[Conversation archive: message dates unknown; archived {today}]",
+        "User: old news",
+    ]
     assert doc["heading"] == f"Conversation archive (auto-compaction, sessY, archived {today})"
     assert doc["thread_id"] is None  # no graph run → no thread to name

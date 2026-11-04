@@ -91,9 +91,11 @@ def test_search_read_pane_and_show_code_agree(proj, monkeypatch, name):
     assert "NEEDLE" in one.split("\n… (")[0]
 
     # The pane: same line count, same row.
-    body = _pane(monkeypatch, proj).get(
-        "/api/fs/file", params={"project": "repo", "path": f"{name}.txt", "start": want, "end": want}
-    ).json()
+    body = (
+        _pane(monkeypatch, proj)
+        .get("/api/fs/file", params={"project": "repo", "path": f"{name}.txt", "start": want, "end": want})
+        .json()
+    )
     assert "NEEDLE" in body["text"]
     assert body["line_count"] == data.count(b"\n")
 

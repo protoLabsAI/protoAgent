@@ -1399,7 +1399,6 @@ def test_task_id_from_response_reads_both_wire_shapes():
     assert task_id_from_response("not a dict") == ""
 
 
-
 @pytest.mark.asyncio
 async def test_work_frames_carry_the_text_offset_they_streamed_at(tmp_path):
     """Durable history keeps the answer as ONE flattened artifact and the work frames

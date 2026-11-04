@@ -292,7 +292,9 @@ def delete_thread(db_path: str, thread_id: str, *, cascade: bool = False) -> int
         try:
             gc_media(db_path, grace_s=0, only=refs)
         except sqlite3.Error:
-            _log.warning("[checkpoint-prune] media GC after deleting %s failed; the sweep will retry", thread_id, exc_info=True)
+            _log.warning(
+                "[checkpoint-prune] media GC after deleting %s failed; the sweep will retry", thread_id, exc_info=True
+            )
     return n
 
 
@@ -348,9 +350,7 @@ def prune_checkpoints(
             (len(_BACKGROUND_PREFIX), _BACKGROUND_PREFIX, bg_keep, keep),
         ).fetchall()
         for tid, ns in over:
-            checkpoints_deleted += trim_group(
-                conn, tid, ns, bg_keep if tid.startswith(_BACKGROUND_PREFIX) else keep
-            )
+            checkpoints_deleted += trim_group(conn, tid, ns, bg_keep if tid.startswith(_BACKGROUND_PREFIX) else keep)
 
         conn.commit()
     finally:

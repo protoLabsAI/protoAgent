@@ -81,13 +81,29 @@ def test_text_only_route_preserves_item_and_message(client, monkeypatch, extra):
 def test_mixed_fold_keeps_per_item_vision_and_fences(client, monkeypatch):
     monkeypatch.setattr(STATE, "graph_config", SimpleNamespace(model_vision=False))
     url = "https://example.com/image.png"
-    assert client.post("/api/chat/sessions/mixed/steer", json={
-        "id": "a", "text": "hidden", "images": [["image/png", url]],
-    }).status_code == 200
+    assert (
+        client.post(
+            "/api/chat/sessions/mixed/steer",
+            json={
+                "id": "a",
+                "text": "hidden",
+                "images": [["image/png", url]],
+            },
+        ).status_code
+        == 200
+    )
     monkeypatch.setattr(STATE, "graph_config", SimpleNamespace(model_vision=True))
-    assert client.post("/api/chat/sessions/mixed/steer", json={
-        "id": "b", "text": "visible", "images": [["image/png", url]],
-    }).status_code == 200
+    assert (
+        client.post(
+            "/api/chat/sessions/mixed/steer",
+            json={
+                "id": "b",
+                "text": "visible",
+                "images": [["image/png", url]],
+            },
+        ).status_code
+        == 200
+    )
     steering.enqueue("mixed", "fenced", msg_id="c", fence=["read_file"])
     update, consumed = SteeringMiddleware._drain({"session_id": "mixed"})
     assert update["messages"][0].content == [
@@ -101,9 +117,16 @@ def test_mixed_fold_keeps_per_item_vision_and_fences(client, monkeypatch):
 def test_unsafe_image_is_omitted_but_refs_survive(client, monkeypatch):
     monkeypatch.setattr(STATE, "graph_config", SimpleNamespace(model_vision=True))
     monkeypatch.setattr("graph.image_limits.fit_data_uri", lambda uri: None)
-    assert client.post("/api/chat/sessions/oversized/steer", json={
-        "text": "look", "images": [["image/png", "data:image/png;base64,AAA="]],
-    }).status_code == 200
+    assert (
+        client.post(
+            "/api/chat/sessions/oversized/steer",
+            json={
+                "text": "look",
+                "images": [["image/png", "data:image/png;base64,AAA="]],
+            },
+        ).status_code
+        == 200
+    )
     content = SteeringMiddleware._inject({"session_id": "oversized"})["messages"][0].content
     assert "[attached-image refs]" in content[0]["text"]
     assert content[1] == {"type": "text", "text": "[an attached image was omitted: too large to send to the model]"}
@@ -160,10 +183,13 @@ def test_turn_query_reads_text_blocks_not_base64(client, monkeypatch):
 
     monkeypatch.setattr(STATE, "graph_config", SimpleNamespace(model_vision=True))
     data_uri = "data:image/png;base64,AAA="
-    assert client.post(
-        "/api/chat/sessions/query/steer",
-        json={"text": "describe the chart", "images": [["image/png", data_uri]]},
-    ).status_code == 200
+    assert (
+        client.post(
+            "/api/chat/sessions/query/steer",
+            json={"text": "describe the chart", "images": [["image/png", data_uri]]},
+        ).status_code
+        == 200
+    )
     content = SteeringMiddleware._inject({"session_id": "query"})["messages"][0].content
     assert isinstance(content, list)  # multimodal: text block + image block
     q = turn_query([HumanMessage(content=content)])
@@ -193,9 +219,13 @@ def test_posted_attachment_reaches_model_call(client, monkeypatch, vision):
         middleware=[SteeringMiddleware()],
         state_schema=ProtoAgentState,
     )
-    response = client.post("/api/chat/sessions/model-call/steer", json={
-        "text": "use this image", "images": [["image/png", "data:image/png;base64,AAA="]],
-    })
+    response = client.post(
+        "/api/chat/sessions/model-call/steer",
+        json={
+            "text": "use this image",
+            "images": [["image/png", "data:image/png;base64,AAA="]],
+        },
+    )
     assert response.status_code == 200
     refs = steering.pending_items("model-call")[0]["refs"]
     agent.invoke(

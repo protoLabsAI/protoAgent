@@ -95,7 +95,9 @@ def test_compatible_candidate_reports_actual_load_result(candidate, monkeypatch,
         if operation == "update":
             response = _client().post("/api/plugins/protobanana/update")
         else:
-            response = _client().post("/api/plugins/install", json={"url": str(candidate), "ref": "v0.5.0", "force": True})
+            response = _client().post(
+                "/api/plugins/install", json={"url": str(candidate), "ref": "v0.5.0", "force": True}
+            )
         body = response.json()
         # The disk update succeeded; HTTP success lets the console refresh its inventory.
         # Activation failures remain explicit and must never claim a successful reload.
@@ -105,9 +107,14 @@ def test_compatible_candidate_reports_actual_load_result(candidate, monkeypatch,
         assert body["restart_recommended"] is False
         assert installer.load_manifest(installer.live_plugins_dir() / "protobanana").version == "0.5.0"
         entry = next(e for e in installer._read_lock()["plugins"] if e["id"] == "protobanana")
-        assert entry["resolved_sha"] == subprocess.check_output(
-            ["git", "rev-parse", "v0.5.0"], cwd=candidate, text=True,
-        ).strip()
+        assert (
+            entry["resolved_sha"]
+            == subprocess.check_output(
+                ["git", "rev-parse", "v0.5.0"],
+                cwd=candidate,
+                text=True,
+            ).strip()
+        )
         if failure:
             assert expected_error in body["load_errors"]["protobanana"]
             assert expected_error in body["error"]
@@ -142,7 +149,8 @@ def test_bundle_host_preflight(candidate, env, monkeypatch, existing, compatible
         _git(bundle, "add", "-A")
         _git(bundle, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "incompatible floor")
     monkeypatch.setattr(
-        installer, "check_plugin_update",
+        installer,
+        "check_plugin_update",
         lambda entry: {"latest_ref": "v0.1.1" if entry["source_url"] == str(candidate) else "v0.1.0"},
     )
     root = installer.live_plugins_dir()
@@ -176,7 +184,12 @@ def test_bundle_installs_the_preflighted_commit(candidate, monkeypatch):
     monkeypatch.setattr(installer, "check_plugin_update", lambda entry: {"latest_ref": "v0.1.0"})
     result = installer._install_bundle(
         {"id": "stack", "plugins": [{"url": str(candidate), "ref": "v0.1.0"}]},
-        "bundle-source", "a" * 40, None, force=False, by="test", allow=None,
+        "bundle-source",
+        "a" * 40,
+        None,
+        force=False,
+        by="test",
+        allow=None,
     )
     assert result["installed"][0]["version"] == "0.1.0"
     entry = installer._read_lock()["plugins"][0]

@@ -145,6 +145,13 @@
   color: var(--pl-color-fg-muted);
   text-transform: capitalize;
 }
+/* Why a failed or canceled job ended (#4726). Wraps rather than clips, since it is
+   usually one short sentence and the dialog has the room. */
+.bg-jobs-error {
+  font-size: var(--pl-font-size-2xs);
+  color: var(--pl-color-status-error);
+  overflow-wrap: anywhere;
+}
 .bg-jobs-tools {
   display: flex;
   flex-wrap: wrap;

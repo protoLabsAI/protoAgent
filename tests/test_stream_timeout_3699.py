@@ -106,9 +106,7 @@ async def test_r2_no_first_chunk_raises_a_stall_timeout_promptly():
     with pytest.raises(StreamStallTimeout) as ei:
         # wait_for is a watchdog on the TEST: if the guard failed to fire, the fake would
         # sleep 3600s and this would surface as a plain TimeoutError instead.
-        await asyncio.wait_for(
-            _drain_guard(_never_first_chunk(), timeout=0.05, label="test-model"), 2.0
-        )
+        await asyncio.wait_for(_drain_guard(_never_first_chunk(), timeout=0.05, label="test-model"), 2.0)
     assert "test-model" in str(ei.value)
     assert "first token" in str(ei.value)
 
@@ -121,9 +119,7 @@ async def test_r2_no_first_chunk_is_retried_per_max_retries_then_fails_clearly()
         return _never_first_chunk()
 
     with pytest.raises(StreamStallTimeout) as ei:
-        await _drain_reconnect(
-            make, timeout=0.05, max_retries=2, label="anthropic-oauth model 'claude-opus-5-5'"
-        )
+        await _drain_reconnect(make, timeout=0.05, max_retries=2, label="anthropic-oauth model 'claude-opus-5-5'")
 
     assert len(calls) == 3  # initial + 2 retries, not 1
     assert "claude-opus-5-5" in str(ei.value)
@@ -194,9 +190,7 @@ async def test_openai_compat_astream_enforces_request_timeout(monkeypatch):
 
     monkeypatch.setattr(ChatOpenAI, "_astream", fake_astream, raising=True)
 
-    client = llm_mod._ReasoningChatOpenAI(
-        model="protolabs/reasoning", api_key="k", timeout=0.05, max_retries=1
-    )
+    client = llm_mod._ReasoningChatOpenAI(model="protolabs/reasoning", api_key="k", timeout=0.05, max_retries=1)
 
     async def run():
         return [c async for c in client._astream([])]

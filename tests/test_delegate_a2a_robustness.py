@@ -375,9 +375,7 @@ def test_explicit_timeout_caps_a_poll_that_keeps_progressing(patched):
     still hold now that the wait happens in the poll rather than in one held read."""
     _clock(patched, step=1.0)
     progressing = [_task_resp(state="TASK_STATE_WORKING", text=f"step {i}") for i in range(50)]
-    bodies = _install_capture_client(
-        patched, send_resp=_task_resp(state="TASK_STATE_WORKING"), get_resps=progressing
-    )
+    bodies = _install_capture_client(patched, send_resp=_task_resp(state="TASK_STATE_WORKING"), get_resps=progressing)
 
     with pytest.raises(DelegateError) as ei:
         asyncio.run(A.dispatch(_parse(poll_timeout_s=300), "hi", timeout=5))
@@ -1019,7 +1017,10 @@ def test_classifier_input_required_is_a_park():
 def test_classifier_bare_message_stays_compatible():
     """A genuine bare Message (no task envelope) is answerable — pre-task compatibility.
     A status-less reply that merely carries artifacts degrades to the same path."""
-    assert classify_answer({"parts": [{"text": "hi"}], "messageId": "m1", "role": "ROLE_AGENT"}).kind == ANSWER_BARE_MESSAGE
+    assert (
+        classify_answer({"parts": [{"text": "hi"}], "messageId": "m1", "role": "ROLE_AGENT"}).kind
+        == ANSWER_BARE_MESSAGE
+    )
     assert classify_answer({"artifacts": [{"parts": [{"text": "hi"}]}]}).answerable
 
 

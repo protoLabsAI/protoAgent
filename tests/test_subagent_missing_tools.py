@@ -81,9 +81,7 @@ def _call(task, **args) -> str:
 
 def _call_batch(task_batch, tasks, **args) -> str:
     out = asyncio.run(
-        task_batch.ainvoke(
-            {"name": "task_batch", "args": {"tasks": tasks, **args}, "id": "tb-1", "type": "tool_call"}
-        )
+        task_batch.ainvoke({"name": "task_batch", "args": {"tasks": tasks, **args}, "id": "tb-1", "type": "tool_call"})
     )
     return getattr(out, "content", out)
 
@@ -144,7 +142,12 @@ def test_scan_matches_whole_identifiers_only():
 def test_r1_missing_tool_refuses_without_invoking_subagent(monkeypatch):
     called: list = []
     tools = _task_tools(monkeypatch, all_tools=_lead_tools(["write_file"]), recorder=called)
-    out = _call(tools["task"], description="read spec", prompt="Use write_file to open docs/spec.md.", subagent_type="researcher")
+    out = _call(
+        tools["task"],
+        description="read spec",
+        prompt="Use write_file to open docs/spec.md.",
+        subagent_type="researcher",
+    )
     assert out.startswith("Not dispatched: subagent 'researcher' does not have tool(s) write_file")
     assert "Its tools:" in out
     assert "web_search" in out  # the subagent's real tools are listed, sorted
@@ -160,7 +163,9 @@ def test_r1_missing_tool_seen_via_full_lead_vocabulary(monkeypatch):
     called: list = []
     holder = {*RESEARCHER_TOOLS, "read_file", "pdf_look"}
     tools = _task_tools(monkeypatch, all_tools=_lead_tools(), lead_tool_names=holder, recorder=called)
-    out = _call(tools["task"], description="read spec", prompt="Open it with read_file first.", subagent_type="researcher")
+    out = _call(
+        tools["task"], description="read spec", prompt="Open it with read_file first.", subagent_type="researcher"
+    )
     assert "read_file" in out and out.startswith("Not dispatched:")
     assert called == []
 
@@ -357,7 +362,9 @@ def test_background_task_batch_isolates_only_genuine_gaps(monkeypatch):
 
 
 @pytest.mark.parametrize("name", ["calculator", "search", "browser", "summarize"])
-@pytest.mark.parametrize("prompt", ["Find {name} sites.", "Use a {name} for research.", "Consider {name} (where relevant)."])
+@pytest.mark.parametrize(
+    "prompt", ["Find {name} sites.", "Use a {name} for research.", "Consider {name} (where relevant)."]
+)
 def test_plain_word_lead_tool_names_are_prose(name, prompt):
     assert _prompt_missing_tools(prompt.format(name=name), [name], []) == []
 

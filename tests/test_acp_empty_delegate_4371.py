@@ -40,7 +40,7 @@ from plugins.delegates.base import DelegateError
 
 # ── a scripted ACP agent over stdio (same shape as test_coder_telemetry.py) ──────────
 
-_AGENT_TMPL = r'''
+_AGENT_TMPL = r"""
 import json, sys
 
 def send(obj):
@@ -62,7 +62,7 @@ while True:
         send({"jsonrpc": "2.0", "id": mid, "result": {"sessionId": "__SESSION__"}})
     elif method == "session/prompt":
         __BODY__
-'''
+"""
 
 # Ends the turn with no agent_message_chunk at all — the #4371 failure.
 _EMPTY_END_TURN = 'send({"jsonrpc": "2.0", "id": mid, "result": {"stopReason": "end_turn"}})'
@@ -107,8 +107,13 @@ def _client(tmp_path, name: str, body: str) -> AcpClient:
 def _delegate(tmp_path, body: str, name: str = "coder"):
     """A parsed ACP ``Delegate`` whose command is the scripted agent."""
     return AcpAdapter().parse(
-        {"name": name, "type": "acp", "command": sys.executable, "args": _agent(tmp_path, name, body),
-         "workdir": str(tmp_path)}
+        {
+            "name": name,
+            "type": "acp",
+            "command": sys.executable,
+            "args": _agent(tmp_path, name, body),
+            "workdir": str(tmp_path),
+        }
     )
 
 
@@ -240,7 +245,9 @@ async def test_background_delegation_drains_ok_false_not_replied_with_nothing(tm
     _wire_pool(monkeypatch, client)
     d = _delegate(tmp_path, _EMPTY_END_TURN)
 
-    mgr = BackgroundManager(agent_name="a", invoke_url="http://127.0.0.1:0", store=BackgroundStore(str(tmp_path / "bg.db")))
+    mgr = BackgroundManager(
+        agent_name="a", invoke_url="http://127.0.0.1:0", store=BackgroundStore(str(tmp_path / "bg.db"))
+    )
     monkeypatch.setattr(rs.STATE, "background_mgr", mgr, raising=False)
     session = "sess-4371"
 

@@ -695,7 +695,10 @@ class TestRegistryShape:
     def test_a_native_lead_keeps_its_meaning_without_model_provider(self, tmp_path):
         result = _snapshot_of(
             tmp_path,
-            {"model": {"provider": "anthropic-oauth", "name": "claude-sonnet-4-5"}, "routing": {"aux_model": "claude-haiku-4-5"}},
+            {
+                "model": {"provider": "anthropic-oauth", "name": "claude-sonnet-4-5"},
+                "routing": {"aux_model": "claude-haiku-4-5"},
+            },
         )
         # Every bare value it routed now names it; the alias lets an import restate it.
         assert result.manifest["config"] == {
@@ -712,9 +715,13 @@ class TestRegistryShape:
             tmp_path,
             {"model": {"name": "protolabs/reasoning", "api_base": "https://pinned.example/v1"}},
             secrets={"model": {"api_key": GATEWAY_KEY}},
-            host_layer={"providers": [{"id": "gateway", "type": "openai-compat", "base_url": "https://box.example/v1"}]},
+            host_layer={
+                "providers": [{"id": "gateway", "type": "openai-compat", "base_url": "https://box.example/v1"}]
+            },
         )
-        assert result.manifest["config"] == {"model": {"name": "protolabs/reasoning", "api_base": "https://pinned.example/v1"}}
+        assert result.manifest["config"] == {
+            "model": {"name": "protolabs/reasoning", "api_base": "https://pinned.example/v1"}
+        }
         assert result.manifest["model_aliases"] == {}
         assert [(r.name, r.was_set) for r in result.required_secrets] == [("model.api_key", True)]
 
@@ -729,7 +736,12 @@ class TestRegistryShape:
             tmp_path,
             {
                 "providers": [
-                    {"id": "local", "type": "openai-compat", "base_url": "http://127.0.0.1:8080/v1", "api_key": PLAIN_CONNECTION_KEY}
+                    {
+                        "id": "local",
+                        "type": "openai-compat",
+                        "base_url": "http://127.0.0.1:8080/v1",
+                        "api_key": PLAIN_CONNECTION_KEY,
+                    }
                 ],
                 "model": {"name": "local:qwen3"},
             },
@@ -767,7 +779,10 @@ class TestRegistryShape:
         """`base_url: ""` on the target REPLACES its box endpoint (#3425) — leave it out."""
         result = _snapshot_of(
             tmp_path,
-            {"providers": [{"id": "gateway", "type": "openai-compat", "base_url": "", "label": ""}], "model": {"name": "m"}},
+            {
+                "providers": [{"id": "gateway", "type": "openai-compat", "base_url": "", "label": ""}],
+                "model": {"name": "m"},
+            },
         )
         assert result.manifest["config"]["providers"] == [{"id": "gateway", "type": "openai-compat"}]
 

@@ -111,7 +111,13 @@ def _with_usage(msgs, input_tokens, output_tokens=0):
     for i in range(len(out) - 1, -1, -1):
         if isinstance(out[i], AIMessage):
             out[i] = out[i].model_copy(
-                update={"usage_metadata": {"input_tokens": input_tokens, "output_tokens": output_tokens, "total_tokens": input_tokens + output_tokens}}
+                update={
+                    "usage_metadata": {
+                        "input_tokens": input_tokens,
+                        "output_tokens": output_tokens,
+                        "total_tokens": input_tokens + output_tokens,
+                    }
+                }
             )
             break
     return out

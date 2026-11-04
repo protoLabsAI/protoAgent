@@ -45,7 +45,10 @@ CASES = {
         None,
         {
             "model": {"name": "anthropic-oauth:claude-sonnet-4-5"},
-            "routing": {"aux_model": "anthropic-oauth:claude-haiku-4-5", "fallback_models": ["protolabs/coder", "anthropic-oauth:claude-x"]},
+            "routing": {
+                "aux_model": "anthropic-oauth:claude-haiku-4-5",
+                "fallback_models": ["protolabs/coder", "anthropic-oauth:claude-x"],
+            },
             "compaction": {"model": "gateway:protolabs/fast"},
             "subagents": {"researcher": {"model": "anthropic-oauth:claude-y"}},
             "providers": [GW, {"id": "anthropic-oauth", "type": "anthropic-oauth"}],
@@ -80,40 +83,64 @@ CASES = {
             "model": {"name": "prod:protolabs/coder"},
         },
         None,
-        {"providers": [{"id": "prod", "type": "openai-compat", "base_url": "https://prod/v1"}], "model": {"name": "prod:protolabs/coder"}},
+        {
+            "providers": [{"id": "prod", "type": "openai-compat", "base_url": "https://prod/v1"}],
+            "model": {"name": "prod:protolabs/coder"},
+        },
         {"providers.prod": "pk"},
         {},
     ),
     "registry beside a legacy endpoint the gateway entry has: that endpoint, one connection": (
-        {"providers": [GW], "model": {"name": "protolabs/reasoning", "provider": "openai", "api_base": "https://gw/v1", "api_key": "k"}},
+        {
+            "providers": [GW],
+            "model": {"name": "protolabs/reasoning", "provider": "openai", "api_base": "https://gw/v1", "api_key": "k"},
+        },
         None,
         {"providers": [GW], "model": {"name": "protolabs/reasoning"}},
         {"model.api_key": "k"},
         {"api_base": "gateway"},
     ),
     "registry beside a legacy endpoint no connection has: it stays": (
-        {"providers": [{"id": "local", "type": "openai-compat", "base_url": "http://127.0.0.1:8080/v1"}], "model": {"name": "local:qwen3", "api_base": "https://old/v1"}},
+        {
+            "providers": [{"id": "local", "type": "openai-compat", "base_url": "http://127.0.0.1:8080/v1"}],
+            "model": {"name": "local:qwen3", "api_base": "https://old/v1"},
+        },
         None,
-        {"providers": [{"id": "local", "type": "openai-compat", "base_url": "http://127.0.0.1:8080/v1"}], "model": {"name": "local:qwen3", "api_base": "https://old/v1"}},
+        {
+            "providers": [{"id": "local", "type": "openai-compat", "base_url": "http://127.0.0.1:8080/v1"}],
+            "model": {"name": "local:qwen3", "api_base": "https://old/v1"},
+        },
         {},
         {},
     ),
     "registry with a subscription lead named by a custom id": (
-        {"providers": [{"id": "claude", "type": "anthropic-oauth"}], "model": {"provider": "anthropic-oauth", "name": "claude-x"}},
+        {
+            "providers": [{"id": "claude", "type": "anthropic-oauth"}],
+            "model": {"provider": "anthropic-oauth", "name": "claude-x"},
+        },
         None,
         {"providers": [{"id": "claude", "type": "anthropic-oauth"}], "model": {"name": "claude:claude-x"}},
         {},
         {"provider": "claude"},
     ),
     "a subscription lead qualified elsewhere: its bare slots still follow model.provider": (
-        {"model": {"provider": "anthropic-oauth", "name": "gateway:protolabs/reasoning"}, "routing": {"aux_model": "claude-haiku-4-5"}},
+        {
+            "model": {"provider": "anthropic-oauth", "name": "gateway:protolabs/reasoning"},
+            "routing": {"aux_model": "claude-haiku-4-5"},
+        },
         None,
-        {"model": {"name": "gateway:protolabs/reasoning"}, "routing": {"aux_model": "anthropic-oauth:claude-haiku-4-5"}},
+        {
+            "model": {"name": "gateway:protolabs/reasoning"},
+            "routing": {"aux_model": "anthropic-oauth:claude-haiku-4-5"},
+        },
         {},
         {"provider": "anthropic-oauth"},
     ),
     "the default provider leaves bare slots bare": (
-        {"model": {"provider": "openai", "name": "anthropic-oauth:claude-sonnet-4-5"}, "routing": {"aux_model": "gpt-5-mini"}},
+        {
+            "model": {"provider": "openai", "name": "anthropic-oauth:claude-sonnet-4-5"},
+            "routing": {"aux_model": "gpt-5-mini"},
+        },
         None,
         {"model": {"name": "anthropic-oauth:claude-sonnet-4-5"}, "routing": {"aux_model": "gpt-5-mini"}},
         {},
@@ -150,13 +177,18 @@ def test_idempotent_and_pure(case):
 
 def test_blank_values_are_left_out_so_the_box_value_is_inherited():
     doc, _, _ = to_registry_shape(
-        {"providers": [{"id": "gateway", "type": "openai-compat", "base_url": "", "label": None}], "model": {"name": "m", "api_base": ""}}
+        {
+            "providers": [{"id": "gateway", "type": "openai-compat", "base_url": "", "label": None}],
+            "model": {"name": "m", "api_base": ""},
+        }
     )
     assert doc == {"providers": [{"id": "gateway", "type": "openai-compat"}], "model": {"name": "m"}}
 
 
 def test_the_first_of_a_duplicated_id_owns_the_key_as_at_load():
-    _, credentials, _ = to_registry_shape({"providers": [{"id": "g", "api_key": "first"}, {"id": "g", "api_key": "second"}]})
+    _, credentials, _ = to_registry_shape(
+        {"providers": [{"id": "g", "api_key": "first"}, {"id": "g", "api_key": "second"}]}
+    )
     assert credentials == {"providers.g": "first"}
 
 
@@ -165,7 +197,9 @@ def test_a_malformed_entry_is_left_for_the_loader_to_reject():
     assert doc["providers"] == ["not-a-mapping", {"id": "ok", "type": "openai-compat"}]
 
 
-@pytest.mark.parametrize("name", ["gateway:protolabs/coder", "acp:claude", "openai-codex:gpt-5", "prod:m", "protolabs/reasoning"])
+@pytest.mark.parametrize(
+    "name", ["gateway:protolabs/coder", "acp:claude", "openai-codex:gpt-5", "prod:m", "protolabs/reasoning"]
+)
 def test_a_value_a_subscription_lead_would_not_claim_is_left_alone(name):
     """Qualified values already say where they go; a `/` alias routes through the gateway."""
     layer = {

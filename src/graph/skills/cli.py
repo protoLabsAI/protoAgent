@@ -30,7 +30,9 @@ def _build_parser() -> argparse.ArgumentParser:
         "curate",
         help="run the curator on ONE tier (private: decay+dedupe+prune · commons: dedupe only)",
     )
-    cp.add_argument("--tier", choices=("private", "commons"), default="private", help="tier to curate (default: private)")
+    cp.add_argument(
+        "--tier", choices=("private", "commons"), default="private", help="tier to curate (default: private)"
+    )
     cp.add_argument(
         "--prune",
         action="store_true",

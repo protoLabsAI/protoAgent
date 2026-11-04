@@ -439,7 +439,9 @@ async def test_tool_sink_emits_a_custom_event_under_the_tool_run_from_another_ta
         # Another task with an EMPTY context — like the pooled client's reader.
         import contextvars
 
-        await asyncio.get_running_loop().create_task(sink({"target": target, "done": True}), context=contextvars.Context())
+        await asyncio.get_running_loop().create_task(
+            sink({"target": target, "done": True}), context=contextvars.Context()
+        )
         return "ok"
 
     events = [e async for e in delegate_to.astream_events({"target": "claude-code"}, version="v2")]
@@ -535,7 +537,13 @@ def test_store_keeps_only_the_latest_snapshot_per_delegation():
     text = Message(message_id="u", role=Role.ROLE_USER, parts=[Part(text="go")])
     task = Task(id="t", context_id="c")
     task.history.extend(
-        [text, _progress_message("a", 1), _progress_message("b", 1), _progress_message("a", 2), _progress_message("a", 3)]
+        [
+            text,
+            _progress_message("a", 1),
+            _progress_message("b", 1),
+            _progress_message("a", 2),
+            _progress_message("a", 3),
+        ]
     )
     assert stores.prune_superseded_progress(task) == 2
     kept = [m.message_id for m in task.history]
@@ -561,7 +569,13 @@ async def test_the_done_snapshot_alone_carries_the_run_in_order_with_inputs_reda
     await t.on_tool({"phase": "end", "id": "1", "status": "completed", "output": "def add(a, b): ..."})
     await t.on_text("Now testing:")
     await t.on_tool(
-        {"phase": "start", "id": "2", "name": "Bash", "kind": "execute", "input": "API_KEY=" + "sk-" + "abcdefghij" * 3 + " pytest"}
+        {
+            "phase": "start",
+            "id": "2",
+            "name": "Bash",
+            "kind": "execute",
+            "input": "API_KEY=" + "sk-" + "abcdefghij" * 3 + " pytest",
+        }
     )
     await t.on_text("Done.")
     await t.finish(ok=True)
@@ -576,7 +590,9 @@ async def test_the_done_snapshot_alone_carries_the_run_in_order_with_inputs_reda
         ("text", "Done."),
     ]
     read, bash = timeline[1], timeline[3]
-    assert read["kind"] == "read" and read["input"] == '{"file_path": "calc.py"}' and read["output"].startswith("def add")
+    assert (
+        read["kind"] == "read" and read["input"] == '{"file_path": "calc.py"}' and read["output"].startswith("def add")
+    )
     assert "sk-abc" not in bash["input"] and "[REDACTED]" in bash["input"]
     # Never settled before the run ended: it settles with the run.
     assert bash["status"] == "completed"
@@ -620,7 +636,12 @@ def test_reply_timeline_trusts_the_reply_text():
     # Paragraph breaks the stream never sent are fine; what the reply has beyond the
     # stream (an incomplete-turn marker, a managed-git PR line) becomes a last text run.
     got = dp.reply_timeline(timeline, "Reading first.\n\nDone.\n\n**PR:** https://x/1")
-    assert [e.get("text") or e["name"] for e in got] == ["Reading first.", "Read calc.py", "Done.", "**PR:** https://x/1"]
+    assert [e.get("text") or e["name"] for e in got] == [
+        "Reading first.",
+        "Read calc.py",
+        "Done.",
+        "**PR:** https://x/1",
+    ]
     # A reply cleaned mid-text (a collapsed doubling) disagrees with its stream: plain text.
     assert dp.reply_timeline(timeline, "Done.") is None
     # No tool calls: nothing a timeline adds over the text.

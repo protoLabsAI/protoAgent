@@ -496,9 +496,7 @@ def build_mcp_tools(config, *, plugin_servers=None) -> tuple[list, list, list[di
         try:
             call_timeout = float(server.get("call_timeout", call_timeout_default))
         except (TypeError, ValueError):
-            log.warning(
-                "[mcp] %s: ignoring non-numeric call_timeout %r", name, server.get("call_timeout")
-            )
+            log.warning("[mcp] %s: ignoring non-numeric call_timeout %r", name, server.get("call_timeout"))
             call_timeout = call_timeout_default
         # Per-server override for the result cap (#2781), same shape as call_timeout —
         # a server whose results are legitimately huge (or that must pass through

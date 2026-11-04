@@ -104,9 +104,7 @@ def test_tier_is_off_by_default(tmp_path):
 def test_tier_knobs_parse():
     from graph.config import LangGraphConfig
 
-    cfg = LangGraphConfig.from_dict(
-        {"soul": {"drift": {"judge": {"enabled": True, "model": "protolabs/reasoning"}}}}
-    )
+    cfg = LangGraphConfig.from_dict({"soul": {"drift": {"judge": {"enabled": True, "model": "protolabs/reasoning"}}}})
 
     assert cfg.soul_drift_judge_enabled is True
     assert cfg.soul_drift_judge_model == "protolabs/reasoning"

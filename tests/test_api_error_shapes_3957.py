@@ -144,7 +144,9 @@ def test_subagent_upstream_auth_failure_code_matches_api_chat():
     class _Unauthorized(Exception):
         status_code = 401
 
-    r = _routes_client(run_exc=_wrapped(_Unauthorized("Error code: 401"))).post("/api/subagents/run", json={"prompt": "x"})
+    r = _routes_client(run_exc=_wrapped(_Unauthorized("Error code: 401"))).post(
+        "/api/subagents/run", json={"prompt": "x"}
+    )
 
     assert r.status_code == 502
     assert r.json()["detail"]["code"] == "authentication_error"
@@ -188,7 +190,10 @@ def test_an_unknown_connection_prefix_raises_a_short_caller_error(monkeypatch):
 
     msg = str(ei.value)
     assert ei.value.model == "nonexistent-provider:bogus-model-xyz"
-    assert msg == "model 'nonexistent-provider:bogus-model-xyz' is not available: 'nonexistent-provider' is not a known connection."
+    assert (
+        msg
+        == "model 'nonexistent-provider:bogus-model-xyz' is not available: 'nonexistent-provider' is not a known connection."
+    )
     # Neither the build error nor the agent's connection list reaches the caller.
     assert "Missing credentials" not in msg and "anthropic-oauth" not in msg and "gateway" not in msg
 
@@ -234,7 +239,10 @@ def test_a_transient_build_failure_is_unavailable(monkeypatch, cause):
 @pytest.mark.parametrize(
     "model, cause",
     [
-        ("openai-codex:gpt-5.6-sol", _oauth_error("Codex token refresh failed (HTTP 401). Run `codex login`.", relogin=True)),
+        (
+            "openai-codex:gpt-5.6-sol",
+            _oauth_error("Codex token refresh failed (HTTP 401). Run `codex login`.", relogin=True),
+        ),
         ("openai-codex:protolabs/coder", RuntimeError("model.name='protolabs/coder' is not an OpenAI model id")),
         ("gateway:protolabs/coder", RuntimeError("that connection has no base URL or API key of its own")),
         ("protolabs/coder", RuntimeError("Missing credentials. Please pass an `api_key`")),
@@ -268,7 +276,9 @@ async def test_the_fix_it_hint_reaches_operator_callers_only(monkeypatch):
         return True
 
     monkeypatch.setattr(chat_mod, "record_failed_turn", _no_record)
-    exc = ModelOverrideError("openai-codex:gpt-5.6-sol", hint="Codex token refresh failed (HTTP 401). Run `codex login`.")
+    exc = ModelOverrideError(
+        "openai-codex:gpt-5.6-sol", hint="Codex token refresh failed (HTTP 401). Run `codex login`."
+    )
 
     token = tracing.set_trust_tier("operator")
     try:
@@ -341,7 +351,10 @@ def _v1_client(monkeypatch, exc):
 def test_v1_answers_an_unknown_connection_400(monkeypatch):
     c = _v1_client(monkeypatch, ModelOverrideError("nonexistent-provider:bogus", "nonexistent-provider"))
 
-    r = c.post("/v1/chat/completions", json={"model": "nonexistent-provider:bogus", "messages": [{"role": "user", "content": "hi"}]})
+    r = c.post(
+        "/v1/chat/completions",
+        json={"model": "nonexistent-provider:bogus", "messages": [{"role": "user", "content": "hi"}]},
+    )
 
     assert r.status_code == 400  # was 200 on the default model
     body = r.json()["error"]
@@ -400,7 +413,9 @@ def test_subagent_run_maps_every_non_429_upstream_status_to_502(upstream):
     class _Upstream(Exception):
         status_code = upstream
 
-    r = _routes_client(run_exc=_wrapped(_Upstream(f"Error code: {upstream}"))).post("/api/subagents/run", json={"prompt": "x"})
+    r = _routes_client(run_exc=_wrapped(_Upstream(f"Error code: {upstream}"))).post(
+        "/api/subagents/run", json={"prompt": "x"}
+    )
 
     assert r.status_code == 502
     assert f"upstream HTTP {upstream}" in r.json()["detail"]["message"]

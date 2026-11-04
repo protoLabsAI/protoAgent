@@ -82,8 +82,7 @@ def test_configure_paths_outside_the_exact_plugin_page_namespace_are_dropped(tmp
 def test_configure_page_is_public_but_its_plugin_api_stays_bearer_gated(tmp_path, monkeypatch) -> None:
     directory = _plugin(
         tmp_path,
-        "settings_tabs:\n"
-        "  - {id: projects, label: Projects, path: /plugins/boardy/config/project%20registry}\n",
+        "settings_tabs:\n  - {id: projects, label: Projects, path: /plugins/boardy/config/project%20registry}\n",
     )
     manifest = load_manifest(directory)
     assert manifest is not None
@@ -105,10 +104,13 @@ def test_configure_page_is_public_but_its_plugin_api_stays_bearer_gated(tmp_path
         client = TestClient(app)
         assert client.get("/plugins/boardy/config/project%20registry").status_code == 200
         assert client.get("/api/plugins/boardy/projects").status_code == 401
-        assert client.get(
-            "/api/plugins/boardy/projects",
-            headers={"Authorization": "Bearer secret"},
-        ).status_code == 200
+        assert (
+            client.get(
+                "/api/plugins/boardy/projects",
+                headers={"Authorization": "Bearer secret"},
+            ).status_code
+            == 200
+        )
     finally:
         auth.set_public_prefixes([])
         auth.configure(bearer_token="", api_key="", allowed_origins_raw="")
@@ -118,8 +120,7 @@ def test_runtime_metadata_exposes_custom_tabs_only_while_enabled(monkeypatch, tm
     root = tmp_path / "plugins"
     _plugin(
         root,
-        "settings_tabs:\n"
-        "  - {id: projects, label: Projects, path: /plugins/boardy/config/projects}\n",
+        "settings_tabs:\n  - {id: projects, label: Projects, path: /plugins/boardy/config/projects}\n",
     )
     monkeypatch.setattr(plugin_loader, "_plugin_roots", lambda _config: [root])
 

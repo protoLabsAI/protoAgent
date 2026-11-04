@@ -14,18 +14,29 @@ from graph.providers.usage.codex import fetch_codex_usage, parse_codex_usage
 from infra.paths import InstancePaths
 
 RESET = "2026-10-23T12:00:00Z"
-CLAUDE = {"plan": "max", "ignored": True, "limits": [
-    {"kind": "5h", "percent": 25, "severity": "ok", "resets_at": RESET},
-    {"kind": "7d", "percent": 81, "resets_at": RESET},
-    {"kind": "weekly", "percent": 50, "severity": "blocked", "resets_at": RESET,
-     "scope": {"model": "Fable"}},
-]}
+CLAUDE = {
+    "plan": "max",
+    "ignored": True,
+    "limits": [
+        {"kind": "5h", "percent": 25, "severity": "ok", "resets_at": RESET},
+        {"kind": "7d", "percent": 81, "resets_at": RESET},
+        {"kind": "weekly", "percent": 50, "severity": "blocked", "resets_at": RESET, "scope": {"model": "Fable"}},
+    ],
+}
 PRIMARY = {"used_percent": 20, "limit_window_seconds": 18000, "reset_at": 1792756800}
 SECONDARY = {"used_percent": 85, "limit_window_seconds": 604800, "reset_at": 1792756800}
-CODEX = {"plan_type": "pro", "rate_limit": {"primary_window": PRIMARY, "secondary_window": SECONDARY},
-         "additional_rate_limits": [{"model": "test-model", "limit_name": "test-bucket",
-                                     "rate_limit": {"primary_window": {**PRIMARY, "used_percent": 100}}}],
-         "credits": {"balance": "10", "has_credits": True}}
+CODEX = {
+    "plan_type": "pro",
+    "rate_limit": {"primary_window": PRIMARY, "secondary_window": SECONDARY},
+    "additional_rate_limits": [
+        {
+            "model": "test-model",
+            "limit_name": "test-bucket",
+            "rate_limit": {"primary_window": {**PRIMARY, "used_percent": 100}},
+        }
+    ],
+    "credits": {"balance": "10", "has_credits": True},
+}
 PROVIDERS = [
     (fetch_anthropic_usage, parse_anthropic_usage, "peek_anthropic_access_token", CLAUDE),
     (fetch_codex_usage, parse_codex_usage, "peek_codex_access_token", CODEX),
@@ -36,8 +47,16 @@ PROVIDERS = [
 def no_refresh_or_write(monkeypatch):
     def forbidden(*args, **kwargs):
         pytest.fail("usage must not refresh, resolve, lock or write credentials")
-    for name in ("_refresh_anthropic_tokens", "_refresh_codex_tokens", "resolve_anthropic_oauth",
-                 "resolve_codex_oauth", "_write_anthropic_store", "_write_codex_store", "_oauth_scope_lock"):
+
+    for name in (
+        "_refresh_anthropic_tokens",
+        "_refresh_codex_tokens",
+        "resolve_anthropic_oauth",
+        "resolve_codex_oauth",
+        "_write_anthropic_store",
+        "_write_codex_store",
+        "_oauth_scope_lock",
+    ):
         monkeypatch.setattr(oauth, name, forbidden)
     monkeypatch.setattr(usage, "_warned", set())
 
@@ -87,8 +106,19 @@ def test_codex_bucket_only_block_does_not_block_model(model):
 
 
 @pytest.mark.parametrize("fetch,parse,peek,payload", PROVIDERS)
-@pytest.mark.parametrize("bad", [None, {}, [], "garbage", {"limits": []}, {"rate_limit": {}},
-                                  {"limits": [None]}, {"rate_limit": {"primary_window": "bad"}}])
+@pytest.mark.parametrize(
+    "bad",
+    [
+        None,
+        {},
+        [],
+        "garbage",
+        {"limits": []},
+        {"rate_limit": {}},
+        {"limits": [None]},
+        {"rate_limit": {"primary_window": "bad"}},
+    ],
+)
 def test_bad_payloads(fetch, parse, peek, payload, bad, caplog):
     for _ in range(2):
         account = parse(bad)
@@ -146,8 +176,16 @@ def test_mistyped_percent(parse, payload, value):
     assert parse(payload).status == "unknown"
 
 
-@pytest.mark.parametrize("pct,severity,status", [(79, None, "ok"), (80, None, "warning"),
-    (100, None, "blocked"), (1, "blocked", "blocked"), (1, "warning", "warning")])
+@pytest.mark.parametrize(
+    "pct,severity,status",
+    [
+        (79, None, "ok"),
+        (80, None, "warning"),
+        (100, None, "blocked"),
+        (1, "blocked", "blocked"),
+        (1, "warning", "warning"),
+    ],
+)
 def test_classify(pct, severity, status):
     assert classify(pct, severity) == status
 
@@ -156,8 +194,11 @@ def test_peek_claude_order(monkeypatch):
     monkeypatch.setattr(oauth, "is_disconnected", lambda *args: False)
     monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "fake-env")
     store = Mock(return_value={"access_token": "fake-store", "expires_at": 0, "account_uuid": "fake-org"})
-    file = Mock(return_value={"claudeAiOauth": {"accessToken": "fake-file", "expiresAt": 0,
-                                               "account": {"uuid": "fake-file-org"}}})
+    file = Mock(
+        return_value={
+            "claudeAiOauth": {"accessToken": "fake-file", "expiresAt": 0, "account": {"uuid": "fake-file-org"}}
+        }
+    )
     keychain = Mock(return_value={"claudeAiOauth": {"accessToken": "fake-keychain"}})
     monkeypatch.setattr(oauth, "_read_anthropic_store", store)
     monkeypatch.setattr(oauth, "_read_claude_credentials_file", file)
@@ -185,8 +226,9 @@ def test_peek_codex(monkeypatch, tmp_path):
     # no-arg call raises TypeError -> swallowed -> None and this test fails, rather than
     # being masked by a zero-arg stub.
     monkeypatch.setattr(oauth, "is_disconnected", lambda *args: False)
-    paths = InstancePaths(instance_id="test", box_root=tmp_path / "box",
-                          instance_root=tmp_path / "inst", app_root=tmp_path / "app")
+    paths = InstancePaths(
+        instance_id="test", box_root=tmp_path / "box", instance_root=tmp_path / "inst", app_root=tmp_path / "app"
+    )
     monkeypatch.setattr(oauth, "instance_paths", lambda: paths)
     paths.config_dir.mkdir(parents=True)
     path = paths.config_dir / "codex-oauth.json"
@@ -217,8 +259,16 @@ def test_credential_read_error_is_unknown(monkeypatch, fetch, parse, peek, paylo
 
 
 @pytest.mark.parametrize("parse,payload", [(parse_anthropic_usage, CLAUDE), (parse_codex_usage, CODEX)])
-@pytest.mark.parametrize("field,value", [("reset", "not-a-date"), ("reset", True),
-    ("reset", "2026-10-23T12:00:00"), ("scope", []), ("scope", {"model": 123})])
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("reset", "not-a-date"),
+        ("reset", True),
+        ("reset", "2026-10-23T12:00:00"),
+        ("scope", []),
+        ("scope", {"model": 123}),
+    ],
+)
 def test_schema_drift(parse, payload, field, value):
     payload = copy.deepcopy(payload)
     if "limits" in payload:
@@ -237,8 +287,16 @@ def test_peek_claude_store_is_read_only(monkeypatch, tmp_path):
     monkeypatch.setattr(oauth, "is_disconnected", lambda *args: False)
     path = tmp_path / "anthropic.json"
     monkeypatch.setattr(oauth, "_anthropic_store_path", lambda: path)
-    path.write_text(json.dumps({"access_token": "fake-old-access", "expires_at": 0,
-                                "refresh_token": "fake-unused-refresh", "account_uuid": "fake-org"}))
+    path.write_text(
+        json.dumps(
+            {
+                "access_token": "fake-old-access",
+                "expires_at": 0,
+                "refresh_token": "fake-unused-refresh",
+                "account_uuid": "fake-org",
+            }
+        )
+    )
     before = path.read_bytes()
     assert oauth.peek_anthropic_access_token().account_id == "fake-org"
     assert path.read_bytes() == before
@@ -246,9 +304,9 @@ def test_peek_claude_store_is_read_only(monkeypatch, tmp_path):
 
 
 @pytest.mark.parametrize("parse,payload", [(parse_anthropic_usage, CLAUDE), (parse_codex_usage, CODEX)])
-@pytest.mark.parametrize("severity,status,expected", [("ok", "blocked", "blocked"),
-                                                     (None, "warning", "warning"),
-                                                     (123, "ok", "unknown")])
+@pytest.mark.parametrize(
+    "severity,status,expected", [("ok", "blocked", "blocked"), (None, "warning", "warning"), (123, "ok", "unknown")]
+)
 def test_provider_status(parse, payload, severity, status, expected):
     payload = copy.deepcopy(payload)
     node = payload["limits"][0] if "limits" in payload else payload["rate_limit"]["primary_window"]
@@ -267,21 +325,48 @@ CLAUDE_LIVE = {
     "seven_day": {"utilization": 14.0, "resets_at": "2026-10-29T09:59:59.759425+00:00"},
     "extra_usage": {"is_enabled": False, "used_credits": 0.0, "currency": "USD"},
     "limits": [
-        {"kind": "session", "group": "session", "percent": 5, "severity": "normal",
-         "resets_at": "2026-10-23T11:19:59.759401+00:00", "scope": None, "is_active": False},
-        {"kind": "weekly_all", "group": "weekly", "percent": 14, "severity": "normal",
-         "resets_at": "2026-10-29T09:59:59.759425+00:00", "scope": None, "is_active": True},
-        {"kind": "weekly_scoped", "group": "weekly", "percent": 0, "severity": "normal",
-         "resets_at": "2026-10-29T10:00:00+00:00",
-         "scope": {"model": {"id": None, "display_name": "Fable"}, "surface": None}, "is_active": False},
+        {
+            "kind": "session",
+            "group": "session",
+            "percent": 5,
+            "severity": "normal",
+            "resets_at": "2026-10-23T11:19:59.759401+00:00",
+            "scope": None,
+            "is_active": False,
+        },
+        {
+            "kind": "weekly_all",
+            "group": "weekly",
+            "percent": 14,
+            "severity": "normal",
+            "resets_at": "2026-10-29T09:59:59.759425+00:00",
+            "scope": None,
+            "is_active": True,
+        },
+        {
+            "kind": "weekly_scoped",
+            "group": "weekly",
+            "percent": 0,
+            "severity": "normal",
+            "resets_at": "2026-10-29T10:00:00+00:00",
+            "scope": {"model": {"id": None, "display_name": "Fable"}, "surface": None},
+            "is_active": False,
+        },
     ],
 }
 CODEX_LIVE = {
     "plan_type": "prolite",
-    "rate_limit": {"allowed": True, "limit_reached": False,
-                   "primary_window": {"used_percent": 50, "limit_window_seconds": 604800,
-                                      "reset_after_seconds": 553560, "reset_at": 1793296874},
-                   "secondary_window": None},
+    "rate_limit": {
+        "allowed": True,
+        "limit_reached": False,
+        "primary_window": {
+            "used_percent": 50,
+            "limit_window_seconds": 604800,
+            "reset_after_seconds": 553560,
+            "reset_at": 1793296874,
+        },
+        "secondary_window": None,
+    },
     "code_review_rate_limit": None,
     "additional_rate_limits": None,
     "credits": {"has_credits": False, "unlimited": False, "balance": "0"},

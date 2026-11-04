@@ -91,13 +91,21 @@ async def test_text_plan_and_artifacts_map_and_a_canonical_replace_is_not_double
     await feed.frame(_status(parts=[{"text": "Looking at the repo."}]))
     nested = {"id": "x", "target": "coder", "plan": [{"content": "Read", "status": "completed"}]}
     await feed.frame(
-        _status(parts=[{"data": nested, "metadata": {"mimeType": "application/vnd.protolabs.delegate-progress-v1+json"}}])
+        _status(
+            parts=[{"data": nested, "metadata": {"mimeType": "application/vnd.protolabs.delegate-progress-v1+json"}}]
+        )
     )
     await feed.frame({"artifactUpdate": {"artifact": {"artifactId": "ans", "parts": [{"text": " All"}]}}})
-    await feed.frame({"artifactUpdate": {"append": True, "artifact": {"artifactId": "ans", "parts": [{"text": " Done"}]}}})
+    await feed.frame(
+        {"artifactUpdate": {"append": True, "artifact": {"artifactId": "ans", "parts": [{"text": " Done"}]}}}
+    )
     # The terminal frame re-sends the WHOLE answer with append=false — already streamed.
-    await feed.frame({"artifactUpdate": {"append": False, "artifact": {"artifactId": "ans", "parts": [{"text": "All Done"}]}}})
-    await feed.frame({"artifactUpdate": {"artifact": {"name": "report.pdf", "artifactId": "a1", "parts": [{"url": "x"}]}}})
+    await feed.frame(
+        {"artifactUpdate": {"append": False, "artifact": {"artifactId": "ans", "parts": [{"text": "All Done"}]}}}
+    )
+    await feed.frame(
+        {"artifactUpdate": {"artifact": {"name": "report.pdf", "artifactId": "a1", "parts": [{"url": "x"}]}}}
+    )
     assert rec.text == "Looking at the repo. All Done"
     assert ("plan", nested["plan"]) in rec.calls
     produced = [e for kind, e in rec.calls if kind == "tool" and e["id"] == "artifact:a1"]
@@ -116,10 +124,14 @@ async def test_protoagent_peer_narration_before_a_tool_reaches_the_card():
 
     t = dp.DelegateProgress("peer", sink, min_interval=0.0)
     feed = A2AProgressFeed(t)
-    await feed.frame({"artifactUpdate": {"artifact": {"artifactId": "ans", "parts": [{"text": "I'll check the tests first."}]}}})
+    await feed.frame(
+        {"artifactUpdate": {"artifact": {"artifactId": "ans", "parts": [{"text": "I'll check the tests first."}]}}}
+    )
     await feed.frame(_status(meta=_tool("started", "c1", "run_command")))
     await feed.frame(_status(meta=_tool("completed", "c1", "run_command")))
-    await feed.frame({"artifactUpdate": {"append": True, "artifact": {"artifactId": "ans", "parts": [{"text": " All pass."}]}}})
+    await feed.frame(
+        {"artifactUpdate": {"append": True, "artifact": {"artifactId": "ans", "parts": [{"text": " All pass."}]}}}
+    )
     await t.finish(ok=True)
     assert any("check the tests" in s["text"] for s in sent), [s["text"] for s in sent]
     assert not any("All pass" in s["text"] for s in sent)
@@ -141,11 +153,18 @@ async def test_an_answer_streamed_in_many_appends_after_the_last_tool_never_show
     await feed.frame(_status(meta=_tool("completed", "c1", "run_command")))
     words = [f" word{i}" for i in range(60)]
     for w in words:
-        await feed.frame({"artifactUpdate": {"append": True, "artifact": {"artifactId": "ans", "parts": [{"text": w}]}}})
+        await feed.frame(
+            {"artifactUpdate": {"append": True, "artifact": {"artifactId": "ans", "parts": [{"text": w}]}}}
+        )
         assert not any("word" in s["text"] for s in sent), "the answer reached the card mid-stream"
         assert "word" not in t.snapshot()["text"]
     await feed.frame(
-        {"artifactUpdate": {"append": False, "artifact": {"artifactId": "ans", "parts": [{"text": "Running them." + "".join(words)}]}}}
+        {
+            "artifactUpdate": {
+                "append": False,
+                "artifact": {"artifactId": "ans", "parts": [{"text": "Running them." + "".join(words)}]},
+            }
+        }
     )
     await feed.frame(_status("TASK_STATE_COMPLETED"))
     await t.finish(ok=True)
@@ -169,12 +188,16 @@ async def test_an_answer_artifact_stream_puts_no_text_on_the_card_but_tools_and_
     await feed.frame(_status(meta=_tool("started", "c1", "run_command")))
     nested = {"id": "x", "target": "coder", "plan": [{"content": "Run tests", "status": "in_progress"}]}
     await feed.frame(
-        _status(parts=[{"data": nested, "metadata": {"mimeType": "application/vnd.protolabs.delegate-progress-v1+json"}}])
+        _status(
+            parts=[{"data": nested, "metadata": {"mimeType": "application/vnd.protolabs.delegate-progress-v1+json"}}]
+        )
     )
     await feed.frame(_status(meta=_tool("completed", "c1", "run_command")))
     await feed.frame(_status(parts=[{"text": "Summing up."}]))  # status text no tool follows
     for i, word in enumerate(("All ", "three ", "tests ", "pass.")):
-        await feed.frame({"artifactUpdate": {"append": i > 0, "artifact": {"artifactId": "ans", "parts": [{"text": word}]}}})
+        await feed.frame(
+            {"artifactUpdate": {"append": i > 0, "artifact": {"artifactId": "ans", "parts": [{"text": word}]}}}
+        )
     await feed.frame(_status("TASK_STATE_COMPLETED", parts=[{"text": "All three tests pass."}]))
     await tracker.finish(ok=True)
     assert feed.settled.is_set()

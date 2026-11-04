@@ -21,6 +21,7 @@ import os
 from typing import Any
 
 from fastapi import HTTPException, Request  # Request at MODULE level: under `from __future__
+
 # import annotations` FastAPI resolves `request: Request` against module globals — a local
 # import silently turns it into a required query param.
 from pydantic import BaseModel

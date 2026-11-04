@@ -222,6 +222,7 @@ def _deps_posture(monkeypatch, *, source_url, acked=(), trust_unverified=False, 
     )
     monkeypatch.setattr(installer, "recorded_source_url", lambda pid: source_url)
     calls: list[str] = []
+
     def _fake(pid, *, failed=None, newly_installed=None):
         calls.append(pid)
         if newly_installed is not None:
@@ -234,7 +235,9 @@ def _deps_posture(monkeypatch, *, source_url, acked=(), trust_unverified=False, 
     # `server` package against that fake and fail.
     import sys
 
-    monkeypatch.setattr(sys.modules["server.agent_init"], "_reload_langgraph_agent", lambda: (True, "stub"), raising=False)
+    monkeypatch.setattr(
+        sys.modules["server.agent_init"], "_reload_langgraph_agent", lambda: (True, "stub"), raising=False
+    )
     return calls
 
 
@@ -1090,7 +1093,9 @@ def test_enabling_a_plugin_with_missing_deps_says_so_in_the_response(monkeypatch
     def _apply_then_load(config=None, soul=None):
         out = applied(config=config, soul=soul)
         # What the real reload leaves behind: the enabled plugin's meta, deps computed at load.
-        rs.STATE.plugin_meta = [{"id": "cowork", "views": [], "enabled": True, "loaded": True, "deps_missing": ["pypdf"]}]
+        rs.STATE.plugin_meta = [
+            {"id": "cowork", "views": [], "enabled": True, "loaded": True, "deps_missing": ["pypdf"]}
+        ]
         return out
 
     monkeypatch.setattr(fake, "_apply_settings_changes", _apply_then_load)

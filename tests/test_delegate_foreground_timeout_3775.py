@@ -156,9 +156,7 @@ def _assert_collectable(out: str) -> None:
 async def test_foreground_room_timeout_returns_task_id_status_and_auto_delivery(wire, collected):
     bodies = wire(lambda body: _working())
 
-    out = await _call(
-        _registry(), target="peer", query="board 4 cards", state={"session_id": SESSION, "messages": []}
-    )
+    out = await _call(_registry(), target="peer", query="board 4 cards", state={"session_id": SESSION, "messages": []})
 
     _assert_collectable(out)
     assert "delivered automatically" in out

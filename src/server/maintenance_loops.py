@@ -68,9 +68,7 @@ async def _sweep_orphaned_forgets() -> None:
     if store is None:
         return
 
-    res = await asyncio.to_thread(
-        sweep_orphaned_forgets, store, retirement_incomplete=_forget_retirement_incomplete
-    )
+    res = await asyncio.to_thread(sweep_orphaned_forgets, store, retirement_incomplete=_forget_retirement_incomplete)
     if res["finished"] or res["restored"]:
         log.info("[forget] settled %d interrupted forget(s), restored %d", res["finished"], res["restored"])
 
@@ -444,8 +442,7 @@ async def _retire_thread(thread_id: str, *, harvest: bool | None = None, cascade
                 if n < _HARVEST_FAILURE_CAP:
                     _HARVEST_FAILURES[thread_id] = n
                     log.warning(
-                        "[retire] harvest failed for %s (attempt %d/%d) — keeping the thread "
-                        "for the next sweep",
+                        "[retire] harvest failed for %s (attempt %d/%d) — keeping the thread for the next sweep",
                         thread_id,
                         n,
                         _HARVEST_FAILURE_CAP,
@@ -453,15 +450,13 @@ async def _retire_thread(thread_id: str, *, harvest: bool | None = None, cascade
                     return None
                 _HARVEST_FAILURES.pop(thread_id, None)
                 log.error(
-                    "[retire] harvest failed %d times for %s — deleting anyway; its knowledge "
-                    "was NOT captured",
+                    "[retire] harvest failed %d times for %s — deleting anyway; its knowledge was NOT captured",
                     n,
                     thread_id,
                 )
             else:
                 log.warning(
-                    "[retire] harvest failed for %s — explicit delete proceeds; its knowledge "
-                    "was NOT captured",
+                    "[retire] harvest failed for %s — explicit delete proceeds; its knowledge was NOT captured",
                     thread_id,
                 )
         else:

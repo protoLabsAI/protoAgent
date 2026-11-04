@@ -11,11 +11,42 @@ from deck import data as deckdata
 from deck.app import DetailScreen, FleetDeck, RosterScreen
 
 ROSTER = [
-    {"name": "protoagent", "id": "protoagent", "port": 7870, "pid": 100, "running": True, "host": True, "version": "0.165.0"},
-    {"name": "protoEngineer", "id": "protoEngineer-ba4c", "port": 7875, "pid": 15285, "running": True, "version": "0.165.0"},
+    {
+        "name": "protoagent",
+        "id": "protoagent",
+        "port": 7870,
+        "pid": 100,
+        "running": True,
+        "host": True,
+        "version": "0.165.0",
+    },
+    {
+        "name": "protoEngineer",
+        "id": "protoEngineer-ba4c",
+        "port": 7875,
+        "pid": 15285,
+        "running": True,
+        "version": "0.165.0",
+    },
     {"name": "old", "id": "old-1", "port": 7890, "pid": 77, "running": True, "version": "0.164.0"},
-    {"name": "Cindi", "id": "Cindi-9f49", "port": 7880, "pid": None, "running": False, "version": "", "bundle": "cowork-stack"},
-    {"name": "ava", "id": "r-ava", "port": None, "pid": None, "running": False, "remote": True, "url": "https://ava.tail:7870"},
+    {
+        "name": "Cindi",
+        "id": "Cindi-9f49",
+        "port": 7880,
+        "pid": None,
+        "running": False,
+        "version": "",
+        "bundle": "cowork-stack",
+    },
+    {
+        "name": "ava",
+        "id": "r-ava",
+        "port": None,
+        "pid": None,
+        "running": False,
+        "remote": True,
+        "url": "https://ava.tail:7870",
+    },
 ]
 
 
@@ -29,8 +60,16 @@ class FakeBackend:
         self.closed = False
 
     def snapshot(self):
-        snap = deckdata.Snapshot(mode=self.mode, label="live · http://127.0.0.1:7870 · protoagent v0.165.0 · via heartbeat", roster=list(self.roster), host_version="0.165.0", warnings=list(self.warnings))
-        snap.rollups["protoEngineer-ba4c"] = deckdata.Rollup(turns=38, cost_usd=12.4, success_rate=0.97, cache_hit_ratio=0.61)
+        snap = deckdata.Snapshot(
+            mode=self.mode,
+            label="live · http://127.0.0.1:7870 · protoagent v0.165.0 · via heartbeat",
+            roster=list(self.roster),
+            host_version="0.165.0",
+            warnings=list(self.warnings),
+        )
+        snap.rollups["protoEngineer-ba4c"] = deckdata.Rollup(
+            turns=38, cost_usd=12.4, success_rate=0.97, cache_hit_ratio=0.61
+        )
         return snap
 
     def start(self, name):
@@ -49,14 +88,29 @@ class FakeBackend:
 
     def detail(self, agent):
         d = deckdata.MemberDetail(slug=deckdata.slug_of(agent), name=agent["name"])
-        d.runtime = {"model": {"name": "claude-fable-5-1", "provider": "gateway"}, "identity": {"name": agent["name"], "operator": "kj"}, "version": "0.165.0", "setup_complete": True, "graph_loaded": True, "warnings": []}
+        d.runtime = {
+            "model": {"name": "claude-fable-5-1", "provider": "gateway"},
+            "identity": {"name": agent["name"], "operator": "kj"},
+            "version": "0.165.0",
+            "setup_complete": True,
+            "graph_loaded": True,
+            "warnings": [],
+        }
         d.logs = [
             {"ts": "2026-09-12T09:41:02+00:00", "level": "INFO", "logger": "a2a", "message": "task 7f3a state=working"},
             {"ts": "2026-09-12T09:41:31+00:00", "level": "WARNING", "logger": "gateway", "message": "429, retry 2/5"},
         ]
         # the diagnostics/sessions route's real row shape (#3171)
         d.sessions = [
-            {"session_id": "chat-1789169255449-mw1pz8", "context_id": "chat-1789169255449-mw1pz8", "latest_task_id": "3137…", "latest_task_state": "TASK_STATE_COMPLETED", "last_activity": "2026-09-11T23:29:04+00:00", "status": "ok", "malformed": []}
+            {
+                "session_id": "chat-1789169255449-mw1pz8",
+                "context_id": "chat-1789169255449-mw1pz8",
+                "latest_task_id": "3137…",
+                "latest_task_state": "TASK_STATE_COMPLETED",
+                "last_activity": "2026-09-11T23:29:04+00:00",
+                "status": "ok",
+                "malformed": [],
+            }
         ]
         return d
 
@@ -104,7 +158,15 @@ class FakeBackend:
     # ── manage (#3471) ──
     archetype_rows = [
         {"id": "basic", "label": "Basic", "blurb": "a blank agent", "bundle": None, "soul": "", "tier": "standard"},
-        {"id": "pm", "label": "Project manager", "blurb": "runs a board", "bundle": "https://github.com/x/pm-archetype", "soul": "You are a PM.", "tier": "standard", "requires_tools": ["github.write"]},
+        {
+            "id": "pm",
+            "label": "Project manager",
+            "blurb": "runs a board",
+            "bundle": "https://github.com/x/pm-archetype",
+            "soul": "You are a PM.",
+            "tier": "standard",
+            "requires_tools": ["github.write"],
+        },
     ]
     warm = 3
     remove_error: Exception | None = None
@@ -116,7 +178,14 @@ class FakeBackend:
 
     def create(self, body):
         self._manage("create", dict(body))
-        row = {"name": body["name"], "id": f"{body['name']}-new1", "port": 7999, "pid": 4242 if body.get("start", True) else None, "running": bool(body.get("start", True)), "version": "0.165.0"}
+        row = {
+            "name": body["name"],
+            "id": f"{body['name']}-new1",
+            "port": 7999,
+            "pid": 4242 if body.get("start", True) else None,
+            "running": bool(body.get("start", True)),
+            "version": "0.165.0",
+        }
         self.roster.append(row)
         return {"ok": True, "agent": row, "installed": ["hello"] if body.get("bundle") else []}
 
@@ -145,7 +214,12 @@ class FakeBackend:
 
     def remote_update(self, agent, **fields):
         self._manage("remote_update", deckdata.slug_of(agent), **fields)
-        return {"ok": True, "agent": {**agent, **{k: v for k, v in fields.items() if k in ("name", "url")}}, "reachable": True, "version": "0.165.0"}
+        return {
+            "ok": True,
+            "agent": {**agent, **{k: v for k, v in fields.items() if k in ("name", "url")}},
+            "reachable": True,
+            "version": "0.165.0",
+        }
 
     def remote_remove(self, agent):
         self._manage("remote_remove", deckdata.slug_of(agent))
@@ -233,7 +307,9 @@ async def test_roster_renders_presence_words_skew_spend_and_topbar():
     async with app.run_test(size=(100, 30)) as pilot:
         await _settle(app, pilot)
         assert isinstance(app.screen, RosterScreen)
-        assert "live · http://127.0.0.1:7870 · protoagent v0.165.0 · via heartbeat" in str(app.screen.query_one("#topbar", Static).content)
+        assert "live · http://127.0.0.1:7870 · protoagent v0.165.0 · via heartbeat" in str(
+            app.screen.query_one("#topbar", Static).content
+        )
         assert "different protoAgent version" in str(app.screen.query_one("#banner", Static).content)
         rows = _rows(app)
         assert [r[1] for r in rows] == ["protoagent", "protoEngineer", "old", "Cindi", "ava"]
@@ -301,7 +377,11 @@ async def test_detail_screen_renders_runtime_logs_sessions_and_telemetry():
         head = str(app.screen.query_one("#detail-head", Static).content)
         assert "protoEngineer" in head and "online" in head and ":7875" in head
         runtime = str(app.screen.query_one("#runtime", Static).content)
-        assert "claude-fable-5-1 via gateway" in runtime and "protoEngineer · kj" in runtime and "warnings   none" in runtime
+        assert (
+            "claude-fable-5-1 via gateway" in runtime
+            and "protoEngineer · kj" in runtime
+            and "warnings   none" in runtime
+        )
         sessions = app.screen.query_one("#sessions", DataTable)
         assert sessions.row_count == 1
         cells = [str(c) for c in sessions.get_row_at(0)]
@@ -326,13 +406,17 @@ async def test_filter_narrows_the_roster_and_escape_clears_it():
         assert await _until(pilot, lambda: _prompt_ready(app))
         await pilot.press(*"coach")
         await pilot.press("enter")
-        assert await _until(pilot, lambda: isinstance(app.screen, RosterScreen) and _rows(app) == [])  # nothing matches "coach" in this roster
+        assert await _until(
+            pilot, lambda: isinstance(app.screen, RosterScreen) and _rows(app) == []
+        )  # nothing matches "coach" in this roster
         await pilot.press("slash")
         assert await _until(pilot, lambda: _prompt_ready(app))
         await pilot.press(*(["backspace"] * 5))  # the prompt reopens with the previous filter
         await pilot.press(*"stopped")
         await pilot.press("enter")
-        assert await _until(pilot, lambda: isinstance(app.screen, RosterScreen) and [r[1] for r in _rows(app)] == ["Cindi"])
+        assert await _until(
+            pilot, lambda: isinstance(app.screen, RosterScreen) and [r[1] for r in _rows(app)] == ["Cindi"]
+        )
         assert "filter: 'stopped'" in str(app.screen.query_one("#status", Static).content)
         # Esc INSIDE the prompt cancels and keeps the active filter (review MEDIUM-4)
         await pilot.press("slash")
@@ -348,10 +432,15 @@ async def test_filter_narrows_the_roster_and_escape_clears_it():
 
 @pytest.mark.asyncio
 async def test_offline_mode_is_badged_and_hides_hub_only_keys():
-    be = FakeBackend(mode="offline", roster=[{"name": "alpha", "id": "alpha-1", "port": 7901, "pid": None, "running": False}])
+    be = FakeBackend(
+        mode="offline", roster=[{"name": "alpha", "id": "alpha-1", "port": 7901, "pid": None, "running": False}]
+    )
     app = FleetDeck(be, poll_s=0)
     async with app.run_test(size=(100, 30)) as pilot:
-        assert await _until(pilot, lambda: "offline: only start/stop are available" in str(app.screen.query_one("#status", Static).content))
+        assert await _until(
+            pilot,
+            lambda: "offline: only start/stop are available" in str(app.screen.query_one("#status", Static).content),
+        )
         assert app.screen.check_action("detail", ()) is False
         assert app.screen.check_action("logs", ()) is False
         assert app.screen.check_action("start", ()) is True
@@ -368,7 +457,10 @@ async def test_offline_mode_is_badged_and_hides_hub_only_keys():
 async def test_log_tail_follows_a_rotating_ring_by_identity():
     """Review HIGH-1: the ring answers the newest N; slicing by count froze the tail at N."""
     be = FakeBackend()
-    window: list[dict] = [{"ts": f"2026-09-12T09:00:{i:02d}+00:00", "level": "INFO", "logger": "t", "message": f"line {i}"} for i in range(5)]
+    window: list[dict] = [
+        {"ts": f"2026-09-12T09:00:{i:02d}+00:00", "level": "INFO", "logger": "t", "message": f"line {i}"}
+        for i in range(5)
+    ]
     n = {"next": 5}
 
     def detail(agent):
@@ -387,7 +479,14 @@ async def test_log_tail_follows_a_rotating_ring_by_identity():
         assert len(log.lines) == 5
         # three new lines arrive; the window still holds 5 → only the 3 new ones are written
         for _ in range(3):
-            window.append({"ts": f"2026-09-12T09:00:{n['next']:02d}+00:00", "level": "INFO", "logger": "t", "message": f"line {n['next']}"})
+            window.append(
+                {
+                    "ts": f"2026-09-12T09:00:{n['next']:02d}+00:00",
+                    "level": "INFO",
+                    "logger": "t",
+                    "message": f"line {n['next']}",
+                }
+            )
             n["next"] += 1
         app.screen.refresh_detail()
         await _settle(app, pilot)
@@ -395,7 +494,14 @@ async def test_log_tail_follows_a_rotating_ring_by_identity():
         assert "line 7" in str(log.lines[-1])
         # a burst larger than the window rotates the anchor out → the window is re-rendered whole
         for _ in range(9):
-            window.append({"ts": f"2026-09-12T09:00:{n['next']:02d}+00:00", "level": "INFO", "logger": "t", "message": f"line {n['next']}"})
+            window.append(
+                {
+                    "ts": f"2026-09-12T09:00:{n['next']:02d}+00:00",
+                    "level": "INFO",
+                    "logger": "t",
+                    "message": f"line {n['next']}",
+                }
+            )
             n["next"] += 1
         app.screen.refresh_detail()
         await _settle(app, pilot)
@@ -483,7 +589,11 @@ async def test_log_tail_re_renders_when_the_member_restarts_and_seq_starts_over(
         return d
 
     be.detail = detail  # type: ignore[assignment]
-    window[:] = [rec(498, "old a", "2026-09-12T09:00:01+00:00"), rec(499, "old b", "2026-09-12T09:00:02+00:00"), rec(500, "old c", "2026-09-12T09:00:03+00:00")]
+    window[:] = [
+        rec(498, "old a", "2026-09-12T09:00:01+00:00"),
+        rec(499, "old b", "2026-09-12T09:00:02+00:00"),
+        rec(500, "old c", "2026-09-12T09:00:03+00:00"),
+    ]
     app = FleetDeck(be, poll_s=0)
     async with app.run_test(size=(100, 30)) as pilot:
         await _settle(app, pilot)
@@ -498,14 +608,24 @@ async def test_log_tail_re_renders_when_the_member_restarts_and_seq_starts_over(
         assert [str(line) for line in log.lines][-2:] == [str(line) for line in log.lines][-2:]
         assert len(log.lines) == 2 and "ready" in str(log.lines[-1]) and "old" not in str(log.lines[0])
         # a restarted counter that happens to REUSE our anchor number with a different record
-        window[:] = [rec(1, "boot", "2026-09-12T09:05:00+00:00"), rec(2, "ready", "2026-09-12T09:05:01+00:00"), rec(3, "x", "2026-09-12T09:05:02+00:00")]
+        window[:] = [
+            rec(1, "boot", "2026-09-12T09:05:00+00:00"),
+            rec(2, "ready", "2026-09-12T09:05:01+00:00"),
+            rec(3, "x", "2026-09-12T09:05:02+00:00"),
+        ]
         app.screen.refresh_detail()
         await _settle(app, pilot)
         assert len(log.lines) == 3  # exactly one new line: same seq 2, same record → advance
-        window[:] = [rec(2, "different", "2026-09-12T09:09:00+00:00"), rec(3, "y", "2026-09-12T09:09:01+00:00"), rec(4, "z", "2026-09-12T09:09:02+00:00")]
+        window[:] = [
+            rec(2, "different", "2026-09-12T09:09:00+00:00"),
+            rec(3, "y", "2026-09-12T09:09:01+00:00"),
+            rec(4, "z", "2026-09-12T09:09:02+00:00"),
+        ]
         app.screen.refresh_detail()
         await _settle(app, pilot)
-        assert len(log.lines) == 3 and "different" in str(log.lines[0])  # seq 3 exists but names another record → re-rendered
+        assert len(log.lines) == 3 and "different" in str(
+            log.lines[0]
+        )  # seq 3 exists but names another record → re-rendered
 
 
 @pytest.mark.asyncio
@@ -580,7 +700,9 @@ async def test_failed_poll_keeps_the_last_roster_and_says_so():
     async with app.run_test(size=(100, 30)) as pilot:
         await _settle(app, pilot)
         assert len(_rows(app)) == 5
-        be.snapshot = lambda: deckdata.Snapshot(mode="live", label="x", error="http://127.0.0.1:7870 did not answer (ReadTimeout)")  # type: ignore[assignment]
+        be.snapshot = lambda: deckdata.Snapshot(
+            mode="live", label="x", error="http://127.0.0.1:7870 did not answer (ReadTimeout)"
+        )  # type: ignore[assignment]
         app.poll()
         assert await _until(pilot, lambda: "last poll failed" in str(app.screen.query_one("#status", Static).content))
         assert len(_rows(app)) == 5

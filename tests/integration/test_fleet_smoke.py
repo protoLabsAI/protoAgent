@@ -111,9 +111,9 @@ def test_hub_proxies_authed_sse_to_a_fleet_token_member(fleet):
     assert st == 200, f"create member: {st} {raw[:300]}"
     agent = json.loads(raw)["agent"]
     mid, mport = agent["id"], agent.get("port")
-    assert poll(
-        lambda: http_get(f"{hub.base}/agents/{mid}/healthz", timeout=3, headers=H)[0] == 200, timeout=90
-    ), "unreachable"
+    assert poll(lambda: http_get(f"{hub.base}/agents/{mid}/healthz", timeout=3, headers=H)[0] == 200, timeout=90), (
+        "unreachable"
+    )
 
     # Prove the member is genuinely CLOSED with the fleet token (else an SSE 200 would be a false
     # pass from an open member): a DIRECT unauthenticated call to its own port is rejected.
@@ -134,9 +134,7 @@ def test_hub_proxies_authed_sse_to_a_fleet_token_member(fleet):
     # it, reporting a proxy-auth regression that wasn't one. A 404 here is the member honestly saying
     # "no such file" — it still proves the request was proxied anonymously rather than 401'd.
     st_ds = http_get(f"{hub.base}/agents/{mid}/_ds/plugin-kit.js", timeout=10)[0]
-    assert st_ds not in (401, 403), (
-        f"closed hub must serve a sister's /_ds/ assets WITHOUT a bearer, got {st_ds}"
-    )
+    assert st_ds not in (401, 403), f"closed hub must serve a sister's /_ds/ assets WITHOUT a bearer, got {st_ds}"
     if (REPO_ROOT / "apps" / "web" / "dist" / "_ds" / "plugin-kit.js").exists():
         # Console built → the asset really should come back, so keep the strong check where it means
         # something (local runs, and any job that builds the SPA first).

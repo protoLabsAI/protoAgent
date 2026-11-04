@@ -340,9 +340,7 @@ def _apply_plugin_registries(plugins) -> None:
     # resolving through sdk.service the moment the reload commits.
     from graph import plugin_services as _plugin_services
 
-    _plugin_services.set_plugin_services(
-        getattr(plugins, "services", None), getattr(plugins, "service_meta", None)
-    )
+    _plugin_services.set_plugin_services(getattr(plugins, "services", None), getattr(plugins, "service_meta", None))
 
 
 async def _plugin_agent_invoke(prompt: str, session_id: str, *, tool_fence: list[str] | None = None) -> str:

@@ -43,7 +43,7 @@ def test_items_render_into_a_labelled_section():
 def test_an_unlabelled_provider_still_gets_a_readable_heading():
     """A plugin that omits ``label`` must not surface its raw registry key as the heading."""
     set_plugin_work_providers({"board:cards": lambda: [{"id": "bd-1", "title": "T"}]})
-    (heading, _lines), = collect_work_sections(8)
+    ((heading, _lines),) = collect_work_sections(8)
     assert heading == "OPEN WORK (board:cards)"
 
 
@@ -60,7 +60,7 @@ def test_an_unlabelled_provider_still_gets_a_readable_heading():
 )
 def test_item_shapes_render(item, expected):
     set_plugin_work_providers({"p:q": lambda: [item]})
-    (_heading, lines), = collect_work_sections(8)
+    ((_heading, lines),) = collect_work_sections(8)
     assert lines == [expected]
 
 
@@ -69,7 +69,7 @@ def test_unusable_items_are_dropped_not_rendered_blank(junk):
     """An item with nothing addressable and nothing to read earns no line — otherwise a
     malformed provider pads the prompt with empty bullets every turn."""
     set_plugin_work_providers({"p:q": lambda: [junk, {"id": "bd-ok", "title": "real"}]})
-    (_heading, lines), = collect_work_sections(8)
+    ((_heading, lines),) = collect_work_sections(8)
     assert lines == ["- bd-ok real"]
 
 
@@ -80,7 +80,7 @@ def test_a_provider_with_no_work_contributes_no_section():
 
 def test_a_long_line_is_trimmed():
     set_plugin_work_providers({"p:q": lambda: [{"id": "bd-1", "title": "x" * 500}]})
-    (_heading, lines), = collect_work_sections(8)
+    ((_heading, lines),) = collect_work_sections(8)
     assert len(lines[0]) <= work_providers._LINE_CAP + 2  # + the "- " bullet
     assert lines[0].endswith("…")
 
@@ -121,6 +121,7 @@ def test_a_raising_provider_is_skipped_and_the_others_still_render(caplog):
 
 def test_a_raising_provider_warns_only_once():
     """It fails on every turn; warning every turn would flood the log."""
+
     def boom():
         raise RuntimeError("nope")
 

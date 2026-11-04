@@ -1,4 +1,5 @@
 """Real turn drivers recover on the same thread after a wire-level quota 429."""
+
 import asyncio
 import importlib
 
@@ -27,9 +28,13 @@ async def test_quota_failure_then_model_switch_keeps_thread_and_releases_turn(en
 
     def respond(request):
         calls.append(request)
-        return http.Response(429, headers={"retry-after": "10" if cancel_backoff else "130287"}, json={
-            "error": {"type": "rate_limit_error", "message": "Weekly quota exhausted"},
-        })
+        return http.Response(
+            429,
+            headers={"retry-after": "10" if cancel_backoff else "130287"},
+            json={
+                "error": {"type": "rate_limit_error", "message": "Weekly quota exhausted"},
+            },
+        )
 
     async def invoke(state, config):
         threads.append(config["configurable"]["thread_id"])
@@ -60,7 +65,12 @@ async def test_quota_failure_then_model_switch_keeps_thread_and_releases_turn(en
 
         async def exhausted_turn():
             if stream:
-                return [frame async for frame in chat._chat_langgraph_stream("hello", "recovery", request_metadata={"model": "exhausted"})]
+                return [
+                    frame
+                    async for frame in chat._chat_langgraph_stream(
+                        "hello", "recovery", request_metadata={"model": "exhausted"}
+                    )
+                ]
             return await chat.chat("hello", "recovery", model="exhausted", origin="api-chat")
 
         async with asyncio.timeout(10):
@@ -81,7 +91,12 @@ async def test_quota_failure_then_model_switch_keeps_thread_and_releases_turn(en
             assert not turn_activity.is_active("recovery")
             assert not local_turns.snapshot("recovery")
             if stream:
-                recovered = [frame async for frame in chat._chat_langgraph_stream("continue", "recovery", request_metadata={"model": "working"})]
+                recovered = [
+                    frame
+                    async for frame in chat._chat_langgraph_stream(
+                        "continue", "recovery", request_metadata={"model": "working"}
+                    )
+                ]
                 assert any(kind == "done" and "Recovered" in payload for kind, payload in recovered)
             else:
                 recovered = await chat.chat("continue", "recovery", model="working", origin="api-chat")

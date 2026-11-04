@@ -177,9 +177,7 @@ def test_session_id_column_migrates_onto_a_legacy_board(tmp_path):
         "assignee TEXT DEFAULT '', created_at TEXT NOT NULL, updated_at TEXT NOT NULL, "
         "closed_at TEXT, close_reason TEXT)"
     )
-    conn.execute(
-        "INSERT INTO issues (id, title, created_at, updated_at) VALUES ('task-1','old one','t','t')"
-    )
+    conn.execute("INSERT INTO issues (id, title, created_at, updated_at) VALUES ('task-1','old one','t','t')")
     conn.commit()
     conn.close()
 

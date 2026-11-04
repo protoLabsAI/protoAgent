@@ -340,8 +340,7 @@ def _parse_settings_tabs(tabs, plugin_id: str) -> list[dict]:
                 normalized["apply"] = "live"
             else:
                 log.warning(
-                    "[plugins] %s: settings tab %r apply %r is not 'live' — ignored "
-                    "(the tab keeps save-then-apply)",
+                    "[plugins] %s: settings tab %r apply %r is not 'live' — ignored (the tab keeps save-then-apply)",
                     plugin_id,
                     tab_id,
                     raw.get("apply"),
@@ -352,12 +351,7 @@ def _parse_settings_tabs(tabs, plugin_id: str) -> list[dict]:
             route = _iframe_page_route(path)
             parts = route.split("/")
             root = f"/plugins/{plugin_id}/"
-            if (
-                not path
-                or not route.startswith(root)
-                or "\\" in route
-                or any(part in {".", ".."} for part in parts)
-            ):
+            if not path or not route.startswith(root) or "\\" in route or any(part in {".", ".."} for part in parts):
                 log.warning(
                     "[plugins] %s: settings tab %r Configure path %r must be a same-origin "
                     "page under /plugins/%s/... — ignored",
@@ -396,8 +390,7 @@ def _parse_settings(settings, tabs: list[dict], plugin_id: str) -> list[dict]:
                 spec.pop("tab", None)
             elif tab_id in path_tabs:
                 log.warning(
-                    "[plugins] %s: setting %r cannot target path-backed settings tab %r "
-                    "— using Configuration",
+                    "[plugins] %s: setting %r cannot target path-backed settings tab %r — using Configuration",
                     plugin_id,
                     spec.get("key"),
                     tab_id,
@@ -596,6 +589,7 @@ def _navigable_view_ids(views: list[dict]) -> set[str]:
     flags are readable here — the console mirrors this check, but the WARNING is only
     available at parse time, which is the half a plugin author can act on.
     """
+
     # ``utility`` is tested for PRESENCE, not Python truthiness. The console applies JS
     # truthiness (``isNavigablePluginView``, apps/web/src/lib/pluginViews.ts), where ``{}`` and
     # ``[]`` are TRUTHY and the view is a utility widget with no dock surface. Python calls both
@@ -816,8 +810,7 @@ def _parse_commands(entries, plugin_id: str, views: list[dict]) -> list[dict]:
             # is a valid id to identify the entry by, and an author staring at a manifest
             # of a dozen commands needs something to grep for.
             log.warning(
-                "[plugins] %s: commands entry (id %r, title %r) needs a safe id (%s) and a "
-                "non-empty title — ignored",
+                "[plugins] %s: commands entry (id %r, title %r) needs a safe id (%s) and a non-empty title — ignored",
                 plugin_id,
                 command_id,
                 title,
@@ -868,9 +861,7 @@ def _parse_commands(entries, plugin_id: str, views: list[dict]) -> list[dict]:
         # entirely, like every other optional field above.
         raw_keywords = raw.get("keywords")
         keywords = (
-            [k for k in (str(x).strip() for x in raw_keywords) if k]
-            if isinstance(raw_keywords, (list, tuple))
-            else []
+            [k for k in (str(x).strip() for x in raw_keywords) if k] if isinstance(raw_keywords, (list, tuple)) else []
         )
         if keywords:
             entry["keywords"] = keywords
@@ -948,15 +939,20 @@ def _parse_public_paths(paths, plugin_id: str, *, kind: str = "public_path") -> 
         if s.startswith(roots) and _CORE_PLUGIN_ROUTE_RE.match(s):
             log.warning(
                 "[plugins] %s: %s %r is a core operator route (plugin update / enable) — ignored",
-                plugin_id, kind, s,
+                plugin_id,
+                kind,
+                s,
             )
         elif s.startswith(roots):
             kept.append(s)
         elif s:
             log.warning(
-                "[plugins] %s: %s %r is outside the plugin namespace "
-                "(/plugins/%s/… or /api/plugins/%s/…) — ignored",
-                plugin_id, kind, s, plugin_id, plugin_id,
+                "[plugins] %s: %s %r is outside the plugin namespace (/plugins/%s/… or /api/plugins/%s/…) — ignored",
+                plugin_id,
+                kind,
+                s,
+                plugin_id,
+                plugin_id,
             )
     return kept
 
@@ -1016,21 +1012,27 @@ def _load_schema_ref(ref: str, plugin_dir: Path, plugin_id: str, topic: str) -> 
         if not target.is_relative_to(root):
             log.warning(
                 "[plugins] %s: emits %r schema $ref %r escapes the plugin directory — ignored",
-                plugin_id, topic, ref,
+                plugin_id,
+                topic,
+                ref,
             )
             return None
         loaded = yaml.safe_load(target.read_text(encoding="utf-8"))
     except (OSError, yaml.YAMLError, ValueError) as exc:
         log.warning(
-            "[plugins] %s: emits %r schema $ref %r is unreadable (%s) — keeping the "
-            "topic name only",
-            plugin_id, topic, ref, exc,
+            "[plugins] %s: emits %r schema $ref %r is unreadable (%s) — keeping the topic name only",
+            plugin_id,
+            topic,
+            ref,
+            exc,
         )
         return None
     if not isinstance(loaded, dict):
         log.warning(
             "[plugins] %s: emits %r schema $ref %r is not a mapping — keeping the topic name only",
-            plugin_id, topic, ref,
+            plugin_id,
+            topic,
+            ref,
         )
         return None
     return loaded
@@ -1051,9 +1053,10 @@ def _resolve_emit_schema(schema, plugin_dir: Path, plugin_id: str, topic: str) -
             return _load_schema_ref(ref.strip(), plugin_dir, plugin_id, topic)
         return schema
     log.warning(
-        "[plugins] %s: emits %r schema must be a mapping or a $ref path, got %s — "
-        "keeping the topic name only",
-        plugin_id, topic, type(schema).__name__,
+        "[plugins] %s: emits %r schema must be a mapping or a $ref path, got %s — keeping the topic name only",
+        plugin_id,
+        topic,
+        type(schema).__name__,
     )
     return None
 
@@ -1088,9 +1091,7 @@ def _parse_emits(entries, plugin_dir: Path, plugin_id: str) -> tuple[list[str], 
         if isinstance(entry, dict):
             topic = str(entry.get("topic", "") or "").strip()
             if not topic:
-                log.warning(
-                    "[plugins] %s: emits entry %r has no 'topic' — skipped", plugin_id, entry
-                )
+                log.warning("[plugins] %s: emits entry %r has no 'topic' — skipped", plugin_id, entry)
                 continue
             names.append(topic)
             contract: dict = {}
@@ -1153,16 +1154,13 @@ def _parse_requires_pip(entries, plugin_id: str) -> tuple[list[str], list[str], 
         if isinstance(entry, dict):
             pkg = str(entry.get("pkg", "") or "").strip()
             if not pkg:
-                log.warning(
-                    "[plugins] %s: requires_pip entry %r has no 'pkg' — skipped", plugin_id, entry
-                )
+                log.warning("[plugins] %s: requires_pip entry %r has no 'pkg' — skipped", plugin_id, entry)
                 continue
             (optional if entry.get("optional") else hard).append(pkg)
             raw_scope = str(entry.get("scope", "") or "").strip().lower()
             if raw_scope and raw_scope not in _PIP_SCOPES:
                 log.warning(
-                    "[plugins] %s: requires_pip entry %r has unknown scope %r (expected %s) — "
-                    "treating as 'runtime'",
+                    "[plugins] %s: requires_pip entry %r has unknown scope %r (expected %s) — treating as 'runtime'",
                     plugin_id,
                     pkg,
                     raw_scope,
@@ -1198,9 +1196,7 @@ def _parse_requires_runtimes(raw, plugin_id: str) -> dict[str, str]:
     if raw is None:
         return {}
     if not isinstance(raw, dict):
-        log.warning(
-            "[plugins] %s: requires_runtimes must be a mapping like {node: '>=20'} — ignored", plugin_id
-        )
+        log.warning("[plugins] %s: requires_runtimes must be a mapping like {node: '>=20'} — ignored", plugin_id)
         return {}
     out: dict[str, str] = {}
     for name, spec in raw.items():
@@ -1495,7 +1491,9 @@ def load_manifest(plugin_dir: Path) -> PluginManifest | None:
         log.warning(
             "[plugins] %s: invalid or reserved plugin id %r — must match %s and must not shadow a "
             "core /api/plugins/ route; skipping",
-            plugin_dir.name, pid, _VALID_PLUGIN_ID.pattern,
+            plugin_dir.name,
+            pid,
+            _VALID_PLUGIN_ID.pattern,
         )
         return None
 
@@ -1533,7 +1531,9 @@ def load_manifest(plugin_dir: Path) -> PluginManifest | None:
     # federation_paths (#2747): same namespace validator, separate list — these
     # lower the tier ceiling, they never exempt auth, so a view page is NOT
     # auto-added here the way it is for public_paths.
-    federation_paths = list(dict.fromkeys(_parse_public_paths(data.get("federation_paths"), pid, kind="federation_path")))
+    federation_paths = list(
+        dict.fromkeys(_parse_public_paths(data.get("federation_paths"), pid, kind="federation_path"))
+    )
     emits, emits_schemas = _parse_emits(data.get("emits"), plugin_dir, pid)
     subscribes = data.get("subscribes")
     requires_pip, optional_pip, pip_scopes = _parse_requires_pip(data.get("requires_pip"), pid)

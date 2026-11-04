@@ -430,9 +430,7 @@ def available_model_lanes(config: "LangGraphConfig") -> list[dict]:
 
         note_legacy_registry_floor("available_model_lanes")
         entries = [Provider(id="gateway", type="openai-compat", label=_PROVIDER_LABELS["gateway"])]
-        entries += [
-            Provider(id=t, type=t, label=_PROVIDER_LABELS.get(t, t)) for t in sorted(NATIVE_OAUTH_PROVIDERS)
-        ]
+        entries += [Provider(id=t, type=t, label=_PROVIDER_LABELS.get(t, t)) for t in sorted(NATIVE_OAUTH_PROVIDERS)]
     for entry in entries:
         lane: dict = {
             "provider": entry.id,
@@ -463,9 +461,7 @@ def available_model_lanes(config: "LangGraphConfig") -> list[dict]:
                 try:
                     # No env fallback for a registered connection — a blank key means
                     # this endpoint needs none, not "borrow the global one".
-                    lane["models"], lane["error"] = list_gateway_models(
-                        base, key, allow_env_key=legacy
-                    )
+                    lane["models"], lane["error"] = list_gateway_models(base, key, allow_env_key=legacy)
                 except Exception as exc:  # noqa: BLE001 — one lane's outage is not the picker's
                     lane["error"] = str(exc)
             else:
@@ -516,6 +512,7 @@ def available_model_lanes(config: "LangGraphConfig") -> list[dict]:
                 lane["error"] = str(exc)
         lanes.append(lane)
     return lanes
+
 
 def qualified_model_options(config: "LangGraphConfig") -> list[str]:
     """Flat, deduped ``<provider>:<model>`` options for every usable lane — what a

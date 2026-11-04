@@ -308,7 +308,12 @@ def _proxy_headers(request, extra_headers: dict | None) -> dict:
 
 
 async def _forward_to_base(
-    base: str, request, path: str, extra_headers: dict | None = None, *, drop_params: frozenset[str] = frozenset(),
+    base: str,
+    request,
+    path: str,
+    extra_headers: dict | None = None,
+    *,
+    drop_params: frozenset[str] = frozenset(),
     ticket_binding: tuple[str, str, str] | None = None,
 ):
     """Stream-proxy ``request`` to ``<base>/<path>`` (SSE-safe). ``drop_params`` names query
@@ -562,7 +567,9 @@ async def _forward_chat_detach(slug, base, request, path, extra, drop_params, bo
     # runs the whole turn here and answers 200 — the same 600s cap it has today, no regression.
     try:
         submitted = await client.send(
-            client.build_request("POST", f"{base}/{path}", headers=headers, content=body, params=params, timeout=_TURN_TIMEOUT)
+            client.build_request(
+                "POST", f"{base}/{path}", headers=headers, content=body, params=params, timeout=_TURN_TIMEOUT
+            )
         )
     except (httpx.ConnectError, httpx.ConnectTimeout):
         return JSONResponse({"detail": "agent is not reachable"}, status_code=502)
@@ -576,7 +583,9 @@ async def _forward_chat_detach(slug, base, request, path, extra, drop_params, bo
         # honest 502 a sync call gives for a dropped connection rather than letting any other
         # httpx error (ReadError/RemoteProtocolError/PoolTimeout/…) escape as a generic hub 500.
         log.warning(
-            "[fleet] proxied POST %s failed submitting the turn (%s)", _redact_media(f"{base}/{path}"), type(exc).__name__
+            "[fleet] proxied POST %s failed submitting the turn (%s)",
+            _redact_media(f"{base}/{path}"),
+            type(exc).__name__,
         )
         return JSONResponse({"detail": "agent is not reachable"}, status_code=502)
 
@@ -645,7 +654,11 @@ async def _forward_chat_detach(slug, base, request, path, extra, drop_params, bo
         if _now() >= deadline:
             # The member turn is NOT cancelled — it keeps running; the caller can keep polling
             # the hub at hub_poll_url. 504 so a fronting proxy/panel renders a real "still working".
-            log.warning("[fleet] detached turn %s still running after %ss ceiling — handing back a poll URL", turn_id, _DETACHED_TURN_MAX_S)
+            log.warning(
+                "[fleet] detached turn %s still running after %ss ceiling — handing back a poll URL",
+                turn_id,
+                _DETACHED_TURN_MAX_S,
+            )
             return JSONResponse(
                 {
                     "detail": f"turn {turn_id} still running after {_DETACHED_TURN_MAX_S}s; keep polling {hub_poll_url}",

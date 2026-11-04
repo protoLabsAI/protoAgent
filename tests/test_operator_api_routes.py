@@ -105,9 +105,7 @@ def test_operator_routes_return_expected_shapes(tmp_path) -> None:
 
     # The in-process adapter ignores project_path (the board is agent-global).
     assert client.get("/api/tasks/status").json() == {"initialized": True}
-    assert (
-        client.post("/api/tasks/issues", json={"title": "Task"}).json()["issue"]["id"] == "task-2"
-    )
+    assert client.post("/api/tasks/issues", json={"title": "Task"}).json()["issue"]["id"] == "task-2"
     assert client.patch(
         "/api/tasks/issues/task-1",
         json={"status": "in_progress"},
@@ -130,9 +128,7 @@ def test_task_close_dispatches_self_improvement_review(monkeypatch) -> None:
     response = _client().post("/api/tasks/issues/task-1/close", json={"reason": "verified"})
 
     assert response.status_code == 200
-    assert captured == [
-        ({"id": "task-1", "status": "closed", "close_reason": "verified"}, "", "verified")
-    ]
+    assert captured == [({"id": "task-1", "status": "closed", "close_reason": "verified"}, "", "verified")]
 
 
 def test_task_close_succeeds_when_review_dispatch_fails(monkeypatch) -> None:
@@ -227,7 +223,11 @@ def test_goal_single_status_under_plural(monkeypatch) -> None:
 
     class _Store:
         def get(self, sid):
-            return type("G", (), {"to_dict": lambda self: {"session_id": "s1", "status": "active"}})() if sid == "s1" else None
+            return (
+                type("G", (), {"to_dict": lambda self: {"session_id": "s1", "status": "active"}})()
+                if sid == "s1"
+                else None
+            )
 
         def read_plan(self, sid):
             return "# plan\n- step one" if sid == "s1" else ""
@@ -390,9 +390,17 @@ def test_chat_form_submit_settles_the_parked_task_only_when_the_wizard_is_done(m
         form_task_settle=settle,
     )
     client = TestClient(app)
-    step = client.post("/api/chat/commands/submit", json={"callback_id": "cb1", "session_id": "chat-1", "answers": {"a": 1}}).json()
+    step = client.post(
+        "/api/chat/commands/submit", json={"callback_id": "cb1", "session_id": "chat-1", "answers": {"a": 1}}
+    ).json()
     assert step == {"form": {"title": "step 2", "steps": []}, "callback_id": "cb2"} and settled == []
-    done = client.post("/api/chat/commands/submit", json={"callback_id": "cb2", "session_id": "chat-1", "answers": {"b": 2}}).json()
+    done = client.post(
+        "/api/chat/commands/submit", json={"callback_id": "cb2", "session_id": "chat-1", "answers": {"b": 2}}
+    ).json()
     assert done == {"reply": "posted"} and settled == ["chat-1"]
-    client.post("/api/chat/commands/submit", json={"callback_id": "cb3", "answers": {}})  # no session: nothing to settle
-    assert settled == ["chat-1"] and answers["n"] == 3  # all three submits ran; only the finished one with a session settled
+    client.post(
+        "/api/chat/commands/submit", json={"callback_id": "cb3", "answers": {}}
+    )  # no session: nothing to settle
+    assert (
+        settled == ["chat-1"] and answers["n"] == 3
+    )  # all three submits ran; only the finished one with a session settled

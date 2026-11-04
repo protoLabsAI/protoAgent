@@ -503,14 +503,24 @@ def test_user_only_skill_is_withheld_from_agent_index_but_still_a_slash(index):
     (skill_summaries), but still a user_facing /slash command."""
     # A normal discoverable skill + a user-only one.
     index.add_skill(
-        _FakeArtifact(name="Deploy guide", description="how to deploy the app",
-                      prompt_template="deploy steps", source_session_id="s1"),
+        _FakeArtifact(
+            name="Deploy guide",
+            description="how to deploy the app",
+            prompt_template="deploy steps",
+            source_session_id="s1",
+        ),
         source="disk",
     )
     index.add_skill(
-        _FakeArtifact(name="Deploy now", description="deploy the app immediately",
-                      prompt_template="run deploy", user_facing=True, user_only=True,
-                      slash="deploy", source_session_id="s2"),
+        _FakeArtifact(
+            name="Deploy now",
+            description="deploy the app immediately",
+            prompt_template="run deploy",
+            user_facing=True,
+            user_only=True,
+            slash="deploy",
+            source_session_id="s2",
+        ),
         source="disk",
     )
     # The always-on index (skill_summaries) shows the normal skill, NOT the user-only one.

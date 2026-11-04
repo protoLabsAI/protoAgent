@@ -110,7 +110,11 @@ def test_chat_reports_signed_out_not_setup(state_guard):
     from server.chat import _setup_required_message
 
     STATE.graph = None
-    STATE.graph_auth_error = {"provider": "openai-codex", "message": "Codex is disconnected in protoAgent. Sign in again to reconnect.", "relogin": True}
+    STATE.graph_auth_error = {
+        "provider": "openai-codex",
+        "message": "Codex is disconnected in protoAgent. Sign in again to reconnect.",
+        "relogin": True,
+    }
     [msg] = _setup_required_message()
     assert "Signed out" in msg["content"]
     assert "disconnected" in msg["content"]
@@ -148,9 +152,7 @@ def _disconnect_client(monkeypatch, *, marker_present: bool = True):
             as_dict=lambda: {"provider": provider, "removed": True, "revoked": True, "note": "test"}
         ),
     )
-    monkeypatch.setattr(
-        "graph.providers.oauth.is_disconnected", lambda provider, paths=None: marker_present
-    )
+    monkeypatch.setattr("graph.providers.oauth.is_disconnected", lambda provider, paths=None: marker_present)
     app = FastAPI()
     register_config_routes(app)
     return TestClient(app)
@@ -238,9 +240,7 @@ def test_oauth_complete_route_triggers_graph_rebuild(state_guard, monkeypatch):
 
     STATE.graph = None
     monkeypatch.setattr("graph.config_io.is_setup_complete", lambda: True)
-    monkeypatch.setattr(
-        "graph.providers.oauth_login.codex_login_poll", lambda flow_id: {"status": "complete"}
-    )
+    monkeypatch.setattr("graph.providers.oauth_login.codex_login_poll", lambda flow_id: {"status": "complete"})
     reloads = []
 
     def _fake_reload():
@@ -256,18 +256,14 @@ def test_oauth_complete_route_triggers_graph_rebuild(state_guard, monkeypatch):
     assert len(reloads) == 1
 
     # A still-pending poll must not reload anything.
-    monkeypatch.setattr(
-        "graph.providers.oauth_login.codex_login_poll", lambda flow_id: {"status": "pending"}
-    )
+    monkeypatch.setattr("graph.providers.oauth_login.codex_login_poll", lambda flow_id: {"status": "pending"})
     res = client.post("/api/config/oauth/poll", json={"provider": "openai-codex", "flow_id": "f1"}).json()
     assert res["status"] == "pending"
     assert "graph_reloaded" not in res
     assert len(reloads) == 1
 
     # A live graph (normal wizard sign-in) skips the rebuild too.
-    monkeypatch.setattr(
-        "graph.providers.oauth_login.codex_login_poll", lambda flow_id: {"status": "complete"}
-    )
+    monkeypatch.setattr("graph.providers.oauth_login.codex_login_poll", lambda flow_id: {"status": "complete"})
     res = client.post("/api/config/oauth/poll", json={"provider": "openai-codex", "flow_id": "f1"}).json()
     assert res["status"] == "complete"
     assert "graph_reloaded" not in res
@@ -296,13 +292,9 @@ def test_signin_completes_a_pending_provider_switch(state_guard, monkeypatch):
         classmethod(lambda cls, path: types.SimpleNamespace(model_provider="openai-codex")),
     )
     monkeypatch.setattr("graph.config_io.config_yaml_path", lambda: "unused")
-    monkeypatch.setattr(
-        "graph.providers.oauth_login.codex_login_poll", lambda flow_id: {"status": "complete"}
-    )
+    monkeypatch.setattr("graph.providers.oauth_login.codex_login_poll", lambda flow_id: {"status": "complete"})
     reloads = []
-    monkeypatch.setattr(
-        "server.agent_init._reload_langgraph_agent", lambda: (reloads.append(1), (True, "ok"))[1]
-    )
+    monkeypatch.setattr("server.agent_init._reload_langgraph_agent", lambda: (reloads.append(1), (True, "ok"))[1])
 
     res = client.post("/api/config/oauth/poll", json={"provider": "openai-codex", "flow_id": "f"}).json()
     assert res["graph_reloaded"] is True and reloads == [1]

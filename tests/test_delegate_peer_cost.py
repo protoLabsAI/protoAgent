@@ -258,7 +258,15 @@ async def test_a2a_dispatch_emits_the_peers_cost_on_the_turn_stream(monkeypatch)
     """The whole point (#3016): a delegation to a protoAgent peer surfaces the peer's
     reported spend as exactly one tagged ``usage`` event — the lane #2872 built — while
     the tool still returns the peer's text unchanged."""
-    inline = {"result": {"task": {"id": "t1", "status": {"state": "TASK_STATE_COMPLETED"}, "artifacts": [_artifact(metadata=_PEER_COST)]}}}
+    inline = {
+        "result": {
+            "task": {
+                "id": "t1",
+                "status": {"state": "TASK_STATE_COMPLETED"},
+                "artifacts": [_artifact(metadata=_PEER_COST)],
+            }
+        }
+    }
     reply, usage = await _dispatch_capturing_usage(monkeypatch, inline)
 
     assert str(reply) == "hi from peer"
@@ -298,7 +306,17 @@ async def test_dispatch_outside_a_run_context_still_returns_the_reply(monkeypatc
     monkeypatch.setattr(
         httpx,
         "AsyncClient",
-        lambda **kw: _PeerClient({"result": {"task": {"id": "t1", "status": {"state": "TASK_STATE_COMPLETED"}, "artifacts": [_artifact(metadata=_PEER_COST)]}}}),
+        lambda **kw: _PeerClient(
+            {
+                "result": {
+                    "task": {
+                        "id": "t1",
+                        "status": {"state": "TASK_STATE_COMPLETED"},
+                        "artifacts": [_artifact(metadata=_PEER_COST)],
+                    }
+                }
+            }
+        ),
     )
     d = ADAPTERS["a2a"].parse({"name": "orbis", "type": "a2a", "url": "https://peer/a2a"})
     assert await ADAPTERS["a2a"].dispatch(d, "q") == "hi from peer"
@@ -339,7 +357,17 @@ async def test_a_detached_background_delegation_does_not_bill_the_spawning_turn(
     monkeypatch.setattr(
         httpx,
         "AsyncClient",
-        lambda **kw: _PeerClient({"result": {"task": {"id": "t1", "status": {"state": "TASK_STATE_COMPLETED"}, "artifacts": [_artifact(metadata=_PEER_COST)]}}}),
+        lambda **kw: _PeerClient(
+            {
+                "result": {
+                    "task": {
+                        "id": "t1",
+                        "status": {"state": "TASK_STATE_COMPLETED"},
+                        "artifacts": [_artifact(metadata=_PEER_COST)],
+                    }
+                }
+            }
+        ),
     )
     mgr = _DetachingBgManager()
     monkeypatch.setattr(STATE, "background_mgr", mgr, raising=False)
@@ -534,7 +562,15 @@ async def test_unreadable_peer_telemetry_never_fails_the_delegation(monkeypatch)
 
     monkeypatch.setattr(a2a, "_peer_usage_row", _boom)
     status.reset()
-    inline = {"result": {"task": {"id": "t1", "status": {"state": "TASK_STATE_COMPLETED"}, "artifacts": [_artifact(metadata=_PEER_COST)]}}}
+    inline = {
+        "result": {
+            "task": {
+                "id": "t1",
+                "status": {"state": "TASK_STATE_COMPLETED"},
+                "artifacts": [_artifact(metadata=_PEER_COST)],
+            }
+        }
+    }
     reply, usage = await _dispatch_capturing_usage(monkeypatch, inline)
 
     assert str(reply) == "hi from peer", "the peer's answer was discarded over a telemetry failure"
@@ -832,7 +868,15 @@ async def test_a_hostile_peers_unbounded_number_cannot_erase_the_calling_turns_r
     from server.a2a import _record_a2a_telemetry
 
     # 1. The peer's numbers arrive the way they really do: off a live delegation.
-    poisoned = {"result": {"task": {"id": "t1", "status": {"state": "TASK_STATE_COMPLETED"}, "artifacts": [_artifact(metadata=_HOSTILE_COST)]}}}
+    poisoned = {
+        "result": {
+            "task": {
+                "id": "t1",
+                "status": {"state": "TASK_STATE_COMPLETED"},
+                "artifacts": [_artifact(metadata=_HOSTILE_COST)],
+            }
+        }
+    }
     reply, usage = await _dispatch_capturing_usage(monkeypatch, poisoned)
     assert str(reply) == "hi from peer", "the delegation itself must still succeed"
     (peer_row,) = usage
@@ -901,7 +945,15 @@ async def test_an_out_of_range_peer_value_is_clamped_floored_and_reported(monkey
     monkeypatch.setattr(a2a, "_clamp_warned", set())
     caplog.set_level(logging.WARNING, logger="protoagent.plugins.delegates")
 
-    poisoned = {"result": {"task": {"id": "t1", "status": {"state": "TASK_STATE_COMPLETED"}, "artifacts": [_artifact(metadata=_HOSTILE_COST)]}}}
+    poisoned = {
+        "result": {
+            "task": {
+                "id": "t1",
+                "status": {"state": "TASK_STATE_COMPLETED"},
+                "artifacts": [_artifact(metadata=_HOSTILE_COST)],
+            }
+        }
+    }
     _reply, usage = await _dispatch_capturing_usage(monkeypatch, poisoned)
     (row,) = usage
 
@@ -936,7 +988,15 @@ def _wire_body(cost_meta) -> str:
     """The peer's reply as a RAW JSON body — what actually crosses the wire, decoded on
     the way in by the real ``json.loads`` (see :class:`_Resp`)."""
     return json.dumps(
-        {"result": {"task": {"id": "t1", "status": {"state": "TASK_STATE_COMPLETED"}, "artifacts": [_artifact(metadata=cost_meta)]}}}
+        {
+            "result": {
+                "task": {
+                    "id": "t1",
+                    "status": {"state": "TASK_STATE_COMPLETED"},
+                    "artifacts": [_artifact(metadata=cost_meta)],
+                }
+            }
+        }
     )
 
 

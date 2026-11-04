@@ -464,7 +464,9 @@ def _migrated_providers(config) -> list[Provider]:
     route = resolve_model_route(config)
     base, key = route.base_url, route.api_key
     if base or key:
-        out.append(Provider(id="gateway", type=PROVIDER_TYPE_OPENAI_COMPAT, label="Gateway", base_url=base, api_key=key))
+        out.append(
+            Provider(id="gateway", type=PROVIDER_TYPE_OPENAI_COMPAT, label="Gateway", base_url=base, api_key=key)
+        )
     lead = (getattr(config, "model_provider", "") or "").strip().lower()
     if lead in ("anthropic-oauth", "openai-codex"):
         out.append(Provider(id=lead, type=lead, label=_LEGACY_PROVIDER_LABELS[lead]))
@@ -1855,7 +1857,7 @@ class LangGraphConfig:
     # off and why that was wrong: an absent tool and a hidden settings section left the
     # operator with a dead "Add project" button and nothing naming what to configure.
     onboarding_enabled: bool = True
-    onboarding_root: str = ""            # e.g. ~/dev — clones land here; registrations must resolve UNDER it
+    onboarding_root: str = ""  # e.g. ~/dev — clones land here; registrations must resolve UNDER it
     onboarding_allow: list[str] = field(default_factory=list)  # e.g. [github.com/protoLabsAI/*]
     onboarding_write_default: bool = False  # registered read-only unless overridden per-call
     # A local folder OUTSIDE ``root`` (or any, with no root) → an in-chat approval card for that one folder
@@ -2091,7 +2093,9 @@ class LangGraphConfig:
         if not candidate.secrets_manager_enabled:
             return candidate
         return cls.from_dict(
-            merged, secrets=secrets, config_dir=p.parent,
+            merged,
+            secrets=secrets,
+            config_dir=p.parent,
             _plugin_config=candidate.plugin_config,
         )
 
@@ -2147,8 +2151,7 @@ class LangGraphConfig:
         secrets = {k: _mapping(v, f"secrets.yaml: {k}") for k, v in secrets.items()}
         config_dir = Path(config_dir) if config_dir is not None else Path(".")
 
-        plugin_config = (_resolve_plugin_config(data, secrets, config_dir)
-                         if _plugin_config is None else _plugin_config)
+        plugin_config = _resolve_plugin_config(data, secrets, config_dir) if _plugin_config is None else _plugin_config
         model = data.get("model", {})
         subagents = data.get("subagents", {})
         middleware = data.get("middleware", {})
@@ -2216,17 +2219,13 @@ class LangGraphConfig:
             model_favorites=list(model.get("favorites", []) or []),
             providers=_parse_providers(data.get("providers"), secrets),
             max_iterations=model.get("max_iterations", cls.max_iterations),
-            turn_stall_timeout_seconds=model.get(
-                "turn_stall_timeout_seconds", cls.turn_stall_timeout_seconds
-            ),
+            turn_stall_timeout_seconds=model.get("turn_stall_timeout_seconds", cls.turn_stall_timeout_seconds),
             round_nudge_after=model.get("round_nudge_after", cls.round_nudge_after),
             round_hard_cap=model.get("round_hard_cap", cls.round_hard_cap),
             request_timeout=model.get("request_timeout", cls.request_timeout),
             llm_max_retries=model.get("max_retries", cls.llm_max_retries),
             llm_max_inflight=model.get("max_inflight", cls.llm_max_inflight),
-            llm_inflight_queue_timeout=model.get(
-                "inflight_queue_timeout", cls.llm_inflight_queue_timeout
-            ),
+            llm_inflight_queue_timeout=model.get("inflight_queue_timeout", cls.llm_inflight_queue_timeout),
             llm_inflight_interactive_reserve=model.get(
                 "inflight_interactive_reserve", cls.llm_inflight_interactive_reserve
             ),
@@ -2302,16 +2301,12 @@ class LangGraphConfig:
             goal_max_rounds_per_turn=data.get("goal", {}).get("max_rounds_per_turn", cls.goal_max_rounds_per_turn),
             watches_enabled=data.get("watches", {}).get("enabled", cls.watches_enabled),
             watch_interval=float(data.get("watches", {}).get("interval", cls.watch_interval) or cls.watch_interval),
-            watch_keep_terminal_h=float(
-                data.get("watches", {}).get("keep_terminal_h", cls.watch_keep_terminal_h) or 0
-            ),
+            watch_keep_terminal_h=float(data.get("watches", {}).get("keep_terminal_h", cls.watch_keep_terminal_h) or 0),
             room_catchup_max_messages=room.get("catchup_max_messages", cls.room_catchup_max_messages),
             room_catchup_max_chars=room.get("catchup_max_chars", cls.room_catchup_max_chars),
             room_max_rounds=room.get("max_rounds", cls.room_max_rounds),
             soul_self_edit_enabled=soul.get("self_edit_enabled", cls.soul_self_edit_enabled),
-            self_improvement_enabled=bool(
-                self_improvement.get("enabled", cls.self_improvement_enabled)
-            ),
+            self_improvement_enabled=bool(self_improvement.get("enabled", cls.self_improvement_enabled)),
             # `off | propose | auto`, so YAML hands a bare `off` here as False (#3253).
             # The `or "off"` literal below lands that right by coincidence, not the
             # field defaults (auto/propose/propose); yaml_word_for_bool makes it right
@@ -2323,16 +2318,11 @@ class LangGraphConfig:
                 yaml_word_for_bool(self_improvement.get("skills", cls.self_improvement_skills)) or "off"
             ),
             self_improvement_distillation=str(
-                yaml_word_for_bool(self_improvement.get("distillation", cls.self_improvement_distillation))
-                or "off"
+                yaml_word_for_bool(self_improvement.get("distillation", cls.self_improvement_distillation)) or "off"
             ),
             soul_drift_enabled=bool(soul_drift.get("enabled", cls.soul_drift_enabled)),
-            soul_drift_interval_hours=int(
-                soul_drift.get("interval_hours", cls.soul_drift_interval_hours) or 0
-            ),
-            soul_drift_threshold=float(
-                soul_drift.get("threshold", cls.soul_drift_threshold) or 0.0
-            ),
+            soul_drift_interval_hours=int(soul_drift.get("interval_hours", cls.soul_drift_interval_hours) or 0),
+            soul_drift_threshold=float(soul_drift.get("threshold", cls.soul_drift_threshold) or 0.0),
             soul_drift_judge_enabled=bool(
                 (soul_drift.get("judge", {}) or {}).get("enabled", cls.soul_drift_judge_enabled)
             ),
@@ -2359,7 +2349,9 @@ class LangGraphConfig:
                 "retention_days", cls.prompt_capture_retention_days
             ),
             prompt_capture_max_calls=data.get("prompts", {}).get("max_calls", cls.prompt_capture_max_calls),
-            fleet_trace_export_enabled=data.get("telemetry", {}).get("fleet_trace_export", cls.fleet_trace_export_enabled),
+            fleet_trace_export_enabled=data.get("telemetry", {}).get(
+                "fleet_trace_export", cls.fleet_trace_export_enabled
+            ),
             inbox_retention_days=data.get("inbox", {}).get("retention_days", cls.inbox_retention_days),
             activity_retention_days=data.get("activity", {}).get("retention_days", cls.activity_retention_days),
             checkpoint_keep_per_thread=data.get("checkpoint", {}).get(
@@ -2383,9 +2375,7 @@ class LangGraphConfig:
             checkpoint_vacuum_legacy_on_start=data.get("checkpoint", {}).get(
                 "vacuum_legacy_on_start", cls.checkpoint_vacuum_legacy_on_start
             ),
-            checkpoint_prune_on_write=data.get("checkpoint", {}).get(
-                "prune_on_write", cls.checkpoint_prune_on_write
-            ),
+            checkpoint_prune_on_write=data.get("checkpoint", {}).get("prune_on_write", cls.checkpoint_prune_on_write),
             checkpoint_offload_media=data.get("checkpoint", {}).get("offload_media", cls.checkpoint_offload_media),
             checkpoint_alert_db_mb=data.get("checkpoint", {}).get("alert_db_mb", cls.checkpoint_alert_db_mb),
             checkpoint_alert_thread_mb=data.get("checkpoint", {}).get(
@@ -2401,7 +2391,9 @@ class LangGraphConfig:
             knowledge_inject_namespaces=list(knowledge.get("inject_namespaces", []) or []),
             knowledge_inject_min_trust=knowledge.get("inject_min_trust", cls.knowledge_inject_min_trust),
             knowledge_hot_write_confirm=knowledge.get("hot_write_confirm", cls.knowledge_hot_write_confirm),
-            context_budget_pct=_coerce_budget_pct(context.get("budget_pct", cls.context_budget_pct), cls.context_budget_pct),
+            context_budget_pct=_coerce_budget_pct(
+                context.get("budget_pct", cls.context_budget_pct), cls.context_budget_pct
+            ),
             context_prior_sessions=_coerce_prior_sessions(
                 context.get("prior_sessions", cls.context_prior_sessions), cls.context_prior_sessions
             ),
@@ -2437,14 +2429,10 @@ class LangGraphConfig:
             mcp_enabled=mcp.get("enabled", cls.mcp_enabled),
             mcp_servers=list(mcp.get("servers", []) or []),
             mcp_timeout_seconds=mcp.get("timeout_seconds", cls.mcp_timeout_seconds),
-            mcp_call_timeout_seconds=mcp.get(
-                "call_timeout_seconds", cls.mcp_call_timeout_seconds
-            ),
+            mcp_call_timeout_seconds=mcp.get("call_timeout_seconds", cls.mcp_call_timeout_seconds),
             mcp_max_result_chars=mcp.get("max_result_chars", cls.mcp_max_result_chars),
             mcp_denylist=list(mcp.get("denylist", []) or []),
-            mcp_persistent_sessions=bool(
-                mcp.get("persistent_sessions", cls.mcp_persistent_sessions)
-            ),
+            mcp_persistent_sessions=bool(mcp.get("persistent_sessions", cls.mcp_persistent_sessions)),
             mcp_scope=mcp.get("scope", cls.mcp_scope),
             operator_mcp_enabled=operator_mcp.get("enabled", cls.operator_mcp_enabled),
             operator_mcp_tools=list(operator_mcp.get("tools", []) or []),
@@ -2490,9 +2478,7 @@ class LangGraphConfig:
             auth_token=secret_auth_token or auth.get("token", cls.auth_token),
             federation_token=secret_federation_token or auth.get("federation_token", cls.federation_token),
             secrets_manager_enabled=bool(secrets_manager.get("enabled", cls.secrets_manager_enabled)),
-            secrets_manager_provider=str(
-                secrets_manager.get("provider", cls.secrets_manager_provider) or "infisical"
-            ),
+            secrets_manager_provider=str(secrets_manager.get("provider", cls.secrets_manager_provider) or "infisical"),
             secrets_manager_host=str(secrets_manager.get("host", cls.secrets_manager_host) or ""),
             secrets_manager_project_id=str(secrets_manager.get("project_id", cls.secrets_manager_project_id) or ""),
             secrets_manager_environment=str(
@@ -2508,9 +2494,7 @@ class LangGraphConfig:
                 secrets_manager.get("refresh_seconds", cls.secrets_manager_refresh_seconds) or 0
             ),
             secrets_manager_required=bool(secrets_manager.get("required", cls.secrets_manager_required)),
-            secrets_manager_override_env=bool(
-                secrets_manager.get("override_env", cls.secrets_manager_override_env)
-            ),
+            secrets_manager_override_env=bool(secrets_manager.get("override_env", cls.secrets_manager_override_env)),
             secrets_manager_timeout_seconds=float(
                 secrets_manager.get("timeout_seconds", cls.secrets_manager_timeout_seconds) or 10.0
             ),
@@ -2566,9 +2550,7 @@ class LangGraphConfig:
             filesystem_run_requires_approval=data.get("filesystem", {}).get(
                 "run_requires_approval", cls.filesystem_run_requires_approval
             ),
-            filesystem_bypass_allowed=data.get("filesystem", {}).get(
-                "bypass_allowed", cls.filesystem_bypass_allowed
-            ),
+            filesystem_bypass_allowed=data.get("filesystem", {}).get("bypass_allowed", cls.filesystem_bypass_allowed),
             filesystem_run_auto_approve=[
                 str(x) for x in ((data.get("filesystem", {}) or {}).get("run_auto_approve") or []) if x is not None
             ],

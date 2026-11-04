@@ -731,7 +731,7 @@ def _on_tool_end(st: _TurnStreamState, event: dict, name: str, parent_tool_id) -
         comp = extract_component(full)
         if comp is not None:
             yield ("component", comp)
-            coerced = str(strip_component(full))[:_chat()._TOOL_PREVIEW_CHARS]  # card = human prefix
+            coerced = str(strip_component(full))[: _chat()._TOOL_PREVIEW_CHARS]  # card = human prefix
     yield (
         "tool_end",
         {

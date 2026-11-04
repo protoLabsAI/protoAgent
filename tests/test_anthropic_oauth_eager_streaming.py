@@ -72,6 +72,4 @@ def test_no_eager_flag_when_no_tools_declare_stream_args(oauth_model):
 
 def test_collect_stream_args_names_ignores_non_tools():
     # A bare callable/dict with no .metadata must not crash or be counted.
-    assert ao._stream_args_tool_names([show_artifact, get_weather, {"name": "raw"}, lambda x: x]) == {
-        "show_artifact"
-    }
+    assert ao._stream_args_tool_names([show_artifact, get_weather, {"name": "raw"}, lambda x: x]) == {"show_artifact"}

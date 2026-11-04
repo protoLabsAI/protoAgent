@@ -1072,7 +1072,13 @@ async def test_unfenced_goal_turn_still_runs_the_other_short_circuits(env, monke
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("message", "noticed"),
-    [("/synthesizer do it", True), ("@proto hi", True), ("/typo", True), ("keep going", False), ("/usr/bin is odd", False)],
+    [
+        ("/synthesizer do it", True),
+        ("@proto hi", True),
+        ("/typo", True),
+        ("keep going", False),
+        ("/usr/bin is odd", False),
+    ],
 )
 async def test_fenced_goal_turn_says_commands_are_paused(env, monkeypatch, _shortcuts, message, noticed):
     """A command the goal's scope keeps from running is announced, not silently turned
@@ -1117,7 +1123,9 @@ async def test_a_deny_all_goal_gates_the_pre_turn_chain(env, monkeypatch, tmp_pa
     from graph.goals.store import GoalStore
 
     (tmp_path / "s.json").write_text(
-        json.dumps({"session_id": "s", "condition": "c", "verifier": {"type": "llm"}, "status": "active", "fence": None})
+        json.dumps(
+            {"session_id": "s", "condition": "c", "verifier": {"type": "llm"}, "status": "active", "fence": None}
+        )
     )
     c = GoalController(config=None, store=GoalStore(base_dir=str(tmp_path)))
     assert c.active_goal("s").fence == [FENCE_DENY_ALL]

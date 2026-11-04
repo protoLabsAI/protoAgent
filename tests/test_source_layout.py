@@ -26,8 +26,7 @@ print(json.dumps({
     'docs': str(plugins.docs.corpus.docs_root()),
 }))
 """
-    run = subprocess.run([sys.executable, "-I", "-c", code], cwd=tmp_path,
-                         capture_output=True, text=True, timeout=30)
+    run = subprocess.run([sys.executable, "-I", "-c", code], cwd=tmp_path, capture_output=True, text=True, timeout=30)
     assert run.returncode == 0, run.stderr
     result = json.loads(run.stdout)
     assert Path(result["graph"]) == ROOT / "src/graph/__init__.py"
@@ -37,11 +36,17 @@ print(json.dumps({
 
 
 def test_module_cli_from_a_neutral_cwd(tmp_path):
-    env = {**os.environ, "PROTOAGENT_BOX_ROOT": str(tmp_path / "box"),
-           "PROTOAGENT_HOME": str(tmp_path / "instance")}
+    env = {**os.environ, "PROTOAGENT_BOX_ROOT": str(tmp_path / "box"), "PROTOAGENT_HOME": str(tmp_path / "instance")}
     # Isolated mode ignores PYTHONUTF8; match the pipe encoding explicitly on Windows.
-    run = subprocess.run([sys.executable, "-I", "-X", "utf8", "-m", "server", "--help"], cwd=tmp_path,
-                         env=env, capture_output=True, text=True, encoding="utf-8", timeout=30)
+    run = subprocess.run(
+        [sys.executable, "-I", "-X", "utf8", "-m", "server", "--help"],
+        cwd=tmp_path,
+        env=env,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        timeout=30,
+    )
     assert run.returncode == 0, run.stderr
     assert "protoagent" in run.stdout.lower()
 
@@ -51,16 +56,20 @@ def test_openshell_launcher_finds_sources_without_editable_install(tmp_path):
     declared = re.search(r"--env PYTHONPATH=(\S+)", launcher).group(1)
     # Map the image's copied checkout to this checkout; -S removes the editable
     # .pth and site packages so they cannot hide an incomplete supervisor override.
-    roots = [str(ROOT / p.removeprefix("/opt/protoagent").lstrip("/"))
-             for p in declared.split(":")]
+    roots = [str(ROOT / p.removeprefix("/opt/protoagent").lstrip("/")) for p in declared.split(":")]
     code = """
 import importlib.util, json
 print(json.dumps({name: importlib.util.find_spec(name).origin
                   for name in ('server', 'graph', 'plugins.docs')}))
 """
-    run = subprocess.run([sys.executable, "-S", "-X", "utf8", "-c", code], cwd=tmp_path,
-                         env={**os.environ, "PYTHONPATH": os.pathsep.join(roots)},
-                         capture_output=True, encoding="utf-8", timeout=30)
+    run = subprocess.run(
+        [sys.executable, "-S", "-X", "utf8", "-c", code],
+        cwd=tmp_path,
+        env={**os.environ, "PYTHONPATH": os.pathsep.join(roots)},
+        capture_output=True,
+        encoding="utf-8",
+        timeout=30,
+    )
     assert run.returncode == 0, run.stderr
     paths = json.loads(run.stdout)
     assert Path(paths["server"]) == ROOT / "src/server/__init__.py"

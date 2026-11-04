@@ -109,9 +109,7 @@ def test_test_failure_fails_the_full_gate(gate, capsys):
 
 
 def test_missing_uv_is_a_warned_skip_not_a_failure(gate, monkeypatch, capsys):
-    monkeypatch.setattr(
-        gate, "find_tool", lambda name: None if name == "uv" else f"/fake/bin/{name}"
-    )
+    monkeypatch.setattr(gate, "find_tool", lambda name: None if name == "uv" else f"/fake/bin/{name}")
     assert gate.run_gate(lint_only=True) == 0
     assert not any("lock" in c for c in gate._runner.calls)  # the uv step never ran
     out = capsys.readouterr().out
@@ -119,9 +117,7 @@ def test_missing_uv_is_a_warned_skip_not_a_failure(gate, monkeypatch, capsys):
 
 
 def test_missing_ruff_is_a_hard_failure(gate, monkeypatch, capsys):
-    monkeypatch.setattr(
-        gate, "find_tool", lambda name: None if name == "ruff" else f"/fake/bin/{name}"
-    )
+    monkeypatch.setattr(gate, "find_tool", lambda name: None if name == "ruff" else f"/fake/bin/{name}")
     assert gate.run_gate() == 1
     assert gate._runner.calls == []  # fails before running anything
     out = capsys.readouterr().out

@@ -225,8 +225,10 @@ def test_reviewer_skill_writes_never_report_unconfirmed_index_mutations(tmp_path
     original_delete = idx.delete_skill
     monkeypatch.setattr(idx, "delete_skill", lambda _skill_id: False)
     editors = _by_name(_build_skill_editor_tools())
+
     def failed_replace(*args):
         raise RuntimeError("index replacement failed")
+
     monkeypatch.setattr(idx, "replace_skill", failed_replace)
 
     update = editors["update_skill"].invoke(
@@ -319,9 +321,7 @@ def test_load_skill_returns_full_procedure(tmp_path, monkeypatch):
 def test_load_skill_unknown_name_lists_available(tmp_path, monkeypatch):
     idx = SkillsIndex(str(tmp_path / "s.db"))
     monkeypatch.setattr(STATE, "skills_index", idx)
-    _by_name(_build_curation_tools())["save_skill"].invoke(
-        {"name": "Real skill", "description": "d", "body": "b"}
-    )
+    _by_name(_build_curation_tools())["save_skill"].invoke({"name": "Real skill", "description": "d", "body": "b"})
     out = load_skill.invoke({"name": "typo-skill"})
     assert "No skill named" in out
     assert "Real skill" in out  # recovers by offering the discoverable set

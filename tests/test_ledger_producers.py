@@ -331,9 +331,7 @@ async def test_a_ledger_failure_cannot_break_a_background_spawn(ledger_db, tmp_p
     monkeypatch.setattr(ledger_mod, "record_delegation", _boom)
 
     # The work matters more than the record of it.
-    job_id = await mgr.spawn(
-        origin_session="s1", subagent_type="researcher", description="d", prompt="p"
-    )
+    job_id = await mgr.spawn(origin_session="s1", subagent_type="researcher", description="d", prompt="p")
     assert job_id
 
 
@@ -359,9 +357,7 @@ async def test_a_background_edge_is_closed_out_when_the_job_lands(ledger_db, tmp
         return None
 
     monkeypatch.setattr(mgr, "_fire", _fire)
-    job_id = await mgr.spawn(
-        origin_session="s1", subagent_type="researcher", description="dig", prompt="go"
-    )
+    job_id = await mgr.spawn(origin_session="s1", subagent_type="researcher", description="dig", prompt="go")
 
     # At dispatch: recorded, but the outcome is "dispatched", not "succeeded".
     assert ledger_db.recent()[0]["duration_ms"] == 0
@@ -388,9 +384,7 @@ async def test_a_failed_background_job_settles_the_edge_as_failed(ledger_db, tmp
         return None
 
     monkeypatch.setattr(mgr, "_fire", _fire)
-    job_id = await mgr.spawn(
-        origin_session="s1", subagent_type="researcher", description="doomed", prompt="go"
-    )
+    job_id = await mgr.spawn(origin_session="s1", subagent_type="researcher", description="doomed", prompt="go")
     store.mark_complete(job_id, "failed", "the subagent exploded")
 
     row = ledger_db.recent()[0]
@@ -398,9 +392,7 @@ async def test_a_failed_background_job_settles_the_edge_as_failed(ledger_db, tmp
     assert "exploded" in row["error"]
 
 
-async def test_a_canceled_background_job_is_not_recorded_as_a_failure(
-    ledger_db, tmp_path, monkeypatch
-):
+async def test_a_canceled_background_job_is_not_recorded_as_a_failure(ledger_db, tmp_path, monkeypatch):
     # Same rule the dispatch path follows: an operator stopping work says nothing about
     # the delegate.
     from background.manager import BackgroundManager
@@ -415,17 +407,13 @@ async def test_a_canceled_background_job_is_not_recorded_as_a_failure(
         return None
 
     monkeypatch.setattr(mgr, "_fire", _fire)
-    job_id = await mgr.spawn(
-        origin_session="s1", subagent_type="researcher", description="stopped", prompt="go"
-    )
+    job_id = await mgr.spawn(origin_session="s1", subagent_type="researcher", description="stopped", prompt="go")
     store.mark_complete(job_id, "canceled", "Canceled.")
 
     assert ledger_db.recent()[0]["outcome"] == "cancelled"
 
 
-async def test_a_redundant_settle_cannot_restate_a_recorded_outcome(
-    ledger_db, tmp_path, monkeypatch
-):
+async def test_a_redundant_settle_cannot_restate_a_recorded_outcome(ledger_db, tmp_path, monkeypatch):
     """`mark_complete` is idempotent and BOTH the manager and the A2A terminal hook call
     it, so a second settle must not overwrite the outcome the first one recorded."""
     from background.manager import BackgroundManager
@@ -440,9 +428,7 @@ async def test_a_redundant_settle_cannot_restate_a_recorded_outcome(
         return None
 
     monkeypatch.setattr(mgr, "_fire", _fire)
-    job_id = await mgr.spawn(
-        origin_session="s1", subagent_type="researcher", description="d", prompt="p"
-    )
+    job_id = await mgr.spawn(origin_session="s1", subagent_type="researcher", description="d", prompt="p")
     assert store.mark_complete(job_id, "failed", "real failure") is True
     assert store.mark_complete(job_id, "completed", "late no-op") is False
 
@@ -481,8 +467,13 @@ async def test_a_background_edge_settles_with_the_turns_cost(ledger_db, tmp_path
     for cost in (0.42, 0.0):
         job_id = await mgr.spawn(origin_session="s1", subagent_type="researcher", description=f"c{cost}", prompt="go")
         outcome = TurnOutcome(
-            task_id="t", context_id=f"background:{job_id}", state="completed", text="done",
-            cost_usd=cost, origin="background", trigger=job_id,
+            task_id="t",
+            context_id=f"background:{job_id}",
+            state="completed",
+            text="done",
+            cost_usd=cost,
+            origin="background",
+            trigger=job_id,
         )
         a2a._handle_background_terminal(outcome)
         costs[cost] = next(r["cost_usd"] for r in ledger_db.recent() if r["task_id"] == job_id)

@@ -42,11 +42,22 @@ def add_parser(sub: Any, common: Any) -> None:
     pf.add_argument("--kind", choices=("harness", "model"), help="only this channel")
     pf.add_argument("--severity", choices=("minor", "major"), help="at least this severe")
     pf.add_argument("--since", metavar="WINDOW", help="seen within a window — 12h, 7d, 2w — or an ISO date")
-    pf.add_argument("--agent", action="append", metavar="NAME", help="only this member (repeatable; `host` is the hub itself)")
+    pf.add_argument(
+        "--agent", action="append", metavar="NAME", help="only this member (repeatable; `host` is the hub itself)"
+    )
     pf.add_argument("--resolved", action="store_true", help="include entries already resolved (default: open only)")
-    pf.add_argument("--raw", action="store_true", help="one row per recorded entry, not per signal (repeats are not collapsed)")
-    pf.add_argument("--limit", type=int, default=100, metavar="N", help="at most N rows per agent (default 100, max 500)")
-    pf.add_argument("-v", "--detail", action="store_true", help="print each row's detail (the reproduction and what would have helped)")
+    pf.add_argument(
+        "--raw", action="store_true", help="one row per recorded entry, not per signal (repeats are not collapsed)"
+    )
+    pf.add_argument(
+        "--limit", type=int, default=100, metavar="N", help="at most N rows per agent (default 100, max 500)"
+    )
+    pf.add_argument(
+        "-v",
+        "--detail",
+        action="store_true",
+        help="print each row's detail (the reproduction and what would have helped)",
+    )
     common(pf, top=False)
     fsub = pf.add_subparsers(dest="friction_cmd", required=False)
     pr = fsub.add_parser("resolve", help="mark a signal resolved (or --reopen) on the named agents")
@@ -145,7 +156,11 @@ def _short(err: Exception) -> str:
         return "rejected the credential the hub attached"
     if isinstance(err, deckhub.HubRequestError):
         # A member on a core that predates the friction plugin has no ledger route at all.
-        return "no friction ledger (member predates the plugin, or has it disabled)" if err.status == 404 else str(err.detail)
+        return (
+            "no friction ledger (member predates the plugin, or has it disabled)"
+            if err.status == 404
+            else str(err.detail)
+        )
     return str(err)
 
 
@@ -159,11 +174,15 @@ def shared_signals(results: list[dict]) -> list[dict]:
             sid = str(i.get("id") or "")
             if not sid:
                 continue
-            row = seen.setdefault(sid, {"id": sid, "kind": i.get("kind", ""), "summary": i.get("summary", ""), "agents": [], "count": 0})
+            row = seen.setdefault(
+                sid, {"id": sid, "kind": i.get("kind", ""), "summary": i.get("summary", ""), "agents": [], "count": 0}
+            )
             if r["name"] not in row["agents"]:
                 row["agents"].append(r["name"])
             row["count"] += int(i.get("count") or 1)
-    return sorted((s for s in seen.values() if len(s["agents"]) > 1), key=lambda s: (len(s["agents"]), s["count"]), reverse=True)
+    return sorted(
+        (s for s in seen.values() if len(s["agents"]) > 1), key=lambda s: (len(s["agents"]), s["count"]), reverse=True
+    )
 
 
 def collect(
@@ -176,7 +195,8 @@ def collect(
     since = parse_since(args.since) if args.since else None
     readable, skipped, unmatched = _targets(roster, args.agent)
     results: list[dict] = [
-        {"name": n, "slug": n, "ok": False, "error": "no such member (`protoagent fleet ls` lists them)", "items": []} for n in unmatched
+        {"name": n, "slug": n, "ok": False, "error": "no such member (`protoagent fleet ls` lists them)", "items": []}
+        for n in unmatched
     ]
     for slug, row in readable:
         name = str(row.get("label") or row.get("name") or slug)
@@ -215,7 +235,9 @@ def render(data: dict, args: argparse.Namespace, header: str) -> None:
             print(f"  ✗ {r['name']}: {r['error']}")
             continue
         n = r["total"]
-        print(f"  {r['name']} — {n} {'signal' if n == 1 and not args.raw else ('entry' if args.raw and n == 1 else ('entries' if args.raw else 'signals'))}")
+        print(
+            f"  {r['name']} — {n} {'signal' if n == 1 and not args.raw else ('entry' if args.raw and n == 1 else ('entries' if args.raw else 'signals'))}"
+        )
         for i in r["items"]:
             print(_line(i))
             if args.detail and i.get("detail"):
@@ -228,8 +250,10 @@ def render(data: dict, args: argparse.Namespace, header: str) -> None:
     if data["skipped"]:
         names = ", ".join(f"{s['name']} ({s['reason']})" for s in data["skipped"])
         print(f"\n  not read: {names}", file=sys.stderr)
-    print(f"\n  {total} {'row' if total == 1 else 'rows'} across {sum(1 for r in results if r['ok'])} agent(s)"
-          + (f" · {sum(1 for r in results if not r['ok'])} unreachable" if any(not r['ok'] for r in results) else ""))
+    print(
+        f"\n  {total} {'row' if total == 1 else 'rows'} across {sum(1 for r in results if r['ok'])} agent(s)"
+        + (f" · {sum(1 for r in results if not r['ok'])} unreachable" if any(not r["ok"] for r in results) else "")
+    )
 
 
 # ── resolve ──────────────────────────────────────────────────────────────────
@@ -241,7 +265,9 @@ def resolve(client: Any, roster: list[dict], args: argparse.Namespace) -> list[d
     precisely the row that was listed, never a neighbour whose text overlaps."""
     names = args.agent or None
     readable, _, unmatched = _targets(roster, names)
-    out: list[dict] = [{"name": n, "ok": False, "error": "no such member (`protoagent fleet ls` lists them)"} for n in unmatched]
+    out: list[dict] = [
+        {"name": n, "ok": False, "error": "no such member (`protoagent fleet ls` lists them)"} for n in unmatched
+    ]
     for slug, row in readable:
         name = str(row.get("label") or row.get("name") or slug)
         try:
@@ -250,12 +276,23 @@ def resolve(client: Any, roster: list[dict], args: argparse.Namespace) -> list[d
             hit = next((i for i in items if str(i.get("id")) == args.id), None)
             if hit is None:
                 if names:  # named explicitly → say so; a sweep just skips agents without it
-                    out.append({"name": name, "ok": False, "error": f"no {'resolved' if args.reopen else 'open'} signal {args.id}"})
+                    out.append(
+                        {
+                            "name": name,
+                            "ok": False,
+                            "error": f"no {'resolved' if args.reopen else 'open'} signal {args.id}",
+                        }
+                    )
                 continue
             res = client.member_post(
                 slug,
                 "/api/friction/resolve",
-                {"summary": hit.get("summary"), "kind": hit.get("kind"), "reason": args.reason, "resolved": not args.reopen},
+                {
+                    "summary": hit.get("summary"),
+                    "kind": hit.get("kind"),
+                    "reason": args.reason,
+                    "resolved": not args.reopen,
+                },
             )
         except deckhub.HubError as exc:
             out.append({"name": name, "ok": False, "error": _short(exc)})
@@ -263,5 +300,13 @@ def resolve(client: Any, roster: list[dict], args: argparse.Namespace) -> list[d
         if isinstance(res, dict) and res.get("error"):
             out.append({"name": name, "ok": False, "error": str(res["error"])})
             continue
-        out.append({"name": name, "ok": True, "changed": int((res or {}).get("changed") or 0), "summary": hit.get("summary"), "reopened": args.reopen})
+        out.append(
+            {
+                "name": name,
+                "ok": True,
+                "changed": int((res or {}).get("changed") or 0),
+                "summary": hit.get("summary"),
+                "reopened": args.reopen,
+            }
+        )
     return out

@@ -70,8 +70,14 @@ def _evict_stale(incoming: str) -> None:
 
 
 def enqueue(
-    session_id: str, text: str, msg_id: str | None = None, *, fence=None,
-    images: list[tuple[str, str]] | None = None, refs: str = "", vision: bool = False,
+    session_id: str,
+    text: str,
+    msg_id: str | None = None,
+    *,
+    fence=None,
+    images: list[tuple[str, str]] | None = None,
+    refs: str = "",
+    vision: bool = False,
 ) -> str | None:
     """Queue a user message for ``session_id``'s running turn. Returns its id (the
     client's if supplied, else a fresh one), or None on a blank message.

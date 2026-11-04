@@ -142,8 +142,7 @@ class MemoryCeiling:
             return "none", ""  # already reported this episode
         self._breached = True
         msg = (
-            f"[memory] RSS {rss_bytes / _MB:.0f} MB crossed the configured ceiling "
-            f"of {self.ceiling_bytes / _MB:.0f} MB"
+            f"[memory] RSS {rss_bytes / _MB:.0f} MB crossed the configured ceiling of {self.ceiling_bytes / _MB:.0f} MB"
         )
         if self.exit_on_breach:
             return "exit", f"{msg} — exiting {EXIT_CODE} so the supervisor restarts this process"

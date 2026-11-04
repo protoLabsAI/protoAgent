@@ -45,11 +45,21 @@ import httpx
 
 from deck import hub as deckhub
 
-TOPICS = ("chat.progress", "turn.started", "turn.finished", "turn.usage", "turn.input_required", "turn.resumed", "chat.resumed")
+TOPICS = (
+    "chat.progress",
+    "turn.started",
+    "turn.finished",
+    "turn.usage",
+    "turn.input_required",
+    "turn.resumed",
+    "chat.resumed",
+)
 _READ_S = 60.0  # keepalives arrive every 15 s; a minute of silence means the socket is dead
 _BACKOFF_S = (1.0, 2.0, 5.0, 10.0, 20.0)
 _MAX_PENDING = 5000  # events awaiting the UI, which drains 500 every half second
-_REPLAY_WINDOW_S = 1.0  # after a reconnect with ?since=, the ring's catch-up arrives at once: those frames are REPLAYED, not live
+_REPLAY_WINDOW_S = (
+    1.0  # after a reconnect with ?since=, the ring's catch-up arrives at once: those frames are REPLAYED, not live
+)
 
 
 @dataclass(frozen=True)
@@ -160,16 +170,24 @@ class MemberEvents:
     def _once(self) -> Iterator[Event]:
         params = self._params()
         replaying = bool(params and "since" in params)
-        with self._client.stream("GET", self.path, headers=self._headers(), params=params, timeout=httpx.Timeout(_READ_S, connect=5.0)) as r:
+        with self._client.stream(
+            "GET", self.path, headers=self._headers(), params=params, timeout=httpx.Timeout(_READ_S, connect=5.0)
+        ) as r:
             self._active = r
             try:
                 if self._stop.is_set():
                     return  # stop() landed while we were connecting: nothing to wake, just leave
                 if r.status_code in (401, 403):
-                    raise deckhub.MemberUnauthorized(self.base_url, self.slug, f"member {self.slug!r} rejected the credential the hub attached")
+                    raise deckhub.MemberUnauthorized(
+                        self.base_url, self.slug, f"member {self.slug!r} rejected the credential the hub attached"
+                    )
                 if r.status_code >= 300:
                     r.read()  # a streaming response must be read before its text is available
-                    detail = f"redirect to {r.headers.get('location', '?')!r} not followed" if r.status_code < 400 else (r.text or "")[:200]
+                    detail = (
+                        f"redirect to {r.headers.get('location', '?')!r} not followed"
+                        if r.status_code < 400
+                        else (r.text or "")[:200]
+                    )
                     raise deckhub.HubRequestError(self.base_url, r.status_code, detail)
                 self.connected = True
                 opened = time.monotonic()
@@ -234,7 +252,16 @@ class Attendance(MemberEvents):
 
     _FINAL_STATUSES = (404,)  # a member without the route (an older version): retrying will not grow one
 
-    def __init__(self, hub_url: str, token: str | None, slug: str, session_id: str, *, transport: httpx.BaseTransport | None = None, insecure_http: bool = False):
+    def __init__(
+        self,
+        hub_url: str,
+        token: str | None,
+        slug: str,
+        session_id: str,
+        *,
+        transport: httpx.BaseTransport | None = None,
+        insecure_http: bool = False,
+    ):
         super().__init__(hub_url, token, slug, transport=transport, insecure_http=insecure_http)
         self.session_id = session_id
         self.path = deckhub.HubClient.member_path(slug, "/api/chat/attend")
@@ -263,7 +290,14 @@ class FleetEvents:
     """One reader thread per member, one queue for the UI. ``watch(slugs)`` reconciles the
     set of members being followed (start the new, stop the gone)."""
 
-    def __init__(self, hub_client: deckhub.HubClient, *, insecure_http: bool = False, transport: httpx.BaseTransport | None = None, max_pending: int = _MAX_PENDING):
+    def __init__(
+        self,
+        hub_client: deckhub.HubClient,
+        *,
+        insecure_http: bool = False,
+        transport: httpx.BaseTransport | None = None,
+        max_pending: int = _MAX_PENDING,
+    ):
         self._hub = hub_client
         self._insecure = insecure_http
         self._transport = transport
@@ -277,7 +311,9 @@ class FleetEvents:
         self._lock = threading.Lock()
 
     def _spawn(self, slug: str) -> None:
-        reader = MemberEvents(self._hub.url, self._hub._token, slug, transport=self._transport, insecure_http=self._insecure)
+        reader = MemberEvents(
+            self._hub.url, self._hub._token, slug, transport=self._transport, insecure_http=self._insecure
+        )
 
         def run() -> None:
             try:
@@ -310,7 +346,10 @@ class FleetEvents:
 
     def status(self) -> dict[str, dict]:
         with self._lock:
-            return {slug: {"connected": r.connected, "last_seq": r.last_seq, "error": r.last_error} for slug, (r, _) in self._readers.items()}
+            return {
+                slug: {"connected": r.connected, "last_seq": r.last_seq, "error": r.last_error}
+                for slug, (r, _) in self._readers.items()
+            }
 
     def drain(self, limit: int = 500) -> list[Event]:
         out: list[Event] = []
@@ -385,10 +424,27 @@ def parse_progress(data: dict) -> Progress | None:
         author = str(data.get("author") or "")
         addressed = str(data.get("addressed_to") or "")
         if mid and not author and addressed:
-            return Progress(session, task_id, "ask", tool_id=mid, addressed_to=addressed, text=str(data.get("text") or ""), control=control)
+            return Progress(
+                session,
+                task_id,
+                "ask",
+                tool_id=mid,
+                addressed_to=addressed,
+                text=str(data.get("text") or ""),
+                control=control,
+            )
         if not mid or not author:
             return None
-        return Progress(session, task_id, "room", tool_id=mid, author=author, text=str(data.get("text") or ""), ok=data.get("ok") is not False, control=control)
+        return Progress(
+            session,
+            task_id,
+            "room",
+            tool_id=mid,
+            author=author,
+            text=str(data.get("text") or ""),
+            ok=data.get("ok") is not False,
+            control=control,
+        )
     if phase == "steer_consumed":
         items = [
             {"id": str(i["id"]), "text": str(i["text"])}

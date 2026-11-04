@@ -438,7 +438,10 @@ def test_an_explicit_kwarg_still_wins_over_the_pinned_default():
     # speak Responses and passes `use_responses_api=True`. Pinning the default must not
     # disarm that path.
     llm = _ReasoningChatOpenAI(
-        model="gpt-5.3-codex", api_key="sk-test", base_url="https://chatgpt.com/backend-api/codex", use_responses_api=True
+        model="gpt-5.3-codex",
+        api_key="sk-test",
+        base_url="https://chatgpt.com/backend-api/codex",
+        use_responses_api=True,
     )
     assert llm.use_responses_api is True
 

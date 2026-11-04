@@ -144,7 +144,14 @@ def test_download_verified_rejects_hash_mismatch(monkeypatch):
 def test_install_end_to_end_unpacks_pins_and_syspaths(box, monkeypatch):
     data = _make_wheel(module="demolib")
     sha = hashlib.sha256(data).hexdigest()
-    monkeypatch.setattr(wi, "_select", lambda n, s: ("1.0.0", {"filename": f"{n}-1.0.0-py3-none-any.whl", "url": "https://f/w.whl", "digests": {"sha256": sha}}))
+    monkeypatch.setattr(
+        wi,
+        "_select",
+        lambda n, s: (
+            "1.0.0",
+            {"filename": f"{n}-1.0.0-py3-none-any.whl", "url": "https://f/w.whl", "digests": {"sha256": sha}},
+        ),
+    )
     monkeypatch.setattr(wi, "_deps_of", lambda n, v: [])
     import graph.plugins.installer as inst
 

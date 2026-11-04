@@ -458,13 +458,7 @@ async def test_bridged_calls_land_in_audit_and_metrics(tmp_path, monkeypatch):
     probe = AuditLogger(tmp_path / "audit.jsonl")
     monkeypatch.setattr("observability.audit.audit_logger", probe)
 
-    code = (
-        "print(tools.echo_tool(text='ok'))\n"
-        "try:\n"
-        "    tools.boom_tool()\n"
-        "except RuntimeError:\n"
-        "    print('caught')\n"
-    )
+    code = "print(tools.echo_tool(text='ok'))\ntry:\n    tools.boom_tool()\nexcept RuntimeError:\n    print('caught')\n"
     out = await run_code(code, _TOOL_MAP, session_id="sess-ptc-test")
     # The child's stdout is platform-newlined — CRLF on Windows (the native CI
     # lane caught exactly this). Normalize for the assertion; the engine
@@ -495,9 +489,7 @@ async def test_fence_blocks_bridged_call_outside_allowlist():
 
 @pytest.mark.asyncio
 async def test_fence_allows_listed_tool():
-    out = await run_code(
-        "print(tools.echo_tool(text='ok'))", _TOOL_MAP, fence=frozenset({"execute_code", "echo_tool"})
-    )
+    out = await run_code("print(tools.echo_tool(text='ok'))", _TOOL_MAP, fence=frozenset({"execute_code", "echo_tool"}))
     assert out == "OK"
 
 

@@ -30,9 +30,7 @@ from langchain.agents.middleware import AgentMiddleware
 # Task-local handoff to PromptCaptureMiddleware: the inner wrap sets it before
 # the model call, the outer capture pops it after the handler returns — same
 # call stack, so concurrent calls in other tasks can't cross wires.
-_WIRE_SYSTEM: contextvars.ContextVar[str | None] = contextvars.ContextVar(
-    "protoagent_wire_system", default=None
-)
+_WIRE_SYSTEM: contextvars.ContextVar[str | None] = contextvars.ContextVar("protoagent_wire_system", default=None)
 
 
 def pop_wire_system() -> str | None:
@@ -49,9 +47,7 @@ def _flatten(content) -> str:
     if isinstance(content, str):
         return content
     if isinstance(content, list):
-        return "".join(
-            b.get("text", "") for b in content if isinstance(b, dict) and b.get("type") == "text"
-        )
+        return "".join(b.get("text", "") for b in content if isinstance(b, dict) and b.get("type") == "text")
     return ""
 
 

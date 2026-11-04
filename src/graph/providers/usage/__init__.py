@@ -83,10 +83,7 @@ def _status(used_pct: float, node: dict[str, Any]) -> str:
 def usable_for(account: Account, model: str | None) -> bool:
     if account.status == "unknown":
         return True
-    return not any(
-        window.status == "blocked" and window.applies_to(model)
-        for window in account.windows
-    )
+    return not any(window.status == "blocked" and window.applies_to(model) for window in account.windows)
 
 
 def _unknown(account: Account, note: str, *, retry_after: int | None = None) -> Account:

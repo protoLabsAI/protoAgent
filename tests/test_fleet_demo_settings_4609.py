@@ -57,13 +57,7 @@ def test_defaults_hold_when_the_tools_section_is_absent_entirely(tmp_path):
 
 
 def test_keys_parse_explicit_values_from_yaml(tmp_path):
-    body = (
-        "tools:\n"
-        "  fleet_demo:\n"
-        "    enabled: true\n"
-        "    max_live: 5\n"
-        "    ttl_hours: 48\n"
-    )
+    body = "tools:\n  fleet_demo:\n    enabled: true\n    max_live: 5\n    ttl_hours: 48\n"
     cfg = LangGraphConfig.from_yaml(_write_yaml(tmp_path, body))
     assert cfg.tools_fleet_demo_enabled is True
     assert cfg.tools_fleet_demo_max_live == 5
@@ -88,8 +82,14 @@ async def test_config_max_live_and_ttl_hours_reach_create_demo(monkeypatch):
 
     def _fake_create(archetype, model_connection, model, name=None, *, created_by, max_live, ttl_hours):
         captured.update(max_live=max_live, ttl_hours=ttl_hours)
-        return {"slug": "demo-x", "port": 7872, "token": "t", "archetype_ref": "basic",
-                "plugin_versions": {}, "created_at": "now"}
+        return {
+            "slug": "demo-x",
+            "port": 7872,
+            "token": "t",
+            "archetype_ref": "basic",
+            "plugin_versions": {},
+            "created_at": "now",
+        }
 
     monkeypatch.setattr(demo, "create_demo", _fake_create)
     tools = _tools(_config(tools_fleet_demo_max_live=7, tools_fleet_demo_ttl_hours=12))

@@ -89,8 +89,15 @@ def test_a_module_loaded_only_at_render_time_fails_the_self_check(tmp_path):
     with `import_module` on the first wide/non-ASCII cell — a PyInstaller scan cannot see it,
     and `import deck.app` never touches it. Blocked, the import still succeeds and the
     self-check must fail."""
-    env = dict(os.environ, PYTHONPATH=os.pathsep.join((str(REPO / "src"), str(REPO))), PROTOAGENT_HOME=str(tmp_path / "inst"), PROTOAGENT_BOX_ROOT=str(tmp_path / "box"))
-    out = subprocess.run([sys.executable, "-c", _BLOCK_RICH_TABLES], env=env, capture_output=True, text=True, cwd=str(REPO), timeout=120)
+    env = dict(
+        os.environ,
+        PYTHONPATH=os.pathsep.join((str(REPO / "src"), str(REPO))),
+        PROTOAGENT_HOME=str(tmp_path / "inst"),
+        PROTOAGENT_BOX_ROOT=str(tmp_path / "box"),
+    )
+    out = subprocess.run(
+        [sys.executable, "-c", _BLOCK_RICH_TABLES], env=env, capture_output=True, text=True, cwd=str(REPO), timeout=120
+    )
     assert out.stdout.strip().splitlines()[-1:] == ["rc 1"], (out.stdout[-500:], out.stderr[-1500:])
     assert "rich._unicode_data.unicode" in out.stderr
 
@@ -100,6 +107,12 @@ def test_the_desktop_smoke_passes_against_the_dev_server():
     """`scripts/fleet_deck_smoke.py` without `--bin` runs `python -m server` — the same
     checks the desktop build runs against the frozen binary, so a check that could never
     pass fails here, not on a paid macOS/Windows leg."""
-    out = subprocess.run([sys.executable, str(REPO / "scripts" / "fleet_deck_smoke.py"), "--timeout", "120"], capture_output=True, text=True, cwd=str(REPO), timeout=600)
+    out = subprocess.run(
+        [sys.executable, str(REPO / "scripts" / "fleet_deck_smoke.py"), "--timeout", "120"],
+        capture_output=True,
+        text=True,
+        cwd=str(REPO),
+        timeout=600,
+    )
     assert out.returncode == 0, (out.stdout[-3000:], out.stderr[-1500:])
     assert "fleet deck smoke: 4/4 passed" in out.stdout

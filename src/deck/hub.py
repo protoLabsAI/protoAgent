@@ -86,7 +86,9 @@ _LOOPBACK_HOSTS = frozenset({"127.0.0.1", "::1", "localhost"})
 _TIMEOUT = httpx.Timeout(5.0, connect=2.0)
 _PROBE_TIMEOUT = httpx.Timeout(2.0, connect=1.0)
 _LIFECYCLE_TIMEOUT = httpx.Timeout(60.0, connect=2.0)
-_CREATE_TIMEOUT = httpx.Timeout(330.0, connect=5.0)  # a bundle create: the hub's 300 s clone/install budget, then the start
+_CREATE_TIMEOUT = httpx.Timeout(
+    330.0, connect=5.0
+)  # a bundle create: the hub's 300 s clone/install budget, then the start
 _DOWN_PER_MEMBER_S = 15.0
 
 
@@ -371,7 +373,9 @@ def discover_hubs(*, explicit_url: str | None = None) -> list[HubCandidate]:
             iroot = Path(hb["instance_root"]) if hb.get("instance_root") else None
             if is_member_root(iroot):
                 continue  # a member's heartbeat — its hub is another record (or the default port)
-            beats.append(HubCandidate(_loopback(port), "heartbeat", instance_root=iroot, identity=hb["identity"], pid=hb["pid"]))
+            beats.append(
+                HubCandidate(_loopback(port), "heartbeat", instance_root=iroot, identity=hb["identity"], pid=hb["pid"])
+            )
     # A box root's own instance (the desktop app, the default `~/.protoagent`) is THE hub for
     # that root; a NAMED instance beneath it (`~/.protoagent/dev`, a sandbox from
     # scripts/dev.sh) is an isolated scratch hub on purpose. Box-root scan order is not a
@@ -575,7 +579,9 @@ class HubClient:
         except httpx.HTTPError as exc:  # anything else httpx can raise — never a raw traceback
             raise HubError(self.url, f"{self.url}: {type(exc).__name__}") from exc
         if 300 <= r.status_code < 400:
-            raise HubRequestError(self.url, r.status_code, f"redirect to {r.headers.get('location', '?')!r} not followed")
+            raise HubRequestError(
+                self.url, r.status_code, f"redirect to {r.headers.get('location', '?')!r} not followed"
+            )
         if r.status_code in (401, 403):
             slug = _slug_of(path)
             if slug:
@@ -652,10 +658,14 @@ class HubClient:
         unless ``start: false``. A bundle create clones and installs on the hub with its own
         300 s budget, then starts the member: the read budget here must outlast that, or a
         slow bundle reads as a dead hub while the member is in fact being created."""
-        return _expect_dict(self.url, self._request("POST", "/api/fleet", json_body=dict(body), timeout=_CREATE_TIMEOUT), "create")
+        return _expect_dict(
+            self.url, self._request("POST", "/api/fleet", json_body=dict(body), timeout=_CREATE_TIMEOUT), "create"
+        )
 
     def rename(self, ident: str, name: str) -> dict:
-        return _expect_dict(self.url, self._request("PATCH", f"/api/fleet/{segment(ident)}", json_body={"name": name}), "rename")
+        return _expect_dict(
+            self.url, self._request("PATCH", f"/api/fleet/{segment(ident)}", json_body={"name": name}), "rename"
+        )
 
     def remove(self, ident: str, *, purge: bool = False) -> dict:
         """``DELETE /api/fleet/<id>[?purge=true]`` — stops the member first. A 409
@@ -676,7 +686,9 @@ class HubClient:
         """Only the fields given change; ``token=""`` clears the stored bearer. A truthy
         ``allow_insecure`` rides along (ADR 0113 D10); a falsy one is omitted."""
         body = {k: v for k, v in fields.items() if v is not None and not (k == "allow_insecure" and not v)}
-        return _expect_dict(self.url, self._request("PATCH", f"/api/fleet/remotes/{segment(ident)}", json_body=body), "remote edit")
+        return _expect_dict(
+            self.url, self._request("PATCH", f"/api/fleet/remotes/{segment(ident)}", json_body=body), "remote edit"
+        )
 
     def remote_pair(self, url: str, code: str, name: str | None = None, *, allow_insecure: bool = False) -> dict:
         """``POST /api/fleet/remotes/pair`` (ADR 0113 D1) — the HUB claims the code against
@@ -687,7 +699,11 @@ class HubClient:
             body["name"] = name
         if allow_insecure:
             body["allow_insecure"] = True  # ADR 0113 D10: the operator accepted cleartext to this remote
-        return _expect_dict(self.url, self._request("POST", "/api/fleet/remotes/pair", json_body=body, timeout=_LIFECYCLE_TIMEOUT), "remote pair")
+        return _expect_dict(
+            self.url,
+            self._request("POST", "/api/fleet/remotes/pair", json_body=body, timeout=_LIFECYCLE_TIMEOUT),
+            "remote pair",
+        )
 
     def remote_remove(self, ident: str) -> dict:
         return _expect_dict(self.url, self._request("DELETE", f"/api/fleet/remotes/{segment(ident)}"), "remote remove")
@@ -782,7 +798,9 @@ class HubClient:
 
     def diagnostics_sessions(self, slug: str, limit: int = 50) -> dict:
         """Newest-first session inventory from the member's task store (#3171 slice 1)."""
-        return _expect_dict(self.url, self.member_get(slug, "/api/diagnostics/sessions", limit=limit), f"{slug} sessions")
+        return _expect_dict(
+            self.url, self.member_get(slug, "/api/diagnostics/sessions", limit=limit), f"{slug} sessions"
+        )
 
     def console_href(self, slug: str) -> str:
         """Where the browser console shows this member (slug routing, ADR 0042): the host

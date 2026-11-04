@@ -138,9 +138,7 @@ def test_migration_maps_kinds_sessions_and_leaves_other_chunks(tmp_path):
     # The pre-0125 backup is a real snapshot: it still holds the conversation rows.
     backup = sqlite3.connect(str(path.with_name("agent.db.pre-0125")))
     try:
-        n = backup.execute(
-            "SELECT COUNT(*) FROM chunks WHERE domain = ?", (HISTORY_DOMAIN,)
-        ).fetchone()[0]
+        n = backup.execute("SELECT COUNT(*) FROM chunks WHERE domain = ?", (HISTORY_DOMAIN,)).fetchone()[0]
     finally:
         backup.close()
     assert n == 3

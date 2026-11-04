@@ -129,11 +129,11 @@ def test_detach_body_injects_true_and_preserves_the_rest():
 @pytest.mark.parametrize(
     "raw",
     [
-        b'{"message":"hi","detach":true}',   # caller already asked to detach
+        b'{"message":"hi","detach":true}',  # caller already asked to detach
         b'{"message":"hi","detach":false}',  # explicit opt-out
         b"not json",
         b"",
-        b"[1,2,3]",                           # a JSON array, not an object
+        b"[1,2,3]",  # a JSON array, not an object
     ],
 )
 def test_detach_body_returns_none_to_forward_verbatim(raw):
@@ -381,7 +381,11 @@ async def test_failed_turn_with_no_upstream_is_500(monkeypatch):
     _local(monkeypatch)
     monkeypatch.setattr(proxy, "_DETACHED_POLL_S", 0)
     submit = FakeResponse(202, {"turn_id": "t5", "session_id": "s5"})
-    polls = [FakeResponse(200, {"state": "failed", "error": {"type": "server_error", "message": "boom", "upstream_status": None}})]
+    polls = [
+        FakeResponse(
+            200, {"state": "failed", "error": {"type": "server_error", "message": "boom", "upstream_status": None}}
+        )
+    ]
     client = FakeClient(submit, polls)
     monkeypatch.setattr(proxy, "_get_client", lambda: client)
 
@@ -494,8 +498,8 @@ async def test_non_dict_200_poll_body_is_retried_then_completes(monkeypatch):
     monkeypatch.setattr(proxy, "_DETACHED_POLL_S", 0)
     submit = FakeResponse(202, {"turn_id": "t1", "session_id": "s1"})
     polls = [
-        FakeResponse(200, [1, 2, 3]),            # a JSON array, not an object
-        FakeResponse(200, b'"still working"'),   # a bare JSON string
+        FakeResponse(200, [1, 2, 3]),  # a JSON array, not an object
+        FakeResponse(200, b'"still working"'),  # a bare JSON string
         FakeResponse(200, {"state": "completed", "response": "ok", "messages": []}),
     ]
     client = FakeClient(submit, polls)

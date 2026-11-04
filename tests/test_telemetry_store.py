@@ -571,9 +571,7 @@ def test_outliers_still_names_a_model_that_is_uniformly_expensive(store):
     cost and the absolute test is unreachable from an ordinary row — the clean room in
     which an uncapped version of this test looks safe while flagging every flagship turn."""
     for i in range(60):
-        store.record(
-            _row(f"haiku{i}", model="claude-haiku-4-5", cost_usd=0.01, duration_ms=4_000, ended_at=_stamp(i))
-        )
+        store.record(_row(f"haiku{i}", model="claude-haiku-4-5", cost_usd=0.01, duration_ms=4_000, ended_at=_stamp(i)))
     for i in range(50):
         store.record(
             _row(f"gw{i}", model="claude-opus-4-8", cost_usd=0.20, duration_ms=20_000, ended_at=_stamp(60 + i))

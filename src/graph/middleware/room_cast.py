@@ -60,7 +60,7 @@ def cast_line(names: list[str], *, lead_name: str = "") -> str:
     return (
         f"{_CAST_MARK} {you}the lead agent of this chat. Also in this chat, having "
         f"spoken here: {listed}. They are OTHER agents — distinct from you and from the "
-        "operator, even where names look similar; `<room-message from=\"X\">` marks what "
+        'operator, even where names look similar; `<room-message from="X">` marks what '
         "X said. They are already caught up on this conversation, so prefer them for "
         "follow-ups on it — awareness, not permission; delegate to whoever fits. When "
         "the operator asks ABOUT one of them, answer about them or ask them via "

@@ -357,13 +357,42 @@ function RecentTurnsPanel({
               <Td>{usd(t.cost_usd)}</Td>
               <Td>{ms(t.duration_ms)}</Td>
               <Td>{t.llm_calls}/{t.tool_calls}</Td>
-              <Td><Badge status={t.state === "completed" ? "success" : t.state === "failed" ? "error" : "neutral"}>{t.state}</Badge></Td>
+              <Td><TurnStateCell turn={t} /></Td>
               <Td><TraceCell turn={t} template={traceUrlTemplate} tracingEnabled={tracingEnabled} onCopied={onTraceCopied} /></Td>
             </Tr>
           ))}
         </TBody>
       </Table>
     </div>
+  );
+}
+
+// The State cell. A failed or canceled turn also shows why it ended (#4726), on one
+// clipped line under the badge so the table stays dense. The line is a button: a tap or
+// a click expands it to the full text, so the reason is readable on a touch screen too,
+// where a hover tooltip never shows. The server only stores an error for a turn that did
+// not complete, and rows from before the column have none.
+export function TurnStateCell({ turn }: { turn: Pick<TelemetryTurn, "state" | "error"> }) {
+  const [expanded, setExpanded] = useState(false);
+  const status = turn.state === "completed" ? "success" : turn.state === "failed" ? "error" : "neutral";
+  const error = turn.state !== "completed" ? (turn.error || "").trim() : "";
+  return (
+    <span className="turn-state-cell">
+      <Badge status={status}>{turn.state}</Badge>
+      {error ? (
+        <button
+          type="button"
+          className="turn-error"
+          title={error}
+          aria-expanded={expanded}
+          data-expanded={expanded ? "" : undefined}
+          onClick={() => setExpanded((v) => !v)}
+          data-testid="telemetry-turn-error"
+        >
+          {error}
+        </button>
+      ) : null}
+    </span>
   );
 }
 

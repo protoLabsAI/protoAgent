@@ -1,4 +1,5 @@
 """Configured-model grading shares rubric semantics without loading other credentials."""
+
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -12,10 +13,15 @@ from evals.judge import ascore_rubric
 async def test_async_grader_uses_supplied_model_and_parses_native_text_blocks(monkeypatch):
     def forbidden(*args, **kwargs):
         raise AssertionError("must not reload the production grader configuration")
+
     monkeypatch.setattr("graph.config.LangGraphConfig.from_yaml", forbidden)
-    model = SimpleNamespace(ainvoke=AsyncMock(return_value=AIMessage(content=[{
-        "type": "text", "text": '{"criteria":[{"met":true,"why":"supported"},{"met":false}]}'
-    }])))
+    model = SimpleNamespace(
+        ainvoke=AsyncMock(
+            return_value=AIMessage(
+                content=[{"type": "text", "text": '{"criteria":[{"met":true,"why":"supported"},{"met":false}]}'}]
+            )
+        )
+    )
     verdict = await ascore_rubric("fixture answer", ["first", "second"], grader=model)
     assert verdict.score == 0.5 and verdict.met == {"first": True, "second": False}
     assert verdict.error is None

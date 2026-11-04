@@ -42,7 +42,6 @@ REPO_ROOT = Path(__file__).resolve().parents[1]  # import root (src/ in a checko
 # ---------------------------------------------------------------------------
 
 
-
 def _launchd_path() -> str:
     """The PATH a launchd-started agent gets: launchd's minimal set plus the per-user
     tool dirs a login shell would add — `~/.cargo/bin` (beads-rust `br`), `~/.local/bin`
@@ -53,6 +52,7 @@ def _launchd_path() -> str:
     home = os.path.expanduser("~")
     dirs = ["/usr/local/bin", "/usr/bin", "/bin", "/opt/homebrew/bin", f"{home}/.cargo/bin", f"{home}/.local/bin"]
     return ":".join(dict.fromkeys(dirs))
+
 
 def autostart_supported() -> tuple[bool, str]:
     """Is this platform a supported autostart target?

@@ -351,9 +351,7 @@ async def update_bundle(
         ok, messages = await asyncio.to_thread(apply_settings, None)
         if not ok:
             retire_errors.append("; ".join(str(m) for m in messages) or "retire reload failed")
-    return BundleUpdateResult(
-        install=res, removed_members=dropped, retire_error="; ".join(retire_errors) or None
-    )
+    return BundleUpdateResult(install=res, removed_members=dropped, retire_error="; ".join(retire_errors) or None)
 
 
 @op(

@@ -61,8 +61,12 @@ class NewAgentModal(OnceModal[dict | None]):
     def __init__(self, archetypes: list[dict]) -> None:
         super().__init__(classes="manage-modal")
         self.archetypes = [a for a in archetypes if a.get("id")]
-        if not any(str(a.get("id")) == "basic" for a in self.archetypes):  # by id: the catalog's bundle-less `custom` is not Basic
-            self.archetypes.insert(0, {"id": "basic", "label": "Basic", "blurb": "a blank agent", "bundle": None, "soul": ""})
+        if not any(
+            str(a.get("id")) == "basic" for a in self.archetypes
+        ):  # by id: the catalog's bundle-less `custom` is not Basic
+            self.archetypes.insert(
+                0, {"id": "basic", "label": "Basic", "blurb": "a blank agent", "bundle": None, "soul": ""}
+            )
 
     def compose(self) -> ComposeResult:
         with VerticalScroll(classes="manage-box"):
@@ -70,8 +74,13 @@ class NewAgentModal(OnceModal[dict | None]):
             with Horizontal(classes="manage-row"):
                 yield Input(placeholder="name — letters, digits, - and _", id="name", select_on_focus=False)
                 yield Input(placeholder="port (optional)", id="port", select_on_focus=False)
-            options = [(f"{a.get('label') or a['id']}" + (f" — {a['blurb']}" if a.get("blurb") else ""), str(a["id"])) for a in self.archetypes]
-            yield Select[str](options, value=str(self.archetypes[0]["id"]), allow_blank=False, prompt="archetype", id="archetype")
+            options = [
+                (f"{a.get('label') or a['id']}" + (f" — {a['blurb']}" if a.get("blurb") else ""), str(a["id"]))
+                for a in self.archetypes
+            ]
+            yield Select[str](
+                options, value=str(self.archetypes[0]["id"]), allow_blank=False, prompt="archetype", id="archetype"
+            )
             yield Static("", id="archetype-note", classes="manage-sub")
             with Horizontal(classes="manage-row"):
                 yield Checkbox("inherit the hub's model connections", value=True, id="inherit")
@@ -98,7 +107,9 @@ class NewAgentModal(OnceModal[dict | None]):
             bits.append("needs " + ", ".join(str(t) for t in a["requires_tools"]))
         if a.get("requires"):
             bits.append("requires " + ", ".join(str(r) for r in a["requires"]))
-        self.query_one("#archetype-note", Static).update("  ·  ".join(bits) if bits else "a blank agent with the persona you give it")
+        self.query_one("#archetype-note", Static).update(
+            "  ·  ".join(bits) if bits else "a blank agent with the persona you give it"
+        )
 
     @on(Select.Changed)
     def _changed(self, event: Select.Changed) -> None:
@@ -166,7 +177,10 @@ class RenameModal(OnceModal[str | None]):
     def compose(self) -> ComposeResult:
         with VerticalScroll(classes="manage-box"):
             yield Static(f"rename {self.current}", classes="manage-title")
-            yield Static("display name only (letters, digits, - and _) — the id, the URL slug and the member's data never change", classes="manage-sub")
+            yield Static(
+                "display name only (letters, digits, - and _) — the id, the URL slug and the member's data never change",
+                classes="manage-sub",
+            )
             yield Input(value=self.current, placeholder="new name", id="name", select_on_focus=False)
             yield Static("", id="hint", classes="manage-hint")
             with Horizontal(classes="manage-buttons"):
@@ -217,10 +231,15 @@ class DeleteModal(OnceModal[dict | None]):
         with VerticalScroll(classes="manage-box"):
             if self.remote:
                 yield Static(f"remove remote {self.target}", classes="manage-title")
-                yield Static("unregisters it from this fleet — the remote agent itself is untouched", classes="manage-sub")
+                yield Static(
+                    "unregisters it from this fleet — the remote agent itself is untouched", classes="manage-sub"
+                )
             else:
                 yield Static(f"delete {self.target}", classes="manage-title")
-                yield Static("stops it and takes it out of the fleet. Its data is kept unless you also purge — both are irreversible.", classes="manage-danger")
+                yield Static(
+                    "stops it and takes it out of the fleet. Its data is kept unless you also purge — both are irreversible.",
+                    classes="manage-danger",
+                )
             yield Input(placeholder=f"type {self.target} to confirm", id="confirm", select_on_focus=False)
             if not self.remote:
                 yield Checkbox("also purge its workspace and data (cannot be undone)", value=False, id="purge")
@@ -273,10 +292,29 @@ class RemoteModal(OnceModal[dict | None]):
         ex = self.existing or {}
         with VerticalScroll(classes="manage-box"):
             yield Static(f"edit remote {ex.get('name')}" if ex else "add a remote member", classes="manage-title")
-            yield Static("proxied under a slug window like a local member; unreachable is registered anyway", classes="manage-sub")
-            yield Input(value=str(ex.get("name") or ""), placeholder="name — letters, digits, - and _", id="name", select_on_focus=False)
-            yield Input(value=str(ex.get("url") or ""), placeholder="url — https://ava.tail:7870", id="url", select_on_focus=False)
-            yield Input(password=True, placeholder="bearer token — entered once, never shown again" + (" (blank keeps the stored one)" if ex else " (optional)"), id="token", select_on_focus=False)
+            yield Static(
+                "proxied under a slug window like a local member; unreachable is registered anyway",
+                classes="manage-sub",
+            )
+            yield Input(
+                value=str(ex.get("name") or ""),
+                placeholder="name — letters, digits, - and _",
+                id="name",
+                select_on_focus=False,
+            )
+            yield Input(
+                value=str(ex.get("url") or ""),
+                placeholder="url — https://ava.tail:7870",
+                id="url",
+                select_on_focus=False,
+            )
+            yield Input(
+                password=True,
+                placeholder="bearer token — entered once, never shown again"
+                + (" (blank keeps the stored one)" if ex else " (optional)"),
+                id="token",
+                select_on_focus=False,
+            )
             if ex:
                 yield Checkbox("clear the stored token", value=False, id="clear")
             yield Static("", id="hint", classes="manage-hint")

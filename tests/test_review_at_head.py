@@ -59,10 +59,7 @@ def review(
             attrs += f" coverage={coverage}"
         if standing_block is not None:
             attrs += f" standing_block={standing_block}"
-        body = (
-            f"<!-- protoagent-qa-review {attrs} -->\n"
-            "## QA panel review\n\nsome prose\n"
-        )
+        body = f"<!-- protoagent-qa-review {attrs} -->\n## QA panel review\n\nsome prose\n"
     return {"user": {"login": login}, "body": body}
 
 
@@ -334,9 +331,7 @@ def test_an_unknown_standing_block_value_fails_closed():
 def test_a_half_contract_fails_closed_when_only_coverage_is_present():
     # A marker that carries one attribute but not the other is malformed → non-success, because
     # its mere presence enables enforcement even with the flag off.
-    decision = rah.decide(
-        [review(MERGED, "PASS", coverage="complete")], MERGED, [], require_contract=False
-    )
+    decision = rah.decide([review(MERGED, "PASS", coverage="complete")], MERGED, [], require_contract=False)
     assert not decision.ok
 
 
@@ -421,6 +416,7 @@ def test_a_gh_failure_in_single_pr_mode_still_exits_zero(monkeypatch, capsys):
 
     assert rah.main() == 0
     assert "502 Bad Gateway" in capsys.readouterr().err
+
 
 def test_dry_run_is_off_unless_explicitly_truthy(monkeypatch):
     """`DRY_RUN=false` used to ENABLE dry-run.

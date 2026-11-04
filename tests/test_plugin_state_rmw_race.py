@@ -91,8 +91,6 @@ async def _wait_for(event: threading.Event, timeout: float = 10.0) -> None:
         await asyncio.sleep(0.01)
 
 
-
-
 async def test_two_concurrent_enables_through_the_route_both_survive(live_config, held_first_reload):
     from operator_api.plugin_routes import register_plugin_routes
 
@@ -131,7 +129,9 @@ async def test_a_side_effect_rewrite_does_not_undo_a_concurrent_enable(
     from operator_api.plugin_routes import register_plugin_routes
 
     monkeypatch.setattr(installer, "sync", lambda **_k: [{"id": "base", "status": "installed"}])
-    monkeypatch.setattr(installer, "list_installed", lambda: [{"id": "base", "source_url": "https://example.test/base"}])
+    monkeypatch.setattr(
+        installer, "list_installed", lambda: [{"id": "base", "source_url": "https://example.test/base"}]
+    )
     monkeypatch.setattr(installer, "install", lambda *a, **_k: {"id": "base", "version": "1", "resolved_sha": "abc"})
     monkeypatch.setattr(installer, "uninstall", lambda pid, purge=False: {"id": pid, "removed": ["dir"]})
 

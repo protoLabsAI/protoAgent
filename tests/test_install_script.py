@@ -108,9 +108,7 @@ def _stub_docker(tmp_path: Path) -> Path:
     return bindir
 
 
-def _env(
-    tmp_path: Path, token: str | None, *, platform: str | None = "linux/amd64", **extra: str
-) -> dict[str, str]:
+def _env(tmp_path: Path, token: str | None, *, platform: str | None = "linux/amd64", **extra: str) -> dict[str, str]:
     env = {k: v for k, v in os.environ.items() if not k.startswith(("PROTOAGENT_", "A2A_"))}
     env.update(NO_COLOR="1", TMPDIR=str(tmp_path), **extra)
     # Pin PLATFORM by default so the stub docker's argv is deterministic; pass
@@ -127,9 +125,7 @@ def _stub_uname(bindir: Path, machine: str) -> None:
     real = shutil.which("uname") or "/usr/bin/uname"
     uname = bindir / "uname"
     uname.write_text(
-        "#!/bin/sh\n"
-        f'[ "$1" = -m ] && {{ printf "%s\\n" "{machine}"; exit 0; }}\n'
-        f'exec "{real}" "$@"\n',
+        f'#!/bin/sh\n[ "$1" = -m ] && {{ printf "%s\\n" "{machine}"; exit 0; }}\nexec "{real}" "$@"\n',
         encoding="utf-8",
     )
     uname.chmod(0o755)
@@ -171,10 +167,10 @@ def test_open_loopback_install_needs_no_token(tmp_path):
 @pytest.mark.parametrize(
     ("machine", "forces_amd64"),
     [
-        ("x86_64", False),   # native amd64
+        ("x86_64", False),  # native amd64
         ("aarch64", False),  # native arm64 — the multi-arch image resolves it
-        ("arm64", False),    # Apple Silicon reports arm64; also native now
-        ("armv7l", True),    # no native variant → amd64 under emulation
+        ("arm64", False),  # Apple Silicon reports arm64; also native now
+        ("armv7l", True),  # no native variant → amd64 under emulation
     ],
 )
 def test_arch_detection_pulls_native_on_amd64_and_arm64(tmp_path, machine, forces_amd64):

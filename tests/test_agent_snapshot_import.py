@@ -179,16 +179,12 @@ class TestInspect:
                 ]
             )
         )
-        assert [(p.url, p.ref) for p in plan.plugins] == [
-            ("https://github.com/protoLabsAI/github-plugin", "abc123")
-        ]
+        assert [(p.url, p.ref) for p in plan.plugins] == [("https://github.com/protoLabsAI/github-plugin", "abc123")]
 
     def test_flags_an_unfamiliar_source(self):
         """The ack should be able to say "2 of these are from somewhere you haven't
         installed from before" — flagging is advisory, not a gate."""
-        plan = inspect_snapshot(
-            _snapshot(plugins=[{"id": "x", "url": "https://gitlab.example/acme/x", "sha": "d"}])
-        )
+        plan = inspect_snapshot(_snapshot(plugins=[{"id": "x", "url": "https://gitlab.example/acme/x", "sha": "d"}]))
         assert plan.unrecognized_plugins
         assert plan.plugins[0].recognized is False
 
@@ -706,9 +702,7 @@ class TestKnowledgeSeedImport:
     def _kb_snapshot(self) -> bytes:
         return _zip(
             {
-                "agent.snapshot.yaml": _manifest(
-                    plugins=[], knowledge={"domains": {"protocols": 12, "general": 3}}
-                ),
+                "agent.snapshot.yaml": _manifest(plugins=[], knowledge={"domains": {"protocols": 12, "general": 3}}),
                 "SOUL.md": "# s",
                 "knowledge/protocols.md": "## Blitzing\n\nOne blitz per turn.\n",
                 "knowledge/general.md": "Notes.\n",
@@ -811,7 +805,10 @@ class TestOldSnapshotsMigrateOnStage:
         (tmp_path / "config").mkdir()
         (tmp_path / "config" / "langgraph-config.yaml").write_text(
             yaml.safe_dump(
-                {"providers": [{"id": "prod", "type": "openai-compat", "base_url": "https://prod/v1"}], "model": {"name": "prod:m"}}
+                {
+                    "providers": [{"id": "prod", "type": "openai-compat", "base_url": "https://prod/v1"}],
+                    "model": {"name": "prod:m"},
+                }
             )
         )
         plan = ImportPlan(agent_name="x", required_secrets=[{"name": "model.api_key", "was_set": True}])

@@ -181,7 +181,9 @@ async def _execute(text: str, metadata: dict | None = None) -> list[TurnOutcome]
     seen: list[TurnOutcome] = []
     set_terminal_hook(seen.append)
     try:
-        await ProtoAgentExecutor(chat_mod._chat_langgraph_stream).execute(_request_context(text, metadata), EventQueue())
+        await ProtoAgentExecutor(chat_mod._chat_langgraph_stream).execute(
+            _request_context(text, metadata), EventQueue()
+        )
     finally:
         set_terminal_hook(None)
     return seen
@@ -224,7 +226,9 @@ def fake_delegation(monkeypatch):
         )
 
     cc = dispatch_mod._chat_commands
-    monkeypatch.setattr(cc, "_parse_subagent_command", lambda m: ("researcher", "dig") if m.startswith("/researcher") else None)
+    monkeypatch.setattr(
+        cc, "_parse_subagent_command", lambda m: ("researcher", "dig") if m.startswith("/researcher") else None
+    )
     monkeypatch.setattr(cc, "_parse_workflow_command", lambda m: ("wf", {"q": 1}) if m.startswith("/wf") else None)
 
     async def _run_parsed_subagent(sub_type, prompt, *, session_id="", turn_model=""):

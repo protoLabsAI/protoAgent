@@ -152,8 +152,12 @@ def test_status_signed_out_shape(client):
 def test_status_signed_in_never_returns_token_material(client):
     refresh_c = "rt-codex-SECRET"
     store = _codex_store()
-    oauth_mod._write_codex_store(store, {"access_token": _LIVE_ACCESS, "refresh_token": refresh_c, "id_token": "idtok-SECRET"})
-    oauth_mod._write_anthropic_store({"access_token": "sk-ant-oat-SECRET", "refresh_token": "sk-ant-ort-SECRET", "expires_in": 3600})
+    oauth_mod._write_codex_store(
+        store, {"access_token": _LIVE_ACCESS, "refresh_token": refresh_c, "id_token": "idtok-SECRET"}
+    )
+    oauth_mod._write_anthropic_store(
+        {"access_token": "sk-ant-oat-SECRET", "refresh_token": "sk-ant-ort-SECRET", "expires_in": 3600}
+    )
 
     res = client.get("/api/config/oauth-status")
     assert res.status_code == 200
@@ -194,7 +198,12 @@ def test_import_rejects_any_provider_but_codex(client, net, provider):
 
 
 def test_import_malformed_body_is_422_not_500(client, net):
-    assert client.post("/api/config/oauth/import", content=b"not json", headers={"content-type": "application/json"}).status_code == 422
+    assert (
+        client.post(
+            "/api/config/oauth/import", content=b"not json", headers={"content-type": "application/json"}
+        ).status_code
+        == 422
+    )
     assert client.post("/api/config/oauth/import", json={"provider": ["openai-codex"]}).status_code == 422
     assert net.calls == []
 
@@ -227,7 +236,10 @@ def test_import_happy_path_rotates_stores_and_signs_in(client, net, tmp_path):
     cli_refresh, new_refresh = "rt-cli-SECRET", "rt-rotated-SECRET"
     _write_cli_auth(tmp_path, {"access_token": _LIVE_ACCESS, "refresh_token": cli_refresh})
     oauth_mod._mark_disconnected(instance_paths(), "openai-codex")
-    net.on(oauth_mod._CODEX_TOKEN_URL, body={"access_token": _ROTATED_ACCESS, "refresh_token": new_refresh, "id_token": "id-SECRET"})
+    net.on(
+        oauth_mod._CODEX_TOKEN_URL,
+        body={"access_token": _ROTATED_ACCESS, "refresh_token": new_refresh, "id_token": "id-SECRET"},
+    )
 
     res = client.post("/api/config/oauth/import", json={"provider": " OpenAI-Codex "})
     assert res.status_code == 200, res.text
@@ -263,7 +275,11 @@ def test_import_refresh_failure_is_400_and_writes_nothing(client, net, tmp_path,
     if isinstance(exc, Exception):
         net.on(oauth_mod._CODEX_TOKEN_URL, exc=exc)
     else:
-        net.on(oauth_mod._CODEX_TOKEN_URL, status, {"refresh_token": "x"} if exc == "no-access" else {"error": "invalid_grant"})
+        net.on(
+            oauth_mod._CODEX_TOKEN_URL,
+            status,
+            {"refresh_token": "x"} if exc == "no-access" else {"error": "invalid_grant"},
+        )
     res = client.post("/api/config/oauth/import", json={"provider": "openai-codex"})
     assert res.status_code == 400
     _assert_no_secrets(res.text, "rt-cli-SECRET", _LIVE_ACCESS)
@@ -387,7 +403,10 @@ def test_poll_success_stores_tokens_and_flips_status(client, net):
     fid = _start_codex(client, net)
     oauth_mod._mark_disconnected(instance_paths(), "openai-codex")
     net.on(_DEVICE_TOKEN_URL, body={"authorization_code": "authcode-SECRET", "code_verifier": "verifier-SECRET"})
-    net.on(oauth_mod._CODEX_TOKEN_URL, body={"access_token": _LIVE_ACCESS, "refresh_token": "rt-SECRET", "id_token": "id-SECRET"})
+    net.on(
+        oauth_mod._CODEX_TOKEN_URL,
+        body={"access_token": _LIVE_ACCESS, "refresh_token": "rt-SECRET", "id_token": "id-SECRET"},
+    )
 
     res = client.post("/api/config/oauth/poll", json={"flow_id": fid})
     assert res.status_code == 200
@@ -506,7 +525,12 @@ def test_complete_success_stores_tokens_and_flips_status(client, net):
     oauth_mod._mark_disconnected(instance_paths(), "anthropic-oauth")
     net.on(
         oauth_mod._ANTHROPIC_TOKEN_URL,
-        body={"access_token": "sk-ant-oat-SECRET", "refresh_token": "sk-ant-ort-SECRET", "expires_in": 3600, "account": {"uuid": "acct-uuid"}},
+        body={
+            "access_token": "sk-ant-oat-SECRET",
+            "refresh_token": "sk-ant-ort-SECRET",
+            "expires_in": 3600,
+            "account": {"uuid": "acct-uuid"},
+        },
     )
     res = client.post("/api/config/oauth/complete", json={"flow_id": fid, "code": f"  authcode-XYZ#{data['state']}  "})
     assert res.status_code == 200

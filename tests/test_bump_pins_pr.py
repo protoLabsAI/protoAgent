@@ -136,9 +136,7 @@ def test_open_or_update_creates_a_pr_when_none_exists(repo: Path, gh_state: Path
     assert "sha=" in result.stdout
 
     # The commit actually landed on a real `bump-pins` branch, force-pushed to origin.
-    branches = subprocess.run(
-        ["git", "branch", "-a"], cwd=repo, check=True, capture_output=True, text=True
-    ).stdout
+    branches = subprocess.run(["git", "branch", "-a"], cwd=repo, check=True, capture_output=True, text=True).stdout
     assert "bump-pins" in branches
 
 

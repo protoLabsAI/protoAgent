@@ -62,8 +62,13 @@ async def test_operator_watches_update_patches_only_what_it_is_sent(monkeypatch,
     from operator_api import console_handlers
 
     ctrl = _wire(monkeypatch, tmp_path)
-    ctrl.create(condition="rollout lands", watch_id="w", verifier={"type": "plugin", "check": "p:v"},
-                interval_s=60, stall_after=4)
+    ctrl.create(
+        condition="rollout lands",
+        watch_id="w",
+        verifier={"type": "plugin", "check": "p:v"},
+        interval_s=60,
+        stall_after=4,
+    )
     res = await console_handlers._operator_watches_update("w", {"interval_s": 1800})
     assert res["ok"] is True
     w = ctrl.store.get("w")
@@ -77,8 +82,7 @@ async def test_operator_watches_update_null_clears_a_field(monkeypatch, tmp_path
     from operator_api import console_handlers
 
     ctrl = _wire(monkeypatch, tmp_path)
-    ctrl.create(condition="c", watch_id="w", verifier={"type": "plugin", "check": "p:v"},
-                deadline=9_999_999_999)
+    ctrl.create(condition="c", watch_id="w", verifier={"type": "plugin", "check": "p:v"}, deadline=9_999_999_999)
     await console_handlers._operator_watches_update("w", {"deadline": None})
     assert ctrl.store.get("w").deadline is None
 
@@ -101,9 +105,7 @@ async def test_operator_watches_update_may_change_the_verifier(monkeypatch, tmp_
 
     ctrl = _wire(monkeypatch, tmp_path)
     ctrl.create(condition="c", watch_id="w", verifier={"type": "plugin", "check": "p:v"})
-    res = await console_handlers._operator_watches_update(
-        "w", {"verifier": {"type": "command", "command": "exit 0"}}
-    )
+    res = await console_handlers._operator_watches_update("w", {"verifier": {"type": "command", "command": "exit 0"}})
     assert res["ok"] is True and ctrl.store.get("w").verifier["type"] == "command"
 
 

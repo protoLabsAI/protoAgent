@@ -77,7 +77,9 @@ def wired(monkeypatch):
 
     cfg = LangGraphConfig()
     cfg.room_max_rounds = 2
-    reg = _Reg({"proto": ["it's the migration", "yes — the 0042 one"], "reviewer": ["I'd blame auth", "agreed, migration"]})
+    reg = _Reg(
+        {"proto": ["it's the migration", "yes — the 0042 one"], "reviewer": ["I'd blame auth", "agreed, migration"]}
+    )
     monkeypatch.setattr(rs.STATE, "graph", graph, raising=False)
     monkeypatch.setattr(rs.STATE, "graph_config", cfg, raising=False)
     monkeypatch.setattr(rs.STATE, "delegate_registry", reg, raising=False)

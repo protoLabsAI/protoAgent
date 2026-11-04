@@ -268,7 +268,16 @@ _TURN_SYSTEM: contextvars.ContextVar[bool] = contextvars.ContextVar("compaction_
 class CountingSummarizationMiddleware(SummarizationMiddleware):
     """``SummarizationMiddleware`` + archive-first (#2784) + a compaction counter."""
 
-    def __init__(self, *args, knowledge_store=None, history_store=_DEFAULT_HISTORY_STORE, window_resolver=None, default_window: int | None = None, system_thread_max_tokens: int = 0, **kwargs):
+    def __init__(
+        self,
+        *args,
+        knowledge_store=None,
+        history_store=_DEFAULT_HISTORY_STORE,
+        window_resolver=None,
+        default_window: int | None = None,
+        system_thread_max_tokens: int = 0,
+        **kwargs,
+    ):
         # Set BEFORE the parent's __init__: it validates a ``fraction`` trigger by asking
         # ``_get_profile_limits``, which reads these.
         self._window_resolver = window_resolver

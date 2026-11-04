@@ -158,7 +158,7 @@ def test_guard_is_cancelled_before_shutdown_awaits_anything() -> None:
     import server
 
     src = inspect.getsource(server._main)
-    body = src[src.index("async def _scheduler_shutdown"):]
+    body = src[src.index("async def _scheduler_shutdown") :]
     body = body[: body.index("\n    @app.on_event") if "\n    @app.on_event" in body else len(body)]
 
     cancel = body.index("STATE.memory_guard_task.cancel()")

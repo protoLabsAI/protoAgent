@@ -152,7 +152,9 @@ TEXT_FINGERPRINT_META = "protoagent/textFingerprint"
 # have no `/media/` segment and are left untouched. Kept BYTE-IDENTICAL to a2aStream.ts
 # `normaliseMediaText` (same regex, same replacement); the shared vector list in
 # tests/test_text_fingerprint.py and sessionHydration.test.ts pins the parity.
-_MEDIA_URL_RE = re.compile(r"""(?:https?:\/\/[^\/\s"'<>)]+)?(?:\/agents\/[^\/\s"'<>)]+)?\/media\/([^\s"'<>)?]+)(?:\?[^\s"'<>)]*)?""")
+_MEDIA_URL_RE = re.compile(
+    r"""(?:https?:\/\/[^\/\s"'<>)]+)?(?:\/agents\/[^\/\s"'<>)]+)?\/media\/([^\s"'<>)?]+)(?:\?[^\s"'<>)]*)?"""
+)
 
 
 def _normalise_media_text(text: str) -> str:
@@ -170,7 +172,13 @@ def _utf16_fnv1a(text: str) -> int:
 
 def _text_fingerprint_meta(measured: str) -> dict[str, dict[str, int]]:
     normalised = _normalise_media_text(measured)
-    return {TEXT_FINGERPRINT_META: {"v": 2, "length": len(normalised.encode("utf-16-le")) // 2, "fnv1a": _utf16_fnv1a(normalised)}}
+    return {
+        TEXT_FINGERPRINT_META: {
+            "v": 2,
+            "length": len(normalised.encode("utf-16-le")) // 2,
+            "fnv1a": _utf16_fnv1a(normalised),
+        }
+    }
 
 
 class TurnStalled(RuntimeError):
@@ -322,6 +330,9 @@ class TurnOutcome:
     # message metadata. ``origin`` ∈ scheduler|inbox|webhook|a2a|"" (empty = a
     # live/operator turn); ``trigger`` is a human label (job id / inbox source);
     # ``priority`` is the inbox tier when applicable.
+    # The turn was incognito (ADR 0069): telemetry keeps its timing and usage but no
+    # content, so its failure text is not stored either (#4726).
+    incognito: bool = False
     origin: str = ""
     trigger: str = ""
     priority: str = ""
@@ -467,7 +478,11 @@ def _begin_turn_files(carry: str = "", principal: str = "", *, principal_kind: s
         logger.warning(
             "[a2a] %d paused-turn file(s) for context %s (task %s) withheld: parked by %s, answered by %s; "
             "files stay parked until TTL expiry/cancel or an authorized claim",
-            count, carry, task_id, parked_kind, principal_kind,
+            count,
+            carry,
+            task_id,
+            parked_kind,
+            principal_kind,
         )
         return False
 
@@ -942,8 +957,10 @@ class ProtoAgentExecutor(AgentExecutor):
         _turn_principal = _principal(context)
         _turn_principal_kind = _principal_kind(context, _origin)
         files_token = _begin_turn_files(
-            carry=str(context.context_id or "") if touches_pause else "", principal=_turn_principal,
-            principal_kind=_turn_principal_kind, task_id=str(context.task_id or ""),
+            carry=str(context.context_id or "") if touches_pause else "",
+            principal=_turn_principal,
+            principal_kind=_turn_principal_kind,
+            task_id=str(context.task_id or ""),
         )
         run_token = _begin_run_scope(str(context.context_id or ""), str(context.task_id or ""))
 
@@ -1150,6 +1167,7 @@ class ProtoAgentExecutor(AgentExecutor):
                 tool_durations=durations,
                 context_tokens=context_tokens,
                 origin=_origin,
+                incognito=bool(_md.get("incognito")),
                 trigger=_trigger,
                 priority=_priority,
                 stimulus=_stimulus,
@@ -1287,7 +1305,9 @@ class ProtoAgentExecutor(AgentExecutor):
                     if isinstance(payload, dict) and payload.get("id"):
                         current = payload.get("current_tool") or {}
                         if isinstance(current, dict) and current.get("status") == "running":
-                            last_activity[0] = f"waiting on @{payload.get('target') or 'a delegate'} ({current.get('name') or 'a tool'})"
+                            last_activity[0] = (
+                                f"waiting on @{payload.get('target') or 'a delegate'} ({current.get('name') or 'a tool'})"
+                            )
                         await updater.update_status(
                             TaskState.TASK_STATE_WORKING,
                             message=updater.new_agent_message([_data_part_proto(payload, DELEGATE_PROGRESS_MIME)]),
@@ -1827,7 +1847,12 @@ def _tool_call_frame(event_type: str, payload: Any) -> tuple[Part | None, dict[s
         # end frame — which the durable store keeps — lets a reload or reattach show the REAL
         # duration instead of the ~0ms between two replayed frames (#4076).
         duration_ms = payload.get("duration_ms")
-        if event_type == "tool_end" and isinstance(duration_ms, int) and not isinstance(duration_ms, bool) and duration_ms > 0:
+        if (
+            event_type == "tool_end"
+            and isinstance(duration_ms, int)
+            and not isinstance(duration_ms, bool)
+            and duration_ms > 0
+        ):
             meta[pa.TOOL_CALL_EXT_URI]["durationMs"] = duration_ms
         return None, meta
     if payload:

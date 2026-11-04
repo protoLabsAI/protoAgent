@@ -176,7 +176,11 @@ class TestStoreIncognito:
         assert legacy is not None and legacy.origin_incognito is False
         # new inserts carry the flag
         jid = s.create(
-            agent_name="a", origin_session="s2", subagent_type="researcher", description="d", prompt="p",
+            agent_name="a",
+            origin_session="s2",
+            subagent_type="researcher",
+            description="d",
+            prompt="p",
             origin_incognito=True,
         )
         assert s.get(jid).origin_incognito is True
@@ -185,7 +189,11 @@ class TestStoreIncognito:
         path = str(tmp_path / "jobs.db")
         s1 = BackgroundStore(path)
         jid = s1.create(
-            agent_name="a", origin_session="s1", subagent_type="researcher", description="d", prompt="p",
+            agent_name="a",
+            origin_session="s1",
+            subagent_type="researcher",
+            description="d",
+            prompt="p",
             origin_incognito=True,
         )
         s2 = BackgroundStore(path)  # re-init on an already-migrated DB must not error
@@ -493,22 +501,25 @@ class TestServerTurnControlPlane:
         turn_control = importlib.import_module("server.turn_control")
         turn_control.mark_session_attended("chat-a")
         turn_control.register_live_server_turn("chat-a", "task-a", origin="scheduler", trigger="job-a")
-        assert turn_control.submit_server_turn_interjection(
-            "chat-b", "task-a", "wrong room", msg_id="x"
-        )["reason"] == "not_live"
+        assert (
+            turn_control.submit_server_turn_interjection("chat-b", "task-a", "wrong room", msg_id="x")["reason"]
+            == "not_live"
+        )
         assert steering.pending("chat-b") == 0
 
         turn_control.release_session_attended("chat-a")
-        assert turn_control.submit_server_turn_interjection(
-            "chat-a", "task-a", "nobody is watching", msg_id="y"
-        )["reason"] == "uncontrollable"
+        assert (
+            turn_control.submit_server_turn_interjection("chat-a", "task-a", "nobody is watching", msg_id="y")["reason"]
+            == "uncontrollable"
+        )
         assert steering.pending("chat-a") == 0
 
         turn_control.mark_session_attended("chat-a")
         turn_control.finish_live_server_turn("chat-a", "task-a")
-        assert turn_control.submit_server_turn_interjection(
-            "chat-a", "task-a", "too late", msg_id="z"
-        )["reason"] == "not_live"
+        assert (
+            turn_control.submit_server_turn_interjection("chat-a", "task-a", "too late", msg_id="z")["reason"]
+            == "not_live"
+        )
         assert steering.pending("chat-a") == 0
 
     def test_unattended_turn_is_addressable_but_not_operator_controllable(self):
@@ -523,9 +534,10 @@ class TestServerTurnControlPlane:
 
         assert payload["task_id"] == "task-9"
         assert payload["operator_controllable"] is False
-        assert turn_control.submit_server_turn_interjection(
-            "chat-42", "task-9", "please answer me", msg_id="m1"
-        )["reason"] == "uncontrollable"
+        assert (
+            turn_control.submit_server_turn_interjection("chat-42", "task-9", "please answer me", msg_id="m1")["reason"]
+            == "uncontrollable"
+        )
         assert steering.pending("chat-42") == 0
 
     def test_pending_hitl_clears_live_control_before_non_answer_can_steer(self, monkeypatch):
@@ -550,9 +562,12 @@ class TestServerTurnControlPlane:
         assert turn_control.live_server_turn_control("chat-42", "task-9")["controllable"] is True
         a2a._a2a_progress("chat-42", "task-9", {"phase": "input_required", "prompt": "Approve?"})
 
-        assert turn_control.submit_server_turn_interjection(
-            "chat-42", "task-9", "do something else", msg_id="m1"
-        )["reason"] == "not_live"
+        assert (
+            turn_control.submit_server_turn_interjection("chat-42", "task-9", "do something else", msg_id="m1")[
+                "reason"
+            ]
+            == "not_live"
+        )
         assert steering.pending("chat-42") == 0
 
 
@@ -1061,8 +1076,11 @@ class TestDismissRetainsReport:
             return ""
 
         register_operator_routes(
-            app, runtime_status=lambda: {}, subagent_list=lambda: [],
-            subagent_run=_run, subagent_batch=_run,
+            app,
+            runtime_status=lambda: {},
+            subagent_list=lambda: [],
+            subagent_run=_run,
+            subagent_batch=_run,
         )
         monkeypatch.setattr(STATE, "background_mgr", mgr, raising=False)
         return TestClient(app)

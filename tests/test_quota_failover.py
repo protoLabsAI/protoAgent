@@ -33,8 +33,10 @@ class _Model:
 
         self.model_name = name
         if provider is None:
-            provider = name.split(":", 1)[0] if ":" in name else (
-                "anthropic-oauth" if name.startswith("claude-") else "openai"
+            provider = (
+                name.split(":", 1)[0]
+                if ":" in name
+                else ("anthropic-oauth" if name.startswith("claude-") else "openai")
             )
         tag_model_provider(self, provider, provider)
 
@@ -166,7 +168,9 @@ def test_same_account_quota_reraises_primary_no_fallback():
     """r1: the only fallback shares the primary's account — on a quota 429 it is skipped and
     the PRIMARY exception is re-raised, no fallback attempted."""
     mw = _fallback_mw(
-        ["anthropic-oauth:claude-sonnet-5"], model_provider="anthropic-oauth", model_name="claude-opus-4-8",
+        ["anthropic-oauth:claude-sonnet-5"],
+        model_provider="anthropic-oauth",
+        model_name="claude-opus-4-8",
         store=_FakeStore({"anthropic-oauth": _blocked_snapshot()}),
     )
     primary_exc = _quota_429()
@@ -231,9 +235,7 @@ def test_unknown_usage_preserves_today_order(monkeypatch):
     """r4: a gateway primary (unknown account) + gateway fallbacks with no snapshot fail over
     in exactly today's order — every fallback tried in turn, nothing skipped."""
     events = _capture_events(monkeypatch)
-    mw = _fallback_mw(
-        ["protolabs/a", "protolabs/b"], model_provider="openai", model_name="protolabs/smart"
-    )
+    mw = _fallback_mw(["protolabs/a", "protolabs/b"], model_provider="openai", model_name="protolabs/smart")
     primary_exc = _quota_429()  # quota body, but a gateway primary has no resolvable account
     order: list[str] = []
 
@@ -290,7 +292,9 @@ def test_graphbubbleup_from_primary_is_reraised_untouched():
 async def test_async_same_account_quota_reraises_primary():
     """r6: the async path enforces the same cross-account-only rule on a quota 429."""
     mw = _fallback_mw(
-        ["anthropic-oauth:claude-sonnet-5"], model_provider="anthropic-oauth", model_name="claude-opus-4-8",
+        ["anthropic-oauth:claude-sonnet-5"],
+        model_provider="anthropic-oauth",
+        model_name="claude-opus-4-8",
         store=_FakeStore({"anthropic-oauth": _blocked_snapshot()}),
     )
     primary_exc = _quota_429()
@@ -412,18 +416,23 @@ async def test_async_override_does_not_degrade_same_account_quota(monkeypatch):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("async_call", [False, True])
-@pytest.mark.parametrize("snapshot", [
-    None,
-    {"status": "ok", "stale": True, "windows": [{"status": "blocked"}]},
-    {"status": "unknown", "windows": [{"status": "blocked"}]},
-    {"status": "ok", "windows": []},
-    _blocked_snapshot({"model": "claude-opus-4-8"}),
-])
+@pytest.mark.parametrize(
+    "snapshot",
+    [
+        None,
+        {"status": "ok", "stale": True, "windows": [{"status": "blocked"}]},
+        {"status": "unknown", "windows": [{"status": "blocked"}]},
+        {"status": "ok", "windows": []},
+        _blocked_snapshot({"model": "claude-opus-4-8"}),
+    ],
+)
 @pytest.mark.parametrize("error", [_Err(429, message="slow down"), _quota_429()])
 async def test_same_account_retry_requires_applicable_block(snapshot, error, async_call):
     mw = _fallback_mw(
-        ["anthropic-oauth:claude-sonnet-5"], model_provider="anthropic-oauth",
-        model_name="claude-opus-4-8", store=_FakeStore({"anthropic-oauth": snapshot}),
+        ["anthropic-oauth:claude-sonnet-5"],
+        model_provider="anthropic-oauth",
+        model_name="claude-opus-4-8",
+        store=_FakeStore({"anthropic-oauth": snapshot}),
     )
     calls = []
 
@@ -465,8 +474,9 @@ def test_actual_model_identity_overrides_lead_and_stale_pick(state):
             return super().cached(provider_id)
 
     store = RecordingStore()
-    mw = _fallback_mw(["protolabs/fast"], model_provider="openai",
-                      model_name="anthropic-oauth:claude-opus-4-8", store=store)
+    mw = _fallback_mw(
+        ["protolabs/fast"], model_provider="openai", model_name="anthropic-oauth:claude-opus-4-8", store=store
+    )
     mw._fallback_plan(_Req(actual, state), _quota_429())
     assert store.reads == ["openai-codex"]
 
@@ -498,15 +508,20 @@ async def test_quota_pick_preserves_turn_error_retry_metadata(monkeypatch, async
     assert result["type"] == "rate_limit_error"
     assert result["upstream_status"] == 429
     assert result["retry_after"] == 86400
-    assert abs((datetime.fromisoformat(result["retry_at"]) -
-                datetime.fromisoformat(caught.value.resets_at)).total_seconds()) < 2
+    assert (
+        abs(
+            (
+                datetime.fromisoformat(result["retry_at"]) - datetime.fromisoformat(caught.value.resets_at)
+            ).total_seconds()
+        )
+        < 2
+    )
     assert not result.get("model_unavailable")
 
 
 @pytest.mark.asyncio
 async def test_async_graphbubbleup_untouched():
-    mw = _fallback_mw(["openai-codex:gpt-5.6"], model_provider="anthropic-oauth",
-                      model_name="claude-opus-4-8")
+    mw = _fallback_mw(["openai-codex:gpt-5.6"], model_provider="anthropic-oauth", model_name="claude-opus-4-8")
     interrupt = GraphBubbleUp()
     calls = []
 

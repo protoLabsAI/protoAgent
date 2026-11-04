@@ -26,7 +26,16 @@ def status(state="TASK_STATE_WORKING", *, parts=None, metadata=None, final=False
     msg: dict = {"role": "ROLE_AGENT", "messageId": "m", "parts": parts or []}
     if metadata:
         msg["metadata"] = metadata
-    return {"result": {"statusUpdate": {"taskId": task_id, "contextId": cid, "status": {"state": state, "message": msg}, "final": final}}}
+    return {
+        "result": {
+            "statusUpdate": {
+                "taskId": task_id,
+                "contextId": cid,
+                "status": {"state": state, "message": msg},
+                "final": final,
+            }
+        }
+    }
 
 
 def artifact(text, *, append=None, last=False, metadata=None, parts=None, cid=CID):
@@ -66,7 +75,9 @@ def fold(*frames, cid=CID):
 def test_state_normalization_and_terminal_set():
     assert a2a.norm_state("TASK_STATE_INPUT_REQUIRED") == "input-required"
     assert a2a.norm_state("input_required") == "input-required"
-    assert a2a.is_terminal("TASK_STATE_COMPLETED") and a2a.is_terminal("canceled") and a2a.is_terminal("TASK_STATE_FAILED")
+    assert (
+        a2a.is_terminal("TASK_STATE_COMPLETED") and a2a.is_terminal("canceled") and a2a.is_terminal("TASK_STATE_FAILED")
+    )
     assert not a2a.is_terminal("TASK_STATE_WORKING") and not a2a.is_terminal("input-required")
     assert a2a.is_paused("TASK_STATE_INPUT_REQUIRED") and a2a.is_paused("auth_required")
 
@@ -102,7 +113,11 @@ def test_replace_keeps_interleaving_when_parts_already_render_the_text():
 
 
 def test_replace_on_real_divergence_rebuilds_once():
-    t = fold(artifact("partial", append=True), status(metadata=tool("started")), artifact("the full canonical answer", last=True))
+    t = fold(
+        artifact("partial", append=True),
+        status(metadata=tool("started")),
+        artifact("the full canonical answer", last=True),
+    )
     assert a2a.text_runs(t.parts) == ["the full canonical answer"]
     assert [p.kind for p in t.parts] == ["tools", "text"]
     assert t.content == "the full canonical answer"
@@ -124,7 +139,13 @@ def test_tool_events_pair_start_and_end_with_duration_and_failure():
         status(metadata=tool("failed", "c2", "fetch_url", error="timeout")),
     )
     c1, c2 = t.tool_calls
-    assert (c1.name, c1.input, c1.output, c1.status, c1.output_chars) == ("run_command", '{"cmd": "ls"}', "file.txt", "done", 1234)
+    assert (c1.name, c1.input, c1.output, c1.status, c1.output_chars) == (
+        "run_command",
+        '{"cmd": "ls"}',
+        "file.txt",
+        "done",
+        1234,
+    )
     assert c1.duration_ms is not None and c1.duration_ms >= 0
     assert (c2.status, c2.output) == ("error", "timeout")
     assert [p.kind for p in t.parts] == ["tools"] and t.parts[0].ids == ["c1", "c2"]
@@ -169,7 +190,11 @@ def test_component_room_reply_and_consumed_steers_are_captured():
     t = fold(
         status(parts=[data_part(a2a.COMPONENT_MIME, {"component": "table", "props": {"rows": []}})]),
         status(parts=[data_part(a2a.ROOM_MIME, {"author": "sonnet", "text": "1 replied"})]),
-        status(parts=[data_part(a2a.STEER_CONSUMED_MIME, {"items": [{"id": "s1", "text": "switch to jellyfish"}, {"bad": 1}]})]),
+        status(
+            parts=[
+                data_part(a2a.STEER_CONSUMED_MIME, {"items": [{"id": "s1", "text": "switch to jellyfish"}, {"bad": 1}]})
+            ]
+        ),
     )
     assert t.components == [{"component": "table", "props": {"rows": []}}] and t.parts[0].kind == "component"
     assert t.room_replies[0]["author"] == "sonnet"
@@ -189,7 +214,13 @@ def test_input_required_surfaces_the_hitl_payload_and_is_not_terminal():
 
 
 def test_failed_state_and_cost_and_context_and_done():
-    meta = {COST: {"usage": {"input_tokens": 1200, "output_tokens": 300, "cache_read_input_tokens": 800}, "costUsd": 0.0123, "durationMs": 4200}}
+    meta = {
+        COST: {
+            "usage": {"input_tokens": 1200, "output_tokens": 300, "cache_read_input_tokens": 800},
+            "costUsd": 0.0123,
+            "durationMs": 4200,
+        }
+    }
     ctx = data_part(a2a.CONTEXT_MIME, {"contextTokens": 5400, "maxTokens": 200000})
     t = fold(
         artifact("answer", append=True),
@@ -197,7 +228,13 @@ def test_failed_state_and_cost_and_context_and_done():
         status("TASK_STATE_COMPLETED", final=True),
     )
     assert t.done and t.state == "completed"
-    assert (t.usage.input_tokens, t.usage.output_tokens, t.usage.cache_read_tokens, t.usage.cost_usd, t.usage.duration_ms) == (1200, 300, 800, 0.0123, 4200)
+    assert (
+        t.usage.input_tokens,
+        t.usage.output_tokens,
+        t.usage.cache_read_tokens,
+        t.usage.cost_usd,
+        t.usage.duration_ms,
+    ) == (1200, 300, 800, 0.0123, 4200)
     assert t.usage.total_tokens == 1500 and t.context["contextTokens"] == 5400
     f = fold(status("TASK_STATE_FAILED", parts=[{"text": "boom"}]))
     assert f.done and f.failed == "boom"
@@ -214,7 +251,14 @@ def test_json_rpc_error_frame_raises():
 def test_foreign_context_frames_are_dropped_but_unstamped_ones_are_not():
     t = fold(artifact("mine", append=True), artifact("theirs", append=True, cid="chat-other"))
     assert t.content == "mine"
-    flat03 = {"result": {"kind": "artifact-update", "taskId": "t1", "artifact": {"parts": [{"text": " more"}]}, "append": True}}
+    flat03 = {
+        "result": {
+            "kind": "artifact-update",
+            "taskId": "t1",
+            "artifact": {"parts": [{"text": " more"}]},
+            "append": True,
+        }
+    }
     t = fold(artifact("mine", append=True), flat03)
     assert t.content == "mine more"
     su03 = {"result": {"kind": "status-update", "taskId": "t1", "status": {"state": "completed"}, "final": True}}
@@ -230,11 +274,26 @@ def test_task_snapshot_replays_history_then_text_and_a_parked_state():
             "task": {
                 "id": "t9",
                 "contextId": CID,
-                "status": {"state": "TASK_STATE_INPUT_REQUIRED", "message": {"parts": [{"text": "Approve?"}, data_part(a2a.HITL_MIME, {"kind": "approval", "title": "Approve shell command?", "detail": "rm -rf build"})]}},
+                "status": {
+                    "state": "TASK_STATE_INPUT_REQUIRED",
+                    "message": {
+                        "parts": [
+                            {"text": "Approve?"},
+                            data_part(
+                                a2a.HITL_MIME,
+                                {"kind": "approval", "title": "Approve shell command?", "detail": "rm -rf build"},
+                            ),
+                        ]
+                    },
+                },
                 "history": [
                     {"role": "ROLE_USER", "parts": [{"text": "clean the build dir"}]},
                     {"role": "ROLE_AGENT", "parts": [data_part(a2a.REASONING_MIME, {"text": "ok"})]},
-                    {"role": "ROLE_AGENT", "parts": [], "metadata": tool("started", "c1", "run_command", args="rm -rf build")},
+                    {
+                        "role": "ROLE_AGENT",
+                        "parts": [],
+                        "metadata": tool("started", "c1", "run_command", args="rm -rf build"),
+                    },
                 ],
                 "artifacts": [{"artifactId": "t9-answer", "parts": [{"text": "Cleaning now."}]}],
             }
@@ -255,11 +314,39 @@ def test_turn_from_durable_replays_a_turns_row_with_tool_cards():
         "state": "TASK_STATE_COMPLETED",
         "status": {"state": "TASK_STATE_COMPLETED"},
         "text": "Let me gather the current state.",
-        "artifacts": [{"artifactId": "x", "parts": [{"text": "Let me gather the current state."}], "metadata": {COST: {"usage": {"input_tokens": 10, "output_tokens": 2}}}}],
+        "artifacts": [
+            {
+                "artifactId": "x",
+                "parts": [{"text": "Let me gather the current state."}],
+                "metadata": {COST: {"usage": {"input_tokens": 10, "output_tokens": 2}}},
+            }
+        ],
         "history": [
             {"role": "ROLE_USER", "parts": [{"text": "status report please"}]},
-            {"role": "ROLE_AGENT", "parts": [], "metadata": {TOOL: {"phase": "started", "name": "@sonnet", "toolCallId": "mention:sonnet", "args": "report your status"}}},
-            {"role": "ROLE_AGENT", "parts": [], "metadata": {TOOL: {"phase": "completed", "result": "1 replied", "toolCallId": "mention:sonnet", "name": "@sonnet"}}},
+            {
+                "role": "ROLE_AGENT",
+                "parts": [],
+                "metadata": {
+                    TOOL: {
+                        "phase": "started",
+                        "name": "@sonnet",
+                        "toolCallId": "mention:sonnet",
+                        "args": "report your status",
+                    }
+                },
+            },
+            {
+                "role": "ROLE_AGENT",
+                "parts": [],
+                "metadata": {
+                    TOOL: {
+                        "phase": "completed",
+                        "result": "1 replied",
+                        "toolCallId": "mention:sonnet",
+                        "name": "@sonnet",
+                    }
+                },
+            },
         ],
     }
     t = a2a.turn_from_durable(CID, row)
@@ -286,7 +373,16 @@ def test_stream_sends_the_1_0_wire_and_yields_frames():
         seen["headers"] = dict(request.headers)
         seen["body"] = json.loads(request.content)
         seen["path"] = request.url.path
-        return httpx.Response(200, headers={"content-type": "text/event-stream"}, text=_sse(status(), artifact("hi", append=True), status("TASK_STATE_COMPLETED", final=True), extra=": keepalive\n\n"))
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            text=_sse(
+                status(),
+                artifact("hi", append=True),
+                status("TASK_STATE_COMPLETED", final=True),
+                extra=": keepalive\n\n",
+            ),
+        )
 
     c = a2a.A2AClient("http://127.0.0.1:7870", "tok", slug="protoEngineer-ba4c", transport=httpx.MockTransport(handler))
     frames = list(c.stream("hello", context_id=CID, metadata={"hitl_resume": True}, task_id="t1"))
@@ -295,7 +391,13 @@ def test_stream_sends_the_1_0_wire_and_yields_frames():
     assert seen["headers"]["a2a-version"] == "1.0" and seen["headers"]["authorization"] == "Bearer tok"
     msg = seen["body"]["params"]["message"]
     assert seen["body"]["method"] == "SendStreamingMessage"
-    assert (msg["role"], msg["parts"], msg["contextId"], msg["taskId"], msg["metadata"]) == ("ROLE_USER", [{"text": "hello"}], CID, "t1", {"hitl_resume": True})
+    assert (msg["role"], msg["parts"], msg["contextId"], msg["taskId"], msg["metadata"]) == (
+        "ROLE_USER",
+        [{"text": "hello"}],
+        CID,
+        "t1",
+        {"hitl_resume": True},
+    )
     t = a2a.Turn(context_id=CID)
     for f in frames:
         a2a.apply_frame(t, f)
@@ -303,22 +405,31 @@ def test_stream_sends_the_1_0_wire_and_yields_frames():
 
 
 def test_sse_parser_handles_multiline_data_and_ignores_comments():
-    body = ": connected\n\ndata: {\"a\":\ndata: 1}\n\n: keepalive\n\ndata: not json\n\ndata: {\"b\": 2}\n\n"
+    body = ': connected\n\ndata: {"a":\ndata: 1}\n\n: keepalive\n\ndata: not json\n\ndata: {"b": 2}\n\n'
     assert list(a2a._parse_sse(iter(body.splitlines()))) == [{"a": 1}, {"b": 2}]
 
 
 def test_for_member_routes_through_the_hub_proxy_and_the_host_directly():
-    hub = deckhub.HubClient("http://127.0.0.1:7870", "tok", transport=httpx.MockTransport(lambda r: httpx.Response(200, json={})))
-    assert a2a.A2AClient.for_member(hub, "protoEngineer-ba4c").endpoint == "http://127.0.0.1:7870/agents/protoEngineer-ba4c/a2a"
+    hub = deckhub.HubClient(
+        "http://127.0.0.1:7870", "tok", transport=httpx.MockTransport(lambda r: httpx.Response(200, json={}))
+    )
+    assert (
+        a2a.A2AClient.for_member(hub, "protoEngineer-ba4c").endpoint
+        == "http://127.0.0.1:7870/agents/protoEngineer-ba4c/a2a"
+    )
     assert a2a.A2AClient.for_member(hub, "host").endpoint == "http://127.0.0.1:7870/a2a"
 
 
 def test_member_401_on_the_proxy_is_the_members_and_a_5xx_is_a_request_error():
-    c = a2a.A2AClient("http://127.0.0.1:7870", "tok", slug="roxy-e815", transport=httpx.MockTransport(lambda r: httpx.Response(401)))
+    c = a2a.A2AClient(
+        "http://127.0.0.1:7870", "tok", slug="roxy-e815", transport=httpx.MockTransport(lambda r: httpx.Response(401))
+    )
     with pytest.raises(deckhub.MemberUnauthorized) as ei:
         list(c.stream("x", context_id=CID))
     assert ei.value.slug == "roxy-e815"
-    c = a2a.A2AClient("http://127.0.0.1:7870", "tok", transport=httpx.MockTransport(lambda r: httpx.Response(503, text="down")))
+    c = a2a.A2AClient(
+        "http://127.0.0.1:7870", "tok", transport=httpx.MockTransport(lambda r: httpx.Response(503, text="down"))
+    )
     with pytest.raises(deckhub.HubRequestError):
         c.get_task("t1")
 
@@ -330,8 +441,17 @@ def test_get_task_reads_the_flat_1_0_result_and_cancel_posts_cancel_task():
         body = json.loads(request.content)
         calls.append(body["method"])
         if body["method"] == "GetTask":
-            return httpx.Response(200, json={"jsonrpc": "2.0", "id": "x", "result": {"id": "t1", "status": {"state": "TASK_STATE_COMPLETED"}, "artifacts": []}})
-        return httpx.Response(200, json={"jsonrpc": "2.0", "id": "x", "result": {"id": "t1", "status": {"state": "TASK_STATE_CANCELED"}}})
+            return httpx.Response(
+                200,
+                json={
+                    "jsonrpc": "2.0",
+                    "id": "x",
+                    "result": {"id": "t1", "status": {"state": "TASK_STATE_COMPLETED"}, "artifacts": []},
+                },
+            )
+        return httpx.Response(
+            200, json={"jsonrpc": "2.0", "id": "x", "result": {"id": "t1", "status": {"state": "TASK_STATE_CANCELED"}}}
+        )
 
     c = a2a.A2AClient("http://127.0.0.1:7870", transport=httpx.MockTransport(handler))
     assert c.get_task("t1")["status"]["state"] == "TASK_STATE_COMPLETED"
@@ -370,7 +490,9 @@ def test_abort_wakes_a_reader_blocked_on_a_real_socket():
             self.rfile.read(int(self.headers.get("Content-Length") or 0))
             self.send_response(200)
             self.send_header("Content-Type", "text/event-stream")
-            self.send_header("Transfer-Encoding", "chunked")  # as uvicorn streams: EOF mid-body is an error, not a clean end
+            self.send_header(
+                "Transfer-Encoding", "chunked"
+            )  # as uvicorn streams: EOF mid-body is an error, not a clean end
             self.end_headers()
             frame = b'data: {"result": {"task": {"id": "t1", "contextId": "s"}}}\n\n'
             self.wfile.write(f"{len(frame):x}\r\n".encode() + frame + b"\r\n")
@@ -420,7 +542,9 @@ def test_abort_wakes_a_reader_blocked_on_a_real_socket():
 
 
 def test_for_member_owns_its_transport_so_close_never_drains_the_hubs_pool():
-    hub = deckhub.HubClient("http://127.0.0.1:7870", "tok", transport=httpx.MockTransport(lambda r: httpx.Response(200, json={})))
+    hub = deckhub.HubClient(
+        "http://127.0.0.1:7870", "tok", transport=httpx.MockTransport(lambda r: httpx.Response(200, json={}))
+    )
     c = a2a.A2AClient.for_member(hub, "protoEngineer-ba4c")
     assert c._client._transport is not hub._client._transport
     c.close()  # the hub's transport is untouched
@@ -428,14 +552,21 @@ def test_for_member_owns_its_transport_so_close_never_drains_the_hubs_pool():
 
 
 def test_rpc_error_body_raises_turn_error():
-    c = a2a.A2AClient("http://127.0.0.1:7870", transport=httpx.MockTransport(lambda r: httpx.Response(200, json={"error": {"code": -32001, "message": "TaskNotFound"}})))
+    c = a2a.A2AClient(
+        "http://127.0.0.1:7870",
+        transport=httpx.MockTransport(
+            lambda r: httpx.Response(200, json={"error": {"code": -32001, "message": "TaskNotFound"}})
+        ),
+    )
     with pytest.raises(a2a.TurnError, match="TaskNotFound"):
         c.get_task("nope")
 
 
 def test_credential_over_plain_http_off_box_is_refused_for_a2a_too():
     with pytest.raises(deckhub.InsecureHub):
-        a2a.A2AClient("http://ava.tail:7870", "tok", slug="x", transport=httpx.MockTransport(lambda r: httpx.Response(200)))
+        a2a.A2AClient(
+            "http://ava.tail:7870", "tok", slug="x", transport=httpx.MockTransport(lambda r: httpx.Response(200))
+        )
 
 
 # ── the stall watchdog ────────────────────────────────────────────────────────
@@ -444,10 +575,22 @@ def test_credential_over_plain_http_off_box_is_refused_for_a2a_too():
 def test_watchdog_finalizes_only_a_terminal_task_after_the_idle_window():
     t = a2a.Turn(context_id=CID, task_id="t1")
     t.last_frame_at = 100.0
-    assert a2a.stalled_turn_is_terminal(t, lambda tid: {"status": {"state": "TASK_STATE_COMPLETED"}}, now=120.0) is None  # not idle yet
-    assert a2a.stalled_turn_is_terminal(t, lambda tid: {"status": {"state": "TASK_STATE_WORKING"}}, now=200.0) is None  # legitimately quiet
-    assert a2a.stalled_turn_is_terminal(t, lambda tid: {"status": {"state": "TASK_STATE_INPUT_REQUIRED"}}, now=200.0) is None  # paused ≠ terminal
-    assert a2a.stalled_turn_is_terminal(t, lambda tid: {"status": {"state": "TASK_STATE_COMPLETED"}}, now=200.0)["status"]["state"] == "TASK_STATE_COMPLETED"
+    assert (
+        a2a.stalled_turn_is_terminal(t, lambda tid: {"status": {"state": "TASK_STATE_COMPLETED"}}, now=120.0) is None
+    )  # not idle yet
+    assert (
+        a2a.stalled_turn_is_terminal(t, lambda tid: {"status": {"state": "TASK_STATE_WORKING"}}, now=200.0) is None
+    )  # legitimately quiet
+    assert (
+        a2a.stalled_turn_is_terminal(t, lambda tid: {"status": {"state": "TASK_STATE_INPUT_REQUIRED"}}, now=200.0)
+        is None
+    )  # paused ≠ terminal
+    assert (
+        a2a.stalled_turn_is_terminal(t, lambda tid: {"status": {"state": "TASK_STATE_COMPLETED"}}, now=200.0)["status"][
+            "state"
+        ]
+        == "TASK_STATE_COMPLETED"
+    )
     assert a2a.stalled_turn_is_terminal(t, lambda tid: {}, now=200.0) == {}  # gone from the store → un-stick
 
     def boom(tid):
@@ -463,9 +606,23 @@ def test_a_resubscribe_snapshot_replaces_history_state_instead_of_doubling_it():
     t = a2a.Turn(context_id=CID)
     hist = [
         {"role": "ROLE_USER", "parts": [{"text": "q"}]},
-        {"role": "ROLE_AGENT", "parts": [{"data": {"text": "thinking hard"}, "metadata": {"mimeType": a2a.REASONING_MIME}}]},
-        {"role": "ROLE_AGENT", "parts": [{"data": {"component": "table", "props": {"rows": []}}, "metadata": {"mimeType": a2a.COMPONENT_MIME}}]},
-        {"role": "ROLE_AGENT", "parts": [], "metadata": {a2a.TOOL_CALL_EXT_URI: {"toolCallId": "c1", "name": "run_command", "phase": "started", "args": "ls"}}},
+        {
+            "role": "ROLE_AGENT",
+            "parts": [{"data": {"text": "thinking hard"}, "metadata": {"mimeType": a2a.REASONING_MIME}}],
+        },
+        {
+            "role": "ROLE_AGENT",
+            "parts": [
+                {"data": {"component": "table", "props": {"rows": []}}, "metadata": {"mimeType": a2a.COMPONENT_MIME}}
+            ],
+        },
+        {
+            "role": "ROLE_AGENT",
+            "parts": [],
+            "metadata": {
+                a2a.TOOL_CALL_EXT_URI: {"toolCallId": "c1", "name": "run_command", "phase": "started", "args": "ls"}
+            },
+        },
     ]
     snap = {"id": "t1", "contextId": CID, "status": {"state": "TASK_STATE_WORKING"}, "history": hist, "artifacts": []}
     a2a.apply_frame(t, {"result": {"task": snap}})
@@ -479,7 +636,11 @@ def test_a_resubscribe_snapshot_replaces_history_state_instead_of_doubling_it():
 
 
 def test_for_member_never_adopts_a_callers_transport():
-    hub = deckhub.HubClient("http://127.0.0.1:7870", "tok", transport=httpx.MockTransport(lambda r: httpx.Response(200, json={"agents": []})))
+    hub = deckhub.HubClient(
+        "http://127.0.0.1:7870",
+        "tok",
+        transport=httpx.MockTransport(lambda r: httpx.Response(200, json={"agents": []})),
+    )
     c = a2a.A2AClient.for_member(hub, "x", transport=hub._client._transport)
     assert c._client._transport is not hub._client._transport
     c.close()
@@ -490,8 +651,12 @@ def test_a_json_answer_instead_of_a_stream_is_surfaced_not_swallowed():
     """Live finding: SubscribeToTask on a task already in a terminal state answers 200 +
     application/json {"error": …} — iter_lines on that yields no SSE frame, and the deck
     showed an exchange that silently never finished."""
+
     def refuse(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(200, json={"jsonrpc": "2.0", "id": "1", "error": {"code": -32602, "message": "Task t1 is in terminal state: 3"}})
+        return httpx.Response(
+            200,
+            json={"jsonrpc": "2.0", "id": "1", "error": {"code": -32602, "message": "Task t1 is in terminal state: 3"}},
+        )
 
     c = a2a.A2AClient("http://127.0.0.1:7870", transport=httpx.MockTransport(refuse))
     frames = list(c.subscribe("t1"))
@@ -500,7 +665,14 @@ def test_a_json_answer_instead_of_a_stream_is_surfaced_not_swallowed():
         a2a.apply_frame(a2a.Turn(context_id=CID), frames[0])
 
     def one_piece(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(200, json={"jsonrpc": "2.0", "id": "1", "result": {"task": {"id": "t1", "contextId": CID, "status": {"state": "TASK_STATE_COMPLETED"}}}})
+        return httpx.Response(
+            200,
+            json={
+                "jsonrpc": "2.0",
+                "id": "1",
+                "result": {"task": {"id": "t1", "contextId": CID, "status": {"state": "TASK_STATE_COMPLETED"}}},
+            },
+        )
 
     c = a2a.A2AClient("http://127.0.0.1:7870", transport=httpx.MockTransport(one_piece))
     t = a2a.Turn(context_id=CID)
@@ -521,12 +693,17 @@ def test_subscribe_retries_a_live_task_the_store_has_not_caught_up_with(monkeypa
     be refused TASK_NOT_FOUND before the task's first store write. Retried, bounded."""
     monkeypatch.setattr(a2a, "_SUBSCRIBE_BACKOFF_S", 0.0)
     calls: list[int] = []
-    sse = 'data: {"jsonrpc": "2.0", "id": "1", "result": {"task": {"id": "t1", "contextId": "%s", "status": {"state": "TASK_STATE_WORKING"}}}}\n\n' % CID
+    sse = (
+        'data: {"jsonrpc": "2.0", "id": "1", "result": {"task": {"id": "t1", "contextId": "%s", "status": {"state": "TASK_STATE_WORKING"}}}}\n\n'
+        % CID
+    )
 
     def racy(request: httpx.Request) -> httpx.Response:
         calls.append(1)
         if len(calls) <= 2:
-            return httpx.Response(200, json={"jsonrpc": "2.0", "id": "1", "error": {"code": -32001, "message": "Task not found"}})
+            return httpx.Response(
+                200, json={"jsonrpc": "2.0", "id": "1", "error": {"code": -32001, "message": "Task not found"}}
+            )
         return httpx.Response(200, headers={"content-type": "text/event-stream"}, text=sse)
 
     c = a2a.A2AClient("http://127.0.0.1:7870", transport=httpx.MockTransport(racy))
@@ -538,7 +715,9 @@ def test_subscribe_retries_a_live_task_the_store_has_not_caught_up_with(monkeypa
 
     def unknown(request: httpx.Request) -> httpx.Response:
         calls.append(1)
-        return httpx.Response(200, json={"jsonrpc": "2.0", "id": "1", "error": {"code": -32001, "message": "Task not found"}})
+        return httpx.Response(
+            200, json={"jsonrpc": "2.0", "id": "1", "error": {"code": -32001, "message": "Task not found"}}
+        )
 
     c = a2a.A2AClient("http://127.0.0.1:7870", transport=httpx.MockTransport(unknown))
     frames = list(c.subscribe("nope"))
@@ -559,7 +738,9 @@ def test_a_repeated_tool_start_keeps_the_recorded_result():
     assert (c1.output, c1.output_chars, c1.status) == ("file.txt", 1234, "running") and c1.duration_ms is not None
 
 
-@pytest.mark.parametrize("message,expected", [({"parts": [{"text": "backend failed"}]}, "backend failed"), (None, "the turn failed")])
+@pytest.mark.parametrize(
+    "message,expected", [({"parts": [{"text": "backend failed"}]}, "backend failed"), (None, "the turn failed")]
+)
 def test_failed_snapshot_restores_failure_marker(message, expected):
     turn = a2a.Turn(context_id=CID)
     a2a.replay_task_snapshot(turn, {"status": {"state": "TASK_STATE_FAILED", "message": message}})
@@ -570,9 +751,12 @@ def test_failed_snapshot_restores_failure_marker(message, expected):
 @pytest.mark.parametrize("size,expected", [(0, 0), (None, 42)])
 def test_snapshot_tool_size_distinguishes_zero_from_missing(size, expected):
     turn = fold(status(metadata=tool("completed", result="prior", outputChars=42)))
-    a2a.replay_task_snapshot(turn, {
-        "history": [{"role": "ROLE_AGENT", "metadata": tool("completed", result="", outputChars=size)}],
-        "status": {"state": "TASK_STATE_COMPLETED"},
-    })
+    a2a.replay_task_snapshot(
+        turn,
+        {
+            "history": [{"role": "ROLE_AGENT", "metadata": tool("completed", result="", outputChars=size)}],
+            "status": {"state": "TASK_STATE_COMPLETED"},
+        },
+    )
     assert turn.tool("c1").output == ""
     assert turn.tool("c1").output_chars == expected

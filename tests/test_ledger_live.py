@@ -128,7 +128,9 @@ async def test_a_wrapped_ask_is_recorded_as_what_was_asked(bus, tmp_path, monkey
     store = LedgerStore(str(tmp_path / "ledger.db"))
     monkeypatch.setattr(rs.STATE, "ledger_store", store, raising=False)
     with ledger.describing("add clamp"):
-        with ledger.dispatch(to_kind="acp", to_name="claude-code", what="You are taking part in a group chat…\n\nadd clamp"):
+        with ledger.dispatch(
+            to_kind="acp", to_name="claude-code", what="You are taking part in a group chat…\n\nadd clamp"
+        ):
             with ledger.dispatch(to_kind="subagent", to_name="inner", what="inner ask"):
                 pass
     started = {d["to_name"]: d["what"] for t, d, _ in bus if t == "delegation.started"}

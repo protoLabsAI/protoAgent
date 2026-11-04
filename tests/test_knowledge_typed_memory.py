@@ -162,8 +162,7 @@ def test_migration_adds_columns(tmp_path):
         "invalidated_at TEXT, invalidation_reason TEXT)"
     )
     db.execute(
-        "INSERT INTO chunks (content, domain, created_at, updated_at) "
-        "VALUES ('legacy row', 'general', 'x', 'x')"
+        "INSERT INTO chunks (content, domain, created_at, updated_at) VALUES ('legacy row', 'general', 'x', 'x')"
     )
     db.commit()
     db.close()
@@ -529,8 +528,15 @@ def test_chunk_from_row_ignores_unknown_columns(tmp_path):
 
     c = Chunk.from_row(
         {
-            "id": 1, "content": "x", "domain": "general", "heading": None, "source": None,
-            "source_type": None, "finding_type": None, "created_at": "t", "updated_at": "t",
+            "id": 1,
+            "content": "x",
+            "domain": "general",
+            "heading": None,
+            "source": None,
+            "source_type": None,
+            "finding_type": None,
+            "created_at": "t",
+            "updated_at": "t",
             "future_column_from_d7": "whatever",
         }
     )
@@ -711,7 +717,12 @@ def test_review_state_backfill_stamps_legacy_rows_once(tmp_path):
     )
     db.execute("CREATE TABLE _kb_meta (key TEXT PRIMARY KEY, value TEXT)")
     db.execute("INSERT INTO _kb_meta(key, value) VALUES ('typed_memory_backfill', 'd4-stamp')")
-    for content, source_type in (("console fact", "operator"), ("agent note", "conversation"), ("web page", "web"), ("unstamped", None)):
+    for content, source_type in (
+        ("console fact", "operator"),
+        ("agent note", "conversation"),
+        ("web page", "web"),
+        ("unstamped", None),
+    ):
         db.execute(
             "INSERT INTO chunks (content, domain, source_type, memory_kind, created_at, updated_at) "
             "VALUES (?, 'general', ?, 'reference', 'x', 'x')",
@@ -738,7 +749,9 @@ def test_review_state_backfill_stamps_legacy_rows_once(tmp_path):
 
     # One-shot: a NULL written behind the store's back after the stamp is not rescanned.
     raw = sqlite3.connect(str(path))
-    raw.execute("INSERT INTO chunks (content, domain, created_at, updated_at) VALUES ('raw after stamp', 'general', 'x', 'x')")
+    raw.execute(
+        "INSERT INTO chunks (content, domain, created_at, updated_at) VALUES ('raw after stamp', 'general', 'x', 'x')"
+    )
     raw.commit()
     raw.close()
     again = {c.content: c.review_state for c in KnowledgeStore(path).list_chunks(limit=10)}
@@ -758,13 +771,25 @@ def test_review_state_backfill_covers_a_pre_3205_db_too(tmp_path):
         "source_type TEXT, finding_type TEXT, namespace TEXT, epoch TEXT, "
         "created_at TEXT NOT NULL, updated_at TEXT NOT NULL, invalidated_at TEXT, invalidation_reason TEXT)"
     )
-    db.execute("INSERT INTO chunks (content, domain, source_type, created_at, updated_at) VALUES ('old operator row', 'hot', 'operator', 'x', 'x')")
-    db.execute("INSERT INTO chunks (content, domain, created_at, updated_at) VALUES ('old anonymous row', 'general', 'x', 'x')")
+    db.execute(
+        "INSERT INTO chunks (content, domain, source_type, created_at, updated_at) VALUES ('old operator row', 'hot', 'operator', 'x', 'x')"
+    )
+    db.execute(
+        "INSERT INTO chunks (content, domain, created_at, updated_at) VALUES ('old anonymous row', 'general', 'x', 'x')"
+    )
     db.commit()
     db.close()
     rows = {c.content: c for c in KnowledgeStore(path).list_chunks(limit=10)}
-    assert (rows["old operator row"].memory_kind, rows["old operator row"].delivery_policy, rows["old operator row"].review_state) == ("standing", "always", "confirmed")
-    assert (rows["old anonymous row"].memory_kind, rows["old anonymous row"].delivery_policy, rows["old anonymous row"].review_state) == ("reference", None, "pending")
+    assert (
+        rows["old operator row"].memory_kind,
+        rows["old operator row"].delivery_policy,
+        rows["old operator row"].review_state,
+    ) == ("standing", "always", "confirmed")
+    assert (
+        rows["old anonymous row"].memory_kind,
+        rows["old anonymous row"].delivery_policy,
+        rows["old anonymous row"].review_state,
+    ) == ("reference", None, "pending")
 
 
 def test_add_chunk_normalizes_review_state_and_expires_at(tmp_path, caplog):

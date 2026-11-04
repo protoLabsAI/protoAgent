@@ -102,7 +102,9 @@ async def _drive(app: FleetDeck) -> list[str]:
         app.hub_rows = [HUB]  # seeded, so opening the tree reads nothing from this box
         await pilot.press("H")
         await _until(pilot, lambda: isinstance(app.screen, HubTreeScreen), "the hub tree never opened")
-        await _until(pilot, lambda: app.screen.query_one("#hubs", DataTable).row_count == 1, "the hub tree never painted its hub")
+        await _until(
+            pilot, lambda: app.screen.query_one("#hubs", DataTable).row_count == 1, "the hub tree never painted its hub"
+        )
         await pilot.press("escape")
         await _until(pilot, lambda: isinstance(app.screen, RosterScreen), "the hub tree never closed")
         painted.append("hubs")

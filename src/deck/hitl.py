@@ -89,7 +89,13 @@ def options_of(schema: dict) -> list[tuple[str, str, str]]:
             if not isinstance(o, dict):
                 continue
             value = o.get("const", o.get("title", ""))
-            out.append((str(value if value is not None else ""), str(o.get("title", value) if o.get("title") is not None else value), str(o.get("description") or "")))
+            out.append(
+                (
+                    str(value if value is not None else ""),
+                    str(o.get("title", value) if o.get("title") is not None else value),
+                    str(o.get("description") or ""),
+                )
+            )
         return out
     if isinstance(src.get("enum"), list):
         return [(str(v), str(v), "") for v in src["enum"]]
@@ -220,7 +226,9 @@ class ApprovalModal(OnceModal[str | None]):
     def compose(self) -> ComposeResult:
         with Vertical(classes="hitl-box"):
             yield Static(Text(f"⚑ {self.member} asks for approval"), classes="hitl-title")
-            yield Static(Text(str(self.hitl.get("title") or "Approve?")), classes="hitl-sub")  # member-authored: text, never markup
+            yield Static(
+                Text(str(self.hitl.get("title") or "Approve?")), classes="hitl-sub"
+            )  # member-authored: text, never markup
             detail = str(self.hitl.get("detail") or "")
             if detail:
                 with VerticalScroll(classes="hitl-detail"):
@@ -233,13 +241,19 @@ class ApprovalModal(OnceModal[str | None]):
                     # onboarding root: Allow read-only / read-write / Deny) — each answers
                     # with its value verbatim; there is no generic "approve" for it.
                     for i, opt in enumerate(self._options):
-                        variant = "error" if opt["kind"].startswith("reject") else ("success" if opt["primary"] else "default")
+                        variant = (
+                            "error"
+                            if opt["kind"].startswith("reject")
+                            else ("success" if opt["primary"] else "default")
+                        )
                         yield Button(opt["label"], id=f"opt-{i}", variant=variant)
                 else:
                     yield Button("Approve (a)", id="approve", variant="success")
                     yield Button("Deny (d)", id="deny", variant="error")
                 yield Button("Dismiss (ctrl+d)", id="dismiss")
-            yield Static("esc leaves the turn parked · dismiss tells the member to go on without an answer", classes="hitl-hint")
+            yield Static(
+                "esc leaves the turn parked · dismiss tells the member to go on without an answer", classes="hitl-hint"
+            )
 
     def on_mount(self) -> None:
         self.query_one("#opt-0" if self._options else "#approve", Button).focus()
@@ -398,7 +412,9 @@ class FormModal(OnceModal[dict | str | None]):
             self._focus_first()
 
     def _focus_first(self) -> None:
-        for w in self.query("#form-fields Input, #form-fields TextArea, #form-fields Select, #form-fields SelectionList, #form-fields Checkbox"):
+        for w in self.query(
+            "#form-fields Input, #form-fields TextArea, #form-fields Select, #form-fields SelectionList, #form-fields Checkbox"
+        ):
             w.focus()
             return
 
@@ -407,24 +423,47 @@ class FormModal(OnceModal[dict | str | None]):
         value = self.values.get(key)
         opts = options_of(schema)
         slot = self._slot_of.get(key, key)
-        children: list = [] if schema.get("type") == "boolean" else [Label(Text(label))]  # a checkbox carries its own label
+        children: list = (
+            [] if schema.get("type") == "boolean" else [Label(Text(label))]
+        )  # a checkbox carries its own label
         if schema.get("description"):
             children.append(Static(Text(str(schema["description"])), classes="hitl-sub"))
         if is_multi(schema) and opts:
             chosen = set(value) if isinstance(value, list) else set()
-            children.append(SelectionList[str](*[(Text(lab + (f" — {desc}" if desc else "")), val, val in chosen) for val, lab, desc in opts], id=f"in-{slot}"))  # option labels are member text too
+            children.append(
+                SelectionList[str](
+                    *[(Text(lab + (f" — {desc}" if desc else "")), val, val in chosen) for val, lab, desc in opts],
+                    id=f"in-{slot}",
+                )
+            )  # option labels are member text too
         elif opts:
             known = {v for v, _, _ in opts}
-            children.append(Select[str]([(Text(lab + (f" — {desc}" if desc else "")), val) for val, lab, desc in opts], value=str(value) if value is not None and str(value) in known else Select.NULL, allow_blank=True, id=f"in-{slot}"))
+            children.append(
+                Select[str](
+                    [(Text(lab + (f" — {desc}" if desc else "")), val) for val, lab, desc in opts],
+                    value=str(value) if value is not None and str(value) in known else Select.NULL,
+                    allow_blank=True,
+                    id=f"in-{slot}",
+                )
+            )
         elif schema.get("type") == "boolean":
-            children.append(Checkbox(Text(label), value=bool(value), id=f"in-{slot}"))  # Textual 8.2.8 builds a str label with Content.from_text, which PARSES markup
+            children.append(
+                Checkbox(Text(label), value=bool(value), id=f"in-{slot}")
+            )  # Textual 8.2.8 builds a str label with Content.from_text, which PARSES markup
         elif schema.get("format") == "textarea":
             children.append(TextArea(str(value) if value is not None else "", id=f"in-{slot}"))
         else:
             hint = "number" if schema.get("type") in ("number", "integer") else ""
             # select_on_focus=False: a visibility re-render re-focuses the successor Input, and
             # Textual's focus-selects-all would make the next keystroke REPLACE what was typed
-            children.append(Input(value=str(value) if value is not None else "", placeholder=hint, id=f"in-{slot}", select_on_focus=False))
+            children.append(
+                Input(
+                    value=str(value) if value is not None else "",
+                    placeholder=hint,
+                    id=f"in-{slot}",
+                    select_on_focus=False,
+                )
+            )
         return Vertical(*children, classes="hitl-field", id=f"field-{slot}")
 
     def _render_buttons(self) -> None:
@@ -496,7 +535,10 @@ class FormModal(OnceModal[dict | str | None]):
     @on(Select.Changed)
     async def _select_changed(self, event: Select.Changed) -> None:
         if event.select.id and event.select.id.startswith("in-"):
-            await self._set(self._key_of.get(event.select.id[3:], event.select.id[3:]), None if event.value is Select.NULL else event.value)
+            await self._set(
+                self._key_of.get(event.select.id[3:], event.select.id[3:]),
+                None if event.value is Select.NULL else event.value,
+            )
 
     @on(SelectionList.SelectedChanged)
     async def _selection_changed(self, event: SelectionList.SelectedChanged) -> None:

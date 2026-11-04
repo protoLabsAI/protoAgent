@@ -23,7 +23,7 @@ def _sse(*frames, ids=True, extra=""):
 
 
 def test_parse_sse_reads_id_lines_multiline_data_and_skips_comments():
-    body = "id: 7\ndata: {\"topic\": \"turn.usage\",\ndata: \"data\": {\"cost_usd\": 0.1}, \"seq\": 7}\n\n: keepalive\n\ndata: not json\n\ndata: {\"topic\": \"x\", \"data\": {}, \"seq\": 9}\n\n"
+    body = 'id: 7\ndata: {"topic": "turn.usage",\ndata: "data": {"cost_usd": 0.1}, "seq": 7}\n\n: keepalive\n\ndata: not json\n\ndata: {"topic": "x", "data": {}, "seq": 9}\n\n'
     got = list(events.parse_sse(iter(body.splitlines())))
     assert got[0][0] == 7 and got[0][1]["topic"] == "turn.usage"
     assert got[1] == (9, {"topic": "x", "data": {}, "seq": 9})  # seq from the payload when no id: line
@@ -35,12 +35,32 @@ def test_member_events_yields_events_sends_bearer_and_replays_since():
 
     def handler(request: httpx.Request) -> httpx.Response:
         calls["n"] += 1
-        seen.append({"auth": request.headers.get("Authorization"), "path": request.url.path, "since": request.url.params.get("since"), "leid": request.headers.get("Last-Event-ID")})
+        seen.append(
+            {
+                "auth": request.headers.get("Authorization"),
+                "path": request.url.path,
+                "since": request.url.params.get("since"),
+                "leid": request.headers.get("Last-Event-ID"),
+            }
+        )
         if calls["n"] == 1:
-            return httpx.Response(200, headers={"content-type": "text/event-stream"}, text=_sse({"topic": "turn.usage", "data": {"cost_usd": 0.5}, "seq": 41}, {"topic": "chat.progress", "data": {"phase": "text", "session_id": "s", "text": "hi"}, "seq": 42}))
-        return httpx.Response(200, headers={"content-type": "text/event-stream"}, text=_sse({"topic": "turn.finished", "data": {"session_id": "s"}, "seq": 43}))
+            return httpx.Response(
+                200,
+                headers={"content-type": "text/event-stream"},
+                text=_sse(
+                    {"topic": "turn.usage", "data": {"cost_usd": 0.5}, "seq": 41},
+                    {"topic": "chat.progress", "data": {"phase": "text", "session_id": "s", "text": "hi"}, "seq": 42},
+                ),
+            )
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            text=_sse({"topic": "turn.finished", "data": {"session_id": "s"}, "seq": 43}),
+        )
 
-    m = events.MemberEvents("http://127.0.0.1:7870", "tok", "protoEngineer-ba4c", transport=httpx.MockTransport(handler))
+    m = events.MemberEvents(
+        "http://127.0.0.1:7870", "tok", "protoEngineer-ba4c", transport=httpx.MockTransport(handler)
+    )
     out: list[events.Event] = []
     for ev in m.events():
         out.append(ev)
@@ -48,7 +68,12 @@ def test_member_events_yields_events_sends_bearer_and_replays_since():
             m.stop()
     assert [e.topic for e in out] == ["turn.usage", "chat.progress", "turn.finished"]
     assert out[0].slug == "protoEngineer-ba4c" and out[0].seq == 41 and out[1].data["text"] == "hi"
-    assert seen[0] == {"auth": "Bearer tok", "path": "/agents/protoEngineer-ba4c/api/events", "since": None, "leid": None}
+    assert seen[0] == {
+        "auth": "Bearer tok",
+        "path": "/agents/protoEngineer-ba4c/api/events",
+        "since": None,
+        "leid": None,
+    }
     # the reconnect (after the first stream closed cleanly) replayed from the last seq
     assert seen[1]["since"] == "42" and seen[1]["leid"] == "42"
     m.close()
@@ -62,7 +87,9 @@ def test_member_events_backs_off_on_transport_errors_and_stops_on_401(monkeypatc
         calls["n"] += 1
         if calls["n"] < 3:
             raise httpx.ConnectError("refused", request=request)
-        return httpx.Response(200, headers={"content-type": "text/event-stream"}, text=_sse({"topic": "turn.usage", "data": {}, "seq": 1}))
+        return httpx.Response(
+            200, headers={"content-type": "text/event-stream"}, text=_sse({"topic": "turn.usage", "data": {}, "seq": 1})
+        )
 
     m = events.MemberEvents("http://127.0.0.1:7870", "tok", "x", transport=httpx.MockTransport(flaky))
     got = []
@@ -72,7 +99,9 @@ def test_member_events_backs_off_on_transport_errors_and_stops_on_401(monkeypatc
     assert calls["n"] == 3 and len(got) == 1 and "refused" in m.last_error
     m.close()
 
-    m = events.MemberEvents("http://127.0.0.1:7870", "tok", "roxy-e815", transport=httpx.MockTransport(lambda r: httpx.Response(401)))
+    m = events.MemberEvents(
+        "http://127.0.0.1:7870", "tok", "roxy-e815", transport=httpx.MockTransport(lambda r: httpx.Response(401))
+    )
     assert list(m.events()) == []
     assert "roxy-e815" in m.last_error and "rejected" in m.last_error  # final: no retry loop
     m.close()
@@ -126,7 +155,9 @@ def test_stop_wakes_a_reader_blocked_on_a_real_socket():
             t0 = time.monotonic()
             m.stop()
             t.join(3.0)
-            assert not t.is_alive() and time.monotonic() - t0 < 2.0, f"reader still blocked after stop() (attempt {attempt})"
+            assert not t.is_alive() and time.monotonic() - t0 < 2.0, (
+                f"reader still blocked after stop() (attempt {attempt})"
+            )
             m.close()
     finally:
         release.set()
@@ -161,19 +192,41 @@ def test_fleet_events_fans_in_and_reconciles_the_watched_set():
 def test_parse_progress_mirrors_the_console():
     base = {"session_id": "s", "task_id": "t"}
     assert events.parse_progress({}) is None
-    p = events.parse_progress({**base, "phase": "tool_start", "tool": "run_command", "tool_call_id": "c1", "control": {"operator_controllable": True}})
-    assert (p.kind, p.name, p.tool_id, p.done, p.control["operator_controllable"]) == ("tool", "run_command", "c1", False, True)
-    p = events.parse_progress({**base, "phase": "tool_end", "tool": "run_command", "tool_call_id": "c1", "output": "3 open", "error": True})
+    p = events.parse_progress(
+        {
+            **base,
+            "phase": "tool_start",
+            "tool": "run_command",
+            "tool_call_id": "c1",
+            "control": {"operator_controllable": True},
+        }
+    )
+    assert (p.kind, p.name, p.tool_id, p.done, p.control["operator_controllable"]) == (
+        "tool",
+        "run_command",
+        "c1",
+        False,
+        True,
+    )
+    p = events.parse_progress(
+        {**base, "phase": "tool_end", "tool": "run_command", "tool_call_id": "c1", "output": "3 open", "error": True}
+    )
     assert (p.done, p.output, p.error) == (True, "3 open", True)
     assert events.parse_progress({**base, "phase": "tool_end", "tool": "x"}) is None  # no id → can't pair
     assert events.parse_progress({**base, "phase": "text", "text": ""}) is None
     assert events.parse_progress({**base, "phase": "text", "text": "hi"}).text == "hi"
-    r = events.parse_progress({**base, "phase": "room_reply", "message_id": "m1", "author": "sonnet", "text": "1 replied", "ok": False})
+    r = events.parse_progress(
+        {**base, "phase": "room_reply", "message_id": "m1", "author": "sonnet", "text": "1 replied", "ok": False}
+    )
     assert (r.kind, r.author, r.ok) == ("room", "sonnet", False)
-    a = events.parse_progress({**base, "phase": "room_reply", "message_id": "m2", "addressed_to": "sonnet", "text": "report"})
+    a = events.parse_progress(
+        {**base, "phase": "room_reply", "message_id": "m2", "addressed_to": "sonnet", "text": "report"}
+    )
     assert (a.kind, a.addressed_to) == ("ask", "sonnet")
     assert events.parse_progress({**base, "phase": "room_reply", "message_id": "m3"}) is None
-    s = events.parse_progress({**base, "phase": "steer_consumed", "items": [{"id": "s1", "text": "go"}, {"id": "", "text": "x"}]})
+    s = events.parse_progress(
+        {**base, "phase": "steer_consumed", "items": [{"id": "s1", "text": "go"}, {"id": "", "text": "x"}]}
+    )
     assert s.kind == "steer" and s.items == [{"id": "s1", "text": "go"}]
     assert events.parse_progress({**base, "phase": "steer_consumed", "items": []}) is None
     assert events.parse_progress({**base, "phase": "turn_started"}) is None
@@ -192,7 +245,9 @@ def test_a_redirect_or_an_error_body_is_an_error_not_a_clean_empty_stream(monkey
             return httpx.Response(302, headers={"location": "https://hub/agents/x/api/events"})
         if calls["n"] == 2:
             return httpx.Response(409, json={"detail": "agent is not running"})
-        return httpx.Response(200, headers={"content-type": "text/event-stream"}, text=_sse({"topic": "turn.usage", "data": {}, "seq": 1}))
+        return httpx.Response(
+            200, headers={"content-type": "text/event-stream"}, text=_sse({"topic": "turn.usage", "data": {}, "seq": 1})
+        )
 
     m = events.MemberEvents("http://127.0.0.1:7870", "tok", "x", transport=httpx.MockTransport(redirect_then_ok))
     got = []
@@ -210,7 +265,10 @@ def test_attendance_gives_up_on_a_member_without_the_route_and_holds_otherwise()
     def missing(request: httpx.Request) -> httpx.Response:
         calls["n"] += 1
         assert request.url.path == "/agents/x/api/chat/attend" and request.url.params.get("session") == "chat-1"
-        assert request.headers.get("Accept") == "text/event-stream" and request.headers.get("Authorization") == "Bearer tok"
+        assert (
+            request.headers.get("Accept") == "text/event-stream"
+            and request.headers.get("Authorization") == "Bearer tok"
+        )
         return httpx.Response(404, json={"detail": "Not Found"})
 
     a = events.Attendance("http://127.0.0.1:7870", "tok", "x", "chat-1", transport=httpx.MockTransport(missing)).start()
@@ -225,10 +283,21 @@ def test_replayed_frames_are_flagged_and_a_member_stamp_is_carried():
     def handler(request: httpx.Request) -> httpx.Response:
         calls["n"] += 1
         if calls["n"] == 1:  # first connect: no replay
-            return httpx.Response(200, headers={"content-type": "text/event-stream"}, text=_sse({"topic": "turn.usage", "data": {}, "seq": 5, "ts": 1700000000.5}))
+            return httpx.Response(
+                200,
+                headers={"content-type": "text/event-stream"},
+                text=_sse({"topic": "turn.usage", "data": {}, "seq": 5, "ts": 1700000000.5}),
+            )
         # the reconnect with ?since= replays the ring at once
         assert request.url.params.get("since") == "5"
-        return httpx.Response(200, headers={"content-type": "text/event-stream"}, text=_sse({"topic": "turn.usage", "data": {}, "seq": 6}, {"topic": "turn.usage", "data": {}, "seq": 7, "ts": "not-a-number"}))
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            text=_sse(
+                {"topic": "turn.usage", "data": {}, "seq": 6},
+                {"topic": "turn.usage", "data": {}, "seq": 7, "ts": "not-a-number"},
+            ),
+        )
 
     m = events.MemberEvents("http://127.0.0.1:7870", "tok", "x", transport=httpx.MockTransport(handler))
     out = []

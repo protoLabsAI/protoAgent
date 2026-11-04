@@ -652,10 +652,12 @@ def test_a_caching_lane_does_not_mask_a_cold_one(monkeypatch):
     and one busy healthy lane will always outvote a quiet broken one."""
     c = _client(
         monkeypatch,
-        _CacheStore([
-            _lane("claude-opus-5", cache_read_input_tokens=4_000_000),
-            _lane("openai-codex", turns=38),
-        ]),
+        _CacheStore(
+            [
+                _lane("claude-opus-5", cache_read_input_tokens=4_000_000),
+                _lane("openai-codex", turns=38),
+            ]
+        ),
     )
     cache = _cache(c)
     assert cache["engaging"] is False
@@ -670,10 +672,12 @@ def test_an_unmeasured_lane_is_not_accused(monkeypatch):
     caching" is the false accusation this verdict exists to stop making."""
     c = _client(
         monkeypatch,
-        _CacheStore([
-            _lane("claude-opus-5", cache_read_input_tokens=4_000_000),
-            _lane("acp:coder", input_tokens=0),
-        ]),
+        _CacheStore(
+            [
+                _lane("claude-opus-5", cache_read_input_tokens=4_000_000),
+                _lane("acp:coder", input_tokens=0),
+            ]
+        ),
     )
     cache = _cache(c)
     assert cache["engaging"] is True

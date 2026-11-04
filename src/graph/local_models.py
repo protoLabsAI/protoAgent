@@ -14,9 +14,7 @@ def detect_local_models(timeout: float = 1.5) -> list[dict]:
     endpoints = []
     for endpoint in _ENDPOINTS:
         try:
-            models, error = list_gateway_models(
-                endpoint["base_url"], "", timeout=timeout, allow_env_key=False
-            )
+            models, error = list_gateway_models(endpoint["base_url"], "", timeout=timeout, allow_env_key=False)
             found = not error
             if found and not models:
                 error = "running, but no models pulled"

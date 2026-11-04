@@ -25,6 +25,7 @@ Hardening (#4446):
   outcome: the no-copy privacy policy that keeps a prompt out of the store applies to the
   reply too, so a poll reads a content-free terminal state (plus the structured error).
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -63,6 +64,7 @@ class _DetachSpec:
     supplies ``server.chat.turn_error`` because this package must not import ``server``.
     ``incognito`` makes the wrapper record a content-free outcome (state/error only, never
     the assistant response/messages) for a private turn (#4446)."""
+
     turn_id: str
     error_adapter: Callable[[BaseException], dict]
     incognito: bool = False
@@ -72,6 +74,7 @@ class _DetachSpec:
 class _Finished:
     """A detached turn's retained outcome. Never holds the prompt — only the assistant
     ``response``/``messages`` and the structured ``error`` (``turn_error`` shape)."""
+
     session_id: str
     state: str  # completed | failed | canceled
     response: str | None
@@ -109,7 +112,8 @@ _DETACH: contextvars.ContextVar[_DetachSpec | None] = contextvars.ContextVar("lo
 
 # Nested drivers in the same detached task share the outer registration.
 _DETACHED_OWNER: contextvars.ContextVar[asyncio.Task | None] = contextvars.ContextVar(
-    "local_turn_detached_owner", default=None,
+    "local_turn_detached_owner",
+    default=None,
 )
 
 # Injectable clock so tests can drive TTL eviction deterministically.
@@ -119,15 +123,15 @@ _clock: Callable[[], float] = time.monotonic
 def snapshot(session_id: str) -> list[dict]:
     """Metadata only — never copy prompts or incognito content into a new store."""
     return [
-        {"id": turn.id, "origin": turn.origin, "started_at": turn.started_at,
-         "cancel_requested": turn.cancel_requested}
-        for turn in _ACTIVE.values() if turn.session_id == session_id
+        {"id": turn.id, "origin": turn.origin, "started_at": turn.started_at, "cancel_requested": turn.cancel_requested}
+        for turn in _ACTIVE.values()
+        if turn.session_id == session_id
     ]
 
 
-def start_detached(coro, *, session_id: str, origin: str,
-                   error_adapter: Callable[[BaseException], dict],
-                   incognito: bool = False) -> str:
+def start_detached(
+    coro, *, session_id: str, origin: str, error_adapter: Callable[[BaseException], dict], incognito: bool = False
+) -> str:
     """Register the whole chat call before returning its detached id (#4277).
 
     The outer wrapper retains outcomes even when chat returns before reaching its
@@ -141,9 +145,7 @@ def start_detached(coro, *, session_id: str, origin: str,
     """
     if len(_DETACHED_TASKS) >= _MAX_DETACHED:
         coro.close()
-        raise DetachedAdmissionError(
-            f"too many concurrent detached turns (cap {_MAX_DETACHED}); retry shortly"
-        )
+        raise DetachedAdmissionError(f"too many concurrent detached turns (cap {_MAX_DETACHED}); retry shortly")
     turn_id = uuid.uuid4().hex
 
     @tracked
@@ -184,13 +186,15 @@ def _result_error(messages) -> dict | None:
 def _response_text(messages) -> str:
     """Joined assistant text — the same ``response`` string ``POST /api/chat`` returns."""
     return "\n\n".join(
-        m["content"] for m in messages or []
+        m["content"]
+        for m in messages or []
         if isinstance(m, dict) and m.get("role") == "assistant" and m.get("content")
     )
 
 
-def _record(turn: LocalTurn, state: str, *, response: str | None,
-            messages: list[dict] | None, error: dict | None) -> None:
+def _record(
+    turn: LocalTurn, state: str, *, response: str | None, messages: list[dict] | None, error: dict | None
+) -> None:
     _FINISHED[turn.id] = _Finished(turn.session_id, state, response, messages, error, _clock())
     _FINISHED.move_to_end(turn.id)
     _prune_finished()
@@ -264,6 +268,7 @@ def tracked(driver):
     up exactly as before, a disconnect/shutdown cancellation re-raises, and a raised
     exception still propagates to the caller.
     """
+
     @functools.wraps(driver)
     async def run(message, session_id, **kwargs):
         task = asyncio.current_task()
@@ -283,12 +288,18 @@ def tracked(driver):
             result = await driver(message, session_id, **kwargs)
             if spec is not None:
                 err = _result_error(result)
-                state = "canceled" if err and err.get("type") == "turn_cancelled" else ("failed" if err else "completed")
+                state = (
+                    "canceled" if err and err.get("type") == "turn_cancelled" else ("failed" if err else "completed")
+                )
                 # Incognito keeps a content-free terminal outcome: the state and structured
                 # error are retained, but the assistant response/messages NEVER are (#4446).
-                _record(turn, state,
-                        response=None if incognito else _response_text(result),
-                        messages=None if incognito else result, error=err)
+                _record(
+                    turn,
+                    state,
+                    response=None if incognito else _response_text(result),
+                    messages=None if incognito else result,
+                    error=err,
+                )
             return result
         except asyncio.CancelledError:
             # A NON-detached turn (no spec) keeps its #4205 semantics: a disconnect or
@@ -299,11 +310,15 @@ def tracked(driver):
             # authorized poll to read as an unknown turn (#4446).
             if spec is None and not turn.cancel_requested:
                 raise
-            msg = [{"role": "assistant", "content": "Turn stopped. You can choose another model and continue this conversation.",
-                    "error": {"type": "turn_cancelled", "message": "Turn stopped.", "upstream_status": None}}]
+            msg = [
+                {
+                    "role": "assistant",
+                    "content": "Turn stopped. You can choose another model and continue this conversation.",
+                    "error": {"type": "turn_cancelled", "message": "Turn stopped.", "upstream_status": None},
+                }
+            ]
             if spec is not None:
-                _record(turn, "canceled", response=None,
-                        messages=None if incognito else msg, error=msg[0]["error"])
+                _record(turn, "canceled", response=None, messages=None if incognito else msg, error=msg[0]["error"])
             return msg
         except Exception as exc:  # noqa: BLE001 — a detached turn has no caller to receive the raise
             if spec is None:
@@ -314,4 +329,5 @@ def tracked(driver):
         finally:
             _ACTIVE.pop(turn.id, None)
             turn.stopped.set()
+
     return run

@@ -49,7 +49,9 @@ def _seed_history(hist: HistoryStore) -> dict[str, int]:
     return {
         "archive": hist.add("archive of s1", session_id=SESSION, thread_id="a2a:s1", kind="archive"),
         "summary": hist.add("summary of a thread", session_id="other-sess", thread_id="a2a:s1", kind="summary"),
-        "goal": hist.add("goal-iteration summary", session_id="other-sess", thread_id="a2a:s1:goal-iter-2", kind="summary"),
+        "goal": hist.add(
+            "goal-iteration summary", session_id="other-sess", thread_id="a2a:s1:goal-iter-2", kind="summary"
+        ),
         "report": hist.add("background report", session_id=SESSION, thread_id="a2a:s1", kind="report"),
         "other": hist.add("another chat's archive", session_id="s2", thread_id="a2a:s2", kind="archive"),
     }
@@ -157,8 +159,7 @@ def test_mid_transaction_failure_leaves_both_tables_untouched(tmp_path):
     # Make the history hide (phase 1) blow up AFTER the chunk hide has already run.
     conn = sqlite3.connect(db)
     conn.execute(
-        "CREATE TRIGGER fail_history BEFORE UPDATE OF invalidated_at ON history "
-        "BEGIN SELECT RAISE(ABORT, 'boom'); END"
+        "CREATE TRIGGER fail_history BEFORE UPDATE OF invalidated_at ON history BEGIN SELECT RAISE(ABORT, 'boom'); END"
     )
     conn.commit()
     conn.close()
@@ -269,7 +270,9 @@ async def test_runtime_sweep_reaches_private_history(tmp_path, monkeypatch, know
 def _reason(db, row_id):
     conn = sqlite3.connect(db)
     try:
-        return conn.execute("SELECT invalidated_at, invalidation_reason FROM history WHERE id = ?", (row_id,)).fetchone()
+        return conn.execute(
+            "SELECT invalidated_at, invalidation_reason FROM history WHERE id = ?", (row_id,)
+        ).fetchone()
     finally:
         conn.close()
 

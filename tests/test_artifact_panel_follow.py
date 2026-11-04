@@ -88,7 +88,7 @@ def test_another_sessions_inline_artifact_never_takes_over_the_panel(monkeypatch
 
 
 def test_an_inline_artifact_opened_in_the_panel_stays_until_a_panel_artifact_arrives(monkeypatch, tmp_path):
-    """"Open in panel" on an inline chip lands that artifact with follow on (it IS the newest);
+    """ "Open in panel" on an inline chip lands that artifact with follow on (it IS the newest);
     later inline answers don't move it, the next panel artifact does."""
     js = _load(monkeypatch, tmp_path)._SHELL_JS
     doc, svg, svg2, doc2 = _art("doc", 100), _art("svg", 200, True), _art("svg2", 300, True), _art("doc2", 400)

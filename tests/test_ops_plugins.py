@@ -721,7 +721,9 @@ async def test_host_bundle_install_refuses_missing_required_input(tmp_path, monk
     repo.mkdir()
 
     with pytest.raises(installer.InstallError, match="Coder \\(board.coder\\)"):
-        await install_and_activate("https://x/pm", ctx=_ctx(), apply_settings=apply, config_inputs={"board.repo": str(repo)})
+        await install_and_activate(
+            "https://x/pm", ctx=_ctx(), apply_settings=apply, config_inputs={"board.repo": str(repo)}
+        )
     assert "updates" not in captured
 
     await install_and_activate(
@@ -739,7 +741,9 @@ async def test_activate_false_skips_bundle_service_seeding(tmp_path, monkeypatch
     cfg = _host_bundle_lock(tmp_path, monkeypatch)
     before = cfg.read_text()
     monkeypatch.setattr(
-        installer, "install", lambda url, ref=None, **k: {"bundle": "stack", "installed": [{"id": "a"}], "enabled": ["a"]}
+        installer,
+        "install",
+        lambda url, ref=None, **k: {"bundle": "stack", "installed": [{"id": "a"}], "enabled": ["a"]},
     )
     monkeypatch.setattr(loader, "purge_plugin_modules", lambda pid: None)
 

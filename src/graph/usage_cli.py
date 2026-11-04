@@ -58,7 +58,9 @@ def _build_parser() -> argparse.ArgumentParser:
         ),
     )
     p.add_argument("--fleet", action="store_true", help="every fleet member through the hub, deduped by account")
-    p.add_argument("--by-agent", action="store_true", help="member share of attributed tokens per account window (operator only)")
+    p.add_argument(
+        "--by-agent", action="store_true", help="member share of attributed tokens per account window (operator only)"
+    )
     p.add_argument("--account", metavar="ID", help="only this account (provider id or account key)")
     p.add_argument(
         "--warn-at",
@@ -243,9 +245,7 @@ def _collect_local(conn: deckhub.Connection, args: argparse.Namespace, now: date
     """This instance's own usage — the ``host`` slug on the opened connection."""
     accounts = _read_usage(conn.client, "host")
     return [
-        _account_record(a, [], args.warn_at, now)
-        for a in accounts
-        if not args.account or _matches(a, args.account)
+        _account_record(a, [], args.warn_at, now) for a in accounts if not args.account or _matches(a, args.account)
     ]
 
 
@@ -280,14 +280,25 @@ def _collect_fleet(conn: deckhub.Connection, args: argparse.Namespace, now: date
             if member not in g["members"]:
                 g["members"].append(member)
             g["accounts"].append(acct)
-    records = [_account_record(_best_account(groups[k]["accounts"]), groups[k]["members"], args.warn_at, now) for k in order]
+    records = [
+        _account_record(_best_account(groups[k]["accounts"]), groups[k]["members"], args.warn_at, now) for k in order
+    ]
     return records, unreachable
 
 
 # ── output ───────────────────────────────────────────────────────────────────
 
 
-def _payload(mode: str, args: argparse.Namespace, *, ok: bool, hub: str | None, records: list[dict], unreachable: list[dict], error: str | None) -> dict:
+def _payload(
+    mode: str,
+    args: argparse.Namespace,
+    *,
+    ok: bool,
+    hub: str | None,
+    records: list[dict],
+    unreachable: list[dict],
+    error: str | None,
+) -> dict:
     warn_hit = any(w["over_warn"] for r in records for w in r["windows"])
     return {
         "mode": mode,
@@ -337,7 +348,9 @@ def _render(payload: dict) -> None:
     for account in accounts:
         if "by_agent" not in account:
             continue
-        print(f"\n  {account['account_key'] or account['provider_id']}: share of attributed tokens (plan % is account-wide)")
+        print(
+            f"\n  {account['account_key'] or account['provider_id']}: share of attributed tokens (plan % is account-wide)"
+        )
         if not account["by_agent"]:
             print("    unavailable — no current attributable window")
         for window in account["by_agent"]:
@@ -394,8 +407,11 @@ def run_usage_cli(argv: list[str]) -> int:
                 record = _account_record(account, account.get("members", []), args.warn_at, now)
                 record["by_agent"] = account.get("by_agent", [])
                 records.append(record)
-            unreachable = [{"member": slug, "slug": slug, "error": "usage unavailable"}
-                           for slug, member in body.get("members", {}).items() if not member.get("reachable")]
+            unreachable = [
+                {"member": slug, "slug": slug, "error": "usage unavailable"}
+                for slug, member in body.get("members", {}).items()
+                if not member.get("reachable")
+            ]
         elif args.fleet:
             records, unreachable = _collect_fleet(conn, args, now)
         else:
@@ -406,7 +422,15 @@ def run_usage_cli(argv: list[str]) -> int:
     finally:
         conn.client.close()
 
-    payload = _payload("fleet" if args.fleet else "local", args, ok=True, hub=hub_url, records=records, unreachable=unreachable, error=None)
+    payload = _payload(
+        "fleet" if args.fleet else "local",
+        args,
+        ok=True,
+        hub=hub_url,
+        records=records,
+        unreachable=unreachable,
+        error=None,
+    )
     if args.as_json:
         _emit(payload)
     else:

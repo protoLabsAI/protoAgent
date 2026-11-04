@@ -709,8 +709,10 @@ def _handoff_title(state: Any) -> str | None:
     messages = state.get("messages") if isinstance(state, dict) else None
     for m in messages or []:
         if isinstance(m, HumanMessage):
-            text = m.content if isinstance(m.content, str) else " ".join(
-                str(p.get("text") or "") for p in m.content if isinstance(p, dict)
+            text = (
+                m.content
+                if isinstance(m.content, str)
+                else " ".join(str(p.get("text") or "") for p in m.content if isinstance(p, dict))
             )
             text = " ".join(text.split())
             if text:

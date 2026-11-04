@@ -91,7 +91,9 @@ class BackgroundManager:
             self._max_concurrency = max(1, int(max_concurrency))
         else:
             try:
-                self._max_concurrency = max(1, int(os.environ.get("BACKGROUND_MAX_CONCURRENCY", _DEFAULT_MAX_CONCURRENCY)))
+                self._max_concurrency = max(
+                    1, int(os.environ.get("BACKGROUND_MAX_CONCURRENCY", _DEFAULT_MAX_CONCURRENCY))
+                )
             except ValueError:
                 self._max_concurrency = _DEFAULT_MAX_CONCURRENCY
         self._sem = asyncio.Semaphore(self._max_concurrency)
@@ -442,7 +444,9 @@ class BackgroundManager:
         if work_task is not None:
             work_task.cancel()
             self.store.mark_complete(job_id, "canceled", "Canceled.")
-            self._publish_completed(job_id, "canceled", job.subagent_type, job.description, job.origin_session, "Canceled.")
+            self._publish_completed(
+                job_id, "canceled", job.subagent_type, job.description, job.origin_session, "Canceled."
+            )
             return {"ok": True, "status": "canceled", "detail": f"Canceled {job_id}."}
         task_id = job.a2a_task_id
         if not task_id:
@@ -910,8 +914,10 @@ def _subagent_fence(subagent_type: str) -> list[str]:
 
         lead_tools = getattr(STATE.graph, "bound_tools", []) or []
         names = _subagent_tool_names(
-            resolved, [*resolved.tools, *(t.name for t in lead_tools)],
-            config=STATE.graph_config, lead_tools=lead_tools,
+            resolved,
+            [*resolved.tools, *(t.name for t in lead_tools)],
+            config=STATE.graph_config,
+            lead_tools=lead_tools,
         )
         return names or [FENCE_DENY_ALL]
     except Exception:  # noqa: BLE001

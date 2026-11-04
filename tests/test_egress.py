@@ -305,10 +305,7 @@ def test_policy_resolves_paths_like_the_enforced_fence(tmp_path):
     real.mkdir()
     p = tmp_path / "c.yaml"
     p.write_text(
-        "filesystem:\n"
-        "  enabled: true\n"
-        "  projects:\n"
-        f"    - {{name: dotted, path: {tmp_path}/./real, write: true}}\n"
+        f"filesystem:\n  enabled: true\n  projects:\n    - {{name: dotted, path: {tmp_path}/./real, write: true}}\n"
     )
     policy = _gen().build_policy(LangGraphConfig.from_yaml(p))
     assert str(real.resolve()) in policy

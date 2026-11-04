@@ -78,7 +78,7 @@ def test_each_inline_kind_dispatches_without_a_placement_branch(monkeypatch, tmp
     # placement-independent branch, identical for the panel and the embed.
     assert "var im = htmlImportMap(code);" in src
     assert "return htmlDoc(im.code, dsLink() + base(kind) + (im.map ? " in src
-    assert 'return vegaDoc(code)' in src
+    assert "return vegaDoc(code)" in src
 
 
 def test_vega_lite_embed_csp_is_the_same_as_the_panel(monkeypatch, tmp_path):
@@ -475,8 +475,11 @@ def test_frames_get_the_full_theme_palette_and_themed_defaults(monkeypatch, tmp_
     base = _js_function(js, "base")
     # base() takes a snapshot, serialises it via snapshotToCss (includes color-scheme), and
     # links the vendored sheet for zero-specificity element defaults.
-    assert "var snap=themeTokens()" in base and "snapshotToCss" in base and "/plugins/artifact/vendor/pl-embed.css" in base
+    assert (
+        "var snap=themeTokens()" in base and "snapshotToCss" in base and "/plugins/artifact/vendor/pl-embed.css" in base
+    )
     from tests.test_artifact_plugin import ROOT
+
     css = (ROOT / "vendor/pl-embed.css").read_text(encoding="utf-8")
     assert ":where(input, select, textarea)" in css and ":where(button)" in css
 
@@ -622,9 +625,13 @@ def test_frame_color_scheme_follows_the_console_ground_not_the_os(monkeypatch, t
     if not NODE:
         pytest.skip("node not on PATH")
     fn = _js_function(js, "bgIsDark")
-    harness = "var document={createElement:function(){throw new Error('no canvas')}};\n" + fn + (
-        "\nconsole.log(JSON.stringify([bgIsDark('#0a0a0c'), bgIsDark('#f6f7f9'), bgIsDark('rgb(250,250,250)'),"
-        " bgIsDark('rgb(10, 10, 12)'), bgIsDark('#000')]));"
+    harness = (
+        "var document={createElement:function(){throw new Error('no canvas')}};\n"
+        + fn
+        + (
+            "\nconsole.log(JSON.stringify([bgIsDark('#0a0a0c'), bgIsDark('#f6f7f9'), bgIsDark('rgb(250,250,250)'),"
+            " bgIsDark('rgb(10, 10, 12)'), bgIsDark('#000')]));"
+        )
     )
     assert _node(harness) == [True, False, False, True, True]
 
@@ -642,7 +649,9 @@ def test_base_theme_css_and_module_failure_preserve_defaults(monkeypatch, tmp_pa
         + _js_function(js, "bgIsDark")
         + _js_function(js, "base")
         + _js_function(js, "pushTheme")
-        + "\n(async()=>{const ds=await import(" + json.dumps(module_url) + ");\n"
+        + "\n(async()=>{const ds=await import("
+        + json.dumps(module_url)
+        + ");\n"
         + r"""
 let values={'--pl-color-bg':'#fafafa','--pl-color-fg':'#111'};
 const root={style:{colorScheme:'light'}};

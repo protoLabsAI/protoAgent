@@ -149,7 +149,9 @@ def register_mcp_routes(app) -> None:
 
         entries = _entries_from_blob(data)
         names = {e["name"] for e in entries}
-        servers = await _apply_servers(lambda cur: [s for s in cur if s.get("name") not in names] + entries, enable=True)
+        servers = await _apply_servers(
+            lambda cur: [s for s in cur if s.get("name") not in names] + entries, enable=True
+        )
         return {"ok": True, "added": sorted(names), "servers": [s["name"] for s in servers]}
 
     @app.get("/api/mcp/catalog")

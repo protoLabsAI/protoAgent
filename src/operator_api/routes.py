@@ -409,6 +409,20 @@ class _TaskStoreAdapter:
         return {"deleted": True}
 
 
+def _bg_job_out(job) -> dict:
+    """A background job for the console, its ``error`` redacted on the way out (#4726).
+
+    New failures are redacted before they are stored. This also covers rows written
+    before that, which still hold the raw text.
+    """
+    from observability.error_text import safe_error_text
+
+    out = job.to_dict()
+    if out.get("error"):
+        out["error"] = safe_error_text(out["error"], max_len=2000)
+    return out
+
+
 def _check_bg_job_id(job_id: str) -> None:
     if not _BG_JOB_ID.fullmatch(job_id or ""):
         raise HTTPException(status_code=400, detail="Invalid background job id.")
@@ -527,7 +541,7 @@ def register_operator_routes(
                 status=status or None,
                 limit=max(1, min(int(limit), 500)),
             )
-            return {"jobs": [j.to_dict() for j in jobs], "enabled": True}
+            return {"jobs": [_bg_job_out(j) for j in jobs], "enabled": True}
         except Exception as exc:
             raise _http_error(exc) from exc
 
@@ -552,7 +566,7 @@ def register_operator_routes(
             raise _http_error(exc) from exc
         if job is None:
             raise HTTPException(status_code=404, detail=f"No background job {job_id}.")
-        return job.to_dict()
+        return _bg_job_out(job)
 
     @app.post("/api/background/{job_id}/cancel")
     async def _background_cancel(job_id: str):
@@ -747,7 +761,6 @@ def register_operator_routes(
                 raise _http_error(exc) from exc
 
     if goal_clear is not None:
-
         # `?close_tasks=true` also closes the goal's session-scoped task backlog (ADR 0079) —
         # used by the "Stop goal" action so a stopped goal leaves no orphaned open tasks.
         @app.delete("/api/goals/{session_id}")

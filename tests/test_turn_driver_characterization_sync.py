@@ -47,13 +47,14 @@ def env(monkeypatch):
     e.trace = TraceSpy().install(monkeypatch)
     e.rows = []
 
-    def _record(sink, *, session_id, origin, state, started):
+    def _record(sink, *, session_id, origin, state, started, error="", incognito=False):
         cb = sink.get("usage_cb")
         e.rows.append(
             {
                 "session_id": session_id,
                 "origin": origin,
                 "state": state,
+                "error": error,
                 "usage": dict(getattr(cb, "usage_metadata", None) or {}) if cb is not None else None,
             }
         )
@@ -125,6 +126,7 @@ async def test_golden_plain_answer(env):
             "session_id": "s1",
             "origin": "v1",
             "state": "completed",
+            "error": "",
             "usage": {"m1": {"input_tokens": 100, "output_tokens": 20, "total_tokens": 120}},
         }
     ]
@@ -252,7 +254,10 @@ async def test_an_autonomous_origin_auto_answers_a_hitl_park_like_streaming(env,
     autonomous (server-fired) origin never parks on a HITL pause — it resumes with the
     no-operator sentinel, keyed by interrupt id, as a streaming turn from that origin does."""
     g = env.install(
-        [Invoke(turn_result(), steps=[set_interrupt({"question": "Which env?"})]), turn_result(AIMessage(content="done"))]
+        [
+            Invoke(turn_result(), steps=[set_interrupt({"question": "Which env?"})]),
+            turn_result(AIMessage(content="done")),
+        ]
     )
 
     out = await chat_mod.chat("deploy", "s1", origin=origin)
@@ -752,6 +757,7 @@ async def test_failure_returns_an_error_bubble_records_it_and_bills_what_was_spe
             "session_id": "s-err",
             "origin": "v1",
             "state": "failed",
+            "error": "bad key",
             "usage": {"m1": {"input_tokens": 7, "output_tokens": 0, "total_tokens": 7}},
         }
     ]
@@ -866,7 +872,7 @@ async def test_a_short_circuit_returns_without_a_graph_turn_and_is_traced(env):
     assert len(out) == 1 and out[0]["role"] == "assistant" and "usage" not in out[0]
     assert env.trace.outputs == [out[0]["content"]]
     # The wrapper still writes a telemetry call, with no usage collector (nothing spent).
-    assert env.rows == [{"session_id": "s1", "origin": "local", "state": "completed", "usage": None}]
+    assert env.rows == [{"session_id": "s1", "origin": "local", "state": "completed", "error": "", "usage": None}]
 
 
 @pytest.mark.asyncio

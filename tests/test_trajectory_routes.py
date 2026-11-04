@@ -59,8 +59,17 @@ def test_call_reconstruction_joins_availability_against_the_checkpoint(monkeypat
         AIMessage(content="a huge original answer " * 50, id="a1"),
         HumanMessage(content="compacted away later", id="h2"),
     ]
-    tl.append("s1", {"t": "request", "model": "m", "stable_sha": "x", "tools_sha": "y",
-                     "tools_count": 3, "msgs": [message_ref(m) for m in original]})
+    tl.append(
+        "s1",
+        {
+            "t": "request",
+            "model": "m",
+            "stable_sha": "x",
+            "tools_sha": "y",
+            "tools_count": 3,
+            "msgs": [message_ref(m) for m in original],
+        },
+    )
 
     body = c.get("/api/trajectory/s1/call/0").json()
     assert body["found"] is True and body["calls"] == 1

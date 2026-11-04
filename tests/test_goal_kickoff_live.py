@@ -101,8 +101,7 @@ def _tmp():
 
 async def _frames(message, session_id, *, request_metadata=None):
     return [
-        frame
-        async for frame in chat_mod._chat_langgraph_stream(message, session_id, request_metadata=request_metadata)
+        frame async for frame in chat_mod._chat_langgraph_stream(message, session_id, request_metadata=request_metadata)
     ]
 
 

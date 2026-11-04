@@ -72,9 +72,7 @@ def _pr_create(calls: list[list[str]]) -> list[str]:
 def test_draft_pr_defaults_false_and_parses():
     d = ADAPTERS["acp"].parse({"name": "c", "type": "acp", "command": "proto", "workdir": "/tmp"})
     assert d.draft_pr is False  # absent ⇒ off
-    d = ADAPTERS["acp"].parse(
-        {"name": "c", "type": "acp", "command": "proto", "workdir": "/tmp", "draft_pr": "true"}
-    )
+    d = ADAPTERS["acp"].parse({"name": "c", "type": "acp", "command": "proto", "workdir": "/tmp", "draft_pr": "true"})
     assert d.draft_pr is True
 
 
@@ -105,9 +103,7 @@ async def test_finish_without_draft_is_byte_identical(repo, monkeypatch):
     (repo / "feature.txt").write_text("new\n")
 
     # Default (draft omitted) must match today's argv exactly — no --draft, fixed prefix.
-    out = await harness.finish(
-        str(repo), base="main", branch="t/plain-abc1235", item_id="abc1235", title="Add feature"
-    )
+    out = await harness.finish(str(repo), base="main", branch="t/plain-abc1235", item_id="abc1235", title="Add feature")
     assert out.pushed
     create = _pr_create(calls)
     assert "--draft" not in create

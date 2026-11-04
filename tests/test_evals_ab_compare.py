@@ -255,9 +255,7 @@ def test_bad_memory_fixture_is_internally_coherent():
 def test_bad_memory_fixture_renders_regression_in_markdown():
     arm_a = json.loads((_FIXTURES / "ab-A-9000.json").read_text())
     arm_b = json.loads((_FIXTURES / "ab-B-9000.json").read_text())
-    md = format_ab_markdown(
-        compare_ab(arm_a, arm_b), trace_link=lambda t: f"https://trace.example/{t}"
-    )
+    md = format_ab_markdown(compare_ab(arm_a, arm_b), trace_link=lambda t: f"https://trace.example/{t}")
     assert "Regressions (A pass" in md
     assert "`memory_region_recall`" in md
     assert "https://trace.example/tr-A-region" in md

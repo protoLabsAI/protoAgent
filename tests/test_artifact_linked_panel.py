@@ -29,8 +29,12 @@ GONE_MSG = "This linked file is no longer reachable (its project was unregistere
 
 # A linked PDF over the 25 MB copy cap but under the 40 MB page-preview cap (r1): 26 MB.
 _LINKED_PDF = {
-    "file": {"filename": "big.pdf", "mime": "application/pdf", "size": 26 * 1024 * 1024,
-             "pdf": {"render": True, "pages": 40}},
+    "file": {
+        "filename": "big.pdf",
+        "mime": "application/pdf",
+        "size": 26 * 1024 * 1024,
+        "pdf": {"render": True, "pages": 40},
+    },
     "link": {"project": "app", "path": "docs/big.pdf", "size": 26 * 1024 * 1024},
     "code": "EXTRACTED PREVIEW TEXT",
 }
@@ -58,9 +62,14 @@ def _run_filecard(js: str, version: dict, note: str) -> str:
         + _js_function(js, "fileCard")
     )
     return _node(
-        stubs + deps
-        + "var v=" + json.dumps(version) + ";"
-        + "console.log(JSON.stringify(fileCard(v, " + json.dumps(note) + ")));"
+        stubs
+        + deps
+        + "var v="
+        + json.dumps(version)
+        + ";"
+        + "console.log(JSON.stringify(fileCard(v, "
+        + json.dumps(note)
+        + ")));"
     )
 
 
@@ -71,7 +80,9 @@ def test_link_banner_names_the_project_path_and_reads_read_only(monkeypatch, tmp
     art = _load(monkeypatch, tmp_path)
     js = _js(art)
     got = _node(
-        _js_function(js, "esc") + _js_function(js, "linkOf") + _js_function(js, "linkBanner")
+        _js_function(js, "esc")
+        + _js_function(js, "linkOf")
+        + _js_function(js, "linkBanner")
         + "console.log(JSON.stringify(["
         + '  linkBanner({link:{project:"app",path:"docs/big.pdf"}},"#fff","#999","#ccc"),'
         + '  linkBanner({file:{}},"#fff","#999","#ccc")'
@@ -98,8 +109,11 @@ def test_linked_pdf_over_25mb_renders_pages_with_the_banner(monkeypatch, tmp_pat
     js = _js(art)
     ok = _node(
         'var PPTX_MIME="x";var DOCX_MIME="y";'
-        + _js_function(js, "previewKind") + _js_function(js, "pdfOk")
-        + "console.log(JSON.stringify(pdfOk(" + json.dumps(_LINKED_PDF) + ")));"
+        + _js_function(js, "previewKind")
+        + _js_function(js, "pdfOk")
+        + "console.log(JSON.stringify(pdfOk("
+        + json.dumps(_LINKED_PDF)
+        + ")));"
     )
     assert ok is True  # a cleared verdict → the page renderer, link or not
     card = _js_function(js, "fileCard")
@@ -119,7 +133,8 @@ def test_status_messages_map_409_to_changed_and_403_to_gone(monkeypatch, tmp_pat
     art = _load(monkeypatch, tmp_path)
     js = _js(art)
     got = _node(
-        _const_lines(js, "LINK_CHANGED_MSG=") + _const_lines(js, "LINK_GONE_MSG=")
+        _const_lines(js, "LINK_CHANGED_MSG=")
+        + _const_lines(js, "LINK_GONE_MSG=")
         + _js_function(js, "linkStatusMsg")
         + "console.log(JSON.stringify([linkStatusMsg(409),linkStatusMsg(403),linkStatusMsg(200)]));"
     )
@@ -192,7 +207,7 @@ def test_version_controls_are_hidden_for_a_linked_artifact(monkeypatch, tmp_path
     # the stepper markup is a single #vnav span wrapping prev / label / next
     html = art._SHELL_HTML
     assert 'id="vnav"' in html
-    vnav = html[html.index('id="vnav"'): html.index('id="vnav"') + 400]
+    vnav = html[html.index('id="vnav"') : html.index('id="vnav"') + 400]
     for ctrl in ('id="vprev"', 'id="vlabel"', 'id="vnext"'):
         assert ctrl in vnav, ctrl
     # editing is already hidden for any file artifact (not re-enabled for linked)

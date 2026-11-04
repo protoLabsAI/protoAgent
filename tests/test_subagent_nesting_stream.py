@@ -108,7 +108,9 @@ async def test_subagent_tool_calls_nest_via_explicit_parent_id(monkeypatch):
     # them BY ID rather than by timing.
     frames: list[tuple[str, str, str | None]] = []  # (kind, name, parentId)
     seq: list[tuple[str, str]] = []
-    async for kind, payload in _run_turn_stream("ask the researcher the time", "s4", {"configurable": {"thread_id": "s4"}}):
+    async for kind, payload in _run_turn_stream(
+        "ask the researcher the time", "s4", {"configurable": {"thread_id": "s4"}}
+    ):
         if kind not in ("tool_start", "tool_end"):
             continue
         frames.append((kind, payload.get("name"), payload.get("parentId")))

@@ -34,11 +34,16 @@ async def test_archive_metadata_and_no_chunks(stores, monkeypatch, automatic, kn
         "graph.conversation_harvest.message_dates",
         lambda *args, **kwargs: {"h1": "2026-08-01", "h2": "2026-08-02"},
     )
+
     def content(text):
-        return [
-            {"type": "text", "text": text},
-            {"type": "image_url", "image_url": {"url": "https://example.com/image.png"}},
-        ] if multipart else text
+        return (
+            [
+                {"type": "text", "text": text},
+                {"type": "image_url", "image_url": {"url": "https://example.com/image.png"}},
+            ]
+            if multipart
+            else text
+        )
 
     state = {
         "session_id": "session",
@@ -48,11 +53,18 @@ async def test_archive_metadata_and_no_chunks(stores, monkeypatch, automatic, kn
         mw = CountingSummarizationMiddleware.__new__(CountingSummarizationMiddleware)
         mw._archive(state, "thread")
     else:
-        graph = SimpleNamespace(aget_state=AsyncMock(return_value=SimpleNamespace(values=state)),
-                                aupdate_state=AsyncMock())
+        graph = SimpleNamespace(
+            aget_state=AsyncMock(return_value=SimpleNamespace(values=state)), aupdate_state=AsyncMock()
+        )
         result = await compact_thread(
-            graph, object(), writer_knowledge, object(), "thread", "session",
-            keep_recent=0, summarizer=AsyncMock(return_value="summary"),
+            graph,
+            object(),
+            writer_knowledge,
+            object(),
+            "thread",
+            "session",
+            keep_recent=0,
+            summarizer=AsyncMock(return_value="summary"),
         )
         assert result["archived_chunks"] == 1
         graph.aupdate_state.assert_awaited_once()
@@ -74,8 +86,10 @@ async def test_manual_archive_failure_preserves_checkpoint_unless_forced(stores,
     if failure == "missing":
         monkeypatch.setattr(STATE, "history_store", None)
     else:
+
         def fail(*args, **kwargs):
             raise RuntimeError("disk failure")
+
         monkeypatch.setattr(history, "add", fail)
     graph = SimpleNamespace(
         aget_state=AsyncMock(return_value=SimpleNamespace(values={"messages": [HumanMessage("full history")]})),
@@ -83,8 +97,15 @@ async def test_manual_archive_failure_preserves_checkpoint_unless_forced(stores,
     )
     summary = AsyncMock(return_value="summary")
     result = await compact_thread(
-        graph, object(), knowledge, object(), "thread", "session",
-        keep_recent=0, summarizer=summary, force=force,
+        graph,
+        object(),
+        knowledge,
+        object(),
+        "thread",
+        "session",
+        keep_recent=0,
+        summarizer=summary,
+        force=force,
     )
     assert result["archived"] is False
     assert result["refused"] is not force
@@ -102,15 +123,18 @@ async def test_manual_archive_failure_preserves_checkpoint_unless_forced(stores,
 async def test_summary_uses_checkpoint_session_and_keeps_facts_in_chunks(stores, multipart):
     knowledge, history = stores
     content = [{"type": "text", "text": "I prefer teal"}] if multipart else "I prefer teal"
-    checkpoint = SimpleNamespace(checkpoint={
-        "ts": "2026-08-02T12:00:00Z",
-        "channel_values": {"session_id": "session", "messages": [HumanMessage(content)]},
-    })
+    checkpoint = SimpleNamespace(
+        checkpoint={
+            "ts": "2026-08-02T12:00:00Z",
+            "channel_values": {"session_id": "session", "messages": [HumanMessage(content)]},
+        }
+    )
     summarizer = AsyncMock(return_value="Teal preference.")
     entry_id = await harvest_thread(
         "custom:thread:goal-iter-2",
         checkpointer=SimpleNamespace(aget_tuple=AsyncMock(return_value=checkpoint)),
-        knowledge_store=knowledge, config=SimpleNamespace(knowledge_facts=True),
+        knowledge_store=knowledge,
+        config=SimpleNamespace(knowledge_facts=True),
         summarizer=summarizer,
         fact_extractor=AsyncMock(return_value=["The user prefers teal."]),
         namespace="project",
@@ -126,14 +150,17 @@ async def test_summary_uses_checkpoint_session_and_keeps_facts_in_chunks(stores,
 async def test_summary_does_not_require_a_knowledge_store(stores, monkeypatch):
     knowledge, history = stores
     monkeypatch.setattr(STATE, "knowledge_store", None)
-    checkpoint = SimpleNamespace(checkpoint={
-        "channel_values": {"session_id": "session", "messages": [HumanMessage("conversation")]},
-    })
+    checkpoint = SimpleNamespace(
+        checkpoint={
+            "channel_values": {"session_id": "session", "messages": [HumanMessage("conversation")]},
+        }
+    )
     extractor = AsyncMock()
     entry_id = await harvest_thread(
         "thread",
         checkpointer=SimpleNamespace(aget_tuple=AsyncMock(return_value=checkpoint)),
-        knowledge_store=None, config=SimpleNamespace(knowledge_facts=True),
+        knowledge_store=None,
+        config=SimpleNamespace(knowledge_facts=True),
         summarizer=AsyncMock(return_value="Retirement summary."),
         fact_extractor=extractor,
     )
@@ -149,8 +176,14 @@ async def test_report_is_full_history_under_origin(stores):
     import asyncio
 
     knowledge, history = stores
-    job = SimpleNamespace(id="job", status="completed", origin_session="origin", origin_incognito=False,
-                          description="Research", result="Full report\n" * 100)
+    job = SimpleNamespace(
+        id="job",
+        status="completed",
+        origin_session="origin",
+        origin_incognito=False,
+        description="Research",
+        result="Full report\n" * 100,
+    )
     assert _should_index_report(job)
     _spawn_report_index(job)
     await asyncio.gather(*list(_BG_WAKE_TASKS))
@@ -159,15 +192,23 @@ async def test_report_is_full_history_under_origin(stores):
     assert knowledge.list_chunks() == []
 
 
-@pytest.mark.parametrize("incognito,thread", [(True, "thread"), (False, "background:job"), (False, "a2a:background:job")])
+@pytest.mark.parametrize(
+    "incognito,thread", [(True, "thread"), (False, "background:job"), (False, "a2a:background:job")]
+)
 async def test_retirement_skips_leave_both_stores_empty(stores, incognito, thread):
     knowledge, history = stores
-    cp = SimpleNamespace(aget_tuple=AsyncMock(return_value=SimpleNamespace(checkpoint={
-        "channel_values": {"incognito": incognito, "messages": [HumanMessage("secret")]}
-    })))
+    cp = SimpleNamespace(
+        aget_tuple=AsyncMock(
+            return_value=SimpleNamespace(
+                checkpoint={"channel_values": {"incognito": incognito, "messages": [HumanMessage("secret")]}}
+            )
+        )
+    )
     summary = AsyncMock(return_value="secret")
-    assert await harvest_thread(thread, checkpointer=cp, knowledge_store=knowledge,
-                                config=object(), summarizer=summary) is None
+    assert (
+        await harvest_thread(thread, checkpointer=cp, knowledge_store=knowledge, config=object(), summarizer=summary)
+        is None
+    )
     summary.assert_not_awaited()
     assert history.search("secret") == []
     assert knowledge.list_chunks() == []
@@ -191,11 +232,14 @@ async def test_summary_write_failure_obeys_retirement_error_policy(stores, monke
         raise RuntimeError("history unavailable")
 
     monkeypatch.setattr(history, "add", fail)
-    cp = SimpleNamespace(aget_tuple=AsyncMock(return_value=SimpleNamespace(checkpoint={
-        "channel_values": {"messages": [HumanMessage("conversation")]}
-    })))
-    kwargs = dict(checkpointer=cp, knowledge_store=knowledge, config=object(),
-                  summarizer=AsyncMock(return_value="summary"))
+    cp = SimpleNamespace(
+        aget_tuple=AsyncMock(
+            return_value=SimpleNamespace(checkpoint={"channel_values": {"messages": [HumanMessage("conversation")]}})
+        )
+    )
+    kwargs = dict(
+        checkpointer=cp, knowledge_store=knowledge, config=object(), summarizer=AsyncMock(return_value="summary")
+    )
     assert await harvest_thread("thread", **kwargs) is None
     with pytest.raises(RuntimeError, match="history unavailable"):
         await harvest_thread("thread", raise_on_error=True, **kwargs)
@@ -206,8 +250,7 @@ def test_report_gate_depends_only_on_history(stores, monkeypatch):
     from server.a2a import _should_index_report
 
     _, history = stores
-    job = SimpleNamespace(status="completed", origin_session="origin", origin_incognito=False,
-                          result="report" * 200)
+    job = SimpleNamespace(status="completed", origin_session="origin", origin_incognito=False, result="report" * 200)
     assert not _should_index_report(job, history_store=None)
     monkeypatch.setattr(STATE, "knowledge_store", None)
     assert _should_index_report(job)

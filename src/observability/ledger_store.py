@@ -205,8 +205,7 @@ class LedgerStore:
         db = self._connect()
         try:
             cur = db.execute(
-                f"INSERT INTO delegations ({','.join(_COLUMNS)}) "
-                f"VALUES ({','.join(':' + c for c in _COLUMNS)})",
+                f"INSERT INTO delegations ({','.join(_COLUMNS)}) VALUES ({','.join(':' + c for c in _COLUMNS)})",
                 row,
             )
             db.commit()

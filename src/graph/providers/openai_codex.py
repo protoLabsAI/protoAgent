@@ -114,6 +114,4 @@ def build_codex_llm(
 
     # The blob is sealed to endpoint+account: stamp WHICH one, so a later turn that
     # lands on another connection drops those items instead of 400-ing on them.
-    return build_codex_client(
-        issuer=issuer_fingerprint(creds.base_url, creds.account_id or ""), **kwargs
-    )
+    return build_codex_client(issuer=issuer_fingerprint(creds.base_url, creds.account_id or ""), **kwargs)

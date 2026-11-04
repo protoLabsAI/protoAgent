@@ -26,7 +26,9 @@ class _Host(App):
 
 
 def _texts(screen) -> str:
-    return "\n".join(str(w.content) for w in screen.query(Static)) + "\n".join(str(w.content) for w in screen.query(Label))
+    return "\n".join(str(w.content) for w in screen.query(Static)) + "\n".join(
+        str(w.content) for w in screen.query(Label)
+    )
 
 
 _FORM = {

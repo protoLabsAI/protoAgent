@@ -337,9 +337,13 @@ async def _acp_turn_collected(session_id: str, message: str) -> list[dict[str, A
     # scanning messages, so it never carried the stale-answer defect, and promising "this
     # is not the previous turn's answer" here would reassure against a risk that doesn't
     # exist on it.
-    content = error or answer or (
-        "**Error:** the ACP runtime ended the turn without a reply and without an error. "
-        "Nothing was returned for this request; retry it."
+    content = (
+        error
+        or answer
+        or (
+            "**Error:** the ACP runtime ended the turn without a reply and without an error. "
+            "Nothing was returned for this request; retry it."
+        )
     )
     out: dict[str, Any] = {"role": "assistant", "content": content}
     if usage is not None:

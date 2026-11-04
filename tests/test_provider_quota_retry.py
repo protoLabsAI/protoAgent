@@ -1,4 +1,5 @@
 """Exercise quota rejection at the real Anthropic SDK HTTP boundary (#4205)."""
+
 import asyncio
 
 import anthropic
@@ -8,10 +9,10 @@ from graph.providers.anthropic_oauth import _OAuthChatAnthropic
 import anthropic._base_client as sdk_base
 
 
-@pytest.fixture(params=["seconds", "milliseconds", "asctime"] + [
-    (bad, fallback) for bad in ("invalid", "nan", "inf", "0", "-1")
-    for fallback in ("seconds", "date")
-])
+@pytest.fixture(
+    params=["seconds", "milliseconds", "asctime"]
+    + [(bad, fallback) for bad in ("invalid", "nan", "inf", "0", "-1") for fallback in ("seconds", "date")]
+)
 def long_retry_headers(request):
     from datetime import UTC, datetime, timedelta
     from email.utils import format_datetime
@@ -38,13 +39,20 @@ async def test_long_provider_retry_is_reported_without_sleep(monkeypatch, stream
 
     def respond(request):
         requests.append(request)
-        return http.Response(status, headers=long_retry_headers, json={
-            "type": "error", "error": {"type": "rate_limit_error", "message": "Weekly quota exhausted"},
-        })
+        return http.Response(
+            status,
+            headers=long_retry_headers,
+            json={
+                "type": "error",
+                "error": {"type": "rate_limit_error", "message": "Weekly quota exhausted"},
+            },
+        )
 
     async with http.AsyncClient(transport=http.MockTransport(respond)) as client:
         llm._async_client._client = client
-        with pytest.raises(anthropic.RateLimitError if status == 429 else anthropic.InternalServerError, match="Weekly quota exhausted"):
+        with pytest.raises(
+            anthropic.RateLimitError if status == 429 else anthropic.InternalServerError, match="Weekly quota exhausted"
+        ):
             async with asyncio.timeout(5):
                 if stream:
                     async for _ in llm.astream("hello"):
@@ -63,9 +71,13 @@ def test_sync_long_retry_does_not_sleep(monkeypatch, stream, long_retry_headers)
 
     def respond(request):
         calls.append(request)
-        return http.Response(429, headers=long_retry_headers, json={
-            "error": {"type": "rate_limit_error", "message": "Weekly quota exhausted"},
-        })
+        return http.Response(
+            429,
+            headers=long_retry_headers,
+            json={
+                "error": {"type": "rate_limit_error", "message": "Weekly quota exhausted"},
+            },
+        )
 
     def no_sleep(delay):
         pytest.fail(f"SDK attempted quota backoff: {delay}")
@@ -92,9 +104,13 @@ async def test_short_retry_remains_cancelable(monkeypatch):
     def respond(request):
         calls.append(request)
         started.set()
-        return http.Response(429, headers={"retry-after": "10"}, json={
-            "error": {"type": "rate_limit_error", "message": "Too many requests"},
-        })
+        return http.Response(
+            429,
+            headers={"retry-after": "10"},
+            json={
+                "error": {"type": "rate_limit_error", "message": "Too many requests"},
+            },
+        )
 
     async with http.AsyncClient(transport=http.MockTransport(respond)) as client:
         llm._async_client._client = client
@@ -107,16 +123,19 @@ async def test_short_retry_remains_cancelable(monkeypatch):
     assert len(calls) == 1
 
 
-@pytest.mark.parametrize("headers,expected", [
-    ({"retry-after": "130287"}, 130287),
-    ({"retry-after-ms": "1500"}, 2),
-    ({"retry-after-ms": "invalid", "retry-after": "130287"}, 130287),
-    ({"retry-after-ms": "nan", "retry-after": "130287"}, 130287),
-    ({"retry-after": "invalid"}, None),
-    ({"retry-after": "nan"}, None),
-    ({"retry-after": "inf"}, None),
-    ({}, None),
-])
+@pytest.mark.parametrize(
+    "headers,expected",
+    [
+        ({"retry-after": "130287"}, 130287),
+        ({"retry-after-ms": "1500"}, 2),
+        ({"retry-after-ms": "invalid", "retry-after": "130287"}, 130287),
+        ({"retry-after-ms": "nan", "retry-after": "130287"}, 130287),
+        ({"retry-after": "invalid"}, None),
+        ({"retry-after": "nan"}, None),
+        ({"retry-after": "inf"}, None),
+        ({}, None),
+    ],
+)
 def test_quota_metadata_reaches_chat_http_error(headers, expected):
     from graph.upstream_errors import rate_limit_details
     from operator_api.chat_routes import _api_chat_error, _v1_error_response
@@ -161,7 +180,11 @@ def test_http_date_retry_preserves_reset_time():
 
     http = sdk_base.httpx2
     reset = datetime.now(UTC).replace(microsecond=0) + timedelta(hours=36)
-    response = http.Response(429, headers={"retry-after": format_datetime(reset)}, request=http.Request("POST", "https://provider.test/messages"))
+    response = http.Response(
+        429,
+        headers={"retry-after": format_datetime(reset)},
+        request=http.Request("POST", "https://provider.test/messages"),
+    )
     exc = anthropic.RateLimitError("weekly limit", response=response, body={"message": "weekly limit"})
     details = rate_limit_details(exc)
     assert 129599 <= details["retry_after"] <= 129600

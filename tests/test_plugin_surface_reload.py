@@ -36,9 +36,9 @@ def test_plan_reconcile_buckets_stop_start_and_reload():
     to_stop, to_start, to_reload, to_restart = ai._plan_surface_reconcile(running, wanted)
 
     assert to_restart == []
-    assert [h["plugin_id"] for h in to_stop] == ["discord"]      # no longer wanted → stop
-    assert [s["plugin_id"] for s in to_start] == ["telegram"]    # newly wanted → start
-    assert [h["plugin_id"] for h in to_reload] == ["google"]     # in both → reload cb
+    assert [h["plugin_id"] for h in to_stop] == ["discord"]  # no longer wanted → stop
+    assert [s["plugin_id"] for s in to_start] == ["telegram"]  # newly wanted → start
+    assert [h["plugin_id"] for h in to_reload] == ["google"]  # in both → reload cb
 
 
 def test_plan_reconcile_keys_on_plugin_id_and_name():
@@ -154,14 +154,14 @@ async def test_reload_hot_starts_new_and_stops_removed_on_the_loop(monkeypatch):
     for _ in range(5):
         await asyncio.sleep(0)
 
-    assert started == ["telegram"]          # newly-enabled surface hot-started
-    assert stopped == ["discord"]           # removed surface stopped
-    assert reloaded == ["google"]           # survivor got its reload callback
+    assert started == ["telegram"]  # newly-enabled surface hot-started
+    assert stopped == ["discord"]  # removed surface stopped
+    assert reloaded == ["google"]  # survivor got its reload callback
 
     keys = {(h["plugin_id"], h["name"]) for h in STATE.plugin_surface_handles}
-    assert ("discord", "discord-gateway") not in keys   # dropped
-    assert ("google", "google-gateway") in keys         # kept (still running)
-    assert ("telegram", "telegram-gateway") in keys     # added
+    assert ("discord", "discord-gateway") not in keys  # dropped
+    assert ("google", "google-gateway") in keys  # kept (still running)
+    assert ("telegram", "telegram-gateway") in keys  # added
 
 
 # ── #3593 end to end: the real loader, register() run twice ────────────────────
@@ -221,7 +221,9 @@ async def test_a_config_reload_leaves_exactly_one_sweep_on_the_new_registration(
     # Boot: load + start, as the startup hook does.
     boot = plugin_loader.load_plugins(LangGraphConfig())
     [spec] = [s for s in boot.surfaces if s["plugin_id"] == "sweeper"]
-    handles = [{"plugin_id": "sweeper", "name": "sweep", "stop": spec["stop"], "reload": None, "handle": spec["start"]()}]
+    handles = [
+        {"plugin_id": "sweeper", "name": "sweep", "stop": spec["stop"], "reload": None, "handle": spec["start"]()}
+    ]
     monkeypatch.setattr(STATE, "plugin_surfaces_started", True, raising=False)
     monkeypatch.setattr(STATE, "plugin_surface_handles", handles, raising=False)
     await _drain()

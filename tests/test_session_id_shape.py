@@ -378,7 +378,9 @@ async def test_a2a_stream_refuses_an_unusable_context_id_and_stores_no_task(_a2a
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("ctx", ["chat-1727712345678-k3j9x2", "a2a:peer-agent:ctx-1", "0b9e8d7c-6a5f-4e3d-8c2b-1a0f9e8d7c6b"])
+@pytest.mark.parametrize(
+    "ctx", ["chat-1727712345678-k3j9x2", "a2a:peer-agent:ctx-1", "0b9e8d7c-6a5f-4e3d-8c2b-1a0f9e8d7c6b"]
+)
 async def test_a2a_first_party_context_ids_still_run(_a2a_wiring, ctx):
     from a2a.server.context import ServerCallContext
     from a2a.types import TaskState

@@ -1123,9 +1123,7 @@ def score_current_trace(name: str, value: float, comment: str = "") -> None:
         pass
 
 
-def score_trace(
-    trace_id: str, name: str, value: float, comment: str = "", *, score_id: str = ""
-) -> None:
+def score_trace(trace_id: str, name: str, value: float, comment: str = "", *, score_id: str = "") -> None:
     """Attach a numeric score to a PAST trace, identified by ``trace_id``.
 
     Unlike :func:`score_current_trace` (which scores the span active in THIS

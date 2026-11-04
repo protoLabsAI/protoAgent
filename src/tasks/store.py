@@ -19,6 +19,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+
 def _publish(topic: str, data: dict) -> None:
     """Best-effort bus push so the console Tasks panel can invalidate live on a change
     instead of polling every 5s (#1310). No-op when the host hasn't wired a publisher
@@ -30,6 +31,7 @@ def _publish(topic: str, data: dict) -> None:
             HOST.publish(topic, data)
     except Exception:  # noqa: BLE001
         pass
+
 
 # Open lifecycle states (closed is terminal). Mirrors the console's
 # issueStatusOrder; `tombstone` is intentionally absent (we hard-delete).
@@ -104,9 +106,7 @@ class TaskStore:
     def _next_id(self) -> str:
         # New ids use the `task-` prefix; legacy `bd-` ids (pre beads→tasks rename)
         # are still read so numbering stays monotonic on an existing board.
-        rows = self._conn.execute(
-            "SELECT id FROM issues WHERE id LIKE 'task-%' OR id LIKE 'bd-%'"
-        ).fetchall()
+        rows = self._conn.execute("SELECT id FROM issues WHERE id LIKE 'task-%' OR id LIKE 'bd-%'").fetchall()
         nums = [int(n) for r in rows if (n := r["id"].split("-", 1)[-1]).isdigit()]
         return f"task-{(max(nums) + 1) if nums else 1}"
 

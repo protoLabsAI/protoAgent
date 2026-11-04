@@ -178,9 +178,7 @@ def test_incognito_skips_injection_but_keeps_skills(tmp_path):
     _upd = mw.before_agent({"messages": [HumanMessage(content="gravity apples")]}, runtime=None)
     assert "<injected_memory>" in (turn_projection(_upd)[0] or "")
 
-    _upd = mw.before_agent(
-        {"messages": [HumanMessage(content="gravity apples")], "incognito": True}, runtime=None
-    )
+    _upd = mw.before_agent({"messages": [HumanMessage(content="gravity apples")], "incognito": True}, runtime=None)
     incog_ctx = turn_projection(_upd)[0] or ""
     assert "<injected_memory>" not in incog_ctx
     assert "<prior_sessions>" not in incog_ctx
@@ -300,9 +298,7 @@ def test_incognito_writes_no_injection_row(tmp_path):
     store = KnowledgeStore(tmp_path / "kb.db")
     store.add_chunk("deploys go out Fridays", domain="hot")
     mw = _mw(store)
-    mw.before_agent(
-        {"messages": [HumanMessage(content="q")], "session_id": "s", "incognito": True}, runtime=None
-    )
+    mw.before_agent({"messages": [HumanMessage(content="q")], "session_id": "s", "incognito": True}, runtime=None)
     assert injection_log().recent() == []
 
 
@@ -446,9 +442,7 @@ def test_injection_detail_resolves_all_groups(tmp_path, monkeypatch):
     assert body["memories"] == [
         {"id": 7, "heading": "Deploy cadence", "snippet": "deploys go out Fridays", "unavailable": False}
     ]
-    assert body["docs"] == [
-        {"id": 3, "source": "physics.pdf", "snippet": "gravity pulls apples", "unavailable": False}
-    ]
+    assert body["docs"] == [{"id": 3, "source": "physics.pdf", "snippet": "gravity pulls apples", "unavailable": False}]
 
 
 def test_injection_detail_pruned_chunk_marked_unavailable(tmp_path, monkeypatch):

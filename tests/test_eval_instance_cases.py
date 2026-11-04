@@ -202,7 +202,15 @@ def test_save_report_marks_instance_rows(tmp_path):
 
 
 def _row(cid, passed, *, tier="gate", instance=False):
-    return {"id": cid, "category": "tool", "name": cid, "passed": passed, "detail": "", "tier": tier, "instance": instance}
+    return {
+        "id": cid,
+        "category": "tool",
+        "name": cid,
+        "passed": passed,
+        "detail": "",
+        "tier": tier,
+        "instance": instance,
+    }
 
 
 def _report(ts, model, rows):

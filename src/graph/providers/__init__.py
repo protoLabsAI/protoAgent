@@ -46,9 +46,7 @@ def build_native_oauth_llm(
     if provider == "anthropic-oauth":
         from graph.providers.anthropic_oauth import build_anthropic_oauth_llm
 
-        return build_anthropic_oauth_llm(
-            config, model_name=model_name, reasoning_effort=reasoning_effort
-        )
+        return build_anthropic_oauth_llm(config, model_name=model_name, reasoning_effort=reasoning_effort)
     if provider == "openai-codex":
         from graph.providers.openai_codex import build_codex_llm
 

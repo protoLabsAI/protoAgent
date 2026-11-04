@@ -256,8 +256,14 @@ async def test_create_passes_an_explicit_name_through(monkeypatch):
 
     def _fake_create(archetype, model_connection, model, name=None, *, created_by, **kw):
         captured["name"] = name
-        return {"slug": "pitch-1", "port": 7872, "token": "t", "archetype_ref": "basic",
-                "plugin_versions": {}, "created_at": "now"}
+        return {
+            "slug": "pitch-1",
+            "port": 7872,
+            "token": "t",
+            "archetype_ref": "basic",
+            "plugin_versions": {},
+            "created_at": "now",
+        }
 
     monkeypatch.setattr(demo, "create_demo", _fake_create)
     await _tools()["fleet_demo_create"].ainvoke(
@@ -374,7 +380,11 @@ async def test_operation_failures_are_structured_and_do_not_leak(monkeypatch, op
         raise errors[failure]("SECRET-SCOPED-BEARER")
 
     monkeypatch.setattr(demo, f"{operation}_demo", fail)
-    arguments = {"archetype": "basic", "model_connection": "local", "model": "test"} if operation == "create" else {"slug": "demo-x"}
+    arguments = (
+        {"archetype": "basic", "model_connection": "local", "model": "test"}
+        if operation == "create"
+        else {"slug": "demo-x"}
+    )
     out = await _tools()[f"fleet_demo_{operation}"].ainvoke(arguments)
     assert out["ok"] is False
     assert out["error"] == "operation_failed"

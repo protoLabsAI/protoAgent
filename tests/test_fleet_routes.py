@@ -133,7 +133,11 @@ def test_archetypes_dedupe_installed_bundle_against_catalog(client, monkeypatch)
                 {"id": "acme2", "source_url": "https://github.com/acme/kit", "archetype": {"label": "Dup url"}},
                 # installed under the repo's FORMER URL (pre-rename pin; GitHub redirect
                 # keeps it resolving) — bundle_aliases must dedupe it too
-                {"id": "acme3", "source_url": "https://github.com/acme/oldkit.git", "archetype": {"label": "Dup alias"}},
+                {
+                    "id": "acme3",
+                    "source_url": "https://github.com/acme/oldkit.git",
+                    "archetype": {"label": "Dup alias"},
+                },
                 # genuinely new → appended
                 {"id": "fresh", "source_url": "https://github.com/x/y", "archetype": {"label": "Fresh"}},
             ]
@@ -478,7 +482,9 @@ def test_patch_remote_edits_and_reprobes(client, monkeypatch):
     from graph.fleet import supervisor
 
     supervisor._probe_cache.clear()
-    monkeypatch.setattr(httpx, "get", lambda url, timeout, **kw: type("C", (), {"status_code": 200, "json": lambda s: {}})())
+    monkeypatch.setattr(
+        httpx, "get", lambda url, timeout, **kw: type("C", (), {"status_code": 200, "json": lambda s: {}})()
+    )
     rid = client.post("/api/fleet/remotes", json={"name": "ava", "url": "http://100.64.1.4:7871"}).json()["agent"]["id"]
 
     r = client.patch(f"/api/fleet/remotes/{rid}", json={"url": "http://100.64.1.4:7999", "token": "sek"})
@@ -996,7 +1002,8 @@ def test_from_url_peeks_and_shapes_an_archetype(client, monkeypatch):
     cfg = type("C", (), {"plugins_sources_official": ["github.com/protoLabsAI/*"], "plugins_sources_acked": []})()
     monkeypatch.setattr(STATE, "graph_config", cfg, raising=False)
     r = client.get(
-        "/api/archetypes/from-url", params={"url": " https://github.com/protoLabsAI/analyst-archetype ", "ref": "v0.1.0"}
+        "/api/archetypes/from-url",
+        params={"url": " https://github.com/protoLabsAI/analyst-archetype ", "ref": "v0.1.0"},
     )
     assert r.status_code == 200, r.text
     body = r.json()
@@ -1101,23 +1108,32 @@ def test_settings_restart_checks_idle_and_audits_actor(client, monkeypatch):
     monkeypatch.setattr(proxy, "_resolve_slug", lambda name: ("local", "http://member", None))
     monkeypatch.setattr("graph.fleet.service_token.resolve_service_token", lambda: "service")
     upstream = Mock()
-    upstream.get = AsyncMock(return_value=httpx.Response(
-        200, json={"idle": False}, request=httpx.Request("GET", "http://member/api/restart/readiness"),
-    ))
+    upstream.get = AsyncMock(
+        return_value=httpx.Response(
+            200,
+            json={"idle": False},
+            request=httpx.Request("GET", "http://member/api/restart/readiness"),
+        )
+    )
     monkeypatch.setattr(proxy, "_get_client", lambda: upstream)
     body = {"when_idle": True, "reason": "settings: Self update"}
     assert client.post("/api/fleet/member/stop", json=body).status_code == 409
     stop.assert_not_called()
     assert audit.call_args.kwargs["args"] == {
-        "actor": "operator", "reason": "settings: Self update", "target": "member",
+        "actor": "operator",
+        "reason": "settings: Self update",
+        "target": "member",
     }
     upstream.get.return_value = httpx.Response(
-        200, json={"idle": True}, request=httpx.Request("GET", "http://member/api/restart/readiness"),
+        200,
+        json={"idle": True},
+        request=httpx.Request("GET", "http://member/api/restart/readiness"),
     )
     assert client.post("/api/fleet/member/stop", json=body).json()["ok"]
     stop.assert_called_once_with("member")
-    upstream.get.assert_awaited_with("http://member/api/restart/readiness",
-                                   headers={"authorization": "Bearer service"}, timeout=5)
+    upstream.get.assert_awaited_with(
+        "http://member/api/restart/readiness", headers={"authorization": "Bearer service"}, timeout=5
+    )
     stop.reset_mock()
     upstream.get.side_effect = OSError("offline")
     assert client.post("/api/fleet/member/stop", json=body).status_code == 409
@@ -1252,7 +1268,9 @@ def test_remote_carries_machine_and_can_be_pinned_but_not_grouped(client, monkey
 
     supervisor._probe_cache.clear()
     monkeypatch.setattr(
-        httpx, "get", lambda url, timeout, **kw: type("C", (), {"status_code": 200, "json": lambda s: {"name": "ava"}})()
+        httpx,
+        "get",
+        lambda url, timeout, **kw: type("C", (), {"status_code": 200, "json": lambda s: {"name": "ava"}})(),
     )
     rid = client.post("/api/fleet/remotes", json={"name": "ava", "url": "http://ava.tail:7871"}).json()["agent"]["id"]
 

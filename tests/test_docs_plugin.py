@@ -234,7 +234,7 @@ def test_view_error_messages_name_the_cause() -> None:
     # The reader names the doc it failed to open — but only for an HTTP failure. An
     # unreachable agent is never reported as a named doc going bad, and the tree/search
     # reads pass no path, because "docs" is genuinely what failed there.
-    assert 'showErr($reader,e,path)' in html
+    assert "showErr($reader,e,path)" in html
     assert 'path&&isHttpErr(e)?esc(path):"docs"' in html
     assert "showErr($list,e)" in html  # tree/search stay generic
 
@@ -315,16 +315,19 @@ def test_register_falls_back_loudly_on_bad_root(tmp_path, caplog) -> None:
         corpus.set_docs_root(None)
 
 
-@pytest.mark.parametrize(("query", "expected"), [
-    ("install a plugin", "guides/plugin-registry.md"),
-    ("create a document", "guides/documents-and-files.md"),
-    ("connect a model", "guides/model-connections.md"),
-    ("schedule a task", "guides/scheduler.md"),
-    ("backup restore", "guides/backup-and-restore.md"),
-    ("deploy docker", "guides/deploy-docker.md"),
-    ("build a plugin view", "guides/build-a-plugin-view.md"),
-    ("access from phone", "guides/phone-access.md"),
-])
+@pytest.mark.parametrize(
+    ("query", "expected"),
+    [
+        ("install a plugin", "guides/plugin-registry.md"),
+        ("create a document", "guides/documents-and-files.md"),
+        ("connect a model", "guides/model-connections.md"),
+        ("schedule a task", "guides/scheduler.md"),
+        ("backup restore", "guides/backup-and-restore.md"),
+        ("deploy docker", "guides/deploy-docker.md"),
+        ("build a plugin view", "guides/build-a-plugin-view.md"),
+        ("access from phone", "guides/phone-access.md"),
+    ],
+)
 def test_task_search_prefers_current_instructions(query, expected) -> None:
     """Use the shipped corpus: short aliases and ADR prose must not beat task guides."""
     index = _load_docs().DocsIndex()
@@ -335,9 +338,7 @@ def test_task_search_prefers_current_instructions(query, expected) -> None:
 def test_search_preserves_reference_and_decision_lookups() -> None:
     index = _load_docs().DocsIndex()
     index.seed()
-    assert "reference/plugin-registry-api.md" in [
-        row.path for row in index.search("PluginRegistry register_tool", 3)
-    ]
+    assert "reference/plugin-registry-api.md" in [row.path for row in index.search("PluginRegistry register_tool", 3)]
     assert index.search("ADR 0065")[0].path == "adr/0065-two-tier-instance-paths.md"
     assert index.search("egress security")[0].path == "explanation/security-and-trust.md"
     assert any(row.path == "guides/acp-runtime.md" for row in index.search("deprecated ACP runtime", 5))
@@ -356,6 +357,7 @@ def test_alias_is_readable_but_search_returns_canonical_pages() -> None:
     # This legacy website URL was never in the reader's bundled corpus. Search
     # classification must not silently broaden the read-access gate.
     import json
+
     catalog = json.loads((ROOT / "plugins/docs/catalog.json").read_text(encoding="utf-8"))
     website_alias = "how-to/build-a-plugin-view.md"
     assert catalog["website_pages"][website_alias]["canonical"] == "guides/build-a-plugin-view.md"
@@ -380,7 +382,6 @@ def test_custom_search_does_not_apply_bundled_status(tmp_path) -> None:
         corpus.set_docs_root(None)
 
 
-
 def test_search_preview_skips_generator_comments_and_legacy_anchors() -> None:
     docs = _load_docs()
     corpus = sys.modules["docs_plugin_under_test.corpus"]
@@ -390,7 +391,6 @@ def test_search_preview_skips_generator_comments_and_legacy_anchors() -> None:
     index.seed()
     hub = next(row for row in index.search("Use protoAgent", 200) if row.path == "guides/use-protoagent.md")
     assert hub.preview.startswith("Chat, work with files")
-
 
 
 def test_catalog_rejects_dangling_canonical_on_current_page(tmp_path, monkeypatch) -> None:

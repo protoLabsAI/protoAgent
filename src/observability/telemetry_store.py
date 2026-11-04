@@ -1,7 +1,8 @@
 """Local telemetry store — per-turn cost/latency rollups (ADR 0006 Slice 2).
 
 Each row carries accumulated token usage (incl. prompt-cache), USD cost,
-wall-clock duration, LLM-call + tool-call counts, model, and outcome.
+wall-clock duration, LLM-call + tool-call counts, model, and outcome — and, for a
+turn that did not complete, why (``error``, #4726).
 This is the *durable, queryable* half of observability inside protoAgent — the
 substrate for "what was expensive/slow over time" and the flywheel's analysis
 (Prometheus is live-scrape-only; Langfuse is opt-in/external).
@@ -55,6 +56,7 @@ _COLUMNS = (
     "tool_durations",  # JSON {tool_name: [ms, ...]} for this turn's calls (#2697)
     "context_tokens",  # peak single-call prompt size = context-window fill (#2773, ADR 0101 D6)
     "run_id",  # the delegation-ledger run this leg belongs to (#4726); "" before it
+    "error",  # why a non-completed turn ended, redacted + clipped by record_turn (#4726)
 )
 
 #: How many sampled turns a model needs before `outliers()` compares its rows against
@@ -136,7 +138,8 @@ class TelemetryStore:
                     provider_id                 TEXT,
                     account_key                 TEXT,
                     context_tokens              INTEGER DEFAULT 0,
-                    run_id                      TEXT
+                    run_id                      TEXT,
+                    error                       TEXT
                 )
                 """
             )
@@ -152,6 +155,7 @@ class TelemetryStore:
                 ("tool_durations", "TEXT"),  # #2697
                 ("context_tokens", "INTEGER DEFAULT 0"),  # #2773 / ADR 0101 D6
                 ("run_id", "TEXT"),  # #4726
+                ("error", "TEXT"),  # #4726
             ):
                 try:
                     db.execute(f"ALTER TABLE turns ADD COLUMN {_col} {_type}")
@@ -241,7 +245,8 @@ class TelemetryStore:
                 provider_id                 TEXT,
                 account_key                 TEXT,
                 context_tokens              INTEGER DEFAULT 0,
-                run_id                      TEXT
+                run_id                      TEXT,
+                error                       TEXT
             )
             """
         )
@@ -262,12 +267,17 @@ class TelemetryStore:
         values = [row.get(c) for c in _COLUMNS]
         placeholders = ",".join("?" for _ in _COLUMNS)
         cols = ",".join(_COLUMNS)
-        db = self._connect()
+        # Best-effort, like every telemetry write: a failed insert (a locked db, a store
+        # whose migration did not land) is logged and dropped, never raised into a turn.
         try:
-            db.execute(f"INSERT INTO turns ({cols}) VALUES ({placeholders})", values)
-            db.commit()
-        finally:
-            db.close()
+            db = self._connect()
+            try:
+                db.execute(f"INSERT INTO turns ({cols}) VALUES ({placeholders})", values)
+                db.commit()
+            finally:
+                db.close()
+        except sqlite3.Error:
+            log.warning("[telemetry] could not record turn %s", row.get("task_id"), exc_info=True)
 
     def attributed_tokens(self, account_key: str, since: str, until: str, model: str | None = None) -> int:
         """Bounded aggregate over one account/window; no turn content leaves the store."""
@@ -450,7 +460,9 @@ class TelemetryStore:
             # fill, not the store's. Zero rows excluded for the same reason as the
             # turn-level series above — absent, not empty.
             fills_by_model: dict[str | None, list[int]] = {}
-            for r in db.execute(f"SELECT model, duration_ms, context_tokens FROM turns {lane_where}", params).fetchall():
+            for r in db.execute(
+                f"SELECT model, duration_ms, context_tokens FROM turns {lane_where}", params
+            ).fetchall():
                 if r["duration_ms"] is not None:
                     durations_by_model.setdefault(r["model"], []).append(r["duration_ms"])
                 if r["context_tokens"]:
@@ -459,15 +471,17 @@ class TelemetryStore:
             for row in by_model:
                 model_durations = sorted(durations_by_model.get(row["model"], []))
                 model_fills = sorted(fills_by_model.get(row["model"], []))
-                by_model_out.append({
-                    **dict(row),
-                    "cost_usd": round(row["cost_usd"] or 0.0, 6),
-                    "p50_duration_ms": _percentile(model_durations, 50),
-                    "p95_duration_ms": _percentile(model_durations, 95),
-                    "p99_duration_ms": _percentile(model_durations, 99),
-                    "cache_hit_ratio": _cache_hit_ratio(dict(row)),
-                    "p95_context_tokens": _percentile(model_fills, 95),
-                })
+                by_model_out.append(
+                    {
+                        **dict(row),
+                        "cost_usd": round(row["cost_usd"] or 0.0, 6),
+                        "p50_duration_ms": _percentile(model_durations, 50),
+                        "p95_duration_ms": _percentile(model_durations, 95),
+                        "p99_duration_ms": _percentile(model_durations, 99),
+                        "cache_hit_ratio": _cache_hit_ratio(dict(row)),
+                        "p95_context_tokens": _percentile(model_fills, 95),
+                    }
+                )
             out["by_model"] = by_model_out
             # #2697 — durable p50/p95/p99 duration PER TOOL, the by-model breakdown's
             # sibling. Unlike `model` (one scalar column, GROUP BY-able in SQL),
@@ -495,13 +509,15 @@ class TelemetryStore:
             by_tool_out = []
             for tool_name, values in durations_by_tool.items():
                 tool_durations_sorted = sorted(values)
-                by_tool_out.append({
-                    "tool": tool_name,
-                    "calls": len(tool_durations_sorted),
-                    "p50_duration_ms": _percentile(tool_durations_sorted, 50),
-                    "p95_duration_ms": _percentile(tool_durations_sorted, 95),
-                    "p99_duration_ms": _percentile(tool_durations_sorted, 99),
-                })
+                by_tool_out.append(
+                    {
+                        "tool": tool_name,
+                        "calls": len(tool_durations_sorted),
+                        "p50_duration_ms": _percentile(tool_durations_sorted, 50),
+                        "p95_duration_ms": _percentile(tool_durations_sorted, 95),
+                        "p99_duration_ms": _percentile(tool_durations_sorted, 99),
+                    }
+                )
             # Slowest first — the whole point of this breakdown is "what's tool X's p99",
             # so lead with the tools worth looking at rather than the most-called ones.
             by_tool_out.sort(key=lambda row: row["p95_duration_ms"], reverse=True)

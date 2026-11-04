@@ -230,8 +230,18 @@ def classify(skill: dict, root: Path) -> tuple[str, bool]:
     return "learned", True
 
 
-def replace_skill(index, root: Path, current: dict, name: str, description: str, body: str,
-                  *, session_id: str = "", reason: str = "operator edit", **options) -> Path:
+def replace_skill(
+    index,
+    root: Path,
+    current: dict,
+    name: str,
+    description: str,
+    body: str,
+    *,
+    session_id: str = "",
+    reason: str = "operator edit",
+    **options,
+) -> Path:
     """Replace an editable skill, compensating ordinary failures on disk and in SQLite.
 
     Rename moves the whole skill directory, preserving scripts/assets. Recovery
@@ -253,9 +263,10 @@ def replace_skill(index, root: Path, current: dict, name: str, description: str,
         if not editable:
             raise ValueError(f"{origin} skills are read-only")
         # Commons rows live outside this root; private skills may shadow them.
-        if any(s.get("tier") != "commons" and s.get("id") != current["id"]
-               and slugify(s["name"]) == slugify(name)
-               for s in index.all_skills()):
+        if any(
+            s.get("tier") != "commons" and s.get("id") != current["id"] and slugify(s["name"]) == slugify(name)
+            for s in index.all_skills()
+        ):
             raise ValueError("destination collides with another skill")
         if new != old and new.parent.exists():
             raise ValueError("destination directory already exists")

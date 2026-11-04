@@ -339,9 +339,7 @@ def test_preview_excludes_the_previewed_sessions_own_summary(monkeypatch, tmp_pa
     km._prior_sessions_cache = km.load_memory(memory_path=str(tmp_path))
     km._prior_sessions_loaded_at = time.monotonic()
 
-    graph = SimpleNamespace(
-        system_prompt_parts=[("SOUL", "STABLE-A")], knowledge_middleware=km, aget_state=None
-    )
+    graph = SimpleNamespace(system_prompt_parts=[("SOUL", "STABLE-A")], knowledge_middleware=km, aget_state=None)
     c = _client(monkeypatch)
     monkeypatch.setattr(rs.STATE, "graph", graph, raising=False)
 

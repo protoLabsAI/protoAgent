@@ -147,7 +147,7 @@ def test_fake_registry_raises_on_a_bare_string_reads():
 
 # ── loader + catalog: reads ride through to GET /api/components ──────────────────────────
 
-_PLUGIN = '''
+_PLUGIN = """
 def _v(props):
     return None
 
@@ -156,7 +156,7 @@ def register(registry):
         "thing-ref", _v, frame="component.html", reads=["features", "features/*", "../escape"]
     )
     registry.register_component("plain-ref", _v)
-'''
+"""
 
 
 def test_loader_and_catalog_carry_reads(tmp_path, monkeypatch):

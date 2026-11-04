@@ -302,7 +302,7 @@ def test_the_chart_csp_admits_the_vendored_embed_stylesheet(monkeypatch, tmp_pat
     art = _load(monkeypatch, tmp_path)
     src = _js_function(art._SHELL_JS, "vegaDoc")
     assert "style-src 'unsafe-inline' \"+ORIGIN+\"/plugins/artifact/vendor/pl-embed.css;" in src
-    assert '/plugins/artifact/vendor/pl-embed.css' in _js_function(art._SHELL_JS, "base")
+    assert "/plugins/artifact/vendor/pl-embed.css" in _js_function(art._SHELL_JS, "base")
 
 
 def test_the_error_boot_waits_for_the_embed_not_the_load_event(monkeypatch, tmp_path):
@@ -686,7 +686,10 @@ def test_a_failed_first_draw_reports_even_when_a_retheme_is_pending(monkeypatch,
     js = _ds_theme_src() + (
         _RACE.replace("__SRC__", src)
         .replace("__CFG__", json.dumps({"spec": json.dumps(SPEC), "tokens": DARK}))
-        .replace("calls[0].res(); await tick();", "calls[0].rej(new Error('bad encoding')); await tick(); out.errsAfterFirst = errs.slice();")
+        .replace(
+            "calls[0].res(); await tick();",
+            "calls[0].rej(new Error('bad encoding')); await tick(); out.errsAfterFirst = errs.slice();",
+        )
     )
     out = _run_node(js)
     assert out.returncode == 0, out.stderr

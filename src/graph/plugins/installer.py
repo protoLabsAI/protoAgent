@@ -500,7 +500,6 @@ def configured_allowlist() -> list[str] | None:
         raise InstallError(f"Cannot read plugin source allowlist: {exc}") from exc
 
 
-
 def _summary(m: PluginManifest, *, source: str, ref: str, sha: str) -> dict:
     return {
         "id": m.id,
@@ -1187,8 +1186,7 @@ def install(
                 backed_up = True
             except OSError as exc:
                 raise InstallError(
-                    f"could not set aside the installed copy of {pid!r} before update "
-                    f"(it was left untouched): {exc}"
+                    f"could not set aside the installed copy of {pid!r} before update (it was left untouched): {exc}"
                 ) from exc
         try:
             shutil.move(str(staging), str(target))
@@ -1712,9 +1710,7 @@ def _remove_installed_copy(target: Path) -> None:
     except OSError as exc:
         # Callers (the REST routes, the ops layer, the CLI) handle InstallError; a bare
         # OSError escaping from here is a 500 / traceback instead of "couldn't remove it".
-        raise InstallError(
-            f"could not remove the installed copy at {target} (it was left in place): {exc}"
-        ) from exc
+        raise InstallError(f"could not remove the installed copy at {target} (it was left in place): {exc}") from exc
     _discard(backup)  # logs (with the cause) if it survives; the next swap retries it
 
 
@@ -2180,10 +2176,10 @@ def is_compatible_upgrade(pinned: str, candidate: str) -> bool:
     if b < a:
         return False  # never downgrade
     if a[0] != 0:
-        return a[0] == b[0]                     # 1.x → same major
+        return a[0] == b[0]  # 1.x → same major
     if a[1] != 0:
-        return b[0] == 0 and a[1] == b[1]       # 0.x → same minor
-    return b[0] == 0 and b[1] == 0              # 0.0.x → same patch series
+        return b[0] == 0 and a[1] == b[1]  # 0.x → same minor
+    return b[0] == 0 and b[1] == 0  # 0.0.x → same patch series
 
 
 def is_release_tag(ref: str) -> bool:

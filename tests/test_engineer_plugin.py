@@ -53,11 +53,7 @@ def test_bundled_skills_are_loader_valid_and_agent_retrievable():
 
 
 def test_skill_names_do_not_collide_with_other_bundled_plugins():
-    others = {
-        p.parent.name
-        for p in Path("plugins").glob("*/skills/*/SKILL.md")
-        if p.parents[2].name != "engineer"
-    }
+    others = {p.parent.name for p in Path("plugins").glob("*/skills/*/SKILL.md") if p.parents[2].name != "engineer"}
     assert not (EXPECTED_SKILLS & others), f"skill names shadowed by another bundled plugin: {EXPECTED_SKILLS & others}"
 
 
@@ -76,8 +72,16 @@ def test_repo_onboard_renders_readme_manifest_and_a_linked_overview():
     body, desc = artifact.prompt_template, artifact.description.lower()
     for trigger in ("get up to speed", "onboard", "what is this codebase", "show me the readme"):
         assert trigger in desc, f"repo-onboard description lost the {trigger!r} trigger"
-    for must in ('kind="markdown"', "show_code", 'kind="mermaid"', "flowchart", "anchor",
-                 "`diagramming-code`", "memory_ingest", "Never change code during onboarding"):
+    for must in (
+        'kind="markdown"',
+        "show_code",
+        'kind="mermaid"',
+        "flowchart",
+        "anchor",
+        "`diagramming-code`",
+        "memory_ingest",
+        "Never change code during onboarding",
+    ):
         assert must in body, f"repo-onboard no longer says {must!r}"
     assert Path("plugins/artifact/skills/diagramming-code/SKILL.md").is_file()
 
@@ -88,9 +92,18 @@ def test_repo_onboard_adopts_atlas_and_degrades_without_it():
     the repo), validated until clean, and the tour presents from atlas.tours.json. Without
     the Atlas tools the Mermaid overview above stays the whole story."""
     body = parse_skill_md(ROOT / "skills/repo-onboard/SKILL.md").prompt_template
-    for must in ("atlas_validate", "atlas_describe", "atlas_show", "`architecture/`",
-                 "atlas.tours.json", "present=true", "Want me to write", "`atlas-likec4`",
-                 "committed and reviewed", "Mermaid path is the whole story"):
+    for must in (
+        "atlas_validate",
+        "atlas_describe",
+        "atlas_show",
+        "`architecture/`",
+        "atlas.tours.json",
+        "present=true",
+        "Want me to write",
+        "`atlas-likec4`",
+        "committed and reviewed",
+        "Mermaid path is the whole story",
+    ):
         assert must in body, f"repo-onboard no longer says {must!r}"
     soul = Path("config/soul-presets/engineer.md").read_text(encoding="utf-8")
     for must in ("Atlas", "atlas_show", "one-off", "open_in_editor", "I ask first"):

@@ -142,7 +142,9 @@ def test_unavailable_artifact_carries_reason_not_content():
         return {"available": False, "kind": "html", "title": "T", "reason": "referenced version is no longer available"}
 
     messages = _ai_and_tool(
-        "update_artifact", {"old_string": "a", "new_string": "b"}, "Updated artifact a-1700000000001-abcdef → version 5."
+        "update_artifact",
+        {"old_string": "a", "new_string": "b"},
+        "Updated artifact a-1700000000001-abcdef → version 5.",
     )
     manifest, _ = build_bundle(messages, thread_id="t1", artifact_resolver=resolver)
     artifact = manifest["messages"][0]["parts"][0]["artifact"]
@@ -162,7 +164,9 @@ def test_file_artifact_carries_file_meta_not_bytes():
         }
 
     messages = _ai_and_tool(
-        "save_file_artifact", {"path": "/tmp/report.pdf"}, "Saved file artifact a-1700000000001-abcdef → v1: report.pdf (application/pdf, 2 KB)"
+        "save_file_artifact",
+        {"path": "/tmp/report.pdf"},
+        "Saved file artifact a-1700000000001-abcdef → v1: report.pdf (application/pdf, 2 KB)",
     )
     manifest, _ = build_bundle(messages, thread_id="t1", artifact_resolver=resolver)
     artifact = manifest["messages"][0]["parts"][0]["artifact"]
@@ -198,7 +202,9 @@ def test_unparseable_result_text_degrades_to_no_artifact_field():
 
 def test_no_resolver_defaults_to_unavailable_not_a_crash():
     messages = _ai_and_tool(
-        "update_artifact", {"old_string": "a", "new_string": "b"}, "Updated artifact a-1700000000001-abcdef → version 2."
+        "update_artifact",
+        {"old_string": "a", "new_string": "b"},
+        "Updated artifact a-1700000000001-abcdef → version 2.",
     )
     manifest, _ = build_bundle(messages, thread_id="t1")  # no artifact_resolver passed
     artifact = manifest["messages"][0]["parts"][0]["artifact"]
@@ -229,7 +235,9 @@ def test_review_discloses_redactions():
 
 def test_review_discloses_unavailable_artifacts():
     messages = _ai_and_tool(
-        "update_artifact", {"old_string": "a", "new_string": "b"}, "Updated artifact a-1700000000001-abcdef → version 5."
+        "update_artifact",
+        {"old_string": "a", "new_string": "b"},
+        "Updated artifact a-1700000000001-abcdef → version 5.",
     )
     manifest, redactions = build_bundle(messages, thread_id="t1")  # no resolver → unavailable
     result = build_bundle_zip(manifest, redactions)

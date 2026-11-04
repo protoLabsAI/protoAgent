@@ -155,6 +155,6 @@ def pytest_interpreter() -> tuple[str | None, str | None]:
     if "pytest" not in managed_runtime_distributions():
         return None, (
             "the managed Python runtime has no pytest — open the Plugins panel and hit "
-            "\"Install deps\" on the plugin that needs it, then try again"
+            '"Install deps" on the plugin that needs it, then try again'
         )
     return str(exe), None

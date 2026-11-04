@@ -142,7 +142,10 @@ _BAD_DISPLAYS = {
         "component": "table",
         "props": {"columns": ["a"], "rows": [["r"] for _ in range(hitl_display.MAX_ROWS + 1)]},
     },
-    "oversize_header": {"component": "table", "props": {"columns": ["x" * (hitl_display.MAX_HEADER_CHARS + 1)], "rows": []}},
+    "oversize_header": {
+        "component": "table",
+        "props": {"columns": ["x" * (hitl_display.MAX_HEADER_CHARS + 1)], "rows": []},
+    },
     "oversize_cell": {"component": "table", "props": {"columns": ["a"], "rows": [[_HUGE_CELL]]}},
     "oversize_bytes": _OVERSIZE_BYTES_TABLE,
 }
@@ -211,7 +214,9 @@ def test_validator_rejects_oversize_bytes_within_shape_limits():
 def test_validator_rejects_non_finite_and_ragged():
     assert hitl_display.validate_display(_table(["a"], [[float("nan")]])) is None
     assert hitl_display.validate_display(_table(["a"], [[float("-inf")]])) is None
-    assert hitl_display.validate_display({"component": "table", "props": {"columns": ["a", "b"], "rows": [[1]]}}) is None
+    assert (
+        hitl_display.validate_display({"component": "table", "props": {"columns": ["a", "b"], "rows": [[1]]}}) is None
+    )
 
 
 def test_validator_none_for_non_table_and_non_dict():

@@ -174,7 +174,9 @@ def test_a_stale_fallback_alias_is_dropped(monkeypatch):
     so an incoherent one is dropped while a coherent native fallback is kept."""
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     cfg = LangGraphConfig.from_dict(
-        _oauth_dict(model={"name": "claude-sonnet-5"}, routing={"fallback_models": ["protolabs/coder", "claude-haiku-4-5"]})
+        _oauth_dict(
+            model={"name": "claude-sonnet-5"}, routing={"fallback_models": ["protolabs/coder", "claude-haiku-4-5"]}
+        )
     )
 
     assert cfg.routing_fallback_models == ["claude-haiku-4-5"]

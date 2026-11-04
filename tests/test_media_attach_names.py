@@ -122,9 +122,7 @@ def test_repark_preserves_distinct_names_and_existing_content_deduplication(
 @pytest.mark.parametrize("names", [("a.png", "b.png"), ("b.png", "a.png")])
 @pytest.mark.parametrize("same_ref", [False, True])
 @pytest.mark.parametrize("park_named_first", [False, True])
-def test_repark_unnamed_and_distinct_names_survive_resume(
-    names, same_ref, park_named_first, monkeypatch
-):
+def test_repark_unnamed_and_distinct_names_survive_resume(names, same_ref, park_named_first, monkeypatch):
     monkeypatch.setattr(media, "_PARKED", {})
     unnamed = media.save_media(b"same", "image/png")
     named = [unnamed if same_ref else media.save_media(b"same", "image/png") for _ in names]

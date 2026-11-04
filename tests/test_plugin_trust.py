@@ -62,9 +62,7 @@ def test_installer_allowlist_shares_the_boundary_fix():
     assert _source_allowed("https://github.com/acme/thing", ["github.com/acme/thing/"])
     assert _source_allowed("https://github.com/acme/thing", ["git@github.com:acme/thing.git"])
     assert not _source_allowed("https://github.com/acme/thing-evil", ["github.com/acme/thing.git"])
-    assert source_trusted(
-        "https://github.com/acme/thing", official=[], acked=["github.com/acme/thing.git"]
-    )
+    assert source_trusted("https://github.com/acme/thing", official=[], acked=["github.com/acme/thing.git"])
 
 
 def test_official_org_glob_matches_every_repo_in_the_org():

@@ -22,6 +22,7 @@ def _sections(groups: list[dict]) -> set[str]:
 
 # ── the matcher ──────────────────────────────────────────────────────────────────────
 
+
 def test_is_hidden_setting_exact_and_prefix():
     assert is_hidden_setting("goal.enabled", ["goal.enabled"])
     assert is_hidden_setting("goal.enabled", ["goal"])  # group prefix
@@ -34,6 +35,7 @@ def test_is_hidden_setting_exact_and_prefix():
 
 # ── config parse ─────────────────────────────────────────────────────────────────────
 
+
 def test_settings_hidden_parses_from_yaml(tmp_path):
     cfg_file = tmp_path / "config.yaml"
     cfg_file.write_text("settings:\n  hidden: [goal, compaction.trigger]\n")
@@ -45,6 +47,7 @@ def test_settings_hidden_parses_from_yaml(tmp_path):
 
 
 # ── presentation half: build_schema ──────────────────────────────────────────────────
+
 
 def test_build_schema_drops_a_hidden_field_only():
     cfg = LangGraphConfig(settings_hidden=["goal.max_iterations"])
@@ -72,6 +75,7 @@ def test_build_schema_unaffected_when_hidden_empty():
 
 
 # ── enforcement half: the write path ─────────────────────────────────────────────────
+
 
 def test_validate_flat_refuses_hidden_keys():
     ok, err = validate_flat({"goal.enabled": True}, hidden=["goal"])

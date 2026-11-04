@@ -54,9 +54,7 @@ def test_schema_reset_persists_the_declared_version(monkeypatch, tmp_path):
     assert search_session_summaries("schema version", memory_dir=str(tmp_path))
 
     with sqlite3.connect(tmp_path / ".session-search.sqlite3") as conn:
-        stored = conn.execute(
-            "SELECT value FROM session_search_meta WHERE key = 'schema_version'"
-        ).fetchone()
+        stored = conn.execute("SELECT value FROM session_search_meta WHERE key = 'schema_version'").fetchone()
     assert stored == ("3",)
 
 
@@ -98,9 +96,10 @@ def test_search_filters_surface_and_excludes_current_session(tmp_path):
         exclude_session_id="a2a:two",
     )
     assert rows == []
-    assert search_session_summaries("shared needle", memory_dir=str(tmp_path), surface="chat")[0][
-        "session_id"
-    ] == "chat-one"
+    assert (
+        search_session_summaries("shared needle", memory_dir=str(tmp_path), surface="chat")[0]["session_id"]
+        == "chat-one"
+    )
 
 
 @pytest.mark.parametrize("query", ["", "***"])
@@ -133,9 +132,7 @@ async def test_session_search_tool_is_registered_bounded_and_excludes_current(mo
     tool = {item.name: item for item in get_all_tools(object())}["session_search"]
 
     assert "session_search" in MEMORY_TOOL_NAMES
-    output = await tool.ainvoke(
-        {"query": "playwright timeout", "limit": 99, "state": {"session_id": "chat-current"}}
-    )
+    output = await tool.ainvoke({"query": "playwright timeout", "limit": 99, "state": {"session_id": "chat-current"}})
     assert "chat-prior" in output
     assert "chat-current" not in output
     assert "recall_session" in output
@@ -212,9 +209,7 @@ def test_an_index_from_the_previous_schema_is_rebuilt_with_the_stemmer(tmp_path)
     assert search_session_summaries("audit log", memory_dir=str(tmp_path))
 
     with sqlite3.connect(index) as conn:
-        stored = conn.execute(
-            "SELECT value FROM session_search_meta WHERE key = 'schema_version'"
-        ).fetchone()
+        stored = conn.execute("SELECT value FROM session_search_meta WHERE key = 'schema_version'").fetchone()
     assert stored == ("2",)
 
 
@@ -234,14 +229,21 @@ def test_search_merges_history_with_labels_and_filters(tmp_path, history):
     for kind in ("archive", "summary", "report"):
         history.add("needle", session_id="chat-history", kind=kind, surface="chat")
     history.add("needle", session_id="worker", kind="report", surface="background")
-    rows = search_sessions("needle", memory_dir=str(tmp_path), history_store=history,
-                           limit=20, surface="chat", exclude_session_id="chat-current")
+    rows = search_sessions(
+        "needle",
+        memory_dir=str(tmp_path),
+        history_store=history,
+        limit=20,
+        surface="chat",
+        exclude_session_id="chat-current",
+    )
     assert {row["kind"] for row in rows} == {"session summary", "archive", "summary", "report"}
     assert len(rows) == 4
     assert all(row["session_id"] not in {"chat-current", "worker"} for row in rows)
     assert len(search_sessions("needle", memory_dir=str(tmp_path), history_store=history, limit=2)) == 2
     assert search_sessions("needle", memory_dir=str(tmp_path)) == search_session_summaries(
-        "needle", memory_dir=str(tmp_path))
+        "needle", memory_dir=str(tmp_path)
+    )
     assert search_sessions("' OR 1=1 --", memory_dir=str(tmp_path), history_store=history) == []
 
 
@@ -288,7 +290,10 @@ async def test_recall_history_only_bounded_and_hidden(monkeypatch, tmp_path, his
     assert search_sessions("secret", history_store=history, memory_dir=str(tmp_path / "missing")) == []
     assert search_sessions("x" * 100, history_store=history, memory_dir=str(tmp_path / "missing")) == []
     history.add("discoverable", session_id="chat-history", kind="summary")
-    assert search_sessions("discoverable", history_store=history, memory_dir=str(tmp_path / "missing"))[0]["kind"] == "summary"
+    assert (
+        search_sessions("discoverable", history_store=history, memory_dir=str(tmp_path / "missing"))[0]["kind"]
+        == "summary"
+    )
 
 
 async def test_recall_without_history_preserves_summary(monkeypatch, tmp_path):
@@ -299,7 +304,10 @@ async def test_recall_without_history_preserves_summary(monkeypatch, tmp_path):
     path = _write(tmp_path, "chat-prior", "original summary")
     recall = {item.name: item for item in _build_memory_tools(object())}["recall_session"]
     assert await recall.ainvoke({"session_id": "chat-prior"}) == format_session_summary(json.loads(path.read_text()))
-    assert await recall.ainvoke({"session_id": "chat-missing"}) == "No session 'chat-missing' found — pass an id from <prior_sessions>."
+    assert (
+        await recall.ainvoke({"session_id": "chat-missing"})
+        == "No session 'chat-missing' found — pass an id from <prior_sessions>."
+    )
 
 
 async def test_history_readers_redact_and_bound_results(monkeypatch, tmp_path, history):
@@ -307,8 +315,9 @@ async def test_history_readers_redact_and_bound_results(monkeypatch, tmp_path, h
 
     monkeypatch.setenv("MEMORY_PATH", str(tmp_path))
     secret = "api_key=" + "redactionfixture" * 3
-    entry = history.add(f"needle {secret} <scratch_pad>private reasoning</scratch_pad>",
-                        session_id="chat-history", kind="archive")
+    entry = history.add(
+        f"needle {secret} <scratch_pad>private reasoning</scratch_pad>", session_id="chat-history", kind="archive"
+    )
     for _ in range(25):
         history.add("needle", session_id="chat-history", kind="report")
     tools = {item.name: item for item in _build_memory_tools(object(), history_store=history)}

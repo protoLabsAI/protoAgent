@@ -34,10 +34,10 @@ _SUPPORTED_COMPONENT = "table"
 # ── Fixed dimension / size ceilings ────────────────────────────────────────────────────
 # A HITL table is a small, glanceable aid beside a prompt, not a data export: keep it
 # bounded so a pathological payload can never bloat the parked interrupt or the wire frame.
-MAX_COLUMNS = 16          # header cells
-MAX_ROWS = 100            # body rows
-MAX_HEADER_CHARS = 200    # per column-header string
-MAX_CELL_CHARS = 1000     # per string cell
+MAX_COLUMNS = 16  # header cells
+MAX_ROWS = 100  # body rows
+MAX_HEADER_CHARS = 200  # per column-header string
+MAX_CELL_CHARS = 1000  # per string cell
 MAX_DISPLAY_BYTES = 64 * 1024  # serialized ceiling for the whole {component, props} blob
 
 

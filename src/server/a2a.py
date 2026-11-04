@@ -777,6 +777,10 @@ def _record_a2a_telemetry(outcome) -> None:
         context_tokens=int(getattr(outcome, "context_tokens", 0) or 0),
         # What the caller asked for — the row's model when no call reported one (#3957).
         requested_model=str(getattr(outcome, "requested_model", "") or ""),
+        # Why a failed leg ended — the task's terminal status text, the stall guard's
+        # message for a wedged turn (#4726). getattr-guarded like the fields above.
+        error=str(getattr(outcome, "error", "") or ""),
+        incognito=bool(getattr(outcome, "incognito", False)),
     )
 
     # Fleet trace export → lab (the flywheel Observe, #1897). Off unless
@@ -990,9 +994,7 @@ def _publish_delegated_lifecycle(context_id: str, task_id: str, frame: dict) -> 
                 "origin": "a2a",
                 "trigger": str(frame.get("trigger") or ""),
                 "caller": _one_line(frame.get("caller"), _DELEGATED_CALLER_LIMIT),
-                "summary": ""
-                if frame.get("private")
-                else _one_line(frame.get("stimulus"), _DELEGATED_SUMMARY_LIMIT),
+                "summary": "" if frame.get("private") else _one_line(frame.get("stimulus"), _DELEGATED_SUMMARY_LIMIT),
             },
         )
     elif phase == "turn_ended" and frame.get("state") != "input_required":
@@ -1115,6 +1117,11 @@ def _handle_background_terminal(outcome) -> None:
     if status != "completed" and not error and state not in ("failed", "canceled"):
         # A background turn has no one to answer it, so a park is a failure — say so.
         error = f"the background turn ended in state {state!r}"
+    # Stored, published on `background.completed` and shown in the console, so redacted
+    # first. The helper never raises, so the settle below always runs (#4726).
+    from observability.error_text import safe_error_text
+
+    error = safe_error_text(error, max_len=2000)
     # The background turn's own priced spend, onto its ledger edge (#3565). The executor
     # reports 0.0 when no call reported usage — unknown, not free — so only a positive
     # total is recorded (the same rule its cost-v1 extension applies).
@@ -1379,9 +1386,7 @@ async def _session_recently_active(session_id: str, *, window_s: int = _SCHEDULE
 
         async with engine.connect() as conn:
             latest = (
-                await conn.execute(
-                    select(func.max(TaskModel.last_updated)).where(TaskModel.context_id == session_id)
-                )
+                await conn.execute(select(func.max(TaskModel.last_updated)).where(TaskModel.context_id == session_id))
             ).scalar()
     except Exception:  # noqa: BLE001 — a read failure must not suppress a delivery
         return True

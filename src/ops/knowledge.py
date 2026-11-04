@@ -133,7 +133,9 @@ async def _extract(source: IngestSource, ctx: OpContext):
     try:
         if source.text is not None:
             text = source.text
-            return ExtractResult(text=text, title=source.text_title or None, source_type="text"), (source.label or "console")
+            return ExtractResult(text=text, title=source.text_title or None, source_type="text"), (
+                source.label or "console"
+            )
         if source.url:
             return await asyncio.to_thread(extract_url, source.url, transcribe=transcribe), (source.label or source.url)
         if source.data is not None:
@@ -172,7 +174,9 @@ async def _extract(source: IngestSource, ctx: OpContext):
     mutates=True,
     summary="Extract a URL / file / text source and index it into long-term knowledge.",
 )
-async def ingest(source: IngestSource, *, domain: str = "general", title: str | None = None, ctx: OpContext) -> IngestResult:
+async def ingest(
+    source: IngestSource, *, domain: str = "general", title: str | None = None, ctx: OpContext
+) -> IngestResult:
     """Run the ingestion pipeline for one source and store it. Raises :class:`IngestError`
     (``no_source`` when nothing was given, ``empty`` when extraction yielded no text)."""
     from knowledge import add_document
@@ -216,7 +220,9 @@ async def ingest(source: IngestSource, *, domain: str = "general", title: str | 
     mutates=False,
     summary="Dry-run an ingest: extract + count chunks for a source without persisting.",
 )
-async def ingest_preview(source: IngestSource, *, title: str | None = None, ctx: OpContext, snippet_chars: int = 600) -> PreviewResult:
+async def ingest_preview(
+    source: IngestSource, *, title: str | None = None, ctx: OpContext, snippet_chars: int = 600
+) -> PreviewResult:
     """Extract + count chunks with the live store's knobs WITHOUT persisting (#1801) — the
     same extraction as :func:`ingest`, stopped before ``add_document``."""
     from knowledge.chunking import chunk_text

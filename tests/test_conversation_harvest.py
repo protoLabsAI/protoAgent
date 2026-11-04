@@ -17,7 +17,6 @@ from graph.checkpointer import build_sqlite_checkpointer
 from graph.conversation_harvest import harvest_thread, render_transcript
 
 
-
 @pytest.fixture(autouse=True)
 def history_store(tmp_path, monkeypatch):
     store = HistoryStore(tmp_path / "kb.db")
@@ -39,12 +38,14 @@ def test_render_transcript_cleans_and_skips_noise():
 
 @pytest.mark.parametrize("message_type,role", [(HumanMessage, "User"), (AIMessage, "Assistant")])
 def test_render_transcript_preserves_multipart_content(message_type, role):
-    message = message_type(content=[
-        {"type": "text", "text": "Caption"},
-        {"type": "image_url", "image_url": {"url": "data:image/png;base64,private"}},
-        "More text",
-        {"type": "text", "text": "<scratch_pad>hidden</scratch_pad>Answer"},
-    ])
+    message = message_type(
+        content=[
+            {"type": "text", "text": "Caption"},
+            {"type": "image_url", "image_url": {"url": "data:image/png;base64,private"}},
+            "More text",
+            {"type": "text", "text": "<scratch_pad>hidden</scratch_pad>Answer"},
+        ]
+    )
     transcript = render_transcript([message])
     assert transcript.startswith(f"{role}: Caption\n\n_[image_url]_\n\nMore text")
     assert "Answer" in transcript
@@ -54,9 +55,18 @@ def test_render_transcript_preserves_multipart_content(message_type, role):
 
 
 def test_render_transcript_preserves_attachment_only_message():
-    assert render_transcript([HumanMessage(content=[
-        {"type": "image_url", "image_url": {"url": "https://example.com/image.png"}},
-    ])]) == "User: _[image_url]_"
+    assert (
+        render_transcript(
+            [
+                HumanMessage(
+                    content=[
+                        {"type": "image_url", "image_url": {"url": "https://example.com/image.png"}},
+                    ]
+                )
+            ]
+        )
+        == "User: _[image_url]_"
+    )
 
 
 class _FakeKnowledge:
@@ -194,7 +204,12 @@ def test_harvest_noop_without_history_store(tmp_path):
     db = str(tmp_path / "c.db")
     _seed(db)
     saver = build_sqlite_checkpointer(db)
-    assert asyncio.run(harvest_thread("a2a:chat-1", checkpointer=saver, knowledge_store=None, history_store=None, config=object())) is None
+    assert (
+        asyncio.run(
+            harvest_thread("a2a:chat-1", checkpointer=saver, knowledge_store=None, history_store=None, config=object())
+        )
+        is None
+    )
 
 
 def test_harvest_noop_on_unknown_thread(tmp_path):

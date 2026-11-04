@@ -164,7 +164,5 @@ def test_real_roadmap_json_parses_into_the_expected_ref_shape() -> None:
         assert title and isinstance(title, str)
         assert isinstance(number, int) and number > 0
     # No release ref may leak into the checkable set (the no-false-positive guarantee).
-    all_active_refs = [
-        r for s in sections if staleness._is_active(s["status"]) for i in s["items"] for r in i["refs"]
-    ]
+    all_active_refs = [r for s in sections if staleness._is_active(s["status"]) for i in s["items"] for r in i["refs"]]
     assert len(refs) == len([r for r in all_active_refs if r.startswith("#")])

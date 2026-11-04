@@ -350,6 +350,7 @@ async def attendance_stream(session_id: str, *, keepalive_s: float = 15.0, is_di
         if attended:
             release_session_attended(sid)
 
+
 # What we resume an autonomous turn's HITL interrupt with, so the agent stops waiting and
 # finishes the turn instead of deadlocking. Bounded by the cap below so a model that keeps
 # re-asking can't auto-answer in an infinite loop; past the cap we force the turn to complete
@@ -458,10 +459,7 @@ def _is_autonomous(request_metadata: dict | None) -> bool:
     if _truthy(md.get("unattended")):
         return True
     origin = md.get("origin")
-    if (
-        str(origin or "").strip().lower() in _ATTENDANCE_CONDITIONAL_ORIGINS
-        and _background_resume_attended(md)
-    ):
+    if str(origin or "").strip().lower() in _ATTENDANCE_CONDITIONAL_ORIGINS and _background_resume_attended(md):
         return False
     return is_autonomous_origin(origin)
 

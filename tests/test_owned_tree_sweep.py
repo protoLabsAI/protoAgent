@@ -186,7 +186,11 @@ def _write_record(box: Path, owner: int, pgid: int, tracked_at: float) -> Path:
     d = box / ".owned-trees"
     d.mkdir(parents=True, exist_ok=True)
     path = d / f"{owner}.json"
-    path.write_text(json.dumps({"owner": owner, "owner_start": None, "trees": [{"root": pgid, "pgid": pgid, "tracked_at": tracked_at}]}))
+    path.write_text(
+        json.dumps(
+            {"owner": owner, "owner_start": None, "trees": [{"root": pgid, "pgid": pgid, "tracked_at": tracked_at}]}
+        )
+    )
     return path
 
 
@@ -259,7 +263,9 @@ def test_a_final_reap_kills_only_what_it_asked_to_stop_first(box):
     it stays tracked and recorded for atexit or the next sweep."""
     import threading
 
-    stubborn = subprocess.Popen(["sh", "-c", "trap '' TERM; echo ready; exec sleep 300"], stdout=subprocess.PIPE, text=True, **group_kwargs())
+    stubborn = subprocess.Popen(
+        ["sh", "-c", "trap '' TERM; echo ready; exec sleep 300"], stdout=subprocess.PIPE, text=True, **group_kwargs()
+    )
     assert stubborn.stdout.readline().strip() == "ready"
     _KILL_AFTER.append(stubborn.pid)
     track_tree(stubborn.pid)
@@ -346,9 +352,13 @@ def test_the_servers_startup_and_shutdown_hooks_run_the_sweep():
     startup, shutdown = hooks["_scheduler_startup"], hooks["_scheduler_shutdown"]
     assert {"_sweep_orphaned_trees_once", "_sweep_orphaned_trees_forever", "create_task"} <= _calls_in(startup)
     cancels = [
-        n for n in ast.walk(shutdown)
-        if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute) and n.func.attr == "cancel"
-        and isinstance(n.func.value, ast.Name) and n.func.value.id == "_ORPHAN_SWEEP_TASK"
+        n
+        for n in ast.walk(shutdown)
+        if isinstance(n, ast.Call)
+        and isinstance(n.func, ast.Attribute)
+        and n.func.attr == "cancel"
+        and isinstance(n.func.value, ast.Name)
+        and n.func.value.id == "_ORPHAN_SWEEP_TASK"
     ]
     assert cancels, "shutdown no longer cancels the periodic sweep"
     assert server.ORPHAN_SWEEP_INTERVAL_S > 0

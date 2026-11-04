@@ -25,14 +25,68 @@ def test_activity_folds_server_fired_turns_and_tools_into_rows_and_state():
     s = "protoEngineer-ba4c"
     act.apply(ev(s, "turn.started", session_id="chat-1", origin="scheduler", trigger="daily"))
     assert act.turn_cell(s) == "⟳ running"
-    act.apply(ev(s, "chat.progress", session_id="chat-1", task_id="t1", phase="tool_start", tool="run_command", tool_call_id="c1", control={"operator_controllable": True}))
-    act.apply(ev(s, "chat.progress", session_id="chat-1", task_id="t1", phase="tool_end", tool="run_command", tool_call_id="c1", output="3 open"))
-    act.apply(ev(s, "chat.progress", session_id="chat-1", task_id="t1", phase="text", text="narration is not a feed row"))
-    act.apply(ev(s, "chat.progress", session_id="chat-1", task_id="t1", phase="room_reply", message_id="m1", author="sonnet", text="1 replied"))
+    act.apply(
+        ev(
+            s,
+            "chat.progress",
+            session_id="chat-1",
+            task_id="t1",
+            phase="tool_start",
+            tool="run_command",
+            tool_call_id="c1",
+            control={"operator_controllable": True},
+        )
+    )
+    act.apply(
+        ev(
+            s,
+            "chat.progress",
+            session_id="chat-1",
+            task_id="t1",
+            phase="tool_end",
+            tool="run_command",
+            tool_call_id="c1",
+            output="3 open",
+        )
+    )
+    act.apply(
+        ev(s, "chat.progress", session_id="chat-1", task_id="t1", phase="text", text="narration is not a feed row")
+    )
+    act.apply(
+        ev(
+            s,
+            "chat.progress",
+            session_id="chat-1",
+            task_id="t1",
+            phase="room_reply",
+            message_id="m1",
+            author="sonnet",
+            text="1 replied",
+        )
+    )
     act.apply(ev(s, "turn.finished", session_id="chat-1", task_id="t1", origin="scheduler", ok=True))
-    act.apply(ev(s, "turn.usage", task_id="t1", context_id="chat-1", state="TASK_STATE_COMPLETED", model="m", cost_usd=0.5, input_tokens=100, output_tokens=5))
+    act.apply(
+        ev(
+            s,
+            "turn.usage",
+            task_id="t1",
+            context_id="chat-1",
+            state="TASK_STATE_COMPLETED",
+            model="m",
+            cost_usd=0.5,
+            input_tokens=100,
+            output_tokens=5,
+        )
+    )
     labels = [(r.glyph, r.label) for r in act.rows]
-    assert labels == [("⟳", "turn started"), ("⟳", "run_command"), ("✓", "run_command"), ("✓", "@sonnet replied"), ("✓", "turn finished"), ("$", "turn completed")]
+    assert labels == [
+        ("⟳", "turn started"),
+        ("⟳", "run_command"),
+        ("✓", "run_command"),
+        ("✓", "@sonnet replied"),
+        ("✓", "turn finished"),
+        ("$", "turn completed"),
+    ]
     assert act.rows[2].detail.startswith("3 open") and act.rows[1].controllable
     assert act.turn_cell(s) == "idle" and act.state[s].last_cost_usd == 0.5 and act.state[s].last_model == "m"
     assert act.last_active_cell(s).endswith("s ago")
@@ -41,10 +95,17 @@ def test_activity_folds_server_fired_turns_and_tools_into_rows_and_state():
 
 def test_activity_usage_closes_open_tools_and_failed_turns_are_marked():
     act = feed.Activity()
-    act.apply(ev("x", "chat.progress", session_id="s", task_id="t", phase="tool_start", tool="fetch_url", tool_call_id="c9"))
+    act.apply(
+        ev("x", "chat.progress", session_id="s", task_id="t", phase="tool_start", tool="fetch_url", tool_call_id="c9")
+    )
     assert act.turn_cell("x") == "⟳ running"
     act.apply(ev("x", "turn.usage", task_id="t", context_id="s", state="TASK_STATE_FAILED", cost_usd="inf"))
-    assert act.turn_cell("x") == "idle" and act.state["x"].open_tools == {} and act.rows[-1].error and act.state["x"].last_cost_usd == 0.0
+    assert (
+        act.turn_cell("x") == "idle"
+        and act.state["x"].open_tools == {}
+        and act.rows[-1].error
+        and act.state["x"].last_cost_usd == 0.0
+    )
     act.apply(ev("x", "chat.resumed", session_id="s", task_id="t2", text="", error="boom"))
     assert act.rows[-1].glyph == "✗" and act.rows[-1].label == "settled"
 
@@ -81,7 +142,9 @@ def test_stale_open_tool_and_a_turn_whose_end_was_lost_stop_counting_as_running(
     act.apply(ev("x", "turn.usage", task_id="t9", context_id="chat-9", state="TASK_STATE_COMPLETED"))
     assert act.turn_cell("x") == "idle"
     # a frame for a task refreshes it: a long turn that keeps talking never ages out
-    act.apply(ev("x", "chat.progress", session_id="chat-2", task_id="t2", phase="tool_start", tool="t", tool_call_id="c2"))
+    act.apply(
+        ev("x", "chat.progress", session_id="chat-2", task_id="t2", phase="tool_start", tool="t", tool_call_id="c2")
+    )
     act.state["x"].running["t2"] -= feed.TURN_TTL_S + 1
     act.state["x"].open_tools["c2"] = ("t", time.monotonic() - feed.RUNNING_TTL_S - 1, "t2")
     assert act.turn_cell("x") == "idle"
@@ -143,9 +206,26 @@ def test_parks_are_per_session_and_the_three_writers_merge():
 
 def test_replayed_events_carry_no_time_unless_the_member_stamped_them():
     act = feed.Activity()
-    act.apply(deckevents.Event(slug="x", topic="turn.usage", data={"task_id": "t", "context_id": "s", "state": "TASK_STATE_COMPLETED", "cost_usd": 1}, seq=1, replayed=True))
+    act.apply(
+        deckevents.Event(
+            slug="x",
+            topic="turn.usage",
+            data={"task_id": "t", "context_id": "s", "state": "TASK_STATE_COMPLETED", "cost_usd": 1},
+            seq=1,
+            replayed=True,
+        )
+    )
     assert act.rows[-1].at is None and act.last_active_cell("x") == ""
-    act.apply(deckevents.Event(slug="x", topic="turn.usage", data={"task_id": "t2", "context_id": "s", "state": "TASK_STATE_COMPLETED"}, seq=2, replayed=True, ts=time.time() - 7200))
+    act.apply(
+        deckevents.Event(
+            slug="x",
+            topic="turn.usage",
+            data={"task_id": "t2", "context_id": "s", "state": "TASK_STATE_COMPLETED"},
+            seq=2,
+            replayed=True,
+            ts=time.time() - 7200,
+        )
+    )
     assert act.rows[-1].at is not None and act.last_active_cell("x") == "2h ago"
     act.apply(ev("x", "turn.usage", task_id="t3", context_id="s", state="TASK_STATE_COMPLETED"))
     assert act.last_active_cell("x") == "0s ago"
@@ -188,18 +268,51 @@ async def test_roster_turn_column_follows_the_bus_and_the_bell_rings_on_a_park()
         assert fe.watched[-1] == ["host", "protoEngineer-ba4c", "old-1"]  # online + host only
         rows = app.screen.query_one("#roster", DataTable)
         assert str(rows.get_row_at(1)[3]) == "idle"
-        fe.pending.append(ev("protoEngineer-ba4c", "chat.progress", session_id="s", task_id="t", phase="tool_start", tool="run_command", tool_call_id="c1"))
-        assert await _until(pilot, lambda: str(app.screen.query_one("#roster", DataTable).get_row_at(1)[3]) == "⟳ running")
-        fe.pending.append(ev("protoEngineer-ba4c", "turn.usage", task_id="t", context_id="s", state="TASK_STATE_COMPLETED", cost_usd=0.01))
+        fe.pending.append(
+            ev(
+                "protoEngineer-ba4c",
+                "chat.progress",
+                session_id="s",
+                task_id="t",
+                phase="tool_start",
+                tool="run_command",
+                tool_call_id="c1",
+            )
+        )
+        assert await _until(
+            pilot, lambda: str(app.screen.query_one("#roster", DataTable).get_row_at(1)[3]) == "⟳ running"
+        )
+        fe.pending.append(
+            ev(
+                "protoEngineer-ba4c",
+                "turn.usage",
+                task_id="t",
+                context_id="s",
+                state="TASK_STATE_COMPLETED",
+                cost_usd=0.01,
+            )
+        )
         assert await _until(pilot, lambda: str(app.screen.query_one("#roster", DataTable).get_row_at(1)[3]) == "idle")
         assert "ago" in str(app.screen.query_one("#roster", DataTable).get_row_at(1)[8])
         # a park on the bus rings once, through the drain
         rings.clear()
-        fe.pending.append(ev("protoEngineer-ba4c", "turn.input_required", context_id="chat-1", task_id="t9", prompt="Merge?"))
-        assert await _until(pilot, lambda: rings == [1] and str(app.screen.query_one("#roster", DataTable).get_row_at(1)[3]) == "⚑ needs you")
+        fe.pending.append(
+            ev("protoEngineer-ba4c", "turn.input_required", context_id="chat-1", task_id="t9", prompt="Merge?")
+        )
+        assert await _until(
+            pilot,
+            lambda: rings == [1] and str(app.screen.query_one("#roster", DataTable).get_row_at(1)[3]) == "⚑ needs you",
+        )
         # the status counts parked TURNS: a second session of the same member is a second turn
-        fe.pending.append(ev("protoEngineer-ba4c", "turn.input_required", context_id="chat-2", task_id="t10", prompt="Deploy?"))
-        assert await _until(pilot, lambda: "⚑ 2 turns parked on a question (protoEngineer)" in str(app.screen.query_one("#status", Static).content))
+        fe.pending.append(
+            ev("protoEngineer-ba4c", "turn.input_required", context_id="chat-2", task_id="t10", prompt="Deploy?")
+        )
+        assert await _until(
+            pilot,
+            lambda: (
+                "⚑ 2 turns parked on a question (protoEngineer)" in str(app.screen.query_one("#status", Static).content)
+            ),
+        )
         fe.pending.append(ev("protoEngineer-ba4c", "turn.resumed", context_id="chat-2", task_id="t10"))
         assert await _until(pilot, lambda: "⚑ 1 turn parked" in str(app.screen.query_one("#status", Static).content))
         # a parked probe result from the poll: a session it saw parked rings; protoEngineer's
@@ -209,7 +322,9 @@ async def test_roster_turn_column_follows_the_bus_and_the_bell_rings_on_a_park()
         snap.parked = {"old-1": {"chat-9": ("waiting on you", "t9")}}
         snap.parked_at = time.monotonic()
         app._apply(snap)
-        assert await _until(pilot, lambda: rings == [1] and "⚑ 2 turns parked" in str(app.screen.query_one("#status", Static).content))
+        assert await _until(
+            pilot, lambda: rings == [1] and "⚑ 2 turns parked" in str(app.screen.query_one("#status", Static).content)
+        )
         assert rings == [1]
         snap.parked = {"old-1": {"chat-9": ("", "t9")}, "protoEngineer-ba4c": {"chat-1": ("", "t9")}}  # both seen clean
         # A clearing probe must have been READ strictly after the parks it clears: one read
@@ -233,10 +348,22 @@ async def test_work_feed_screen_lists_rows_filters_and_opens_the_member():
     app = FleetDeck(be, poll_s=0, events=fe)
     async with app.run_test(size=(130, 34)) as pilot:
         await _settle(app, pilot)
-        fe.pending.extend([
-            ev("protoEngineer-ba4c", "chat.progress", session_id="chat-1", task_id="t", phase="tool_start", tool="run_command", tool_call_id="c1"),
-            ev("old-1", "turn.usage", task_id="t2", context_id="chat-2", state="TASK_STATE_COMPLETED", cost_usd=0.2),
-        ])
+        fe.pending.extend(
+            [
+                ev(
+                    "protoEngineer-ba4c",
+                    "chat.progress",
+                    session_id="chat-1",
+                    task_id="t",
+                    phase="tool_start",
+                    tool="run_command",
+                    tool_call_id="c1",
+                ),
+                ev(
+                    "old-1", "turn.usage", task_id="t2", context_id="chat-2", state="TASK_STATE_COMPLETED", cost_usd=0.2
+                ),
+            ]
+        )
         assert await _until(pilot, lambda: len(app.activity.rows) >= 2)  # both bus rows landed
         await pilot.press("w")
         assert await _until(pilot, lambda: isinstance(app.screen, WorkFeedScreen))
@@ -262,7 +389,9 @@ async def test_work_feed_screen_lists_rows_filters_and_opens_the_member():
 
 @pytest.mark.asyncio
 async def test_offline_has_no_feed():
-    be = FakeBackend(mode="offline", roster=[{"name": "alpha", "id": "alpha-1", "port": 7901, "pid": None, "running": False}])
+    be = FakeBackend(
+        mode="offline", roster=[{"name": "alpha", "id": "alpha-1", "port": 7901, "pid": None, "running": False}]
+    )
     app = FleetDeck(be, poll_s=0)
     async with app.run_test(size=(120, 30)) as pilot:
         await _settle(app, pilot)

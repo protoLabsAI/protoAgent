@@ -180,9 +180,7 @@ def test_pool_over_fetches_only_when_a_floor_is_active():
 
 
 def test_filtered_pool_still_trims_to_top_k():
-    hits = [
-        {"table": "chunks", "preview": f"hit {i}", "id": i, "source_type": "operator"} for i in range(6)
-    ]
+    hits = [{"table": "chunks", "preview": f"hit {i}", "id": i, "source_type": "operator"} for i in range(6)]
     store = _CapturingStore(results=hits)
     ctx = _context(_mw(store, top_k=2, inject_min_trust=2))
     assert "hit 0" in ctx and "hit 1" in ctx and "hit 2" not in ctx

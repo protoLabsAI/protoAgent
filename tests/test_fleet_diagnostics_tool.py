@@ -235,7 +235,9 @@ async def test_a_duplicated_display_name_is_refused_not_silently_picked(monkeypa
 async def test_local_logs_go_through_the_proxy_with_the_service_token(monkeypatch):
     _install_roster(monkeypatch, [_LOCAL])
     cap: list[httpx.Request] = []
-    _install_http(monkeypatch, body={"enabled": True, "lines": [{"message": "hi"}], "returned": 1, "capacity": 2}, capture=cap)
+    _install_http(
+        monkeypatch, body={"enabled": True, "lines": [{"message": "hi"}], "returned": 1, "capacity": 2}, capture=cap
+    )
     out = await _logs("Alpha", lines=50)
     assert out["ok"] is True
     assert out["logs"]["returned"] == 1
@@ -373,7 +375,13 @@ async def test_disabled_buffer_signal_is_preserved(monkeypatch):
     _install_roster(monkeypatch, [_LOCAL])
     _install_http(
         monkeypatch,
-        body={"enabled": False, "lines": [], "returned": 0, "capacity": 0, "note": "log buffer disabled (LOG_BUFFER_LINES=0)"},
+        body={
+            "enabled": False,
+            "lines": [],
+            "returned": 0,
+            "capacity": 0,
+            "note": "log buffer disabled (LOG_BUFFER_LINES=0)",
+        },
     )
     out = await _logs("Alpha")
     assert out["ok"] is True

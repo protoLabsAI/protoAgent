@@ -94,9 +94,7 @@ def service(name: str) -> Callable | None:
     return get_service(name)
 
 
-def record_friction(
-    kind: str, summary: str, detail: str = "", severity: str = "minor", *, source: str
-) -> str | None:
+def record_friction(kind: str, summary: str, detail: str = "", severity: str = "minor", *, source: str) -> str | None:
     """Record a friction point in THIS instance's friction ledger from plugin code.
 
     The agent's ``record_friction`` tool only captures what goes wrong inside a turn. A
@@ -1329,8 +1327,7 @@ def schedule_recurring(
         return {
             "ok": False,
             "job_id": None,
-            "message": f"schedule {cron!r} is not a 5-field cron expression — "
-            "for a one-shot turn use run_in_session",
+            "message": f"schedule {cron!r} is not a 5-field cron expression — for a one-shot turn use run_in_session",
         }
     full_id = f"{plugin_job_prefix(plugin_id)}{job_id.strip()}"
     # Idempotent replace: add_job RAISES on a duplicate id, so drop any pending job
@@ -1971,7 +1968,10 @@ def provider_usage(account: str | None = None, *, delegate: Any = None, model: s
         blocking = [w for w in applicable if w.status == "blocked"]
         binding = (
             max(blocking, key=lambda w: w.resets_at)
-            if blocking else max(applicable, key=lambda w: w.used_pct) if applicable else None
+            if blocking
+            else max(applicable, key=lambda w: w.used_pct)
+            if applicable
+            else None
         )
         return {
             "usable": usable_for(acct, model),

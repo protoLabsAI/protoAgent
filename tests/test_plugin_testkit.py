@@ -138,8 +138,7 @@ def test_fake_registry_mirrors_the_full_plugin_registry_surface():
         real_params = [(p.name, p.kind) for p in inspect.signature(fn).parameters.values()]
         fake_params = [(p.name, p.kind) for p in inspect.signature(fake_fn).parameters.values()]
         assert fake_params == real_params, (
-            f"FakeRegistry.{name} signature drifted from PluginRegistry.{name}: "
-            f"{fake_params} != {real_params}"
+            f"FakeRegistry.{name} signature drifted from PluginRegistry.{name}: {fake_params} != {real_params}"
         )
 
 
@@ -408,8 +407,8 @@ def test_fake_registry_emit_namespaces_like_the_real_bus():
     reg = testkit.FakeRegistry(plugin_id="friction")
 
     reg.emit("recorded", {"a": 1})
-    reg.emit("friction.resolved")          # already namespaced — must not double-prefix
-    reg.emit("friction")                   # the bare plugin id is a valid topic
+    reg.emit("friction.resolved")  # already namespaced — must not double-prefix
+    reg.emit("friction")  # the bare plugin id is a valid topic
 
     assert [t for t, _ in reg.emitted] == ["friction.recorded", "friction.resolved", "friction"]
 

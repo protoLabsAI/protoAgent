@@ -455,7 +455,9 @@ NOT_TOOL_NAMES = frozenset(
 
 # `on_change` is named as `on_change: true` in drop-folder, which no backtick sweep sees —
 # and it is the arg that makes a drop zone fire per change instead of once.
-_WATCH_ARGS_THE_SKILLS_NAME = frozenset({"check", "check_args", "run_prompt", "interval_s", "expires_in_s", "on_change"})
+_WATCH_ARGS_THE_SKILLS_NAME = frozenset(
+    {"check", "check_args", "run_prompt", "interval_s", "expires_in_s", "on_change"}
+)
 
 
 def _in_tree_tool_names() -> set[str]:

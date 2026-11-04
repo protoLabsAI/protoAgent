@@ -102,9 +102,7 @@ def test_rewind_by_content_honors_occurrence():
         AIMessage(content="final", id="a3"),
     ]
     g = _FakeGraph(msgs)
-    res = asyncio.run(
-        rewind_thread(g, object(), "a2a:s1", target_content="done", occurrence=0)
-    )
+    res = asyncio.run(rewind_thread(g, object(), "a2a:s1", target_content="done", occurrence=0))
     _config, update = g.updates[0]
     assert [m.id for m in update["messages"][1:]] == ["h1", "a1"]  # the FIRST "done", not a2
     assert res["removed"] == 4 and res["kept"] == 2
@@ -226,11 +224,13 @@ def test_rewind_by_content_matches_list_block_messages():
     ]
     fake = _FakeGraph(msgs)
     result = asyncio.run(
-        rewind_thread(fake, object(), "a2a:s1", target_id="client-id-never-matches", target_content="PA-WINDOWS-FORK-A.")
+        rewind_thread(
+            fake, object(), "a2a:s1", target_id="client-id-never-matches", target_content="PA-WINDOWS-FORK-A."
+        )
     )
     assert result["found"] is True
     assert result["kept"] == 2 and result["removed"] == 2
-    (_, update), = fake.updates
+    ((_, update),) = fake.updates
     kept_ids = [m.id for m in update["messages"] if not isinstance(m, RemoveMessage)]
     assert kept_ids == ["h1", "a1"]
 
@@ -269,7 +269,7 @@ def test_rewind_before_excludes_the_target_pair():
     result = asyncio.run(rewind_thread(fake, object(), "a2a:s1", target_content="q2", before=True))
     assert result["found"] is True
     assert result["kept"] == 2 and result["removed"] == 2
-    (_, update), = fake.updates
+    ((_, update),) = fake.updates
     kept_ids = [m.id for m in update["messages"] if not isinstance(m, RemoveMessage)]
     assert kept_ids == ["h1", "a1"]
 
@@ -376,9 +376,7 @@ def test_fork_resolves_the_clicked_occurrence_of_duplicate_content():
         AIMessage(content="same reply", id="a2"),
     ]
     g = _ThreadedFakeGraph({"a2a:src": msgs})
-    res = asyncio.run(
-        fork_thread(g, object(), "a2a:src", "a2a:dst", target_content="same reply", occurrence=0)
-    )
+    res = asyncio.run(fork_thread(g, object(), "a2a:src", "a2a:dst", target_content="same reply", occurrence=0))
     assert res["found"] is True and res["kept"] == 2  # the FIRST duplicate, as clicked
 
 

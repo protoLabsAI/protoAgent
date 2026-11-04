@@ -16,7 +16,11 @@ from runtime.flags import Flag
 @pytest.fixture(autouse=True)
 def _hermetic_env(monkeypatch):
     for k in list(os.environ):
-        if k.startswith("PROTOAGENT_FLAG_") or k in ("PROTOAGENT_CHANNEL", "PROTOAGENT_INSTANCE", "PROTOAGENT_AUTO_SCOPE"):
+        if k.startswith("PROTOAGENT_FLAG_") or k in (
+            "PROTOAGENT_CHANNEL",
+            "PROTOAGENT_INSTANCE",
+            "PROTOAGENT_AUTO_SCOPE",
+        ):
             monkeypatch.delenv(k, raising=False)
     yield
 
@@ -37,8 +41,13 @@ def test_flags_route_serves_resolved_payload(monkeypatch):
     assert body["channel"] == "beta"
     assert body["flags"] == [
         {
-            "id": "chat.new", "description": "A new thing", "tier": "beta",
-            "owner": "kj", "remove_by": "v2", "enabled": True, "source": "channel",
+            "id": "chat.new",
+            "description": "A new thing",
+            "tier": "beta",
+            "owner": "kj",
+            "remove_by": "v2",
+            "enabled": True,
+            "source": "channel",
         }
     ]
 

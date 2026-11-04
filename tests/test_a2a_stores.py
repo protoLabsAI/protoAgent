@@ -372,9 +372,7 @@ async def test_reaper_counts_a_prompt_only_history_as_orphan_at_birth(tmp_path):
     store, engine = await _fresh_task_store(tmp_path)
     ctx = _ctx()
     prompt = a2a_pb2.Message(role=a2a_pb2.ROLE_USER, parts=[a2a_pb2.Part(text="list the workspace")])
-    await _seed_task(
-        store, engine, ctx, "orphan", state="TASK_STATE_WORKING", age_s=400, now=now, history=[prompt]
-    )
+    await _seed_task(store, engine, ctx, "orphan", state="TASK_STATE_WORKING", age_s=400, now=now, history=[prompt])
 
     n = await reap_orphaned_working_tasks(engine, birth_grace_s=300, idle_after_s=1800, now=now)
     assert n == 1
@@ -509,9 +507,7 @@ async def test_reaper_is_idempotent_and_deletes_nothing(tmp_path):
     await _seed_task(
         store, engine, ctx, "stalled", state="TASK_STATE_WORKING", age_s=2000, now=now, history=[_agent_msg()]
     )
-    await _seed_task(
-        store, engine, ctx, "live", state="TASK_STATE_WORKING", age_s=10, now=now, history=[_agent_msg()]
-    )
+    await _seed_task(store, engine, ctx, "live", state="TASK_STATE_WORKING", age_s=10, now=now, history=[_agent_msg()])
     await _seed_task(store, engine, ctx, "done", state="TASK_STATE_COMPLETED", age_s=99_999, now=now)
 
     sm = async_sessionmaker(engine, expire_on_commit=False)

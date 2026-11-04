@@ -229,9 +229,22 @@ def register_browse_routes(app) -> None:
             raise _fs_error(404, "not_found", f"no such file: {path}") from exc
         rel = target.relative_to(root).as_posix()
         with fh:
-            base = {"project": project, "path": rel, "size": os.fstat(fh.fileno()).st_size, "language": guess_language(rel)}
+            base = {
+                "project": project,
+                "path": rel,
+                "size": os.fstat(fh.fileno()).st_size,
+                "language": guess_language(rel),
+            }
             if sniff_binary(fh):
-                return {**base, "line_count": None, "start": None, "end": None, "truncated": False, "binary": True, "text": None}
+                return {
+                    **base,
+                    "line_count": None,
+                    "start": None,
+                    "end": None,
+                    "truncated": False,
+                    "binary": True,
+                    "text": None,
+                }
             try:
                 win = read_window(fh, start, end)
             except ValueError as exc:

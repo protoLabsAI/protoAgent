@@ -39,44 +39,65 @@ def polling_logger(monkeypatch):
 def test_successful_polls_are_debug(polling_logger, monkeypatch, path, method, level):
     monkeypatch.setattr(polling_logger, "level", level)
     rec = logging.LogRecord(
-        polling_logger.name, logging.INFO, __file__, 1, _UVICORN_FMT,
-        ("127.0.0.1:5", method, path + "?limit=10", "1.1", 200), None,
+        polling_logger.name,
+        logging.INFO,
+        __file__,
+        1,
+        _UVICORN_FMT,
+        ("127.0.0.1:5", method, path + "?limit=10", "1.1", 200),
+        None,
     )
     assert bool(polling_logger.filter(rec)) is (level == logging.DEBUG)
     assert (rec.levelno, rec.levelname) == (logging.DEBUG, "DEBUG")
 
 
-@pytest.mark.parametrize("path", [
-    "/api/chat/sessions/chat-1793128619708-j3cseg/local-turns",
-    "/api/plugins/project_board/features/bd-1cky.9/progress",
-])
+@pytest.mark.parametrize(
+    "path",
+    [
+        "/api/chat/sessions/chat-1793128619708-j3cseg/local-turns",
+        "/api/plugins/project_board/features/bd-1cky.9/progress",
+    ],
+)
 def test_id_carrying_polls_are_debug(polling_logger, path):
     rec = logging.LogRecord(
-        polling_logger.name, logging.INFO, __file__, 1, _UVICORN_FMT,
-        ("127.0.0.1:5", "GET", path + "?since=3", "1.1", 200), None,
+        polling_logger.name,
+        logging.INFO,
+        __file__,
+        1,
+        _UVICORN_FMT,
+        ("127.0.0.1:5", "GET", path + "?since=3", "1.1", 200),
+        None,
     )
     assert not polling_logger.filter(rec)
     assert rec.levelno == logging.DEBUG
 
 
-@pytest.mark.parametrize("method,path,status", [
-    ("GET", "/api/runtime/status", 500),
-    ("HEAD", "/healthz", 400),
-    ("POST", "/api/runtime/status", 200),
-    ("DELETE", "/api/background/job-1", 200),
-    ("GET", "/api/chat", 200),
-    ("GET", "/api/runtime/status-other", 200),
-    ("GET", "/api/chat?next=/api/runtime/status", 200),
-    ("GET", "/api/chat/sessions/s-1", 200),
-    ("GET", "/api/chat/sessions/s-1/local-turns/t-1", 200),
-    ("POST", "/api/chat/sessions/s-1/local-turns", 200),
-    ("GET", "/api/plugins/project_board/features/bd-1", 200),
-    ("GET", "/api/chat/sessions/s-1/local-turns", 500),
-])
+@pytest.mark.parametrize(
+    "method,path,status",
+    [
+        ("GET", "/api/runtime/status", 500),
+        ("HEAD", "/healthz", 400),
+        ("POST", "/api/runtime/status", 200),
+        ("DELETE", "/api/background/job-1", 200),
+        ("GET", "/api/chat", 200),
+        ("GET", "/api/runtime/status-other", 200),
+        ("GET", "/api/chat?next=/api/runtime/status", 200),
+        ("GET", "/api/chat/sessions/s-1", 200),
+        ("GET", "/api/chat/sessions/s-1/local-turns/t-1", 200),
+        ("POST", "/api/chat/sessions/s-1/local-turns", 200),
+        ("GET", "/api/plugins/project_board/features/bd-1", 200),
+        ("GET", "/api/chat/sessions/s-1/local-turns", 500),
+    ],
+)
 def test_other_access_records_stay_info(polling_logger, method, path, status):
     rec = logging.LogRecord(
-        polling_logger.name, logging.INFO, __file__, 1, _UVICORN_FMT,
-        ("127.0.0.1:5", method, path, "1.1", status), None,
+        polling_logger.name,
+        logging.INFO,
+        __file__,
+        1,
+        _UVICORN_FMT,
+        ("127.0.0.1:5", method, path, "1.1", status),
+        None,
     )
     assert polling_logger.filter(rec)
     assert (rec.levelno, rec.levelname) == (logging.INFO, "INFO")
@@ -87,8 +108,13 @@ def test_other_access_records_stay_info(polling_logger, method, path, status):
 def test_installed_filters_redact_even_dropped_polls(polling_logger, monkeypatch, level, path):
     monkeypatch.setattr(polling_logger, "level", level)
     rec = logging.LogRecord(
-        polling_logger.name, logging.INFO, __file__, 1, _UVICORN_FMT,
-        ("127.0.0.1:5", "GET", path + "?sig=secret", "1.1", 200), None,
+        polling_logger.name,
+        logging.INFO,
+        __file__,
+        1,
+        _UVICORN_FMT,
+        ("127.0.0.1:5", "GET", path + "?sig=secret", "1.1", 200),
+        None,
     )
     kept = polling_logger.filter(rec)
     assert bool(kept) is (path.startswith("/media/") or level == logging.DEBUG)
@@ -98,8 +124,13 @@ def test_installed_filters_redact_even_dropped_polls(polling_logger, monkeypatch
 
 def test_poll_filter_preserves_preformatted_records(polling_logger):
     rec = logging.LogRecord(
-        polling_logger.name, logging.INFO, __file__, 1,
-        "GET /media/file?sig=secret 200", (), None,
+        polling_logger.name,
+        logging.INFO,
+        __file__,
+        1,
+        "GET /media/file?sig=secret 200",
+        (),
+        None,
     )
     assert polling_logger.filter(rec)
     assert rec.levelno == logging.INFO
@@ -110,8 +141,13 @@ def _format_access(path: str, status: int = 200) -> str:
     """One uvicorn-style access record run through the core redact filter, then formatted — the
     exact sequence the ``uvicorn.access`` logger performs when the filter is attached."""
     rec = logging.LogRecord(
-        "uvicorn.access", logging.INFO, __file__, 1, _UVICORN_FMT,
-        ("127.0.0.1:5", "GET", path, "1.1", status), None,
+        "uvicorn.access",
+        logging.INFO,
+        __file__,
+        1,
+        _UVICORN_FMT,
+        ("127.0.0.1:5", "GET", path, "1.1", status),
+        None,
     )
     assert access_log_redact.MediaRedactFilter().filter(rec) is True
     return rec.getMessage()
@@ -124,7 +160,7 @@ def test_core_media_signature_is_redacted():
     sig = "a" * 64
     line = _format_access(f"/media/abc.png?sig={sig}")
     assert sig not in line  # no part of the signature survives
-    assert 'GET /media/abc.png?sig=… HTTP/1.1' in line
+    assert "GET /media/abc.png?sig=… HTTP/1.1" in line
 
 
 def test_expiring_and_fleet_media_signatures_are_redacted():
@@ -178,15 +214,26 @@ def test_filter_handles_args_tuple_and_preformatted_msg():
     sig = "f" * 64
     # args-tuple branch (uvicorn's normal %-style record)
     rec = logging.LogRecord(
-        "uvicorn.access", logging.INFO, __file__, 1, _UVICORN_FMT,
-        ("1.2.3.4:5", "GET", f"/media/a.png?sig={sig}", "1.1", 200), None,
+        "uvicorn.access",
+        logging.INFO,
+        __file__,
+        1,
+        _UVICORN_FMT,
+        ("1.2.3.4:5", "GET", f"/media/a.png?sig={sig}", "1.1", 200),
+        None,
     )
     assert access_log_redact.MediaRedactFilter().filter(rec) is True
     assert sig not in rec.getMessage() and "sig=…" in rec.getMessage()
 
     # pre-formatted msg branch (no args)
     rec2 = logging.LogRecord(
-        "uvicorn.access", logging.INFO, __file__, 1, f"GET /media/a.png?sig={sig} 200", None, None,
+        "uvicorn.access",
+        logging.INFO,
+        __file__,
+        1,
+        f"GET /media/a.png?sig={sig} 200",
+        None,
+        None,
     )
     assert access_log_redact.MediaRedactFilter().filter(rec2) is True
     assert sig not in rec2.getMessage() and "sig=…" in rec2.getMessage()
@@ -216,7 +263,13 @@ def test_core_server_install_path_needs_no_plugin():
         mine = [f for f in lg.filters if isinstance(f, access_log_redact.MediaRedactFilter)]
         assert len(mine) == 1
         rec = logging.LogRecord(
-            "uvicorn.access", logging.INFO, __file__, 1, "%s", (f"/media/x.png?sig={'c' * 64}",), None,
+            "uvicorn.access",
+            logging.INFO,
+            __file__,
+            1,
+            "%s",
+            (f"/media/x.png?sig={'c' * 64}",),
+            None,
         )
         assert mine[0].filter(rec) is True
         assert "sig=…" in rec.getMessage() and "c" * 64 not in rec.getMessage()
@@ -251,7 +304,13 @@ def test_media_redaction_survives_uvicorn_config_logging_init():
 
         sig = "e" * 64
         rec = logging.LogRecord(
-            "uvicorn.access", logging.INFO, __file__, 1, "%s", (f"/media/x.png?sig={sig}",), None,
+            "uvicorn.access",
+            logging.INFO,
+            __file__,
+            1,
+            "%s",
+            (f"/media/x.png?sig={sig}",),
+            None,
         )
         assert mine[0].filter(rec) is True
         assert "sig=…" in rec.getMessage() and sig not in rec.getMessage()
@@ -322,8 +381,13 @@ async def test_detached_submit_timeout_redacts_url_and_never_logs_the_body(monke
     path = f"media/report.png?exp=1&sig={sig}"
     with caplog.at_level(logging.WARNING, logger="protoagent.server"):
         resp = await proxy._forward_chat_detach(
-            "ava-1a2b", "http://127.0.0.1:7001", _FakeRequest(method="POST", body=body),
-            path, {}, frozenset(), body,
+            "ava-1a2b",
+            "http://127.0.0.1:7001",
+            _FakeRequest(method="POST", body=body),
+            path,
+            {},
+            frozenset(),
+            body,
         )
     assert resp.status_code == 504
     assert sig not in caplog.text and "sig=…" in caplog.text
@@ -337,7 +401,13 @@ async def test_detached_submit_error_redacts_signed_media_url(monkeypatch, caplo
     path = f"media/report.png?sig={sig}"
     with caplog.at_level(logging.WARNING, logger="protoagent.server"):
         resp = await proxy._forward_chat_detach(
-            "ava-1a2b", "http://127.0.0.1:7001", _FakeRequest(method="POST"), path, {}, frozenset(), b"{}",
+            "ava-1a2b",
+            "http://127.0.0.1:7001",
+            _FakeRequest(method="POST"),
+            path,
+            {},
+            frozenset(),
+            b"{}",
         )
     assert resp.status_code == 502
     assert sig not in caplog.text and "sig=…" in caplog.text

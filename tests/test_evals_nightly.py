@@ -114,8 +114,10 @@ def test_pass_to_fail_records_exactly_one_friction_per_case():
 
     rec = _FakeRecorder()
     written = nightly.record_regressions(
-        nightly.gate_regressions(prev, curr), "evals/results/run-nightly-9.json",
-        recorder=rec, trace_link=_fake_link,
+        nightly.gate_regressions(prev, curr),
+        "evals/results/run-nightly-9.json",
+        recorder=rec,
+        trace_link=_fake_link,
     )
 
     assert written == ["calc"]
@@ -135,8 +137,12 @@ def test_summary_is_stable_across_nights_for_the_same_case():
     curr1 = _report([_row("calc", False, trace_id="a")])
     curr2 = _report([_row("calc", False, trace_id="b")])
     prev = _report([_row("calc", True)])
-    s1 = nightly.record_regressions(nightly.gate_regressions(prev, curr1), "r1", recorder=_FakeRecorder(), trace_link=_fake_link)
-    s2 = nightly.record_regressions(nightly.gate_regressions(prev, curr2), "r2", recorder=_FakeRecorder(), trace_link=_fake_link)
+    s1 = nightly.record_regressions(
+        nightly.gate_regressions(prev, curr1), "r1", recorder=_FakeRecorder(), trace_link=_fake_link
+    )
+    s2 = nightly.record_regressions(
+        nightly.gate_regressions(prev, curr2), "r2", recorder=_FakeRecorder(), trace_link=_fake_link
+    )
     assert s1 == s2 == ["calc"]
 
 
@@ -164,9 +170,7 @@ def test_record_skips_cases_the_recorder_rejects():
             return "" if self.calls == 1 else "harness:row"  # first write rejected
 
     rec = _RejectingRecorder()
-    written = nightly.record_regressions(
-        nightly.gate_regressions(prev, curr), "r", recorder=rec, trace_link=_fake_link
-    )
+    written = nightly.record_regressions(nightly.gate_regressions(prev, curr), "r", recorder=rec, trace_link=_fake_link)
     assert rec.calls == 2  # both regressions attempted
     assert written == ["search"]  # only the one the ledger took counts (calc rejected)
 
@@ -175,7 +179,9 @@ def test_pass_to_pass_records_nothing():
     prev = _report([_row("calc", True)])
     curr = _report([_row("calc", True)])
     rec = _FakeRecorder()
-    assert nightly.record_regressions(nightly.gate_regressions(prev, curr), "r", recorder=rec, trace_link=_fake_link) == []
+    assert (
+        nightly.record_regressions(nightly.gate_regressions(prev, curr), "r", recorder=rec, trace_link=_fake_link) == []
+    )
     assert rec.calls == []
 
 
@@ -184,7 +190,9 @@ def test_fail_to_fail_records_nothing():
     prev = _report([_row("calc", False)])
     curr = _report([_row("calc", False)])
     rec = _FakeRecorder()
-    assert nightly.record_regressions(nightly.gate_regressions(prev, curr), "r", recorder=rec, trace_link=_fake_link) == []
+    assert (
+        nightly.record_regressions(nightly.gate_regressions(prev, curr), "r", recorder=rec, trace_link=_fake_link) == []
+    )
     assert rec.calls == []
 
 
@@ -194,7 +202,9 @@ def test_tracked_tier_flip_records_nothing():
     curr = _report([_row("judge", False, tier="tracked")])
     rec = _FakeRecorder()
     assert nightly.gate_regressions(prev, curr) == []
-    assert nightly.record_regressions(nightly.gate_regressions(prev, curr), "r", recorder=rec, trace_link=_fake_link) == []
+    assert (
+        nightly.record_regressions(nightly.gate_regressions(prev, curr), "r", recorder=rec, trace_link=_fake_link) == []
+    )
     assert rec.calls == []
 
 
@@ -225,7 +235,9 @@ def test_record_without_trace_id_omits_the_link():
     prev = _report([_row("calc", True)])
     curr = _report([_row("calc", False)])  # no trace_id
     rec = _FakeRecorder()
-    nightly.record_regressions(nightly.gate_regressions(prev, curr), "evals/results/x.json", recorder=rec, trace_link=_fake_link)
+    nightly.record_regressions(
+        nightly.gate_regressions(prev, curr), "evals/results/x.json", recorder=rec, trace_link=_fake_link
+    )
     assert "report:" in rec.calls[0]["detail"]
     assert "trace:" not in rec.calls[0]["detail"]
 
@@ -247,8 +259,8 @@ def test_flake_detection_two_flips_in_seven():
     # 7 nightlies. `flaky` flips pass/fail twice (P,F,P,…); `stable` never flips.
     reports = _seq_reports(
         {
-            "flaky": [True, False, True, True, True, True, True],   # 2 flips
-            "stable": [True, True, True, True, True, True, True],   # 0 flips
+            "flaky": [True, False, True, True, True, True, True],  # 2 flips
+            "stable": [True, True, True, True, True, True, True],  # 0 flips
         }
     )
     flakes = nightly.flaky_gate_cases(reports)
@@ -307,9 +319,7 @@ def test_load_nightly_reports_ignores_adhoc_runs(tmp_path):
     (tmp_path / "run-nightly-100.json").write_text(
         json.dumps(_report([_row("calc", True)], nightly_ts=100)), encoding="utf-8"
     )
-    (tmp_path / "run-sweep-200-vendor-m.json").write_text(
-        json.dumps(_report([_row("calc", False)])), encoding="utf-8"
-    )
+    (tmp_path / "run-sweep-200-vendor-m.json").write_text(json.dumps(_report([_row("calc", False)])), encoding="utf-8")
     (tmp_path / "run-1234.json").write_text(json.dumps(_report([_row("calc", False)])), encoding="utf-8")
 
     loaded = nightly.load_nightly_reports(tmp_path)
@@ -466,16 +476,29 @@ def test_friction_log_routes_regressions_and_never_reaches_the_sweep(tmp_path, m
 
 
 def test_gate_recoveries_require_observed_failure_and_gate_pass():
-    prev = _report([
-        _row("calc", False), _row("calc-long", False), _row("tracked", False, tier="tracked"),
-        _row("skipped", False, skipped=True), _row("now-skipped", False),
-        _row("demoted", False), _row("stable", True),
-    ])
-    curr = _report([
-        _row("calc", True), _row("calc-long", False), _row("tracked", True),
-        _row("skipped", True), _row("now-skipped", True, skipped=True),
-        _row("demoted", True, tier="tracked"), _row("stable", True), _row("new", True),
-    ])
+    prev = _report(
+        [
+            _row("calc", False),
+            _row("calc-long", False),
+            _row("tracked", False, tier="tracked"),
+            _row("skipped", False, skipped=True),
+            _row("now-skipped", False),
+            _row("demoted", False),
+            _row("stable", True),
+        ]
+    )
+    curr = _report(
+        [
+            _row("calc", True),
+            _row("calc-long", False),
+            _row("tracked", True),
+            _row("skipped", True),
+            _row("now-skipped", True, skipped=True),
+            _row("demoted", True, tier="tracked"),
+            _row("stable", True),
+            _row("new", True),
+        ]
+    )
     assert [row["id"] for row in nightly.gate_recoveries(prev, curr)] == ["calc"]
 
 
@@ -512,7 +535,9 @@ def test_resolution_failure_does_not_change_gate(tmp_path, monkeypatch, capsys, 
     monkeypatch.setattr(nightly, "_friction_recorder", lambda: None)
     monkeypatch.setattr(nightly, "_RESULTS_DIR", tmp_path)
     _seed_nightly(tmp_path, [_row("recover", False), _row("other", True)], nightly_ts=1)
-    monkeypatch.setattr(nightly, "run_sweep", _fake_sweep(tmp_path, [_row("recover", True), _row("other", not regressed)]))
+    monkeypatch.setattr(
+        nightly, "run_sweep", _fake_sweep(tmp_path, [_row("recover", True), _row("other", not regressed)])
+    )
     assert nightly.main(["--model", "vendor/m"]) == int(regressed)
     assert "friction" in capsys.readouterr().err
 
@@ -528,22 +553,34 @@ def test_resolution_continues_after_one_case_errors():
 
     nightly.resolve_recoveries([_row("a", True), _row("b", True)], "report.json", resolver=resolver)
     assert len(calls) == 2
-    assert calls[1] == ("nightly gate regression: b", {
-        "kind": "harness", "exact": True, "resolved": True,
-        "reason": "nightly gate passed; report: report.json",
-    })
+    assert calls[1] == (
+        "nightly gate regression: b",
+        {
+            "kind": "harness",
+            "exact": True,
+            "resolved": True,
+            "reason": "nightly gate passed; report: report.json",
+        },
+    )
 
 
-@pytest.mark.parametrize("regressed,no_triage,recorded,expected", [
-    (True, False, True, 1), (False, False, True, 0),
-    (True, True, True, 0), (True, False, False, 0),
-])
+@pytest.mark.parametrize(
+    "regressed,no_triage,recorded,expected",
+    [
+        (True, False, True, 1),
+        (False, False, True, 0),
+        (True, True, True, 0),
+        (True, False, False, 0),
+    ],
+)
 def test_main_queues_triage_once(tmp_path, monkeypatch, triage_jobs, regressed, no_triage, recorded, expected):
     monkeypatch.setattr(nightly, "_RESULTS_DIR", tmp_path)
     monkeypatch.setattr(nightly, "_default_trace_link", _fake_link)
     monkeypatch.setattr(nightly, "_friction_recorder", lambda: _FakeRecorder() if recorded else None)
     _seed_nightly(tmp_path, [_row("a", True), _row("b", True)], nightly_ts=1)
-    monkeypatch.setattr(nightly, "run_sweep", _fake_sweep(tmp_path, [_row("a", not regressed), _row("b", not regressed)]))
+    monkeypatch.setattr(
+        nightly, "run_sweep", _fake_sweep(tmp_path, [_row("a", not regressed), _row("b", not regressed)])
+    )
     args = ["--model", "vendor/m"] + (["--no-triage"] if no_triage else [])
     assert nightly.main(args) == int(regressed)
     assert len(triage_jobs) == expected
@@ -648,7 +685,8 @@ def test_triage_preserves_live_scheduler_ownership(tmp_path, monkeypatch, capsys
     else:
         monkeypatch.delenv("AGENT_NAME", raising=False)
     monkeypatch.setattr(
-        LangGraphConfig, "from_yaml",
+        LangGraphConfig,
+        "from_yaml",
         lambda path: SimpleNamespace(identity_name="protoagent", scheduler_enabled=True),
     )
     if override:
@@ -715,12 +753,15 @@ def test_triage_rechecks_owner_when_enqueuing(tmp_path, monkeypatch):
 # ── host-side rerun evidence, and triage for another agent's ledger ──────────
 
 
-@pytest.mark.parametrize("row,expected", [
-    (None, "unavailable (no result for this case)"),
-    ({"id": "a", "passed": True, "skipped": True}, "unavailable (skipped)"),
-    ({"id": "a", "passed": True}, "PASS on a fresh agent (possible flake)"),
-    ({"id": "a", "passed": False}, "FAIL on a fresh agent (reproduced)"),
-])
+@pytest.mark.parametrize(
+    "row,expected",
+    [
+        (None, "unavailable (no result for this case)"),
+        ({"id": "a", "passed": True, "skipped": True}, "unavailable (skipped)"),
+        ({"id": "a", "passed": True}, "PASS on a fresh agent (possible flake)"),
+        ({"id": "a", "passed": False}, "FAIL on a fresh agent (reproduced)"),
+    ],
+)
 def test_rerun_verdict(row, expected):
     assert nightly.rerun_verdict(row) == expected
 
@@ -728,8 +769,9 @@ def test_rerun_verdict(row, expected):
 def test_record_regressions_writes_rerun_line():
     rec = _FakeRecorder()
     reruns = {"a": {"id": "a", "passed": True}}
-    nightly.record_regressions([_row("a", False), _row("b", False)], "r.json", recorder=rec, trace_link=_fake_link,
-                               reruns=reruns)
+    nightly.record_regressions(
+        [_row("a", False), _row("b", False)], "r.json", recorder=rec, trace_link=_fake_link, reruns=reruns
+    )
     details = [call["detail"] for call in rec.calls]
     assert details[0].endswith("rerun: PASS on a fresh agent (possible flake)")
     assert details[1].endswith("rerun: unavailable (no result for this case)")

@@ -70,7 +70,9 @@ def test_gateway_graph_chat_override_to_codex_shapes_the_selected_call(monkeypat
     )
     seen = {}
 
-    override.wrap_model_call(request, lambda selected: shape.wrap_model_call(selected, lambda wire: seen.update(wire=wire)))
+    override.wrap_model_call(
+        request, lambda selected: shape.wrap_model_call(selected, lambda wire: seen.update(wire=wire))
+    )
 
     wire = seen["wire"]
     assert wire.model is built
@@ -149,7 +151,9 @@ def test_codex_graph_chat_override_to_gateway_does_not_apply_codex_shape(monkeyp
     )
     seen = {}
 
-    override.wrap_model_call(request, lambda selected: shape.wrap_model_call(selected, lambda wire: seen.update(wire=wire)))
+    override.wrap_model_call(
+        request, lambda selected: shape.wrap_model_call(selected, lambda wire: seen.update(wire=wire))
+    )
 
     wire = seen["wire"]
     assert model_provider_type(wire.model) == "openai-compat"

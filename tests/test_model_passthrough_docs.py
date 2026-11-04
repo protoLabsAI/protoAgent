@@ -165,12 +165,9 @@ def test_page_is_wired_into_the_catalog_and_sidebar() -> None:
     land in the generated navigation ``config.mts`` builds the sidebar from."""
     catalog = json.loads(_text(CATALOG))
     assert PAGE in catalog["pages"], "page must be classified in the catalog"
-    homes = [
-        p
-        for j in catalog["journeys"]
-        for g in j["groups"]
-        for p in g["pages"]
-    ] + [j["landing"] for j in catalog["journeys"]]
+    homes = [p for j in catalog["journeys"] for g in j["groups"] for p in g["pages"]] + [
+        j["landing"] for j in catalog["journeys"]
+    ]
     assert PAGE in homes, "page must have a primary navigation home"
     # The generated sidebar config (consumed by config.mts) must link the page.
     assert "/guides/model-passthrough" in _text(NAVIGATION)

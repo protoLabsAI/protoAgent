@@ -166,7 +166,9 @@ def test_every_create_and_revise_tool_emits_a_valid_ref(monkeypatch, tmp_path):
     _live(art)
     # placement="panel" keeps this exercising the panel ref shape (no inline flag) now that the
     # default is inline — the point here is that every create/revise tool emits a valid chip.
-    out = art.show_artifact.invoke({"kind": "html", "code": "<h1>Hi</h1>", "title": "  My\n  page ", "placement": "panel"})
+    out = art.show_artifact.invoke(
+        {"kind": "html", "code": "<h1>Hi</h1>", "title": "  My\n  page ", "placement": "panel"}
+    )
     comp = extract_component(out)
     aid = art._read_store()["artifacts"][0]["id"]
     assert comp == {

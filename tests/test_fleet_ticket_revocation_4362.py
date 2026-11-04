@@ -19,7 +19,13 @@ from fastapi import FastAPI, Request, WebSocket
 from graph.fleet import proxy
 from tests import test_device_socket_guard as support
 from tests.test_device_socket_guard import (
-    DAY, TICK, Socket, _FLEET, _SECRET, _install, _phone,
+    DAY,
+    TICK,
+    Socket,
+    _FLEET,
+    _SECRET,
+    _install,
+    _phone,
 )
 
 auth = support.auth
@@ -91,9 +97,11 @@ async def test_mint_redeem_and_close_both_legs(auth, devices, clock, ttl, monkey
             assert phone not in str(request.url) + repr(dict(request.headers))
             assert str(request.url).endswith(mint_route)
             member_tickets.add("original-member-ticket")
-            return httpx.Response(200, stream=httpx.ByteStream(
-                json.dumps({"ticket": "original-member-ticket", "ttl": 30}).encode()
-            ), headers={"content-type": "application/json"})
+            return httpx.Response(
+                200,
+                stream=httpx.ByteStream(json.dumps({"ticket": "original-member-ticket", "ttl": 30}).encode()),
+                headers={"content-type": "application/json"},
+            )
 
         async with httpx.AsyncClient(transport=httpx.MockTransport(mint_member)) as upstream:
             monkeypatch.setattr(proxy, "_get_client", lambda: upstream)
@@ -101,8 +109,10 @@ async def test_mint_redeem_and_close_both_legs(auth, devices, clock, ttl, monkey
             async with httpx.AsyncClient(transport=httpx.ASGITransport(app), base_url="http://testserver") as client:
                 response = await client.post(
                     f"/agents/peer/{mint_route}",
-                    headers={"authorization": f"Bearer {_SECRET if ending == 'operator' else phone}",
-                             "x-device-id": "forged-device"},
+                    headers={
+                        "authorization": f"Bearer {_SECRET if ending == 'operator' else phone}",
+                        "x-device-id": "forged-device",
+                    },
                 )
             assert response.status_code == 200
             ticket = response.json()["ticket"]
@@ -237,10 +247,14 @@ async def test_malformed_mint_never_exposes_unbound_response(auth, devices, cloc
     _, phone = _phone(devices)
     monkeypatch.setattr(proxy, "_resolve_slug", lambda slug: ("local", "http://member", None))
     monkeypatch.setattr("graph.fleet.service_token.resolve_service_token", lambda: _FLEET)
-    async with httpx.AsyncClient(transport=httpx.MockTransport(lambda req: httpx.Response(200, content=payload))) as member:
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(lambda req: httpx.Response(200, content=payload))
+    ) as member:
         monkeypatch.setattr(proxy, "_get_client", lambda: member)
         async with httpx.AsyncClient(transport=httpx.ASGITransport(hub(auth)), base_url="http://testserver") as client:
-            result = await client.post("/agents/peer/api/plugins/terminal/ticket", headers={"authorization": f"Bearer {phone}"})
+            result = await client.post(
+                "/agents/peer/api/plugins/terminal/ticket", headers={"authorization": f"Bearer {phone}"}
+            )
         assert result.status_code == 502
         assert result.json() == {"detail": "invalid member ticket response"}
         assert not proxy._ticket_bindings
@@ -255,22 +269,30 @@ async def test_alternate_mint_spelling_cannot_bypass_binding(auth, devices, cloc
     monkeypatch.setattr("graph.fleet.service_token.resolve_service_token", lambda: _FLEET)
     path = "/agents/peer/" + spelling
     # Raw ASGI preserves literal dots (httpx's *client* would normalize before the hub).
-    request = StarletteRequest({
-        "type": "http", "method": "POST", "path": path.replace("%74", "t"),
-        "raw_path": path.encode(), "query_string": b"", "headers": [],
-        "state": {"trust_tier": "operator", "device_id": device["id"], "credential_scope": "device"},
-    })
+    request = StarletteRequest(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": path.replace("%74", "t"),
+            "raw_path": path.encode(),
+            "query_string": b"",
+            "headers": [],
+            "state": {"trust_tier": "operator", "device_id": device["id"], "credential_scope": "device"},
+        }
+    )
     request._body = b""
-    async with httpx.AsyncClient(transport=httpx.MockTransport(
-        lambda req: httpx.Response(200, json={"ticket": "original"})
-    )) as member:
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(lambda req: httpx.Response(200, json={"ticket": "original"}))
+    ) as member:
         monkeypatch.setattr(proxy, "_get_client", lambda: member)
         response = await proxy.forward_to("peer", request, spelling.replace("%74", "t"))
     assert response.status_code == 200
     assert json.loads(response.body)["ticket"].startswith(proxy._TICKET_PREFIX)
 
 
-@pytest.mark.parametrize("frame", ["raw text", '{"ticket":"ordinary-member-ticket"}', '[' * 1100 + '"hub-ticket.x"' + ']' * 1100])
+@pytest.mark.parametrize(
+    "frame", ["raw text", '{"ticket":"ordinary-member-ticket"}', "[" * 1100 + '"hub-ticket.x"' + "]" * 1100]
+)
 async def test_non_handle_frames_remain_opaque(frame):
     class Client:
         def __init__(self):

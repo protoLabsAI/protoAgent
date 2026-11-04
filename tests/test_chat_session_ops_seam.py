@@ -57,8 +57,7 @@ def _chat():
 def test_no_test_patches_a_moved_name_on_server_chat():
     stale = stale_patches("server.chat", _MOVED)
     assert not stale, (
-        "patch these on server.chat_session_ops / server.turn_telemetry, not server.chat (#3810): "
-        + ", ".join(stale)
+        "patch these on server.chat_session_ops / server.turn_telemetry, not server.chat (#3810): " + ", ".join(stale)
     )
 
 

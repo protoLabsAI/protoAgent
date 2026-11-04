@@ -57,7 +57,9 @@ def _pragma(db: Path, name: str):
 def _rows(db: Path) -> list[tuple]:
     conn = sqlite3.connect(db)
     try:
-        return conn.execute("SELECT thread_id, checkpoint_id, checkpoint FROM checkpoints ORDER BY checkpoint_id").fetchall()
+        return conn.execute(
+            "SELECT thread_id, checkpoint_id, checkpoint FROM checkpoints ORDER BY checkpoint_id"
+        ).fetchall()
     finally:
         conn.close()
 

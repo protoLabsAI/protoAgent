@@ -47,10 +47,25 @@ def _dedup_key(row: dict) -> tuple | None:
     content = (row.get("content") or "").strip()
     if not content:
         return None
-    return (content, *(row.get(field) or "" for field in (
-        "domain", "namespace", "source", "source_type", "heading", "finding_type",
-        "epoch", "memory_kind", "subject", "expires_at", "delivery_policy",
-    )))
+    return (
+        content,
+        *(
+            row.get(field) or ""
+            for field in (
+                "domain",
+                "namespace",
+                "source",
+                "source_type",
+                "heading",
+                "finding_type",
+                "epoch",
+                "memory_kind",
+                "subject",
+                "expires_at",
+                "delivery_policy",
+            )
+        ),
+    )
 
 
 def _tag(chunk, tier: str):
@@ -115,14 +130,30 @@ class LayeredKnowledgeStore:
         delivery layer's rejected/expired exclusion) and ``prefix`` (#3293 — the type-ahead's
         trailing partial word) are passed through to both tiers."""
         priv = self._private.search(
-            query, k, domain=domain, namespace=namespace, include_invalidated=include_invalidated, epoch=epoch,
-            memory_kind=memory_kind, review_state=review_state, delivery_policy=delivery_policy,
-            deliverable=deliverable, prefix=prefix,
+            query,
+            k,
+            domain=domain,
+            namespace=namespace,
+            include_invalidated=include_invalidated,
+            epoch=epoch,
+            memory_kind=memory_kind,
+            review_state=review_state,
+            delivery_policy=delivery_policy,
+            deliverable=deliverable,
+            prefix=prefix,
         )
         comm = self._commons.search(
-            query, k, domain=domain, namespace=namespace, include_invalidated=include_invalidated, epoch=epoch,
-            memory_kind=memory_kind, review_state=review_state, delivery_policy=delivery_policy,
-            deliverable=deliverable, prefix=prefix,
+            query,
+            k,
+            domain=domain,
+            namespace=namespace,
+            include_invalidated=include_invalidated,
+            epoch=epoch,
+            memory_kind=memory_kind,
+            review_state=review_state,
+            delivery_policy=delivery_policy,
+            deliverable=deliverable,
+            prefix=prefix,
         )
 
         fused: list[dict] = []

@@ -232,7 +232,9 @@ def _guard_running_server(paths: InstancePaths, *, port: int, force: bool) -> bo
     if pid is None and not listening:
         return True
     if pid is None:
-        print(f"protoagent: something is listening on :{port}, but this instance did not start it; stop it before reset")
+        print(
+            f"protoagent: something is listening on :{port}, but this instance did not start it; stop it before reset"
+        )
         return False
     if not force:
         print(f"protoagent: this instance is running (pid {pid}); stop it first or pass --force")

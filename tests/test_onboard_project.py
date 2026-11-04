@@ -645,14 +645,34 @@ async def test_clone_failure_surfaces_error(tmp_path, monkeypatch):
         ("acme/widget", "github.com/acme/widget", "https://github.com/acme/widget.git", "acme/widget"),
         ("github.com/acme/widget", "github.com/acme/widget", "https://github.com/acme/widget.git", "acme/widget"),
         ("https://github.com/acme/widget", "github.com/acme/widget", "https://github.com/acme/widget", "acme/widget"),
-        ("https://GitHub.com/acme/widget.git/", "github.com/acme/widget", "https://GitHub.com/acme/widget.git/", "acme/widget"),
+        (
+            "https://GitHub.com/acme/widget.git/",
+            "github.com/acme/widget",
+            "https://GitHub.com/acme/widget.git/",
+            "acme/widget",
+        ),
         ("git@github.com:acme/widget.git", "github.com/acme/widget", "git@github.com:acme/widget.git", "acme/widget"),
         ("gitlab.com/acme/widget", "gitlab.com/acme/widget", "https://gitlab.com/acme/widget.git", ""),
-        ("https://gitlab.com/acme/tools/cli.git", "gitlab.com/acme/tools/cli", "https://gitlab.com/acme/tools/cli.git", ""),
+        (
+            "https://gitlab.com/acme/tools/cli.git",
+            "gitlab.com/acme/tools/cli",
+            "https://gitlab.com/acme/tools/cli.git",
+            "",
+        ),
         ("git@gitlab.com:acme/widget.git", "gitlab.com/acme/widget", "git@gitlab.com:acme/widget.git", ""),
-        ("ssh://git@git.example.com:2222/acme/widget", "git.example.com/acme/widget", "ssh://git@git.example.com:2222/acme/widget", ""),
+        (
+            "ssh://git@git.example.com:2222/acme/widget",
+            "git.example.com/acme/widget",
+            "ssh://git@git.example.com:2222/acme/widget",
+            "",
+        ),
         ("gh-work:acme/widget", "gh-work/acme/widget", "gh-work:acme/widget", ""),  # an ssh config alias
-        ("git://host.example.org/acme/widget", "host.example.org/acme/widget", "git://host.example.org/acme/widget", ""),
+        (
+            "git://host.example.org/acme/widget",
+            "host.example.org/acme/widget",
+            "git://host.example.org/acme/widget",
+            "",
+        ),
     ],
 )
 def test_parse_accepts_any_git_host(given, normalized, clone_url, slug):
@@ -808,7 +828,13 @@ async def test_local_registers_dir_under_root_with_github_from_origin(tmp_path, 
     out = await _local(_cfg(tmp_path)).ainvoke({"path": str(repo)})
 
     assert applied[0]["projects"] == [
-        {"name": "widget", "path": str(repo.resolve()), "github": "acme/widget", "default_branch": "trunk", "write": False}
+        {
+            "name": "widget",
+            "path": str(repo.resolve()),
+            "github": "acme/widget",
+            "default_branch": "trunk",
+            "write": False,
+        }
     ]
     assert applied[0]["filesystem"] == {"enabled": True}
     assert out.startswith("Registered widget (read-only)") and "GitHub acme/widget" in out
@@ -1048,7 +1074,9 @@ async def test_refresh_without_upstream_is_refused(tmp_path, applied):
 
 
 @pytest.mark.parametrize("home_relative", [False, True])
-async def test_refresh_resolves_registered_nondefault_path_not_root_reponame(tmp_path, applied, monkeypatch, home_relative):
+async def test_refresh_resolves_registered_nondefault_path_not_root_reponame(
+    tmp_path, applied, monkeypatch, home_relative
+):
     """r1: a repo registered at root/protoAgent-team (bound to the repo) refreshes THAT
     checkout — never clones root/<repo-name> — and writes no new registry/fence entry."""
     _origin, seed, clone = _origin_and_clone(tmp_path, "protoAgent-team")
@@ -1119,8 +1147,16 @@ async def test_onboard_name_collision_does_not_block_a_distinct_name(tmp_path, m
     await _tool(_cfg(tmp_path, projects=[entry])).ainvoke({"github_repo": "acme/widget", "name": "widget-2"})
 
     assert len(mocks.clone_calls) == 1  # a genuinely new checkout
-    assert mocks.clone_calls[0][0][0] == ["git", "clone", "--", "https://github.com/acme/widget.git", str(tmp_path / "widget")]
-    assert any(p["path"] == str(tmp_path / "widget") and p["name"] == "widget-2" for p in mocks.apply_calls[0]["projects"])
+    assert mocks.clone_calls[0][0][0] == [
+        "git",
+        "clone",
+        "--",
+        "https://github.com/acme/widget.git",
+        str(tmp_path / "widget"),
+    ]
+    assert any(
+        p["path"] == str(tmp_path / "widget") and p["name"] == "widget-2" for p in mocks.apply_calls[0]["projects"]
+    )
 
 
 async def test_local_refuses_name_collision_at_different_path(tmp_path, applied):

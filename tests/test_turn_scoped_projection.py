@@ -84,7 +84,9 @@ class _TurnModel(BaseChatModel):
         self.log.append((turn, [str(m.content) for m in messages if is_context_frame(m)]))
         if turn in ("turn-A", "turn-R") and not any(isinstance(m, AIMessage) for m in messages):
             self.first_call_a.set()
-            return AIMessage(content="", tool_calls=[{"name": "hold", "args": {}, "id": "call-hold", "type": "tool_call"}])
+            return AIMessage(
+                content="", tool_calls=[{"name": "hold", "args": {}, "id": "call-hold", "type": "tool_call"}]
+            )
         return AIMessage(content=f"done {turn}")
 
     def _generate(self, messages, stop=None, run_manager=None, **kwargs):
@@ -185,9 +187,7 @@ def test_interleaved_sync_turns_each_deliver_their_own_projection():
         assert b_done.wait(20), "turn B never finished"
         return "held"
 
-    graph, recorder, saver = _build(
-        StructuredTool.from_function(hold), model_log=model_log, first_call_a=first_call_a
-    )
+    graph, recorder, saver = _build(StructuredTool.from_function(hold), model_log=model_log, first_call_a=first_call_a)
     errors: list[BaseException] = []
 
     def run_a():

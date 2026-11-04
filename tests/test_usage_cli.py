@@ -27,24 +27,41 @@ WEEKLY_RESET = "2026-10-25T10:00:00+00:00"
 
 def win(wid, kind, used, resets_at, status="ok", scope=None, window_seconds=18000, binding=False):
     return {
-        "id": wid, "kind": kind, "window_seconds": window_seconds, "used_pct": used,
-        "resets_at": resets_at, "status": status, "scope": scope, "binding": binding,
+        "id": wid,
+        "kind": kind,
+        "window_seconds": window_seconds,
+        "used_pct": used,
+        "resets_at": resets_at,
+        "status": status,
+        "scope": scope,
+        "binding": binding,
     }
 
 
 def acct(provider_id, *, account_key="acct-1", plan="pro", status="ok", windows=(), stale=False, error=None):
     return {
-        "provider_id": provider_id, "provider_type": provider_id, "account_key": account_key,
-        "plan": plan, "source": "endpoint", "fetched_at": NOW, "stale_after": NOW,
-        "windows": list(windows), "credits": None, "status": status, "error": error,
-        "retry_after": None, "stale": stale,
+        "provider_id": provider_id,
+        "provider_type": provider_id,
+        "account_key": account_key,
+        "plan": plan,
+        "source": "endpoint",
+        "fetched_at": NOW,
+        "stale_after": NOW,
+        "windows": list(windows),
+        "credits": None,
+        "status": status,
+        "error": error,
+        "retry_after": None,
+        "stale": stale,
     }
 
 
 # A rich anthropic account (a session window + a model-scoped weekly window) and a
 # disconnected codex account that reads as unknown.
 ANTHROPIC = acct(
-    "anthropic-oauth", account_key="acct-1", plan="pro",
+    "anthropic-oauth",
+    account_key="acct-1",
+    plan="pro",
     windows=[
         win("session", "session", 42.0, SESSION_RESET),
         win("weekly", "weekly", 88.0, WEEKLY_RESET, status="warning", scope={"model": "opus"}),
@@ -127,8 +144,18 @@ def test_local_reads_only_the_host_slug(monkeypatch):
 TOP_KEYS = {"mode", "ok", "hub", "warn_at", "warn_hit", "error", "accounts", "unreachable"}
 ACCOUNT_KEYS = {"provider_id", "provider_type", "account_key", "plan", "status", "stale", "error", "members", "windows"}
 WINDOW_KEYS = {
-    "id", "kind", "label", "scope", "used_pct", "status", "resets_at",
-    "resets_in_seconds", "resets_in", "window_seconds", "binding", "over_warn",
+    "id",
+    "kind",
+    "label",
+    "scope",
+    "used_pct",
+    "status",
+    "resets_at",
+    "resets_in_seconds",
+    "resets_in",
+    "window_seconds",
+    "binding",
+    "over_warn",
 }
 
 
@@ -245,7 +272,9 @@ def test_stale_account_is_marked_and_never_trips_warn(monkeypatch, capsys):
     # must NOT trip the default --warn-at 80, and the row must be marked "stale", not shown
     # with its old live-looking per-window status.
     stale = acct(
-        "anthropic-oauth", status="unknown", stale=True,
+        "anthropic-oauth",
+        status="unknown",
+        stale=True,
         windows=[win("session", "session", 95.0, SESSION_RESET, status="ok")],
     )
     _live(monkeypatch, FakeClient({"host": [stale]}))
@@ -258,7 +287,9 @@ def test_stale_account_is_marked_and_never_trips_warn(monkeypatch, capsys):
 
 def test_json_stale_account_suppresses_over_warn(monkeypatch, capsys):
     stale = acct(
-        "anthropic-oauth", status="unknown", stale=True,
+        "anthropic-oauth",
+        status="unknown",
+        stale=True,
         windows=[win("weekly", "weekly", 95.0, WEEKLY_RESET, status="warning")],
     )
     _live(monkeypatch, FakeClient({"host": [stale]}))

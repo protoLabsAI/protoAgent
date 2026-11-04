@@ -937,7 +937,11 @@ def _rebind_locked(device_id: str, digest: str) -> tuple[dict, str] | None:
         return None
     if hmac.compare_digest(device.token_sha256, digest):
         prev = device.token_sha256
-    elif device.prev_token_sha256 and device.prev_retired_at is None and hmac.compare_digest(device.prev_token_sha256, digest):
+    elif (
+        device.prev_token_sha256
+        and device.prev_retired_at is None
+        and hmac.compare_digest(device.prev_token_sha256, digest)
+    ):
         # The asker held the previous token of a rotation nobody ever used; that rotation's
         # token is discarded (nobody can be relying on it) — the same rule as `rotate_device`.
         prev = device.prev_token_sha256

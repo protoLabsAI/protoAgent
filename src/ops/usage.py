@@ -23,8 +23,9 @@ from ops import OpContext, op
     mutates=False,
     summary="Best-effort subscription-usage snapshot for the native-OAuth providers (poll at most once per minute; disconnected/failed providers read as unknown).",
 )
-def snapshot(ctx: OpContext | None = None, account: str | None = None, force: bool = False,
-             cache_only: bool = False) -> dict:
+def snapshot(
+    ctx: OpContext | None = None, account: str | None = None, force: bool = False, cache_only: bool = False
+) -> dict:
     """``{accounts: [Account.to_dict() + {stale}], fetched_at}``.
 
     ``account`` narrows to one provider (an unknown name still returns an ``unknown``
@@ -74,12 +75,18 @@ def merge_fleet_usage(host: dict, peers: dict[str, dict | None]) -> dict:
             for window in (row.get("windows") or []) if isinstance(row.get("windows", []), list) else []:
                 if not isinstance(window, dict):
                     continue
-                clean = {k: v for k, v in window.items() if k in {
-                    "id", "kind", "window_seconds", "used_pct", "resets_at", "status", "binding"
-                } and isinstance(v, (str, int, float, bool, type(None)))}
+                clean = {
+                    k: v
+                    for k, v in window.items()
+                    if k in {"id", "kind", "window_seconds", "used_pct", "resets_at", "status", "binding"}
+                    and isinstance(v, (str, int, float, bool, type(None)))
+                }
                 scope = window.get("scope")
-                clean["scope"] = {k: v for k, v in scope.items()
-                                  if k in {"model", "bucket"} and isinstance(v, str)} if isinstance(scope, dict) else None
+                clean["scope"] = (
+                    {k: v for k, v in scope.items() if k in {"model", "bucket"} and isinstance(v, str)}
+                    if isinstance(scope, dict)
+                    else None
+                )
                 windows.append(clean)
             accounts[identity] = {
                 "account_key": key,
@@ -112,9 +119,15 @@ def attribution_windows(accounts: list[dict]) -> list[dict]:
                 scope = window.get("scope") or {}
                 if scope and not scope.get("model"):
                     continue  # a provider bucket cannot be mapped to observed models
-                result.append({"account_key": account["account_key"], "window_id": window["id"],
-                               "since": start.isoformat(), "until": end.isoformat(),
-                               "model": scope.get("model")})
+                result.append(
+                    {
+                        "account_key": account["account_key"],
+                        "window_id": window["id"],
+                        "since": start.isoformat(),
+                        "until": end.isoformat(),
+                        "model": scope.get("model"),
+                    }
+                )
             except (KeyError, TypeError, ValueError):
                 continue
     return result[:32]
@@ -130,8 +143,10 @@ def local_attribution(windows: list[dict]) -> list[dict]:
             if not isinstance(window, dict) or STATE.telemetry_store is None:
                 continue
             window = {k: window.get(k) for k in ("account_key", "window_id", "since", "until", "model")}
-            if any(not isinstance(window[k], str) or len(window[k]) > 512
-                   for k in ("account_key", "window_id", "since", "until")):
+            if any(
+                not isinstance(window[k], str) or len(window[k]) > 512
+                for k in ("account_key", "window_id", "since", "until")
+            ):
                 continue
             if window["model"] is not None and not isinstance(window["model"], str):
                 continue
@@ -139,7 +154,10 @@ def local_attribution(windows: list[dict]) -> list[dict]:
             if not 0 < (end - start).total_seconds() <= 366 * 86400:
                 continue
             tokens = STATE.telemetry_store.attributed_tokens(
-                window["account_key"], window["since"], window["until"], window.get("model"),
+                window["account_key"],
+                window["since"],
+                window["until"],
+                window.get("model"),
             )
             rows.append({**window, "tokens": tokens})
         except Exception:  # noqa: BLE001 — disabled/unreadable telemetry is unknown
@@ -158,8 +176,13 @@ def merge_attribution(accounts: list[dict], windows: list[dict], members: dict[s
             unavailable = []
             for slug, payload in members.items():
                 rows = payload.get("attribution", []) if isinstance(payload, dict) else []
-                match = next((r for r in rows if isinstance(r, dict)
-                              and all(r.get(k) == v for k, v in window.items())), None) if isinstance(rows, list) else None
+                match = (
+                    next(
+                        (r for r in rows if isinstance(r, dict) and all(r.get(k) == v for k, v in window.items())), None
+                    )
+                    if isinstance(rows, list)
+                    else None
+                )
                 tokens = match.get("tokens") if match else None
                 if isinstance(tokens, bool) or not isinstance(tokens, int) or tokens < 0:
                     unavailable.append(slug)
@@ -168,5 +191,6 @@ def merge_attribution(accounts: list[dict], windows: list[dict], members: dict[s
             total = sum(r["tokens"] for r in shares)
             for row in shares:
                 row["share_pct"] = 100 * row["tokens"] / total if total else None
-            account["by_agent"].append({**window, "attributed_tokens": total,
-                                        "members": shares, "unavailable": unavailable})
+            account["by_agent"].append(
+                {**window, "attributed_tokens": total, "members": shares, "unavailable": unavailable}
+            )

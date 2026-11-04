@@ -461,8 +461,11 @@ async def test_update_distinguishes_none_from_not_supplied(tmp_path):
     "unchanged". That's the whole reason the signature uses an UNSET sentinel."""
     c = _ctrl(tmp_path)
     c.create(
-        condition="ship it", watch_id="w", verifier={"type": "plugin", "check": "p:v"},
-        deadline=9_999_999_999, stall_after=4,
+        condition="ship it",
+        watch_id="w",
+        verifier={"type": "plugin", "check": "p:v"},
+        deadline=9_999_999_999,
+        stall_after=4,
     )
     _ok, _m, w = await c.update("w", deadline=None)  # explicit clear
     assert w.deadline is None
@@ -606,7 +609,9 @@ async def test_repeating_met_watch_is_edge_triggered_not_level(tmp_path, monkeyp
     try:
         c = _ctrl(tmp_path)
         c.create(
-            condition="credits >= 1M", watch_id="w", verifier={"type": "plugin", "check": "p:v"},
+            condition="credits >= 1M",
+            watch_id="w",
+            verifier={"type": "plugin", "check": "p:v"},
             repeat=True,
         )
         # false → true (fire) → true → true (silent: still the same edge) → false → true (fire)
@@ -641,8 +646,11 @@ async def test_change_trigger_fires_on_every_move_and_never_on_the_first_check(t
     try:
         c = _ctrl(tmp_path)
         c.create(
-            condition="treasury", watch_id="w", verifier={"type": "plugin", "check": "p:v"},
-            trigger="change", repeat=True,
+            condition="treasury",
+            watch_id="w",
+            verifier={"type": "plugin", "check": "p:v"},
+            trigger="change",
+            repeat=True,
         )
         # Never met — a change monitor doesn't care about the predicate at all.
         _script(monkeypatch, [(False, "100"), (False, "100"), (False, "250"), (False, "250"), (False, "900")])
@@ -660,14 +668,17 @@ async def test_change_trigger_fires_on_changed_not_on_met(tmp_path, monkeypatch)
     events: list[str] = []
     from graph.watches import hooks as watch_hooks
 
-    watch_hooks.set_watch_hooks([
-        {"plugin_id": "t", "on_met": lambda w: events.append("met"), "on_changed": lambda w: events.append("changed")}
-    ])
+    watch_hooks.set_watch_hooks(
+        [{"plugin_id": "t", "on_met": lambda w: events.append("met"), "on_changed": lambda w: events.append("changed")}]
+    )
     try:
         c = _ctrl(tmp_path)
         c.create(
-            condition="treasury", watch_id="w", verifier={"type": "plugin", "check": "p:v"},
-            trigger="change", repeat=True,
+            condition="treasury",
+            watch_id="w",
+            verifier={"type": "plugin", "check": "p:v"},
+            trigger="change",
+            repeat=True,
         )
         # Even when the predicate IS true, a change-trigger reports the change, not a met.
         _script(monkeypatch, [(True, "100"), (True, "250")])
@@ -686,8 +697,11 @@ async def test_a_repeating_watch_still_expires_on_its_deadline(tmp_path, monkeyp
 
     c = _ctrl(tmp_path)
     c.create(
-        condition="c", watch_id="w", verifier={"type": "plugin", "check": "p:v"},
-        repeat=True, deadline=time() - 1,
+        condition="c",
+        watch_id="w",
+        verifier={"type": "plugin", "check": "p:v"},
+        repeat=True,
+        deadline=time() - 1,
     )
     _script(monkeypatch, [(False, "x")])
     assert await c.evaluate("w") == "expired"
@@ -720,9 +734,7 @@ async def test_switching_trigger_clears_the_edge_state(tmp_path, monkeypatch):
     """Moving an already-satisfied watch onto `met` must be able to fire again — otherwise it
     waits for a falling edge that may never come."""
     c = _ctrl(tmp_path)
-    c.create(
-        condition="c", watch_id="w", verifier={"type": "plugin", "check": "p:v"}, trigger="change", repeat=True
-    )
+    c.create(condition="c", watch_id="w", verifier={"type": "plugin", "check": "p:v"}, trigger="change", repeat=True)
     _script(monkeypatch, [(True, "a"), (True, "b")])
     await c.evaluate("w")  # establishes was_met = True under the change trigger
     assert c.store.get("w").was_met is True
@@ -742,8 +754,11 @@ async def test_a_flapping_watch_warns_once_and_counts(tmp_path, monkeypatch, cap
 
     c = _ctrl(tmp_path)
     c.create(
-        condition="oscillates", watch_id="w", verifier={"type": "plugin", "check": "p:v"},
-        trigger="change", repeat=True,
+        condition="oscillates",
+        watch_id="w",
+        verifier={"type": "plugin", "check": "p:v"},
+        trigger="change",
+        repeat=True,
     )
     # A value that moves on EVERY poll — the worst case, and exactly what a clock-like
     # verifier looks like.
@@ -769,8 +784,11 @@ async def test_a_settled_watch_resets_and_can_warn_again(tmp_path, monkeypatch, 
 
     c = _ctrl(tmp_path)
     c.create(
-        condition="c", watch_id="w", verifier={"type": "plugin", "check": "p:v"},
-        trigger="change", repeat=True,
+        condition="c",
+        watch_id="w",
+        verifier={"type": "plugin", "check": "p:v"},
+        trigger="change",
+        repeat=True,
     )
     # Flap, settle (repeated identical evidence → no fire), then flap again.
     steps = [(False, str(i)) for i in range(7)] + [(False, "same")] * 3 + [(False, str(i)) for i in range(20, 28)]

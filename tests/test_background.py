@@ -192,7 +192,11 @@ class TestStore:
         s = _store(tmp_path)
         lone = s.create(agent_name="a", origin_session="s1", subagent_type="researcher", description="d", prompt="p")
         member = s.create(
-            agent_name="a", origin_session="s1", subagent_type="researcher", description="d", prompt="p",
+            agent_name="a",
+            origin_session="s1",
+            subagent_type="researcher",
+            description="d",
+            prompt="p",
             batch_id="batch-A",
         )
         assert s.get(lone).batch_id is None  # unbatched spawn → NULL
@@ -202,14 +206,22 @@ class TestStore:
         s = _store(tmp_path)
         ids = [
             s.create(
-                agent_name="a", origin_session="s1", subagent_type="researcher", description=f"d{i}", prompt="p",
+                agent_name="a",
+                origin_session="s1",
+                subagent_type="researcher",
+                description=f"d{i}",
+                prompt="p",
                 batch_id="batch-A",
             )
             for i in range(3)
         ]
         # a job in a DIFFERENT batch (and one unbatched) must not leak into the counts
         s.create(
-            agent_name="a", origin_session="s1", subagent_type="researcher", description="other", prompt="p",
+            agent_name="a",
+            origin_session="s1",
+            subagent_type="researcher",
+            description="other",
+            prompt="p",
             batch_id="batch-B",
         )
         s.create(agent_name="a", origin_session="s1", subagent_type="researcher", description="lone", prompt="p")
@@ -229,7 +241,11 @@ class TestStore:
         s = _store(tmp_path)
         ids = [
             s.create(
-                agent_name="a", origin_session="s1", subagent_type="researcher", description=f"d{i}", prompt="p",
+                agent_name="a",
+                origin_session="s1",
+                subagent_type="researcher",
+                description=f"d{i}",
+                prompt="p",
                 batch_id="batch-A",
             )
             for i in range(3)
@@ -272,7 +288,11 @@ class TestStore:
         assert old is not None and old.batch_id is None  # legacy row migrated, unbatched
         assert old.result_author == ""  # legacy results remain ordinary task notifications
         new = s.create(
-            agent_name="a", origin_session="s1", subagent_type="researcher", description="d", prompt="p",
+            agent_name="a",
+            origin_session="s1",
+            subagent_type="researcher",
+            description="d",
+            prompt="p",
             batch_id="batch-A",
             result_author="proto",
         )
@@ -635,20 +655,26 @@ class TestResumeAttendance:
     async def test_batch_stamps_the_same_decision_as_singleton(self, tmp_path):
         # r4 — one origin session, one decision, whichever resume shape delivers it.
         attended_sessions = {"sess-1"}
-        mgr = _manager(
-            tmp_path, batch_join_timeout_s=1000, attended_check=lambda s: s in attended_sessions
-        )
+        mgr = _manager(tmp_path, batch_join_timeout_s=1000, attended_check=lambda s: s in attended_sessions)
         sends = self._recorder(mgr)
         # a singleton nudge into sess-1
         await mgr.resume_origin(_resume_job())
         # a coalesced batch on the SAME origin session
         a = mgr.store.create(
-            agent_name="a", origin_session="sess-1", subagent_type="researcher",
-            description="a", prompt="p", batch_id="batch-Z",
+            agent_name="a",
+            origin_session="sess-1",
+            subagent_type="researcher",
+            description="a",
+            prompt="p",
+            batch_id="batch-Z",
         )
         b = mgr.store.create(
-            agent_name="a", origin_session="sess-1", subagent_type="researcher",
-            description="b", prompt="p", batch_id="batch-Z",
+            agent_name="a",
+            origin_session="sess-1",
+            subagent_type="researcher",
+            description="b",
+            prompt="p",
+            batch_id="batch-Z",
         )
         mgr.store.mark_complete(a, "completed", "ra")
         assert await mgr.resume_for_terminal(mgr.store.get(a)) is None  # holds for the sibling
@@ -674,7 +700,9 @@ class TestResumeAttendance:
         turn_control = importlib.import_module("server.turn_control")
 
         turn_control._ATTENDED_SESSIONS.clear()
-        mgr = _manager(tmp_path)  # attended_check=None → lazy server.chat.is_session_attended (owned by server.turn_control)
+        mgr = _manager(
+            tmp_path
+        )  # attended_check=None → lazy server.chat.is_session_attended (owned by server.turn_control)
         assert mgr._session_attended("sess-live") is False
         assert turn_control.mark_session_attended("sess-live") is True
         try:
@@ -693,8 +721,12 @@ class TestBatchJoin:
 
     def _member(self, mgr, batch_id, origin="s1", desc="d"):
         return mgr.store.create(
-            agent_name="a", origin_session=origin, subagent_type="researcher",
-            description=desc, prompt="p", batch_id=batch_id,
+            agent_name="a",
+            origin_session=origin,
+            subagent_type="researcher",
+            description=desc,
+            prompt="p",
+            batch_id=batch_id,
         )
 
     def _patch_send(self, mgr) -> list:
@@ -1009,16 +1041,12 @@ class TestChatProgress:
         import server.a2a as a2a
 
         published: list = []
-        monkeypatch.setattr(
-            a2a._event_bus, "publish", lambda t, d=None, **kw: published.append((t, d, kw))
-        )
+        monkeypatch.setattr(a2a._event_bus, "publish", lambda t, d=None, **kw: published.append((t, d, kw)))
         return a2a, published
 
     def test_server_fired_text_frame_is_republished(self, monkeypatch):
         a2a, published = self._capture(monkeypatch)
-        a2a._a2a_progress(
-            "chat-7", "task-9", {"phase": "text", "text": "Ball secured.", "origin": "scheduler"}
-        )
+        a2a._a2a_progress("chat-7", "task-9", {"phase": "text", "text": "Ball secured.", "origin": "scheduler"})
         assert len(published) == 1
         topic, data, kw = published[0]
         assert topic == "chat.progress"
@@ -1269,9 +1297,7 @@ class TestChatProgress:
 
     def test_consumed_marker_without_usable_items_is_not_published(self, monkeypatch):
         a2a, published = self._capture(monkeypatch)
-        a2a._a2a_progress(
-            "chat-7", "t", {"phase": "steer_consumed", "items": [{"id": "x"}], "origin": "scheduler"}
-        )
+        a2a._a2a_progress("chat-7", "t", {"phase": "steer_consumed", "items": [{"id": "x"}], "origin": "scheduler"})
         assert published == []
 
     def test_operator_turn_consumed_marker_is_not_republished(self, monkeypatch):
@@ -1324,9 +1350,7 @@ class TestHitlTurnEvents:
 
         published: list = []
         monkeypatch.setattr(a2a._event_bus, "publish", lambda t, d=None: published.append((t, d)))
-        a2a._a2a_progress(
-            "chat-session-1", "task-9", {"phase": "input_required", "prompt": "Approve the merge?"}
-        )
+        a2a._a2a_progress("chat-session-1", "task-9", {"phase": "input_required", "prompt": "Approve the merge?"})
         assert published == [
             (
                 "turn.input_required",
@@ -1443,9 +1467,7 @@ class TestDrainIntoChat:
         assert "truncated to" in body
         assert len(body) < _BG_RESULT_CAP + 2000
 
-    def test_delegate_results_drain_as_authored_room_messages_in_completion_order(
-        self, tmp_path, monkeypatch
-    ):
+    def test_delegate_results_drain_as_authored_room_messages_in_completion_order(self, tmp_path, monkeypatch):
         from runtime.state import STATE
         from server.chat import _drain_background
 
@@ -1516,10 +1538,7 @@ class TestDrainIntoChat:
 
         monkeypatch.setattr(rs.STATE, "background_mgr", mgr, raising=False)
         monkeypatch.setattr(rs.STATE, "graph", _EmptyGraph(), raising=False)
-        frames = [
-            frame
-            async for frame in _run_turn_stream("resume", "room-2", {"configurable": {"thread_id": "t"}})
-        ]
+        frames = [frame async for frame in _run_turn_stream("resume", "room-2", {"configurable": {"thread_id": "t"}})]
 
         assert frames[0] == (
             "room_reply",

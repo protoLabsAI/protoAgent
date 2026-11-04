@@ -62,11 +62,7 @@ class _FakeResponse:
         # A2A answers 200 for a turn that FAILED — the outcome is in the body (#3376),
         # so the fire path reads this. Defaults to a completed task so every existing
         # test keeps meaning "this fire succeeded".
-        self._payload = (
-            payload
-            if payload is not None
-            else {"result": {"status": {"state": "TASK_STATE_COMPLETED"}}}
-        )
+        self._payload = payload if payload is not None else {"result": {"status": {"state": "TASK_STATE_COMPLETED"}}}
 
     def json(self):
         return self._payload
@@ -428,9 +424,7 @@ class TestFireTurnEvents:
         import httpx
 
         payload = {"result": {"id": "task-99", "status": {"state": "TASK_STATE_COMPLETED"}}}
-        monkeypatch.setattr(
-            httpx, "AsyncClient", lambda **kw: _FakeClient(_FakeResponse(200, payload=payload))
-        )
+        monkeypatch.setattr(httpx, "AsyncClient", lambda **kw: _FakeClient(_FakeResponse(200, payload=payload)))
         events: list = []
         s = _make_scheduler(tmp_path, event_publish=lambda t, d: events.append((t, d)))
         job = s.add_job("sweep the inbox", _FUTURE_ISO, job_id="job-1", context_id="chat-42")
@@ -505,7 +499,9 @@ class TestFireTurnEvents:
         monkeypatch.setattr(httpx, "AsyncClient", lambda **kw: _Capture(_FakeResponse(200)))
         events: list = []
         s = _make_scheduler(tmp_path, event_publish=lambda t, d: events.append((t, d)))
-        job = s.add_job("Resume working toward your active goal now.", _FUTURE_ISO, job_id="goal-run:chat-3", context_id="chat-3")
+        job = s.add_job(
+            "Resume working toward your active goal now.", _FUTURE_ISO, job_id="goal-run:chat-3", context_id="chat-3"
+        )
 
         await s._fire(job)
 
@@ -1187,7 +1183,7 @@ class TestA2ATurnFailure:
         assert _a2a_turn_failure({"result": {"status": {"state": "TASK_STATE_COMPLETED"}}}) == ""
 
     def test_failed_task_reports_the_agents_own_error_text(self):
-        """"TASK_STATE_FAILED" is not actionable; the error inside it is."""
+        """ "TASK_STATE_FAILED" is not actionable; the error inside it is."""
         from scheduler.local import _a2a_turn_failure
 
         assert "observability.audit" in _a2a_turn_failure(_failed_body())
@@ -1250,9 +1246,7 @@ class TestFireOutcomeTracking:
 
         s = _make_scheduler(tmp_path)
         job = self._job(s)
-        monkeypatch.setattr(
-            httpx, "AsyncClient", lambda **kw: _FakeClient(_FakeResponse(200, payload=_failed_body()))
-        )
+        monkeypatch.setattr(httpx, "AsyncClient", lambda **kw: _FakeClient(_FakeResponse(200, payload=_failed_body())))
 
         assert await s._fire(job) is True  # still DELIVERED — the POST worked
         row = self._row(s, job.id)
@@ -1308,9 +1302,7 @@ class TestFireOutcomeTracking:
 
         s = _make_scheduler(tmp_path)
         job = self._job(s)
-        monkeypatch.setattr(
-            httpx, "AsyncClient", lambda **kw: _FakeClient(_FakeResponse(200, payload=_failed_body()))
-        )
+        monkeypatch.setattr(httpx, "AsyncClient", lambda **kw: _FakeClient(_FakeResponse(200, payload=_failed_body())))
         await s._fire(job)
         await s._fire(job)
         assert self._row(s, job.id)["consecutive_failures"] == 2
@@ -1331,9 +1323,7 @@ class TestFireOutcomeTracking:
 
         s = _make_scheduler(tmp_path)
         job = self._job(s, schedule="0 14 * * *")
-        monkeypatch.setattr(
-            httpx, "AsyncClient", lambda **kw: _FakeClient(_FakeResponse(200, payload=_failed_body()))
-        )
+        monkeypatch.setattr(httpx, "AsyncClient", lambda **kw: _FakeClient(_FakeResponse(200, payload=_failed_body())))
 
         for _ in range(BACKOFF_AFTER_FAILURES - 1):
             await s._fire(job)
@@ -1353,9 +1343,7 @@ class TestFireOutcomeTracking:
 
         s = _make_scheduler(tmp_path)
         job = self._job(s, schedule="0 14 * * *")
-        monkeypatch.setattr(
-            httpx, "AsyncClient", lambda **kw: _FakeClient(_FakeResponse(200, payload=_failed_body()))
-        )
+        monkeypatch.setattr(httpx, "AsyncClient", lambda **kw: _FakeClient(_FakeResponse(200, payload=_failed_body())))
 
         # Drive the streak far past the cap, then measure ONE more step. The cap bounds a
         # SINGLE backoff, so a single step is the only thing that can demonstrate it.
@@ -1387,9 +1375,7 @@ class TestFireOutcomeTracking:
 
         s = _make_scheduler(tmp_path)
         job = self._job(s)
-        monkeypatch.setattr(
-            httpx, "AsyncClient", lambda **kw: _FakeClient(_FakeResponse(200, payload=_failed_body()))
-        )
+        monkeypatch.setattr(httpx, "AsyncClient", lambda **kw: _FakeClient(_FakeResponse(200, payload=_failed_body())))
         for _ in range(10):
             job = s.get_job(job.id) or job
             await s._fire(job)
@@ -1456,9 +1442,7 @@ class TestBackoffFromPostClaimNextFire:
         s.add_job("hourly sweep", self.HOURLY, job_id="hb")
         # Pin the row to a known slot so every claim timestamp below is deterministic.
         self._pin_next_fire(s, "hb", datetime(2026, 1, 1, 0, 0, tzinfo=UTC))
-        monkeypatch.setattr(
-            httpx, "AsyncClient", lambda **kw: _FakeClient(_FakeResponse(200, payload=_failed_body()))
-        )
+        monkeypatch.setattr(httpx, "AsyncClient", lambda **kw: _FakeClient(_FakeResponse(200, payload=_failed_body())))
 
         # Rounds 1 & 2 fail below the threshold — no backoff, so each claim just rolls the
         # row to the next hourly slot (00:00 → 01:00 → 02:00).

@@ -1,4 +1,5 @@
 """Stable capability prose must follow the graph surface, including partial groups."""
+
 from types import SimpleNamespace
 
 import pytest
@@ -11,13 +12,15 @@ from runtime.context import build_stable_prefix
 def isolated_persona(monkeypatch):
     monkeypatch.setattr("graph.prompts._read_file", lambda _: "# Fixture identity")
     from runtime.state import STATE
+
     monkeypatch.setattr(STATE, "delegate_registry", SimpleNamespace(names=lambda: ["reviewer"]))
 
 
 @pytest.mark.parametrize("bound", [frozenset(), frozenset({"current_time"})])
 def test_empty_surface_has_no_capability_sections(bound):
-    parts = dict(build_system_prompt_parts(bound_tool_names=bound,
-                 projects=[{"name": "p", "path": "/p", "write": True}]))
+    parts = dict(
+        build_system_prompt_parts(bound_tool_names=bound, projects=[{"name": "p", "path": "/p", "write": True}])
+    )
     assert set(parts) == {"SOUL", "Guidelines"}
 
 

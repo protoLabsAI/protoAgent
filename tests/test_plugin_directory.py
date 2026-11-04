@@ -24,6 +24,7 @@ _SPEC.loader.exec_module(pd)
 
 # ── the real directory parses and is well-formed ────────────────────────────────────
 
+
 def test_directory_loads_and_validates() -> None:
     entries = pd.load()
     assert entries, "plugin-directory.yaml has no active entries"
@@ -44,6 +45,7 @@ def test_derived_marketing_overlay_is_in_sync() -> None:
 
 
 # ── schema contracts the consumers rely on ──────────────────────────────────────────
+
 
 def test_app_catalog_schema() -> None:
     """The Discover UI + /api/plugins/catalog expect exactly these entry keys."""
@@ -121,10 +123,15 @@ def test_site_overlay_shapes() -> None:
 # ── behavior on fixture entries ─────────────────────────────────────────────────────
 
 _FIXTURE = [
-    {"id": "ext", "name": "Ext", "category": "Tools", "tagline": "t",
-     "repo": "https://github.com/protoLabsAI/ext-plugin", "site_id": "ext2"},
-    {"id": "built", "name": "Built", "category": "Tools", "tagline": "t",
-     "bundled": True, "app": False},
+    {
+        "id": "ext",
+        "name": "Ext",
+        "category": "Tools",
+        "tagline": "t",
+        "repo": "https://github.com/protoLabsAI/ext-plugin",
+        "site_id": "ext2",
+    },
+    {"id": "built", "name": "Built", "category": "Tools", "tagline": "t", "bundled": True, "app": False},
 ]
 
 
@@ -143,11 +150,19 @@ def test_app_false_entries_stay_out_of_the_app_catalog() -> None:
 
 
 def _census(tmp_path: Path) -> list[dict]:
-    doc = {"plugins": [
-        {"id": s, "name": s.title(), "category": "T", "tagline": "t", "status": s,
-         "repo": f"https://github.com/protoLabsAI/{s}-plugin"}
-        for s in ("active", "incubating", "personal", "archived", "deprecated", "internal")
-    ]}
+    doc = {
+        "plugins": [
+            {
+                "id": s,
+                "name": s.title(),
+                "category": "T",
+                "tagline": "t",
+                "status": s,
+                "repo": f"https://github.com/protoLabsAI/{s}-plugin",
+            }
+            for s in ("active", "incubating", "personal", "archived", "deprecated", "internal")
+        ]
+    }
     f = tmp_path / "dir.yaml"
     f.write_text(json.dumps(doc), encoding="utf-8")  # JSON is valid YAML
     return pd.load(f)
@@ -157,7 +172,12 @@ def test_load_keeps_the_whole_census(tmp_path: Path) -> None:
     # The file is the full census (#2910): every status survives load(); which surface
     # lists what is the renderers' call.
     assert [e["id"] for e in _census(tmp_path)] == [
-        "active", "incubating", "personal", "archived", "deprecated", "internal",
+        "active",
+        "incubating",
+        "personal",
+        "archived",
+        "deprecated",
+        "internal",
     ]
 
 
@@ -179,9 +199,19 @@ def test_the_marketing_page_badges_incubating_and_hides_the_rest(tmp_path: Path)
 
 
 def test_a_hidden_marker_uses_the_site_key(tmp_path: Path) -> None:
-    doc = {"plugins": [{"id": "palmier_pro", "site_id": "palmier-pro", "name": "P", "category": "T",
-                        "tagline": "t", "status": "personal",
-                        "repo": "https://github.com/protoLabsAI/palmier-pro-plugin"}]}
+    doc = {
+        "plugins": [
+            {
+                "id": "palmier_pro",
+                "site_id": "palmier-pro",
+                "name": "P",
+                "category": "T",
+                "tagline": "t",
+                "status": "personal",
+                "repo": "https://github.com/protoLabsAI/palmier-pro-plugin",
+            }
+        ]
+    }
     f = tmp_path / "dir.yaml"
     f.write_text(json.dumps(doc), encoding="utf-8")
     assert json.loads(pd.render_site(pd.load(f))) == [{"id": "palmier-pro", "status": "personal", "hidden": True}]
@@ -204,13 +234,22 @@ def test_every_external_entry_keys_onto_its_scraped_card() -> None:
         )
 
 
-@pytest.mark.parametrize("bad", [
-    {"id": "x", "name": "X", "category": "T", "tagline": "t"},  # neither repo nor bundled
-    {"id": "x", "name": "X", "category": "T", "tagline": "t", "bundled": True,
-     "repo": "https://github.com/protoLabsAI/x-plugin"},  # both
-    {"id": "x", "name": "X", "category": "T", "tagline": "t", "repo": "r", "status": "wat"},
-    {"id": "x", "category": "T", "tagline": "t", "repo": "r"},  # no name
-])
+@pytest.mark.parametrize(
+    "bad",
+    [
+        {"id": "x", "name": "X", "category": "T", "tagline": "t"},  # neither repo nor bundled
+        {
+            "id": "x",
+            "name": "X",
+            "category": "T",
+            "tagline": "t",
+            "bundled": True,
+            "repo": "https://github.com/protoLabsAI/x-plugin",
+        },  # both
+        {"id": "x", "name": "X", "category": "T", "tagline": "t", "repo": "r", "status": "wat"},
+        {"id": "x", "category": "T", "tagline": "t", "repo": "r"},  # no name
+    ],
+)
 def test_invalid_entries_are_rejected(bad: dict, tmp_path: Path) -> None:
     f = tmp_path / "dir.yaml"
     f.write_text(json.dumps({"plugins": [bad]}), encoding="utf-8")
@@ -347,8 +386,9 @@ def test_every_bundled_plugin_renders_exactly_one_bundled_card() -> None:
     """A bundled plugin must fold its override onto the in-tree card — never leave the raw
     manifest card unfolded next to an override-only append."""
     rendered = _astro_merge(_bundled_cards() + _scraped_cards())
-    listed = {e["id"] for e in pd.load()
-              if e.get("bundled") and pd._status(e) in pd._SITE_STATUSES and e.get("site", True)}
+    listed = {
+        e["id"] for e in pd.load() if e.get("bundled") and pd._status(e) in pd._SITE_STATUSES and e.get("site", True)
+    }
     for pid in listed:
         cards = [p for p in rendered if str(p.get("id")) == pid]
         assert len(cards) == 1, f"{pid}: expected one card, got {len(cards)}"

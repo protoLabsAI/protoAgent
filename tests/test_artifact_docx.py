@@ -168,7 +168,9 @@ def test_shell_routes_docx_and_xlsx(monkeypatch, tmp_path):
         ["data.csv", "text/csv"],
     ]
     got = _node(
-        'var PPTX_MIME="p";var DOCX_MIME="' + DOCX_MIME + '";'
+        'var PPTX_MIME="p";var DOCX_MIME="'
+        + DOCX_MIME
+        + '";'
         + _js_function(_js(art), "previewKind")
         + "console.log(JSON.stringify("
         + json.dumps(cases)
@@ -189,7 +191,9 @@ def test_shell_honours_a_refused_docx_preflight(monkeypatch, tmp_path):
         {"file": {"filename": "a.pdf", "mime": "application/pdf", "docx": {"render": True}}},
     ]
     got = _node(
-        'var PPTX_MIME="p";var DOCX_MIME="' + DOCX_MIME + '";'
+        'var PPTX_MIME="p";var DOCX_MIME="'
+        + DOCX_MIME
+        + '";'
         + _js_function(js, "previewKind")
         + _js_function(js, "docxOk")
         + "console.log(JSON.stringify("
@@ -206,7 +210,13 @@ def test_docx_frame_is_locked_down(monkeypatch, tmp_path):
     art = _load(monkeypatch, tmp_path)
     js = _js(art)
     src = _js_function(js, "docxDoc")
-    for directive in ("default-src 'none'", "script-src 'nonce-", "connect-src 'none'", "worker-src 'none'", "frame-src 'none'"):
+    for directive in (
+        "default-src 'none'",
+        "script-src 'nonce-",
+        "connect-src 'none'",
+        "worker-src 'none'",
+        "frame-src 'none'",
+    ):
         assert directive in src, directive
     assert "unsafe-eval" not in src
     assert 'cdn("jszip", nonce) + cdn("docxPreview", nonce)' in src  # JSZip first: docx-preview reads window.JSZip
@@ -246,7 +256,9 @@ def test_docx_caps_mirror_python(monkeypatch, tmp_path):
 )
 def test_csv_delimiter_is_sniffed(monkeypatch, tmp_path, text, want):
     art = _load(monkeypatch, tmp_path)
-    got = _node(_js_function(_js(art), "sniffDelim") + "console.log(JSON.stringify(sniffDelim(" + json.dumps(text) + ")));")
+    got = _node(
+        _js_function(_js(art), "sniffDelim") + "console.log(JSON.stringify(sniffDelim(" + json.dumps(text) + ")));"
+    )
     assert got == want
 
 
@@ -255,11 +267,11 @@ def test_csv_table_right_aligns_numeric_columns(monkeypatch, tmp_path):
     js = _js(art)
     rows = [["item", "qty", "price", "note"], ["Lasgun", "3", "$15.00", ""], ["Autogun", "12", "(1,200)", "x"]]
     got = _node(
-        'function esc(s){return String(s);}var TABLE_MAX_ROWS=500;'
+        "function esc(s){return String(s);}var TABLE_MAX_ROWS=500;"
         + _js_function(js, "dsvTable")
         + "var t=dsvTable("
         + json.dumps(rows)
-        + ",false);console.log(JSON.stringify([t.label, (t.html.match(/<th class=\"n\">/g)||[]).length, (t.html.match(/<td class=\"n\">/g)||[]).length]));"
+        + ',false);console.log(JSON.stringify([t.label, (t.html.match(/<th class="n">/g)||[]).length, (t.html.match(/<td class="n">/g)||[]).length]));'
     )
     assert got == ["4 columns × 2 rows", 2, 4]  # qty + price numeric; item + note not
 
@@ -314,10 +326,12 @@ def test_a_dash_does_not_stop_a_column_reading_as_numbers(monkeypatch, tmp_path)
     art = _load(monkeypatch, tmp_path)
     rows = [["Weapon", "Str", "AP"], ["Lasgun", "3", "-"], ["Meltagun", "8", "-4"]]
     got = _node(
-        'function esc(s){return String(s);}var TABLE_MAX_ROWS=500;'
+        "function esc(s){return String(s);}var TABLE_MAX_ROWS=500;"
         + _js_function(_js(art), "dsvTable")
-        + "var t=dsvTable(" + json.dumps(rows) + ",false);"
-        + "console.log(JSON.stringify((t.html.match(/<th class=\"n\">/g)||[]).length));"
+        + "var t=dsvTable("
+        + json.dumps(rows)
+        + ",false);"
+        + 'console.log(JSON.stringify((t.html.match(/<th class="n">/g)||[]).length));'
     )
     assert got == 2  # Str and AP
 
@@ -341,6 +355,8 @@ def test_a_cell_that_looks_like_a_sheet_marker_cannot_split_a_sheet(monkeypatch,
     p = tmp_path / "trap.xlsx"
     wb.save(str(p))
     preview = art._preview._extract_xlsx(p)
-    got = _node(_js_function(_js(art), "splitSheets") + "console.log(JSON.stringify(splitSheets(" + json.dumps(preview) + ")));")
+    got = _node(
+        _js_function(_js(art), "splitSheets") + "console.log(JSON.stringify(splitSheets(" + json.dumps(preview) + ")));"
+    )
     assert [s["name"] for s in got] == ["Real"]
     assert got[0]["csv"].splitlines()[0] == '"### sheet: Fake"'

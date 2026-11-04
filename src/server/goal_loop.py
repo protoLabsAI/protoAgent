@@ -151,8 +151,7 @@ def goal_fenced(goal_state, fence) -> list[str]:
 
 def goal_model_notice(model: str) -> str:
     return (
-        f"⚠ The goal's model `{model}` is unavailable — running on the default model. "
-        "Pick a model, or `/goal clear`."
+        f"⚠ The goal's model `{model}` is unavailable — running on the default model. Pick a model, or `/goal clear`."
     )
 
 

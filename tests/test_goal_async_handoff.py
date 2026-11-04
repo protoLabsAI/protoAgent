@@ -52,7 +52,9 @@ def test_awaiting_true_for_pending_schedule_on_this_session(clear_triggers, monk
     monkeypatch.setattr(rs.STATE, "scheduler", SimpleNamespace(list_jobs=lambda: [job]), raising=False)
     assert chat_mod._awaiting_self_resume("s") is True
     monkeypatch.setattr(
-        rs.STATE, "scheduler", SimpleNamespace(list_jobs=lambda: [SimpleNamespace(context_id="elsewhere")]),
+        rs.STATE,
+        "scheduler",
+        SimpleNamespace(list_jobs=lambda: [SimpleNamespace(context_id="elsewhere")]),
         raising=False,
     )
     assert chat_mod._awaiting_self_resume("s") is False
@@ -89,7 +91,9 @@ def test_the_one_shot_firing_this_turn_is_not_awaited(clear_triggers, monkeypatc
 def test_an_unreadable_next_fire_on_the_firing_job_counts_as_pending(clear_triggers, monkeypatch, next_fire):
     # _is_spent_firing_job's documented fail-safe: a next_fire it can't read is treated as a
     # pending resume, never as the spent one-shot. Pinned so a refactor can't flip it quietly.
-    job = SimpleNamespace(id="wait:s", context_id="s", schedule="2000-01-01T00:00:00+00:00", next_fire=next_fire, prompt="p")
+    job = SimpleNamespace(
+        id="wait:s", context_id="s", schedule="2000-01-01T00:00:00+00:00", next_fire=next_fire, prompt="p"
+    )
     monkeypatch.setattr(rs.STATE, "scheduler", SimpleNamespace(list_jobs=lambda: [job]), raising=False)
     with _fired_by("wait:s"):
         assert chat_mod._awaiting_self_resume("s") is True

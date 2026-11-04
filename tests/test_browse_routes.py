@@ -107,10 +107,16 @@ def test_roots_offer_jump_off_points_and_drop_dead_ones(tmp_path, monkeypatch):
     monkeypatch.setattr(
         rs.STATE,
         "graph_config",
-        type("C", (), {"filesystem_projects": [
-            {"name": "live", "path": str(live)},
-            {"name": "gone", "path": str(tmp_path / "vanished")},
-        ]})(),
+        type(
+            "C",
+            (),
+            {
+                "filesystem_projects": [
+                    {"name": "live", "path": str(live)},
+                    {"name": "gone", "path": str(tmp_path / "vanished")},
+                ]
+            },
+        )(),
         raising=False,
     )
     roots = _client().get("/api/fs/browse", params={"path": str(tmp_path)}).json()["roots"]

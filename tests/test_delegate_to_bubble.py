@@ -74,13 +74,17 @@ async def _frames(session, monkeypatch):
     )
     fake = _ToolFake(messages=stream)
     monkeypatch.setattr("graph.agent.create_llm", lambda *a, **k: fake)
-    g = create_agent_graph(LangGraphConfig(), include_subagents=False, extra_tools=[delegate_to], checkpointer=MemorySaver())
+    g = create_agent_graph(
+        LangGraphConfig(), include_subagents=False, extra_tools=[delegate_to], checkpointer=MemorySaver()
+    )
     monkeypatch.setattr(rs.STATE, "graph", g, raising=False)
     monkeypatch.setattr(rs.STATE, "goal_controller", None, raising=False)
     monkeypatch.setattr(rs.STATE, "graph_config", LangGraphConfig(), raising=False)
 
     frames = []
-    async for kind, payload in _run_turn_stream("have proto look at auth", session, {"configurable": {"thread_id": session}}):
+    async for kind, payload in _run_turn_stream(
+        "have proto look at auth", session, {"configurable": {"thread_id": session}}
+    ):
         frames.append((kind, payload))
     return frames
 
@@ -115,9 +119,7 @@ async def test_delegate_to_emits_ask_then_reply(monkeypatch):
 async def test_delegate_to_emits_NO_tool_card(monkeypatch):
     """The whole point of #3042's bubble: the delegation is conversation, not a card."""
     frames = await _frames("dtb2", monkeypatch)
-    delegate_cards = [
-        p for k, p in frames if k in ("tool_start", "tool_end") and (p.get("name") == "delegate_to")
-    ]
+    delegate_cards = [p for k, p in frames if k in ("tool_start", "tool_end") and (p.get("name") == "delegate_to")]
     assert delegate_cards == [], f"delegate_to must not render a tool card; saw {delegate_cards}"
 
 
@@ -143,7 +145,9 @@ async def test_an_ordinary_tool_still_gets_its_card(monkeypatch):
         itertools.repeat(AIMessage(content="<output>done</output>")),
     )
     monkeypatch.setattr("graph.agent.create_llm", lambda *a, **k: _ToolFake(messages=stream))
-    g = create_agent_graph(LangGraphConfig(), include_subagents=False, extra_tools=[current_time], checkpointer=MemorySaver())
+    g = create_agent_graph(
+        LangGraphConfig(), include_subagents=False, extra_tools=[current_time], checkpointer=MemorySaver()
+    )
     monkeypatch.setattr(rs.STATE, "graph", g, raising=False)
     monkeypatch.setattr(rs.STATE, "goal_controller", None, raising=False)
     monkeypatch.setattr(rs.STATE, "graph_config", LangGraphConfig(), raising=False)
@@ -169,14 +173,23 @@ async def test_wire_order_is_leadtext_then_ask_then_reply(monkeypatch):
     # One model response: lead SAYS something, THEN calls delegate_to.
     lead_then_delegate = AIMessage(
         content="I'll coordinate this.",
-        tool_calls=[{"name": "delegate_to", "args": {"target": "proto", "query": "look at auth"}, "id": "d1", "type": "tool_call"}],
+        tool_calls=[
+            {
+                "name": "delegate_to",
+                "args": {"target": "proto", "query": "look at auth"},
+                "id": "d1",
+                "type": "tool_call",
+            }
+        ],
     )
     stream = itertools.chain(
         [lead_then_delegate, AIMessage(content="proto handled it")],
         itertools.repeat(AIMessage(content="<output>done</output>")),
     )
     monkeypatch.setattr("graph.agent.create_llm", lambda *a, **k: _ToolFake(messages=stream))
-    g = create_agent_graph(LangGraphConfig(), include_subagents=False, extra_tools=[delegate_to], checkpointer=MemorySaver())
+    g = create_agent_graph(
+        LangGraphConfig(), include_subagents=False, extra_tools=[delegate_to], checkpointer=MemorySaver()
+    )
     monkeypatch.setattr(rs.STATE, "graph", g, raising=False)
     monkeypatch.setattr(rs.STATE, "goal_controller", None, raising=False)
     monkeypatch.setattr(rs.STATE, "graph_config", LangGraphConfig(), raising=False)
@@ -270,7 +283,9 @@ async def test_a_background_delegation_is_one_ask_with_its_job_and_summary(monke
 
 @pytest.mark.asyncio
 async def test_without_a_summary_the_row_gets_the_prompts_first_sentence(monkeypatch):
-    frames = await _frames_for("bgd2", monkeypatch, {"target": "sonnet", "query": _PROMPT, "background": True}, _RECEIPT)
+    frames = await _frames_for(
+        "bgd2", monkeypatch, {"target": "sonnet", "query": _PROMPT, "background": True}, _RECEIPT
+    )
     [ask] = [p for k, p in frames if k == "room_reply"]
     assert ask["summary"] == "Repo: protoLabsAI/joshmabry-portfolio."
 
@@ -300,7 +315,9 @@ async def test_an_inline_reply_that_opens_with_error_is_still_a_reply(monkeypatc
     start with "Error" is the delegate reporting one, not the dispatch refusing — calling it
     a failed dispatch would hide the answer behind an error row."""
     reply = "Error budget for the month is spent; I'd hold the release."
-    frames = await _frames_for("bgd6", monkeypatch, {"target": "sonnet", "query": "how are we?", "background": True}, reply)
+    frames = await _frames_for(
+        "bgd6", monkeypatch, {"target": "sonnet", "query": "how are we?", "background": True}, reply
+    )
     ask, authored = [p for k, p in frames if k == "room_reply"]
     assert ask["ok"] is True and "error" not in ask
     assert authored["author"] == "sonnet" and authored["text"] == reply

@@ -349,9 +349,7 @@ def test_list_reports_the_implicit_gateway_lead_as_a_model_name_reference(client
         model={"name": "protolabs/reasoning"},
     )
     row = client.get("/api/config/providers").json()["providers"][0]
-    assert row["in_use"] == [
-        {"key": "model.name", "value": "protolabs/reasoning", "kind": "slot", "clearable": False}
-    ]
+    assert row["in_use"] == [{"key": "model.name", "value": "protolabs/reasoning", "kind": "slot", "clearable": False}]
     assert row["in_use_by"] == ["model.name=protolabs/reasoning (implicit gateway)"]
 
 
@@ -459,9 +457,7 @@ def test_delete_release_clears_only_this_connections_favorites(client, monkeypat
         model={"name": "local-vllm:main", "favorites": ["prod-gateway:x", "local-vllm:y", "prod-gateway:z"]},
     )
     seen = _apply_spy(monkeypatch, {})
-    r = client.request(
-        "DELETE", "/api/config/providers/prod-gateway", json={"releases": {"model.favorites": None}}
-    )
+    r = client.request("DELETE", "/api/config/providers/prod-gateway", json={"releases": {"model.favorites": None}})
     assert r.status_code == 200
     assert seen["calls"] == 1
     # Only local-vllm's favorite survives; both prod-gateway favorites are gone.

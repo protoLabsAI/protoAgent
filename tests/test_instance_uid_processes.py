@@ -1,4 +1,5 @@
 """Concurrent first-use identity publication across real processes (#4197)."""
+
 import multiprocessing
 import os
 from pathlib import Path
@@ -70,7 +71,9 @@ def test_existing_identity_does_not_need_write_access(tmp_path, monkeypatch):
     target = tmp_path / ".instance-uid"
     target.write_text(" existing-id\n")
     monkeypatch.setattr(paths, "instance_paths", lambda: SimpleNamespace(instance_uid_file=target))
-    monkeypatch.setattr(paths.os, "open", lambda *a, **k: pytest.fail("existing identity tried to acquire a write lock"))
+    monkeypatch.setattr(
+        paths.os, "open", lambda *a, **k: pytest.fail("existing identity tried to acquire a write lock")
+    )
     assert paths.instance_uid() == "existing-id"
     assert target.read_text() == " existing-id\n"
 

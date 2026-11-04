@@ -80,7 +80,9 @@ def test_a_stock_sqlite_saver_with_the_serde_reads_offloaded_images_exactly(tmp_
     assert _image_urls(tup) == [_url(1), _url(2), _url(3)]
     assert all(REF_PREFIX not in u for u in _image_urls(tup))
     # history listing goes through the same serializer
-    assert all(REF_PREFIX not in u for t in stock.list({"configurable": {"thread_id": "a2a:t"}}) for u in _image_urls(t))
+    assert all(
+        REF_PREFIX not in u for t in stock.list({"configurable": {"thread_id": "a2a:t"}}) for u in _image_urls(t)
+    )
     conn.close()
 
     # Without the serde a stock saver sees references — the reason the serde exists.
@@ -140,14 +142,18 @@ def test_per_thread_blobs_from_4306_migrate_into_per_db_media(tmp_path):
         blobs: dict[str, str] = {}
         cv = offload_channel_values({"messages": [HumanMessage(content="hi"), _img(5)]}, blobs)
         for h, data in blobs.items():
-            conn.execute(
-                "INSERT INTO checkpoint_blobs VALUES (?, ?, ?, ?)", (tid, h, data.encode(), 1.0)
-            )
+            conn.execute("INSERT INTO checkpoint_blobs VALUES (?, ?, ?, ?)", (tid, h, data.encode(), 1.0))
         conn.commit()
         cfg = {"configurable": {"thread_id": tid, "checkpoint_ns": ""}}
-        ck = {"v": 1, "id": "1f1c0000-0000-6000-8000-00000000000" + tid[-1].replace("a", "1").replace("b", "2"),
-              "ts": "2026-10-16T00:00:00+00:00", "channel_values": cv, "channel_versions": {},
-              "versions_seen": {}, "pending_sends": []}
+        ck = {
+            "v": 1,
+            "id": "1f1c0000-0000-6000-8000-00000000000" + tid[-1].replace("a", "1").replace("b", "2"),
+            "ts": "2026-10-16T00:00:00+00:00",
+            "channel_values": cv,
+            "channel_versions": {},
+            "versions_seen": {},
+            "pending_sends": [],
+        }
         plain.put(cfg, ck, {"source": "loop", "step": 1, "parents": {}}, {})
     conn.close()
 
