@@ -720,8 +720,7 @@ _served_card: dict = {"card": None, "consumers": []}
 def register_card_consumer(handler) -> None:
     """Track an a2a-sdk request handler so ``refresh_served_card`` can swap its
     captured ``_agent_card`` alongside the served route's copy. Private-attr
-    reach-in, like ``harden_active_task_registry`` — remove if the SDK grows a
-    setter."""
+    reach-in — remove if the SDK grows a setter."""
     _served_card["consumers"].append(handler)
 
 

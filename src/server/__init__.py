@@ -1276,7 +1276,6 @@ def _main():
     from a2a_impl import auth
     from a2a_impl.executor import set_progress_hook, set_terminal_hook
     from a2a_impl.hitl_routing import install_parked_task_routing
-    from a2a_impl.registry import harden_active_task_registry
     from a2a_impl.stores import (
         build_a2a_stores,
         build_push_sender,
@@ -1485,13 +1484,6 @@ def _main():
         push_config_store=push_config_store,
         push_sender=build_push_sender(push_config_store, _a2a_push_client),
     )
-    # a2a-sdk 1.1.0 GC's a turn's still-pending `producer:<task_id>` task at teardown
-    # (upstream a2a-python#1123; #1713) — 'Task was destroyed but it is pending!' at
-    # every turn completion under load. Swap in a registry whose cleanup owns the
-    # producer/consumer tasks for their lifetime: strong-ref'd and awaited (grace to
-    # flush) or cancelled+awaited before the last reference drops. Remove once the
-    # SDK ships the fix and the pin moves past 1.1.0 (see a2a_impl/registry.py).
-    harden_active_task_registry(a2a_request_handler)
     # One parked HITL task per context (#3930): a console form answer sent without the
     # parked task's id continues THAT task (A2A §3.4.3), and a pause re-raised on a newer
     # task settles the older one — no input-required task is left orphaned.

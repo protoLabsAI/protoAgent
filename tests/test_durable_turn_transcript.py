@@ -41,7 +41,6 @@ async def _a2a_hygiene(monkeypatch):
 
     set_terminal_hook(None)
     set_progress_hook(None)
-    monkeypatch.setattr("a2a_impl.registry.FLUSH_GRACE_S", 0.02)
     yield
     await drain_handlers()
     set_terminal_hook(None)

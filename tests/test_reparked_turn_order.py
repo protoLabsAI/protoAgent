@@ -28,7 +28,6 @@ from fastapi import FastAPI
 import protolabs_a2a as pa
 from a2a_impl import hitl_routing
 from a2a_impl.executor import ProtoAgentExecutor, set_progress_hook, set_terminal_hook
-from a2a_impl.registry import harden_active_task_registry
 
 CTX = "chat-3963"
 CALL = ServerCallContext()
@@ -39,7 +38,6 @@ _HANDLERS: list = []
 def _hooks(monkeypatch):
     set_terminal_hook(None)
     set_progress_hook(None)
-    monkeypatch.setattr("a2a_impl.registry.FLUSH_GRACE_S", 0.02)
     yield
     set_terminal_hook(None)
     set_progress_hook(None)
@@ -83,7 +81,6 @@ async def _handler(tmp_path, calls: list):
         agent_card=card,
         push_config_store=InMemoryPushNotificationConfigStore(),
     )
-    assert harden_active_task_registry(handler)
     router = hitl_routing.install_parked_task_routing(handler)
     assert router is not None
     _HANDLERS.append((handler, router))

@@ -938,10 +938,9 @@ class ProtoAgentExecutor(AgentExecutor):
         # delta tips the size check). History of the size knob: 240 (an 11KB
         # answer ≈ 48 frames — "reads as chunky, visible ~40-word blocks"), then
         # 60, originally 24. The teardown-race concern that motivated raising it
-        # (registry FLUSH_GRACE_S, #1713) was re-tested and disproven at 24 —
-        # 30x through the real SendStreamingMessage SSE body, zero grace-window
-        # warnings, zero truncation (tests/test_a2a_flush_granularity.py):
-        # FLUSH_GRACE_S fires on a genuinely hung producer, not frame count.
+        # (#1713) was re-tested and disproven at 24 — 30x through the real
+        # SendStreamingMessage SSE body, zero truncation
+        # (tests/test_a2a_flush_granularity.py).
         # (Still not re-tested: real TCP backpressure / a slow browser consumer —
         # if a future report ties chunkiness back to teardown under load, look
         # there first.) Governs the answer text and reasoning batching (#1710).

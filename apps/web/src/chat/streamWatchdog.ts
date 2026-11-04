@@ -3,10 +3,9 @@
 // The chat's only "turn done" signal is the A2A SSE stream closing (onDone) —
 // there is no standalone terminal event on the wire. If the stream stalls open
 // mid-turn — e.g. a large answer whose terminal frames were stranded when the
-// server's producer got cancelled on teardown (a2a_impl/registry.py grants a
-// 0.5s grace then cancels), or a proxy/tailnet buffer — the reader blocks
-// forever, so onDone, the post-stream reconcile, and the turn's `finally` never
-// run and the bubble spins "Working…" until reload.
+// server's producer got cancelled on teardown, or a proxy/tailnet buffer — the
+// reader blocks forever, so onDone, the post-stream reconcile, and the turn's
+// `finally` never run and the bubble spins "Working…" until reload.
 //
 // This watchdog turns "stuck forever" into "self-heals in seconds": reset it on
 // every stream frame; after an idle window with no frames, consult the durable

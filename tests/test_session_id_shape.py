@@ -303,7 +303,6 @@ def _a2a_handler(calls: list):
     import protolabs_a2a as pa
     from a2a_impl import hitl_routing
     from a2a_impl.executor import ProtoAgentExecutor
-    from a2a_impl.registry import harden_active_task_registry
 
     async def stream(text, ctx, *, resume=False, caller_trace=None, **kwargs):
         calls.append(ctx)
@@ -323,7 +322,6 @@ def _a2a_handler(calls: list):
         agent_card=card,
         push_config_store=InMemoryPushNotificationConfigStore(),
     )
-    assert harden_active_task_registry(handler)
     router = hitl_routing.install_parked_task_routing(handler)
     assert router is not None
     _A2A_ROUTERS.append((handler, router))

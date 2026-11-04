@@ -219,7 +219,6 @@ def _serve_peer(stream_fn, *, streaming=True):
     from fastapi import FastAPI
 
     from a2a_impl.executor import ProtoAgentExecutor
-    from a2a_impl.registry import harden_active_task_registry
 
     sock = socket.socket()
     sock.bind(("127.0.0.1", 0))
@@ -240,7 +239,6 @@ def _serve_peer(stream_fn, *, streaming=True):
         agent_card=card,
         push_config_store=InMemoryPushNotificationConfigStore(),
     )
-    harden_active_task_registry(handler)
     app = FastAPI()
     add_a2a_routes_to_fastapi(
         app,

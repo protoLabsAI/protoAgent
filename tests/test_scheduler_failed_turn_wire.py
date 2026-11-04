@@ -27,11 +27,6 @@ _REAL_ASYNC_CLIENT = httpx.AsyncClient
 
 
 @pytest.fixture(autouse=True)
-def _fast_flush(monkeypatch):
-    monkeypatch.setattr("a2a_impl.registry.FLUSH_GRACE_S", 0.02)
-
-
-@pytest.fixture(autouse=True)
 async def _drain_a2a_cleanup():
     yield
     await drain_handlers()

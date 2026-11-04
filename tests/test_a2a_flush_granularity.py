@@ -1,7 +1,7 @@
 """Regression coverage for the answer-streaming flush threshold (_FLUSH_CHARS).
 
 Proves the many-frame path a lower threshold produces doesn't strand the
-terminal frames on the #1713 teardown-cancel grace window, that the full
+terminal frames at turn teardown (#1713), that the full
 answer always lands intact regardless of how many artifact-update frames it
 took to get there, and that the wire actually flushes at ~_FLUSH_CHARS
 granularity (frame count ≈ answer_len / _FLUSH_CHARS) — so a silent
@@ -9,7 +9,6 @@ regression back to coarse batching fails here, not in the console.
 """
 
 import json
-import logging
 
 import httpx
 import pytest
@@ -62,10 +61,9 @@ async def _run_one(app, rpc_id):
 
 
 @pytest.mark.asyncio
-async def test_many_small_flushes_never_strand_the_terminal_frames(caplog):
+async def test_many_small_flushes_never_strand_the_terminal_frames():
     """A dense ≥4KB stream still lands the complete answer every time, at the
-    granularity _FLUSH_CHARS promises, with no teardown-grace-window warning."""
-    caplog.set_level(logging.WARNING, logger="a2a_impl.registry")
+    granularity _FLUSH_CHARS promises."""
     # The wire carries ~one append frame per _FLUSH_CHARS of answer (each flush
     # rounds up to a whole 7-char delta, the tail flushes on `done`, plus the
     # one terminal REPLACE) — so total frames ≈ len/24 within a ±20% band. A
@@ -79,9 +77,6 @@ async def test_many_small_flushes_never_strand_the_terminal_frames(caplog):
             f"iteration {i}: {frame_count} artifact frames for a {len(_ANSWER)}-char answer — "
             f"expected ≈{expected:.0f} (±20%) at _FLUSH_CHARS={_FLUSH_CHARS}"
         )
-
-    stuck_warnings = [r.message for r in caplog.records if "still pending" in r.message]
-    assert not stuck_warnings, f"teardown grace window was hit: {stuck_warnings}"
 
 
 async def _slow_sparse_stream(text, ctx, *, resume=False, caller_trace=None, **kwargs):
