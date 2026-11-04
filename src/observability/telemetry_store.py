@@ -1,7 +1,8 @@
 """Local telemetry store — per-turn cost/latency rollups (ADR 0006 Slice 2).
 
 Each row carries accumulated token usage (incl. prompt-cache), USD cost,
-wall-clock duration, LLM-call + tool-call counts, model, and outcome.
+wall-clock duration, LLM-call + tool-call counts, model, and outcome — and, for a
+turn that did not complete, why (``error``, #4726).
 This is the *durable, queryable* half of observability inside protoAgent — the
 substrate for "what was expensive/slow over time" and the flywheel's analysis
 (Prometheus is live-scrape-only; Langfuse is opt-in/external).
@@ -55,6 +56,7 @@ _COLUMNS = (
     "tool_durations",  # JSON {tool_name: [ms, ...]} for this turn's calls (#2697)
     "context_tokens",  # peak single-call prompt size = context-window fill (#2773, ADR 0101 D6)
     "run_id",  # the delegation-ledger run this leg belongs to (#4726); "" before it
+    "error",  # why a non-completed turn ended, redacted + clipped by record_turn (#4726)
 )
 
 #: How many sampled turns a model needs before `outliers()` compares its rows against
@@ -136,7 +138,8 @@ class TelemetryStore:
                     provider_id                 TEXT,
                     account_key                 TEXT,
                     context_tokens              INTEGER DEFAULT 0,
-                    run_id                      TEXT
+                    run_id                      TEXT,
+                    error                       TEXT
                 )
                 """
             )
@@ -152,6 +155,7 @@ class TelemetryStore:
                 ("tool_durations", "TEXT"),  # #2697
                 ("context_tokens", "INTEGER DEFAULT 0"),  # #2773 / ADR 0101 D6
                 ("run_id", "TEXT"),  # #4726
+                ("error", "TEXT"),  # #4726
             ):
                 try:
                     db.execute(f"ALTER TABLE turns ADD COLUMN {_col} {_type}")
@@ -241,7 +245,8 @@ class TelemetryStore:
                 provider_id                 TEXT,
                 account_key                 TEXT,
                 context_tokens              INTEGER DEFAULT 0,
-                run_id                      TEXT
+                run_id                      TEXT,
+                error                       TEXT
             )
             """
         )

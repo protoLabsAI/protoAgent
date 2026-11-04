@@ -1895,7 +1895,10 @@ class AcpClient:
                 failure = exc
                 raise
             finally:
-                self._record_run_telemetry(state, started, tool_calls, session_id, usage)
+                failure_reason = (
+                    "" if state == "completed" else self._failure_reason(failure, stop_reason, empty_reply)
+                )
+                self._record_run_telemetry(state, started, tool_calls, session_id, usage, error=failure_reason)
                 io = tracing.io_allowed()
                 if (usage or cost_usd) and not native:
                     self._trace_generation(usage, cost_usd, started, session_id)
@@ -1908,7 +1911,7 @@ class AcpClient:
                     # A failed run has no reply, so without this its trace had no output
                     # at all: say why it failed (timeout, agent error, cancel, cut off, or
                     # an empty normal-ended turn — #4371).
-                    output = f"[{state}] {self._failure_reason(failure, stop_reason, empty_reply)}" + (
+                    output = f"[{state}] {failure_reason}" + (
                         f"\n\n{reply}" if reply else ""
                     )
                 metadata = {
@@ -2051,7 +2054,16 @@ class AcpClient:
             return None
         return self._empty_reply_note(self.last_stop_reason, self._turn_tool_calls)
 
-    def _record_run_telemetry(self, state: str, started: float, tool_calls: int, session_id: str, usage: dict | None = None) -> None:
+    def _record_run_telemetry(
+        self,
+        state: str,
+        started: float,
+        tool_calls: int,
+        session_id: str,
+        usage: dict | None = None,
+        *,
+        error: str = "",
+    ) -> None:
         """One durable telemetry row per coder run (#3015). Best-effort; never raises.
 
         The project-board loop dispatches coders from a background loop rather than from
@@ -2071,6 +2083,9 @@ class AcpClient:
         Synchronous on purpose. It is called from a ``finally`` that can run while the
         task is already being cancelled, and an ``await`` there would be interrupted
         before the row landed — losing precisely the cancelled runs worth seeing.
+
+        ``error`` is why a failed run failed, the same line its trace output leads with
+        (``_failure_reason``), so the row says why without opening the trace (#4726).
         """
         if not self.record_runs:
             return
@@ -2110,6 +2125,7 @@ class AcpClient:
                 # `turn.started`, so publishing only the -1 half would drive that count
                 # negative — see `record_turn`'s own docstring.
                 publish_usage_event=False,
+                error=error,
             )
         except Exception as exc:  # noqa: BLE001 — telemetry must never break a coder run
             logger.debug("[acp/%s] could not record run telemetry: %s", self.name, exc)

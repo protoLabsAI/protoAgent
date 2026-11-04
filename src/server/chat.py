@@ -1858,6 +1858,7 @@ async def _chat_langgraph(
     sink: dict[str, Any] = {}
     result: list[dict[str, Any]] = []
     state = "failed"
+    error = ""  # why a failed turn failed, for the telemetry row (#4726)
     try:
         # ADR 0115 D6 (#3760): a console / operator turn runs under `interactive`; the OpenAI-
         # compat (`v1`) and plugin surfaces stay `default`. Scoped to the turn here (the impl
@@ -1880,14 +1881,25 @@ async def _chat_langgraph(
         # error key — not an exception — is what distinguishes a failed turn.
         # A turn parked at a HITL ask is neither — the impl stamps `input_required` on
         # the sink, the state the A2A surface records for the same park (#3945).
-        if any(isinstance(m, dict) and m.get("error") for m in result):
+        failure = next((m["error"] for m in result if isinstance(m, dict) and m.get("error")), None)
+        if failure is not None:
             state = "failed"
+            error = str(failure.get("message") or "") if isinstance(failure, dict) else str(failure)
         else:
             state = sink.get("state") or "completed"
         return result
     except asyncio.CancelledError:
         state = "canceled" if local_turns.cancellation_requested() else "failed"
+        if state == "failed":
+            # Cancelled from outside with no stop request (a dropped client, a shutdown).
+            # "cancelled" is also the cue for record_turn to prefer a stall reason (#4726).
+            error = "cancelled"
+        raise
+    except Exception as exc:
+        error = str(exc).strip() or type(exc).__name__
         raise
     finally:
         _turn_control._turn_ended(session_id)
-        _turn_telemetry.record_local_turn(sink, session_id=session_id, origin=origin, state=state, started=started)
+        _turn_telemetry.record_local_turn(
+            sink, session_id=session_id, origin=origin, state=state, started=started, error=error
+        )

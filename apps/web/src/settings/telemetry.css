@@ -83,6 +83,24 @@
   color: var(--pl-color-status-error);
 }
 /* .turn-state* retired — the State cell is a DS <Badge> (success/error/neutral) now. */
+/* A failed or canceled turn's stored reason (#4726). One clipped line under the
+   badge, with the full text in the title tooltip, so long errors never widen the table. */
+.telemetry-table .turn-state-cell {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--pl-space-0_5);
+}
+.telemetry-table .turn-error {
+  display: block;
+  max-width: 28ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--pl-font-size-2xs);
+  color: var(--pl-color-fg-muted);
+  cursor: help;
+}
 
 /* Trace cell — deep link to Langfuse, or a copyable trace id when the console
    has no URL template for the trace. */

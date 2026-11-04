@@ -84,3 +84,11 @@ export function isShortResult(result: string, failed: boolean): boolean {
     !result.includes("…_[truncated]_")
   );
 }
+
+/** Why a finished job did not complete, or "" (#4726). The registry stores it on
+ *  `error` (for example "interrupted: the server restarted before the job finished",
+ *  #3945). A running or completed job never shows one, even if the field is set. */
+export function jobFailureReason(job: Pick<BackgroundJobDTO, "status" | "error">): string {
+  if (job.status === "running" || job.status === "completed") return "";
+  return (job.error || "").trim();
+}

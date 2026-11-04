@@ -72,7 +72,7 @@ describe("Settings type scale → DS tokens (#3688 part 7b)", () => {
 
   it("migrated every in-range site to an in-scale token, at the expected per-file counts", () => {
     expect(tokenCount(pathpickerCss)).toBe(6); // +1: .path-list-empty (multiple path rows)
-    expect(tokenCount(telemetryCss)).toBe(5);
+    expect(tokenCount(telemetryCss)).toBe(6); // +1: .turn-error, a failed turn's reason (#4726)
     expect(tokenCount(providersCss)).toBe(3);
     expect(tokenCount(delegatesCss)).toBe(1);
   });

@@ -777,6 +777,9 @@ def _record_a2a_telemetry(outcome) -> None:
         context_tokens=int(getattr(outcome, "context_tokens", 0) or 0),
         # What the caller asked for — the row's model when no call reported one (#3957).
         requested_model=str(getattr(outcome, "requested_model", "") or ""),
+        # Why a failed leg ended — the task's terminal status text, the stall guard's
+        # message for a wedged turn (#4726). getattr-guarded like the fields above.
+        error=str(getattr(outcome, "error", "") or ""),
     )
 
     # Fleet trace export → lab (the flywheel Observe, #1897). Off unless

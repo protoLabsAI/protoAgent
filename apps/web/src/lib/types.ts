@@ -945,6 +945,9 @@ export type BackgroundJobDTO = {
   result?: string;
   created_at?: string;
   completed_at?: string;
+  /** Why a job that did not complete ended (#3945), e.g. "interrupted: the server
+   *  restarted before the job finished". Empty for a completed job. */
+  error?: string;
 };
 
 // A renderable UI component (ADR 0051 Slice 2) carried on a component-v1 DataPart and
@@ -1606,6 +1609,9 @@ export type TelemetryTurn = {
   context_tokens?: number;
   /** Derived per-turn cache-hit ratio (cache reads / prompt tokens), from recent(). */
   cache_hit_ratio?: number;
+  /** Why a failed or canceled turn ended, redacted and clipped server-side (#4726).
+   *  Empty/absent for completed turns and rows recorded before the column existed. */
+  error?: string | null;
 };
 
 export type TelemetryInsights = {

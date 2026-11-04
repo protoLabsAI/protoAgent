@@ -159,6 +159,48 @@ def _success_for(state: str) -> int | None:
     return 1 if state == "completed" else 0
 
 
+#: The longest ``error`` a row keeps. Long enough for the stall guard's whole message
+#: (which names the step that never returned) and an upstream error's first line; a
+#: stack trace or a provider's full JSON body is cut, since the row is a pointer to why
+#: and the trace/log holds the rest.
+_ERROR_MAX = 500
+
+
+def _turn_error(state: str, error: str) -> str:
+    """The ``error`` column for one leg: why a non-completed turn ended, or ``""``.
+
+    Free text from an exception or a provider can carry a credential (an echoed header,
+    a URL with a key in it), so it is redacted WHOLE before it is clipped — a secret cut
+    in half no longer matches the redactor. Same order the ledger uses for its edges.
+
+    When the caller has nothing better, the stall guard's stop reason fills in (#3940,
+    ``graph.turn_liveness``). Work the guard cancels — an ACP coder run under a stalled
+    ``delegate_to``, say — sees a bare ``CancelledError`` and would otherwise record
+    "cancelled", hiding that the turn above it stalled. The reason is read from the
+    current context, so it is only ever non-empty inside a guarded turn's work.
+    """
+    if state in ("completed", "input_required"):
+        return ""
+    try:
+        from graph.turn_liveness import turn_stop_reason
+
+        stop = turn_stop_reason()
+    except Exception:  # noqa: BLE001 — telemetry must never break a turn
+        stop = ""
+    text = str(error or "").strip()
+    if stop and (not text or text.lower() == "cancelled"):
+        text = stop
+    if not text:
+        return ""
+    try:
+        from graph.middleware.redaction import redact
+
+        text = str(redact(text))
+    except Exception:  # noqa: BLE001 — fail closed: an unredacted error is not stored
+        return "(error text withheld: redaction failed)"
+    return text if len(text) <= _ERROR_MAX else text[: _ERROR_MAX - 1] + "…"
+
+
 def _turn_account(model: str, requested: str) -> tuple[str, str]:
     try:
         from graph.delegation_usage import provider_account
@@ -211,6 +253,7 @@ def record_turn(
     requested_model: str = "",
     provider_id: str = "",
     account_key: str = "",
+    error: str = "",
 ) -> None:
     """Record one finished turn leg: Prometheus, the realtime bus, and the store.
 
@@ -220,6 +263,12 @@ def record_turn(
     its first call, a short-circuit reply) it falls back to the REQUESTED model, and to
     the configured default only when nothing was requested (#3957) — a failed override
     turn used to be filed under the default model it never touched.
+
+    ``error`` is why a failed or canceled leg ended (#4726): the text the A2A task's
+    terminal status carries, the ``/v1`` error message, a coder run's failure reason.
+    It is ignored for a completed or parked leg, redacted and clipped before it is
+    stored, and filled from the stall guard's stop reason when the caller has none
+    (see :func:`_turn_error`).
 
     Every step is independently guarded, so a failure in one still lets the
     others run and none of them can reach the caller.
@@ -314,6 +363,7 @@ def record_turn(
         # The run this leg belongs to (#4726): the turn's own task id, the spawning turn's
         # run for a background job, or the edge's run for a coder dispatch.
         "run_id": _current_run_id(),
+        "error": _turn_error(state, error),
     }
 
     if publish_usage_event:
@@ -328,7 +378,9 @@ def record_turn(
         log.exception("[telemetry] failed to record turn %s", task_id)
 
 
-def record_local_turn(sink: dict, *, session_id: str, origin: str, state: str, started: float) -> None:
+def record_local_turn(
+    sink: dict, *, session_id: str, origin: str, state: str, started: float, error: str = ""
+) -> None:
     """Write the telemetry row for one non-streaming turn (#3000). Best-effort.
 
     ``sink`` is populated by ``_chat_langgraph_impl`` (``server/turn_sync.py``) with the turn's usage
@@ -350,6 +402,8 @@ def record_local_turn(sink: dict, *, session_id: str, origin: str, state: str, s
     failed A2A turns showed up as ``failed``, so the success rate over-reported.
     ``state`` is ``failed`` only when the reply carries the structured ``error`` key
     (#3914's contract) or the impl raised — control-plane replies never carry it.
+    ``error`` is that key's message, or the exception's, and lands in the row's
+    ``error`` column (#4726).
     """
     try:
         usage_cb = sink.get("usage_cb")
@@ -401,6 +455,7 @@ def record_local_turn(sink: dict, *, session_id: str, origin: str, state: str, s
             # turn.started with a -1 on the terminal turn.usage, and this driver
             # emits no turn.started.
             publish_usage_event=False,
+            error=error,
         )
     except Exception:  # noqa: BLE001 — telemetry must never break a turn
         log.debug("[telemetry] failed to record a non-streaming turn", exc_info=True)
