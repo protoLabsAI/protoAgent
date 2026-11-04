@@ -1610,15 +1610,254 @@ textarea {
   background: var(--pl-color-bg-hover);
 }
 
+.fleet-switcher-trigger-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
 .fleet-switcher-name {
   display: inline-flex;
   align-items: center;
   gap: var(--pl-space-1_5);
   min-width: 0;
 }
+.fleet-switcher-name-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .fleet-switcher-check {
   flex: 0 0 auto;
   color: var(--pl-color-accent);
+}
+
+/* Fleet switcher groups, pins, filter and the per-row actions menu
+   (docs/design/fleet-switcher-groups.md). The dropdown, its collapsible section headers
+   (MenuGroup) and the filter box (MenuFilter) are all DS-styled (@protolabsai/ui ^0.69); only
+   the console-specific row/action layout lives here. */
+
+/* The hover/focus-revealed pin star on a desktop row (DS MenuItem `action`). A filled star
+   marks a pinned agent even when the row isn't hovered, so pins read at a glance. */
+.fleet-star {
+  color: var(--pl-color-fg-muted);
+}
+.fleet-star.is-pinned {
+  color: var(--pl-color-accent);
+}
+
+/* A collapsed group header's running dot sits just after the name (MenuGroup `label` slot). */
+.fleet-group-label {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--pl-space-1);
+  min-width: 0;
+}
+.fleet-group-label-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Row-actions menu (right-click a desktop row): Pin / Move to group… / New group…. */
+.fleet-move-row {
+  display: inline-flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--pl-space-2);
+  width: 100%;
+}
+.fleet-newgroup {
+  padding: var(--pl-space-1) var(--pl-space-2);
+  min-width: 200px;
+}
+.fleet-newgroup-row {
+  display: flex;
+  align-items: center;
+  gap: var(--pl-space-2);
+}
+.fleet-newgroup-err {
+  color: var(--pl-color-status-error);
+  margin-top: var(--pl-space-1);
+}
+.fleet-newgroup-hint {
+  color: var(--pl-color-fg-muted);
+  margin-top: var(--pl-space-1);
+}
+
+/* ── Phone bottom sheet (useIsMobile < 767px) ──────────────────────────────────────────────
+   The switcher is a DS Drawer side="bottom" size="85dvh": a fixed-tall sheet whose ONLY scroll
+   container is the list, so it never shrinks/jumps as the filter narrows the list, and opening it
+   never scrolls the page behind (the DS overlay layer scroll-locks the background; nothing here
+   calls scrollIntoView). The filter stays pinned at the top. */
+.fleet-sheet .pl-drawer__body {
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+}
+.fleet-sheet-inner {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  flex: 1;
+}
+.fleet-sheet-inner .pl-menu__filter {
+  flex: 0 0 auto;
+  padding: var(--pl-space-2);
+  margin: 0;
+}
+.fleet-sheet-list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: var(--pl-space-1) 0 var(--pl-space-2);
+  outline: none;
+}
+.fleet-sheet-foot {
+  border-top: var(--pl-border-width) solid var(--pl-color-border);
+  margin-top: var(--pl-space-1);
+  padding-top: var(--pl-space-1);
+}
+.fleet-slabel {
+  margin-top: var(--pl-space-1);
+}
+
+/* A phone agent row: a ≥44px tap target (WCAG 2.5.5), name button + optional pin marker + the
+   always-visible ⋯ actions button. */
+.fleet-prow-wrap {
+  display: flex;
+  align-items: center;
+  gap: var(--pl-space-1);
+  padding: 0 var(--pl-space-2);
+}
+.fleet-prow {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: var(--pl-space-2);
+  min-height: 44px;
+  min-width: 0;
+  padding: var(--pl-space-1) var(--pl-space-1);
+  background: none;
+  border: none;
+  border-radius: var(--pl-radius);
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.fleet-prow:hover,
+.fleet-prow:focus-visible {
+  background: var(--pl-color-bg-hover);
+}
+.fleet-prow.is-disabled {
+  color: var(--pl-color-fg-muted);
+  cursor: default;
+}
+.fleet-pinmark {
+  flex: 0 0 auto;
+  color: var(--pl-color-accent);
+  display: inline-flex;
+}
+.fleet-more {
+  flex: 0 0 auto;
+  width: 44px;
+  height: 44px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: none;
+  border: none;
+  border-radius: var(--pl-radius);
+  color: var(--pl-color-fg-muted);
+  font-size: var(--pl-font-size-lg);
+  line-height: 1;
+  cursor: pointer;
+}
+.fleet-more:hover,
+.fleet-more:focus-visible {
+  background: var(--pl-color-bg-hover);
+  color: var(--pl-color-fg);
+}
+
+/* A phone group header: same 44px height, toggles the (shared) collapsed state on tap. */
+.fleet-ghead {
+  display: flex;
+  align-items: center;
+  gap: var(--pl-space-2);
+  width: 100%;
+  min-height: 44px;
+  padding: var(--pl-space-1) var(--pl-space-2);
+  background: none;
+  border: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.fleet-ghead:hover,
+.fleet-ghead:focus-visible {
+  background: var(--pl-color-bg-hover);
+}
+.fleet-ghead-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.fleet-chev {
+  flex: 0 0 auto;
+  color: var(--pl-color-fg-muted);
+  transition: transform 120ms ease;
+}
+.fleet-chev.is-open {
+  transform: rotate(90deg);
+}
+
+/* The row-actions sheet (second Drawer, replaces the switcher sheet — one sheet, one trap). */
+.fleet-act-title {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--pl-space-2);
+  min-width: 0;
+}
+.fleet-act-back {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--pl-space-0_5);
+  background: none;
+  border: none;
+  color: var(--pl-color-accent);
+  font: inherit;
+  cursor: pointer;
+  padding: 0;
+}
+.fleet-act-body {
+  display: flex;
+  flex-direction: column;
+}
+.fleet-act-item {
+  width: 100%;
+}
+.fleet-act-sub {
+  margin-left: auto;
+  color: var(--pl-color-fg-muted);
+}
+.fleet-act-note {
+  color: var(--pl-color-fg-muted);
+  padding: var(--pl-space-1) var(--pl-space-2);
+  margin: 0;
+}
+.fleet-foot-item {
+  width: 100%;
+}
+.fleet-foot-item:disabled {
+  color: var(--pl-color-fg-muted);
+  cursor: default;
 }
 
 /* Tooltip-wrapped menu row (#1708 — the disabled "Fleet settings" item on a fleet

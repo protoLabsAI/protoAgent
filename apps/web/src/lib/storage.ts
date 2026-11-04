@@ -102,6 +102,12 @@ export const KEY_REGISTRY: readonly KeySpec[] = [
   { id: "keybindings", area: "local", pattern: /^protoagent\.keybindings$/, category: "prefs", slug: noSlug, evictable: false },
   { id: "chat.inputHistory", area: "local", pattern: /^protoagent\.chat\.inputHistory$/, category: "prefs", slug: noSlug, evictable: false },
   { id: "fleet.recent", area: "local", pattern: /^protoagent\.fleet\.recent$/, category: "prefs", slug: noSlug, evictable: false },
+  // Fleet switcher (docs/design/fleet-switcher-groups.md): the last agents switched to from this
+  // browser (newest first), and the group ids collapsed in the switcher. A SEPARATE key from the
+  // legacy `fleet.recent` slug→timestamp map above — that store has a documented single writer
+  // (fleetPalette.ts) and a different shape, so the switcher must not share it.
+  { id: "fleet.switcherRecent", area: "local", pattern: /^protoagent\.fleet\.switcherRecent$/, category: "prefs", slug: noSlug, evictable: false },
+  { id: "fleet.collapsed", area: "local", pattern: /^protoagent\.fleet\.collapsed$/, category: "prefs", slug: noSlug, evictable: false },
   { id: "palette.recent", area: "local", pattern: /^protoagent\.palette\.recent$/, category: "prefs", slug: noSlug, evictable: false },
   { id: "codePane.widened", area: "local", pattern: /^protoagent\.codePane\.widened$/, category: "prefs", slug: noSlug, evictable: false },
   { id: "kb.openGroups", area: "local", pattern: /^protoagent\.kb\.openGroups$/, category: "prefs", slug: noSlug, evictable: false },
