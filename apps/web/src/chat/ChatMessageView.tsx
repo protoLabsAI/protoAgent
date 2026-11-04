@@ -753,10 +753,39 @@ function oneLine(text: string, max = 90): string {
   return flat.length > max ? `${flat.slice(0, max).trimEnd()}…` : flat;
 }
 
+// The shared result body (#2990 + #4726) for a scheduled fire — the fire time, the full
+// (untruncated) summary, and the "View full result" action that opens the fire's turn in the
+// document viewer. Extracted so the first-fire ScheduledReportCard and the expanded recurring
+// ScheduledChip render the SAME body instead of duplicating it. Returns a fragment so each
+// parent (card / chip body) owns its own flex-column wrapper + gap.
+function ScheduledResultBody({ scheduled }: { scheduled: NonNullable<ChatMessage["scheduled"]> }) {
+  const failed = scheduled.status === "failed";
+  const title = `Scheduled task ${scheduled.jobId} ${failed ? "failed" : "ran"}`;
+  const summary = scheduled.summary?.trim() || "(no output)";
+  const open = () =>
+    openDocument({
+      title,
+      subtitle: `Fired ${fmtFiredAt(scheduled.firedAt)} — full turn in Activity`,
+      load: () => Promise.resolve(summary),
+    });
+  return (
+    <>
+      <div className="chat-scheduled-summary">{summary}</div>
+      <div className="chat-scheduled-actions">
+        <span className="chat-scheduled-time">{fmtFiredAt(scheduled.firedAt)}</span>
+        <Button size="sm" variant="ghost" onClick={open}>
+          View full result
+        </Button>
+      </div>
+    </>
+  );
+}
+
 // The scheduled-task RESULT CARD (#2990) — parallel to BackgroundReportCard, but a
 // distinct visual: a calendar/clock icon (not FileText) and a full card body carrying the
-// job id, fire time, result summary, and a "View full result" link into the Activity turn.
-// Rendered for the FIRST fire in a session; recurring re-fires collapse to ScheduledChip.
+// fire time, result summary, and a "View full result" link into the Activity turn (the body
+// is the shared ScheduledResultBody). Rendered for the FIRST fire in a session; recurring
+// re-fires collapse to ScheduledChip.
 function ScheduledReportCard({
   message,
   scheduled,
@@ -769,13 +798,6 @@ function ScheduledReportCard({
   if (dismissed.has(key)) return null;
   const failed = scheduled.status === "failed";
   const title = `Scheduled task ${scheduled.jobId} ${failed ? "failed" : "ran"}`;
-  const summary = scheduled.summary?.trim() || "(no output)";
-  const open = () =>
-    openDocument({
-      title,
-      subtitle: `Fired ${fmtFiredAt(scheduled.firedAt)} — full turn in Activity`,
-      load: () => Promise.resolve(summary),
-    });
   return (
     <Message role={message.role} className="chat-report chat-scheduled">
       <div className={`chat-scheduled-card${failed ? " chat-scheduled-card--failed" : ""}`}>
@@ -784,7 +806,6 @@ function ScheduledReportCard({
           <span className="chat-scheduled-title" title={title}>
             {title}
           </span>
-          <span className="chat-scheduled-time">{fmtFiredAt(scheduled.firedAt)}</span>
           <Button
             variant="ghost"
             size="xs"
@@ -796,20 +817,20 @@ function ScheduledReportCard({
             <X size={14} />
           </Button>
         </div>
-        <div className="chat-scheduled-summary">{summary}</div>
-        <div className="chat-scheduled-actions">
-          <Button size="sm" variant="ghost" onClick={open}>
-            View full result
-          </Button>
-        </div>
+        <ScheduledResultBody scheduled={scheduled} />
       </div>
     </Message>
   );
 }
 
 // The compact recurring variant (#2990): a second-or-later fire of the same schedule into
-// this session renders as ONE dismissable line ("Scheduled task <id> ran — <summary>")
-// instead of a full card, so an hourly check can't fill the chat with 24 cards/day.
+// this session renders as ONE line ("Scheduled task <id> ran — <summary>") instead of a full
+// card, so an hourly check can't fill the chat with 24 cards/day. But the one-liner is no
+// longer a dead end (#4726): it EXPANDS in place — on click or Enter/Space, with aria-expanded
+// — into the same ScheduledResultBody the first-fire card shows (summary · fire time · "View
+// full result"), and collapses again on a second toggle. Expand state is LOCAL, so it is
+// per-message. The dismiss ✕ is a SIBLING of the disclosure toggle (not nested), so dismissing
+// never toggles the expand; it still hides the fire from this transcript in either state.
 function ScheduledChip({
   message,
   scheduled,
@@ -818,28 +839,56 @@ function ScheduledChip({
   scheduled: NonNullable<ChatMessage["scheduled"]>;
 }) {
   const { dismissed, dismiss } = useDismissedScheduled();
+  const [expanded, setExpanded] = useState(false);
   const key = `${scheduled.jobId}:${scheduled.firedAt}`;
   if (dismissed.has(key)) return null;
   const failed = scheduled.status === "failed";
   const verb = failed ? "failed" : "ran";
   const line = `Scheduled task ${scheduled.jobId} ${verb} — ${oneLine(scheduled.summary || "(no output)")}`;
+  const toggle = () => setExpanded((v) => !v);
   return (
     <Message role={message.role} className="chat-report chat-scheduled-chip-msg">
-      <div className="chat-report-chip">
-        <CalendarClock size={14} aria-hidden />
-        <span className="chat-report-title" title={line}>
-          {line}
-        </span>
-        <Button
-          variant="ghost"
-          size="xs"
-          icon
-          onClick={() => dismiss(key)}
-          title="Dismiss — the full turn stays in the Activity log"
-          aria-label="Dismiss scheduled result"
-        >
-          <X size={14} />
-        </Button>
+      <div
+        className={`chat-scheduled-chip${expanded ? " chat-scheduled-chip--open" : ""}${
+          failed ? " chat-scheduled-chip--failed" : ""
+        }`}
+      >
+        <div className="chat-scheduled-chip-row">
+          <div
+            role="button"
+            tabIndex={0}
+            className="chat-scheduled-chip-toggle"
+            aria-expanded={expanded}
+            onClick={toggle}
+            onKeyDown={(event) => {
+              if (event.key === "Enter" || event.key === " ") {
+                event.preventDefault();
+                toggle();
+              }
+            }}
+          >
+            <CalendarClock size={14} aria-hidden />
+            <span className="chat-report-title" title={line}>
+              {line}
+            </span>
+            <ChevronDown size={14} aria-hidden className="chat-scheduled-chip-chevron" />
+          </div>
+          <Button
+            variant="ghost"
+            size="xs"
+            icon
+            onClick={() => dismiss(key)}
+            title="Dismiss — the full turn stays in the Activity log"
+            aria-label="Dismiss scheduled result"
+          >
+            <X size={14} />
+          </Button>
+        </div>
+        {expanded ? (
+          <div className="chat-scheduled-chip-body">
+            <ScheduledResultBody scheduled={scheduled} />
+          </div>
+        ) : null}
       </div>
     </Message>
   );

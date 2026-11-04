@@ -192,9 +192,9 @@
   white-space: nowrap;
 }
 /* Scheduled-task RESULT card (#2990) — the first fire of a schedule, delivered back to the
-   chat that created it. A full card (not the one-line report chip): calendar/clock head,
-   summary body, and a "View full result" action. Recurring re-fires use .chat-report-chip
-   above (via ScheduledChip) instead, so the two share the compact chrome. */
+   chat that created it. A full card (not the one-line report chip): calendar/clock head +
+   the shared ScheduledResultBody (summary, fire time, "View full result"). Recurring re-fires
+   render the expandable .chat-scheduled-chip below, which expands into the SAME body. */
 .chat-scheduled-card {
   display: flex;
   flex-direction: column;
@@ -240,7 +240,78 @@
 }
 .chat-scheduled-actions {
   display: flex;
-  justify-content: flex-end;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--pl-space-2);
+}
+
+/* Recurring re-fire chip (#2990 + #4726) — the compact one-line variant, now EXPANDABLE so a
+   repeat fire is readable instead of a dead end. Collapsed it is the raised pill; expanded it
+   grows a card body (the shared ScheduledResultBody) under the one-line row. The disclosure
+   toggle (icon + line + chevron) fills the row; the dismiss ✕ is an independent sibling, so ✕
+   never toggles the expand. Chrome only here — the line reuses .chat-report-title and the body
+   reuses .chat-scheduled-summary/.chat-scheduled-time, so no new font-size sits off the scale. */
+.chat-scheduled-chip {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: stretch;
+  max-width: 100%;
+  background: var(--pl-color-bg-raised);
+  border: 1px solid var(--pl-color-border);
+  border-radius: var(--pl-radius-pill);
+  box-shadow: var(--pl-shadow-card);
+}
+.chat-scheduled-chip--open {
+  border-radius: var(--pl-radius-lg);
+}
+.chat-scheduled-chip--failed {
+  border-color: var(--pl-color-status-error, var(--pl-color-border));
+}
+.chat-scheduled-chip-row {
+  display: flex;
+  align-items: center;
+  gap: var(--pl-space-2);
+  padding: var(--pl-space-1) var(--pl-space-1_5) var(--pl-space-1) var(--pl-space-3);
+}
+.chat-scheduled-chip-toggle {
+  display: flex;
+  align-items: center;
+  gap: var(--pl-space-2);
+  min-width: 0;
+  flex: 1 1 auto;
+  border: none;
+  background: none;
+  color: var(--pl-color-fg);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.chat-scheduled-chip-toggle > svg {
+  flex: 0 0 auto;
+  color: var(--pl-color-fg-muted);
+}
+.chat-scheduled-chip-toggle .chat-report-title {
+  flex: 1 1 auto;
+}
+.chat-scheduled-chip-toggle:focus-visible {
+  outline: 2px solid var(--pl-color-focus, var(--pl-color-accent));
+  outline-offset: -2px;
+  border-radius: var(--pl-radius-md);
+}
+.chat-scheduled-chip-chevron {
+  flex: 0 0 auto;
+  color: var(--pl-color-fg-muted);
+  transition: transform 0.15s ease;
+}
+.chat-scheduled-chip--open .chat-scheduled-chip-chevron {
+  transform: rotate(180deg);
+}
+.chat-scheduled-chip-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--pl-space-2);
+  padding: var(--pl-space-2) var(--pl-space-3) var(--pl-space-2_5);
+  border-top: 1px solid var(--pl-color-border);
 }
 
 /* Server-initiated RESULT card (#3028) — a SETTLED scheduled fire, watch reaction, or
