@@ -96,7 +96,11 @@ def shape_oauth_system(system: Any) -> list[Any]:
         first = system[0]
         if first == prefix_block:
             return list(system)
-        rest = _split_leading_prefix(str(first.get("text", ""))) if isinstance(first, dict) and first.get("type", "text") == "text" else None
+        rest = (
+            _split_leading_prefix(str(first.get("text", "")))
+            if isinstance(first, dict) and first.get("type", "text") == "text"
+            else None
+        )
         if rest is None:
             return [prefix_block, *system]
         if rest:
@@ -150,9 +154,7 @@ def _claude_code_version() -> str:
         return _version_cache
     for cmd in ("claude", "claude-code"):
         try:
-            out = subprocess.run(
-                [cmd, "--version"], capture_output=True, text=True, timeout=5
-            )
+            out = subprocess.run([cmd, "--version"], capture_output=True, text=True, timeout=5)
         except (OSError, subprocess.SubprocessError):
             continue
         if out.returncode == 0 and out.stdout.strip():
@@ -281,7 +283,8 @@ try:
             return _AsyncInteractiveAnthropic(
                 **self._client_params,
                 http_client=with_anthropic_headers(
-                    _get_default_async_httpx_client(**self._http_client_params()), asynchronous=True,
+                    _get_default_async_httpx_client(**self._http_client_params()),
+                    asynchronous=True,
                 ),
             )
 

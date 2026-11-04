@@ -150,9 +150,7 @@ def source_from_docs(merged: dict | None, secrets_doc: dict | None) -> SourceCon
     )
 
 
-def hydrate_from_docs(
-    merged: dict | None, secrets_doc: dict | None, *, force: bool = False
-) -> SourceStatus | None:
+def hydrate_from_docs(merged: dict | None, secrets_doc: dict | None, *, force: bool = False) -> SourceStatus | None:
     """Fetch-and-apply for the configured source. Returns the resulting status, or
     ``None`` when hydration is disabled/unconfigured. Raises only
     :class:`SecretsRequiredError` (``required: true`` + failed fetch)."""
@@ -166,9 +164,7 @@ def hydrate_from_docs(
     with _LOCK:
         fp = cfg.fingerprint()
         if not force and fp == _LAST_FINGERPRINT and _LAST_STATUS is not None:
-            window = (
-                float(max(30, cfg.refresh_seconds)) if (_LAST_OK and cfg.refresh_seconds > 0) else 60.0
-            )
+            window = float(max(30, cfg.refresh_seconds)) if (_LAST_OK and cfg.refresh_seconds > 0) else 60.0
             if not _LAST_OK:
                 window = FAILURE_RETRY_SECONDS
             if (time.monotonic() - _LAST_ATTEMPT_MONO) < window:
@@ -207,8 +203,7 @@ def hydrate_from_docs(
             status.shadowed = shadowed
             if changed or shadowed:
                 log.info(
-                    "[secrets] %s: %d env var(s) applied (%d changed this pass, %d shadowed by "
-                    "pre-existing env%s)",
+                    "[secrets] %s: %d env var(s) applied (%d changed this pass, %d shadowed by pre-existing env%s)",
                     cfg.provider,
                     len(_APPLIED),
                     changed,

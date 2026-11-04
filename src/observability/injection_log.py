@@ -212,9 +212,7 @@ class InjectionLog:
         this returns into their referenced content."""
         db = self._connect()
         try:
-            row = db.execute(
-                "SELECT * FROM injections WHERE id = ?", (int(record_id),)
-            ).fetchone()
+            row = db.execute("SELECT * FROM injections WHERE id = ?", (int(record_id),)).fetchone()
         except sqlite3.DatabaseError as exc:
             log.warning("[injection-log] get failed: %s", exc)
             return None

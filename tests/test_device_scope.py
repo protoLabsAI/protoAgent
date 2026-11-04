@@ -747,12 +747,17 @@ def test_the_server_route_mints_through_sse_token_for():
         for fn in ast.walk(tree)
         if isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef))
         and any(
-            isinstance(d, ast.Call) and d.args and isinstance(d.args[0], ast.Constant) and d.args[0].value == "/api/sse-token"
+            isinstance(d, ast.Call)
+            and d.args
+            and isinstance(d.args[0], ast.Constant)
+            and d.args[0].value == "/api/sse-token"
             for d in fn.decorator_list
         )
     ]
     assert len(handlers) == 1
-    calls = {n.func.attr for n in ast.walk(handlers[0]) if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)}
+    calls = {
+        n.func.attr for n in ast.walk(handlers[0]) if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
+    }
     assert "sse_token_for" in calls and "generate_sse_token" not in calls
 
 
@@ -809,7 +814,13 @@ def test_flagged_fields_are_marked_in_the_schema():
     from graph.settings_schema import FIELDS
 
     flagged = {f.key for f in FIELDS if f.credential_plane}
-    assert {"auth.token", "auth.federation_token", "network.bind", "egress.allowed_hosts", "filesystem.allow_run"} <= flagged
+    assert {
+        "auth.token",
+        "auth.federation_token",
+        "network.bind",
+        "egress.allowed_hosts",
+        "filesystem.allow_run",
+    } <= flagged
 
 
 @pytest.fixture
@@ -858,13 +869,17 @@ def test_device_scope_settings_write_of_a_plane_key_is_403_naming_it(config_clie
 
 
 def test_device_scope_can_still_write_ordinary_keys(config_client):
-    resp = config_client.post("/api/settings", headers={"x-test-scope": "device"}, json={"updates": {"identity.name": "x"}})
+    resp = config_client.post(
+        "/api/settings", headers={"x-test-scope": "device"}, json={"updates": {"identity.name": "x"}}
+    )
     assert resp.status_code == 200 and resp.json()["ok"] is True
     assert config_client.writes
 
 
 def test_full_scope_can_write_plane_keys(config_client):
-    resp = config_client.post("/api/settings", headers={"x-test-scope": "full"}, json={"updates": {"network.bind": "0.0.0.0"}})
+    resp = config_client.post(
+        "/api/settings", headers={"x-test-scope": "full"}, json={"updates": {"network.bind": "0.0.0.0"}}
+    )
     assert resp.status_code == 200 and resp.json()["ok"] is True
 
 
@@ -878,13 +893,17 @@ def test_device_scope_nested_config_write_is_checked(config_client):
         "/api/config", headers={"x-test-scope": "device"}, json={"config": {"auth": {"token": "mine"}}}
     )
     assert resp.status_code == 403 and resp.json()["keys"] == ["auth.token"]
-    resp = config_client.post("/api/config", headers={"x-test-scope": "device"}, json={"config": {"identity": {"name": "x"}}})
+    resp = config_client.post(
+        "/api/config", headers={"x-test-scope": "device"}, json={"config": {"identity": {"name": "x"}}}
+    )
     assert resp.status_code == 200
 
 
 def test_device_scope_setup_finish_is_checked(config_client):
     resp = config_client.post(
-        "/api/config/setup", headers={"x-test-scope": "device"}, json={"config": {"network": {"bind": "0.0.0.0"}}, "soul": ""}
+        "/api/config/setup",
+        headers={"x-test-scope": "device"},
+        json={"config": {"network": {"bind": "0.0.0.0"}}, "soul": ""},
     )
     assert resp.status_code == 403 and resp.json()["keys"] == ["network.bind"]
 
@@ -995,7 +1014,11 @@ def test_an_encoded_query_or_fragment_char_cannot_hide_a_ceiling_path(echo, devi
     """``%3F``/``%23`` decode INTO the routed path but cut ``request.url.path`` short — the
     ceiling checks both spellings."""
     _, token = _phone(devices)
-    for path in ("/agents/peer/api/plugins/install%3Fx", "/agents/peer/api/secrets/sync%23", "/api/plugin-setup/a%23/b"):
+    for path in (
+        "/agents/peer/api/plugins/install%3Fx",
+        "/agents/peer/api/secrets/sync%23",
+        "/api/plugin-setup/a%23/b",
+    ):
         assert echo.post(path, headers=_hdr(token)).status_code == 403, path
 
 

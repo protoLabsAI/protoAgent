@@ -98,6 +98,7 @@ def test_record_accepts_a_generator():
     delta = tool_delta.record_toolset(n for n in ["a", "b"])
     assert delta == {"added": ["b"], "removed": []}
 
+
 # ── the middleware (standalone, unconditional) ────────────────────────────────
 def _mw():
     from graph.middleware.tool_delta import ToolDeltaMiddleware
@@ -159,10 +160,12 @@ def test_wrap_model_call_delivers_the_tagged_frame():
     class _Req:
         messages: list
         state: dict = field(default_factory=dict)
+
         def override(self, **kw):
             return _Req(**{**{"messages": self.messages, "state": self.state}, **kw})
 
     captured = []
+
     def handler(req):
         captured.append(req)
         return "ok"

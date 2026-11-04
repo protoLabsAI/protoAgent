@@ -186,7 +186,9 @@ async def test_update_watch_tool_needs_something_to_change(monkeypatch, tmp_path
 async def test_update_watch_tool_cannot_touch_an_operator_verifier(monkeypatch, tmp_path):
     # The tool runs untrusted, so the ADR 0067 D4 boundary holds through it too.
     ctrl, _create, _l, update, _c = _tools(monkeypatch, tmp_path)
-    ctrl.create(condition="prod is healthy", watch_id="w", verifier={"type": "command", "command": "true"}, trusted=True)
+    ctrl.create(
+        condition="prod is healthy", watch_id="w", verifier={"type": "command", "command": "true"}, trusted=True
+    )
     out = await update.ainvoke({"watch_id": "w", "condition": "anything"})
     assert "only its operator can edit it" in out
     assert ctrl.store.get("w").condition == "prod is healthy"

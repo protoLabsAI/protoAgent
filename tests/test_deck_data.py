@@ -11,11 +11,42 @@ from deck import data as deckdata
 from deck import hub
 
 ROSTER = [
-    {"name": "protoagent", "id": "protoagent", "port": 7870, "pid": 100, "running": True, "host": True, "version": "0.165.0"},
-    {"name": "protoEngineer", "id": "protoEngineer-ba4c", "port": 7875, "pid": 15285, "running": True, "version": "0.165.0"},
+    {
+        "name": "protoagent",
+        "id": "protoagent",
+        "port": 7870,
+        "pid": 100,
+        "running": True,
+        "host": True,
+        "version": "0.165.0",
+    },
+    {
+        "name": "protoEngineer",
+        "id": "protoEngineer-ba4c",
+        "port": 7875,
+        "pid": 15285,
+        "running": True,
+        "version": "0.165.0",
+    },
     {"name": "old", "id": "old-1", "port": 7890, "pid": 77, "running": True, "version": "0.164.0"},
-    {"name": "Cindi", "id": "Cindi-9f49", "port": 7880, "pid": None, "running": False, "version": "", "bundle": "cowork-stack"},
-    {"name": "ava", "id": "r-ava", "port": None, "pid": None, "running": False, "remote": True, "url": "https://ava.tail:7870"},
+    {
+        "name": "Cindi",
+        "id": "Cindi-9f49",
+        "port": 7880,
+        "pid": None,
+        "running": False,
+        "version": "",
+        "bundle": "cowork-stack",
+    },
+    {
+        "name": "ava",
+        "id": "r-ava",
+        "port": None,
+        "pid": None,
+        "running": False,
+        "remote": True,
+        "url": "https://ava.tail:7870",
+    },
 ]
 
 
@@ -35,15 +66,31 @@ def _hub(request: httpx.Request) -> httpx.Response | None:
             200,
             json={
                 "members": {
-                    "host": {"reachable": True, "telemetry_enabled": True, "rollup": {"turns": 3, "cost_usd": 3.1, "success_rate": 1.0, "cache_hit_ratio": 0.5}},
-                    "protoEngineer-ba4c": {"reachable": True, "telemetry_enabled": True, "rollup": {"turns": 38, "cost_usd": 12.4, "success_rate": 0.97, "cache_hit_ratio": 0.61}},
+                    "host": {
+                        "reachable": True,
+                        "telemetry_enabled": True,
+                        "rollup": {"turns": 3, "cost_usd": 3.1, "success_rate": 1.0, "cache_hit_ratio": 0.5},
+                    },
+                    "protoEngineer-ba4c": {
+                        "reachable": True,
+                        "telemetry_enabled": True,
+                        "rollup": {"turns": 38, "cost_usd": 12.4, "success_rate": 0.97, "cache_hit_ratio": 0.61},
+                    },
                     "old-1": {"reachable": False, "telemetry_enabled": True, "rollup": None},
                     "Cindi-9f49": {"reachable": True, "telemetry_enabled": False, "rollup": None},
                 }
             },
         )
     if p == "/api/runtime/status":
-        return httpx.Response(200, json={"warnings": ["1 fleet member(s) run a different protoAgent version", {"message": "oauth token stale", "provider": "anthropic"}]})
+        return httpx.Response(
+            200,
+            json={
+                "warnings": [
+                    "1 fleet member(s) run a different protoAgent version",
+                    {"message": "oauth token stale", "provider": "anthropic"},
+                ]
+            },
+        )
     return None
 
 
@@ -108,14 +155,47 @@ def test_live_detail_reads_through_the_slug_proxy_and_degrades_per_pane():
         p = request.url.path
         paths.append(p)
         if p == "/agents/protoEngineer-ba4c/api/runtime/status":
-            return httpx.Response(200, json={"model": {"name": "claude-fable-5-1", "provider": "gateway"}, "identity": {"name": "protoEngineer"}, "version": "0.165.0", "warnings": []})
+            return httpx.Response(
+                200,
+                json={
+                    "model": {"name": "claude-fable-5-1", "provider": "gateway"},
+                    "identity": {"name": "protoEngineer"},
+                    "version": "0.165.0",
+                    "warnings": [],
+                },
+            )
         if p == "/agents/protoEngineer-ba4c/api/diagnostics/logs":
             assert request.url.params["lines"] == "200"
-            return httpx.Response(200, json={"enabled": True, "capacity": 1024, "returned": 1, "lines": [{"ts": "2026-09-12T09:41:02+00:00", "level": "INFO", "logger": "a2a", "message": "task working"}]})
+            return httpx.Response(
+                200,
+                json={
+                    "enabled": True,
+                    "capacity": 1024,
+                    "returned": 1,
+                    "lines": [
+                        {"ts": "2026-09-12T09:41:02+00:00", "level": "INFO", "logger": "a2a", "message": "task working"}
+                    ],
+                },
+            )
         if p == "/agents/protoEngineer-ba4c/api/diagnostics/sessions":
             return httpx.Response(503, json={"sessions": [], "detail": "task store is not configured on this member"})
         if p == "/agents/old-1/api/diagnostics/sessions":
-            return httpx.Response(200, json={"sessions": [{"session_id": "chat-1", "context_id": "chat-1", "latest_task_id": "t1", "latest_task_state": "TASK_STATE_WORKING", "last_activity": "2026-09-12T09:00:00+00:00", "status": "ok", "malformed": []}]})
+            return httpx.Response(
+                200,
+                json={
+                    "sessions": [
+                        {
+                            "session_id": "chat-1",
+                            "context_id": "chat-1",
+                            "latest_task_id": "t1",
+                            "latest_task_state": "TASK_STATE_WORKING",
+                            "last_activity": "2026-09-12T09:00:00+00:00",
+                            "status": "ok",
+                            "malformed": [],
+                        }
+                    ]
+                },
+            )
         return httpx.Response(404)
 
     be = deckdata.LiveBackend(_conn(handler))
@@ -136,7 +216,19 @@ def test_live_snapshot_survives_a_malformed_member_rollup_and_non_dict_telemetry
         if p == "/api/fleet":
             return httpx.Response(200, json={"agents": ROSTER})
         if p == "/api/telemetry/fleet":
-            return httpx.Response(200, json={"members": {"protoEngineer-ba4c": {"reachable": True, "rollup": {"turns": "Infinity", "cost_usd": None, "success_rate": "NaN"}}, "old-1": {"rollup": "nope"}, "Cindi-9f49": "garbage"}})
+            return httpx.Response(
+                200,
+                json={
+                    "members": {
+                        "protoEngineer-ba4c": {
+                            "reachable": True,
+                            "rollup": {"turns": "Infinity", "cost_usd": None, "success_rate": "NaN"},
+                        },
+                        "old-1": {"rollup": "nope"},
+                        "Cindi-9f49": "garbage",
+                    }
+                },
+            )
         return httpx.Response(200, json={"warnings": []})
 
     be = deckdata.LiveBackend(_conn(handler))
@@ -163,7 +255,16 @@ def test_live_detail_notes_a_disabled_log_buffer_and_rejects_non_dict_bodies():
     def handler(request: httpx.Request) -> httpx.Response:
         p = request.url.path
         if p.endswith("/api/diagnostics/logs"):
-            return httpx.Response(200, json={"enabled": False, "lines": [], "returned": 0, "capacity": 0, "note": "log buffer disabled (LOG_BUFFER_LINES=0)"})
+            return httpx.Response(
+                200,
+                json={
+                    "enabled": False,
+                    "lines": [],
+                    "returned": 0,
+                    "capacity": 0,
+                    "note": "log buffer disabled (LOG_BUFFER_LINES=0)",
+                },
+            )
         if p.endswith("/api/runtime/status"):
             return httpx.Response(200, text="<html>proxy</html>")
         return httpx.Response(200, json={"sessions": []})
@@ -266,4 +367,8 @@ def test_every_id_the_deck_puts_in_a_member_path_is_one_encoded_segment():
     be.delegation_cancel(a, "../s", "d/1")
     paths = [p for _, p in seen]
     assert all(p.startswith("/agents/x-1/api/chat/sessions/%2E%2E%2Fs/") for p in paths), paths
-    assert paths[2].endswith("/steer/m%2F1") and "/server-turns/t%2F1/interject" in paths[3] and "/delegations/d%2F1/cancel" in paths[4]
+    assert (
+        paths[2].endswith("/steer/m%2F1")
+        and "/server-turns/t%2F1/interject" in paths[3]
+        and "/delegations/d%2F1/cancel" in paths[4]
+    )

@@ -129,9 +129,7 @@ class TestBeforeAgent:
         """The projection includes <working_state> when the agent has active commitments."""
         import runtime.state as rs
 
-        goal = SimpleNamespace(
-            status="active", iteration=1, max_iterations=5, condition="test goal"
-        )
+        goal = SimpleNamespace(status="active", iteration=1, max_iterations=5, condition="test goal")
         goal_ctrl = SimpleNamespace(
             active_goal=lambda sid: goal,
             _store=SimpleNamespace(read_plan=lambda sid: "step 1"),

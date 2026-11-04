@@ -828,7 +828,9 @@ def register_pairing_routes(app, agent_name=None) -> None:
             return JSONResponse({"ok": False, "error": "invalid or expired pairing code"}, status_code=403)
         device, token = result
         moved = bool(device.pop("moved", False))  # a handoff code rebound an existing device
-        log.info("[pairing] %s %s %s", device["kind"], device["id"], "moved here" if moved else "claimed a pairing code")
+        log.info(
+            "[pairing] %s %s %s", device["kind"], device["id"], "moved here" if moved else "claimed a pairing code"
+        )
         body = {"ok": True, "device": device, "token": token, "moved": moved}
         if device.get("kind") == "device":
             # The phone's address set (ADR 0121 D1), authenticated by the claim itself. An

@@ -456,7 +456,11 @@ class TestTierPolicy:
         # A long-idle skill the PRIVATE policy would decay + prune (see the contrast below).
         idx = _seed_index(
             str(tmp_path / "commons.db"),
-            [_make_skill(name="rare runbook", description="emergency restore steps", confidence=1.0, last_used_days_ago=400)],
+            [
+                _make_skill(
+                    name="rare runbook", description="emergency restore steps", confidence=1.0, last_used_days_ago=400
+                )
+            ],
         )
         entry = SkillCurator(
             index=idx, audit_path=self._audit(tmp_path), tier="commons", decay=False, prune=False, dry_run=False
@@ -486,7 +490,11 @@ class TestTierPolicy:
         # Contrast: the same long-idle skill IS reaped under the private (default) policy.
         idx = _seed_index(
             str(tmp_path / "priv.db"),
-            [_make_skill(name="rare runbook", description="emergency restore steps", confidence=1.0, last_used_days_ago=400)],
+            [
+                _make_skill(
+                    name="rare runbook", description="emergency restore steps", confidence=1.0, last_used_days_ago=400
+                )
+            ],
         )
         SkillCurator(index=idx, audit_path=self._audit(tmp_path), tier="private").run()
         assert idx.all_skills() == []  # decayed below threshold → pruned

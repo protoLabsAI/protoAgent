@@ -155,7 +155,9 @@ async def compact_thread(
     messages = list(values.get("messages") or [])
     incognito = bool(values.get("incognito"))
 
-    keep = keep_recent if keep_recent is not None else getattr(config, "compaction_keep_messages", _DEFAULT_KEEP_MESSAGES)
+    keep = (
+        keep_recent if keep_recent is not None else getattr(config, "compaction_keep_messages", _DEFAULT_KEEP_MESSAGES)
+    )
     keep = max(0, int(keep))
 
     # Already small enough — nothing to gain, nothing removed (not a refusal).
@@ -248,7 +250,11 @@ async def compact_thread(
         summary = (
             "(No summary is available — the earlier conversation was force-compacted after "
             "a context-window overflow."
-            + (f" The full transcript is archived; use recall_session(session_id={session_id!r}).)" if entry_ids else ")")
+            + (
+                f" The full transcript is archived; use recall_session(session_id={session_id!r}).)"
+                if entry_ids
+                else ")"
+            )
         )
 
     cut = _safe_cut_index(messages, keep)

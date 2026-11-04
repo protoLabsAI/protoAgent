@@ -191,7 +191,9 @@ def test_codex_never_silently_imports_the_cli_login(monkeypatch, tmp_path):
     """
     cli = tmp_path / "codex_auth.json"
     cli.write_text(
-        json.dumps({"tokens": {"access_token": _jwt({"exp": time.time() + 3600}), "refresh_token": "r", "account_id": "a"}})
+        json.dumps(
+            {"tokens": {"access_token": _jwt({"exp": time.time() + 3600}), "refresh_token": "r", "account_id": "a"}}
+        )
     )
     monkeypatch.setattr(oauth_mod, "_CODEX_CLI_AUTH_FILE", cli)
     store = tmp_path / "codex-oauth.json"
@@ -338,7 +340,9 @@ def test_codex_no_reimport_of_a_stale_cli_login(monkeypatch, tmp_path):
 def test_codex_bootstrap_refuses_a_stale_cli_login(monkeypatch, tmp_path):
     """With no store of our own, a stale CLI login is a sign-in problem, not a refresh one."""
     cli = tmp_path / "codex_auth.json"
-    cli.write_text(json.dumps({"tokens": {"access_token": _jwt({"exp": time.time() - 10}), "refresh_token": "r-stale"}}))
+    cli.write_text(
+        json.dumps({"tokens": {"access_token": _jwt({"exp": time.time() - 10}), "refresh_token": "r-stale"}})
+    )
     monkeypatch.setattr(oauth_mod, "_CODEX_CLI_AUTH_FILE", cli)
     monkeypatch.setattr(oauth_mod, "_codex_store_path", lambda paths: tmp_path / "store-nope.json")
 
@@ -358,7 +362,15 @@ def test_import_takes_ownership_by_rotating_on_the_way_in(monkeypatch, tmp_path)
     """The explicit handover: import refreshes immediately, so only we hold a live token."""
     cli = tmp_path / "codex_auth.json"
     cli.write_text(
-        json.dumps({"tokens": {"access_token": _jwt({"exp": time.time() + 3600}), "refresh_token": "r-cli", "account_id": "acct-1"}})
+        json.dumps(
+            {
+                "tokens": {
+                    "access_token": _jwt({"exp": time.time() + 3600}),
+                    "refresh_token": "r-cli",
+                    "account_id": "acct-1",
+                }
+            }
+        )
     )
     monkeypatch.setattr(oauth_mod, "_CODEX_CLI_AUTH_FILE", cli)
     store = tmp_path / "codex-oauth.json"
@@ -1257,7 +1269,9 @@ def test_disconnect_suppresses_reimport_until_reconnect(monkeypatch, tmp_path):
     paths = types.SimpleNamespace(config_dir=tmp_path)
     cli = tmp_path / "codex_cli.json"
     cli.write_text(
-        json.dumps({"tokens": {"access_token": _jwt({"exp": time.time() + 3600}), "refresh_token": "r", "account_id": "a"}})
+        json.dumps(
+            {"tokens": {"access_token": _jwt({"exp": time.time() + 3600}), "refresh_token": "r", "account_id": "a"}}
+        )
     )
     _patch_codex(monkeypatch, paths, cli)
     monkeypatch.setattr(oauth_mod.httpx, "post", _CodexRefreshStub({"r": _jwt({"exp": time.time() + 3600})}))
@@ -1345,7 +1359,15 @@ def test_import_stamps_cli_provenance_and_refresh_preserves_it(monkeypatch, tmp_
     """Import records cli_bootstrap; a later refresh keeps it (rotation isn't ownership)."""
     cli = tmp_path / "codex_auth.json"
     cli.write_text(
-        json.dumps({"tokens": {"access_token": _jwt({"exp": time.time() + 3600}), "refresh_token": "r", "account_id": "acct-1"}})
+        json.dumps(
+            {
+                "tokens": {
+                    "access_token": _jwt({"exp": time.time() + 3600}),
+                    "refresh_token": "r",
+                    "account_id": "acct-1",
+                }
+            }
+        )
     )
     store = tmp_path / "codex-oauth.json"
     monkeypatch.setattr(oauth_mod, "_CODEX_CLI_AUTH_FILE", cli)
@@ -1645,7 +1667,9 @@ def test_legacy_oauth_promotion_matches_stamped_anthropic_accounts(monkeypatch, 
     inst.mkdir()
     box.mkdir()
     monkeypatch.setattr(oauth_mod, "box_root", lambda: box)
-    fresh = json.dumps({"access_token": "new", "refresh_token": "r2", "expires_at": 2_000_009_999, "account_uuid": "u1"})
+    fresh = json.dumps(
+        {"access_token": "new", "refresh_token": "r2", "expires_at": 2_000_009_999, "account_uuid": "u1"}
+    )
     (box / "anthropic-oauth.json").write_text(
         json.dumps({"access_token": "old", "refresh_token": "r1", "expires_at": 2_000_000_000, "account_uuid": "u1"})
     )
@@ -1827,9 +1851,7 @@ def test_codex_adopts_a_token_a_peer_process_just_rotated(monkeypatch, tmp_path)
 
     def _post(url, **kw):
         # Our spend is refused — a peer got there first and left its result on disk.
-        store.write_text(
-            json.dumps({"tokens": {"access_token": winner, "refresh_token": "r-peer", "account_id": "a"}})
-        )
+        store.write_text(json.dumps({"tokens": {"access_token": winner, "refresh_token": "r-peer", "account_id": "a"}}))
         return types.SimpleNamespace(status_code=401, json=lambda: {})
 
     monkeypatch.setattr(oauth_mod.httpx, "post", _post)
@@ -1882,7 +1904,9 @@ def test_the_hint_is_persisted_by_a_refresh(monkeypatch, tmp_path):
     """Every process on the box must see the same answer, so it rides the store."""
     store = tmp_path / "codex-oauth.json"
     store.write_text(
-        json.dumps({"tokens": {"access_token": _jwt({"exp": time.time() - 10}), "refresh_token": "r", "account_id": "a"}})
+        json.dumps(
+            {"tokens": {"access_token": _jwt({"exp": time.time() - 10}), "refresh_token": "r", "account_id": "a"}}
+        )
     )
     monkeypatch.setattr(oauth_mod, "_codex_store_path", lambda paths: store)
     mark = time.time() + 777_777

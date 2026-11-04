@@ -43,9 +43,7 @@ async def test_spawn_work_completes_and_notifies_once(tmp_path):
     async def work():
         return "ingested 3 chunks"
 
-    job_id = await mgr.spawn_work(
-        origin_session="s1", kind="ingest", description="Ingest foo", detail="foo", work=work
-    )
+    job_id = await mgr.spawn_work(origin_session="s1", kind="ingest", description="Ingest foo", detail="foo", work=work)
     assert job_id.startswith("bg-")
 
     job = await _settle(mgr.store, job_id)

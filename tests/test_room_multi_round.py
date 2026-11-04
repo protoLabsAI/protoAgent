@@ -435,7 +435,7 @@ async def test_the_offer_to_pass_reaches_the_delegate_only_above_one_round(monke
 
 @pytest.mark.asyncio
 async def test_a_qualified_pass_is_an_answer_and_keeps_the_room_going(monkeypatch):
-    """"Pass — but note X" is not silence. It carries the note the room needs, so it is
+    """ "Pass — but note X" is not silence. It carries the note the room needs, so it is
     recorded, attributed, and it does NOT settle the room: someone still has to answer
     it. The narrow token check is what makes that true."""
     graph = _Graph()
@@ -499,9 +499,7 @@ async def test_an_all_unreachable_room_still_falls_through_to_the_lead(monkeypat
 
     reg = _Down(names=("proto", "reviewer"))
     _wire(monkeypatch, reg, max_rounds=3)
-    monkeypatch.setattr(
-        "plugins.delegates.autostart.startable_member", lambda url: {"name": "member"}, raising=False
-    )
+    monkeypatch.setattr("plugins.delegates.autostart.startable_member", lambda url: {"name": "member"}, raising=False)
 
     reply, outcomes = await sc._at_delegate_exchange("@proto @reviewer status?", "p6")
 

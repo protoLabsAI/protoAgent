@@ -61,7 +61,9 @@ def oauth_llm(monkeypatch):
 
     def build(strip: bool):
         llm = create_llm(
-            LangGraphConfig(model_provider="anthropic-oauth", model_name="claude-opus-5-5", strip_prior_turn_thinking=strip)
+            LangGraphConfig(
+                model_provider="anthropic-oauth", model_name="claude-opus-5-5", strip_prior_turn_thinking=strip
+            )
         )
         llm.max_retries = 0
         return llm

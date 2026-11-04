@@ -259,11 +259,43 @@ def persona_doc(config, *, exposed=_RESOLVE_EXPOSED) -> str:
 # precede a real answer, so they are STRIPPED and what remains decides. Never boilerplate
 # by themselves.
 _FILLER_LEADINS: tuple[str, ...] = (
-    "sure", "ok", "okay", "alright", "all right", "of course", "certainly", "absolutely",
-    "sure thing", "no problem", "gotcha", "understood", "got it", "sounds good", "will do",
-    "you got it", "yes", "yep", "yeah", "yup", "great", "perfect", "right", "first",
-    "now", "so", "well", "cool", "then", "also", "just", "please", "actually", "hey",
-    "hi", "hello", "go ahead and",
+    "sure",
+    "ok",
+    "okay",
+    "alright",
+    "all right",
+    "of course",
+    "certainly",
+    "absolutely",
+    "sure thing",
+    "no problem",
+    "gotcha",
+    "understood",
+    "got it",
+    "sounds good",
+    "will do",
+    "you got it",
+    "yes",
+    "yep",
+    "yeah",
+    "yup",
+    "great",
+    "perfect",
+    "right",
+    "first",
+    "now",
+    "so",
+    "well",
+    "cool",
+    "then",
+    "also",
+    "just",
+    "please",
+    "actually",
+    "hey",
+    "hi",
+    "hello",
+    "go ahead and",
 )
 
 # Tier 2 — an actual announcement of work that produced no output: a lead ("let me", "i'll",
@@ -271,20 +303,68 @@ _FILLER_LEADINS: tuple[str, ...] = (
 # nothing even when performed live here — action/answer verbs ("fix", "change", "explain")
 # are intentionally excluded, since a clause like "the fix is …" carries the answer itself.
 _INTENT_LEADS: tuple[str, ...] = (
-    "let me", "let's", "let us", "i'll", "i will", "i'm going to", "i am going to",
-    "i'm gonna", "i am gonna", "i'm about to", "i am about to", "going to", "gonna",
+    "let me",
+    "let's",
+    "let us",
+    "i'll",
+    "i will",
+    "i'm going to",
+    "i am going to",
+    "i'm gonna",
+    "i am gonna",
+    "i'm about to",
+    "i am about to",
+    "going to",
+    "gonna",
 )
 _WORK_VERBS: tuple[str, ...] = (
-    "read", "look", "take a look", "have a look", "check", "examine", "inspect", "review",
-    "start", "begin", "investigate", "dig", "explore", "open", "search", "gather",
-    "go through", "pull up", "analyze", "scan", "trace", "study", "get started",
-    "get back to", "dive", "work on", "familiarize", "spin up",
+    "read",
+    "look",
+    "take a look",
+    "have a look",
+    "check",
+    "examine",
+    "inspect",
+    "review",
+    "start",
+    "begin",
+    "investigate",
+    "dig",
+    "explore",
+    "open",
+    "search",
+    "gather",
+    "go through",
+    "pull up",
+    "analyze",
+    "scan",
+    "trace",
+    "study",
+    "get started",
+    "get back to",
+    "dive",
+    "work on",
+    "familiarize",
+    "spin up",
 )
 # Announce phrases with no lead+verb shape ("looking into it", "one moment", "on it").
 _STANDALONE_INTENT: tuple[str, ...] = (
-    "looking into", "taking a look", "having a look", "one moment", "one sec",
-    "one second", "give me a moment", "give me a sec", "give me a second", "on it",
-    "working on it", "getting started", "hang on", "hold on", "here goes", "here we go",
+    "looking into",
+    "taking a look",
+    "having a look",
+    "one moment",
+    "one sec",
+    "one second",
+    "give me a moment",
+    "give me a sec",
+    "give me a second",
+    "on it",
+    "working on it",
+    "getting started",
+    "hang on",
+    "hold on",
+    "here goes",
+    "here we go",
 )
 
 # With zero tool calls, a reply at or under this many characters is a candidate for
@@ -319,7 +399,7 @@ def _strip_leadins(text: str) -> str:
             if text == f:
                 return ""
             if text.startswith(f) and text[len(f)] in _WORD_BOUNDARY:
-                text = text[len(f):].lstrip(_WORD_BOUNDARY)
+                text = text[len(f) :].lstrip(_WORD_BOUNDARY)
                 changed = True
                 break
     return text
@@ -334,7 +414,7 @@ def _is_intent_clause(clause: str) -> bool:
         return True
     for lead in _INTENT_LEADS:
         if _startswith_phrase(clause, lead):
-            rest = _strip_leadins(clause[len(lead):])
+            rest = _strip_leadins(clause[len(lead) :])
             if any(_startswith_phrase(rest, v) for v in _WORK_VERBS):
                 return True
     return False
@@ -643,8 +723,12 @@ async def _aux_prompt(agent: str, config, text: str) -> str:
         # `coder:` key would put an internal housekeeping call in the coder-run count
         # (#3015). It is unmetered either way — a separate row shape, if anyone wants it.
         client = AcpClient(
-            spec["command"], spec.get("args"), cwd=os.getcwd(), name=f"{agent}-aux",
-            record_runs=False, scrub_env=False,  # Own auxiliary model: retain inherited auth.
+            spec["command"],
+            spec.get("args"),
+            cwd=os.getcwd(),
+            name=f"{agent}-aux",
+            record_runs=False,
+            scrub_env=False,  # Own auxiliary model: retain inherited auth.
         )
         _AUX_CLIENTS[agent] = client
     return await client.prompt(text)

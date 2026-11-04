@@ -829,11 +829,7 @@ def test_none_deletes_a_map_member_across_save_readback(tmp_path):
     plugins.* keys ride through untouched (add/replace merge behavior unchanged)."""
     path = _write_yaml(
         tmp_path,
-        "plugins:\n"
-        "  enabled: [alpha, beta]\n"
-        "  update_policy:\n"
-        "    alpha: auto\n"
-        "    beta: manual\n",
+        "plugins:\n  enabled: [alpha, beta]\n  update_policy:\n    alpha: auto\n    beta: manual\n",
     )
     doc = load_yaml_doc(Path(path))
     apply_updates_to_yaml(doc, {"plugins": {"update_policy": {"beta": None}}})

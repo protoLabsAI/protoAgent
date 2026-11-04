@@ -51,12 +51,20 @@ def test_falls_back_to_workspace_soul_when_no_instance_soul(monkeypatch, tmp_pat
 # --- Operating model doctrine (ADR 0079, #3190 capability-derived) ----------
 
 # All operating-model tool names for convenience.
-_ALL_OM_TOOLS = frozenset({
-    "set_goal", "update_goal_plan", "abandon_goal",
-    "task_create", "task_update", "task_close",
-    "schedule_task", "create_watch", "wait",
-    "current_time",  # always-bound filler
-})
+_ALL_OM_TOOLS = frozenset(
+    {
+        "set_goal",
+        "update_goal_plan",
+        "abandon_goal",
+        "task_create",
+        "task_update",
+        "task_close",
+        "schedule_task",
+        "create_watch",
+        "wait",
+        "current_time",  # always-bound filler
+    }
+)
 
 
 def test_operating_model_with_all_capabilities():
@@ -142,6 +150,7 @@ def test_working_state_block_is_referenced_for_observe():
 
 # --- Subagent roster filtering (ADR 0108 D3) ---------------------------------
 
+
 def test_subagent_roster_shows_only_lead_visible():
     """The prompt's subagent section lists only lead-visible subagents."""
     prompt = build_system_prompt(include_subagents=True)
@@ -151,13 +160,15 @@ def test_subagent_roster_shows_only_lead_visible():
 
     # Workflow-internal subagents must NOT appear
     for name in (
-        "antagonist", "verifier", "synthesizer",
-        "codebase-mapper", "review-finder", "review-synthesizer",
+        "antagonist",
+        "verifier",
+        "synthesizer",
+        "codebase-mapper",
+        "review-finder",
+        "review-synthesizer",
         "self-improve",
     ):
-        assert f"**{name}**" not in prompt, (
-            f"workflow-only subagent '{name}' should not appear in the lead prompt"
-        )
+        assert f"**{name}**" not in prompt, f"workflow-only subagent '{name}' should not appear in the lead prompt"
 
 
 def test_workflow_subagents_still_in_registry():
@@ -166,16 +177,19 @@ def test_workflow_subagents_still_in_registry():
     from graph.subagents.config import SUBAGENT_REGISTRY
 
     for name in (
-        "antagonist", "verifier", "synthesizer",
-        "codebase-mapper", "review-finder", "review-synthesizer",
+        "antagonist",
+        "verifier",
+        "synthesizer",
+        "codebase-mapper",
+        "review-finder",
+        "review-synthesizer",
         "self-improve",
     ):
-        assert name in SUBAGENT_REGISTRY, (
-            f"workflow subagent '{name}' must remain in SUBAGENT_REGISTRY"
-        )
+        assert name in SUBAGENT_REGISTRY, f"workflow subagent '{name}' must remain in SUBAGENT_REGISTRY"
 
 
 # --- SOUL is persona only (#3190) ----------------------------------------------------
+
 
 def test_template_soul_names_no_capability_tools():
     """The persona must not carry capability doctrine: tool names belong to the
@@ -188,9 +202,7 @@ def test_template_soul_names_no_capability_tools():
 
     from tests.test_prompt_budgets import FIXTURE_SOUL
 
-    repo_soul = (Path(__file__).resolve().parents[1] / "config" / "SOUL.md").read_text(
-        encoding="utf-8"
-    )
+    repo_soul = (Path(__file__).resolve().parents[1] / "config" / "SOUL.md").read_text(encoding="utf-8")
     names = _GOAL_TOOLS | _SCHEDULE_TOOLS | _TASK_TOOLS | _WATCH_TOOLS | _WAIT_TOOLS
     for text in (repo_soul, FIXTURE_SOUL):
         for name in names:

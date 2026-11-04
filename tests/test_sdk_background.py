@@ -109,9 +109,7 @@ async def test_spawn_background_degrades_without_a_manager(monkeypatch):
 async def test_background_status_running_then_finished(mgr):
     from graph import sdk
 
-    spawned = await sdk.spawn_background(
-        "Chart the frontier.", subagent_type="researcher", origin_session="chat-1"
-    )
+    spawned = await sdk.spawn_background("Chart the frontier.", subagent_type="researcher", origin_session="chat-1")
     task_id = spawned["task_id"]
 
     running = sdk.background_status(task_id)

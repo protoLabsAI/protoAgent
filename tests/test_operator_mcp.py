@@ -69,8 +69,14 @@ def test_boot_stores_builds_skills_index(tmp_path, monkeypatch):
         # The registry fields ride every real bundle; _boot_stores_only now applies them
         # (#3248), so the duck-typed stub carries empty ones.
         lambda config, existing_tools=None: types.SimpleNamespace(
-            tools=[], skill_dirs=[], meta={},
-            goal_verifiers={}, goal_verifier_meta=None, goal_hooks={}, watch_hooks={}, lifecycle_hooks={},
+            tools=[],
+            skill_dirs=[],
+            meta={},
+            goal_verifiers={},
+            goal_verifier_meta=None,
+            goal_hooks={},
+            watch_hooks={},
+            lifecycle_hooks={},
         ),
     )
     monkeypatch.setattr(STATE, "tasks_store", object(), raising=False)  # skip real TaskStore
@@ -366,8 +372,11 @@ def test_host_and_sidecar_agree_with_registries_and_denylist(monkeypatch, goal_e
     monkeypatch.setattr(verifiers, "_PLUGIN_VERIFIER_META", {})
     ai._apply_plugin_registries(
         types.SimpleNamespace(
-            goal_verifiers={"p:v": object()}, goal_verifier_meta=None,
-            goal_hooks={}, watch_hooks={}, lifecycle_hooks={},
+            goal_verifiers={"p:v": object()},
+            goal_verifier_meta=None,
+            goal_hooks={},
+            watch_hooks={},
+            lifecycle_hooks={},
         )
     )
     monkeypatch.setattr(lg, "_disabled_tools", {"calculator"})

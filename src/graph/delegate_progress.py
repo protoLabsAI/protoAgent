@@ -349,7 +349,9 @@ class DelegateProgress:
             return
         self._timeline_text_left -= len(delta)
         if self._timeline_text_left < 0:
-            log.debug("[delegate-progress] %r: timeline text over %d chars — dropped", self.target, TIMELINE_TEXT_BUDGET)
+            log.debug(
+                "[delegate-progress] %r: timeline text over %d chars — dropped", self.target, TIMELINE_TEXT_BUDGET
+            )
             self._timeline, self._timeline_tools = None, {}
             return
         last = self._timeline[-1] if self._timeline else None
@@ -366,7 +368,15 @@ class DelegateProgress:
         # Bearer …"` — so the name is redacted like the input it repeats.
         name = _redacted(name)
         if phase == "start" or (phase == "end" and row is None):
-            row = {"type": "tool", "id": tid, "name": name, "kind": kind, "status": "running", "input": "", "output": ""}
+            row = {
+                "type": "tool",
+                "id": tid,
+                "name": name,
+                "kind": kind,
+                "status": "running",
+                "input": "",
+                "output": "",
+            }
             if not self._timeline_add(row):
                 return
             self._timeline_tools[tid] = row

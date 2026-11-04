@@ -68,7 +68,8 @@ def test_full_block_assembles_all_sections(clear_state, monkeypatch):
     goal = SimpleNamespace(status="active", iteration=2, max_iterations=8, condition="ship the redesign")
     monkeypatch.setattr(rs.STATE, "goal_controller", _GoalCtrl(goal, plan="- [x] scope\n- [ ] build"), raising=False)
     monkeypatch.setattr(
-        rs.STATE, "tasks_store",
+        rs.STATE,
+        "tasks_store",
         _Tasks([{"status": "open", "id": "task-1", "priority": 1, "issue_type": "task", "title": "wire the hero"}]),
         raising=False,
     )
@@ -121,7 +122,8 @@ def test_read_failure_is_skipped_not_raised(clear_state, monkeypatch):
     monkeypatch.setattr(rs.STATE, "goal_controller", _Boom(), raising=False)
     # A task still renders — the goal section is skipped, nothing propagates.
     monkeypatch.setattr(
-        rs.STATE, "tasks_store",
+        rs.STATE,
+        "tasks_store",
         _Tasks([{"status": "open", "id": "task-2", "priority": 2, "issue_type": "task", "title": "t"}]),
         raising=False,
     )

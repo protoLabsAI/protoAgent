@@ -288,7 +288,9 @@ def test_v1_streaming_unchanged(monkeypatch):
     graph = _FakeGraph([ToolMessage(content="ok", tool_call_id="c1")])  # would be "length" if consulted
     c = _client(monkeypatch, graph=graph, chat_reply=reply)
     r = c.post("/v1/chat/completions", json={"messages": [{"role": "user", "content": "go"}], "stream": True})
-    frames = [json.loads(ln[len("data: ") :]) for ln in r.text.splitlines() if ln.startswith("data: ") and "[DONE]" not in ln]
+    frames = [
+        json.loads(ln[len("data: ") :]) for ln in r.text.splitlines() if ln.startswith("data: ") and "[DONE]" not in ln
+    ]
     assert frames[0]["choices"][0]["delta"]["content"] == "narration\n\nfinal"
     assert frames[1]["choices"][0]["finish_reason"] == "stop"
 

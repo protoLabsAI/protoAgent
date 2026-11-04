@@ -46,7 +46,9 @@ def _bare_png_header(w: int, h: int) -> bytes:
     the header sniffer (the pixels are a 1-row stub; nothing decodes them)."""
     ihdr = struct.pack(">IIBBBBB", w, h, 8, 2, 0, 0, 0)
     chunk = lambda t, d: struct.pack(">I", len(d)) + t + d + struct.pack(">I", zlib.crc32(t + d))  # noqa: E731
-    return b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", ihdr) + chunk(b"IDAT", zlib.compress(b"\x00" * 4)) + chunk(b"IEND", b"")
+    return (
+        b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", ihdr) + chunk(b"IDAT", zlib.compress(b"\x00" * 4)) + chunk(b"IEND", b"")
+    )
 
 
 def _b64(raw: bytes) -> str:
@@ -190,7 +192,9 @@ def test_create_llm_pushes_the_config_limits():
     from graph.llm import create_llm
 
     try:
-        create_llm(LangGraphConfig(image_max_side=900, max_images_per_request=7, api_key="sk-x", api_base="http://gw.test/v1"))
+        create_llm(
+            LangGraphConfig(image_max_side=900, max_images_per_request=7, api_key="sk-x", api_base="http://gw.test/v1")
+        )
     except Exception:  # noqa: BLE001 — only the configure side effect matters here
         pass
     assert image_limits.max_side() == 900
@@ -200,7 +204,9 @@ def test_create_llm_pushes_the_config_limits():
 def test_multimodal_tool_result_downscales_the_live_failure_screenshot(big_png):
     from graph.multimodal import multimodal_tool_result, parse_multimodal_result, render_multimodal_content
 
-    env = parse_multimodal_result(multimodal_tool_result("campaign", images=[{"b64": _b64(big_png), "mime": "image/png"}]))
+    env = parse_multimodal_result(
+        multimodal_tool_result("campaign", images=[{"b64": _b64(big_png), "mime": "image/png"}])
+    )
     (img,) = env["images"]
     assert max(_dims_b64(img["b64"])) <= 1568
     assert img["mime"] == "image/jpeg"
@@ -278,7 +284,12 @@ def test_non_image_content_is_untouched(oauth_llm, big_png):
     history = _poisoned_history(big_png, 22)
     payload = oauth_llm._get_request_payload(history)
     # Every tool_use / tool_result id and every caption survives in order.
-    tool_results = [b for m in payload["messages"] for b in (m["content"] if isinstance(m["content"], list) else []) if b.get("type") == "tool_result"]
+    tool_results = [
+        b
+        for m in payload["messages"]
+        for b in (m["content"] if isinstance(m["content"], list) else [])
+        if b.get("type") == "tool_result"
+    ]
     assert [b["tool_use_id"] for b in tool_results] == [f"t{i}" for i in range(22)]
     texts = _anthropic_texts(payload)
     for i in range(22):
@@ -299,7 +310,9 @@ def test_without_pillow_an_illegal_image_becomes_a_note(monkeypatch):
     monkeypatch.setattr(image_limits, "_pil", lambda: None)
     huge = _b64(_bare_png_header(2560, 1600))
     blocks = [
-        {"type": "text", "text": f"shot {i}"} if j == 0 else {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": huge}}
+        {"type": "text", "text": f"shot {i}"}
+        if j == 0
+        else {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": huge}}
         for i in range(25)
         for j in range(2)
     ]
@@ -324,7 +337,13 @@ def test_gateway_payload_is_clamped_too(big_png):
     snapshot = copy.deepcopy(history)
     image_limits.configure(max_images_per_request=0)
     payload = model._get_request_payload(history)
-    urls = [b["image_url"]["url"] for m in payload["messages"] if isinstance(m.get("content"), list) for b in m["content"] if b.get("type") == "image_url"]
+    urls = [
+        b["image_url"]["url"]
+        for m in payload["messages"]
+        if isinstance(m.get("content"), list)
+        for b in m["content"]
+        if b.get("type") == "image_url"
+    ]
     assert len(urls) == 23
     assert all(max(_dims_b64(u.split(",", 1)[1])) <= 2000 for u in urls)
     assert history == snapshot
@@ -336,7 +355,10 @@ def test_request_budget_omits_the_oldest_first(monkeypatch):
     pad = small + "A" * (900 - len(small))  # ~900 b64 chars each, header still parses
     content = []
     for i in range(5):
-        content += [{"type": "text", "text": f"pic {i}"}, {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": pad}}]
+        content += [
+            {"type": "text", "text": f"pic {i}"},
+            {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": pad}},
+        ]
     out = image_limits.clamp_request_images({"messages": [{"role": "user", "content": content}]})
     assert len(_anthropic_images(out)) == 3
     assert out["messages"][0]["content"][1]["type"] == "text"  # the oldest went first
@@ -392,7 +414,12 @@ def _assert_legal(payload: dict) -> None:
 
 
 def _url_turn() -> HumanMessage:
-    return HumanMessage(content=[{"type": "text", "text": "url pic"}, {"type": "image_url", "image_url": {"url": "https://example.test/a.png"}}])
+    return HumanMessage(
+        content=[
+            {"type": "text", "text": "url pic"},
+            {"type": "image_url", "image_url": {"url": "https://example.test/a.png"}},
+        ]
+    )
 
 
 def test_url_images_count_toward_the_many_image_limit(oauth_llm):
@@ -434,7 +461,14 @@ def test_decompression_bomb_is_refused_from_its_header(monkeypatch):
     assert image_limits.downscale(bomb, max_side=1568, max_bytes=10**7) is None
     assert image_limits.fit_image(bomb, "image/png") is None
     assert image_limits.fit_data_uri(_uri(bomb)) is None
-    payload = {"messages": [{"role": "user", "content": [{"type": "text", "text": "bomb"}, {"type": "image_url", "image_url": {"url": _uri(bomb)}}]}]}
+    payload = {
+        "messages": [
+            {
+                "role": "user",
+                "content": [{"type": "text", "text": "bomb"}, {"type": "image_url", "image_url": {"url": _uri(bomb)}}],
+            }
+        ]
+    }
     out = image_limits.clamp_request_images(payload)
     assert out["messages"][0]["content"][1] == {"type": "text", "text": "[image omitted: bomb]"}
     assert loads == [1]  # only downscale() opened it — and it bailed on the header size
@@ -533,7 +567,9 @@ def test_responses_api_payload_is_clamped(big_png):
     and the gateway under PROTOAGENT_GATEWAY_RESPONSES_API."""
     from graph.llm import _ReasoningChatOpenAI
 
-    model = _ReasoningChatOpenAI(model="protolabs/smart", api_key="sk-test", base_url="http://gw.test/v1", use_responses_api=True)
+    model = _ReasoningChatOpenAI(
+        model="protolabs/smart", api_key="sk-test", base_url="http://gw.test/v1", use_responses_api=True
+    )
     history = _poisoned_history(big_png, 23)
     snapshot = copy.deepcopy(history)
     image_limits.configure(max_images_per_request=0)
@@ -548,7 +584,9 @@ def test_responses_api_payload_is_clamped(big_png):
     payload = model._get_request_payload(history)
     assert len(_all_wire_images(payload)) == 13  # 23 > 20: the oldest batch of 10 goes
     notes = [
-        b for item in payload["input"] for f in ("content", "output")
+        b
+        for item in payload["input"]
+        for f in ("content", "output")
         for b in (item.get(f) if isinstance(item.get(f), list) else [])
         if b.get("type") == "input_text" and b["text"].startswith("[image omitted:")
     ]
@@ -634,7 +672,9 @@ def test_omission_boundary_is_monotonic_and_batched():
         last_drop = 0
         batch = image_limits.omit_batch(cap or image_limits.DEFAULT_MAX_IMAGES_PER_REQUEST)
         for _ in range(120):
-            images.append(("b64", rng.choice((50_000, 400_000, 2_500_000, 6_000_000))) if rng.random() > 0.1 else ("ref", 0))
+            images.append(
+                ("b64", rng.choice((50_000, 400_000, 2_500_000, 6_000_000))) if rng.random() > 0.1 else ("ref", 0)
+            )
             _cap, n_drop, _refs, _side = image_limits._plan(images, cap)
             assert n_drop >= last_drop, (cap, len(images))
             assert n_drop % batch == 0 or n_drop == len(images)

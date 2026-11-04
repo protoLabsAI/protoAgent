@@ -48,9 +48,7 @@ def floor_is_fatal(monkeypatch):
 def no_network(monkeypatch):
     """Lane probes and the context-window lookup are network I/O; none of it is under test."""
     monkeypatch.setattr("graph.config_io.list_gateway_models", lambda base, key, **kw: (["m"], ""), raising=False)
-    monkeypatch.setattr(
-        discovery, "oauth_status", lambda p: discovery.OAuthStatus(p, False, "", "", "Sign in first.")
-    )
+    monkeypatch.setattr(discovery, "oauth_status", lambda p: discovery.OAuthStatus(p, False, "", "", "Sign in first."))
     monkeypatch.setattr(discovery, "list_provider_models", lambda provider, cfg: ([], ""))
     monkeypatch.setattr("graph.model_window.context_window_for", lambda cfg, model: None)
 

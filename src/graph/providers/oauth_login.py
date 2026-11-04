@@ -102,9 +102,7 @@ def codex_login_start() -> dict[str, Any]:
             provider="openai-codex",
         )
     if resp.status_code != 200:
-        raise OAuthLoginError(
-            f"Device-code request failed (HTTP {resp.status_code}).", provider="openai-codex"
-        )
+        raise OAuthLoginError(f"Device-code request failed (HTTP {resp.status_code}).", provider="openai-codex")
     d = resp.json()
     user_code = str(d.get("user_code", "") or "")
     device_auth_id = str(d.get("device_auth_id", "") or "")
@@ -255,7 +253,10 @@ def anthropic_login_complete(flow_id: str, code: str) -> dict[str, str]:
     except httpx.HTTPError as exc:
         return {"status": "error", "error": f"Token exchange could not reach Anthropic: {exc}"}
     if resp.status_code != 200:
-        return {"status": "error", "error": f"Token exchange failed (HTTP {resp.status_code}) — the code may have expired."}
+        return {
+            "status": "error",
+            "error": f"Token exchange failed (HTTP {resp.status_code}) — the code may have expired.",
+        }
     tokens = resp.json()
     if not str(tokens.get("access_token", "") or ""):
         return {"status": "error", "error": "Token exchange returned no access_token."}

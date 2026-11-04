@@ -233,9 +233,7 @@ async def test_addressed_turn_opens_live_work_before_delegate_finishes(wired, mo
 
     async def _slow(message, session_id="", request_metadata=None):
         await release.wait()
-        return "line 40", [
-            {"author": "proto", "ok": True, "reply": "line 40", "catchup": 0, "truncated": False}
-        ]
+        return "line 40", [{"author": "proto", "ok": True, "reply": "line 40", "catchup": 0, "truncated": False}]
 
     monkeypatch.setattr(rooms, "_at_delegate_exchange", _slow)
     stream = sc._chat_langgraph_stream_impl("@proto status?", "s-progress")

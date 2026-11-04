@@ -35,13 +35,22 @@ def _use(monkeypatch, *registry: Flag) -> None:
 
 # ── tier vs channel ─────────────────────────────────────────────────────────────
 
+
 @pytest.mark.parametrize(
     "tier,channel,expected",
     [
-        ("on", "prod", True), ("on", "beta", True), ("on", "dev", True),
-        ("beta", "prod", False), ("beta", "beta", True), ("beta", "dev", True),
-        ("dev", "prod", False), ("dev", "beta", False), ("dev", "dev", True),
-        ("off", "prod", False), ("off", "beta", False), ("off", "dev", False),
+        ("on", "prod", True),
+        ("on", "beta", True),
+        ("on", "dev", True),
+        ("beta", "prod", False),
+        ("beta", "beta", True),
+        ("beta", "dev", True),
+        ("dev", "prod", False),
+        ("dev", "beta", False),
+        ("dev", "dev", True),
+        ("off", "prod", False),
+        ("off", "beta", False),
+        ("off", "dev", False),
     ],
 )
 def test_tier_vs_channel(monkeypatch, tier, channel, expected):
@@ -56,6 +65,7 @@ def test_unregistered_flag_is_off(monkeypatch):
 
 # ── env override precedence ─────────────────────────────────────────────────────
 
+
 def test_env_override_forces_state(monkeypatch):
     _use(monkeypatch, Flag("chat.new", "d", tier="off"))
     monkeypatch.setenv("PROTOAGENT_FLAG_CHAT_NEW", "on")
@@ -69,6 +79,7 @@ def test_env_key_derivation():
 
 
 # ── channel derivation ──────────────────────────────────────────────────────────
+
 
 def test_channel_explicit_env_wins(monkeypatch):
     monkeypatch.setenv("PROTOAGENT_CHANNEL", "beta")
@@ -104,14 +115,20 @@ def test_bad_channel_value_ignored(monkeypatch):
 
 # ── the API payload ─────────────────────────────────────────────────────────────
 
+
 def test_resolved_flags_payload(monkeypatch):
     _use(monkeypatch, Flag("a.b", "desc", tier="beta", owner="me", remove_by="v1.0"))
     out = flags.resolved_flags(channel="beta")
     assert out["channel"] == "beta"
     assert out["flags"] == [
         {
-            "id": "a.b", "description": "desc", "tier": "beta", "owner": "me",
-            "remove_by": "v1.0", "enabled": True, "source": "channel",
+            "id": "a.b",
+            "description": "desc",
+            "tier": "beta",
+            "owner": "me",
+            "remove_by": "v1.0",
+            "enabled": True,
+            "source": "channel",
         }
     ]
     # an env override flips enabled + tags the source.
@@ -121,6 +138,7 @@ def test_resolved_flags_payload(monkeypatch):
 
 
 # ── registry hygiene (guards the real FLAGS as it grows) ────────────────────────
+
 
 def test_real_registry_is_well_formed():
     ids = [f.id for f in flags.FLAGS]

@@ -54,6 +54,7 @@ posix_only = pytest.mark.skipif(
 def _isolated_registry():
     """Every test starts with an empty registry and no pending KILL timer, and
     nothing it tracked outlives it."""
+
     def _cancel_escalation():
         # The KILL timer signals whatever is tracked when it FIRES, so one left
         # pending from a test kills the next test's trees mid-run.
@@ -417,12 +418,16 @@ async def test_a_cancelled_shell_command_is_forgotten_once_it_finishes_on_its_ow
     release = tmp_path / "release"
     # Keep the real child alive until AFTER the ownership assertion. A fixed sleep
     # can finish while a busy runner is resuming the cancelled task (#4187).
-    task = asyncio.create_task(run_command([
-        sys.executable, "-c",
-        "import pathlib,sys,time\np=pathlib.Path(sys.argv[1])\n"
-        "while not p.exists(): time.sleep(0.01)\n",
-        str(release),
-    ]))
+    task = asyncio.create_task(
+        run_command(
+            [
+                sys.executable,
+                "-c",
+                "import pathlib,sys,time\np=pathlib.Path(sys.argv[1])\nwhile not p.exists(): time.sleep(0.01)\n",
+                str(release),
+            ]
+        )
+    )
     try:
         for _ in range(300):
             if tracked_trees():

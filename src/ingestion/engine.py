@@ -118,9 +118,7 @@ _VIDEO_EXTS = {".mp4", ".mov", ".mkv", ".webm", ".avi", ".m4v", ".mpeg", ".mpg",
 # bare extractor without a describe fn still rejects images with a clear message.
 _IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".tiff", ".tif", ".heic", ".heif"}
 
-SUPPORTED_EXTENSIONS = sorted(
-    _TEXT_EXTS | _MD_EXTS | _HTML_EXTS | _PDF_EXTS | _DOCX_EXTS | _AUDIO_EXTS | _VIDEO_EXTS
-)
+SUPPORTED_EXTENSIONS = sorted(_TEXT_EXTS | _MD_EXTS | _HTML_EXTS | _PDF_EXTS | _DOCX_EXTS | _AUDIO_EXTS | _VIDEO_EXTS)
 SUPPORTED_DESCRIPTION = "text, Markdown, HTML, PDF, Word (.docx), audio + video files, and web/YouTube URLs"
 
 
@@ -267,6 +265,8 @@ _ENCRYPTED_OOXML_MARKER = "EncryptedPackage".encode("utf-16-le")
 def _ole_word_refusal(data: bytes) -> UnsupportedSource:
     """The right refusal for an OLE2 Word file: encrypted .docx, else legacy .doc."""
     return UnsupportedSource(_ENCRYPTED_DOCX_HINT if _ENCRYPTED_OOXML_MARKER in data else _LEGACY_DOC_HINT)
+
+
 _DOCX_MISSING_HINT = (
     "Word (.docx) files need the 'python-docx' package — a core protoAgent dependency, so "
     "this server's install is incomplete. Reinstall its dependencies (uv sync, or pip "
@@ -408,7 +408,8 @@ def _not_a_word_document(names: set[str], detail: str = "") -> UnsupportedSource
             "this file is an OpenDocument file, not a Word document — save it as .docx or export it to PDF"
         )
     return UnsupportedSource(
-        "this file isn't a Word document" + (f" ({detail})" if detail else "")
+        "this file isn't a Word document"
+        + (f" ({detail})" if detail else "")
         + " — open it in Word and save it as .docx, or export it to PDF"
     )
 

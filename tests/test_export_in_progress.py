@@ -31,8 +31,10 @@ async def test_running_export_returns_without_waiting(monkeypatch, partial):
     messages = [
         HumanMessage(content="hello"),
         AIMessage(
-            content=[{"type": "text", "text": "Working"},
-                     {"type": "tool_use", "id": "pending", "name": "unfinished", "input": {"value": "hidden"}}],
+            content=[
+                {"type": "text", "text": "Working"},
+                {"type": "tool_use", "id": "pending", "name": "unfinished", "input": {"value": "hidden"}},
+            ],
             tool_calls=[
                 {"id": "done", "name": "completed", "args": {}},
                 {"id": "pending", "name": "unfinished", "args": {"value": "hidden"}},
@@ -128,10 +130,14 @@ async def test_running_empty_export_keeps_progress_flag(monkeypatch, checkpointe
 @pytest.mark.asyncio
 async def test_dict_messages_match_tool_results_by_id():
     messages = [
-        {"role": "assistant", "content": "Working", "tool_calls": [
-            {"id": "one", "name": "finished", "args": {}},
-            {"id": "two", "name": "pending", "args": {}},
-        ]},
+        {
+            "role": "assistant",
+            "content": "Working",
+            "tool_calls": [
+                {"id": "one", "name": "finished", "args": {}},
+                {"id": "two", "name": "pending", "args": {}},
+            ],
+        },
         {"role": "tool", "tool_call_id": "one", "content": "done"},
     ]
     original = deepcopy(messages)

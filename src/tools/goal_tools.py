@@ -73,7 +73,9 @@ def _build_list_verifiers_tool():
         from graph.goals.verifiers import verifier_catalog
 
         catalog = verifier_catalog()
-        lines: list[str] = ["Core verifier types (informational — operator-only, not usable by your set_goal/create_watch):"]
+        lines: list[str] = [
+            "Core verifier types (informational — operator-only, not usable by your set_goal/create_watch):"
+        ]
         for t in catalog["types"]:
             lines.append(f"  {t['value']}: {t['description']}")
         lines.append("")

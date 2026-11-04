@@ -330,6 +330,7 @@ def is_safe_session_id(session_id: str) -> bool:
     separators, no NUL, and no ``%``, so an id can't spoof an encoded name)."""
     return bool(session_id) and set(session_id) <= _SESSION_ID_SAFE_CHARS
 
+
 # The always-present framing header (ADR 0069 D1): the digest lists OTHER
 # sessions, never the current conversation — the old unlabeled verbatim block
 # made fresh threads narrate other threads' history as their own.
@@ -453,9 +454,7 @@ def render_digest(entries: list[DigestEntry]) -> str:
     return "<prior_sessions>\n" + "\n".join([_DIGEST_HEADER, *(e.line for e in entries)]) + "\n</prior_sessions>"
 
 
-def finish_digest(
-    entries: list[DigestEntry], max_tokens: int = 2000, *, dir_exists: bool = True
-) -> DigestResult:
+def finish_digest(entries: list[DigestEntry], max_tokens: int = 2000, *, dir_exists: bool = True) -> DigestResult:
     """Token-trim (char/4, dropping from the END — oldest under ``newest``,
     lowest-rank under ``relevant``) and render. Preserves the loader's empty
     shapes: no memory dir → ``""``; a dir with nothing usable → ``<prior_sessions/>``."""

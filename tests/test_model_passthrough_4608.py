@@ -137,7 +137,11 @@ def test_openai_messages_convert_every_role():
                 "role": "assistant",
                 "content": "",
                 "tool_calls": [
-                    {"id": "call_1", "type": "function", "function": {"name": "get_weather", "arguments": '{"city": "SF"}'}}
+                    {
+                        "id": "call_1",
+                        "type": "function",
+                        "function": {"name": "get_weather", "arguments": '{"city": "SF"}'},
+                    }
                 ],
             },
             {"role": "tool", "tool_call_id": "call_1", "content": "72F"},
@@ -151,7 +155,13 @@ def test_openai_messages_convert_every_role():
 
 def test_malformed_tool_arguments_degrade_to_empty_dict():
     lc = openai_messages_to_langchain(
-        [{"role": "assistant", "content": "", "tool_calls": [{"id": "x", "function": {"name": "f", "arguments": "not json"}}]}]
+        [
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [{"id": "x", "function": {"name": "f", "arguments": "not json"}}],
+            }
+        ]
     )
     assert lc[0].tool_calls[0]["args"] == {}
 
@@ -205,9 +215,10 @@ def test_tool_choice_converted_to_anthropic_native():
     assert convert_tool_choice("auto", "anthropic-oauth") == {"type": "auto"}
     assert convert_tool_choice("none", "anthropic-oauth") == {"type": "none"}
     # OpenAI's forced-function dict → Anthropic's forced-tool dict.
-    assert convert_tool_choice(
-        {"type": "function", "function": {"name": "get_weather"}}, "anthropic-oauth"
-    ) == {"type": "tool", "name": "get_weather"}
+    assert convert_tool_choice({"type": "function", "function": {"name": "get_weather"}}, "anthropic-oauth") == {
+        "type": "tool",
+        "name": "get_weather",
+    }
     # A dict already in Anthropic shape is left alone.
     assert convert_tool_choice({"type": "any"}, "anthropic-oauth") == {"type": "any"}
     # A bare tool name keeps ChatAnthropic's own string→tool meaning, made explicit.
@@ -298,7 +309,12 @@ def test_temperature_dropped_for_anthropic_oauth(harness):
     r = _post(
         harness,
         "claude-sub",
-        {"model": "claude-sonnet-4-6", "messages": [{"role": "user", "content": "hi"}], "temperature": 0, "max_tokens": 64},
+        {
+            "model": "claude-sonnet-4-6",
+            "messages": [{"role": "user", "content": "hi"}],
+            "temperature": 0,
+            "max_tokens": 64,
+        },
     )
     assert r.status_code == 200, r.text
     kw = harness.state["llm"].captured["kwargs"]
@@ -380,7 +396,9 @@ def test_non_loopback_client_is_403(harness, monkeypatch):
     app = FastAPI()
     register_model_passthrough_routes(app)
     remote = TestClient(app, client=("10.1.2.3", 9999))
-    r = remote.post(PATH.format(conn="prod-gateway"), json={"model": "x", "messages": [{"role": "user", "content": "hi"}]})
+    r = remote.post(
+        PATH.format(conn="prod-gateway"), json={"model": "x", "messages": [{"role": "user", "content": "hi"}]}
+    )
     assert r.status_code == 403
     assert harness.state["calls"] == []  # refused before any model build
 
@@ -424,7 +442,10 @@ def test_usage_recorded_and_no_graph_run(harness, monkeypatch):
     r = _post(
         harness,
         "claude-sub",
-        {"model": "claude-sonnet-4-6", "messages": [{"role": "system", "content": "SYS"}, {"role": "user", "content": "hi"}]},
+        {
+            "model": "claude-sonnet-4-6",
+            "messages": [{"role": "system", "content": "SYS"}, {"role": "user", "content": "hi"}],
+        },
     )
     assert r.status_code == 200, r.text
 

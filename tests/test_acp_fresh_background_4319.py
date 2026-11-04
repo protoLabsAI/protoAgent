@@ -83,6 +83,7 @@ async def _call(registry, **kwargs):
 @pytest.mark.parametrize("detached", [False, True])
 async def test_independent_background_jobs_are_fresh_even_in_pool(coder, monkeypatch, detached):
     client, registry, wire, persisted = coder
+
     def forbidden_read():
         raise AssertionError("fresh jobs must not read the persisted session")
 

@@ -163,13 +163,7 @@ def test_apply_updates_deletes_from_an_independent_map_section(tmp_path: Path) -
 
     yaml_path = tmp_path / "c.yaml"
     yaml_path.write_text(
-        "plugins:\n"
-        "  enabled:\n"
-        "    - alpha\n"
-        "    - beta\n"
-        "  update_policy:\n"
-        "    alpha: auto\n"
-        "    beta: manual\n"
+        "plugins:\n  enabled:\n    - alpha\n    - beta\n  update_policy:\n    alpha: auto\n    beta: manual\n"
     )
 
     doc = config_io.load_yaml_doc(yaml_path)
@@ -189,18 +183,11 @@ def test_apply_updates_deletes_at_more_than_one_nesting_depth(tmp_path: Path) ->
 
     yaml_path = tmp_path / "c.yaml"
     yaml_path.write_text(
-        "delegates:\n"
-        "  acme:\n"
-        "    url: http://acme\n"
-        "  beta:\n"
-        "    fast: http://fast\n"
-        "    slow: http://slow\n"
+        "delegates:\n  acme:\n    url: http://acme\n  beta:\n    fast: http://fast\n    slow: http://slow\n"
     )
 
     doc = config_io.load_yaml_doc(yaml_path)
-    config_io.apply_updates_to_yaml(
-        doc, {"delegates": {"acme": None, "beta": {"slow": None}}}
-    )
+    config_io.apply_updates_to_yaml(doc, {"delegates": {"acme": None, "beta": {"slow": None}}})
 
     assert "acme" not in doc["delegates"]  # removed one level deep
     assert "slow" not in doc["delegates"]["beta"]  # removed two levels deep
@@ -216,18 +203,10 @@ def test_apply_updates_leaf_dict_replaces_not_deep_merges(tmp_path: Path) -> Non
     from graph import config_io
 
     yaml_path = tmp_path / "c.yaml"
-    yaml_path.write_text(
-        "project_board:\n"
-        "  projects:\n"
-        "    acme:\n"
-        "      repo: org/old\n"
-        "      branch: main\n"
-    )
+    yaml_path.write_text("project_board:\n  projects:\n    acme:\n      repo: org/old\n      branch: main\n")
 
     doc = config_io.load_yaml_doc(yaml_path)
-    config_io.apply_updates_to_yaml(
-        doc, {"project_board": {"projects": {"acme": {"repo": "org/new"}}}}
-    )
+    config_io.apply_updates_to_yaml(doc, {"project_board": {"projects": {"acme": {"repo": "org/new"}}}})
 
     acme = doc["project_board"]["projects"]["acme"]
     assert acme["repo"] == "org/new"  # replaced value written
@@ -622,9 +601,7 @@ def test_apply_seed_merge_adds_new_declarative_block(monkeypatch, tmp_path: Path
     # ride along) and is reported by its root; per-leaf paths are for keys added
     # into a section the live config already has.
     assert out["added"] == ["a2a"]
-    assert config_io.load_yaml_doc(config_io.config_yaml_path())["a2a"]["description"] == (
-        "Vera, PR reviewer"
-    )
+    assert config_io.load_yaml_doc(config_io.config_yaml_path())["a2a"]["description"] == ("Vera, PR reviewer")
 
 
 def test_apply_seed_merge_adds_leaf_into_existing_section(monkeypatch, tmp_path: Path) -> None:
@@ -1363,7 +1340,10 @@ def test_the_failure_message_names_the_consequence_not_a_set_diff():
 @pytest.mark.parametrize(
     "error, expected",
     [
-        (httpx.ConnectError("[Errno 61] Connection refused"), "Nothing is answering at {url}. Is the server running, and is the port right? (connection refused)"),
+        (
+            httpx.ConnectError("[Errno 61] Connection refused"),
+            "Nothing is answering at {url}. Is the server running, and is the port right? (connection refused)",
+        ),
         (httpx.ConnectTimeout("secret detail"), "The endpoint didn't answer in time. (timeout)"),
         (httpx.ReadTimeout("secret detail"), "The endpoint didn't answer in time. (timeout)"),
         (httpx.RemoteProtocolError("disconnected"), "connection failed: disconnected"),

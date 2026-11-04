@@ -39,6 +39,7 @@ def goal_run_job_id(session_id: str) -> str:
     queues one drive turn, not two."""
     return f"{GOAL_RUN_JOB_PREFIX}{session_id}"
 
+
 # Accepted ranges for a goal's per-goal budgets when a caller sets them (#3973). Unset
 # (``None``) means "use the config default". Outside the range is refused, not clamped:
 # a string, a float, a bool, zero or a negative would otherwise reach ``GoalState`` and

@@ -165,7 +165,9 @@ async def test_a_raising_publisher_never_costs_the_delegation(monkeypatch, bus, 
         snaps.append(snap)
 
     t = dp.DelegateProgress("claude-code", sink)
-    await t.on_tool({"phase": "start", "id": "t1", "name": "Edit", "kind": "edit", "locations": [{"path": str(project / "x")}]})
+    await t.on_tool(
+        {"phase": "start", "id": "t1", "name": "Edit", "kind": "edit", "locations": [{"path": str(project / "x")}]}
+    )
     await t.on_tool({"phase": "end", "id": "t1", "status": "completed"})
     await t.finish(ok=True)
     assert snaps[-1]["done"] is True and snaps[-1]["recent_tools"][0]["status"] == "completed"
@@ -206,8 +208,14 @@ def _forged_frames(project, n):
             call = {"toolCallId": f"c{i}", "name": "write_file", "phase": phase}
             if phase == "started":
                 call["args"] = {"path": str(project / "src" / f"f{i}.py")}
-            yield {"statusUpdate": {"status": {"state": "TASK_STATE_WORKING", "message": {
-                "role": "ROLE_AGENT", "parts": [], "metadata": {TOOL_CALL_EXT_URI: call}}}}}
+            yield {
+                "statusUpdate": {
+                    "status": {
+                        "state": "TASK_STATE_WORKING",
+                        "message": {"role": "ROLE_AGENT", "parts": [], "metadata": {TOOL_CALL_EXT_URI: call}},
+                    }
+                }
+            }
 
 
 async def test_a_remote_a2a_peer_cannot_forge_fs_changed(bus, project):
@@ -244,8 +252,15 @@ async def test_a_flood_of_writes_is_coalesced_to_at_most_two_events_a_second(bus
 async def test_finish_flushes_coalesced_writes_and_close_drops_the_trailing_task(bus, project):
     t = dp.DelegateProgress("coder", _noop_sink, write_interval=60.0)
     for i in range(3):
-        await t.on_tool({"phase": "start", "id": f"e{i}", "name": "Edit", "kind": "edit",
-                         "locations": [{"path": str(project / f"f{i}.py")}]})
+        await t.on_tool(
+            {
+                "phase": "start",
+                "id": f"e{i}",
+                "name": "Edit",
+                "kind": "edit",
+                "locations": [{"path": str(project / f"f{i}.py")}],
+            }
+        )
         await t.on_tool({"phase": "end", "id": f"e{i}", "status": "completed"})
     assert [d["paths"] for _, d, _ in bus.sent] == [["f0.py"]]
     await t.finish(ok=True)  # the run is over — its last edits must not wait out 60 s
@@ -277,13 +292,19 @@ def test_own_write_and_edit_tools_publish_source_agent(bus, project):
     from tools.fs_tools import build_fs_tools
 
     tools = {t.name: t for t in build_fs_tools(bus.state["cfg"])}
-    assert tools["write_file"].invoke({"project": "app", "path": "./src/new.py", "content": "x = 1\n"}).startswith("Created")
+    assert (
+        tools["write_file"]
+        .invoke({"project": "app", "path": "./src/new.py", "content": "x = 1\n"})
+        .startswith("Created")
+    )
     assert tools["edit_file"].invoke({"project": "app", "path": "src/calc.py", "old": "a + b", "new": "b + a"}) == (
         "Edited src/calc.py."
     )
     # A refused write is not a change.
-    assert tools["edit_file"].invoke({"project": "app", "path": "src/calc.py", "old": "nope", "new": "x"}).startswith(
-        "Error"
+    assert (
+        tools["edit_file"]
+        .invoke({"project": "app", "path": "src/calc.py", "old": "nope", "new": "x"})
+        .startswith("Error")
     )
     assert [(t, d) for t, d, _ in bus.sent] == [
         ("fs.changed", {"project": "app", "paths": ["src/new.py"], "source": "agent"}),

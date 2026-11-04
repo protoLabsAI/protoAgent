@@ -65,8 +65,14 @@ def test_promote_preserves_user_only(tmp_path):
     private, commons = _idx(tmp_path)
     private.add_skill(
         types.SimpleNamespace(
-            name="deploy", description="deploy + verify", prompt_template="run it",
-            tools_used=(), source_session_id="", user_facing=True, slash="deploy", user_only=True,
+            name="deploy",
+            description="deploy + verify",
+            prompt_template="run it",
+            tools_used=(),
+            source_session_id="",
+            user_facing=True,
+            slash="deploy",
+            user_only=True,
         )
     )
     idx = LayeredSkillsIndex(private, commons)
@@ -140,7 +146,16 @@ def test_skills_cli_curate_commons_dedupes_only(tmp_path, monkeypatch, capsys):
     conn.execute(
         "INSERT INTO skills_fts (name, description, prompt_template, tools_used, "
         "source_session_id, created_at, confidence, last_used) VALUES (?,?,?,?,?,?,?,?)",
-        ("rare runbook", "emergency restore", "do it", "", "", "2025-01-01T00:00:00+00:00", 1.0, "2025-01-01T00:00:00+00:00"),
+        (
+            "rare runbook",
+            "emergency restore",
+            "do it",
+            "",
+            "",
+            "2025-01-01T00:00:00+00:00",
+            1.0,
+            "2025-01-01T00:00:00+00:00",
+        ),
     )
     conn.commit()
     idx.close()
@@ -214,11 +229,23 @@ def test_union_resorts_by_recency_across_tiers(tmp_path):
 
     commons = MagicMock()
     commons.skill_summaries.return_value = [
-        {"name": "stale-commons", "description": "c", "slash": "", "last_used": "2026-01-01T00:00:00", "confidence": 1.0},
+        {
+            "name": "stale-commons",
+            "description": "c",
+            "slash": "",
+            "last_used": "2026-01-01T00:00:00",
+            "confidence": 1.0,
+        },
     ]
     private = MagicMock()
     private.skill_summaries.return_value = [
-        {"name": "fresh-private", "description": "p", "slash": "", "last_used": "2026-08-19T00:00:00", "confidence": 1.0},
+        {
+            "name": "fresh-private",
+            "description": "p",
+            "slash": "",
+            "last_used": "2026-08-19T00:00:00",
+            "confidence": 1.0,
+        },
     ]
     idx = LayeredSkillsIndex.__new__(LayeredSkillsIndex)
     idx._commons = commons

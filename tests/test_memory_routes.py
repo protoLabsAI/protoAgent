@@ -41,7 +41,9 @@ def _write(d, sid, messages, **extra):
 
 
 def test_sessions_list_returns_digest_fields(tmp_path, monkeypatch):
-    _write(tmp_path, "chat-abc", [{"role": "user", "content": "plan the launch"}, {"role": "assistant", "content": "ok"}])
+    _write(
+        tmp_path, "chat-abc", [{"role": "user", "content": "plan the launch"}, {"role": "assistant", "content": "ok"}]
+    )
     c = _client(monkeypatch, tmp_path)
     rows = c.get("/api/memory/sessions").json()["sessions"]
     assert len(rows) == 1
@@ -258,7 +260,13 @@ class _HotKS:
 
     def __init__(self):
         self.rows = [
-            {"id": 3, "content": "operator prefers dark mode", "domain": "hot", "created_at": "2026-07-01", "source": "console"}
+            {
+                "id": 3,
+                "content": "operator prefers dark mode",
+                "domain": "hot",
+                "created_at": "2026-07-01",
+                "source": "console",
+            }
         ]
         self.added: list[tuple] = []
         self.deleted: list[int] = []
@@ -481,7 +489,14 @@ def test_hot_excludes_commons_tier(tmp_path, monkeypatch):
     ks = _HotKS()
     ks.rows = [
         {**ks.rows[0], "tier": "private"},
-        {"id": 7, "content": "shared fact", "domain": "hot", "created_at": "2026-07-01", "source": "commons", "tier": "commons"},
+        {
+            "id": 7,
+            "content": "shared fact",
+            "domain": "hot",
+            "created_at": "2026-07-01",
+            "source": "commons",
+            "tier": "commons",
+        },
     ]
     c = _client(monkeypatch, tmp_path, knowledge=ks)
     assert [r["id"] for r in c.get("/api/memory/hot").json()["chunks"]] == [3]
@@ -663,7 +678,10 @@ def test_knowledge_browser_returns_no_history_rows(tmp_path, monkeypatch):
     ks.add_chunk("the launch checklist lives in the runbook", domain="general", source="console")
     hs.add(
         "conversation archive: we discussed the launch checklist at length",
-        kind="archive", session_id="chat-1", thread_id="a2a:chat-1", heading="archive",
+        kind="archive",
+        session_id="chat-1",
+        thread_id="a2a:chat-1",
+        heading="archive",
     )
     monkeypatch.setattr(rs.STATE, "knowledge_store", ks, raising=False)
     app = FastAPI()
@@ -684,12 +702,24 @@ def test_knowledge_browser_returns_no_history_rows(tmp_path, monkeypatch):
 def test_history_sessions_list_rollup(tmp_path, monkeypatch):
     # r2: a per-session rollup — surface, date span and per-kind counts.
     hs = _history(tmp_path)
-    hs.add("archived transcript about the launch", kind="archive", session_id="chat-1",
-           thread_id="a2a:chat-1", span_start="2026-06-01", span_end="2026-06-02", heading="archive one")
-    hs.add("summary of the launch planning", kind="summary", session_id="chat-1",
-           thread_id="a2a:chat-1", span_end="2026-06-03", heading="summary one")
-    hs.add("background job report", kind="report", session_id="sched-1",
-           surface="background", heading="report one")
+    hs.add(
+        "archived transcript about the launch",
+        kind="archive",
+        session_id="chat-1",
+        thread_id="a2a:chat-1",
+        span_start="2026-06-01",
+        span_end="2026-06-02",
+        heading="archive one",
+    )
+    hs.add(
+        "summary of the launch planning",
+        kind="summary",
+        session_id="chat-1",
+        thread_id="a2a:chat-1",
+        span_end="2026-06-03",
+        heading="summary one",
+    )
+    hs.add("background job report", kind="report", session_id="sched-1", surface="background", heading="report one")
     c = _client(monkeypatch, tmp_path, history=hs)
     body = c.get("/api/memory/history/sessions").json()
     assert body["enabled"] is True
@@ -707,7 +737,9 @@ def test_history_sessions_disabled_without_store(tmp_path, monkeypatch):
     c = _client(monkeypatch, tmp_path)  # history_store is None
     assert c.get("/api/memory/history/sessions").json() == {"enabled": False, "sessions": []}
     assert c.get("/api/memory/history/search", params={"q": "x"}).json() == {
-        "enabled": False, "query": "x", "results": [],
+        "enabled": False,
+        "query": "x",
+        "results": [],
     }
     assert c.get("/api/memory/history/entries/1").json() == {"enabled": False, "entry": None}
     assert c.delete("/api/memory/history/entries/1").json() == {"enabled": False, "deleted": False}
@@ -717,8 +749,13 @@ def test_history_sessions_disabled_without_store(tmp_path, monkeypatch):
 def test_history_search_uses_the_session_search_query(tmp_path, monkeypatch):
     # r2: the SAME normalization session_search runs — natural text, not raw FTS5.
     hs = _history(tmp_path)
-    eid = hs.add("we finalized the launch checklist and rollout plan", kind="summary",
-                 session_id="chat-1", thread_id="a2a:chat-1", heading="launch summary")
+    eid = hs.add(
+        "we finalized the launch checklist and rollout plan",
+        kind="summary",
+        session_id="chat-1",
+        thread_id="a2a:chat-1",
+        heading="launch summary",
+    )
     hs.add("unrelated chatter about lunch", kind="summary", session_id="chat-2")
     c = _client(monkeypatch, tmp_path, history=hs)
     hits = c.get("/api/memory/history/search", params={"q": "launch checklist"}).json()["results"]
@@ -733,8 +770,13 @@ def test_history_search_uses_the_session_search_query(tmp_path, monkeypatch):
 def test_history_open_entry_in_full(tmp_path, monkeypatch):
     # r2: opening an entry returns its whole content, not an excerpt.
     hs = _history(tmp_path)
-    eid = hs.add("the whole archived transcript, verbatim", kind="archive",
-                 session_id="chat-1", heading="archive one", span_start="2026-06-01")
+    eid = hs.add(
+        "the whole archived transcript, verbatim",
+        kind="archive",
+        session_id="chat-1",
+        heading="archive one",
+        span_start="2026-06-01",
+    )
     c = _client(monkeypatch, tmp_path, history=hs)
     entry = c.get(f"/api/memory/history/entries/{eid}").json()["entry"]
     assert entry["id"] == eid

@@ -19,8 +19,14 @@ from server import a2a as server_a2a
 
 
 def _parked(tid: str, ctx: str, payload: dict) -> a2a_pb2.Task:
-    msg = a2a_pb2.Message(role=a2a_pb2.ROLE_AGENT, message_id=f"m-{tid}", parts=[_text_part("Input required."), _data_part_proto(payload, HITL_MIME)])
-    return a2a_pb2.Task(id=tid, context_id=ctx, status=a2a_pb2.TaskStatus(state=a2a_pb2.TASK_STATE_INPUT_REQUIRED, message=msg))
+    msg = a2a_pb2.Message(
+        role=a2a_pb2.ROLE_AGENT,
+        message_id=f"m-{tid}",
+        parts=[_text_part("Input required."), _data_part_proto(payload, HITL_MIME)],
+    )
+    return a2a_pb2.Task(
+        id=tid, context_id=ctx, status=a2a_pb2.TaskStatus(state=a2a_pb2.TASK_STATE_INPUT_REQUIRED, message=msg)
+    )
 
 
 @pytest.mark.asyncio
@@ -29,9 +35,15 @@ async def test_a_redeemed_plugin_form_completes_its_parked_task_and_a_real_hitl_
     store = DatabaseTaskStore(engine)
     await store.initialize()
     ctx = ServerCallContext()
-    await store.save(_parked("form-1", "chat-form", {"kind": "form", "title": "Post?", "steps": [], "plugin_callback_id": "cb1"}), ctx)
+    await store.save(
+        _parked("form-1", "chat-form", {"kind": "form", "title": "Post?", "steps": [], "plugin_callback_id": "cb1"}),
+        ctx,
+    )
     await store.save(_parked("hitl-1", "chat-hitl", {"kind": "approval", "title": "Approve?"}), ctx)
-    await store.save(a2a_pb2.Task(id="work-1", context_id="chat-work", status=a2a_pb2.TaskStatus(state=a2a_pb2.TASK_STATE_WORKING)), ctx)
+    await store.save(
+        a2a_pb2.Task(id="work-1", context_id="chat-work", status=a2a_pb2.TaskStatus(state=a2a_pb2.TASK_STATE_WORKING)),
+        ctx,
+    )
     monkeypatch.setattr(server_a2a.STATE, "a2a_task_engine", engine, raising=False)
     try:
         assert await server_a2a.settle_plugin_form_task("chat-form") is True
@@ -43,7 +55,10 @@ async def test_a_redeemed_plugin_form_completes_its_parked_task_and_a_real_hitl_
         assert (await store.get("hitl-1", ctx)).status.state == a2a_pb2.TASK_STATE_INPUT_REQUIRED
         assert await server_a2a.settle_plugin_form_task("chat-work") is False
         assert (await store.get("work-1", ctx)).status.state == a2a_pb2.TASK_STATE_WORKING
-        assert await server_a2a.settle_plugin_form_task("nowhere") is False and await server_a2a.settle_plugin_form_task("") is False
+        assert (
+            await server_a2a.settle_plugin_form_task("nowhere") is False
+            and await server_a2a.settle_plugin_form_task("") is False
+        )
     finally:
         await engine.dispose()
 
@@ -55,7 +70,23 @@ async def test_settle_is_a_no_op_without_the_durable_stores(monkeypatch):
 
 
 def test_the_callback_id_is_read_from_either_data_part_spelling():
-    assert server_a2a._plugin_form_callback_in({"state": "TASK_STATE_INPUT_REQUIRED", "message": {"parts": [{"text": "x"}, {"data": {"plugin_callback_id": "cb9"}, "metadata": {"mimeType": HITL_MIME}}]}}) == "cb9"
-    assert server_a2a._plugin_form_callback_in({"message": {"parts": [{"data": {"data": {"plugin_callback_id": "cb8"}}}]}}) == "cb8"
+    assert (
+        server_a2a._plugin_form_callback_in(
+            {
+                "state": "TASK_STATE_INPUT_REQUIRED",
+                "message": {
+                    "parts": [
+                        {"text": "x"},
+                        {"data": {"plugin_callback_id": "cb9"}, "metadata": {"mimeType": HITL_MIME}},
+                    ]
+                },
+            }
+        )
+        == "cb9"
+    )
+    assert (
+        server_a2a._plugin_form_callback_in({"message": {"parts": [{"data": {"data": {"plugin_callback_id": "cb8"}}}]}})
+        == "cb8"
+    )
     assert server_a2a._plugin_form_callback_in({"message": {"parts": [{"data": {"kind": "approval"}}]}}) == ""
     assert server_a2a._plugin_form_callback_in("nope") == "" and server_a2a._plugin_form_callback_in({}) == ""

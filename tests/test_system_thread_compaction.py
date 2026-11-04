@@ -192,12 +192,8 @@ def test_is_system_thread_falls_back_to_the_prefixed_thread_id(monkeypatch):
     so detection must still see the ``system:`` segment when the state lacks a session id."""
     import langgraph.config
 
-    monkeypatch.setattr(
-        langgraph.config, "get_config", lambda: {"configurable": {"thread_id": "a2a:system:activity"}}
-    )
+    monkeypatch.setattr(langgraph.config, "get_config", lambda: {"configurable": {"thread_id": "a2a:system:activity"}})
     assert _is_system_thread({})
     # A non-system a2a thread must not be mistaken for one.
-    monkeypatch.setattr(
-        langgraph.config, "get_config", lambda: {"configurable": {"thread_id": "a2a:sess-chat-123"}}
-    )
+    monkeypatch.setattr(langgraph.config, "get_config", lambda: {"configurable": {"thread_id": "a2a:sess-chat-123"}})
     assert not _is_system_thread({})

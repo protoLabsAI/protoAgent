@@ -201,8 +201,13 @@ async def test_an_older_orphan_is_never_the_live_turn(monkeypatch, tmp_path):
 
     def row(task_id, state, minute):
         return {
-            "id": task_id, "context_id": CTX, "kind": "task", "status": {"state": state},
-            "artifacts": [], "history": [], "last_updated": datetime(2026, 9, 30, 12, minute, tzinfo=UTC),
+            "id": task_id,
+            "context_id": CTX,
+            "kind": "task",
+            "status": {"state": state},
+            "artifacts": [],
+            "history": [],
+            "last_updated": datetime(2026, 9, 30, 12, minute, tzinfo=UTC),
         }
 
     async with store.engine.begin() as conn:
@@ -230,8 +235,13 @@ async def _seeded(tmp_path, rows):
             TaskModel.__table__.insert(),
             [
                 {
-                    "id": task_id, "context_id": CTX, "kind": "task", "status": {"state": state},
-                    "artifacts": [], "history": [], "last_updated": datetime(2026, 9, 30, 12, minute, tzinfo=UTC),
+                    "id": task_id,
+                    "context_id": CTX,
+                    "kind": "task",
+                    "status": {"state": state},
+                    "artifacts": [],
+                    "history": [],
+                    "last_updated": datetime(2026, 9, 30, 12, minute, tzinfo=UTC),
                 }
                 for task_id, state, minute in rows
             ],
@@ -248,7 +258,11 @@ async def test_a_turn_queued_behind_the_running_one_is_not_live(monkeypatch, tmp
     running turn's bubble."""
     engine = await _seeded(
         tmp_path,
-        [("done", "TASK_STATE_COMPLETED", 1), ("running", "TASK_STATE_WORKING", 2), ("queued", "TASK_STATE_WORKING", 3)],
+        [
+            ("done", "TASK_STATE_COMPLETED", 1),
+            ("running", "TASK_STATE_WORKING", 2),
+            ("queued", "TASK_STATE_WORKING", 3),
+        ],
     )
     body = await _read(monkeypatch, engine, f"/api/chat/sessions/{CTX}/turns")
     assert [t["task_id"] for t in body["turns"]] == ["done", "running", "queued"]
@@ -262,9 +276,7 @@ async def test_the_task_holding_the_thread_lock_is_live(monkeypatch, tmp_path):
     truth — even when an older unfinished row (an orphan) precedes it."""
     from runtime import turn_activity
 
-    engine = await _seeded(
-        tmp_path, [("orphan", "TASK_STATE_WORKING", 1), ("running", "TASK_STATE_WORKING", 2)]
-    )
+    engine = await _seeded(tmp_path, [("orphan", "TASK_STATE_WORKING", 1), ("running", "TASK_STATE_WORKING", 2)])
     async with turn_activity.holding(CTX, "running"):
         body = await _read(monkeypatch, engine, f"/api/chat/sessions/{CTX}/turns")
     assert body["live_task_id"] == "running"
@@ -290,7 +302,9 @@ def test_turn_order_falls_back_to_last_change_off_sqlite():
 
     from a2a_impl.stores import task_newest_first
 
-    pg = str(select(TaskModel.id).order_by(*task_newest_first(TaskModel, "postgresql")).compile(dialect=postgresql.dialect()))
+    pg = str(
+        select(TaskModel.id).order_by(*task_newest_first(TaskModel, "postgresql")).compile(dialect=postgresql.dialect())
+    )
     assert "rowid" not in pg and "last_updated DESC NULLS LAST" in pg
     lite = str(select(TaskModel.id).order_by(*task_newest_first(TaskModel, "sqlite")).compile(dialect=sqlite.dialect()))
     assert "tasks.rowid DESC" in lite

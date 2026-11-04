@@ -113,9 +113,7 @@ def test_lead_minimal_within_budget():
 
 def test_build_system_prompt_is_parts_joined():
     parts = build_system_prompt_parts(include_subagents=True, bound_tool_names=ALL_BOUND)
-    assert build_system_prompt(include_subagents=True, bound_tool_names=ALL_BOUND) == "\n\n".join(
-        t for _, t in parts
-    )
+    assert build_system_prompt(include_subagents=True, bound_tool_names=ALL_BOUND) == "\n\n".join(t for _, t in parts)
 
 
 # ── honesty: capability-derived doctrine ─────────────────────────────────────────────

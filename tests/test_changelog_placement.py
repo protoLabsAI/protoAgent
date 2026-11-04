@@ -18,9 +18,7 @@ from pathlib import Path
 import pytest
 
 ROOT = Path(__file__).resolve().parent.parent
-_SPEC = importlib.util.spec_from_file_location(
-    "changelog_placement", ROOT / "scripts" / "changelog_placement.py"
-)
+_SPEC = importlib.util.spec_from_file_location("changelog_placement", ROOT / "scripts" / "changelog_placement.py")
 _MOD = importlib.util.module_from_spec(_SPEC)
 assert _SPEC and _SPEC.loader
 _SPEC.loader.exec_module(_MOD)

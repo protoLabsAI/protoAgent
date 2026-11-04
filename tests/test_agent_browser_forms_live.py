@@ -58,10 +58,7 @@ storage = _mod("storage")
 # Chrome is present (missing == a real gap; unknown == let the per-fixture open decide).
 _PROBE = preflight.probe({"binary": "agent-browser"})
 _UNAVAILABLE = (not _PROBE.cli_ok) or (_PROBE.chrome == "missing")
-_REASON = (
-    "agent-browser CLI is not usable here" if not _PROBE.cli_ok
-    else "no Chrome for agent-browser to drive"
-)
+_REASON = "agent-browser CLI is not usable here" if not _PROBE.cli_ok else "no Chrome for agent-browser to drive"
 pytestmark = [pytest.mark.platform_sensitive, pytest.mark.skipif(_UNAVAILABLE, reason=_REASON)]
 
 
@@ -162,7 +159,8 @@ async def test_select_opens_a_closed_combobox_itself_without_a_prior_click(brows
     await _open(browser, GREENHOUSE)
     # prove it is closed before we touch it (a boolean expression returns an unquoted "true")
     closed = await browser["browser_eval"].ainvoke(
-        {"expression": "document.getElementById('country_input').getAttribute('aria-expanded') === 'false'"})
+        {"expression": "document.getElementById('country_input').getAttribute('aria-expanded') === 'false'"}
+    )
     assert closed == "true", closed
 
     out = await browser["browser_select"].ainvoke({"field": "Country", "option_text": "Canada"})
@@ -175,11 +173,14 @@ async def test_select_uses_an_already_open_menu_without_toggling_it_closed(brows
     dispatch a mousedown that would TOGGLE react-select closed (then fail to find options)."""
     await _open(browser, GREENHOUSE)
     # open the Country menu the way a user would (focus + ArrowDown), WITHOUT browser_select
-    opened = await browser["browser_eval"].ainvoke({"expression":
-        "(function(){var i=document.getElementById('country_input');"
-        "i.focus();"
-        "i.dispatchEvent(new KeyboardEvent('keydown',{key:'ArrowDown',bubbles:true,cancelable:true}));"
-        "return i.getAttribute('aria-expanded')==='true';})()"})
+    opened = await browser["browser_eval"].ainvoke(
+        {
+            "expression": "(function(){var i=document.getElementById('country_input');"
+            "i.focus();"
+            "i.dispatchEvent(new KeyboardEvent('keydown',{key:'ArrowDown',bubbles:true,cancelable:true}));"
+            "return i.getAttribute('aria-expanded')==='true';})()"
+        }
+    )
     assert opened == "true", opened
 
     out = await browser["browser_select"].ainvoke({"field": "Country", "option_text": "United States"})
@@ -217,13 +218,16 @@ async def test_select_opens_a_type_to_search_combobox_by_typing(browser):
     await _open(browser, GREENHOUSE)
     field = "Primary skill"
     # prove it stays closed on a pointer sequence AND ArrowDown — only typing will open it
-    not_opened = await browser["browser_eval"].ainvoke({"expression":
-        "(function(){var i=document.getElementById('skills_input');"
-        "var c=document.getElementById('skills_control');"
-        "c.dispatchEvent(new MouseEvent('mousedown',{bubbles:true,cancelable:true,button:0,buttons:1}));"
-        "i.focus();"
-        "i.dispatchEvent(new KeyboardEvent('keydown',{key:'ArrowDown',bubbles:true,cancelable:true}));"
-        "return i.getAttribute('aria-expanded')==='false';})()"})
+    not_opened = await browser["browser_eval"].ainvoke(
+        {
+            "expression": "(function(){var i=document.getElementById('skills_input');"
+            "var c=document.getElementById('skills_control');"
+            "c.dispatchEvent(new MouseEvent('mousedown',{bubbles:true,cancelable:true,button:0,buttons:1}));"
+            "i.focus();"
+            "i.dispatchEvent(new KeyboardEvent('keydown',{key:'ArrowDown',bubbles:true,cancelable:true}));"
+            "return i.getAttribute('aria-expanded')==='false';})()"
+        }
+    )
     assert not_opened == "true", not_opened
 
     out = await browser["browser_select"].ainvoke({"field": field, "option_text": "Python"})
@@ -250,7 +254,7 @@ async def test_select_on_a_control_that_never_opens_is_an_explicit_open_error(br
     assert out.startswith("Error: could not open the dropdown for"), out
     assert "aria-expanded stayed false" in out
     assert "no options were found" not in out
-    assert (await _form(browser))[field]["value"] == ""   # nothing committed
+    assert (await _form(browser))[field]["value"] == ""  # nothing committed
 
 
 async def test_ten_consecutive_selects_across_comboboxes_all_commit(browser):
@@ -261,9 +265,15 @@ async def test_ten_consecutive_selects_across_comboboxes_all_commit(browser):
     visa = "Are you authorized to work?"
     sponsorship = "Will you now or in the future require immigration sponsorship?"
     picks = [
-        (visa, "Yes"), ("Country", "United States"), (sponsorship, "No"),
-        (visa, "No"), ("Country", "Canada"), (sponsorship, "Yes"),
-        (visa, "Yes"), ("Country", "Ireland"), (sponsorship, "Not sure"),
+        (visa, "Yes"),
+        ("Country", "United States"),
+        (sponsorship, "No"),
+        (visa, "No"),
+        ("Country", "Canada"),
+        (sponsorship, "Yes"),
+        (visa, "Yes"),
+        ("Country", "Ireland"),
+        (sponsorship, "Not sure"),
         ("Country", "United Kingdom"),
     ]
     assert len(picks) == 10
@@ -271,7 +281,7 @@ async def test_ten_consecutive_selects_across_comboboxes_all_commit(browser):
         out = await browser["browser_select"].ainvoke({"field": field, "option_text": option})
         assert out.startswith(f'Selected "{option}" in'), out
 
-    fields = await _form(browser)   # the LAST committed value per control reads back
+    fields = await _form(browser)  # the LAST committed value per control reads back
     assert fields[visa]["value"] == "Yes"
     assert fields["Country"]["value"] == "United Kingdom"
     assert fields[sponsorship]["value"] == "Not sure"
@@ -318,15 +328,18 @@ async def test_phone_country_shared_dial_code_is_a_hard_mismatch(browser):
     assert first.startswith('Selected "Canada'), first
 
     # the fixture hook: the next commit stays Canada regardless of which option is clicked
-    forced = await browser["browser_eval"].ainvoke({"expression":
-        "(function(){document.querySelector('.select__container')"
-        ".setAttribute('data-force-commit','Canada +1');return true;})()"})
+    forced = await browser["browser_eval"].ainvoke(
+        {
+            "expression": "(function(){document.querySelector('.select__container')"
+            ".setAttribute('data-force-commit','Canada +1');return true;})()"
+        }
+    )
     assert forced == "true", forced
 
     out = await browser["browser_select"].ainvoke({"field": "#country", "option_text": "United States"})
     assert out.startswith("Error:"), out
     assert "does not match" in out
-    assert '"Canada"' in out              # the mismatch names the committed country, not "+1"
+    assert '"Canada"' in out  # the mismatch names the committed country, not "+1"
 
 
 async def test_phone_country_shared_prefix_options_are_not_conflated(browser):
@@ -337,20 +350,21 @@ async def test_phone_country_shared_prefix_options_are_not_conflated(browser):
     "Virgin Islands" and wrongly reported ok). The error names the committed country, parenthetical
     and all, not the shared "+1" nor a bare "Virgin Islands"."""
     await _open(browser, PHONE_COUNTRY)
-    first = await browser["browser_select"].ainvoke(
-        {"field": "#country", "option_text": "Virgin Islands (British)"})
+    first = await browser["browser_select"].ainvoke({"field": "#country", "option_text": "Virgin Islands (British)"})
     assert first.startswith('Selected "Virgin Islands (British)'), first
 
-    forced = await browser["browser_eval"].ainvoke({"expression":
-        "(function(){document.querySelector('.select__container')"
-        ".setAttribute('data-force-commit','Virgin Islands (British) +1284');return true;})()"})
+    forced = await browser["browser_eval"].ainvoke(
+        {
+            "expression": "(function(){document.querySelector('.select__container')"
+            ".setAttribute('data-force-commit','Virgin Islands (British) +1284');return true;})()"
+        }
+    )
     assert forced == "true", forced
 
-    out = await browser["browser_select"].ainvoke(
-        {"field": "#country", "option_text": "Virgin Islands (U.S.)"})
+    out = await browser["browser_select"].ainvoke({"field": "#country", "option_text": "Virgin Islands (U.S.)"})
     assert out.startswith("Error:"), out
     assert "does not match" in out
-    assert '"Virgin Islands (British)"' in out     # the full name, not "+1" and not "Virgin Islands"
+    assert '"Virgin Islands (British)"' in out  # the full name, not "+1" and not "Virgin Islands"
 
 
 async def test_phone_country_form_read_reports_the_name(browser):
@@ -427,27 +441,32 @@ async def test_iti_tel_without_its_own_label_does_not_borrow_country(browser):
     await _open(browser, GREENHOUSE)
     # A country-list labelled "Country" + a label-less tel input in one `.iti` — the shape the
     # review flagged (the existing fixture's tel input has a <label for>, so it never hit it).
-    injected = await browser["browser_eval"].ainvoke({"expression":
-        "(function(){var form=document.getElementById('application');"
-        "var iti=document.createElement('div');iti.className='iti';"
-        "var fc=document.createElement('div');fc.className='iti__flag-container';"
-        "var flag=document.createElement('div');flag.className='iti__selected-flag';"
-        "flag.setAttribute('role','button');"                       # role=button → not enumerated
-        "var ul=document.createElement('ul');ul.className='iti__country-list';"
-        "ul.setAttribute('aria-label','Country');"                  # the listbox's accessible name
-        "fc.appendChild(flag);fc.appendChild(ul);"
-        "var tel=document.createElement('input');tel.type='tel';tel.id='intl_phone';"
-        "tel.name='intl_phone';tel.setAttribute('placeholder','Mobile');"   # NO <label for>; own name is the placeholder
-        "iti.appendChild(fc);iti.appendChild(tel);form.appendChild(iti);"
-        "return !!document.getElementById('intl_phone');})()"})
+    injected = await browser[
+        "browser_eval"
+    ].ainvoke(
+        {
+            "expression": "(function(){var form=document.getElementById('application');"
+            "var iti=document.createElement('div');iti.className='iti';"
+            "var fc=document.createElement('div');fc.className='iti__flag-container';"
+            "var flag=document.createElement('div');flag.className='iti__selected-flag';"
+            "flag.setAttribute('role','button');"  # role=button → not enumerated
+            "var ul=document.createElement('ul');ul.className='iti__country-list';"
+            "ul.setAttribute('aria-label','Country');"  # the listbox's accessible name
+            "fc.appendChild(flag);fc.appendChild(ul);"
+            "var tel=document.createElement('input');tel.type='tel';tel.id='intl_phone';"
+            "tel.name='intl_phone';tel.setAttribute('placeholder','Mobile');"  # NO <label for>; own name is the placeholder
+            "iti.appendChild(fc);iti.appendChild(tel);form.appendChild(iti);"
+            "return !!document.getElementById('intl_phone');})()"
+        }
+    )
     assert injected == "true", injected
 
     by_id = await _form_by_id(browser)
     assert "intl_phone" in by_id, sorted(by_id)
     tel = by_id["intl_phone"]
     assert tel["kind"] == "tel"
-    assert tel["label"] != "Country"      # the country-list's name did NOT leak onto the number field
-    assert tel["label"] == "Mobile"       # it keeps its own placeholder label
+    assert tel["label"] != "Country"  # the country-list's name did NOT leak onto the number field
+    assert tel["label"] == "Mobile"  # it keeps its own placeholder label
 
     # "Country" stays unambiguous beside the real react-select: it resolves THERE and commits,
     # never an "matches 2 fields" ambiguity (the old borrow) nor the tel input.
@@ -481,7 +500,8 @@ async def test_iti_v23_select_by_button_css_reads_back_the_name(browser):
     reads back the country NAME too."""
     await _open(browser, PHONE_COUNTRY_ITI)
     out = await browser["browser_select"].ainvoke(
-        {"field": "button.iti__selected-country", "option_text": "United States"})
+        {"field": "button.iti__selected-country", "option_text": "United States"}
+    )
     assert out.startswith('Selected "United States'), out
     assert 'reads "+1"' not in out
 
@@ -519,15 +539,18 @@ async def test_iti_v23_repick_then_a_shared_dial_code_is_a_hard_mismatch(browser
     assert (await _form(browser))["Country"]["value"] == "United States"
 
     # the fixture hook: the next commit stays Canada regardless of which option is clicked
-    forced = await browser["browser_eval"].ainvoke({"expression":
-        "(function(){document.getElementById('phone_iti')"
-        ".setAttribute('data-force-commit','Canada');return true;})()"})
+    forced = await browser["browser_eval"].ainvoke(
+        {
+            "expression": "(function(){document.getElementById('phone_iti')"
+            ".setAttribute('data-force-commit','Canada');return true;})()"
+        }
+    )
     assert forced == "true", forced
 
     out = await browser["browser_select"].ainvoke({"field": "Country", "option_text": "United States"})
     assert out.startswith("Error:"), out
     assert "does not match" in out
-    assert '"Canada"' in out               # the mismatch names the committed country, not "+1"
+    assert '"Canada"' in out  # the mismatch names the committed country, not "+1"
     assert 'reads "+1"' not in out
 
 
@@ -539,17 +562,21 @@ async def test_iti_v23_select_from_the_open_portalled_dropdown_resolves_the_wrap
     portalled container, which holds no selected-country button and is removed on commit (which is
     why the live read-back saw only "+1")."""
     await _open(browser, PHONE_COUNTRY_ITI)
-    opened = await browser["browser_eval"].ainvoke({"expression":
-        "(function(){document.getElementById('country_button').click();"
-        "return !!document.getElementById('iti_country_listbox')"
-        " && document.getElementById('country_button').getAttribute('aria-expanded')==='true';})()"})
+    opened = await browser["browser_eval"].ainvoke(
+        {
+            "expression": "(function(){document.getElementById('country_button').click();"
+            "return !!document.getElementById('iti_country_listbox')"
+            " && document.getElementById('country_button').getAttribute('aria-expanded')==='true';})()"
+        }
+    )
     assert opened == "true", opened
 
     # Address the PORTALLED list specifically (a second, non-portalled picker on the page also has
     # a `ul.iti__country-list`, so scope to the body-level `.iti--container` the open dropdown rode
     # into). browser_select must still resolve the OWNING `.iti` wrapper via the button's aria-controls.
     out = await browser["browser_select"].ainvoke(
-        {"field": ".iti--container ul.iti__country-list", "option_text": "United States"})
+        {"field": ".iti--container ul.iti__country-list", "option_text": "United States"}
+    )
     assert out.startswith('Selected "United States'), out
     assert 'reads "+1"' not in out
     assert (await _form(browser))["Country"]["value"] == "United States"
@@ -564,14 +591,16 @@ async def test_iti_v23_nonportalled_picker_opens_the_parked_list_before_committi
     back; the portalled picker beside it is untouched."""
     await _open(browser, PHONE_COUNTRY_ITI)
     # the rows are in the DOM but hidden (the list is closed) before we select
-    hidden = await browser["browser_eval"].ainvoke({"expression":
-        "(function(){var c=document.getElementById('mobile_dropdown_content');"
-        "return c.classList.contains('iti__hide')"
-        " && document.querySelectorAll('#mobile_country_listbox .iti__country').length===4;})()"})
+    hidden = await browser["browser_eval"].ainvoke(
+        {
+            "expression": "(function(){var c=document.getElementById('mobile_dropdown_content');"
+            "return c.classList.contains('iti__hide')"
+            " && document.querySelectorAll('#mobile_country_listbox .iti__country').length===4;})()"
+        }
+    )
     assert hidden == "true", hidden
 
-    out = await browser["browser_select"].ainvoke(
-        {"field": "#mobile_country_button", "option_text": "United States"})
+    out = await browser["browser_select"].ainvoke({"field": "#mobile_country_button", "option_text": "United States"})
     assert out.startswith('Selected "United States'), out
     assert 'reads "+1"' not in out
     assert "no options were found" not in out
@@ -587,17 +616,15 @@ async def test_iti_v23_two_pickers_on_one_page_do_not_conflate_rows(browser):
     turn commits to its OWN widget. Proves the document-wide row scan is visibility-scoped and the
     per-picker open check never lets one picker's rows suppress opening the other."""
     await _open(browser, PHONE_COUNTRY_ITI)
-    mobile = await browser["browser_select"].ainvoke(
-        {"field": "#mobile_country_button", "option_text": "Canada"})
+    mobile = await browser["browser_select"].ainvoke({"field": "#mobile_country_button", "option_text": "Canada"})
     assert mobile.startswith('Selected "Canada'), mobile
 
-    country = await browser["browser_select"].ainvoke(
-        {"field": "Country", "option_text": "United States"})
+    country = await browser["browser_select"].ainvoke({"field": "Country", "option_text": "United States"})
     assert country.startswith('Selected "United States'), country
 
     fields = await _form(browser)
-    assert fields["Country"]["value"] == "United States"      # the portalled picker
-    assert fields["Mobile region"]["value"] == "Canada"       # the non-portalled picker — unchanged
+    assert fields["Country"]["value"] == "United States"  # the portalled picker
+    assert fields["Mobile region"]["value"] == "Canada"  # the non-portalled picker — unchanged
 
 
 # ── file input behind an "Attach" button, verified THROUGH a widget re-render (#4032 bug 3) ──
@@ -637,9 +664,12 @@ async def test_upload_resume_by_id_survives_the_widget_rerender(browser):
         assert "could not be found to verify" not in out
         # the widget really DID replace its input (a fresh node carries no files) yet the filename
         # stays visible as a chip — the exact shape that stranded the old nonce-only verify
-        rerendered = await browser["browser_eval"].ainvoke({"expression":
-            "(function(){var i=document.getElementById('resume');"
-            "return (i.files.length===0) && !!document.querySelector('#resume_block .file-chip');})()"})
+        rerendered = await browser["browser_eval"].ainvoke(
+            {
+                "expression": "(function(){var i=document.getElementById('resume');"
+                "return (i.files.length===0) && !!document.querySelector('#resume_block .file-chip');})()"
+            }
+        )
         assert rerendered == "true", rerendered
         assert (await _form_by_id(browser))["resume"]["value"] == "id_resume.pdf"
     finally:
@@ -651,19 +681,22 @@ async def test_upload_cover_letter_and_resume_land_on_their_own_ids(browser):
     attaches ONLY to the cover letter and #resume ONLY to the résumé — never crossed."""
     await _open(browser, GREENHOUSE)
     root = storage.capture_root().resolve()
-    cv = root / "the_resume.pdf"; cv.write_bytes(b"%PDF-1.4 r\n%%EOF\n")
-    cover = root / "the_cover.pdf"; cover.write_bytes(b"%PDF-1.4 c\n%%EOF\n")
+    cv = root / "the_resume.pdf"
+    cv.write_bytes(b"%PDF-1.4 r\n%%EOF\n")
+    cover = root / "the_cover.pdf"
+    cover.write_bytes(b"%PDF-1.4 c\n%%EOF\n")
     try:
         up_c = await browser["browser_upload"].ainvoke({"field": "#cover_letter", "file_path": "the_cover.pdf"})
         assert up_c.startswith("Uploaded the_cover.pdf to"), up_c
         up_r = await browser["browser_upload"].ainvoke({"field": "#resume", "file_path": "the_resume.pdf"})
         assert up_r.startswith("Uploaded the_resume.pdf to"), up_r
 
-        by_id = await _form_by_id(browser)   # r3 + r5: each filename reads back on its own id
+        by_id = await _form_by_id(browser)  # r3 + r5: each filename reads back on its own id
         assert by_id["resume"]["value"] == "the_resume.pdf"
         assert by_id["cover_letter"]["value"] == "the_cover.pdf"
     finally:
-        cv.unlink(missing_ok=True); cover.unlink(missing_ok=True)
+        cv.unlink(missing_ok=True)
+        cover.unlink(missing_ok=True)
 
 
 async def test_empty_file_fields_do_not_borrow_the_resume_chip(browser):
@@ -672,15 +705,16 @@ async def test_empty_file_fields_do_not_borrow_the_resume_chip(browser):
     shares its wrapper with the manual-entry textarea, yet its own chip still reads back."""
     await _open(browser, GREENHOUSE)
     root = storage.capture_root().resolve()
-    f = root / "only_resume.pdf"; f.write_bytes(b"%PDF-1.4 only\n%%EOF\n")
+    f = root / "only_resume.pdf"
+    f.write_bytes(b"%PDF-1.4 only\n%%EOF\n")
     try:
         up = await browser["browser_upload"].ainvoke({"field": "#resume", "file_path": "only_resume.pdf"})
         assert up.startswith("Uploaded only_resume.pdf to"), up
 
         by_id = await _form_by_id(browser)
-        assert by_id["resume"]["value"] == "only_resume.pdf"   # the field's OWN chip reads back
-        assert by_id["cover_letter"]["value"] == ""            # empty — NOT "only_resume.pdf"
-        assert by_id["transcript"]["value"] == ""              # empty — NOT "only_resume.pdf"
+        assert by_id["resume"]["value"] == "only_resume.pdf"  # the field's OWN chip reads back
+        assert by_id["cover_letter"]["value"] == ""  # empty — NOT "only_resume.pdf"
+        assert by_id["transcript"]["value"] == ""  # empty — NOT "only_resume.pdf"
     finally:
         f.unlink(missing_ok=True)
 
@@ -690,7 +724,8 @@ async def test_upload_by_the_shared_attach_label_is_ambiguous(browser):
     ambiguous error that lists them — which is WHY the id form (#resume / #cover_letter) exists."""
     await _open(browser, GREENHOUSE)
     root = storage.capture_root().resolve()
-    f = root / "ambiguous.pdf"; f.write_bytes(b"%PDF-1.4\n%%EOF\n")
+    f = root / "ambiguous.pdf"
+    f.write_bytes(b"%PDF-1.4\n%%EOF\n")
     try:
         out = await browser["browser_upload"].ainvoke({"field": "Attach", "file_path": "ambiguous.pdf"})
         assert out.startswith("Error:") and "matches 2 fields" in out, out
@@ -709,24 +744,28 @@ async def test_upload_rejecting_widget_is_a_hard_error_with_the_message(browser)
     NEVER a "verified via the displayed filename" success."""
     await _open(browser, GREENHOUSE)
     root = storage.capture_root().resolve()
-    f = root / "rejected.pdf"; f.write_bytes(b"%PDF-1.4 x\n%%EOF\n")
+    f = root / "rejected.pdf"
+    f.write_bytes(b"%PDF-1.4 x\n%%EOF\n")
     try:
         out = await browser["browser_upload"].ainvoke({"field": "#transcript", "file_path": "rejected.pdf"})
         assert out.startswith("Error:"), out
         assert not out.startswith("Uploaded")
-        assert "verified via the field's displayed filename" not in out   # the alert is NOT a chip
+        assert "verified via the field's displayed filename" not in out  # the alert is NOT a chip
         assert "nothing is attached" in out
-        assert "could not be attached" in out               # the field's message is surfaced
-        assert "rejected.pdf" in out                         # and it names the rejected file
+        assert "could not be attached" in out  # the field's message is surfaced
+        assert "rejected.pdf" in out  # and it names the rejected file
         # the alert's message ENDS in the filename, yet the plain wrapper around it is not read as a
         # displayed-filename chip (both the alert and anything containing it are excluded)
-        rejected = await browser["browser_eval"].ainvoke({"expression":
-            "(function(){var b=document.getElementById('transcript_block');"
-            "var w=b.querySelector('.transcript-status');var a=b.querySelector('[role=alert]');"
-            "return !!(w && a && w.contains(a) && !w.matches('[role=alert],[class*=error]')"
-            " && /rejected\\.pdf$/.test(a.textContent.trim()));})()"})
-        assert rejected == "true", rejected       # the fixture really built the finding-2 shape
-        assert (await _form_by_id(browser))["transcript"]["value"] == ""   # no silent attach
+        rejected = await browser["browser_eval"].ainvoke(
+            {
+                "expression": "(function(){var b=document.getElementById('transcript_block');"
+                "var w=b.querySelector('.transcript-status');var a=b.querySelector('[role=alert]');"
+                "return !!(w && a && w.contains(a) && !w.matches('[role=alert],[class*=error]')"
+                " && /rejected\\.pdf$/.test(a.textContent.trim()));})()"
+            }
+        )
+        assert rejected == "true", rejected  # the fixture really built the finding-2 shape
+        assert (await _form_by_id(browser))["transcript"]["value"] == ""  # no silent attach
     finally:
         f.unlink(missing_ok=True)
 
@@ -741,16 +780,19 @@ async def test_form_read_ignores_incidental_dotted_text_without_a_detach_control
     await _open(browser, GREENHOUSE)
     # drop incidental dotted text (an email, a domain, a stray "Accepted: .pdf"), NO detach control,
     # into the still-empty cover-letter block — exactly the live-page noise the review warned about
-    injected = await browser["browser_eval"].ainvoke({"expression":
-        "(function(){var b=document.getElementById('cover_letter_block');"
-        "['Questions? jobs@acme.com','See greenhouse.io','Accepted: .pdf'].forEach(function(s){"
-        "var d=document.createElement('div');d.textContent=s;b.appendChild(d);});"
-        "return String(b.querySelectorAll('div').length);})()"})
+    injected = await browser["browser_eval"].ainvoke(
+        {
+            "expression": "(function(){var b=document.getElementById('cover_letter_block');"
+            "['Questions? jobs@acme.com','See greenhouse.io','Accepted: .pdf'].forEach(function(s){"
+            "var d=document.createElement('div');d.textContent=s;b.appendChild(d);});"
+            "return String(b.querySelectorAll('div').length);})()"
+        }
+    )
     assert injected and injected != "0", injected
 
     by_id = await _form_by_id(browser)
-    assert by_id["cover_letter"]["value"] == ""   # incidental dotted text is NOT an attached filename
-    assert by_id["resume"]["value"] == ""         # and a truly empty résumé stays empty too
+    assert by_id["cover_letter"]["value"] == ""  # incidental dotted text is NOT an attached filename
+    assert by_id["resume"]["value"] == ""  # and a truly empty résumé stays empty too
 
 
 # ── file input the widget REMOVES from the DOM after the attach (#4032 input-removed) ──
@@ -767,18 +809,21 @@ async def test_upload_into_a_widget_that_removes_its_input(browser):
     displayed filename — never reported as "nothing is attached"."""
     await _open(browser, GREENHOUSE)
     root = storage.capture_root().resolve()
-    f = root / "removed_resume.pdf"; f.write_bytes(b"%PDF-1.4 removed\n%%EOF\n")
+    f = root / "removed_resume.pdf"
+    f.write_bytes(b"%PDF-1.4 removed\n%%EOF\n")
     try:
-        out = await browser["browser_upload"].ainvoke(
-            {"field": "#writing_sample", "file_path": "removed_resume.pdf"})
+        out = await browser["browser_upload"].ainvoke({"field": "#writing_sample", "file_path": "removed_resume.pdf"})
         assert out.startswith("Uploaded removed_resume.pdf to"), out
         assert "verified via the field's displayed filename" in out, out
         assert "nothing is attached" not in out
         # the widget really REMOVED the input (gone from the DOM) yet the chip stays visible —
         # the exact shape that stranded a nonce-only verify and read empty by id/name
-        gone = await browser["browser_eval"].ainvoke({"expression":
-            "(function(){return (document.getElementById('writing_sample')===null)"
-            " && !!document.querySelector('#writing_sample_block .file-chip');})()"})
+        gone = await browser["browser_eval"].ainvoke(
+            {
+                "expression": "(function(){return (document.getElementById('writing_sample')===null)"
+                " && !!document.querySelector('#writing_sample_block .file-chip');})()"
+            }
+        )
         assert gone == "true", gone
     finally:
         f.unlink(missing_ok=True)
@@ -790,20 +835,20 @@ async def test_form_read_lists_the_orphaned_file_field_with_bare_filename(browse
     required read off the label's '*', and NO duplicate (there is no live input with that id)."""
     await _open(browser, GREENHOUSE)
     root = storage.capture_root().resolve()
-    f = root / "orphan_sample.pdf"; f.write_bytes(b"%PDF-1.4 orphan\n%%EOF\n")
+    f = root / "orphan_sample.pdf"
+    f.write_bytes(b"%PDF-1.4 orphan\n%%EOF\n")
     try:
-        up = await browser["browser_upload"].ainvoke(
-            {"field": "#writing_sample", "file_path": "orphan_sample.pdf"})
+        up = await browser["browser_upload"].ainvoke({"field": "#writing_sample", "file_path": "orphan_sample.pdf"})
         assert up.startswith("Uploaded orphan_sample.pdf to"), up
 
         rows = json.loads(await browser["browser_form_read"].ainvoke({"scope": ""}))
         file_rows = [r for r in rows if r["id"] == "writing_sample"]
-        assert len(file_rows) == 1, file_rows            # recovered, and not duplicated
+        assert len(file_rows) == 1, file_rows  # recovered, and not duplicated
         row = file_rows[0]
         assert row["kind"] == "file"
-        assert row["value"] == "orphan_sample.pdf"       # bare filename — the label prefix stripped
+        assert row["value"] == "orphan_sample.pdf"  # bare filename — the label prefix stripped
         assert row["label"] == "Writing sample"
-        assert row["required"] is True                   # from the label's '*'
+        assert row["required"] is True  # from the label's '*'
     finally:
         f.unlink(missing_ok=True)
 
@@ -813,10 +858,10 @@ async def test_removed_input_upload_leaves_the_cover_letter_empty(browser):
     letter's own id still reads empty, and the orphan row carries the uploaded filename."""
     await _open(browser, GREENHOUSE)
     root = storage.capture_root().resolve()
-    f = root / "res_only.pdf"; f.write_bytes(b"%PDF-1.4 r\n%%EOF\n")
+    f = root / "res_only.pdf"
+    f.write_bytes(b"%PDF-1.4 r\n%%EOF\n")
     try:
-        up = await browser["browser_upload"].ainvoke(
-            {"field": "#writing_sample", "file_path": "res_only.pdf"})
+        up = await browser["browser_upload"].ainvoke({"field": "#writing_sample", "file_path": "res_only.pdf"})
         assert up.startswith("Uploaded res_only.pdf to"), up
         by_id = await _form_by_id(browser)
         assert by_id["writing_sample"]["value"] == "res_only.pdf"
@@ -831,32 +876,38 @@ async def test_sibling_file_field_chip_never_confirms_the_removed_upload(browser
     borrow the sibling's chip — it is a hard Error, never a silent success."""
     await _open(browser, GREENHOUSE)
     root = storage.capture_root().resolve()
-    f = root / "sibling.pdf"; f.write_bytes(b"%PDF-1.4 s\n%%EOF\n")
+    f = root / "sibling.pdf"
+    f.write_bytes(b"%PDF-1.4 s\n%%EOF\n")
     try:
         # Re-wire #writing_sample to remove itself on change but render NO chip of its own, and drop
         # a matching "sibling.pdf" chip into the cover-letter block (which keeps its own live input).
-        rigged = await browser["browser_eval"].ainvoke({"expression":
-            "(function(){var i=document.getElementById('writing_sample');"
-            "var c=i.cloneNode(false);i.parentNode.replaceChild(c,i);"            # drop the wired handler
-            "c.addEventListener('change',function(){if(c.parentNode)c.parentNode.removeChild(c);});"
-            "var cb=document.getElementById('cover_letter_block');"
-            "var chip=document.createElement('span');chip.className='file-chip';"
-            "var nm=document.createElement('span');nm.className='file-chip__name';nm.textContent='sibling.pdf';"
-            "var rm=document.createElement('button');rm.type='button';rm.className='file-chip__remove';rm.textContent='\\u00d7';"
-            "chip.appendChild(nm);chip.appendChild(rm);cb.appendChild(chip);"
-            "return !!document.querySelector('#cover_letter_block .file-chip');})()"})
+        rigged = await browser["browser_eval"].ainvoke(
+            {
+                "expression": "(function(){var i=document.getElementById('writing_sample');"
+                "var c=i.cloneNode(false);i.parentNode.replaceChild(c,i);"  # drop the wired handler
+                "c.addEventListener('change',function(){if(c.parentNode)c.parentNode.removeChild(c);});"
+                "var cb=document.getElementById('cover_letter_block');"
+                "var chip=document.createElement('span');chip.className='file-chip';"
+                "var nm=document.createElement('span');nm.className='file-chip__name';nm.textContent='sibling.pdf';"
+                "var rm=document.createElement('button');rm.type='button';rm.className='file-chip__remove';rm.textContent='\\u00d7';"
+                "chip.appendChild(nm);chip.appendChild(rm);cb.appendChild(chip);"
+                "return !!document.querySelector('#cover_letter_block .file-chip');})()"
+            }
+        )
         assert rigged == "true", rigged
 
-        out = await browser["browser_upload"].ainvoke(
-            {"field": "#writing_sample", "file_path": "sibling.pdf"})
+        out = await browser["browser_upload"].ainvoke({"field": "#writing_sample", "file_path": "sibling.pdf"})
         assert out.startswith("Error:"), out
         assert "nothing is attached" in out
         assert "verified via the field's displayed filename" not in out
         # the input really is gone, and the only "sibling.pdf" chip sits in the cover-letter block
-        state = await browser["browser_eval"].ainvoke({"expression":
-            "(function(){return (document.getElementById('writing_sample')===null)"
-            " && document.querySelectorAll('#writing_sample_block .file-chip').length===0"
-            " && !!document.querySelector('#cover_letter_block .file-chip');})()"})
+        state = await browser["browser_eval"].ainvoke(
+            {
+                "expression": "(function(){return (document.getElementById('writing_sample')===null)"
+                " && document.querySelectorAll('#writing_sample_block .file-chip').length===0"
+                " && !!document.querySelector('#cover_letter_block .file-chip');})()"
+            }
+        )
         assert state == "true", state
     finally:
         f.unlink(missing_ok=True)
@@ -871,40 +922,46 @@ async def test_removing_widget_with_no_label_refinds_via_ancestor_with_id(browse
     the chip would be unreachable and the attach would read 'nothing is attached'."""
     await _open(browser, GREENHOUSE)
     root = storage.capture_root().resolve()
-    f = root / "portfolio_sample.pdf"; f.write_bytes(b"%PDF-1.4 portfolio\n%%EOF\n")
+    f = root / "portfolio_sample.pdf"
+    f.write_bytes(b"%PDF-1.4 portfolio\n%%EOF\n")
     try:
         # A label-less file field nested one level deep: #portfolio_box (has id, survives removal) >
         # .portfolio-inner (the input's immediate parent, NO id) > input#portfolio. On change the
         # widget removes the input and renders the chip into the GRANDPARENT (#portfolio_box).
-        rigged = await browser["browser_eval"].ainvoke({"expression":
-            "(function(){var form=document.getElementById('application');"
-            "var box=document.createElement('div');box.className='field';box.id='portfolio_box';"
-            "var inner=document.createElement('div');inner.className='portfolio-inner';"
-            "var inp=document.createElement('input');inp.type='file';inp.id='portfolio';"
-            "inp.name='portfolio';inp.className='hidden-file';"
-            "inner.appendChild(inp);box.appendChild(inner);form.appendChild(box);"
-            "inp.addEventListener('change',function(){"
-            "var nm=(inp.files&&inp.files.length)?inp.files[0].name:'';if(!nm)return;"
-            "inp.parentNode.removeChild(inp);"
-            "var chip=document.createElement('span');chip.className='file-chip';"
-            "var n=document.createElement('span');n.className='file-chip__name';n.textContent=nm;"
-            "var rm=document.createElement('button');rm.type='button';rm.className='file-chip__remove';rm.textContent='\\u00d7';"
-            "chip.appendChild(n);chip.appendChild(rm);box.appendChild(chip);});"
-            "return (document.getElementById('portfolio')!==null)"
-            " && document.querySelectorAll('label[for=\"portfolio\"]').length===0;})()"})
+        rigged = await browser["browser_eval"].ainvoke(
+            {
+                "expression": "(function(){var form=document.getElementById('application');"
+                "var box=document.createElement('div');box.className='field';box.id='portfolio_box';"
+                "var inner=document.createElement('div');inner.className='portfolio-inner';"
+                "var inp=document.createElement('input');inp.type='file';inp.id='portfolio';"
+                "inp.name='portfolio';inp.className='hidden-file';"
+                "inner.appendChild(inp);box.appendChild(inner);form.appendChild(box);"
+                "inp.addEventListener('change',function(){"
+                "var nm=(inp.files&&inp.files.length)?inp.files[0].name:'';if(!nm)return;"
+                "inp.parentNode.removeChild(inp);"
+                "var chip=document.createElement('span');chip.className='file-chip';"
+                "var n=document.createElement('span');n.className='file-chip__name';n.textContent=nm;"
+                "var rm=document.createElement('button');rm.type='button';rm.className='file-chip__remove';rm.textContent='\\u00d7';"
+                "chip.appendChild(n);chip.appendChild(rm);box.appendChild(chip);});"
+                "return (document.getElementById('portfolio')!==null)"
+                " && document.querySelectorAll('label[for=\"portfolio\"]').length===0;})()"
+            }
+        )
         assert rigged == "true", rigged
 
-        out = await browser["browser_upload"].ainvoke(
-            {"field": "#portfolio", "file_path": "portfolio_sample.pdf"})
+        out = await browser["browser_upload"].ainvoke({"field": "#portfolio", "file_path": "portfolio_sample.pdf"})
         assert out.startswith("Uploaded portfolio_sample.pdf to"), out
         assert "verified via the field's displayed filename" in out, out
         assert "nothing is attached" not in out
         # The input really was removed and the chip lives in the grandparent-with-id, NOT the input's
         # immediate parent — so only the ancestor-with-id container re-finds it.
-        state = await browser["browser_eval"].ainvoke({"expression":
-            "(function(){return (document.getElementById('portfolio')===null)"
-            " && !!document.querySelector('#portfolio_box > .file-chip')"
-            " && !document.querySelector('.portfolio-inner .file-chip');})()"})
+        state = await browser["browser_eval"].ainvoke(
+            {
+                "expression": "(function(){return (document.getElementById('portfolio')===null)"
+                " && !!document.querySelector('#portfolio_box > .file-chip')"
+                " && !document.querySelector('.portfolio-inner .file-chip');})()"
+            }
+        )
         assert state == "true", state
     finally:
         f.unlink(missing_ok=True)
@@ -921,43 +978,49 @@ async def test_removing_widget_inside_a_wrapping_label_verifies_via_outside_chip
     ancestor-with-id container confirms the attach via the displayed filename."""
     await _open(browser, GREENHOUSE)
     root = storage.capture_root().resolve()
-    f = root / "wrapped_sample.pdf"; f.write_bytes(b"%PDF-1.4 wrapped\n%%EOF\n")
+    f = root / "wrapped_sample.pdf"
+    f.write_bytes(b"%PDF-1.4 wrapped\n%%EOF\n")
     try:
         # #wrapped_box (id, survives) > <label> (WRAPS the input, NO `for`) > input#wrapped. On change
         # the widget removes the input and renders the chip into #wrapped_box, a SIBLING of the label
         # (outside it) — the shape a label-pinned container could not reach.
-        rigged = await browser["browser_eval"].ainvoke({"expression":
-            "(function(){var form=document.getElementById('application');"
-            "var box=document.createElement('div');box.className='field';box.id='wrapped_box';"
-            "var lab=document.createElement('label');"
-            "lab.appendChild(document.createTextNode('Portfolio '));"   # wrapping label text, NO `for`
-            "var inp=document.createElement('input');inp.type='file';inp.id='wrapped';"
-            "inp.name='wrapped';inp.className='hidden-file';"
-            "lab.appendChild(inp);box.appendChild(lab);form.appendChild(box);"
-            "inp.addEventListener('change',function(){"
-            "var nm=(inp.files&&inp.files.length)?inp.files[0].name:'';if(!nm)return;"
-            "inp.parentNode.removeChild(inp);"                          # remove the input from the DOM
-            "var chip=document.createElement('span');chip.className='file-chip';"
-            "var n=document.createElement('span');n.className='file-chip__name';n.textContent=nm;"
-            "var rm=document.createElement('button');rm.type='button';rm.className='file-chip__remove';rm.textContent='\\u00d7';"
-            "chip.appendChild(n);chip.appendChild(rm);box.appendChild(chip);});"   # chip OUTSIDE the label
-            "var i=document.getElementById('wrapped');"
-            "return (i!==null) && (i.closest('label')!==null)"           # the input really sits in a <label>
-            " && document.querySelectorAll('label[for=\"wrapped\"]').length===0;})()"})  # and there is no label[for]
+        rigged = await browser["browser_eval"].ainvoke(
+            {
+                "expression": "(function(){var form=document.getElementById('application');"
+                "var box=document.createElement('div');box.className='field';box.id='wrapped_box';"
+                "var lab=document.createElement('label');"
+                "lab.appendChild(document.createTextNode('Portfolio '));"  # wrapping label text, NO `for`
+                "var inp=document.createElement('input');inp.type='file';inp.id='wrapped';"
+                "inp.name='wrapped';inp.className='hidden-file';"
+                "lab.appendChild(inp);box.appendChild(lab);form.appendChild(box);"
+                "inp.addEventListener('change',function(){"
+                "var nm=(inp.files&&inp.files.length)?inp.files[0].name:'';if(!nm)return;"
+                "inp.parentNode.removeChild(inp);"  # remove the input from the DOM
+                "var chip=document.createElement('span');chip.className='file-chip';"
+                "var n=document.createElement('span');n.className='file-chip__name';n.textContent=nm;"
+                "var rm=document.createElement('button');rm.type='button';rm.className='file-chip__remove';rm.textContent='\\u00d7';"
+                "chip.appendChild(n);chip.appendChild(rm);box.appendChild(chip);});"  # chip OUTSIDE the label
+                "var i=document.getElementById('wrapped');"
+                "return (i!==null) && (i.closest('label')!==null)"  # the input really sits in a <label>
+                " && document.querySelectorAll('label[for=\"wrapped\"]').length===0;})()"
+            }
+        )  # and there is no label[for]
         assert rigged == "true", rigged
 
-        out = await browser["browser_upload"].ainvoke(
-            {"field": "#wrapped", "file_path": "wrapped_sample.pdf"})
+        out = await browser["browser_upload"].ainvoke({"field": "#wrapped", "file_path": "wrapped_sample.pdf"})
         assert out.startswith("Uploaded wrapped_sample.pdf to"), out
         assert "verified via the field's displayed filename" in out, out
         assert "nothing is attached" not in out
         # the input was removed from INSIDE the wrapping label, and the chip now sits OUTSIDE that
         # label (a direct child of the ancestor-with-id) — only the ancestor-with-id container re-finds
         # it; a container pinned to the (surviving, now-empty) label would miss it.
-        state = await browser["browser_eval"].ainvoke({"expression":
-            "(function(){return (document.getElementById('wrapped')===null)"
-            " && !!document.querySelector('#wrapped_box > .file-chip')"
-            " && document.querySelectorAll('#wrapped_box label .file-chip').length===0;})()"})
+        state = await browser["browser_eval"].ainvoke(
+            {
+                "expression": "(function(){return (document.getElementById('wrapped')===null)"
+                " && !!document.querySelector('#wrapped_box > .file-chip')"
+                " && document.querySelectorAll('#wrapped_box label .file-chip').length===0;})()"
+            }
+        )
         assert state == "true", state
     finally:
         f.unlink(missing_ok=True)
@@ -970,15 +1033,19 @@ async def test_live_greenhouse_removes_input_and_label_upload_and_form_read_see_
     vanished #resume under its id with value == the filename (cover letter stays empty)."""
     await _open(browser, RESUME_CHIP)
     root = storage.capture_root().resolve()
-    f = root / "resume-gitlab.pdf"; f.write_bytes(b"%PDF-1.4 gitlab\n%%EOF\n")
+    f = root / "resume-gitlab.pdf"
+    f.write_bytes(b"%PDF-1.4 gitlab\n%%EOF\n")
     try:
         out = await browser["browser_upload"].ainvoke({"field": "#resume", "file_path": "resume-gitlab.pdf"})
         assert out.startswith("Uploaded resume-gitlab.pdf to"), out
         assert "nothing is attached" not in out
-        gone = await browser["browser_eval"].ainvoke({"expression":
-            "(function(){return document.getElementById('resume')===null"
-            " && document.querySelector('label[for=resume]')===null"
-            " && !!document.querySelector('.file-upload__filename .chip');})()"})
+        gone = await browser["browser_eval"].ainvoke(
+            {
+                "expression": "(function(){return document.getElementById('resume')===null"
+                " && document.querySelector('label[for=resume]')===null"
+                " && !!document.querySelector('.file-upload__filename .chip');})()"
+            }
+        )
         assert gone == "true", gone
         by_id = await _form_by_id(browser)
         assert by_id["resume"]["kind"] == "file"
@@ -994,7 +1061,8 @@ async def test_upload_waits_for_a_chip_greenhouse_renders_late(browser):
     attached" (6/26 live runs). The verify now re-checks an empty read-back for a bounded wait."""
     await _open(browser, RESUME_CHIP + "?chip_delay_ms=600")
     root = storage.capture_root().resolve()
-    f = root / "resume-late.pdf"; f.write_bytes(b"%PDF-1.4 late chip\n%%EOF\n")
+    f = root / "resume-late.pdf"
+    f.write_bytes(b"%PDF-1.4 late chip\n%%EOF\n")
     try:
         out = await browser["browser_upload"].ainvoke({"field": "#resume", "file_path": "resume-late.pdf"})
         assert out == "Uploaded resume-late.pdf to Attach (verified via the field's displayed filename)", out
@@ -1007,7 +1075,8 @@ async def test_upload_still_errors_when_no_chip_appears_within_the_wait(browser)
     is still a hard "nothing is attached" error, returned after the wait rather than hanging."""
     await _open(browser, RESUME_CHIP + "?chip_delay_ms=6000")
     root = storage.capture_root().resolve()
-    f = root / "resume-never.pdf"; f.write_bytes(b"%PDF-1.4 no chip\n%%EOF\n")
+    f = root / "resume-never.pdf"
+    f.write_bytes(b"%PDF-1.4 no chip\n%%EOF\n")
     try:
         loop = asyncio.get_running_loop()
         t0 = loop.time()
@@ -1029,14 +1098,16 @@ async def test_click_js_fallback_reveals_the_enter_manually_textarea(browser):
     the in-page dispatch fires."""
     await _open(browser, GREENHOUSE)
     before = await browser["browser_eval"].ainvoke(
-        {"expression": "!!document.querySelector('#manual_resume').offsetParent"})
+        {"expression": "!!document.querySelector('#manual_resume').offsetParent"}
+    )
     assert before == "false"
 
     out = await browser["browser_click"].ainvoke({"selector": "#enter_manually", "js_fallback": True})
     assert out == "Clicked #enter_manually (JS fallback)", out
 
     after = await browser["browser_eval"].ainvoke(
-        {"expression": "!!document.querySelector('#manual_resume').offsetParent"})
+        {"expression": "!!document.querySelector('#manual_resume').offsetParent"}
+    )
     assert after == "true"
 
 
@@ -1063,8 +1134,14 @@ async def test_form_read_reports_every_field_with_its_value(browser):
     assert "Female" in gender["options"]
     # every field on the form is reported, in one call
     assert {
-        "First Name", "Last Name", "Email", "Phone number",
-        "Are you authorized to work?", "Country", "Resume/CV", "Gender",
+        "First Name",
+        "Last Name",
+        "Email",
+        "Phone number",
+        "Are you authorized to work?",
+        "Country",
+        "Resume/CV",
+        "Gender",
     } <= set(fields)
 
 
@@ -1122,11 +1199,14 @@ async def test_form_read_keeps_a_visible_unlabelled_text_input(browser):
     await _open(browser, GREENHOUSE)
     # inject a visibly-sized, label-less text input INTO a select container, beside its control —
     # exactly where a shadow input lives, but visible, so it must stay a field
-    injected = await browser["browser_eval"].ainvoke({"expression":
-        "(function(){var c=document.querySelector('.select__container');"
-        "var i=document.createElement('input');i.type='text';i.id='visible_bare';"
-        "i.style.width='200px';i.style.height='32px';c.appendChild(i);"
-        "return !!document.getElementById('visible_bare');})()"})
+    injected = await browser["browser_eval"].ainvoke(
+        {
+            "expression": "(function(){var c=document.querySelector('.select__container');"
+            "var i=document.createElement('input');i.type='text';i.id='visible_bare';"
+            "i.style.width='200px';i.style.height='32px';c.appendChild(i);"
+            "return !!document.getElementById('visible_bare');})()"
+        }
+    )
     assert injected == "true", injected
 
     by_id = await _form_by_id(browser)
@@ -1194,12 +1274,11 @@ MULTI_FIELD = "Race (mark all that apply)"
 
 async def test_multiselect_select_reads_the_chip_once(browser):
     await _open(browser, MULTISELECT)
-    out = await browser["browser_select"].ainvoke(
-        {"field": MULTI_FIELD, "option_text": "I don't wish to answer"})
+    out = await browser["browser_select"].ainvoke({"field": MULTI_FIELD, "option_text": "I don't wish to answer"})
     assert out.startswith('Selected "I don\'t wish to answer" in'), out
 
     value = (await _form(browser))[MULTI_FIELD]["value"]
-    assert value == "I don't wish to answer", value      # once — no doubling, no trailing ", "
+    assert value == "I don't wish to answer", value  # once — no doubling, no trailing ", "
 
 
 async def test_multiselect_second_option_reads_both_once(browser):
@@ -1207,7 +1286,7 @@ async def test_multiselect_second_option_reads_both_once(browser):
     first = await browser["browser_select"].ainvoke({"field": MULTI_FIELD, "option_text": "Asian"})
     assert first.startswith('Selected "Asian" in'), first
     second = await browser["browser_select"].ainvoke({"field": MULTI_FIELD, "option_text": "White"})
-    assert second.startswith('Selected "White" in'), second   # chosen is AMONG the chips → ok
+    assert second.startswith('Selected "White" in'), second  # chosen is AMONG the chips → ok
 
     value = (await _form(browser))[MULTI_FIELD]["value"]
     assert value == "Asian, White", value
@@ -1219,9 +1298,12 @@ async def test_multiselect_reselecting_an_existing_chip_never_toggles_it_off(bro
     clicking would report "Selected" while the chip was actually removed. Re-selecting an option
     that is already a chip must not click it: it stays selected and is reported as such."""
     await _open(browser, MULTISELECT)
-    hooked = await browser["browser_eval"].ainvoke({"expression":
-        "(function(){var c=document.querySelector('.select__container');"
-        "c.setAttribute('data-keep-selected','');c.setAttribute('data-async-commit','');return true;})()"})
+    hooked = await browser["browser_eval"].ainvoke(
+        {
+            "expression": "(function(){var c=document.querySelector('.select__container');"
+            "c.setAttribute('data-keep-selected','');c.setAttribute('data-async-commit','');return true;})()"
+        }
+    )
     assert hooked == "true", hooked
 
     first = await browser["browser_select"].ainvoke({"field": MULTI_FIELD, "option_text": "Asian"})
@@ -1231,9 +1313,9 @@ async def test_multiselect_reselecting_an_existing_chip_never_toggles_it_off(bro
 
     again = await browser["browser_select"].ainvoke({"field": MULTI_FIELD, "option_text": "Asian"})
     assert again.startswith('Selected "Asian" in') and "already selected" in again, again
-    await asyncio.sleep(0.3)                                   # let any (wrong) async commit land
+    await asyncio.sleep(0.3)  # let any (wrong) async commit land
     value = (await _form(browser))[MULTI_FIELD]["value"]
-    assert value == "Asian, White", value                      # still selected, not toggled off
+    assert value == "Asian, White", value  # still selected, not toggled off
 
 
 # ── Greenhouse 2026 phone country: the NAME comes from the flag CLASS (iti__us) ───
@@ -1260,9 +1342,12 @@ async def test_phone_country_flag_class_shared_dial_code_is_a_hard_mismatch(brow
     first = await browser["browser_select"].ainvoke({"field": "#country", "option_text": "Canada"})
     assert first.startswith('Selected "Canada'), first
 
-    forced = await browser["browser_eval"].ainvoke({"expression":
-        "(function(){document.querySelector('.select__container')"
-        ".setAttribute('data-force-commit','Canada +1');return true;})()"})
+    forced = await browser["browser_eval"].ainvoke(
+        {
+            "expression": "(function(){document.querySelector('.select__container')"
+            ".setAttribute('data-force-commit','Canada +1');return true;})()"
+        }
+    )
     assert forced == "true", forced
 
     out = await browser["browser_select"].ainvoke({"field": "#country", "option_text": "United States"})
@@ -1278,12 +1363,15 @@ async def test_flag_country_name_skips_a_country_list_before_the_selected_flag(b
     out = await browser["browser_select"].ainvoke({"field": "#country", "option_text": "United States"})
     assert out.startswith('Selected "United States'), out
 
-    injected = await browser["browser_eval"].ainvoke({"expression":
-        "(function(){var sv=document.querySelector('.select__single-value');"
-        "var ul=document.createElement('ul');ul.className='iti__country-list';ul.setAttribute('role','listbox');"
-        "['af','ca'].forEach(function(cc){var li=document.createElement('li');"
-        "var f=document.createElement('div');f.className='iti__flag iti__'+cc;li.appendChild(f);ul.appendChild(li);});"
-        "sv.insertBefore(ul, sv.firstChild);return true;})()"})
+    injected = await browser["browser_eval"].ainvoke(
+        {
+            "expression": "(function(){var sv=document.querySelector('.select__single-value');"
+            "var ul=document.createElement('ul');ul.className='iti__country-list';ul.setAttribute('role','listbox');"
+            "['af','ca'].forEach(function(cc){var li=document.createElement('li');"
+            "var f=document.createElement('div');f.className='iti__flag iti__'+cc;li.appendChild(f);ul.appendChild(li);});"
+            "sv.insertBefore(ul, sv.firstChild);return true;})()"
+        }
+    )
     assert injected == "true", injected
 
     assert (await _form_by_id(browser))["country"]["value"] == "United States"
@@ -1297,12 +1385,15 @@ async def test_iti_button_change_country_aria_label_reduces_to_the_name(browser)
     out = await browser["browser_select"].ainvoke({"field": "Country", "option_text": "United States"})
     assert out.startswith('Selected "United States'), out
 
-    stripped = await browser["browser_eval"].ainvoke({"expression":
-        "(function(){var b=document.querySelector('#phone_iti .iti__selected-country');"
-        "b.querySelectorAll('*').forEach(function(n){n.removeAttribute('title');"
-        "n.removeAttribute('aria-label');if(/a11y/.test(n.className))n.textContent='';});"
-        "b.removeAttribute('title');"
-        "b.setAttribute('aria-label','Change country, selected United States (+1)');return true;})()"})
+    stripped = await browser["browser_eval"].ainvoke(
+        {
+            "expression": "(function(){var b=document.querySelector('#phone_iti .iti__selected-country');"
+            "b.querySelectorAll('*').forEach(function(n){n.removeAttribute('title');"
+            "n.removeAttribute('aria-label');if(/a11y/.test(n.className))n.textContent='';});"
+            "b.removeAttribute('title');"
+            "b.setAttribute('aria-label','Change country, selected United States (+1)');return true;})()"
+        }
+    )
     assert stripped == "true", stripped
 
     raw = await browser["browser_form_read"].ainvoke({"scope": ""})
@@ -1315,9 +1406,15 @@ async def test_iti_button_change_country_aria_label_reduces_to_the_name(browser)
 
 def test_fixtures_are_self_contained_with_no_network_resources():
     comment = re.compile(r"<!--.*?-->", re.S)
-    for name in ("greenhouse.html", "ashby.html", "greenhouse_phone_country.html",
-                 "greenhouse_phone_country_iti.html", "greenhouse_resume_chip.html",
-                 "greenhouse_phone_country_flag.html", "greenhouse_multiselect.html"):
+    for name in (
+        "greenhouse.html",
+        "ashby.html",
+        "greenhouse_phone_country.html",
+        "greenhouse_phone_country_iti.html",
+        "greenhouse_resume_chip.html",
+        "greenhouse_phone_country_flag.html",
+        "greenhouse_multiselect.html",
+    ):
         body = comment.sub("", (FIXTURES / name).read_text(encoding="utf-8")).lower()
         for marker in ("http://", "https://", "<script src", "<link ", "<img ", "url("):
             assert marker not in body, f"{name} references an external/network resource: {marker!r}"

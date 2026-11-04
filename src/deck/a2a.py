@@ -432,8 +432,16 @@ def _unwrap(frame: dict) -> tuple[dict | None, dict | None, dict | None]:
         return None, None, None
     kind = result.get("kind")
     task = result.get("task") if isinstance(result.get("task"), dict) else (result if kind == "task" else None)
-    su = result.get("statusUpdate") if isinstance(result.get("statusUpdate"), dict) else (result if kind == "status-update" else None)
-    au = result.get("artifactUpdate") if isinstance(result.get("artifactUpdate"), dict) else (result if kind == "artifact-update" else None)
+    su = (
+        result.get("statusUpdate")
+        if isinstance(result.get("statusUpdate"), dict)
+        else (result if kind == "status-update" else None)
+    )
+    au = (
+        result.get("artifactUpdate")
+        if isinstance(result.get("artifactUpdate"), dict)
+        else (result if kind == "artifact-update" else None)
+    )
     return task, su, au
 
 
@@ -460,7 +468,10 @@ def apply_tool_event(turn: Turn, evt: ToolEvent) -> None:
     if evt.phase == "start":
         # Nest a subagent's own tool under its `task` card: the server tags the child
         # with the parent id (authoritative); fall back to "last open task wins".
-        open_task = next((c for c in reversed(turn.tool_calls) if c.name == "task" and c.status == "running" and c.id != evt.id), None)
+        open_task = next(
+            (c for c in reversed(turn.tool_calls) if c.name == "task" and c.status == "running" and c.id != evt.id),
+            None,
+        )
         parent = evt.parent_id if evt.parent_id is not None else (open_task.id if open_task else None)
         card = ToolCall(id=evt.id, name=evt.name, input=evt.input, status="running", started_at=now, parent_id=parent)
         if idx is not None:
@@ -482,7 +493,9 @@ def apply_tool_event(turn: Turn, evt: ToolEvent) -> None:
             c.duration_ms = int((now - c.started_at) * 1000)
     else:
         # Missed start — still render it as a fresh top-level call.
-        turn.tool_calls.append(ToolCall(id=evt.id, name=evt.name, output=evt.output, output_chars=evt.output_chars, status=status))
+        turn.tool_calls.append(
+            ToolCall(id=evt.id, name=evt.name, output=evt.output, output_chars=evt.output_chars, status=status)
+        )
         turn.parts = add_tool_ref(turn.parts, evt.id)
 
 
@@ -547,7 +560,11 @@ def replay_task_snapshot(turn: Turn, task: dict) -> None:
         for c in fresh.tool_calls:  # a card seen live keeps its timing; new ones join in order
             live = known.get(c.id)
             if live is not None:
-                live.status, live.output, live.output_chars = c.status, c.output if c.output is not None else live.output, c.output_chars if c.output_chars is not None else live.output_chars
+                live.status, live.output, live.output_chars = (
+                    c.status,
+                    c.output if c.output is not None else live.output,
+                    c.output_chars if c.output_chars is not None else live.output_chars,
+                )
                 live.parent_id = live.parent_id or c.parent_id
                 merged.append(live)
             else:
@@ -647,7 +664,9 @@ def turn_from_durable(context_id: str, durable: dict) -> Turn:
         turn,
         {
             "id": durable.get("task_id"),
-            "status": durable.get("status") if isinstance(durable.get("status"), dict) else {"state": durable.get("state")},
+            "status": durable.get("status")
+            if isinstance(durable.get("status"), dict)
+            else {"state": durable.get("state")},
             "artifacts": durable.get("artifacts") or [],
             "history": durable.get("history") or [],
         },
@@ -749,14 +768,21 @@ class A2AClient:
     def _raise_for(self, r: httpx.Response) -> None:
         if r.status_code in (401, 403):
             if self.slug != "host":
-                raise deckhub.MemberUnauthorized(self.base_url, self.slug, f"member {self.slug!r} rejected the credential the hub attached")
+                raise deckhub.MemberUnauthorized(
+                    self.base_url, self.slug, f"member {self.slug!r} rejected the credential the hub attached"
+                )
             raise deckhub.HubUnauthorized(self.base_url, f"{self.base_url} rejected the credential ({r.status_code})")
         if r.status_code >= 400:
             raise deckhub.HubRequestError(self.base_url, r.status_code, (r.text or "").strip()[:300] or r.reason_phrase)
 
     def _message(self, text: str, *, context_id: str, task_id: str | None, metadata: dict | None) -> dict:
         mid = str(uuid.uuid4())
-        message: dict[str, Any] = {"role": "ROLE_USER", "parts": [{"text": text}], "messageId": mid, "contextId": context_id}
+        message: dict[str, Any] = {
+            "role": "ROLE_USER",
+            "parts": [{"text": text}],
+            "messageId": mid,
+            "contextId": context_id,
+        }
         if task_id:
             message["taskId"] = task_id  # resume a parked input-required task
         if metadata:
@@ -792,7 +818,12 @@ class A2AClient:
         frame, before anything is yielded, so it is retried here with a short bounded
         backoff. A genuinely unknown task still surfaces its error, ~0.75s later."""
         for attempt in range(_SUBSCRIBE_ATTEMPTS):
-            payload = {"jsonrpc": "2.0", "id": str(uuid.uuid4()), "method": "SubscribeToTask", "params": {"id": task_id}}
+            payload = {
+                "jsonrpc": "2.0",
+                "id": str(uuid.uuid4()),
+                "method": "SubscribeToTask",
+                "params": {"id": task_id},
+            }
             frames = self._sse("POST", payload)
             first = next(frames, None)
             if first is None:
@@ -808,7 +839,9 @@ class A2AClient:
 
     def _sse(self, method: str, payload: dict) -> Iterator[dict]:
         try:
-            with self._client.stream(method, self.a2a_path, headers=self._headers(), json=payload, timeout=_STREAM_TIMEOUT) as r:
+            with self._client.stream(
+                method, self.a2a_path, headers=self._headers(), json=payload, timeout=_STREAM_TIMEOUT
+            ) as r:
                 self._active = r
                 try:
                     if r.status_code >= 400:
@@ -826,7 +859,11 @@ class A2AClient:
                         if isinstance(body, dict) and (body.get("error") or body.get("result") is not None):
                             yield body  # apply_frame raises TurnError on the error shape
                         else:
-                            raise deckhub.HubRequestError(self.base_url, r.status_code, f"{self.endpoint} answered {(r.headers.get('content-type') or 'nothing')!r} instead of a stream")
+                            raise deckhub.HubRequestError(
+                                self.base_url,
+                                r.status_code,
+                                f"{self.endpoint} answered {(r.headers.get('content-type') or 'nothing')!r} instead of a stream",
+                            )
                         return
                     yield from _parse_sse(r.iter_lines())
                 finally:
@@ -841,7 +878,9 @@ class A2AClient:
         try:
             r = self._client.post(self.a2a_path, headers=self._headers(), json=payload, timeout=_RPC_TIMEOUT)
         except httpx.TransportError as exc:
-            raise deckhub.HubUnreachable(self.base_url, f"{self.base_url} did not answer ({type(exc).__name__})") from exc
+            raise deckhub.HubUnreachable(
+                self.base_url, f"{self.base_url} did not answer ({type(exc).__name__})"
+            ) from exc
         self._raise_for(r)
         try:
             body = r.json()

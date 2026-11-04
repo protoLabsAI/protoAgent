@@ -433,7 +433,9 @@ def working_tree_diff(root: Path, timeout: float = DIFF_TIMEOUT_S) -> WorkingTre
             continue
         if _looks_binary(data):
             f.binary = True
-            extra.append(f"diff --git a/{rel} b/{rel}\nnew file mode 100644\nBinary files /dev/null and b/{rel} differ\n")
+            extra.append(
+                f"diff --git a/{rel} b/{rel}\nnew file mode 100644\nBinary files /dev/null and b/{rel} differ\n"
+            )
             continue
         chunk, adds = _synthetic_new_file(rel, data)
         f.additions = adds

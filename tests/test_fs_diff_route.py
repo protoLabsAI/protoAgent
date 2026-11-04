@@ -27,6 +27,7 @@ pytestmark = [
     pytest.mark.platform_sensitive,
 ]
 
+
 @pytest.fixture(autouse=True)
 def _unwired_host_config(monkeypatch):
     """The fs registry prefers the LIVE ``HOST.config`` seam over the config it was given;
@@ -47,9 +48,7 @@ _ENV = {
 
 
 def _git(cwd: Path, *args: str) -> str:
-    return subprocess.run(
-        ["git", *args], cwd=cwd, env=_ENV, check=True, capture_output=True, text=True
-    ).stdout
+    return subprocess.run(["git", *args], cwd=cwd, env=_ENV, check=True, capture_output=True, text=True).stdout
 
 
 def _repo(root: Path) -> Path:

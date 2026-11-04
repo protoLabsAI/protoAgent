@@ -217,7 +217,7 @@ def test_reload_refreshes_plugin_verifier_registry(tmp_path, monkeypatch):
 
 
 def test_reload_without_a_model_stays_up_with_graph_uncompiled(tmp_path, monkeypatch):
-    """"Explore without a model" (#4566): setup is complete but no model is connected.
+    """ "Explore without a model" (#4566): setup is complete but no model is connected.
 
     `create_llm` raises on the empty key, so the reload must NOT attempt the graph build —
     it leaves the graph uncompiled, commits cleanly and returns ok, so the server stays up
@@ -709,19 +709,21 @@ def test_full_reload_still_rebuilds_plugins_and_mcp(tmp_path, monkeypatch):
     monkeypatch.setattr(
         ai,
         "_build_plugins",
-        lambda *a, **k: calls.append("plugins")
-        or SimpleNamespace(
-            mcp_servers=[],
-            tools=[],
-            tool_plugins={},
-            skill_dirs=[],
-            meta=[],
-            surfaces=[],
-            chat_commands={},
-            subagents=[],
-            middleware=[],
-            late_tool_factories=[],
-            routers=[],
+        lambda *a, **k: (
+            calls.append("plugins")
+            or SimpleNamespace(
+                mcp_servers=[],
+                tools=[],
+                tool_plugins={},
+                skill_dirs=[],
+                meta=[],
+                surfaces=[],
+                chat_commands={},
+                subagents=[],
+                middleware=[],
+                late_tool_factories=[],
+                routers=[],
+            )
         ),
     )
     monkeypatch.setattr(ai, "_build_mcp", lambda *a, **k: calls.append("mcp") or ([], [], []))

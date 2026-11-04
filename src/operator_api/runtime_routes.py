@@ -48,7 +48,9 @@ def restart_readiness() -> dict:
             busy.append(f"{count} background job{'s' if len(jobs) != 1 else ''}")
     supervised = STATE.uvicorn_server is not None or bool(os.environ.get("PROTOAGENT_FLEET_TOKEN"))
     return {
-        "idle": not busy, "busy": busy, "supervised": supervised,
+        "idle": not busy,
+        "busy": busy,
+        "supervised": supervised,
         "how_to": "" if supervised else "Stop the server and start it again the way you launched it.",
         "boot_id": _BOOT_ID,
     }
@@ -60,11 +62,14 @@ def audit_restart(request: Request, reason: str, *, target: str = "self") -> Non
     actor = getattr(request.state, "device_id", None) or "operator"
     reason = " ".join(reason.split())[:1000]
     audit_logger.log(
-        session_id="operator", tool="restart", args={"actor": actor, "reason": reason, "target": target},
-        result_summary="Restart requested", duration_ms=0, success=True,
+        session_id="operator",
+        tool="restart",
+        args={"actor": actor, "reason": reason, "target": target},
+        result_summary="Restart requested",
+        duration_ms=0,
+        success=True,
     )
     log.info("[restart] actor=%s target=%s reason=%s", actor, target, reason)
-
 
 
 def reexec_command(executable: str, argv: list[str], frozen: bool) -> list[str]:

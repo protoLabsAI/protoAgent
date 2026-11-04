@@ -147,7 +147,7 @@ async def test_a_good_pick_applies_to_its_own_turn_only(env, turn):
     picked = await turn("s-good", _GOOD)
     default = await turn("s-good")
 
-    text = (lambda r: r["content"] if isinstance(r, dict) else r[1])
+    text = lambda r: r["content"] if isinstance(r, dict) else r[1]
     assert text(picked) == f"answer from {_GOOD}"
     assert text(default) == "answer from default-model"
 

@@ -1678,26 +1678,18 @@ def detect_soul_drift(baseline_version_id: str | None = None) -> dict | None:
 # ---------------------------------------------------------------------------
 
 
-def friendly_connection_error(
-    kind_or_exc: str | Exception, *, url: str, status: int | None = None
-) -> str:
+def friendly_connection_error(kind_or_exc: str | Exception, *, url: str, status: int | None = None) -> str:
     """Explain probe failures; string fallbacks must contain no upstream body."""
     import httpx
 
     if status in (401, 403):
         return f"The endpoint rejected the key. Check the API key. (HTTP {status})"
     if status == 404:
-        return (
-            "No such endpoint or model. Check the URL (it usually ends in /v1) "
-            "and the model name. (HTTP 404)"
-        )
+        return "No such endpoint or model. Check the URL (it usually ends in /v1) and the model name. (HTTP 404)"
     if isinstance(kind_or_exc, (httpx.TimeoutException, TimeoutError)):
         return "The endpoint didn't answer in time. (timeout)"
     if isinstance(kind_or_exc, (httpx.ConnectError, ConnectionRefusedError)):
-        return (
-            f"Nothing is answering at {url}. Is the server running, "
-            "and is the port right? (connection refused)"
-        )
+        return f"Nothing is answering at {url}. Is the server running, and is the port right? (connection refused)"
     if isinstance(kind_or_exc, Exception):
         return f"connection failed: {kind_or_exc}"
     return kind_or_exc
@@ -1864,9 +1856,7 @@ def validate_model_connection(
         return True, ""
 
     # Don't echo the raw upstream body (#871) — just the status.
-    return False, friendly_connection_error(
-        f"HTTP {resp.status_code}", url=url, status=resp.status_code
-    )
+    return False, friendly_connection_error(f"HTTP {resp.status_code}", url=url, status=resp.status_code)
 
 
 # ---------------------------------------------------------------------------

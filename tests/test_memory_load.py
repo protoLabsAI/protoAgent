@@ -677,6 +677,7 @@ def test_frame_message_is_tagged_and_enveloped(tmp_path):
     class _FakeRequest:
         messages: list
         state: dict
+
         def override(self, **kw):
             return _FakeRequest(**{**{"messages": self.messages, "state": self.state}, **kw})
 
@@ -704,6 +705,7 @@ def test_old_checkpoint_frames_are_stripped_from_model_visible_messages(tmp_path
     @dataclass
     class _Req:
         messages: list
+
         def override(self, **kw):
             return _Req(**{**{"messages": self.messages}, **kw})
 
@@ -719,9 +721,10 @@ def test_old_checkpoint_frames_are_stripped_from_model_visible_messages(tmp_path
     projected = mw._project_messages(_Req(messages=msgs))
     # The old frame is gone from the model-visible list.
     assert len(projected.messages) == 3
-    assert all(not hasattr(m, "additional_kwargs") or
-               not m.additional_kwargs.get("protoagent_injected_context")
-               for m in projected.messages)
+    assert all(
+        not hasattr(m, "additional_kwargs") or not m.additional_kwargs.get("protoagent_injected_context")
+        for m in projected.messages
+    )
 
 
 def test_projection_replaces_old_frames_with_fresh(tmp_path):
@@ -736,6 +739,7 @@ def test_projection_replaces_old_frames_with_fresh(tmp_path):
     class _Req:
         messages: list
         state: dict | None = None
+
         def override(self, **kw):
             return _Req(**{**{"messages": self.messages, "state": self.state}, **kw})
 
@@ -754,8 +758,7 @@ def test_projection_replaces_old_frames_with_fresh(tmp_path):
     msgs = [HumanMessage(content="q"), old_frame, AIMessage(content="…"), HumanMessage(content="next")]
 
     projected = mw._project_messages(_Req(messages=msgs, state=update))
-    frames = [m for m in projected.messages
-              if getattr(m, "additional_kwargs", {}).get("protoagent_injected_context")]
+    frames = [m for m in projected.messages if getattr(m, "additional_kwargs", {}).get("protoagent_injected_context")]
     assert len(frames) == 1  # exactly one: the fresh projection
     assert "stale v1 frame" not in frames[0].content
     assert "proj-sess" in frames[0].content

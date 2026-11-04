@@ -199,11 +199,14 @@ async def test_achieved_goal_enqueues_review_through_lifecycle(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("knob,attr", [
-    ("soul_md", "self_improvement_soul_md"),
-    ("skills", "self_improvement_skills"),
-    ("distillation", "self_improvement_distillation"),
-])
+@pytest.mark.parametrize(
+    "knob,attr",
+    [
+        ("soul_md", "self_improvement_soul_md"),
+        ("skills", "self_improvement_skills"),
+        ("distillation", "self_improvement_distillation"),
+    ],
+)
 def test_bare_yaml_off_is_the_off_policy_not_a_lucky_blank(tmp_path, knob, attr):
     """PIN, not a regression test — this passes before the fix too.
 
@@ -239,9 +242,7 @@ def test_ordinary_values_and_absent_keys_are_untouched(tmp_path):
     from graph.config import LangGraphConfig
 
     cfg_path = tmp_path / "si-plain.yaml"
-    cfg_path.write_text(
-        "self_improvement:\n  soul_md: propose\n  distillation: auto\n", encoding="utf-8"
-    )
+    cfg_path.write_text("self_improvement:\n  soul_md: propose\n  distillation: auto\n", encoding="utf-8")
     cfg = LangGraphConfig.from_yaml(str(cfg_path))
     assert cfg.self_improvement_soul_md == "propose"
     assert cfg.self_improvement_distillation == "auto"

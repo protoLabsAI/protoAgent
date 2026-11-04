@@ -39,9 +39,7 @@ def windows_locale_read_text(monkeypatch):
     monkeypatch.setattr(Path, "read_text", locale_read_text)
 
 
-def test_archetype_catalog_survives_non_utf8_locale(
-    tmp_path, monkeypatch, windows_locale_read_text
-):
+def test_archetype_catalog_survives_non_utf8_locale(tmp_path, monkeypatch, windows_locale_read_text):
     from infra.paths import InstancePaths
 
     ip = InstancePaths(
@@ -52,9 +50,7 @@ def test_archetype_catalog_survives_non_utf8_locale(
     )
     ip.config_dir.mkdir(parents=True)
     catalog = {"archetypes": [{"id": "em", "title": "Coach — em dash intact"}]}
-    (ip.config_dir / "archetype-catalog.json").write_bytes(
-        json.dumps(catalog, ensure_ascii=False).encode("utf-8")
-    )
+    (ip.config_dir / "archetype-catalog.json").write_bytes(json.dumps(catalog, ensure_ascii=False).encode("utf-8"))
     monkeypatch.setattr("infra.paths.instance_paths", lambda: ip)
 
     from operator_api.fleet_routes import _load_archetype_catalog
@@ -89,9 +85,9 @@ def test_shipped_catalogs_actually_exercise_the_regression():
     the locale test needs a new canary."""
     shipped = list((ROOT / "config").glob("*catalog*.json"))
     assert shipped, "no shipped catalogs found under config/"
-    assert any(
-        any(ord(ch) > 127 for ch in f.read_text(encoding="utf-8")) for f in shipped
-    ), "no shipped catalog contains non-ASCII — locale regression no longer exercised"
+    assert any(any(ord(ch) > 127 for ch in f.read_text(encoding="utf-8")) for f in shipped), (
+        "no shipped catalog contains non-ASCII — locale regression no longer exercised"
+    )
 
 
 def test_no_bare_read_text_in_operator_api():

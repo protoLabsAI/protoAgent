@@ -332,9 +332,7 @@ def _ddgs_supports_backend(text_method) -> bool:
         params = inspect.signature(text_method).parameters.values()
     except (TypeError, ValueError):
         return False
-    return any(
-        p.name == "backend" or p.kind is inspect.Parameter.VAR_KEYWORD for p in params
-    )
+    return any(p.name == "backend" or p.kind is inspect.Parameter.VAR_KEYWORD for p in params)
 
 
 @tool
@@ -526,8 +524,7 @@ async def fetch_url(url: str, max_chars: int = _MAX_OUTPUT_CHARS) -> str:
         # model blame the page (e.g. "JS-rendered") when the cap cut off real content.
         total = len(text)
         text = (
-            text[:max_chars].rstrip()
-            + f"\n…[truncated: showing {max_chars} of {total} chars — "
+            text[:max_chars].rstrip() + f"\n…[truncated: showing {max_chars} of {total} chars — "
             "re-call with a larger max_chars to read the rest]"
         )
 
@@ -862,7 +859,7 @@ def _skill_tools_unavailable_note(tools_used) -> str:
 
     if not entries:
         return ""
-    shown = entries[: _MAX_UNAVAILABLE_LISTED]
+    shown = entries[:_MAX_UNAVAILABLE_LISTED]
     more = f" (+{len(entries) - len(shown)} more)" if len(entries) > len(shown) else ""
     return f"Unavailable in this context: {', '.join(shown)}{more}."
 
@@ -1018,10 +1015,14 @@ def get_all_tools(
 
         # Reload publishes the new store after constructing the graph. Resolve it
         # at invocation so tools cannot retain the previous instance's history.
-        tools.extend(_build_memory_tools(
-            knowledge_store, graph_config, background_mgr,
-            history_store_getter=lambda: STATE.history_store,
-        ))
+        tools.extend(
+            _build_memory_tools(
+                knowledge_store,
+                graph_config,
+                background_mgr,
+                history_store_getter=lambda: STATE.history_store,
+            )
+        )
     if scheduler is not None:
         tools.extend(_build_scheduler_tools(scheduler))
     if inbox_store is not None:

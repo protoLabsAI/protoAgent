@@ -157,7 +157,9 @@ def _artifact_script(clock) -> list:
         _tc_chunk("m1", args="Hi\\n", index=0),
         clock.tick(0.3),
         _tc_chunk("m1", args='</h1>"}', index=0),
-        model_end("m1", tool_calls=[("tc1", "show_artifact", {"kind": "html", "code": "<h1>Hi\n</h1>"})], usage=(10, 1, 0, 0)),
+        model_end(
+            "m1", tool_calls=[("tc1", "show_artifact", {"kind": "html", "code": "<h1>Hi\n</h1>"})], usage=(10, 1, 0, 0)
+        ),
     ]
 
 

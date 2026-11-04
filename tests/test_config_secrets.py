@@ -361,9 +361,7 @@ def test_strip_secrets_from_doc_relocates_inline_langfuse_keys(monkeypatch, tmp_
 def test_from_yaml_overlays_langfuse_keys(tmp_path: Path) -> None:
     from graph.config import LangGraphConfig
 
-    (tmp_path / "langgraph-config.yaml").write_text(
-        "tracing:\n  enabled: true\n  host: https://cloud.langfuse.com\n"
-    )
+    (tmp_path / "langgraph-config.yaml").write_text("tracing:\n  enabled: true\n  host: https://cloud.langfuse.com\n")
     (tmp_path / "secrets.yaml").write_text("tracing:\n  public_key: pk-overlay\n  secret_key: sk-overlay\n")
 
     cfg = LangGraphConfig.from_yaml(tmp_path / "langgraph-config.yaml")
@@ -458,9 +456,7 @@ def test_a_config_only_instance_resolves_credentials_for_init(tmp_path, monkeypa
     for var in ("LANGFUSE_PUBLIC_KEY", "LANGFUSE_SECRET_KEY", "LANGFUSE_HOST", "LANGFUSE_URL"):
         monkeypatch.delenv(var, raising=False)
 
-    (tmp_path / "langgraph-config.yaml").write_text(
-        "tracing:\n  enabled: true\n  host: https://cloud.langfuse.com\n"
-    )
+    (tmp_path / "langgraph-config.yaml").write_text("tracing:\n  enabled: true\n  host: https://cloud.langfuse.com\n")
     (tmp_path / "secrets.yaml").write_text("tracing:\n  public_key: pk-live\n  secret_key: sk-live\n")
 
     cfg = LangGraphConfig.from_yaml(tmp_path / "langgraph-config.yaml")

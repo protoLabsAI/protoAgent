@@ -169,7 +169,10 @@ def test_swap_replaces_only_the_trailing_block(monkeypatch):
 
 def test_unchanged_block_returns_the_same_objects(monkeypatch):
     old = _ws("same")
-    text, sections = f"x\n\n{old}", [{"label": "Skills index", "chars": 1}, {"label": "Working state", "chars": len(old)}]
+    text, sections = (
+        f"x\n\n{old}",
+        [{"label": "Skills index", "chars": 1}, {"label": "Working state", "chars": len(old)}],
+    )
     _patch_block(monkeypatch, old)
     out, secs = refresh_working_state(text, sections, {})
     assert out is text and secs is sections

@@ -115,7 +115,9 @@ def test_read_heartbeats_skips_dead_and_own_pid_and_never_unlinks(tmp_path, monk
     d = tmp_path / ".instances"
     d.mkdir()
     live, dead = 4242, 4343
-    (d / f"{live}.json").write_text(json.dumps({"pid": live, "port": 7901, "identity": "ava", "instance_root": "/x/ava"}))
+    (d / f"{live}.json").write_text(
+        json.dumps({"pid": live, "port": 7901, "identity": "ava", "instance_root": "/x/ava"})
+    )
     (d / f"{dead}.json").write_text(json.dumps({"pid": dead, "port": 7902}))
     (d / f"{os.getpid()}.json").write_text(json.dumps({"pid": os.getpid(), "port": 7903}))
     (d / "junk.json").write_text("{}")
@@ -266,7 +268,9 @@ def test_token_chain_sends_nothing_to_a_candidate_the_operator_did_not_name(tmp_
     peer = hub.HubCandidate("https://ava.tail:7870", "peer", trusted=False)
     assert list(hub.token_chain(peer, explicit="explicit")) == [None]
     # even a loopback listener, when it is untrusted, gets none of the box's tokens
-    assert list(hub.token_chain(hub.HubCandidate("http://127.0.0.1:7870", "peer", trusted=False), explicit="explicit")) == [None]
+    assert list(
+        hub.token_chain(hub.HubCandidate("http://127.0.0.1:7870", "peer", trusted=False), explicit="explicit")
+    ) == [None]
 
     # and `connect` sends no Authorization header at all to it: the card is public, the
     # roster is asked for once, in open mode, and its 401 ends the search
@@ -337,7 +341,9 @@ def test_client_403_is_a_credential_rejection_too():
 
 
 def test_client_4xx_without_detail_falls_back_to_body_text():
-    c = hub.HubClient("http://127.0.0.1:7870", transport=_transport(lambda r: httpx.Response(500, json={"error": "boom"})))
+    c = hub.HubClient(
+        "http://127.0.0.1:7870", transport=_transport(lambda r: httpx.Response(500, json={"error": "boom"}))
+    )
     with pytest.raises(hub.HubRequestError) as ei:
         c.fleet()
     assert ei.value.detail and ei.value.detail != "None"
@@ -403,9 +409,20 @@ def test_connect_reports_the_insecure_refusal_as_answered(tmp_path, monkeypatch)
     _no_disk_tokens(monkeypatch, tmp_path)
     cand = hub.HubCandidate("http://ava.tail:7870", "flag")
     with pytest.raises(hub.NoHub) as ei:
-        hub.connect(url="ava.tail:7870", token="tok", candidates=[cand], transport=_transport(lambda r: _card_ok(r) or httpx.Response(200, json={"agents": []})))
+        hub.connect(
+            url="ava.tail:7870",
+            token="tok",
+            candidates=[cand],
+            transport=_transport(lambda r: _card_ok(r) or httpx.Response(200, json={"agents": []})),
+        )
     assert ei.value.answered and "plain http" in str(ei.value)
-    conn = hub.connect(url="ava.tail:7870", token="tok", candidates=[cand], transport=_transport(lambda r: _card_ok(r) or httpx.Response(200, json={"agents": []})), insecure_http=True)
+    conn = hub.connect(
+        url="ava.tail:7870",
+        token="tok",
+        candidates=[cand],
+        transport=_transport(lambda r: _card_ok(r) or httpx.Response(200, json={"agents": []})),
+        insecure_http=True,
+    )
     conn.client.close()
 
 
@@ -424,15 +441,25 @@ def test_client_never_follows_a_redirect_with_the_bearer():
 
 def test_malformed_2xx_lifecycle_bodies_are_hub_errors():
     """A proxy's HTML or an empty body on 200 must not read as "started" (CodeRabbit)."""
-    html = hub.HubClient("http://127.0.0.1:7870", transport=_transport(lambda r: httpx.Response(200, text="<html>proxy</html>")))
-    for call in (lambda: html.start("a"), lambda: html.stop("a"), lambda: html.down(), lambda: html.fleet(), lambda: html.runtime_status()):
+    html = hub.HubClient(
+        "http://127.0.0.1:7870", transport=_transport(lambda r: httpx.Response(200, text="<html>proxy</html>"))
+    )
+    for call in (
+        lambda: html.start("a"),
+        lambda: html.stop("a"),
+        lambda: html.down(),
+        lambda: html.fleet(),
+        lambda: html.runtime_status(),
+    ):
         with pytest.raises(hub.HubError) as ei:
             call()
         assert "malformed" in str(ei.value)
     empty = hub.HubClient("http://127.0.0.1:7870", transport=_transport(lambda r: httpx.Response(200)))
     with pytest.raises(hub.HubError):
         empty.start("a")
-    bad_roster = hub.HubClient("http://127.0.0.1:7870", transport=_transport(lambda r: httpx.Response(200, json={"agents": "nope"})))
+    bad_roster = hub.HubClient(
+        "http://127.0.0.1:7870", transport=_transport(lambda r: httpx.Response(200, json={"agents": "nope"}))
+    )
     with pytest.raises(hub.HubError):
         bad_roster.fleet()
 
@@ -620,7 +647,9 @@ def test_connect_skips_a_member_that_answers_as_a_fleet_of_itself(tmp_path, monk
         if (r := _card_ok(request)) is not None:
             return r
         if request.url.port == 7871:
-            return httpx.Response(200, json={"agents": [{"name": "killteamCoach", "host": True, "member": True, "running": True}]})
+            return httpx.Response(
+                200, json={"agents": [{"name": "killteamCoach", "host": True, "member": True, "running": True}]}
+            )
         return httpx.Response(200, json={"agents": [{"name": "protoagent", "host": True, "running": True}]})
 
     member = hub.HubCandidate("http://127.0.0.1:7871", "heartbeat")
@@ -673,14 +702,22 @@ def test_every_manage_path_encodes_its_id_as_one_segment_dots_included():
     c.remote_update("a.b", url="u")
     c.start("..")
     paths = [p for _, p in seen]
-    assert paths == ["/api/fleet/%2E%2E?purge=true", "/api/fleet/%2E", "/api/fleet/remotes/%2E%2E%2F%2E%2E", "/api/fleet/remotes/a%2Eb", "/api/fleet/%2E%2E/start"]
+    assert paths == [
+        "/api/fleet/%2E%2E?purge=true",
+        "/api/fleet/%2E",
+        "/api/fleet/remotes/%2E%2E%2F%2E%2E",
+        "/api/fleet/remotes/a%2Eb",
+        "/api/fleet/%2E%2E/start",
+    ]
     assert hub.segment("chat-1.2/3") == "chat-1%2E2%2F3"
 
 
 def test_instance_root_comes_from_config_explain_and_is_none_when_missing():
     def handler(request: httpx.Request) -> httpx.Response:
         if request.url.path == "/api/config/explain":
-            return httpx.Response(200, json={"instance_id": "x", "box_root": "/b", "instance_root": "/b/dev", "paths": {}})
+            return httpx.Response(
+                200, json={"instance_id": "x", "box_root": "/b", "instance_root": "/b/dev", "paths": {}}
+            )
         return httpx.Response(404)
 
     c = hub.HubClient("http://127.0.0.1:7870", "tok", transport=httpx.MockTransport(handler))
@@ -695,8 +732,12 @@ def test_heartbeats_and_pidfile_skip_a_pid_that_is_alive_but_not_ours(tmp_path, 
     `u` was refused. Liveness is not evidence; being one of our processes is."""
     root = tmp_path
     (root / ".instances").mkdir()
-    (root / ".instances" / "1.json").write_text(json.dumps({"pid": 1, "port": 7871, "identity": "dev", "instance_root": str(root / "dev")}))
-    (root / ".instances" / "4242.json").write_text(json.dumps({"pid": 4242, "port": 7872, "identity": "ours", "instance_root": str(root / "ours")}))
+    (root / ".instances" / "1.json").write_text(
+        json.dumps({"pid": 1, "port": 7871, "identity": "dev", "instance_root": str(root / "dev")})
+    )
+    (root / ".instances" / "4242.json").write_text(
+        json.dumps({"pid": 4242, "port": 7872, "identity": "ours", "instance_root": str(root / "ours")})
+    )
     monkeypatch.setattr(hub, "pid_alive", lambda pid: pid in (1, 4242))  # both alive …
     monkeypatch.setattr(hub, "is_protoagent_pid", lambda pid: pid == 4242)  # … one is a protoAgent
     assert [h["pid"] for h in hub.read_heartbeats(root)] == [4242]

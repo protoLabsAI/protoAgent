@@ -18,8 +18,13 @@ def register_usage_routes(app) -> None:
     """Register ``GET /api/usage`` on ``app``."""
 
     @app.get("/api/usage")
-    async def _api_usage(account: str | None = None, refresh: bool = False, cache_only: bool = False,
-                         by_agent: bool = False, attribution_windows_json: str | None = None):
+    async def _api_usage(
+        account: str | None = None,
+        refresh: bool = False,
+        cache_only: bool = False,
+        by_agent: bool = False,
+        attribution_windows_json: str | None = None,
+    ):
         """Best-effort usage for the native-OAuth providers.
 
         ``account`` narrows to one provider; ``refresh=true`` bypasses the ordinary poll
@@ -71,7 +76,8 @@ def register_usage_routes(app) -> None:
             async with limit:
                 try:
                     return await asyncio.wait_for(
-                        _fetch_member_json(slug, path), timeout=12.0,
+                        _fetch_member_json(slug, path),
+                        timeout=12.0,
                     )
                 except Exception:  # noqa: BLE001 — never expose exception text or credentials
                     return None
@@ -87,6 +93,5 @@ def register_usage_routes(app) -> None:
             path += "&" + urlencode({"by_agent": "true", "attribution_windows_json": json.dumps(windows)})
             results = await asyncio.gather(*(read(slug) for slug in slugs))
             host["attribution"] = await asyncio.to_thread(local_attribution, windows)
-            merge_attribution(body["accounts"], windows,
-                              {"host": host, **dict(zip(slugs, results, strict=True))})
+            merge_attribution(body["accounts"], windows, {"host": host, **dict(zip(slugs, results, strict=True))})
         return body

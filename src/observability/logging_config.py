@@ -85,6 +85,7 @@ def _quiet_secret_url_loggers(root_level: int) -> None:
     for name in _SECRET_URL_LOGGERS:
         logging.getLogger(name).setLevel(floor)
 
+
 # ---------------------------------------------------------------------------
 # Bounded in-process log buffer (#3168)
 # ---------------------------------------------------------------------------

@@ -455,7 +455,9 @@ class TelemetryStore:
             # fill, not the store's. Zero rows excluded for the same reason as the
             # turn-level series above — absent, not empty.
             fills_by_model: dict[str | None, list[int]] = {}
-            for r in db.execute(f"SELECT model, duration_ms, context_tokens FROM turns {lane_where}", params).fetchall():
+            for r in db.execute(
+                f"SELECT model, duration_ms, context_tokens FROM turns {lane_where}", params
+            ).fetchall():
                 if r["duration_ms"] is not None:
                     durations_by_model.setdefault(r["model"], []).append(r["duration_ms"])
                 if r["context_tokens"]:
@@ -464,15 +466,17 @@ class TelemetryStore:
             for row in by_model:
                 model_durations = sorted(durations_by_model.get(row["model"], []))
                 model_fills = sorted(fills_by_model.get(row["model"], []))
-                by_model_out.append({
-                    **dict(row),
-                    "cost_usd": round(row["cost_usd"] or 0.0, 6),
-                    "p50_duration_ms": _percentile(model_durations, 50),
-                    "p95_duration_ms": _percentile(model_durations, 95),
-                    "p99_duration_ms": _percentile(model_durations, 99),
-                    "cache_hit_ratio": _cache_hit_ratio(dict(row)),
-                    "p95_context_tokens": _percentile(model_fills, 95),
-                })
+                by_model_out.append(
+                    {
+                        **dict(row),
+                        "cost_usd": round(row["cost_usd"] or 0.0, 6),
+                        "p50_duration_ms": _percentile(model_durations, 50),
+                        "p95_duration_ms": _percentile(model_durations, 95),
+                        "p99_duration_ms": _percentile(model_durations, 99),
+                        "cache_hit_ratio": _cache_hit_ratio(dict(row)),
+                        "p95_context_tokens": _percentile(model_fills, 95),
+                    }
+                )
             out["by_model"] = by_model_out
             # #2697 — durable p50/p95/p99 duration PER TOOL, the by-model breakdown's
             # sibling. Unlike `model` (one scalar column, GROUP BY-able in SQL),
@@ -500,13 +504,15 @@ class TelemetryStore:
             by_tool_out = []
             for tool_name, values in durations_by_tool.items():
                 tool_durations_sorted = sorted(values)
-                by_tool_out.append({
-                    "tool": tool_name,
-                    "calls": len(tool_durations_sorted),
-                    "p50_duration_ms": _percentile(tool_durations_sorted, 50),
-                    "p95_duration_ms": _percentile(tool_durations_sorted, 95),
-                    "p99_duration_ms": _percentile(tool_durations_sorted, 99),
-                })
+                by_tool_out.append(
+                    {
+                        "tool": tool_name,
+                        "calls": len(tool_durations_sorted),
+                        "p50_duration_ms": _percentile(tool_durations_sorted, 50),
+                        "p95_duration_ms": _percentile(tool_durations_sorted, 95),
+                        "p99_duration_ms": _percentile(tool_durations_sorted, 99),
+                    }
+                )
             # Slowest first — the whole point of this breakdown is "what's tool X's p99",
             # so lead with the tools worth looking at rather than the most-called ones.
             by_tool_out.sort(key=lambda row: row["p95_duration_ms"], reverse=True)

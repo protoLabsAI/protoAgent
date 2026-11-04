@@ -99,7 +99,9 @@ def test_compact_preserves_tool_call_pairing():
         AIMessage(content="answer2", id="a4"),
     ]
     g = _FakeGraph(msgs)
-    res = asyncio.run(compact_thread(g, object(), None, _cfg(2), "a2a:s1", "s1", history_store=_FakeHistory(), summarizer=_summ))
+    res = asyncio.run(
+        compact_thread(g, object(), None, _cfg(2), "a2a:s1", "s1", history_store=_FakeHistory(), summarizer=_summ)
+    )
 
     _config, update = g.updates[0]
     tail = update["messages"][2:]
@@ -135,7 +137,9 @@ def test_compact_refuses_when_summarizer_raises():
     msgs = [HumanMessage(content=f"m{i}", id=f"m{i}") for i in range(6)]
     g = _FakeGraph(msgs)
     kb = _FakeHistory()
-    res = asyncio.run(compact_thread(g, object(), None, _cfg(2), "a2a:s1", "s1", history_store=kb, summarizer=_raise_summ))
+    res = asyncio.run(
+        compact_thread(g, object(), None, _cfg(2), "a2a:s1", "s1", history_store=kb, summarizer=_raise_summ)
+    )
     assert res["refused"] is True and res["reason"] == "summary_error"
     assert res["archived"] is True and res["archived_chunks"] == 1  # the archive stands
     assert g.updates == []  # NO checkpoint rewrite
@@ -151,7 +155,11 @@ def test_compact_noop_when_already_short():
 
 
 def test_compact_refuses_without_checkpointer():
-    res = asyncio.run(compact_thread(_FakeGraph([]), None, None, _cfg(2), "a2a:s1", "s1", history_store=_FakeHistory(), summarizer=_boom))
+    res = asyncio.run(
+        compact_thread(
+            _FakeGraph([]), None, None, _cfg(2), "a2a:s1", "s1", history_store=_FakeHistory(), summarizer=_boom
+        )
+    )
     assert res["refused"] is True and res["reason"] == "no_checkpointer"
 
 
@@ -248,7 +256,9 @@ def test_force_compacts_without_a_store():
     history was not archived (never claim an archive that didn't happen)."""
     msgs = [HumanMessage(content=f"m{i}", id=f"m{i}") for i in range(6)]
     g = _FakeGraph(msgs)
-    res = asyncio.run(compact_thread(g, object(), None, _cfg(2), "a2a:s1", "s1", history_store=None, summarizer=_summ, force=True))
+    res = asyncio.run(
+        compact_thread(g, object(), None, _cfg(2), "a2a:s1", "s1", history_store=None, summarizer=_summ, force=True)
+    )
     assert res["refused"] is False
     assert res["archived"] is False
     assert g.updates, "force mode must rewrite"
@@ -261,7 +271,9 @@ def test_force_compacts_when_summarizer_raises():
     msgs = [HumanMessage(content=f"m{i}", id=f"m{i}") for i in range(6)]
     g = _FakeGraph(msgs)
     kb = _FakeHistory(yields=True)
-    res = asyncio.run(compact_thread(g, object(), None, _cfg(2), "a2a:s1", "s1", history_store=kb, summarizer=_raise_summ, force=True))
+    res = asyncio.run(
+        compact_thread(g, object(), None, _cfg(2), "a2a:s1", "s1", history_store=kb, summarizer=_raise_summ, force=True)
+    )
     assert res["refused"] is False
     assert g.updates
     summary_msg = g.updates[0][1]["messages"][1]
@@ -274,7 +286,9 @@ def test_force_still_noops_on_an_already_short_thread():
     overflow has another cause and a retry would hit the same wall."""
     msgs = [HumanMessage(content="m", id="m0")]
     g = _FakeGraph(msgs)
-    res = asyncio.run(compact_thread(g, object(), None, _cfg(5), "a2a:s1", "s1", history_store=None, summarizer=_summ, force=True))
+    res = asyncio.run(
+        compact_thread(g, object(), None, _cfg(5), "a2a:s1", "s1", history_store=None, summarizer=_summ, force=True)
+    )
     # A benign no-op, not a refusal — but nothing shrank, which is what the
     # overflow caller keys on (it requires removed > 0 before retrying).
     assert res["reason"] == "too_short" and res["removed"] == 0
@@ -321,7 +335,9 @@ def test_compact_never_archives_an_incognito_thread(tmp_path):
     rewriting history it hasn't archived — so it refuses and changes nothing."""
     app = _seed_real_thread(str(tmp_path / "c.db"), "a2a:incog", incognito=True)
     kb = _FakeHistory()
-    res = asyncio.run(compact_thread(app, object(), None, _cfg(2), "a2a:incog", "incog", history_store=kb, summarizer=_boom))
+    res = asyncio.run(
+        compact_thread(app, object(), None, _cfg(2), "a2a:incog", "incog", history_store=kb, summarizer=_boom)
+    )
     assert kb.docs == []
     assert res["refused"] is True and res["reason"] == "incognito"
     assert res["removed"] == 0
@@ -332,7 +348,11 @@ def test_force_compact_of_an_incognito_thread_shrinks_without_archiving(tmp_path
     writing its transcript into memory."""
     app = _seed_real_thread(str(tmp_path / "c.db"), "a2a:incog", incognito=True)
     kb = _FakeHistory()
-    res = asyncio.run(compact_thread(app, object(), None, _cfg(2), "a2a:incog", "incog", history_store=kb, summarizer=_summ, force=True))
+    res = asyncio.run(
+        compact_thread(
+            app, object(), None, _cfg(2), "a2a:incog", "incog", history_store=kb, summarizer=_summ, force=True
+        )
+    )
     assert kb.docs == []
     assert res["refused"] is False and res["removed"] > 0 and res["archived"] is False
 
@@ -341,7 +361,9 @@ def test_compact_archives_a_non_incognito_real_thread(tmp_path):
     """Control for the two tests above: the same real thread, not incognito, IS archived."""
     app = _seed_real_thread(str(tmp_path / "c.db"), "a2a:open", incognito=False)
     kb = _FakeHistory()
-    res = asyncio.run(compact_thread(app, object(), None, _cfg(2), "a2a:open", "open", history_store=kb, summarizer=_summ))
+    res = asyncio.run(
+        compact_thread(app, object(), None, _cfg(2), "a2a:open", "open", history_store=kb, summarizer=_summ)
+    )
     assert len(kb.docs) == 1 and "teal" in kb.docs[0]["content"]
     assert res["archived"] is True
 
@@ -387,8 +409,12 @@ def test_compact_archive_row_carries_thread_source_and_dates(monkeypatch, tmp_pa
 def test_safe_cut_skips_orphan_tool_block_without_parent():
     from graph.compaction_op import _safe_cut_index
 
-    msgs = [HumanMessage(content="q"), ToolMessage(content="orphan", tool_call_id="missing"),
-            ToolMessage(content="also orphan", tool_call_id="missing2"), AIMessage(content="answer")]
+    msgs = [
+        HumanMessage(content="q"),
+        ToolMessage(content="orphan", tool_call_id="missing"),
+        ToolMessage(content="also orphan", tool_call_id="missing2"),
+        AIMessage(content="answer"),
+    ]
     assert _safe_cut_index(msgs, keep_last=3) == 3
 
 

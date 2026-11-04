@@ -305,9 +305,7 @@ async def _at_delegate_exchange(
     for o in claimed:
         o["in_answer"] = True
     if claimed:
-        note = _room_note(
-            [o for o in spoken if not _covered_by_a_bubble(o)], spoken, targets, _line, outcomes, plan
-        )
+        note = _room_note([o for o in spoken if not _covered_by_a_bubble(o)], spoken, targets, _line, outcomes, plan)
         # A TURN-level field, carried on the first exchange rather than as an extra list
         # entry: this function returns `(answer, outcomes)` and the note belongs to
         # neither, while a synthetic outcome would be counted as a participant by every

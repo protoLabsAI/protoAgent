@@ -205,9 +205,7 @@ class MCPSessionPool:
             if self._closed:
                 # Pool-side (shutdown/reload swap) — degrade to a tool error
                 # instead of killing a turn the operator never stopped.
-                raise RuntimeError(
-                    f"MCP session pool closed while calling server {slot.name!r}"
-                ) from None
+                raise RuntimeError(f"MCP session pool closed while calling server {slot.name!r}") from None
             # The caller cancelled (turn Stop, an upstream timeout). Propagate to
             # the pool side and RE-RAISE: swallowing this would hand the model a
             # normal tool result and the turn would keep running after Stop.
@@ -222,9 +220,7 @@ class MCPSessionPool:
                 raise RuntimeError("MCP session pool is closed")
             if self._loop is None:
                 self._loop = asyncio.new_event_loop()
-                self._thread = threading.Thread(
-                    target=self._loop.run_forever, name="mcp-session-pool", daemon=True
-                )
+                self._thread = threading.Thread(target=self._loop.run_forever, name="mcp-session-pool", daemon=True)
                 self._thread.start()
             return self._loop
 
@@ -313,9 +309,7 @@ class MCPSessionPool:
             task.cancel()
             # A late `ready` exception (owner failing after our timeout) must be
             # retrieved or asyncio logs "exception was never retrieved".
-            ready.add_done_callback(
-                lambda f: f.exception() if not f.cancelled() else None
-            )
+            ready.add_done_callback(lambda f: f.exception() if not f.cancelled() else None)
             raise
         slot.session, slot.stop, slot.task = session, stop, task
         slot.generation += 1
@@ -367,8 +361,7 @@ class PooledServerSession:
             if _session_is_dead(exc):
                 # Server died mid-call AND the one reconnect retry died too.
                 raise ToolException(
-                    f"MCP server '{self._slot.name}' died during the call "
-                    f"(one reconnect was attempted): {exc}"
+                    f"MCP server '{self._slot.name}' died during the call (one reconnect was attempted): {exc}"
                 ) from exc
             raise  # live-server protocol error — same semantics as per-call sessions
         except ToolException:
@@ -378,6 +371,4 @@ class PooledServerSession:
             # by a config reload, ...). A ToolException is caught by the tool's
             # handle_tool_error and returned to the model as a recoverable
             # tool-error string — a dead engine must not cost the whole turn.
-            raise ToolException(
-                f"MCP server '{self._slot.name}' is unreachable (reconnect failed): {exc}"
-            ) from exc
+            raise ToolException(f"MCP server '{self._slot.name}' is unreachable (reconnect failed): {exc}") from exc

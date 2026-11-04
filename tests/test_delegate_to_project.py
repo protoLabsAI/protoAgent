@@ -67,9 +67,7 @@ while True:
 
 
 def _git(root: Path, *args: str) -> str:
-    return subprocess.run(
-        ["git", "-C", str(root), *args], check=True, capture_output=True, text=True
-    ).stdout
+    return subprocess.run(["git", "-C", str(root), *args], check=True, capture_output=True, text=True).stdout
 
 
 def _repo(path: Path) -> Path:
@@ -205,7 +203,9 @@ async def test_project_on_non_acp_delegate_is_refused(coder_registry, projects_c
             await coder_registry.dispatch(name, "hi", project=scope)
 
 
-async def test_project_dispatch_sets_only_workdir_and_never_mutates_the_roster(coder_registry, projects_config, monkeypatch):
+async def test_project_dispatch_sets_only_workdir_and_never_mutates_the_roster(
+    coder_registry, projects_config, monkeypatch
+):
     configured = dataclasses.asdict(coder_registry.get("coder"))
     seen = {}
 
@@ -257,8 +257,14 @@ async def test_second_dispatch_into_same_project_reuses_its_client_and_workdir(c
 def test_return_diff_parses_and_defaults_on():
     acp = ADAPTERS["acp"]
     assert acp.parse({"name": "c", "type": "acp", "command": "x", "workdir": "/tmp"}).return_diff is True
-    assert acp.parse({"name": "c", "type": "acp", "command": "x", "workdir": "/tmp", "return_diff": "false"}).return_diff is False
-    assert acp.parse({"name": "c", "type": "acp", "command": "x", "workdir": "/tmp", "return_diff": False}).return_diff is False
+    assert (
+        acp.parse({"name": "c", "type": "acp", "command": "x", "workdir": "/tmp", "return_diff": "false"}).return_diff
+        is False
+    )
+    assert (
+        acp.parse({"name": "c", "type": "acp", "command": "x", "workdir": "/tmp", "return_diff": False}).return_diff
+        is False
+    )
     assert "return_diff" in {f.key for f in acp.config_schema()}
 
 
@@ -322,10 +328,20 @@ async def test_non_git_project_degrades_to_a_note(agent_script, tmp_path, monkey
     plain = tmp_path / "plain"
     plain.mkdir()
     (plain / "app.py").write_text("x\n", encoding="utf-8")
-    cfg = LangGraphConfig(filesystem_enabled=True, filesystem_projects=[{"name": "plain", "path": str(plain), "write": True}])
+    cfg = LangGraphConfig(
+        filesystem_enabled=True, filesystem_projects=[{"name": "plain", "path": str(plain), "write": True}]
+    )
     monkeypatch.setattr(HOST, "config", lambda: cfg)
     reg = DelegateRegistry(
-        [{"name": "coder", "type": "acp", "command": sys.executable, "args": [str(agent_script)], "workdir": str(tmp_path)}]
+        [
+            {
+                "name": "coder",
+                "type": "acp",
+                "command": sys.executable,
+                "args": [str(agent_script)],
+                "workdir": str(tmp_path),
+            }
+        ]
     )
     reply = await reg.dispatch("coder", "add a line", project=resolve("plain"))
     assert "done in" in reply and "is not a git repository" in reply
@@ -426,7 +442,15 @@ async def test_tool_background_path_carries_the_project(monkeypatch, projects_co
 
     monkeypatch.setattr(STATE, "background_mgr", None, raising=False)
     tool = _tool(
-        [{"name": "coder", "type": "acp", "command": sys.executable, "args": [str(agent_script)], "workdir": str(tmp_path)}],
+        [
+            {
+                "name": "coder",
+                "type": "acp",
+                "command": sys.executable,
+                "args": [str(agent_script)],
+                "workdir": str(tmp_path),
+            }
+        ],
         monkeypatch,
     )
     out = await _call(tool, {"target": "coder", "query": "add a line", "project": "rw", "background": True})

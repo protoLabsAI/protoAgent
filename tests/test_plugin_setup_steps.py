@@ -38,21 +38,34 @@ def test_plugin_setup_is_an_allowlisted_kind():
 
 
 def test_a_plugin_setup_action_keeps_its_step_and_is_scoped_to_the_reporting_plugin():
-    actions = _actions({"kind": "plugin_setup", "step": "download-cli", "label": "Download the CLI",
-                        "target": "some_other_plugin", "command": "rm -rf /", "url": "https://evil.example"})
+    actions = _actions(
+        {
+            "kind": "plugin_setup",
+            "step": "download-cli",
+            "label": "Download the CLI",
+            "target": "some_other_plugin",
+            "command": "rm -rf /",
+            "url": "https://evil.example",
+        }
+    )
     assert actions == [{"kind": "plugin_setup", "target": "pb", "step": "download-cli", "label": "Download the CLI"}]
     json.dumps(actions)  # plain data
 
 
-@pytest.mark.parametrize("step", [None, "", "   ", "Download", "../etc", "a/b", "a.b", "http://x", "x:y", "a" * 65, 5,
-                                  ["download-cli"]])
+@pytest.mark.parametrize(
+    "step", [None, "", "   ", "Download", "../etc", "a/b", "a.b", "http://x", "x:y", "a" * 65, 5, ["download-cli"]]
+)
 def test_a_plugin_setup_action_without_a_valid_step_is_dropped(step):
     assert _actions({"kind": "plugin_setup", "step": step, "label": "Go"}) is None
 
 
 def test_a_plugin_setup_action_sits_beside_a_config_action():
-    actions = _actions([{"kind": "plugin_setup", "step": "install-chrome", "label": "Install Chrome"},
-                        {"kind": "plugin_config", "label": "Configure", "fields": ["binary"]}])
+    actions = _actions(
+        [
+            {"kind": "plugin_setup", "step": "install-chrome", "label": "Install Chrome"},
+            {"kind": "plugin_config", "label": "Configure", "fields": ["binary"]},
+        ]
+    )
     assert [a["kind"] for a in actions] == ["plugin_setup", "plugin_config"]
 
 
@@ -77,8 +90,11 @@ def test_a_step_that_raises_is_not_ok_with_its_message():
         raise RuntimeError("the network is down")
 
     setup_gaps.register_step("pb", "go", boom)
-    assert setup_gaps.run_step("pb", "go") == {"ok": False, "message": "RuntimeError: the network is down",
-                                               "pending": False}
+    assert setup_gaps.run_step("pb", "go") == {
+        "ok": False,
+        "message": "RuntimeError: the network is down",
+        "pending": False,
+    }
 
 
 def test_a_long_message_is_bounded():
@@ -102,9 +118,9 @@ def test_steps_per_plugin_are_capped():
 def test_disable_and_uninstall_drop_the_steps_with_the_gaps():
     setup_gaps.register_step("pb", "go", lambda: 1)
     setup_gaps.register_step("gh", "login", lambda: 1)
-    setup_gaps.clear_plugin("pb")                        # disabled
+    setup_gaps.clear_plugin("pb")  # disabled
     assert not setup_gaps.has_step("pb", "go") and setup_gaps.has_step("gh", "login")
-    setup_gaps.retain({"other"})                         # gh uninstalled
+    setup_gaps.retain({"other"})  # gh uninstalled
     assert not setup_gaps.has_step("gh", "login")
 
 
@@ -128,20 +144,20 @@ def test_the_testkit_fake_records_steps_with_the_host_signature():
 def test_a_registry_from_before_a_clear_reports_nothing(tmp_path):
     old = PluginRegistry("pb", tmp_path)
     old.report_setup_gap("cli", "the CLI is missing")
-    setup_gaps.clear_plugin("pb")                          # the operator disabled it
+    setup_gaps.clear_plugin("pb")  # the operator disabled it
     # …and a download thread of that load finishes afterwards, re-reporting with a Retry
     old.report_setup_gap("cli", "the download failed", action={"kind": "plugin_setup", "step": "download-cli"})
     assert setup_gaps.active() == []
-    fresh = PluginRegistry("pb", tmp_path)                # re-enabled: the new load reports normally
+    fresh = PluginRegistry("pb", tmp_path)  # re-enabled: the new load reports normally
     fresh.report_setup_gap("cli", "the CLI is missing")
     assert [g["key"] for g in setup_gaps.active()] == ["cli"]
-    old.report_setup_gap("late", "still the old load")    # …and the old one still can't
+    old.report_setup_gap("late", "still the old load")  # …and the old one still can't
     assert [g["key"] for g in setup_gaps.active()] == ["cli"]
 
 
 def test_an_uninstall_retires_the_generation_too(tmp_path):
     old = PluginRegistry("pb", tmp_path)
-    setup_gaps.retain({"other"})                           # pb is gone from disk
+    setup_gaps.retain({"other"})  # pb is gone from disk
     old.report_setup_gap("cli", "late")
     assert setup_gaps.active() == []
 
@@ -166,15 +182,17 @@ def test_a_plugin_whose_reload_fails_loses_its_steps_and_banners(tmp_path, monke
         "def register(registry):\n"
         "    registry.register_setup_step('go', lambda: 'ran the OLD code')\n"
         "    registry.report_setup_gap('cli', 'missing', action={'kind': 'plugin_setup', 'step': 'go'})\n",
-        encoding="utf-8")
+        encoding="utf-8",
+    )
     monkeypatch.setattr(plugin_loader, "_plugin_roots", lambda _config: [root])
     first = plugin_loader.load_plugins(LangGraphConfig(plugins_enabled=["boomy"]))
     assert first.meta[0].get("loaded") is True
     assert setup_gaps.has_step("boomy", "go") and [g["key"] for g in setup_gaps.active()] == ["cli"]
 
-    (plugin / "__init__.py").write_text("def register(registry):\n    raise RuntimeError('broken edit')\n",
-                                        encoding="utf-8")
-    plugin_loader.purge_plugin_modules("boomy")            # what a reload does before re-importing
+    (plugin / "__init__.py").write_text(
+        "def register(registry):\n    raise RuntimeError('broken edit')\n", encoding="utf-8"
+    )
+    plugin_loader.purge_plugin_modules("boomy")  # what a reload does before re-importing
     second = plugin_loader.load_plugins(LangGraphConfig(plugins_enabled=["boomy"]))
     assert "broken edit" in str(second.meta[0].get("error"))
     # no live code behind them any more: the old load's step is unreachable, its banner gone

@@ -29,14 +29,14 @@ def _v(props):
 
 # A plugin that registers one FRAMED component and one plain (no-frame) component, so the
 # catalog is exercised across both shapes in a single load.
-_PLUGIN = '''
+_PLUGIN = """
 def _v(props):
     return None
 
 def register(registry):
     registry.register_component("thing-ref", _v, frame="component.html")
     registry.register_component("plain-ref", _v)
-'''
+"""
 
 
 def _make_plugin(root: Path, pid: str) -> None:
@@ -91,7 +91,12 @@ def test_catalog_lists_core_and_plugin_kinds():
     for core in components.COMPONENT_TYPES:
         assert rows[core] == {"name": core, "plugin": None, "frame_url": None, "reads": []}
     # The frame kind carries its public URL; the plain plugin kind is attributed but frameless.
-    assert rows["thing-ref"] == {"name": "thing-ref", "plugin": "p", "frame_url": "/plugins/p/component.html", "reads": []}
+    assert rows["thing-ref"] == {
+        "name": "thing-ref",
+        "plugin": "p",
+        "frame_url": "/plugins/p/component.html",
+        "reads": [],
+    }
     assert rows["plain-ref"] == {"name": "plain-ref", "plugin": "p", "frame_url": None, "reads": []}
 
 
@@ -151,5 +156,10 @@ def test_route_requires_operator_bearer_and_returns_catalog(tmp_path, monkeypatc
     rows = {r["name"]: r for r in resp.json()}
     for core in components.COMPONENT_TYPES:
         assert rows[core] == {"name": core, "plugin": None, "frame_url": None, "reads": []}
-    assert rows["thing-ref"] == {"name": "thing-ref", "plugin": "p", "frame_url": "/plugins/p/component.html", "reads": []}
+    assert rows["thing-ref"] == {
+        "name": "thing-ref",
+        "plugin": "p",
+        "frame_url": "/plugins/p/component.html",
+        "reads": [],
+    }
     assert rows["plain-ref"] == {"name": "plain-ref", "plugin": "p", "frame_url": None, "reads": []}

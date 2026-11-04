@@ -63,6 +63,7 @@ def _rmtree(path: Path) -> None:
     else:  # pragma: no cover - the repo pins 3.12+
         _shutil.rmtree(path, onerror=lambda f, t, e: _clear_readonly(f, t, e))
 
+
 REMOTE = "https://git.example.test"
 UPSTREAM = f"{REMOTE}/protoLabsAI/cowork-plugin"  # the retired standalone repo
 FORK = f"{REMOTE}/someone/cowork-plugin"  # an operator's deliberate override
@@ -507,7 +508,9 @@ async def test_single_install_of_a_superseded_url_enables_the_bundled_copy(host)
         written.update(updates(cfg) if callable(updates) else updates)
         return True, []
 
-    res = await install_and_activate(UPSTREAM, ctx=OpContext(knowledge_store=None, graph_config=cfg), apply_settings=_apply)
+    res = await install_and_activate(
+        UPSTREAM, ctx=OpContext(knowledge_store=None, graph_config=cfg), apply_settings=_apply
+    )
     assert res.enabled == ["cowork"] and written["plugins"]["enabled"] == ["cowork"]
     assert res.installed_ids == []
 
@@ -711,7 +714,9 @@ def _superseded_pair(host, *, installed_extra: str = "", bundled_extra: str = ""
 
 
 def test_install_deps_installs_the_running_copys_deps_not_the_ignored_ones(host, monkeypatch):
-    _superseded_pair(host, installed_extra="requires_pip:\n  - oldpkg==1.0\n", bundled_extra="requires_pip:\n  - newpkg==2.0\n")
+    _superseded_pair(
+        host, installed_extra="requires_pip:\n  - oldpkg==1.0\n", bundled_extra="requires_pip:\n  - newpkg==2.0\n"
+    )
     monkeypatch.setattr(installer, "_frozen_like", lambda: False)
     pip_calls: list[list[str]] = []
     # The pip boundary only — install_deps itself (and its copy choice) runs for real.
@@ -725,7 +730,9 @@ def test_install_deps_installs_the_running_copys_deps_not_the_ignored_ones(host,
 
 
 def test_installed_inventory_describes_the_running_bundled_copy(host, monkeypatch):
-    _superseded_pair(host, installed_extra="requires_pip:\n  - oldpkg==1.0\n", bundled_extra="requires_pip:\n  - newpkg==2.0\n")
+    _superseded_pair(
+        host, installed_extra="requires_pip:\n  - oldpkg==1.0\n", bundled_extra="requires_pip:\n  - newpkg==2.0\n"
+    )
     _wire_routes(monkeypatch, enabled=["cowork"])
     row = next(r for r in _client().get("/api/plugins/installed").json()["plugins"] if r["id"] == "cowork")
     assert row["superseded"] is True and row["copy_on_disk"] is True
@@ -1073,7 +1080,9 @@ def test_archetype_preview_describes_the_bundled_copy_without_fetching(host):
 
 
 def _devkit(monkeypatch):
-    spec = importlib.util.spec_from_file_location("pdk_supersedes_test", REPO / "plugins" / "plugin-devkit" / "__init__.py")
+    spec = importlib.util.spec_from_file_location(
+        "pdk_supersedes_test", REPO / "plugins" / "plugin-devkit" / "__init__.py"
+    )
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     applied: list = []
@@ -1363,9 +1372,7 @@ def test_the_autoupdate_skip_log_redacts_the_install_url(host, monkeypatch, capl
     cfg = types.SimpleNamespace(plugins_enabled=["cowork"], plugins_disabled=[], plugins_sources_allow=[])
     monkeypatch.setattr(agent_init, "_apply_settings_changes", lambda **kw: (True, []))
     with caplog.at_level(logging.INFO):
-        updated = asyncio.run(
-            agent_init._plugin_autoupdate_sweep(cfg, {"cowork": {"track": "main", "when": "always"}})
-        )
+        updated = asyncio.run(agent_init._plugin_autoupdate_sweep(cfg, {"cowork": {"track": "main", "when": "always"}}))
     assert updated == 0
     assert "ships with protoAgent now" in caplog.text and "SEKRET" not in caplog.text
 
@@ -1813,7 +1820,6 @@ def test_a_tracked_superseded_row_whose_files_are_gone_clears_only_the_lock(host
     report = installer.uninstall("cowork")
     assert report["removed"] == ["lock"] and report["was_loaded"] is False
     assert installer._read_lock()["plugins"] == []
-
 
 
 # ═══ Round-5: every delete goes through a "this really is the plugin" check ════════

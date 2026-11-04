@@ -75,8 +75,12 @@ def test_npm_package_strips_the_version(spec: str, name: str) -> None:
 
 @pytest.mark.parametrize(
     ("spec", "name"),
-    [("mcp-server-git", "mcp-server-git"), ("mcp-server-git==1.2", "mcp-server-git"),
-     ("pkg[cli]>=2", "pkg"), ("pkg@1.0", "pkg")],
+    [
+        ("mcp-server-git", "mcp-server-git"),
+        ("mcp-server-git==1.2", "mcp-server-git"),
+        ("pkg[cli]>=2", "pkg"),
+        ("pkg@1.0", "pkg"),
+    ],
 )
 def test_pypi_package_strips_the_specifier(spec: str, name: str) -> None:
     assert cmc.pypi_package(spec) == name
@@ -138,7 +142,11 @@ def test_missing_and_yanked_pypi_projects_are_drift() -> None:
 
 def test_a_remote_endpoint_that_wants_credentials_is_alive() -> None:
     """The GitHub MCP endpoint answers an anonymous probe with 401 — that is up."""
-    server = {"id": "gh", "docs": "https://docs.example/x", "template": {"transport": "http", "url": "https://mcp.example/"}}
+    server = {
+        "id": "gh",
+        "docs": "https://docs.example/x",
+        "template": {"transport": "http", "url": "https://mcp.example/"},
+    }
     for status in (200, 401, 403, 405, 406):
         res = cmc.check_server(server, _fetcher({"https://mcp.example/": (status, None), **_DOCS_OK}))
         assert (res.drift, res.warnings) == ([], []), status
@@ -149,8 +157,9 @@ def test_a_remote_endpoint_that_wants_credentials_is_alive() -> None:
 def test_a_docs_page_behind_a_login_or_gone_is_drift() -> None:
     doc = {"dist-tags": {"latest": "1"}, "versions": {"1": {}}}
     for status in (403, 404, 410):
-        res = cmc.check_server(_npx("ok"), _fetcher({"https://registry.npmjs.org/": (200, doc),
-                                                     "https://docs.example/": (status, None)}))
+        res = cmc.check_server(
+            _npx("ok"), _fetcher({"https://registry.npmjs.org/": (200, doc), "https://docs.example/": (status, None)})
+        )
         assert res.drift == [f"docs `https://docs.example/x` answered {status}"], status
 
 
@@ -161,8 +170,9 @@ def test_a_docs_page_behind_a_login_or_gone_is_drift() -> None:
 )
 def test_inconclusive_answers_warn_and_never_count_as_drift(answer) -> None:
     """A flaky registry must not file an issue or redden a PR."""
-    res = cmc.check_server(_npx("pkg"), _fetcher({"https://registry.npmjs.org/": answer,
-                                                  "https://docs.example/": answer}))
+    res = cmc.check_server(
+        _npx("pkg"), _fetcher({"https://registry.npmjs.org/": answer, "https://docs.example/": answer})
+    )
     assert res.drift == [] and len(res.warnings) == 2
 
 

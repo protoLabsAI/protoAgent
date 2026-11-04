@@ -77,7 +77,14 @@ def _managed_bin() -> Path:
 
 @pytest.mark.parametrize(
     ("text", "expected"),
-    [("v22.11.0", (22, 11, 0)), ("20", (20, 0, 0)), ("v20.6", (20, 6, 0)), ("v24.18.0\n", (24, 18, 0)), ("", None), ("node", None)],
+    [
+        ("v22.11.0", (22, 11, 0)),
+        ("20", (20, 0, 0)),
+        ("v20.6", (20, 6, 0)),
+        ("v24.18.0\n", (24, 18, 0)),
+        ("", None),
+        ("node", None),
+    ],
 )
 def test_parse_node_version(text, expected):
     assert nr.parse_node_version(text) == expected

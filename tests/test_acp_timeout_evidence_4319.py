@@ -19,8 +19,12 @@ def client(monkeypatch, tmp_path):
 
 async def run(client):
     return await client._prompt_locked(
-        "work", progress_callback=None, tool_callback=None, text_callback=None,
-        thought_callback=None, timeout=0.01,
+        "work",
+        progress_callback=None,
+        tool_callback=None,
+        text_callback=None,
+        thought_callback=None,
+        timeout=0.01,
     )
 
 
@@ -32,11 +36,21 @@ async def test_timeout_has_bounded_redacted_evidence(client, monkeypatch):
     client._note_transcript({"_meta": {"transcriptPath": "/logs/session-4319.jsonl"}})
 
     async def send(_message):
-        await update(client, sessionUpdate="tool_call", toolCallId="edit", title="Edit",
-                     kind="edit", rawInput={"content": "NEVER DUMP FILE CONTENT"})
-        await update(client, sessionUpdate="tool_call_update", toolCallId="edit",
-                     locations=[{"path": f"src/file-{i}.py"} for i in range(20)],
-                     content=[{"type": "diff", "path": "other.py", "newText": "PRIVATE CONTENT"}])
+        await update(
+            client,
+            sessionUpdate="tool_call",
+            toolCallId="edit",
+            title="Edit",
+            kind="edit",
+            rawInput={"content": "NEVER DUMP FILE CONTENT"},
+        )
+        await update(
+            client,
+            sessionUpdate="tool_call_update",
+            toolCallId="edit",
+            locations=[{"path": f"src/file-{i}.py"} for i in range(20)],
+            content=[{"type": "diff", "path": "other.py", "newText": "PRIVATE CONTENT"}],
+        )
         client._stderr_tail.extend(["No onPostToolUseHook found"] * 50)
         client._stderr_tail.append("\x1b[31mAPI_KEY=secret-value\x1b[0m")
         client._stderr_tail.append("noise" * 1000)
@@ -69,11 +83,23 @@ async def test_evidence_resets_and_read_paths_are_not_edits(client, monkeypatch)
         nonlocal calls
         calls += 1
         if calls == 1:
-            await update(client, sessionUpdate="tool_call", toolCallId="old", title="Write",
-                         kind="edit", locations=[{"path": "previous.py"}])
+            await update(
+                client,
+                sessionUpdate="tool_call",
+                toolCallId="old",
+                title="Write",
+                kind="edit",
+                locations=[{"path": "previous.py"}],
+            )
         else:
-            await update(client, sessionUpdate="tool_call", toolCallId="read", title="Read",
-                         kind="read", locations=[{"path": "only-read.py"}])
+            await update(
+                client,
+                sessionUpdate="tool_call",
+                toolCallId="read",
+                title="Read",
+                kind="read",
+                locations=[{"path": "only-read.py"}],
+            )
 
     monkeypatch.setattr(client, "_send", send)
     for _ in range(2):
@@ -95,10 +121,15 @@ async def test_pending_permission_until_response_sent(client, monkeypatch):
         await release.wait()
 
     monkeypatch.setattr(client, "_respond", respond)
-    request = asyncio.create_task(client._handle_request({
-        "id": 1, "method": "session/request_permission",
-        "params": {"options": [{"kind": "allow_once", "optionId": "yes"}]},
-    }))
+    request = asyncio.create_task(
+        client._handle_request(
+            {
+                "id": 1,
+                "method": "session/request_permission",
+                "params": {"options": [{"kind": "allow_once", "optionId": "yes"}]},
+            }
+        )
+    )
     try:
         await entered.wait()
         assert "pending_permission=yes" in client._timeout_evidence()
@@ -114,8 +145,13 @@ async def test_abandon_preserves_exception_contract(client, monkeypatch, reporte
     original = AcpError("transport gone", code=42, data={"reason": "gone"}, reported_by_agent=reported)
 
     async def request(*args, **kwargs):
-        await update(client, sessionUpdate="tool_call", toolCallId="bash",
-                     title='Bash: echo SECRET_ARGUMENT', rawInput={"command": "SECRET_ARGUMENT"})
+        await update(
+            client,
+            sessionUpdate="tool_call",
+            toolCallId="bash",
+            title="Bash: echo SECRET_ARGUMENT",
+            rawInput={"command": "SECRET_ARGUMENT"},
+        )
         raise original
 
     monkeypatch.setattr(client, "_request", request)
@@ -146,8 +182,7 @@ async def test_unknown_tool_and_external_cancellation_contract(client, monkeypat
 
 async def test_replayed_tools_ignored_and_transcript_cleared(client):
     client._loading = True
-    await update(client, sessionUpdate="tool_call", title="Edit", kind="edit",
-                 locations=[{"path": "history.py"}])
+    await update(client, sessionUpdate="tool_call", title="Edit", kind="edit", locations=[{"path": "history.py"}])
     assert client._last_tool is None
     assert client._observed_edit_paths == []
     client._note_transcript({"_meta": {"transcriptPath": "/logs/old.jsonl"}})
@@ -168,13 +203,25 @@ async def test_timeout_snapshots_pending_permission_and_tool_age(client, monkeyp
 
     async def send(_message):
         nonlocal permission_task
-        await update(client, sessionUpdate="tool_call", toolCallId="write",
-                     title="Write", kind="edit", locations=[{"path": "attempt.py"}],
-                     status="failed")
+        await update(
+            client,
+            sessionUpdate="tool_call",
+            toolCallId="write",
+            title="Write",
+            kind="edit",
+            locations=[{"path": "attempt.py"}],
+            status="failed",
+        )
         client._last_tool = ("Write", time.monotonic() - 12)
-        permission_task = asyncio.create_task(client._handle_request({
-            "id": 9, "method": "session/request_permission", "params": {},
-        }))
+        permission_task = asyncio.create_task(
+            client._handle_request(
+                {
+                    "id": 9,
+                    "method": "session/request_permission",
+                    "params": {},
+                }
+            )
+        )
         await entered.wait()
 
     monkeypatch.setattr(client, "_respond", respond)
@@ -194,9 +241,16 @@ async def test_timeout_snapshots_pending_permission_and_tool_age(client, monkeyp
 
 @pytest.mark.parametrize("load", [False, True])
 async def test_transcript_metadata_bound_to_new_or_loaded_session(client, monkeypatch, load):
-    monkeypatch.setattr(client, "_request", AsyncMock(return_value={
-        "sessionId": "new-session", "_meta": {"transcriptPath": "/agent/reported.jsonl"},
-    }))
+    monkeypatch.setattr(
+        client,
+        "_request",
+        AsyncMock(
+            return_value={
+                "sessionId": "new-session",
+                "_meta": {"transcriptPath": "/agent/reported.jsonl"},
+            }
+        ),
+    )
     monkeypatch.setattr(client, "_persist_session_id", lambda _: None)
     if load:
         await client._load_session("resumed-session")

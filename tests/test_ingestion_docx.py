@@ -160,7 +160,9 @@ _HELLO = f'<?xml version="1.0"?><w:document xmlns:w="{_W_NS}"><w:body><w:p><w:r>
 
 
 def _package(document_xml: bytes) -> bytes:
-    return _bare_zip({"[Content_Types].xml": _CONTENT_TYPES, "_rels/.rels": _ROOT_RELS, "word/document.xml": document_xml})
+    return _bare_zip(
+        {"[Content_Types].xml": _CONTENT_TYPES, "_rels/.rels": _ROOT_RELS, "word/document.xml": document_xml}
+    )
 
 
 def _body(inner: bytes) -> bytes:
@@ -281,9 +283,7 @@ def test_docx_text_box_is_read_once_despite_its_legacy_fallback():
     from docx.oxml import parse_xml
 
     d = docx.Document()
-    box = (
-        "<w:txbxContent><w:p><w:r><w:t>linkedin.com/in/jane</w:t></w:r></w:p></w:txbxContent>"
-    )
+    box = "<w:txbxContent><w:p><w:r><w:t>linkedin.com/in/jane</w:t></w:r></w:p></w:txbxContent>"
     anchor = parse_xml(
         '<w:p xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"'
         ' xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"'
@@ -900,8 +900,12 @@ def test_chat_attach_refuses_a_bomb_and_never_reaches_the_store(monkeypatch):
     over_budget = _package(_body(b"<w:p/>" * (engine._MAX_DOCX_XML_NODES + 200_000)))
     bad_method = _lying_size_docx(64 * 2**20, zipfile.ZIP_BZIP2)
 
-    too_large = c.post("/api/knowledge/attach", data={"session_id": "s1"}, files={"file": ("bloat.docx", over_budget, DOCX_MIME)})
-    bogus = c.post("/api/knowledge/attach", data={"session_id": "s1"}, files={"file": ("bomb.docx", bad_method, DOCX_MIME)})
+    too_large = c.post(
+        "/api/knowledge/attach", data={"session_id": "s1"}, files={"file": ("bloat.docx", over_budget, DOCX_MIME)}
+    )
+    bogus = c.post(
+        "/api/knowledge/attach", data={"session_id": "s1"}, files={"file": ("bomb.docx", bad_method, DOCX_MIME)}
+    )
 
     assert too_large.status_code == 413, too_large.text
     assert "too large or too complex" in too_large.json()["detail"]
@@ -926,7 +930,9 @@ def test_chat_attach_document_cannot_forge_its_own_fence(monkeypatch):
     body = _save(d)
     c = _client(monkeypatch, _KS())
 
-    ctx = c.post("/api/knowledge/attach", data={"session_id": "s1"}, files={"file": ("resume.docx", body, DOCX_MIME)}).json()["context"]
+    ctx = c.post(
+        "/api/knowledge/attach", data={"session_id": "s1"}, files={"file": ("resume.docx", body, DOCX_MIME)}
+    ).json()["context"]
 
     fence = re.match(r"\[Attached file: resume\.docx · id ([0-9a-f]{8})\]", ctx).group(1)
     # Exactly one real opening and one real closing delimiter — both carrying the id.
@@ -941,7 +947,10 @@ def test_chat_attach_fence_id_is_per_attachment(monkeypatch):
     c = _client(monkeypatch, _KS())
     files = {"file": ("note.txt", b"hello", "text/plain")}
     ids = {
-        re.match(r"\[Attached file: note\.txt · id ([0-9a-f]{8})\]", c.post("/api/knowledge/attach", data={"session_id": "s1"}, files=files).json()["context"]).group(1)
+        re.match(
+            r"\[Attached file: note\.txt · id ([0-9a-f]{8})\]",
+            c.post("/api/knowledge/attach", data={"session_id": "s1"}, files=files).json()["context"],
+        ).group(1)
         for _ in range(2)
     }
     assert len(ids) == 2, "the same id twice — a document that saw one could forge the next"

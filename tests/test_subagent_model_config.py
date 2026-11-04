@@ -107,7 +107,9 @@ def test_config_overlay_preserves_allow_skill_emission(monkeypatch):
 
     original = SUBAGENT_REGISTRY.get("researcher")
     # _apply_config_subagents reads the module-level RESEARCHER_CONFIG as its base.
-    monkeypatch.setattr(sub_config, "RESEARCHER_CONFIG", dataclasses.replace(RESEARCHER_CONFIG, allow_skill_emission=False))
+    monkeypatch.setattr(
+        sub_config, "RESEARCHER_CONFIG", dataclasses.replace(RESEARCHER_CONFIG, allow_skill_emission=False)
+    )
     try:
         cfg = LangGraphConfig()
         cfg.researcher = dataclasses.replace(cfg.researcher, model="protolabs/reasoning")

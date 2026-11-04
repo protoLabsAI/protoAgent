@@ -189,7 +189,7 @@ def test_sync_middleware_keeps_the_steer_when_boundary_dispatch_fails(monkeypatc
 
 
 def test_drain_records_what_a_turn_folded_in(monkeypatch):
-    """"Gone from the queue" alone cannot tell a message the agent READ from one a restart
+    """ "Gone from the queue" alone cannot tell a message the agent READ from one a restart
     dropped, and the console must not guess between settling a message the agent never saw
     and re-offering one it already used. The drain log is the server answering that."""
     steering.enqueue("s-drain", "one", msg_id="d1")
@@ -265,10 +265,7 @@ async def test_turn_stream_sanitizes_and_forwards_consumed_steers(monkeypatch):
     monkeypatch.setattr(chat_mod, "_pending_interrupt_value", _no_interrupt)
 
     frames = [
-        frame
-        async for frame in chat_mod._run_turn_stream(
-            "start", "sess", {"configurable": {"thread_id": "sess"}}
-        )
+        frame async for frame in chat_mod._run_turn_stream("start", "sess", {"configurable": {"thread_id": "sess"}})
     ]
 
     assert ("steer_consumed", {"items": [{"id": "s1", "text": "first"}, {"id": "7", "text": "9"}]}) in frames

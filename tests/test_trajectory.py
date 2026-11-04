@@ -94,9 +94,17 @@ def test_middleware_emits_joinable_request_refs(tmp_path, monkeypatch):
 
     msgs = [HumanMessage(content="the question", id="h1"), AIMessage(content="the answer", id="a1")]
     resp = SimpleNamespace(
-        result=[AIMessage(content="ok", usage_metadata={"input_tokens": 100, "output_tokens": 5,
-                                                        "total_tokens": 105,
-                                                        "input_token_details": {"cache_read": 90}})]
+        result=[
+            AIMessage(
+                content="ok",
+                usage_metadata={
+                    "input_tokens": 100,
+                    "output_tokens": 5,
+                    "total_tokens": 105,
+                    "input_token_details": {"cache_read": 90},
+                },
+            )
+        ]
     )
     out = TrajectoryMiddleware().wrap_model_call(_Req(msgs), lambda r: resp)
     assert out is resp
@@ -147,8 +155,12 @@ def test_rewind_and_fork_emit_surface_ops(tmp_path, monkeypatch):
         async def aupdate_state(self, config, update):
             pass
 
-    msgs = [HumanMessage(content="q", id="h1"), AIMessage(content="a", id="a1"),
-            HumanMessage(content="q2", id="h2"), AIMessage(content="a2", id="a2")]
+    msgs = [
+        HumanMessage(content="q", id="h1"),
+        AIMessage(content="a", id="a1"),
+        HumanMessage(content="q2", id="h2"),
+        AIMessage(content="a2", id="a2"),
+    ]
     g = _G({"a2a:src": msgs})
     asyncio.run(rewind_thread(g, object(), "a2a:src", target_content="a"))
     asyncio.run(fork_thread(g, object(), "a2a:src", "a2a:dst", target_content="a"))

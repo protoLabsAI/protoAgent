@@ -219,14 +219,8 @@ async def _stream_with_reconnect(
             # Two different failures reach here and the distinction matters when reading
             # logs: a transport drop (provider CLOSED the stream — often a rate limit) vs
             # a stall (socket still open, provider went SILENT — #2305/#3699).
-            stalled = isinstance(exc, StreamStallTimeout) or (
-                _STALL_ERRORS and isinstance(exc, _STALL_ERRORS)
-            )
-            cause = (
-                "provider went silent mid-stream"
-                if stalled
-                else "provider closed stream; possible rate limit"
-            )
+            stalled = isinstance(exc, StreamStallTimeout) or (_STALL_ERRORS and isinstance(exc, _STALL_ERRORS))
+            cause = "provider went silent mid-stream" if stalled else "provider closed stream; possible rate limit"
             log.warning(
                 "model stream dropped before any content (%s: %s) — reconnecting, attempt %d/%d in %.1fs (%s)",
                 type(exc).__name__,
@@ -249,9 +243,7 @@ def _stream_timeout_s(value: object) -> float | None:
     return float(value) if isinstance(value, int | float) and value > 0 else None
 
 
-async def _guard_stream_timeout(
-    stream: AsyncIterator, *, timeout: float, label: str
-) -> AsyncIterator:
+async def _guard_stream_timeout(stream: AsyncIterator, *, timeout: float, label: str) -> AsyncIterator:
     """Bound a model stream's time-to-first-token AND inter-chunk idle by ``timeout`` (#3699).
 
     httpx's read timeout bounds a single socket read; a provider that holds an SSE
@@ -309,9 +301,7 @@ async def _guard_stream_timeout(
 # to `self._astream` (older langchain_openai did exactly that) — which would otherwise ask the
 # limiter for a second slot on a held lane and deadlock a `max_inflight: 1` lane until
 # GatewayQueueTimeout, or burn two slots per call at higher limits.
-_HELD_LANES: contextvars.ContextVar[frozenset[str]] = contextvars.ContextVar(
-    "_llm_held_lanes", default=frozenset()
-)
+_HELD_LANES: contextvars.ContextVar[frozenset[str]] = contextvars.ContextVar("_llm_held_lanes", default=frozenset())
 
 
 @contextlib.asynccontextmanager
@@ -410,9 +400,7 @@ def _guarded_reconnecting_stream(
     async def guarded() -> AsyncIterator:
         async with _lane_slot(lane, arrival=arrival):
             stream = make_stream()
-            guarded_stream = (
-                _guard_stream_timeout(stream, timeout=timeout, label=label) if timeout else stream
-            )
+            guarded_stream = _guard_stream_timeout(stream, timeout=timeout, label=label) if timeout else stream
             async for chunk in guarded_stream:
                 yield chunk
 
@@ -507,7 +495,9 @@ def _request_chars(payload: dict) -> int:
         if isinstance(content, list) and any(map(_is_media_part, content)):
             m = {**m, "content": [part for part in content if not _is_media_part(part)]}
         messages.append(m)
-    return len(json.dumps(messages, ensure_ascii=False)) + len(json.dumps(payload.get("tools") or [], ensure_ascii=False))
+    return len(json.dumps(messages, ensure_ascii=False)) + len(
+        json.dumps(payload.get("tools") or [], ensure_ascii=False)
+    )
 
 
 def _opening(message: object, limit: int = 512) -> str:
@@ -1012,7 +1002,9 @@ def split_slot_target(model_name: str | None, config: LangGraphConfig | None = N
     return prefix.strip().lower(), rest.strip()
 
 
-def resolve_slot_target(model_name: str | None, config: LangGraphConfig | None = None) -> tuple[str, "Provider | None", str, str]:
+def resolve_slot_target(
+    model_name: str | None, config: LangGraphConfig | None = None
+) -> tuple[str, "Provider | None", str, str]:
     """Where a (possibly provider-qualified) model value routes — the dispatch ``create_llm`` runs.
 
     Returns ``(connection_id, entry, provider_type, bare_model)``. ``connection_id`` is
@@ -1239,9 +1231,7 @@ def create_llm(
         from graph.providers import build_native_oauth_llm
 
         return tag_model_provider(
-            build_native_oauth_llm(
-                ptype, config, model_name=slot_model or None, reasoning_effort=reasoning_effort
-            ),
+            build_native_oauth_llm(ptype, config, model_name=slot_model or None, reasoning_effort=reasoning_effort),
             ptype,
             slot_provider,
         )

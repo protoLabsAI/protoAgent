@@ -43,10 +43,24 @@ _MCP_INCOMPATIBLE = {"ask_human", "request_user_input"}
 # it's principled rather than a hand-maintained list — so it's deliberately NOT hardcoded here.
 _READ_ONLY_TOOLS = frozenset(
     {
-        "current_time", "calculator", "web_search", "fetch_url", "load_skill",
-        "search_tools", "list_skills", "recent_activity", "list_agents",
-        "memory_recall", "recall_session", "memory_list", "memory_stats",
-        "list_schedules", "check_inbox", "task_list", "list_watches", "read_note",
+        "current_time",
+        "calculator",
+        "web_search",
+        "fetch_url",
+        "load_skill",
+        "search_tools",
+        "list_skills",
+        "recent_activity",
+        "list_agents",
+        "memory_recall",
+        "recall_session",
+        "memory_list",
+        "memory_stats",
+        "list_schedules",
+        "check_inbox",
+        "task_list",
+        "list_watches",
+        "read_note",
         # Fleet diagnostics (ADR 0071 / #3170) is a read-only, roster-only, bounded and
         # secret-redacted member-inspection read (recent logs + one exact task-by-id), so it
         # belongs in this profile — the operator already decided foreign operator-MCP clients

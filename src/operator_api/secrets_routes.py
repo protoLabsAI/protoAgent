@@ -132,9 +132,16 @@ def register_secrets_routes(app) -> None:
                 result = None
             if not isinstance(result, FetchResult):
                 # Exception text/tracebacks may include credentials or response bodies.
-                logging.getLogger(__name__).warning("Secrets connection test: provider violated the fetch result contract")
-                return {"ok": False, "error": "secrets provider failed during connection test",
-                        "error_kind": "internal", "count": 0, "names": []}
+                logging.getLogger(__name__).warning(
+                    "Secrets connection test: provider violated the fetch result contract"
+                )
+                return {
+                    "ok": False,
+                    "error": "secrets provider failed during connection test",
+                    "error_kind": "internal",
+                    "count": 0,
+                    "names": [],
+                }
             names = sorted(result.values or {}) if result.ok else []
             return {
                 "ok": result.ok,

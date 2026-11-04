@@ -74,9 +74,7 @@ def test_a_rewrite_that_leaves_every_stat_field_unchanged_is_seen(tmp_path, monk
 
     frozen = os.stat(path)
     real_stat = os.stat
-    monkeypatch.setattr(
-        os, "stat", lambda t, *a, **k: frozen if os.fspath(t) == str(path) else real_stat(t, *a, **k)
-    )
+    monkeypatch.setattr(os, "stat", lambda t, *a, **k: frozen if os.fspath(t) == str(path) else real_stat(t, *a, **k))
     _write(tmp_path / "p", "Omega")  # same length as "Alpha"
     assert os.stat(path) == frozen
 

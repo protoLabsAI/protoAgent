@@ -41,28 +41,47 @@ async def test_new_member_from_an_archetype_posts_the_consoles_body():
         modal = app.screen
         # the Select applies its initial value as it mounts: on a slow runner (Windows CI) the
         # modal is the active screen a beat before that, and an immediate read sees Select.NULL
-        assert await _until(pilot, lambda: modal.query_one("#archetype", Select).value == "basic"), modal.query_one("#archetype", Select).value
+        assert await _until(pilot, lambda: modal.query_one("#archetype", Select).value == "basic"), modal.query_one(
+            "#archetype", Select
+        ).value
         assert [a["id"] for a in modal.archetypes] == ["basic", "pm"]
         await pilot.press("ctrl+s")  # no name yet: refused, stays open
         assert await _until(pilot, lambda: "name is required" in str(modal.query_one("#hint", Static).content))
-        assert isinstance(app.screen, NewAgentModal) and "name is required" in str(modal.query_one("#hint", Static).content)
+        assert isinstance(app.screen, NewAgentModal) and "name is required" in str(
+            modal.query_one("#hint", Static).content
+        )
         modal.query_one("#name", Input).focus()
         assert await _ready_to_type(pilot, app)
         await pilot.press(*"sc out", "ctrl+s")  # the hub's charset rule, checked before the round trip
         assert await _until(pilot, lambda: "letters, digits" in str(modal.query_one("#hint", Static).content))
-        assert isinstance(app.screen, NewAgentModal) and "letters, digits" in str(modal.query_one("#hint", Static).content)
+        assert isinstance(app.screen, NewAgentModal) and "letters, digits" in str(
+            modal.query_one("#hint", Static).content
+        )
         modal.query_one("#name", Input).value = ""
         assert await _ready_to_type(pilot, app)
         await pilot.press(*"scout")
         modal.query_one("#archetype", Select).value = "pm"
-        assert await _until(pilot, lambda: "installs https://github.com/x/pm-archetype" in str(modal.query_one("#archetype-note", Static).content))
+        assert await _until(
+            pilot,
+            lambda: (
+                "installs https://github.com/x/pm-archetype" in str(modal.query_one("#archetype-note", Static).content)
+            ),
+        )
         assert "installs https://github.com/x/pm-archetype" in str(modal.query_one("#archetype-note", Static).content)
         modal.query_one("#start", Checkbox).value = False
         modal.query_one("#port", Input).value = "7911"
         await pilot.press("ctrl+s")
         await _settle(app, pilot)
         creates = [c for c in be.calls if c[0] == "create"]
-        assert creates and creates[0][1] == {"name": "scout", "bundle": "https://github.com/x/pm-archetype", "inherit_config": True, "start": False, "soul": "You are a PM.", "requires_tools": ["github.write"], "port": 7911}
+        assert creates and creates[0][1] == {
+            "name": "scout",
+            "bundle": "https://github.com/x/pm-archetype",
+            "inherit_config": True,
+            "start": False,
+            "soul": "You are a PM.",
+            "requires_tools": ["github.write"],
+            "port": 7911,
+        }
         assert isinstance(app.screen, RosterScreen) and "scout" in _rows(app)
         # the reserved name is refused before it reaches the hub
         await pilot.press("n")
@@ -71,7 +90,9 @@ async def test_new_member_from_an_archetype_posts_the_consoles_body():
         assert await _ready_to_type(pilot, app)
         await pilot.press(*"host", "enter")
         assert await _until(pilot, lambda: "reserved" in str(app.screen.query_one("#hint", Static).content))
-        assert isinstance(app.screen, NewAgentModal) and "reserved" in str(app.screen.query_one("#hint", Static).content)
+        assert isinstance(app.screen, NewAgentModal) and "reserved" in str(
+            app.screen.query_one("#hint", Static).content
+        )
         await pilot.press("escape")
         assert await _until(pilot, lambda: isinstance(app.screen, RosterScreen))
         await _settle(app, pilot)  # negative: the cancel created nothing
@@ -97,7 +118,9 @@ async def test_rename_is_display_only_and_a_same_name_is_a_no_op():
         assert await _ready_to_type(pilot, app)
         await pilot.press(*"Engineer Prime", "enter")  # a space: the hub would 400 — refused here, typing kept
         assert await _until(pilot, lambda: "letters, digits" in str(app.screen.query_one("#hint", Static).content))
-        assert isinstance(app.screen, RenameModal) and "letters, digits" in str(app.screen.query_one("#hint", Static).content)
+        assert isinstance(app.screen, RenameModal) and "letters, digits" in str(
+            app.screen.query_one("#hint", Static).content
+        )
         assert app.screen.query_one("#name", Input).value == "Engineer Prime"
         app.screen.query_one("#name", Input).value = ""
         assert await _ready_to_type(pilot, app)
@@ -107,7 +130,10 @@ async def test_rename_is_display_only_and_a_same_name_is_a_no_op():
         assert "engineer-prime" in _rows(app)
         # the hub's own name is not for the deck to change: the key is hidden and inert
         app.screen.query_one("#roster", DataTable).move_cursor(row=0)
-        assert await _until(pilot, lambda: app.screen.check_action("rename", ()) is False and app.screen.check_action("delete", ()) is False)
+        assert await _until(
+            pilot,
+            lambda: app.screen.check_action("rename", ()) is False and app.screen.check_action("delete", ()) is False,
+        )
         await pilot.press("R")
         await _settle(app, pilot)  # negative: no modal is pushed
         assert isinstance(app.screen, RosterScreen)
@@ -200,7 +226,9 @@ async def test_remotes_add_edit_and_remove_with_the_token_sent_once():
         app.screen.query_one("#roster", DataTable).move_cursor(row=rows.index("bo"))
         await pilot.press("d")
         assert await _until(pilot, lambda: isinstance(app.screen, DeleteModal))
-        assert not app.screen.query("#purge") and "unregisters" in app.screen.query(".manage-sub").first().render().plain
+        assert (
+            not app.screen.query("#purge") and "unregisters" in app.screen.query(".manage-sub").first().render().plain
+        )
         assert await _ready_to_type(pilot, app)
         await pilot.press(*"bo", "enter")
         await _settle(app, pilot)
@@ -229,12 +257,19 @@ async def test_roster_order_moves_persist_a_complete_permutation():
         await _settle(app, pilot)
         orders = [c[1] for c in be.calls if c[0] == "set_order"]
         assert orders[-1].index("protoEngineer-ba4c") == 4  # the newest order is what the hub holds
-        if len(orders) == 3:  # both writes landed (the usual case); a press overtaken by the newer one is dropped, never committed late
+        if (
+            len(orders) == 3
+        ):  # both writes landed (the usual case); a press overtaken by the newer one is dropped, never committed late
             assert orders[-2].index("protoEngineer-ba4c") == 3
         assert _rows(app)[-1] == "protoEngineer"
         # under a filter the keys are hidden and inert: a move would swap with a hidden neighbour
         app.screen._set_filter("proto")
-        assert await _until(pilot, lambda: app.screen.check_action("move_down", ()) is False and app.screen.check_action("move_up", ()) is False)
+        assert await _until(
+            pilot,
+            lambda: (
+                app.screen.check_action("move_down", ()) is False and app.screen.check_action("move_up", ()) is False
+            ),
+        )
         n = len(orders)
         await pilot.press("J")
         await _settle(app, pilot)  # negative: no order-write worker ran
@@ -243,7 +278,9 @@ async def test_roster_order_moves_persist_a_complete_permutation():
 
 @pytest.mark.asyncio
 async def test_offline_refuses_every_manage_key_and_the_footer_shows_the_warm_cap_live():
-    be = FakeBackend(mode="offline", roster=[{"name": "alpha", "id": "alpha-1", "port": 7901, "pid": None, "running": False}])
+    be = FakeBackend(
+        mode="offline", roster=[{"name": "alpha", "id": "alpha-1", "port": 7901, "pid": None, "running": False}]
+    )
     app = FleetDeck(be, poll_s=0)
     async with app.run_test(size=(120, 30)) as pilot:
         await _settle(app, pilot)
@@ -253,7 +290,11 @@ async def test_offline_refuses_every_manage_key_and_the_footer_shows_the_warm_ca
             await pilot.press(key)
             await _settle(app, pilot)  # negative: no modal, no worker
             assert isinstance(app.screen, RosterScreen), key
-        assert not [c for c in be.calls if c[0] in ("create", "rename", "remove", "remote_add", "remote_update", "remote_remove", "set_order")]
+        assert not [
+            c
+            for c in be.calls
+            if c[0] in ("create", "rename", "remove", "remote_add", "remote_update", "remote_remove", "set_order")
+        ]
         assert "warm cap" not in str(app.screen.query_one("#status", Static).content)
     be = FakeBackend()
     app = FleetDeck(be, poll_s=0)
@@ -272,13 +313,31 @@ async def test_the_footer_shows_each_manage_key_only_where_it_applies():
         table = scr.query_one("#roster", DataTable)
         table.move_cursor(row=0)  # host
         assert await _until(pilot, lambda: table.cursor_row == 0 and scr.check_action("rename", ()) is False)
-        assert {a: scr.check_action(a, ()) for a in ("new_member", "add_remote", "rename", "delete", "edit_remote", "move_down")} == {"new_member": True, "add_remote": True, "rename": False, "delete": False, "edit_remote": False, "move_down": True}
+        assert {
+            a: scr.check_action(a, ())
+            for a in ("new_member", "add_remote", "rename", "delete", "edit_remote", "move_down")
+        } == {
+            "new_member": True,
+            "add_remote": True,
+            "rename": False,
+            "delete": False,
+            "edit_remote": False,
+            "move_down": True,
+        }
         table.move_cursor(row=1)  # a local member
         assert await _until(pilot, lambda: table.cursor_row == 1 and scr.check_action("rename", ()) is True)
-        assert (scr.check_action("rename", ()), scr.check_action("delete", ()), scr.check_action("edit_remote", ())) == (True, True, False)
+        assert (
+            scr.check_action("rename", ()),
+            scr.check_action("delete", ()),
+            scr.check_action("edit_remote", ()),
+        ) == (True, True, False)
         table.move_cursor(row=4)  # the remote
         assert await _until(pilot, lambda: table.cursor_row == 4 and scr.check_action("edit_remote", ()) is True)
-        assert (scr.check_action("rename", ()), scr.check_action("delete", ()), scr.check_action("edit_remote", ())) == (True, True, True)
+        assert (
+            scr.check_action("rename", ()),
+            scr.check_action("delete", ()),
+            scr.check_action("edit_remote", ()),
+        ) == (True, True, True)
 
 
 @pytest.mark.asyncio
@@ -300,7 +359,9 @@ async def test_every_manage_modal_holds_inside_the_decks_80x24_floor():
             submit, hint = modal.query_one("#submit", Button), modal.query_one("#hint", Static)
             # laid out (an unlaid region is all zeros and would pass the bounds below vacuously)
             assert await _until(pilot, lambda: box.region.height > 0 and submit.region.height > 0), key
-            assert box.region.height <= 24 and submit.region.y + submit.region.height <= 24 and 0 <= hint.region.y < 24, (kind.__name__, box.region, submit.region, hint.region)
+            assert (
+                box.region.height <= 24 and submit.region.y + submit.region.height <= 24 and 0 <= hint.region.y < 24
+            ), (kind.__name__, box.region, submit.region, hint.region)
             await pilot.press("escape")
             assert await _until(pilot, lambda: isinstance(app.screen, RosterScreen)), key
 
@@ -329,7 +390,17 @@ async def test_a_duplicate_submit_never_pops_the_roster_and_mutates_once():
         await _settle(app, pilot)
         assert isinstance(app.screen, RosterScreen) and len(app.screen_stack) == 2
         assert [c for c in be.calls if c[0] == "remove"] == [("remove", "Cindi-9f49", {"purge": False})]
-        for key, kind, fill in (("n", NewAgentModal, lambda m: setattr(m.query_one("#name", Input), "value", "twice")), ("a", RemoteModal, lambda m: (setattr(m.query_one("#name", Input), "value", "bo"), setattr(m.query_one("#url", Input), "value", "https://bo:7870")))):
+        for key, kind, fill in (
+            ("n", NewAgentModal, lambda m: setattr(m.query_one("#name", Input), "value", "twice")),
+            (
+                "a",
+                RemoteModal,
+                lambda m: (
+                    setattr(m.query_one("#name", Input), "value", "bo"),
+                    setattr(m.query_one("#url", Input), "value", "https://bo:7870"),
+                ),
+            ),
+        ):
             await pilot.press(key)
             assert await _until(pilot, lambda: isinstance(app.screen, kind)), key
             modal = app.screen
@@ -348,7 +419,10 @@ async def test_a_duplicate_submit_never_pops_the_roster_and_mutates_once():
             (modal.action_submit if hasattr(modal, "action_submit") else modal._submit)()
             await _settle(app, pilot)
             assert isinstance(app.screen, RosterScreen) and len(app.screen_stack) == 2, key
-        assert len([c for c in be.calls if c[0] == "create"]) == 1 and len([c for c in be.calls if c[0] == "remote_add"]) == 1
+        assert (
+            len([c for c in be.calls if c[0] == "create"]) == 1
+            and len([c for c in be.calls if c[0] == "remote_add"]) == 1
+        )
         # the S3 prompt modals share the guard
         q = QuestionModal("x", {"question": "?"}, draft="yes")
         got: list = []
@@ -397,7 +471,18 @@ async def test_authored_strings_render_as_text_not_markup():
     async with app.run_test(size=(120, 36)) as pilot:
         await _settle(app, pilot)
         assert _rows(app)[1] == "Coach [/]"
-        fe.pending.append(ev("old-1", "chat.progress", session_id="s", task_id="t", phase="tool_end", tool="run_command", tool_call_id="c1", output="[red]boom[/] [/]"))
+        fe.pending.append(
+            ev(
+                "old-1",
+                "chat.progress",
+                session_id="s",
+                task_id="t",
+                phase="tool_end",
+                tool="run_command",
+                tool_call_id="c1",
+                output="[red]boom[/] [/]",
+            )
+        )
         assert await _until(pilot, lambda: len(app.activity.rows) >= 1)  # the bus row landed
         await pilot.press("w")
         from deck.feed import WorkFeedScreen

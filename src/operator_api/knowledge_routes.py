@@ -275,7 +275,10 @@ def register_knowledge_routes(app) -> None:
         root = _user_skills_root()
         try:
             artifact = write_skill(
-                root, name, description, prompt,
+                root,
+                name,
+                description,
+                prompt,
                 tools=_as_str_list(body.get("tools") or body.get("tools_used")),
                 user_facing=bool(body.get("user_facing", False)),
                 slash=str(body.get("slash", "")).strip(),
@@ -321,8 +324,11 @@ def register_knowledge_routes(app) -> None:
         if not editable:
             return JSONResponse({"detail": f"{origin} skills are read-only"}, status_code=403)
         body = body or {}
-        fields = (body.get("name", cur.get("name", "")), body.get("description", ""),
-                  body.get("prompt_template", body.get("body", "")))
+        fields = (
+            body.get("name", cur.get("name", "")),
+            body.get("description", ""),
+            body.get("prompt_template", body.get("body", "")),
+        )
         if any(not isinstance(value, str) for value in fields):
             return JSONResponse({"detail": "name, description, and body must be strings"}, status_code=400)
         name, description, prompt = (value.strip() for value in fields)
@@ -330,13 +336,18 @@ def register_knowledge_routes(app) -> None:
             return JSONResponse({"detail": "name, description, and body are required"}, status_code=400)
         new_slug, old_slug = slugify(name), slugify(cur.get("name", ""))
         if new_slug != old_slug and any(
-            s.get("tier") != "commons" and slugify(s.get("name", "")) == new_slug
-            and s.get("id") != skill_id for s in idx.all_skills()
+            s.get("tier") != "commons" and slugify(s.get("name", "")) == new_slug and s.get("id") != skill_id
+            for s in idx.all_skills()
         ):
             return JSONResponse({"detail": f"a skill named “{name}” already exists"}, status_code=409)
         try:
             replace_skill(
-                idx, root, cur, name, description, prompt,
+                idx,
+                root,
+                cur,
+                name,
+                description,
+                prompt,
                 tools=_as_str_list(body.get("tools") or body.get("tools_used")),
                 user_facing=bool(body.get("user_facing", cur.get("user_facing", False))),
                 slash=str(body.get("slash", cur.get("slash", "") or "")).strip(),

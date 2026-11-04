@@ -1,4 +1,5 @@
 """REST turn visibility, cancellation, and same-session recovery (#4205)."""
+
 import asyncio
 import importlib
 
@@ -14,6 +15,7 @@ from server import turn_control, turn_sync
 @pytest.fixture
 def app(monkeypatch):
     import operator_api.chat_routes as routes
+
     chat = importlib.import_module("server.chat")
     monkeypatch.setattr(STATE, "graph", object())
     monkeypatch.setattr(STATE, "graph_config", None)
@@ -46,7 +48,9 @@ async def test_rest_turn_cancel_then_same_session_model_switch(app, monkeypatch)
 
     monkeypatch.setattr(turn_sync, "_chat_langgraph_impl", provider)
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app), base_url="http://test") as client:
-        pending = asyncio.create_task(client.post("/api/chat", json={"message": "hi", "session_id": "same", "model": "exhausted"}))
+        pending = asyncio.create_task(
+            client.post("/api/chat", json={"message": "hi", "session_id": "same", "model": "exhausted"})
+        )
         await asyncio.wait_for(entered.wait(), 5)
         turns = (await client.get("/api/chat/sessions/same/turns")).json()["local_turns"]
         assert len(turns) == 1 and turns[0]["origin"] == "api-chat"
@@ -61,7 +65,9 @@ async def test_rest_turn_cancel_then_same_session_model_switch(app, monkeypatch)
         assert failure.status_code == 409
         assert failure.json()["detail"]["code"] == "turn_cancelled"
         assert not local_turns.snapshot("same")
-        response = await asyncio.wait_for(client.post("/api/chat", json={"message": "continue", "session_id": "same", "model": "working"}), 5)
+        response = await asyncio.wait_for(
+            client.post("/api/chat", json={"message": "continue", "session_id": "same", "model": "working"}), 5
+        )
         assert response.status_code == 200
         assert response.json()["response"] == "recovered"
         assert not turn_control._thread_lock("a2a:same").locked()

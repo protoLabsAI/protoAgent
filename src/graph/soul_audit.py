@@ -90,12 +90,18 @@ _CAPABILITIES: tuple[tuple[str, re.Pattern[str], re.Pattern[str]], ...] = (
     ),
     (
         "post to Slack",
-        re.compile(r"\b(?:post|send|messag|repl|announc)[a-z]*\b[^.\n]{0,30}\bslack\b|\bslack\b[^.\n]{0,30}\b(?:post|send|messag|announc)[a-z]*\b", re.I),
+        re.compile(
+            r"\b(?:post|send|messag|repl|announc)[a-z]*\b[^.\n]{0,30}\bslack\b|\bslack\b[^.\n]{0,30}\b(?:post|send|messag|announc)[a-z]*\b",
+            re.I,
+        ),
         re.compile(r"slack"),
     ),
     (
         "post to Discord",
-        re.compile(r"\b(?:post|send|messag|repl|announc)[a-z]*\b[^.\n]{0,30}\bdiscord\b|\bdiscord\b[^.\n]{0,30}\b(?:post|send|messag|announc)[a-z]*\b", re.I),
+        re.compile(
+            r"\b(?:post|send|messag|repl|announc)[a-z]*\b[^.\n]{0,30}\bdiscord\b|\bdiscord\b[^.\n]{0,30}\b(?:post|send|messag|announc)[a-z]*\b",
+            re.I,
+        ),
         re.compile(r"discord"),
     ),
     (

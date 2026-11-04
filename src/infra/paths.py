@@ -109,7 +109,6 @@ def atomic_write(path: Path | str, text: str, *, mode: int | None = None) -> Non
         raise
 
 
-
 _log = logging.getLogger("protoagent.paths")
 
 # The relative PROTOAGENT_PLUGINS_DIR value last warned about: once per breakage, again
@@ -150,6 +149,7 @@ def read_text_utf8(path: Path | str) -> str:
             enc = "cp1252"
         _log.warning("[paths] %s is not UTF-8 — decoding as legacy %s (#2521)", p, enc)
         return data.decode(enc, errors="replace")
+
 
 def _anchored_pyproject_version() -> str | None:
     """``[project].version`` from the ``pyproject.toml`` that governs *this* package,
@@ -490,9 +490,7 @@ def pid_alive(pid: int) -> bool:
 # ``graph/fleet/supervisor._server_binary_names`` — kept local because ``infra`` must
 # not import ``graph`` (graph imports this module at boot).
 _SERVER_BINARY_NAMES = frozenset(
-    n
-    for name in ("protoagent-server", "protoagent_server", "protoagent")
-    for n in (name, f"{name}.exe")
+    n for name in ("protoagent-server", "protoagent_server", "protoagent") for n in (name, f"{name}.exe")
 )
 
 

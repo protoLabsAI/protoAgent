@@ -120,7 +120,7 @@ def test_the_fence_holds_without_a_configured_name():
 def test_the_envelope_reading_rule_is_stated():
     """The lead once read `<room-message from="operator" to="proto">` and concluded
     proto WAS the operator — say how to read the tag."""
-    assert 'marks what X said' in cast_line(["proto"])
+    assert "marks what X said" in cast_line(["proto"])
 
 
 def test_no_system_message_is_left_alone():

@@ -27,6 +27,7 @@ def _testserver_is_a_trusted_host(monkeypatch):
 def _echo_ws_server():
     """A real echo WebSocket server on a free port, in a background thread.
     Returns (port, stop) — proves forward_ws relays frames BOTH ways over real sockets."""
+
     async def _echo(conn):
         async for msg in conn:
             await conn.send(msg)  # echo text or binary

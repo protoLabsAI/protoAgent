@@ -200,9 +200,15 @@ async def test_an_attachment_send_stores_the_bubble_not_the_document_dump(monkey
     dumps = [f"[Attached file: f{i}.md]\n{'lorem ipsum ' * 700}\n[end of f{i}.md]" for i in range(4)]
     sent = "\n\n".join([*dumps, "Summarize these."])
     bubble = "Summarize these.\n\nAttached: f0.md, f1.md, f2.md, f3.md"
-    image = {"raw": base64.b64encode(b"\x89PNG" + b"\x00" * 512).decode(), "mediaType": "image/png", "filename": "a.png"}
+    image = {
+        "raw": base64.b64encode(b"\x89PNG" + b"\x00" * 512).decode(),
+        "mediaType": "image/png",
+        "filename": "a.png",
+    }
     turn, seen = await _one_turn(
-        monkeypatch, tmp_path, _message(sent, "chat-att", parts=[image], metadata={"display": bubble, "incognito": True})
+        monkeypatch,
+        tmp_path,
+        _message(sent, "chat-att", parts=[image], metadata={"display": bubble, "incognito": True}),
     )
 
     assert seen["text"] == sent  # the model still gets every document
@@ -219,7 +225,11 @@ async def test_bounded_image_thumbnails_ride_the_durable_prompt(monkeypatch, tmp
     another browser (ADR 0104) shows the same inline thumbnails, not just the "Attached:"
     names. They ride the message metadata and are stored on the durable prompt as sent."""
     thumb = "data:image/jpeg;base64," + "A" * 2000
-    image = {"raw": base64.b64encode(b"\x89PNG" + b"\x00" * 4096).decode(), "mediaType": "image/png", "filename": "shot.png"}
+    image = {
+        "raw": base64.b64encode(b"\x89PNG" + b"\x00" * 4096).decode(),
+        "mediaType": "image/png",
+        "filename": "shot.png",
+    }
     turn, seen = await _one_turn(
         monkeypatch,
         tmp_path,
@@ -280,7 +290,10 @@ async def test_a_hidden_send_stores_no_thumbnails(monkeypatch, tmp_path):
         _message(
             "[regenerate]",
             "chat-thumb-hidden",
-            metadata={"hidden": True, "thumbnails": [{"name": "x.png", "mime": "image/png", "thumb": "data:image/jpeg;base64,YQ=="}]},
+            metadata={
+                "hidden": True,
+                "thumbnails": [{"name": "x.png", "mime": "image/png", "thumb": "data:image/jpeg;base64,YQ=="}],
+            },
         ),
     )
     [prompt] = [m for m in turn["history"] if m.get("role") == "ROLE_USER"]

@@ -16,11 +16,58 @@ from deck import hub as deckhub
 from graph.fleet import cli
 
 ROSTER = [
-    {"name": "protoagent", "label": "protoagent", "id": "protoagent", "port": 7870, "pid": 100, "running": True, "host": True, "version": "0.165.0", "bundle": ""},
-    {"name": "protoEngineer", "label": "protoEngineer", "id": "protoEngineer-ba4c", "port": 7875, "pid": 15285, "running": True, "version": "0.165.0", "bundle": ""},
-    {"name": "Cindi", "label": "Cindi", "id": "Cindi-9f49", "port": 7880, "pid": None, "running": False, "version": "", "bundle": "cowork-stack"},
-    {"name": "old", "label": "old", "id": "old-1", "port": 7890, "pid": 77, "running": True, "version": "0.164.0", "bundle": ""},
-    {"name": "ava", "label": "ava", "id": "r-ava", "port": None, "pid": None, "running": False, "remote": True, "url": "https://ava.tail:7870", "version": ""},
+    {
+        "name": "protoagent",
+        "label": "protoagent",
+        "id": "protoagent",
+        "port": 7870,
+        "pid": 100,
+        "running": True,
+        "host": True,
+        "version": "0.165.0",
+        "bundle": "",
+    },
+    {
+        "name": "protoEngineer",
+        "label": "protoEngineer",
+        "id": "protoEngineer-ba4c",
+        "port": 7875,
+        "pid": 15285,
+        "running": True,
+        "version": "0.165.0",
+        "bundle": "",
+    },
+    {
+        "name": "Cindi",
+        "label": "Cindi",
+        "id": "Cindi-9f49",
+        "port": 7880,
+        "pid": None,
+        "running": False,
+        "version": "",
+        "bundle": "cowork-stack",
+    },
+    {
+        "name": "old",
+        "label": "old",
+        "id": "old-1",
+        "port": 7890,
+        "pid": 77,
+        "running": True,
+        "version": "0.164.0",
+        "bundle": "",
+    },
+    {
+        "name": "ava",
+        "label": "ava",
+        "id": "r-ava",
+        "port": None,
+        "pid": None,
+        "running": False,
+        "remote": True,
+        "url": "https://ava.tail:7870",
+        "version": "",
+    },
 ]
 
 
@@ -55,11 +102,31 @@ class FakeClient:
 
     def archetypes(self):
         self.calls.append(("archetypes",))
-        return [{"id": "basic", "label": "Basic", "bundle": None, "soul": ""}, {"id": "pm", "label": "PM", "bundle": "https://github.com/x/pm-archetype", "soul": "You are a PM.", "requires_tools": ["github.write"]}]
+        return [
+            {"id": "basic", "label": "Basic", "bundle": None, "soul": ""},
+            {
+                "id": "pm",
+                "label": "PM",
+                "bundle": "https://github.com/x/pm-archetype",
+                "soul": "You are a PM.",
+                "requires_tools": ["github.write"],
+            },
+        ]
 
     def create(self, body):
         self.calls.append(("create", dict(body)))
-        return {"ok": True, "agent": {"name": body["name"], "id": f"{body['name']}-1", "port": body.get("port") or 7999, "pid": 4242 if body.get("start", True) else None, "running": body.get("start", True)}, "installed": ["pm"] if body.get("bundle") else [], "warnings": ["credential store stayed local"] if body.get("bundle") else []}
+        return {
+            "ok": True,
+            "agent": {
+                "name": body["name"],
+                "id": f"{body['name']}-1",
+                "port": body.get("port") or 7999,
+                "pid": 4242 if body.get("start", True) else None,
+                "running": body.get("start", True),
+            },
+            "installed": ["pm"] if body.get("bundle") else [],
+            "warnings": ["credential store stayed local"] if body.get("bundle") else [],
+        }
 
     def rename(self, ident, name):
         self.calls.append(("rename", ident, name))
@@ -68,20 +135,39 @@ class FakeClient:
     def remove(self, ident, *, purge=False):
         self.calls.append(("remove", ident, purge))
         if self.remove_status:
-            raise deckhub.HubRequestError(self.url, self.remove_status, "workspace busy" if self.remove_status == 409 else "no such member")
+            raise deckhub.HubRequestError(
+                self.url, self.remove_status, "workspace busy" if self.remove_status == 409 else "no such member"
+            )
         return {"ok": True, "name": ident, "removed": ["workspace"] if purge else []}
 
     def remote_add(self, name, url, token="", **kw):
         self.calls.append(("remote_add", name, url, token) + ((kw,) if kw else ()))
-        return {"ok": True, "agent": {"id": f"r-{name}", "name": name, "url": url, "remote": True}, "reachable": False, "version": ""}
+        return {
+            "ok": True,
+            "agent": {"id": f"r-{name}", "name": name, "url": url, "remote": True},
+            "reachable": False,
+            "version": "",
+        }
 
     def remote_update(self, ident, **fields):
         self.calls.append(("remote_update", ident, fields))
-        return {"ok": True, "agent": {"id": ident, "name": "ava", "url": fields.get("url", "https://ava.tail:7870"), "remote": True}, "reachable": True, "version": "0.165.0"}
+        return {
+            "ok": True,
+            "agent": {"id": ident, "name": "ava", "url": fields.get("url", "https://ava.tail:7870"), "remote": True},
+            "reachable": True,
+            "version": "0.165.0",
+        }
 
     def remote_pair(self, url, code, name=None, **kw):
         self.calls.append(("remote_pair", url, code, name) + ((kw,) if kw else ()))
-        return {"ok": True, "agent": {"id": "r-ava", "name": name or "ava", "url": url, "remote": True}, "reachable": True, "version": "0.183.1", "auth": "ok", "action": "added"}
+        return {
+            "ok": True,
+            "agent": {"id": "r-ava", "name": name or "ava", "url": url, "remote": True},
+            "reachable": True,
+            "version": "0.183.1",
+            "auth": "ok",
+            "action": "added",
+        }
 
     def remote_remove(self, ident):
         self.calls.append(("remote_remove", ident))
@@ -123,12 +209,37 @@ def sup(monkeypatch):
     """A supervisor whose disk view carries the synthesized host row (as the real one does)."""
     calls: list[tuple] = []
     disk = [
-        {"name": "main", "label": "main", "id": "main", "port": 7870, "pid": 999, "running": True, "host": True, "version": "0.165.0", "bundle": ""},
-        {"name": "alpha", "label": "alpha", "id": "alpha-1", "port": 7901, "pid": None, "running": False, "version": "", "bundle": ""},
+        {
+            "name": "main",
+            "label": "main",
+            "id": "main",
+            "port": 7870,
+            "pid": 999,
+            "running": True,
+            "host": True,
+            "version": "0.165.0",
+            "bundle": "",
+        },
+        {
+            "name": "alpha",
+            "label": "alpha",
+            "id": "alpha-1",
+            "port": 7901,
+            "pid": None,
+            "running": False,
+            "version": "",
+            "bundle": "",
+        },
     ]
     monkeypatch.setattr(cli.supervisor, "status", lambda: list(disk))
-    monkeypatch.setattr(cli.supervisor, "up", lambda names=None: calls.append(("up", names)) or [{"name": "alpha", "port": 7901, "pid": 5}])
-    monkeypatch.setattr(cli.supervisor, "down", lambda names=None: calls.append(("down", names)) or [{"name": "alpha", "stopped": True}])
+    monkeypatch.setattr(
+        cli.supervisor,
+        "up",
+        lambda names=None: calls.append(("up", names)) or [{"name": "alpha", "port": 7901, "pid": 5}],
+    )
+    monkeypatch.setattr(
+        cli.supervisor, "down", lambda names=None: calls.append(("down", names)) or [{"name": "alpha", "stopped": True}]
+    )
     return calls
 
 
@@ -139,7 +250,15 @@ def test_bare_fleet_needs_a_terminal_on_both_ends(monkeypatch, capsys):
     import importlib
 
     real = importlib.import_module
-    monkeypatch.setattr(importlib, "import_module", lambda name, *a, **kw: (_ for _ in ()).throw(AssertionError("must not import the deck")) if name.startswith("deck.") else real(name, *a, **kw))
+    monkeypatch.setattr(
+        importlib,
+        "import_module",
+        lambda name, *a, **kw: (
+            (_ for _ in ()).throw(AssertionError("must not import the deck"))
+            if name.startswith("deck.")
+            else real(name, *a, **kw)
+        ),
+    )
     monkeypatch.setattr("sys.stdout.isatty", lambda: False)
     monkeypatch.setattr("sys.stdin.isatty", lambda: True)
     assert cli.run_fleet_cli([]) == 2
@@ -193,9 +312,16 @@ def test_bare_fleet_opens_the_deck_on_the_live_backend(monkeypatch):
     import importlib
 
     real = importlib.import_module
-    monkeypatch.setattr(importlib, "import_module", lambda name, *a, **kw: FakeApp if name == "deck.app" else real(name, *a, **kw))
+    monkeypatch.setattr(
+        importlib, "import_module", lambda name, *a, **kw: FakeApp if name == "deck.app" else real(name, *a, **kw)
+    )
     assert cli.run_fleet_cli([]) == 0
-    assert seen_kw["start_on_hubs"] is False and callable(seen_kw["launcher"]) and callable(seen_kw["peers"]) and seen_kw["token"] is None
+    assert (
+        seen_kw["start_on_hubs"] is False
+        and callable(seen_kw["launcher"])
+        and callable(seen_kw["peers"])
+        and seen_kw["token"] is None
+    )
     assert seen == {"mode": "live"}
     assert cli.run_deck_cli(["ls"]) == 0  # `top` strips a LEADING verb and opens the deck
     assert seen == {"mode": "live"}
@@ -206,7 +332,9 @@ def test_bare_fleet_opens_the_deck_on_the_live_backend(monkeypatch):
     def fake_connect(*, url=None, token=None, candidates=None, transport=None, insecure_http=False):
         tokens["token"] = token
         client = FakeClient()
-        return deckhub.Connection(client=client, candidate=deckhub.HubCandidate(client.url, "flag"), card={}, roster=list(client.roster))
+        return deckhub.Connection(
+            client=client, candidate=deckhub.HubCandidate(client.url, "flag"), card={}, roster=list(client.roster)
+        )
 
     monkeypatch.setattr(deckhub, "connect", fake_connect)
     assert cli.run_deck_cli(["--token", "status"]) == 0
@@ -240,7 +368,9 @@ def test_ls_live_renders_hub_header_rows_and_skew(monkeypatch, capsys):
     _live(monkeypatch, client)
     assert cli.run_fleet_cli(["ls"]) == 0
     out = capsys.readouterr().out
-    assert out.splitlines()[0] == "protoagent fleet · live · http://127.0.0.1:7870 · protoagent v0.165.0 · via heartbeat"
+    assert (
+        out.splitlines()[0] == "protoagent fleet · live · http://127.0.0.1:7870 · protoagent v0.165.0 · via heartbeat"
+    )
     assert "● protoagent" in out and "host" in out
     assert "● protoEngineer" in out and ":7875" in out and "pid 15285" in out
     assert "○ Cindi" in out and "stopped" in out and "[cowork-stack]" in out
@@ -368,7 +498,9 @@ def test_ls_passes_hub_token_and_insecure_flag_through(monkeypatch, capsys):
     def fake_connect(*, url=None, token=None, candidates=None, transport=None, insecure_http=False):
         seen.update(url=url, token=token, insecure_http=insecure_http)
         client = FakeClient()
-        return deckhub.Connection(client=client, candidate=deckhub.HubCandidate(client.url, "flag"), card={}, roster=list(client.roster))
+        return deckhub.Connection(
+            client=client, candidate=deckhub.HubCandidate(client.url, "flag"), card={}, roster=list(client.roster)
+        )
 
     monkeypatch.setattr(deckhub, "connect", fake_connect)
     cli.run_fleet_cli(["status", "--hub", "ava.tail:7870", "--token", "abc"])
@@ -380,7 +512,9 @@ def test_ls_passes_hub_token_and_insecure_flag_through(monkeypatch, capsys):
 
 def test_offline_supervisor_error_is_json_when_asked(monkeypatch, capsys, sup):
     _offline(monkeypatch)
-    monkeypatch.setattr(cli.supervisor, "status", lambda: (_ for _ in ()).throw(cli.supervisor.FleetError("fleet.json is corrupt")))
+    monkeypatch.setattr(
+        cli.supervisor, "status", lambda: (_ for _ in ()).throw(cli.supervisor.FleetError("fleet.json is corrupt"))
+    )
     assert cli.run_fleet_cli(["ls", "--offline", "--json"]) == 1
     data = json.loads(capsys.readouterr().out)
     assert data["mode"] == "error" and "corrupt" in data["error"]
@@ -452,7 +586,13 @@ def test_up_offline_uses_the_supervisor(monkeypatch, capsys, sup):
 
 
 def test_down_live_all_uses_the_fleet_down_route_with_a_budget_per_running_member(monkeypatch, capsys, sup):
-    client = FakeClient(down=lambda: {"ok": False, "stopped": ["protoEngineer"], "failed": [{"name": "old", "reason": "survived SIGKILL"}]})
+    client = FakeClient(
+        down=lambda: {
+            "ok": False,
+            "stopped": ["protoEngineer"],
+            "failed": [{"name": "old", "reason": "survived SIGKILL"}],
+        }
+    )
     _live(monkeypatch, client)
     assert cli.run_fleet_cli(["down", "--json"]) == 1
     assert client.calls == [("down", 2)]  # protoEngineer + old are the running LOCAL members
@@ -485,7 +625,11 @@ def test_down_offline_honours_a_survivor_and_an_unknown_name(monkeypatch, capsys
     """Review MEDIUM-5: offline `down` printed ✓ and exited 0 for a member that survived
     SIGKILL, and swallowed a name the supervisor did not know."""
     _offline(monkeypatch)
-    monkeypatch.setattr(cli.supervisor, "down", lambda names=None: [{"name": "alpha", "stopped": False, "reason": "still alive after SIGKILL"}])
+    monkeypatch.setattr(
+        cli.supervisor,
+        "down",
+        lambda names=None: [{"name": "alpha", "stopped": False, "reason": "still alive after SIGKILL"}],
+    )
     assert cli.run_fleet_cli(["down", "alpha", "ghost"]) == 1
     captured = capsys.readouterr()
     assert "✗ alpha" in captured.err and "still alive after SIGKILL" in captured.err
@@ -502,15 +646,32 @@ def test_new_live_resolves_an_archetype_on_the_hub_and_posts_the_consoles_body(m
     assert cli.run_fleet_cli(["new", "scout", "--archetype", "pm", "--no-start", "--port", "7911", "--json"]) == 0
     body = json.loads(capsys.readouterr().out)
     create = next(c for c in client.calls if c[0] == "create")[1]
-    assert create == {"name": "scout", "start": False, "inherit_config": True, "port": 7911, "bundle": "https://github.com/x/pm-archetype", "soul": "You are a PM.", "requires_tools": ["github.write"]}
-    assert body["mode"] == "live" and body["results"][0]["ok"] and body["results"][0]["installed"] == ["pm"] and body["results"][0]["agent"]["running"] is False
+    assert create == {
+        "name": "scout",
+        "start": False,
+        "inherit_config": True,
+        "port": 7911,
+        "bundle": "https://github.com/x/pm-archetype",
+        "soul": "You are a PM.",
+        "requires_tools": ["github.write"],
+    }
+    assert (
+        body["mode"] == "live"
+        and body["results"][0]["ok"]
+        and body["results"][0]["installed"] == ["pm"]
+        and body["results"][0]["agent"]["running"] is False
+    )
     # an unknown archetype is refused before anything is created
     client.calls.clear()
     assert cli.run_fleet_cli(["new", "scout", "--archetype", "nope"]) == 1
     assert not any(c[0] == "create" for c in client.calls) and "no archetype 'nope'" in capsys.readouterr().err
     # a blank member, no inheritance
     assert cli.run_fleet_cli(["new", "blank", "--no-inherit"]) == 0
-    assert next(c for c in client.calls if c[0] == "create")[1] == {"name": "blank", "start": True, "inherit_config": False}
+    assert next(c for c in client.calls if c[0] == "create")[1] == {
+        "name": "blank",
+        "start": True,
+        "inherit_config": False,
+    }
     assert "started (:7999, pid 4242) via hub" in capsys.readouterr().out
 
 
@@ -527,7 +688,13 @@ def test_new_offline_runs_the_op_and_refuses_an_archetype(monkeypatch, capsys):
     monkeypatch.setattr(fleet_ops, "create", fake_create)
     assert cli.run_fleet_cli(["new", "beta", "--bundle", "https://github.com/x/y", "--no-start", "--json"]) == 0
     body = json.loads(capsys.readouterr().out)
-    assert seen == {"name": "beta", "bundle": "https://github.com/x/y", "port": None, "start": False, "inherit_config": True}
+    assert seen == {
+        "name": "beta",
+        "bundle": "https://github.com/x/y",
+        "port": None,
+        "start": False,
+        "inherit_config": True,
+    }
     assert body["mode"] == "offline" and body["results"][0]["ok"]
     assert cli.run_fleet_cli(["new", "beta", "--archetype", "pm"]) == 1
     assert "--archetype needs a running hub" in capsys.readouterr().err
@@ -585,7 +752,11 @@ def test_rename_live_and_offline(monkeypatch, capsys):
     _live(monkeypatch, client)
     assert cli.run_fleet_cli(["rename", "alpha", "Alpha Prime", "--json"]) == 0
     body = json.loads(capsys.readouterr().out)
-    assert ("rename", "alpha", "Alpha Prime") in client.calls and body["results"][0]["new_name"] == "Alpha Prime" and body["results"][0]["id"] == "alpha-1"
+    assert (
+        ("rename", "alpha", "Alpha Prime") in client.calls
+        and body["results"][0]["new_name"] == "Alpha Prime"
+        and body["results"][0]["id"] == "alpha-1"
+    )
     _offline(monkeypatch)
     from ops import fleet as fleet_ops
 
@@ -606,7 +777,9 @@ def test_remote_add_edit_rm_live_with_the_bearer_from_stdin(monkeypatch, capsys)
     assert cli.run_fleet_cli(["remote", "add", "bo", "https://bo.tail:7870", "--bearer-stdin", "--json"]) == 0
     body = json.loads(capsys.readouterr().out)
     assert ("remote_add", "bo", "https://bo.tail:7870", "s3cret") in client.calls
-    assert "s3cret" not in json.dumps(body) and body["results"][0]["reachable"] is False  # never echoed; unreachable is not an error
+    assert (
+        "s3cret" not in json.dumps(body) and body["results"][0]["reachable"] is False
+    )  # never echoed; unreachable is not an error
     assert cli.run_fleet_cli(["remote", "edit", "bo", "--url", "https://bo2.tail:7870"]) == 0
     assert ("remote_update", "bo", {"url": "https://bo2.tail:7870"}) in client.calls
     assert "reachable, v0.165.0" in capsys.readouterr().out
@@ -665,7 +838,9 @@ def test_pair_live_hub_error_is_a_failed_row(monkeypatch, capsys):
     client = FakeClient()
 
     def refuse(url, code, name=None):
-        raise deckhub.HubRequestError(client.url, 400, "that code is invalid or expired — generate a new one on the remote")
+        raise deckhub.HubRequestError(
+            client.url, 400, "that code is invalid or expired — generate a new one on the remote"
+        )
 
     client.remote_pair = refuse
     _live(monkeypatch, client)
@@ -681,7 +856,13 @@ def test_pair_offline_runs_the_op(monkeypatch, capsys):
 
     async def pair(url, code, name=None):
         seen.append((url, code, name))
-        return {"agent": {"id": "r-1", "name": "ava", "url": url}, "reachable": True, "version": "0.1", "auth": "ok", "action": "retokened"}
+        return {
+            "agent": {"id": "r-1", "name": "ava", "url": url},
+            "reachable": True,
+            "version": "0.1",
+            "auth": "ok",
+            "action": "retokened",
+        }
 
     monkeypatch.setattr(fleet_ops, "remotes_pair", pair)
     assert cli.run_fleet_cli(["pair", "http://100.64.0.5:7870", "C0DE", "--json"]) == 0
@@ -739,7 +920,9 @@ def test_insecure_http_is_the_d10_opt_in_for_pair_and_remote_add_edit(monkeypatc
     assert client.calls[-1] == ("remote_pair", "http://192.168.1.20:7870", "C0DE", None)
     assert cli.run_fleet_cli(["pair", "http://192.168.1.20:7870", "C0DE", "--insecure-http"]) == 0
     assert client.calls[-1] == ("remote_pair", "http://192.168.1.20:7870", "C0DE", None, {"allow_insecure": True})
-    assert cli.run_fleet_cli(["remote", "add", "bo", "http://192.168.1.20:7870", "--bearer", "t", "--insecure-http"]) == 0
+    assert (
+        cli.run_fleet_cli(["remote", "add", "bo", "http://192.168.1.20:7870", "--bearer", "t", "--insecure-http"]) == 0
+    )
     assert client.calls[-1] == ("remote_add", "bo", "http://192.168.1.20:7870", "t", {"allow_insecure": True})
     assert cli.run_fleet_cli(["remote", "edit", "bo", "--bearer", "t", "--insecure-http"]) == 0
     assert client.calls[-1] == ("remote_update", "bo", {"token": "t", "allow_insecure": True})
@@ -752,7 +935,13 @@ def test_insecure_http_is_the_d10_opt_in_for_pair_and_remote_add_edit(monkeypatc
 
     async def pair(url, code, name=None, allow_insecure=False):
         seen.append(allow_insecure)
-        return {"agent": {"id": "r-1", "name": "ava", "url": url}, "reachable": True, "version": "0.1", "auth": "ok", "action": "added"}
+        return {
+            "agent": {"id": "r-1", "name": "ava", "url": url},
+            "reachable": True,
+            "version": "0.1",
+            "auth": "ok",
+            "action": "added",
+        }
 
     monkeypatch.setattr(fleet_ops, "remotes_pair", pair)
     assert cli.run_fleet_cli(["pair", "http://192.168.1.20:7870", "C0DE", "--offline", "--insecure-http"]) == 0
@@ -762,7 +951,14 @@ def test_insecure_http_is_the_d10_opt_in_for_pair_and_remote_add_edit(monkeypatc
 
 def test_remote_edit_says_when_the_token_was_cleared(monkeypatch, capsys):
     client = FakeClient()
-    moved = lambda ident, **fields: {"ok": True, "agent": {"id": ident, "name": "ava", "url": fields["url"]}, "reachable": True, "version": "1", "auth": "none", "token_cleared": True}  # noqa: E731
+    moved = lambda ident, **fields: {
+        "ok": True,
+        "agent": {"id": ident, "name": "ava", "url": fields["url"]},
+        "reachable": True,
+        "version": "1",
+        "auth": "none",
+        "token_cleared": True,
+    }  # noqa: E731
     client.remote_update = moved
     _live(monkeypatch, client)
     assert cli.run_fleet_cli(["remote", "edit", "ava", "--url", "https://elsewhere:7870"]) == 0
@@ -774,9 +970,13 @@ def test_remote_edit_says_when_the_token_was_cleared(monkeypatch, capsys):
 def test_order_live_and_offline(monkeypatch, capsys):
     client = FakeClient()
     _live(monkeypatch, client)
-    assert cli.run_fleet_cli(["order", "protoagent", "old-1", "protoEngineer-ba4c", "Cindi-9f49", "r-ava", "--json"]) == 0
+    assert (
+        cli.run_fleet_cli(["order", "protoagent", "old-1", "protoEngineer-ba4c", "Cindi-9f49", "r-ava", "--json"]) == 0
+    )
     body = json.loads(capsys.readouterr().out)
-    assert ("set_order", ["protoagent", "old-1", "protoEngineer-ba4c", "Cindi-9f49", "r-ava"]) in client.calls and body["results"][0]["order"][1] == "old-1"
+    assert ("set_order", ["protoagent", "old-1", "protoEngineer-ba4c", "Cindi-9f49", "r-ava"]) in client.calls and body[
+        "results"
+    ][0]["order"][1] == "old-1"
     _offline(monkeypatch)
     from ops import fleet as fleet_ops
 
@@ -846,16 +1046,52 @@ def _tree_rows():
     from deck.hubs import HubRow
 
     return [
-        HubRow(name="studio", root=Path("/tmp/desktop"), url="http://127.0.0.1:7870", port=7870, presence="running", launcher="desktop app", version="0.165.0", pid=222, source="heartbeat", members=13, running=5, remotes=0, candidate=deckhub.HubCandidate("http://127.0.0.1:7870", "heartbeat")),
-        HubRow(name="dev", root=Path("/tmp/dev"), url="http://127.0.0.1:7871", port=7871, presence="stopped", source="root", version="0.164.0", members=2, running=0, remotes=0),
-        HubRow(name="ava", root=None, url="https://ava.tail:7870", port=7870, presence="unreachable", launcher="peer", source="peer", candidate=deckhub.HubCandidate("https://ava.tail:7870", "peer")),
+        HubRow(
+            name="studio",
+            root=Path("/tmp/desktop"),
+            url="http://127.0.0.1:7870",
+            port=7870,
+            presence="running",
+            launcher="desktop app",
+            version="0.165.0",
+            pid=222,
+            source="heartbeat",
+            members=13,
+            running=5,
+            remotes=0,
+            candidate=deckhub.HubCandidate("http://127.0.0.1:7870", "heartbeat"),
+        ),
+        HubRow(
+            name="dev",
+            root=Path("/tmp/dev"),
+            url="http://127.0.0.1:7871",
+            port=7871,
+            presence="stopped",
+            source="root",
+            version="0.164.0",
+            members=2,
+            running=0,
+            remotes=0,
+        ),
+        HubRow(
+            name="ava",
+            root=None,
+            url="https://ava.tail:7870",
+            port=7870,
+            presence="unreachable",
+            launcher="peer",
+            source="peer",
+            candidate=deckhub.HubCandidate("https://ava.tail:7870", "peer"),
+        ),
     ]
 
 
 def test_fleet_all_prints_the_hub_tree_and_json_carries_every_row(monkeypatch, capsys):
 
     probed: list = []
-    monkeypatch.setattr("deck.discovery.enumerate_hubs", lambda *, peers=None: (probed.append(("peers", peers)) or _tree_rows()))
+    monkeypatch.setattr(
+        "deck.discovery.enumerate_hubs", lambda *, peers=None: probed.append(("peers", peers)) or _tree_rows()
+    )
 
     def probe(row, *, token=None, insecure_http=False, roots=None):
         probed.append((row.name, token))
@@ -870,8 +1106,16 @@ def test_fleet_all_prints_the_hub_tree_and_json_carries_every_row(monkeypatch, c
     assert body["mode"] == "hubs" and [h["name"] for h in body["hubs"]] == ["studio", "dev", "ava"]
     assert [h["presence"] for h in body["hubs"]] == ["running", "stopped", "unauthorized"]
     dev_root = str(Path("/tmp/dev"))  # rendered the platform's way (backslashes on Windows)
-    assert body["hubs"][0]["launcher"] == "desktop app" and body["hubs"][0]["members"] == 13 and body["hubs"][1]["root"] == dev_root
-    assert ("peers", [{"name": "ava", "url": "https://ava.tail:7870"}]) in probed and ("studio", "tok") in probed and ("ava", "tok") in probed
+    assert (
+        body["hubs"][0]["launcher"] == "desktop app"
+        and body["hubs"][0]["members"] == 13
+        and body["hubs"][1]["root"] == dev_root
+    )
+    assert (
+        ("peers", [{"name": "ava", "url": "https://ava.tail:7870"}]) in probed
+        and ("studio", "tok") in probed
+        and ("ava", "tok") in probed
+    )
     assert not any(p[0] == "dev" for p in probed)  # a stopped hub has nothing to probe
     # the human table, off a terminal
     monkeypatch.setattr("sys.stdout.isatty", lambda: False)
@@ -906,18 +1150,26 @@ def test_launch_hub_runs_protoagent_up_for_that_root_and_never_this_shells_scope
     monkeypatch.setattr("subprocess.run", fake_run)
     monkeypatch.setenv("PROTOAGENT_INSTANCE", "somewhere-else")
     monkeypatch.setenv("PROTOAGENT_HOME", "/nope")
-    monkeypatch.setattr("deck.discovery.instance_roots", lambda: [])  # nothing on disk owns a port here (this box's roots would)
+    monkeypatch.setattr(
+        "deck.discovery.instance_roots", lambda: []
+    )  # nothing on disk owns a port here (this box's roots would)
     held = {7870, 7871}  # the desktop hub and something else hold these
     monkeypatch.setattr(cli, "_port_free", lambda port: port not in held)
     row = HubRow(name="dev", root=Path("/tmp/dev"), url=None, port=7871, presence="stopped", source="root")
     cli._launch_hub(row)  # its remembered port is held: the next free one in the range
-    assert seen["argv"][-3:] == ["up", "--port", "7872"] and seen["env"]["PROTOAGENT_HOME"] == str(Path("/tmp/dev")) and "PROTOAGENT_INSTANCE" not in seen["env"]
+    assert (
+        seen["argv"][-3:] == ["up", "--port", "7872"]
+        and seen["env"]["PROTOAGENT_HOME"] == str(Path("/tmp/dev"))
+        and "PROTOAGENT_INSTANCE" not in seen["env"]
+    )
     assert (row.port, row.url) == (7872, "http://127.0.0.1:7872")  # the row learned where it will answer
     held.discard(7871)
     row = HubRow(name="dev", root=Path("/tmp/dev"), url=None, port=7871, presence="stopped", source="root")
     cli._launch_hub(row)
     assert seen["argv"][-3:] == ["up", "--port", "7871"]  # free again: the remembered port wins
-    cli._launch_hub(HubRow(name="fresh", root=Path("/tmp/fresh"), url=None, port=None, presence="stopped", source="root"))
+    cli._launch_hub(
+        HubRow(name="fresh", root=Path("/tmp/fresh"), url=None, port=None, presence="stopped", source="root")
+    )
     assert seen["argv"][-3:] == ["up", "--port", "7871"]  # no memory: the first free one
 
     class Bad(P):
@@ -926,12 +1178,18 @@ def test_launch_hub_runs_protoagent_up_for_that_root_and_never_this_shells_scope
 
     monkeypatch.setattr("subprocess.run", lambda *a, **k: Bad())
     with pytest.raises(RuntimeError, match="port 7871 is held"):
-        cli._launch_hub(HubRow(name="dev", root=Path("/tmp/dev"), url=None, port=7871, presence="stopped", source="root"))
+        cli._launch_hub(
+            HubRow(name="dev", root=Path("/tmp/dev"), url=None, port=7871, presence="stopped", source="root")
+        )
     with pytest.raises(RuntimeError, match="instance root"):
-        cli._launch_hub(HubRow(name="ava", root=None, url="https://ava:7870", port=7870, presence="unreachable", source="peer"))
+        cli._launch_hub(
+            HubRow(name="ava", root=None, url="https://ava:7870", port=7870, presence="unreachable", source="peer")
+        )
 
 
-def test_launch_hub_gives_the_desktop_root_its_box_root_and_the_port_probe_sees_a_wildcard_listener(monkeypatch, tmp_path):
+def test_launch_hub_gives_the_desktop_root_its_box_root_and_the_port_probe_sees_a_wildcard_listener(
+    monkeypatch, tmp_path
+):
     import socket
     from pathlib import Path
 
@@ -944,7 +1202,9 @@ def test_launch_hub_gives_the_desktop_root_its_box_root_and_the_port_probe_sees_
         stdout = "started"
         stderr = ""
 
-    monkeypatch.setattr("subprocess.run", lambda argv, *, env, capture_output, text, timeout: (seen.update(argv=argv, env=env) or P()))
+    monkeypatch.setattr(
+        "subprocess.run", lambda argv, *, env, capture_output, text, timeout: seen.update(argv=argv, env=env) or P()
+    )
     monkeypatch.setattr(cli, "_port_free", lambda port: True)
     desktop = tmp_path / "Application Support" / "studio.protolabs.protoagent"
     desktop.mkdir(parents=True)
@@ -989,10 +1249,17 @@ def test_launch_hub_never_takes_a_port_another_hubs_member_owns_on_disk(tmp_path
     dev = tmp_path / "dev"
     (dev / "workspaces").mkdir(parents=True)
     (dev / "workspaces" / "fleet.json").write_text("{}")
-    (dev / "server.pid").write_text(json.dumps({"pid": 0, "port": 7873}))  # dev's own remembered port is never "taken" from itself
+    (dev / "server.pid").write_text(
+        json.dumps({"pid": 0, "port": 7873})
+    )  # dev's own remembered port is never "taken" from itself
     seen: dict = {}
-    monkeypatch.setattr("subprocess.run", lambda argv, *, env, capture_output, text, timeout: (seen.update(argv=argv, env=env) or _Started()))
-    monkeypatch.setattr(cli, "_port_free", lambda port: port != 7870)  # the desktop hub holds 7870; 7871 binds (its member is stopped)
+    monkeypatch.setattr(
+        "subprocess.run",
+        lambda argv, *, env, capture_output, text, timeout: seen.update(argv=argv, env=env) or _Started(),
+    )
+    monkeypatch.setattr(
+        cli, "_port_free", lambda port: port != 7870
+    )  # the desktop hub holds 7870; 7871 binds (its member is stopped)
     monkeypatch.setattr(deckhub, "desktop_box_roots", lambda: [desktop])
     monkeypatch.setattr("deck.discovery.instance_roots", lambda: [desktop, dev])
     cli._launch_hub(hubs.HubRow(name="dev", root=dev, url=None, port=None, presence="stopped", source="root"))
@@ -1026,22 +1293,42 @@ def test_launch_hub_keeps_the_box_root_of_a_scoped_instance_under_a_custom_box(t
     monkeypatch.setattr("deck.discovery.instance_roots", lambda: [dev])
     seen: dict = {}
     real_run = subprocess.run
-    monkeypatch.setattr("subprocess.run", lambda argv, *, env, capture_output, text, timeout: (seen.update(argv=argv, env=env) or _Started()))
+    monkeypatch.setattr(
+        "subprocess.run",
+        lambda argv, *, env, capture_output, text, timeout: seen.update(argv=argv, env=env) or _Started(),
+    )
     monkeypatch.setattr(cli, "_port_free", lambda port: True)
     monkeypatch.setenv("PROTOAGENT_BOX_ROOT", str(box))
     monkeypatch.setenv("PROTOAGENT_INSTANCE", "dev")
     cli._launch_hub(hubs.HubRow(name="dev", root=dev, url=None, port=None, presence="stopped", source="root"))
     env = dict(seen["env"])
-    assert env["PROTOAGENT_HOME"] == str(dev) and env["PROTOAGENT_BOX_ROOT"] == str(box) and "PROTOAGENT_INSTANCE" not in env
+    assert (
+        env["PROTOAGENT_HOME"] == str(dev)
+        and env["PROTOAGENT_BOX_ROOT"] == str(box)
+        and "PROTOAGENT_INSTANCE" not in env
+    )
     # what the CHILD resolves from that env — a real interpreter, this checkout, no server
     repo = Path(__file__).resolve().parents[1]
     env["PYTHONPATH"] = os.pathsep.join((str(repo / "src"), str(repo)))
-    out = real_run([sys.executable, "-c", "from infra.paths import instance_paths as p; print(p().box_root); print(p().instance_root)"], env=env, capture_output=True, text=True, cwd=str(repo), timeout=60)
+    out = real_run(
+        [
+            sys.executable,
+            "-c",
+            "from infra.paths import instance_paths as p; print(p().box_root); print(p().instance_root)",
+        ],
+        env=env,
+        capture_output=True,
+        text=True,
+        cwd=str(repo),
+        timeout=60,
+    )
     child_box, child_root = out.stdout.strip().splitlines()[-2:]
     assert (Path(child_box), Path(child_root)) == (box, dev), out.stderr
     # a scoped instance under the plain data home gets no box root: the default IS that home
     seen.clear()
-    cli._launch_hub(hubs.HubRow(name="dev2", root=home / "dev2", url=None, port=None, presence="stopped", source="root"))
+    cli._launch_hub(
+        hubs.HubRow(name="dev2", root=home / "dev2", url=None, port=None, presence="stopped", source="root")
+    )
     assert "PROTOAGENT_BOX_ROOT" not in seen["env"]
 
 
@@ -1059,14 +1346,25 @@ def test_fleet_all_on_a_tty_opens_the_tree_even_when_a_hub_refuses_every_credent
     class FakeApp:
         @staticmethod
         def run(backend, **kw):
-            opened.update(kw, mode=backend.mode, label=backend.snapshot().label, lifecycle=getattr(backend, "lifecycle", True))
+            opened.update(
+                kw, mode=backend.mode, label=backend.snapshot().label, lifecycle=getattr(backend, "lifecycle", True)
+            )
             return 0
 
     real = importlib.import_module
-    monkeypatch.setattr(importlib, "import_module", lambda name, *a, **kw: FakeApp if name == "deck.app" else real(name, *a, **kw))
+    monkeypatch.setattr(
+        importlib, "import_module", lambda name, *a, **kw: FakeApp if name == "deck.app" else real(name, *a, **kw)
+    )
     rc = cli.run_fleet_cli(["--all"])
-    assert rc == 0 and opened.get("start_on_hubs") is True and opened["mode"] == "offline" and "rejected every credential" in opened["label"], capsys.readouterr().err
-    assert opened["lifecycle"] is False and "start/stop refused" in opened["label"]  # a hub answered: nothing is driven from disk beside it
+    assert (
+        rc == 0
+        and opened.get("start_on_hubs") is True
+        and opened["mode"] == "offline"
+        and "rejected every credential" in opened["label"]
+    ), capsys.readouterr().err
+    assert (
+        opened["lifecycle"] is False and "start/stop refused" in opened["label"]
+    )  # a hub answered: nothing is driven from disk beside it
     opened.clear()
     _offline(monkeypatch)  # nothing answered at all: the disk view keeps start/stop
     assert cli.run_fleet_cli(["--all"]) == 0 and opened["lifecycle"] is True
@@ -1076,7 +1374,9 @@ def test_fleet_all_on_a_tty_opens_the_tree_even_when_a_hub_refuses_every_credent
     assert cli.run_fleet_cli([]) == 1 and not opened
     # --offline reaches the deck as its own flag: the tree then lists disk and probes nothing
     opened.clear()
-    assert cli.run_fleet_cli(["--all", "--offline"]) == 0 and opened.get("offline") is True and opened.get("peers") is None
+    assert (
+        cli.run_fleet_cli(["--all", "--offline"]) == 0 and opened.get("offline") is True and opened.get("peers") is None
+    )
 
 
 def test_discover_peers_honours_the_boxs_discovery_knobs(tmp_path, monkeypatch):
@@ -1089,7 +1389,9 @@ def test_discover_peers_honours_the_boxs_discovery_knobs(tmp_path, monkeypatch):
     from graph.fleet import discovery
 
     # the Host layer file the cascade reads (conftest points PROTOAGENT_HOST_CONFIG at a tmp one)
-    Path(os.environ["PROTOAGENT_HOST_CONFIG"]).write_text("fleet:\n  discovery:\n    mdns: true\n    port_min: 7870\n    port_max: 7872\n", encoding="utf-8")
+    Path(os.environ["PROTOAGENT_HOST_CONFIG"]).write_text(
+        "fleet:\n  discovery:\n    mdns: true\n    port_min: 7870\n    port_max: 7872\n", encoding="utf-8"
+    )
     calls: dict = {}
 
     async def scan_local(port_range, skip):
@@ -1116,7 +1418,17 @@ def test_fleet_all_strips_control_characters_from_what_a_peer_or_hub_said(monkey
     from deck import hubs
 
     evil = "evil\x1b[2J\x07\nhub"
-    row = hubs.HubRow(name=evil, root=None, url="https://ava.tail:7870", port=7870, presence="unauthorized", launcher="peer", source="peer", version="1\x9b0", note="refused\x1b]0;pwned\x07")
+    row = hubs.HubRow(
+        name=evil,
+        root=None,
+        url="https://ava.tail:7870",
+        port=7870,
+        presence="unauthorized",
+        launcher="peer",
+        source="peer",
+        version="1\x9b0",
+        note="refused\x1b]0;pwned\x07",
+    )
     monkeypatch.setattr("deck.discovery.enumerate_hubs", lambda *, peers=None: [row])
     monkeypatch.setattr("deck.discovery.probe", lambda r, **kw: r)
     monkeypatch.setattr("deck.discovery.reconcile", lambda rows: rows)
@@ -1128,6 +1440,7 @@ def test_fleet_all_strips_control_characters_from_what_a_peer_or_hub_said(monkey
     assert cli.run_fleet_cli(["--all", "--json"]) == 0
     body = json.loads(capsys.readouterr().out)
     assert body["hubs"][0]["name"] == evil and body["hubs"][0]["version"] == "1\x9b0"  # raw, for scripts
+
 
 @pytest.mark.platform_sensitive
 def test_the_non_interactive_verbs_never_load_textual(tmp_path):
@@ -1141,10 +1454,22 @@ def test_the_non_interactive_verbs_never_load_textual(tmp_path):
     from pathlib import Path
 
     repo = Path(__file__).resolve().parents[1]
-    env = dict(os.environ, PYTHONPATH=os.pathsep.join((str(repo / "src"), str(repo))), PROTOAGENT_HOME=str(tmp_path / "inst"), PROTOAGENT_BOX_ROOT=str(tmp_path / "box"))
+    env = dict(
+        os.environ,
+        PYTHONPATH=os.pathsep.join((str(repo / "src"), str(repo))),
+        PROTOAGENT_HOME=str(tmp_path / "inst"),
+        PROTOAGENT_BOX_ROOT=str(tmp_path / "box"),
+    )
     probe = "import sys; from graph.fleet import cli\ntry:\n    rc = cli.run_fleet_cli({argv!r})\nexcept SystemExit as e:\n    rc = e.code\nprint('textual' in sys.modules, 'deck.hubs' in sys.modules, rc)"
     for argv in (["--all", "--offline", "--json"], ["ls", "--offline", "--json"], ["--help"]):
-        out = subprocess.run([sys.executable, "-c", probe.format(argv=argv)], env=env, capture_output=True, text=True, cwd=str(repo), timeout=120)
+        out = subprocess.run(
+            [sys.executable, "-c", probe.format(argv=argv)],
+            env=env,
+            capture_output=True,
+            text=True,
+            cwd=str(repo),
+            timeout=120,
+        )
         last = (out.stdout.strip().splitlines() or [""])[-1]
         assert last.startswith("False False"), (argv, last, out.stderr[-500:])
 
@@ -1157,10 +1482,14 @@ def test_launch_hub_never_takes_a_stopped_members_port_that_only_its_workspace_y
 
     desktop = tmp_path / "desktop"
     (desktop / "workspaces" / "killteam-0416").mkdir(parents=True)
-    (desktop / "workspaces" / "killteam-0416" / "workspace.yaml").write_text("id: killteam-0416\nname: killteam\nport: 7871\n")
+    (desktop / "workspaces" / "killteam-0416" / "workspace.yaml").write_text(
+        "id: killteam-0416\nname: killteam\nport: 7871\n"
+    )
     (desktop / "workspaces" / "roxy-e815").mkdir(parents=True)
     (desktop / "workspaces" / "roxy-e815" / "workspace.yaml").write_text("id: roxy-e815\nname: roxy\nport: 7872\n")
-    (desktop / "workspaces" / "fleet.json").write_text(json.dumps({"roxy-e815": {"pid": 7, "port": 7872}}))  # only the RUNNING member
+    (desktop / "workspaces" / "fleet.json").write_text(
+        json.dumps({"roxy-e815": {"pid": 7, "port": 7872}})
+    )  # only the RUNNING member
     dev = tmp_path / "dev"
     (dev / "workspaces").mkdir(parents=True)
     (dev / "workspaces" / "fleet.json").write_text("{}")
@@ -1168,8 +1497,12 @@ def test_launch_hub_never_takes_a_stopped_members_port_that_only_its_workspace_y
     assert {7871, 7872} <= set(members)  # the stopped member's port is known from its record
     assert set(discovery._ports_on_disk([desktop, dev])[0]) == {7872}  # the tree's listener skip: started members only
     seen: dict = {}
-    monkeypatch.setattr("subprocess.run", lambda argv, *, env, capture_output, text, timeout: (seen.update(argv=argv) or _Started()))
-    monkeypatch.setattr(cli, "_port_free", lambda port: port != 7870)  # the desktop hub holds 7870; 7871 and 7872 bind (7871's member is stopped)
+    monkeypatch.setattr(
+        "subprocess.run", lambda argv, *, env, capture_output, text, timeout: seen.update(argv=argv) or _Started()
+    )
+    monkeypatch.setattr(
+        cli, "_port_free", lambda port: port != 7870
+    )  # the desktop hub holds 7870; 7871 and 7872 bind (7871's member is stopped)
     monkeypatch.setattr(deckhub, "desktop_box_roots", lambda: [desktop])
     monkeypatch.setattr("deck.discovery.instance_roots", lambda: [desktop, dev])
     cli._launch_hub(discovery.HubRow(name="dev", root=dev, url=None, port=None, presence="stopped", source="root"))

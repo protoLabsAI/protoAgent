@@ -28,24 +28,35 @@ async def test_thread_affinity_on_wire_is_stable_and_isolated(streaming):
                 return httpx.Response(503, json={"error": {"message": "temporary failure"}})
         if body.get("stream"):
             chunk = {
-                "id": "chatcmpl-test", "object": "chat.completion.chunk", "created": 0,
+                "id": "chatcmpl-test",
+                "object": "chat.completion.chunk",
+                "created": 0,
                 "model": "protolabs/smart",
-                "choices": [{"index": 0, "delta": {"role": "assistant", "content": "ok"},
-                             "finish_reason": "stop"}],
+                "choices": [{"index": 0, "delta": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
             }
-            return httpx.Response(200, headers={"content-type": "text/event-stream"},
-                                  content=f"data: {json.dumps(chunk)}\n\ndata: [DONE]\n\n")
-        return httpx.Response(200, json={
-            "id": "chatcmpl-test", "object": "chat.completion", "created": 0,
-            "model": "protolabs/smart",
-            "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"},
-                         "finish_reason": "stop"}],
-        })
+            return httpx.Response(
+                200,
+                headers={"content-type": "text/event-stream"},
+                content=f"data: {json.dumps(chunk)}\n\ndata: [DONE]\n\n",
+            )
+        return httpx.Response(
+            200,
+            json={
+                "id": "chatcmpl-test",
+                "object": "chat.completion",
+                "created": 0,
+                "model": "protolabs/smart",
+                "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
+            },
+        )
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
         model = _ReasoningChatOpenAI(
-            model="protolabs/smart", api_key="test", base_url="https://gateway.test/v1",
-            http_async_client=client, default_headers={"User-Agent": _GATEWAY_UA},
+            model="protolabs/smart",
+            api_key="test",
+            base_url="https://gateway.test/v1",
+            http_async_client=client,
+            default_headers={"User-Agent": _GATEWAY_UA},
             streaming=streaming,
             max_retries=1,
         )

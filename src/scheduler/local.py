@@ -207,6 +207,7 @@ def _a2a_turn_canceled(payload: object) -> bool:
         return False
     return str(status.get("state") or "").upper() in _A2A_CANCELED_STATES
 
+
 # Start backing off only after a job has failed this many times in a row. Two is
 # noise (a restart mid-turn, a gateway blip); three is a pattern.
 BACKOFF_AFTER_FAILURES = 3
@@ -423,7 +424,8 @@ class LocalScheduler:
         if owner["agent_name"] != self.agent_name:
             raise ValueError("scheduler store belongs to a different agent; check target identity")
         mismatch = db.execute(
-            "SELECT 1 FROM jobs WHERE agent_name IS NOT ? LIMIT 1", (self.agent_name,),
+            "SELECT 1 FROM jobs WHERE agent_name IS NOT ? LIMIT 1",
+            (self.agent_name,),
         ).fetchone()
         if mismatch:
             raise ValueError("scheduler store belongs to a different agent; check target identity")
@@ -1265,9 +1267,7 @@ def _row_to_job(row: Any) -> Job:
         ttl=row["ttl"] if "ttl" in keys else None,
         max_fires=row["max_fires"] if "max_fires" in keys else None,
         fire_count=int(row["fire_count"] or 0) if "fire_count" in keys else 0,
-        consecutive_failures=(
-            int(row["consecutive_failures"] or 0) if "consecutive_failures" in keys else 0
-        ),
+        consecutive_failures=(int(row["consecutive_failures"] or 0) if "consecutive_failures" in keys else 0),
         last_error=row["last_error"] if "last_error" in keys else None,
         last_ok=row["last_ok"] if "last_ok" in keys else None,
         fence=_load_fence(row["fence"] if "fence" in keys else None),

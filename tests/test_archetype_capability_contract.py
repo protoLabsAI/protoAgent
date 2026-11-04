@@ -134,7 +134,13 @@ def test_write_host_archetype_round_trips_and_an_empty_contract_removes_the_file
 def test_reset_setup_drops_the_contract_with_the_marker(tmp_path, monkeypatch):
     """Re-running the wizard (POST /api/config/reset-setup) must not carry the LAST
     run's contract into the next one — the re-run records its own."""
-    from graph.config_io import host_archetype_path, mark_setup_complete, reset_setup, setup_marker_path, write_host_archetype
+    from graph.config_io import (
+        host_archetype_path,
+        mark_setup_complete,
+        reset_setup,
+        setup_marker_path,
+        write_host_archetype,
+    )
 
     _host(tmp_path, monkeypatch)
     mark_setup_complete()

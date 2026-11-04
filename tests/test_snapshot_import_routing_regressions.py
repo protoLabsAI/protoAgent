@@ -185,7 +185,10 @@ def test_G_old_snapshot_model_api_key_alias_is_filed_as_a_custom_connections_key
         "kind": "agent-snapshot",
         "agent": {"name": "vera"},
         "plugins": [],
-        "config": {"providers": [{"id": "local", "type": "openai-compat", "base_url": LOCAL}], "model": {"name": "local:qwen3"}},
+        "config": {
+            "providers": [{"id": "local", "type": "openai-compat", "base_url": LOCAL}],
+            "model": {"name": "local:qwen3"},
+        },
         "soul": None,
         "required_secrets": [{"name": "model.api_key", "kind": "config", "description": "", "was_set": True}],
     }
@@ -194,4 +197,6 @@ def test_G_old_snapshot_model_api_key_alias_is_filed_as_a_custom_connections_key
         zf.writestr(SNAPSHOT_MANIFEST, yaml.safe_dump(manifest))
     res = apply_snapshot(buf.getvalue(), name="old-1", acknowledged=True, install=False, secrets={"model.api_key": KEY})
     cfg = LangGraphConfig.from_yaml(Path(res.path) / "config" / "langgraph-config.yaml")
-    assert cfg.provider_by_id("local").api_key != KEY, "`--secret model.api_key` was filed as the `local` connection's key"
+    assert cfg.provider_by_id("local").api_key != KEY, (
+        "`--secret model.api_key` was filed as the `local` connection's key"
+    )

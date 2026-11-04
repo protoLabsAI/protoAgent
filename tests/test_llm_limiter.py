@@ -187,9 +187,7 @@ async def test_arrival_preserves_aging_from_logical_start():
     lane = _lane(clock, limit=1)
     loop = asyncio.get_running_loop()
     aged_bulk = llm_limiter._Waiter(BULK, wait_start=130.0, arrival=0.0, seq=1, future=loop.create_future())
-    fresh_default = llm_limiter._Waiter(
-        DEFAULT, wait_start=130.0, arrival=130.0, seq=2, future=loop.create_future()
-    )
+    fresh_default = llm_limiter._Waiter(DEFAULT, wait_start=130.0, arrival=130.0, seq=2, future=loop.create_future())
     lane._queue = [aged_bulk, fresh_default]
     assert lane._effective_rank(aged_bulk, 130.0) == _rank_interactive() == 2
     assert lane._select(130.0) is aged_bulk

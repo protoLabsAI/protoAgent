@@ -22,9 +22,7 @@ from server.chat import (
 def _install_registry(monkeypatch, names=("proto",)):
     """Publish a live DelegateRegistry (roster = ``names``) on STATE, the way the
     delegates plugin does at register() time."""
-    reg = DelegateRegistry(
-        [{"name": n, "type": "openai", "url": "https://g/v1", "model": "m"} for n in names]
-    )
+    reg = DelegateRegistry([{"name": n, "type": "openai", "url": "https://g/v1", "model": "m"} for n in names])
     monkeypatch.setattr(rs.STATE, "delegate_registry", reg, raising=False)
     return reg
 

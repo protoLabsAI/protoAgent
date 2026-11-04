@@ -337,8 +337,7 @@ class TestAttendedResumeDecision:
 
     def test_explicit_unattended_overrides_attendance(self):
         assert (
-            turn_control._is_autonomous({"origin": "background-resume", "attended": True, "unattended": True})
-            is True
+            turn_control._is_autonomous({"origin": "background-resume", "attended": True, "unattended": True}) is True
         )
 
     def test_operator_turn_still_not_autonomous(self):
@@ -408,6 +407,7 @@ async def test_answered_interrupt_does_not_resurface(monkeypatch):
     assert await chat_mod._pending_interrupt(cfg) == ("bbb", "second")
     assert await chat_mod._resume_payload(cfg, "us-east-1") == {"bbb": "us-east-1"}
 
+
 # ── #3414: the pause text must be answerable on its own ──────────────────────────────
 #
 # Every DELEGATE CALLER reads the TEXT part of an input-required pause — a peer that parks
@@ -416,7 +416,6 @@ async def test_answered_interrupt_does_not_resurface(monkeypatch):
 # `question or title`, so a form or approval (neither carries `question`) arrived as a bare
 # title: observed live, a delegate parked on a form and its caller got only "protoContent
 # readiness gate" — no fields, no options, nothing to answer.
-
 
 
 def test_a_plain_ask_still_uses_its_question():

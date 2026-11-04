@@ -119,9 +119,7 @@ def is_supported() -> bool:
 def _node_version(node_exe: str) -> str | None:
     """``<node> --version`` (stripped, e.g. ``v24.18.0``), or None if it won't run."""
     try:
-        out = subprocess.run(
-            [node_exe, "--version"], capture_output=True, text=True, timeout=10, check=False
-        )
+        out = subprocess.run([node_exe, "--version"], capture_output=True, text=True, timeout=10, check=False)
     except (OSError, subprocess.SubprocessError):
         return None
     got = (out.stdout or "").strip()
@@ -279,9 +277,7 @@ def _swap_into_place(new_dist: Path, final: Path) -> None:
         shutil.rmtree(backup, ignore_errors=True)
 
 
-def install_managed_node(
-    *, force: bool = False, on_progress: ProgressCb | None = None, timeout: float = 300.0
-) -> dict:
+def install_managed_node(*, force: bool = False, on_progress: ProgressCb | None = None, timeout: float = 300.0) -> dict:
     """Download + verify + extract the pinned Node into the managed dir; return
     ``node_status()``.
 

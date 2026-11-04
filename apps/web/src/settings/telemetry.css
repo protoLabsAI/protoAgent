@@ -99,7 +99,22 @@
   white-space: nowrap;
   font-size: var(--pl-font-size-2xs);
   color: var(--pl-color-fg-muted);
-  cursor: help;
+  /* A button so a tap expands it (touch has no hover tooltip); reset its chrome. */
+  padding: 0;
+  border: 0;
+  background: none;
+  font-family: inherit;
+  text-align: start;
+  cursor: pointer;
+}
+.telemetry-table .turn-error[data-expanded] {
+  white-space: normal;
+  overflow-wrap: anywhere;
+  max-width: 48ch;
+}
+.telemetry-table .turn-error:focus-visible {
+  outline: 2px solid var(--pl-color-focus);
+  outline-offset: 2px;
 }
 
 /* Trace cell — deep link to Langfuse, or a copyable trace id when the console

@@ -328,7 +328,9 @@ def register_fleet_routes(app) -> None:
         raw_inputs = body.get("inputs")
         # JSON null means "not provided" — drop it BEFORE str() coercion, or str(None) becomes
         # the truthy literal "None" and bypasses resolve_bundle_mcp_item's env/default fallthrough.
-        inputs = {str(k): str(v) for k, v in raw_inputs.items() if v is not None} if isinstance(raw_inputs, dict) else None
+        inputs = (
+            {str(k): str(v) for k, v in raw_inputs.items() if v is not None} if isinstance(raw_inputs, dict) else None
+        )
         raw_secrets = body.get("secrets")
         secrets = [s for s in raw_secrets if isinstance(s, dict)] if isinstance(raw_secrets, list) else None
         # Operator answers to the bundle's declared config_inputs prompts (#2934). Values
@@ -394,12 +396,16 @@ def register_fleet_routes(app) -> None:
             headers = {"authorization": f"Bearer {resolve_service_token()}"}
             try:
                 response = await proxy._get_client().get(
-                    f"{base}/api/restart/readiness", headers=headers, timeout=5,
+                    f"{base}/api/restart/readiness",
+                    headers=headers,
+                    timeout=5,
                 )
                 response.raise_for_status()
                 readiness = response.json()
             except Exception as exc:
-                raise HTTPException(409, "Could not check whether the agent is idle; no restart was attempted.") from exc
+                raise HTTPException(
+                    409, "Could not check whether the agent is idle; no restart was attempted."
+                ) from exc
             if readiness.get("idle") is not True:
                 raise HTTPException(409, "The agent became busy; choose Restart when idle again.")
         try:
@@ -425,7 +431,10 @@ def register_fleet_routes(app) -> None:
         URL slug, the workspace dir and the data scope — never changes; open windows
         and checkpoints survive. A running agent re-reads its identity on restart."""
         try:
-            return {"ok": True, **await fleet_ops.rename(name, (req or {}).get("name"))}  # the op owns the check: None/blank → 400
+            return {
+                "ok": True,
+                **await fleet_ops.rename(name, (req or {}).get("name")),
+            }  # the op owns the check: None/blank → 400
         except manager.WorkspaceError as exc:
             raise HTTPException(400, str(exc))
 

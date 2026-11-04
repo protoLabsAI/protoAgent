@@ -371,9 +371,7 @@ def _refresh_anthropic_tokens(refresh_token: str, *, timeout_s: float = 20.0) ->
         )
     tokens = resp.json()
     if not str(tokens.get("access_token", "") or ""):
-        raise OAuthCredentialError(
-            "Claude token refresh returned no access_token.", provider="anthropic-oauth"
-        )
+        raise OAuthCredentialError("Claude token refresh returned no access_token.", provider="anthropic-oauth")
     return tokens
 
 
@@ -470,8 +468,7 @@ def _resolve_anthropic_oauth_locked() -> AnthropicOAuthCreds:
             refresh_token = str(store.get("refresh_token", "") or "").strip()
             if not refresh_token:
                 raise OAuthCredentialError(
-                    "protoAgent's stored Claude OAuth token has expired and cannot be "
-                    "refreshed. Sign in again.",
+                    "protoAgent's stored Claude OAuth token has expired and cannot be refreshed. Sign in again.",
                     provider="anthropic-oauth",
                 )
             refreshed = _refresh_anthropic_tokens(refresh_token)
@@ -496,7 +493,8 @@ def _resolve_anthropic_oauth_locked() -> AnthropicOAuthCreds:
             exp_ms = oauth.get("expiresAt") if isinstance(oauth, dict) else None
             token = str(oauth.get("accessToken", "") or "").strip() if isinstance(oauth, dict) else ""
             borrowed_expired = borrowed_expired or (
-                bool(token) and isinstance(exp_ms, (int, float))
+                bool(token)
+                and isinstance(exp_ms, (int, float))
                 and float(exp_ms) / 1000.0 <= time.time() + _ANTHROPIC_REFRESH_SKEW_S
             )
             creds = _creds_from_claude_doc(doc, source)
@@ -714,7 +712,9 @@ def _promote_instance_oauth_to_box_locked(config_dir: Path) -> OAuthPromotion:
             except (OSError, ValueError, json.JSONDecodeError):
                 marker_doc = []
             disconnected = set(marker_doc) if isinstance(marker_doc, list) else set()
-            blocked = [provider for _source, _destination, _filename, provider in candidates if provider in disconnected]
+            blocked = [
+                provider for _source, _destination, _filename, provider in candidates if provider in disconnected
+            ]
             if blocked:
                 raise OAuthStoreTransferError(
                     "cannot share legacy instance OAuth for "
@@ -909,9 +909,7 @@ def _refresh_codex_tokens(tokens: dict[str, Any], *, timeout_s: float = 20.0) ->
     try:
         payload = resp.json()
     except ValueError as exc:
-        raise OAuthCredentialError(
-            "Codex token refresh returned invalid JSON.", provider="openai-codex"
-        ) from exc
+        raise OAuthCredentialError("Codex token refresh returned invalid JSON.", provider="openai-codex") from exc
 
     new_access = str(payload.get("access_token", "") or "").strip()
     if not new_access:
@@ -1107,7 +1105,9 @@ def _resolve_codex_oauth_locked(paths: InstancePaths | None = None, *, force_ref
 
     def _creds(tokens: dict[str, Any], access: str, source: str) -> CodexOAuthCreds:
         base_url = os.environ.get("PROTOAGENT_CODEX_BASE_URL", "").strip().rstrip("/") or _CODEX_DEFAULT_BASE_URL
-        return CodexOAuthCreds(access_token=access, account_id=_codex_account_id(tokens), base_url=base_url, source=source)
+        return CodexOAuthCreds(
+            access_token=access, account_id=_codex_account_id(tokens), base_url=base_url, source=source
+        )
 
     # Fast path: a warm, unexpired store read needs neither the lock nor a write.
     tokens = _read_codex_tokens(store)
@@ -1325,7 +1325,9 @@ def _disconnect_locked(provider: str, paths: InstancePaths | None = None) -> Dis
         # Anthropic has no token-revoke endpoint for these tokens; local removal +
         # suppression is the contract. Claude Code's own credentials are untouched.
         return DisconnectResult(
-            provider, removed=existed, revoked=False,
+            provider,
+            removed=existed,
+            revoked=False,
             note="removed protoAgent's Claude token; sign in again to reconnect",
         )
     raise OAuthCredentialError(f"not a native OAuth provider: {provider!r}", provider=provider)

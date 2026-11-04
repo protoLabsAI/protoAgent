@@ -86,7 +86,9 @@ async def test_real_toolnode_checkpoints_the_room_with_its_turn(monkeypatch):
             [
                 AIMessage(
                     content="",
-                    tool_calls=[{"name": "delegate_to", "args": {"target": "proto", "query": "inspect auth"}, "id": "call-1"}],
+                    tool_calls=[
+                        {"name": "delegate_to", "args": {"target": "proto", "query": "inspect auth"}, "id": "call-1"}
+                    ],
                 ),
                 AIMessage(content="<output>I will use that finding.</output>"),
             ],

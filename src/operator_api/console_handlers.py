@@ -654,9 +654,7 @@ async def _operator_goals_rearm(session_id: str, body: dict) -> dict:
         add = int((body or {}).get("add_iterations") or 0)
     except (TypeError, ValueError):
         add = 0
-    ok, msg, resumed, _state = await asyncio.to_thread(
-        STATE.goal_controller.rearm, session_id, add_iterations=add
-    )
+    ok, msg, resumed, _state = await asyncio.to_thread(STATE.goal_controller.rearm, session_id, add_iterations=add)
     if not ok:
         return {"ok": False, "error": msg}
     # A reactivated (terminal → active) goal needs a turn to resume driving — enqueue a
@@ -773,9 +771,7 @@ async def _operator_activity_list() -> dict:
 
     # recent() is sync sqlite — offload it off the loop (#875), mirroring the
     # scheduler/goals handlers above.
-    entries = (
-        await asyncio.to_thread(STATE.activity_log.recent, 100) if STATE.activity_log is not None else []
-    )
+    entries = await asyncio.to_thread(STATE.activity_log.recent, 100) if STATE.activity_log is not None else []
     messages: list[dict] = []
     if STATE.checkpointer is not None:
         thread_id = f"a2a:{ACTIVITY_CONTEXT}"

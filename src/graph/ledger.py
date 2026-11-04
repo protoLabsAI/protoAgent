@@ -441,9 +441,7 @@ def settle_delegation(
     if store is None:
         return False
     try:
-        return store.settle(
-            task_id, outcome=outcome, duration_ms=duration_ms, error=error, cost_usd=cost_usd
-        )
+        return store.settle(task_id, outcome=outcome, duration_ms=duration_ms, error=error, cost_usd=cost_usd)
     except Exception:  # noqa: BLE001 — settling must never break a job's completion
         log.exception("[ledger] settle_delegation failed")
         return False

@@ -224,7 +224,9 @@ def run_plugin_cli(argv: list[str]) -> int:
                 # action item on macOS/Linux — pip would skip it anyway).
                 deps = sorted({d for p in s["installed"] for d in installer.applicable_deps(p.get("requires_pip", []))})
                 if deps and args.install_runtime_deps and installer._frozen_like():
-                    print(f"  ✓ member deps (installed into the managed Python runtime where missing): {', '.join(deps)}")
+                    print(
+                        f"  ✓ member deps (installed into the managed Python runtime where missing): {', '.join(deps)}"
+                    )
                 elif deps:
                     print(
                         f"  ⚠ member deps (NOT installed — review, then `plugin install-deps <id>`): {', '.join(deps)}"
@@ -238,7 +240,9 @@ def run_plugin_cli(argv: list[str]) -> int:
                     print(f"  recommended config: {s['config']}")
                 return 0
             if s.get("superseded"):
-                print(f"· {s['id']} ships with protoAgent now (bundled v{s['version']}) — nothing fetched from {args.url}.")
+                print(
+                    f"· {s['id']} ships with protoAgent now (bundled v{s['version']}) — nothing fetched from {args.url}."
+                )
                 print(f"  To turn it on, add '{s['id']}' to plugins.enabled in your config, then restart.")
                 return 0
             print(f"✓ installed {s['id']} v{s['version']} @ {s['resolved_sha'][:10]}")
@@ -255,7 +259,9 @@ def run_plugin_cli(argv: list[str]) -> int:
             if hard_here and args.install_runtime_deps and installer._frozen_like():
                 # The opt-in pip'd whatever was missing into the managed runtime (or the
                 # install would have failed with pip's error).
-                print(f"  ✓ declared deps (installed into the managed Python runtime where missing): {', '.join(hard_here)}")
+                print(
+                    f"  ✓ declared deps (installed into the managed Python runtime where missing): {', '.join(hard_here)}"
+                )
             elif hard_here:
                 print(f"  ⚠ declared deps (NOT installed — review, then install): {', '.join(hard_here)}")
                 print(f"    protoagent plugin install-deps {s['id']}")
@@ -304,8 +310,7 @@ def run_plugin_cli(argv: list[str]) -> int:
                 print(
                     f"  that was an installed copy the loader ignores — {args.id} ships with protoAgent "
                     f"(bundled v{rep['superseded_by_bundled']}) and keeps running; its enabled state, "
-                    "config and secrets are unchanged"
-                    + (" (--purge doesn't apply to them)." if args.purge else ".")
+                    "config and secrets are unchanged" + (" (--purge doesn't apply to them)." if args.purge else ".")
                 )
                 # Out-of-process, this CLI can't see what a running server imported. A server
                 # that hasn't restarted since protoAgent began shipping the plugin may still
@@ -351,8 +356,12 @@ def run_plugin_cli(argv: list[str]) -> int:
                 status = installer.check_plugin_update(entry)
                 ref = status.get("latest_ref") or ref
             s = installer.install(
-                str(entry.get("source_url") or ""), ref, force=True, by=f"cli-update-bundle:{args.id}",
-                allow=installer.configured_allowlist(), install_runtime_deps=args.install_runtime_deps,
+                str(entry.get("source_url") or ""),
+                ref,
+                force=True,
+                by=f"cli-update-bundle:{args.id}",
+                allow=installer.configured_allowlist(),
+                install_runtime_deps=args.install_runtime_deps,
             )
             print(f"✓ updated bundle {s.get('bundle', args.id)} @ {s.get('resolved_sha', '')[:10]}")
             for p in s.get("installed") or []:
@@ -369,9 +378,7 @@ def run_plugin_cli(argv: list[str]) -> int:
             return 0
         if args.cmd == "uninstall-bundle":
             rep = installer.uninstall_bundle(args.id, purge=args.purge)
-            print(
-                f"✓ uninstalled bundle {args.id} — members removed: {', '.join(rep['removed_members']) or 'none'}"
-            )
+            print(f"✓ uninstalled bundle {args.id} — members removed: {', '.join(rep['removed_members']) or 'none'}")
             if rep["kept"]:
                 print(f"  kept (shared with another bundle / re-installed directly): {', '.join(rep['kept'])}")
             if rep["skipped_missing"]:

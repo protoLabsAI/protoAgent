@@ -98,9 +98,7 @@ def test_resolve_bundle_item_unresolved_required_blanks_placeholder():
 
 
 def test_resolve_bundle_item_bare_entry_no_inputs():
-    entry, unresolved = resolve_bundle_mcp_item(
-        {"name": "plain", "transport": "stdio", "command": "npx"}, {}
-    )
+    entry, unresolved = resolve_bundle_mcp_item({"name": "plain", "transport": "stdio", "command": "npx"}, {})
     assert unresolved == []
     assert entry["name"] == "plain"
     assert entry["command"] == "npx"
@@ -205,14 +203,10 @@ def test_resolve_bundle_item_namespaced_beats_bare_without_shadowing_other_serve
 def test_resolve_bundle_item_blank_namespaced_value_falls_through():
     """A blank namespaced value doesn't shadow the bare key or the env fallback —
     same falsy fall-through the bare operator value already has."""
-    entry, unresolved = resolve_bundle_mcp_item(
-        _token_item("gh"), {}, {"gh:token": "", "token": "bare"}
-    )
+    entry, unresolved = resolve_bundle_mcp_item(_token_item("gh"), {}, {"gh:token": "", "token": "bare"})
     assert unresolved == []
     assert entry["headers"]["Authorization"] == "Bearer bare"
 
-    from_env, unresolved2 = resolve_bundle_mcp_item(
-        _token_item("gh"), {"TK": "envval"}, {"gh:token": ""}
-    )
+    from_env, unresolved2 = resolve_bundle_mcp_item(_token_item("gh"), {"TK": "envval"}, {"gh:token": ""})
     assert unresolved2 == []
     assert from_env["headers"]["Authorization"] == "Bearer envval"

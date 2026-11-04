@@ -48,31 +48,45 @@ def _build_operating_model(bound_tools: frozenset[str] | None = None) -> str:
 
     lines = ["# Operating model", ""]
     if has_any:
-        lines.extend([
-            "Drive standing objectives across turns, using your live commitments:",
-            "- **Observe** — read `<working_state>` and why this turn started.",
-            "- **Orient** — revise the plan when circumstances change.",
-            "- **Decide** — choose the next concrete step and its dependencies.",
-            "- **Act** — do the step.",
-            "",
-        ])
+        lines.extend(
+            [
+                "Drive standing objectives across turns, using your live commitments:",
+                "- **Observe** — read `<working_state>` and why this turn started.",
+                "- **Orient** — revise the plan when circumstances change.",
+                "- **Decide** — choose the next concrete step and its dependencies.",
+                "- **Act** — do the step.",
+                "",
+            ]
+        )
+
     def available(name: str) -> bool:
         return bound_tools is None or name in bound_tools
 
     if has_goal:
-        actions = [text for name, text in (
-            ("set_goal", "`set_goal` establishes an objective."),
-            ("update_goal_plan", "`update_goal_plan` keeps its plan current."),
-            ("abandon_goal", "Use `abandon_goal` when the objective is out of scope."),
-        ) if available(name)]
-        lines.append("- **Goals:** " + " ".join(actions) +
-                     " Only the deterministic verifier decides DONE; continue until it passes or report a blocker.")
+        actions = [
+            text
+            for name, text in (
+                ("set_goal", "`set_goal` establishes an objective."),
+                ("update_goal_plan", "`update_goal_plan` keeps its plan current."),
+                ("abandon_goal", "Use `abandon_goal` when the objective is out of scope."),
+            )
+            if available(name)
+        ]
+        lines.append(
+            "- **Goals:** "
+            + " ".join(actions)
+            + " Only the deterministic verifier decides DONE; continue until it passes or report a blocker."
+        )
     if has_tasks:
-        actions = [text for name, text in (
-            ("task_create", "decompose work with `task_create`"),
-            ("task_update", "record progress with `task_update`"),
-            ("task_close", "finish with `task_close`"),
-        ) if available(name)]
+        actions = [
+            text
+            for name, text in (
+                ("task_create", "decompose work with `task_create`"),
+                ("task_update", "record progress with `task_update`"),
+                ("task_close", "finish with `task_close`"),
+            )
+            if available(name)
+        ]
         lines.append("- **Tasks:** " + "; ".join(actions) + ".")
     if has_schedule:
         lines.append(
@@ -81,15 +95,16 @@ def _build_operating_model(bound_tools: frozenset[str] | None = None) -> str:
         )
     if has_watch:
         lines.append(
-            "- **Watches:** use `create_watch` for an external condition. "
-            "It resumes you when the condition trips."
+            "- **Watches:** use `create_watch` for an external condition. It resumes you when the condition trips."
         )
     if has_wait:
         lines.append(
             "- **Wait:** `wait(seconds, then=…)` ends this turn and resumes you after "
             "a short countdown with the supplied next step."
         )
-    lines.append("\nIf progress stalls, change the approach and record the blocker; don't repeat a failed action unchanged.")
+    lines.append(
+        "\nIf progress stalls, change the approach and record the blocker; don't repeat a failed action unchanged."
+    )
     return "\n".join(lines)
 
 
@@ -244,7 +259,9 @@ def build_system_prompt_parts(
             "For fan-out, synthesize once all required results arrive."
         )
     if bound_tool_names is None:
-        guideline_lines.append("- Capability guidance describes potential features; use only tools exposed by your runtime.")
+        guideline_lines.append(
+            "- Capability guidance describes potential features; use only tools exposed by your runtime."
+        )
     parts.append(("Guidelines", "\n".join(guideline_lines)))
 
     return parts
@@ -252,13 +269,22 @@ def build_system_prompt_parts(
 
 def _build_projects_section(projects, bound_tool_names: frozenset[str] | None = None) -> str:
     """Render roots and only the filesystem operations reachable by this lead."""
-    ordered = ("list_projects", "read_file", "list_dir", "find_files", "search_files",
-               "write_file", "edit_file", "delete_file")
+    ordered = (
+        "list_projects",
+        "read_file",
+        "list_dir",
+        "find_files",
+        "search_files",
+        "write_file",
+        "edit_file",
+        "delete_file",
+    )
     available = [name for name in ordered if bound_tool_names is None or name in bound_tool_names]
     if not available:
         return ""
     lines = [
-        "# Managed projects", "",
+        "# Managed projects",
+        "",
         "Available filesystem tools: " + ", ".join(f"`{name}`" for name in available) + ". "
         "Paths are fenced to these roots. Project permissions still apply; read-only roots cannot be modified.",
     ]
@@ -277,7 +303,6 @@ def _build_projects_section(projects, bound_tool_names: frozenset[str] | None = 
         lines.append(f"- **{name}** ({mode}) — `{path}`")
         rendered += 1
     return "\n".join(lines) if rendered else ""
-
 
 
 def _build_collaboration_section() -> str:
@@ -328,16 +353,21 @@ def _build_subagent_section(bound_tools: frozenset[str] | None = None) -> str:
     for name, config in SUBAGENT_REGISTRY.items():
         if config.lead_visible:
             lines.append(f"- **{name}**: {config.description}")
-    lines.extend([
-        "",
-        ("Run independent delegations concurrently with `task_batch`. " if has_batch else
-         "Run independent delegations with parallel `task` calls. ") +
-        "Subagents cannot spawn further subagents.",
-        "Use `run_in_background=true` for long independent work; results arrive automatically "
-        "on a later turn. Use foreground when you need the result to finish this reply. "
-        "Without a background manager, requests run in the foreground. "
-        "Follow the async-work rule in Guidelines once a job is confirmed running in the background.",
-    ])
+    lines.extend(
+        [
+            "",
+            (
+                "Run independent delegations concurrently with `task_batch`. "
+                if has_batch
+                else "Run independent delegations with parallel `task` calls. "
+            )
+            + "Subagents cannot spawn further subagents.",
+            "Use `run_in_background=true` for long independent work; results arrive automatically "
+            "on a later turn. Use foreground when you need the result to finish this reply. "
+            "Without a background manager, requests run in the foreground. "
+            "Follow the async-work rule in Guidelines once a job is confirmed running in the background.",
+        ]
+    )
     return "\n".join(lines)
 
 

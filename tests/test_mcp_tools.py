@@ -44,9 +44,9 @@ def test_stdio_connection_mapping(monkeypatch) -> None:
     assert conn["transport"] == "stdio"
     assert conn["command"] == "npx"
     assert conn["args"] == ["-y", "x"]
-    assert conn["env"]["A"] == "1"                     # per-server override wins
+    assert conn["env"]["A"] == "1"  # per-server override wins
     assert conn["env"]["MCP_TEST_PLAINVAR"] == "keep"  # ordinary var inherited
-    assert "MCP_TEST_API_KEY" not in conn["env"]       # secret-named var stripped
+    assert "MCP_TEST_API_KEY" not in conn["env"]  # secret-named var stripped
 
 
 def test_stdio_connection_inherit_env_false() -> None:
@@ -91,9 +91,7 @@ def test_env_tilde_expanded_with_default_inherit() -> None:
 def test_stdio_inherit_env_true_passes_full(monkeypatch) -> None:
     # inherit_env: true → the FULL parent env, secrets included (escape hatch).
     monkeypatch.setenv("MCP_TEST_API_KEY", "secret")
-    conn = _server_connection(
-        {"name": "fs", "transport": "stdio", "command": "npx", "inherit_env": True}
-    )
+    conn = _server_connection({"name": "fs", "transport": "stdio", "command": "npx", "inherit_env": True})
     assert conn["env"]["MCP_TEST_API_KEY"] == "secret"
 
 
@@ -103,9 +101,9 @@ def test_stdio_default_strips_secret_named_vars(monkeypatch) -> None:
     monkeypatch.setenv("FOO_PASSWORD", "p")
     monkeypatch.setenv("SSH_AUTH_SOCK", "/run/ssh-agent.sock")  # capability handle → stripped
     monkeypatch.setenv("DATABASE_URL", "postgres://u:pw@h/db")  # DSN w/ creds → stripped
-    monkeypatch.setenv("SENTRY_DSN", "https://k@sentry/1")      # DSN → stripped
-    monkeypatch.setenv("OPENAI_BASE_URL", "https://gw/v1")      # base URL, not a secret → kept
-    monkeypatch.setenv("MCP_TEST_PLAIN", "ok")                  # ordinary var → kept
+    monkeypatch.setenv("SENTRY_DSN", "https://k@sentry/1")  # DSN → stripped
+    monkeypatch.setenv("OPENAI_BASE_URL", "https://gw/v1")  # base URL, not a secret → kept
+    monkeypatch.setenv("MCP_TEST_PLAIN", "ok")  # ordinary var → kept
     conn = _server_connection({"name": "fs", "transport": "stdio", "command": "npx"})
     env = conn["env"]
     for stripped in ("FOO_TOKEN", "FOO_SECRET", "FOO_PASSWORD", "SSH_AUTH_SOCK", "DATABASE_URL", "SENTRY_DSN"):

@@ -128,12 +128,7 @@ def test_changelog_entry_is_present_and_collatable() -> None:
 
     lead = '- **Document "Stay awake while serving" for phone access (#4541).**'
     sources = [CHANGELOG_MD, *sorted(REPO.glob("CHANGELOG-*.md"))]
-    found = any(
-        line.startswith(lead)
-        for p in sources
-        if p.is_file()
-        for line in _text(p).splitlines()
-    )
+    found = any(line.startswith(lead) for p in sources if p.is_file() for line in _text(p).splitlines())
     assert found, (
         "the #4541 docs changelog entry is missing from "
         f"{FRAGMENT.relative_to(REPO)} (fragment, pre-release), "

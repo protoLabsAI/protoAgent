@@ -432,11 +432,14 @@ def test_startup_claim_reset_reclaims_crash_lease_without_retry_window(tmp_path)
 
     stale = datetime(2026, 1, 1, tzinfo=UTC)
     [first] = store.claim_now_recovery_batch(limit=8, retry_after_s=3600, now=stale)
-    assert store.claim_now_recovery_batch(
-        limit=8,
-        retry_after_s=3600,
-        now=stale + timedelta(seconds=120),
-    ) == []
+    assert (
+        store.claim_now_recovery_batch(
+            limit=8,
+            retry_after_s=3600,
+            now=stale + timedelta(seconds=120),
+        )
+        == []
+    )
     assert store.reset_stale_recovery_claims() == 1
 
     [second] = store.claim_now_recovery_batch(
@@ -586,10 +589,7 @@ async def test_startup_recovery_accepted_but_mark_delivered_failure_stays_claime
     # The durable accepted-delivery marker (#3351 review): survives a restart's claim reset,
     # so this recorded mark-failure is completed — not re-fired — on the next pass.
     assert row["recovery_accepted_at"] is not None
-    assert (
-        row["recovery_error"]
-        == "accepted delivery could not be marked delivered: sqlite write failed"
-    )
+    assert row["recovery_error"] == "accepted delivery could not be marked delivered: sqlite write failed"
 
     listed = await ch._operator_inbox_list("now", include_delivered=False)
     assert [visible["id"] for visible in listed["items"]] == [item["id"]]
@@ -910,9 +910,7 @@ async def test_startup_recovery_cancellation_restores_entire_claimed_batch(tmp_p
         assert by_id[item_id]["recovery_claimed_at"] is None
         assert by_id[item_id]["recovery_error"] == "delivery was cancelled"
     # And the restored tail is re-claimable by a subsequent recovery pass (not permanently hidden).
-    reclaim = store.claim_now_recovery_batch(
-        limit=8, retry_after_s=0, now=datetime.now(UTC) + timedelta(seconds=10)
-    )
+    reclaim = store.claim_now_recovery_batch(limit=8, retry_after_s=0, now=datetime.now(UTC) + timedelta(seconds=10))
     assert [r["id"] for r in reclaim] == [items[1]["id"], items[2]["id"]]
 
 

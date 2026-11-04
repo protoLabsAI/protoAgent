@@ -659,8 +659,7 @@ class PluginRegistry:
         the zero-config alternative; a hook is the direct callback form.)"""
         if not (callable(on_app_loaded) or callable(on_agent_active) or callable(on_system_wake)):
             log.warning(
-                "[plugins] %s: register_lifecycle_hook needs on_app_loaded, on_agent_active, "
-                "and/or on_system_wake",
+                "[plugins] %s: register_lifecycle_hook needs on_app_loaded, on_agent_active, and/or on_system_wake",
                 self.plugin_id,
             )
             return
@@ -710,20 +709,13 @@ class PluginRegistry:
         ``output_schema``/``result_mime``). All three are required — the card
         build hard-indexes them, so a spec missing any must fail HERE, attributed
         to its plugin, not as a ``KeyError`` at boot inside the card build (#2754)."""
-        if (
-            not isinstance(spec, dict)
-            or not spec.get("id")
-            or not spec.get("name")
-            or not spec.get("description")
-        ):
+        if not isinstance(spec, dict) or not spec.get("id") or not spec.get("name") or not spec.get("description"):
             log.warning(
                 "[plugins] %s: register_a2a_skill needs a dict with id+name+description: %r", self.plugin_id, spec
             )
             return
         if any(s.get("id") == spec["id"] for s in self.a2a_skills):
-            log.warning(
-                "[plugins] %s: a2a skill %r registered twice — keeping the first", self.plugin_id, spec["id"]
-            )
+            log.warning("[plugins] %s: a2a skill %r registered twice — keeping the first", self.plugin_id, spec["id"])
             return
         self.a2a_skills.append(spec)
 
@@ -888,9 +880,7 @@ class PluginRegistry:
         # plugin's saves land on ONE topic a consumer (GC dashboard, gallery view)
         # can subscribe to; the payload carries the producing plugin's id.
         if self.host and self.host.publish:
-            self.host.publish(
-                "media.saved", {"id": ref.id, "url": ref.url, "mime": ref.mime, "plugin": self.plugin_id}
-            )
+            self.host.publish("media.saved", {"id": ref.id, "url": ref.url, "mime": ref.mime, "plugin": self.plugin_id})
         else:  # non-server context (tests, headless) — no bus wired
             log.debug("[plugins] %s: media.saved event dropped — no bus", self.plugin_id)
         return ref

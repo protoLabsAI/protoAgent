@@ -425,13 +425,19 @@ def register_plugin_routes(app) -> None:
         from graph.plugins import setup_gaps
 
         if not setup_gaps.has_step(plugin_id, step):
-            raise HTTPException(status_code=404, detail=f"plugin {plugin_id!r} has no setup step {step!r} (is it enabled?)")
+            raise HTTPException(
+                status_code=404, detail=f"plugin {plugin_id!r} has no setup step {step!r} (is it enabled?)"
+            )
         log.info("[plugins] running setup step %s/%s", plugin_id, step)
         result = await asyncio.to_thread(setup_gaps.run_step, plugin_id, step)
         if result is None:  # dropped between the check and the run (a reload / disable)
-            raise HTTPException(status_code=404, detail=f"plugin {plugin_id!r} has no setup step {step!r} (is it enabled?)")
+            raise HTTPException(
+                status_code=404, detail=f"plugin {plugin_id!r} has no setup step {step!r} (is it enabled?)"
+            )
         # Audit-logged like install-deps (ADR 0027 D5): a step may fetch or install software.
-        installer._audit("setup_step", {"id": plugin_id, "step": step}, result.get("message") or "", success=result["ok"])
+        installer._audit(
+            "setup_step", {"id": plugin_id, "step": step}, result.get("message") or "", success=result["ok"]
+        )
         return result
 
     @app.get("/api/plugins/catalog")
@@ -838,9 +844,7 @@ def register_plugin_routes(app) -> None:
         # "cannot install over it", which read as a broken update.
         bundled = installer.bundled_superseding(plugin_id, source_url)
         if bundled is not None:
-            raise HTTPException(
-                status_code=409, detail=installer.superseded_reason(plugin_id, source_url, bundled)
-            )
+            raise HTTPException(status_code=409, detail=installer.superseded_reason(plugin_id, source_url, bundled))
         ref = entry.get("requested_ref", "") or None
         if ref and installer.is_release_tag(ref):
             # A release-tag pin is immutable — the update target is the newest

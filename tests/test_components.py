@@ -52,9 +52,7 @@ class TestCodec:
         truncated card preview (what server/chat.py used to do) cuts the JSON tail and fails."""
         from server.chat import _TOOL_PREVIEW_CHARS
 
-        steps = [
-            {"label": f"Phase {i}: build the thing", "state": "todo", "detail": "x" * 80} for i in range(9)
-        ]
+        steps = [{"label": f"Phase {i}: build the thing", "state": "todo", "detail": "x" * 80} for i in range(9)]
         full = "Rendered a timeline component for the user. " + encode_component("timeline", {"steps": steps})
         assert len(full) > _TOOL_PREVIEW_CHARS  # the payload is bigger than the card preview
         # Full content extracts the complete payload …

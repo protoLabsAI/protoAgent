@@ -47,9 +47,7 @@ def _import_plugin():
     environment names — used identically by the test process and every child process."""
     for k in [k for k in sys.modules if k.startswith(_PKG)]:
         del sys.modules[k]
-    spec = importlib.util.spec_from_file_location(
-        _PKG, ROOT / "__init__.py", submodule_search_locations=[str(ROOT)]
-    )
+    spec = importlib.util.spec_from_file_location(_PKG, ROOT / "__init__.py", submodule_search_locations=[str(ROOT)])
     assert spec and spec.loader
     mod = importlib.util.module_from_spec(spec)
     sys.modules[_PKG] = mod
@@ -254,8 +252,11 @@ def test_render_status_in_one_process_does_not_erase_a_pin_from_another(art, pro
     not a "Pinned" reply over a store that ended up unpinned."""
     aid = _show(art, "<h1>Resume</h1>", "Master resume")
     stamp_read, pin_read = _CTX.Event(), _CTX.Event()
-    stamp = procs("render_status", {"artifact_id": aid, "version": 1, "error": "Icon is not defined"},
-                  gate=("hold", stamp_read, pin_read))
+    stamp = procs(
+        "render_status",
+        {"artifact_id": aid, "version": 1, "error": "Icon is not defined"},
+        gate=("hold", stamp_read, pin_read),
+    )
     pin = procs("pin", {"artifact_id": aid}, gate=("signal", pin_read))
     procs.wait_ready()
     stamp.go.set()
@@ -509,7 +510,9 @@ def test_a_same_millisecond_pair_across_a_trim_gets_the_right_verdict_or_none(ar
     assert codes() == ["<p>v3</p>", "<p>A</p>", "<p>B</p>"]
     assert vers[1]["ts"] == vers[2]["ts"] == rendered["ts"]  # the ambiguity is real: ts can't tell A from B
 
-    r = client.post("/api/plugins/artifact/render-status", json={"id": aid, **rendered, "ok": False, "error": "A threw"})
+    r = client.post(
+        "/api/plugins/artifact/render-status", json={"id": aid, **rendered, "ok": False, "error": "A threw"}
+    )
     assert r.json()["recorded"] is True
     vers = art._find(art._read_store(), aid)["versions"]
     assert vers[1]["code"] == "<p>A</p>" and vers[1]["render"]["error"] == "A threw"
@@ -518,7 +521,9 @@ def test_a_same_millisecond_pair_across_a_trim_gets_the_right_verdict_or_none(ar
     for code in ("<p>C</p>", "<p>D</p>"):  # trim A away, while its same-ts twin B survives
         art.rewrite_artifact.invoke({"code": code, "artifact_id": aid})
     assert codes() == ["<p>B</p>", "<p>C</p>", "<p>D</p>"]
-    late = client.post("/api/plugins/artifact/render-status", json={"id": aid, **rendered, "ok": False, "error": "A threw"})
+    late = client.post(
+        "/api/plugins/artifact/render-status", json={"id": aid, **rendered, "ok": False, "error": "A threw"}
+    )
     assert late.json()["recorded"] is False
     assert all("render" not in v for v in art._find(art._read_store(), aid)["versions"])
 
@@ -732,11 +737,15 @@ def test_each_new_degrade_errno_is_warned_with_the_path_and_a_repeat_is_not_sile
         fake.fail_errno = errno.ENOLCK
         _show(art, "<p>3</p>")  # a new one
     lock_path = str(art._store._lock_path())
-    warned = [r.getMessage() for r in caplog.records if r.levelname == "WARNING" and "cross-process lock" in r.getMessage()]
+    warned = [
+        r.getMessage() for r in caplog.records if r.levelname == "WARNING" and "cross-process lock" in r.getMessage()
+    ]
     assert len(warned) == 2, warned
     assert "EBADF" in warned[0] and "ENOLCK" in warned[1], warned
     assert all(lock_path in m for m in warned), warned
-    repeats = [r.getMessage() for r in caplog.records if r.levelname == "DEBUG" and "still unavailable" in r.getMessage()]
+    repeats = [
+        r.getMessage() for r in caplog.records if r.levelname == "DEBUG" and "still unavailable" in r.getMessage()
+    ]
     assert len(repeats) == 1 and "EBADF" in repeats[0] and lock_path in repeats[0], repeats
     assert len(art._read_store()["artifacts"]) == 3  # every write still landed
 

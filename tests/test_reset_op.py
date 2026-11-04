@@ -45,13 +45,17 @@ def test_force_refuses_to_kill_an_unknown_port_listener(monkeypatch, tmp_path):
 
 def test_heartbeat_finds_a_running_desktop_process_without_a_pidfile(monkeypatch, tmp_path):
     paths = _paths(tmp_path)
-    monkeypatch.setattr(reset, "colocated_instances", lambda: [{"pid": os.getpid(), "instance_root": str(paths.instance_root)}])
+    monkeypatch.setattr(
+        reset, "colocated_instances", lambda: [{"pid": os.getpid(), "instance_root": str(paths.instance_root)}]
+    )
     assert reset._tracked_pid(paths) == os.getpid()
 
 
 def test_heartbeat_ignores_a_stale_registry_process(monkeypatch, tmp_path):
     paths = _paths(tmp_path)
-    monkeypatch.setattr(reset, "colocated_instances", lambda: [{"pid": 424242, "instance_root": str(paths.instance_root)}])
+    monkeypatch.setattr(
+        reset, "colocated_instances", lambda: [{"pid": 424242, "instance_root": str(paths.instance_root)}]
+    )
     monkeypatch.setattr(reset, "pid_alive", lambda _pid: False)
 
     assert reset._tracked_pid(paths) is None

@@ -32,7 +32,22 @@ from deck.discovery import (  # noqa: F401 — re-exported for callers and tests
     wait_for_port,
 )
 
-__all__ = ["HubRow", "PRESENCE_GLYPH", "count_members", "enumerate_hubs", "instance_roots", "launcher_of", "plain", "probe", "reconcile", "row_text", "wait_for_port", "HubTreeScreen", "HUBS_CSS"]  # the public surface; the underscore helpers above stay reachable as attributes
+__all__ = [
+    "HubRow",
+    "PRESENCE_GLYPH",
+    "count_members",
+    "enumerate_hubs",
+    "instance_roots",
+    "launcher_of",
+    "plain",
+    "probe",
+    "reconcile",
+    "row_text",
+    "wait_for_port",
+    "HubTreeScreen",
+    "HUBS_CSS",
+]  # the public surface; the underscore helpers above stay reachable as attributes
+
 
 class HubTreeScreen(Screen):
     """Every hub on the box, one row each; ``enter`` attaches the deck to that hub,
@@ -58,7 +73,9 @@ class HubTreeScreen(Screen):
         table: DataTable = DataTable(id="hubs", cursor_type="row")
         table.add_columns("", "HUB", "STATE", "LAUNCHER", "PORT", "VER", "MEMBERS", "NOTE / ROOT")
         yield table
-        yield Static("enter attaches the deck to a running hub · u brings a stopped hub up · r rediscovers", id="hubs-status")
+        yield Static(
+            "enter attaches the deck to a running hub · u brings a stopped hub up · r rediscovers", id="hubs-status"
+        )
         yield Footer()
 
     def on_mount(self) -> None:
@@ -75,13 +92,30 @@ class HubTreeScreen(Screen):
         cur = table.cursor_row
         table.clear()
         for i, r in enumerate(self.rows):
-            glyph = Text(PRESENCE_GLYPH.get(r.presence, "·"), style={"running": "green", "unauthorized": "yellow", "unreachable": "red", "starting": "yellow"}.get(r.presence, "dim"))
+            glyph = Text(
+                PRESENCE_GLYPH.get(r.presence, "·"),
+                style={"running": "green", "unauthorized": "yellow", "unreachable": "red", "starting": "yellow"}.get(
+                    r.presence, "dim"
+                ),
+            )
             members, note = row_text(r)
             # every str cell is a Text: a plain str is parsed for console markup, and the
             # name, version and note come from the hub (a peer's are self-reported)
-            table.add_row(glyph, Text(r.name), Text(r.presence), Text(r.launcher), Text(str(r.port or "—")), Text(r.version or "—"), Text(members), Text(note, style="yellow" if r.note else "dim"), key=f"{r.key}#{i}")
+            table.add_row(
+                glyph,
+                Text(r.name),
+                Text(r.presence),
+                Text(r.launcher),
+                Text(str(r.port or "—")),
+                Text(r.version or "—"),
+                Text(members),
+                Text(note, style="yellow" if r.note else "dim"),
+                key=f"{r.key}#{i}",
+            )
         n_run = sum(1 for r in self.rows if r.presence == "running")
-        self.query_one("#hubs-head", Static).update(f"hubs on this box · {len(self.rows)} found · {n_run} running" + (" · working…" if self.busy else ""))
+        self.query_one("#hubs-head", Static).update(
+            f"hubs on this box · {len(self.rows)} found · {n_run} running" + (" · working…" if self.busy else "")
+        )
         if self.rows and cur is not None and cur < len(self.rows):
             table.move_cursor(row=cur)
         self.refresh_bindings()  # the footer offers attach / bring up for THIS row, and only then

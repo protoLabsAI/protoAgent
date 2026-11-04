@@ -52,8 +52,7 @@ def _make_pdf(text: str, *, draw: bool = True) -> bytes:
     for off in offsets:
         body += ("%010d 00000 n \n" % off).encode()
     body += (
-        b"trailer\n<< /Size " + str(n).encode() + b" /Root 1 0 R >>\n"
-        b"startxref\n" + str(xref_pos).encode() + b"\n%%EOF"
+        b"trailer\n<< /Size " + str(n).encode() + b" /Root 1 0 R >>\nstartxref\n" + str(xref_pos).encode() + b"\n%%EOF"
     )
     return bytes(body)
 
@@ -103,9 +102,7 @@ async def test_pdf_sniffed_from_octet_stream_body(monkeypatch):
     assert pdf.startswith(b"%PDF-")
 
     def _handler(request):
-        return httpx.Response(
-            200, headers={"content-type": "application/octet-stream"}, content=pdf
-        )
+        return httpx.Response(200, headers={"content-type": "application/octet-stream"}, content=pdf)
 
     _mock_httpx(monkeypatch, _handler)
     result = await fetch_url.ainvoke({"url": "https://example.com/mystery"})

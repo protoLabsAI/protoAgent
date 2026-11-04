@@ -85,9 +85,13 @@ def _isolated(monkeypatch, tmp_path):
 
 def _spec(payload: bytes = PAYLOAD, platform: str = "linux-x64"):
     asset = cli_fetch.ASSETS[platform][0]
-    return cli_fetch.FetchSpec(cli_fetch.CLI_VERSION, platform, asset,
-                               cli_fetch.RELEASE_URL.format(version=cli_fetch.CLI_VERSION, asset=asset),
-                               _sha(payload))
+    return cli_fetch.FetchSpec(
+        cli_fetch.CLI_VERSION,
+        platform,
+        asset,
+        cli_fetch.RELEASE_URL.format(version=cli_fetch.CLI_VERSION, asset=asset),
+        _sha(payload),
+    )
 
 
 def _pin_fake(monkeypatch, payload: bytes = PAYLOAD) -> str:
@@ -113,9 +117,16 @@ class _Finished:
         return self._rc
 
 
-def _cli_env(monkeypatch, *, which=None, chrome="pass",
-             chrome_msg="Google Chrome for Testing 151.0.7900.12 at /x/chrome", installs=None, install_rc=0,
-             install_err=""):
+def _cli_env(
+    monkeypatch,
+    *,
+    which=None,
+    chrome="pass",
+    chrome_msg="Google Chrome for Testing 151.0.7900.12 at /x/chrome",
+    installs=None,
+    install_rc=0,
+    install_err="",
+):
     """A synthetic CLI: ``--version`` and ``doctor --json`` behind ``subprocess.run`` (the
     preflight), and ``install`` behind ``subprocess.Popen`` (chrome_install) — a successful
     install flips doctor's one Chrome check to pass."""
@@ -127,8 +138,9 @@ def _cli_env(monkeypatch, *, which=None, chrome="pass",
         if verb == ["--version"]:
             return types.SimpleNamespace(returncode=0, stdout="agent-browser 0.27.1", stderr="")
         if verb == ["doctor"]:
-            payload = json.dumps({"checks": [{"id": "chrome.installed", "status": state["chrome"],
-                                              "message": state["msg"]}]})
+            payload = json.dumps(
+                {"checks": [{"id": "chrome.installed", "status": state["chrome"], "message": state["msg"]}]}
+            )
             return types.SimpleNamespace(returncode=0, stdout=payload, stderr="")
         return types.SimpleNamespace(returncode=0, stdout="", stderr="")
 
@@ -167,8 +179,15 @@ def _host_actions(raw) -> list[dict]:
 
 
 def test_every_upstream_asset_is_pinned_with_its_own_sha256():
-    assert set(cli_fetch.ASSETS) == {"darwin-arm64", "darwin-x64", "linux-x64", "linux-arm64",
-                                     "linux-musl-x64", "linux-musl-arm64", "win32-x64"}
+    assert set(cli_fetch.ASSETS) == {
+        "darwin-arm64",
+        "darwin-x64",
+        "linux-x64",
+        "linux-arm64",
+        "linux-musl-x64",
+        "linux-musl-arm64",
+        "win32-x64",
+    }
     for key, (asset, sha) in cli_fetch.ASSETS.items():
         assert asset == f"agent-browser-{key}" + (".exe" if key.startswith("win32") else "")
         assert re.fullmatch(r"[0-9a-f]{64}", sha), key
@@ -181,21 +200,25 @@ def test_the_pin_is_the_version_the_plugin_is_verified_against():
     assert cli_fetch.CLI_VERSION == "0.27.1"
     assert "verified on 0.27.1" in (ROOT / "runtime.py").read_text(encoding="utf-8")
     assert cli_fetch.fetch_spec("darwin-arm64").url == (
-        "https://github.com/vercel-labs/agent-browser/releases/download/v0.27.1/agent-browser-darwin-arm64")
+        "https://github.com/vercel-labs/agent-browser/releases/download/v0.27.1/agent-browser-darwin-arm64"
+    )
 
 
-@pytest.mark.parametrize("system,machine,musl,key", [
-    ("Darwin", "arm64", False, "darwin-arm64"),
-    ("Darwin", "x86_64", False, "darwin-x64"),
-    ("Linux", "x86_64", False, "linux-x64"),
-    ("Linux", "aarch64", False, "linux-arm64"),
-    ("Linux", "x86_64", True, "linux-musl-x64"),
-    ("Linux", "aarch64", True, "linux-musl-arm64"),
-    ("Windows", "AMD64", False, "win32-x64"),
-    ("Windows", "ARM64", False, None),
-    ("FreeBSD", "amd64", False, None),
-    ("Linux", "riscv64", False, None),
-])
+@pytest.mark.parametrize(
+    "system,machine,musl,key",
+    [
+        ("Darwin", "arm64", False, "darwin-arm64"),
+        ("Darwin", "x86_64", False, "darwin-x64"),
+        ("Linux", "x86_64", False, "linux-x64"),
+        ("Linux", "aarch64", False, "linux-arm64"),
+        ("Linux", "x86_64", True, "linux-musl-x64"),
+        ("Linux", "aarch64", True, "linux-musl-arm64"),
+        ("Windows", "AMD64", False, "win32-x64"),
+        ("Windows", "ARM64", False, None),
+        ("FreeBSD", "amd64", False, None),
+        ("Linux", "riscv64", False, None),
+    ],
+)
 def test_platform_keys_follow_upstreams_asset_naming(system, machine, musl, key):
     assert cli_fetch.platform_key(system, machine, musl=musl) == key
 
@@ -277,13 +300,13 @@ def test_a_target_stuck_in_use_is_accepted_only_when_it_is_already_the_pinned_bu
     def never(a, b):
         raise PermissionError(13, "in use")
 
-    dest.write_bytes(PAYLOAD)                  # another instance installed the same bytes
+    dest.write_bytes(PAYLOAD)  # another instance installed the same bytes
     tmp.write_bytes(PAYLOAD)
     cli_fetch._replace(str(tmp), dest, _sha(PAYLOAD), sleep=slept.append, replace=never)
     assert not tmp.exists() and dest.read_bytes() == PAYLOAD
-    assert sum(slept) < 10                     # bounded, not a spin
+    assert sum(slept) < 10  # bounded, not a spin
 
-    dest.write_bytes(b"an older build")        # something ELSE is stuck in place
+    dest.write_bytes(b"an older build")  # something ELSE is stuck in place
     tmp.write_bytes(PAYLOAD)
     with pytest.raises(PermissionError, match="in use"):
         cli_fetch._replace(str(tmp), dest, _sha(PAYLOAD), sleep=lambda s: None, replace=never)
@@ -298,11 +321,14 @@ def test_an_egress_block_stops_the_download_before_it_starts(monkeypatch, tmp_pa
     assert called == []
 
 
-@pytest.mark.parametrize("url", [
-    "http://release-assets.githubusercontent.com/x",      # not https
-    "https://evil.example/x",
-    "https://githubusercontent.com.evil.example/x",       # suffix spoof
-])
+@pytest.mark.parametrize(
+    "url",
+    [
+        "http://release-assets.githubusercontent.com/x",  # not https
+        "https://evil.example/x",
+        "https://githubusercontent.com.evil.example/x",  # suffix spoof
+    ],
+)
 def test_a_redirect_off_githubusercontent_is_refused(url):
     with pytest.raises(PermissionError):
         cli_fetch.check_redirect_target(url)
@@ -359,8 +385,9 @@ def test_a_download_in_flight_is_joined_not_repeated(monkeypatch):
         return PAYLOAD
 
     assert cli_fetch.ensure_cli(background=True, downloader=slow)["state"] == "fetching"
-    joiner = threading.Thread(target=lambda: out.append(cli_fetch.ensure_cli(background=False, wait=5,
-                                                                               downloader=slow)))
+    joiner = threading.Thread(
+        target=lambda: out.append(cli_fetch.ensure_cli(background=False, wait=5, downloader=slow))
+    )
     joiner.start()
     time.sleep(0.05)
     gate.set()
@@ -379,9 +406,10 @@ def test_a_failed_download_is_not_retried_automatically_but_is_on_the_button(mon
     st = cli_fetch.ensure_cli(background=False, downloader=bad)
     assert st["state"] == "failed" and "connection reset" in st["error"]
     assert cli_fetch.ensure_cli(background=False, downloader=bad)["state"] == "failed"
-    assert len(calls) == 1                                           # the tool path didn't retry
-    assert cli_fetch.ensure_cli(background=False, force=True,
-                                downloader=lambda url, timeout: PAYLOAD)["state"] == "done"
+    assert len(calls) == 1  # the tool path didn't retry
+    assert (
+        cli_fetch.ensure_cli(background=False, force=True, downloader=lambda url, timeout: PAYLOAD)["state"] == "done"
+    )
 
 
 def test_a_tampered_cached_binary_is_not_resolved(monkeypatch):
@@ -446,7 +474,7 @@ def test_while_downloading_the_banner_has_no_button_and_a_failure_offers_retry(m
     reg = _registry()
     preflight.report(reg, {})
     assert "downloading the agent-browser CLI v0.27.1" in reg.setup_gaps[preflight.CLI_GAP]
-    assert preflight.CLI_GAP not in reg.setup_gap_actions             # nothing to double-click
+    assert preflight.CLI_GAP not in reg.setup_gap_actions  # nothing to double-click
 
     holder.state.update(state="failed", error="OSError: connection reset by peer")
     preflight.report(reg, {})
@@ -483,7 +511,8 @@ def test_no_chrome_offers_an_install_button_the_host_keeps(monkeypatch):
     preflight.report(reg, {})
     assert "No Chrome binary found" in reg.setup_gaps[preflight.CHROME_GAP]
     assert _host_actions(reg.setup_gap_actions[preflight.CHROME_GAP]) == [
-        {"kind": "plugin_setup", "target": "agent_browser", "step": "install-chrome", "label": "Install Chrome"}]
+        {"kind": "plugin_setup", "target": "agent_browser", "step": "install-chrome", "label": "Install Chrome"}
+    ]
 
 
 def test_linux_arm64_is_told_to_use_chromium_not_given_a_button_that_must_fail(monkeypatch):
@@ -497,8 +526,9 @@ def test_linux_arm64_is_told_to_use_chromium_not_given_a_button_that_must_fail(m
 
 def test_chrome_install_is_supported_everywhere_but_linux_arm64():
     assert chrome_install.supported("Linux", "aarch64") is False
-    assert all(chrome_install.supported(s, m) for s, m in [("Linux", "x86_64"), ("Darwin", "arm64"),
-                                                            ("Windows", "AMD64")])
+    assert all(
+        chrome_install.supported(s, m) for s, m in [("Linux", "x86_64"), ("Darwin", "arm64"), ("Windows", "AMD64")]
+    )
 
 
 # ── the steps behind the buttons ─────────────────────────────────────────────────
@@ -523,7 +553,7 @@ def test_the_download_button_fetches_in_the_background_and_the_banner_moves_on(m
     assert res["ok"] is True
     assert cli_fetch._slot().idle.wait(5)
     assert cli_fetch.fetch_state()["state"] == "done"
-    assert preflight.CLI_GAP not in reg.setup_gaps                      # the CLI banner cleared…
+    assert preflight.CLI_GAP not in reg.setup_gaps  # the CLI banner cleared…
     assert reg.setup_gap_actions[preflight.CHROME_GAP]["step"] == "install-chrome"  # …and Chrome is next
 
 
@@ -563,9 +593,9 @@ def test_setup_refresh_serializes_probe_and_banner_publication(monkeypatch, step
         if not old_probe_started.is_set():
             old_probe_started.set()
             assert release_old_probe.wait(5)
-            return preflight.Probe(binary="agent-browser",
-                                   cli_path="" if step == "download-cli" else "/installed/ab",
-                                   chrome="missing")
+            return preflight.Probe(
+                binary="agent-browser", cli_path="" if step == "download-cli" else "/installed/ab", chrome="missing"
+            )
         new_probe_started.set()
         return preflight.Probe(binary="agent-browser", cli_path="/installed/ab", chrome="ok")
 
@@ -630,8 +660,14 @@ def test_the_install_chrome_button_runs_the_resolved_cli_and_the_gap_clears(monk
 
 
 def test_a_failed_chrome_install_puts_the_clis_error_and_a_retry_on_the_banner(monkeypatch):
-    _cli_env(monkeypatch, which="/opt/ab", chrome="fail", chrome_msg="No Chrome binary found", install_rc=1,
-             install_err="\x1b[31m✗\x1b[0m Failed to download Chrome: connection timed out")
+    _cli_env(
+        monkeypatch,
+        which="/opt/ab",
+        chrome="fail",
+        chrome_msg="No Chrome binary found",
+        install_rc=1,
+        install_err="\x1b[31m✗\x1b[0m Failed to download Chrome: connection timed out",
+    )
     reg = _registry()
     _PKG.register(reg)
     reg.setup_steps["install-chrome"]()
@@ -780,8 +816,10 @@ def test_an_implausible_chrome_version_never_lands_in_the_ua(text):
 
 
 def test_the_version_is_read_from_doctors_real_message_shape():
-    msg = ("Google Chrome for Testing 149.0.7827.55 at /Users/me/.agent-browser/browsers/"
-           "chrome-149.0.7827.55/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing")
+    msg = (
+        "Google Chrome for Testing 149.0.7827.55 at /Users/me/.agent-browser/browsers/"
+        "chrome-149.0.7827.55/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing"
+    )
     assert preflight.chrome_version_of(msg) == "149.0.7827.55"
 
 
@@ -807,11 +845,11 @@ def test_a_download_finishing_after_the_plugin_was_disabled_raises_no_ghost_bann
     _PKG.register(reg)
     assert [g["key"] for g in setup_gaps.active()] == [preflight.CLI_GAP]
     assert setup_gaps.run_step("agent_browser", "download-cli")["pending"] is True
-    setup_gaps.clear_plugin("agent_browser")               # disabled mid-download
+    setup_gaps.clear_plugin("agent_browser")  # disabled mid-download
     gate.set()
     assert cli_fetch._slot().idle.wait(10)
-    assert cli_fetch.fetch_state()["state"] == "failed"   # the thread did finish and refresh…
-    assert setup_gaps.active() == []                       # …and raised no ghost
+    assert cli_fetch.fetch_state()["state"] == "failed"  # the thread did finish and refresh…
+    assert setup_gaps.active() == []  # …and raised no ghost
     assert not setup_gaps.has_step("agent_browser", "download-cli")
 
 
@@ -871,7 +909,7 @@ def test_a_descendant_that_escapes_the_group_cannot_pin_the_install_thread(monke
         chrome_install.start(str(cli), background=False, timeout=1)
         elapsed = time.monotonic() - started
         assert chrome_install.state()["state"] == "failed"
-        assert elapsed < 6, elapsed                         # not the 30 s the escapee holds the pipes
+        assert elapsed < 6, elapsed  # not the 30 s the escapee holds the pipes
     finally:
         deadline = time.monotonic() + 3
         while not pidfile.exists() and time.monotonic() < deadline:
@@ -947,7 +985,7 @@ def test_a_slow_but_steady_link_finishes_well_past_the_idle_timeout(monkeypatch)
         started = time.monotonic()
         data = _REAL_DOWNLOAD(f"{base}/asset", 30)
     assert data == b"x" * 4096
-    assert time.monotonic() - started > 1.0                   # several idle periods, never idle for one
+    assert time.monotonic() - started > 1.0  # several idle periods, never idle for one
 
 
 def test_a_stalled_link_fails_on_the_idle_timeout(monkeypatch):
@@ -993,10 +1031,15 @@ async def test_a_slow_first_use_download_answers_still_downloading_and_keeps_goi
     assert cli_fetch.fetch_state()["state"] == "done" and cli_fetch.installed_path()
 
 
-@pytest.mark.parametrize("cache_verdicts", [
-    pytest.param(True, marks=pytest.mark.skipif(os.name == "nt", reason="Windows never caches (st_ctime = creation)")),
-    False,
-])
+@pytest.mark.parametrize(
+    "cache_verdicts",
+    [
+        pytest.param(
+            True, marks=pytest.mark.skipif(os.name == "nt", reason="Windows never caches (st_ctime = creation)")
+        ),
+        False,
+    ],
+)
 def test_a_same_size_swap_with_the_mtime_restored_is_not_trusted(monkeypatch, cache_verdicts):
     _pin_fake(monkeypatch)
     monkeypatch.setattr(cli_fetch, "_CACHE_VERDICTS", cache_verdicts)
@@ -1004,7 +1047,7 @@ def test_a_same_size_swap_with_the_mtime_restored_is_not_trusted(monkeypatch, ca
     path = Path(cli_fetch.installed_path())
     assert path.is_file()
     before = path.stat()
-    path.write_bytes(bytes(b ^ 0xFF for b in PAYLOAD))       # same size, different bytes, same inode
+    path.write_bytes(bytes(b ^ 0xFF for b in PAYLOAD))  # same size, different bytes, same inode
     os.utime(path, ns=(before.st_atime_ns, before.st_mtime_ns))
     after = path.stat()
     assert (after.st_size, after.st_mtime_ns, after.st_ino) == (before.st_size, before.st_mtime_ns, before.st_ino)
@@ -1022,8 +1065,9 @@ def test_windows_never_caches_a_verdict(monkeypatch):
 # ── the real thing (opt-in) ──────────────────────────────────────────────────────
 
 
-@pytest.mark.skipif(not _NETWORK, reason="downloads the real pinned agent-browser release — "
-                                         "set PROTOAGENT_NETWORK_TESTS=1 to run it")
+@pytest.mark.skipif(
+    not _NETWORK, reason="downloads the real pinned agent-browser release — set PROTOAGENT_NETWORK_TESTS=1 to run it"
+)
 def test_real_download_of_the_pinned_asset_verifies_runs_and_refuses_a_flipped_byte(monkeypatch, tmp_path):
     spec = cli_fetch.fetch_spec()
     if spec is None:

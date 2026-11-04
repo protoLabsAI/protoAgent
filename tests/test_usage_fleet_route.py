@@ -20,9 +20,12 @@ from ops.usage import merge_fleet_usage, snapshot
 
 def account(key="shared", used=20):
     return Account(
-        "anthropic-oauth", "anthropic-oauth", account_key=key, plan="max", status="ok",
-        windows=[Window("session", "session", 18000, used,
-                        datetime.now(UTC) + timedelta(hours=1), "ok")],
+        "anthropic-oauth",
+        "anthropic-oauth",
+        account_key=key,
+        plan="max",
+        status="ok",
+        windows=[Window("session", "session", 18000, used, datetime.now(UTC) + timedelta(hours=1), "ok")],
     )
 
 
@@ -58,9 +61,15 @@ def test_shared_account_one_poll_and_members(client, monkeypatch, tmp_path):
     observed = account(used=80)
     peer_store.merge_windows(observed, observed.windows, "headers", datetime.now(UTC))
     monkeypatch.setattr(usage_store, "_DEFAULT_STORE", host_store)
-    monkeypatch.setattr(supervisor, "status", lambda: [
-        {"host": True, "id": "real-host-id"}, {"id": "worker"}, {"id": "worker"},
-    ])
+    monkeypatch.setattr(
+        supervisor,
+        "status",
+        lambda: [
+            {"host": True, "id": "real-host-id"},
+            {"id": "worker"},
+            {"id": "worker"},
+        ],
+    )
     reads = []
 
     async def read(slug, path):
@@ -141,8 +150,10 @@ def test_remote_paired_bearer_and_redaction(client, monkeypatch):
 
 def test_merge_is_pure_host_preferred_and_unknowns_separate():
     host = {"accounts": [account().to_dict()]}
-    peers = {"a": {"accounts": [account(used=90).to_dict(), account("peer").to_dict()]},
-             "b": {"accounts": [account("peer").to_dict(), account(None).to_dict()]}}
+    peers = {
+        "a": {"accounts": [account(used=90).to_dict(), account("peer").to_dict()]},
+        "b": {"accounts": [account("peer").to_dict(), account(None).to_dict()]},
+    }
     before = deepcopy((host, peers))
     body = merge_fleet_usage(host, peers)
     assert (host, peers) == before

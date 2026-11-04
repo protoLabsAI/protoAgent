@@ -438,9 +438,7 @@ def test_ingest_audio_without_transcribe_model_returns_501(monkeypatch):
 def test_ingest_preview_text_persists_nothing(monkeypatch):
     ks = _IngestKS()
     c = _client(monkeypatch, knowledge=ks)
-    body = c.post(
-        "/api/knowledge/ingest/preview", data={"text": "a pasted note body", "title": "My Note"}
-    ).json()
+    body = c.post("/api/knowledge/ingest/preview", data={"text": "a pasted note body", "title": "My Note"}).json()
     assert body["enabled"] is True
     assert body["chunks"] == 1 and body["chars"] == len("a pasted note body")
     assert body["approx_tokens"] >= 1
@@ -679,8 +677,11 @@ def test_chunk_update_keeps_an_always_on_row_always_on(monkeypatch, tmp_path):
 
     store = KnowledgeStore(tmp_path / "kb.db")
     cid = store.add_chunk(
-        "operator prefers metric units", domain="preferences",
-        delivery_policy="always", source_type="operator", subject="operator",
+        "operator prefers metric units",
+        domain="preferences",
+        delivery_policy="always",
+        source_type="operator",
+        subject="operator",
     )
     monkeypatch.setattr(rs.STATE, "knowledge_store", store, raising=False)
     monkeypatch.setattr(rs.STATE, "skills_index", None, raising=False)

@@ -152,17 +152,36 @@ class RosterScreen(Screen):
             ver_cell = Text(f"v{ver}{' !skew' if snap.skewed(a) else ''}" if ver else "—")
             if snap.skewed(a):
                 ver_cell.stylize("bold yellow")
-            glyph = Text(_GLYPH[pres], style={"host": "green", "online": "green", "remote": "cyan", "stopped": "dim", "unreachable": "red"}[pres])
+            glyph = Text(
+                _GLYPH[pres],
+                style={"host": "green", "online": "green", "remote": "cyan", "stopped": "dim", "unreachable": "red"}[
+                    pres
+                ],
+            )
             pid = str(a.get("pid")) if a.get("pid") and pres in ("online", "host") else "—"
             port = f":{a['port']}" if a.get("port") else "—"
             bundle = str(a.get("bundle") or "")
             if a.get("remote") and a.get("url"):
                 bundle = str(a["url"])
             turn = app.activity.turn_cell(slug_of(a)) if pres in ("online", "host", "remote") else ""
-            turn_cell = Text(turn, style="bold yellow" if turn.startswith("⚑") else ("yellow" if turn.startswith("⟳") else "dim"))
+            turn_cell = Text(
+                turn, style="bold yellow" if turn.startswith("⚑") else ("yellow" if turn.startswith("⟳") else "dim")
+            )
             # every operator- or member-authored string is a Text, never markup: a label
             # like "Coach [/]" would otherwise raise on the UI thread
-            table.add_row(glyph, Text(display_name(a)), pres, turn_cell, port, ver_cell, pid, _fmt_cost(snap.rollups.get(slug_of(a)), pres), app.activity.last_active_cell(slug_of(a)), Text(bundle) if isinstance(bundle, str) else bundle, key=key)
+            table.add_row(
+                glyph,
+                Text(display_name(a)),
+                pres,
+                turn_cell,
+                port,
+                ver_cell,
+                pid,
+                _fmt_cost(snap.rollups.get(slug_of(a)), pres),
+                app.activity.last_active_cell(slug_of(a)),
+                Text(bundle) if isinstance(bundle, str) else bundle,
+                key=key,
+            )
         if rows:
             idx = next((i for i, a in enumerate(rows) if slug_of(a) == keep), 0)
             table.move_cursor(row=idx)
@@ -180,7 +199,9 @@ class RosterScreen(Screen):
             parts.append(f"warm cap {app.warm_max or 'unlimited'}")
         if snap.mode == "offline":
             if getattr(app.backend, "lifecycle", True) is False:
-                parts.append("offline beside a hub that answered: nothing is driven from disk — attach to it (H) or pass --token")
+                parts.append(
+                    "offline beside a hub that answered: nothing is driven from disk — attach to it (H) or pass --token"
+                )
             else:
                 parts.append("offline: only start/stop are available — start a hub for the rest")
         if self._filter:
@@ -329,14 +350,19 @@ class RosterScreen(Screen):
         # a remote is renamed through its own record (PATCH /api/fleet/remotes/<id>); the
         # workspace rename route does not know it
         verb = "remote_update" if a.get("remote") else "rename"
-        self.app.push_screen(RenameModal(display_name(a)), lambda name: self.app.manage(verb, a, {"name": name}) if name else None)  # type: ignore[attr-defined]
+        self.app.push_screen(
+            RenameModal(display_name(a)), lambda name: self.app.manage(verb, a, {"name": name}) if name else None
+        )  # type: ignore[attr-defined]
 
     def action_delete(self) -> None:
         a = self.selected()
         if a is None or a.get("host"):
             return
         remote = bool(a.get("remote"))
-        self.app.push_screen(DeleteModal(display_name(a), remote=remote), lambda res: self.app.manage("remote_remove" if remote else "remove", a, res) if res is not None else None)  # type: ignore[attr-defined]
+        self.app.push_screen(
+            DeleteModal(display_name(a), remote=remote),
+            lambda res: self.app.manage("remote_remove" if remote else "remove", a, res) if res is not None else None,
+        )  # type: ignore[attr-defined]
 
     def action_add_remote(self) -> None:
         self.app.push_screen(RemoteModal(), lambda res: self.app.manage("remote_add", None, res) if res else None)  # type: ignore[attr-defined]
@@ -353,7 +379,9 @@ class RosterScreen(Screen):
         if a is None or app.snapshot is None or self._filter:
             return
         roster = app.snapshot.roster
-        ids = [str(r.get("id") or slug_of(r)) for r in roster]  # the hub's order, complete, by immutable id (the host's is its own id, not the `host` slug)
+        ids = [
+            str(r.get("id") or slug_of(r)) for r in roster
+        ]  # the hub's order, complete, by immutable id (the host's is its own id, not the `host` slug)
         me = str(a.get("id") or slug_of(a))
         if me not in ids:
             return
@@ -510,7 +538,11 @@ class DetailScreen(Screen):
     def _head_text(self) -> str:
         a = self._current()
         pres = presence_of(a)
-        return f"◂ {display_name(a)}   {pres} · :{a.get('port') or '—'}" + (f" · pid {a['pid']}" if a.get("pid") and pres in ("online", "host") else "") + (f" · v{a['version']}" if a.get("version") else "")
+        return (
+            f"◂ {display_name(a)}   {pres} · :{a.get('port') or '—'}"
+            + (f" · pid {a['pid']}" if a.get("pid") and pres in ("online", "host") else "")
+            + (f" · v{a['version']}" if a.get("version") else "")
+        )
 
     def check_action(self, action: str, parameters: tuple[object, ...]) -> bool | None:
         if action in ("stop", "restart"):
@@ -558,8 +590,10 @@ class DetailScreen(Screen):
             ident = rt.get("identity") or {}
             lines = [
                 "RUNTIME",
-                f"  model      {model.get('name') or '—'}" + (f" via {model.get('provider')}" if model.get("provider") else ""),
-                f"  identity   {ident.get('name') or d.name}" + (f" · {ident.get('operator')}" if ident.get("operator") else ""),
+                f"  model      {model.get('name') or '—'}"
+                + (f" via {model.get('provider')}" if model.get("provider") else ""),
+                f"  identity   {ident.get('name') or d.name}"
+                + (f" · {ident.get('operator')}" if ident.get("operator") else ""),
                 f"  runtime    {rt.get('agent_runtime') or 'native'} · v{rt.get('version') or '?'}",
                 f"  setup      {'complete' if rt.get('setup_complete') else 'incomplete'} · graph {'loaded' if rt.get('graph_loaded') else 'not loaded'}",
             ]
@@ -580,7 +614,9 @@ class DetailScreen(Screen):
                 sid = str(s.get("session_id") or s.get("context_id") or "")
                 short = sid if len(sid) <= 26 else f"{sid[:12]}…{sid[-8:]}"
                 state = str(s.get("latest_task_state") or s.get("status") or "").replace("TASK_STATE_", "").lower()
-                table.add_row(Text(str(short)), Text(str(state)), str(s.get("last_activity") or "")[:16].replace("T", " "))
+                table.add_row(
+                    Text(str(short)), Text(str(state)), str(s.get("last_activity") or "")[:16].replace("T", " ")
+                )
 
         r = d.rollup
         if r is None:
@@ -692,7 +728,8 @@ class DetailScreen(Screen):
 
 class FleetDeck(App[int]):
     TITLE = "protoagent fleet"
-    CSS = """
+    CSS = (
+        """
     Screen { layout: vertical; }
     #topbar { height: 1; padding: 0 1; background: $surface; color: $text; text-style: bold; }
     #banner { height: auto; padding: 0 1; background: $warning 20%; color: $warning; }
@@ -710,7 +747,13 @@ class FleetDeck(App[int]):
     #runtime, #sessions-head, #telemetry, #log-head { height: auto; margin: 0 0 1 0; }
     #sessions { height: auto; max-height: 12; }
     #log { height: 1fr; }
-    """ + TALK_CSS + FEED_CSS + HITL_CSS + MANAGE_CSS + HUBS_CSS
+    """
+        + TALK_CSS
+        + FEED_CSS
+        + HITL_CSS
+        + MANAGE_CSS
+        + HUBS_CSS
+    )
 
     def __init__(
         self,
@@ -780,7 +823,9 @@ class FleetDeck(App[int]):
         self.warm_max = v
         roster = self._roster_screen()
         if roster is not None and self.snapshot is not None:
-            roster.render_snapshot(self.snapshot)  # read on the UI thread: a snapshot captured in the worker could be the "attaching" placeholder the first poll has since replaced
+            roster.render_snapshot(
+                self.snapshot
+            )  # read on the UI thread: a snapshot captured in the worker could be the "attaching" placeholder the first poll has since replaced
 
     def drain_events(self) -> None:
         """Fold what the member buses sent since the last tick into the activity model;
@@ -831,7 +876,15 @@ class FleetDeck(App[int]):
         if snap.error and self.snapshot is not None:
             # keep the last good roster, surface the failure
             keep = self.snapshot
-            snap = Snapshot(mode=keep.mode, label=keep.label, roster=keep.roster, host_version=keep.host_version, rollups=keep.rollups, warnings=keep.warnings, error=snap.error)
+            snap = Snapshot(
+                mode=keep.mode,
+                label=keep.label,
+                roster=keep.roster,
+                host_version=keep.host_version,
+                rollups=keep.rollups,
+                warnings=keep.warnings,
+                error=snap.error,
+            )
         self.call_from_thread(self._apply, snap, backend)
 
     def _apply(self, snap: Snapshot, backend: Any = None) -> None:
@@ -903,7 +956,9 @@ class FleetDeck(App[int]):
             # what disk says, unprobed — as `protoagent fleet --all --offline` prints it
             self.call_from_thread(self._show_discovery, gen, [r for r in rows if r.source != "local"], False)
             return
-        self.call_from_thread(self._show_discovery, gen, [r for r in rows if r.source != "local"], True)  # a listener by port is shown once it says what it is
+        self.call_from_thread(
+            self._show_discovery, gen, [r for r in rows if r.source != "local"], True
+        )  # a listener by port is shown once it says what it is
         roots = _instance_roots()
         for r in rows:
             if r.presence in ("running", "unreachable") and r.candidate is not None:
@@ -948,7 +1003,9 @@ class FleetDeck(App[int]):
         from deck.data import LiveBackend
 
         try:
-            conn = deckhub.connect(candidates=[row.candidate], token=row.token or self._token, insecure_http=self._insecure_http)
+            conn = deckhub.connect(
+                candidates=[row.candidate], token=row.token or self._token, insecure_http=self._insecure_http
+            )
         except Exception as exc:  # noqa: BLE001
             self.call_from_thread(self.notify, f"could not attach to {row.name}: {exc}", severity="error", timeout=10)
             return
@@ -995,7 +1052,9 @@ class FleetDeck(App[int]):
 
     def bring_up(self, row: HubRow) -> None:
         if self._launcher is None:
-            self.notify("bringing a hub up needs the CLI's launcher — run the deck with `protoagent fleet`", severity="warning")
+            self.notify(
+                "bringing a hub up needs the CLI's launcher — run the deck with `protoagent fleet`", severity="warning"
+            )
             return
         if row.root is None or row.presence != "stopped":
             return
@@ -1021,7 +1080,12 @@ class FleetDeck(App[int]):
             row.presence = "stopped"
             row.note = "started, but its port did not answer in time — see its server.log"
             self.call_from_thread(self._show_hubs, self.hub_rows, False)
-            self.call_from_thread(self.notify, f"{row.name}: started, but its port did not answer in time — see {row.root}/server.log", severity="error", timeout=10)
+            self.call_from_thread(
+                self.notify,
+                f"{row.name}: started, but its port did not answer in time — see {row.root}/server.log",
+                severity="error",
+                timeout=10,
+            )
             return
         row.candidate = deckhub.HubCandidate(row.url, "pidfile", instance_root=row.root)
         row.presence = "running"
@@ -1045,7 +1109,11 @@ class FleetDeck(App[int]):
         except Exception as exc:  # noqa: BLE001
             self.call_from_thread(self.notify, f"could not read the archetypes: {exc}", severity="error", timeout=8)
             return
-        self.call_from_thread(self.push_screen, NewAgentModal(archetypes), lambda body: self.manage("create", None, body) if body else None)
+        self.call_from_thread(
+            self.push_screen,
+            NewAgentModal(archetypes),
+            lambda body: self.manage("create", None, body) if body else None,
+        )
 
     def manage(self, verb: str, agent: dict | None, payload: dict | None) -> None:
         who = display_name(agent) if agent else str((payload or {}).get("name") or "")
@@ -1063,17 +1131,27 @@ class FleetDeck(App[int]):
                 if res.get("installed"):
                     extra += f" · installed {', '.join(str(x) for x in res['installed'])}"
                 if res.get("warnings"):
-                    self.call_from_thread(self.notify, "; ".join(str(w) for w in res["warnings"]), severity="warning", timeout=10)
+                    self.call_from_thread(
+                        self.notify, "; ".join(str(w) for w in res["warnings"]), severity="warning", timeout=10
+                    )
                 done = f"created {who}{extra}"
             elif verb == "rename":
                 res = self.backend.rename(agent or {}, str(payload.get("name") or ""))
                 done = f"renamed to {res.get('name') or payload.get('name')}"
             elif verb == "remove":
                 res = self.backend.remove(agent or {}, purge=bool(payload.get("purge")))
-                done = f"deleted {who}" + (" — workspace and data purged" if "workspace" in (res.get("removed") or []) else " — data kept")
+                done = f"deleted {who}" + (
+                    " — workspace and data purged" if "workspace" in (res.get("removed") or []) else " — data kept"
+                )
             elif verb == "remote_add":
-                res = self.backend.remote_add(str(payload.get("name") or ""), str(payload.get("url") or ""), str(payload.get("token") or ""))
-                done = f"added remote {who}" + (f" · reachable, v{res.get('version')}" if res.get("reachable") else " · unreachable for now — it will show up when it answers")
+                res = self.backend.remote_add(
+                    str(payload.get("name") or ""), str(payload.get("url") or ""), str(payload.get("token") or "")
+                )
+                done = f"added remote {who}" + (
+                    f" · reachable, v{res.get('version')}"
+                    if res.get("reachable")
+                    else " · unreachable for now — it will show up when it answers"
+                )
             elif verb == "remote_update":
                 res = self.backend.remote_update(agent or {}, **payload)
                 done = f"updated remote {who}" + (" · reachable" if res.get("reachable") else " · unreachable for now")
@@ -1086,16 +1164,28 @@ class FleetDeck(App[int]):
             status = getattr(exc, "status", None)
             if verb == "remove" and status == 409:
                 # partial, retryable: the member IS stopped, only its workspace survived (#2583)
-                self.call_from_thread(self.notify, f"{who}: stopped, but its workspace survived — repeat the delete to finish", severity="warning", timeout=10)
+                self.call_from_thread(
+                    self.notify,
+                    f"{who}: stopped, but its workspace survived — repeat the delete to finish",
+                    severity="warning",
+                    timeout=10,
+                )
             else:
                 detail = getattr(exc, "detail", None) or str(exc)
-                self.call_from_thread(self.notify, f"{verb.replace('_', ' ')} {who}: {detail}", severity="error", timeout=10)
+                self.call_from_thread(
+                    self.notify, f"{verb.replace('_', ' ')} {who}: {detail}", severity="error", timeout=10
+                )
             self.call_from_thread(self.poll)
             return
         if res.get("ok", True):
             self.call_from_thread(self.notify, done)
         else:
-            self.call_from_thread(self.notify, f"{verb.replace('_', ' ')} {who}: {res.get('reason') or res.get('error') or 'failed'}", severity="error", timeout=8)
+            self.call_from_thread(
+                self.notify,
+                f"{verb.replace('_', ' ')} {who}: {res.get('reason') or res.get('error') or 'failed'}",
+                severity="error",
+                timeout=8,
+            )
         self.call_from_thread(self.poll)
 
     def set_order(self, ids: list[str]) -> None:
@@ -1121,15 +1211,25 @@ class FleetDeck(App[int]):
         if res.get("ok", True):
             self.call_from_thread(self.notify, "order saved")
         else:
-            self.call_from_thread(self.notify, f"set order: {res.get('reason') or res.get('error') or 'failed'}", severity="error", timeout=8)
+            self.call_from_thread(
+                self.notify,
+                f"set order: {res.get('reason') or res.get('error') or 'failed'}",
+                severity="error",
+                timeout=8,
+            )
         self.call_from_thread(self.poll)
 
     def lifecycle(self, verb: str, agent: dict) -> None:
         if agent.get("host"):
-            self.notify("the hub cannot stop or restart itself from the deck — use `protoagent down`", severity="warning")
+            self.notify(
+                "the hub cannot stop or restart itself from the deck — use `protoagent down`", severity="warning"
+            )
             return
         if agent.get("remote"):
-            self.notify("a remote member is registered, not spawned — it cannot be started or stopped from here", severity="warning")
+            self.notify(
+                "a remote member is registered, not spawned — it cannot be started or stopped from here",
+                severity="warning",
+            )
             return
         self.notify(f"{verb} {display_name(agent)}…")
         self._lifecycle(verb, agent)
@@ -1153,7 +1253,12 @@ class FleetDeck(App[int]):
         if ok:
             self.call_from_thread(self.notify, f"{verb} {name}: done")
         else:
-            self.call_from_thread(self.notify, f"{verb} {name}: {res.get('reason') or res.get('error') or 'failed'}", severity="error", timeout=8)
+            self.call_from_thread(
+                self.notify,
+                f"{verb} {name}: {res.get('reason') or res.get('error') or 'failed'}",
+                severity="error",
+                timeout=8,
+            )
         self.call_from_thread(self.poll)  # a @work method belongs to the app thread
 
     @work(thread=True, group="browser")

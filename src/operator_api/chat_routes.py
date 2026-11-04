@@ -67,6 +67,8 @@ class _delete_lock:
             _DELETE_LOCKS.pop(self.session_id, None)
         else:
             _DELETE_LOCKS[self.session_id] = (lock, users - 1)
+
+
 from server import agent_name
 from server.agent_init import _retire_thread
 from server.chat import (
@@ -171,9 +173,7 @@ async def _record_chat_tombstone(conn, session_id: str) -> None:
     # Portable upsert: the surrounding engine transaction serializes these two
     # statements on SQLite and keeps the implementation dialect-neutral.
     await conn.execute(delete(table).where(table.c.context_id == session_id))
-    await conn.execute(
-        insert(table).values(context_id=session_id, deleted_at=datetime.now(timezone.utc))
-    )
+    await conn.execute(insert(table).values(context_id=session_id, deleted_at=datetime.now(timezone.utc)))
 
 
 def _newest_turn_ranked(task_model, dialect_name: str, where):
@@ -472,11 +472,7 @@ def _v1_session_id(req: dict, request=None) -> str:
     """
     body = req or {}
     header = (request.headers.get("X-Session-Id") or "").strip() if request is not None else ""
-    raw = (
-        str(body.get("session_id") or "").strip()
-        or header
-        or str(body.get("user") or "").strip()
-    )
+    raw = str(body.get("session_id") or "").strip() or header or str(body.get("user") or "").strip()
     if not raw:
         # uuid4, not the wall clock: unique per request AND collision-free.
         return f"openai-compat-{uuid.uuid4().hex}"
@@ -626,7 +622,9 @@ def _turn_error_status(err: dict) -> tuple[int, dict[str, str] | None]:
 
 def _rate_limit_fields(err: dict) -> dict:
     """The additive cooldown fields shared by both HTTP error envelopes."""
-    return {key: err[key] for key in ("retry_after", "retry_at", "quota_exhausted", "provider_rate_limited") if key in err}
+    return {
+        key: err[key] for key in ("retry_after", "retry_at", "quota_exhausted", "provider_rate_limited") if key in err
+    }
 
 
 def _api_chat_error(
@@ -808,14 +806,17 @@ def register_chat_routes(app, ui: str) -> None:
         # back as a structured error bubble a 200 a client counted as an answer. The
         # console's /api/chat fallback already reads a non-2xx `detail` as a failed turn.
         try:
-            result = await _run_disconnectable_chat(request, chat(
-                req.message,
-                session_id,
-                model=req.model,
-                incognito=req.incognito,
-                hitl_resume=req.hitl_resume,
-                origin="api-chat",
-            ))
+            result = await _run_disconnectable_chat(
+                request,
+                chat(
+                    req.message,
+                    session_id,
+                    model=req.model,
+                    incognito=req.incognito,
+                    hitl_resume=req.hitl_resume,
+                    origin="api-chat",
+                ),
+            )
         except Exception as exc:
             raise _api_chat_error(turn_error(exc), session_id, exc, raised=True) from exc
         turn_err = next((m["error"] for m in result if isinstance(m.get("error"), dict)), None)
@@ -825,7 +826,9 @@ def register_chat_routes(app, ui: str) -> None:
         return {"response": "\n\n".join(parts), "messages": result, "session_id": session_id}
 
     @app.delete("/api/chat/sessions/{session_id}")
-    async def _api_delete_session(session_id: SessionId, harvest: bool = False, retire: bool = True, forget: bool = False):
+    async def _api_delete_session(
+        session_id: SessionId, harvest: bool = False, retire: bool = True, forget: bool = False
+    ):
         """See :func:`_delete_session` — registered as in flight for the orphaned-forget
         sweep (#3957), which must never settle a forget a running delete still owns."""
         from graph import conversation_harvest as _harvest
@@ -888,7 +891,9 @@ def register_chat_routes(app, ui: str) -> None:
             else []
         )
         # Not best-effort: if this raises, the delete fails before anything is retired.
-        marker = await asyncio.to_thread(_harvest.begin_forget, forget_store, session_id, forget_tids) if forget else None
+        marker = (
+            await asyncio.to_thread(_harvest.begin_forget, forget_store, session_id, forget_tids) if forget else None
+        )
         try:
             chunk_id = await _retire_thread(f"a2a:{session_id}", harvest=harvest, cascade=True)
             await _retire_thread(f"chat:{session_id}", harvest=False, cascade=True)  # only harvest once
@@ -942,9 +947,7 @@ def register_chat_routes(app, ui: str) -> None:
         # * ORIGIN-scoped (#3362): drops every context an answered room dispatch recorded as
         #   originating from this session, under whatever arbitrary key the resolver minted
         #   it — matched on the recorded origin EXACTLY, never inferred from a key's shape.
-        forget_delegate_conversations(
-            f"a2a:{session_id}", f"chat:{session_id}", _resolve_thread_id(None, session_id)
-        )
+        forget_delegate_conversations(f"a2a:{session_id}", f"chat:{session_id}", _resolve_thread_id(None, session_id))
         forget_delegate_conversations_for_session(session_id)
         # The session-summary memory (#2482) — without this, a digest of the
         # deleted conversation kept riding <prior_sessions> into future prompts,
@@ -989,17 +992,13 @@ def register_chat_routes(app, ui: str) -> None:
         # would then hide (and delete) what this attempt's harvest just wrote.
         forgotten = 0
         if marker and store is not None and not callable(getattr(store, "mark_forget_pending", None)):
-            forgotten += await asyncio.to_thread(
-                _harvest.forget_conversation_memory, store, session_id, forget_tids
-            )
+            forgotten += await asyncio.to_thread(_harvest.forget_conversation_memory, store, session_id, forget_tids)
         if marker:
             forgotten += await asyncio.to_thread(_harvest.finish_forget, forget_store, marker)
         elif forget:
             # A store that can't hide rows (a plugin backend): the one-step delete, after
             # retirement so a failed retirement still forgets nothing.
-            forgotten = await asyncio.to_thread(
-                _harvest.forget_conversation_memory, store, session_id, forget_tids
-            )
+            forgotten = await asyncio.to_thread(_harvest.forget_conversation_memory, store, session_id, forget_tids)
         return {"deleted": True, "harvested": chunk_id is not None, "forgotten": forgotten}
 
     @app.post("/api/chat/sessions/{session_id}/compact")
@@ -1078,11 +1077,7 @@ def register_chat_routes(app, ui: str) -> None:
                         # fleet-room, and API contexts. Only console-created
                         # chat tabs use the stable ``chat-`` id prefix.
                         .where(TaskModel.context_id.like("chat-%"))
-                        .where(
-                            ~exists(
-                                select(1).where(tombstones.c.context_id == TaskModel.context_id)
-                            )
-                        )
+                        .where(~exists(select(1).where(tombstones.c.context_id == TaskModel.context_id)))
                         .group_by(TaskModel.context_id)
                         .order_by(
                             func.max(TaskModel.last_updated).desc().nulls_last(),
@@ -1120,10 +1115,18 @@ def register_chat_routes(app, ui: str) -> None:
             log.warning("[chat] session summary read failed for %s: %s", session_id, exc)
             from runtime import turn_activity
 
-            return {"session_id": session_id, "active": turn_activity.is_active(session_id), "turn_count": None,
-                    "last_updated": None, "last_state": None, "reason": f"read failed: {type(exc).__name__}"}
+            return {
+                "session_id": session_id,
+                "active": turn_activity.is_active(session_id),
+                "turn_count": None,
+                "last_updated": None,
+                "last_state": None,
+                "reason": f"read failed: {type(exc).__name__}",
+            }
         if summary is None:
-            raise HTTPException(status_code=404, detail={"code": "not_found", "reason": f"unknown session: {session_id}"})
+            raise HTTPException(
+                status_code=404, detail={"code": "not_found", "reason": f"unknown session: {session_id}"}
+            )
         return summary
 
     @app.get("/api/chat/sessions/{session_id}/local-turns")
@@ -1165,8 +1168,12 @@ def register_chat_routes(app, ui: str) -> None:
         local = local_turns.snapshot(session_id)
         engine = getattr(STATE, "a2a_task_engine", None)
         if engine is None:
-            return {"turns": [], "local_turns": local,
-                    "live_task_id": _mark_local_live(local, None), "reason": "task store not initialized"}
+            return {
+                "turns": [],
+                "local_turns": local,
+                "live_task_id": _mark_local_live(local, None),
+                "reason": "task store not initialized",
+            }
         limit = max(1, min(int(limit), 200))
         try:
             from sqlalchemy import exists, select
@@ -1185,11 +1192,7 @@ def register_chat_routes(app, ui: str) -> None:
                             TaskModel.last_updated,
                         )
                         .where(TaskModel.context_id == session_id)
-                        .where(
-                            ~exists(
-                                select(1).where(tombstones.c.context_id == TaskModel.context_id)
-                            )
-                        )
+                        .where(~exists(select(1).where(tombstones.c.context_id == TaskModel.context_id)))
                         # Read the NEWEST bounded tail so catch-up always includes
                         # a current HITL/in-flight turn, then restore chronology below.
                         # Newest = most recently CREATED, never most recently updated: a
@@ -1202,8 +1205,12 @@ def register_chat_routes(app, ui: str) -> None:
                 rows.reverse()
         except Exception as exc:  # noqa: BLE001 — a read API must degrade, not 500 the console
             log.warning("[chat] session turns read failed for %s: %s", session_id, exc)
-            return {"turns": [], "local_turns": local,
-                    "live_task_id": _mark_local_live(local, None), "reason": f"read failed: {type(exc).__name__}"}
+            return {
+                "turns": [],
+                "local_turns": local,
+                "live_task_id": _mark_local_live(local, None),
+                "reason": f"read failed: {type(exc).__name__}",
+            }
 
         def _text(artifacts) -> str:
             # One paragraph per artifact: a task resumed after a HITL pause answers in one
@@ -1245,8 +1252,7 @@ def register_chat_routes(app, ui: str) -> None:
         # #4277 / other #4205 non-A2A driver) is the live one; A2A liveness always wins.
         local_rows = local_turns.snapshot(session_id)
         local_live_id = _mark_local_live(local_rows, live)
-        return {"turns": turns, "local_turns": local_rows,
-                "live_task_id": live["task_id"] if live else local_live_id}
+        return {"turns": turns, "local_turns": local_rows, "live_task_id": live["task_id"] if live else local_live_id}
 
     @app.get("/api/chat/sessions/{session_id}/turns/{turn_id}")
     async def _api_session_turn(session_id: SessionId, turn_id: str):
@@ -1363,7 +1369,11 @@ def register_chat_routes(app, ui: str) -> None:
         incognito = bool((body or {}).get("incognito", False))
         refs = "" if incognito else _bridge_attachment_ids(images, session_id)
         mid = steering.enqueue(
-            session_id, text, msg_id=msg_id, images=images, refs=refs,
+            session_id,
+            text,
+            msg_id=msg_id,
+            images=images,
+            refs=refs,
             vision=bool(getattr(STATE.graph_config, "model_vision", False)),
         )
         return {"ok": True, "id": mid, "pending": steering.pending(session_id)}

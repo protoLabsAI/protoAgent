@@ -14,7 +14,14 @@ from graph.middleware.tool_deferral import ToolDeferralMiddleware
 
 
 def _tool(name):
-    return {"type": "function", "function": {"name": name, "description": "PRIVATE DESCRIPTION", "parameters": {"type": "object", "properties": {}}}}
+    return {
+        "type": "function",
+        "function": {
+            "name": name,
+            "description": "PRIVATE DESCRIPTION",
+            "parameters": {"type": "object", "properties": {}},
+        },
+    }
 
 
 @dataclass
@@ -32,8 +39,10 @@ class Request:
 
 def test_report_preserves_order_but_not_content_and_counts_mirrored_args_once():
     args = {"query": "PRIVATE ARGUMENT"}
-    m = AIMessage(content=[{"type": "tool_use", "id": "c", "name": "base", "input": args}],
-                  tool_calls=[{"id": "c", "name": "base", "args": args}])
+    m = AIMessage(
+        content=[{"type": "tool_use", "id": "c", "name": "base", "input": args}],
+        tool_calls=[{"id": "c", "name": "base", "args": args}],
+    )
     a = request_shape(Request(messages=[m]))
     b = request_shape(Request(messages=[m], tools=[_tool("extra"), _tool("base")]))
     assert a["schemas"] != b["schemas"]
@@ -76,10 +85,20 @@ def test_deferral_schema_widening_and_post_compaction_loss_are_visible():
 
 def test_usage_distinguishes_unknown_zero_and_priority_cache_reads():
     def response(details):
-        return SimpleNamespace(result=[AIMessage(content="ok", usage_metadata={
-            "input_tokens": 100, "output_tokens": 1, "total_tokens": 101,
-            "input_token_details": details,
-        })])
+        return SimpleNamespace(
+            result=[
+                AIMessage(
+                    content="ok",
+                    usage_metadata={
+                        "input_tokens": 100,
+                        "output_tokens": 1,
+                        "total_tokens": 101,
+                        "input_token_details": details,
+                    },
+                )
+            ]
+        )
+
     unknown = usage_summary(response({}))
     zero = usage_summary(response({"cache_read": 0}))
     hit = usage_summary(response({"priority_cache_read": 80, "priority_cache_creation": 10}))
@@ -87,7 +106,7 @@ def test_usage_distinguishes_unknown_zero_and_priority_cache_reads():
     assert unknown["cache_read_ratio"] is None
     assert zero["cache_read_tokens"] == 0
     assert zero["cache_write_tokens"] is None
-    assert hit["cache_read_ratio"] == .8
+    assert hit["cache_read_ratio"] == 0.8
     assert hit["non_read_input_tokens"] == 20
     assert hit["cache_write_tokens"] == 10
     write_only = usage_summary(response({"cache_creation": 80}))
@@ -128,7 +147,10 @@ def test_failed_live_run_retains_completed_quality_outcomes(monkeypatch, tmp_pat
 
     monkeypatch.setattr(prompt_context, "_live", partial)
     output = tmp_path / "report.json"
-    assert prompt_context.main(["--config", str(tmp_path / "config.yaml"), "--model", "fixture", "--output", str(output)]) == 1
+    assert (
+        prompt_context.main(["--config", str(tmp_path / "config.yaml"), "--model", "fixture", "--output", str(output)])
+        == 1
+    )
     report = json.loads(output.read_text())
     assert report["quality"] == [
         {"scenario": "completed", "passed": True},
@@ -140,7 +162,20 @@ def test_failed_live_run_retains_completed_quality_outcomes(monkeypatch, tmp_pat
 
 @pytest.mark.platform_sensitive
 @pytest.mark.asyncio
-@pytest.mark.parametrize("profile", ["minimal", "full", "projects_delegates", "catalog", "background", "incognito", "task_disabled", "held_filesystem", "deferred"])
+@pytest.mark.parametrize(
+    "profile",
+    [
+        "minimal",
+        "full",
+        "projects_delegates",
+        "catalog",
+        "background",
+        "incognito",
+        "task_disabled",
+        "held_filesystem",
+        "deferred",
+    ],
+)
 async def test_real_graph_request_profiles_and_reload(monkeypatch, tmp_path, profile):
     from langchain_core.language_models.fake_chat_models import GenericFakeChatModel
     from langchain_core.tools import StructuredTool
@@ -159,16 +194,28 @@ async def test_real_graph_request_profiles_and_reload(monkeypatch, tmp_path, pro
     probe = RequestProbe()
     shaping = agent.provider_shape_middleware
     monkeypatch.setattr(agent, "provider_shape_middleware", lambda c: [*shaping(c), probe])
-    monkeypatch.setattr(agent, "create_llm", lambda *a, **k: Model(messages=iter([AIMessage(content="done")]), disable_streaming=True))
+    monkeypatch.setattr(
+        agent, "create_llm", lambda *a, **k: Model(messages=iter([AIMessage(content="done")]), disable_streaming=True)
+    )
     monkeypatch.setattr(STATE, "delegate_registry", None)
     extras = []
     if profile == "minimal":
-        cfg.tools_disabled = [t.name for t in agent.create_agent_graph(cfg, include_subagents=False).bound_tools
-                              if t.name != "current_time"]
+        cfg.tools_disabled = [
+            t.name
+            for t in agent.create_agent_graph(cfg, include_subagents=False).bound_tools
+            if t.name != "current_time"
+        ]
     if profile == "catalog":
+
         def inspect_fixture(query: str) -> str:
             return "fixture"
-        extras = [StructuredTool.from_function(inspect_fixture, name=f"fixture_{i}", description=f"Read-only synthetic catalog capability {i}.") for i in range(40)]
+
+        extras = [
+            StructuredTool.from_function(
+                inspect_fixture, name=f"fixture_{i}", description=f"Read-only synthetic catalog capability {i}."
+            )
+            for i in range(40)
+        ]
     if profile == "projects_delegates":
         cfg.filesystem_enabled = True
         cfg.projects = [{"name": "fixture", "path": str(tmp_path), "write": False}]

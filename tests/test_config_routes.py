@@ -869,10 +869,14 @@ def test_finish_setup_records_the_host_capability_contract(monkeypatch):
     from graph.config_io import read_host_archetype
 
     monkeypatch.setattr(cr, "_build_settings_callbacks", lambda: {"finish_setup": lambda c, s: (True, "ready")})
-    body = _client().post(
-        "/api/config/setup",
-        json={"config": {}, "soul": "S", "requires_tools": ["github_create_issue", " ", ""]},
-    ).json()
+    body = (
+        _client()
+        .post(
+            "/api/config/setup",
+            json={"config": {}, "soul": "S", "requires_tools": ["github_create_issue", " ", ""]},
+        )
+        .json()
+    )
     assert body == {"ok": True, "message": "ready"}
     assert read_host_archetype() == {"requires_tools": ["github_create_issue"]}
 
@@ -881,7 +885,9 @@ def test_finish_setup_failure_leaves_no_contract_behind(monkeypatch):
     import operator_api.config_routes as cr
     from graph.config_io import read_host_archetype
 
-    monkeypatch.setattr(cr, "_build_settings_callbacks", lambda: {"finish_setup": lambda c, s: (False, "model connection failed")})
+    monkeypatch.setattr(
+        cr, "_build_settings_callbacks", lambda: {"finish_setup": lambda c, s: (False, "model connection failed")}
+    )
     body = _client().post("/api/config/setup", json={"config": {}, "soul": "S", "requires_tools": ["x"]}).json()
     assert body["ok"] is False
     assert read_host_archetype() is None
@@ -977,9 +983,13 @@ def test_save_plugin_restart_field_reports_real_restart_keys(monkeypatch):
     import server.agent_init as agent_init
 
     plugin = SimpleNamespace(section="boardy", defaults={"workers": 2}, test=False)
-    monkeypatch.setattr(schema, "_plugin_field_specs", lambda: [
-        (plugin, "boardy.workers", "workers", {"key": "workers", "type": "number", "restart": True}),
-    ])
+    monkeypatch.setattr(
+        schema,
+        "_plugin_field_specs",
+        lambda: [
+            (plugin, "boardy.workers", "workers", {"key": "workers", "type": "number", "restart": True}),
+        ],
+    )
     monkeypatch.setattr(agent_init, "_apply_settings_changes", lambda config=None, layer="agent": (True, []))
     resp = _client().post("/api/settings", json={"updates": {"boardy.workers": 4}}).json()
     assert resp["ok"] is True

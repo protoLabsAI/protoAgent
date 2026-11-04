@@ -252,9 +252,7 @@ async def _run_turn_outcome(stream_fn):
     set_terminal_hook(outcomes.append)
     try:
         app = _mini_a2a_app(stream_fn)
-        async with httpx.AsyncClient(
-            transport=httpx.ASGITransport(app=app), base_url="http://test", timeout=10
-        ) as c:
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test", timeout=10) as c:
             resp = await c.post(
                 "/a2a",
                 headers={"A2A-Version": "1.0"},

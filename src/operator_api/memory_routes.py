@@ -388,8 +388,13 @@ def register_memory_routes(app) -> None:
         def _add():
             try:
                 return store.add_chunk(
-                    content, domain, heading=heading, source=source, source_type="operator",
-                    delivery_policy="always", **carried,
+                    content,
+                    domain,
+                    heading=heading,
+                    source=source,
+                    source_type="operator",
+                    delivery_policy="always",
+                    **carried,
                 )
             except TypeError:
                 # A plugin backend predating the typed kwargs. Its OWN reader still
@@ -440,9 +445,7 @@ def register_memory_routes(app) -> None:
         body = body or {}
         state = str(body.get("state", "")).strip().lower()
         if state not in REVIEW_STATES:
-            return JSONResponse(
-                {"detail": f"state must be one of {', '.join(sorted(REVIEW_STATES))}"}, status_code=400
-            )
+            return JSONResponse({"detail": f"state must be one of {', '.join(sorted(REVIEW_STATES))}"}, status_code=400)
         if str(body.get("tier") or "") == "commons":
             return JSONResponse(
                 {"detail": "commons rows are curated via promote/forget, not reviewed here"}, status_code=400

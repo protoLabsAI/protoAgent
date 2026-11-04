@@ -359,10 +359,10 @@ def export_turn(outcome: Any, *, checkpointer: Any, graph_config: Any, bound_too
                 "tool_calls": int(getattr(outcome, "tool_calls", 0) or 0),
                 # v1 caveats for the lab's adapter:
                 "delegation": None,  # in-process task() subagents are embedded in messages;
-                                     # cross-agent A2A delegations link via shared trace_id
+                # cross-agent A2A delegations link via shared trace_id
                 "tools_note": "bound superset; deferred-tool visibility narrows per turn",
                 "reward_semantics": "terminal-state verifier (completed=1.0, failed=0.0); "
-                                    "dense subgoal-verifier events are R3 follow-up",
+                "dense subgoal-verifier events are R3 follow-up",
                 "content_truncated": truncated,
             },
         }

@@ -64,9 +64,7 @@ def test_extract_text_gathers_every_artifact_not_just_the_first():
 def test_extract_text_status_message_parts_join_without_newlines():
     """The status.message fallback (a parked peer's question) reassembles its streamed
     parts the same verbatim way — no spurious newline between chunks (#3085)."""
-    parked = {
-        "task": {"status": {"message": {"parts": [{"text": "Which"}, {"text": " repo"}, {"text": "?"}]}}}
-    }
+    parked = {"task": {"status": {"message": {"parts": [{"text": "Which"}, {"text": " repo"}, {"text": "?"}]}}}}
     assert _extract_text(parked) == "Which repo?"
 
 
@@ -81,6 +79,7 @@ def test_is_terminal_handles_1_0_and_legacy_states():
 
 
 # Park questions deliberately have different precedence from ordinary answers (#4506).
+
 
 @pytest.mark.parametrize("wrapped", [False, True])
 @pytest.mark.parametrize(
@@ -148,9 +147,7 @@ async def test_park_paths_use_status_question(monkeypatch, path, artifact, statu
     task = _parked_task(artifact, status)
     if path == "dispatch":
         rpc = AsyncMock(return_value={"task": task})
-        message = await A2aAdapter()._dispatch_traced(
-            d, "check auth", send_timeout=1, poll_timeout=1, _rpc=rpc
-        )
+        message = await A2aAdapter()._dispatch_traced(d, "check auth", send_timeout=1, poll_timeout=1, _rpc=rpc)
         assert rpc.await_count == 1
         assert rpc.call_args.args[1] == "SendMessage"
     else:

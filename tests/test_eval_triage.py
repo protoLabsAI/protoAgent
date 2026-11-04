@@ -1,4 +1,5 @@
 """Proposal-only nightly triage: real tools/agent loop, fake model and I/O boundaries."""
+
 import json
 from pathlib import Path
 from types import SimpleNamespace
@@ -17,9 +18,14 @@ from plugins import friction
 def regression(tmp_path, monkeypatch):
     path = tmp_path / "friction.jsonl"
     monkeypatch.setenv("FRICTION_LOG", str(path))
-    row = {"kind": "harness", "summary": "nightly gate regression: instance:lookup",
-           "severity": "major", "source": "plugin:evals-nightly", "trace_id": "trace-1",
-           "detail": "report: run.json\ntrace: https://trace.example/trace-1"}
+    row = {
+        "kind": "harness",
+        "summary": "nightly gate regression: instance:lookup",
+        "severity": "major",
+        "source": "plugin:evals-nightly",
+        "trace_id": "trace-1",
+        "detail": "report: run.json\ntrace: https://trace.example/trace-1",
+    }
     path.write_text(json.dumps(row) + "\n", encoding="utf-8")
     return row, path
 
@@ -27,8 +33,12 @@ def regression(tmp_path, monkeypatch):
 @pytest.mark.asyncio
 async def test_reads_only_open_nightly_entries_without_latest_twelve_cap(regression):
     row, path = regression
-    rows = [row, {**row, "source": "agent"}, {**row, "summary": "nightly gate regression: resolved", "resolved_at": "yesterday"},
-            {**row, "summary": "unrelated"}]
+    rows = [
+        row,
+        {**row, "source": "agent"},
+        {**row, "summary": "nightly gate regression: resolved", "resolved_at": "yesterday"},
+        {**row, "summary": "unrelated"},
+    ]
     rows += [{**row, "summary": f"nightly gate regression: case-{i}"} for i in range(15)]
     path.write_text("\n".join(map(json.dumps, rows)), encoding="utf-8")
     result = json.loads(await friction.eval_regression_entries.ainvoke({}))
@@ -67,8 +77,14 @@ async def test_seeded_regression_proposal_through_agent(regression, monkeypatch,
     original = path.read_bytes()
     rid = friction.entry_id("harness", row["summary"])
     trace = Mock(return_value={"trace_url": "https://trace.example/trace-1", "trace": "lookup never called"})
-    runner = Mock(return_value={"id": "instance:lookup", "passed": classification == "flake",
-                               "skipped": False, "detail": "missing expected lookup"})
+    runner = Mock(
+        return_value={
+            "id": "instance:lookup",
+            "passed": classification == "flake",
+            "skipped": False,
+            "detail": "missing expected lookup",
+        }
+    )
     monkeypatch.setattr(friction, "_read_regression_trace", trace)
     monkeypatch.setattr(friction, "_rerun_eval_case", runner)
     proposals = []
@@ -80,11 +96,19 @@ async def test_seeded_regression_proposal_through_agent(regression, monkeypatch,
         return "Created proposal-1"
 
     evidence = f"instance:lookup https://trace.example/trace-1 friction {rid}"
-    steps = [call("eval_regression_entries"), call("eval_regression_trace", trace_id="trace-1"),
-             call("eval_rerun_case", case_id="instance:lookup")]
+    steps = [
+        call("eval_regression_entries"),
+        call("eval_regression_trace", trace_id="trace-1"),
+        call("eval_rerun_case", case_id="instance:lookup"),
+    ]
     if classification == "harness":
-        steps.append(call("task_create", title="Investigate lookup regression", description=(
-            f"{evidence}; assertion: missing expected lookup; suspected cause: routing defect")))
+        steps.append(
+            call(
+                "task_create",
+                title="Investigate lookup regression",
+                description=(f"{evidence}; assertion: missing expected lookup; suspected cause: routing defect"),
+            )
+        )
         answer = "Proposal proposal-1: " + evidence
     elif classification == "case":
         answer = f"Case-edit proposal: {evidence}\nCorrect stale fixture data.\n{friction.EVAL_CASE_EDIT_GUARDRAIL}"
@@ -92,9 +116,11 @@ async def test_seeded_regression_proposal_through_agent(regression, monkeypatch,
         answer = f"Flake: {evidence}; demote to tracked or fix"
     steps.append(AIMessage(content=answer))
     spec = friction._build_eval_regression_subagent()
-    agent = create_agent(Model(messages=iter(steps)), system_prompt=spec.system_prompt,
-                         tools=[friction.eval_regression_entries, friction.eval_regression_trace,
-                                friction.eval_rerun_case, task_create])
+    agent = create_agent(
+        Model(messages=iter(steps)),
+        system_prompt=spec.system_prompt,
+        tools=[friction.eval_regression_entries, friction.eval_regression_trace, friction.eval_rerun_case, task_create],
+    )
     result = await agent.ainvoke({"messages": [HumanMessage(content=spec.default_prompt)]})
     final = result["messages"][-1].content
     assert evidence in final
@@ -118,8 +144,11 @@ def test_registered_allowlist_and_existing_reviewer(monkeypatch):
     monkeypatch.setattr(friction, "_REGISTRY", None)
     friction.register(registry)
     spec = next(s for s in registry.subagents if s.name == "eval_regression_triage")
-    assert set(spec.tools) == friction.eval_triage_tool_names() == {
-        "eval_regression_entries", "eval_regression_trace", "eval_rerun_case", "task_create"}
+    assert (
+        set(spec.tools)
+        == friction.eval_triage_tool_names()
+        == {"eval_regression_entries", "eval_regression_trace", "eval_rerun_case", "task_create"}
+    )
     assert not spec.inherit_read_tools
     assert not spec.allow_skill_emission
     assert not set(spec.tools) & {"resolve_friction", "write_file", "edit_file", "run_command", "task"}
@@ -141,8 +170,15 @@ async def test_runner_rejects_multiple_cases_and_options(monkeypatch, case_id):
 def isolated_runner(tmp_path, monkeypatch, regression):
     row, ledger = regression
     nightly = tmp_path / "nightly.json"
-    nightly.write_text(json.dumps({"nightly": True, "model": "vendor/nightly-model",
-                                   "results": [{"id": "instance:lookup", "trace_id": "trace-1"}]}))
+    nightly.write_text(
+        json.dumps(
+            {
+                "nightly": True,
+                "model": "vendor/nightly-model",
+                "results": [{"id": "instance:lookup", "trace_id": "trace-1"}],
+            }
+        )
+    )
     ledger.write_text(json.dumps({**row, "detail": f"report: {nightly}"}) + "\n")
     cases = tmp_path / "operator-cases.json"
     cases.write_text('[{"id": "lookup"}]')
@@ -162,12 +198,12 @@ def isolated_runner(tmp_path, monkeypatch, regression):
 
 
 @pytest.mark.platform_sensitive
-@pytest.mark.parametrize("rows", [[], [{"id": "wrong", "passed": True}],
-                                  [{"id": "instance:lookup"}, {"id": "extra"}]])
+@pytest.mark.parametrize("rows", [[], [{"id": "wrong", "passed": True}], [{"id": "instance:lookup"}, {"id": "extra"}]])
 def test_runner_rejects_empty_or_wrong_report(monkeypatch, rows, isolated_runner):
     def run(argv, **kwargs):
         Path(argv[argv.index("--out") + 1]).write_text(json.dumps({"results": rows}), encoding="utf-8")
         return SimpleNamespace(returncode=0)
+
     monkeypatch.setattr("subprocess.run", run)
     with pytest.raises(ValueError, match="exactly"):
         friction._rerun_eval_case("instance:lookup")
@@ -187,17 +223,20 @@ def test_runner_fixed_command_and_skipped_result(monkeypatch, isolated_runner):
         assert argv[argv.index("--model-label") + 1] == "vendor/nightly-model"
         server_argv = launch.call_args.args[0]
         assert argv[argv.index("--base-url") + 1] == (
-            "http://127.0.0.1:" + server_argv[server_argv.index("--port") + 1])
+            "http://127.0.0.1:" + server_argv[server_argv.index("--port") + 1]
+        )
         env = kwargs["env"]
         assert env == launch.call_args.kwargs["env"]
         assert env["PROTOAGENT_MODEL"] == "vendor/nightly-model"
         assert env["PROTOAGENT_INSTANCE"] == "triage"
-        assert all(k not in env for k in ("PROTOAGENT_HOME", "EVAL_BASE_URL", "AGENT_BASE_URL",
-                                         "FRICTION_LOG", "AUDIT_PATH"))
+        assert all(
+            k not in env for k in ("PROTOAGENT_HOME", "EVAL_BASE_URL", "AGENT_BASE_URL", "FRICTION_LOG", "AUDIT_PATH")
+        )
         root = Path(env["PROTOAGENT_BOX_ROOT"])
         assert Path(env["PROTOAGENT_SEED_CONFIG"]).parent == root
         assert (root / "host-config.yaml").read_text(encoding="utf-8") == (
-            "model:\n  base_url: https://gateway.example\n")
+            "model:\n  base_url: https://gateway.example\n"
+        )
         cases = Path(argv[argv.index("--instance-cases") + 1])
         assert cases.parent == root
         assert json.loads(cases.read_text(encoding="utf-8")) == [{"id": "lookup"}]
@@ -207,6 +246,7 @@ def test_runner_fixed_command_and_skipped_result(monkeypatch, isolated_runner):
         assert report.parent == root
         report.write_text(json.dumps({"results": [row]}), encoding="utf-8")
         return SimpleNamespace(returncode=0)
+
     monkeypatch.setattr("subprocess.run", run)
     assert friction._rerun_eval_case("instance:lookup") == row
     proc.terminate.assert_called_once()
@@ -216,8 +256,9 @@ def test_runner_fixed_command_and_skipped_result(monkeypatch, isolated_runner):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("report", [None, {}, {"nightly": True, "model": ""},
-                                      {"nightly": True, "model": "other", "results": []}])
+@pytest.mark.parametrize(
+    "report", [None, {}, {"nightly": True, "model": ""}, {"nightly": True, "model": "other", "results": []}]
+)
 async def test_missing_nightly_context_never_launches_or_passes(isolated_runner, report):
     launch, _, nightly = isolated_runner
     if report is None:
@@ -265,7 +306,8 @@ def test_trace_backend_read_is_bounded_and_does_not_score(monkeypatch):
     assert result["trace"] == {"input": "find the record"}
     assert result["trace_url"] == "https://trace.example/trace-1"
     client.api.trace.get.assert_called_once_with(
-        "trace-1", request_options={"timeout_in_seconds": 20, "max_retries": 0})
+        "trace-1", request_options={"timeout_in_seconds": 20, "max_retries": 0}
+    )
     client.create_score.assert_not_called()
 
 

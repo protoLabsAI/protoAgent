@@ -184,10 +184,10 @@ def test_missing_deps_detail_lists_hard_then_optional_specs(tmp_path, monkeypatc
     d.mkdir()
     (d / "protoagent.plugin.yaml").write_text(
         "id: p\nname: P\nrequires_pip:\n"
-        f"  - \"{NOPE}-a>=1\"\n"
+        f'  - "{NOPE}-a>=1"\n'
         f"  - \"{NOPE}-win; sys_platform == 'win32'\"\n"
-        "  - \"httpx>=0.1\"\n"
-        f"  - {{ pkg: \"{NOPE}-b>=2\", optional: true }}\n",
+        '  - "httpx>=0.1"\n'
+        f'  - {{ pkg: "{NOPE}-b>=2", optional: true }}\n',
         encoding="utf-8",
     )
     m = load_manifest(d)
@@ -208,7 +208,7 @@ def test_install_route_reports_deps_needed_with_specs_source_and_target(monkeypa
     d.mkdir()
     (d / "protoagent.plugin.yaml").write_text(
         "id: widgets\nname: Widgets\nrepository: https://github.com/acme/widgets\nrequires_pip:\n"
-        f"  - \"{NOPE}>=1\"\n  - \"pywinpty>=2.0; sys_platform == 'win32'\"\n",
+        f'  - "{NOPE}>=1"\n  - "pywinpty>=2.0; sys_platform == \'win32\'"\n',
         encoding="utf-8",
     )
     m = load_manifest(d)
@@ -278,9 +278,16 @@ def test_cli_install_prints_only_the_deps_that_apply_here(monkeypatch, capsys, t
 
     _on(monkeypatch, "darwin")
     summary = {
-        "id": "terminal", "name": "Terminal", "version": "0.4.1", "description": "", "resolved_sha": "a" * 40,
-        "repository": "", "requires_pip": ["pywinpty>=2.0; sys_platform == 'win32'"], "optional_pip": [],
-        "contributes": {"views": []}, "capabilities": {},
+        "id": "terminal",
+        "name": "Terminal",
+        "version": "0.4.1",
+        "description": "",
+        "resolved_sha": "a" * 40,
+        "repository": "",
+        "requires_pip": ["pywinpty>=2.0; sys_platform == 'win32'"],
+        "optional_pip": [],
+        "contributes": {"views": []},
+        "capabilities": {},
     }
     monkeypatch.setattr(installer, "install", lambda *a, **k: summary)
     monkeypatch.setattr(installer, "configured_allowlist", lambda: None)

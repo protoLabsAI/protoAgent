@@ -144,6 +144,7 @@ def _is_sse_query_token_path(path: str) -> bool:
     of a bearer header (see ``_SSE_QUERY_TOKEN_PATHS``)."""
     return _SSE_QUERY_TOKEN_RE.match(path or "") is not None
 
+
 # A plugin public-prefix must be a real SUBTREE of its own namespace —
 # ``/plugins/<id>/…`` or ``/api/plugins/<id>/…`` with a trailing slash after the
 # id segment — so a bare core route like ``/api/plugins/install`` can never be
@@ -857,9 +858,7 @@ class A2AAuthMiddleware(BaseHTTPMiddleware):
             try:
                 from infra.media import check_access as _media_access
 
-                verdict = _media_access(
-                    path, request.query_params.get("sig", ""), request.query_params.get("exp", "")
-                )
+                verdict = _media_access(path, request.query_params.get("sig", ""), request.query_params.get("exp", ""))
                 if verdict == "ok":
                     return await call_next(request)
                 media_expired = verdict == "expired"

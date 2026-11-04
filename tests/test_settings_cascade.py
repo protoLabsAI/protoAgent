@@ -269,9 +269,7 @@ def test_host_save_clears_shadowing_agent_key(tmp_path, monkeypatch):
     # Agent leaf carries a stale api_base (a seed shadow) alongside an agent-scoped key.
     leaf.write_text("model:\n  api_base: http://stale-agent-gw/v1\n  temperature: 0.5\n")
 
-    ok, messages = _apply_settings_changes(
-        config={"model": {"api_base": "http://new-host-gw/v1"}}, layer="host"
-    )
+    ok, messages = _apply_settings_changes(config={"model": {"api_base": "http://new-host-gw/v1"}}, layer="host")
     assert ok
 
     # Host file got the new value.

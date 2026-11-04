@@ -24,11 +24,24 @@ def status(state="TASK_STATE_WORKING", *, parts=None, metadata=None, final=False
     msg: dict = {"role": "ROLE_AGENT", "messageId": "m", "parts": parts or []}
     if metadata:
         msg["metadata"] = metadata
-    return {"result": {"statusUpdate": {"taskId": "t1", "contextId": cid, "status": {"state": state, "message": msg}, "final": final}}}
+    return {
+        "result": {
+            "statusUpdate": {
+                "taskId": "t1",
+                "contextId": cid,
+                "status": {"state": state, "message": msg},
+                "final": final,
+            }
+        }
+    }
 
 
 def artifact(text, *, append=None, last=False, metadata=None, cid="s"):
-    upd: dict = {"taskId": "t1", "contextId": cid, "artifact": {"artifactId": "a", "parts": [{"text": text}], **({"metadata": metadata} if metadata else {})}}
+    upd: dict = {
+        "taskId": "t1",
+        "contextId": cid,
+        "artifact": {"artifactId": "a", "parts": [{"text": text}], **({"metadata": metadata} if metadata else {})},
+    }
     if append is not None:
         upd["append"] = append
     if last:
@@ -40,13 +53,44 @@ def canned_frames(cid: str) -> list[dict]:
     return [
         {"result": {"task": {"id": "t1", "contextId": cid, "status": {"state": "TASK_STATE_SUBMITTED"}}}},
         status(parts=[{"data": {"text": "let me look"}, "metadata": {"mimeType": a2a.REASONING_MIME}}], cid=cid),
-        status(metadata={TOOL: {"toolCallId": "c1", "name": "task", "phase": "started", "args": "board_triage"}}, cid=cid),
-        status(metadata={TOOL: {"toolCallId": "c2", "name": "run_command", "phase": "started", "args": "gh pr list", "parentToolCallId": "c1"}}, cid=cid),
-        status(metadata={TOOL: {"toolCallId": "c2", "name": "run_command", "phase": "completed", "result": "3 open", "outputChars": 120}}, cid=cid),
+        status(
+            metadata={TOOL: {"toolCallId": "c1", "name": "task", "phase": "started", "args": "board_triage"}}, cid=cid
+        ),
+        status(
+            metadata={
+                TOOL: {
+                    "toolCallId": "c2",
+                    "name": "run_command",
+                    "phase": "started",
+                    "args": "gh pr list",
+                    "parentToolCallId": "c1",
+                }
+            },
+            cid=cid,
+        ),
+        status(
+            metadata={
+                TOOL: {
+                    "toolCallId": "c2",
+                    "name": "run_command",
+                    "phase": "completed",
+                    "result": "3 open",
+                    "outputChars": 120,
+                }
+            },
+            cid=cid,
+        ),
         status(metadata={TOOL: {"toolCallId": "c1", "name": "task", "phase": "completed", "result": "done"}}, cid=cid),
         artifact("Three PRs are ", append=True, cid=cid),
         artifact("open.", append=True, cid=cid),
-        artifact("Three PRs are open.", last=True, metadata={COST: {"usage": {"input_tokens": 900, "output_tokens": 40}, "costUsd": 0.0042, "durationMs": 3100}}, cid=cid),
+        artifact(
+            "Three PRs are open.",
+            last=True,
+            metadata={
+                COST: {"usage": {"input_tokens": 900, "output_tokens": 40}, "costUsd": 0.0042, "durationMs": 3100}
+            },
+            cid=cid,
+        ),
         status("TASK_STATE_COMPLETED", final=True, cid=cid),
     ]
 
@@ -57,7 +101,9 @@ class FakeA2A:
     `block=True` yields the first N frames then blocks until abort() and raises like a
     closed socket — the shape of a stalled/half-open stream."""
 
-    def __init__(self, frames=None, *, hang=False, block_after=None, task_state="TASK_STATE_COMPLETED", sub_frames=None):
+    def __init__(
+        self, frames=None, *, hang=False, block_after=None, task_state="TASK_STATE_COMPLETED", sub_frames=None
+    ):
         self.frames, self.hang, self.block_after = frames, hang, block_after
         self.task_state = task_state
         self.sub_frames = sub_frames  # what SubscribeToTask replays (default: the canned turn)
@@ -124,7 +170,11 @@ class FakeA2A:
         return {}
 
     def get_task(self, task_id):
-        return {"id": task_id, "status": {"state": self.task_state}, "artifacts": [{"parts": [{"text": "finalized from the task"}]}]}
+        return {
+            "id": task_id,
+            "status": {"state": self.task_state},
+            "artifacts": [{"parts": [{"text": "finalized from the task"}]}],
+        }
 
     def close(self):
         self.closed = True
@@ -205,7 +255,9 @@ async def test_esc_cancels_a_running_turn_then_backs_out():
         comp = app.screen.query_one("#composer", Input)
         comp.value = "go"
         await pilot.press("enter")
-        assert await _until(pilot, lambda: app.screen.convo.live is not None and app.screen.convo.live.turn.task_id == "t1")
+        assert await _until(
+            pilot, lambda: app.screen.convo.live is not None and app.screen.convo.live.turn.task_id == "t1"
+        )
         assert "⟳" in str(app.screen.query_one("#talk-status", Static).content)
         await pilot.press("escape")
         assert await _until(pilot, lambda: fake.cancelled == ["t1"] and app.screen.convo.live is None)
@@ -246,11 +298,24 @@ async def test_session_picker_replays_durable_turns_with_tool_cards():
         "artifacts": [{"parts": [{"text": "Yesterday's answer."}]}],
         "history": [
             {"role": "ROLE_USER", "parts": [{"text": "yesterday's question"}]},
-            {"role": "ROLE_AGENT", "parts": [], "metadata": {TOOL: {"toolCallId": "m1", "name": "@sonnet", "phase": "started", "args": "report"}}},
-            {"role": "ROLE_AGENT", "parts": [], "metadata": {TOOL: {"toolCallId": "m1", "name": "@sonnet", "phase": "completed", "result": "1 replied"}}},
+            {
+                "role": "ROLE_AGENT",
+                "parts": [],
+                "metadata": {TOOL: {"toolCallId": "m1", "name": "@sonnet", "phase": "started", "args": "report"}},
+            },
+            {
+                "role": "ROLE_AGENT",
+                "parts": [],
+                "metadata": {
+                    TOOL: {"toolCallId": "m1", "name": "@sonnet", "phase": "completed", "result": "1 replied"}
+                },
+            },
         ],
     }
-    be = TalkBackend(sessions=[{"session_id": "chat-1-old", "turn_count": 1, "last_updated": "2026-09-11T23:29:04"}], turns={"chat-1-old": [row]})
+    be = TalkBackend(
+        sessions=[{"session_id": "chat-1-old", "turn_count": 1, "last_updated": "2026-09-11T23:29:04"}],
+        turns={"chat-1-old": [row]},
+    )
     app = FleetDeck(be, poll_s=0)
     async with app.run_test(size=(120, 36)) as pilot:
         await _open_talk(be, pilot, app)
@@ -263,7 +328,9 @@ async def test_session_picker_replays_durable_turns_with_tool_cards():
         assert app.screen.convo.session_id == "chat-1-old" and be.turn_reads[-1] == "chat-1-old"
         assert "yesterday's question" in str(app.screen.query(".user-msg").first().content)
         tree = app.screen.query_one("#work-tree", Tree)
-        assert [n.data.name for n in tree.root.children] == ["@sonnet"] and tree.root.children[0].data.output == "1 replied"
+        assert [n.data.name for n in tree.root.children] == ["@sonnet"] and tree.root.children[
+            0
+        ].data.output == "1 replied"
         # enter on the card → pager with args and result
         tree.focus()
         tree.select_node(tree.root.children[0])
@@ -286,7 +353,10 @@ async def test_opening_a_session_attaches_to_the_running_turn_not_one_queued_beh
 
     def row(task_id, text, live):
         return {
-            "task_id": task_id, "live": live, "status": {"state": "TASK_STATE_WORKING"}, "artifacts": [],
+            "task_id": task_id,
+            "live": live,
+            "status": {"state": "TASK_STATE_WORKING"},
+            "artifacts": [],
             "history": [{"role": "ROLE_USER", "parts": [{"text": text}]}],
         }
 
@@ -355,7 +425,14 @@ async def test_talk_refuses_offline_and_stopped_members():
 async def test_a_parked_question_is_surfaced_in_the_status_line():
     class Parked(FakeA2A):
         def stream(self, text, *, context_id, task_id=None, metadata=None):
-            yield status("TASK_STATE_INPUT_REQUIRED", parts=[{"text": "Merge this PR?"}, {"data": {"question": "Merge this PR?"}, "metadata": {"mimeType": a2a.HITL_MIME}}], cid=context_id)
+            yield status(
+                "TASK_STATE_INPUT_REQUIRED",
+                parts=[
+                    {"text": "Merge this PR?"},
+                    {"data": {"question": "Merge this PR?"}, "metadata": {"mimeType": a2a.HITL_MIME}},
+                ],
+                cid=context_id,
+            )
 
     be = TalkBackend(a2a_client=Parked())
     app = FleetDeck(be, poll_s=0)
@@ -384,8 +461,12 @@ async def test_stall_finalizes_from_the_task_and_unblocks_the_reader(monkeypatch
         await pilot.press("enter")
         # the Task frame must have landed (task_id set) and the idle window elapsed, or the
         # watchdog takes the no-frame branch instead of the durable-task one
-        assert await _until(pilot, lambda: app.screen.convo.live is not None and app.screen.convo.live.turn.task_id == "t1")
-        assert await _until(pilot, lambda: time.monotonic() - app.screen.convo.live.turn.last_frame_at >= talkmod.STALL_IDLE_S)
+        assert await _until(
+            pilot, lambda: app.screen.convo.live is not None and app.screen.convo.live.turn.task_id == "t1"
+        )
+        assert await _until(
+            pilot, lambda: time.monotonic() - app.screen.convo.live.turn.last_frame_at >= talkmod.STALL_IDLE_S
+        )
         app.screen._check_stall()  # the 5 s timer, driven by hand
         await _settle(app, pilot)
         ex = app.screen.convo.exchanges[-1]
@@ -409,7 +490,15 @@ async def test_a_member_that_sends_nothing_is_aborted_after_the_window(monkeypat
         comp.value = "go"
         await pilot.press("enter")
         # the reader is out (a client to abort), no Task frame came, and the window elapsed
-        assert await _until(pilot, lambda: (ex := app.screen.convo.live) is not None and ex.client is not None and not ex.turn.task_id and time.monotonic() - max(ex.turn.last_frame_at, ex.started_at) >= talkmod.STALL_IDLE_S)
+        assert await _until(
+            pilot,
+            lambda: (
+                (ex := app.screen.convo.live) is not None
+                and ex.client is not None
+                and not ex.turn.task_id
+                and time.monotonic() - max(ex.turn.last_frame_at, ex.started_at) >= talkmod.STALL_IDLE_S
+            ),
+        )
         app.screen._check_stall()
         await _settle(app, pilot)
         ex = app.screen.convo.exchanges[-1]
@@ -425,7 +514,9 @@ async def test_read_timeout_consults_the_task_before_failing():
     class Stalls(FakeA2A):
         def stream(self, text, *, context_id, task_id=None, metadata=None):
             self.sent.append({"text": text})
-            yield {"result": {"task": {"id": "t1", "contextId": context_id, "status": {"state": "TASK_STATE_SUBMITTED"}}}}
+            yield {
+                "result": {"task": {"id": "t1", "contextId": context_id, "status": {"state": "TASK_STATE_SUBMITTED"}}}
+            }
             raise a2amod.StreamStalled("http://127.0.0.1:7870", "no frame for 60s")
 
         def subscribe(self, task_id):
@@ -478,7 +569,17 @@ async def test_a_silent_stretch_on_a_working_turn_re_attaches_instead_of_failing
             self.subscribed.append(task_id)
             frames = canned_frames("s")
             # the snapshot first (history so far), then the rest of the live frames
-            yield {"result": {"task": {"id": task_id, "contextId": self.sent and self.sent[-1].get("cid") or "s", "status": {"state": "TASK_STATE_WORKING"}, "history": [], "artifacts": []}}}
+            yield {
+                "result": {
+                    "task": {
+                        "id": task_id,
+                        "contextId": self.sent and self.sent[-1].get("cid") or "s",
+                        "status": {"state": "TASK_STATE_WORKING"},
+                        "history": [],
+                        "artifacts": [],
+                    }
+                }
+            }
             yield from frames[3:]
 
     fake = Quiet()
@@ -564,7 +665,9 @@ async def test_second_escape_abandons_a_turn_that_will_not_stop():
         comp = app.screen.query_one("#composer", Input)
         comp.value = "go"
         await pilot.press("enter")
-        assert await _until(pilot, lambda: app.screen.convo.live is not None and app.screen.convo.live.turn.task_id == "t1")
+        assert await _until(
+            pilot, lambda: app.screen.convo.live is not None and app.screen.convo.live.turn.task_id == "t1"
+        )
         await pilot.press("escape")  # cancel fails; the stream is (deliberately) still hanging
         assert await _until(pilot, lambda: "abandons" in str(app.screen.query_one("#talk-status", Static).content))
         assert isinstance(app.screen, ConversationScreen)
@@ -591,5 +694,8 @@ def test_sessions_and_turns_read_through_the_slug_proxy():
     be = deckdata.LiveBackend(conn)
     assert be.sessions(ROSTER[1]) == [{"session_id": "chat-1", "turn_count": 2}]
     assert be.turns(ROSTER[1], "chat-1") == [{"task_id": "t"}]
-    assert seen == ["/agents/protoEngineer-ba4c/api/chat/sessions", "/agents/protoEngineer-ba4c/api/chat/sessions/chat-1/turns"]
+    assert seen == [
+        "/agents/protoEngineer-ba4c/api/chat/sessions",
+        "/agents/protoEngineer-ba4c/api/chat/sessions/chat-1/turns",
+    ]
     assert be.a2a(ROSTER[1]).endpoint == "http://127.0.0.1:7870/agents/protoEngineer-ba4c/a2a"

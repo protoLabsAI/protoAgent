@@ -131,7 +131,11 @@ def test_the_card_is_rebuilt_from_the_guard_after_a_live_rotation():
 
     def current_schemes():
         card = pa.build_agent_card(
-            name="x", description="d", url="http://h/a2a", version="1", skills=[],
+            name="x",
+            description="d",
+            url="http://h/a2a",
+            version="1",
+            skills=[],
             bearer=auth.bearer_configured(),
         )
         sa._apply_real_security(card, pa)
@@ -201,7 +205,11 @@ def test_a_deprecated_credential_is_still_advertised_while_it_works():
 
     auth.configure(bearer_token=None, api_key=API_KEY, allowed_origins_raw="")
     card = pa.build_agent_card(
-        name="x", description="d", url="http://h/a2a", version="1", skills=[],
+        name="x",
+        description="d",
+        url="http://h/a2a",
+        version="1",
+        skills=[],
         bearer=auth.bearer_configured(),
     )
     sa._apply_real_security(card, pa)

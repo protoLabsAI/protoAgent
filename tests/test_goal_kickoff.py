@@ -74,8 +74,11 @@ def test_kickoff_prompt_folds_in_user_message_but_not_a_goal_command(tmp_path):
 def test_kickoff_prompt_includes_contract_when_present(tmp_path):
     c = _ctrl(tmp_path)
     c.set_goal_operator(
-        "s1", "cond", {"type": "command", "command": "pytest -q"},
-        outcome="green CI", constraints=["do not touch prod"],
+        "s1",
+        "cond",
+        {"type": "command", "command": "pytest -q"},
+        outcome="green CI",
+        constraints=["do not touch prod"],
     )
     prompt = c.kickoff_prompt(c.active_goal("s1"))
     assert "green CI" in prompt

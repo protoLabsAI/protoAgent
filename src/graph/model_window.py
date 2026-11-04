@@ -174,7 +174,9 @@ def fallback_window(config, model: str, provider_type: str = "") -> int | None:
         win = _library_profile_window(name)
         if win:
             return win
-    best = max((p for p in KNOWN_FAMILY_WINDOWS if bare.lower().startswith(p[0])), key=lambda p: len(p[0]), default=None)
+    best = max(
+        (p for p in KNOWN_FAMILY_WINDOWS if bare.lower().startswith(p[0])), key=lambda p: len(p[0]), default=None
+    )
     return best[1] if best else None
 
 

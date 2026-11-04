@@ -167,7 +167,9 @@ def render_multimodal_content(env: dict, *, vision: bool, describe_fn: DescribeF
 
     images = list(env.get("images") or [])
     if len(images) > MAX_IMAGES_PER_RESULT:
-        notes.append(f"[{len(images) - MAX_IMAGES_PER_RESULT} image(s) dropped: max {MAX_IMAGES_PER_RESULT} per tool result]")
+        notes.append(
+            f"[{len(images) - MAX_IMAGES_PER_RESULT} image(s) dropped: max {MAX_IMAGES_PER_RESULT} per tool result]"
+        )
         images = images[:MAX_IMAGES_PER_RESULT]
 
     for i, img in enumerate(images, start=1):
@@ -210,8 +212,7 @@ def render_multimodal_content(env: dict, *, vision: bool, describe_fn: DescribeF
     if vision and accepted:
         blocks: list[dict] = [{"type": "text", "text": caption}]
         blocks += [
-            {"type": "image_url", "image_url": {"url": f"data:{mime};base64,{b64}"}}
-            for b64, mime, _raw in accepted
+            {"type": "image_url", "image_url": {"url": f"data:{mime};base64,{b64}"}} for b64, mime, _raw in accepted
         ]
         return blocks
 

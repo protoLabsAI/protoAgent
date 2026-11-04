@@ -56,7 +56,9 @@ def _columns(path: str) -> list[str]:
 
 
 def _row(task_id: str, **over) -> dict:
-    base = dict(task_id=task_id, session_id="s1", state="failed", success=0, model="m", ended_at="2026-11-03T00:00:00+00:00")
+    base = dict(
+        task_id=task_id, session_id="s1", state="failed", success=0, model="m", ended_at="2026-11-03T00:00:00+00:00"
+    )
     base.update(over)
     return base
 
@@ -125,7 +127,9 @@ def test_record_turn_stores_a_redacted_clipped_error_for_a_failed_turn(store):
     from server.turn_telemetry import _ERROR_MAX, record_turn
 
     long_tail = "x" * 2000
-    record_turn(task_id="f", session_id="s", state="failed", error=f"401 from provider, key {_SECRET} rejected. {long_tail}")
+    record_turn(
+        task_id="f", session_id="s", state="failed", error=f"401 from provider, key {_SECRET} rejected. {long_tail}"
+    )
 
     err = _errors(store)["f"]
     assert _SECRET not in err and "[REDACTED]" in err
@@ -309,3 +313,77 @@ async def test_a_failed_coder_run_stores_why(store, tmp_path):
     (row,) = store.recent()
     assert row["state"] == "failed"
     assert "the coder blew up" in row["error"]
+
+
+# ── 6. review follow-ups: incognito, background-job errors, fail-closed helper ─────
+
+
+def test_an_incognito_turn_keeps_its_state_but_stores_no_error_text(store):
+    # A provider or exception message can echo the user's input, and an incognito turn
+    # keeps timing and usage but no content (ADR 0069).
+    from server.turn_telemetry import record_turn
+
+    record_turn(task_id="inc", session_id="s", state="failed", error="echoed: my private text", incognito=True)
+    row = next(r for r in store.recent() if r["task_id"] == "inc")
+    assert (row["state"], row["error"]) == ("failed", "")
+
+
+def test_an_incognito_a2a_turn_reaches_record_turn_as_incognito(monkeypatch):
+    import server.turn_telemetry as tt
+    from a2a_impl.executor import TurnOutcome
+    from server.a2a import _record_a2a_telemetry
+
+    seen = {}
+    monkeypatch.setattr(tt, "record_turn", lambda **kw: seen.update(kw))
+    _record_a2a_telemetry(
+        TurnOutcome(task_id="t", context_id="c", state="failed", text="", error="boom", incognito=True)
+    )
+    assert (seen["error"], seen["incognito"]) == ("boom", True)
+
+
+def test_safe_error_text_fails_closed_when_redaction_breaks(monkeypatch):
+    import graph.middleware.redaction as red
+    from observability.error_text import WITHHELD, safe_error_text
+
+    def _boom(_text):
+        raise RuntimeError("redactor down")
+
+    monkeypatch.setattr(red, "redact", _boom)
+    assert safe_error_text(f"key {_SECRET}") == WITHHELD
+    assert safe_error_text("   ") == ""
+
+
+def test_a_background_job_error_is_redacted_before_it_is_stored_and_published(monkeypatch):
+    import types
+
+    import runtime.state as rs
+    import server.a2a as a2a_mod
+
+    settled, published = {}, []
+
+    class _Store:
+        def mark_complete(self, job_id, status, text, *, cost_usd=None, error=""):
+            settled.update(job_id=job_id, status=status, error=error)
+
+        def get(self, job_id):
+            return None
+
+    monkeypatch.setattr(rs.STATE, "background_mgr", types.SimpleNamespace(store=_Store()), raising=False)
+    monkeypatch.setattr(a2a_mod._event_bus, "publish", lambda *a, **k: published.append(a))
+    outcome = types.SimpleNamespace(
+        context_id="background:bg-0123456789ab", trigger="", state="failed", text="", error=f"401: {_SECRET}"
+    )
+    a2a_mod._handle_background_terminal(outcome)
+    assert settled["status"] == "failed"
+    assert _SECRET not in settled["error"] and "[REDACTED]" in settled["error"]
+
+
+def test_the_background_routes_redact_an_error_stored_before_redaction():
+    import types
+
+    from operator_api.routes import _bg_job_out
+
+    job = types.SimpleNamespace(to_dict=lambda: {"id": "bg-1", "error": f"raw {_SECRET}", "result": "r"})
+    out = _bg_job_out(job)
+    assert _SECRET not in out["error"] and out["result"] == "r"
+    assert _bg_job_out(types.SimpleNamespace(to_dict=lambda: {"id": "bg-2", "error": ""}))["error"] == ""

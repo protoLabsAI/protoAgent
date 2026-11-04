@@ -47,7 +47,7 @@ def env(monkeypatch):
     e.trace = TraceSpy().install(monkeypatch)
     e.rows = []
 
-    def _record(sink, *, session_id, origin, state, started, error=""):
+    def _record(sink, *, session_id, origin, state, started, error="", incognito=False):
         cb = sink.get("usage_cb")
         e.rows.append(
             {
@@ -254,7 +254,10 @@ async def test_an_autonomous_origin_auto_answers_a_hitl_park_like_streaming(env,
     autonomous (server-fired) origin never parks on a HITL pause — it resumes with the
     no-operator sentinel, keyed by interrupt id, as a streaming turn from that origin does."""
     g = env.install(
-        [Invoke(turn_result(), steps=[set_interrupt({"question": "Which env?"})]), turn_result(AIMessage(content="done"))]
+        [
+            Invoke(turn_result(), steps=[set_interrupt({"question": "Which env?"})]),
+            turn_result(AIMessage(content="done")),
+        ]
     )
 
     out = await chat_mod.chat("deploy", "s1", origin=origin)

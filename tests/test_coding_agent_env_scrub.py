@@ -12,16 +12,26 @@ from plugins.delegates.adapters import ADAPTERS
 pytestmark = pytest.mark.platform_sensitive
 
 HOST_VARS = (
-    "PROTOAGENT_HOME", "PROTOAGENT_INSTANCE", "PROTOAGENT_BOX_ROOT",
-    "AGENT_NAME", "A2A_AUTH_TOKEN", "PROTOAGENT_FLEET_TOKEN",
+    "PROTOAGENT_HOME",
+    "PROTOAGENT_INSTANCE",
+    "PROTOAGENT_BOX_ROOT",
+    "AGENT_NAME",
+    "A2A_AUTH_TOKEN",
+    "PROTOAGENT_FLEET_TOKEN",
 )
 
 
 @pytest.fixture
 def host_env(monkeypatch):
     env = {name: "host-only" for name in HOST_VARS}
-    env.update(PATH="/usr/bin", HOME="/home/operator", XDG_CONFIG_HOME="/home/operator/.config",
-               OPENAI_API_KEY="host-provider-key", CLAUDECODE="1", CLAUDE_CODE_ENTRYPOINT="cli")
+    env.update(
+        PATH="/usr/bin",
+        HOME="/home/operator",
+        XDG_CONFIG_HOME="/home/operator/.config",
+        OPENAI_API_KEY="host-provider-key",
+        CLAUDECODE="1",
+        CLAUDE_CODE_ENTRYPOINT="cli",
+    )
     monkeypatch.setattr(os, "environ", env.copy())
     monkeypatch.setattr(acp_client, "_discovered_node_dirs", lambda: ())
     return env
@@ -120,9 +130,14 @@ async def test_launch_roles_preserve_runtime_auth_but_scrub_coders(host_env, tmp
                 runtime = acp_runtime.AcpRuntime(config, cwd=str(tmp_path), context=object())
                 client = runtime._default_client_factory()
             else:
-                delegate = ADAPTERS["acp"].parse({
-                    "name": "coder", "type": "acp", "command": "proto", "workdir": str(tmp_path),
-                })
+                delegate = ADAPTERS["acp"].parse(
+                    {
+                        "name": "coder",
+                        "type": "acp",
+                        "command": "proto",
+                        "workdir": str(tmp_path),
+                    }
+                )
                 spec = coding_agent._delegate_spec(delegate)
                 if role == "pooled-coder":
                     client = coding_agent._client_for(spec)

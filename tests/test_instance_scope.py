@@ -116,9 +116,7 @@ def test_colocated_sibling_same_instance_is_warned(monkeypatch, tmp_path):
     mine = str(paths.instance_paths().instance_root)  # this process's instance_root
     d = home / ".instances"
     d.mkdir()
-    (d / "12345.json").write_text(
-        json.dumps({"pid": 12345, "port": 7871, "identity": "roxy", "instance_root": mine})
-    )
+    (d / "12345.json").write_text(json.dumps({"pid": 12345, "port": 7871, "identity": "roxy", "instance_root": mine}))
     monkeypatch.setattr(paths, "pid_alive", lambda pid: True)
     monkeypatch.setattr(paths, "_is_protoagent_pid", lambda pid: True)
     sibs = paths.colocated_instances()
@@ -138,9 +136,7 @@ def test_box_only_coresident_is_not_warned(monkeypatch, tmp_path):
     assert other != str(paths.instance_paths().instance_root)
     d = home / ".instances"
     d.mkdir()
-    (d / "12345.json").write_text(
-        json.dumps({"pid": 12345, "port": 7871, "identity": "dev", "instance_root": other})
-    )
+    (d / "12345.json").write_text(json.dumps({"pid": 12345, "port": 7871, "identity": "dev", "instance_root": other}))
     monkeypatch.setattr(paths, "pid_alive", lambda pid: True)
     monkeypatch.setattr(paths, "_is_protoagent_pid", lambda pid: True)
     # Still discoverable on the box…

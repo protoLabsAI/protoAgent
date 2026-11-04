@@ -258,7 +258,9 @@ def _summ(trigger, *, profile_window=1_000_000, tokens=0, **kw):
 
     from graph.middleware.compaction import CountingSummarizationMiddleware
 
-    model = FakeListChatModel(responses=["summary"], profile={"max_input_tokens": profile_window} if profile_window else None)
+    model = FakeListChatModel(
+        responses=["summary"], profile={"max_input_tokens": profile_window} if profile_window else None
+    )
     return CountingSummarizationMiddleware(
         model=model, trigger=trigger, keep=("messages", 2), token_counter=lambda _m: tokens, **kw
     )
@@ -348,7 +350,10 @@ def test_compaction_strips_thinking_from_the_kept_tail():
     from langchain_core.messages import AIMessage, HumanMessage
 
     think = {"type": "thinking", "thinking": "", "signature": "sig"}
-    msgs = [HumanMessage("q", id=f"h{i}") if i % 2 == 0 else AIMessage([think, {"type": "text", "text": "a"}], id=f"a{i}") for i in range(10)]
+    msgs = [
+        HumanMessage("q", id=f"h{i}") if i % 2 == 0 else AIMessage([think, {"type": "text", "text": "a"}], id=f"a{i}")
+        for i in range(10)
+    ]
     mw = _summ(("messages", 4), tokens=1)
     out = mw.before_model({"messages": msgs}, None)
     assert out is not None

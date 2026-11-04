@@ -25,7 +25,11 @@ from typing import Any
 from ops import op
 
 
-@op(name="fleet.up", mutates=True, summary="Start fleet member agents (named, or all workspaces) as background processes.")
+@op(
+    name="fleet.up",
+    mutates=True,
+    summary="Start fleet member agents (named, or all workspaces) as background processes.",
+)
 async def up(names: list[str] | None = None) -> list[dict]:
     from graph.fleet import supervisor
 
@@ -136,13 +140,20 @@ def remote_add_sync(name: str, url: str, token: str = "", allow_insecure: bool =
     registration is intentional)."""
     from graph.fleet import supervisor
 
-    rec = supervisor.add_remote(str(name or ""), str(url or ""), token=str(token or ""), allow_insecure=bool(allow_insecure))
+    rec = supervisor.add_remote(
+        str(name or ""), str(url or ""), token=str(token or ""), allow_insecure=bool(allow_insecure)
+    )
     reachable, version = supervisor.probe_remote(rec["id"])
     return {"agent": rec, "reachable": reachable, "version": version, "auth": _auth_of(rec["id"])}
 
 
 def remote_update_sync(
-    ident: str, *, name: str | None = None, url: str | None = None, token: str | None = None, allow_insecure: bool = False
+    ident: str,
+    *,
+    name: str | None = None,
+    url: str | None = None,
+    token: str | None = None,
+    allow_insecure: bool = False,
 ) -> dict:
     """Edit a remote in place — omitted fields stay, ``token=""`` clears the bearer. Moving
     the url to a new origin without a token CLEARS the stored one (it was issued by the old
@@ -233,7 +244,11 @@ def unpin_sync(agent_id: str) -> dict:
     return supervisor.unpin_agent(agent_id)
 
 
-@op(name="fleet.create", mutates=True, summary="Create a fleet member (blank, or from a bundle archetype), inheriting the host's model connections by default, and start it.")
+@op(
+    name="fleet.create",
+    mutates=True,
+    summary="Create a fleet member (blank, or from a bundle archetype), inheriting the host's model connections by default, and start it.",
+)
 async def create(
     name: str,
     *,
@@ -266,69 +281,128 @@ async def create(
     )
 
 
-@op(name="fleet.remove", mutates=True, summary="Remove a fleet member: stop it if running, then retire it (data kept) or purge its workspace.")
+@op(
+    name="fleet.remove",
+    mutates=True,
+    summary="Remove a fleet member: stop it if running, then retire it (data kept) or purge its workspace.",
+)
 async def remove(ident: str, *, purge: bool = False) -> dict:
     return await asyncio.to_thread(remove_sync, ident, purge=purge)
 
 
-@op(name="fleet.rename", mutates=True, summary="Rename a fleet member's display name (its id, URL slug and data scope never change).")
+@op(
+    name="fleet.rename",
+    mutates=True,
+    summary="Rename a fleet member's display name (its id, URL slug and data scope never change).",
+)
 async def rename(ident: str, new_name: str) -> dict:
     return await asyncio.to_thread(rename_sync, ident, new_name)
 
 
-@op(name="fleet.remotes.add", mutates=True, summary="Register a remote protoAgent as a switchable fleet member (optional bearer, never returned) and probe it.")
+@op(
+    name="fleet.remotes.add",
+    mutates=True,
+    summary="Register a remote protoAgent as a switchable fleet member (optional bearer, never returned) and probe it.",
+)
 async def remotes_add(name: str, url: str, token: str = "", allow_insecure: bool = False) -> dict:
     return await asyncio.to_thread(remote_add_sync, name, url, token, allow_insecure)
 
 
-@op(name="fleet.remotes.update", mutates=True, summary="Edit a remote member's name / url / token in place (omitted fields stay; an empty token clears it) and re-probe it.")
+@op(
+    name="fleet.remotes.update",
+    mutates=True,
+    summary="Edit a remote member's name / url / token in place (omitted fields stay; an empty token clears it) and re-probe it.",
+)
 async def remotes_update(
-    ident: str, *, name: str | None = None, url: str | None = None, token: str | None = None, allow_insecure: bool = False
+    ident: str,
+    *,
+    name: str | None = None,
+    url: str | None = None,
+    token: str | None = None,
+    allow_insecure: bool = False,
 ) -> dict:
-    return await asyncio.to_thread(remote_update_sync, ident, name=name, url=url, token=token, allow_insecure=allow_insecure)
+    return await asyncio.to_thread(
+        remote_update_sync, ident, name=name, url=url, token=token, allow_insecure=allow_insecure
+    )
 
 
-@op(name="fleet.remotes.pair", mutates=True, summary="Pair with a remote protoAgent by claiming a code its operator generated; stores the minted per-device token (never returned) and adds or re-tokens the member.")
+@op(
+    name="fleet.remotes.pair",
+    mutates=True,
+    summary="Pair with a remote protoAgent by claiming a code its operator generated; stores the minted per-device token (never returned) and adds or re-tokens the member.",
+)
 async def remotes_pair(url: str, code: str, name: str | None = None, allow_insecure: bool = False) -> dict:
     return await asyncio.to_thread(remote_pair_sync, url, code, name, allow_insecure)
 
 
-@op(name="fleet.remotes.remove", mutates=True, summary="Unregister a remote fleet member (the remote agent itself is untouched).")
+@op(
+    name="fleet.remotes.remove",
+    mutates=True,
+    summary="Unregister a remote fleet member (the remote agent itself is untouched).",
+)
 async def remotes_remove(ident: str) -> dict:
     return await asyncio.to_thread(remote_remove_sync, ident)
 
 
-@op(name="fleet.order", mutates=True, summary="Persist the fleet roster's display order — a complete permutation of the current member ids.")
+@op(
+    name="fleet.order",
+    mutates=True,
+    summary="Persist the fleet roster's display order — a complete permutation of the current member ids.",
+)
 async def order(order: list[str]) -> list[str]:
     return await asyncio.to_thread(order_sync, order)
 
 
-@op(name="fleet.groups.create", mutates=True, summary="Create an operator switcher group (appended last). Rejects a blank, reserved ('Remote') or duplicate name.")
+@op(
+    name="fleet.groups.create",
+    mutates=True,
+    summary="Create an operator switcher group (appended last). Rejects a blank, reserved ('Remote') or duplicate name.",
+)
 async def groups_create(name: str) -> dict:
     return await asyncio.to_thread(group_create_sync, name)
 
 
-@op(name="fleet.groups.rename", mutates=True, summary="Rename a switcher group in place (its id, and every agent assigned to it, are unchanged).")
+@op(
+    name="fleet.groups.rename",
+    mutates=True,
+    summary="Rename a switcher group in place (its id, and every agent assigned to it, are unchanged).",
+)
 async def groups_rename(group_id: str, name: str) -> dict:
     return await asyncio.to_thread(group_rename_sync, group_id, name)
 
 
-@op(name="fleet.groups.reorder", mutates=True, summary="Persist the switcher group display order — a complete permutation of the current group ids.")
+@op(
+    name="fleet.groups.reorder",
+    mutates=True,
+    summary="Persist the switcher group display order — a complete permutation of the current group ids.",
+)
 async def groups_reorder(order: list[str]) -> list[dict]:
     return await asyncio.to_thread(group_reorder_sync, order)
 
 
-@op(name="fleet.groups.delete", mutates=True, summary="Delete a switcher group; its agents become ungrouped (no agent is removed).")
+@op(
+    name="fleet.groups.delete",
+    mutates=True,
+    summary="Delete a switcher group; its agents become ungrouped (no agent is removed).",
+)
 async def groups_delete(group_id: str) -> dict:
     return await asyncio.to_thread(group_delete_sync, group_id)
 
 
-@op(name="fleet.agent.group", mutates=True, summary="Assign an agent to a switcher group (or none). Remote agents are grouped by their machine and can't be assigned.")
+@op(
+    name="fleet.agent.group",
+    mutates=True,
+    summary="Assign an agent to a switcher group (or none). Remote agents are grouped by their machine and can't be assigned.",
+)
 async def agent_group(agent_id: str, group: str | None = None) -> dict:
     return await asyncio.to_thread(agent_group_sync, agent_id, group)
 
 
-@op(name="fleet.agent.pin", mutates=True, summary="Pin an agent to the top of the switcher (idempotent; keeps its original pin time).")
+@op(
+    name="fleet.agent.pin",
+    mutates=True,
+    summary="Pin an agent to the top of the switcher (idempotent; keeps its original pin time).",
+)
 async def agent_pin(agent_id: str) -> dict:
     return await asyncio.to_thread(pin_sync, agent_id)
 

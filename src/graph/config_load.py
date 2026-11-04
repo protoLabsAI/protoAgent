@@ -599,5 +599,5 @@ def _load_host_layer() -> dict:
         for offset, part in enumerate(parts):
             if part not in node:
                 break
-            node = _mapping(node[part], f"{hp}: {'.'.join(parts[:offset + 1])}")
+            node = _mapping(node[part], f"{hp}: {'.'.join(parts[: offset + 1])}")
     return _filter_to_host_keys(raw)

@@ -22,9 +22,7 @@ def _count(store, table):
 def _indexes(store, table):
     db = sqlite3.connect(store.path)
     try:
-        rows = db.execute(
-            "SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = ?", (table,)
-        ).fetchall()
+        rows = db.execute("SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = ?", (table,)).fetchall()
     finally:
         db.close()
     return {r[0] for r in rows}

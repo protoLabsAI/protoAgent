@@ -47,9 +47,7 @@ _TOKEN_DEF = re.compile(r"^\s*(--pl-[a-z0-9-]+)\s*:", re.M)
 
 def _defined_tokens() -> set[str]:
     return {
-        line.strip()
-        for line in SNAPSHOT.read_text(encoding="utf-8").splitlines()
-        if line.strip().startswith("--pl-")
+        line.strip() for line in SNAPSHOT.read_text(encoding="utf-8").splitlines() if line.strip().startswith("--pl-")
     }
 
 

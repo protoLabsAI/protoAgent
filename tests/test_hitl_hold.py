@@ -106,8 +106,7 @@ def _cfg(session_id: str) -> dict:
 
 async def _frames(message: str, session_id: str, *, request_metadata=None):
     return [
-        frame
-        async for frame in chat_mod._chat_langgraph_stream(message, session_id, request_metadata=request_metadata)
+        frame async for frame in chat_mod._chat_langgraph_stream(message, session_id, request_metadata=request_metadata)
     ]
 
 
@@ -169,9 +168,7 @@ async def test_held_messages_fold_in_order_after_submit(monkeypatch):
     assert steering.pending(sid) == 0  # released — nothing left queued
 
     history = await _history(sid)
-    tool_idx = next(
-        i for i, m in enumerate(history) if isinstance(m, ToolMessage) and "staging" in str(m.content)
-    )
+    tool_idx = next(i for i, m in enumerate(history) if isinstance(m, ToolMessage) and "staging" in str(m.content))
     fold = next(
         (i, m)
         for i, m in enumerate(history)
@@ -211,7 +208,9 @@ async def test_held_messages_released_on_dismiss(monkeypatch):
     history = await _history(sid)
     tool_idx = next(i for i, m in enumerate(history) if isinstance(m, ToolMessage) and "[dismissed]" in str(m.content))
     fold_idx = next(
-        i for i, m in enumerate(history) if isinstance(m, HumanMessage) and "note sent while form open" in str(m.content)
+        i
+        for i, m in enumerate(history)
+        if isinstance(m, HumanMessage) and "note sent while form open" in str(m.content)
     )
     assert tool_idx < fold_idx
     assert await chat_mod._pending_interrupt_value(_cfg(sid)) is None  # the pause is resolved
@@ -384,8 +383,12 @@ async def test_answer_to_an_orphaned_input_required_task_reaches_the_agent(monke
         monkeypatch, [_form_call(), AIMessage(content="Deployed to prod."), AIMessage(content="You said banana.")]
     )
     card = pa.build_agent_card(
-        name="t", description="d", url="http://t/a2a", version="0.0.0",
-        skills=[AgentSkill(id="chat", name="chat", description="d", tags=["chat"])], bearer=False,
+        name="t",
+        description="d",
+        url="http://t/a2a",
+        version="0.0.0",
+        skills=[AgentSkill(id="chat", name="chat", description="d", tags=["chat"])],
+        bearer=False,
     )
     handler = DefaultRequestHandler(
         agent_executor=ProtoAgentExecutor(chat_mod._chat_langgraph_stream),
@@ -448,8 +451,12 @@ async def test_randomized_answer_vs_held_message_race_never_loses_the_answer(mon
         [_form_call(), AIMessage(content="Deployed to prod.")] + [AIMessage(content="ok") for _ in range(6)],
     )
     card = pa.build_agent_card(
-        name="t", description="d", url="http://t/a2a", version="0.0.0",
-        skills=[AgentSkill(id="chat", name="chat", description="d", tags=["chat"])], bearer=False,
+        name="t",
+        description="d",
+        url="http://t/a2a",
+        version="0.0.0",
+        skills=[AgentSkill(id="chat", name="chat", description="d", tags=["chat"])],
+        bearer=False,
     )
     handler = DefaultRequestHandler(
         agent_executor=ProtoAgentExecutor(chat_mod._chat_langgraph_stream),

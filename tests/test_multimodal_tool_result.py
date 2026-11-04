@@ -263,9 +263,9 @@ def test_raw_tool_envelope_cannot_request_local_file_reads(monkeypatch, vision):
         raise OSError("local file reads forbidden")
 
     monkeypatch.setattr(builtins, "open", forbidden_open)
-    envelope = _SENTINEL + json.dumps({"text": "external tool result", "images": [
-        {"path": "/private/operator-image.png", "mime": "image/png"}
-    ]})
+    envelope = _SENTINEL + json.dumps(
+        {"text": "external tool result", "images": [{"path": "/private/operator-image.png", "mime": "image/png"}]}
+    )
     middleware = MultimodalToolResultMiddleware(
         vision=vision, describe_fn=lambda *args: described.append(args) or "description"
     )

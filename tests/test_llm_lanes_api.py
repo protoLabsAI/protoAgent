@@ -129,9 +129,7 @@ async def test_route_and_sdk_report_the_saturated_lane():
         sdk_snap = sdk.llm_lanes()  # in-process read, no HTTP
 
         app = _app()
-        async with httpx.AsyncClient(
-            transport=httpx.ASGITransport(app=app), base_url="http://test"
-        ) as c:
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as c:
             resp = await c.get("/api/telemetry/llm-lanes")
 
         assert resp.status_code == 200
@@ -152,9 +150,7 @@ async def test_route_reports_disabled_when_limiter_off():
     llm_limiter.configure(limit=0)  # the default — limiter disabled
 
     app = _app()
-    async with httpx.AsyncClient(
-        transport=httpx.ASGITransport(app=app), base_url="http://test"
-    ) as c:
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as c:
         resp = await c.get("/api/telemetry/llm-lanes")
     assert resp.status_code == 200
     assert resp.json() == {"enabled": False}
@@ -182,9 +178,7 @@ async def test_route_makes_no_network_call(monkeypatch):
     async with _saturated_lane(clock):
         clock.advance(120.0)
         app = _app()
-        async with httpx.AsyncClient(
-            transport=httpx.ASGITransport(app=app), base_url="http://test"
-        ) as c:
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as c:
             resp = await c.get("/api/telemetry/llm-lanes")
         assert resp.status_code == 200
         assert resp.json()["lanes"][0]["saturated"] is True
@@ -210,10 +204,7 @@ async def test_lane_metrics_update_from_the_limiter_snapshot():
         clock.advance(120.0)
 
         waits_before = (
-            REGISTRY.get_sample_value(
-                f"{p}_llm_queue_wait_seconds_count", {"lane": LANE, "priority": "bulk"}
-            )
-            or 0.0
+            REGISTRY.get_sample_value(f"{p}_llm_queue_wait_seconds_count", {"lane": LANE, "priority": "bulk"}) or 0.0
         )
         timeouts_before = REGISTRY.get_sample_value(f"{p}_llm_queue_timeouts_total", {"lane": LANE}) or 0.0
 
@@ -226,9 +217,7 @@ async def test_lane_metrics_update_from_the_limiter_snapshot():
         assert REGISTRY.get_sample_value(f"{p}_llm_inflight", {"lane": LANE}) == 1.0
         assert REGISTRY.get_sample_value(f"{p}_llm_queue_depth", {"lane": LANE, "priority": "bulk"}) == 3.0
         assert REGISTRY.get_sample_value(f"{p}_llm_queue_depth", {"lane": LANE, "priority": "default"}) == 1.0
-        assert (
-            REGISTRY.get_sample_value(f"{p}_llm_queue_depth", {"lane": LANE, "priority": "interactive"}) == 1.0
-        )
+        assert REGISTRY.get_sample_value(f"{p}_llm_queue_depth", {"lane": LANE, "priority": "interactive"}) == 1.0
         # Histogram + counter advanced by exactly one observation/increment.
         assert (
             REGISTRY.get_sample_value(f"{p}_llm_queue_wait_seconds_count", {"lane": LANE, "priority": "bulk"})

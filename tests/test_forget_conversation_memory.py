@@ -79,19 +79,29 @@ def test_forget_conversation_memory_removes_exactly_the_chats_rows(tmp_path):
     store.add_chunk(
         "archive", domain="conversation", namespace="chat-archive:s1", source="a2a:s1", source_type="conversation"
     )
-    store.add_chunk("pre-provenance archive", domain="conversation", namespace="chat-archive:s1", source_type="conversation")
+    store.add_chunk(
+        "pre-provenance archive", domain="conversation", namespace="chat-archive:s1", source_type="conversation"
+    )
     store.add_chunk("summary", domain="conversation", source="a2a:s1", source_type="harvest")
     store.add_chunk("fact", domain="fact", source="a2a:s1", source_type="extracted")
     store.add_chunk("legacy-thread summary", domain="conversation", source="chat:s1", source_type="harvest")
     store.add_chunk("goal-iteration fact", domain="fact", source="a2a:s1:goal-iter-3", source_type="extracted")
     # Not the chat's to forget. All stay.
     keep = [
-        ("remembered on request", {"domain": "general", "source": "s1", "source_type": "conversation"}),  # memory_ingest
+        (
+            "remembered on request",
+            {"domain": "general", "source": "s1", "source_type": "conversation"},
+        ),  # memory_ingest
         ("background report", {"domain": "conversation", "source": "s1", "source_type": "background_report"}),
         ("pre-provenance fact", {"domain": "fact", "source": "harvest", "source_type": "extracted"}),
         (
             "another chat's archive",
-            {"domain": "conversation", "namespace": "chat-archive:s10", "source": "a2a:s10", "source_type": "conversation"},
+            {
+                "domain": "conversation",
+                "namespace": "chat-archive:s10",
+                "source": "a2a:s10",
+                "source_type": "conversation",
+            },
         ),
         ("another chat's fact", {"domain": "fact", "source": "a2a:s10", "source_type": "extracted"}),
         ("attachment", {"domain": "general", "namespace": "attach:s1"}),  # the route's own cleanup, not this helper's
@@ -296,7 +306,10 @@ def test_sweep_skips_in_flight_and_undecidable_forgets(tmp_path):
 
     ch.FORGETS_IN_FLIGHT.add("s1")
     try:
-        assert ch.sweep_orphaned_forgets(store, retirement_incomplete=lambda s, a: False) == {"finished": 0, "restored": 0}
+        assert ch.sweep_orphaned_forgets(store, retirement_incomplete=lambda s, a: False) == {
+            "finished": 0,
+            "restored": 0,
+        }
     finally:
         ch.FORGETS_IN_FLIGHT.discard("s1")
 

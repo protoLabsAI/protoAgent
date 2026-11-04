@@ -88,7 +88,6 @@ def _build_checkpointer(config):
         return MemorySaver()
 
 
-
 #: Filename for a per-agent store in its OWN instance-private store dir. A constant, because
 #: the dir is already the scope (``instance_root/<store>/``) — see ``_agent_store_db``.
 _AGENT_DB = "agent.db"

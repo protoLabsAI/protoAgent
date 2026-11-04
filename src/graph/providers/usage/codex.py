@@ -23,8 +23,9 @@ def _windows(rate, prefix, scope=None):
         binding = node.get("binding", False)
         if not isinstance(binding, bool):
             raise ValueError("invalid binding")
-        windows.append(Window(f"{prefix}:{name}", kind, int(seconds), used,
-                              _reset(node["reset_at"]), status, scope, binding))
+        windows.append(
+            Window(f"{prefix}:{name}", kind, int(seconds), used, _reset(node["reset_at"]), status, scope, binding)
+        )
     if not windows:
         raise ValueError("missing windows")
     return windows
@@ -53,5 +54,10 @@ def parse_codex_usage(payload, *, account: Account | None = None) -> Account:
 
 
 def fetch_codex_usage(*, http=None) -> Account:
-    return _fetch("openai-codex", "https://chatgpt.com/backend-api/wham/usage",
-                  oauth.peek_codex_access_token, parse_codex_usage, http)
+    return _fetch(
+        "openai-codex",
+        "https://chatgpt.com/backend-api/wham/usage",
+        oauth.peek_codex_access_token,
+        parse_codex_usage,
+        http,
+    )

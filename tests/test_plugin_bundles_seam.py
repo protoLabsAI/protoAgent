@@ -41,7 +41,13 @@ _MOVED = (
 )
 # Module-level constants/data the moved code may read by bare name (their one home is
 # bundles.py; nothing patches them). Every moved FUNCTION is reached via ``_inst()``.
-_BARE_OK = {"BUNDLE_FILENAME", "CONFIG_INPUT_TYPES", "CONFIG_INPUT_RESERVED_SECTIONS", "_CONFIG_INPUT_KEY_RE", "_ARCHETYPE_KEYS"}
+_BARE_OK = {
+    "BUNDLE_FILENAME",
+    "CONFIG_INPUT_TYPES",
+    "CONFIG_INPUT_RESERVED_SECTIONS",
+    "_CONFIG_INPUT_KEY_RE",
+    "_ARCHETYPE_KEYS",
+}
 
 
 def test_bundles_never_from_imports_installer_names():

@@ -198,6 +198,7 @@ def sync_self_display_name(new_name: str) -> str | None:
     atomic_write(root / "workspace.yaml", yaml.safe_dump(rec, sort_keys=False))
     return None
 
+
 def capability_contract_warning(bound_tool_names) -> str | None:
     """Warn when THIS agent's persona commits to actions it has no tool for (#2277).
 
@@ -336,7 +337,9 @@ def _port_allocation_lock():
     try:
         lock.acquire(timeout=_PORT_LOCK_TIMEOUT_S)
     except Timeout as exc:
-        raise WorkspaceError("another agent is being created on this machine right now — try again in a moment") from exc
+        raise WorkspaceError(
+            "another agent is being created on this machine right now — try again in a moment"
+        ) from exc
     try:
         yield
     finally:
@@ -699,9 +702,7 @@ def create(
 
             try:
                 oauth_source = Path(inherit_model).expanduser()
-                transfer = promote_instance_oauth_to_box(
-                    oauth_source if oauth_source.is_dir() else oauth_source.parent
-                )
+                transfer = promote_instance_oauth_to_box(oauth_source if oauth_source.is_dir() else oauth_source.parent)
                 # A store that could not join the shared tier is reported, not fatal: the
                 # sister still boots on the machine-wide login. Killing the create here
                 # left the operator with no reachable remedy (#3112 follow-up).
@@ -1071,7 +1072,9 @@ def missing_required_config_inputs(cfg: Path, lock: Path, overlay: Mapping[str, 
     return missing
 
 
-def copy_host_delegates(cfg: Path, lock: Path, values: Mapping[str, object] | None, host_config_dir: str | None) -> list[str]:
+def copy_host_delegates(
+    cfg: Path, lock: Path, values: Mapping[str, object] | None, host_config_dir: str | None
+) -> list[str]:
     """Carry the delegate(s) the operator PICKED in a ``type: delegate`` config input
     from the host's registry into the member's own — entry into the member's
     ``langgraph-config.yaml`` ``delegates:`` list, its secrets into the member's
@@ -1389,6 +1392,7 @@ def _overlay_model(cfg: Path, ws: Path, src: str) -> None:
     if inherited_secrets:
         save_secrets(inherited_secrets, cfg.parent / "secrets.yaml")
 
+
 def _stamp_identity(cfg: Path, name: str, shared_skills: bool, *, instance_id: str | None = None) -> None:
     """Force identity.name (display) + instance.id (the opaque data-scope key) on a
     (possibly cloned) config, and optionally set skills.shared — comment-preserving."""
@@ -1422,7 +1426,9 @@ _LOG_LINE = re.compile(r"^\d{4}-\d{2}-\d{2}[ T][\d:.,]+\s+(?:\[?(?:DEBUG|INFO|WA
 _REASON_MAX = 1500
 
 
-def install_failure_reason(stdout: str | bytes | None, stderr: str | bytes | None, returncode: int | None = None) -> str:
+def install_failure_reason(
+    stdout: str | bytes | None, stderr: str | bytes | None, returncode: int | None = None
+) -> str:
     """The one line that says WHY a ``plugin install`` subprocess failed.
 
     The child's stderr interleaves its own log stream (httpx narrates every GET at INFO) with the
@@ -1494,7 +1500,9 @@ def _install_bundle_into(ws: Path, bundle: str, *, ref: str | None = None) -> li
             timeout=_BUNDLE_INSTALL_TIMEOUT_S,
         )
     except subprocess.TimeoutExpired as exc:
-        _log.warning("bundle install of %s timed out after %ss\n%s", bundle, _BUNDLE_INSTALL_TIMEOUT_S, _tail(exc.stderr))
+        _log.warning(
+            "bundle install of %s timed out after %ss\n%s", bundle, _BUNDLE_INSTALL_TIMEOUT_S, _tail(exc.stderr)
+        )
         raise WorkspaceError(
             f"bundle install failed: timed out after {_BUNDLE_INSTALL_TIMEOUT_S}s installing {bundle}"
         ) from None
@@ -1502,14 +1510,20 @@ def _install_bundle_into(ws: Path, bundle: str, *, ref: str | None = None) -> li
         reason = install_failure_reason(proc.stdout, proc.stderr, proc.returncode)
         # The FULL output goes to the hub log — the 400 detail carries only the reason.
         _log.warning(
-            "bundle install of %s failed (exit %s): %s\n%s", bundle, proc.returncode, reason, _tail(proc.stderr, proc.stdout)
+            "bundle install of %s failed (exit %s): %s\n%s",
+            bundle,
+            proc.returncode,
+            reason,
+            _tail(proc.stderr, proc.stdout),
         )
         raise WorkspaceError(f"bundle install failed: {reason}")
     import json
 
     lock = ws / "plugins.lock"
     try:
-        return [p["id"] for p in json.loads(lock.read_text(encoding="utf-8")).get("plugins", [])] if lock.exists() else []
+        return (
+            [p["id"] for p in json.loads(lock.read_text(encoding="utf-8")).get("plugins", [])] if lock.exists() else []
+        )
     except (json.JSONDecodeError, OSError):
         return []
 

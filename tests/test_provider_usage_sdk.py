@@ -88,7 +88,9 @@ def test_name_lookup_resolves_against_configured_roster(monkeypatch):
 
 
 def _window(wid: str, used: float, *, status: str = "ok", scope: dict | None = None) -> Window:
-    return Window(id=wid, kind="session", window_seconds=18000, used_pct=used, resets_at=RESET, status=status, scope=scope)
+    return Window(
+        id=wid, kind="session", window_seconds=18000, used_pct=used, resets_at=RESET, status=status, scope=scope
+    )
 
 
 def _snapshot(provider_id: str, windows: list[Window], *, status: str = "ok", stale: bool = False) -> dict:

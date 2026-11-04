@@ -325,26 +325,20 @@ class TestScheduleTaskTool:
     async def test_max_fires_passed_through(self):
         # r3 (tool side): max_fires rides the job to the backend.
         sched = _FakeScheduler()
-        out = await _tool(sched, "schedule_task").ainvoke(
-            {"prompt": "check", "when": "0 * * * *", "max_fires": 5}
-        )
+        out = await _tool(sched, "schedule_task").ainvoke({"prompt": "check", "when": "0 * * * *", "max_fires": 5})
         assert "Scheduled job" in out
         assert sched.last_max_fires == 5
 
     async def test_unparseable_ttl_returns_validation_error(self):
         # r7: "abc" is rejected before anything is scheduled.
         sched = _FakeScheduler()
-        out = await _tool(sched, "schedule_task").ainvoke(
-            {"prompt": "check", "when": "0 * * * *", "ttl": "abc"}
-        )
+        out = await _tool(sched, "schedule_task").ainvoke({"prompt": "check", "when": "0 * * * *", "ttl": "abc"})
         assert out.startswith("Error:") and "ttl" in out
         assert sched.last_ttl == "__unset__"  # add_job never called
 
     async def test_nonpositive_max_fires_returns_error(self):
         sched = _FakeScheduler()
-        out = await _tool(sched, "schedule_task").ainvoke(
-            {"prompt": "check", "when": "0 * * * *", "max_fires": 0}
-        )
+        out = await _tool(sched, "schedule_task").ainvoke({"prompt": "check", "when": "0 * * * *", "max_fires": 0})
         assert out.startswith("Error:") and "max_fires" in out
         assert sched.last_max_fires == "__unset__"
 

@@ -73,6 +73,7 @@ def cached_peers() -> list[dict]:
     """Currently-cached discovery candidates (within TTL). Best-effort, may be stale."""
     return [peer for _, peer in _cached_peers()]
 
+
 # App-layer defaults for the discovery knobs (Host layer, ADR 0047 D8) — used when no
 # live config is loaded (CLI/test context). Mirror the LangGraphConfig dataclass defaults.
 _DEFAULT_PORT_RANGE = (7860, 7910)
@@ -183,7 +184,11 @@ def advertise(name: str, port: int, bind: str | None = None) -> None:
         return
     ip = _advertise_address(bind)
     if ip is None:
-        log.info("[discovery] %s is bound to loopback (%s) — nothing on the network can reach it, not advertising", name, bind)
+        log.info(
+            "[discovery] %s is bound to loopback (%s) — nothing on the network can reach it, not advertising",
+            name,
+            bind,
+        )
         return
     try:
         from zeroconf import ServiceInfo, Zeroconf

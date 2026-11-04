@@ -243,8 +243,7 @@ def migrate_legacy_auto_vacuum(
             return result
         result.update(status="migrated")
         _log.warning(
-            "[checkpoint-migrate] migrated %s: %s -> %s in %.1fs (auto_vacuum=INCREMENTAL; "
-            "later prunes now shrink it)",
+            "[checkpoint-migrate] migrated %s: %s -> %s in %.1fs (auto_vacuum=INCREMENTAL; later prunes now shrink it)",
             db,
             _human(result["size_before"]),
             _human(result["size_after"]),
@@ -313,8 +312,10 @@ def _run_compact(args) -> int:
         ns = f" ns={t['ns']!r}" if t["ns"] else ""
         print(f"    {t['thread_id']}{ns}: {t['delete']}/{t['checkpoints']} rows, {_human(t['bytes'])}")
     if plan["auto_vacuum"] != 2:
-        print("  note: auto_vacuum is not INCREMENTAL — freed space is reused but the file only shrinks after "
-              "`protoagent checkpoint migrate` with the agent stopped")
+        print(
+            "  note: auto_vacuum is not INCREMENTAL — freed space is reused but the file only shrinks after "
+            "`protoagent checkpoint migrate` with the agent stopped"
+        )
     if args.apply:
         r = plan["result"]
         print(

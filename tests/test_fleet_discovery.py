@@ -109,7 +109,7 @@ _TS_STATUS = {
         "k1": {"HostName": "ava", "Online": True, "TailscaleIPs": ["100.101.189.45", "fd7a::1"]},
         "k2": {"HostName": "beefcake", "Online": False, "TailscaleIPs": ["100.77.164.70"]},
         "k3": {"HostName": "no-ips", "Online": True, "TailscaleIPs": []},
-    }
+    },
 }
 
 

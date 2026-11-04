@@ -89,8 +89,11 @@ def test_an_advertised_window_alone_never_sizes_a_request():
     # entry says 196,608 in front of a 262,144-token vLLM. Neither is the shared limit, so a
     # call that fits today must go out untouched however big it is.
     model = _ReasoningChatOpenAI(
-        model="protolabs/smart", api_key="sk-test", base_url="http://gw.test/v1",
-        max_tokens=32_768, profile={"max_input_tokens": 196_608},
+        model="protolabs/smart",
+        api_key="sk-test",
+        base_url="http://gw.test/v1",
+        max_tokens=32_768,
+        profile={"max_input_tokens": 196_608},
     )
     messages = [SystemMessage("You are the reviewer."), HumanMessage("x" * 700_000)]
     _calibrate(model._get_request_payload(messages), 0.25)
@@ -223,7 +226,9 @@ def test_a_sizing_error_never_breaks_the_request(monkeypatch):
         raise RuntimeError("sizing bug")
 
     monkeypatch.setattr(llm, "_request_chars", boom)
-    model = _ReasoningChatOpenAI(model="protolabs/smart", api_key="sk-test", base_url="http://gw.test/v1", max_tokens=32_768)
+    model = _ReasoningChatOpenAI(
+        model="protolabs/smart", api_key="sk-test", base_url="http://gw.test/v1", max_tokens=32_768
+    )
     assert model._get_request_payload([HumanMessage("hi")])["max_completion_tokens"] == 32_768
 
 
@@ -235,7 +240,11 @@ def _sse(prompt_tokens: int) -> bytes:
     frames = [
         {**base, "choices": [{"index": 0, "delta": {"role": "assistant", "content": "ok"}, "finish_reason": None}]},
         {**base, "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}]},
-        {**base, "choices": [], "usage": {"prompt_tokens": prompt_tokens, "completion_tokens": 1, "total_tokens": prompt_tokens + 1}},
+        {
+            **base,
+            "choices": [],
+            "usage": {"prompt_tokens": prompt_tokens, "completion_tokens": 1, "total_tokens": prompt_tokens + 1},
+        },
     ]
     return "".join(f"data: {json.dumps(f)}\n\n" for f in frames).encode() + b"data: [DONE]\n\n"
 
@@ -257,8 +266,13 @@ def _gateway(window: int, ratio: float, sent: list):
 
 def _model(handler) -> _ReasoningChatOpenAI:
     return _ReasoningChatOpenAI(
-        model="protolabs/smart", api_key="sk-test", base_url="http://gw.test/v1",
-        max_tokens=16_384, streaming=True, stream_usage=True, max_retries=0,
+        model="protolabs/smart",
+        api_key="sk-test",
+        base_url="http://gw.test/v1",
+        max_tokens=16_384,
+        streaming=True,
+        stream_usage=True,
+        max_retries=0,
         http_async_client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
     )
 

@@ -69,8 +69,20 @@ CONFIG_INPUT_TYPES = ("string", "path", "delegate", "boolean")
 # form. Plugin sections (`project_board.*`, `github.*`) are what the mechanism is for.
 CONFIG_INPUT_RESERVED_SECTIONS = frozenset(
     {
-        "model", "auth", "network", "security", "egress", "plugins", "filesystem",
-        "projects", "onboarding", "delegates", "identity", "instance", "secrets", "mcp",
+        "model",
+        "auth",
+        "network",
+        "security",
+        "egress",
+        "plugins",
+        "filesystem",
+        "projects",
+        "onboarding",
+        "delegates",
+        "identity",
+        "instance",
+        "secrets",
+        "mcp",
         "self_improvement",
     }
 )
@@ -299,7 +311,10 @@ def _install_bundle(
                     _inst().log.info(
                         "[plugins] bundle %s: member %s stays at %s — %s is outside the "
                         "compatible range; bump the manifest pin deliberately to adopt it",
-                        bid, entry.get("id", "?"), member_ref, latest,
+                        bid,
+                        entry.get("id", "?"),
+                        member_ref,
+                        latest,
                     )
             except Exception:  # noqa: BLE001 — best-effort; fall back to the manifest pin
                 pass
@@ -393,7 +408,9 @@ def _install_bundle(
         {"url": bundle_url, "sha": bundle_sha, "id": bid},
         f"installed bundle {bid} ({len(installed)} plugin(s))",
     )
-    _inst().log.info("[plugins] installed bundle %s@%s (%d plugins) from %s", bid, bundle_sha[:10], len(installed), bundle_url)
+    _inst().log.info(
+        "[plugins] installed bundle %s@%s (%d plugins) from %s", bid, bundle_sha[:10], len(installed), bundle_url
+    )
     summary = {
         "bundle": bid,
         "name": bundle.get("name", ""),

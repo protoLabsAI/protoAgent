@@ -154,7 +154,12 @@ def publish_fs_changed(project: str, paths: list[str], *, source: str, target: s
         # The topic is a literal so docs/reference/plugin-events.md's scan catalogs it.
         publish(
             "fs.changed",
-            {"project": project, "paths": list(paths)[:MAX_PATHS], "source": source, **({"target": target} if target else {})},
+            {
+                "project": project,
+                "paths": list(paths)[:MAX_PATHS],
+                "source": source,
+                **({"target": target} if target else {}),
+            },
             retain=False,
         )
         return True

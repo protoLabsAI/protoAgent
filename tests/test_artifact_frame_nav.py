@@ -144,7 +144,10 @@ def test_only_a_video_file_render_asks_for_fullscreen(monkeypatch, tmp_path):
     # Every other navigation passes no grant (the fallback card, model code).
     assert "frameNav.set(fileCard(ctx.v, note));" in js
     # The static frame in shell.html stays without `allow` — the grant is per navigation.
-    assert '<iframe id="frame" sandbox="allow-scripts allow-pointer-lock" referrerpolicy="no-referrer"></iframe>' in art._SHELL_HTML
+    assert (
+        '<iframe id="frame" sandbox="allow-scripts allow-pointer-lock" referrerpolicy="no-referrer"></iframe>'
+        in art._SHELL_HTML
+    )
 
 
 def test_every_srcdoc_swap_goes_through_the_navigator(monkeypatch, tmp_path):

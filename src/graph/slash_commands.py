@@ -57,6 +57,7 @@ def _reap_stale_plugin_forms() -> None:
     for cid in [c for c, p in _PLUGIN_FORM_CALLBACKS.items() if now - p.created > _PLUGIN_FORM_TTL_S]:
         _PLUGIN_FORM_CALLBACKS.pop(cid, None)
 
+
 # Slash tokens already warned as shadowed (a skill whose token a workflow/subagent
 # claims) — warn once, not on every resolve.
 _warned_shadowed_skills: set[str] = set()

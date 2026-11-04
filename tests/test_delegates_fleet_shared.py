@@ -30,8 +30,18 @@ def box(tmp_path, monkeypatch):
     monkeypatch.setattr(cio, "config_yaml_path", lambda: leaf / "langgraph-config.yaml")
     monkeypatch.setattr(cio, "secrets_yaml_path", lambda: leaf / "secrets.yaml")
     # load/save the leaf doc against the real file
-    monkeypatch.setattr(cio, "load_yaml_doc", lambda path=None: yaml.safe_load((path or leaf / "langgraph-config.yaml").read_text()) or {})
-    monkeypatch.setattr(cio, "save_yaml_doc", lambda doc, path=None: (path or leaf / "langgraph-config.yaml").write_text(yaml.safe_dump(doc, sort_keys=False)))
+    monkeypatch.setattr(
+        cio,
+        "load_yaml_doc",
+        lambda path=None: yaml.safe_load((path or leaf / "langgraph-config.yaml").read_text()) or {},
+    )
+    monkeypatch.setattr(
+        cio,
+        "save_yaml_doc",
+        lambda doc, path=None: (path or leaf / "langgraph-config.yaml").write_text(
+            yaml.safe_dump(doc, sort_keys=False)
+        ),
+    )
 
     def _load_secrets(path=None):
         p = path or leaf / "secrets.yaml"
@@ -53,8 +63,14 @@ def box(tmp_path, monkeypatch):
 
 def test_host_scoped_entry_lands_in_the_box_and_reads_back_on_every_instance(box):
     store.upsert_delegate(
-        {"name": "cc", "type": "acp", "command": "/abs/claude-agent-acp", "workdir": "/w", "scope": "host",
-         "env": {"ANTHROPIC_API_KEY": "sk-shared"}}
+        {
+            "name": "cc",
+            "type": "acp",
+            "command": "/abs/claude-agent-acp",
+            "workdir": "/w",
+            "scope": "host",
+            "env": {"ANTHROPIC_API_KEY": "sk-shared"},
+        }
     )
     host = yaml.safe_load((box["root"] / "host-config.yaml").read_text())
     assert [d["name"] for d in host["delegates"]] == ["cc"]
@@ -94,8 +110,10 @@ def test_hub_moves_an_entry_between_layers_on_scope_change(box):
     assert store.read_delegates_raw()[0]["scope"] == "agent"
     store.upsert_delegate({"name": "cc", "type": "acp", "command": "/x", "workdir": "/w", "scope": "host"})
     assert [d["scope"] for d in store.read_delegates_raw()] == ["host"]
-    assert "delegates" not in yaml.safe_load((box["leaf"] / "langgraph-config.yaml").read_text()) or \
-        yaml.safe_load((box["leaf"] / "langgraph-config.yaml").read_text())["delegates"] == []
+    assert (
+        "delegates" not in yaml.safe_load((box["leaf"] / "langgraph-config.yaml").read_text())
+        or yaml.safe_load((box["leaf"] / "langgraph-config.yaml").read_text())["delegates"] == []
+    )
     store.upsert_delegate({"name": "cc", "type": "acp", "command": "/x", "workdir": "/w", "scope": "agent"})
     assert [d["scope"] for d in store.read_delegates_raw()] == ["agent"]
     assert yaml.safe_load((box["root"] / "host-config.yaml").read_text())["delegates"] == []
@@ -113,7 +131,9 @@ def test_unreadable_or_absent_box_layer_contributes_nothing(box):
 def test_scope_flip_carries_the_stored_secret_both_ways(box):
     """Flipping *Share with fleet* on an entry whose key the form left blank ("keep
     stored") must move the credential with it — never leave no layer holding it."""
-    store.upsert_delegate({"name": "gw", "type": "openai", "api_base": "https://gw/v1", "model": "m", "api_key": "sk-1"})
+    store.upsert_delegate(
+        {"name": "gw", "type": "openai", "api_base": "https://gw/v1", "model": "m", "api_key": "sk-1"}
+    )
     assert yaml.safe_load((box["leaf"] / "secrets.yaml").read_text())["delegate_secrets"] == {"gw.api_key": "sk-1"}
     # → host, key omitted
     store.upsert_delegate({"name": "gw", "type": "openai", "api_base": "https://gw/v1", "model": "m", "scope": "host"})
@@ -126,7 +146,9 @@ def test_scope_flip_carries_the_stored_secret_both_ways(box):
     assert yaml.safe_load((box["leaf"] / "secrets.yaml").read_text())["delegate_secrets"] == {"gw.api_key": "sk-1"}
     assert not (yaml.safe_load((box["root"] / "host-secrets.yaml").read_text()) or {}).get("delegate_secrets")
     # a supplied key on the flip wins over the migrated one
-    store.upsert_delegate({"name": "gw", "type": "openai", "api_base": "https://gw/v1", "model": "m", "api_key": "sk-2", "scope": "host"})
+    store.upsert_delegate(
+        {"name": "gw", "type": "openai", "api_base": "https://gw/v1", "model": "m", "api_key": "sk-2", "scope": "host"}
+    )
     assert yaml.safe_load((box["root"] / "host-secrets.yaml").read_text())["delegate_secrets"] == {"gw.api_key": "sk-2"}
 
 
@@ -149,7 +171,16 @@ def test_host_write_preserves_other_keys_and_refuses_an_unparseable_file(box):
 def test_a_shadow_does_not_borrow_the_shared_secret(box, monkeypatch):
     """A member that shadows a shared coder to opt OUT of its key must not have the
     host key injected into its own entry."""
-    store.upsert_delegate({"name": "cc", "type": "acp", "command": "/hub", "workdir": "/w", "scope": "host", "env": {"ANTHROPIC_API_KEY": "sk-shared"}})
+    store.upsert_delegate(
+        {
+            "name": "cc",
+            "type": "acp",
+            "command": "/hub",
+            "workdir": "/w",
+            "scope": "host",
+            "env": {"ANTHROPIC_API_KEY": "sk-shared"},
+        }
+    )
     monkeypatch.setattr(store, "can_write_host_layer", lambda: False)
     store.upsert_delegate({"name": "cc", "type": "acp", "command": "/mine", "workdir": "/w"})
     merged = store.merged_delegates()

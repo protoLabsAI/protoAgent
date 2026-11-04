@@ -125,7 +125,13 @@ def _sse_data(text):
 def test_openai_completion_reports_real_usage(monkeypatch):
     # ADR 0075 D4: /v1 usage is no longer stubbed — it reflects the turn's token accounting
     # attached by server.chat (summed over lead + goal continuations + subagents).
-    reply = [{"role": "assistant", "content": "hi", "usage": {"prompt_tokens": 12, "completion_tokens": 8, "total_tokens": 20}}]
+    reply = [
+        {
+            "role": "assistant",
+            "content": "hi",
+            "usage": {"prompt_tokens": 12, "completion_tokens": 8, "total_tokens": 20},
+        }
+    ]
     c = _client(monkeypatch, chat_reply=reply)
     body = c.post("/v1/chat/completions", json={"messages": [{"role": "user", "content": "hi"}]}).json()
     assert body["usage"] == {"prompt_tokens": 12, "completion_tokens": 8, "total_tokens": 20}
@@ -159,13 +165,19 @@ def test_openai_completion_usage_defaults_to_zero(monkeypatch):
 
 
 def test_openai_streaming_usage_only_when_opted_in(monkeypatch):
-    reply = [{"role": "assistant", "content": "hi", "usage": {"prompt_tokens": 5, "completion_tokens": 3, "total_tokens": 8}}]
+    reply = [
+        {"role": "assistant", "content": "hi", "usage": {"prompt_tokens": 5, "completion_tokens": 3, "total_tokens": 8}}
+    ]
 
     # stream_options.include_usage → a final chunk with empty choices carrying usage.
     c = _client(monkeypatch, chat_reply=reply)
     r = c.post(
         "/v1/chat/completions",
-        json={"messages": [{"role": "user", "content": "hi"}], "stream": True, "stream_options": {"include_usage": True}},
+        json={
+            "messages": [{"role": "user", "content": "hi"}],
+            "stream": True,
+            "stream_options": {"include_usage": True},
+        },
     )
     frames = _sse_data(r.text)
     usage_frames = [f for f in frames if "usage" in f]
@@ -358,7 +370,9 @@ def test_delete_session_forget_with_harvest_keeps_exactly_what_the_harvest_produ
 
     assert body == {"deleted": True, "harvested": True, "forgotten": 3}
     assert calls == [("a2a:s1", True), ("chat:s1", False)]
-    assert _contents(store) == sorted(["fresh summary", "The user's favourite colour is teal.", "The user lives in Lisbon."])
+    assert _contents(store) == sorted(
+        ["fresh summary", "The user's favourite colour is teal.", "The user lives in Lisbon."]
+    )
     (fact,) = [ch for ch in store.list_chunks(limit=500) if "teal" in ch.content]
     assert fact.source == "a2a:s1" and fact.invalidated_at is None
 
@@ -403,7 +417,9 @@ def test_delete_session_forget_retry_keeps_the_first_attempts_harvest(monkeypatc
     body = c.delete("/api/chat/sessions/s1?forget=true&harvest=true").json()  # the retry
 
     assert body["forgotten"] == 3
-    assert _contents(store) == sorted(["fresh summary", "The user's favourite colour is teal.", "The user lives in Lisbon."])
+    assert _contents(store) == sorted(
+        ["fresh summary", "The user's favourite colour is teal.", "The user lives in Lisbon."]
+    )
 
 
 def test_delete_session_forget_failure_fails_the_delete(monkeypatch, tmp_path):
@@ -469,7 +485,9 @@ def test_delete_session_double_failure_retry_keeps_the_harvest(monkeypatch, tmp_
     fail["retire"] = False
     c.delete("/api/chat/sessions/s1?forget=true&harvest=true")  # attempt 3
 
-    assert _contents(store) == sorted(["fresh summary", "The user's favourite colour is teal.", "The user lives in Lisbon."])
+    assert _contents(store) == sorted(
+        ["fresh summary", "The user's favourite colour is teal.", "The user lives in Lisbon."]
+    )
 
 
 def test_delete_session_resumed_marker_with_incomplete_retirement_still_restores(monkeypatch, tmp_path):
@@ -841,11 +859,16 @@ def test_rewind_session_route(monkeypatch):
 
     monkeypatch.setattr(cr, "rewind_session", _fake_rewind)
     c = _client(monkeypatch)
-    body = c.post(
-        "/api/chat/sessions/s1/rewind", json={"message_id": "m9", "content": "the answer"}
-    ).json()
+    body = c.post("/api/chat/sessions/s1/rewind", json={"message_id": "m9", "content": "the answer"}).json()
     assert seen == [
-        {"session_id": "s1", "message_id": "m9", "index": None, "content": "the answer", "occurrence": None, "before": False}
+        {
+            "session_id": "s1",
+            "message_id": "m9",
+            "index": None,
+            "content": "the answer",
+            "occurrence": None,
+            "before": False,
+        }
     ]
     # The Regenerate path (#2491) requests the exclusive cut.
     c.post("/api/chat/sessions/s1/rewind", json={"content": "q", "before": True})
@@ -1061,9 +1084,7 @@ def test_delegation_list_and_cancel_roundtrip(monkeypatch):
 
     f = _Fake()
     delegations.register("s1", "d1", f, label="research X")
-    assert c.get("/api/chat/sessions/s1/delegations").json() == {
-        "running": [{"id": "d1", "label": "research X"}]
-    }
+    assert c.get("/api/chat/sessions/s1/delegations").json() == {"running": [{"id": "d1", "label": "research X"}]}
     # Cancel the live delegation → cancelled; still counted (the tool's finally
     # unregisters once the task actually unwinds, not the route).
     assert c.post("/api/chat/sessions/s1/delegations/d1/cancel").json() == {"cancelled": True, "running": 1}
@@ -1198,7 +1219,13 @@ def test_fork_session_route(monkeypatch):
 
     async def _fake_fork(session_id, new_session_id, **kw):
         seen.append((session_id, new_session_id, kw.get("content"), kw.get("occurrence")))
-        return {"found": True, "kept": 4, "discarded": 2, "reason": "", "message": "Forked with 4 message(s) of real context."}
+        return {
+            "found": True,
+            "kept": 4,
+            "discarded": 2,
+            "reason": "",
+            "message": "Forked with 4 message(s) of real context.",
+        }
 
     monkeypatch.setattr(cr, "fork_session", _fake_fork)
     c = _client(monkeypatch)
@@ -1421,7 +1448,9 @@ def test_session_turns_reads_the_task_store(monkeypatch, tmp_path):
                 # Inserted in CREATION order, as the SDK store writes them (a task row is
                 # inserted once, when the task starts) — the route orders by that (#3963).
                 [
-                    row("t-1", 1, "TASK_STATE_COMPLETED", "first answer", history=[{"role": "ROLE_AGENT", "parts": []}]),
+                    row(
+                        "t-1", 1, "TASK_STATE_COMPLETED", "first answer", history=[{"role": "ROLE_AGENT", "parts": []}]
+                    ),
                     row("t-2", 5, "TASK_STATE_COMPLETED", "second answer"),
                     row("t-3", 5, "TASK_STATE_WORKING", "latest partial"),
                     {  # a different session must not leak in
@@ -1540,6 +1569,7 @@ def test_chat_tombstones_are_not_count_evicted(monkeypatch, tmp_path):
     from sqlalchemy.ext.asyncio import create_async_engine
 
     engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path}/bounded-tombstones.db")
+
     async def _record_and_count():
         async with engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
@@ -1547,10 +1577,7 @@ def test_chat_tombstones_are_not_count_evicted(monkeypatch, tmp_path):
             deleted_at = datetime(2026, 8, 19, 12, 0, tzinfo=timezone.utc)
             await conn.execute(
                 insert(table),
-                [
-                    {"context_id": f"chat-{index:05d}", "deleted_at": deleted_at}
-                    for index in range(10_001)
-                ],
+                [{"context_id": f"chat-{index:05d}", "deleted_at": deleted_at} for index in range(10_001)],
             )
             # This insert would have triggered the old 10k count eviction.
             await cr._record_chat_tombstone(conn, "chat-new")
@@ -1569,9 +1596,7 @@ def test_chat_tombstones_are_not_count_evicted(monkeypatch, tmp_path):
                 },
             )
             count = await conn.scalar(select(func.count()).select_from(table))
-            oldest = await conn.scalar(
-                select(table.c.context_id).where(table.c.context_id == "chat-00000")
-            )
+            oldest = await conn.scalar(select(table.c.context_id).where(table.c.context_id == "chat-00000"))
             return count, oldest
 
     count, oldest = asyncio.run(_record_and_count())

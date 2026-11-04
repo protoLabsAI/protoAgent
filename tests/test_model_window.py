@@ -209,7 +209,9 @@ def test_the_codex_lane_gets_the_conservative_subscription_window(monkeypatch):
     codex lane — the lead's ``model.provider`` or a qualified slot — uses the
     conservative subscription window, never the API card."""
     _gateway_knows_nothing(monkeypatch)
-    cfg = SimpleNamespace(**vars(_cfg(model_name="gpt-6.1-sol")), model_provider="openai-codex", providers=[], providers_declared=False)
+    cfg = SimpleNamespace(
+        **vars(_cfg(model_name="gpt-6.1-sol")), model_provider="openai-codex", providers=[], providers_declared=False
+    )
     assert model_window.context_window_for(cfg) == model_window.CODEX_SUBSCRIPTION_WINDOW
     assert model_window.fallback_window(cfg, "gpt-6.1-sol", "openai-codex") == model_window.CODEX_SUBSCRIPTION_WINDOW
 

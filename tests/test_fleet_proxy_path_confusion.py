@@ -112,6 +112,7 @@ def _hub(monkeypatch, member_base: str):
 
 # ── the headline confusion case ────────────────────────────────────────────────
 
+
 def test_dotdot_in_public_prefix_cannot_reach_api_config(monkeypatch, member):
     """``/plugins/foo/%2e%2e/%2e%2e/api/config`` — admitted by the hub's member-public prefix,
     would collapse to ``/api/config`` at the member. The hub must refuse it outright (400),
@@ -147,6 +148,7 @@ def test_literal_backslash_refused(monkeypatch, member):
 
 # ── no regression: legitimate paths forward raw and decode exactly once ─────────
 
+
 def test_member_public_page_forwards_unchanged(monkeypatch, member):
     """A real anonymous member-public view page still proxies and dispatches at the member."""
     client = TestClient(_hub(monkeypatch, member))
@@ -174,6 +176,7 @@ def test_authed_api_still_proxies(monkeypatch, member):
 
 
 # ── WebSocket lane: same contract ───────────────────────────────────────────────
+
 
 def test_ws_ambiguous_path_is_refused(monkeypatch, member):
     """The WS proxy refuses the same encodings before dialling (close, no upstream connect)."""

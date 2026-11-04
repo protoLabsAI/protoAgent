@@ -798,7 +798,7 @@ def test_animejs_is_vendored_sri_pinned_and_served(monkeypatch, tmp_path):
     html = art._SHELL_HTML + js
     assert '"animejs":' in html and "anime.esm.min.js" in html
     assert "cdnjs.cloudflare.com" not in html and "unpkg.com" not in html
-    assert b'from"' not in served and b"from \"" not in served  # self-contained: nothing else to fetch
+    assert b'from"' not in served and b'from "' not in served  # self-contained: nothing else to fetch
     assert b"export{" in served and b" as animate" in served  # an ES module exporting animate()
 
 
@@ -1219,7 +1219,7 @@ def test_live_theme_repush_is_wired(monkeypatch, tmp_path):
     assert "st.setProperty(k,String(m.tokens[k]))" in html
     # shell side: observe the kit re-theme + re-push after a fresh srcdoc load.
     assert "new MutationObserver(pushTheme).observe(document.documentElement" in html
-    assert 'frameNav.onLoad(pushTheme)' in html  # follows a replaced frame element (#4076)
+    assert "frameNav.onLoad(pushTheme)" in html  # follows a replaced frame element (#4076)
 
 
 # ── file artifacts (ADR 0092 D2): save_file_artifact + sidecar blobs + blob route ─
@@ -1680,7 +1680,6 @@ def _same_snapshot_gate(monkeypatch, module, attr):
         return out
 
     monkeypatch.setattr(module, attr, gated)
-
 
 
 def test_parallel_update_artifact_calls_both_land(monkeypatch, tmp_path):

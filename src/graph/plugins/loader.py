@@ -520,10 +520,7 @@ def _warn_unserved_views(manifest: PluginManifest, routers: list[dict]) -> None:
     blank/404 — usually a missing ``register_router`` or a path typo. Query strings
     and fragments select state inside a served page and are not part of its route.
     """
-    pages = [
-        ("view", view.get("id"), view.get("path"))
-        for view in manifest.views
-    ]
+    pages = [("view", view.get("id"), view.get("path")) for view in manifest.views]
     pages.extend(
         ("Configure tab", tab.get("id"), tab.get("path"))
         for tab in getattr(manifest, "settings_tabs", [])
@@ -1031,7 +1028,6 @@ def load_plugins(config, *, core_tool_names: set[str] | None = None) -> PluginLo
                 _report_ignored_copy(manifest, note)
             result.meta.append(entry)
             continue
-
 
         _report_ignored_copy(manifest, note)
 

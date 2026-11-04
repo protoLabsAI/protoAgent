@@ -122,11 +122,7 @@ def _export_message(result: dict) -> str:
             " A turn is still running." if result.get("in_progress") else ""
         )
     redactions = result.get("redactions") or []
-    note = (
-        f" Redacted before export: {', '.join(redactions)} — read it through before sharing."
-        if redactions
-        else ""
-    )
+    note = f" Redacted before export: {', '.join(redactions)} — read it through before sharing." if redactions else ""
     if result.get("in_progress"):
         return f"Exported {result.get('message_count', 0)} message(s) so far — a turn is still running.{note}"
     return f"Exported {result.get('message_count', 0)} message(s) as Markdown.{note}"
@@ -165,7 +161,11 @@ async def export_session(
     in_progress = lock.locked()
     if in_progress:
         result = await export_thread(
-            STATE.graph, STATE.checkpointer, tid, title=title, drop_unanswered_tool_calls=True,
+            STATE.graph,
+            STATE.checkpointer,
+            tid,
+            title=title,
+            drop_unanswered_tool_calls=True,
         )
     else:
         async with lock:
@@ -192,7 +192,12 @@ async def aside_session(
     the main thread (nothing to guard), and a side chat is meant to run *alongside* the main
     conversation — locking would block the very thread it's supposed to sit beside."""
     if STATE.graph is None:
-        return {"found": False, "answer": "", "reason": "setup", "message": "Setup required — finish the setup wizard first."}
+        return {
+            "found": False,
+            "answer": "",
+            "reason": "setup",
+            "message": "Setup required — finish the setup wizard first.",
+        }
 
     from graph.aside_op import run_aside
     from graph.fence_scope import normalize_fence
@@ -442,8 +447,5 @@ def _fork_message(result: dict) -> str:
     if reason == "empty_prefix":
         return "Nothing forkable before that point — the branch starts fresh."
     if reason == "not_found":
-        return (
-            "Couldn't locate that message in the server history — the branch starts "
-            "fresh (display copy only)."
-        )
+        return "Couldn't locate that message in the server history — the branch starts fresh (display copy only)."
     return "Fork unavailable — the branch starts fresh (display copy only)."

@@ -290,8 +290,19 @@ def test_design_system_preset_is_pure_persona() -> None:
     # findings split into system gaps vs consumer fixes; decompose a rendered site into
     # repeated patterns (covered / needs a variant / missing component); and generate a
     # dark + light brand theme against the live token contract, every pair contrast-checked.
-    for needle in ("audit", "codebase", "url", "score", "variant", "missing",
-                   "theme", "contrast", "dark", "light", "token contract"):
+    for needle in (
+        "audit",
+        "codebase",
+        "url",
+        "score",
+        "variant",
+        "missing",
+        "theme",
+        "contrast",
+        "dark",
+        "light",
+        "token contract",
+    ):
         assert needle in lower, f"capabilities description is missing {needle!r}"
 
     # Two-board model: brief the consuming app's PM (title beside its number, file:line
@@ -301,13 +312,31 @@ def test_design_system_preset_is_pure_persona() -> None:
         assert needle in lower, f"two-board model is missing {needle!r}"
 
     # Every existing principle survives the refresh.
-    for needle in ("read before i write", "the tokens are law", "one concern per pr",
-                   "humans do", "accessibility is a requirement", "findings, not flags"):
+    for needle in (
+        "read before i write",
+        "the tokens are law",
+        "one concern per pr",
+        "humans do",
+        "accessibility is a requirement",
+        "findings, not flags",
+    ):
         assert needle in lower, f"an existing principle was dropped: {needle!r}"
 
     # Pure persona / generic: no tool syntax, config keys, or org-specific names leak in.
-    banned = ("protoagent", "protocontent", "protolabs", "@protolabsai", "designsystem",
-              "claude", "anthropic", "opus", "sonnet", "python -m", "```", "slash command")
+    banned = (
+        "protoagent",
+        "protocontent",
+        "protolabs",
+        "@protolabsai",
+        "designsystem",
+        "claude",
+        "anthropic",
+        "opus",
+        "sonnet",
+        "python -m",
+        "```",
+        "slash command",
+    )
     for token in banned:
         assert token not in lower, f"preset leaks a non-persona/org-specific token {token!r}"
 
@@ -380,16 +409,29 @@ def test_brand_launch_replaces_social_marketing_and_is_held() -> None:
     # Draft-only doctrine: the persona must keep its hard rules (never posts, never invents a
     # number, operator is the only approver, nothing private on screen, sourced norms).
     soul = preset.read_text().lower()
-    for needle in ("never post", "never invent a number", "only approver", "competitor",
-                   "home paths", "sources", "one checkpoint per phase"):
+    for needle in (
+        "never post",
+        "never invent a number",
+        "only approver",
+        "competitor",
+        "home paths",
+        "sources",
+        "one checkpoint per phase",
+    ):
         assert needle in soul, f"brand-launch persona lost a hard rule: {needle!r}"
 
     # Architecture walkthroughs (Atlas): the model is the target repo's, so the persona asks
     # before writing it; the operator approves the tour script before anything is recorded;
     # the recording goes through Campaign's shot-script flow; the take keeps the clip rules.
-    for needle in ("atlas_record_script", "ask before writing", "atlas_validate",
-                   "approval before recording", "100% crops", "at least 4 seconds",
-                   "never jump-cut"):
+    for needle in (
+        "atlas_record_script",
+        "ask before writing",
+        "atlas_validate",
+        "approval before recording",
+        "100% crops",
+        "at least 4 seconds",
+        "never jump-cut",
+    ):
         assert needle in soul, f"brand-launch persona lost an Atlas walkthrough rule: {needle!r}"
 
     assert ids[-1] == "custom", f"'custom' must stay LAST in the archetype list, got {ids}"
@@ -418,8 +460,13 @@ def test_analyst_archetype_is_held() -> None:
     # and on first run tells the operator where to set the (operator-only) data folders
     # instead of trying to set them itself.
     soul = preset.read_text().lower()
-    for needle in ("never invent a number", "cite the source file", "what i assumed",
-                   "settings ▸ plugins ▸ data analyst ▸ data folders", "operator-only"):
+    for needle in (
+        "never invent a number",
+        "cite the source file",
+        "what i assumed",
+        "settings ▸ plugins ▸ data analyst ▸ data folders",
+        "operator-only",
+    ):
         assert needle in soul, f"analyst persona lost a hard rule: {needle!r}"
 
     assert ids[-1] == "custom", f"'custom' must stay LAST in the archetype list, got {ids}"
@@ -461,7 +508,13 @@ def test_sidecar_bundles_every_forwarded_cli_module() -> None:
 def _sidecar_collect_all() -> set[str]:
     tree = ast.parse((ROOT / "apps" / "desktop" / "sidecar" / "build_sidecar.py").read_text(encoding="utf-8"))
     for node in ast.walk(tree):
-        targets = node.targets if isinstance(node, ast.Assign) else [node.target] if isinstance(node, ast.AnnAssign) and node.value is not None else []
+        targets = (
+            node.targets
+            if isinstance(node, ast.Assign)
+            else [node.target]
+            if isinstance(node, ast.AnnAssign) and node.value is not None
+            else []
+        )
         if any(getattr(t, "id", "") == "COLLECT_ALL" for t in targets):
             return {el.value for el in node.value.elts}  # type: ignore[attr-defined,union-attr]
     raise AssertionError("could not find COLLECT_ALL in build_sidecar.py")
@@ -534,9 +587,16 @@ def test_career_coach_archetype_is_listed_with_a_generic_preset() -> None:
     assert "Never applies on its own." in row["blurb"]
 
     soul = (CONFIG / "soul-presets" / "career-coach.md").read_text().lower()
-    for rule in ("coach first", "single source of truth", "paste their resume",
-                 "never invent experience", "never\nauto-submit", "even when asked",
-                 "careercoach_find_roles", "careercoach_save_apply_kit"):
+    for rule in (
+        "coach first",
+        "single source of truth",
+        "paste their resume",
+        "never invent experience",
+        "never\nauto-submit",
+        "even when asked",
+        "careercoach_find_roles",
+        "careercoach_save_apply_kit",
+    ):
         assert rule in soul, f"career-coach persona lost a hard rule: {rule!r}"
     for personal_detail in ("jobcoach", "@", "/users/", "c:\\users\\"):
         assert personal_detail not in soul

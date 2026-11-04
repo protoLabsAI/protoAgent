@@ -159,9 +159,13 @@ def _build_curation_tools(*, provenance_required: bool = False):
         from graph.extensions.skills import SkillV1Artifact
 
         trusted_session_id = _session_id_from(state)
-        session_id = trusted_session_id if provenance_required else ((source_session_id or "").strip() or trusted_session_id)
+        session_id = (
+            trusted_session_id if provenance_required else ((source_session_id or "").strip() or trusted_session_id)
+        )
         if provenance_required and (not session_id or not (provenance_reason or "").strip()):
-            return "Error: self-improvement writes require a trusted source session and evidence-based provenance reason."
+            return (
+                "Error: self-improvement writes require a trusted source session and evidence-based provenance reason."
+            )
         prompt = body or ""
         clean_reason = " ".join(provenance_reason.split()).replace("--", "—")
         if clean_reason:
@@ -223,7 +227,9 @@ def _build_skill_editor_tools(*, provenance_required: bool = False):
             return "Skills index is not available — cannot update."
         if not all((name or "").strip() for name in (name, description, body, reason)):
             return "Error: name, description, body, and evidence-based reason are required."
-        current = next((s for s in idx.all_skills() if str(s.get("name", "")).casefold() == name.strip().casefold()), None)
+        current = next(
+            (s for s in idx.all_skills() if str(s.get("name", "")).casefold() == name.strip().casefold()), None
+        )
         if current is None:
             return f"No skill named {name!r} exists."
         root = user_skills_dir(create=True)
@@ -231,7 +237,8 @@ def _build_skill_editor_tools(*, provenance_required: bool = False):
         if not target_slug:
             return "Error: refusing to update a skill with an empty storage slug."
         if any(
-            s.get("tier") != "commons" and s.get("id") != current.get("id")
+            s.get("tier") != "commons"
+            and s.get("id") != current.get("id")
             and slugify(str(s.get("name", ""))) == target_slug
             for s in idx.all_skills()
         ):
@@ -240,12 +247,16 @@ def _build_skill_editor_tools(*, provenance_required: bool = False):
         if not editable:
             return f"Refusing to update {origin} skill {name!r}; only user/learned skills are editable."
         trusted_session_id = _session_id_from(state)
-        session_id = trusted_session_id if provenance_required else ((source_session_id or "").strip() or trusted_session_id)
+        session_id = (
+            trusted_session_id if provenance_required else ((source_session_id or "").strip() or trusted_session_id)
+        )
         if provenance_required and not session_id:
             return "Error: self-improvement writes require a trusted source session."
         try:
             backup = replace_skill(
-                idx, root, current,
+                idx,
+                root,
+                current,
                 current.get("name", name),
                 description.strip(),
                 body.strip(),
@@ -254,7 +265,8 @@ def _build_skill_editor_tools(*, provenance_required: bool = False):
                 slash=str(current.get("slash", "") or ""),
                 user_only=bool(current.get("user_only", False)),
                 provenance={"session_id": session_id, "reason": reason.strip()},
-                session_id=session_id, reason=reason.strip(),
+                session_id=session_id,
+                reason=reason.strip(),
             )
         except Exception as exc:  # noqa: BLE001
             return f"Error updating skill: {exc}"
@@ -282,7 +294,9 @@ def _build_skill_editor_tools(*, provenance_required: bool = False):
             return "Skills index is not available — cannot delete."
         if not (name or "").strip() or not (reason or "").strip():
             return "Error: name and evidence-based reason are required."
-        current = next((s for s in idx.all_skills() if str(s.get("name", "")).casefold() == name.strip().casefold()), None)
+        current = next(
+            (s for s in idx.all_skills() if str(s.get("name", "")).casefold() == name.strip().casefold()), None
+        )
         if current is None:
             return f"No skill named {name!r} exists."
         root = user_skills_dir(create=True)
@@ -298,7 +312,9 @@ def _build_skill_editor_tools(*, provenance_required: bool = False):
         if not editable:
             return f"Refusing to delete {origin} skill {name!r}; only user/learned skills are editable."
         trusted_session_id = _session_id_from(state)
-        session_id = trusted_session_id if provenance_required else ((source_session_id or "").strip() or trusted_session_id)
+        session_id = (
+            trusted_session_id if provenance_required else ((source_session_id or "").strip() or trusted_session_id)
+        )
         if provenance_required and not session_id:
             return "Error: self-improvement writes require a trusted source session."
         backup = archive_skill(root, current, session_id=session_id, reason=reason.strip())
@@ -389,7 +405,6 @@ def _publish_persona_event(topic: str, data: dict) -> None:
         pass
 
 
-
 # ── guarded agent-owned config writes (tools.self_config_enabled) ─────────────────────
 # The trust surface an agent must never be able to widen from inside. These are the knobs
 # that decide what the agent is ALLOWED to do — shell execution, which directories the
@@ -398,19 +413,19 @@ def _publish_persona_event(topic: str, data: dict) -> None:
 # it is a privilege-escalation tool, so the fence is a denylist checked before anything
 # reaches the write path (ADR 0071 / ADR 0089 draw exactly these lines).
 _CONFIG_WRITE_DENIED = (
-    "acp",               # ACP runtime specs carry a `command` the host spawns
-    "auth",              # bearer/token config — the operator API's gate
-    "delegates",         # each entry is an EXECUTABLE (command/args/workdir, permissions: auto)
-    "egress",            # ADR 0008 network fence
-    "filesystem",        # allow_run + the ADR 0007 project fence
-    "mcp",               # out-of-process tool servers = new capability
-    "operator",          # allowed_dirs / project_dir — the operator fence
-    "plugins",           # enabling a plugin runs its code in-process AS the agent
-    "runtime",           # per-agent command overrides, same spawn path as delegates
+    "acp",  # ACP runtime specs carry a `command` the host spawns
+    "auth",  # bearer/token config — the operator API's gate
+    "delegates",  # each entry is an EXECUTABLE (command/args/workdir, permissions: auto)
+    "egress",  # ADR 0008 network fence
+    "filesystem",  # allow_run + the ADR 0007 project fence
+    "mcp",  # out-of-process tool servers = new capability
+    "operator",  # allowed_dirs / project_dir — the operator fence
+    "plugins",  # enabling a plugin runs its code in-process AS the agent
+    "runtime",  # per-agent command overrides, same spawn path as delegates
     "security",
-    "self_improvement", # automatic durable mutation policy is operator-owned
-    "soul",              # persona has its own guarded path (edit_soul, ADR 0081)
-    "tools",             # incl. self_config_enabled itself: no self-widening
+    "self_improvement",  # automatic durable mutation policy is operator-owned
+    "soul",  # persona has its own guarded path (edit_soul, ADR 0081)
+    "tools",  # incl. self_config_enabled itself: no self-widening
 )
 
 # Section denial can't be the whole story: plugin config sections are named after their
@@ -538,7 +553,9 @@ def _config_write_refusal(updates: dict) -> str | None:
         try:
             marked = _spawn_marked_keys()
         except Exception:  # noqa: BLE001 — can't tell which settings spawn: refuse, don't guess
-            log.warning("[set_config] plugin settings discovery failed; refusing the plugin-section write", exc_info=True)
+            log.warning(
+                "[set_config] plugin settings discovery failed; refusing the plugin-section write", exc_info=True
+            )
             sections = ", ".join(sorted({p.split(".", 1)[0] for p in plugin_paths}))
             return (
                 f"Refused: couldn't verify which {sections} settings name a program to run, so "
@@ -551,9 +568,7 @@ def _config_write_refusal(updates: dict) -> str | None:
 
     if executable:
         # Name the keys as the agent wrote them, not every nested path under them.
-        shown = sorted(
-            {k for k in updates if any(p == k or p.startswith(f"{k}.") for p in executable)} or executable
-        )
+        shown = sorted({k for k in updates if any(p == k or p.startswith(f"{k}.") for p in executable)} or executable)
         return (
             f"Refused: {', '.join(shown)} names a program to run. You may choose among the "
             f"executables your operator has already provisioned (e.g. a coder by name), but defining "
@@ -673,10 +688,7 @@ def _build_fleet_diagnostics_tool() -> list:
             return await read_member_logs(member, lines)
         if mode in {"task", "tasks"}:
             return await read_member_task(member, task_id)
-        detail = (
-            "fleet_diagnostics only supports read='logs' or read='task'. "
-            "It has no runtime control actions."
-        )
+        detail = "fleet_diagnostics only supports read='logs' or read='task'. It has no runtime control actions."
         return {
             "ok": False,
             "error": "unsupported_read",
@@ -736,7 +748,9 @@ def _build_soul_editor_tool(reload_callback=None, *, provenance_required: bool =
                 "(To retire a persona trait, replace the section with its revised text instead.)"
             )
         trusted_session_id = _session_id_from(state)
-        session_id = trusted_session_id if provenance_required else ((source_session_id or "").strip() or trusted_session_id)
+        session_id = (
+            trusted_session_id if provenance_required else ((source_session_id or "").strip() or trusted_session_id)
+        )
         clean_reason = (reason or "").strip()
         if provenance_required and (not session_id or not clean_reason):
             return "Error: self-improvement persona writes require a trusted source session and evidence-based reason."

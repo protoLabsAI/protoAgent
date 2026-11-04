@@ -102,13 +102,17 @@ async def test_calculator_refuses_expensive_power_before_calling_operator(monkey
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("expression", [
-    "9" * 1400,  # large literal, before any operators
-    "(2 ** 2000) * (2 ** 2000) * (2 ** 2000)",  # oversized intermediate
-    "1+" * 300 + "1",  # too many AST nodes
-    "-" * 100 + "1",  # too much recursion even with few nodes
-    " " * 5000 + "1",  # parser input budget
-], ids=["literal", "intermediate", "node-count", "depth", "input-length"])
+@pytest.mark.parametrize(
+    "expression",
+    [
+        "9" * 1400,  # large literal, before any operators
+        "(2 ** 2000) * (2 ** 2000) * (2 ** 2000)",  # oversized intermediate
+        "1+" * 300 + "1",  # too many AST nodes
+        "-" * 100 + "1",  # too much recursion even with few nodes
+        " " * 5000 + "1",  # parser input budget
+    ],
+    ids=["literal", "intermediate", "node-count", "depth", "input-length"],
+)
 async def test_calculator_bounds_input_and_intermediate_work(expression):
     from tools.lg_tools import calculator
 

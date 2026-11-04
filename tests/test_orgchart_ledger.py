@@ -38,8 +38,16 @@ def _edges():
 
 def _rows(**over):
     base = dict(
-        to_kind="acp", to_name="coder", dispatches=7, ok=5, failed=2, cancelled=0,
-        cost_usd=1.5, priced=5, duration_ms=1000, last_at="2026-09-09T02:00:00+00:00",
+        to_kind="acp",
+        to_name="coder",
+        dispatches=7,
+        ok=5,
+        failed=2,
+        cancelled=0,
+        cost_usd=1.5,
+        priced=5,
+        duration_ms=1000,
+        last_at="2026-09-09T02:00:00+00:00",
     )
     base.update(over)
     return base
@@ -74,9 +82,7 @@ def test_subagents_appear_as_nodes_because_the_chart_never_had_them():
     # For an agent whose delegation is all in-process, this is the entire picture — the
     # chart would otherwise show none of its actual work.
     nodes, edges = _nodes(), _edges()
-    topology._apply_work(
-        nodes, edges, "http://self", [_rows(to_kind="subagent", to_name="researcher")]
-    )
+    topology._apply_work(nodes, edges, "http://self", [_rows(to_kind="subagent", to_name="researcher")])
 
     node = nodes["subagent:researcher"]
     assert node["kind"] == "subagent"
@@ -118,7 +124,9 @@ def test_the_overlay_is_a_no_op_without_a_ledger():
 def test_malformed_ledger_rows_are_skipped_rather_than_drawn():
     nodes, edges = _nodes(), _edges()
     topology._apply_work(
-        nodes, edges, "http://self",
+        nodes,
+        edges,
+        "http://self",
         [{"to_kind": "", "to_name": "x"}, {"to_kind": "subagent", "to_name": ""}],
     )
 
@@ -142,7 +150,9 @@ def test_a_peers_own_record_lands_on_its_own_delegates_and_subagents():
     edges.append({"from": "http://peer", "to": "acp:http://peer#coder", "kind": "delegate"})
     topology._apply_work(nodes, edges, "http://self", [_rows()])
     topology._apply_work(
-        nodes, edges, "http://peer",
+        nodes,
+        edges,
+        "http://peer",
         [_rows(dispatches=3, ok=3, failed=0), _rows(to_kind="subagent", to_name="researcher", dispatches=1)],
         owner_is_self=False,
     )
@@ -170,11 +180,17 @@ def test_a_shared_node_keeps_our_record_and_sums_the_peers():
     hub_own = {e["to"] for e in edges if e["from"] == "http://self"}
     for peer in ("http://peer", "http://peer2"):
         topology._apply_work(
-            nodes, edges, peer,
-            [_rows(to_kind="openai", to_name="brain", dispatches=50), _rows(to_kind="openai", to_name="small", dispatches=3, ok=3, failed=0)],
-            owner_is_self=False, hub_own=hub_own,
+            nodes,
+            edges,
+            peer,
+            [
+                _rows(to_kind="openai", to_name="brain", dispatches=50),
+                _rows(to_kind="openai", to_name="small", dispatches=3, ok=3, failed=0),
+            ],
+            owner_is_self=False,
+            hub_own=hub_own,
         )
-    assert nodes[model["id"]]["work"]["dispatches"] == 2       # ours wins on a node we use
+    assert nodes[model["id"]]["work"]["dispatches"] == 2  # ours wins on a node we use
     assert nodes[shared_peer["id"]]["work"]["dispatches"] == 6  # two peers' records add up
 
 

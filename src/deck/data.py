@@ -74,7 +74,9 @@ class Snapshot:
     host_version: str = ""
     rollups: dict[str, Rollup] = field(default_factory=dict)  # by slug
     warnings: list[str] = field(default_factory=list)
-    parked: dict[str, dict[str, tuple[str, str]]] | None = None  # slug → {session → (why it waits or "", latest task id)}; None = not probed this poll
+    parked: dict[str, dict[str, tuple[str, str]]] | None = (
+        None  # slug → {session → (why it waits or "", latest task id)}; None = not probed this poll
+    )
     parked_at: float = 0.0  # monotonic, when the probe read (a stale result must not undo what the bus said since)
     error: str = ""  # a failed poll keeps the previous roster and shows this
     fetched_at: float = field(default_factory=time.monotonic)
@@ -177,7 +179,9 @@ class LiveBackend:
         finally:
             self._first = None
         host = next((a for a in roster if a.get("host")), {})
-        snap = Snapshot(mode="live", label=self._label(roster), roster=roster, host_version=str(host.get("version") or ""))
+        snap = Snapshot(
+            mode="live", label=self._label(roster), roster=roster, host_version=str(host.get("version") or "")
+        )
         try:
             fleet = client.telemetry_fleet()
             for slug, entry in (fleet.get("members") or {}).items():
@@ -307,7 +311,9 @@ class LiveBackend:
 
     def steer(self, agent: dict, session_id: str, msg_id: str, text: str) -> dict:
         """Queue a message into the RUNNING turn (folded in at its next model call)."""
-        out = self.client.member_post(slug_of(agent), f"/api/chat/sessions/{_seg(session_id)}/steer", {"id": msg_id, "text": text})
+        out = self.client.member_post(
+            slug_of(agent), f"/api/chat/sessions/{_seg(session_id)}/steer", {"id": msg_id, "text": text}
+        )
         return out if isinstance(out, dict) else {}
 
     def steer_pending(self, agent: dict, session_id: str) -> list[dict]:
@@ -323,24 +329,40 @@ class LiveBackend:
 
     def interject(self, agent: dict, session_id: str, task_id: str, msg_id: str, text: str) -> dict:
         """Queue an operator interjection into an attended server-fired turn (by task id)."""
-        out = self.client.member_post(slug_of(agent), f"/api/chat/sessions/{_seg(session_id)}/server-turns/{_seg(task_id)}/interject", {"id": msg_id, "text": text})
+        out = self.client.member_post(
+            slug_of(agent),
+            f"/api/chat/sessions/{_seg(session_id)}/server-turns/{_seg(task_id)}/interject",
+            {"id": msg_id, "text": text},
+        )
         return out if isinstance(out, dict) else {}
 
     def delegation_cancel(self, agent: dict, session_id: str, delegation_id: str) -> bool:
         """Abort ONE running foreground delegation (a ``task`` card), not the turn."""
-        out = self.client.member_post(slug_of(agent), f"/api/chat/sessions/{_seg(session_id)}/delegations/{_seg(delegation_id)}/cancel")
+        out = self.client.member_post(
+            slug_of(agent), f"/api/chat/sessions/{_seg(session_id)}/delegations/{_seg(delegation_id)}/cancel"
+        )
         return bool(isinstance(out, dict) and out.get("cancelled"))
 
     def submit_form(self, agent: dict, session_id: str, callback_id: str, answers: dict) -> dict:
         """Redeem a plugin composer-form; ``{"form", "callback_id"}`` is the next step."""
-        out = self.client.member_post(slug_of(agent), "/api/chat/commands/submit", {"callback_id": callback_id, "session_id": session_id, "answers": answers})
+        out = self.client.member_post(
+            slug_of(agent),
+            "/api/chat/commands/submit",
+            {"callback_id": callback_id, "session_id": session_id, "answers": answers},
+        )
         return out if isinstance(out, dict) else {}
 
     def attend(self, agent: dict, session_id: str):
         """Mark the session attended for as long as the returned handle is open."""
         from deck.events import Attendance
 
-        return Attendance(self.client.url, self.client._token, slug_of(agent), session_id, insecure_http=getattr(self.client, "insecure_http", False)).start()
+        return Attendance(
+            self.client.url,
+            self.client._token,
+            slug_of(agent),
+            session_id,
+            insecure_http=getattr(self.client, "insecure_http", False),
+        ).start()
 
     # ── manage (#3471): live mutations go through the hub, by immutable id ──
 
@@ -445,7 +467,9 @@ class OfflineBackend:
         raise RuntimeError("offline — no hub to reach this member through")
 
     steer = steer_pending = steer_cancel = interject = delegation_cancel = submit_form = _offline
-    create = rename = remove = remote_add = remote_update = remote_remove = set_order = _offline  # the CLI's offline verbs go through the ops; the deck stays start/stop
+    create = rename = remove = remote_add = remote_update = remote_remove = set_order = (
+        _offline  # the CLI's offline verbs go through the ops; the deck stays start/stop
+    )
 
     def archetypes(self) -> list[dict]:
         return []

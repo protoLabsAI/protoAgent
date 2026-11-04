@@ -440,9 +440,7 @@ def configure(
     if clock is not None:
         _CLOCK = clock
     for lane in _LANES.values():
-        lane.reconfigure(
-            limit=_LIMIT, queue_timeout=_QUEUE_TIMEOUT, interactive_reserve=_RESERVE, clock=_CLOCK
-        )
+        lane.reconfigure(limit=_LIMIT, queue_timeout=_QUEUE_TIMEOUT, interactive_reserve=_RESERVE, clock=_CLOCK)
 
 
 def _get_or_create_lane(lane: str) -> _Lane:

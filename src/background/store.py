@@ -406,9 +406,7 @@ class BackgroundStore:
             return 0
         db = self._connect()
         try:
-            row = db.execute(
-                "SELECT COUNT(*) AS n FROM background_jobs WHERE batch_id = ?", (batch_id,)
-            ).fetchone()
+            row = db.execute("SELECT COUNT(*) AS n FROM background_jobs WHERE batch_id = ?", (batch_id,)).fetchone()
             return int(row["n"]) if row else 0
         finally:
             db.close()

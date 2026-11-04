@@ -85,7 +85,9 @@ def _media(db):
 def _max_checkpoint_bytes(db, thread_id):
     conn = sqlite3.connect(db)
     try:
-        return conn.execute("SELECT MAX(length(checkpoint)) FROM checkpoints WHERE thread_id=?", (thread_id,)).fetchone()[0]
+        return conn.execute(
+            "SELECT MAX(length(checkpoint)) FROM checkpoints WHERE thread_id=?", (thread_id,)
+        ).fetchone()[0]
     finally:
         conn.close()
 
@@ -115,9 +117,7 @@ def test_offloaded_images_round_trip_byte_identical(tmp_path):
     db = str(tmp_path / "c.db")
     _, state = _run_turns(db, 3)
     tools = [m for m in state.values["messages"] if isinstance(m, ToolMessage)]
-    assert [m.content[1]["image_url"]["url"] for m in tools] == [
-        "data:image/png;base64," + _png(i) for i in range(3)
-    ]
+    assert [m.content[1]["image_url"]["url"] for m in tools] == ["data:image/png;base64," + _png(i) for i in range(3)]
     assert all(REF_PREFIX not in json.dumps(m.content) for m in tools)
 
 
@@ -451,7 +451,10 @@ def test_a_real_task_subagent_namespace_is_bounded_on_write(tmp_path):
     db = str(tmp_path / "c.db")
     saver = build_sqlite_checkpointer(db)
     parent = iter(
-        [AIMessage(content="", tool_calls=[{"name": "task", "args": {"prompt": "go"}, "id": "t1"}]), AIMessage(content="done")]
+        [
+            AIMessage(content="", tool_calls=[{"name": "task", "args": {"prompt": "go"}, "id": "t1"}]),
+            AIMessage(content="done"),
+        ]
     )
     app = create_agent(model=_Fake(messages=parent), tools=[task], checkpointer=saver)
     cfg = {"configurable": {"thread_id": "a2a:chat-1"}}
@@ -490,7 +493,9 @@ def test_a_lone_surrogate_in_a_media_string_does_not_brick_the_thread(tmp_path):
     g = StateGraph(MessagesState)
     g.add_node(
         "n",
-        lambda s: {"messages": [ToolMessage(content=[{"type": "image_url", "image_url": {"url": weird}}], tool_call_id="x")]},
+        lambda s: {
+            "messages": [ToolMessage(content=[{"type": "image_url", "image_url": {"url": weird}}], tool_call_id="x")]
+        },
     )
     g.add_edge(START, "n")
     g.add_edge("n", END)

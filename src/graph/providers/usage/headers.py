@@ -12,9 +12,11 @@ def _headers(headers):
     # Bound work and reject unusual containers without stringifying arbitrary objects.
     if len(headers) > 256:
         raise ValueError("too many headers")
-    return {key.lower(): value for key, value in headers.items()
-            if isinstance(key, str) and len(key) <= 128
-            and isinstance(value, str) and len(value) <= 128}
+    return {
+        key.lower(): value
+        for key, value in headers.items()
+        if isinstance(key, str) and len(key) <= 128 and isinstance(value, str) and len(value) <= 128
+    }
 
 
 def _number(value):
@@ -41,10 +43,17 @@ def parse_anthropic_headers(headers) -> list[Window]:
                 status = headers.get(f"{prefix}-status")
                 if status == "allowed_warning":
                     status = "warning"
-                windows.append(Window(
-                    f"{name}:{index}", kind, seconds, used, reset,
-                    classify(used, status), binding=claim == name,
-                ))
+                windows.append(
+                    Window(
+                        f"{name}:{index}",
+                        kind,
+                        seconds,
+                        used,
+                        reset,
+                        classify(used, status),
+                        binding=claim == name,
+                    )
+                )
             except Exception:
                 continue
         return windows
@@ -84,7 +93,10 @@ def capture(provider_id, headers) -> None:
         if windows:
             account = Account(provider_id, provider_id, source="headers")
             usage_store.default_store().merge_windows(
-                account, windows, source="headers", fetched_at=account.fetched_at,
+                account,
+                windows,
+                source="headers",
+                fetched_at=account.fetched_at,
             )
     except Exception:
         pass

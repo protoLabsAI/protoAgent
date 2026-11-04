@@ -155,9 +155,7 @@ def _shell_chords() -> set[str]:
 
     The docs name these next to the word "palette" on purpose — the launcher *is* the palette,
     in its own window — so they must never be judged against the in-app binding."""
-    assert DESKTOP_SHELL.exists(), (
-        f"desktop shell moved: {DESKTOP_SHELL.relative_to(REPO)} — update this test"
-    )
+    assert DESKTOP_SHELL.exists(), f"desktop shell moved: {DESKTOP_SHELL.relative_to(REPO)} — update this test"
     combos = set(_SHELL_CHORD_RE.findall(DESKTOP_SHELL.read_text(encoding="utf-8")))
     assert len(combos) >= 2, (
         "default_hotkeys() no longer parses — the shell chords would start being judged as "
@@ -191,9 +189,7 @@ def _keyboard_action_labels() -> set[str]:
 
 def _palette_labels() -> tuple[set[str], tuple[str, ...]]:
     """(exact labels, label prefixes) the palette registers as ROOT commands."""
-    assert PALETTE_ADAPTER.is_dir(), (
-        f"palette adapter moved: {PALETTE_ADAPTER.relative_to(REPO)} — update this test"
-    )
+    assert PALETTE_ADAPTER.is_dir(), f"palette adapter moved: {PALETTE_ADAPTER.relative_to(REPO)} — update this test"
     sources = [p for p in sorted(PALETTE_ADAPTER.glob("*.ts*")) if ".test." not in p.name]
     src = "\n".join(p.read_text(encoding="utf-8") for p in sources)
     labels = set(_LABEL_RE.findall(src)) | set(_LINK_RE.findall(src)) | _keyboard_action_labels()
@@ -204,7 +200,12 @@ def _palette_labels() -> tuple[set[str], tuple[str, ...]]:
 
 def _doc_pages() -> list[Path]:
     pages = [p for p in (REPO / "docs").rglob("*.md") if _SKIP_DIRS.isdisjoint(p.parts)]
-    pages += [REPO / "README.md", REPO / "PROTO.md", REPO / "plugins" / "docs" / "catalog.json", REPO / "docs" / ".vitepress" / "navigation.json"]
+    pages += [
+        REPO / "README.md",
+        REPO / "PROTO.md",
+        REPO / "plugins" / "docs" / "catalog.json",
+        REPO / "docs" / ".vitepress" / "navigation.json",
+    ]
     return pages
 
 

@@ -34,6 +34,19 @@ describe("TurnStateCell", () => {
     expect(errorEl()?.getAttribute("title")).toBe(reason);
   });
 
+  it("expands to the full reason on a tap, since touch has no hover tooltip", () => {
+    const reason = "upstream 500: " + "x".repeat(200);
+    act(() => root.render(h(TurnStateCell, { turn: { state: "failed", error: reason } })));
+    const el = errorEl() as HTMLButtonElement;
+    expect(el.tagName).toBe("BUTTON");
+    expect(el.getAttribute("aria-expanded")).toBe("false");
+    act(() => el.click());
+    expect(el.getAttribute("aria-expanded")).toBe("true");
+    expect(el.hasAttribute("data-expanded")).toBe(true);
+    act(() => el.click());
+    expect(el.hasAttribute("data-expanded")).toBe(false);
+  });
+
   it("shows a canceled turn's stop reason", () => {
     const reason = "stalled: no progress for 300s in tool web_fetch";
     act(() => root.render(h(TurnStateCell, { turn: { state: "canceled", error: reason } })));

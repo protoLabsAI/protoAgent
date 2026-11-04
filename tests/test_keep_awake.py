@@ -91,8 +91,12 @@ async def test_overlapping_fires(monkeypatch, tmp_path):
 def test_backend_failure_is_logged_once(monkeypatch, caplog, platform):
     monkeypatch.setattr(keep_awake.sys, "platform", platform)
     monkeypatch.setattr(keep_awake.subprocess, "Popen", Mock(side_effect=FileNotFoundError("missing")))
-    monkeypatch.setattr(keep_awake.ctypes, "windll", SimpleNamespace(kernel32=SimpleNamespace(
-        SetThreadExecutionState=Mock(side_effect=OSError("ctypes failure")))), raising=False)
+    monkeypatch.setattr(
+        keep_awake.ctypes,
+        "windll",
+        SimpleNamespace(kernel32=SimpleNamespace(SetThreadExecutionState=Mock(side_effect=OSError("ctypes failure")))),
+        raising=False,
+    )
     with caplog.at_level(logging.INFO):
         for _ in range(2):
             with keep_awake.hold("test"):
@@ -126,8 +130,11 @@ def test_process_backend(monkeypatch, platform):
     monkeypatch.setattr(keep_awake.subprocess, "Popen", spawn)
     with keep_awake.hold("test"):
         process.terminate.assert_not_called()
-    expected = (["caffeinate", "-i", "-w", str(os.getpid())] if platform == "darwin" else
-                ["systemd-inhibit", "--what=sleep", "--why=test", "--mode=block", "sleep", "infinity"])
+    expected = (
+        ["caffeinate", "-i", "-w", str(os.getpid())]
+        if platform == "darwin"
+        else ["systemd-inhibit", "--what=sleep", "--why=test", "--mode=block", "sleep", "infinity"]
+    )
     assert spawn.call_args.args[0] == expected
     process.terminate.assert_called_once()
     process.wait.assert_called_once_with(timeout=1)
@@ -136,8 +143,12 @@ def test_process_backend(monkeypatch, platform):
 def test_windows_backend(monkeypatch, caplog):
     monkeypatch.setattr(keep_awake.sys, "platform", "win32")
     state = Mock(side_effect=[0x80000000, 0x80000001])
-    monkeypatch.setattr(keep_awake.ctypes, "windll", SimpleNamespace(kernel32=SimpleNamespace(
-        SetThreadExecutionState=state)), raising=False)
+    monkeypatch.setattr(
+        keep_awake.ctypes,
+        "windll",
+        SimpleNamespace(kernel32=SimpleNamespace(SetThreadExecutionState=state)),
+        raising=False,
+    )
     with keep_awake.hold("test"):
         state.assert_called_once_with(0x80000001)
         assert state.argtypes == [ctypes.c_uint32]
@@ -152,8 +163,12 @@ def test_windows_zero_return_is_not_treated_as_failure(monkeypatch, caplog):
     success, so a zero must still hold and release the assertion, with no warning."""
     monkeypatch.setattr(keep_awake.sys, "platform", "win32")
     state = Mock(side_effect=[0, 0] * 2)
-    monkeypatch.setattr(keep_awake.ctypes, "windll", SimpleNamespace(kernel32=SimpleNamespace(
-        SetThreadExecutionState=state)), raising=False)
+    monkeypatch.setattr(
+        keep_awake.ctypes,
+        "windll",
+        SimpleNamespace(kernel32=SimpleNamespace(SetThreadExecutionState=state)),
+        raising=False,
+    )
     with caplog.at_level(logging.INFO):
         for _ in range(2):
             with keep_awake.hold("test"):
@@ -198,8 +213,11 @@ def test_serving_hold_backend(monkeypatch, platform):
     spawn = Mock(return_value=process)
     monkeypatch.setattr(keep_awake.subprocess, "Popen", spawn)
     assert keep_awake.start_serving_hold() is True
-    expected = (["caffeinate", "-s", "-w", str(os.getpid())] if platform == "darwin" else
-                ["systemd-inhibit", "--what=sleep", "--why=protoAgent serving", "--mode=block", "sleep", "infinity"])
+    expected = (
+        ["caffeinate", "-s", "-w", str(os.getpid())]
+        if platform == "darwin"
+        else ["systemd-inhibit", "--what=sleep", "--why=protoAgent serving", "--mode=block", "sleep", "infinity"]
+    )
     assert spawn.call_args.args[0] == expected
     process.terminate.assert_not_called()
     keep_awake.stop_serving_hold()

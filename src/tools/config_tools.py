@@ -86,9 +86,7 @@ def redact_for_agent(value: Any, *, key: str = "") -> Any:
             elif str(k).strip().lower() in _OPAQUE_MAPS and isinstance(v, dict):
                 # Every value, not just the sensibly-named ones: these maps are
                 # free-form, and "FOO_BAR" is as likely to be a token as "API_KEY".
-                out[k] = {
-                    ik: (_REDACTED if iv not in (None, "") else iv) for ik, iv in v.items()
-                }
+                out[k] = {ik: (_REDACTED if iv not in (None, "") else iv) for ik, iv in v.items()}
             else:
                 out[k] = redact_for_agent(v, key=str(k))
         return out
@@ -100,10 +98,7 @@ def redact_for_agent(value: Any, *, key: str = "") -> Any:
 def _dump(doc: Any) -> str:
     text = json.dumps(doc, indent=2, default=str, sort_keys=True)
     if len(text) > _MAX_CHARS:
-        return (
-            text[:_MAX_CHARS]
-            + f"\n… (truncated at {_MAX_CHARS} chars — ask for one section instead)"
-        )
+        return text[:_MAX_CHARS] + f"\n… (truncated at {_MAX_CHARS} chars — ask for one section instead)"
     return text
 
 
@@ -159,11 +154,7 @@ def _path_error(path: str, part: str, seen: list[str], current: Any) -> str:
     at = ".".join(seen) or "<root>"
     if isinstance(current, dict):
         available = ", ".join(sorted(str(k) for k in current))
-        suffix = (
-            f" Available keys at {at}: {available}"
-            if available
-            else f" {at} is an empty object."
-        )
+        suffix = f" Available keys at {at}: {available}" if available else f" {at} is an empty object."
     elif isinstance(current, list):
         suffix = f" {at} is a list with {len(current)} item(s); use a numeric path segment."
     else:
@@ -192,8 +183,7 @@ def _resolve_path(doc: dict, path: str) -> tuple[bool, Any, str, list[str]]:
                 return (
                     False,
                     None,
-                    f"Error: no config path {path!r}; list index {idx} is out of range "
-                    f"at {'.'.join(seen)}.",
+                    f"Error: no config path {path!r}; list index {idx} is out of range at {'.'.join(seen)}.",
                     seen,
                 )
             current = current[idx]
@@ -268,9 +258,7 @@ def _page_value(value: Any, *, section_segments: list[str], offset: int, limit: 
     page_limit = min(limit or _DEFAULT_PAGE_LIMIT, _MAX_PAGE_LIMIT)
     if not isinstance(value, (dict, list)):
         text = _selected_dump({section: value})
-        if text is not None and (
-            not isinstance(value, str) or (not offset and not limit)
-        ):
+        if text is not None and (not isinstance(value, str) or (not offset and not limit)):
             return text
         if not isinstance(value, str):
             return (
@@ -289,24 +277,15 @@ def _page_value(value: Any, *, section_segments: list[str], offset: int, limit: 
         text = _selected_dump(envelope)
         if text is not None:
             return text
-        return (
-            f"Error: scalar page for {section!r} exceeds {_MAX_CHARS} chars. "
-            "Reduce limit."
-        )
+        return f"Error: scalar page for {section!r} exceeds {_MAX_CHARS} chars. Reduce limit."
 
     keys = sorted(value, key=str) if isinstance(value, dict) else list(range(len(value)))
     total = len(value)
     pl = page_limit
     while True:
         window = keys[offset : offset + pl]
-        page = (
-            {k: value[k] for k in window}
-            if isinstance(value, dict)
-            else [value[k] for k in window]
-        )
-        envelope = _page_envelope(
-            section, offset=offset, limit=pl, returned=len(window), total=total, page=page
-        )
+        page = {k: value[k] for k in window} if isinstance(value, dict) else [value[k] for k in window]
+        envelope = _page_envelope(section, offset=offset, limit=pl, returned=len(window), total=total, page=page)
         text = _dump(envelope)
         if len(text) <= _MAX_CHARS:
             return text
@@ -472,21 +451,14 @@ def build_config_tools(config) -> list:
             if not ok and "." not in wanted:
                 near = sorted(k for k in doc if wanted.lower() in k.lower())
                 suggestion = f" Did you mean: {', '.join(near)}?" if near else ""
-                return (
-                    f"Error: no config section {wanted!r}.{suggestion}\n"
-                    f"Sections: {', '.join(sorted(doc))}"
-                )
+                return f"Error: no config section {wanted!r}.{suggestion}\nSections: {', '.join(sorted(doc))}"
             if not ok:
                 return error
             if offset or limit:
-                return _page_value(
-                    selected, section_segments=segments, offset=offset, limit=limit
-                )
+                return _page_value(selected, section_segments=segments, offset=offset, limit=limit)
             text = _selected_dump({wanted: selected})
             if text is None:
-                return _page_value(
-                    selected, section_segments=segments, offset=0, limit=_DEFAULT_PAGE_LIMIT
-                )
+                return _page_value(selected, section_segments=segments, offset=0, limit=_DEFAULT_PAGE_LIMIT)
             return text
 
         text = _dump(doc)

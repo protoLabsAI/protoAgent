@@ -583,7 +583,9 @@ def test_env_credentials_beat_config_credentials(monkeypatch):
     monkeypatch.setenv("LANGFUSE_SECRET_KEY", "sk-env")
     monkeypatch.setenv("LANGFUSE_HOST", "https://env.langfuse.example")
 
-    tracing.init(config=_Cfg(enabled=True, host="https://cfg.langfuse.example", public_key="pk-cfg", secret_key="sk-cfg"))
+    tracing.init(
+        config=_Cfg(enabled=True, host="https://cfg.langfuse.example", public_key="pk-cfg", secret_key="sk-cfg")
+    )
 
     assert tracing._langfuse.public_key == "pk-env"
     assert tracing._langfuse.secret_key == "sk-env"
@@ -1011,9 +1013,7 @@ def test_telemetry_surface_chips_the_tracing_keys():
     for key in ("tracing.enabled", "tracing.host", "tracing.public_key", "tracing.secret_key"):
         assert f'"{key}"' in src, f"the telemetry surface no longer offers {key}"
     # The cell's title has to name a section that renders these fields.
-    assert "Settings ▸ Tracing" in src, (
-        "the disabled-trace cell points at a settings path that does not render tracing"
-    )
+    assert "Settings ▸ Tracing" in src, "the disabled-trace cell points at a settings path that does not render tracing"
 
 
 def test_telemetry_surface_chips_every_telemetry_section_field():
@@ -1043,7 +1043,7 @@ def test_telemetry_surface_chips_every_telemetry_section_field():
         "prompts.max_calls",
     }
     for field in telemetry_fields:
-        assert f'"{field["key"]}"' in src, f'{field["key"]} renders in no Telemetry control'
+        assert f'"{field["key"]}"' in src, f"{field['key']} renders in no Telemetry control"
 
 
 # ── shutdown flush wiring ─────────────────────────────────────────────────────

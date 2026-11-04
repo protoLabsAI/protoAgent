@@ -139,9 +139,7 @@ def _walk_references(view: dict, pid: str) -> tuple[list[str], list[dict]]:
     for name, value in view["subagents"].items():
         if value.lower().startswith(f"{pid}:"):
             strings.append(f"subagents.{name}.model={value}")
-            entries.append(
-                {"key": f"subagents.{name}.model", "value": value, "kind": "subagent", "clearable": True}
-            )
+            entries.append({"key": f"subagents.{name}.model", "value": value, "kind": "subagent", "clearable": True})
     return strings, entries
 
 
@@ -169,9 +167,7 @@ def _nest_updates(dotted: dict) -> dict:
     return out
 
 
-def _write_providers(
-    entries: list[dict], secret_updates: dict[str, str], extra_updates: dict | None = None
-) -> None:
+def _write_providers(entries: list[dict], secret_updates: dict[str, str], extra_updates: dict | None = None) -> None:
     """Persist the registry to YAML, routing keys to the secrets overlay.
 
     Same split model.api_key has always used: the key never lands in the config file,
@@ -376,6 +372,7 @@ def register_provider_routes(app) -> None:
         pid = (pid or "").strip().lower()
         if cfg.provider_by_id(pid) is None:
             raise HTTPException(status_code=404, detail=f"no provider named {pid!r}")
+
         def _patched(current) -> list[dict]:
             if current.provider_by_id(pid) is None:  # deleted in another tab meanwhile
                 raise ValueError(f"no provider named {pid!r}")
@@ -455,8 +452,7 @@ def register_provider_routes(app) -> None:
             raise HTTPException(
                 status_code=409,
                 detail=(
-                    f"{pid!r} is still named by: {', '.join(remaining)}. "
-                    "Repoint those to another connection first."
+                    f"{pid!r} is still named by: {', '.join(remaining)}. Repoint those to another connection first."
                 ),
             )
         # The last-connection guard is unchanged, and evaluated AFTER releases.
@@ -468,13 +464,18 @@ def register_provider_routes(app) -> None:
                     "without a configured model source. Confirm that explicitly to continue."
                 ),
             )
+
         def _without(current) -> list[dict]:
             return [e for e in _entries_from_config(current) if e["id"] != pid]
 
         def _releases(current) -> dict:
             return {
                 key: (
-                    [f for f in (getattr(current, "model_favorites", []) or []) if not str(f).lower().startswith(f"{pid}:")]
+                    [
+                        f
+                        for f in (getattr(current, "model_favorites", []) or [])
+                        if not str(f).lower().startswith(f"{pid}:")
+                    ]
                     if value is _FAVORITES_OF_CURRENT
                     else value
                 )

@@ -88,9 +88,7 @@ def test_tools_disabled_drops_search_tools(tmp_path):
     # filtered set), so it needs its own pass — otherwise a disabled search_tools
     # silently re-binds, which the Tools-tab row toggle would surface as a switch
     # that snaps back on.
-    g = create_agent_graph(
-        _cfg(tmp_path, tools_deferred_enabled=True, tools_disabled=["search_tools"])
-    )
+    g = create_agent_graph(_cfg(tmp_path, tools_deferred_enabled=True, tools_disabled=["search_tools"]))
     assert "search_tools" not in _bound_names(g)
     assert "search_tools" in {t.name for t in g.disabled_tools}
 
@@ -99,9 +97,7 @@ def test_tools_disabled_drops_search_tools(tmp_path):
 
 
 def test_disabled_tools_are_stamped_for_the_catalog(tmp_path):
-    g = create_agent_graph(
-        _cfg(tmp_path, tools_disabled=["run_command", "calculator", "ghost_tool"])
-    )
+    g = create_agent_graph(_cfg(tmp_path, tools_disabled=["run_command", "calculator", "ghost_tool"]))
     dropped = {t.name for t in g.disabled_tools}
     # The dropped tool OBJECTS are kept (name/description feed the console row) …
     assert {"run_command", "calculator"} <= dropped

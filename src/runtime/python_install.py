@@ -336,7 +336,17 @@ def _pip_install(exe: Path, spec_args: list[str], *, what: str, timeout: float =
     _ensure_pip(exe)
     r = _run_python(
         exe,
-        ["-m", "pip", "install", "--only-binary", ":all:", "--disable-pip-version-check", "--no-input", "-q", *spec_args],
+        [
+            "-m",
+            "pip",
+            "install",
+            "--only-binary",
+            ":all:",
+            "--disable-pip-version-check",
+            "--no-input",
+            "-q",
+            *spec_args,
+        ],
         timeout=timeout,
     )
     if r.returncode != 0:

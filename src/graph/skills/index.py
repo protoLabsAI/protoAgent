@@ -275,11 +275,13 @@ class SkillsIndex:
             published = True  # publication may change disk and then raise
             artifact = publish()
             values = {
-                "name": artifact.name, "description": artifact.description,
+                "name": artifact.name,
+                "description": artifact.description,
                 "prompt_template": artifact.prompt_template,
                 "tools_used": " ".join(artifact.tools_used or []),
                 "source_session_id": artifact.source_session_id,
-                "source": "disk", "user_facing": "1" if artifact.user_facing else "0",
+                "source": "disk",
+                "user_facing": "1" if artifact.user_facing else "0",
                 "slash": artifact.slash_token() if artifact.user_facing else artifact.slash,
                 "user_only": "1" if artifact.user_only else "0",
             }
@@ -294,17 +296,24 @@ class SkillsIndex:
             try:
                 conn.rollback()
                 if snapshot is not None:
-                    current = conn.execute("SELECT rowid AS id, * FROM skills_fts WHERE rowid = ?", (skill_id,)).fetchone()
+                    current = conn.execute(
+                        "SELECT rowid AS id, * FROM skills_fts WHERE rowid = ?", (skill_id,)
+                    ).fetchone()
                     if current is None or dict(current) != snapshot:
                         columns = [key for key in snapshot if key != "id"]
                         conn.execute("DELETE FROM skills_fts WHERE rowid = ?", (skill_id,))
                         conn.execute(
-                            "INSERT INTO skills_fts (rowid, " + ", ".join(columns) + ") VALUES (" +
-                            ", ".join("?" for _ in range(len(columns) + 1)) + ")",
+                            "INSERT INTO skills_fts (rowid, "
+                            + ", ".join(columns)
+                            + ") VALUES ("
+                            + ", ".join("?" for _ in range(len(columns) + 1))
+                            + ")",
                             (skill_id, *(snapshot[key] for key in columns)),
                         )
                         conn.commit()
-                    restored = conn.execute("SELECT rowid AS id, * FROM skills_fts WHERE rowid = ?", (skill_id,)).fetchone()
+                    restored = conn.execute(
+                        "SELECT rowid AS id, * FROM skills_fts WHERE rowid = ?", (skill_id,)
+                    ).fetchone()
                     if restored is None or dict(restored) != snapshot:
                         raise RuntimeError("index snapshot verification failed")
             except Exception as exc:

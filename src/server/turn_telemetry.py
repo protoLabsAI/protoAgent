@@ -166,7 +166,7 @@ def _success_for(state: str) -> int | None:
 _ERROR_MAX = 500
 
 
-def _turn_error(state: str, error: str) -> str:
+def _turn_error(state: str, error: str, *, incognito: bool = False) -> str:
     """The ``error`` column for one leg: why a non-completed turn ended, or ``""``.
 
     Free text from an exception or a provider can carry a credential (an echoed header,
@@ -179,7 +179,9 @@ def _turn_error(state: str, error: str) -> str:
     "cancelled", hiding that the turn above it stalled. The reason is read from the
     current context, so it is only ever non-empty inside a guarded turn's work.
     """
-    if state in ("completed", "input_required"):
+    if state in ("completed", "input_required") or incognito:
+        # An incognito turn keeps timing and usage but no content (ADR 0069). A provider
+        # or exception message can echo the user's input, so its failure text is content.
         return ""
     try:
         from graph.turn_liveness import turn_stop_reason
@@ -190,15 +192,9 @@ def _turn_error(state: str, error: str) -> str:
     text = str(error or "").strip()
     if stop and (not text or text.lower() == "cancelled"):
         text = stop
-    if not text:
-        return ""
-    try:
-        from graph.middleware.redaction import redact
+    from observability.error_text import safe_error_text
 
-        text = str(redact(text))
-    except Exception:  # noqa: BLE001 — fail closed: an unredacted error is not stored
-        return "(error text withheld: redaction failed)"
-    return text if len(text) <= _ERROR_MAX else text[: _ERROR_MAX - 1] + "…"
+    return safe_error_text(text, max_len=_ERROR_MAX)
 
 
 def _turn_account(model: str, requested: str) -> tuple[str, str]:
@@ -254,6 +250,7 @@ def record_turn(
     provider_id: str = "",
     account_key: str = "",
     error: str = "",
+    incognito: bool = False,
 ) -> None:
     """Record one finished turn leg: Prometheus, the realtime bus, and the store.
 
@@ -363,7 +360,7 @@ def record_turn(
         # The run this leg belongs to (#4726): the turn's own task id, the spawning turn's
         # run for a background job, or the edge's run for a coder dispatch.
         "run_id": _current_run_id(),
-        "error": _turn_error(state, error),
+        "error": _turn_error(state, error, incognito=incognito),
     }
 
     if publish_usage_event:
@@ -379,7 +376,14 @@ def record_turn(
 
 
 def record_local_turn(
-    sink: dict, *, session_id: str, origin: str, state: str, started: float, error: str = ""
+    sink: dict,
+    *,
+    session_id: str,
+    origin: str,
+    state: str,
+    started: float,
+    error: str = "",
+    incognito: bool = False,
 ) -> None:
     """Write the telemetry row for one non-streaming turn (#3000). Best-effort.
 
@@ -456,6 +460,7 @@ def record_local_turn(
             # emits no turn.started.
             publish_usage_event=False,
             error=error,
+            incognito=incognito,
         )
     except Exception:  # noqa: BLE001 — telemetry must never break a turn
         log.debug("[telemetry] failed to record a non-streaming turn", exc_info=True)

@@ -445,7 +445,11 @@ def _content_lists(payload: dict):
                     continue
                 yield (top, mi, field, None), content
                 for bi, block in enumerate(content):
-                    if isinstance(block, dict) and block.get("type") == "tool_result" and isinstance(block.get("content"), list):
+                    if (
+                        isinstance(block, dict)
+                        and block.get("type") == "tool_result"
+                        and isinstance(block.get("content"), list)
+                    ):
                         yield (top, mi, field, bi), block["content"]
 
 

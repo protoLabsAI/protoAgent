@@ -152,7 +152,9 @@ def test_the_hold_spans_the_refresh_that_follows_pip(plugin, monkeypatch):
     monkeypatch.setattr(loader, "refresh_plugin_deps", slow_refresh)
     app = _app()
     first: list = []
-    t = threading.Thread(target=lambda: first.append(TestClient(app).post("/api/plugins/install-deps", json={"id": PID})))
+    t = threading.Thread(
+        target=lambda: first.append(TestClient(app).post("/api/plugins/install-deps", json={"id": PID}))
+    )
     t.start()
     try:
         assert refreshing.wait(30), "the first install never reached its refresh"

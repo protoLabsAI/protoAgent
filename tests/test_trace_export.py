@@ -127,9 +127,7 @@ def test_completed_turn_row_shape(tmp_path, monkeypatch):
 )
 def test_reward_mapping(tmp_path, monkeypatch, state, verified, reward):
     _enable(tmp_path, monkeypatch)
-    trace_export.export_turn(
-        _Outcome(state=state), checkpointer=_Checkpointer(_MESSAGES), graph_config=_Cfg()
-    )
+    trace_export.export_turn(_Outcome(state=state), checkpointer=_Checkpointer(_MESSAGES), graph_config=_Cfg())
     (row,) = _read_rows(tmp_path)
     assert row["verified"] is verified
     assert row["reward"] == reward
@@ -137,9 +135,7 @@ def test_reward_mapping(tmp_path, monkeypatch, state, verified, reward):
 
 def test_incognito_thread_skipped(tmp_path, monkeypatch):
     _enable(tmp_path, monkeypatch)
-    trace_export.export_turn(
-        _Outcome(), checkpointer=_Checkpointer(_MESSAGES, incognito=True), graph_config=_Cfg()
-    )
+    trace_export.export_turn(_Outcome(), checkpointer=_Checkpointer(_MESSAGES, incognito=True), graph_config=_Cfg())
     assert not list(tmp_path.glob("*.jsonl"))
 
 

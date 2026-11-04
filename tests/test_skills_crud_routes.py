@@ -107,9 +107,13 @@ def test_create_rejects_duplicate_name(monkeypatch, tmp_path):
 
 def test_edit_rewrites_file_and_reindexes(monkeypatch, tmp_path):
     c, idx, root = _client(monkeypatch, tmp_path)
-    created = c.post("/api/playbooks", json={"name": "Edit Me", "description": "old", "prompt_template": "old body"}).json()
+    created = c.post(
+        "/api/playbooks", json={"name": "Edit Me", "description": "old", "prompt_template": "old body"}
+    ).json()
     sid = created["id"]
-    r = c.put(f"/api/playbooks/{sid}", json={"name": "Edit Me", "description": "new desc", "prompt_template": "new body"})
+    r = c.put(
+        f"/api/playbooks/{sid}", json={"name": "Edit Me", "description": "new desc", "prompt_template": "new body"}
+    )
     assert r.status_code == 200
     md = (root / "edit-me" / "SKILL.md").read_text()
     assert "new desc" in md and "new body" in md and "old body" not in md
@@ -196,12 +200,16 @@ def test_promote_then_forget_round_trip(monkeypatch, tmp_path):
 
     priv = next(p for p in c.get("/api/playbooks").json()["playbooks"] if p["tier"] == "private")
     assert c.post(f"/api/playbooks/{priv['id']}/promote").json() == {
-        "enabled": True, "promoted": True, "name": "Nightly"
+        "enabled": True,
+        "promoted": True,
+        "name": "Nightly",
     }
 
     commons = next(p for p in c.get("/api/playbooks").json()["playbooks"] if p["tier"] == "commons")
     assert c.post(f"/api/playbooks/{commons['id']}/forget").json() == {
-        "enabled": True, "forgotten": True, "name": "Nightly"
+        "enabled": True,
+        "forgotten": True,
+        "name": "Nightly",
     }
     assert not any(p["tier"] == "commons" for p in c.get("/api/playbooks").json()["playbooks"])
     assert any(p["tier"] == "private" for p in c.get("/api/playbooks").json()["playbooks"])  # private untouched
@@ -210,7 +218,9 @@ def test_promote_then_forget_round_trip(monkeypatch, tmp_path):
 def test_forget_unknown_commons_id(monkeypatch, tmp_path):
     c, _idx = _client_layered(monkeypatch, tmp_path)
     assert c.post("/api/playbooks/9999/forget").json() == {
-        "enabled": True, "forgotten": False, "error": "no commons skill with that id"
+        "enabled": True,
+        "forgotten": False,
+        "error": "no commons skill with that id",
     }
 
 
@@ -222,19 +232,19 @@ def test_forget_not_layered_hints(monkeypatch, tmp_path):
 
 
 @pytest.mark.platform_sensitive
-@pytest.mark.parametrize('field', ['name', 'description', 'prompt_template'])
+@pytest.mark.parametrize("field", ["name", "description", "prompt_template"])
 def test_edit_rejects_explicit_null_before_mutating(monkeypatch, tmp_path, field):
     client, idx, root = _client(monkeypatch, tmp_path)
-    body = {'name': 'Keep Me', 'description': 'old', 'prompt_template': 'old body'}
-    sid = client.post('/api/playbooks', json=body).json()['id']
+    body = {"name": "Keep Me", "description": "old", "prompt_template": "old body"}
+    sid = client.post("/api/playbooks", json=body).json()["id"]
     before = idx.all_skills()
-    path = root / 'keep-me' / 'SKILL.md'
+    path = root / "keep-me" / "SKILL.md"
     original = path.read_bytes()
-    response = client.put(f'/api/playbooks/{sid}', json={**body, field: None})
+    response = client.put(f"/api/playbooks/{sid}", json={**body, field: None})
     assert response.status_code == 400
     assert idx.all_skills() == before
     assert path.read_bytes() == original
-    assert not (root / '.history').exists()
+    assert not (root / ".history").exists()
 
 
 @pytest.mark.platform_sensitive
@@ -251,9 +261,14 @@ def test_edit_promoted_private_skill_preserves_commons(monkeypatch, tmp_path, re
         current = idx._private.get_skill("Deploy")
         assert current["id"] != idx._commons.get_skill("Deploy")["id"]
         name = "Release" if rename else "Deploy"
-        response = c.put(f"/api/playbooks/{current['id']}", json={
-            "name": name, "description": "updated", "body": "updated body",
-        })
+        response = c.put(
+            f"/api/playbooks/{current['id']}",
+            json={
+                "name": name,
+                "description": "updated",
+                "body": "updated body",
+            },
+        )
         assert response.status_code == 200, response.text
         assert idx._private.get_skill(name)["id"] == current["id"]
         assert idx._commons.all_skills() == shared

@@ -126,9 +126,7 @@ def _lead_graph_tool_names(*, goal_enabled: bool, watches_enabled: bool) -> set[
     with patch("graph.agent.create_llm", lambda *a, **k: fake):
         from graph.agent import create_agent_graph
 
-        g = create_agent_graph(
-            LangGraphConfig(goal_enabled=goal_enabled, watches_enabled=watches_enabled)
-        )
+        g = create_agent_graph(LangGraphConfig(goal_enabled=goal_enabled, watches_enabled=watches_enabled))
     node = g.nodes["tools"]
     for obj in (node, getattr(node, "runnable", None), getattr(node, "bound", None)):
         tbn = getattr(obj, "tools_by_name", None)

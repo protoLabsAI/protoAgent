@@ -101,7 +101,9 @@ def _pip_installs(calls: list[list[str]]) -> list[list[str]]:
 
 
 def test_frozen_install_reports_deps_then_the_confirm_installs_them_into_the_managed_runtime(desktop, monkeypatch):
-    repo = _plugin_repo(desktop["root"], f"requires_pip:\n  - \"{PKG}>=1\"\n  - {{pkg: 'softpad-xyz>=2', optional: true}}\n")
+    repo = _plugin_repo(
+        desktop["root"], f"requires_pip:\n  - \"{PKG}>=1\"\n  - {{pkg: 'softpad-xyz>=2', optional: true}}\n"
+    )
     _wire(monkeypatch, enabled=[], disabled=[], meta=[{"id": "depdemo", "enabled": True, "loaded": True}])
 
     # 1) Install: the plugin lands, NOTHING is pip'd, and the response carries what the
@@ -138,7 +140,7 @@ def test_frozen_install_reports_deps_then_the_confirm_installs_them_into_the_man
 
 def test_frozen_install_with_nothing_missing_asks_nothing(desktop, monkeypatch):
     # httpx ships in the host (a core dep) — nothing for the dialog to ask.
-    repo = _plugin_repo(desktop["root"], "requires_pip: [\"httpx>=0.27\"]\n")
+    repo = _plugin_repo(desktop["root"], 'requires_pip: ["httpx>=0.27"]\n')
     _wire(monkeypatch, enabled=[], disabled=[], meta=[])
     body = _client().post("/api/plugins/install", json={"url": str(repo)}).json()
     assert body["deps_needed"] == []
@@ -162,7 +164,7 @@ def test_cli_install_runtime_deps_flag_keeps_non_interactive_provisioning_workin
     they still pip missing required deps into the managed runtime as part of the install."""
     from graph.plugins.cli import run_plugin_cli
 
-    repo = _plugin_repo(desktop["root"], f"requires_pip: [\"{PKG}>=1\"]\n")
+    repo = _plugin_repo(desktop["root"], f'requires_pip: ["{PKG}>=1"]\n')
     assert run_plugin_cli(["install", str(repo), "--install-runtime-deps"]) == 0
     [pip] = _pip_installs(desktop["pip"])
     assert pip[0] == str(desktop["exe"]) and pip[-1] == f"{PKG}>=1"
@@ -172,7 +174,7 @@ def test_cli_install_runtime_deps_flag_keeps_non_interactive_provisioning_workin
 def test_cli_install_without_the_flag_leaves_deps_for_install_deps(desktop, capsys):
     from graph.plugins.cli import run_plugin_cli
 
-    repo = _plugin_repo(desktop["root"], f"requires_pip: [\"{PKG}>=1\"]\n")
+    repo = _plugin_repo(desktop["root"], f'requires_pip: ["{PKG}>=1"]\n')
     assert run_plugin_cli(["install", str(repo)]) == 0
     assert desktop["pip"] == []
     out = capsys.readouterr().out

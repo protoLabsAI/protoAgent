@@ -110,9 +110,7 @@ def register_feedback_routes(app) -> None:
         if req.value is None:
             removed = 0
             if store is not None:
-                removed = await asyncio.to_thread(
-                    store.delete_feedback, session_id=session_id, trace_id=trace_id
-                )
+                removed = await asyncio.to_thread(store.delete_feedback, session_id=session_id, trace_id=trace_id)
             unscored = False
             if trace_id and tracing.is_enabled():
                 await asyncio.to_thread(tracing.delete_score, _score_id(trace_id))

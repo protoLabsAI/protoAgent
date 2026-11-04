@@ -154,8 +154,20 @@ class HistoryStore:
                 "INSERT INTO history (session_id, thread_id, surface, kind, heading, content, "
                 "span_start, span_end, created_at, namespace, invalidated_at, invalidation_reason) "
                 "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                (session_id, thread_id, surface, kind, heading, content, span_start, span_end,
-                 created_at or _now_iso(), namespace, invalidated_at, invalidation_reason),
+                (
+                    session_id,
+                    thread_id,
+                    surface,
+                    kind,
+                    heading,
+                    content,
+                    span_start,
+                    span_end,
+                    created_at or _now_iso(),
+                    namespace,
+                    invalidated_at,
+                    invalidation_reason,
+                ),
             )
             return int(cur.lastrowid)
 
@@ -175,20 +187,25 @@ class HistoryStore:
             where += f" AND kind IN ({','.join('?' for _ in kinds)})"
             params.extend(kinds)
         with closing(self._connect()) as db:
-            return [HistoryEntry(**dict(row)) for row in db.execute(
-                f"SELECT * FROM history WHERE {where} ORDER BY created_at, id", params
-            )]
+            return [
+                HistoryEntry(**dict(row))
+                for row in db.execute(f"SELECT * FROM history WHERE {where} ORDER BY created_at, id", params)
+            ]
 
     def search(self, query: str, limit: int = 10) -> list[HistoryEntry]:
         """Search heading/content using FTS5 syntax, returning visible, kind-labelled hits."""
         if not query.strip() or limit <= 0:
             return []
         with closing(self._connect()) as db:
-            return [HistoryEntry(**dict(row)) for row in db.execute(
-                "SELECT h.* FROM history_fts JOIN history h ON h.id = history_fts.rowid "
-                "WHERE history_fts MATCH ? AND h.invalidated_at IS NULL "
-                "ORDER BY history_fts.rank, h.id LIMIT ?", (query, limit)
-            )]
+            return [
+                HistoryEntry(**dict(row))
+                for row in db.execute(
+                    "SELECT h.* FROM history_fts JOIN history h ON h.id = history_fts.rowid "
+                    "WHERE history_fts MATCH ? AND h.invalidated_at IS NULL "
+                    "ORDER BY history_fts.rank, h.id LIMIT ?",
+                    (query, limit),
+                )
+            ]
 
     # ── console History view (ADR 0125 D6) ───────────────────────────────────────
     # The operator-facing rollup/stats/delete surface for the Memory inspector's
@@ -255,9 +272,7 @@ class HistoryStore:
         reaches a row another forget has hidden (``invalidated_at IS NULL``). Returns
         whether a row was removed."""
         with self._write() as db:
-            return db.execute(
-                "DELETE FROM history WHERE id = ? AND invalidated_at IS NULL", (id,)
-            ).rowcount > 0
+            return db.execute("DELETE FROM history WHERE id = ? AND invalidated_at IS NULL", (id,)).rowcount > 0
 
     def delete_session(self, session_id: str, thread_ids: Sequence[str] = ()) -> int:
         """Hard-delete a whole session's history — the History tab's session delete, with

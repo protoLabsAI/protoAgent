@@ -42,7 +42,9 @@ def _common(p: argparse.ArgumentParser, *, top: bool) -> None:
         help=f"credential for --hub — a fleet token or operator bearer (env: {deckhub.ENV_TOKEN}); never printed",
         **d,
     )
-    p.add_argument("--offline", action="store_true", help="read this instance's fleet.json instead of asking a hub", **d)
+    p.add_argument(
+        "--offline", action="store_true", help="read this instance's fleet.json instead of asking a hub", **d
+    )
     p.add_argument(
         "--insecure-http",
         action="store_true",
@@ -54,7 +56,13 @@ def _common(p: argparse.ArgumentParser, *, top: bool) -> None:
         **d,
     )
     p.add_argument("--json", dest="as_json", action="store_true", help="emit JSON for scripting", **d)
-    p.add_argument("--all", dest="all_hubs", action="store_true", help="every hub on this box (and peers found on the network), not one hub's fleet", **d)
+    p.add_argument(
+        "--all",
+        dest="all_hubs",
+        action="store_true",
+        help="every hub on this box (and peers found on the network), not one hub's fleet",
+        **d,
+    )
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -88,7 +96,12 @@ def _build_parser() -> argparse.ArgumentParser:
     pn.add_argument("--bundle", metavar="GIT_URL", help="a bundle to install into the new member")
     pn.add_argument("--port", type=int)
     pn.add_argument("--no-start", dest="start", action="store_false", help="create only; do not start it")
-    pn.add_argument("--no-inherit", dest="inherit", action="store_false", help="a fully blank agent — no model connections or credentials from the hub")
+    pn.add_argument(
+        "--no-inherit",
+        dest="inherit",
+        action="store_false",
+        help="a fully blank agent — no model connections or credentials from the hub",
+    )
     _common(pn, top=False)
     pr = sub.add_parser("rm", help="remove a member (stops it first); its data is kept unless --purge")
     pr.add_argument("name")
@@ -104,7 +117,10 @@ def _build_parser() -> argparse.ArgumentParser:
     ra = rsub.add_parser("add", help="register a remote protoAgent as a fleet member")
     ra.add_argument("name")
     ra.add_argument("url")
-    ra.add_argument("--bearer", help="the remote's bearer (prefer --bearer-stdin: argv is visible to other processes and shell history); --token is the HUB's credential")
+    ra.add_argument(
+        "--bearer",
+        help="the remote's bearer (prefer --bearer-stdin: argv is visible to other processes and shell history); --token is the HUB's credential",
+    )
     ra.add_argument("--bearer-stdin", action="store_true", help="read the remote's bearer from stdin (one line)")
     _common(ra, top=False)
     re_ = rsub.add_parser("edit", help="change a remote's name, url or token in place")
@@ -129,7 +145,9 @@ def _build_parser() -> argparse.ArgumentParser:
         help="the pairing code the remote showed (single-use, expires in minutes); omit it to be prompted, or use --code-stdin, to keep it out of shell history",
     )
     pp.add_argument("--code-stdin", action="store_true", help="read the pairing code from stdin (one line)")
-    pp.add_argument("--name", dest="member_name", help="the member's name in this fleet (default: the remote's agent name)")
+    pp.add_argument(
+        "--name", dest="member_name", help="the member's name in this fleet (default: the remote's agent name)"
+    )
     _common(pp, top=False)
     po = sub.add_parser("order", help="persist the roster's display order: every member id, in the order wanted")
     po.add_argument("ids", nargs="+", metavar="ID")
@@ -203,8 +221,12 @@ def _note_other_hubs(conn: deckhub.Connection, args: argparse.Namespace) -> None
     except Exception:  # noqa: BLE001 — a note must never break the command
         return
     if others:
-        where = ", ".join(f"{c.url.rsplit(':', 1)[-1]}{f' ({c.instance_root.name})' if c.instance_root else ''}" for c in others)
-        _note(f"{len(others)} other hub(s) on this box: :{where} — `fleet --all` lists them; `--hub URL` picks one", args)
+        where = ", ".join(
+            f"{c.url.rsplit(':', 1)[-1]}{f' ({c.instance_root.name})' if c.instance_root else ''}" for c in others
+        )
+        _note(
+            f"{len(others)} other hub(s) on this box: :{where} — `fleet --all` lists them; `--hub URL` picks one", args
+        )
 
 
 # ── ls ───────────────────────────────────────────────────────────────────────
@@ -317,11 +339,15 @@ def _cmd_friction(args: argparse.Namespace) -> int:
             for r in results:
                 if r["ok"]:
                     if not args.as_json:
-                        print(f"  ✓ {r['name']:16} {verb} {r['changed']} {'entry' if r['changed'] == 1 else 'entries'} — {r['summary']}")
+                        print(
+                            f"  ✓ {r['name']:16} {verb} {r['changed']} {'entry' if r['changed'] == 1 else 'entries'} — {r['summary']}"
+                        )
                 elif not args.as_json:
                     print(f"  ✗ {r['name']:16} {r['error']}", file=sys.stderr)
             if args.as_json:
-                code = _finish(args, "live", results, hub_url)  # always emits: a script must get JSON, even an empty list
+                code = _finish(
+                    args, "live", results, hub_url
+                )  # always emits: a script must get JSON, even an empty list
                 return code or (0 if results else 1)
             return 1 if (not results or any(not r["ok"] for r in results)) else 0
 
@@ -355,7 +381,11 @@ def _cmd_friction_all(args: argparse.Namespace) -> int:
     for r in rows:
         if r.candidate is not None:
             discovery.probe(r, token=args.token, insecure_http=args.insecure_http, roots=roots)
-    live = [r for r in discovery.reconcile(rows) if r.presence == "running" and r.candidate is not None and r.candidate.trusted]
+    live = [
+        r
+        for r in discovery.reconcile(rows)
+        if r.presence == "running" and r.candidate is not None and r.candidate.trusted
+    ]
 
     results: list[dict] = []
     skipped: list[dict] = []
@@ -412,7 +442,13 @@ def _cmd_up(args: argparse.Namespace) -> int:
                     continue
                 agent = res.get("agent") or {}
                 tag = "already running" if agent.get("already") else "started"
-                _row_ok(name, args, results, f"{tag} (:{agent.get('port')}, pid {agent.get('pid')}) via hub {hub_url}", agent=agent)
+                _row_ok(
+                    name,
+                    args,
+                    results,
+                    f"{tag} (:{agent.get('port')}, pid {agent.get('pid')}) via hub {hub_url}",
+                    agent=agent,
+                )
         finally:
             conn.client.close()
         return _finish(args, "live", results, hub_url)
@@ -448,12 +484,16 @@ def _cmd_down(args: argparse.Namespace) -> int:
                     try:
                         res = conn.client.stop(name)
                     except deckhub.HubError as exc:
-                        _row_fail(name, args, results, exc.detail if isinstance(exc, deckhub.HubRequestError) else str(exc))
+                        _row_fail(
+                            name, args, results, exc.detail if isinstance(exc, deckhub.HubRequestError) else str(exc)
+                        )
                         continue
                     if res.get("ok"):
                         _row_ok(name, args, results, f"stopped via hub {hub_url}", stopped=True)
                     else:
-                        _row_fail(name, args, results, f"not stopped — {res.get('reason', 'still running')}", stopped=False)
+                        _row_fail(
+                            name, args, results, f"not stopped — {res.get('reason', 'still running')}", stopped=False
+                        )
             else:
                 running = sum(1 for a in conn.roster if a.get("running") and not a.get("host") and not a.get("remote"))
                 try:
@@ -468,7 +508,9 @@ def _cmd_down(args: argparse.Namespace) -> int:
                 for name in stopped:
                     _row_ok(name, args, results, f"stopped via hub {hub_url}", stopped=True)
                 for f in fails:
-                    _row_fail(str(f.get("name", "?")), args, results, str(f.get("reason") or "not stopped"), stopped=False)
+                    _row_fail(
+                        str(f.get("name", "?")), args, results, str(f.get("reason") or "not stopped"), stopped=False
+                    )
         finally:
             conn.client.close()
         return _finish(args, "live", results, hub_url)
@@ -552,7 +594,9 @@ def _port_free(port: int) -> bool:
     return True
 
 
-def _pick_port(preferred: int | None, *, taken: frozenset[int] | set[int] = frozenset(), low: int = 7870, high: int = 7910) -> int:
+def _pick_port(
+    preferred: int | None, *, taken: frozenset[int] | set[int] = frozenset(), low: int = 7870, high: int = 7910
+) -> int:
     """The port a stopped hub should come up on: the one it last used when nothing holds
     it, else the first free one in the fleet's range (ports are box-global: the desktop
     hub usually holds 7870). ``taken`` are ports other hubs' records on disk own — a
@@ -604,7 +648,9 @@ def _launch_hub(row) -> None:
         if not _same_dir(parent, deckhub.data_home()) and any(_same_dir(parent, b) for b in deckhub.known_box_roots()):
             env["PROTOAGENT_BOX_ROOT"] = str(parent)
     discovery = importlib.import_module("deck.discovery")  # Textual-free: the launcher never loads the screen
-    member_ports, hub_ports = discovery._ports_on_disk(discovery.instance_roots(), records=True)  # a stopped member's recorded port is still its own
+    member_ports, hub_ports = discovery._ports_on_disk(
+        discovery.instance_roots(), records=True
+    )  # a stopped member's recorded port is still its own
     taken = set(member_ports) | {p for p, r in hub_ports.items() if not _same_dir(r, row.root)}
     port = _pick_port(row.port, taken=taken)
     row.port = port
@@ -614,7 +660,11 @@ def _launch_hub(row) -> None:
     argv = [*base, "up", "--port", str(port)]
     proc = subprocess.run(argv, env=env, capture_output=True, text=True, timeout=120)
     if proc.returncode != 0:
-        raise RuntimeError((proc.stderr or proc.stdout or "").strip().splitlines()[-1] if (proc.stderr or proc.stdout).strip() else f"protoagent up exited {proc.returncode}")
+        raise RuntimeError(
+            (proc.stderr or proc.stdout or "").strip().splitlines()[-1]
+            if (proc.stderr or proc.stdout).strip()
+            else f"protoagent up exited {proc.returncode}"
+        )
 
 
 def _hub_row_dict(r) -> dict:
@@ -639,7 +689,9 @@ def _cmd_hubs(args: argparse.Namespace) -> int:
     """``protoagent fleet --all``: every hub on this box, probed, plus peers."""
     import importlib
 
-    discovery = importlib.import_module("deck.discovery")  # NOT deck.hubs: the screen would load Textual for a --json run
+    discovery = importlib.import_module(
+        "deck.discovery"
+    )  # NOT deck.hubs: the screen would load Textual for a --json run
     rows = discovery.enumerate_hubs(peers=[] if args.offline else _discover_peers())
     roots = discovery.instance_roots()
     for r in rows:
@@ -652,14 +704,21 @@ def _cmd_hubs(args: argparse.Namespace) -> int:
     if not rows:
         print("(no hubs found on this box)")
         return 0
-    print(f"hubs on this box · {len(rows)} found · {sum(1 for r in rows if r.presence == 'running')} running" + (" · --offline: peers not scanned, hubs not probed" if args.offline else ""))
-    plain = discovery.plain  # a peer names itself and a hub reports its version: no control character reaches the terminal
+    print(
+        f"hubs on this box · {len(rows)} found · {sum(1 for r in rows if r.presence == 'running')} running"
+        + (" · --offline: peers not scanned, hubs not probed" if args.offline else "")
+    )
+    plain = (
+        discovery.plain
+    )  # a peer names itself and a hub reports its version: no control character reaches the terminal
     for r in rows:
         glyph = discovery.PRESENCE_GLYPH.get(r.presence, "·")
         members, where = discovery.row_text(r)
         port = f":{r.port}" if r.port else "—"
         ver = f"v{plain(r.version)}" if r.version else "—"
-        print(f"  {glyph} {plain(r.name):<18} {r.presence:<12} {r.launcher:<13} {port:<7} {ver:<9} {members:<18} {plain(where)}")
+        print(
+            f"  {glyph} {plain(r.name):<18} {r.presence:<12} {r.launcher:<13} {port:<7} {ver:<9} {members:<18} {plain(where)}"
+        )
     return 0
 
 
@@ -688,7 +747,9 @@ def _read_bearer(args: argparse.Namespace) -> str | None:
         else:
             line = sys.stdin.readline().rstrip("\r\n")
         if not line.strip():
-            raise _BearerError("--bearer-stdin read an empty line — nothing sent (to forget a stored bearer, pass --clear-bearer)")
+            raise _BearerError(
+                "--bearer-stdin read an empty line — nothing sent (to forget a stored bearer, pass --clear-bearer)"
+            )
         return line
     if argv_bearer is not None and not argv_bearer.strip():
         raise _BearerError("--bearer is empty — nothing sent (to forget a stored bearer, pass --clear-bearer)")
@@ -709,7 +770,9 @@ def _run_op(coro_fn, *a, **kw):
 def _cmd_new(args: argparse.Namespace) -> int:
     results: list[dict] = []
     if args.archetype and args.bundle:
-        _row_fail(args.name, args, results, "pass --archetype OR --bundle, not both (an archetype names its own bundle)")
+        _row_fail(
+            args.name, args, results, "pass --archetype OR --bundle, not both (an archetype names its own bundle)"
+        )
         return _finish(args, "error", results)
     conn = _open_hub(args)
     body: dict[str, Any] = {"name": args.name, "start": args.start, "inherit_config": args.inherit}
@@ -723,7 +786,12 @@ def _cmd_new(args: argparse.Namespace) -> int:
             if args.archetype:
                 arch = next((a for a in conn.client.archetypes() if str(a.get("id")) == args.archetype), None)
                 if arch is None:
-                    _row_fail(args.name, args, results, f"no archetype {args.archetype!r} on the hub (see the deck's n, or GET /api/archetypes)")
+                    _row_fail(
+                        args.name,
+                        args,
+                        results,
+                        f"no archetype {args.archetype!r} on the hub (see the deck's n, or GET /api/archetypes)",
+                    )
                     return _finish(args, "live", results, hub_url)
                 if arch.get("bundle"):
                     body["bundle"] = arch["bundle"]
@@ -737,32 +805,68 @@ def _cmd_new(args: argparse.Namespace) -> int:
                 _row_fail(args.name, args, results, _hub_detail(exc))
                 return _finish(args, "live", results, hub_url)
             agent = res.get("agent") or {}
-            state = f"started (:{agent.get('port')}, pid {agent.get('pid')})" if agent.get("running") else f"created (:{agent.get('port')}, not started)"
+            state = (
+                f"started (:{agent.get('port')}, pid {agent.get('pid')})"
+                if agent.get("running")
+                else f"created (:{agent.get('port')}, not started)"
+            )
             for w in res.get("warnings") or []:
                 _note(f"note: {w}", args)
-            _row_ok(args.name, args, results, f"{state} via hub {hub_url}", agent=agent, installed=res.get("installed", []), warnings=res.get("warnings", []))
+            _row_ok(
+                args.name,
+                args,
+                results,
+                f"{state} via hub {hub_url}",
+                agent=agent,
+                installed=res.get("installed", []),
+                warnings=res.get("warnings", []),
+            )
         finally:
             conn.client.close()
         return _finish(args, "live", results, hub_url)
     if args.archetype:
-        _row_fail(args.name, args, results, "--archetype needs a running hub (its catalog lives there); offline, pass --bundle <git-url> or nothing for a blank member")
+        _row_fail(
+            args.name,
+            args,
+            results,
+            "--archetype needs a running hub (its catalog lives there); offline, pass --bundle <git-url> or nothing for a blank member",
+        )
         return _finish(args, "offline", results)
     from graph.workspaces import manager
     from ops import fleet as fleet_ops
 
     try:
-        res = _run_op(fleet_ops.create, args.name, bundle=args.bundle, port=args.port, start=args.start, inherit_config=args.inherit)
+        res = _run_op(
+            fleet_ops.create,
+            args.name,
+            bundle=args.bundle,
+            port=args.port,
+            start=args.start,
+            inherit_config=args.inherit,
+        )
     except (manager.WorkspaceError, supervisor.FleetError) as exc:
         _row_fail(args.name, args, results, str(exc))
         return _finish(args, "offline", results)
     agent = res.get("agent") or {}
-    state = f"started (:{agent.get('port')}, pid {agent.get('pid')})" if agent.get("running") else f"created (:{agent.get('port')}, not started)"
-    _row_ok(args.name, args, results, f"{state} via disk (offline)", agent=agent, installed=res.get("installed", []), warnings=res.get("warnings", []))
+    state = (
+        f"started (:{agent.get('port')}, pid {agent.get('pid')})"
+        if agent.get("running")
+        else f"created (:{agent.get('port')}, not started)"
+    )
+    _row_ok(
+        args.name,
+        args,
+        results,
+        f"{state} via disk (offline)",
+        agent=agent,
+        installed=res.get("installed", []),
+        warnings=res.get("warnings", []),
+    )
     return _finish(args, "offline", results)
 
 
 def _confirm_remove(args: argparse.Namespace) -> str:
-    """"" when confirmed; else why not. The prompt goes to STDERR: ``rm … --json | jq`` keeps
+    """ "" when confirmed; else why not. The prompt goes to STDERR: ``rm … --json | jq`` keeps
     stdin on the terminal and stdout on the pipe, and a prompt on stdout would sit
     invisibly ahead of the JSON."""
     if args.yes:
@@ -793,7 +897,9 @@ def _cmd_rm(args: argparse.Namespace) -> int:
         except deckhub.HubRequestError as exc:
             if exc.status == 409:
                 # partial, retryable: the member IS stopped, only its workspace survived (#2583)
-                _row_fail(args.name, args, results, "stopped, but its workspace survived — repeat to finish", retryable=True)
+                _row_fail(
+                    args.name, args, results, "stopped, but its workspace survived — repeat to finish", retryable=True
+                )
             else:
                 _row_fail(args.name, args, results, exc.detail)
             return _finish(args, "live", results, hub_url)
@@ -802,7 +908,13 @@ def _cmd_rm(args: argparse.Namespace) -> int:
             return _finish(args, "live", results, hub_url)
         finally:
             conn.client.close()
-        _row_ok(args.name, args, results, ("purged" if "workspace" in (res.get("removed") or []) else "removed (data kept)") + f" via hub {hub_url}", removed=res.get("removed", []))
+        _row_ok(
+            args.name,
+            args,
+            results,
+            ("purged" if "workspace" in (res.get("removed") or []) else "removed (data kept)") + f" via hub {hub_url}",
+            removed=res.get("removed", []),
+        )
         return _finish(args, "live", results, hub_url)
     from graph.workspaces import manager
     from ops import fleet as fleet_ops
@@ -815,7 +927,13 @@ def _cmd_rm(args: argparse.Namespace) -> int:
     except (manager.WorkspaceError, supervisor.FleetError) as exc:
         _row_fail(args.name, args, results, str(exc))
         return _finish(args, "offline", results)
-    _row_ok(args.name, args, results, ("purged" if "workspace" in (res.get("removed") or []) else "removed (data kept)") + " via disk (offline)", removed=res.get("removed", []))
+    _row_ok(
+        args.name,
+        args,
+        results,
+        ("purged" if "workspace" in (res.get("removed") or []) else "removed (data kept)") + " via disk (offline)",
+        removed=res.get("removed", []),
+    )
     return _finish(args, "offline", results)
 
 
@@ -831,7 +949,14 @@ def _cmd_rename(args: argparse.Namespace) -> int:
             return _finish(args, "live", results, hub_url)
         finally:
             conn.client.close()
-        _row_ok(args.name, args, results, f"renamed to {res.get('name')} (id {res.get('id')} unchanged) via hub {hub_url}", id=res.get("id"), new_name=res.get("name"))
+        _row_ok(
+            args.name,
+            args,
+            results,
+            f"renamed to {res.get('name')} (id {res.get('id')} unchanged) via hub {hub_url}",
+            id=res.get("id"),
+            new_name=res.get("name"),
+        )
         return _finish(args, "live", results, hub_url)
     from graph.workspaces import manager
     from ops import fleet as fleet_ops
@@ -841,7 +966,14 @@ def _cmd_rename(args: argparse.Namespace) -> int:
     except manager.WorkspaceError as exc:
         _row_fail(args.name, args, results, str(exc))
         return _finish(args, "offline", results)
-    _row_ok(args.name, args, results, f"renamed to {res.get('name')} (id {res.get('id')} unchanged) via disk (offline)", id=res.get("id"), new_name=res.get("name"))
+    _row_ok(
+        args.name,
+        args,
+        results,
+        f"renamed to {res.get('name')} (id {res.get('id')} unchanged) via disk (offline)",
+        id=res.get("id"),
+        new_name=res.get("name"),
+    )
     return _finish(args, "offline", results)
 
 
@@ -882,17 +1014,47 @@ def _cmd_remote(args: argparse.Namespace) -> int:
         try:
             if args.remote_cmd == "add":
                 res = conn.client.remote_add(name, args.url, token or "", **_insecure_kw(args))
-                _row_ok(name, args, results, f"added: {_remote_text(res)} via hub {hub_url}", agent=res.get("agent"), reachable=res.get("reachable"), version=res.get("version"))
+                _row_ok(
+                    name,
+                    args,
+                    results,
+                    f"added: {_remote_text(res)} via hub {hub_url}",
+                    agent=res.get("agent"),
+                    reachable=res.get("reachable"),
+                    version=res.get("version"),
+                )
             elif args.remote_cmd == "edit":
-                fields = {k: v for k, v in (("name", args.new_name), ("url", args.url), ("token", token)) if v is not None}
+                fields = {
+                    k: v for k, v in (("name", args.new_name), ("url", args.url), ("token", token)) if v is not None
+                }
                 if not fields:
-                    _row_fail(name, args, results, "nothing to change — pass --name, --url, --bearer/--bearer-stdin or --clear-bearer")
+                    _row_fail(
+                        name,
+                        args,
+                        results,
+                        "nothing to change — pass --name, --url, --bearer/--bearer-stdin or --clear-bearer",
+                    )
                     return _finish(args, "live", results, hub_url)
                 res = conn.client.remote_update(name, **fields, **_insecure_kw(args))
-                _row_ok(name, args, results, f"updated: {_remote_text(res)} via hub {hub_url}", agent=res.get("agent"), reachable=res.get("reachable"), version=res.get("version"), token_cleared=bool(res.get("token_cleared")))
+                _row_ok(
+                    name,
+                    args,
+                    results,
+                    f"updated: {_remote_text(res)} via hub {hub_url}",
+                    agent=res.get("agent"),
+                    reachable=res.get("reachable"),
+                    version=res.get("version"),
+                    token_cleared=bool(res.get("token_cleared")),
+                )
             else:
                 res = conn.client.remote_remove(name)
-                _row_ok(name, args, results, f"unregistered via hub {hub_url} (the remote agent itself is untouched)", id=res.get("id"))
+                _row_ok(
+                    name,
+                    args,
+                    results,
+                    f"unregistered via hub {hub_url} (the remote agent itself is untouched)",
+                    id=res.get("id"),
+                )
         except deckhub.HubError as exc:
             _row_fail(name, args, results, _hub_detail(exc))
         finally:
@@ -904,13 +1066,37 @@ def _cmd_remote(args: argparse.Namespace) -> int:
     try:
         if args.remote_cmd == "add":
             res = _run_op(fleet_ops.remotes_add, name, args.url, token or "", **_insecure_kw(args))
-            _row_ok(name, args, results, f"added: {_remote_text(res)} via disk (offline)", agent=res.get("agent"), reachable=res.get("reachable"), version=res.get("version"))
+            _row_ok(
+                name,
+                args,
+                results,
+                f"added: {_remote_text(res)} via disk (offline)",
+                agent=res.get("agent"),
+                reachable=res.get("reachable"),
+                version=res.get("version"),
+            )
         elif args.remote_cmd == "edit":
             if args.new_name is None and args.url is None and token is None:
-                _row_fail(name, args, results, "nothing to change — pass --name, --url, --bearer/--bearer-stdin or --clear-bearer")
+                _row_fail(
+                    name,
+                    args,
+                    results,
+                    "nothing to change — pass --name, --url, --bearer/--bearer-stdin or --clear-bearer",
+                )
                 return _finish(args, "offline", results)
-            res = _run_op(fleet_ops.remotes_update, name, name=args.new_name, url=args.url, token=token, **_insecure_kw(args))
-            _row_ok(name, args, results, f"updated: {_remote_text(res)} via disk (offline)", agent=res.get("agent"), reachable=res.get("reachable"), version=res.get("version"), token_cleared=bool(res.get("token_cleared")))
+            res = _run_op(
+                fleet_ops.remotes_update, name, name=args.new_name, url=args.url, token=token, **_insecure_kw(args)
+            )
+            _row_ok(
+                name,
+                args,
+                results,
+                f"updated: {_remote_text(res)} via disk (offline)",
+                agent=res.get("agent"),
+                reachable=res.get("reachable"),
+                version=res.get("version"),
+                token_cleared=bool(res.get("token_cleared")),
+            )
         else:
             res = _run_op(fleet_ops.remotes_remove, name)
             _row_ok(name, args, results, "unregistered via disk (offline)", id=res.get("id"))
@@ -921,7 +1107,12 @@ def _cmd_remote(args: argparse.Namespace) -> int:
 
 def _pair_text(res: dict) -> str:
     verb = "re-paired (new token)" if res.get("action") == "retokened" else "paired + added"
-    auth = {"ok": "token accepted", "rejected": "token REJECTED", "unknown": "token not verified yet", "none": "no token"}.get(str(res.get("auth")), str(res.get("auth")))
+    auth = {
+        "ok": "token accepted",
+        "rejected": "token REJECTED",
+        "unknown": "token not verified yet",
+        "none": "no token",
+    }.get(str(res.get("auth")), str(res.get("auth")))
     return f"{verb}: {_remote_text(res)} · {auth}"
 
 
@@ -935,7 +1126,9 @@ def _read_code(args: argparse.Namespace) -> str:
     if code is None:
         if args.code_stdin or not sys.stdin.isatty():
             if not args.code_stdin:
-                raise _BearerError("no pairing code — pass it, pipe it with --code-stdin, or run on a terminal to be prompted")
+                raise _BearerError(
+                    "no pairing code — pass it, pipe it with --code-stdin, or run on a terminal to be prompted"
+                )
             code = sys.stdin.readline().rstrip("\r\n")
         else:
             import getpass
@@ -963,7 +1156,17 @@ def _cmd_pair(args: argparse.Namespace) -> int:
         try:
             res = conn.client.remote_pair(args.url, code, args.member_name, **_insecure_kw(args))
             name = (res.get("agent") or {}).get("name") or label
-            _row_ok(name, args, results, f"{_pair_text(res)} via hub {hub_url}", agent=res.get("agent"), reachable=res.get("reachable"), version=res.get("version"), auth=res.get("auth"), action=res.get("action"))
+            _row_ok(
+                name,
+                args,
+                results,
+                f"{_pair_text(res)} via hub {hub_url}",
+                agent=res.get("agent"),
+                reachable=res.get("reachable"),
+                version=res.get("version"),
+                auth=res.get("auth"),
+                action=res.get("action"),
+            )
         except deckhub.HubError as exc:
             _row_fail(label, args, results, _hub_detail(exc))
         finally:
@@ -975,7 +1178,17 @@ def _cmd_pair(args: argparse.Namespace) -> int:
     try:
         res = _run_op(fleet_ops.remotes_pair, args.url, code, args.member_name, **_insecure_kw(args))
         name = (res.get("agent") or {}).get("name") or label
-        _row_ok(name, args, results, f"{_pair_text(res)} via disk (offline)", agent=res.get("agent"), reachable=res.get("reachable"), version=res.get("version"), auth=res.get("auth"), action=res.get("action"))
+        _row_ok(
+            name,
+            args,
+            results,
+            f"{_pair_text(res)} via disk (offline)",
+            agent=res.get("agent"),
+            reachable=res.get("reachable"),
+            version=res.get("version"),
+            auth=res.get("auth"),
+            action=res.get("action"),
+        )
     except (supervisor.FleetError, manager.WorkspaceError) as exc:
         _row_fail(label, args, results, str(exc))
     return _finish(args, "offline", results)
@@ -993,7 +1206,13 @@ def _cmd_order(args: argparse.Namespace) -> int:
             return _finish(args, "live", results, hub_url)
         finally:
             conn.client.close()
-        _row_ok("order", args, results, f"saved: {' › '.join(res.get('order') or args.ids)} via hub {hub_url}", order=res.get("order"))
+        _row_ok(
+            "order",
+            args,
+            results,
+            f"saved: {' › '.join(res.get('order') or args.ids)} via hub {hub_url}",
+            order=res.get("order"),
+        )
         return _finish(args, "live", results, hub_url)
     from ops import fleet as fleet_ops
 

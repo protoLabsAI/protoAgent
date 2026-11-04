@@ -102,7 +102,7 @@ def test_an_unchanged_lock_says_so(tmp_path):
 @pytest.mark.parametrize(
     ("before", "after", "is_down"),
     [
-        ("1.2.11", "1.2.2", True),      # the naive string compare gets this wrong
+        ("1.2.11", "1.2.2", True),  # the naive string compare gets this wrong
         ("1.10.0", "1.9.0", True),
         ("2026.5.9", "2026.7.19", False),
         ("0.4.2", "0.3.15", True),

@@ -319,7 +319,10 @@ async def test_registry_raw_dispatch_bypasses_managed_git(repo, monkeypatch):
 
 async def test_finish_reuses_existing_pr(repo, monkeypatch):
     # dedup matches the item's -<id7> suffix, so the open PR must carry it on its head branch.
-    _fake_gh(monkeypatch, {"pr list": (0, '[{"url": "https://github.com/x/y/pull/3", "headRefName": "t/reuse-abc1234"}]', "")})
+    _fake_gh(
+        monkeypatch,
+        {"pr list": (0, '[{"url": "https://github.com/x/y/pull/3", "headRefName": "t/reuse-abc1234"}]', "")},
+    )
     await harness.prepare(str(repo), base="main", branch="t/reuse-abc1234")
     (repo / "again.txt").write_text("re-run\n")
 
@@ -387,7 +390,16 @@ async def test_managed_dispatch_preflight_returns_existing_pr(tmp_path, monkeypa
 
     # An open PR whose head branch carries item-43's suffix — a DIFFERENT slug than this
     # run would mint, proving dedup keys on the item id, not the slug.
-    _fake_gh(monkeypatch, {"pr list": (0, '[{"url": "https://github.com/x/y/pull/11", "headRefName": "coder-1/some-other-slug-item-43"}]', "")})
+    _fake_gh(
+        monkeypatch,
+        {
+            "pr list": (
+                0,
+                '[{"url": "https://github.com/x/y/pull/11", "headRefName": "coder-1/some-other-slug-item-43"}]',
+                "",
+            )
+        },
+    )
 
     async def must_not_run(self, d, query, *, timeout=None):
         raise AssertionError("coder must not be dispatched when an open PR exists")

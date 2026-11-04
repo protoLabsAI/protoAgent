@@ -156,7 +156,9 @@ def render_markdown(
         from graph.context_frame import is_context_frame
 
         if is_context_frame(message):
-            lines.append(f"_[injected context frame — {len(text_of(message) or ''):,} chars of recalled memory / skills / working state]_")
+            lines.append(
+                f"_[injected context frame — {len(text_of(message) or ''):,} chars of recalled memory / skills / working state]_"
+            )
             lines.append("")
             continue
         heading = _ROLE_HEADINGS.get(role, role.title() or "Message")
@@ -204,7 +206,9 @@ def _without_unanswered_tail(messages: list) -> tuple[list, bool]:
     for index in range(len(messages) - 1, -1, -1):
         message = messages[index]
         if role_of(message) == "tool":
-            call_id = message.get("tool_call_id") if isinstance(message, dict) else getattr(message, "tool_call_id", None)
+            call_id = (
+                message.get("tool_call_id") if isinstance(message, dict) else getattr(message, "tool_call_id", None)
+            )
             if call_id:
                 answered.add(call_id)
             continue
@@ -218,12 +222,16 @@ def _without_unanswered_tail(messages: list) -> tuple[list, bool]:
         if isinstance(content, list):
             # tool_use blocks mirror tool_calls; remove the same dangling calls there.
             content = [
-                block for block in content
-                if not (isinstance(block, dict) and block.get("type") in ("tool_use", "tool_call")
-                        and block.get("id") not in answered)
+                block
+                for block in content
+                if not (
+                    isinstance(block, dict)
+                    and block.get("type") in ("tool_use", "tool_call")
+                    and block.get("id") not in answered
+                )
             ]
         rendered = {"role": role_of(message), "content": content, "tool_calls": kept}
-        return [*messages[:index], rendered, *messages[index + 1:]], True
+        return [*messages[:index], rendered, *messages[index + 1 :]], True
     return messages, False
 
 
@@ -256,7 +264,9 @@ async def export_thread(
         return {"found": False, "markdown": "", "message_count": 0, "redactions": [], "reason": "empty_thread"}
 
     render_messages, dropped = _without_unanswered_tail(messages) if drop_unanswered_tool_calls else (messages, False)
-    markdown, redactions = render_markdown(render_messages, thread_id=thread_id, title=title, redact_secrets=redact_secrets)
+    markdown, redactions = render_markdown(
+        render_messages, thread_id=thread_id, title=title, redact_secrets=redact_secrets
+    )
     if dropped:
         markdown += "\n_(turn still running…)_\n"
     if redactions:

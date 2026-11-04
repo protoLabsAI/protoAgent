@@ -133,8 +133,8 @@ def test_manifest_settings_tabs_apply_live_kept_invalid_dropped(tmp_path, caplog
     assert by_id["overview"].get("apply") == "live"
     assert by_id["projects"].get("apply") == "live"
     assert by_id["projects"].get("path") == "/plugins/tabbed/config/projects"
-    assert "apply" not in by_id["runtime"]          # default save-then-apply, untouched
-    assert "apply" not in by_id["review"]           # invalid value dropped
+    assert "apply" not in by_id["runtime"]  # default save-then-apply, untouched
+    assert "apply" not in by_id["review"]  # invalid value dropped
     assert "is not 'live'" in caplog.text
 
 
@@ -153,7 +153,8 @@ def test_requires_pip_optional_entries(tmp_path) -> None:
     # Dict entries route on the `optional` flag; a dict without it (or with
     # optional: false) is just a hard dep spelled long-form.
     _make_plugin(
-        tmp_path, "rp1",
+        tmp_path,
+        "rp1",
         manifest_extra=(
             "requires_pip:\n"
             '  - "httpx>=0.27"\n'
@@ -172,10 +173,11 @@ def test_requires_pip_malformed_entries_warn_not_fail(tmp_path, caplog) -> None:
     import logging as _logging
 
     _make_plugin(
-        tmp_path, "rp2",
+        tmp_path,
+        "rp2",
         manifest_extra=(
             "requires_pip:\n"
-            "  - { optional: true }\n"          # no pkg → skipped
+            "  - { optional: true }\n"  # no pkg → skipped
             '  - { pkg: "", optional: true }\n'  # empty pkg → skipped
             '  - "httpx>=0.27"\n'
         ),
@@ -248,7 +250,9 @@ def test_missing_optional_deps_are_surfaced_but_raise_no_global_banner(tmp_path,
 
     setup_gaps.reset()
     _make_plugin(
-        tmp_path, "softp", enabled=True,
+        tmp_path,
+        "softp",
+        enabled=True,
         manifest_extra='requires_pip:\n  - { pkg: "nope-pkg-c", optional: true }\n',
     )
     monkeypatch.setattr(plugin_loader, "_plugin_roots", lambda config: [tmp_path])
@@ -272,7 +276,9 @@ def test_a_required_gap_names_missing_optional_deps_once(tmp_path, monkeypatch) 
 
     setup_gaps.reset()
     _make_plugin(
-        tmp_path, "bothp", enabled=True,
+        tmp_path,
+        "bothp",
+        enabled=True,
         manifest_extra='requires_pip:\n  - "nope-pkg-e"\n  - { pkg: "nope-pkg-f", optional: true }\n',
     )
     monkeypatch.setattr(plugin_loader, "_plugin_roots", lambda config: [tmp_path])
@@ -327,7 +333,9 @@ def test_emits_inline_schema(tmp_path) -> None:
     # A dict entry contributes its topic to the names list AND its declared
     # summary/schema to the contract map; bare siblings stay names-only.
     _make_plugin(
-        tmp_path, "ev1", enabled=True,
+        tmp_path,
+        "ev1",
+        enabled=True,
         manifest_extra=(
             "emits:\n"
             "  - ev1.plain\n"
@@ -354,7 +362,9 @@ def test_emits_schema_ref_file(tmp_path) -> None:
     # `schema: {$ref: <path>}` (and the bare-string shorthand) reads a JSON/YAML
     # schema file from INSIDE the plugin dir at manifest-load time.
     d = _make_plugin(
-        tmp_path, "ev2", enabled=True,
+        tmp_path,
+        "ev2",
+        enabled=True,
         manifest_extra=(
             "emits:\n"
             "  - topic: ev2.ship_purchased\n"
@@ -379,17 +389,19 @@ def test_emits_invalid_ref_warns_not_fails(tmp_path, caplog) -> None:
     import logging as _logging
 
     d = _make_plugin(
-        tmp_path, "ev3", enabled=True,
+        tmp_path,
+        "ev3",
+        enabled=True,
         manifest_extra=(
             "emits:\n"
             "  - topic: ev3.missing\n"
             "    summary: still has a summary\n"
-            "    schema: {$ref: events/nope.json}\n"   # file doesn't exist
+            "    schema: {$ref: events/nope.json}\n"  # file doesn't exist
             "  - topic: ev3.escape\n"
             "    schema: {$ref: ../../outside.json}\n"  # path traversal → refused
             "  - topic: ev3.badtype\n"
-            "    schema: 7\n"                           # not a mapping / ref
-            "  - summary: no topic here\n"              # unusable entry → skipped
+            "    schema: 7\n"  # not a mapping / ref
+            "  - summary: no topic here\n"  # unusable entry → skipped
             "  - ev3.ok\n"
         ),
     )
@@ -502,13 +514,11 @@ def test_public_paths_namespace_scoped(tmp_path) -> None:
     # A plugin may declare auth-exempt paths only under its OWN namespace; anything
     # else (a core path, another plugin's path) is dropped by the parser.
     _make_plugin(
-        tmp_path, "wh", enabled=True,
+        tmp_path,
+        "wh",
+        enabled=True,
         manifest_extra=(
-            "public_paths:\n"
-            "  - /plugins/wh/webhook\n"
-            "  - /api/plugins/wh/data\n"
-            "  - /api/config\n"
-            "  - /plugins/other/x\n"
+            "public_paths:\n  - /plugins/wh/webhook\n  - /api/plugins/wh/data\n  - /api/config\n  - /plugins/other/x\n"
         ),
     )
     m = load_manifest(tmp_path / "wh")
@@ -520,7 +530,9 @@ def test_federation_paths_namespace_scoped_and_separate(tmp_path) -> None:
     # own list: they lower the /api operator ceiling, they never exempt auth — so a view
     # page is NOT auto-added, and a core / foreign path is dropped just like public_paths.
     _make_plugin(
-        tmp_path, "room", enabled=True,
+        tmp_path,
+        "room",
+        enabled=True,
         manifest_extra=(
             "federation_paths:\n"
             "  - /api/plugins/room/v1/\n"
@@ -539,8 +551,12 @@ def test_load_plugins_aggregates_federation_paths_from_enabled_only(tmp_path, mo
     # The loader hands the server one flat list for the auth middleware — enabled plugins
     # only, so a disabled plugin can't lower the ceiling on a route it no longer serves.
     root = tmp_path / "plugins"
-    _make_plugin(root, "room", enabled=True, tool="room_tool", manifest_extra="federation_paths:\n  - /api/plugins/room/v1/\n")
-    _make_plugin(root, "off", enabled=False, tool="off_tool", manifest_extra="federation_paths:\n  - /api/plugins/off/v1/\n")
+    _make_plugin(
+        root, "room", enabled=True, tool="room_tool", manifest_extra="federation_paths:\n  - /api/plugins/room/v1/\n"
+    )
+    _make_plugin(
+        root, "off", enabled=False, tool="off_tool", manifest_extra="federation_paths:\n  - /api/plugins/off/v1/\n"
+    )
     monkeypatch.setattr(plugin_loader, "_plugin_roots", lambda config: [root])
     res = load_plugins(_cfg())
     assert res.federation_paths == ["/api/plugins/room/v1/"]
@@ -707,7 +723,9 @@ def test_a2a_skill_cross_plugin_collision_first_wins(tmp_path, monkeypatch) -> N
     skipped with a warning, and ownership is recorded per id (#2754) — before
     this, the loader extended a2a_skills anonymously and the duplicate shipped
     to the card."""
-    body = "def register(registry):\n    registry.register_a2a_skill({'id': 'triage', 'name': '%s', 'description': 'd'})\n"
+    body = (
+        "def register(registry):\n    registry.register_a2a_skill({'id': 'triage', 'name': '%s', 'description': 'd'})\n"
+    )
     root = tmp_path / "plugins"
     _make_plugin(root, "aaa", enabled=True, body=body % "A")
     _make_plugin(root, "bbb", enabled=True, body=body % "B")
@@ -823,14 +841,14 @@ def test_register_router_prefix_warning_accepts_both_canonical_prefixes(tmp_path
 
     reg = PluginRegistry("wh", tmp_path)
     with caplog.at_level(logging.WARNING, logger="protoagent.plugins"):
-        reg.register_router(_FakeRouter())                              # default /plugins/wh
-        reg.register_router(_FakeRouter(), prefix="/api/plugins/wh")    # gated data router
+        reg.register_router(_FakeRouter())  # default /plugins/wh
+        reg.register_router(_FakeRouter(), prefix="/api/plugins/wh")  # gated data router
         reg.register_router(_FakeRouter(), prefix="/api/plugins/wh/data")
     assert "does not start with" not in caplog.text  # both canonical prefixes are silent
 
     caplog.clear()
     with caplog.at_level(logging.WARNING, logger="protoagent.plugins"):
-        reg.register_router(_FakeRouter(), prefix="/rogue")            # genuinely off-convention
+        reg.register_router(_FakeRouter(), prefix="/rogue")  # genuinely off-convention
     assert "does not start with" in caplog.text
 
 
@@ -949,21 +967,23 @@ def test_view_paths_are_auto_public(tmp_path) -> None:
     # public_paths. (This is the bug that 401-blanked the bundled notes/docs views
     # under a token gate.) Explicit public_paths still merge in, deduped.
     _make_plugin(
-        tmp_path, "viewy", enabled=True,
+        tmp_path,
+        "viewy",
+        enabled=True,
         manifest_extra=(
             "views:\n"
             '  - {id: main, label: Main, path: /plugins/viewy/view, palette: {path: "/plugins/viewy/quick?mode=search"}}\n'
             "public_paths:\n"
-            "  - /plugins/viewy/view\n"          # also declared explicitly → not duplicated
-            "  - /api/plugins/viewy/webhook\n"   # a non-view exempt path → preserved
+            "  - /plugins/viewy/view\n"  # also declared explicitly → not duplicated
+            "  - /api/plugins/viewy/webhook\n"  # a non-view exempt path → preserved
         ),
     )
     m = load_manifest(tmp_path / "viewy")
     assert m is not None
     assert m.public_paths == [
-        "/plugins/viewy/view",          # from public_paths; the view path collapses onto it
+        "/plugins/viewy/view",  # from public_paths; the view path collapses onto it
         "/api/plugins/viewy/webhook",
-        "/plugins/viewy/quick",         # palette path, query stripped, auto-added
+        "/plugins/viewy/quick",  # palette path, query stripped, auto-added
     ]
 
 
@@ -1026,7 +1046,11 @@ def test_manifest_parses_palette_commands(tmp_path) -> None:
         # at all for an unknown view id. `navigate` is the non-inline spelling.
         {"id": "quick", "title": "Quick browse", "action": {"type": "open_view", "view": "browser", "inline": True}},
         # `method` defaults to POST rather than being guessed per call site.
-        {"id": "reindex", "title": "Reindex workspace", "action": {"type": "tool", "route": "reindex", "method": "POST"}},
+        {
+            "id": "reindex",
+            "title": "Reindex workspace",
+            "action": {"type": "tool", "route": "reindex", "method": "POST"},
+        },
         # A bare emit topic is forced into the plugin's own event namespace; the bare-string
         # `keywords` is left off rather than iterated into ["b", "r", "o", "a", …].
         {"id": "announce", "title": "Announce", "action": {"type": "emit", "topic": "cmdy.reindexed"}},
@@ -1306,15 +1330,15 @@ def test_loader_meta_exposes_commands_only_for_enabled_plugins(monkeypatch, tmp_
         "cmdy",
         enabled=True,
         tool="ct",
-        manifest_extra=(
-            "commands:\n  - {id: reindex, title: Reindex, action: {type: tool, route: reindex}}\n"
-        ),
+        manifest_extra=("commands:\n  - {id: reindex, title: Reindex, action: {type: tool, route: reindex}}\n"),
     )
     monkeypatch.setattr(plugin_loader, "_plugin_roots", lambda config: [root])
 
     on = load_plugins(_cfg(plugins_enabled=["cmdy"])).meta[0]
     assert on["enabled"] is True
-    assert on["commands"] == [{"id": "reindex", "title": "Reindex", "action": {"type": "tool", "route": "reindex", "method": "POST"}}]
+    assert on["commands"] == [
+        {"id": "reindex", "title": "Reindex", "action": {"type": "tool", "route": "reindex", "method": "POST"}}
+    ]
     # `commands` is the palette contribution; `chat_commands` (a loaded plugin's
     # register_chat_command tokens) is a different thing entirely — this plugin registers
     # none, so a palette entry leaking into that key would show up here as a phantom
@@ -1336,9 +1360,7 @@ def test_unserved_command_route_warns(monkeypatch, tmp_path, caplog) -> None:
         "cmdy",
         enabled=True,
         tool="ct",
-        manifest_extra=(
-            "commands:\n  - {id: reindex, title: Reindex, action: {type: tool, route: reindex}}\n"
-        ),
+        manifest_extra=("commands:\n  - {id: reindex, title: Reindex, action: {type: tool, route: reindex}}\n"),
     )
     monkeypatch.setattr(plugin_loader, "_plugin_roots", lambda config: [root])
     with caplog.at_level(_logging.WARNING, logger="protoagent.plugins"):

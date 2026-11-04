@@ -118,9 +118,7 @@ def test_gateway_configured_accepts_a_none_endpoint_but_not_a_blank_one(migrated
     assert _gateway_configured(sdk, conn) is True
 
     # A declared registry with a blank-endpoint connection + a key still fails loudly.
-    declared = LangGraphConfig.from_dict(
-        {"providers": [{"id": "local", "type": "openai-compat", "api_key": "secret"}]}
-    )
+    declared = LangGraphConfig.from_dict({"providers": [{"id": "local", "type": "openai-compat", "api_key": "secret"}]})
     blank = declared.provider_by_id("local")
     assert blank.base_url == "" and blank.api_key == "secret"
     assert _gateway_configured(declared, blank) is False
@@ -130,9 +128,7 @@ def test_declared_bare_base_url_is_coerced_to_empty_not_none():
     """A declared entry with a bare ``base_url:`` (null in YAML) parses to "", not ``None``
     — only the explicit ``sdk-default`` sentinel means the SDK default, so a bare/blank
     endpoint fails the 'needs an endpoint' check instead of silently using it."""
-    parsed = _parse_providers(
-        [{"id": "local", "type": "openai-compat", "base_url": None, "api_key": "secret"}], {}
-    )
+    parsed = _parse_providers([{"id": "local", "type": "openai-compat", "base_url": None, "api_key": "secret"}], {})
     assert parsed[0].base_url == ""
     assert resolve_model_route(object(), parsed[0]).base_url == ""
 

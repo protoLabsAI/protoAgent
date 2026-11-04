@@ -74,8 +74,12 @@ def test_pick_port_skips_ports_other_instances_record_for_stopped_members(root, 
 
     desktop = tmp_path / "desktop"
     (desktop / "workspaces" / "designSystem-9062").mkdir(parents=True)
-    (desktop / "workspaces" / "designSystem-9062" / "workspace.yaml").write_text("id: designSystem-9062\nname: designSystem\nport: 7871\n")
-    dev_member = tmp_path / "box-root" / "dev" / "workspaces" / "claudia-5d75"  # a scoped instance under the plain data home
+    (desktop / "workspaces" / "designSystem-9062" / "workspace.yaml").write_text(
+        "id: designSystem-9062\nname: designSystem\nport: 7871\n"
+    )
+    dev_member = (
+        tmp_path / "box-root" / "dev" / "workspaces" / "claudia-5d75"
+    )  # a scoped instance under the plain data home
     dev_member.mkdir(parents=True)
     (dev_member / "workspace.yaml").write_text("id: claudia-5d75\nname: claudia\nport: 7872\n")
     monkeypatch.setattr(paths, "desktop_box_roots", lambda: [desktop])
@@ -96,7 +100,10 @@ def test_known_box_roots_lists_each_existing_root_once(tmp_path, monkeypatch):
     desktop.mkdir()
     monkeypatch.setattr(paths, "desktop_box_roots", lambda: [desktop, tmp_path / "missing"])
     (tmp_path / "box-root").mkdir()
-    assert paths.known_box_roots() == [(tmp_path / "box-root").resolve(), desktop.resolve()]  # box root == data home here: listed once
+    assert paths.known_box_roots() == [
+        (tmp_path / "box-root").resolve(),
+        desktop.resolve(),
+    ]  # box root == data home here: listed once
 
 
 def test_one_unreadable_record_does_not_void_the_scan(root, monkeypatch, tmp_path):
@@ -123,7 +130,10 @@ def test_one_unreadable_record_does_not_void_the_scan(root, monkeypatch, tmp_pat
     assert manager.create("beta")["port"] == 7874  # …but the readable one is still skipped
 
 
-@pytest.mark.skipif(os.name == "nt", reason="patching os.name to posix makes pathlib refuse every path on Windows; the Linux branch is covered on Linux/macOS")
+@pytest.mark.skipif(
+    os.name == "nt",
+    reason="patching os.name to posix makes pathlib refuse every path on Windows; the Linux branch is covered on Linux/macOS",
+)
 def test_the_linux_desktop_root_is_taurus_config_dir(tmp_path, monkeypatch):
     """Review: the desktop points its sidecar's PROTOAGENT_HOME at Tauri's app_config_dir —
     `$XDG_CONFIG_HOME`/`~/.config/<id>` on Linux, not the data dir. (A fresh copy of the
@@ -563,8 +573,7 @@ def test_apply_bundle_mcp_servers_unions_by_name_no_clobber(root):
     ws.mkdir(parents=True, exist_ok=True)
     cfg = ws / "langgraph-config.yaml"
     cfg.write_text(
-        "mcp:\n  enabled: true\n  servers:\n"
-        "    - {name: fs, transport: stdio, command: /usr/local/bin/mine}\n"
+        "mcp:\n  enabled: true\n  servers:\n    - {name: fs, transport: stdio, command: /usr/local/bin/mine}\n"
     )
     (ws / "plugins.lock").write_text(
         json.dumps(
@@ -787,9 +796,7 @@ def test_apply_bundle_config_inputs_writes_declared_dotted_keys(root):
     ws = root / "agent"
     cfg = _seed_config(ws)
     lock = _config_inputs_lock(ws)
-    written = manager._apply_bundle_config_inputs(
-        cfg, lock, {"board.repo": "org/repo", "sneaky.path": "x"}
-    )
+    written = manager._apply_bundle_config_inputs(cfg, lock, {"board.repo": "org/repo", "sneaky.path": "x"})
     assert sorted(written) == ["board.auto_merge", "board.repo"]  # answer + defaulted toggle
     doc = yaml.safe_load(cfg.read_text())
     assert doc["board"] == {"repo": "org/repo", "auto_merge": False}
@@ -941,9 +948,7 @@ class TestRemoveKeepsDataUnlessPurged:
         PROTOAGENT_BOX_ROOT — so on the desktop app (box root under ~/Library/Application
         Support) the purge branch could never find anything to delete."""
         box = tmp_path / "box"
-        monkeypatch.setattr(
-            "infra.paths.instance_paths", lambda: type("P", (), {"box_root": box})()
-        )
+        monkeypatch.setattr("infra.paths.instance_paths", lambda: type("P", (), {"box_root": box})())
         s = manager.create("ava")
         legacy = box / s["id"]
         legacy.mkdir(parents=True)
@@ -1048,7 +1053,13 @@ def _pm_lock(ws, *, project=True):
                     {
                         "id": "pm",
                         "config_inputs": [
-                            {"key": "board.repo", "label": "Repo", "type": "path", "required": True, "project": project},
+                            {
+                                "key": "board.repo",
+                                "label": "Repo",
+                                "type": "path",
+                                "required": True,
+                                "project": project,
+                            },
                             {"key": "board.coder", "label": "Coder delegate", "type": "delegate", "required": True},
                             {"key": "gh.default_repo", "label": "GitHub repo", "type": "string"},
                             {"key": "board.loop_enabled", "label": "Loop", "type": "boolean", "default": False},
@@ -1070,7 +1081,9 @@ def _host_dir(tmp_path):
         "  - name: claude-code\n    type: acp\n    command: /abs/claude-agent-acp\n    workdir: /tmp/x\n"
         "  - name: peer\n    type: a2a\n    url: http://peer\n"
     )
-    (host / "secrets.yaml").write_text("delegate_secrets:\n  claude-code.env.ANTHROPIC_API_KEY: sk-host\n  peer.auth.token: t\n")
+    (host / "secrets.yaml").write_text(
+        "delegate_secrets:\n  claude-code.env.ANTHROPIC_API_KEY: sk-host\n  peer.auth.token: t\n"
+    )
     return host
 
 
@@ -1150,7 +1163,9 @@ def test_github_slug_for_checkout_parses_origin(tmp_path):
     repo = tmp_path / "r"
     repo.mkdir()
     subprocess.run(["git", "init", "-q", str(repo)], check=True)
-    subprocess.run(["git", "-C", str(repo), "remote", "add", "origin", "git@github.com:protoLabsAI/ORBIS.git"], check=True)
+    subprocess.run(
+        ["git", "-C", str(repo), "remote", "add", "origin", "git@github.com:protoLabsAI/ORBIS.git"], check=True
+    )
     assert manager.github_slug_for_checkout(repo) == "protoLabsAI/ORBIS"
     subprocess.run(["git", "-C", str(repo), "remote", "set-url", "origin", "https://github.com/acme/thing"], check=True)
     assert manager.github_slug_for_checkout(repo) == "acme/thing"
@@ -1272,12 +1287,8 @@ def test_overlay_model_uses_effective_host_scoped_model_and_providers(root, tmp_
     cfg = yaml.safe_load((cfg_dir / "langgraph-config.yaml").read_text())
 
     assert cfg["model"]["name"] == "box-gateway:box/model"
-    assert cfg["providers"] == [
-        {"id": "box-gateway", "type": "openai-compat", "base_url": "https://box.example/v1"}
-    ]
-    assert yaml.safe_load((cfg_dir / "secrets.yaml").read_text()) == {
-        "providers": {"box-gateway": "sk-box"}
-    }
+    assert cfg["providers"] == [{"id": "box-gateway", "type": "openai-compat", "base_url": "https://box.example/v1"}]
+    assert yaml.safe_load((cfg_dir / "secrets.yaml").read_text()) == {"providers": {"box-gateway": "sk-box"}}
 
 
 def test_overlay_model_blank_secret_values_preserve_inline_legacy_keys(root, tmp_path):
@@ -1455,7 +1466,9 @@ def test_bundle_failure_does_not_transfer_oauth_ownership(root, tmp_path, monkey
     (host / "langgraph-config.yaml").write_text("model:\n  name: chatgpt:gpt-5-codex\n")
     local_store = host / "codex-oauth.json"
     local_store.write_text('{"tokens":{"refresh_token":"instance"}}')
-    monkeypatch.setattr(manager, "_install_bundle_into", lambda ws, bundle, ref=None: (_ for _ in ()).throw(RuntimeError("boom")))
+    monkeypatch.setattr(
+        manager, "_install_bundle_into", lambda ws, bundle, ref=None: (_ for _ in ()).throw(RuntimeError("boom"))
+    )
 
     with pytest.raises(RuntimeError, match="boom"):
         manager.create("sister", inherit_model=str(host), bundle="https://example.invalid/bundle")
@@ -1480,7 +1493,9 @@ def test_create_from_bundle_refuses_missing_required_input_and_cleans_up(root, t
 
     monkeypatch.setattr(manager, "_install_bundle_into", fake_install)
     with pytest.raises(manager.WorkspaceError, match="Coder delegate \\(board.coder\\)"):
-        manager.create("pm", bundle="https://example/pm", config_inputs={"board.repo": str(repo)}, inherit_model=str(host))
+        manager.create(
+            "pm", bundle="https://example/pm", config_inputs={"board.repo": str(repo)}, inherit_model=str(host)
+        )
     assert not (root / "pm").exists()
 
     rec = manager.create(
@@ -1607,7 +1622,16 @@ def test_cli_new_answers_config_inputs_and_copies_the_delegate(root, tmp_path, m
     repo.mkdir(parents=True)
     assert cli.run_workspace_cli(["new", "cli-pm", "--bundle", "https://x/pm", "--input", "nonsense"]) == 2
     rc = cli.run_workspace_cli(
-        ["new", "cli-pm", "--bundle", "https://x/pm", "--input", f"board.repo={repo}", "--input", "board.coder=claude-code"]
+        [
+            "new",
+            "cli-pm",
+            "--bundle",
+            "https://x/pm",
+            "--input",
+            f"board.repo={repo}",
+            "--input",
+            "board.coder=claude-code",
+        ]
     )
     assert rc == 0
     out = capsys.readouterr().out
@@ -1824,15 +1848,35 @@ def test_bundle_install_failure_surfaces_the_cli_reason_not_httpx_noise(monkeypa
     [
         ("", _ANALYST_STDERR, "'data' needs duckdb"),
         # A crash: no ✗ line — the traceback's last line, never an INFO line after it.
-        ("", "2026-10-03 1:2:3,4 INFO httpx GET x\nTraceback (most recent call last):\n  File \"x\"\nValueError: bad manifest\n", "ValueError: bad manifest"),
+        (
+            "",
+            '2026-10-03 1:2:3,4 INFO httpx GET x\nTraceback (most recent call last):\n  File "x"\nValueError: bad manifest\n',
+            "ValueError: bad manifest",
+        ),
         # Only narration + an ERROR log line → the ERROR line.
-        ("", "2026-10-03 17:00:00,000 INFO httpx GET a\n2026-10-03 17:00:00,001 ERROR protoagent boom happened\n", "ERROR protoagent boom happened"),
+        (
+            "",
+            "2026-10-03 17:00:00,000 INFO httpx GET a\n2026-10-03 17:00:00,001 ERROR protoagent boom happened\n",
+            "ERROR protoagent boom happened",
+        ),
         # The ✗ line on stdout (some CLI paths print there) still wins over stderr noise.
-        ("✗ plugin 'x' already installed — from 'y'; use --force to replace.\n", "2026-10-03 17:00:00,000 INFO httpx GET a\n", "plugin 'x' already installed"),
+        (
+            "✗ plugin 'x' already installed — from 'y'; use --force to replace.\n",
+            "2026-10-03 17:00:00,000 INFO httpx GET a\n",
+            "plugin 'x' already installed",
+        ),
         # A multi-line ✗ (git's own error follows on the next lines) keeps its continuation.
-        ("", "2026-10-03 17:00:00,000 INFO httpx GET a\n✗ git clone https://github.com/o/nope failed: Cloning into '/tmp/r'...\nremote: Repository not found.\nfatal: repository 'https://github.com/o/nope/' not found\n", "Cloning into '/tmp/r'... remote: Repository not found. fatal: repository"),
+        (
+            "",
+            "2026-10-03 17:00:00,000 INFO httpx GET a\n✗ git clone https://github.com/o/nope failed: Cloning into '/tmp/r'...\nremote: Repository not found.\nfatal: repository 'https://github.com/o/nope/' not found\n",
+            "Cloning into '/tmp/r'... remote: Repository not found. fatal: repository",
+        ),
         # A crash with boot banners on stdout: stderr's last line, not the banner.
-        ("[metrics] Prometheus metrics initialized\n[trace_export] fleet trace export disabled.\n", "Traceback (most recent call last):\nOSError: disk full\n", "OSError: disk full"),
+        (
+            "[metrics] Prometheus metrics initialized\n[trace_export] fleet trace export disabled.\n",
+            "Traceback (most recent call last):\nOSError: disk full\n",
+            "OSError: disk full",
+        ),
         # Nothing at all → the exit code, never an empty detail.
         ("", "", "exited 2"),
     ],

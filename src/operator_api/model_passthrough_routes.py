@@ -178,7 +178,9 @@ def openai_messages_to_langchain(messages: list[dict] | None) -> list[BaseMessag
             out.append(SystemMessage(content=content))
         elif role in ("assistant", "ai"):
             tool_calls = _to_lc_tool_calls(m.get("tool_calls"))
-            out.append(AIMessage(content=content or "", tool_calls=tool_calls) if tool_calls else AIMessage(content=content))
+            out.append(
+                AIMessage(content=content or "", tool_calls=tool_calls) if tool_calls else AIMessage(content=content)
+            )
         elif role == "tool":
             out.append(ToolMessage(content=content, tool_call_id=str(m.get("tool_call_id") or "")))
         else:
@@ -402,7 +404,9 @@ def register_model_passthrough_routes(app) -> None:
         entry = cfg.provider_by_id(conn)
         if entry is None:
             known = ", ".join(cfg.provider_ids()) or "(none registered)"
-            raise HTTPException(status_code=404, detail=f"no model connection named {connection!r}; registered: {known}")
+            raise HTTPException(
+                status_code=404, detail=f"no model connection named {connection!r}; registered: {known}"
+            )
         # The connection's registered TYPE (ADR 0106) drives how the OpenAI-shaped per-call
         # params are adapted below — it is the one authoritative signal for "what can this
         # client actually take", resolved once so tool_choice and temperature/max_tokens stay
@@ -414,7 +418,7 @@ def register_model_passthrough_routes(app) -> None:
             # another connection's endpoint. Name the model instead of guessing.
             raise HTTPException(
                 status_code=400,
-                detail="'model' is required: name the connection's model, e.g. {\"model\": \"claude-sonnet-4-6\", …}",
+                detail='\'model\' is required: name the connection\'s model, e.g. {"model": "claude-sonnet-4-6", …}',
             )
 
         # The qualified-slot form IS how ADR 0106 names a connection's model — the same string a

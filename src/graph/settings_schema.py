@@ -727,14 +727,14 @@ FIELDS: list[Field] = [
         "Prior-session digest",
         "select",
         "Knowledge",
-        "How the cross-session digest is chosen each turn. \"newest\" (default) injects "
+        'How the cross-session digest is chosen each turn. "newest" (default) injects '
         "one attributed line for each of the newest sessions, exactly as before. "
-        "\"relevant\" injects only sessions whose content matches what was just asked "
-        "(session-search FTS, best match first), falling back to \"newest\" when the "
-        "query is empty or the index is unavailable. \"off\" injects no automatic digest "
+        '"relevant" injects only sessions whose content matches what was just asked '
+        '(session-search FTS, best match first), falling back to "newest" when the '
+        'query is empty or the index is unavailable. "off" injects no automatic digest '
         "— the agent still reaches past sessions on demand via session_search / "
         "recall_session. Whatever the policy, the current session's own summary is never "
-        "injected as a \"prior\" session.",
+        'injected as a "prior" session.',
         options=["newest", "relevant", "off"],
     ),
     # Prior-session digest ceilings (ADR 0021; wired in #3308).
@@ -748,7 +748,7 @@ FIELDS: list[Field] = [
         "attributed line each (id, time, surface, topic, message count) — roughly 30 "
         "tokens per entry. Lower it to keep continuity while spending less of the turn "
         "on unrelated history; it is a ceiling, not a switch, so to remove the digest "
-        "entirely set the prior-session digest policy to \"off\".",
+        'entirely set the prior-session digest policy to "off".',
         minimum=1,
         maximum=100,
     ),
@@ -760,7 +760,7 @@ FIELDS: list[Field] = [
         "Knowledge",
         "Token ceiling for the rendered digest block (estimated at 4 characters per "
         "token). Entries past the ceiling drop from the end — oldest first under "
-        "\"newest\", lowest-ranked first under \"relevant\". With the default digest "
+        '"newest", lowest-ranked first under "relevant". With the default digest '
         "size the block lands well under this cap, so the session count is usually the "
         "binding limit.",
         minimum=1,
@@ -933,7 +933,14 @@ FIELDS: list[Field] = [
     # coherent middle ground vs skills.enabled:false (which kills everything). The
     # runtime (KnowledgeMiddleware + runtime/context.py) honors 0, so the schema must
     # let it through validation (ADR 0060).
-    Field("skills.top_k", "skills_top_k", "Skills shown with full summaries (all are always listed)", "number", "Knowledge", minimum=0),
+    Field(
+        "skills.top_k",
+        "skills_top_k",
+        "Skills shown with full summaries (all are always listed)",
+        "number",
+        "Knowledge",
+        minimum=0,
+    ),
     Field(
         "checkpoint.db_path",
         "checkpoint_db_path",
@@ -1249,8 +1256,7 @@ FIELDS: list[Field] = [
         "Demo agents: live cap",
         "number",
         "Tools",
-        "Most demo members allowed running at once; creating another is refused until one is "
-        "deleted or aged out.",
+        "Most demo members allowed running at once; creating another is refused until one is deleted or aged out.",
         minimum=1,
     ),
     Field(
@@ -1259,8 +1265,7 @@ FIELDS: list[Field] = [
         "Demo agents: TTL (hours)",
         "number",
         "Tools",
-        "How many hours a demo member lives before it is reaped; the reap runs before each new "
-        "demo is created.",
+        "How many hours a demo member lives before it is reaped; the reap runs before each new demo is created.",
         minimum=1,
     ),
     Field(
@@ -2504,9 +2509,7 @@ def build_schema(
         # label; the NUL-delimited key is internal and never leaves this function.
         plugin_id = getattr(sch, "plugin_id", None)
         group_key = f"plugin:{plugin_id}\0{group}\0{tab_id}"
-        groups.setdefault(group_key, {"section": group, "fields": [], "plugin_id": plugin_id})[
-            "fields"
-        ].append(entry)
+        groups.setdefault(group_key, {"section": group, "fields": [], "plugin_id": plugin_id})["fields"].append(entry)
         if tab is not None:
             groups[group_key]["settings_tab"] = {
                 "id": tab["id"],
@@ -2646,8 +2649,7 @@ def restart_keys(updates: dict[str, Any]) -> list[str]:
     """Keys in the payload that need a process restart to take effect."""
     plugin_specs = {full: spec for _, full, _, spec in _plugin_field_specs()}
     return [
-        k for k in updates
-        if (_BY_KEY[k].restart if k in _BY_KEY else plugin_specs.get(k, {}).get("restart", False))
+        k for k in updates if (_BY_KEY[k].restart if k in _BY_KEY else plugin_specs.get(k, {}).get("restart", False))
     ]
 
 

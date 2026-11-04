@@ -148,19 +148,47 @@ def _row(store, task_id, **kw):
 def test_summary_by_model_leaves_out_turns_no_model_ran(env):
     _row(env, "metered")
     # An @-address to a peer without cost-v1: labelled, but nothing ran on the lane.
-    _row(env, "mention", models="", llm_calls=0, tool_calls=1, input_tokens=0, output_tokens=0,
-         total_tokens=0, cache_read_input_tokens=0, cost_usd=0.0, duration_ms=300_000)
+    _row(
+        env,
+        "mention",
+        models="",
+        llm_calls=0,
+        tool_calls=1,
+        input_tokens=0,
+        output_tokens=0,
+        total_tokens=0,
+        cache_read_input_tokens=0,
+        cost_usd=0.0,
+        duration_ms=300_000,
+    )
     # An @-address to a protoAgent peer: the spend is the peer's, not the lane's.
-    _row(env, "peer-only", models="peer:orbis", input_tokens=700, cache_read_input_tokens=0,
-         total_tokens=755, output_tokens=55, cost_usd=0.0123, duration_ms=90_000)
+    _row(
+        env,
+        "peer-only",
+        models="peer:orbis",
+        input_tokens=700,
+        cache_read_input_tokens=0,
+        total_tokens=755,
+        output_tokens=55,
+        cost_usd=0.0123,
+        duration_ms=90_000,
+    )
     # A lead turn that also delegated keeps its place in its lane.
     _row(env, "lead+peer", models="claude-opus-5-5,peer:orbis")
     # A resumed turn can re-run delegate_to BEFORE its lead model calls (batched approval,
     # autostart consent): the peer arrives first, but the lead model still ran.
     _row(env, "peer-then-lead", models="peer:orbis,claude-opus-5-5")
     # Two peers and no lead model is still a turn no model of this agent ran.
-    _row(env, "two-peers", models="peer:orbis,peer:hermes", input_tokens=10,
-         cache_read_input_tokens=0, total_tokens=12, output_tokens=2, cost_usd=0.001)
+    _row(
+        env,
+        "two-peers",
+        models="peer:orbis,peer:hermes",
+        input_tokens=10,
+        cache_read_input_tokens=0,
+        total_tokens=12,
+        output_tokens=2,
+        cost_usd=0.001,
+    )
 
     s = env.summary()
 
@@ -177,8 +205,19 @@ def test_summary_by_model_leaves_out_turns_no_model_ran(env):
 
 def test_a_failed_first_call_stays_in_its_lane(env):
     """A turn whose first call was rejected (#3957) did try that model — it is the lane's."""
-    _row(env, "rejected", state="failed", success=0, models="", llm_calls=0, input_tokens=0,
-         output_tokens=0, total_tokens=0, cache_read_input_tokens=0, cost_usd=0.0)
+    _row(
+        env,
+        "rejected",
+        state="failed",
+        success=0,
+        models="",
+        llm_calls=0,
+        input_tokens=0,
+        output_tokens=0,
+        total_tokens=0,
+        cache_read_input_tokens=0,
+        cost_usd=0.0,
+    )
 
     s = env.summary()
 
@@ -188,8 +227,19 @@ def test_a_failed_first_call_stays_in_its_lane(env):
 
 def test_a_canceled_zero_usage_turn_stays_in_its_lane(env):
     """Canceled mid-stream before usage landed looks like "no model ran" — keep it visible."""
-    _row(env, "canceled", state="canceled", success=0, models="", llm_calls=0, input_tokens=0,
-         output_tokens=0, total_tokens=0, cache_read_input_tokens=0, cost_usd=0.0)
+    _row(
+        env,
+        "canceled",
+        state="canceled",
+        success=0,
+        models="",
+        llm_calls=0,
+        input_tokens=0,
+        output_tokens=0,
+        total_tokens=0,
+        cache_read_input_tokens=0,
+        cost_usd=0.0,
+    )
 
     s = env.summary()
 

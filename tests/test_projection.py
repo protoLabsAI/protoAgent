@@ -328,14 +328,24 @@ def test_default_recorder_writes_attributed_row_only_when_record_true(monkeypatc
     store = _FakeStore(hot_entries=_HOT, results=_RAG)
 
     compose_projected_context(
-        _QUERY, store, None, {"session_id": "sess-1"},
-        record=False, options=_options(), prior_sessions=lambda: (_DIGEST, list(_DIGEST_IDS)),
+        _QUERY,
+        store,
+        None,
+        {"session_id": "sess-1"},
+        record=False,
+        options=_options(),
+        prior_sessions=lambda: (_DIGEST, list(_DIGEST_IDS)),
     )
     assert rows == []  # speculative: the full layer ran, nothing claims a turn happened
 
     compose_projected_context(
-        _QUERY, store, None, {"session_id": "sess-1"},
-        record=True, options=_options(), prior_sessions=lambda: (_DIGEST, list(_DIGEST_IDS)),
+        _QUERY,
+        store,
+        None,
+        {"session_id": "sess-1"},
+        record=True,
+        options=_options(),
+        prior_sessions=lambda: (_DIGEST, list(_DIGEST_IDS)),
     )
     assert len(rows) == 1
     row = rows[0]
@@ -525,7 +535,13 @@ def test_no_query_means_no_rag_search(monkeypatch):
     _clear_working_state(monkeypatch)
     store = _FakeStore(hot_entries=_HOT, results=_RAG)
     projected = compose_projected_context(
-        "", store, None, {}, record=False, options=_options(), prior_sessions=lambda: ("", []),
+        "",
+        store,
+        None,
+        {},
+        record=False,
+        options=_options(),
+        prior_sessions=lambda: ("", []),
     )
     assert store.search_calls == []
     assert "[Relevant knowledge" not in projected.text
@@ -564,7 +580,13 @@ def test_hot_memory_fallback_for_a_backend_without_the_entries_reader(monkeypatc
             return []
 
     projected = compose_projected_context(
-        "", _LegacyStore(), None, {}, record=False, options=_options(), prior_sessions=lambda: ("", []),
+        "",
+        _LegacyStore(),
+        None,
+        {},
+        record=False,
+        options=_options(),
+        prior_sessions=lambda: ("", []),
     )
     assert "[Always-on facts (hot memory):]\noperator prefers dark mode" in projected.text
     assert projected.hot_ids == []  # un-attributed, but still delivered
@@ -680,13 +702,18 @@ def test_delivery_boundary_trims_an_over_long_result_set(caplog):
     what made #3259 an over-injection rather than a logging artefact)."""
     from graph.projection import _Candidates, _fit_to_budget
 
-    over = [
-        {"id": i, "preview": f"hit {i}", "domain": "fact", "source_type": "extracted"}
-        for i in range(30)
-    ]
+    over = [{"id": i, "preview": f"hit {i}", "domain": "fact", "source_type": "extracted"} for i in range(30)]
     c = _Candidates(
-        digest="", digest_ids=[], digest_entries=[], hot="", hot_ids=[],
-        results=list(over), skill_block="", skill_listed=0, skill_full_rows=0, working_state="",
+        digest="",
+        digest_ids=[],
+        digest_entries=[],
+        hot="",
+        hot_ids=[],
+        results=list(over),
+        skill_block="",
+        skill_listed=0,
+        skill_full_rows=0,
+        working_state="",
     )
     with caplog.at_level("WARNING", logger="graph.projection"):
         delivered = _fit_to_budget(c, ProjectionOptions(top_k=5, budget_chars=None), None, [])
@@ -703,14 +730,14 @@ def test_over_delivery_cannot_reach_the_injection_log(monkeypatch):
 
     monkeypatch.setattr(projection, "rank_by_trust", lambda results, opts: list(results))
     store = _FakeStore(
-        results=[
-            {"id": i, "preview": f"hit {i}", "domain": "fact", "source_type": "extracted"}
-            for i in range(30)
-        ]
+        results=[{"id": i, "preview": f"hit {i}", "domain": "fact", "source_type": "extracted"} for i in range(30)]
     )
     rows: list[tuple] = []
     compose_projected_context(
-        "q", store, None, {"session_id": "s-1"},
+        "q",
+        store,
+        None,
+        {"session_id": "s-1"},
         options=ProjectionOptions(top_k=5),
         prior_sessions=lambda **kw: ("", []),
         record_fn=lambda state, parts, dig, hot, rag: rows.append((dig, hot, rag)),
@@ -750,8 +777,13 @@ def test_projection_records_effective_top_k_and_rag_stage_counts(monkeypatch):
     store = _FakeStore(results=results)
 
     compose_projected_context(
-        _QUERY, store, None, {"session_id": "sess-1"},
-        record=True, options=ProjectionOptions(top_k=5), prior_sessions=lambda **kw: ("", []),
+        _QUERY,
+        store,
+        None,
+        {"session_id": "sess-1"},
+        record=True,
+        options=ProjectionOptions(top_k=5),
+        prior_sessions=lambda **kw: ("", []),
     )
     assert len(rows) == 1
     row = rows[0]
@@ -775,8 +807,13 @@ def test_top_k_five_records_final_rag_count_within_cap(tmp_path, monkeypatch):
     store = _seeded_store(tmp_path)  # 12 rows, each matches "gravity note"
 
     compose_projected_context(
-        "gravity note", store, None, {"session_id": "s-1"},
-        record=True, options=ProjectionOptions(top_k=5), prior_sessions=lambda **kw: ("", []),
+        "gravity note",
+        store,
+        None,
+        {"session_id": "s-1"},
+        record=True,
+        options=ProjectionOptions(top_k=5),
+        prior_sessions=lambda **kw: ("", []),
     )
     assert len(rows) == 1
     row = rows[0]
@@ -793,12 +830,21 @@ def test_injection_log_persists_and_decodes_rag_stage_counts(tmp_path):
 
     log = InjectionLog(str(tmp_path / "inj.db"))
     log.record(
-        session_id="s-1", rag_chunk_ids=[10, 11, 12], approx_tokens=42,
-        effective_top_k=5, rag_retrieved=9, rag_trust_filtered=6, rag_final=3,
+        session_id="s-1",
+        rag_chunk_ids=[10, 11, 12],
+        approx_tokens=42,
+        effective_top_k=5,
+        rag_retrieved=9,
+        rag_trust_filtered=6,
+        rag_final=3,
     )
     row = log.recent()[0]
     assert row["rag_stage_counts"] == {
-        "effective_top_k": 5, "retrieved": 9, "trust_filtered": 6, "final": 3, "rag_chunk_ids": 3,
+        "effective_top_k": 5,
+        "retrieved": 9,
+        "trust_filtered": 6,
+        "final": 3,
+        "rag_chunk_ids": 3,
     }
     assert log.get(row["id"])["rag_stage_counts"] == row["rag_stage_counts"]
 
@@ -829,15 +875,25 @@ def test_injection_log_migrates_legacy_db_and_decodes_defaults(tmp_path):
     log = InjectionLog(str(p))  # opening runs the ALTER migration
     legacy = log.recent(session_id="s-old")[0]
     assert legacy["rag_stage_counts"] == {
-        "effective_top_k": 0, "retrieved": 0, "trust_filtered": 0, "final": 0, "rag_chunk_ids": 0,
+        "effective_top_k": 0,
+        "retrieved": 0,
+        "trust_filtered": 0,
+        "final": 0,
+        "rag_chunk_ids": 0,
     }
     assert legacy["rag_chunk_ids"] == [1, 2, 3]  # legacy content preserved
     assert legacy["approx_tokens"] == 7
 
-    log.record(session_id="s-new", rag_chunk_ids=[4, 5], effective_top_k=5, rag_retrieved=8, rag_trust_filtered=5, rag_final=2)
+    log.record(
+        session_id="s-new", rag_chunk_ids=[4, 5], effective_top_k=5, rag_retrieved=8, rag_trust_filtered=5, rag_final=2
+    )
     fresh = log.recent(session_id="s-new")[0]
     assert fresh["rag_stage_counts"] == {
-        "effective_top_k": 5, "retrieved": 8, "trust_filtered": 5, "final": 2, "rag_chunk_ids": 2,
+        "effective_top_k": 5,
+        "retrieved": 8,
+        "trust_filtered": 5,
+        "final": 2,
+        "rag_chunk_ids": 2,
     }
 
 
@@ -855,5 +911,9 @@ def test_injection_log_decodes_unparseable_stage_counts_to_defaults(tmp_path):
     db.commit()
     db.close()
     assert log.recent(session_id="s")[0]["rag_stage_counts"] == {
-        "effective_top_k": 0, "retrieved": 0, "trust_filtered": 0, "final": 0, "rag_chunk_ids": 0,
+        "effective_top_k": 0,
+        "retrieved": 0,
+        "trust_filtered": 0,
+        "final": 0,
+        "rag_chunk_ids": 0,
     }

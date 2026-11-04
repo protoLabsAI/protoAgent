@@ -179,7 +179,12 @@ async def test_a_well_formed_streaming_send_still_streams_through_the_guard():
 async def test_refusal_echoes_only_a_valid_json_rpc_id():
     r = await _post(
         _app([]),
-        {"jsonrpc": "2.0", "id": {"not": "an id"}, "method": "SendMessage", "params": {"contextId": "c", "message": _v1_message()}},
+        {
+            "jsonrpc": "2.0",
+            "id": {"not": "an id"},
+            "method": "SendMessage",
+            "params": {"contextId": "c", "message": _v1_message()},
+        },
         _V1,
     )
     body = r.json()

@@ -146,6 +146,8 @@ def _same_path_key(path: str | os.PathLike) -> str:
     """A comparison key for a filesystem path: absolute + ``normcase`` (case-insensitive on
     Windows, where ``which`` returns ``node.EXE`` for the file a dir probe calls ``node.exe``)."""
     return os.path.normcase(os.path.abspath(os.fspath(path)))
+
+
 _VERSION_LOCK = threading.Lock()
 
 

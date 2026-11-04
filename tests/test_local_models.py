@@ -7,6 +7,7 @@ from fastapi.testclient import TestClient
 import pytest
 
 from graph import local_models
+
 # Load the registrar before tests replace config_io with narrow module fakes.
 from operator_api.config_routes import register_config_routes
 

@@ -349,9 +349,7 @@ def _history_table_present(db: sqlite3.Connection) -> bool:
     forget primitives must skip it rather than raise ``no such table`` and abort a forget
     that must still cover ``chunks``."""
     try:
-        return (
-            db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='history'").fetchone() is not None
-        )
+        return db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='history'").fetchone() is not None
     except sqlite3.DatabaseError:
         return False
 
@@ -607,12 +605,7 @@ def _table_present(db: sqlite3.Connection, name: str) -> bool:
     core agent.db that holds only ``history`` — a plugin KnowledgeBackend's file —
     or that predates the ``chunk_vectors`` side table)."""
     try:
-        return (
-            db.execute(
-                "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (name,)
-            ).fetchone()
-            is not None
-        )
+        return db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (name,)).fetchone() is not None
     except sqlite3.DatabaseError:
         return False
 
@@ -716,14 +709,12 @@ def migrate_conversation_chunks_to_history(db_path: str | Path | None) -> int:
             # boot has no live traffic, so this set equals the rows just inserted.
             if has_vectors:
                 db.execute(
-                    "DELETE FROM chunk_vectors WHERE chunk_id IN "
-                    "(SELECT id FROM chunks WHERE domain = ?)",
+                    "DELETE FROM chunk_vectors WHERE chunk_id IN (SELECT id FROM chunks WHERE domain = ?)",
                     (HISTORY_DOMAIN,),
                 )
             db.execute("DELETE FROM chunks WHERE domain = ?", (HISTORY_DOMAIN,))
             db.execute(
-                "INSERT INTO _kb_meta(key, value) VALUES(?, ?) "
-                "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                "INSERT INTO _kb_meta(key, value) VALUES(?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
                 (_HISTORY_MIGRATION_KEY, _now_iso()),
             )
         log.info(
@@ -1039,8 +1030,7 @@ class KnowledgeStore:
             return
         try:
             db.execute(
-                "INSERT INTO _kb_meta(key, value) VALUES(?, ?) "
-                "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                "INSERT INTO _kb_meta(key, value) VALUES(?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
                 (key, value),
             )
             db.commit()
@@ -1134,9 +1124,7 @@ class KnowledgeStore:
             if normalized in REVIEW_STATES:
                 review_state = normalized
             else:
-                log.warning(
-                    "[knowledge] add_chunk: unknown review_state %r ignored (tier rule applies)", review_state
-                )
+                log.warning("[knowledge] add_chunk: unknown review_state %r ignored (tier rule applies)", review_state)
                 review_state = None
         if review_state is None:
             review_state = infer_review_state(source_type)
@@ -1154,9 +1142,21 @@ class KnowledgeStore:
                 "delivery_policy, created_at, updated_at) "
                 "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
-                    content, domain, heading, source, source_type, finding_type,
-                    namespace, epoch, memory_kind, subject, review_state, expires_at,
-                    delivery_policy, now, now,
+                    content,
+                    domain,
+                    heading,
+                    source,
+                    source_type,
+                    finding_type,
+                    namespace,
+                    epoch,
+                    memory_kind,
+                    subject,
+                    review_state,
+                    expires_at,
+                    delivery_policy,
+                    now,
+                    now,
                 ),
             )
             db.commit()
@@ -1395,16 +1395,32 @@ class KnowledgeStore:
         try:
             rows = (
                 self._search_fts(
-                    db, query, k, domain, namespace, include_invalidated, epoch,
-                    memory_kind=memory_kind, review_state=review_state,
-                    delivery_policy=delivery_policy, deliverable=deliverable,
+                    db,
+                    query,
+                    k,
+                    domain,
+                    namespace,
+                    include_invalidated,
+                    epoch,
+                    memory_kind=memory_kind,
+                    review_state=review_state,
+                    delivery_policy=delivery_policy,
+                    deliverable=deliverable,
                     prefix=prefix,
                 )
                 if self._fts_available
                 else self._search_like(
-                    db, query, k, domain, namespace, include_invalidated, epoch,
-                    memory_kind=memory_kind, review_state=review_state,
-                    delivery_policy=delivery_policy, deliverable=deliverable,
+                    db,
+                    query,
+                    k,
+                    domain,
+                    namespace,
+                    include_invalidated,
+                    epoch,
+                    memory_kind=memory_kind,
+                    review_state=review_state,
+                    delivery_policy=delivery_policy,
+                    deliverable=deliverable,
                 )
             )
         except sqlite3.DatabaseError as exc:
@@ -1810,9 +1826,7 @@ class KnowledgeStore:
         if db is None:
             return None
         try:
-            row = db.execute(
-                "SELECT id FROM chunks WHERE content = ? ORDER BY id LIMIT 1", (content,)
-            ).fetchone()
+            row = db.execute("SELECT id FROM chunks WHERE content = ? ORDER BY id LIMIT 1", (content,)).fetchone()
             return int(row["id"]) if row else None
         except sqlite3.DatabaseError:
             return None

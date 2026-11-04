@@ -198,7 +198,13 @@ def test_non_pdf_files_get_no_pdf_verdict(monkeypatch, tmp_path):
 # ── vendored pdf.js + its route ─────────────────────────────────────────────────
 
 
-@pytest.mark.parametrize("name,marker", [("pdfjs.min.mjs", b"globalThis.pdfjsLib="), ("pdfjs-worker.min.mjs", b"globalThis.pdfjsWorker={WorkerMessageHandler}")])
+@pytest.mark.parametrize(
+    "name,marker",
+    [
+        ("pdfjs.min.mjs", b"globalThis.pdfjsLib="),
+        ("pdfjs-worker.min.mjs", b"globalThis.pdfjsWorker={WorkerMessageHandler}"),
+    ],
+)
 def test_pdfjs_is_vendored_and_served_same_origin(monkeypatch, tmp_path, name, marker):
     from fastapi.testclient import TestClient
 
@@ -301,7 +307,7 @@ def test_in_frame_failure_shows_the_extracted_text(monkeypatch, tmp_path):
     assert "caps.parseMs" in ctl
     assert "password-protected" in ctl
     assert '<details id="ol"><summary>Extracted text</summary>' in _js_function(js, "pdfDoc")
-    assert "kind===\"pdf\" ? PDF_CAPS" in _js_function(js, "feedCaps")
+    assert 'kind==="pdf" ? PDF_CAPS' in _js_function(js, "feedCaps")
     assert "feedCaps(ctx.kind).watchdogMs" in js and '"Page")+" preview unavailable — rendering took too long"' in js
 
 

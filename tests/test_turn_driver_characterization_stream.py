@@ -701,7 +701,9 @@ async def test_a_silent_wait_yield_replies_with_when_it_resumes(env):
                 tool_end(
                     "t1",
                     "wait",
-                    tool_msg("Wait scheduled: 45 minutes. Will resume to: Check on bd-49yo. Don't create cards.", "tc1"),
+                    tool_msg(
+                        "Wait scheduled: 45 minutes. Will resume to: Check on bd-49yo. Don't create cards.", "tc1"
+                    ),
                 ),
             ]
         ]
@@ -980,7 +982,9 @@ async def test_goal_continuation_interrupt_parks_an_attended_turn_and_stops_the_
     goals = FakeGoals([("continue", "not yet", "keep going"), ("done", "met")])
     goals.active = False
     monkeypatch.setattr(env.state, "goal_controller", goals, raising=False)
-    g = env.install(streams=[[text("r1", "draft")], [text("r2", "One thing:"), set_interrupt({"question": "Which env?"})]])
+    g = env.install(
+        streams=[[text("r1", "draft")], [text("r2", "One thing:"), set_interrupt({"question": "Which env?"})]]
+    )
     g.on_call = lambda graph, config: setattr(goals, "active", True)
 
     frames = await _run("ship it")
@@ -999,7 +1003,10 @@ async def test_goal_continuation_interrupt_parks_an_attended_turn_and_stops_the_
 @pytest.mark.parametrize(
     ("script", "answer"),
     [
-        ([tool_start("t1", "wait"), tool_end("t1", "wait", tool_msg("Wait scheduled for 5m.", "tc1"))], "Wait scheduled for 5m."),
+        (
+            [tool_start("t1", "wait"), tool_end("t1", "wait", tool_msg("Wait scheduled for 5m.", "tc1"))],
+            "Wait scheduled for 5m.",
+        ),
         ([reasoning("r1", "hmm")], _EMPTY),
     ],
 )

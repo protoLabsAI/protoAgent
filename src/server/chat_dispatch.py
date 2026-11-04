@@ -229,8 +229,7 @@ _GOAL_FENCED_ACP_REFUSAL = (
 # The status line a turn in such a session gets when its text looked like a command
 # (a `/command` or an `@`-mention): it isn't run — the text goes to the goal-driven turn.
 _GOAL_FENCED_COMMANDS_PAUSED = (
-    "⏸ Commands are paused while this goal runs with a restricted tool scope — "
-    "`/goal clear` to resume."
+    "⏸ Commands are paused while this goal runs with a restricted tool scope — `/goal clear` to resume."
 )
 
 
@@ -464,11 +463,7 @@ async def _pre_turn_dispatch(pre: _PreTurn, session_id: str, request_metadata: d
         # produce six outcomes, and "6 replied over 3 rounds" describes a room of
         # six people that does not exist.
         _answered = len(
-            {
-                str(item.get("author") or "")
-                for item in (_at_outcome or [])
-                if item.get("ok") and not item.get("silent")
-            }
+            {str(item.get("author") or "") for item in (_at_outcome or []) if item.get("ok") and not item.get("silent")}
         )
         _rounds = max((int(item.get("round") or 1) for item in (_at_outcome or [])), default=1)
         if _at_outcome:
@@ -539,9 +534,7 @@ async def _pre_turn_dispatch(pre: _PreTurn, session_id: str, request_metadata: d
         # only when the composer claimed something (see `_at_delegate_exchange`:
         # with nothing claimed the console lands the answer whole, and this frame
         # would be the duplicate).
-        _room_note_text = next(
-            (str(o.get("room_note") or "") for o in (_at_outcome or []) if o.get("room_note")), ""
-        )
+        _room_note_text = next((str(o.get("room_note") or "") for o in (_at_outcome or []) if o.get("room_note")), "")
         if _room_note_text:
             yield ("room_reply", {"note": True, "from": "room", "text": _room_note_text, "ok": True})
         pre.handled = True

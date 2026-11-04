@@ -90,11 +90,14 @@ def acp_usage(delegate: str, usage: dict | None) -> dict:
 
         read, write = count("cachedReadTokens"), count("cachedWriteTokens")
         return {
-            "provider_id": provider, "account_key": key, "cost_usd": 0.0,
+            "provider_id": provider,
+            "account_key": key,
+            "cost_usd": 0.0,
             "usage": {
                 "input_tokens": count("inputTokens") + read + write,
                 "output_tokens": count("outputTokens"),
-                "cache_read_input_tokens": read, "cache_creation_input_tokens": write,
+                "cache_read_input_tokens": read,
+                "cache_creation_input_tokens": write,
             },
         }
     except Exception:  # noqa: BLE001 — preserve today's behavior on malformed reports

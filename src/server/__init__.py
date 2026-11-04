@@ -514,8 +514,7 @@ def build_serve_parser() -> argparse.ArgumentParser:
         "--port",
         type=int,
         default=7870,
-        help="Port to listen on (default 7870). Pick another if 7870 is already in "
-        "use, e.g. by another protoAgent.",
+        help="Port to listen on (default 7870). Pick another if 7870 is already in use, e.g. by another protoAgent.",
     )
     # Bind host. Defaults to loopback so a local/desktop run is NOT exposed on
     # all interfaces (prod-readiness: the console + operator API are otherwise
@@ -1339,9 +1338,11 @@ def _main():
     # configured" / "origins not set" at INFO, anything reachable keeps them at WARNING. This
     # mirrors the authoritative resolution + args.host mutation below (--host flag > cascade),
     # which runs later; reuse this value there so the two never drift.
-    resolved_bind_host = args.host or (
-        STATE.graph_config.bind_host if STATE.graph_config else os.environ.get("PROTOAGENT_HOST", "127.0.0.1")
-    ) or "127.0.0.1"
+    resolved_bind_host = (
+        args.host
+        or (STATE.graph_config.bind_host if STATE.graph_config else os.environ.get("PROTOAGENT_HOST", "127.0.0.1"))
+        or "127.0.0.1"
+    )
     auth.install(
         fastapi_app,
         bearer_token=(STATE.graph_config.auth_token if STATE.graph_config else None),

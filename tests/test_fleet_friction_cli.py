@@ -28,8 +28,15 @@ ROSTER = [
 
 def _item(kind, summary, severity="minor", count=1, seen=NOW, detail="", tool=""):
     return {
-        "id": friction_id(kind, summary), "kind": kind, "summary": summary, "severity": severity,
-        "count": count, "first_seen": seen, "last_seen": seen, "detail": detail, "tool": tool,
+        "id": friction_id(kind, summary),
+        "kind": kind,
+        "summary": summary,
+        "severity": severity,
+        "count": count,
+        "first_seen": seen,
+        "last_seen": seen,
+        "detail": detail,
+        "tool": tool,
     }
 
 
@@ -42,7 +49,11 @@ def friction_id(kind, summary):
 SHARED = _item("harness", "read_file truncates at 50k chars", "major", 4, detail="needs from_line")
 LEDGERS = {
     "host": [_item("harness", "board_cancel is not idempotent", "minor", 1)],
-    "alpha-1": [SHARED, _item("model", "wrong path guessed", "minor", 2), _item("harness", "ancient thing", "major", 1, seen=OLD)],
+    "alpha-1": [
+        SHARED,
+        _item("model", "wrong path guessed", "minor", 2),
+        _item("harness", "ancient thing", "major", 1, seen=OLD),
+    ],
     "beta-2": [dict(SHARED, count=3), _item("harness", "flaky list_dir", "minor", 9)],
 }
 
@@ -77,7 +88,10 @@ class FakeClient:
 
 def _live(monkeypatch, client):
     conn = deckhub.Connection(
-        client=client, candidate=deckhub.HubCandidate(client.url, "heartbeat"), card={"name": "hub"}, roster=list(client.roster)
+        client=client,
+        candidate=deckhub.HubCandidate(client.url, "heartbeat"),
+        card={"name": "hub"},
+        roster=list(client.roster),
     )
     monkeypatch.setattr(deckhub, "connect", lambda **kw: conn)
 
@@ -199,7 +213,12 @@ def test_resolve_all_agents_hits_every_member_that_has_it(monkeypatch, capsys):
 def test_resolve_reopen_clears_the_stamp(monkeypatch, capsys):
     c = FakeClient()
     _live(monkeypatch, c)
-    assert _run(["friction", "resolve", friction_id("harness", SHARED["summary"]), "--agent", "alpha", "--reopen", "--json"]) == 0
+    assert (
+        _run(
+            ["friction", "resolve", friction_id("harness", SHARED["summary"]), "--agent", "alpha", "--reopen", "--json"]
+        )
+        == 0
+    )
     assert [call for call in c.calls if call[0] == "post"][0][3]["resolved"] is False
     assert any(call[0] == "get" and call[3].get("resolved") == "true" for call in c.calls)
 
@@ -232,8 +251,16 @@ def _hubs(monkeypatch, specs):
 
     disc = importlib.import_module("deck.discovery")
     rows = [
-        disc.HubRow(name=n, root=None, url=f"http://127.0.0.1:{p}", port=p, presence="running", launcher="", source="heartbeat",
-                    candidate=deckhub.HubCandidate(f"http://127.0.0.1:{p}", "heartbeat", trusted=True))
+        disc.HubRow(
+            name=n,
+            root=None,
+            url=f"http://127.0.0.1:{p}",
+            port=p,
+            presence="running",
+            launcher="",
+            source="heartbeat",
+            candidate=deckhub.HubCandidate(f"http://127.0.0.1:{p}", "heartbeat", trusted=True),
+        )
         for n, p, _ in specs
     ]
     clients = {f"http://127.0.0.1:{p}": c for n, p, c in specs}

@@ -78,8 +78,11 @@ def test_recent_response_unwrap_never_iterates_dict_keys():
     keys and _lane_rows explodes. The unwrap must take the list or nothing."""
     from evals.ptc_bench import _lane_rows
 
-    body = {"enabled": True, "turns": [{"session_id": "a2a:ptc-eval-loop-0", "llm_calls": 11}],
-            "langfuse_trace_url_template": None}
+    body = {
+        "enabled": True,
+        "turns": [{"session_id": "a2a:ptc-eval-loop-0", "llm_calls": 11}],
+        "langfuse_trace_url_template": None,
+    }
     turns = body.get("turns") or [] if isinstance(body, dict) else (body or [])
     assert _lane_rows(turns, "loop", 1)[0]["llm_calls"] == 11
     empty = {"enabled": False}

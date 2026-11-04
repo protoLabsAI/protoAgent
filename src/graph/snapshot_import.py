@@ -301,7 +301,13 @@ def _validated_manifest(zf: zipfile.ZipFile) -> tuple[dict, set[str]]:
         raise SnapshotError("manifest knowledge `domains` must be a mapping")
     domains = domains or {}
     for domain, count in domains.items():
-        if not isinstance(domain, str) or not domain.strip() or not isinstance(count, int) or isinstance(count, bool) or count < 0:
+        if (
+            not isinstance(domain, str)
+            or not domain.strip()
+            or not isinstance(count, int)
+            or isinstance(count, bool)
+            or count < 0
+        ):
             raise SnapshotError("knowledge domains must map non-empty names to non-negative integer counts")
     expected_knowledge = {f"knowledge/{_safe_domain(domain)}.md" for domain in domains}
     if len(expected_knowledge) != len(domains):
@@ -341,7 +347,9 @@ def inspect_snapshot(data: bytes, *, known_sources: list[str] | None = None) -> 
             PluginPin(
                 id=str(raw.get("id") or "").strip() or url.rstrip("/").split("/")[-1],
                 url=url,
-                ref=str(raw.get("sha") or raw.get("resolved_sha") or raw.get("ref") or raw.get("requested_ref") or "").strip(),
+                ref=str(
+                    raw.get("sha") or raw.get("resolved_sha") or raw.get("ref") or raw.get("requested_ref") or ""
+                ).strip(),
                 recognized=_recognized(url, known_sources),
             )
         )
@@ -676,7 +684,11 @@ def _install_pins(ws: Path, pins: list[PluginPin]) -> tuple[list[str], list[dict
             continue
         if proc.returncode != 0:
             failed.append(
-                {"id": pin.id, "url": pin.url, "error": install_failure_reason(proc.stdout, proc.stderr, proc.returncode)}
+                {
+                    "id": pin.id,
+                    "url": pin.url,
+                    "error": install_failure_reason(proc.stdout, proc.stderr, proc.returncode),
+                }
             )
             continue
         installed.append(pin.id)
@@ -799,9 +811,7 @@ def _write_secrets(
             atomic_write(cfg_path, yaml.safe_dump(config, sort_keys=False, allow_unicode=True), mode=0o600)
 
     return sorted(
-        str(r.get("name"))
-        for r in plan.required_secrets
-        if r.get("was_set") and str(r.get("name")) not in persisted
+        str(r.get("name")) for r in plan.required_secrets if r.get("was_set") and str(r.get("name")) not in persisted
     )
 
 

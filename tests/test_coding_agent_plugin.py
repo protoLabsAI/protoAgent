@@ -1825,7 +1825,7 @@ async def test_a_repeat_that_is_not_adjacent_survives():
 
 @pytest.mark.asyncio
 async def test_a_repeat_across_a_tool_call_survives():
-    """"Adjacent" must mean back-to-back. The same sentence either side of a tool call is
+    """ "Adjacent" must mean back-to-back. The same sentence either side of a tool call is
     the agent restating where it got to — real narration, not the emit-side stutter — so
     the guard resets at the boundary. (QA panel finding on the #3407 PR.)"""
     c = _fresh_client()

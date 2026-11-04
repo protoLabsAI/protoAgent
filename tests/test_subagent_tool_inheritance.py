@@ -1,4 +1,5 @@
 """Dispatch permission boundaries, without a live model (#4327)."""
+
 import asyncio
 from dataclasses import replace
 from types import SimpleNamespace
@@ -20,6 +21,7 @@ def stub(name, read=False):
     def impl() -> str:
         """A test tool."""
         return "ok"
+
     impl.metadata = {"access": "read"} if read else None
     return impl
 
@@ -27,8 +29,14 @@ def stub(name, read=False):
 @pytest.fixture
 def setup(monkeypatch):
     config = LangGraphConfig(tools_subagent_only=["held_read"])
-    tools = [stub("explicit"), stub("read_file"), stub("plugin_read", True),
-             stub("write_file"), stub("update_artifact"), stub("held_read", True)]
+    tools = [
+        stub("explicit"),
+        stub("read_file"),
+        stub("plugin_read", True),
+        stub("write_file"),
+        stub("update_artifact"),
+        stub("held_read", True),
+    ]
     tools += [stub(n, True) for n in sorted(NEVER_INHERITED)]
     spec = SubagentConfig(name="inheritance-test", description="test", system_prompt="test", tools=["explicit"])
     monkeypatch.setitem(SUBAGENT_REGISTRY, spec.name, spec)
@@ -70,7 +78,9 @@ def test_effective_permissions(monkeypatch, setup, path, case):
     if path == "background":
         fence = _subagent_fence(spec.name)
         assert fence == (expected or [FENCE_DENY_ALL])
-        assert intersect_fences(fence, ["read_file"]) == (["read_file"] if "read_file" in expected else [FENCE_DENY_ALL])
+        assert intersect_fences(fence, ["read_file"]) == (
+            ["read_file"] if "read_file" in expected else [FENCE_DENY_ALL]
+        )
         return
     if path == "manual":
         asyncio.run(agent.run_manual_subagent(config, description="test", prompt="test", subagent_type=spec.name))
@@ -97,6 +107,7 @@ def test_prompt_guard_inherits_reads_but_requires_write_optin(monkeypatch, setup
 
     monkeypatch.setattr(agent, "_run_subagent", fake_run)
     bound = {t.name: t for t in agent._build_task_tools(config, tools)}
+
     def invoke(prompt):
         args = dict(description="test", prompt=prompt, subagent_type=spec.name)
         if path == "manual":
@@ -150,7 +161,12 @@ def test_graph_publishes_filesystem_and_late_read_objects(monkeypatch, setup, ba
     graph = agent.create_agent_graph(config, background_mgr=Background(), late_tool_factories=[lambda ts, c: tools[2]])
     monkeypatch.setattr(STATE, "graph", graph)
     task = next(t for t in graph.bound_tools if t.name == "task")
-    args = dict(description="test", prompt="Use read_file and plugin_read", subagent_type=spec.name, run_in_background=background)
+    args = dict(
+        description="test",
+        prompt="Use read_file and plugin_read",
+        subagent_type=spec.name,
+        run_in_background=background,
+    )
     result = asyncio.run(task.ainvoke({"name": "task", "args": args, "id": "test", "type": "tool_call"}))
     assert "Not dispatched" not in result.content
     assert len(calls) == 1
@@ -180,10 +196,16 @@ def test_inner_runner_binds_inherited_reads_and_intersects_parent(monkeypatch, s
     monkeypatch.setattr(agent, "create_llm", lambda *a, **k: object())
     monkeypatch.setattr(agent, "create_agent", create)
     with fence_scope(["read_file", "write_file"]):
-        asyncio.run(agent._run_subagent_inner(
-            config=config, tool_map={t.name: t for t in tools}, available_subagents=spec.name,
-            description="test", prompt="test", subagent_type=spec.name,
-        ))
+        asyncio.run(
+            agent._run_subagent_inner(
+                config=config,
+                tool_map={t.name: t for t in tools},
+                available_subagents=spec.name,
+                description="test",
+                prompt="test",
+                subagent_type=spec.name,
+            )
+        )
     assert bound == tools[:3]
     assert inputs[0]["subagent_fence"] == ["read_file"]
 
@@ -220,9 +242,14 @@ def test_manual_assembles_filesystem_and_late_reads(monkeypatch, setup):
         return "ran"
 
     monkeypatch.setattr(agent, "_run_subagent", fake_run)
-    result = asyncio.run(agent.run_manual_subagent(
-        config, description="test", prompt="Use read_file and plugin_read", subagent_type=spec.name,
-    ))
+    result = asyncio.run(
+        agent.run_manual_subagent(
+            config,
+            description="test",
+            prompt="Use read_file and plugin_read",
+            subagent_type=spec.name,
+        )
+    )
     assert result == "ran"
     assert seen == tools[:3]
 
@@ -236,9 +263,15 @@ def test_researcher_read_prompt_dispatches(monkeypatch):
 
     monkeypatch.setattr(agent, "_run_subagent", fake_run)
     task = agent._build_task_tools(LangGraphConfig(), [stub("read_file")])[0]
-    result = asyncio.run(task.ainvoke({
-        "name": "task", "id": "test", "type": "tool_call",
-        "args": {"description": "read", "prompt": "Use read_file", "subagent_type": "researcher"},
-    }))
+    result = asyncio.run(
+        task.ainvoke(
+            {
+                "name": "task",
+                "id": "test",
+                "type": "tool_call",
+                "args": {"description": "read", "prompt": "Use read_file", "subagent_type": "researcher"},
+            }
+        )
+    )
     assert result.content == "ran"
     assert len(calls) == 1

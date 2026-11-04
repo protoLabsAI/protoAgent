@@ -20,6 +20,7 @@ _MAX_BYTES = 50 * 1024 * 1024  # 50 MB
 _TAIL_BYTES = 512 * 1024  # get_recent reads at most the last 512 KB
 _MAX_SESSIONS = 1000  # cap the in-memory per-session stats dict
 
+
 class AuditLogger:
     """Append-only JSONL audit log for tool executions (rotating, per-instance)."""
 

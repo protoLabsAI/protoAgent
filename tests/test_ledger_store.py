@@ -251,9 +251,7 @@ def test_the_writer_stamps_this_agent_as_the_source(wired, monkeypatch):
 
     from graph import ledger
 
-    monkeypatch.setattr(
-        rs.STATE, "graph_config", type("C", (), {"identity_name": "gina"})(), raising=False
-    )
+    monkeypatch.setattr(rs.STATE, "graph_config", type("C", (), {"identity_name": "gina"})(), raising=False)
     ledger.record_delegation(to_kind="a2a", to_name="hermes")
 
     assert wired.recent()[0]["from_agent"] == "gina"

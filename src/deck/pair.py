@@ -55,7 +55,9 @@ def _parser() -> argparse.ArgumentParser:
         help="with --device: draw the QR for a light-background terminal (default assumes dark)",
     )
     p.add_argument("--url", default=None, help="the instance to pair (default: the one running on this machine)")
-    p.add_argument("--token", default=None, help=f"operator credential for --url (default: ${deckhub.ENV_TOKEN} / this box's)")
+    p.add_argument(
+        "--token", default=None, help=f"operator credential for --url (default: ${deckhub.ENV_TOKEN} / this box's)"
+    )
     p.add_argument("--json", action="store_true", help="machine-readable output")
     p.add_argument(
         "--insecure-http",

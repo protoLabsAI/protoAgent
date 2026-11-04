@@ -541,7 +541,9 @@ async def test_unset_root_approved_registers_at_the_chosen_access(layout, applie
 
 async def test_unset_root_real_graph_round_trip(layout, applied):
     _root, outside = layout
-    payload, out = await _drive(_tool(_cfg(Path(""), onboarding_root="")), {"path": str(outside)}, _option("Allow read-only"))
+    payload, out = await _drive(
+        _tool(_cfg(Path(""), onboarding_root="")), {"path": str(outside)}, _option("Allow read-only")
+    )
     assert "no onboarding root is set" in payload["detail"]
     assert applied[0]["projects"][-1]["write"] is False and "approved by the operator" in out
 
@@ -585,7 +587,12 @@ async def test_unset_root_bypass_does_not_skip_the_card(layout, applied, park):
 
 async def test_unset_root_onboard_project_still_refuses_to_clone(tmp_path, applied, park):
     """Cloning is unchanged: with no root there is nowhere for a clone to land."""
-    tools = {t.name: t for t in onboard_tools.build_onboard_tools(_cfg(Path(""), onboarding_root="", onboarding_allow=["github.com/acme/*"]))}
+    tools = {
+        t.name: t
+        for t in onboard_tools.build_onboard_tools(
+            _cfg(Path(""), onboarding_root="", onboarding_allow=["github.com/acme/*"])
+        )
+    }
     out = await tools["onboard_project"].ainvoke({"repo": "acme/widget"})
     assert out.startswith("Refused:") and "onboarding.root isn't set" in out
     assert park.payloads == [] and applied == []

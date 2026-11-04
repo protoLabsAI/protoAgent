@@ -167,8 +167,7 @@ class HybridKnowledgeStore(KnowledgeStore):
             return True
         except Exception as exc:  # noqa: BLE001 — a probe failure must only open the breaker
             log.warning(
-                "[knowledge] embedding probe failed — semantic recall paused for %.0fs "
-                "(keyword recall continues): %s",
+                "[knowledge] embedding probe failed — semantic recall paused for %.0fs (keyword recall continues): %s",
                 self._breaker_cooldown_s,
                 exc,
             )
@@ -659,9 +658,16 @@ class HybridKnowledgeStore(KnowledgeStore):
                 return base[:k]
 
             vec_ids = self._vector_search(
-                query_vec, self._vector_k, domain, namespace, include_invalidated, epoch,
-                memory_kind=memory_kind, review_state=review_state,
-                delivery_policy=delivery_policy, deliverable=deliverable,
+                query_vec,
+                self._vector_k,
+                domain,
+                namespace,
+                include_invalidated,
+                epoch,
+                memory_kind=memory_kind,
+                review_state=review_state,
+                delivery_policy=delivery_policy,
+                deliverable=deliverable,
             )
             if not vec_ids:
                 return base[:k]

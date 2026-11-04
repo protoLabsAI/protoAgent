@@ -142,7 +142,12 @@ def test_remint_route_returns_fresh_link_or_404():
     assert c.get(rel).content == b"png"  # the fresh link really serves the file
     # forged / missing / empty → 404
     assert c.post("/api/media/remint", json={"url": f"/media/{name}?sig=bogus"}).status_code == 404
-    assert c.post("/api/media/remint", json={"url": f"/media/missing.png?sig={media.sign_name('missing.png')}"}).status_code == 404
+    assert (
+        c.post(
+            "/api/media/remint", json={"url": f"/media/missing.png?sig={media.sign_name('missing.png')}"}
+        ).status_code
+        == 404
+    )
     assert c.post("/api/media/remint", json={}).status_code == 404
 
 

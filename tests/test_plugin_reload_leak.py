@@ -64,8 +64,7 @@ def _live_plugin_modules(pid: str) -> list[types.ModuleType]:
         m
         for m in gc.get_objects()
         # Exact type avoids dereferencing dead weakref proxies on the heap.
-        if type(m) is types.ModuleType
-        and getattr(m, "__name__", "").startswith(prefix)
+        if type(m) is types.ModuleType and getattr(m, "__name__", "").startswith(prefix)
     ]
 
 

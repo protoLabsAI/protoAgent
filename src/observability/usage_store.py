@@ -136,9 +136,7 @@ class UsageStore:
 
     # ── merge (U3 header capture) ────────────────────────────────────────────────
 
-    def merge_windows(
-        self, account: Any, windows: list, source: str, fetched_at: datetime
-    ) -> None:
+    def merge_windows(self, account: Any, windows: list, source: str, fetched_at: datetime) -> None:
         """Fold ``windows`` observed for ``account`` into the cache; per window id the
         newer ``fetched_at`` wins (older observations are dropped). Publishes
         ``provider.usage`` if anything actually changed. Does not count as a poll."""
@@ -239,11 +237,7 @@ class UsageStore:
         self._entries[provider_id] = entry
         # A fresh→stale or stale→fresh transition is a UI-visible change even when the
         # underlying windows match.
-        changed = (
-            prior is None
-            or prior.fingerprint != entry.fingerprint
-            or prior.stale != entry.stale
-        )
+        changed = prior is None or prior.fingerprint != entry.fingerprint or prior.stale != entry.stale
         if self._record_good(account):
             self._persist_locked()
         return entry, (self._present(provider_id, entry) if changed else None)

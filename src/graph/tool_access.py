@@ -6,13 +6,26 @@ This module selects candidates only; dispatch applies each subagent's policy.
 from tools.lg_tools import HITL_TOOL_NAMES
 
 
-CORE_READ_TOOLS: frozenset[str] = frozenset({
-    "list_projects", "list_dir", "read_file", "find_files", "search_files",
-})
+CORE_READ_TOOLS: frozenset[str] = frozenset(
+    {
+        "list_projects",
+        "list_dir",
+        "read_file",
+        "find_files",
+        "search_files",
+    }
+)
 
-NEVER_INHERITED: frozenset[str] = HITL_TOOL_NAMES | frozenset({
-    "task", "task_batch", "stop_task", "execute_code", "run_command", "delegate_to",
-})
+NEVER_INHERITED: frozenset[str] = HITL_TOOL_NAMES | frozenset(
+    {
+        "task",
+        "task_batch",
+        "stop_task",
+        "execute_code",
+        "run_command",
+        "delegate_to",
+    }
+)
 
 
 def is_read_tool(tool) -> bool:

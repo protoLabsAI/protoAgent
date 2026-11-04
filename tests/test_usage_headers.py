@@ -19,9 +19,11 @@ CLAUDE = {
     "anthropic-ratelimit-unified-7d-status": "rejected",
     "anthropic-ratelimit-unified-representative-claim": "7d",
 }
-CODEX = {f"x-codex-{slot}-{key}": value for slot, minutes, percent in
-         (("primary", "300", "25"), ("secondary", "10080", "81"))
-         for key, value in (("used-percent", percent), ("window-minutes", minutes), ("reset-at", "1792756800"))}
+CODEX = {
+    f"x-codex-{slot}-{key}": value
+    for slot, minutes, percent in (("primary", "300", "25"), ("secondary", "10080", "81"))
+    for key, value in (("used-percent", percent), ("window-minutes", minutes), ("reset-at", "1792756800"))
+}
 
 
 @pytest.fixture
@@ -31,10 +33,13 @@ def store(monkeypatch):
     return result
 
 
-@pytest.mark.parametrize("provider,parser,golden", [
-    ("anthropic-oauth", h.parse_anthropic_headers, CLAUDE),
-    ("openai-codex", h.parse_codex_headers, CODEX),
-])
+@pytest.mark.parametrize(
+    "provider,parser,golden",
+    [
+        ("anthropic-oauth", h.parse_anthropic_headers, CLAUDE),
+        ("openai-codex", h.parse_codex_headers, CODEX),
+    ],
+)
 def test_goldens_and_merge(provider, parser, golden, store):
     windows = parser({k.upper(): v for k, v in golden.items()})
     assert [w.kind for w in windows] == ["session", "weekly"]
@@ -66,8 +71,10 @@ def test_capture_fuzz_never_raises(store, monkeypatch):
     for _ in range(200):
         garbage.append("".join(chr(rng.randrange(0x110000)) for _ in range(rng.randrange(50))))
     for value in garbage:
-        for provider, parser, golden in (("anthropic-oauth", h.parse_anthropic_headers, CLAUDE),
-                                         ("openai-codex", h.parse_codex_headers, CODEX)):
+        for provider, parser, golden in (
+            ("anthropic-oauth", h.parse_anthropic_headers, CLAUDE),
+            ("openai-codex", h.parse_codex_headers, CODEX),
+        ):
             assert parser(value) == []
             h.capture(provider, value)
             for key in golden:
@@ -140,18 +147,33 @@ async def test_sdk_model_call(monkeypatch, store, asynchronous, status, capture_
 
     http = _http()
     calls = []
-    body = {"id": "msg_test", "type": "message", "role": "assistant", "model": "claude-test",
-            "content": [{"type": "text", "text": "unchanged"}], "stop_reason": "end_turn",
-            "usage": {"input_tokens": 1, "output_tokens": 1}}
+    body = {
+        "id": "msg_test",
+        "type": "message",
+        "role": "assistant",
+        "model": "claude-test",
+        "content": [{"type": "text", "text": "unchanged"}],
+        "stop_reason": "end_turn",
+        "usage": {"input_tokens": 1, "output_tokens": 1},
+    }
 
     def respond(request):
         calls.append(request)
-        return http.Response(status, headers=CLAUDE, json=body if status == 200 else
-                             {"type": "error", "error": {"type": "rate_limit_error", "message": "limited"}})
+        return http.Response(
+            status,
+            headers=CLAUDE,
+            json=body
+            if status == 200
+            else {"type": "error", "error": {"type": "rate_limit_error", "message": "limited"}},
+        )
 
     monkeypatch.setattr(ao, "current_oauth_token", lambda **kw: "fake-token")
-    monkeypatch.setattr(ao, "_get_default_httpx_client", lambda **kw: http.Client(transport=http.MockTransport(respond)))
-    monkeypatch.setattr(ao, "_get_default_async_httpx_client", lambda **kw: http.AsyncClient(transport=http.MockTransport(respond)))
+    monkeypatch.setattr(
+        ao, "_get_default_httpx_client", lambda **kw: http.Client(transport=http.MockTransport(respond))
+    )
+    monkeypatch.setattr(
+        ao, "_get_default_async_httpx_client", lambda **kw: http.AsyncClient(transport=http.MockTransport(respond))
+    )
     if capture_failure:
         monkeypatch.setattr(h, "capture", Mock(side_effect=RuntimeError("capture failed")))
     model = ao._OAuthChatAnthropic(model="claude-test", oauth_token="fake-token", api_key="unused", max_retries=0)
@@ -190,8 +212,11 @@ def test_codex_builder_enables_headers(monkeypatch):
     from graph.config import LangGraphConfig
     from graph.providers import codex_client, openai_codex
 
-    monkeypatch.setattr(openai_codex, "resolve_codex_oauth", lambda: SimpleNamespace(
-        base_url="https://example.test", access_token="fake-token", account_id="fake-account"))
+    monkeypatch.setattr(
+        openai_codex,
+        "resolve_codex_oauth",
+        lambda: SimpleNamespace(base_url="https://example.test", access_token="fake-token", account_id="fake-account"),
+    )
     build = Mock()
     monkeypatch.setattr(codex_client, "build_codex_client", build)
     openai_codex.build_codex_llm(LangGraphConfig(), model_name="gpt-5-codex")
@@ -214,9 +239,13 @@ def test_sdk_429_error_path_without_transport_hook(store, asynchronous):
 
 
 def test_anthropic_warning_and_representative_alias():
-    windows = h.parse_anthropic_headers({**CLAUDE,
-        "anthropic-ratelimit-unified-5h-status": "allowed_warning",
-        "anthropic-ratelimit-unified-representative-claim": "five_hour"})
+    windows = h.parse_anthropic_headers(
+        {
+            **CLAUDE,
+            "anthropic-ratelimit-unified-5h-status": "allowed_warning",
+            "anthropic-ratelimit-unified-representative-claim": "five_hour",
+        }
+    )
     assert windows[0].status == "warning"
     assert windows[0].binding
 

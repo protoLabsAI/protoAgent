@@ -62,7 +62,10 @@ def test_action_buttons_use_the_ds_plugin_kit_classes():
     page = view_page()
     assert '<button class="pl-btn pl-btn--sm pl-btn--ghost" type="button" id="refresh"' in page
     assert 'title="Drop caches and re-crawl the fleet"' in page
-    assert '<button class="pl-btn pl-btn--ghost pl-btn--icon pl-btn--sm" type="button" id="d-close" aria-label="Close"' in page
+    assert (
+        '<button class="pl-btn pl-btn--ghost pl-btn--icon pl-btn--sm" type="button" id="d-close" aria-label="Close"'
+        in page
+    )
     # The script binds both controls by id.
     assert '$("refresh")' in page and '$("d-close")' in page
 
@@ -229,7 +232,9 @@ def test_peer_reported_health_carries_the_error_for_its_leaves(monkeypatch):
         raise httpx.ConnectError("down")
 
     monkeypatch.setattr(topo, "_make_client", lambda cfg: httpx.AsyncClient(transport=httpx.MockTransport(handler)))
-    monkeypatch.setattr(topo, "_roster", lambda: [{"type": "a2a", "name": "alpha", "url": ALPHA, "auth": {"token": "t"}}])
+    monkeypatch.setattr(
+        topo, "_roster", lambda: [{"type": "a2a", "name": "alpha", "url": ALPHA, "auth": {"token": "t"}}]
+    )
     # OUR prober also knows a `coder` — a different process. It must not badge the peer's.
     monkeypatch.setattr(topo, "_health", lambda: {"coder": {"ok": True, "latency_ms": 5}})
     monkeypatch.setattr(topo, "_fleet_remotes", lambda: [])
@@ -256,13 +261,18 @@ def test_a_peers_health_never_overrides_our_own_probe_of_an_agent(monkeypatch):
                 # alpha reaches beta fine; we cannot (the handler refuses beta below).
                 return httpx.Response(
                     200,
-                    json={"delegates": [{"type": "a2a", "name": "beta", "url": BETA,
-                                         "health": {"ok": True, "latency_ms": 3}}]},
+                    json={
+                        "delegates": [
+                            {"type": "a2a", "name": "beta", "url": BETA, "health": {"ok": True, "latency_ms": 3}}
+                        ]
+                    },
                 )
         raise httpx.ConnectError("down")
 
     monkeypatch.setattr(topo, "_make_client", lambda cfg: httpx.AsyncClient(transport=httpx.MockTransport(handler)))
-    monkeypatch.setattr(topo, "_roster", lambda: [{"type": "a2a", "name": "alpha", "url": ALPHA, "auth": {"token": "t"}}])
+    monkeypatch.setattr(
+        topo, "_roster", lambda: [{"type": "a2a", "name": "alpha", "url": ALPHA, "auth": {"token": "t"}}]
+    )
     monkeypatch.setattr(topo, "_health", lambda: {})
     monkeypatch.setattr(topo, "_fleet_remotes", lambda: [])
     monkeypatch.setattr(topo, "_self_identity", lambda: ("ava", "http://self:7870", "org head"))
@@ -288,10 +298,17 @@ def _wire(monkeypatch, calls, roster=None, health=None, remotes=None):
         host, path = request.url.host, request.url.path
         if host == "alpha":
             if path == "/.well-known/agent-card.json":
-                return httpx.Response(200, json={"name": "Alpha", "version": "1.2", "description": "Alpha — planner. Etc."})
+                return httpx.Response(
+                    200, json={"name": "Alpha", "version": "1.2", "description": "Alpha — planner. Etc."}
+                )
             if path == "/api/delegates":
                 assert request.headers.get("Authorization") == "Bearer tok-alpha"
-                return httpx.Response(200, json={"delegates": [{"type": "a2a", "name": "gamma", "url": GAMMA + "/a2a", "description": "leaf"}]})
+                return httpx.Response(
+                    200,
+                    json={
+                        "delegates": [{"type": "a2a", "name": "gamma", "url": GAMMA + "/a2a", "description": "leaf"}]
+                    },
+                )
         if host == "gamma" and path == "/.well-known/agent-card.json":
             return httpx.Response(200, json={"name": "Gamma"})
         raise httpx.ConnectError("down")
@@ -301,12 +318,20 @@ def _wire(monkeypatch, calls, roster=None, health=None, remotes=None):
     monkeypatch.setattr(
         topo,
         "_roster",
-        lambda: roster
-        if roster is not None
-        else [
-            {"type": "a2a", "name": "alpha", "url": ALPHA + "/a2a", "auth": {"token": "tok-alpha"}, "scope": "host"},
-            {"type": "a2a", "name": "beta", "url": BETA, "description": "beta — QA agent. Etc."},
-        ],
+        lambda: (
+            roster
+            if roster is not None
+            else [
+                {
+                    "type": "a2a",
+                    "name": "alpha",
+                    "url": ALPHA + "/a2a",
+                    "auth": {"token": "tok-alpha"},
+                    "scope": "host",
+                },
+                {"type": "a2a", "name": "beta", "url": BETA, "description": "beta — QA agent. Etc."},
+            ]
+        ),
     )
     monkeypatch.setattr(topo, "_health", lambda: health or {})
     monkeypatch.setattr(topo, "_fleet_remotes", lambda: remotes or [])
@@ -478,7 +503,9 @@ def _wire_local_peer(monkeypatch, peer: str, peer_delegates: list[dict]):
 
 def test_a_local_peers_proxied_delegate_is_the_member_too(monkeypatch):
     peer = "http://127.0.0.1:7881"  # a local fleet member on the hub's box
-    _wire_local_peer(monkeypatch, peer, [{"type": "a2a", "name": "alpha", "url": "http://127.0.0.1:7870/agents/alpha-b8bb/a2a"}])
+    _wire_local_peer(
+        monkeypatch, peer, [{"type": "a2a", "name": "alpha", "url": "http://127.0.0.1:7870/agents/alpha-b8bb/a2a"}]
+    )
     data = asyncio.run(topo.get_topology({}))
     ids = {n["id"] for n in data["nodes"]}
     assert "http://127.0.0.1:7870/agents/alpha-b8bb" not in ids
@@ -554,11 +581,22 @@ def _wire_fleet(monkeypatch, calls):
             if path == "/api/delegates":
                 return httpx.Response(200, json={"delegates": [{"type": "acp", "name": "coder", "command": "claude"}]})
             if path == "/api/ledger/live":
-                return httpx.Response(200, json={"edges": [{"id": "e1", "to_kind": "acp", "to_name": "coder", "what": "fix it", "started_at": 1.0}]})
+                return httpx.Response(
+                    200,
+                    json={
+                        "edges": [
+                            {"id": "e1", "to_kind": "acp", "to_name": "coder", "what": "fix it", "started_at": 1.0}
+                        ]
+                    },
+                )
             if path == "/api/ledger":
-                return httpx.Response(200, json={"edges": [{"edge_id": 9, "to_kind": "acp", "to_name": "coder", "outcome": "ok"}]})
+                return httpx.Response(
+                    200, json={"edges": [{"edge_id": 9, "to_kind": "acp", "to_name": "coder", "outcome": "ok"}]}
+                )
             if path == "/api/ledger/edges":
-                return httpx.Response(200, json={"edges": [{"to_kind": "acp", "to_name": "coder", "dispatches": 4, "ok": 4}]})
+                return httpx.Response(
+                    200, json={"edges": [{"to_kind": "acp", "to_name": "coder", "dispatches": 4, "ok": 4}]}
+                )
         raise httpx.ConnectError("down")
 
     monkeypatch.setattr(topo, "_make_client", lambda cfg: httpx.AsyncClient(transport=httpx.MockTransport(handler)))
@@ -608,9 +646,16 @@ def test_a_peers_live_edges_are_whitelisted_and_typed():
     """A peer's payload is untrusted input to every console that renders it: unknown keys
     are dropped and numbers are numbers — a string `started_at` can't smuggle markup."""
     dirty = {
-        "id": "e1", "to_kind": "acp", "to_name": "coder", "started_at": '"><img src=x onerror=alert(1)>',
-        "evil": "<script>", "progress": {"tool_count": "<b>9</b>", "plan": [{"content": "x", "status": "pending", "x": 1}],
-                                         "current_tool": {"name": "Edit", "kind": "edit", "locations": [{"path": "a.py", "line": "<i>"}]}},
+        "id": "e1",
+        "to_kind": "acp",
+        "to_name": "coder",
+        "started_at": '"><img src=x onerror=alert(1)>',
+        "evil": "<script>",
+        "progress": {
+            "tool_count": "<b>9</b>",
+            "plan": [{"content": "x", "status": "pending", "x": 1}],
+            "current_tool": {"name": "Edit", "kind": "edit", "locations": [{"path": "a.py", "line": "<i>"}]},
+        },
     }
     e = topo._clean_live(dirty, "http://peer")
     assert "evil" not in e and e["owner"] == "http://peer"
@@ -744,12 +789,12 @@ def test_mode_switch_is_an_aria_pressed_segmented_control_defaulting_active():
     assert '<button class="seg-btn" type="button" data-mode="all" aria-pressed="false">All</button>' in html
     # Default is Active; stored value "all" is the only thing that flips it.
     assert 'return localStorage.getItem(MODE_KEY) === "all" ? "all" : "active";' in js
-    assert 'let MODE = modeStore.get();' in js
+    assert "let MODE = modeStore.get();" in js
     # aria-pressed tracks MODE, and clicking a segment switches.
     assert 'b.setAttribute("aria-pressed", String(b.dataset.mode === MODE));' in js
     assert '$("mode").addEventListener("click"' in js
     # Styled with existing tokens (no raw hex beyond the shared shadow mix).
-    assert ".seg {" in css and ".seg-btn[aria-pressed=\"true\"]" in css
+    assert ".seg {" in css and '.seg-btn[aria-pressed="true"]' in css
     assert "var(--bg-raised)" in css
 
 
@@ -772,7 +817,7 @@ def test_the_a_key_toggles_mode_but_not_while_typing():
     assert 'else if (e.key === "a" || e.key === "A") toggleMode();' in js
     # The handler the `a` branch lives in bails on an editable target / modifier first.
     handler = js[js.rindex('if (e.key === "+"') - 400 : js.index('else if (e.key === "a"')]
-    assert 'input, textarea, select, [contenteditable]' in handler
+    assert "input, textarea, select, [contenteditable]" in handler
     assert "e.metaKey || e.ctrlKey || e.altKey" in handler
 
 
@@ -829,8 +874,8 @@ def test_header_shows_n_of_m_shown_and_clicking_show_all_switches():
     """Active's stats lead with "N of M shown · show all"; the whole thing is a button that
     switches to All. The counts are drawn-of-total, measured around the filter pass."""
     js, _css, _html = _view_files()
-    assert "if (MODE === \"active\" && TOTAL)" in js
-    assert 'id="show-all"' in js and "of ${TOTAL} shown · <span class=\"link\">show all</span>" in js
+    assert 'if (MODE === "active" && TOTAL)' in js
+    assert 'id="show-all"' in js and 'of ${TOTAL} shown · <span class="link">show all</span>' in js
     assert '$("stats").addEventListener("click", (e) => { if (e.target.closest("#show-all")) setMode("all"); });' in js
     # SHOWN/TOTAL are the non-self node counts before and after the filter.
     render = js[js.index("function render()") : js.index("GRAPH = fold(g);")]
@@ -870,7 +915,10 @@ def test_active_empty_state_names_the_last_handoff_with_a_show_all_button():
     assert "Nothing delegated yet" in js and "Everything is filtered out" in js
     # The overlay ignores pointer events, but its button must not.
     assert ".empty button { pointer-events: auto;" in css
-    assert '$("empty").addEventListener("click", (e) => { if (e.target.closest("#empty-show-all")) setMode("all"); });' in js
+    assert (
+        '$("empty").addEventListener("click", (e) => { if (e.target.closest("#empty-show-all")) setMode("all"); });'
+        in js
+    )
 
 
 def test_active_mode_never_folds_what_it_kept():
