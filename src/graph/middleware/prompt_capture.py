@@ -156,8 +156,12 @@ class PromptCaptureMiddleware(AgentMiddleware):
             projected_text, projected_sections = pop_projected_context(token)
             context_sections = None
 
+            turn_task_id = str(current_request_metadata().get("a2a.task_id") or "")
             self._store().record(
-                task_id=("" if self._parent_task_id else str(current_request_metadata().get("a2a.task_id") or "")),
+                task_id=("" if self._parent_task_id else turn_task_id),
+                # A subagent row keeps its own call numbering, but records the turn it
+                # ran inside so the turn's prompt view can list it (#4726).
+                turn_task_id=(turn_task_id if self._parent_task_id else ""),
                 session_id=tracing.current_session_id() or "",
                 trace_id=tracing.current_trace_id() or "",
                 parent_task_id=self._parent_task_id,

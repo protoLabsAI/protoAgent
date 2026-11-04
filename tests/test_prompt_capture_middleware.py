@@ -280,6 +280,8 @@ def test_subagent_identity_nests_rows_under_parent():
     assert (row["task_id"], row["parent_task_id"], row["subagent_type"]) == ("", "call-xyz", "researcher")
     assert row["stable_text"] == "SUB PROMPT"
     assert row["stable_sections"] == [{"label": "researcher system prompt", "chars": 10}]
+    # ...and the turn it ran inside finds it, by the only id the task route has (#4726).
+    assert [r["subagent_type"] for r in prompt_snapshots().calls_for_parent("task-77")] == ["researcher"]
 
 
 # ── wire-vs-composed capture (#2527) ──────────────────────────────────────────
