@@ -42,6 +42,7 @@ from a2a_impl.wire import task_id_from_response
 from events import ACTIVITY_CONTEXT
 from infra import keep_awake
 from scheduler.interface import Job, is_cron, parse_iso_to_utc, parse_ttl
+from observability.sqlite_migrate import add_missing_columns
 
 log = logging.getLogger(__name__)
 
@@ -445,46 +446,25 @@ class LocalScheduler:
         try:
             db = self._connect()
             db.executescript(_SCHEMA)
-            # Lightweight migration for stores created before per-job timezone.
-            try:
-                db.execute("ALTER TABLE jobs ADD COLUMN timezone TEXT")
-            except sqlite3.OperationalError:
-                pass  # column already present
-            # …and before per-job context_id (ADR 0053 same-session resume).
-            try:
-                db.execute("ALTER TABLE jobs ADD COLUMN context_id TEXT")
-            except sqlite3.OperationalError:
-                pass  # column already present
-            # …and before origin_session (#2990 deliver-result-to-origin-chat).
-            try:
-                db.execute("ALTER TABLE jobs ADD COLUMN origin_session TEXT")
-            except sqlite3.OperationalError:
-                pass  # column already present
-            # …and before auto-expiry (#2992 ttl / max_fires / fire_count).
-            for ddl in (
-                "ALTER TABLE jobs ADD COLUMN ttl TEXT",
-                "ALTER TABLE jobs ADD COLUMN max_fires INTEGER",
-                "ALTER TABLE jobs ADD COLUMN fire_count INTEGER NOT NULL DEFAULT 0",
-            ):
-                try:
-                    db.execute(ddl)
-                except sqlite3.OperationalError:
-                    pass  # column already present
-            # …and before outcome tracking (#3376 — failures were invisible).
-            for ddl in (
-                "ALTER TABLE jobs ADD COLUMN consecutive_failures INTEGER NOT NULL DEFAULT 0",
-                "ALTER TABLE jobs ADD COLUMN last_error TEXT",
-                "ALTER TABLE jobs ADD COLUMN last_ok TEXT",
-            ):
-                try:
-                    db.execute(ddl)
-                except sqlite3.OperationalError:
-                    pass  # column already present
-            # …and before the creating turn's tool fence (existing rows → unfenced).
-            try:
-                db.execute("ALTER TABLE jobs ADD COLUMN fence TEXT")
-            except sqlite3.OperationalError:
-                pass  # column already present
+            # Additive migrations for stores created before each column existed. Only the
+            # missing ones are ALTERed, and a failed ALTER raises: a lock timeout used to
+            # pass as "column already present" and leave the store without it.
+            add_missing_columns(
+                db,
+                "jobs",
+                (
+                    ("timezone", "TEXT"),  # per-job timezone
+                    ("context_id", "TEXT"),  # ADR 0053 same-session resume
+                    ("origin_session", "TEXT"),  # #2990 deliver-result-to-origin-chat
+                    ("ttl", "TEXT"),  # #2992 auto-expiry
+                    ("max_fires", "INTEGER"),
+                    ("fire_count", "INTEGER NOT NULL DEFAULT 0"),
+                    ("consecutive_failures", "INTEGER NOT NULL DEFAULT 0"),  # #3376 outcomes
+                    ("last_error", "TEXT"),
+                    ("last_ok", "TEXT"),
+                    ("fence", "TEXT"),  # the creating turn's tool fence (existing rows → unfenced)
+                ),
+            )
             # Re-key rows written under a previous display name (#2382). Every jobs.db is
             # single-agent by construction — the path carries either the constant segment or
             # the agent's own name segment — so every row in THIS file is ours, whatever name
