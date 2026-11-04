@@ -125,6 +125,15 @@ export function reorderByDrag(ids: string[], from: number, to: number): string[]
   return next;
 }
 
+/** The target slot for a drop onto an item's "before" marker. `reorderByDrag` removes the dragged id
+ *  FIRST, so a forward move (dragging past a later target) shifts that target one slot left — the drop
+ *  must then insert one slot earlier to actually land BEFORE the target. A backward move (or a same
+ *  slot) is unaffected. Pairs with `reorderByDrag`; exported so the drop-before math is unit-tested
+ *  without a real HTML5 drag (which jsdom can't drive). */
+export function dropBeforeIndex(from: number, to: number): number {
+  return from < to ? to - 1 : to;
+}
+
 /** Can the row at `index` still move in `dir`? False at the matching list boundary — the
  *  keyboard path announces the boundary rather than moving silently (`moveAnnouncement`). */
 export function canMove(index: number, dir: "up" | "down", length: number): boolean {
@@ -218,7 +227,7 @@ export function deleteGroupConfirm(name: string, count: number): { title: string
   return {
     title: `Delete the group "${name}"?`,
     body: count
-      ? `Its ${pluralAgents(count)} move to No group. No agents are removed.`
+      ? `Its ${pluralAgents(count)} ${count === 1 ? "moves" : "move"} to No group. No agents are removed.`
       : "It has no agents. No agents are removed.",
   };
 }
@@ -1146,6 +1155,7 @@ export function FleetGroupsPanel({ onBack }: { onBack?: () => void }) {
   const fleet = useQuery(fleetQuery());
   const phone = useIsMobile();
   const rootRef = useRef<HTMLDivElement>(null);
+  const toast = useToast();
 
   const agents = useMemo(() => fleet.data?.agents ?? [], [fleet.data]);
   const groups = useMemo(() => fleet.data?.groups ?? [], [fleet.data]);
@@ -1174,32 +1184,72 @@ export function FleetGroupsPanel({ onBack }: { onBack?: () => void }) {
 
   // ── roster writes (hub, shared by every browser) — optimistic patch then invalidate, exactly as
   // the switcher does. The 3s poll stays authoritative and rolls back a rejected write. ──
-  const patchAgent = useCallback(
-    (id: string, patch: Partial<FleetAgent>) =>
-      qc.setQueryData<FleetStatus>(queryKeys.fleet, (cur) =>
-        cur ? { ...cur, agents: cur.agents.map((a) => (a.id === id ? { ...a, ...patch } : a)) } : cur,
-      ),
-    [qc],
-  );
-  const patchGroupOrder = useCallback(
-    (order: string[]) =>
-      qc.setQueryData<FleetStatus>(queryKeys.fleet, (cur) =>
-        cur ? { ...cur, groups: orderAgentsByIds(cur.groups ?? [], order) } : cur,
-      ),
-    [qc],
-  );
   const invalidate = useCallback(() => qc.invalidateQueries({ queryKey: queryKeys.fleet }), [qc]);
-  const onWrite = useMemo(
-    () => ({ onSuccess: markSaved, onSettled: invalidate }),
-    [markSaved, invalidate],
+  // Runs as a mutation's onMutate: cancel the in-flight fleet fetch FIRST (a 3s poll that started
+  // before the write could otherwise resolve AFTER the patch and restore the pre-write roster until
+  // the mutation settles), then patch. The request is sent only after onMutate resolves, so the
+  // patch cannot race it.
+  const optimisticPatch = useCallback(
+    async (apply: (cur: FleetStatus) => FleetStatus) => {
+      await qc.cancelQueries({ queryKey: queryKeys.fleet });
+      qc.setQueryData<FleetStatus>(queryKeys.fleet, (cur) => (cur ? apply(cur) : cur));
+    },
+    [qc],
   );
-
-  const createMut = useMutation({ mutationFn: (name: string) => api.createFleetGroup(name), ...onWrite });
+  const onWrite = useMemo(
+    () => ({
+      onSuccess: markSaved,
+      onSettled: invalidate,
+      // A rejected group write (other than a 401 the global auth gate handles) otherwise reverts on
+      // the next poll with no word to the operator. Show the panel's standard error toast.
+      onError: (e: unknown) =>
+        toast({ tone: "error", title: "Couldn't save the group change", message: errMsg(e) }),
+    }),
+    [markSaved, invalidate, toast],
+  );
+  // Overlapping writes are serialized at their SOURCE, per-control: a reorder blocks a second reorder
+  // (shouldSubmitOrder/reorderMut.isPending), `assign` refuses a second pick while one is in flight,
+  // and the pin star disables on the row whose write is pending — so a fast double-submit of the same
+  // kind can't reach the hub out of order and store the earlier choice last. Different agents still
+  // pin/assign concurrently (one slow write must not freeze the rest of the editor).
+  const createMut = useMutation({
+    mutationFn: (name: string) => api.createFleetGroup(name),
+    ...onWrite,
+    // Add the created group to the cache now (as reorder/assign patches do): mutateAsync resolves
+    // only after the onSettled refetch, and a FAILED refetch still resolves, so without this addGroup
+    // could set editingId to a group `groups` doesn't yet hold — "Saved", but no card/name field. The
+    // following invalidation replaces this entry with the server state.
+    onSuccess: (res) => {
+      qc.setQueryData<FleetStatus>(queryKeys.fleet, (cur) =>
+        cur ? { ...cur, groups: [...(cur.groups ?? []), res.group] } : cur,
+      );
+      markSaved();
+    },
+  });
   const renameMut = useMutation({ mutationFn: (v: { id: string; name: string }) => api.renameFleetGroup(v.id, v.name), ...onWrite });
-  const reorderMut = useMutation({ mutationFn: (order: string[]) => api.reorderFleetGroups(order), ...onWrite });
+  const reorderMut = useMutation({
+    mutationFn: (order: string[]) => api.reorderFleetGroups(order),
+    onMutate: (order: string[]) => optimisticPatch((cur) => ({ ...cur, groups: orderAgentsByIds(cur.groups ?? [], order) })),
+    ...onWrite,
+  });
   const deleteMut = useMutation({ mutationFn: (id: string) => api.deleteFleetGroup(id), ...onWrite });
-  const assignMut = useMutation({ mutationFn: (v: { id: string; group: string | null }) => api.setFleetAgentGroup(v.id, v.group), ...onWrite });
-  const pinMut = useMutation({ mutationFn: (v: { id: string; pinned: boolean }) => (v.pinned ? api.pinFleetAgent(v.id) : api.unpinFleetAgent(v.id)), ...onWrite });
+  const assignMut = useMutation({
+    mutationFn: (v: { id: string; group: string | null }) => api.setFleetAgentGroup(v.id, v.group),
+    onMutate: (v: { id: string; group: string | null }) =>
+      optimisticPatch((cur) => ({ ...cur, agents: cur.agents.map((a) => (a.id === v.id ? { ...a, group: v.group } : a)) })),
+    ...onWrite,
+  });
+  const pinMut = useMutation({
+    mutationFn: (v: { id: string; pinned: boolean }) => (v.pinned ? api.pinFleetAgent(v.id) : api.unpinFleetAgent(v.id)),
+    onMutate: (v: { id: string; pinned: boolean }) =>
+      optimisticPatch((cur) => ({
+        ...cur,
+        agents: cur.agents.map((a) =>
+          a.id === v.id ? { ...a, pinned: v.pinned, pinned_at: v.pinned ? new Date().toISOString() : undefined } : a,
+        ),
+      })),
+    ...onWrite,
+  });
 
   // ── rename ──
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -1236,7 +1286,8 @@ export function FleetGroupsPanel({ onBack }: { onBack?: () => void }) {
       setEditingId(res.group.id);
     } catch {
       // A rejected create (e.g. a name race another browser just made) leaves the list unchanged;
-      // the invalidation reconciles. The default name is locally unique, so this is rare.
+      // createMut.onError already surfaced the error toast, and the invalidation reconciles. The
+      // default name is locally unique, so this is rare. The catch only keeps the rejection handled.
     }
   }, [groups, createMut]);
 
@@ -1245,10 +1296,9 @@ export function FleetGroupsPanel({ onBack }: { onBack?: () => void }) {
   const reorderGroups = useCallback(
     (order: string[]) => {
       if (!shouldSubmitOrder(order, fleetOrderIds(groups), reorderMut.isPending)) return;
-      patchGroupOrder(order);
-      reorderMut.mutate(order);
+      reorderMut.mutate(order); // the optimistic patch now lives in reorderMut.onMutate (cancel-first)
     },
-    [groups, reorderMut, patchGroupOrder],
+    [groups, reorderMut],
   );
   const moveGroup = useCallback(
     (g: FleetGroup, dir: "up" | "down") => {
@@ -1283,23 +1333,21 @@ export function FleetGroupsPanel({ onBack }: { onBack?: () => void }) {
   const assign = useCallback(
     (a: FleetAgent, group: string | null) => {
       if (a.remote || (a.group ?? null) === group) return; // remote is automatic; skip a no-op
-      patchAgent(a.id, { group });
+      if (assignMut.isPending) return; // one write already in flight; a second pick would race it
       setLandedId(a.id); // a brief highlight so the operator sees where it landed
       if (landTimer.current) clearTimeout(landTimer.current);
       landTimer.current = setTimeout(() => setLandedId(null), 1200);
-      assignMut.mutate({ id: a.id, group });
+      assignMut.mutate({ id: a.id, group }); // the optimistic patch now lives in assignMut.onMutate
     },
-    [patchAgent, assignMut],
+    [assignMut],
   );
 
   // ── pin / unpin (any agent, remote included) ──
   const togglePin = useCallback(
     (a: FleetAgent) => {
-      const pinned = !a.pinned;
-      patchAgent(a.id, { pinned, pinned_at: pinned ? new Date().toISOString() : undefined });
-      pinMut.mutate({ id: a.id, pinned });
+      pinMut.mutate({ id: a.id, pinned: !a.pinned }); // the optimistic patch now lives in pinMut.onMutate
     },
-    [patchAgent, pinMut],
+    [pinMut],
   );
 
   // ── delete (the spec's confirm; the agents become ungrouped, none is removed) ──
@@ -1316,6 +1364,12 @@ export function FleetGroupsPanel({ onBack }: { onBack?: () => void }) {
   const [drag, setDrag] = useState<{ kind: "group" | "agent"; id: string } | null>(null);
   const [dropGroupId, setDropGroupId] = useState<string | null>(null);
   const [dropZone, setDropZone] = useState<string | null>(null);
+  // A row is the drag source, but a press that BEGINS on the row's pin star must not start a row
+  // drag: the drag would suppress the star's click (so the pin never toggles) and could drop the
+  // agent into whatever zone it was released over. Setting draggable=false on the star itself does
+  // nothing — the row, not the star, is the source — so while a star press is down the ROW drops its
+  // draggable, and rearms on release. (True only for the star: the explicit control the reviewer hit.)
+  const [controlPress, setControlPress] = useState(false);
   const clearDrag = useCallback(() => {
     setDrag(null);
     setDropGroupId(null);
@@ -1325,7 +1379,9 @@ export function FleetGroupsPanel({ onBack }: { onBack?: () => void }) {
     (targetId: string) => {
       if (drag?.kind === "group" && drag.id !== targetId) {
         const ids = fleetOrderIds(groups);
-        reorderGroups(reorderByDrag(ids, ids.indexOf(drag.id), ids.indexOf(targetId)));
+        const from = ids.indexOf(drag.id);
+        const to = ids.indexOf(targetId);
+        reorderGroups(reorderByDrag(ids, from, dropBeforeIndex(from, to)));
       }
       clearDrag();
     },
@@ -1352,7 +1408,7 @@ export function FleetGroupsPanel({ onBack }: { onBack?: () => void }) {
       <li
         key={a.id}
         className={`fleet-arow${a.id === landedId ? " landed" : ""}${drag?.kind === "agent" && drag.id === a.id ? " dragging" : ""}`}
-        draggable={draggable || undefined}
+        draggable={draggable && !controlPress ? true : undefined}
         onDragStart={
           draggable
             ? (e) => {
@@ -1377,7 +1433,10 @@ export function FleetGroupsPanel({ onBack }: { onBack?: () => void }) {
           aria-pressed={a.pinned ?? false}
           aria-label={`${a.pinned ? "Unpin" : "Pin"} ${name}`}
           title={a.pinned ? "Pinned to the top of the switcher" : "Pin to the top of the switcher"}
-          disabled={!!blocked}
+          disabled={!!blocked || (pinMut.isPending && pinMut.variables?.id === a.id)}
+          onPointerDown={() => setControlPress(true)}
+          onPointerUp={() => setControlPress(false)}
+          onPointerCancel={() => setControlPress(false)}
           onClick={() => togglePin(a)}
         >
           <Star size={15} fill={a.pinned ? "currentColor" : "none"} aria-hidden />
@@ -1512,6 +1571,10 @@ export function FleetGroupsPanel({ onBack }: { onBack?: () => void }) {
           <Empty title="Managed from the host instance" description={blocked} />
         ) : fleet.isLoading ? (
           <Empty>Loading the fleet…</Empty>
+        ) : fleet.isError && !fleet.data ? (
+          // The initial fleet read failed, so there is no roster to edit. Showing the empty "No
+          // groups yet" state would invite an Add group that then fails silently; say so instead.
+          <Empty title="Couldn't load the fleet" description="Try again in a moment." />
         ) : (
           <div className={`fleet-groups${phone ? " is-phone" : ""}`} ref={rootRef}>
             <p className="fleet-groups-legend">

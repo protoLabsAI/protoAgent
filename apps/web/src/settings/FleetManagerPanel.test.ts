@@ -1,6 +1,7 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, createElement as h } from "react";
 import { createRoot, type Root } from "react-dom/client";
+import { ToastProvider } from "@protolabsai/ui/overlays";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { api } from "../lib/api";
@@ -12,6 +13,7 @@ import {
   canMove,
   defaultGroupName,
   deleteGroupConfirm,
+  dropBeforeIndex,
   fleetAutostartRoster,
   FleetGroupsPanel,
   fleetOrderIds,
@@ -107,15 +109,38 @@ async function flush() {
   });
 }
 
+// FleetGroupsPanel calls useToast() (its group writes toast on rejection), which throws outside a
+// ToastProvider — so the editor renders inside one, and a rejected write's toast lands in the
+// provider's `.pl-toast__title` / `.pl-toast__msg` where a test can read it.
+function renderPanel(client: QueryClient) {
+  act(() => {
+    root.render(
+      h(QueryClientProvider, { client }, h(ToastProvider, null, h(FleetGroupsPanel, { onBack: () => {} }))),
+    );
+  });
+}
+
 async function mount(status?: FleetStatus) {
   (api.fleet as ReturnType<typeof vi.fn>).mockResolvedValue(status ?? roster());
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  act(() => {
-    root.render(h(QueryClientProvider, { client }, h(FleetGroupsPanel, { onBack: () => {} })));
-  });
+  renderPanel(client);
   await flush();
   await flush();
 }
+
+// A write's isPending spans its onSettled → invalidate → refetch, so settling a mutation takes
+// several hops; flush a few times when a later interaction depends on the prior write being done.
+async function settle() {
+  for (let i = 0; i < 4; i++) await flush();
+}
+
+const toastTitle = () => document.querySelector(".pl-toast__title")?.textContent || "";
+// The pin star for a named agent, whatever its current pinned/label state (its aria-label flips
+// between "Pin"/"Unpin" as the row toggles, so find it by the row the name sits in).
+const starFor = (name: string) =>
+  [...document.querySelectorAll<HTMLElement>(".fleet-arow")]
+    .find((li) => (li.textContent || "").includes(name))
+    ?.querySelector(".fleet-star") as HTMLButtonElement | undefined;
 
 const PointerCtor = (globalThis as unknown as { PointerEvent?: typeof MouseEvent }).PointerEvent ?? MouseEvent;
 function pointer(type: string, el: Element, opts: MouseEventInit = {}) {
@@ -321,6 +346,28 @@ describe("reorderByDrag — the drag-and-drop payload", () => {
   });
 });
 
+describe("dropBeforeIndex — a group drag lands BEFORE the drop-before marker", () => {
+  const ids = ["A", "B", "C"];
+  // The group editor drops onto a target card's "before" marker: reorderByDrag removes the dragged id
+  // first, so a FORWARD move shifts the target one slot left — the index must be nudged back by one.
+  const dropBefore = (from: number, to: number) => reorderByDrag(ids, from, dropBeforeIndex(from, to));
+
+  it("nudges a forward drop back one slot, backward/same drops are unchanged", () => {
+    expect(dropBeforeIndex(0, 2)).toBe(1); // forward: A before C → insert at 1
+    expect(dropBeforeIndex(2, 0)).toBe(0); // backward: C before A → insert at 0
+    expect(dropBeforeIndex(1, 1)).toBe(1); // same slot
+  });
+
+  it("drops A onto C's before-marker → [B, A, C], not [B, C, A]", () => {
+    // Without the nudge, removing A shifts C to index 1 and A lands AFTER it ([B, C, A]).
+    expect(dropBefore(0, 2)).toEqual(["B", "A", "C"]);
+  });
+
+  it("a backward drop (C before A) is unaffected → [C, A, B]", () => {
+    expect(dropBefore(2, 0)).toEqual(["C", "A", "B"]);
+  });
+});
+
 describe("canMove — the list boundaries the keyboard path announces", () => {
   it("is false for ↑ at the top and ↓ at the bottom", () => {
     expect(canMove(0, "up", 3)).toBe(false);
@@ -492,8 +539,9 @@ describe("deleteGroupConfirm — the spec's confirm copy (verbatim from the appr
     });
   });
 
-  it("uses the singular count for one agent", () => {
-    expect(deleteGroupConfirm("Work", 1).body).toBe("Its 1 agent move to No group. No agents are removed.");
+  it("uses the singular count AND verb for one agent (1 agent moves, N agents move)", () => {
+    expect(deleteGroupConfirm("Work", 1).body).toBe("Its 1 agent moves to No group. No agents are removed.");
+    expect(deleteGroupConfirm("Work", 2).body).toBe("Its 2 agents move to No group. No agents are removed.");
   });
 
   it("reads differently for an empty group", () => {
@@ -639,7 +687,8 @@ describe("FleetGroupsPanel — desktop group cards", () => {
     await flush();
     const dialog = document.querySelector('[role="alertdialog"], [role="dialog"]')!;
     expect(dialog.textContent).toContain('Delete the group "Work"?');
-    expect(dialog.textContent).toContain("move to No group. No agents are removed.");
+    // Work holds one agent (nova), so the confirm uses the singular verb "moves".
+    expect(dialog.textContent).toContain("Its 1 agent moves to No group. No agents are removed.");
     clickEl(byText("Delete group")!); // the destructive confirm button
     await flush();
     expect(api.deleteFleetGroup).toHaveBeenCalledWith("g-work");
@@ -686,6 +735,107 @@ describe("FleetGroupsPanel — desktop group cards", () => {
     // The remote row is not draggable.
     const remoteCard = document.querySelector('[aria-label="Remote"]')!;
     expect(remoteCard.querySelector(".fleet-arow[draggable='true']")).toBeFalsy();
+  });
+});
+
+// ── PR #4735 review fixes: optimistic writes land via onMutate (cancel-first), overlapping writes of
+// one kind are refused at the source, a rejected write is reported, and a failed initial load says so.
+describe("FleetGroupsPanel — write behaviour (PR #4735 review)", () => {
+  // Hold a write open so a later interaction sees it unambiguously in flight (its isPending otherwise
+  // spans the settle refetch; a never-resolving mock removes that timing from the test).
+  function hang<T>() {
+    let release!: (v: T) => void;
+    const promise = new Promise<T>((res) => {
+      release = res;
+    });
+    return { promise, release };
+  }
+
+  it("optimistically moves a picked agent via onMutate, cancelling the in-flight poll first (:1191)", async () => {
+    const h1 = hang<{ ok: true; id: string; group: string | null }>();
+    (api.setFleetAgentGroup as ReturnType<typeof vi.fn>).mockReturnValue(h1.promise);
+    const cancelSpy = vi.spyOn(QueryClient.prototype, "cancelQueries");
+    await mount();
+    openPicker("Group for orion"); // orion (n2) is ungrouped
+    await flush();
+    clickEl(pickerItem("Work")!);
+    await settle();
+    // The onMutate patch moved orion into the Work card before the write settled…
+    expect(document.querySelector('[aria-label="Work group"]')!.textContent).toContain("orion");
+    // …and it cancelled the in-flight fleet poll first (only optimisticPatch calls cancelQueries).
+    expect(cancelSpy).toHaveBeenCalled();
+    h1.release({ ok: true, id: "n2", group: "g-work" });
+  });
+
+  it("ignores a second group pick while the first assign is still in flight (:1293)", async () => {
+    const h1 = hang<{ ok: true; id: string; group: string | null }>();
+    (api.setFleetAgentGroup as ReturnType<typeof vi.fn>).mockReturnValue(h1.promise);
+    await mount();
+    openPicker("Group for orion");
+    await flush();
+    clickEl(pickerItem("Work")!); // assign #1 → in flight (never settles)
+    await settle();
+    expect(api.setFleetAgentGroup).toHaveBeenCalledTimes(1);
+    // Pick again while the first write is pending — the isPending guard drops it, so no second PUT.
+    openPicker("Group for orion");
+    await flush();
+    const personal = pickerItem("Personal");
+    if (personal) clickEl(personal);
+    await settle();
+    expect(api.setFleetAgentGroup).toHaveBeenCalledTimes(1);
+    h1.release({ ok: true, id: "n2", group: "g-work" });
+  });
+
+  it("disables only the pressed row's pin star while its own write is pending — no double-toggle (:1301)", async () => {
+    const h1 = hang<{ ok: true; id: string; pinned: boolean; pinned_at: string }>();
+    (api.pinFleetAgent as ReturnType<typeof vi.fn>).mockReturnValue(h1.promise);
+    await mount();
+    clickEl(starFor("nova")!); // pin nova → in flight
+    expect(starFor("nova")!.disabled).toBe(true); // its own write is pending → no re-toggle
+    expect(starFor("orion")!.disabled).toBe(false); // a different row's star stays live
+    clickEl(starFor("nova")!); // a second press is ignored (disabled)
+    await settle();
+    expect(api.pinFleetAgent).toHaveBeenCalledTimes(1);
+    h1.release({ ok: true, id: "n1", pinned: true, pinned_at: "" });
+  });
+
+  it("shows the panel's error toast when a group write is rejected (:1202)", async () => {
+    (api.setFleetAgentGroup as ReturnType<typeof vi.fn>).mockRejectedValue(new Error("server said no"));
+    await mount();
+    openPicker("Group for orion");
+    await flush();
+    clickEl(pickerItem("Work")!);
+    await settle();
+    expect(toastTitle()).toContain("Couldn't save the group change");
+  });
+
+  it("shows the error toast when creating a group is rejected (:1202, addGroup no longer silent)", async () => {
+    (api.createFleetGroup as ReturnType<typeof vi.fn>).mockRejectedValue(new Error("name taken"));
+    await mount();
+    clickEl(byText("Add group")!);
+    await settle();
+    expect(toastTitle()).toContain("Couldn't save the group change");
+  });
+
+  it("a press that begins on the pin star does not arm a row drag (:1362)", async () => {
+    await mount();
+    const star = starFor("nova")!;
+    const row = star.closest(".fleet-arow") as HTMLElement;
+    expect(row.getAttribute("draggable")).toBe("true"); // a press on the row body still drags it
+    act(() => pointer("pointerdown", star)); // …but a press that starts on the star…
+    expect(row.getAttribute("draggable")).not.toBe("true"); // …drops the row's draggable, so no drag starts
+    act(() => pointer("pointerup", star));
+    expect(row.getAttribute("draggable")).toBe("true"); // and it rearms on release
+  });
+
+  it("shows a load error instead of the empty state when the initial fleet read fails (:1516)", async () => {
+    (api.fleet as ReturnType<typeof vi.fn>).mockRejectedValue(new Error("boom"));
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    renderPanel(client);
+    await settle();
+    expect(container.textContent).toContain("Couldn't load the fleet");
+    expect(container.textContent).not.toContain("No groups yet"); // the empty editor is NOT shown
+    expect(byText("Add group")).toBeFalsy(); // and there is nothing to add into
   });
 });
 
