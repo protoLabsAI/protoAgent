@@ -1,5 +1,20 @@
 [
   {
+    "version": "v0.227.0",
+    "date": "2026-11-04",
+    "changes": [
+      "A link can open a plugin view and hand it data (#4712).",
+      "A migrated gateway keeps the SDK-default endpoint (#4597).",
+      "Background system:* threads compact at a much lower token threshold (#4625).",
+      "Preserve working plugins on incompatible upgrades (#4669).",
+      "Finished A2A turns no longer pile up in memory on the desktop app (#4720).",
+      "The desktop app now ships the dependency versions CI tests (#4720, #4722).",
+      "Image thumbnails in a user's chat bubble survive a rebuild from server state (#4700).",
+      "The chat composer's idle placeholder names the actual agent (#4713).",
+      "Scrub spawned coder environments (#4629)."
+    ]
+  },
+  {
     "version": "v0.226.0",
     "date": "2026-11-02",
     "changes": [
