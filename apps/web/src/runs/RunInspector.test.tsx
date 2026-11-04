@@ -88,7 +88,7 @@ describe("RunInspectorBody states", () => {
     expect(head).toContain("3m12s");
     expect(q('[data-testid="run-completion"]')).toBeNull(); // the root is a turn, not a checked edge
     const items = all('[role="treeitem"]');
-    expect(items.map((i) => i.getAttribute("aria-label"))).toEqual(["turn console, completed", "subagent research, ok", "coder codex, failed"]);
+    expect(items.map((i) => i.getAttribute("aria-label"))).toEqual(["turn console, completed", "subagent research, completed", "coder codex, failed"]);
     expect(items.map((i) => i.getAttribute("aria-level"))).toEqual(["1", "2", "3"]);
     expect(q('[data-testid="run-node-completion"]')!.textContent).toBe("complete · 1 nudge");
   });
@@ -152,7 +152,7 @@ describe("RunInspectorBody tree", () => {
     expect(items().map((i) => i.tabIndex)).toEqual([0, -1, -1]); // one roving tab stop
     items()[0].focus();
     await key("ArrowDown");
-    expect(document.activeElement?.getAttribute("aria-label")).toBe("subagent research, ok");
+    expect(document.activeElement?.getAttribute("aria-label")).toBe("subagent research, completed");
     await key("ArrowLeft"); // collapse research
     expect(items()).toHaveLength(2);
     expect(items()[1].getAttribute("aria-expanded")).toBe("false");
@@ -161,7 +161,7 @@ describe("RunInspectorBody tree", () => {
     expect(document.activeElement?.getAttribute("aria-label")).toBe("coder codex, failed");
     await key("ArrowLeft"); // codex is expanded (it failed) → collapses
     await key("ArrowLeft"); // → its parent
-    expect(document.activeElement?.getAttribute("aria-label")).toBe("subagent research, ok");
+    expect(document.activeElement?.getAttribute("aria-label")).toBe("subagent research, completed");
     await key("Home");
     expect(document.activeElement?.getAttribute("aria-label")).toBe("turn console, completed");
   });

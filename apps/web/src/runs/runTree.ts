@@ -337,6 +337,14 @@ export function visibleIds(roots: RunNode[], expanded: (id: string) => boolean):
   return out;
 }
 
+/** One word per outcome in the drawer. The ledger says `ok` and telemetry says
+ *  `completed` for the same thing, and the two spell cancel differently. */
+export function outcomeLabel(outcome: string): string {
+  if (outcome === "ok") return "completed";
+  if (outcome === "canceled") return "cancelled";
+  return outcome;
+}
+
 /** Badge tone for an outcome or turn state. */
 export function outcomeTone(outcome: string): "success" | "error" | "warning" | "info" | "neutral" {
   if (outcome === "ok" || outcome === "completed") return "success";

@@ -22,6 +22,7 @@ import { traceCellState } from "../telemetry/traceUrl";
 import {
   buildRunTree,
   KIND_LABEL,
+  outcomeLabel,
   outcomeTone,
   shortRunId,
   spanLabel,
@@ -78,7 +79,6 @@ export function RunInspectorBody({ runId }: { runId: string }) {
     );
   }
   const ctx: TraceCtx = { template: data.langfuse_trace_url_template ?? null, tracingEnabled: data.tracing_enabled ?? true };
-  const rootTurn = tree.roots[0]?.kind === "turn" ? tree.roots[0].turns[tree.roots[0].turns.length - 1] : undefined;
   return (
     <div className="run-inspector__body" data-testid="run-inspector">
       <RunHeader tree={tree} asked={runId} />
@@ -90,7 +90,6 @@ export function RunInspectorBody({ runId }: { runId: string }) {
         <RunTreeView roots={tree.roots} ctx={ctx} />
       )}
       <div className="run-inspector__foot">
-        {rootTurn ? <TurnLinks turn={rootTurn} ctx={ctx} /> : null}
         <CopyButton text={runDeepLinkUrl(tree.runId || runId)} label="Copy link" testId="run-copy-link" icon={<Link2 size={13} aria-hidden />} />
       </div>
     </div>
@@ -119,7 +118,7 @@ function RunHeader({ tree, asked }: { tree: RunTree; asked: string }) {
       </div>
       {tree.empty ? null : (
         <p className="run-inspector__summary">
-          <Badge status={outcomeTone(tree.outcome)}>{tree.outcome || "unknown"}</Badge>
+          <Badge status={outcomeTone(tree.outcome)}>{outcomeLabel(tree.outcome) || "unknown"}</Badge>
           <span>{tree.costUsd == null ? "cost unmeasured" : usd(tree.costUsd)}</span>
           <span aria-label="wall-clock span">{spanLabel(tree.spanMs)}</span>
           {tree.liveCount ? (
@@ -271,7 +270,7 @@ function RunTreeItem({
       role="treeitem"
       aria-level={level}
       aria-expanded={expandable ? expanded : undefined}
-      aria-label={`${KIND_LABEL[node.kind]} ${node.name}, ${node.outcome}`}
+      aria-label={`${KIND_LABEL[node.kind]} ${node.name}, ${outcomeLabel(node.outcome)}`}
       tabIndex={tabStop === node.id ? 0 : -1}
       data-node-id={node.id}
       data-testid="run-node"
@@ -300,7 +299,7 @@ function RunTreeItem({
               <StatusDot status="info" pulse label="live" />
             </span>
           ) : (
-            <Badge status={outcomeTone(node.outcome)}>{node.outcome || "—"}</Badge>
+            <Badge status={outcomeTone(node.outcome)}>{outcomeLabel(node.outcome) || "—"}</Badge>
           )}
           {node.completion ? (
             <span className={short ? "run-node__completion run-node__completion--short" : "run-node__completion"} data-testid="run-node-completion">

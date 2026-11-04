@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { RunEdgeRow, RunLiveEdge, RunRecord, TelemetryTurn } from "../lib/types";
-import { buildRunTree, normalizeEdges, progressLine, shortRunId, spanLabel, visibleIds, type RunNode } from "./runTree";
+import { buildRunTree, normalizeEdges, outcomeLabel, progressLine, shortRunId, spanLabel, visibleIds, type RunNode } from "./runTree";
 
 // The run inspector's tree (#4726), built from `GET /api/runs/{id}`: durable rows nest by
 // edge_uuid/parent_uuid, live edges merge in by id, and turns attach by task id.
@@ -151,5 +151,14 @@ describe("helpers", () => {
     expect(progressLine({ text: " reading files " })).toBe("reading files");
     expect(progressLine({ tool_count: 3 })).toBe("3 tool calls");
     expect(progressLine(null)).toBe("");
+  });
+});
+
+describe("outcomeLabel", () => {
+  it("says one word for the ledger's ok and telemetry's completed", () => {
+    expect(outcomeLabel("ok")).toBe("completed");
+    expect(outcomeLabel("completed")).toBe("completed");
+    expect(outcomeLabel("canceled")).toBe("cancelled");
+    expect(outcomeLabel("failed")).toBe("failed");
   });
 });
