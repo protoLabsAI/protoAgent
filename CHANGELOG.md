@@ -15,6 +15,145 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.228.0] - 2026-11-04
+
+### Added
+- **A finished run can be rebuilt from the delegation ledger, and `GET /api/runs/{id}` returns it (#4726, #4727).**
+  Which delegation started which used to exist only in the live registry, and was lost as
+  soon as each one closed. Several producers also wrote rows with no session, task or parent
+  id, so a workflow step, a board coder or a `delegate_to` call couldn't be traced back to
+  the turn that started it. Every ledger row now records `edge_uuid`, `parent_uuid` and a
+  `run_id`, which is the A2A task id of the turn the work started in. Telemetry turns record
+  the same `run_id`. A background job's own turn joins the run that spawned it, even after
+  a restart. A workflow run is now an edge of its own, keyed by its run id, so its steps
+  nest under it. A run whose steps failed is recorded as `failed`. A `task` call records
+  its turn's session instead of an empty one. A coding-agent run and an A2A peer's task
+  record their task id on the edge, so the row joins their telemetry. Plugins can group
+  work outside a turn with `sdk.run_scope`.
+
+- **The completion check's verdict is recorded on the ledger, and `GET /api/ledger/completion` counts it (#4726, #4728).**
+  When a review lane stopped without its findings, the only record was a text prefix in
+  the tool result and a log line. The ledger said `ok` either way, so there was no way to
+  count how often it happened or how often a nudge fixed it. Each subagent row now records
+  `completion` (`complete`, `incomplete`, or `partial` for a hard stop) and `nudges`.
+  `delegation.finished` carries both. The org-chart edge aggregate adds `incomplete` and
+  `nudged` counts.
+
+- **Delegation-ledger retention is configurable, and the observability guide says how long each part of a run is kept (#4726, #4730).**
+  `LedgerStore.prune` existed, but nothing called it. The maintenance loop now prunes the
+  ledger when `telemetry.ledger_retention_days` is set. The default is `0`, which keeps
+  everything as before, because the org chart's lifetime stats read the whole table. The
+  new table in the guide lists each store a run's parts live in and its window: 24 hours
+  for the full turn detail, 90 days for telemetry, forever for the ledger, and the newest
+  200 workflow runs.
+
+- **Finished background jobs are pruned after a retention window (#4726, #4734).**
+  The background job store used to keep every job forever. The maintenance loop now
+  deletes a completed, failed or canceled job once its result has been delivered to the
+  session that spawned it and it finished more than `background.retention_days` ago. The
+  default is 90 days, the same as `telemetry.retention_days`, so a job ages out with its
+  turn rows. Running jobs and undelivered results are never deleted, and `0` keeps
+  everything.
+
+- **A run inspector drawer in the console (#4738).**
+  A View run link under each chat answer, on each row of the Telemetry recent turns table,
+  on each background job and in the Org Chart's node drawer opens one drawer showing
+  everything recorded for that run. Its header gives the outcome, the total cost, the
+  wall-clock span and the completion check's verdict. Below it is the tree of delegations,
+  each with its kind, target, outcome, cost, duration and completion badge, the error of a
+  failed one (a tap shows all of it), and the turns recorded for it with links to their
+  traces and prompts. Work still running shows a live dot and its progress, and the drawer
+  refreshes every three seconds until nothing is in flight. A `?run=<id>` link opens the
+  drawer directly. `GET /api/runs/{id}` now also resolves the uuid of any delegation inside a
+  run, finished or still running, and returns the trace link template. Plugin views can open
+  the drawer with the new `protoagent:run:open` bridge message.
+
+- **Fleet settings has a group editor for the agent switcher (#4731, #4732).**
+  Settings ▸ Fleet now has a Groups view (docs/design/fleet-switcher-groups.md) that organizes the
+  agent switcher into sections — the console half of the groups + pins the roster already stores.
+  Each operator group is a card holding its agents, in switcher order, followed by a "No group"
+  card and a read-only Remote card. Add a group (its name field opens ready to type), rename it
+  inline (Enter saves, Escape cancels, with the spec's error copy for a blank, duplicate or
+  reserved "Remote" name), reorder groups by the drag handle or the keyboard-reachable Move up /
+  Move down, and delete one — its agents move to No group, none is removed. Move an agent between
+  groups by dragging it onto another card or by the Group picker on its row, and pin or unpin any
+  agent, remote included. Every change saves at once with a small "Saved" note and no Save button;
+  the writes are the same hub roster fields the switcher reads, so a pin or a group set here shows
+  in the switcher too. Remote agents are listed read-only with the machine they're on. On a phone
+  it's one column with the drag handles off, the Group picker on its own line and 44px targets. The
+  editor is read-only in a directly-reached member window, like the rest of Fleet settings.
+
+- **The fleet roster now stores operator switcher groups and per-agent pins (#4727).**
+  Groundwork for the approved fleet-switcher redesign (docs/design/fleet-switcher-groups.md):
+  the hub persists an ordered list of named groups and, keyed by each agent's immutable id, its
+  group assignment and pin (with the time it was pinned) alongside the roster order in
+  `roster.json`, so they are shared by every browser and survive a restart. `GET /api/fleet`
+  now returns a top-level `groups` array plus optional `group`, `pinned`, `pinned_at` and (for
+  remotes) `machine` on each agent — all optional, so an older hub still returns today's flat
+  shape. New hub-only writes create, rename, reorder and delete a group, assign an agent to a
+  group, and pin or unpin — gated like the existing Fleet settings order write. Remote agents
+  are grouped automatically by their machine and can't be assigned to a group, but can be
+  pinned; deleting a group ungroups its agents. No console UI yet — that lands in a later card.
+
+- **The agent switcher groups, pins, filters and remembers recent agents (#4731).**
+  The top-left agent menu is no longer one flat list. Agents are sorted into sections — the
+  one you're on, your pinned favourites, the few you switched to most recently, your own named
+  groups, and a single Remote section for agents on paired machines — and once a fleet reaches
+  ten agents a filter box at the top lets you type to find one across every group (collapsed
+  groups open as you type; Enter jumps to the first match). Pin or unpin an agent from its row,
+  and right-click a row to move it into a group or make a new one; remote agents can be pinned
+  but are grouped automatically by their machine. Which groups you've collapsed and which agents
+  you've used recently are remembered in this browser. On a phone the same switcher opens as a
+  bottom sheet with large touch targets and a "⋯" button on each row for the same actions.
+
+### Fixed
+- **The `/prompt` view lists a turn's subagent calls again (#4726, #4729).**
+  A subagent's prompt snapshot was keyed by the tool-call id that delegated it, but the
+  task route looked subagents up by the turn's task id, so the list was always empty for a
+  real turn. The existing test wrote the turn id as the parent and missed it. Subagent
+  snapshots now also record the turn they ran inside, and the route matches on that.
+
+- **Telemetry records why a turn failed, and the console shows it (#4733).**
+  A failed or canceled turn's row in `turns` used to say only `failed`. It now has an
+  `error` column holding the reason: the A2A task's terminal error (including the stall
+  guard's message for a wedged turn), the `/v1` error message, or an ACP coder run's
+  failure line. The text is redacted and clipped to 500 characters before it is stored,
+  and an incognito turn stores none. When a turn is cancelled underneath a stalled turn,
+  the row records the stall guard's stop reason instead of a bare "cancelled". Existing
+  stores gain the column on open, including pre-#3001 stores that are rebuilt.
+  The Recent turns table shows the reason under the state badge, and a tap expands it to
+  the full text. The background agents dialog shows a failed job's stored error, such as
+  a job interrupted by a server restart. A background job's error is now redacted before
+  it is stored and again when the console reads it, which covers older rows.
+
+- **A failed schema migration raises instead of passing as done (#4736).**
+  When the telemetry, delegation ledger, prompt snapshot, scheduler or activity store
+  opened an older DB, it added missing columns with an ALTER and treated any SQLite error
+  as "column already present". A lock timeout during a real migration therefore let the
+  store start without the column, and every insert failed until the process restarted.
+  The stores now read the table's columns once and ALTER only the missing ones. An ALTER
+  that fails raises, except when a concurrent opener added the same column first. The
+  scheduler and activity stores log that failure as a schema init error.
+
+- **Console copy and dismiss failures say so instead of claiming success (#4737).**
+  Copying a trace id in Recent turns toasted "Trace id copied" even when the clipboard
+  write failed, and the background agents dialog's Copy button left an unhandled
+  rejection when the Clipboard API was missing or refused. Both now report success only
+  once the write lands and say the copy failed otherwise; the trace-id toast carries the
+  id so it can still be selected. Stopping, deleting or clearing background jobs updated
+  the list right away and ignored a server error, so a refused action looked done. The
+  list now rolls back and a toast names what failed.
+
+- **A repeat scheduled-task chip is no longer a dead end — it expands to the full result (#4726).**
+  After a schedule's first fire in a chat (which gets the full ScheduledReportCard), later fires
+  collapse to a compact one-line chip so an hourly job can't fill the thread with cards (#2990).
+  That one-liner used to be the only affordance — the run's result was reachable only through a
+  90-character hover tooltip or the Activity log. The chip now expands in place on click (and
+  Enter/Space, with `aria-expanded`) into the same body the first-fire card shows: the full
+  summary, the fire time, and a working "View full result". A second toggle collapses it, expand
+  state is local per message, and the dismiss ✕ still works in both states without toggling the
+  expand. The first-fire card and the recurring chip now share one `ScheduledResultBody`.
+
 ## [0.227.0] - 2026-11-04
 
 ### Added
