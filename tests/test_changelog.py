@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import importlib.util
+import json
+import re
 from pathlib import Path
 
 import pytest
@@ -164,6 +166,57 @@ def test_no_released_version_is_missing_from_marketing_changelog():
         pytest.skip("no marketing site (a fork dropped it) — staleness guard N/A")
     missing = changelog.missing_versions()
     assert not missing, f"changelog.json missing: {missing} — run `changelog.py scaffold <v>` then curate"
+
+
+def test_v0228_section_cites_the_corrected_pr_numbers():
+    """bd-5lu3.g1: four v0.228.0 entries shipped guessed PR links (their changelog.d
+    fragments carried no PR number in the filename). The GitHub release notes use the
+    right numbers; this pins CHANGELOG.md to them so the slip can't silently return."""
+    _date, body = changelog._section(changelog.CHANGELOG.read_text(encoding="utf-8"), "0.228.0")
+    assert body, "no [0.228.0] section in CHANGELOG.md"
+    flat = re.sub(r"\s+", " ", body)
+
+    # Corrected citations.
+    assert "operator switcher groups and per-agent pins (#4731)" in flat
+    assert "agent switcher groups, pins, filters and remembers recent agents (#4732)" in flat
+    assert "Fleet settings has a group editor for the agent switcher (#4735)" in flat
+    assert "expands to the full result (#4724)" in flat
+
+    # The guessed numbers are gone from those four entries.
+    assert "operator switcher groups and per-agent pins (#4727)" not in flat
+    assert "remembers recent agents (#4731)" not in flat
+    assert "group editor for the agent switcher (#4731, #4732)" not in flat
+    assert "expands to the full result (#4726)" not in flat
+
+    # The "no UI yet" line is replaced by the one naming the UI that shipped this release.
+    assert "No console UI yet" not in flat
+    assert "The switcher (#4732) and the Fleet settings group editor (#4735) use these fields." in flat
+
+
+def test_v0228_marketing_json_mirrors_the_corrected_pr_numbers():
+    """The marketing /changelog bullets for v0.228.0 must carry the same corrected
+    numbers as CHANGELOG.md, and the file must stay valid JSON."""
+    if not changelog.MARKETING_JSON.exists():
+        pytest.skip("no marketing site (a fork dropped it)")
+    data = json.loads(changelog.MARKETING_JSON.read_text(encoding="utf-8"))
+    entry = next((e for e in data if e.get("version") == "v0.228.0"), None)
+    assert entry is not None, "v0.228.0 missing from marketing changelog.json"
+    changes = entry["changes"]
+
+    assert "The fleet roster now stores operator switcher groups and per-agent pins (#4731)." in changes
+    assert "The agent switcher groups, pins, filters and remembers recent agents (#4732)." in changes
+    assert "Fleet settings has a group editor for the agent switcher (#4735)." in changes
+    assert (
+        "A repeat scheduled-task chip is no longer a dead end — it expands to the full result (#4724)." in changes
+    )
+
+    # The guessed numbers are gone.
+    assert "The fleet roster now stores operator switcher groups and per-agent pins (#4727)." not in changes
+    assert "The agent switcher groups, pins, filters and remembers recent agents (#4731)." not in changes
+    assert "Fleet settings has a group editor for the agent switcher (#4731, #4732)." not in changes
+    assert (
+        "A repeat scheduled-task chip is no longer a dead end — it expands to the full result (#4726)." not in changes
+    )
 
 
 # ── Monthly archives (#2437) ─────────────────────────────────────────────────

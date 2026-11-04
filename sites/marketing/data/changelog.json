@@ -8,14 +8,14 @@
       "Delegation-ledger retention is configurable, and the observability guide says how long each part of a run is kept (#4726, #4730).",
       "Finished background jobs are pruned after a retention window (#4726, #4734).",
       "A run inspector drawer in the console (#4738).",
-      "Fleet settings has a group editor for the agent switcher (#4731, #4732).",
-      "The fleet roster now stores operator switcher groups and per-agent pins (#4727).",
-      "The agent switcher groups, pins, filters and remembers recent agents (#4731).",
+      "Fleet settings has a group editor for the agent switcher (#4735).",
+      "The fleet roster now stores operator switcher groups and per-agent pins (#4731).",
+      "The agent switcher groups, pins, filters and remembers recent agents (#4732).",
       "The /prompt view lists a turn's subagent calls again (#4726, #4729).",
       "Telemetry records why a turn failed, and the console shows it (#4733).",
       "A failed schema migration raises instead of passing as done (#4736).",
       "Console copy and dismiss failures say so instead of claiming success (#4737).",
-      "A repeat scheduled-task chip is no longer a dead end — it expands to the full result (#4726)."
+      "A repeat scheduled-task chip is no longer a dead end — it expands to the full result (#4724)."
     ]
   },
   {
