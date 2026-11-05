@@ -6,6 +6,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 import { formatCountdown, hostKindLabel, newlyPaired, secondsLeft, tailnetFirst, type PairKind } from "../lib/agentPairing";
 import { api, DEVICE_SCOPE_MESSAGE } from "../lib/api";
+import { copyText } from "../lib/clipboard";
 import { currentSlug } from "../lib/api/routing";
 import {
   PUBLIC_CONSOLE_DOCS,
@@ -479,8 +480,13 @@ export function DevicesPanel() {
                   type="button"
                   variant="ghost"
                   onClick={() => {
-                    void navigator.clipboard.writeText(mintedToken);
-                    toast({ title: "Token copied", message: "Keep it somewhere safe." });
+                    void copyText(mintedToken).then((ok) =>
+                      toast(
+                        ok
+                          ? { title: "Token copied", message: "Keep it somewhere safe." }
+                          : { tone: "error", title: "Couldn't copy the token", message: "Select it and copy it by hand." },
+                      ),
+                    );
                   }}
                 >
                   <Copy size={14} aria-hidden /> Copy
@@ -611,8 +617,13 @@ export function DevicesPanel() {
                 type="button"
                 variant="ghost"
                 onClick={() => {
-                  void navigator.clipboard.writeText(pairing.code);
-                  toast({ title: "Code copied", message: "Paste it into Pair… on the other hub." });
+                  void copyText(pairing.code).then((ok) =>
+                    toast(
+                      ok
+                        ? { title: "Code copied", message: "Paste it into Pair… on the other hub." }
+                        : { tone: "error", title: "Couldn't copy the code", message: "Type it into Pair… on the other hub." },
+                    ),
+                  );
                 }}
               >
                 <Copy size={14} aria-hidden /> Copy

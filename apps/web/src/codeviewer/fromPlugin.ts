@@ -2,6 +2,7 @@ import { useToast } from "@protolabsai/ui/overlays";
 
 import { FS_ROOTS_QUERY_KEY } from "../chat/useEditorLinker";
 import { api } from "../lib/api";
+import { copyText } from "../lib/clipboard";
 import { editorLabel, makeEditorLinker, joinProjectPath, type EditorId } from "../lib/editorLinks";
 import { getEditorPref, getOpenFilesIn, type OpenFilesIn } from "../lib/editorPref";
 import { queryClient } from "../lib/queryClient";
@@ -177,14 +178,7 @@ export function defaultRouteDeps(): RouteDeps {
       // A custom scheme (zed://, vscode://) goes to the OS without unloading the page.
       window.location.href = href;
     },
-    copy: async (text) => {
-      try {
-        await navigator.clipboard.writeText(text);
-        return true;
-      } catch {
-        return false;
-      }
-    },
+    copy: copyText,
   };
 }
 
