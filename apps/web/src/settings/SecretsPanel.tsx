@@ -8,17 +8,48 @@ import { TestConnectionButton } from "../app/ui-kit";
 import { api } from "../lib/api";
 import { errMsg } from "../lib/format";
 import { queryKeys, secretsStatusQuery } from "../lib/queries";
+import type { SecretsTestOverrides } from "../lib/types";
 import { SettingsCategoryPanel } from "./SettingsCategory";
+
+// The server's SecretsTestRequest fields (operator_api/secrets_routes.py). Only these ride
+// along on a Test connection; the other `secrets_manager.*` knobs (enabled, refresh_seconds,
+// required, override_env) aren't test parameters.
+const TEST_FIELDS = new Set<keyof SecretsTestOverrides>([
+  "provider", "host", "project_id", "environment", "path", "recursive", "client_id", "client_secret", "timeout_seconds",
+]);
+
+// Map the panel's dirty `secrets_manager.*` field keys (dotted config paths) to the test
+// route's field names (#4702). The schema keys are flat (`secrets_manager.client_id`), so the
+// final path segment IS the request field name — taking the last segment also survives a
+// nested credential key (`secrets_manager.auth.client_id` → `client_id`). `api.secretsTest`
+// drops blanks and the redacted placeholder, so pass the raw dirty values straight through.
+export function secretsTestOverrides(dirty: Record<string, unknown>): SecretsTestOverrides {
+  const out: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(dirty)) {
+    if (!key.startsWith("secrets_manager.")) continue;
+    const short = key.split(".").pop() as keyof SecretsTestOverrides;
+    if (TEST_FIELDS.has(short)) out[short] = value;
+  }
+  return out as SecretsTestOverrides;
+}
 
 // Settings ▸ Secrets (ADR 0080): the schema-driven `secrets_manager.*` fields plus a
 // live status/actions card over /api/secrets/{status,sync,test}. The card rides the
 // SettingsCategoryPanel `footer` seam so fields + status share ONE stage panel (two
-// stacked panels split 50/50 and read as two surfaces — ADR 0048 §3.1).
+// stacked panels split 50/50 and read as two surfaces — ADR 0048 §3.1). The footer is a
+// render function so the status card's Test connection can probe the operator's unsaved
+// field edits, not just the saved config (#4702).
 export function SecretsPanel() {
-  return <SettingsCategoryPanel category="Secrets" title="Secrets manager" footer={<SecretsStatusCard />} />;
+  return (
+    <SettingsCategoryPanel
+      category="Secrets"
+      title="Secrets manager"
+      footer={({ dirty }) => <SecretsStatusCard overrides={secretsTestOverrides(dirty)} />}
+    />
+  );
 }
 
-function SecretsStatusCard() {
+function SecretsStatusCard({ overrides }: { overrides: SecretsTestOverrides }) {
   const toast = useToast();
   const queryClient = useQueryClient();
   const { data: status, isError } = useQuery(secretsStatusQuery());
@@ -34,7 +65,7 @@ function SecretsStatusCard() {
   });
 
   const test = useMutation({
-    mutationFn: () => api.secretsTest(),
+    mutationFn: () => api.secretsTest(overrides),
     onSuccess: (r) => {
       if (r.ok) toast({ tone: "success", title: "Connection OK", message: `${r.count} secret(s) in scope.` });
       else toast({ tone: "error", title: "Connection failed", message: r.error || r.error_kind || "fetch failed" });
