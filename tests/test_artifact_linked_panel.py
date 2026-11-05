@@ -117,7 +117,7 @@ def test_linked_pdf_over_25mb_renders_pages_with_the_banner(monkeypatch, tmp_pat
     )
     assert ok is True  # a cleared verdict → the page renderer, link or not
     card = _js_function(js, "fileCard")
-    assert "if(pdfOk(v)) return pdfDoc(v);" in card  # linked pdf → real pages
+    assert "if(pdfOk(v)) return pdfDoc(v, page);" in card  # linked pdf → real pages (page: #4748 deep-link)
     assert "linkBanner(v," in _js_function(js, "pdfDoc")  # the banner on the page view
     # the byte feed caps on the 40 MB page cap, which a 26 MB linked file is under
     block = re.search(r"var PDF_CAPS=\{(.*?)\};", js, re.S).group(1)

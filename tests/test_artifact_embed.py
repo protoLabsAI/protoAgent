@@ -58,11 +58,14 @@ def test_embed_renders_through_the_same_builder_as_the_panel(monkeypatch, tmp_pa
     js = _js(art)
     panel = _js_function(js, "render")
     embed = _js_function(js, "renderEmbed")
-    # Both placements build the frame with the IDENTICAL expression — so the embed frame's CSP,
-    # vendored libs and SRI are byte-identical to the panel's for every kind.
-    builder = 'a.kind==="file" ? fileCard(v) : srcdoc(a.kind, v.code, renderingLinks)'
-    assert builder in panel, "the panel builds the frame via srcdoc()/fileCard()"
-    assert builder in embed, "the embed must build the frame via the SAME srcdoc()/fileCard() call"
+    # Both placements build the frame through the SAME two builders — srcdoc() for a frame kind,
+    # fileCard() for a file — so the embed frame's CSP, vendored libs and SRI stay byte-identical
+    # to the panel's for every kind. The non-file branch is literally identical; the panel's
+    # fileCard() additionally threads the chip's deep-link page (#4748), which only scrolls a PDF
+    # and never reaches the frame's CSP/libs/SRI (an embed has no cited page, so it passes none).
+    assert "srcdoc(a.kind, v.code, renderingLinks)" in panel and "srcdoc(a.kind, v.code, renderingLinks)" in embed
+    assert 'a.kind==="file" ? fileCard(v, undefined, targetPage) : srcdoc(a.kind, v.code, renderingLinks)' in panel
+    assert 'a.kind==="file" ? fileCard(v) : srcdoc(a.kind, v.code, renderingLinks)' in embed
     # The embed path invents no CSP/sandbox of its own.
     assert "Content-Security-Policy" not in embed and "sandbox" not in embed
 
