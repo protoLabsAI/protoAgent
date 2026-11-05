@@ -131,7 +131,10 @@ def fence_tools(request):
 
 def _answer_tools() -> frozenset[str]:
     """The answer-type HITL tools (their interrupt asks a question; the resume is an
-    ANSWER, not an approval) — the registry the subagent HITL deny uses too."""
+    ANSWER, not an approval). This is a STRICT SUBSET of the subagent hard-deny set
+    (``SUBAGENT_DENIED_TOOLS``): an approval-type interrupt tool like ``self_restart`` is
+    denied to subagents but is NOT exempt here — a resumer whose fence excludes it must
+    DECLINE it (``_declined``), never run it, because its resume is an approval."""
     from tools.lg_tools import HITL_TOOL_NAMES
 
     return HITL_TOOL_NAMES

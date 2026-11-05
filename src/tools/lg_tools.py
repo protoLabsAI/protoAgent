@@ -920,12 +920,22 @@ def load_skill(name: str) -> str:
 # ``get_all_tools``.
 
 
-# Lead-only HITL tools: each pauses the lead A2A turn via a LangGraph interrupt that only the
-# lead turn's runner resumes. A subagent runs on a checkpointer-less graph, so binding one
-# would fail opaquely mid-delegation — graph.agent hard-denies these from every subagent's
-# tool set (``_subagent_tools``) regardless of its allowlist. Keep this in sync if a new
-# interrupt-based tool is added.
-HITL_TOOL_NAMES = frozenset({"ask_human", "request_user_input", "self_restart"})
+# Answer-type HITL tools: each interrupt ASKS A QUESTION and the resume is an ANSWER (not an
+# approval). SubagentFenceMiddleware keys its resume-exemption on exactly this set — a parked
+# answer-type call completes on its own resume even when the resumer's fence excludes it, so
+# the operator's answer isn't dropped. An APPROVAL-type interrupt tool (``self_restart``) must
+# NOT be here: a resumer whose fence excludes it must DECLINE it, not run it. Add only
+# question/answer interrupts here; add every lead-only interrupt tool to SUBAGENT_DENIED_TOOLS.
+HITL_TOOL_NAMES = frozenset({"ask_human", "request_user_input"})
+
+# Lead-only interrupt tools hard-denied to every subagent: a subagent runs on a
+# checkpointer-less graph, so binding any ``interrupt()``-based tool (answer-type or
+# approval-type) would fail opaquely mid-delegation — graph.agent hard-denies these from every
+# subagent's tool set (``_subagent_tools`` / ``_subagent_tool_names``) and tool_access excludes
+# them from read inheritance, regardless of a SubagentConfig.tools allowlist. This is the
+# superset of HITL_TOOL_NAMES plus the approval-type ``self_restart``. Keep it in sync when a
+# new interrupt-based lead tool is added.
+SUBAGENT_DENIED_TOOLS = HITL_TOOL_NAMES | frozenset({"self_restart"})
 
 
 def get_all_tools(
@@ -977,11 +987,12 @@ def get_all_tools(
     Pass ``None`` to disable either subsystem — the lead agent runs
     fine with just the four keyless general tools.
     """
-    # ask_human, request_user_input and self_restart are lead-only HITL tools — each
-    # pauses the A2A turn via a LangGraph interrupt that only the lead turn's runner resumes.
-    # Subagents (run outside that runner, on a graph with no checkpointer) must not get these:
-    # they're absent from every subagent allowlist in graph/subagents/config.py AND hard-denied
-    # in graph.agent._subagent_tools, so a fork can't enable one via a tools list either.
+    # ask_human, request_user_input (answer-type) and self_restart (approval-type) are lead-only
+    # interrupt tools — each pauses the A2A turn via a LangGraph interrupt that only the lead
+    # turn's runner resumes. Subagents (run outside that runner, on a graph with no checkpointer)
+    # must not get any of them: they're absent from every subagent allowlist in
+    # graph/subagents/config.py AND hard-denied via SUBAGENT_DENIED_TOOLS in
+    # graph.agent._subagent_tools, so a fork can't enable one via a tools list either.
     # show_component (inline component rendering, ADR 0051 / #1323): table/keyvalue/timeline
     # widgets rendered inline in chat by the console's extensible component registry.
     tools = [current_time, calculator, web_search, fetch_url, ask_human, request_user_input, load_skill, show_component]

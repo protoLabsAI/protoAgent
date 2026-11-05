@@ -26,7 +26,7 @@ from graph.middleware.memory import SessionSummaryMiddleware
 from graph.middleware.message_capture import MessageCaptureMiddleware
 from graph.state import ProtoAgentState
 from graph.subagents.config import SUBAGENT_REGISTRY, BackgroundSpawnRefused
-from tools.lg_tools import HITL_TOOL_NAMES, drop_disabled_tools, get_all_tools
+from tools.lg_tools import SUBAGENT_DENIED_TOOLS, drop_disabled_tools, get_all_tools
 from tools.session import _session_id_from
 
 logger = logging.getLogger(__name__)
@@ -685,22 +685,23 @@ class SubagentError(RuntimeError):
 
 
 def _subagent_tools(sub_config, tool_map: dict) -> list:
-    """Resolve a subagent's bound tools from its allowlist, hard-denying the lead-only HITL
-    interrupt tools (``HITL_TOOL_NAMES``) even if the config lists them. A subagent runs on a
-    checkpointer-less graph, so ``ask_human`` / ``request_user_input`` would fail opaquely
-    mid-delegation — this is the enforced backstop to the convention that no subagent allowlist
-    names them, so a fork can't enable one by editing a ``SubagentConfig.tools`` list."""
-    blocked = [n for n in sub_config.tools if n in HITL_TOOL_NAMES]
+    """Resolve a subagent's bound tools from its allowlist, hard-denying the lead-only interrupt
+    tools (``SUBAGENT_DENIED_TOOLS`` — the answer-type HITL tools plus approval-type
+    ``self_restart``) even if the config lists them. A subagent runs on a checkpointer-less
+    graph, so any ``interrupt()``-based tool would fail opaquely mid-delegation — this is the
+    enforced backstop to the convention that no subagent allowlist names them, so a fork can't
+    enable one by editing a ``SubagentConfig.tools`` list."""
+    blocked = [n for n in sub_config.tools if n in SUBAGENT_DENIED_TOOLS]
     if blocked:
         import logging
 
         logging.getLogger(__name__).warning(
-            "[subagent] '%s' lists HITL tool(s) %s — dropping them; a subagent can't resume a "
-            "LangGraph interrupt (no checkpointer). Remove them from its tools list.",
+            "[subagent] '%s' lists lead-only interrupt tool(s) %s — dropping them; a subagent "
+            "can't resume a LangGraph interrupt (no checkpointer). Remove them from its tools list.",
             sub_config.name,
             blocked,
         )
-    return [tool_map[name] for name in sub_config.tools if name in tool_map and name not in HITL_TOOL_NAMES]
+    return [tool_map[name] for name in sub_config.tools if name in tool_map and name not in SUBAGENT_DENIED_TOOLS]
 
 
 def _effective_subagent_tools(config, sub_config, tool_map: dict) -> list:
@@ -727,7 +728,7 @@ def _effective_subagent_tools(config, sub_config, tool_map: dict) -> list:
 def _subagent_tool_names(sub_config, resolvable_names, *, config=None, lead_tools=()) -> list[str]:
     """Resolve detached names, retaining explicit grants to held tools."""
     names = {str(n) for n in resolvable_names}
-    explicit = [n for n in (sub_config.tools or []) if n in names and n not in HITL_TOOL_NAMES]
+    explicit = [n for n in (sub_config.tools or []) if n in names and n not in SUBAGENT_DENIED_TOOLS]
     inherited = _effective_subagent_tools(config, sub_config, {t.name: t for t in lead_tools})
     combined = dict.fromkeys([*explicit, *(t.name for t in inherited if getattr(t, "name", None))])
     return list(_policy_tool_map(config, sub_config.name, combined))

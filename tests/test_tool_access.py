@@ -6,7 +6,7 @@ import pytest
 
 from graph.subagents.config import SUBAGENT_REGISTRY, SubagentConfig
 from graph.tool_access import CORE_READ_TOOLS, NEVER_INHERITED, inherited_read_tools, is_read_tool
-from tools.lg_tools import HITL_TOOL_NAMES
+from tools.lg_tools import SUBAGENT_DENIED_TOOLS
 
 
 @pytest.mark.parametrize("name", sorted(CORE_READ_TOOLS))
@@ -29,7 +29,7 @@ def test_metadata_seam_and_missing_metadata():
 
 @pytest.mark.parametrize(
     "name",
-    sorted(HITL_TOOL_NAMES | {"task", "task_batch", "stop_task", "execute_code", "run_command", "delegate_to"}),
+    sorted(SUBAGENT_DENIED_TOOLS | {"task", "task_batch", "stop_task", "execute_code", "run_command", "delegate_to"}),
 )
 def test_control_tools_cannot_opt_into_inheritance(name):
     assert name in NEVER_INHERITED
