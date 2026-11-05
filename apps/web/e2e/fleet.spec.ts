@@ -964,14 +964,14 @@ test("⌘K → Fleet Room: a TYPED @name addresses that member without using the
 test("a sister agent's window: Fleet settings opens the fleet panel from the switcher", async ({ page }) => {
   await page.goto("/app/agent/ava/", { waitUntil: "load" });
   await page.getByTestId("fleet-switcher").click();
-  await page.getByRole("menuitem", { name: "Fleet settings" }).click();
+  await page.getByRole("button", { name: "Fleet settings", exact: true }).click();
   await expect(page.getByRole("heading", { name: "Agents" })).toBeVisible();
 });
 
 test("a sister agent's window: New agent opens the archetype picker from the switcher", async ({ page }) => {
   await page.goto("/app/agent/ava/", { waitUntil: "load" });
   await page.getByTestId("fleet-switcher").click();
-  await page.getByRole("menuitem", { name: "New agent" }).click();
+  await page.getByRole("button", { name: "New agent", exact: true }).click();
   await expect(page.getByRole("heading", { name: "New agent" })).toBeVisible();
 });
 
@@ -1127,3 +1127,46 @@ test("Fleet Room diagnostics: switching members retargets the drawer; a fleet-se
   await expect(page.getByTestId("diag-member")).toHaveText("roxy");
   await expect(page.getByTestId("diag-error-stopped")).toBeVisible();
 });
+
+for (const mobile of [false, true]) {
+  test(`switcher header stays visible while its once-only agent list scrolls (mobile=${mobile})`, async ({ page }) => {
+    if (mobile) await page.setViewportSize({ width: 390, height: 844 });
+    await page.route("**/api/fleet", (route) => route.fulfill({
+      json: {
+        groups: [{ id: "team", name: "Team" }],
+        agents: Array.from({ length: 35 }, (_, i) => ({
+          id: i === 0 ? "host" : `agent-${i}`, name: `Agent ${i}`,
+          host: i === 0, pinned: i < 3, pinned_at: `2026-11-0${i + 1}`,
+          group: "team", running: true, port: 7800, pid: 1, bundle: "",
+        })),
+      },
+    }));
+    await page.goto("/app/", { waitUntil: "load" });
+    if (mobile) await page.getByTestId("header-menu").click();
+    await page.getByTestId("fleet-switcher").click();
+    const menu = page.locator(mobile ? ".fleet-sheet-list" : ".fleet-switcher-menu");
+    await expect(menu.locator(".fleet-switcher-name-text")).toHaveCount(35);
+    const header = page.locator(mobile ? ".fleet-sheet .pl-drawer__head" : ".fleet-switcher-header");
+    const filter = page.locator(mobile ? ".fleet-sheet .pl-menu__filter" : ".fleet-switcher-header .pl-menu__filter");
+    // Finish the sheet entrance before comparing scroll geometry.
+    if (mobile) await page.locator(".fleet-sheet").evaluate(async (el) => {
+      await Promise.all(el.getAnimations().map((animation) => animation.finished));
+    });
+    const filterBefore = await filter.boundingBox();
+    const before = await header.boundingBox();
+    await menu.evaluate((el) => { el.scrollTop = el.scrollHeight; });
+    const after = await header.boundingBox();
+    const filterAfter = await filter.boundingBox();
+    expect(Math.abs(filterAfter!.y - filterBefore!.y)).toBeLessThanOrEqual(1);
+    expect(Math.abs(after!.y - before!.y)).toBeLessThanOrEqual(1);
+    await expect(header.getByRole("button", { name: "New agent", exact: true })).toBeVisible();
+    await expect(header.getByRole("button", { name: "Fleet settings", exact: true })).toBeVisible();
+    const icon = filter.locator(".pl-input-affix__icon svg");
+    await expect(icon).toBeVisible();
+    const bounds = await icon.boundingBox();
+    expect(bounds!.width).toBe(16);
+    expect(bounds!.height).toBe(16);
+    await filter.getByRole("textbox").fill("Agent 1");
+    await expect(menu.locator(".fleet-switcher-name-text")).toHaveCount(11);
+  });
+}

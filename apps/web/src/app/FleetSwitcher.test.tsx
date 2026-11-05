@@ -48,7 +48,7 @@ vi.mock("../lib/api", () => {
   };
 });
 
-import { agentHref, api, ApiError } from "../lib/api";
+import { agentHref, api, ApiError, currentSlug } from "../lib/api";
 
 // Radix (DropdownMenu/Popper/Drawer focus-trap) touches layout + pointer-capture APIs jsdom lacks.
 Element.prototype.hasPointerCapture ??= () => false;
@@ -124,13 +124,13 @@ async function flush() {
   });
 }
 
-async function mount() {
+async function mount(actions: { onNewAgent?: () => void; onManageFleet?: () => void } = {}) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   act(() => {
     // The switcher toasts a rejected pin/move (it no longer fails silently), so it renders inside a
     // ToastProvider — as it does in the app (AppToasts wraps <App/>). useToast() throws without one.
     root.render(
-      h(QueryClientProvider, { client }, h(ToastProvider, null, h(FleetSwitcher, { fallbackName: "protoagent" }))),
+      h(QueryClientProvider, { client }, h(ToastProvider, null, h(FleetSwitcher, { fallbackName: "protoagent", ...actions }))),
     );
   });
   await flush();
@@ -187,6 +187,7 @@ function keydown(el: Element, key: string) {
 
 beforeEach(() => {
   mobileRef.value = false;
+  vi.mocked(currentSlug).mockReturnValue("host");
   localStorage.clear();
   scrollIntoView.mockClear();
   (api.fleet as ReturnType<typeof vi.fn>).mockResolvedValue(roster());
@@ -212,7 +213,7 @@ describe("FleetSwitcher — desktop dropdown", () => {
     await mount();
     await openMenu();
     const t = mainMenu()!.textContent || "";
-    const order = ["Pinned", "Recent", "Demos", "Personal", "Remote", "New agent", "Fleet settings"];
+    const order = ["Pinned", "Demos", "Personal", "Remote"];
     const positions = order.map((label) => t.indexOf(label));
     expect(positions.every((p) => p >= 0)).toBe(true);
     expect(positions).toEqual([...positions].sort((x, y) => x - y));
@@ -233,11 +234,12 @@ describe("FleetSwitcher — desktop dropdown", () => {
     const t = mainMenu()!.textContent || "";
     expect(t).toContain("lyra"); // collapsed group opened temporarily to show the match
     expect(t).not.toContain("nova"); // non-matches hidden
-    expect(t).not.toContain("Pinned"); // Current / Pinned / Recent hidden while filtering
+    expect(t).not.toContain("Pinned"); // no pinned agents match lyra
     keydown(input, "Enter");
     await flush();
     expect(agentHref).toHaveBeenCalledWith("n4");
-    expect(JSON.parse(localStorage.getItem("protoagent.fleet.switcherRecent") || "[]")[0]).toBe("n4");
+    expect(localStorage.getItem("protoagent.fleet.switcherRecent")).toBeNull();
+    expect(localStorage.getItem("protoagent.fleet.recent")).toBeNull();
   });
 
   it("shows a disabled no-match row with the spec's copy", async () => {
@@ -259,12 +261,12 @@ describe("FleetSwitcher — desktop dropdown", () => {
     expect(JSON.parse(localStorage.getItem("protoagent.fleet.collapsed") || "[]")).toContain("g-demos");
   });
 
-  it("reads recents from storage and renders them, newest first", async () => {
+  it("ignores stored recents", async () => {
     localStorage.setItem("protoagent.fleet.switcherRecent", JSON.stringify(["n2"])); // orion
     await mount();
     await openMenu();
     const t = mainMenu()!.textContent || "";
-    expect(t.indexOf("Recent")).toBeGreaterThanOrEqual(0);
+    expect(t).not.toContain("Recent");
     expect(t).toContain("orion");
   });
 
@@ -440,7 +442,7 @@ describe("FleetSwitcher — desktop dropdown", () => {
 
 // ── This card: a hub that predates the groups API, and writes that no longer fail silently. ──
 describe("FleetSwitcher — hub without the groups API (#4731)", () => {
-  it("hides the star and the Pin/Move items, shows the plain list, and keeps the filter + recents", async () => {
+  it("hides the star and the Pin/Move items, shows the plain list, and keeps the filter", async () => {
     localStorage.setItem("protoagent.fleet.switcherRecent", JSON.stringify(["n1"])); // nova
     (api.fleet as ReturnType<typeof vi.fn>).mockResolvedValue(rosterNoGroups());
     await mount();
@@ -461,9 +463,9 @@ describe("FleetSwitcher — hub without the groups API (#4731)", () => {
     expect(t).toContain("Remote");
     expect(t).toContain("nova");
     expect(t).toContain("vega"); // was group:g-demos, now Ungrouped (the group no longer exists)
-    // Per-browser affordances stay: the filter (≥ 10 agents) and the Recent section.
+    // The filter stays available, but recents are retired.
     expect(document.querySelector('input[placeholder="Find an agent"]')).toBeTruthy();
-    expect(t).toContain("Recent");
+    expect(t).not.toContain("Recent");
   });
 });
 
@@ -593,4 +595,119 @@ describe("FleetSwitcher — phone bottom sheet", () => {
     await flush();
     expect(document.body.textContent).toContain("Remote agents are grouped by their machine.");
   });
+});
+
+describe.each([false, true])("FleetSwitcher once-only header (mobile=%s)", (mobile) => {
+  beforeEach(() => { mobileRef.value = mobile; });
+
+  it.each([null, "g-demos"])("renders current pinned in group %s and every other agent once", async (group) => {
+    const data = roster();
+    Object.assign(data.agents[0], { pinned: true, group });
+    Object.assign(data.agents.find((a) => a.id === "r1")!, { pinned: true });
+    vi.mocked(api.fleet).mockResolvedValue(data);
+    await mount();
+    await openMenu();
+    const scope = document.querySelector(mobile ? ".fleet-sheet-list" : ".fleet-switcher-menu")!;
+    const names = () => [...scope.querySelectorAll(mobile ? ".fleet-prow-wrap .fleet-switcher-name-text" : ".fleet-switcher-name-text")]
+      .map((el) => el.textContent);
+    expect(names()).toEqual(["atlas", "pulsar", "rigel", "sol", "nova", "orion", "cass", "deneb", "vega", "lyra", "mira", "quasar"]);
+    expect(scope.querySelectorAll('[aria-label="current agent"]')).toHaveLength(1);
+    expect(scope.textContent).not.toContain("Recent");
+    const input = document.querySelector('input[placeholder="Find an agent"]') as HTMLInputElement;
+    setInput(input, "Demos");
+    await flush();
+    expect(names()).toEqual(group ? ["atlas", "vega", "lyra"] : ["vega", "lyra"]);
+    setInput(input, "rigel");
+    await flush();
+    expect(names()).toEqual(["rigel"]);
+    expect(scope.textContent).toContain("Pinned");
+    expect(scope.textContent).not.toContain("No agents match");
+  });
+
+  it("keeps a pinned remote current agent only in the main row", async () => {
+    const data = roster();
+    data.agents.find((a) => a.id === "r1")!.pinned = true;
+    vi.mocked(api.fleet).mockResolvedValue(data);
+    vi.mocked(currentSlug).mockReturnValue("r1");
+    await mount();
+    await openMenu();
+    const scope = document.querySelector(mobile ? ".fleet-sheet-list" : ".fleet-switcher-menu")!;
+    const names = [...scope.querySelectorAll(".fleet-switcher-name-text")].map((el) => el.textContent);
+    expect(names[0]).toBe("pulsar");
+    expect(names.filter((name) => name === "pulsar")).toHaveLength(1);
+    expect(scope.querySelectorAll('[aria-label="current agent"]')).toHaveLength(1);
+    expect(names).toHaveLength(data.agents.length);
+  });
+
+  it("keeps the filter and labelled icon actions in the header and invokes each action", async () => {
+    const onNewAgent = vi.fn();
+    const onManageFleet = vi.fn();
+    await mount({ onNewAgent, onManageFleet });
+    for (const [label, callback] of [["New agent", onNewAgent], ["Fleet settings", onManageFleet]] as const) {
+      await openMenu();
+      const header = document.querySelector(mobile ? ".fleet-sheet .pl-drawer__head" : ".fleet-switcher-header")!;
+      const button = header.querySelector<HTMLButtonElement>(`button[aria-label="${label}"]`)!;
+      expect(button).toBeTruthy();
+      expect(button.title).toBe(label);
+      expect(button.disabled).toBe(false);
+      expect(button.querySelector("svg")).toBeTruthy();
+      expect(document.querySelectorAll(`button[aria-label="${label}"]`)).toHaveLength(1);
+      const input = document.querySelector('input[placeholder="Find an agent"]')!;
+      expect(input.closest(".fleet-sheet-list")).toBeNull();
+      expect(document.querySelector(".pl-menu__filter .pl-input-affix__icon svg")).toBeTruthy();
+      if (mobile) {
+        expect(header.querySelector('[aria-label="Close"]')).toBeTruthy();
+        expect(document.querySelector(".fleet-sheet-list .fleet-header-actions")).toBeNull();
+      } else {
+        expect(header.contains(input)).toBe(true);
+        expect(themeCss).toMatch(/\.fleet-switcher-header\s*\{[^}]*position: sticky;[^}]*top: 0;[^}]*background: var\(--pl-color-bg-raised\)/);
+      }
+      clickOnly(button);
+      await flush();
+      expect(callback).toHaveBeenCalledOnce();
+      expect(document.querySelector(mobile ? ".fleet-sheet" : ".fleet-switcher-menu")).toBeNull();
+    }
+    expect(themeCss).toMatch(/\.fleet-sheet \.pl-menu__filter \.pl-input-affix__icon svg\s*\{[^}]*width: 16px;[^}]*height: 16px/);
+  });
+
+  it("disables both header buttons with the existing member reason", async () => {
+    const data = roster();
+    data.agents[0].member = true;
+    vi.mocked(api.fleet).mockResolvedValue(data);
+    await mount();
+    await openMenu();
+    for (const label of ["New agent", "Fleet settings"]) {
+      const button = document.querySelector<HTMLButtonElement>(`button[aria-label="${label}"]`)!;
+      expect(button.disabled).toBe(true);
+      expect(button.title).toBe("Fleet settings are managed from the host instance");
+    }
+  });
+
+  it("ignores both old recents stores and never writes them on a switch", async () => {
+    localStorage.setItem("protoagent.fleet.recent", JSON.stringify({ n1: 123 }));
+    localStorage.setItem("protoagent.fleet.switcherRecent", JSON.stringify(["n1"]));
+    const write = vi.spyOn(Storage.prototype, "setItem");
+    await mount();
+    await openMenu();
+    expect(document.querySelector(mobile ? ".fleet-sheet-list" : ".fleet-switcher-menu")!.textContent).not.toContain("Recent");
+    const input = document.querySelector('input[placeholder="Find an agent"]') as HTMLInputElement;
+    setInput(input, "nova");
+    await flush();
+    keydown(input, "Enter");
+    await flush();
+    expect(agentHref).toHaveBeenCalledWith("n1");
+    expect(write.mock.calls.some(([key]) => key === "protoagent.fleet.recent" || key === "protoagent.fleet.switcherRecent")).toBe(false);
+    write.mockRestore();
+  });
+});
+
+it("hands focus from the filter to the first agent and back with arrow keys", async () => {
+  await mount();
+  await openMenu();
+  const input = document.querySelector('input[placeholder="Find an agent"]') as HTMLInputElement;
+  keydown(input, "ArrowDown");
+  const first = mainMenu()!.querySelector('[role="menuitem"]')!;
+  expect(document.activeElement).toBe(first);
+  keydown(first, "ArrowUp");
+  expect(document.activeElement).toBe(input);
 });
