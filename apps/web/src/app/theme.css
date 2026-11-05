@@ -1658,7 +1658,7 @@ textarea {
   align-items: center;
   gap: var(--pl-space-1);
   margin: -4px -4px var(--pl-space-1);
-  padding: 4px 4px var(--pl-space-1);
+  padding: var(--pl-space-1);
   background: var(--pl-color-bg-raised);
   border-bottom: var(--pl-border-width) solid var(--pl-color-border);
 }
