@@ -511,8 +511,22 @@ def test_shell_select_is_embedder_only_and_versioned_by_lifetime_number(monkeypa
     # A request that can't resolve after a FRESH poll — one issued after it arrived — (deleted/
     # evicted) is dropped; a poll already in flight when it arrived can't drop it.
     assert "if(!a){ if(seq>pendingSel.after) pendingSel=null; return false; }" in js
-    assert "pendingSel={id:id, ver:ver, after:pollSeq};" in js
+    assert "pendingSel={id:id, ver:ver, after:pollSeq, page:page};" in js
     assert '" of "+vtot' in js
+
+
+def test_shell_pdf_deep_link_page_reaches_the_viewer(monkeypatch, tmp_path):
+    # #4748: the chip's optional page rides the select, is armed as a one-shot per artifact, folded
+    # into the PDF frame's cfg for the rendered version, and scrolled to once the pages are laid out.
+    js = _load(monkeypatch, tmp_path)._SHELL_JS
+    # The listener reads an untrusted m.page (finite, floored, ≥ 1, else 0) and stores it on pendingSel.
+    assert 'var page=(typeof m.page==="number" && isFinite(m.page) && Math.floor(m.page)>=1) ? Math.floor(m.page) : 0;' in js
+    # takePendingSel arms a one-shot page bound to the artifact (a plain select clears any stale one).
+    assert "pendingPage = (page>1) ? {id:a.id, page:page} : null;" in js
+    # pdfDoc folds the page into cfg only for the rendered artifact, and consumes it (no re-scroll).
+    assert "if(pendingPage && pendingPage.id===renderingId){ cfg.page=pendingPage.page; pendingPage=null; }" in js
+    # artPdf jumps to the page once the slots are laid out; go() clamps a too-large page to the last.
+    assert "if(cfg.page>1) go(Math.min(cfg.page, count));" in js
 
 
 @pytest.mark.parametrize("page", [1, 46])

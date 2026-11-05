@@ -1988,6 +1988,10 @@
       + ";--pl-color-fg-muted:"+tok("--pl-color-fg-muted","#9aa0aa")+";--pl-color-border:"+tok("--pl-color-border","rgba(255,255,255,.12)")
       + ";--pl-color-accent:"+tok("--pl-color-accent","#9b87f2")+"}";
     var cfg={caps:PDF_CAPS, pages:+((f.pdf&&f.pdf.pages)||0)};
+    // The chip's one-shot deep-link page (#4748) — only for the version actually being rendered,
+    // the artifact the select landed on (renderingId is set to selArt's id just above the frame
+    // swap). Consumed here so a later poll or re-render of the same version doesn't re-scroll.
+    if(pendingPage && pendingPage.id===renderingId){ cfg.page=pendingPage.page; pendingPage=null; }
     return '<!doctype html><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="'+csp+'">'
       + '<style>'+tokens+PDF_CSS+'</style>'
       + '<div class="wrap">'+linkBanner(v, "var(--pl-color-fg)", "var(--pl-color-fg-muted)", "var(--pl-color-border)")+'<div class="hd"><div class="ic" aria-hidden="true">PDF</div>'
@@ -2141,6 +2145,9 @@
           slots.push(s); size(s); box.appendChild(el); io.observe(el);
         }
         status.textContent=""; nav.hidden=false; lastFit=fitW(); update();
+        // The chip's deep-link page (#4748): the slots are laid out, so scroll to it now. go()
+        // clamps, so a page past the end lands on the last page; page 1 stays at the top.
+        if(cfg.page>1) go(Math.min(cfg.page, count));
         post({type:"protoArtifact:pdf", state:"rendered", count:count});
       }catch(e){
         var msg=String((e&&e.message)||e);
@@ -2556,6 +2563,10 @@
   // already in flight when the agent's new artifact was announced can answer with the store from
   // before it, and must not drop the request for an id it couldn't have seen yet.
   var pendingSel=null, pollSeq=0, appliedSeq=0;
+  // A one-shot page the chip asked a PDF to open AT (#4748): {id, page}, a 1-based page bound to
+  // the artifact the select resolved onto. pdfDoc reads it for the matching version and consumes
+  // it, so a later poll or re-render of the same version doesn't re-scroll the operator.
+  var pendingPage=null;
   // Resolve the pending deep-link into the selection state; true when it resolved. Kept apart from
   // the render so a fresh poll can fold it in BEFORE its one render — the frame never shows the
   // remembered selection first and is never re-targeted mid-load (see frameNavigator).
@@ -2564,9 +2575,12 @@
     if(!pendingSel) return false;
     var a=null; for(var i=0;i<arts.length;i++) if(arts[i].id===pendingSel.id){ a=arts[i]; break; }
     if(!a){ if(seq>pendingSel.after) pendingSel=null; return false; }
-    var want=pendingSel.ver; pendingSel=null;
+    var want=pendingSel.ver, page=pendingSel.page; pendingSel=null;
     var vtot=total(a), idx=want-(vtot-a.versions.length)-1;
     selId=a.id;
+    // Arm the one-shot page jump for this artifact (#4748); a select without a page clears any
+    // stale one so a plain open never inherits an earlier chip's page.
+    pendingPage = (page>1) ? {id:a.id, page:page} : null;
     // The newest version → follow it (selVer null), and follow newest ARTIFACTS only when this
     // is also the newest one (the picker's own rule, atNewest). An older version pins it: auto-
     // follow off, so the next agent edit doesn't yank the operator off the version they asked
@@ -2584,7 +2598,10 @@
     var id=typeof m.id==="string" ? m.id.slice(0,64) : "";
     var ver=(typeof m.ver==="number" && isFinite(m.ver)) ? Math.floor(m.ver) : 0;
     if(!id || ver<1) return;
-    pendingSel={id:id, ver:ver, after:pollSeq};
+    // Optional 1-based page (#4748): a PDF chip can ask the panel to open AT a cited page. Untrusted
+    // like id/ver — a finite number, floored, ≥ 1, else 0 (ignored).
+    var page=(typeof m.page==="number" && isFinite(m.page) && Math.floor(m.page)>=1) ? Math.floor(m.page) : 0;
+    pendingSel={id:id, ver:ver, after:pollSeq, page:page};
     if(booted){ applyPendingSel(0); if(pendingSel) kickPoll(); }
   });
 
