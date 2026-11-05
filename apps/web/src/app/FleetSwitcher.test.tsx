@@ -595,6 +595,21 @@ describe("FleetSwitcher — phone bottom sheet", () => {
     await flush();
     expect(document.body.textContent).toContain("Remote agents are grouped by their machine.");
   });
+
+  it("spells out the fleet-settings disabled reason as visible text (touch has no tooltip)", async () => {
+    const data = roster();
+    data.agents[0].member = true; // a member window: New agent / Fleet settings are blocked
+    vi.mocked(api.fleet).mockResolvedValue(data);
+    await mount();
+    clickEl(document.querySelector('[data-testid="fleet-switcher"]')!);
+    await flush();
+    // The header icons are still disabled with the reason in their title…
+    expect(document.querySelector<HTMLButtonElement>('button[aria-label="Fleet settings"]')!.disabled).toBe(true);
+    // …and the reason also shows as plain text in the sheet, which a touch user can read.
+    expect(document.querySelector(".fleet-sheet-note")?.textContent).toContain(
+      "Fleet settings are managed from the host instance",
+    );
+  });
 });
 
 describe.each([false, true])("FleetSwitcher once-only header (mobile=%s)", (mobile) => {
@@ -710,4 +725,63 @@ it("hands focus from the filter to the first agent and back with arrow keys", as
   expect(document.activeElement).toBe(first);
   keydown(first, "ArrowUp");
   expect(document.activeElement).toBe(input);
+});
+
+// The header actions are plain buttons (aria-label/title/disabled-reason a MenuItem can't carry)
+// and Radix's menu blocks Tab — so they'd be keyboard-unreachable without the header's own toolbar
+// wiring. Left/Right cross the filter and the two buttons; Down enters the list; Up returns to the
+// filter. This is the regression the review flagged.
+it("keeps the header action buttons keyboard-reachable from the filter (Right/Left/Down/Up)", async () => {
+  await mount({ onNewAgent: vi.fn(), onManageFleet: vi.fn() });
+  await openMenu();
+  const input = document.querySelector('input[placeholder="Find an agent"]') as HTMLInputElement;
+  const newBtn = document.querySelector('button[aria-label="New agent"]') as HTMLButtonElement;
+  const settingsBtn = document.querySelector('button[aria-label="Fleet settings"]') as HTMLButtonElement;
+  // Right from the filter (caret at the far end) hops onto the first action, then the second.
+  act(() => {
+    input.focus();
+    input.setSelectionRange(input.value.length, input.value.length);
+  });
+  keydown(input, "ArrowRight");
+  expect(document.activeElement).toBe(newBtn);
+  keydown(newBtn, "ArrowRight");
+  expect(document.activeElement).toBe(settingsBtn);
+  // Left walks back across the toolbar: second action → first action → the filter box.
+  keydown(settingsBtn, "ArrowLeft");
+  expect(document.activeElement).toBe(newBtn);
+  keydown(newBtn, "ArrowLeft");
+  expect(document.activeElement).toBe(input);
+  // Down from an action drops into the list; Up from an action returns to the filter.
+  act(() => newBtn.focus());
+  keydown(newBtn, "ArrowDown");
+  expect((document.activeElement as HTMLElement).getAttribute("role")).toBe("menuitem");
+  act(() => settingsBtn.focus());
+  keydown(settingsBtn, "ArrowUp");
+  expect(document.activeElement).toBe(input);
+});
+
+// Below the filter threshold there is no filter box to arrow up into, so the header would be
+// unreachable when focus opens on the first row (the reviewer's exact < 10-agent case). Up from
+// the first row bridges to the first action button instead.
+it("reaches the header buttons by arrowing up from the first row when there is no filter", async () => {
+  const mk = (id: string, name: string, over: Partial<FleetAgent> = {}): FleetAgent => ({
+    id,
+    name,
+    port: 7800,
+    pid: 1,
+    running: false,
+    bundle: "",
+    ...over,
+  });
+  vi.mocked(api.fleet).mockResolvedValue({
+    groups: [],
+    agents: [mk("host-id", "atlas", { host: true, running: true }), mk("n1", "nova"), mk("n2", "orion")],
+  });
+  await mount({ onNewAgent: vi.fn(), onManageFleet: vi.fn() });
+  await openMenu();
+  expect(document.querySelector('input[placeholder="Find an agent"]')).toBeFalsy(); // < 10 agents: no filter
+  const first = mainMenu()!.querySelector('[role="menuitem"]') as HTMLElement;
+  act(() => first.focus());
+  keydown(first, "ArrowUp");
+  expect(document.activeElement).toBe(document.querySelector('button[aria-label="New agent"]'));
 });

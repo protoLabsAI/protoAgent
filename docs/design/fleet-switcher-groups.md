@@ -89,6 +89,13 @@ instance" agent is ungrouped by default but can be assigned to a group like any 
 
 - **Open**: Enter, Space or Down Arrow on the trigger (existing `Menu` behaviour). Focus goes
   to the filter box if it's shown, otherwise the first row.
+- **Header row**: the filter and the **New agent** / **Fleet settings** icon buttons are a
+  toolbar — **Left / Right Arrow** move across them (Right only hops out of the filter box once
+  the caret is at the end). **Down Arrow** from a button drops into the list; **Up Arrow**
+  returns to the filter. The buttons are plain `<button>`s (an `aria-label`, a `title` and the
+  disabled-reason tooltip a `MenuItem` can't carry), and the DS Menu blocks Tab, so this toolbar
+  wiring is what keeps them keyboard-reachable. Below the filter threshold (no filter box),
+  **Up Arrow from the first row** reaches the first button instead.
 - **Down / Up Arrow**: from the filter box, Down moves into the list. In the list, the arrows
   move through rows and group headers in order. Up from the first row goes back to the filter.
 - **Right / Left Arrow** on a group header: open / collapse it. On an agent row, Right opens
@@ -293,13 +300,12 @@ stand-ins in the console.
 
 1. Library first for `MenuGroup` / `MenuFilter` (above).
 2. One "Remote" section, with a machine Badge on each agent (not one section per machine).
-3. **Each agent once (Josh, 2026-11-04)**: current only in the main row; other pinned
-   agents only in Pinned; everyone else only in their home section. Recent is removed;
-   old browser values are ignored and switching writes no recents. Filter and action
-   buttons stay in view in the header, with no footer.
+3. Duplicates are fine: a pinned or recent agent also stays in its home section.
+   _(Superseded by 11 — each agent now appears once and Recent is gone.)_
 4. Remote agents can't move into operator groups ("Move to group…" disabled with tooltip),
    but can be pinned.
-5. Pins live with the fleet roster (same in every browser); collapsed groups are per browser.
+5. Pins live with the fleet roster (same in every browser); recents and collapsed groups
+   are per browser. _(Recents retired by 11; collapsed groups stay per browser.)_
 6. **Switcher preview approved** (Josh, 2026-11-03): reviewed
    `design/fleet-switcher-preview.html`, "looks good to me". Part 3 (the Fleet settings
    group editor preview) follows: `design/fleet-groups-settings-preview.html`.
@@ -318,3 +324,16 @@ stand-ins in the console.
 10. **Spec APPROVED, ready to build** (Josh, 2026-11-03). Build order: `MenuGroup` and
     `MenuFilter` in protoContent first, then the protoAgent data, switcher and Fleet
     settings cards, all citing this file.
+11. **Each agent once (Josh, 2026-11-04, supersedes 3)**: after using the shipped switcher
+    Josh found a starred current agent listed three times (current row, Pinned, its section)
+    — "awful ux … if an agent is active it only needs to appear in the main one" — and chose
+    to **drop Recent**. So every agent now appears exactly once: the current agent only in the
+    main row, other pinned agents only in Pinned, everyone else only in their home section
+    (ungrouped / operator group / Remote). The **Recent** section is removed and the
+    `protoagent.fleet.recent` storage key is retired — old values are ignored and switching
+    writes no recents. Same screenshots asked to move **New agent** and **Fleet settings** out
+    of the footer into the header row beside the filter (icon buttons, kept in view on scroll),
+    and to keep the filter's search icon visible; the footer items and the separator before
+    them are gone. The header icon buttons stay keyboard-reachable inside the DS Menu (which
+    blocks Tab): Left/Right move across the filter and the two buttons, Down drops into the
+    list, Up returns to the filter.

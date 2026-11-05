@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowLeft, Check, ChevronDown, ChevronRight, Folder, Plus, Settings, Star } from "lucide-react";
-import { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState, type ReactNode } from "react";
+import { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from "react";
 
 import { Menu, MenuFilter, MenuGroup, MenuItem, MenuLabel, MenuSeparator, type MenuHandle } from "@protolabsai/ui/menu";
 import { Drawer, Tooltip, useToast } from "@protolabsai/ui/overlays";
@@ -260,6 +260,86 @@ export function FleetSwitcher({
     return () => cancelAnimationFrame(id);
   }, [menuOpen, isMobile, showFilter]);
 
+  // ── desktop header keyboard (the blocked-footer-items regression fix) ───────────────────────
+  // Radix's menu blocks Tab and only roving-focuses MenuItems, so the two action buttons — plain
+  // buttons by design, since they carry an aria-label, a title and the disabled-reason tooltip a
+  // MenuItem can't — would be keyboard-unreachable. Make the header a toolbar: Left/Right move
+  // across the filter and the two buttons, Down drops into the list, Up returns to the filter. The
+  // filter↔list arrows (Down into the first row, Up back to it) stay owned by the DS MenuFilter.
+  const headerRef = useRef<HTMLDivElement>(null);
+  const headerStops = useCallback((): HTMLElement[] => {
+    const root = headerRef.current;
+    if (!root) return [];
+    const input = root.querySelector<HTMLElement>(".pl-menu__filter input");
+    const actions = [...root.querySelectorAll<HTMLElement>(".fleet-header-actions button:not([disabled])")];
+    return [input, ...actions].filter((el): el is HTMLElement => el !== null);
+  }, []);
+  const firstMenuItem = useCallback(
+    (): HTMLElement | null =>
+      headerRef.current
+        ?.closest("[data-radix-menu-content]")
+        ?.querySelector<HTMLElement>(
+          '[role="menuitem"]:not([data-disabled]),[role="menuitemradio"]:not([data-disabled]),[role="menuitemcheckbox"]:not([data-disabled])',
+        ) ?? null,
+    [],
+  );
+  const onHeaderKeyDown = useCallback(
+    (e: ReactKeyboardEvent<HTMLDivElement>) => {
+      const el = e.target as HTMLElement;
+      const stops = headerStops();
+      const idx = stops.indexOf(el);
+      if (idx < 0) return;
+      const input = el instanceof HTMLInputElement ? el : null;
+      // In the text box, Left/Right first move the caret; only hop controls from the far edge.
+      const atEnd = !input || (input.selectionStart === input.value.length && input.selectionStart === input.selectionEnd);
+      const atStart = !input || (input.selectionStart === 0 && input.selectionEnd === 0);
+      if (e.key === "ArrowRight" && atEnd && stops[idx + 1]) {
+        e.preventDefault();
+        stops[idx + 1].focus();
+      } else if (e.key === "ArrowLeft" && atStart && idx > 0) {
+        e.preventDefault();
+        stops[idx - 1].focus();
+      } else if (e.key === "ArrowDown" && !input) {
+        e.preventDefault();
+        firstMenuItem()?.focus();
+      } else if (e.key === "ArrowUp" && !input) {
+        const filterInput = stops[0] instanceof HTMLInputElement ? stops[0] : null;
+        if (filterInput) {
+          e.preventDefault();
+          filterInput.focus();
+        }
+      }
+    },
+    [headerStops, firstMenuItem],
+  );
+  // Below the filter threshold there is no MenuFilter to arrow up into — the DS registers its
+  // Up-from-first-row→filter bridge only when a filter is mounted — so the header would be
+  // unreachable when focus opens on the first row. Bridge Up-from-first-row to the first action
+  // button instead. The listener sits on `document` in the capture phase so it runs before Radix's
+  // roving-focus handler (a React-synthetic listener on the app root) gets to loop focus.
+  useEffect(() => {
+    if (!menuOpen || isMobile || showFilter || typeof document === "undefined") return;
+    const onCapture = (ev: Event) => {
+      const ke = ev as KeyboardEvent;
+      if (ke.key !== "ArrowUp") return;
+      const menu = document.querySelector(".pl-menu:not(.fleet-rowmenu)");
+      if (!menu) return;
+      const first = menu.querySelector(
+        '[role="menuitem"]:not([data-disabled]),[role="menuitemradio"]:not([data-disabled]),[role="menuitemcheckbox"]:not([data-disabled])',
+      );
+      if (first && document.activeElement === first) {
+        const btn = menu.querySelector<HTMLElement>(".fleet-header-actions button:not([disabled])");
+        if (btn) {
+          ke.preventDefault();
+          ke.stopPropagation();
+          btn.focus();
+        }
+      }
+    };
+    document.addEventListener("keydown", onCapture, { capture: true });
+    return () => document.removeEventListener("keydown", onCapture, { capture: true });
+  }, [menuOpen, isMobile, showFilter]);
+
   // Only a hard fleet-API error hides the switcher; otherwise it's always available.
   if (fleet.isError) return <>{fallbackName}</>;
 
@@ -396,7 +476,7 @@ export function FleetSwitcher({
           </button>
         }
       >
-        <div className="fleet-switcher-header">
+        <div className="fleet-switcher-header" ref={headerRef} onKeyDown={onHeaderKeyDown}>
           {showFilter ? (
             <MenuFilter
               value={filter}
@@ -730,6 +810,8 @@ function PhoneSwitcher(props: PhoneProps) {
         className="fleet-sheet"
       >
         <div className="fleet-sheet-inner">
+          {/* On touch the header icons' disabled-reason tooltip is never seen, so spell it out. */}
+          {props.fleetSettingsBlocked ? <p className="fleet-sheet-note fleet-act-note">{props.fleetSettingsBlocked}</p> : null}
           {props.showFilter ? (
             <MenuFilter
               value={props.filter}
