@@ -15,6 +15,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.229.0] - 2026-11-05
+
+### Changed
+- **The run drawer's header sums up the completion check for runs that started from chat (#4744).**
+  The check rules on subagents, not on the lead turn, so a chat-rooted run had no verdict in
+  its header even when every subagent inside it was checked. The header now says the check
+  passed all N subagents it ran on and how many needed a nudge. When some came back short, the
+  warning gives the count against the number checked ("1 of 3 checked subagents…").
+
+### Fixed
+- **The console's remaining copy buttons say when a copy didn't land (#4743).**
+  #4737 fixed the trace and background-job copy buttons. Five more still showed "Copied" or a
+  "copied" toast without checking the write, and two of them sit on the device pairing screen,
+  where a silent failure means a lost token. Chat message copy, the prompt viewer, the run
+  drawer, and the device token and pairing code buttons now go through `copyText` and report a
+  failure when the clipboard is unavailable (plain-http access) or the write is rejected. The
+  code viewer's two copies, which already handled failure, use the same helper.
+
+- **Fleet groups and pins no longer fail silently, and the switcher hides its write controls on a hub without the groups API (#4735).**
+  The Fleet settings group editor (#4735) and the agent switcher assumed the hub served the
+  groups/pins API (#4731). Against an older hub that predates it, the group and pin routes 404/405
+  and the write was swallowed — "clicking Add group does nothing", and a pin star or a Move to group
+  updated the screen then silently reverted on the next poll. The console now detects a hub whose
+  `GET /api/fleet` returns no `groups` field: the switcher hides the pin star and the row menu's Pin
+  and Move to group (rendering the plain Ungrouped + Remote list, keeping the per-browser filter and
+  recents), and the Groups editor shows an update note instead of the editor. When a group or pin
+  write is rejected the optimistic change is now rolled back and the failure is reported — the hub's
+  own message for a rejected name, otherwise "Couldn't save that change. Try again." — never a silent
+  swallow.
+
+- **Fleet switcher shows each agent once and keeps its controls in view (#4735).**
+  Current and pinned agents no longer repeat in their groups, and the Recent section
+  and switcher recents writes are removed. New agent and Fleet settings move to icon
+  buttons in the fixed header on desktop and phone, and the search icon is visible.
+  The header buttons stay keyboard-reachable (arrow keys move across the filter and the
+  two actions), and a phone member window spells out why they're disabled.
+
+### Docs
+- **The v0.228.0 changelog's fleet and scheduled-task PR links were corrected (#4731, #4732, #4735, #4724).**
+  Four entries were collated from changelog.d fragments whose filenames carried no PR number, so the
+  links were guessed; CHANGELOG.md and the marketing `/changelog` now match the GitHub release notes.
+
 ## [0.228.0] - 2026-11-04
 
 ### Added
