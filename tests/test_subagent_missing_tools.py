@@ -23,7 +23,7 @@ import graph.agent as agent_mod
 from graph.agent import _dispatch_tool_gap, _prompt_missing_tools, _subagent_tools
 from graph.config import LangGraphConfig
 from graph.subagents.config import SUBAGENT_REGISTRY
-from tools.lg_tools import HITL_TOOL_NAMES, get_all_tools
+from tools.lg_tools import SUBAGENT_DENIED_TOOLS, get_all_tools
 
 RESEARCHER_TOOLS = list(SUBAGENT_REGISTRY["researcher"].tools)
 # codebase-mapper allowlists read_file; a detached run gets it (full graph + fence), an
@@ -228,9 +228,10 @@ def test_r5_subagent_inheritance_unchanged():
     for name, cfg in SUBAGENT_REGISTRY.items():
         resolved = [t.name for t in _subagent_tools(cfg, tool_map)]
         # The contract _subagent_tools has always had: the allowlist, in order, minus the
-        # HITL interrupt tools and anything not bound on this instance. The guard touches
-        # none of this, so every registered subagent resolves to exactly the same set.
-        expected = [n for n in cfg.tools if n in tool_map and n not in HITL_TOOL_NAMES]
+        # lead-only interrupt tools (SUBAGENT_DENIED_TOOLS) and anything not bound on this
+        # instance. The guard touches none of this, so every registered subagent resolves
+        # to exactly the same set.
+        expected = [n for n in cfg.tools if n in tool_map and n not in SUBAGENT_DENIED_TOOLS]
         assert resolved == expected, f"inheritance drifted for subagent '{name}'"
 
 

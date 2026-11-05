@@ -3,7 +3,7 @@
 This module selects candidates only; dispatch applies each subagent's policy.
 """
 
-from tools.lg_tools import HITL_TOOL_NAMES
+from tools.lg_tools import SUBAGENT_DENIED_TOOLS
 
 
 CORE_READ_TOOLS: frozenset[str] = frozenset(
@@ -17,7 +17,7 @@ CORE_READ_TOOLS: frozenset[str] = frozenset(
     }
 )
 
-NEVER_INHERITED: frozenset[str] = HITL_TOOL_NAMES | frozenset(
+NEVER_INHERITED: frozenset[str] = SUBAGENT_DENIED_TOOLS | frozenset(
     {
         "task",
         "task_batch",
