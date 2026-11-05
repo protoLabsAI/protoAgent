@@ -35,6 +35,7 @@ from contextlib import contextmanager
 from typing import TYPE_CHECKING
 
 from infra.paths import instance_paths
+from operator_api.runtime_routes import schedule_restart
 from runtime.state import STATE
 from server import agent_name
 
@@ -485,6 +486,7 @@ def _init_langgraph_agent(headless_setup: bool = False):
                     # imports server/. The prompt-only variant: a persona edit must not
                     # re-import plugins or respawn MCP servers (#3365).
                     reload_callback=_reload_for_soul_edit,
+                    restart_scheduler=lambda reason: schedule_restart(reason, actor="agent"),
                 )
         except OAuthCredentialError as exc:
             # Signed-out is an intentional state, not a boot failure (#2458): the user
@@ -1367,6 +1369,7 @@ def _reload_langgraph_agent(*, reload_plugins: bool = True) -> tuple[bool, str]:
                     # persona editor a one-shot after the first hot-reload. Threads the
                     # prompt-only variant, so the scope reduction survives a reload too (#3365).
                     reload_callback=_reload_for_soul_edit,
+                    restart_scheduler=lambda reason: schedule_restart(reason, actor="agent"),
                 )
             else:
                 new_graph = None

@@ -62,6 +62,7 @@ from tools.memory_tools import (  # re-exported: tests / plugins / forks import 
     _build_memory_tools,
     _memory_citation,  # noqa: F401 — re-export only (tests/test_memory_provenance.py)
 )
+from tools.restart_tools import build_restart_tools
 from tools.scheduler_tools import (  # re-exported: tests / plugins / forks import them from here
     _build_scheduler_tools,
     _build_task_tools,
@@ -924,7 +925,7 @@ def load_skill(name: str) -> str:
 # would fail opaquely mid-delegation — graph.agent hard-denies these from every subagent's
 # tool set (``_subagent_tools``) regardless of its allowlist. Keep this in sync if a new
 # interrupt-based tool is added.
-HITL_TOOL_NAMES = frozenset({"ask_human", "request_user_input"})
+HITL_TOOL_NAMES = frozenset({"ask_human", "request_user_input", "self_restart"})
 
 
 def get_all_tools(
@@ -942,6 +943,7 @@ def get_all_tools(
     skill_edit_enabled=False,
     self_improvement_provenance_required=False,
     reload_callback=None,
+    restart_scheduler=None,
 ):
     """Return every LangChain tool the lead agent + subagents can use.
 
@@ -967,20 +969,23 @@ def get_all_tools(
       graph reload, INJECTED (not imported) and handed to ``edit_soul`` so a
       persona self-edit goes live on the next turn without ``tools/`` reaching
       into ``server/``. ``None`` degrades to next-natural-reload semantics.
+    - ``restart_scheduler`` enables consent-gated self_restart for the lead agent.
+      The server injects the scheduler so tools do not import the operator API.
     - ``skill_edit_enabled`` binds guarded skill update/delete tools. Each mutation
       archives the outgoing skill for rollback before changing the live artifact.
 
     Pass ``None`` to disable either subsystem — the lead agent runs
     fine with just the four keyless general tools.
     """
-    # ask_human AND request_user_input are lead-agent HITL tools (HITL_TOOL_NAMES) — each
+    # ask_human, request_user_input and self_restart are lead-only HITL tools — each
     # pauses the A2A turn via a LangGraph interrupt that only the lead turn's runner resumes.
-    # Subagents (run outside that runner, on a graph with no checkpointer) must not get either:
+    # Subagents (run outside that runner, on a graph with no checkpointer) must not get these:
     # they're absent from every subagent allowlist in graph/subagents/config.py AND hard-denied
     # in graph.agent._subagent_tools, so a fork can't enable one via a tools list either.
     # show_component (inline component rendering, ADR 0051 / #1323): table/keyvalue/timeline
     # widgets rendered inline in chat by the console's extensible component registry.
     tools = [current_time, calculator, web_search, fetch_url, ask_human, request_user_input, load_skill, show_component]
+    tools.extend(build_restart_tools(restart_scheduler))
     # GitHub read tools (PRs/issues/commits) moved to the first-party `github`
     # plugin (opt-in) — not everyone needs them. Enable with plugins.enabled: [github].
     # Notes tools now ship with the first-party `notes` plugin (ADR 0034 S4):

@@ -11,7 +11,7 @@ from tools.lg_tools import HITL_TOOL_NAMES, get_all_tools
 
 
 def _tool_map() -> dict:
-    return {t.name: t for t in get_all_tools()}
+    return {t.name: t for t in get_all_tools(restart_scheduler=lambda reason: {"scheduled": True})}
 
 
 def _cfg(tools: list[str]) -> SubagentConfig:
@@ -25,9 +25,9 @@ def test_hitl_tools_exist_in_full_lead_set():
 
 def test_subagent_tools_hard_denies_hitl_even_when_listed():
     tm = _tool_map()
-    bound = {t.name for t in _subagent_tools(_cfg(["current_time", "ask_human", "request_user_input"]), tm)}
+    bound = {t.name for t in _subagent_tools(_cfg(["current_time", "ask_human", "request_user_input", "self_restart"]), tm)}
     assert "current_time" in bound  # the legitimate tool is kept
-    assert bound.isdisjoint(HITL_TOOL_NAMES)  # both HITL tools dropped
+    assert bound.isdisjoint(HITL_TOOL_NAMES)  # all HITL tools dropped
 
 
 def test_subagent_tools_leaves_normal_allowlist_untouched():

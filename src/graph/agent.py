@@ -1964,6 +1964,7 @@ def create_agent_graph(
     tasks_store=None,
     background_mgr=None,
     reload_callback=None,
+    restart_scheduler=None,
 ):
     """Create the protoAgent LangGraph agent.
 
@@ -2036,6 +2037,7 @@ def create_agent_graph(
         soul_edit_enabled=getattr(config, "soul_self_edit_enabled", False),
         self_config_enabled=getattr(config, "tools_self_config_enabled", False),
         reload_callback=reload_callback,
+        restart_scheduler=restart_scheduler,
     )
 
     if extra_tools:
