@@ -513,3 +513,76 @@ def test_shell_select_is_embedder_only_and_versioned_by_lifetime_number(monkeypa
     assert "if(!a){ if(seq>pendingSel.after) pendingSel=null; return false; }" in js
     assert "pendingSel={id:id, ver:ver, after:pollSeq};" in js
     assert '" of "+vtot' in js
+
+
+@pytest.mark.parametrize("page", [1, 46])
+def test_ref_page_is_kept_and_carried_in_tail(monkeypatch, tmp_path, page):
+    art = _load(monkeypatch, tmp_path)
+    _live(art)
+    saved = {"id": "a", "kind": "file", "title": "Rules", "version_count": 1, "versions": [{}]}
+    props = art._ref.ref_props(saved, page=page)
+    assert art._ref.validate_artifact_ref(props) is None
+    assert props["page"] == page
+    assert extract_component(art._ref.ref_tail(saved, page=page))["props"] == props
+    default = {"artifact_id": "a", "version": 1, "versions_total": 1, "title": "Rules", "kind": "file"}
+    assert art._ref.ref_props(saved) == default
+    assert art._ref.ref_props(saved, page=0) == default
+
+
+@pytest.mark.parametrize("page", [None, 0, -1, True, False, "46", 1.5, [], {}])
+def test_validator_drops_malformed_page_without_rejecting_ref(monkeypatch, tmp_path, page):
+    art = _load(monkeypatch, tmp_path)
+    props = {"artifact_id": "a", "version": 1, "kind": "file", "page": page}
+    assert art._ref.validate_artifact_ref(props) is None
+    assert "page" not in props
+
+
+@pytest.mark.platform_sensitive
+@pytest.mark.parametrize("link", [False, True])
+@pytest.mark.parametrize("filename,page,reason", [("notes.txt", 46, "only supported for a PDF"), ("rules.pdf", -1, "1-based")])
+def test_save_file_refuses_invalid_page_before_saving(monkeypatch, tmp_path, link, filename, page, reason):
+    from tests.test_artifact_linked import _fence
+
+    store_dir = tmp_path / "store"
+    art = _load(monkeypatch, store_dir)
+    _live(art)
+    path = tmp_path / filename
+    path.write_bytes(b"test")
+    _fence(monkeypatch, art, workspace=tmp_path)
+    out = art.save_file_artifact.invoke({"path": str(path), "link": link, "page": page})
+    assert reason in out
+    assert extract_component(out) is None
+    assert art._read_store()["artifacts"] == []
+    assert not art._store._blob_root().exists()
+
+
+@pytest.mark.platform_sensitive
+@pytest.mark.parametrize("link", [False, True])
+@pytest.mark.parametrize("page", [None, 0, 46])
+def test_save_pdf_page_ref_and_default_reply(monkeypatch, tmp_path, link, page):
+    from pypdf import PdfWriter
+
+    from tests.test_artifact_linked import _fence
+
+    art = _load(monkeypatch, tmp_path / "store")
+    _live(art)
+    path = tmp_path / "rules.pdf"
+    writer = PdfWriter()
+    for _ in range(46):
+        writer.add_blank_page(width=72, height=72)
+    writer.write(path)
+    _fence(monkeypatch, art, workspace=tmp_path)
+    args = {"path": str(path), "link": link}
+    if page is not None:
+        args["page"] = page
+    out = art.save_file_artifact.invoke(args)
+    props = extract_component(out)["props"]
+    saved = art._read_store()["artifacts"][0]
+    assert props == art._ref.ref_props(saved, page=page)
+    if page:
+        assert props["page"] == 46
+        assert " — opens at page 46" in strip_component(out)
+    else:
+        assert "page" not in props
+        assert "opens at page" not in strip_component(out)
+    assert bool(saved.get("linked")) == link

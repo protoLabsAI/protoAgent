@@ -293,6 +293,7 @@ def save_file_artifact(
     artifact_id: str = "",
     project: str = "",
     link: bool = False,
+    page: int = 0,
     state: Annotated[Any, InjectedState] = None,
 ) -> str:
     """Save a file you already wrote to disk (.docx/.xlsx/.pptx/.pdf/image/text) into the
@@ -311,6 +312,7 @@ def save_file_artifact(
     ``link=True`` links reference material you did NOT produce in place, without copying; it must
     be inside a registered project. A linked artifact is READ-ONLY with no versions — never pass
     ``artifact_id`` with it — and is served from the file in place (re-checked on every download).
+    ``page``: open a PDF at that page, e.g. a cited page; one linked save per citation is fine.
     """
     # Maintainer notes (kept out of the model-facing schema; the model-facing manual is the
     # rendering-artifacts skill): previews by type — .docx/.pdf → rendered pages, .pptx →
@@ -319,6 +321,8 @@ def save_file_artifact(
     # refused. The max_blob_kb cap doesn't apply — a linked file has its own max_linked_kb cap
     # (200 MB default). The blob route serves a linked version through the live fence on every
     # request (#4370): 403 once it leaves the fence, 409 when the file changed or is gone.
+    if page < 0:
+        return "page must be a positive PDF page number (1-based), or 0 for no page hint."
     if link and artifact_id:
         return (
             "link=True can't be combined with artifact_id: a linked artifact serves a file in "
@@ -328,12 +332,16 @@ def save_file_artifact(
     p, why = _resolve_file(path, project)
     if p is None:
         return why
+    if page and not _pdfview.is_pdf(p.name, _preview._guess_mime(p)):
+        return "page is only supported for a PDF. Omit page or use 0 for other files."
     if link:
-        return _save_linked_artifact(p, path, project, title, _chat_session(state))
+        return _save_linked_artifact(p, path, project, title, _chat_session(state), page=page)
     prepared = _prepare_file(p)
     if isinstance(prepared, str):
         return prepared
-    msg, saved = _save_file(**prepared.fields(), title=title, artifact_id=artifact_id, session_id=_chat_session(state))
+    msg, saved = _save_file(
+        **prepared.fields(), title=title, artifact_id=artifact_id, session_id=_chat_session(state), page=page
+    )
     return msg + _save_nudge(saved[0]) + saved[2] if saved else msg
 
 
@@ -454,6 +462,7 @@ def _save_file(
     pdf: dict | None = None,
     docx: dict | None = None,
     session_id: str = "",
+    page: int = 0,
 ) -> tuple[str, tuple[str, int, str] | None]:
     """save_file_artifact's store read-modify-write → ``(msg, None)`` for a refusal, or
     ``(msg, (art_id, version, ref_tail))`` for a write (the chip tail built inside the lock, from
@@ -509,7 +518,8 @@ def _save_file(
     return (
         f"Saved file artifact {art_id} → v{v}: {filename} ({mime}, {kb} KB) — now in the "
         f"Artifact panel with a preview and a Download button."
-    ), (art_id, v, _ref.ref_tail(art))
+        + (f" — opens at page {page}" if page else "")
+    ), (art_id, v, _ref.ref_tail(art, page=page))
 
 
 # ── linked file artifacts (ADR 0092 D2 extension, #4370) ─────────────────────────────
@@ -566,7 +576,7 @@ def _link_meta(p: Path, project: str, rel: str, data: bytes) -> dict | str:
     }
 
 
-def _save_linked_artifact(p: Path, path: str, project: str, title: str, session_id: str) -> str:
+def _save_linked_artifact(p: Path, path: str, project: str, title: str, session_id: str, page: int = 0) -> str:
     """The ``link=True`` half of ``save_file_artifact``: fence ``p`` to a registered project,
     build the same preview/thumb/preflights as a copied save (under the larger linked cap), and
     store a reference-only version. Refuses a file that resolves outside every project."""
@@ -584,7 +594,7 @@ def _save_linked_artifact(p: Path, path: str, project: str, title: str, session_
     link = _link_meta(p, proj_name, rel, prepared.data)
     if isinstance(link, str):
         return link
-    return _save_linked(**prepared.fields(), title=title, link=link, session_id=session_id)
+    return _save_linked(**prepared.fields(), title=title, link=link, session_id=session_id, page=page)
 
 
 @_store.serialized
@@ -601,6 +611,7 @@ def _save_linked(
     pdf: dict | None = None,
     docx: dict | None = None,
     session_id: str = "",
+    page: int = 0,
 ) -> str:
     """Store a LINKED file version (#4370): the usual ``file`` meta + a ``link`` reference and NO
     blob — the bytes stay in the project. Always a NEW artifact (``link=True`` forbids
@@ -629,7 +640,8 @@ def _save_linked(
         f"Linked file artifact {art_id} → v1: {filename} ({mime}, {kb} KB) from "
         f"{link['project']}/{link['path']} — now in the Artifact panel as a reference "
         f"(read-only, no copy). Downloads serve the file in place, re-checked on every request."
-    ) + _ref.ref_tail(art)
+        + (f" — opens at page {page}" if page else "")
+    ) + _ref.ref_tail(art, page=page)
 
 
 def _service_roots(plugin_id: str, roots: Any) -> tuple[list[Path], str]:
