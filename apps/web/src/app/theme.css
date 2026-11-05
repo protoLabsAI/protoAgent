@@ -1645,16 +1645,22 @@ textarea {
    (MenuGroup) and the filter box (MenuFilter) are all DS-styled (@protolabsai/ui ^0.69); only
    the console-specific row/action layout lives here. */
 
-/* Menu has no header slot: keep its controls above the scrolling rows. */
+/* Menu has no header slot: keep its controls above the scrolling rows. The menu's own 4px
+   padding would leave a band above (and beside) a `top: 0` sticky header that the rows visibly
+   scroll through, so the header pulls itself over that padding (negative margin, matching
+   padding) and sticks at -4px: an opaque block flush with the menu's edge, with a hairline
+   below so rows pass under it rather than appearing to cut through. */
 .fleet-switcher-header {
   position: sticky;
-  top: 0;
+  top: -4px;
   z-index: 1;
   display: flex;
   align-items: center;
   gap: var(--pl-space-1);
+  margin: -4px -4px var(--pl-space-1);
+  padding: 4px 4px var(--pl-space-1);
   background: var(--pl-color-bg-raised);
-  padding-bottom: var(--pl-space-1);
+  border-bottom: var(--pl-border-width) solid var(--pl-color-border);
 }
 .fleet-switcher-header .pl-menu__filter {
   flex: 1;
