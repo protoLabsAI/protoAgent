@@ -46,7 +46,7 @@ def harness(tmp_path, monkeypatch):
                 "input_token_details": {"cache_read": 30, "cache_creation": 10},
             } if usage else None,
         )
-        model = ReviewModel(messages=iter([message]))
+        model = ReviewModel(messages=iter([message]), disable_streaming=True)
         monkeypatch.setattr(agent, "create_llm", lambda *_a, **_kw: model)
         return await agent._run_subagent(
             config=config, tool_map={}, available_subagents="review-test",
@@ -159,3 +159,84 @@ async def test_writer_setup_failure_is_best_effort(harness, monkeypatch, caplog)
     assert "failed to record subagent" in caplog.text
     assert store.recent() == []
     assert edges.recent()[0]["cost_usd"] is not None
+
+
+@pytest.mark.parametrize("driver", ["stream", "sync", "sync_continuation"])
+@pytest.mark.parametrize("runner_task", [False, True])
+async def test_in_turn_tool_delegation_is_billed_only_by_parent(harness, monkeypatch, driver, runner_task):
+    """Plugin tools and workflow runner tasks inherit the lead's billing owner."""
+    import asyncio
+    from unittest.mock import AsyncMock
+
+    from langchain_core.runnables import RunnableLambda
+    from langchain_core.tools import tool
+    from observability.turn_telemetry import fold_usage_rows, record_turn, telemetry_usage, make_usage_callback
+    from server import turn_stream, turn_sync
+
+    run, store, edges = harness
+
+    @tool
+    async def review_gate() -> str:
+        """Run the workflow review gate without a sink or collector."""
+        assert not delegation_usage.is_collecting()
+        if runner_task:
+            return await asyncio.create_task(run())
+        return await run()
+
+    async def lead(_input):
+        answer = await review_gate.ainvoke({})
+        return {"messages": [AIMessage(content=answer)]}
+
+    monkeypatch.setattr(STATE, "graph", RunnableLambda(lead))
+    monkeypatch.setattr(STATE, "goal_controller", None)
+    chat = turn_stream._chat()
+    monkeypatch.setattr(chat, "_pending_interrupt_value", AsyncMock(return_value=None))
+    monkeypatch.setattr(chat, "_drain_background", lambda *_a: ([], []))
+    monkeypatch.setattr(turn_sync._turn_control, "_hold_if_hitl_pending", AsyncMock(return_value=None))
+    calls = 2 if driver == "sync_continuation" else 1
+    if driver == "sync_continuation":
+        async def steps(self):
+            yield turn_sync._goal_loop.GoalContinuation(
+                message="Review again", config={"configurable": {"thread_id": "fresh-goal-thread"}},
+            )
+
+        monkeypatch.setattr(turn_sync._goal_loop.GoalDrive, "steps", steps)
+        monkeypatch.setattr(turn_stream, "_carried_fence", AsyncMock(return_value=[]))
+    config = {"configurable": {"thread_id": "parent"}, "metadata": {"trace_tag": "keep"}}
+    if driver == "stream":
+        frames = [frame async for frame in turn_stream._run_turn_stream("review", "parent", config)]
+        usage_rows = [payload for kind, payload in frames if kind == "usage"]
+        models, usage, cost = fold_usage_rows(usage_rows)
+        assert len(usage_rows) == 1
+    else:
+        callback = make_usage_callback()
+        await turn_sync._native_turn(
+            "review", None, session_id="parent", config={**config, "callbacks": [callback]},
+            usage_cb=callback, state_extra={}, tool_fence=None, hitl_resume=False, incognito=False,
+        )
+        models, usage, cost = telemetry_usage(callback.usage_metadata)
+        assert callback.llm_calls == calls
+    assert store.recent() == []
+    assert len(edges.recent()) == calls
+    assert usage["input_tokens"] + usage["output_tokens"] == 120 * calls
+    record_turn(task_id="parent", session_id="parent", state="completed", models=models,
+                usage=usage, cost_usd=cost, requested_model="openai-codex:gpt-5")
+    assert [row["total_tokens"] for row in store.recent()] == [120 * calls]
+    assert config["metadata"] == {"trace_tag": "keep"}
+    # Billing ownership must not escape the graph's runnable context.
+    assert not delegation_usage.is_parent_billed()
+    await run()
+    assert len(store.recent()) == 2
+
+
+async def test_unbilled_runnable_callbacks_do_not_hide_orphan_usage(harness):
+    from langchain_core.callbacks import BaseCallbackHandler
+    from langchain_core.runnables import RunnableLambda
+
+    run, store, _ = harness
+
+    async def workflow(_input):
+        return await run()
+
+    await RunnableLambda(workflow).ainvoke({}, config={"callbacks": [BaseCallbackHandler()]})
+    assert [row["total_tokens"] for row in store.recent()] == [120]

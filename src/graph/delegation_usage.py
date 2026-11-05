@@ -48,6 +48,23 @@ def is_collecting() -> bool:
     return _rows_ctx.get() is not None
 
 
+def billed_graph_config(config: dict) -> dict:
+    """Mark a graph whose model calls are accounted for by its turn driver.
+
+    Runnable metadata follows the same nested calls and runner tasks as LangChain
+    callbacks. Set this only at a billed graph invocation, not around pre-turn work.
+    Preserve the caller's config and metadata (including tracing identifiers).
+    """
+    return {**config, "metadata": {**(config.get("metadata") or {}), "protoagent_turn_billed": True}}
+
+
+def is_parent_billed() -> bool:
+    """Whether the inherited runnable config belongs to a billed lead graph."""
+    from langchain_core.runnables.config import ensure_config
+
+    return ensure_config()["metadata"].get("protoagent_turn_billed") is True
+
+
 def note(rows: list[dict]) -> None:
     """Append a settled delegation's usage rows to the bound collector, if any. Never raises."""
     sink = _rows_ctx.get()

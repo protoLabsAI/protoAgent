@@ -21,7 +21,8 @@ dispatched from a plugin's background loop rather than from a turn, which is exa
 they were invisible until they were routed through here. If you are adding a new surface
 that spends tokens, this function is the seam — anything that does not reach it is, by
 construction, unmeasured. Orphan in-process delegations also use this writer (#4612),
-only when no caller sink or collector will bill their usage to a parent turn.
+only when no caller sink, collector, or inherited lead-graph billing context will
+bill their usage to a parent turn.
 
 The non-streaming driver's side of that seam lives here too (#3810): the usage
 callback it attaches to a turn (:func:`make_usage_callback`), the fold of that

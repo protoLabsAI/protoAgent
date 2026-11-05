@@ -139,6 +139,9 @@ async def _native_turn(
     from langchain_core.messages import HumanMessage
 
     from graph.goals.goal_turn import goal_turn
+    from graph.delegation_usage import billed_graph_config
+
+    config = billed_graph_config(config)
 
     # When a goal is already active, the whole turn is goal-driven —
     # suppress cross-session prior_sessions on the initial turn too.
@@ -299,7 +302,7 @@ async def _native_turn(
             )
             # Fresh-context iterations get a scoped config without the turn's
             # callbacks — re-attach usage_cb so their tokens count.
-            cont_config = {**step.config, "callbacks": [usage_cb]}
+            cont_config = billed_graph_config({**step.config, "callbacks": [usage_cb]})
             last_config = cont_config
             # Lock the BASE thread (mirrors the streaming driver, which holds it
             # across the whole goal loop): same-session iterations write `config`'s

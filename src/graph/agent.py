@@ -944,8 +944,8 @@ async def _run_subagent(
     per-edge VIEW of spend the parent turn already counts, so a rollup must never add
     ``delegations.cost_usd`` to ``turns.cost_usd`` for the same work. It is stored anyway
     because the ledger retains per-edge detail. ``turns`` includes orphan delegations
-    with usage but no caller sink or bound collector; delegations billed by a parent
-    turn do not write a second row.
+    with usage but no caller sink, bound collector, or inherited lead-graph billing
+    context; delegations billed by a parent turn do not write a second row.
 
     ``cost_usd`` stays NULL — never ``0`` — when no model call reported usage (a provider
     or native-OAuth path that returns no ``usage_metadata``, or a delegation that failed
@@ -985,7 +985,7 @@ async def _run_subagent(
             # carry these rows to its turn's telemetry — it binds a collector instead (#3957).
             delegation_usage.note(rows)
             edge.cost_usd = _delegation_cost_usd(rows)
-            if rows and usage_sink is None and not delegation_usage.is_collecting():
+            if rows and usage_sink is None and not delegation_usage.is_collecting() and not delegation_usage.is_parent_billed():
                 try:
                     import asyncio
                     import sys

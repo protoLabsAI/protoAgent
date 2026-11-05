@@ -199,6 +199,7 @@ async def test_golden_answer_with_a_tool_round_trip(env):
     assert config == {
         "configurable": {"thread_id": "a2a:s-golden"},
         "recursion_limit": LangGraphConfig().max_iterations,
+        "metadata": {"protoagent_turn_billed": True},
     }
 
 
@@ -755,8 +756,9 @@ async def test_goal_kickoff_continuation_and_done_note(env, monkeypatch):
     assert g.stream_calls[0][0]["messages"][-1].content == "KICKOFF<ship it>"
     assert g.stream_calls[1][0]["messages"][-1].content == "keep going"
     assert goals.evals == ["draft", "better"]
-    # Same-session goal: the continuation reuses the turn's config.
-    assert g.stream_calls[1][1] is g.stream_calls[0][1]
+    # Same-session goal: the continuation retains the turn's config values;
+    # the streaming driver copies it to attach billing ownership per invocation.
+    assert g.stream_calls[1][1] == g.stream_calls[0][1]
 
 
 @pytest.mark.asyncio
@@ -785,6 +787,7 @@ async def test_goal_fresh_context_continuation_gets_a_scoped_thread(env, monkeyp
     assert g.stream_calls[1][1] == {
         "configurable": {"thread_id": "a2a:s1:goal-iter-4"},
         "recursion_limit": LangGraphConfig().max_iterations,
+        "metadata": {"protoagent_turn_billed": True},
     }
     # The empty continuation keeps the previous answer; the last NOTE still appends.
     assert frames[-1] == ("done", "one\n\n---\nagain")
@@ -877,7 +880,7 @@ async def test_goal_continuation_interrupt_is_auto_answered_on_an_autonomous_tur
         ("done", "Checking.\n\nDeployed.\n\n---\nmet"),
     ]
     assert g.resumes == [{"int-0": turn_control._AUTONOMOUS_HITL_SENTINEL}]
-    assert isinstance(g.stream_calls[2][0], Command) and g.stream_calls[2][1] is g.stream_calls[1][1]
+    assert isinstance(g.stream_calls[2][0], Command) and g.stream_calls[2][1] == g.stream_calls[1][1]
     assert goals.evals == ["draft", "Checking.\n\nDeployed."]
 
 
@@ -919,7 +922,8 @@ async def test_fresh_context_continuation_gives_up_on_its_own_scoped_thread(env,
 
     scoped = {"configurable": {"thread_id": "a2a:s1:goal-iter-2"}, "recursion_limit": LangGraphConfig().max_iterations}
     assert not any(k == "input_required" for k, _ in frames)
-    assert all(cfg == scoped for _, cfg in g.stream_calls[1:])  # every continuation pass is scoped
+    billed_scoped = {**scoped, "metadata": {"protoagent_turn_billed": True}}
+    assert all(cfg == billed_scoped for _, cfg in g.stream_calls[1:])  # every continuation pass is scoped
     assert len(g.resumes) == cap
     assert g.updates == [(scoped, None)]  # the give-up cleared the continuation's thread
     assert frames[-1] == ("done", "asking\n\n---\nmet")

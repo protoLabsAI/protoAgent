@@ -1159,10 +1159,12 @@ async def _run_turn_stream(
     from observability import metrics
     from observability import pricing
 
+    from graph.delegation_usage import billed_graph_config
+
     st = _TurnStreamState(metrics=metrics, pricing=pricing)
     async for event in STATE.graph.astream_events(
         graph_input,
-        config=config,
+        config=billed_graph_config(config),
         version="v2",
     ):
         kind = event.get("event", "")
