@@ -1846,3 +1846,33 @@ def test_read_file_on_text_is_unchanged_by_the_image_guard(workspace):
     _, a, _ = workspace
     t = _tools(_Cfg(filesystem_projects=[{"name": "a", "path": str(a)}]))
     assert "hello" in t["read_file"].invoke({"project": "a", "path": "src/main.py"})
+
+
+def test_view_image_is_an_inherited_read_tool_like_read_file(workspace):
+    """The gating contract: `read_file` bounces image paths to `view_image`, so a
+    subagent that inherits `read_file` MUST also inherit `view_image` — otherwise the
+    error points at a tool it never received. Both are core reads, so
+    `inherited_read_tools` selects them together (#4749 review)."""
+    from types import SimpleNamespace
+
+    from graph.tool_access import inherited_read_tools, is_read_tool
+
+    _, a, _ = workspace
+    tools = build_fs_tools(_Cfg(filesystem_projects=[{"name": "a", "path": str(a)}]))
+    by_name = {t.name: t for t in tools}
+    assert is_read_tool(by_name["view_image"]) and is_read_tool(by_name["read_file"])
+    inherited = {t.name for t in inherited_read_tools(tools, SimpleNamespace(tools_subagent_only=[]))}
+    assert {"read_file", "view_image"} <= inherited
+
+
+def test_view_image_refuses_an_oversized_file_without_reading_it(workspace, monkeypatch):
+    """A huge or misnamed file is refused from its size, before the multimodal helper
+    reads and base64-encodes the whole thing into memory."""
+    import tools.fs_tools as fs_mod
+
+    _, a, _ = workspace
+    monkeypatch.setattr(fs_mod, "_MAX_IMAGE_SOURCE_BYTES", 16)
+    (a / "huge.png").write_bytes(_PNG_BYTES)  # 72 bytes > the patched 16-byte cap
+    t = _tools(_Cfg(filesystem_projects=[{"name": "a", "path": str(a)}]))
+    out = t["view_image"].invoke({"project": "a", "path": "huge.png"})
+    assert out.startswith("Error:") and "view_image limit" in out

@@ -63,6 +63,13 @@ _IMAGE_MIMES = {
     ".gif": "image/gif",
     ".webp": "image/webp",
 }
+# Ceiling on the on-disk size `view_image` will hand to `multimodal_tool_result`.
+# That helper reads and base64-encodes the whole file into memory BEFORE `fit_image`
+# gets to downscale it, so a huge or misnamed file (a video renamed `.png`) would
+# balloon memory first. Refuse it from `stat()` instead. 40 MB is well above any real
+# screenshot/photo (`image_limits.MAX_DECODE_PIXELS` already caps a small file that
+# declares a giant canvas, the opposite failure).
+_MAX_IMAGE_SOURCE_BYTES = 40 * 1024 * 1024
 _MAX_LIST = 400
 _MAX_MATCHES = 200
 _MAX_CONTEXT_LINES = 20  # clamp on search_files(context_lines=…) — a runaway value shouldn't blow the result budget
@@ -1177,6 +1184,12 @@ def build_fs_tools(config) -> list:
             size = target.stat().st_size
         except OSError as exc:
             return f"Error: cannot read {path}: {exc}"
+        if size > _MAX_IMAGE_SOURCE_BYTES:
+            # Refuse before the helper reads the whole file into memory to base64 it.
+            return (
+                f"Error: {path} is {size} bytes, over the {_MAX_IMAGE_SOURCE_BYTES}-byte "
+                "view_image limit — that is too large to be a normal image (or it isn't one)."
+            )
         text = f"{project}/{path} ({size} bytes, {mime})"
         # multimodal_tool_result reads the file, fits/downscales it and builds the
         # sentinel envelope the middleware turns into image blocks (vision) or a

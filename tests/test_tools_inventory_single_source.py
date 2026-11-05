@@ -171,6 +171,7 @@ def test_core_tools_group_by_subsystem():
     from operator_api.console_handlers import _tool_category
 
     assert _tool_category("read_file", "core") == "Filesystem"
+    assert _tool_category("view_image", "core") == "Filesystem"
     assert _tool_category("run_command", "core") == "Filesystem"
     assert _tool_category("load_skill", "core") == "Skills"
     assert _tool_category("web_search", "core") == "Web & research"

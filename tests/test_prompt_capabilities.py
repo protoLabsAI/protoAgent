@@ -62,5 +62,17 @@ def test_partial_filesystem_preserves_roots_without_advertising_writes():
     assert build_stable_prefix(**changed) == build_stable_prefix(**changed)
 
 
+def test_view_image_is_advertised_when_bound():
+    """The projects section lists every bound filesystem tool — including view_image
+    (#4749), which was being told about every fs tool except the new one."""
+    projects = [{"name": "p", "path": "/p", "write": False}]
+    kwargs = dict(projects=projects, bound_tool_names=frozenset({"read_file", "view_image"}))
+    text = dict(build_system_prompt_parts(**kwargs))["Managed projects"]
+    assert "`view_image`" in text
+    # Still filtered when unbound.
+    unbound = dict(projects=projects, bound_tool_names=frozenset({"read_file"}))
+    assert "`view_image`" not in dict(build_system_prompt_parts(**unbound))["Managed projects"]
+
+
 def test_external_unknown_surface_is_explicitly_qualified():
     assert "use only tools exposed by your runtime" in build_stable_prefix(bound_tool_names=None)
