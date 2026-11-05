@@ -15,6 +15,10 @@ name: Review at head
 # every open PR, including ones the panel never touches, so it cannot silently go missing the
 # way the thing it guards does. `skip-review-gate` is the documented escape hatch.
 #
+# An open prepare-release/* or release/* PR holds every non-release PR pending.
+# skip-release-freeze waives this hold; skip-review-gate only waives review.
+# Release PR events sweep all open PRs, including on close/merge to lift the hold.
+#
 # `pull_request_target` (not `pull_request`) for the same reason as team-ready-claims.yml:
 # posting a commit status needs a write token, which `pull_request` withholds from fork PRs.
 # Safe here for the usual reason — the job checks out and runs the BASE repo's script, reads
@@ -22,7 +26,7 @@ name: Review at head
 
 on:
   pull_request_target:
-    types: [opened, synchronize, reopened, ready_for_review, labeled, unlabeled]
+    types: [opened, synchronize, reopened, ready_for_review, labeled, unlabeled, closed]
   pull_request_review:
     # Fast path, best-effort: fires only for PRs whose branch contains this file (see the
     # schedule comment). Kept because when it does fire it turns a PR green in seconds.
@@ -82,9 +86,12 @@ jobs:
     name: Assert a panel verdict at head
     # check_run fires for EVERY check run in the repo; only the reviewer app's two matter.
     if: >-
-      github.event_name != 'check_run' ||
+      (github.event.action != 'closed' ||
+       startsWith(github.event.pull_request.head.ref, 'prepare-release/') ||
+       startsWith(github.event.pull_request.head.ref, 'release/')) &&
+      (github.event_name != 'check_run' ||
       (github.event.check_run.app.slug == 'protoreview' &&
-       contains(fromJSON('["QA panel","protoReview"]'), github.event.check_run.name))
+       contains(fromJSON('["QA panel","protoReview"]'), github.event.check_run.name)))
     runs-on: ubuntu-latest # workspace-config: allow-hosted-runner public repo — GH-hosted is free
     timeout-minutes: 5
     steps:
@@ -92,7 +99,8 @@ jobs:
       - name: Assert a verdict exists for this head
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
+          # Release events sweep to apply/lift the freeze across existing PRs.
+          PR_NUMBER: ${{ !startsWith(github.event.pull_request.head.ref, 'prepare-release/') && !startsWith(github.event.pull_request.head.ref, 'release/') && github.event.pull_request.number || '' }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           PR_LABELS: ${{ join(github.event.pull_request.labels.*.name, ',') }}
           # check_run mode: sweep only the open PRs whose head is this run's head.

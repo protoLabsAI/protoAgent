@@ -425,8 +425,9 @@ def test_dry_run_is_off_unless_explicitly_truthy(monkeypatch):
     posted, nothing red, and the merge gate silently ineffective. It is parsed like
     REQUIRE_COVERAGE_CONTRACT now — a silent off-switch on a merge gate is the worst kind.
     """
+    monkeypatch.setattr(rah, "_open_prs", lambda: [])
     seen: dict[str, bool] = {}
-    monkeypatch.setattr(rah, "check_pr", lambda pr, head, labels, *, dry_run: seen.update(dry_run=dry_run))
+    monkeypatch.setattr(rah, "check_pr", lambda pr, head, labels, *, dry_run, open_prs: seen.update(dry_run=dry_run))
     monkeypatch.setenv("PR_NUMBER", "123")
     monkeypatch.setenv("HEAD_SHA", MERGED)
     monkeypatch.setenv("PR_LABELS", "")
@@ -616,7 +617,7 @@ def test_a_timed_out_reviews_read_posts_no_status_and_still_exits_zero(monkeypat
     monkeypatch.delenv("DRY_RUN", raising=False)
     assert rah.main() == 0
     # Fail closed: the read failed, so no verdict was decided and no status was written.
-    assert len(calls) == 1 and "statuses" not in " ".join(calls[0])
+    assert len(calls) == 2 and all("statuses" not in " ".join(call) for call in calls)
     assert "timed out" in capsys.readouterr().err
 
 
@@ -777,7 +778,7 @@ def test_a_check_run_event_sweeps_only_the_prs_at_that_head(monkeypatch):
             {"number": 2, "headRefOid": REVIEWED, "labels": [{"name": "x"}]},
         ],
     )
-    monkeypatch.setattr(rah, "check_pr", lambda pr, head, labels, *, dry_run: seen.append(pr))
+    monkeypatch.setattr(rah, "check_pr", lambda pr, head, labels, *, dry_run, open_prs: seen.append(pr))
     monkeypatch.delenv("PR_NUMBER", raising=False)
     monkeypatch.setenv("CHECK_RUN_HEAD_SHA", MERGED)
     assert rah.main() == 0
@@ -795,3 +796,124 @@ def test_the_workflow_wires_the_check_run_fast_path():
     assert "checks: read" in wf
     assert "CHECK_RUN_HEAD_SHA: ${{ github.event.check_run.head_sha }}" in wf
     assert "github.event.check_run.app.slug == 'protoreview'" in wf
+
+
+# ── release preparation freezes the required status (#4576) ──────────────────
+
+
+@pytest.mark.parametrize("branch", ["prepare-release/v1", "release/v1"])
+def test_release_freeze_exempts_all_release_prs(branch):
+    prs = [{"number": 4560, "headRefName": branch}, {"number": 4561, "headRefName": "release/v2"}]
+    assert rah.release_freeze(prs, 4559) == "4560"
+    assert rah.release_freeze(prs, 4560) is None
+    assert rah.release_freeze(prs, 4561) is None
+    assert rah.release_freeze([], 4559) is None
+    assert rah.release_freeze([{"number": 1, "headRefName": "feature/release/v1"}], 4559) is None
+
+
+@pytest.mark.parametrize("verdict", ["PASS", "WARN", "FAIL", None])
+@pytest.mark.parametrize("labels", [[], ["skip-review-gate"]])
+def test_freeze_posts_pending_whatever_the_review(monkeypatch, verdict, labels):
+    monkeypatch.setattr(rah, "_reviews", lambda pr: [review(MERGED, verdict)] if verdict else [])
+    monkeypatch.setattr(rah, "_check_runs", lambda sha: [])
+    posted = []
+    monkeypatch.setattr(rah, "_post_status", lambda sha, decision, pr: posted.append((sha, decision, pr)))
+    decision = rah.check_pr(
+        4559, MERGED, labels, dry_run=False,
+        open_prs=[{"number": 4560, "headRefName": "prepare-release/v1"}],
+    )
+    assert decision == rah.Decision("pending", "release freeze: #4560 is open — merges resume when it closes")
+    assert posted == [(MERGED, decision, 4559)]
+
+
+@pytest.mark.parametrize("verdict", ["PASS", "FAIL"])
+@pytest.mark.parametrize("pr,labels", [(4560, []), (4559, ["skip-release-freeze"])])
+def test_release_and_freeze_escape_hatch_keep_the_review_decision(monkeypatch, verdict, pr, labels):
+    reviews = [review(MERGED, verdict)]
+    monkeypatch.setattr(rah, "_reviews", lambda pr: reviews)
+    monkeypatch.setattr(rah, "_post_status", lambda *args: None)
+    decision = rah.check_pr(
+        pr, MERGED, labels, dry_run=False,
+        open_prs=[{"number": 4560, "headRefName": "release/v1"}],
+    )
+    assert decision == rah.decide(reviews, MERGED, labels, require_contract=rah.REQUIRE_COVERAGE_CONTRACT)
+
+
+@pytest.mark.parametrize("listing_fails", [False, True])
+def test_single_pr_lists_once_and_listing_failure_preserves_review(monkeypatch, capsys, listing_fails):
+    calls = []
+
+    def listing():
+        calls.append(True)
+        if listing_fails:
+            raise RuntimeError("listing unavailable")
+        return [{"number": 4560, "headRefName": "release/v1"}]
+
+    monkeypatch.setattr(rah, "_open_prs", listing)
+    monkeypatch.setattr(rah, "_reviews", lambda pr: [review(MERGED)])
+    posted = []
+    monkeypatch.setattr(rah, "_post_status", lambda sha, decision, pr: posted.append(decision))
+    monkeypatch.setenv("PR_NUMBER", "4559")
+    monkeypatch.setenv("HEAD_SHA", MERGED)
+    monkeypatch.setenv("PR_LABELS", "")
+    monkeypatch.delenv("DRY_RUN", raising=False)
+    assert rah.main() == 0
+    assert calls == [True]
+    assert posted[0].state == ("success" if listing_fails else "pending")
+    if listing_fails:
+        assert "warning: cannot list open PRs; no release freeze" in capsys.readouterr().err
+
+
+def test_open_pr_listing_requests_branch_names(monkeypatch):
+    calls = []
+    monkeypatch.setattr(rah, "_gh", lambda *args: calls.append(args) or "[]")
+    assert rah._open_prs() == []
+    assert "headRefName" in calls[0][-1].split(",")
+
+
+@pytest.mark.parametrize("branch", ["prepare-release/v1", "release/v1", "feature/ordinary"])
+@pytest.mark.parametrize("action", ["opened", "reopened", "closed"])
+def test_workflow_release_events_sweep_and_other_closed_prs_exit(monkeypatch, branch, action):
+    import yaml
+    from types import SimpleNamespace
+
+    wf = yaml.safe_load((Path(__file__).resolve().parents[1] / ".github/workflows/review-at-head.yml").read_text())
+    # PyYAML's YAML 1.1 reader treats the Actions `on` key as True.
+    assert "closed" in wf[True]["pull_request_target"]["types"]
+    job = wf["jobs"]["assert"]
+    github = SimpleNamespace(
+        event_name="pull_request_target",
+        event=SimpleNamespace(action=action, pull_request=SimpleNamespace(number=4560, head=SimpleNamespace(ref=branch))),
+    )
+
+    def expression(value):
+        value = value.removeprefix("${{").removesuffix("}}").strip()
+        value = value.replace("&&", " and ").replace("||", " or ")
+        value = re.sub(r"!(?!=)", "not ", value)
+        return eval(f"({value})", {"__builtins__": {}}, {"github": github, "startsWith": str.startswith})
+
+    release = branch.startswith(("prepare-release/", "release/"))
+    assert expression(job["if"]) == (release or action != "closed")
+    number = expression(job["steps"][1]["env"]["PR_NUMBER"])
+    assert number == ("" if release else 4560)
+    if not release:
+        return
+
+    # Execute the sweep selected by the workflow after the release disappears.
+    monkeypatch.setenv("PR_NUMBER", str(number))
+    monkeypatch.delenv("CHECK_RUN_HEAD_SHA", raising=False)
+    monkeypatch.delenv("DRY_RUN", raising=False)
+    prs = [
+        {"number": n, "headRefOid": MERGED, "headRefName": f"feature/{n}", "labels": []}
+        for n in (4559, 4562)
+    ]
+    if action != "closed":
+        prs.append({"number": 4560, "headRefOid": MERGED, "headRefName": branch, "labels": []})
+    monkeypatch.setattr(rah, "_open_prs", lambda: prs)
+    monkeypatch.setattr(rah, "_reviews", lambda pr: [review(MERGED)])
+    posted = {}
+    monkeypatch.setattr(rah, "_post_status", lambda sha, decision, pr: posted.update({pr: decision.state}))
+    assert rah.main() == 0
+    assert posted[4559] == posted[4562] == ("success" if action == "closed" else "pending")
+    if action != "closed":
+        assert posted[4560] == "success"

@@ -51,6 +51,11 @@ the status description — the same shape as ``skip-changelog`` and ``gate-exemp
 exists because a required check that can never go green (panel outage, a PR the panel does
 not pick up) would otherwise wedge the queue with no way out but an admin merge.
 
+**Release freeze (#4576).** Open ``prepare-release/`` or ``release/`` PRs hold
+other PRs pending regardless of verdict. Release PRs are exempt. The
+``skip-release-freeze`` label waives only the freeze; ``skip-review-gate`` does
+not waive it. Closing a release PR re-evaluates all open PRs.
+
 **Which verdict speaks for a head (pr-reviewer-plugin#234).** Several panel rounds can land
 on one head: two racing panels (pr-reviewer-plugin#89), or a re-review an operator summoned
 to dispute a verdict. This gate reads them exactly as the plugin's own ``QA panel`` gate
@@ -550,6 +555,17 @@ def decide(
     return Decision("success", f"{verdict} at {head_sha[:12]}")
 
 
+def release_freeze(open_prs: list[dict], this_pr: int) -> str | None:
+    """Return the release PR holding merges, exempting release PRs themselves."""
+    releases = [
+        row for row in open_prs
+        if (row.get("headRefName") or "").startswith(("prepare-release/", "release/"))
+    ]
+    if any(str(row["number"]) == str(this_pr) for row in releases):
+        return None
+    return str(releases[0]["number"]) if releases else None
+
+
 # ── I/O ───────────────────────────────────────────────────────────────────────
 
 
@@ -591,7 +607,7 @@ def _check_runs(sha: str) -> list[dict]:
 
 
 def _open_prs() -> list[dict]:
-    return json.loads(_gh("pr", "list", "--state", "open", "--limit", "100", "--json", "number,headRefOid,labels"))
+    return json.loads(_gh("pr", "list", "--state", "open", "--limit", "100", "--json", "number,headRefOid,headRefName,labels"))
 
 
 def _post_status(sha: str, decision: Decision, pr: int) -> None:
@@ -613,14 +629,20 @@ def _post_status(sha: str, decision: Decision, pr: int) -> None:
     print(f"#{pr} {sha[:12]} -> {decision.state}: {decision.description}")
 
 
-def check_pr(pr: int, head_sha: str, labels: list[str], *, dry_run: bool) -> Decision:
-    reviews = _reviews(pr)
-    # Check runs only matter for a verdict-less head, so a reviewed PR never depends on the
-    # extra call (a failure of which would post nothing at all).
-    runs = None
-    if SKIP_LABEL not in labels and verdict_for_head(reviews, head_sha) is None:
-        runs = _check_runs(head_sha)
-    decision = decide(reviews, head_sha, labels, require_contract=REQUIRE_COVERAGE_CONTRACT, check_runs=runs)
+def check_pr(
+    pr: int, head_sha: str, labels: list[str], *, dry_run: bool, open_prs: list[dict] | None = None
+) -> Decision:
+    frozen_by = release_freeze(open_prs or [], pr)
+    if frozen_by and "skip-release-freeze" not in labels:
+        decision = Decision("pending", f"release freeze: #{frozen_by} is open — merges resume when it closes")
+    else:
+        reviews = _reviews(pr)
+        # Check runs only matter for a verdict-less head, so a reviewed PR never depends on the
+        # extra call (a failure of which would post nothing at all).
+        runs = None
+        if SKIP_LABEL not in labels and verdict_for_head(reviews, head_sha) is None:
+            runs = _check_runs(head_sha)
+        decision = decide(reviews, head_sha, labels, require_contract=REQUIRE_COVERAGE_CONTRACT, check_runs=runs)
     if dry_run:
         print(f"[dry-run] #{pr} {head_sha[:12]} -> {decision.state}: {decision.description}")
     else:
@@ -635,6 +657,12 @@ def main() -> int:
     dry_run = os.environ.get("DRY_RUN", "").strip().lower() in {"1", "true", "yes", "on"}
     pr_number = os.environ.get("PR_NUMBER")
 
+    try:
+        open_prs = _open_prs()
+    except RuntimeError as exc:
+        print(f"review_at_head: warning: cannot list open PRs; no release freeze: {exc}", file=sys.stderr)
+        open_prs = []
+
     if pr_number:
         head = os.environ["HEAD_SHA"]
         labels = [x for x in os.environ.get("PR_LABELS", "").split(",") if x]
@@ -645,7 +673,7 @@ def main() -> int:
         # escapes main(), `raise SystemExit(main())` never runs, and the job exits non-zero
         # on a transient error — producing exactly the second red check this comment forbids.
         try:
-            check_pr(int(pr_number), head, labels, dry_run=dry_run)
+            check_pr(int(pr_number), head, labels, dry_run=dry_run, open_prs=open_prs)
         except RuntimeError as exc:  # a transient API failure is not an unreviewed PR
             print(f"#{pr_number}: {exc}", file=sys.stderr)
         return 0
@@ -656,12 +684,12 @@ def main() -> int:
     # the PRs at that head: the payload's own PR list is empty for fork PRs and carries no
     # labels, so the open-PR listing is the one source for both.
     only_head = os.environ.get("CHECK_RUN_HEAD_SHA", "").strip()
-    for row in _open_prs():
+    for row in open_prs:
         if only_head and row.get("headRefOid") != only_head:
             continue
         labels = [lbl["name"] for lbl in row.get("labels") or []]
         try:
-            check_pr(row["number"], row["headRefOid"], labels, dry_run=dry_run)
+            check_pr(row["number"], row["headRefOid"], labels, dry_run=dry_run, open_prs=open_prs)
         except RuntimeError as exc:  # one unreachable PR must not abandon the rest
             print(f"#{row['number']}: {exc}", file=sys.stderr)
     return 0
