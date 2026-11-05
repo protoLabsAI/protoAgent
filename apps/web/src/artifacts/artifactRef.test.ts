@@ -45,6 +45,7 @@ describe("artifactRefFromProps", () => {
       kind: "html",
       inline: false,
       height: 0,
+      page: 0,
     });
     expect(artifactRefFromProps({ artifact_id: "", version: 1 })).toBeNull();
     expect(artifactRefFromProps({ artifact_id: "a", version: 0 })).toBeNull();
@@ -74,6 +75,18 @@ describe("artifactRefFromProps", () => {
     expect(artifactRefFromProps({ artifact_id: "a", version: 1, inline: true, height: -4 })?.height).toBe(0);
     expect(artifactRefFromProps({ artifact_id: "a", version: 1, inline: true, height: "big" as unknown })?.height).toBe(0);
   });
+
+  it("reads an optional 1-based page off untrusted props (#4748)", () => {
+    // A PDF chip's cited page: a finite integer ≥ 1 is kept, everything else → 0 ("no page").
+    expect(artifactRefFromProps({ artifact_id: "a", version: 1, kind: "file", page: 46 })?.page).toBe(46);
+    expect(artifactRefFromProps({ artifact_id: "a", version: 1, kind: "file", page: 1 })?.page).toBe(1);
+    expect(artifactRefFromProps({ artifact_id: "a", version: 1 })?.page).toBe(0); // missing → 0
+    expect(artifactRefFromProps({ artifact_id: "a", version: 1, page: 0 })?.page).toBe(0);
+    expect(artifactRefFromProps({ artifact_id: "a", version: 1, page: -3 })?.page).toBe(0);
+    expect(artifactRefFromProps({ artifact_id: "a", version: 1, page: 1.5 })?.page).toBe(0);
+    expect(artifactRefFromProps({ artifact_id: "a", version: 1, page: true as unknown })?.page).toBe(0);
+    expect(artifactRefFromProps({ artifact_id: "a", version: 1, page: "46" as unknown })?.page).toBe(0);
+  });
 });
 
 describe("refState / versionLabel", () => {
@@ -96,6 +109,29 @@ describe("openArtifactRef", () => {
     const ui = useUI.getState();
     expect(ui.rightPanel).toBe(ARTIFACT_VIEW_KEY);
     expect(ui.rightCollapsed).toBe(false);
+  });
+
+  it("carries the chip's page in the select only when > 0 (#4748)", () => {
+    expect(openArtifactRef({ id: "a-1", version: 2, page: 46 })).toBe(true);
+    expect(takePluginViewMessages(ARTIFACT_VIEW_KEY)).toEqual([
+      { type: "protoArtifact:select", id: "a-1", ver: 2, page: 46 },
+    ]);
+    // page 0 / absent → the message is byte-for-byte the pre-#4748 shape (no page key).
+    openArtifactRef({ id: "a-1", version: 2, page: 0 });
+    expect(takePluginViewMessages(ARTIFACT_VIEW_KEY)).toEqual([{ type: "protoArtifact:select", id: "a-1", ver: 2 }]);
+    openArtifactRef({ id: "a-1", version: 2 });
+    expect(takePluginViewMessages(ARTIFACT_VIEW_KEY)).toEqual([{ type: "protoArtifact:select", id: "a-1", ver: 2 }]);
+  });
+
+  it("auto-open carries the chip's page too (#4748)", () => {
+    vi.spyOn(chatStore, "getSnapshot").mockReturnValue({ ...chatStore.getSnapshot(), currentSessionId: "s-1" });
+    onLiveArtifactRef(
+      { component: "artifact-ref", props: { artifact_id: "a-pdf", version: 1, kind: "file", page: 46 } },
+      { sessionId: "s-1" },
+    );
+    expect(takePluginViewMessages(ARTIFACT_VIEW_KEY)).toEqual([
+      { type: "protoArtifact:select", id: "a-pdf", ver: 1, page: 46 },
+    ]);
   });
 
   it("a click on a phone pushes the panel (mobileActive)", () => {

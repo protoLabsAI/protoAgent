@@ -511,8 +511,23 @@ def test_shell_select_is_embedder_only_and_versioned_by_lifetime_number(monkeypa
     # A request that can't resolve after a FRESH poll — one issued after it arrived — (deleted/
     # evicted) is dropped; a poll already in flight when it arrived can't drop it.
     assert "if(!a){ if(seq>pendingSel.after) pendingSel=null; return false; }" in js
-    assert "pendingSel={id:id, ver:ver, after:pollSeq};" in js
+    assert "pendingSel={id:id, ver:ver, after:pollSeq, page:page};" in js
     assert '" of "+vtot' in js
+
+
+def test_shell_pdf_deep_link_page_reaches_the_viewer(monkeypatch, tmp_path):
+    # #4748: the chip's optional page rides the select, is armed as a one-shot per artifact, folded
+    # into the PDF frame's cfg for the rendered version, and scrolled to once the pages are laid out.
+    js = _load(monkeypatch, tmp_path)._SHELL_JS
+    # The listener reads an untrusted m.page (finite, floored, ≥ 1, else 0) and stores it on pendingSel.
+    assert 'var page=(typeof m.page==="number" && isFinite(m.page) && Math.floor(m.page)>=1) ? Math.floor(m.page) : 0;' in js
+    # takePendingSel arms a one-shot page bound to the artifact (a plain select clears any stale one).
+    assert "pendingPage = (page>0) ? {id:a.id, page:page} : null;" in js
+    # render consumes the request; pdfDoc receives only the page for this render.
+    assert "pendingPage=null;  // Consume every select" in js
+    assert "if(page>0) cfg.page=page;" in js
+    # artPdf jumps to the page once the slots are laid out; go() clamps a too-large page to the last.
+    assert "if(cfg.page>1) go(Math.min(cfg.page, count));" in js
 
 
 @pytest.mark.parametrize("page", [1, 46])
@@ -586,3 +601,56 @@ def test_save_pdf_page_ref_and_default_reply(monkeypatch, tmp_path, link, page):
         assert "page" not in props
         assert "opens at page" not in strip_component(out)
     assert bool(saved.get("linked")) == link
+
+
+@pytest.mark.platform_sensitive
+def test_pdf_page_reselect_consumes_each_request_without_leaking(monkeypatch, tmp_path):
+    """Run real selection/render logic: same-key citations navigate, polls do not."""
+    from tests.test_artifact_slides import _js_function, _node
+
+    js = _load(monkeypatch, tmp_path)._SHELL_JS
+    functions = "\n".join(_js_function(js, name) for name in ("total", "takePendingSel", "render"))
+    out = _node(
+        functions
+        + r"""
+var arts=[{id:'pdf', kind:'file', versions:[{ts:1, pdf:true}, {ts:2, pdf:true}]}];
+var selId='pdf', selVer=null, followNewest=true, lastRendered='', pendingSel=null, pendingPage=null;
+var editing=false, renderingId, renderingVer, renderingTs, renderingN, renderingLinks, linkLabels;
+var $bar={style:{}}, $empty={style:{}}, $frame={style:{}}, $edit={style:{}}, $vnav={style:{}};
+var $vlabel={}, $vprev={}, $vnext={}, frames=[];
+var frameNav={set:function(doc){frames.push(doc);}, clear:function(){}};
+function selArt(){return arts[0];}
+function verIdx(a){return selVer===null ? a.versions.length-1 : selVer;}
+function atNewest(){return true;}
+function saveSel(){} function pptxReset(){} function mediaReset(){} function renderLinks(){}
+function slidesOk(){return false;} function docxOk(){return false;} function isVideoFile(){return false;}
+function pdfOk(v){return !!v.pdf;}
+function fileCard(v, note, page){return {ts:v.ts, page:page};}
+function select(ver,page){pendingSel={id:'pdf',ver:ver,page:page}; takePendingSel(0); render();}
+render();
+select(2,46); select(2,12); render(); render();
+select(2,1); select(2,0); select(2,undefined);
+// Moving away and back must not revive the last citation.
+selVer=0; render(); selVer=null; render();
+// A citation to a version without a preview is consumed immediately.
+arts[0].versions[0].pdf=false;
+select(1,46); selVer=null; render();
+// A fresh agent version also starts without an inherited citation.
+arts[0].versions.push({ts:3,pdf:true}); render();
+console.log(JSON.stringify({frames:frames,pending:pendingPage}));
+"""
+    )
+    assert out == {
+        "frames": [
+            {"ts": 2, "page": 0},
+            {"ts": 2, "page": 46},
+            {"ts": 2, "page": 12},
+            {"ts": 2, "page": 1},
+            {"ts": 1, "page": 0},
+            {"ts": 2, "page": 0},
+            {"ts": 1, "page": 0},
+            {"ts": 2, "page": 0},
+            {"ts": 3, "page": 0},
+        ],
+        "pending": None,
+    }

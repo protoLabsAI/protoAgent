@@ -1361,8 +1361,8 @@ def test_save_file_artifact_registered_and_shell_has_filecard(monkeypatch, tmp_p
     assert "save_file_artifact" in names
     # the shell renders file kinds as a download card, hides Edit, and downloads via the blob route
     html = art._SHELL_HTML + art._SHELL_JS
-    assert "function fileCard(v, note)" in html
-    assert 'a.kind==="file" ? fileCard(v) : srcdoc(a.kind, v.code, renderingLinks)' in html
+    assert "function fileCard(v, note, page)" in html  # page (#4748): the chip's cited PDF page
+    assert 'a.kind==="file" ? fileCard(v, undefined, targetPage) : srcdoc(a.kind, v.code, renderingLinks)' in html
     assert "/blob?version=" in html
 
 

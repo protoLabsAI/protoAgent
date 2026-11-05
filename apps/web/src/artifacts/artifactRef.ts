@@ -25,6 +25,11 @@ const KINDS = new Set(["html", "svg", "mermaid", "react", "markdown", "vega-lite
 // the floor". Both are untrusted props off the wire, so `inline` is an exact boolean check and
 // `height` is a finite positive number run through the same [80,1200] clamp the host applies to
 // the frame's reported height — never cast.
+//
+// `page` (#4748): an optional 1-based page a PDF artifact-ref opens AT — the cited page from
+// save_file_artifact(page=N). Untrusted like the rest, so it's a finite integer ≥ 1 or 0
+// ("no page — open as today"), never cast. The panel honours it only for a PDF; any other kind
+// just ignores it.
 export type ArtifactRef = {
   id: string;
   version: number;
@@ -32,6 +37,7 @@ export type ArtifactRef = {
   kind: string;
   inline: boolean;
   height: number;
+  page: number;
 };
 
 export function artifactRefFromProps(props: Record<string, unknown> | undefined): ArtifactRef | null {
@@ -45,7 +51,9 @@ export function artifactRefFromProps(props: Record<string, unknown> | undefined)
   const inline = props.inline === true;
   const h = props.height;
   const height = typeof h === "number" && Number.isFinite(h) && h > 0 ? clampHeight(Math.round(h)) : 0;
-  return { id, version, title, kind, inline, height };
+  const p = props.page;
+  const page = typeof p === "number" && Number.isInteger(p) && p >= 1 ? p : 0;
+  return { id, version, title, kind, inline, height, page };
 }
 
 /** The chip's name for an artifact: its title, else "<kind> artifact". */
@@ -120,7 +128,10 @@ export type OpenArtifactOptions = {
  *  touch tablet (ADR 0086, lib/autoOpen.ts — the chip opens the panel on a tap instead),
  *  never for a background tab's turn, and never when the panel shares chat's dock, where
  *  opening it would swap the conversation out from under the operator. */
-export function openArtifactRef(ref: Pick<ArtifactRef, "id" | "version">, opts: OpenArtifactOptions = {}): boolean {
+export function openArtifactRef(
+  ref: Pick<ArtifactRef, "id" | "version"> & { page?: number },
+  opts: OpenArtifactOptions = {},
+): boolean {
   const dock = dockOf(ARTIFACT_VIEW_KEY);
   if (!dock) return false;
   if (opts.auto) {
@@ -135,7 +146,15 @@ export function openArtifactRef(ref: Pick<ArtifactRef, "id" | "version">, opts: 
     const chatDock = dockOf("chat") ?? "left";
     if (dock === chatDock || dock === "hidden") return false;
   }
-  postToPluginView(ARTIFACT_VIEW_KEY, { type: "protoArtifact:select", id: ref.id, ver: ref.version });
+  // `page` (#4748) rides the select ONLY when it's a real 1-based page — a 0/absent page keeps
+  // the message byte-for-byte the pre-#4748 shape, so a non-PDF ref opens exactly as before.
+  const msg: { type: "protoArtifact:select"; id: string; ver: number; page?: number } = {
+    type: "protoArtifact:select",
+    id: ref.id,
+    ver: ref.version,
+  };
+  if (typeof ref.page === "number" && ref.page > 0) msg.page = ref.page;
+  postToPluginView(ARTIFACT_VIEW_KEY, msg);
   // flushSync: a collapsed dock UNMOUNTS its column (DS AppShell), so the panel's iframe only
   // exists after this commit — committing now starts its load (and so its ready ping) at once.
   try {

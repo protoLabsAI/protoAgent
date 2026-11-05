@@ -988,11 +988,11 @@
       + '<b style="font-weight:600;color:'+fg+'">'+esc(String(l.project)+"/"+String(l.path))+'</b> · read-only</div>';
   }
   // `note` (optional) forces the text card and says why the slides/pages aren't shown.
-  function fileCard(v, note){
+  function fileCard(v, note, page){
     var f=v.file||{}, name=f.filename||"file", mime=f.mime||"application/octet-stream";
     var pk=previewKind(name, mime);
     if(pk==="pdf" && !note){
-      if(pdfOk(v)) return pdfDoc(v);
+      if(pdfOk(v)) return pdfDoc(v, page);
       note="Page preview unavailable — "+(f.pdf&&typeof f.pdf==="object"
         ? String(f.pdf.reason||"the file failed the safety checks")
         : "this version was saved before page previews; re-save the file to render its pages");
@@ -1711,7 +1711,8 @@
   }
   function render(){
     $bar.style.display = arts.length ? "flex" : "none";
-    var a=selArt();
+    var a=selArt(), page=pendingPage;
+    pendingPage=null;  // Consume every select, including versions without a PDF preview.
     if(!a){ frameNav.clear(); $empty.style.display="flex"; $frame.style.display="none"; lastRendered=""; return; }
     var vi=verIdx(a), v=a.versions[vi];
     // LIFETIME numbers (#3617) — the ones the chat's artifact-ref chips carry. Past the
@@ -1729,7 +1730,9 @@
     // the max_versions cap every new version lands in the SAME slot (the trim shifts the rest down),
     // so a position-only key never re-rendered past the cap.
     var key=a.id+"@"+vi+"@"+v.ts;
-    if(key!==lastRendered){ lastRendered=key; renderingId=a.id; renderingVer=vi+1; renderingTs=v.ts;
+    var targetPage=page && page.id===a.id && a.kind==="file" && pdfOk(v) ? page.page : 0;
+    // A citation into the PDF already on screen must navigate too, even with an unchanged key.
+    if(key!==lastRendered || targetPage>0){ lastRendered=key; renderingId=a.id; renderingVer=vi+1; renderingTs=v.ts;
       renderingN=(a.version_count||a.versions.length)-a.versions.length+vi+1;  // lifetime number (_store._version_key)
       // The version's STORED code links (ADR 0038 amendment) — the only targets a click in the
       // frame can open. Captured with the srcdoc so they always belong to what's on screen.
@@ -1739,7 +1742,7 @@
       pptxReset(a.kind==="file" && (slidesOk(v)||pdfOk(v)||docxOk(v))
         ? {id:a.id, vi:vi, v:v, key:key, kind:pdfOk(v) ? "pdf" : docxOk(v) ? "docx" : "pptx"} : null);
       mediaReset(a, v, vi);
-      frameNav.set(a.kind==="file" ? fileCard(v) : srcdoc(a.kind, v.code, renderingLinks), isVideoFile(a, v)); $frame.style.display="block";
+      frameNav.set(a.kind==="file" ? fileCard(v, undefined, targetPage) : srcdoc(a.kind, v.code, renderingLinks), isVideoFile(a, v)); $frame.style.display="block";
       renderLinks(); }
   }
 
@@ -1976,7 +1979,7 @@
     parseMs: 20000,
     watchdogMs: 45000
   };
-  function pdfDoc(v){
+  function pdfDoc(v, page){
     var cs=getComputedStyle(document.documentElement);
     function tok(n,d){ return (cs.getPropertyValue(n)||d).trim(); }
     var f=v.file||{}, name=f.filename||"document.pdf", mime=f.mime||"application/pdf", nonce=cspNonce();
@@ -1988,6 +1991,7 @@
       + ";--pl-color-fg-muted:"+tok("--pl-color-fg-muted","#9aa0aa")+";--pl-color-border:"+tok("--pl-color-border","rgba(255,255,255,.12)")
       + ";--pl-color-accent:"+tok("--pl-color-accent","#9b87f2")+"}";
     var cfg={caps:PDF_CAPS, pages:+((f.pdf&&f.pdf.pages)||0)};
+    if(page>0) cfg.page=page;
     return '<!doctype html><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="'+csp+'">'
       + '<style>'+tokens+PDF_CSS+'</style>'
       + '<div class="wrap">'+linkBanner(v, "var(--pl-color-fg)", "var(--pl-color-fg-muted)", "var(--pl-color-border)")+'<div class="hd"><div class="ic" aria-hidden="true">PDF</div>'
@@ -2141,6 +2145,9 @@
           slots.push(s); size(s); box.appendChild(el); io.observe(el);
         }
         status.textContent=""; nav.hidden=false; lastFit=fitW(); update();
+        // The chip's deep-link page (#4748): the slots are laid out, so scroll to it now. go()
+        // clamps, so a page past the end lands on the last page; page 1 stays at the top.
+        if(cfg.page>1) go(Math.min(cfg.page, count));
         post({type:"protoArtifact:pdf", state:"rendered", count:count});
       }catch(e){
         var msg=String((e&&e.message)||e);
@@ -2556,6 +2563,9 @@
   // already in flight when the agent's new artifact was announced can answer with the store from
   // before it, and must not drop the request for an id it couldn't have seen yet.
   var pendingSel=null, pollSeq=0, appliedSeq=0;
+  // A one-shot page bound to the resolved select. render consumes it even when its version
+  // has no PDF preview, so later version changes cannot inherit the citation.
+  var pendingPage=null;
   // Resolve the pending deep-link into the selection state; true when it resolved. Kept apart from
   // the render so a fresh poll can fold it in BEFORE its one render — the frame never shows the
   // remembered selection first and is never re-targeted mid-load (see frameNavigator).
@@ -2564,9 +2574,12 @@
     if(!pendingSel) return false;
     var a=null; for(var i=0;i<arts.length;i++) if(arts[i].id===pendingSel.id){ a=arts[i]; break; }
     if(!a){ if(seq>pendingSel.after) pendingSel=null; return false; }
-    var want=pendingSel.ver; pendingSel=null;
+    var want=pendingSel.ver, page=pendingSel.page; pendingSel=null;
     var vtot=total(a), idx=want-(vtot-a.versions.length)-1;
     selId=a.id;
+    // Arm the one-shot page jump for this artifact (#4748); a select without a page clears any
+    // stale one so a plain open never inherits an earlier chip's page.
+    pendingPage = (page>0) ? {id:a.id, page:page} : null;
     // The newest version → follow it (selVer null), and follow newest ARTIFACTS only when this
     // is also the newest one (the picker's own rule, atNewest). An older version pins it: auto-
     // follow off, so the next agent edit doesn't yank the operator off the version they asked
@@ -2584,7 +2597,10 @@
     var id=typeof m.id==="string" ? m.id.slice(0,64) : "";
     var ver=(typeof m.ver==="number" && isFinite(m.ver)) ? Math.floor(m.ver) : 0;
     if(!id || ver<1) return;
-    pendingSel={id:id, ver:ver, after:pollSeq};
+    // Optional 1-based page (#4748): a PDF chip can ask the panel to open AT a cited page. Untrusted
+    // like id/ver — a finite number, floored, ≥ 1, else 0 (ignored).
+    var page=(typeof m.page==="number" && isFinite(m.page) && Math.floor(m.page)>=1) ? Math.floor(m.page) : 0;
+    pendingSel={id:id, ver:ver, after:pollSeq, page:page};
     if(booted){ applyPendingSel(0); if(pendingSel) kickPoll(); }
   });
 
