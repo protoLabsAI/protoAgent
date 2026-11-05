@@ -56,10 +56,17 @@ def restart_readiness() -> dict:
     }
 
 
-def audit_restart(request: Request, reason: str, *, target: str = "self") -> None:
+def audit_restart(
+    request: Request | None, reason: str, *, actor: str | None = None, target: str = "self"
+) -> None:
+    """Write the restart audit row. The operator routes pass the live ``Request`` and the
+    actor is read from its device id (falling back to ``"operator"``). An agent-driven
+    self-restart (#4577's ``schedule_restart``) has no request, so it passes ``actor``
+    explicitly with ``request=None`` — either way the audited row is the same shape."""
     from observability.audit import audit_logger
 
-    actor = getattr(request.state, "device_id", None) or "operator"
+    if actor is None:
+        actor = getattr(request.state, "device_id", None) or "operator"
     reason = " ".join(reason.split())[:1000]
     audit_logger.log(
         session_id="operator",
@@ -120,6 +127,70 @@ def _shutdown_started() -> bool:
     return bool(server is not None and getattr(server, "should_exit", False))
 
 
+async def _wait_then_arm(wait_s: int) -> bool:
+    """Poll ``restart_readiness()["idle"]`` once a second for up to ``wait_s`` seconds, then
+    arm the re-exec and trigger the graceful exit. Shared by the route's when-idle drain and
+    the agent-driven ``schedule_restart`` so there is one implementation of the wait-then-arm
+    step.
+
+    Abandons WITHOUT arming (returns ``False``, leaving ``STATE.restart_requested`` unset) if
+    the process is already winding down for another reason — a Ctrl-C, a hub supervisor stop,
+    an earlier restart — or the agent never goes idle within the grace. Otherwise it sets
+    ``STATE.restart_requested`` and asks the live Server to exit, falling back to the SIGINT
+    path when no Server is registered, and returns ``True``."""
+    from runtime.state import STATE
+
+    try:
+        for _ in range(wait_s):
+            if _shutdown_started():
+                log.info("[restart] shutdown already underway; restart abandoned")
+                return False
+            if restart_readiness()["idle"]:
+                break
+            await asyncio.sleep(1)
+        else:
+            log.warning("[restart] agent stayed busy; when-idle restart abandoned")
+            return False
+    except Exception:
+        log.exception("[restart] could not verify idle; restart abandoned")
+        return False
+    STATE.restart_requested = True  # idle reconfirmed — arm the re-exec now
+    if request_server_exit():
+        return True
+    # No live Server reference (an embedding host that runs the app itself). Fall back to the
+    # signal — what this used to do unconditionally, and why Windows never restarted (see
+    # request_server_exit).
+    try:
+        os.kill(os.getpid(), signal.SIGINT)
+    except Exception:  # noqa: BLE001 — last resort if signalling fails
+        log.exception("[restart] failed to signal graceful shutdown")
+    return True
+
+
+def schedule_restart(reason: str, *, actor: str = "agent", wait_s: int = 600) -> dict:
+    """Arm a graceful self-restart that fires once the calling turn finishes.
+
+    ``POST /api/restart`` 409s unless the agent is idle at request time, but a tool always
+    runs inside a turn — so this writes the audit row and then starts a background task that
+    waits for idle (up to ``wait_s`` seconds) before arming the re-exec, via the same
+    ``_wait_then_arm`` helper the route's when-idle drain uses. Card 2/2 wires the
+    consent-gated ``self_restart`` tool to this.
+
+    Returns ``{"scheduled": False, "reason": how_to}`` when the process isn't supervised
+    (nothing would relaunch it), otherwise ``{"scheduled": True, ...}``. The background task
+    abandons silently without arming if the wait times out or a shutdown is already under way
+    (``STATE.restart_requested`` stays unset)."""
+    audit_restart(None, reason, actor=actor)
+    readiness = restart_readiness()
+    if not readiness["supervised"]:
+        return {"scheduled": False, "reason": readiness["how_to"]}
+    asyncio.create_task(_wait_then_arm(wait_s))
+    return {
+        "scheduled": True,
+        "reason": f"Restart armed; it fires once the agent is idle (waiting up to {wait_s}s).",
+    }
+
+
 def register_runtime_control_routes(app) -> None:
     from fastapi import APIRouter
     from fastapi.responses import JSONResponse
@@ -159,26 +230,14 @@ def register_runtime_control_routes(app) -> None:
             # re-execs once its run() returns (iff STATE.restart_requested is set).
             await asyncio.sleep(0.3)
             if when_idle:
-                # A turn may have started while the response flushed. Give it a bounded
-                # grace to finish, and bail the instant the process is already winding
-                # down for another reason. In both the time-out and the shutdown case
-                # we return WITHOUT arming the re-exec, so the server exits cleanly
-                # instead of re-launching on a restart the operator never saw through.
-                try:
-                    for _ in range(_RESTART_IDLE_GRACE_S):
-                        if _shutdown_started():
-                            log.info("[restart] shutdown already underway; restart abandoned")
-                            return
-                        if restart_readiness()["idle"]:
-                            break
-                        await asyncio.sleep(1)
-                    else:
-                        log.warning("[restart] agent stayed busy; when-idle restart abandoned")
-                        return
-                except Exception:
-                    log.exception("[restart] could not verify idle; restart abandoned")
-                    return
-                STATE.restart_requested = True  # idle reconfirmed — arm the re-exec now
+                # A turn may have started while the response flushed. _wait_then_arm gives
+                # it a bounded grace to finish, bails the instant the process is already
+                # winding down for another reason, and arms the re-exec (then exits) only
+                # once idle is reconfirmed — leaving STATE.restart_requested unset on both
+                # the time-out and the shutdown case, so the server exits cleanly instead
+                # of re-launching on a restart the operator never saw through.
+                await _wait_then_arm(_RESTART_IDLE_GRACE_S)
+                return
             if request_server_exit():
                 return
             # No live Server reference (an embedding host that runs the app itself).
