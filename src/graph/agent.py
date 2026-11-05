@@ -943,9 +943,9 @@ async def _run_subagent(
     billed through ``usage_sink`` (#2872) and Langfuse records on each generation. It is a
     per-edge VIEW of spend the parent turn already counts, so a rollup must never add
     ``delegations.cost_usd`` to ``turns.cost_usd`` for the same work. It is stored anyway
-    because the ``turns`` join does not exist for most delegations: ``turns`` holds A2A
-    turns only, so a workflow step (``sdk.run_subagent``) had no queryable cost outside
-    Langfuse.
+    because the ledger retains per-edge detail. ``turns`` includes orphan delegations
+    with usage but no caller sink, bound collector, or inherited lead-graph billing
+    context; delegations billed by a parent turn do not write a second row.
 
     ``cost_usd`` stays NULL — never ``0`` — when no model call reported usage (a provider
     or native-OAuth path that returns no ``usage_metadata``, or a delegation that failed
@@ -985,6 +985,37 @@ async def _run_subagent(
             # carry these rows to its turn's telemetry — it binds a collector instead (#3957).
             delegation_usage.note(rows)
             edge.cost_usd = _delegation_cost_usd(rows)
+            if rows and usage_sink is None and not delegation_usage.is_collecting() and not delegation_usage.is_parent_billed():
+                try:
+                    import asyncio
+                    import sys
+
+                    from graph.subagent_model import resolve_subagent_model
+                    from observability.turn_telemetry import fold_usage_rows, record_turn
+
+                    models, usage, _ = fold_usage_rows(rows)
+                    sub_config = SUBAGENT_REGISTRY.get(subagent_type)
+                    requested = resolve_subagent_model(
+                        config, subagent_type, turn_model,
+                        pinned=getattr(sub_config, "model", "") or "",
+                    )
+                    failure = sys.exc_info()[1]
+                    record_turn(
+                        task_id=edge.id,
+                        session_id=session_id,
+                        state="cancelled" if isinstance(failure, asyncio.CancelledError) else (
+                            "failed" if failure else "completed"
+                        ),
+                        models=models,
+                        usage=usage,
+                        cost_usd=edge.cost_usd,
+                        llm_calls=len(rows),
+                        requested_model=requested or "",
+                        publish_usage_event=False,
+                        error=str(failure) if failure else "",
+                    )
+                except Exception:  # noqa: BLE001 — telemetry must never break a delegation
+                    logger.exception("[telemetry] failed to record subagent %s", subagent_type)
 
 
 def _delegation_cost_usd(rows: list[dict]) -> float | None:
