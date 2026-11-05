@@ -5,8 +5,8 @@
     "changes": [
       "The run drawer's header sums up the completion check for runs that started from chat (#4744).",
       "The console's remaining copy buttons say when a copy didn't land (#4743).",
-      "Fleet groups and pins no longer fail silently, and the switcher hides its write controls on a hub without the groups API (#4735).",
-      "Fleet switcher shows each agent once and keeps its controls in view (#4735).",
+      "Fleet groups and pins no longer fail silently, and the switcher hides its write controls on a hub without the groups API (#4741).",
+      "Fleet switcher shows each agent once and keeps its controls in view (#4745).",
       "The v0.228.0 changelog's fleet and scheduled-task PR links were corrected (#4731, #4732, #4735, #4724)."
     ]
   },

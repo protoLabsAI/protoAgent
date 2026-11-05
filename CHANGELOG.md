@@ -33,7 +33,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   failure when the clipboard is unavailable (plain-http access) or the write is rejected. The
   code viewer's two copies, which already handled failure, use the same helper.
 
-- **Fleet groups and pins no longer fail silently, and the switcher hides its write controls on a hub without the groups API (#4735).**
+- **Fleet groups and pins no longer fail silently, and the switcher hides its write controls on a hub without the groups API (#4741).**
   The Fleet settings group editor (#4735) and the agent switcher assumed the hub served the
   groups/pins API (#4731). Against an older hub that predates it, the group and pin routes 404/405
   and the write was swallowed — "clicking Add group does nothing", and a pin star or a Move to group
@@ -45,7 +45,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   own message for a rejected name, otherwise "Couldn't save that change. Try again." — never a silent
   swallow.
 
-- **Fleet switcher shows each agent once and keeps its controls in view (#4735).**
+- **Fleet switcher shows each agent once and keeps its controls in view (#4745).**
   Current and pinned agents no longer repeat in their groups, and the Recent section
   and switcher recents writes are removed. New agent and Fleet settings move to icon
   buttons in the fixed header on desktop and phone, and the search icon is visible.
