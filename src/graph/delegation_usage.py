@@ -43,6 +43,11 @@ def collect() -> Iterator[list[dict]]:
             _rows_ctx.set(None)
 
 
+def is_collecting() -> bool:
+    """Whether a caller has bound a collector, including an empty collector."""
+    return _rows_ctx.get() is not None
+
+
 def note(rows: list[dict]) -> None:
     """Append a settled delegation's usage rows to the bound collector, if any. Never raises."""
     sink = _rows_ctx.get()
