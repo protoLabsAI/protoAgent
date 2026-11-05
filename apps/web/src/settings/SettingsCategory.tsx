@@ -24,6 +24,12 @@ import { fieldVisible } from "./visibility";
 
 export type PluginSettingsTab = PluginSettingsTabDescriptor & { groups: SettingsGroup[] };
 
+// The `footer` slot is usually a plain node, but a caller that needs the panel's live unsaved
+// values (Settings ▸ Secrets' Test connection, #4702) can pass a render function instead — it
+// receives the current `dirty` map (keys are dotted config paths). A ReactNode footer keeps
+// working unchanged for every other caller.
+export type SettingsFooter = ReactNode | ((ctx: { dirty: Record<string, unknown> }) => ReactNode);
+
 /** Build the ordered Configure tabs while retaining unassigned fields in the
  * backward-compatible Configuration fallback. Exported to pin the wire-to-UI
  * contract without coupling tests to Dialog focus management. */
@@ -77,7 +83,7 @@ export function SettingsCategoryPanel(props: {
   category: string;
   title?: string;
   emptyHint?: string;
-  footer?: ReactNode;
+  footer?: SettingsFooter;
   lead?: ReactNode;
   leadTitle?: string;
 }) {
@@ -126,7 +132,7 @@ export function SettingsCategory({
   categories?: string[];
   title?: string;
   emptyHint?: string;
-  footer?: ReactNode;
+  footer?: SettingsFooter;
   lead?: ReactNode;
   leadTitle?: string;
   pluginId?: string;
@@ -570,7 +576,9 @@ export function SettingsCategory({
             })}
           </Accordion>
         )}
-        {footer}
+        {/* A render-function footer (ADR 0080 Test connection, #4702) gets the live dirty
+            values so it can probe what's typed but unsaved; a plain node renders as-is. */}
+        {typeof footer === "function" ? footer({ dirty }) : footer}
       </div>
     </>
   );

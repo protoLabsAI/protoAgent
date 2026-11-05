@@ -591,6 +591,21 @@ export type SecretsTestResult = {
   names: string[];
 };
 
+// POST /api/secrets/test body — the unsaved form values to probe with (#4702). Field
+// names are the server's SecretsTestRequest (operator_api/secrets_routes.py); every field
+// is optional and any omitted/blank one falls back to the saved config.
+export type SecretsTestOverrides = {
+  provider?: string;
+  host?: string;
+  project_id?: string;
+  environment?: string;
+  path?: string;
+  recursive?: boolean;
+  client_id?: string;
+  client_secret?: string;
+  timeout_seconds?: number;
+};
+
 export type WorkflowSummary = {
   name: string;
   description: string;

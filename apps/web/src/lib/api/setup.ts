@@ -15,6 +15,7 @@ import type {
   ConfigPayload,
   FlagsPayload,
   SecretsStatus,
+  SecretsTestOverrides,
   SecretsTestResult,
   SetupStatus,
   SettingsGroup,
@@ -26,6 +27,11 @@ import { request, requestForm } from "./http";
 export type RestartReadiness = {
   idle: boolean; busy: string[]; supervised: boolean; how_to: string; boot_id: string;
 };
+
+// The redacted bullet run the Settings secret inputs show in place of a stored-but-unechoed
+// credential (SettingsCategory's SecretInput placeholder). It is a display sentinel, never a
+// real secret, so `secretsTest` refuses to post a credential that begins with it.
+export const SECRET_MASK = "••••••••";
 
 export const setupApi = {
   async restartReadiness() {
@@ -277,15 +283,28 @@ export const setupApi = {
   },
 
   // External secrets manager (ADR 0080) — status / force-a-refresh / connection test.
-  // Test runs against the SAVED config (unsaved form edits don't ride along yet).
+  // Test runs against the SAVED config overlaid by whatever unsaved form values the operator
+  // typed (#4702): each non-blank override is sent under its SecretsTestRequest field name and
+  // the server falls back to the saved config for the rest. The redacted placeholder a stored
+  // secret shows (`SECRET_MASK`) is display-only, so it is never posted as a credential.
   secretsStatus() {
     return request<SecretsStatus>("/api/secrets/status");
   },
   secretsSync() {
     return request<SecretsStatus>("/api/secrets/sync", { method: "POST", body: {} });
   },
-  secretsTest() {
-    return request<SecretsTestResult>("/api/secrets/test", { method: "POST", body: {} });
+  secretsTest(overrides: SecretsTestOverrides = {}) {
+    const body: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(overrides)) {
+      // Blank / omitted fields fall back to the saved config server-side — send only what
+      // the operator actually set so an empty box never clobbers a saved value.
+      if (value === undefined || value === null || value === "") continue;
+      // The secret inputs echo a redacted marker for an already-stored credential, never the
+      // real value; posting that marker would overwrite the test with gibberish.
+      if ((key === "client_secret" || key === "client_id") && typeof value === "string" && value.startsWith(SECRET_MASK)) continue;
+      body[key] = value;
+    }
+    return request<SecretsTestResult>("/api/secrets/test", { method: "POST", body });
   },
 
   // `requires_tools` is the picked archetype's capability contract (ADR 0100) — the
