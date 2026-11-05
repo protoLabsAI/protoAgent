@@ -295,6 +295,10 @@ path outside every project, or a symlink escaping one, is refused). A linked art
 default). Downloads serve the file in place, re-checked against the project fence on every request:
 403 once it's no longer reachable, 409 if it changed or disappeared since it was linked.
 
+**Citing a page in a PDF.** Use `save_file_artifact(path, link=True, page=46)` to open
+the citation at page 46 (1-based). One linked save per citation is fine. `page` also works
+for copied PDFs; omit it or use `0` for no page hint. Other file types do not accept a page.
+
 This is for files that already exist on disk. To *render* HTML/React/SVG/Markdown/charts, use
 `show_artifact` (above) — don't write those to a file first.
 

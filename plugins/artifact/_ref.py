@@ -31,7 +31,7 @@ TITLE_MAX = 200
 # `inline`/`height` are the inline-placement hints (ADR 0118 D2): a chip rendered as the
 # artifact's own embedded frame, clamped to [HEIGHT_MIN, HEIGHT_MAX] px. Both are optional —
 # an older payload (and every default panel call) simply has neither.
-_PROPS = {"artifact_id", "version", "versions_total", "title", "kind", "inline", "height"}
+_PROPS = {"artifact_id", "version", "versions_total", "title", "kind", "inline", "height", "page"}
 HEIGHT_MIN = 80
 HEIGHT_MAX = 1200
 
@@ -73,14 +73,17 @@ def validate_artifact_ref(props: dict) -> str | None:
             props["height"] = max(HEIGHT_MIN, min(HEIGHT_MAX, h))
         else:
             props.pop("height")
+    if "page" in props and not _pos_int(props["page"]):
+        props.pop("page")
     return None
 
 
-def ref_props(art: dict, *, inline: bool = False, height: int | None = None) -> dict:
+def ref_props(art: dict, *, inline: bool = False, height: int | None = None, page: int | None = None) -> dict:
     """The ``artifact-ref`` props for ``art``'s LATEST version (the one a tool just wrote).
 
     ``inline`` adds the inline-placement flag (ADR 0118 D2); ``height`` adds a clamped px hint.
-    The defaults emit neither, so a plain panel call's props are byte-for-byte as before."""
+    ``page`` adds a 1-based PDF page hint.
+    The defaults emit none of these, so a plain panel call's props are byte-for-byte as before."""
     n = _store._version_key(art)[0]
     title = " ".join(str(art.get("title") or "").split())  # one line — it's a chip label
     if len(title) > TITLE_MAX:
@@ -96,17 +99,19 @@ def ref_props(art: dict, *, inline: bool = False, height: int | None = None) -> 
         props["inline"] = True
     if height is not None:
         props["height"] = max(HEIGHT_MIN, min(HEIGHT_MAX, int(height)))
+    if _pos_int(page):
+        props["page"] = page
     return props
 
 
-def ref_tail(art: dict, *, inline: bool = False, height: int | None = None) -> str:
+def ref_tail(art: dict, *, inline: bool = False, height: int | None = None, page: int | None = None) -> str:
     """The component tail a tool appends to its reply: ``"\\n" + <sentinel payload>``, or
     ``""`` when the props wouldn't validate (never let a pointer break the reply).
 
     ``inline``/``height`` carry the inline-placement hints (ADR 0118 D2) into the props."""
     if not EMIT:
         return ""
-    props = ref_props(art, inline=inline, height=height)
+    props = ref_props(art, inline=inline, height=height, page=page)
     if validate_artifact_ref(props) is not None:
         return ""
     from graph.sdk import encode_component
