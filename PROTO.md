@@ -161,6 +161,14 @@ that contain the workflow. The `skip-review-gate` label waives the check with a
 recorded status description when a verdict cannot be obtained. Implementation:
 `scripts/review_at_head.py`; tests: `tests/test_review_at_head.py`.
 
+**Release freeze.** While a same-repository `prepare-release/*` or `release/*` PR
+is open, `Review at head` is held `pending` on every other open PR regardless of
+its verdict, so a hand-opened PR cannot merge between a dispatched release and its
+tag and leave its changelog fragment uncollated. `skip-review-gate` does *not*
+lift this hold — use the separate `skip-release-freeze` label — and a fork PR
+merely named `release/*` does not freeze anything. The freeze lifts automatically
+when the release PR closes.
+
 A red **“QA panel: N finding(s) persist”** counts unresolved review threads,
 including other reviewers' threads. Read the threads even if the panel returned PASS.
 
