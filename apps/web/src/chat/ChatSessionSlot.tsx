@@ -8,6 +8,7 @@ import { useKbIntents } from "../keybindings/intents";
 import { api } from "../lib/api";
 import { CHAT_ATTACH_ACCEPT } from "../lib/attachTypes";
 import { errMsg } from "../lib/format";
+import { copyText } from "../lib/clipboard";
 import { brandName } from "../lib/brand";
 import { needsModelBanner } from "./modelBanner";
 import { hasNoteLede } from "./NoteCard";
@@ -852,10 +853,17 @@ export function ChatSessionSlot({
     }
   }
 
+  // "Copied" shows only once the write landed; a missing Clipboard API (plain-http
+  // access) or a rejected write says so instead of claiming success.
   function copyMessage(message: ChatMessage) {
-    void navigator.clipboard?.writeText(message.content || "");
-    setCopiedId(message.id ?? null);
-    window.setTimeout(() => setCopiedId((id) => (id === message.id ? null : id)), 1500);
+    void copyText(message.content || "").then((ok) => {
+      if (!ok) {
+        onError("Couldn't copy the message. The clipboard isn't available here.");
+        return;
+      }
+      setCopiedId(message.id ?? null);
+      window.setTimeout(() => setCopiedId((id) => (id === message.id ? null : id)), 1500);
+    });
   }
 
   // Regenerate an assistant reply: drop it (and anything after) from the thread,

@@ -8,12 +8,13 @@ import { StatusDot } from "@protolabsai/ui/data";
 import { Drawer } from "@protolabsai/ui/overlays";
 import { Badge, Button } from "@protolabsai/ui/primitives";
 import { useQuery } from "@tanstack/react-query";
-import { Check, ChevronDown, ChevronRight, Copy, ExternalLink, FileText, Link2, Workflow } from "lucide-react";
+import { Check, ChevronDown, ChevronRight, Copy, ExternalLink, FileText, Link2, Workflow, XCircle } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 
 import { openPromptViewer } from "../chat/PromptViewer";
 import { openDocument } from "../docviewer";
 import { loadBackgroundReport } from "../lib/api";
+import { copyText } from "../lib/clipboard";
 import { errMsg, localStamp, ms, tokens, usd } from "../lib/format";
 import { runQuery } from "../lib/queries";
 import type { TelemetryTurn } from "../lib/types";
@@ -418,28 +419,30 @@ function TurnLinks({ turn, ctx }: { turn: TelemetryTurn; ctx: TraceCtx }) {
   );
 }
 
-function CopyButton({ text, label, testId, icon, iconOnly }: { text: string; label: string; testId?: string; icon?: ReactNode; iconOnly?: boolean }) {
-  const [copied, setCopied] = useState(false);
+export function CopyButton({ text, label, testId, icon, iconOnly }: { text: string; label: string; testId?: string; icon?: ReactNode; iconOnly?: boolean }) {
+  const [outcome, setOutcome] = useState<"idle" | "copied" | "failed">("idle");
   useEffect(() => {
-    if (!copied) return;
-    const t = setTimeout(() => setCopied(false), 1500);
+    if (outcome === "idle") return;
+    const t = setTimeout(() => setOutcome("idle"), outcome === "copied" ? 1500 : 3000);
     return () => clearTimeout(t);
-  }, [copied]);
+  }, [outcome]);
+  const copied = outcome === "copied";
+  const failed = outcome === "failed";
   return (
     <Button
       size="sm"
       variant="ghost"
       icon={iconOnly}
       aria-label={iconOnly ? label : undefined}
-      title={label}
+      title={failed ? "Copy failed" : label}
       data-testid={testId}
+      data-copy-outcome={outcome}
       onClick={() => {
-        void navigator.clipboard?.writeText(text).catch(() => {});
-        setCopied(true);
+        void copyText(text).then((ok) => setOutcome(ok ? "copied" : "failed"));
       }}
     >
-      {copied ? <Check size={13} aria-hidden /> : icon ?? <Copy size={13} aria-hidden />}
-      {iconOnly ? null : copied ? " Copied" : ` ${label}`}
+      {copied ? <Check size={13} aria-hidden /> : failed ? <XCircle size={13} aria-hidden /> : icon ?? <Copy size={13} aria-hidden />}
+      {iconOnly ? null : copied ? " Copied" : failed ? " Copy failed" : ` ${label}`}
     </Button>
   );
 }

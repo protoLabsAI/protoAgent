@@ -11,6 +11,7 @@ import { useEffect, useState } from "react";
 
 import { openDocument } from "../docviewer";
 import { api, ApiError } from "../lib/api";
+import { copyText } from "../lib/clipboard";
 import type { PromptBreakdown, PromptCall, PromptSection } from "../lib/types";
 import { Markdown } from "./LazyMarkdown";
 import {
@@ -58,7 +59,7 @@ export function PromptViewerBody({ taskId, sessionId }: { taskId: string; sessio
   const [status, setStatus] = useState<"loading" | "ready" | "disabled" | "empty" | "error">("loading");
   const [error, setError] = useState("");
   const [active, setActive] = useState("0");
-  const [copied, setCopied] = useState(false);
+  const [copied, setCopied] = useState<"idle" | "copied" | "failed">("idle");
   // Rendered (markdown) by default — the raw monospace dump was rough to read;
   // Raw stays one click away (and Copy always copies the exact bytes) because
   // this dialog's whole identity is "the exact prompt".
@@ -216,9 +217,9 @@ export function PromptViewerBody({ taskId, sessionId }: { taskId: string; sessio
       ? sectionDiff(anchorCall.sections, call.sections)
       : null;
   const copy = () => {
-    void navigator.clipboard.writeText(promptText(call)).then(() => {
-      setCopied(true);
-      window.setTimeout(() => setCopied(false), 1500);
+    void copyText(promptText(call)).then((ok) => {
+      setCopied(ok ? "copied" : "failed");
+      window.setTimeout(() => setCopied("idle"), ok ? 1500 : 3000);
     });
   };
 
@@ -267,8 +268,8 @@ export function PromptViewerBody({ taskId, sessionId }: { taskId: string; sessio
         <Button size="sm" variant="ghost" onClick={() => setRaw((r) => !r)}>
           {raw ? "Rendered" : "Raw"}
         </Button>
-        <Button size="sm" variant="ghost" onClick={copy}>
-          {copied ? "Copied" : "Copy"}
+        <Button size="sm" variant="ghost" onClick={copy} data-copy-outcome={copied}>
+          {copied === "copied" ? "Copied" : copied === "failed" ? "Copy failed" : "Copy"}
         </Button>
       </div>
       {!noAnchor ? (

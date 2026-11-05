@@ -23,6 +23,7 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 
 import { FS_ROOTS_QUERY_KEY, useEditorLinker } from "../chat/useEditorLinker";
 import { api, ApiError, type FsDiffFile, type FsFile } from "../lib/api";
+import { copyText } from "../lib/clipboard";
 import { editorLabel } from "../lib/editorLinks";
 import { useEditorPref } from "../lib/editorPref";
 import { useIsMobile } from "../lib/useIsMobile";
@@ -274,12 +275,8 @@ function FileView({ current, seq, recent }: { current: CodeRef; seq: number; rec
 
   const href = external?.(current.project, current.path, current.line) ?? null;
   const copyPath = async () => {
-    try {
-      await navigator.clipboard.writeText(current.path);
-      toast({ tone: "success", title: "Copied", message: current.path });
-    } catch {
-      toast({ tone: "error", title: "Couldn't copy", message: current.path });
-    }
+    if (await copyText(current.path)) toast({ tone: "success", title: "Copied", message: current.path });
+    else toast({ tone: "error", title: "Couldn't copy", message: current.path });
   };
 
   return (
