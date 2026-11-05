@@ -160,7 +160,7 @@ Ids of the configured subagents — for validating/listing recipe steps.
 ### `sdk.run_subagent` {#sdk-run-subagent}
 
 ```python
-await sdk.run_subagent(subagent_type: str, prompt: str, *, description: str, extra_tools: Any = None, truncate: int | None = None, turn_model: str | None = None, check_prompt_tools: bool = True) -> str
+await sdk.run_subagent(subagent_type: str, prompt: str, *, description: str, extra_tools: Any = None, truncate: int | None = None, turn_model: str | None = None, check_prompt_tools: bool = True, session_id: str = '') -> str
 ```
 
 Run a subagent to completion and return its text output.
@@ -187,6 +187,12 @@ names a tool it was never given, instead of letting it run to a "blocked" finish
 Pass `False` when the prompt is your own fixed template with other steps' output
 interpolated into it: a tool name inside that data is not a request for the tool, and
 the check would refuse a step whose input merely mentions one ([#4501](https://github.com/protoLabsAI/protoAgent/issues/4501)).
+
+`session_id` supplies a ledger-only fallback identity ([#4612](https://github.com/protoLabsAI/protoAgent/issues/4612)). An enclosing
+edge or run scope's session takes precedence, so workflow steps inside a chat
+stay in that chat's session. Outside a session the workflows plugin supplies
+`workflow:<run_id>`. This value never enters the subagent's tool state or
+telemetry session. The default `""` preserves existing behavior.
 
 ### `sdk.renders_ui` {#sdk-renders-ui}
 

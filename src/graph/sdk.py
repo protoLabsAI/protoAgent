@@ -205,11 +205,11 @@ async def run_subagent(
     interpolated into it: a tool name inside that data is not a request for the tool, and
     the check would refuse a step whose input merely mentions one (#4501).
 
-    ``session_id`` is stamped on the delegation's ledger edge so the run can be joined back
-    to the caller it belongs to (#4612). The default ``""`` keeps the prior behaviour (an
-    empty edge, or the id inherited from any enclosing run scope). The workflows plugin
-    passes its run identity (``workflow:<run_id>``) so a review-gate step's row is no longer
-    orphaned from its workflow run.
+    ``session_id`` supplies a ledger-only fallback identity (#4612). An enclosing
+    edge or run scope's session takes precedence, so workflow steps inside a chat
+    stay in that chat's session. Outside a session the workflows plugin supplies
+    ``workflow:<run_id>``. This value never enters the subagent's tool state or
+    telemetry session. The default ``""`` preserves existing behavior.
     """
     from graph.agent import run_manual_subagent
     from graph.subagent_model import current_turn_model
@@ -228,7 +228,7 @@ async def run_subagent(
         truncate=truncate,
         turn_model=current_turn_model() if turn_model is None else turn_model,
         check_prompt_tools=check_prompt_tools,
-        session_id=session_id,
+        ledger_session_id=session_id,
     )
 
 

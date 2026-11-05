@@ -300,9 +300,9 @@ async def _traced_step(name: str, subagent_type: str, prompt: str, step_id: str,
         # a PR diff, comments) interpolated in. A tool name inside that data is not a request
         # for the tool, and the dispatch-time scan refused the step on it (#4501).
         #
-        # Stamp the run's identity on the delegation edge so a step's row joins back to its
-        # workflow run instead of landing with an empty session_id (#4612). The run_id is the
-        # same key the ledger edge and trace already use (`task_id = run_id`).
+        # Supply a ledger-only fallback for standalone steps (#4612). The SDK preserves
+        # an enclosing chat's session and keeps this synthetic identity out of tool state.
+        # The run_id is the same key the workflow edge and trace use (`task_id = run_id`).
         out = await sdk.run_subagent(
             subagent_type, prompt, description=description, check_prompt_tools=False, session_id=f"workflow:{run_id}"
         )
