@@ -51,10 +51,11 @@ the status description — the same shape as ``skip-changelog`` and ``gate-exemp
 exists because a required check that can never go green (panel outage, a PR the panel does
 not pick up) would otherwise wedge the queue with no way out but an admin merge.
 
-**Release freeze (#4576).** Open ``prepare-release/`` or ``release/`` PRs hold
-other PRs pending regardless of verdict. Release PRs are exempt. The
-``skip-release-freeze`` label waives only the freeze; ``skip-review-gate`` does
-not waive it. Closing a release PR re-evaluates all open PRs.
+**Release freeze (#4576).** An open SAME-REPOSITORY ``prepare-release/`` or ``release/`` PR
+holds other PRs pending regardless of verdict. A fork PR merely named ``release/*`` does not
+freeze anything — it has no write access to this repo, so only a same-repository release PR
+counts. Release PRs are exempt. The ``skip-release-freeze`` label waives only the freeze;
+``skip-review-gate`` does not waive it. Closing a release PR re-evaluates all open PRs.
 
 **Which verdict speaks for a head (pr-reviewer-plugin#234).** Several panel rounds can land
 on one head: two racing panels (pr-reviewer-plugin#89), or a re-review an operator summoned
@@ -127,6 +128,10 @@ def _float_env(name: str, default: float) -> float:
 PANEL_STALL_MINUTES = _float_env("PANEL_STALL_MINUTES", 90.0)
 STATUS_CONTEXT = os.environ.get("STATUS_CONTEXT", "Review at head")
 SKIP_LABEL = "skip-review-gate"
+# The release-freeze escape hatch (#4576). Its own label, NOT SKIP_LABEL: `skip-review-gate`
+# waives the review verdict, the freeze is a separate hold and waiving one must not waive the
+# other. A named constant so check_pr and the tests reference one spelling.
+SKIP_FREEZE_LABEL = "skip-release-freeze"
 
 # Verdicts that are an explicit "do not merge". PASS and WARN both satisfy the gate; WARN is
 # advisory by design (ADR 0078) and #3297 shipped one. Kept as a set so a new blocking
@@ -556,10 +561,21 @@ def decide(
 
 
 def release_freeze(open_prs: list[dict], this_pr: int) -> str | None:
-    """Return the release PR holding merges, exempting release PRs themselves."""
+    """Return the open release PR holding merges, exempting release PRs themselves.
+
+    A release PR is a SAME-REPOSITORY PR whose head branch starts with ``prepare-release/``
+    or ``release/`` (the spellings ``scripts/changelog_gate.sh`` accepts). The same-repository
+    requirement (``isCrossRepository`` false) is the point of this guard: a PR from a FORK
+    can name its branch ``release/anything`` with no access to this repo, so keying the freeze
+    on the branch name alone would let any fork author hold every other open PR pending and
+    kick off a sweep on every event. A fork PR named ``release/*`` is therefore an ordinary PR
+    here — it neither freezes others nor is itself exempt. ``isCrossRepository`` absent (older
+    listings, the module's own test fixtures) reads as same-repository, preserving behaviour.
+    """
     releases = [
         row for row in open_prs
         if (row.get("headRefName") or "").startswith(("prepare-release/", "release/"))
+        and not row.get("isCrossRepository")
     ]
     if any(str(row["number"]) == str(this_pr) for row in releases):
         return None
@@ -607,7 +623,14 @@ def _check_runs(sha: str) -> list[dict]:
 
 
 def _open_prs() -> list[dict]:
-    return json.loads(_gh("pr", "list", "--state", "open", "--limit", "100", "--json", "number,headRefOid,headRefName,labels"))
+    # `isCrossRepository` distinguishes a fork PR from a same-repo one so release_freeze can
+    # ignore a fork branch merely named release/* (it has no write access to this repo).
+    return json.loads(
+        _gh(
+            "pr", "list", "--state", "open", "--limit", "100",
+            "--json", "number,headRefOid,headRefName,isCrossRepository,labels",
+        )
+    )
 
 
 def _post_status(sha: str, decision: Decision, pr: int) -> None:
@@ -633,7 +656,7 @@ def check_pr(
     pr: int, head_sha: str, labels: list[str], *, dry_run: bool, open_prs: list[dict] | None = None
 ) -> Decision:
     frozen_by = release_freeze(open_prs or [], pr)
-    if frozen_by and "skip-release-freeze" not in labels:
+    if frozen_by and SKIP_FREEZE_LABEL not in labels:
         decision = Decision("pending", f"release freeze: #{frozen_by} is open — merges resume when it closes")
     else:
         reviews = _reviews(pr)

@@ -15,7 +15,9 @@ name: Review at head
 # every open PR, including ones the panel never touches, so it cannot silently go missing the
 # way the thing it guards does. `skip-review-gate` is the documented escape hatch.
 #
-# An open prepare-release/* or release/* PR holds every non-release PR pending.
+# An open SAME-REPOSITORY prepare-release/* or release/* PR holds every non-release PR pending.
+# A fork PR merely named release/* does not — it has no write access, so only a same-repo
+# release PR (head.repo.full_name == the repository) counts, both here and in the script.
 # skip-release-freeze waives this hold; skip-review-gate only waives review.
 # Release PR events sweep all open PRs, including on close/merge to lift the hold.
 #
@@ -87,8 +89,9 @@ jobs:
     # check_run fires for EVERY check run in the repo; only the reviewer app's two matter.
     if: >-
       (github.event.action != 'closed' ||
-       startsWith(github.event.pull_request.head.ref, 'prepare-release/') ||
-       startsWith(github.event.pull_request.head.ref, 'release/')) &&
+       ((startsWith(github.event.pull_request.head.ref, 'prepare-release/') ||
+         startsWith(github.event.pull_request.head.ref, 'release/')) &&
+        github.event.pull_request.head.repo.full_name == github.repository)) &&
       (github.event_name != 'check_run' ||
       (github.event.check_run.app.slug == 'protoreview' &&
        contains(fromJSON('["QA panel","protoReview"]'), github.event.check_run.name)))
@@ -99,8 +102,12 @@ jobs:
       - name: Assert a verdict exists for this head
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # Release events sweep to apply/lift the freeze across existing PRs.
-          PR_NUMBER: ${{ !startsWith(github.event.pull_request.head.ref, 'prepare-release/') && !startsWith(github.event.pull_request.head.ref, 'release/') && github.event.pull_request.number || '' }}
+          # Release events sweep to apply/lift the freeze across existing PRs. Only a
+          # same-repository release PR sweeps; a fork PR named release/* is an ordinary PR, so
+          # it keeps its own number and is checked per-PR (never sweeps). An empty string is
+          # falsy in Actions expressions, so the condition is written to fall through to '' only
+          # when the PR is a same-repo release branch.
+          PR_NUMBER: ${{ ((!startsWith(github.event.pull_request.head.ref, 'prepare-release/') && !startsWith(github.event.pull_request.head.ref, 'release/')) || github.event.pull_request.head.repo.full_name != github.repository) && github.event.pull_request.number || '' }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           PR_LABELS: ${{ join(github.event.pull_request.labels.*.name, ',') }}
           # check_run mode: sweep only the open PRs whose head is this run's head.

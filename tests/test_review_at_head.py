@@ -811,6 +811,25 @@ def test_release_freeze_exempts_all_release_prs(branch):
     assert rah.release_freeze([{"number": 1, "headRefName": "feature/release/v1"}], 4559) is None
 
 
+@pytest.mark.parametrize("branch", ["prepare-release/v1", "release/v1"])
+def test_a_fork_pr_named_release_does_not_freeze_and_is_not_exempt(branch):
+    # The #4576 round-1 hole: the freeze keyed on branch name alone, so ANY fork PR — which has
+    # no write access to this repo — could name its branch release/* and hold every other open
+    # PR pending (and trigger a sweep on every event). `isCrossRepository` is the same-repo
+    # guard: a fork release PR is an ordinary PR here — it freezes nothing …
+    fork = [{"number": 9001, "headRefName": branch, "isCrossRepository": True}]
+    assert rah.release_freeze(fork, 4559) is None
+    assert rah.release_freeze(fork, 9001) is None  # … and is itself not exempt from a real freeze
+    real_plus_fork = [
+        {"number": 4560, "headRefName": "release/v1", "isCrossRepository": False},
+        {"number": 9001, "headRefName": branch, "isCrossRepository": True},
+    ]
+    assert rah.release_freeze(real_plus_fork, 9001) == "4560"  # the fork release PR is frozen like any other
+    assert rah.release_freeze(real_plus_fork, 4560) is None  # the genuine same-repo release PR is exempt
+    # An explicit same-repo flag freezes exactly as the absent-flag fixtures above do.
+    assert rah.release_freeze([{"number": 4560, "headRefName": branch, "isCrossRepository": False}], 4559) == "4560"
+
+
 @pytest.mark.parametrize("verdict", ["PASS", "WARN", "FAIL", None])
 @pytest.mark.parametrize("labels", [[], ["skip-review-gate"]])
 def test_freeze_posts_pending_whatever_the_review(monkeypatch, verdict, labels):
@@ -868,12 +887,19 @@ def test_open_pr_listing_requests_branch_names(monkeypatch):
     calls = []
     monkeypatch.setattr(rah, "_gh", lambda *args: calls.append(args) or "[]")
     assert rah._open_prs() == []
-    assert "headRefName" in calls[0][-1].split(",")
+    fields = calls[0][-1].split(",")
+    # headRefName feeds the freeze branch match; isCrossRepository rejects a fork's release/*.
+    assert "headRefName" in fields
+    assert "isCrossRepository" in fields
+
+
+REPO = "protoLabsAI/protoAgent"
 
 
 @pytest.mark.parametrize("branch", ["prepare-release/v1", "release/v1", "feature/ordinary"])
 @pytest.mark.parametrize("action", ["opened", "reopened", "closed"])
-def test_workflow_release_events_sweep_and_other_closed_prs_exit(monkeypatch, branch, action):
+@pytest.mark.parametrize("fork", [False, True], ids=["same-repo", "fork"])
+def test_workflow_release_events_sweep_and_other_closed_prs_exit(monkeypatch, branch, action, fork):
     import yaml
     from types import SimpleNamespace
 
@@ -881,9 +907,17 @@ def test_workflow_release_events_sweep_and_other_closed_prs_exit(monkeypatch, br
     # PyYAML's YAML 1.1 reader treats the Actions `on` key as True.
     assert "closed" in wf[True]["pull_request_target"]["types"]
     job = wf["jobs"]["assert"]
+    head_repo = "attacker/protoAgent-fork" if fork else REPO
     github = SimpleNamespace(
+        repository=REPO,
         event_name="pull_request_target",
-        event=SimpleNamespace(action=action, pull_request=SimpleNamespace(number=4560, head=SimpleNamespace(ref=branch))),
+        event=SimpleNamespace(
+            action=action,
+            pull_request=SimpleNamespace(
+                number=4560,
+                head=SimpleNamespace(ref=branch, repo=SimpleNamespace(full_name=head_repo)),
+            ),
+        ),
     )
 
     def expression(value):
@@ -892,7 +926,9 @@ def test_workflow_release_events_sweep_and_other_closed_prs_exit(monkeypatch, br
         value = re.sub(r"!(?!=)", "not ", value)
         return eval(f"({value})", {"__builtins__": {}}, {"github": github, "startsWith": str.startswith})
 
-    release = branch.startswith(("prepare-release/", "release/"))
+    # A fork PR named release/* has no write access, so the workflow treats it as ordinary: it
+    # neither runs on close nor sweeps. Only a SAME-REPO release branch is a release event.
+    release = branch.startswith(("prepare-release/", "release/")) and not fork
     assert expression(job["if"]) == (release or action != "closed")
     number = expression(job["steps"][1]["env"]["PR_NUMBER"])
     assert number == ("" if release else 4560)
@@ -904,11 +940,13 @@ def test_workflow_release_events_sweep_and_other_closed_prs_exit(monkeypatch, br
     monkeypatch.delenv("CHECK_RUN_HEAD_SHA", raising=False)
     monkeypatch.delenv("DRY_RUN", raising=False)
     prs = [
-        {"number": n, "headRefOid": MERGED, "headRefName": f"feature/{n}", "labels": []}
+        {"number": n, "headRefOid": MERGED, "headRefName": f"feature/{n}", "isCrossRepository": False, "labels": []}
         for n in (4559, 4562)
     ]
     if action != "closed":
-        prs.append({"number": 4560, "headRefOid": MERGED, "headRefName": branch, "labels": []})
+        prs.append(
+            {"number": 4560, "headRefOid": MERGED, "headRefName": branch, "isCrossRepository": False, "labels": []}
+        )
     monkeypatch.setattr(rah, "_open_prs", lambda: prs)
     monkeypatch.setattr(rah, "_reviews", lambda pr: [review(MERGED)])
     posted = {}
