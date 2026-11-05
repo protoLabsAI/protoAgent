@@ -920,6 +920,7 @@ def test_a_step_is_dispatched_with_the_prompt_tool_scan_off(monkeypatch):
         return "ok"
 
     _patch_sdk(monkeypatch, run_subagent)
-    out = asyncio.run(wf._traced_step("demo", "researcher", "summarise `wait` and github_get_pr", "s1"))
+    out = asyncio.run(wf._traced_step("demo", "researcher", "summarise `wait` and github_get_pr", "s1", "run-7"))
     assert out == "ok"
-    assert seen == [{"check_prompt_tools": False}]
+    # The step also stamps its run identity on the delegation edge (#4612).
+    assert seen == [{"check_prompt_tools": False, "session_id": "workflow:run-7"}]

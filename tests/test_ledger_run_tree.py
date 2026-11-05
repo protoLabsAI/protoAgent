@@ -214,7 +214,7 @@ async def test_a_workflow_run_is_an_edge_its_steps_nest_under(ledger_db, tmp_pat
     import plugins.workflows as wf
     from plugins.workflows.run_state import WorkflowRunStore
 
-    async def _step(name, subagent_type, prompt, step_id):
+    async def _step(name, subagent_type, prompt, step_id, run_id):
         if step_id == "b":
             raise RuntimeError("step b broke")
         with ledger.dispatch(to_kind="subagent", to_name=subagent_type, what=f"workflow {name}:{step_id}"):

@@ -156,7 +156,7 @@ async def _run_prepared(
         run_store.step_started(step_id, prompt=prompt)
         if on_step:
             await _safe(on_step, {"phase": "start", "step_id": step_id, "subagent": subagent_type})
-        out = await _traced_step(name, subagent_type, prompt, step_id)
+        out = await _traced_step(name, subagent_type, prompt, step_id, run_id)
         run_store.step_done(step_id, out)
         if on_step:
             await _safe(on_step, {"phase": "end", "step_id": step_id, "subagent": subagent_type, "output": out})
@@ -286,7 +286,7 @@ def _finish_stopped(run_store: WorkflowRunStore) -> None:
         run_store.finish(STATUS_CANCELLED)
 
 
-async def _traced_step(name: str, subagent_type: str, prompt: str, step_id: str) -> str:
+async def _traced_step(name: str, subagent_type: str, prompt: str, step_id: str, run_id: str) -> str:
     """One step's subagent, with the step's identity on its ``subagent:`` span (#3565).
 
     The run's own keys (``run_id``, ``workflow``, ``parent_session_id``, the redacted
@@ -299,7 +299,13 @@ async def _traced_step(name: str, subagent_type: str, prompt: str, step_id: str)
         # A step prompt is the recipe's template with earlier steps' output (finder reports,
         # a PR diff, comments) interpolated in. A tool name inside that data is not a request
         # for the tool, and the dispatch-time scan refused the step on it (#4501).
-        out = await sdk.run_subagent(subagent_type, prompt, description=description, check_prompt_tools=False)
+        #
+        # Stamp the run's identity on the delegation edge so a step's row joins back to its
+        # workflow run instead of landing with an empty session_id (#4612). The run_id is the
+        # same key the ledger edge and trace already use (`task_id = run_id`).
+        out = await sdk.run_subagent(
+            subagent_type, prompt, description=description, check_prompt_tools=False, session_id=f"workflow:{run_id}"
+        )
     return _strip_completed_header(out, subagent_type, description)
 
 
@@ -432,7 +438,7 @@ async def _resume(
 
     async def _run_step(subagent_type: str, prompt: str, step_id: str) -> str:
         run_store.step_started(step_id, prompt=prompt)
-        out = await _traced_step(name, subagent_type, prompt, step_id)
+        out = await _traced_step(name, subagent_type, prompt, step_id, run_id)
         run_store.step_done(step_id, out)
         return out
 
