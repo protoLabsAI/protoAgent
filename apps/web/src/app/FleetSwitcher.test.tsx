@@ -675,7 +675,7 @@ describe.each([false, true])("FleetSwitcher once-only header (mobile=%s)", (mobi
         expect(document.querySelector(".fleet-sheet-list .fleet-header-actions")).toBeNull();
       } else {
         expect(header.contains(input)).toBe(true);
-        expect(themeCss).toMatch(/\.fleet-switcher-header\s*\{[^}]*position: sticky;[^}]*top: 0;[^}]*background: var\(--pl-color-bg-raised\)/);
+        expect(themeCss).toMatch(/\.fleet-switcher-header\s*\{[^}]*position: sticky;[^}]*top: -4px;[^}]*margin: -4px -4px[^}]*background: var\(--pl-color-bg-raised\)/);
       }
       clickOnly(button);
       await flush();
