@@ -1645,6 +1645,56 @@ textarea {
    (MenuGroup) and the filter box (MenuFilter) are all DS-styled (@protolabsai/ui ^0.69); only
    the console-specific row/action layout lives here. */
 
+/* Menu has no header slot: keep its controls above the scrolling rows. The menu's own 4px
+   padding would leave a band above (and beside) a `top: 0` sticky header that the rows visibly
+   scroll through, so the header pulls itself over that padding (negative margin, matching
+   padding) and sticks at -4px: an opaque block flush with the menu's edge, with a hairline
+   below so rows pass under it rather than appearing to cut through. */
+.fleet-switcher-header {
+  position: sticky;
+  top: -4px;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  gap: var(--pl-space-1);
+  margin: -4px -4px var(--pl-space-1);
+  padding: var(--pl-space-1);
+  background: var(--pl-color-bg-raised);
+  border-bottom: var(--pl-border-width) solid var(--pl-color-border);
+}
+.fleet-switcher-header .pl-menu__filter {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  border: 0;
+  padding: 0;
+}
+.fleet-header-actions {
+  display: inline-flex;
+  gap: var(--pl-space-1);
+  margin-left: auto;
+  flex-shrink: 0;
+}
+.fleet-sheet-title {
+  display: flex;
+  align-items: center;
+  gap: var(--pl-space-2);
+}
+.fleet-sheet .pl-drawer__title {
+  flex: 1;
+}
+.fleet-sheet .fleet-header-actions .pl-iconbtn {
+  width: 44px;
+  height: 44px;
+}
+/* MenuFilter's bare SVG needs explicit dimensions inside the input affix. */
+.fleet-switcher-header .pl-input-affix__icon svg,
+.fleet-sheet .pl-menu__filter .pl-input-affix__icon svg {
+  display: block;
+  width: 16px;
+  height: 16px;
+}
+
 /* The hover/focus-revealed pin star on a desktop row (DS MenuItem `action`). A filled star
    marks a pinned agent even when the row isn't hovered, so pins read at a glance. */
 .fleet-star {
@@ -1716,17 +1766,16 @@ textarea {
   padding: var(--pl-space-2);
   margin: 0;
 }
+/* The touch-visible disabled-reason note (the header icons' tooltip isn't seen on touch). */
+.fleet-sheet-note {
+  flex: 0 0 auto;
+}
 .fleet-sheet-list {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
   padding: var(--pl-space-1) 0 var(--pl-space-2);
   outline: none;
-}
-.fleet-sheet-foot {
-  border-top: var(--pl-border-width) solid var(--pl-color-border);
-  margin-top: var(--pl-space-1);
-  padding-top: var(--pl-space-1);
 }
 .fleet-slabel {
   margin-top: var(--pl-space-1);
@@ -1859,18 +1908,10 @@ textarea {
   padding: var(--pl-space-1) var(--pl-space-2);
   margin: 0;
 }
-.fleet-foot-item {
-  width: 100%;
-}
-.fleet-foot-item:disabled {
-  color: var(--pl-color-fg-muted);
-  cursor: default;
-}
-
-/* Tooltip-wrapped menu row (#1708 — the disabled "Fleet settings" item on a fleet
-   member). The DS Tooltip's trigger span is inline-flex, which would shrink the
-   wrapped .pl-menu__item to its content width; make it block so the row spans the
-   menu like its siblings. (DS gap — a disabled-menu-item-with-tooltip pattern
+/* Tooltip-wrapped menu row (RowMenu's disabled "Move to group…" on a remote agent —
+   its reason is a Tooltip). The DS Tooltip's trigger span is inline-flex, which would
+   shrink the wrapped .pl-menu__item to its content width; make it block so the row
+   spans the menu like its siblings. (DS gap — a disabled-menu-item-with-tooltip pattern
    belongs in @protolabsai/ui's Menu; drop this once protoContent ships one.) */
 .pl-menu .pl-tip-wrap {
   display: block;

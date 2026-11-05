@@ -1,4 +1,4 @@
-# Fleet switcher: groups, filter, recents, pins — spec
+# Fleet switcher: groups, filter, pins — spec
 
 Status: **APPROVED, ready to build** (Josh, 2026-11-03; see Decisions log 6–10). Owner: designSystem. Requested by Josh, 2026-11-03.
 Surface: `apps/web/src/app/FleetSwitcher.tsx` (protoAgent console, top-left agent dropdown).
@@ -30,22 +30,19 @@ Two gaps, flagged rather than invented: the DS has **no collapsible menu section
 
 Top to bottom. A section with no rows is hidden, along with its title and separator.
 
-1. **Filter box**: only when the fleet has 10 or more agents.
-2. **Current**: the agent this window is on. StatusDot, name, Check. Always shown.
-3. **Pinned**: starred agents, in the order they were pinned. Title: "Pinned".
-4. **Recent**: the last 3 agents switched to from this browser, newest first, excluding the
-   current agent and anything already pinned. Title: "Recent".
-5. **Ungrouped**: local agents with no group. No title, just a separator above it.
-6. **Operator groups**: in the order set in Fleet settings. Title = group name + count.
-7. **Remote**: always last among the groups, always automatic. Title: "Remote".
-   Each row carries a Badge with its machine name.
-8. Separator, then **New agent** and **Fleet settings**, unchanged, with the existing
-   `fleetSettingsDisabledReason` gating.
+1. **Fixed header row**: filter box (at 10 or more agents), then icon buttons
+   **New agent** and **Fleet settings**, with matching tooltips and aria-labels.
+   Both retain the existing `fleetSettingsDisabledReason` gating and disabled tooltip.
+   Desktop uses a sticky opaque header inside the DS Menu; only the rows scroll.
+2. **Current**: the agent this window is on, with StatusDot, name and Check.
+3. **Pinned**: other starred agents, in the order they were pinned.
+4. **Ungrouped**: remaining local agents with no group, without a title.
+5. **Operator groups**: remaining agents in their own group, in Fleet settings order.
+6. **Remote**: remaining remote agents, with a machine Badge on each row.
 
-**One home per agent, many shortcuts.** An agent's home is exactly one of Ungrouped, an
-operator group or Remote. Current, Pinned and Recent are shortcuts. An agent may appear
-both as a shortcut and in its home, so the group lists stay complete and predictable.
-In its home section a pinned agent shows a filled star, so the duplicate reads as intended.
+**Each agent once (Josh, 2026-11-04).** Current takes precedence over Pinned, which
+takes precedence over the agent's home section. Empty sections are hidden. There is
+no Recent section and no footer.
 
 **Row anatomy** (every section): StatusDot (`success` + pulse when running, else
 `neutral`), display name (`label ?? name`), optional Badges ("this instance" on the host,
@@ -58,8 +55,8 @@ instance" agent is ungrouped by default but can be assigned to a group like any 
   menu opens, so the operator can just start typing.
 - Matches a case-insensitive substring of the display name, the handle (`name`), the group
   name and, for remote agents, the machine name.
-- While the filter has text: Current, Pinned and Recent are hidden. The remaining sections
-  show only matching rows, and **collapsed groups open temporarily** so their matches show.
+- While the filter has text, matching rows retain the same Current → Pinned → home
+  precedence, and **collapsed groups open temporarily** so their matches show.
   A section with no matches is hidden. Each agent appears once.
 - The first match is highlighted. **Enter** switches to it. **Escape** clears the text
   first, and closes the menu if the box is already empty.
@@ -80,8 +77,8 @@ instance" agent is ungrouped by default but can be assigned to a group like any 
 
 | Case | What shows |
 |---|---|
-| Only the host agent | Current row, then New agent and Fleet settings. No titles, no filter. |
-| No pins / no recents | Those sections are hidden. No placeholder. |
+| Only the host agent | Header actions and Current row. No section titles, no filter. |
+| No pins | Those sections are hidden. No placeholder. |
 | An operator group with no agents | Hidden in the switcher. Shown in Fleet settings as "No agents yet". |
 | No paired machines | No Remote section. |
 | Filter matches nothing | One disabled row: "No agents match "{text}"". |
@@ -92,6 +89,13 @@ instance" agent is ungrouped by default but can be assigned to a group like any 
 
 - **Open**: Enter, Space or Down Arrow on the trigger (existing `Menu` behaviour). Focus goes
   to the filter box if it's shown, otherwise the first row.
+- **Header row**: the filter and the **New agent** / **Fleet settings** icon buttons are a
+  toolbar — **Left / Right Arrow** move across them (Right only hops out of the filter box once
+  the caret is at the end). **Down Arrow** from a button drops into the list; **Up Arrow**
+  returns to the filter. The buttons are plain `<button>`s (an `aria-label`, a `title` and the
+  disabled-reason tooltip a `MenuItem` can't carry), and the DS Menu blocks Tab, so this toolbar
+  wiring is what keeps them keyboard-reachable. Below the filter threshold (no filter box),
+  **Up Arrow from the first row** reaches the first button instead.
 - **Down / Up Arrow**: from the filter box, Down moves into the list. In the list, the arrows
   move through rows and group headers in order. Up from the first row goes back to the filter.
 - **Right / Left Arrow** on a group header: open / collapse it. On an agent row, Right opens
@@ -161,12 +165,11 @@ and rules are unchanged; only the container and the controls change.
 focus trap). Not a library gap.
 
 - Tapping the agent name opens the sheet. Title: "Switch agent". The sheet has a Close
-  button in its header and closes on a backdrop tap or after switching.
+  button in its header, beside New agent and Fleet settings icon buttons, and closes on a backdrop tap or after switching.
 - The filter sits fixed at the top of the sheet; the list scrolls under it. On a phone the
   filter does **not** take focus on open (that would pop the keyboard over half the list);
   tap it to type. The 10-agent threshold is unchanged.
-- Same sections, same order: current, pinned, recent, ungrouped, groups, Remote, then New
-  agent and Fleet settings.
+- Same once-only sections and order: current, pinned, ungrouped, groups, Remote. No footer.
 - Rows are at least 44px tall (WCAG 2.5.5 target; well past 2.5.8's 24px minimum). Group
   headers are the same height and toggle on tap; collapsed state is shared with desktop
   (same per-browser storage).
@@ -250,8 +253,6 @@ type FleetAgent = {
 
 **Stored per browser (`localStorage`):**
 
-- `protoagent.fleet.recent`: up to 3 agent ids, newest first. Written on each switch,
-  before navigating. Ids no longer in the roster are dropped when read.
 - `protoagent.fleet.collapsed`: the group ids (and `"remote"`) that are collapsed.
 
 ## Copy
@@ -261,7 +262,7 @@ type FleetAgent = {
 | Trigger aria-label | Switch agent (unchanged) |
 | Filter placeholder | Find an agent |
 | Filter aria-label | Find an agent by name or group |
-| Section titles | Pinned · Recent · {group name} · Remote |
+| Section titles | Pinned · {group name} · Remote |
 | Remote row badge | {machine name} |
 | Host badge | this instance (unchanged) |
 | Group header aria-label | {name}, {n} agents, collapsed / expanded |
@@ -271,7 +272,7 @@ type FleetAgent = {
 | New group field placeholder | Group name |
 | Remote move disabled tooltip | Remote agents are grouped by their machine. |
 | No filter matches | No agents match "{text}" |
-| Footer | New agent · Fleet settings (unchanged) |
+| Header icon buttons (tooltip and aria-label) | New agent · Fleet settings |
 | Settings section | Groups |
 | Settings help | Groups organize the agent switcher. They don't change what agents can do. |
 | Settings buttons | Add group · Move up · Move down · Delete |
@@ -300,10 +301,11 @@ stand-ins in the console.
 1. Library first for `MenuGroup` / `MenuFilter` (above).
 2. One "Remote" section, with a machine Badge on each agent (not one section per machine).
 3. Duplicates are fine: a pinned or recent agent also stays in its home section.
+   _(Superseded by 11 — each agent now appears once and Recent is gone.)_
 4. Remote agents can't move into operator groups ("Move to group…" disabled with tooltip),
    but can be pinned.
 5. Pins live with the fleet roster (same in every browser); recents and collapsed groups
-   are per browser.
+   are per browser. _(Recents retired by 11; collapsed groups stay per browser.)_
 6. **Switcher preview approved** (Josh, 2026-11-03): reviewed
    `design/fleet-switcher-preview.html`, "looks good to me". Part 3 (the Fleet settings
    group editor preview) follows: `design/fleet-groups-settings-preview.html`.
@@ -322,3 +324,16 @@ stand-ins in the console.
 10. **Spec APPROVED, ready to build** (Josh, 2026-11-03). Build order: `MenuGroup` and
     `MenuFilter` in protoContent first, then the protoAgent data, switcher and Fleet
     settings cards, all citing this file.
+11. **Each agent once (Josh, 2026-11-04, supersedes 3)**: after using the shipped switcher
+    Josh found a starred current agent listed three times (current row, Pinned, its section)
+    — "awful ux … if an agent is active it only needs to appear in the main one" — and chose
+    to **drop Recent**. So every agent now appears exactly once: the current agent only in the
+    main row, other pinned agents only in Pinned, everyone else only in their home section
+    (ungrouped / operator group / Remote). The **Recent** section is removed and the
+    `protoagent.fleet.recent` storage key is retired — old values are ignored and switching
+    writes no recents. Same screenshots asked to move **New agent** and **Fleet settings** out
+    of the footer into the header row beside the filter (icon buttons, kept in view on scroll),
+    and to keep the filter's search icon visible; the footer items and the separator before
+    them are gone. The header icon buttons stay keyboard-reachable inside the DS Menu (which
+    blocks Tab): Left/Right move across the filter and the two buttons, Down drops into the
+    list, Up returns to the filter.

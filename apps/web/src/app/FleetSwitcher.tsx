@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowLeft, Check, ChevronDown, ChevronRight, Folder, Plus, Settings, Star } from "lucide-react";
-import { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState, type ReactNode } from "react";
+import { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from "react";
 
 import { Menu, MenuFilter, MenuGroup, MenuItem, MenuLabel, MenuSeparator, type MenuHandle } from "@protolabsai/ui/menu";
 import { Drawer, Tooltip, useToast } from "@protolabsai/ui/overlays";
@@ -17,17 +17,13 @@ import { fleetHasGroupsApi, fleetSettingsDisabledReason, fleetWriteErrorMessage 
 
 // The URL slug is the agent's STABLE id, never its (editable) display name — renaming an agent
 // must not change its URL/bookmarks. `host` is the reserved slug for this instance. Group/pin
-// writes and recents key off the immutable `id` everywhere, same rule as slugs.
+// writes key off the immutable `id` everywhere, same rule as slugs.
 const slugOf = (a: { id: string; host?: boolean }) => (a.host ? "host" : a.id);
 const nameOf = (a: FleetAgent) => a.label ?? a.name;
 
-// Spec: docs/design/fleet-switcher-groups.md. The filter appears at ≥ 10 agents; recents/collapsed
-// live per browser (through the ADR 0114 storage seam); pins/groups live with the hub roster. The
-// recents key is deliberately NOT the spec's `protoagent.fleet.recent`: that one is already the
-// palette's legacy slug→timestamp store with a single documented writer (fleetPalette.ts), so the
-// switcher keeps its own key rather than corrupting a shared one.
+// Collapse state lives per browser; pins/groups live with the hub roster.
+// Old switcher recents are deliberately ignored.
 const FILTER_MIN = 10;
-const RECENT_KEY = "protoagent.fleet.switcherRecent"; // up to 3 agent ids, newest first
 const COLLAPSED_KEY = "protoagent.fleet.collapsed"; // group ids + "remote" that are collapsed
 const REMOTE_KEY = "remote"; // the single automatic "Remote" section's collapse/home key
 
@@ -51,7 +47,7 @@ type HomeSection = { key: string; name: string; agents: FleetAgent[] };
 // focused agent lives in the URL (/app/agent/<slug>/), so picking one NAVIGATES there — each window
 // is its own agent, a reload can't desync. The dropdown ALWAYS shows (New agent + Fleet settings
 // stay reachable even with a single agent); only a hard fleet-API error falls back to the plain
-// name. Desktop is the DS Menu (filter, collapsible groups, pins, recents, a per-row actions menu);
+// name. Desktop is the DS Menu (filter, collapsible groups, pins, a per-row actions menu);
 // below 767px (`useIsMobile`) it's a DS bottom-sheet Drawer with the same sections and copy.
 export function FleetSwitcher({
   fallbackName,
@@ -77,17 +73,14 @@ export function FleetSwitcher({
   const fleetSettingsBlocked = fleetSettingsDisabledReason(agents);
   // A hub that predates the groups/pins API (#4731) returns the flat roster with no `groups` field:
   // its pin/group routes 404/405, so the write controls (star, Pin, Move) are hidden there too and
-  // the plain Ungrouped + Remote list shows (groups is []). The filter and recents are per browser,
-  // so they stay. Once the roster has loaded (fleet.data present) and carried no `groups`, it's a
+  // the plain Ungrouped + Remote list shows (groups is []). The filter stays available.
+  // Once the roster has loaded (fleet.data present) and carried no `groups`, it's a
   // legacy hub; while still loading we don't yet know, so don't flash the controls off.
   const groupsSupported = !fleet.data || fleetHasGroupsApi(fleet.data);
   const canWrite = !fleetSettingsBlocked && groupsSupported;
 
   const [filter, setFilter] = useState("");
   const [collapsed, setCollapsed] = useState<string[]>(() => readIds(COLLAPSED_KEY));
-  // Read once: a switch navigates (full page load), so recents are re-read on the next mount.
-  const [recent] = useState<string[]>(() => readIds(RECENT_KEY));
-
   const query = filter.trim().toLowerCase();
   const filtering = query.length > 0;
 
@@ -200,16 +193,13 @@ export function FleetSwitcher({
     (a: FleetAgent) => {
       const target = slugOf(a);
       if (target === slug) return; // already here
-      // Written BEFORE navigating (spec): newest first, deduped, capped at 3.
-      writeIds(RECENT_KEY, [a.id, ...recent.filter((x) => x !== a.id)].slice(0, 3));
       window.location.href = agentHref(target);
     },
-    [slug, recent],
+    [slug],
   );
 
   // ── sections ───────────────────────────────────────────────────────────────────────────────
-  // One home per agent — Ungrouped, an operator group, or Remote — in switcher order; Current,
-  // Pinned and Recent are shortcuts that duplicate the home row on purpose (spec Decision 3).
+  // Each agent appears in Current, Pinned, or its home section, in that order.
   const groupIds = useMemo(() => new Set(groups.map((g) => g.id)), [groups]);
   const homeOf = useCallback(
     (a: FleetAgent): string => (a.remote ? REMOTE_KEY : a.group && groupIds.has(a.group) ? a.group : "ungrouped"),
@@ -222,36 +212,30 @@ export function FleetSwitcher({
       { key: REMOTE_KEY, name: "Remote", agents: [] },
     ];
     const byKey = new Map(base.map((s) => [s.key, s]));
-    for (const a of agents) byKey.get(homeOf(a))?.agents.push(a);
+    for (const a of agents) {
+      if (a.id !== current?.id && !a.pinned) byKey.get(homeOf(a))?.agents.push(a);
+    }
     return base;
-  }, [agents, groups, homeOf]);
+  }, [agents, groups, homeOf, current]);
 
   const pinned = useMemo(
-    () => agents.filter((a) => a.pinned).sort((x, y) => (x.pinned_at ?? "").localeCompare(y.pinned_at ?? "")),
-    [agents],
+    () => agents
+      .filter((a) => a.pinned && a.id !== current?.id)
+      .sort((x, y) => (x.pinned_at ?? "").localeCompare(y.pinned_at ?? "")),
+    [agents, current],
   );
-  const recentAgents = useMemo(() => {
-    const pinnedIds = new Set(pinned.map((a) => a.id));
-    return recent
-      .map((id) => agents.find((a) => a.id === id))
-      .filter((a): a is FleetAgent => !!a && a.id !== current?.id && !pinnedIds.has(a.id))
-      .slice(0, 3);
-  }, [recent, agents, pinned, current]);
-
   const matches = useCallback(
     (a: FleetAgent, groupName: string) =>
       [nameOf(a), a.name, groupName, a.remote ? a.machine ?? "" : ""].join(" ").toLowerCase().includes(query),
     [query],
   );
-  // The first match in rendered order (ungrouped, groups, Remote) — Enter in the filter switches to it.
-  const topMatch = useMemo(() => {
-    if (!filtering) return null;
-    for (const s of sections) {
-      const m = s.agents.find((a) => matches(a, s.name));
-      if (m) return m;
-    }
-    return null;
-  }, [filtering, sections, matches]);
+  const groupNameOf = (a: FleetAgent) => sections.find((s) => s.key === homeOf(a))?.name ?? "";
+  const shownCurrent = current && (!filtering || matches(current, groupNameOf(current))) ? current : undefined;
+  const shownPinned = pinned.filter((a) => !filtering || matches(a, groupNameOf(a)));
+  // Enter follows the same order as the visible list.
+  const topMatch = filtering
+    ? shownCurrent ?? shownPinned[0] ?? sections.flatMap((s) => s.agents.filter((a) => matches(a, s.name)))[0]
+    : null;
   const onFilterSubmit = useCallback(() => {
     if (topMatch) doSwitch(topMatch);
   }, [topMatch, doSwitch]);
@@ -266,6 +250,7 @@ export function FleetSwitcher({
 
   // On desktop the filter takes focus when the menu opens, so the operator can just start typing
   // (the DS MenuFilter isn't a menu item, so Radix's open-focus lands on the first row, not it).
+  const menuRef = useRef<MenuHandle>(null);
   const [menuOpen, setMenuOpen] = useState(false);
   useEffect(() => {
     if (!menuOpen || isMobile || !showFilter || typeof requestAnimationFrame !== "function") return;
@@ -273,6 +258,86 @@ export function FleetSwitcher({
       (document.querySelector(".pl-menu:not(.fleet-rowmenu) .pl-menu__filter input") as HTMLElement | null)?.focus();
     });
     return () => cancelAnimationFrame(id);
+  }, [menuOpen, isMobile, showFilter]);
+
+  // ── desktop header keyboard (the blocked-footer-items regression fix) ───────────────────────
+  // Radix's menu blocks Tab and only roving-focuses MenuItems, so the two action buttons — plain
+  // buttons by design, since they carry an aria-label, a title and the disabled-reason tooltip a
+  // MenuItem can't — would be keyboard-unreachable. Make the header a toolbar: Left/Right move
+  // across the filter and the two buttons, Down drops into the list, Up returns to the filter. The
+  // filter↔list arrows (Down into the first row, Up back to it) stay owned by the DS MenuFilter.
+  const headerRef = useRef<HTMLDivElement>(null);
+  const headerStops = useCallback((): HTMLElement[] => {
+    const root = headerRef.current;
+    if (!root) return [];
+    const input = root.querySelector<HTMLElement>(".pl-menu__filter input");
+    const actions = [...root.querySelectorAll<HTMLElement>(".fleet-header-actions button:not([disabled])")];
+    return [input, ...actions].filter((el): el is HTMLElement => el !== null);
+  }, []);
+  const firstMenuItem = useCallback(
+    (): HTMLElement | null =>
+      headerRef.current
+        ?.closest("[data-radix-menu-content]")
+        ?.querySelector<HTMLElement>(
+          '[role="menuitem"]:not([data-disabled]),[role="menuitemradio"]:not([data-disabled]),[role="menuitemcheckbox"]:not([data-disabled])',
+        ) ?? null,
+    [],
+  );
+  const onHeaderKeyDown = useCallback(
+    (e: ReactKeyboardEvent<HTMLDivElement>) => {
+      const el = e.target as HTMLElement;
+      const stops = headerStops();
+      const idx = stops.indexOf(el);
+      if (idx < 0) return;
+      const input = el instanceof HTMLInputElement ? el : null;
+      // In the text box, Left/Right first move the caret; only hop controls from the far edge.
+      const atEnd = !input || (input.selectionStart === input.value.length && input.selectionStart === input.selectionEnd);
+      const atStart = !input || (input.selectionStart === 0 && input.selectionEnd === 0);
+      if (e.key === "ArrowRight" && atEnd && stops[idx + 1]) {
+        e.preventDefault();
+        stops[idx + 1].focus();
+      } else if (e.key === "ArrowLeft" && atStart && idx > 0) {
+        e.preventDefault();
+        stops[idx - 1].focus();
+      } else if (e.key === "ArrowDown" && !input) {
+        e.preventDefault();
+        firstMenuItem()?.focus();
+      } else if (e.key === "ArrowUp" && !input) {
+        const filterInput = stops[0] instanceof HTMLInputElement ? stops[0] : null;
+        if (filterInput) {
+          e.preventDefault();
+          filterInput.focus();
+        }
+      }
+    },
+    [headerStops, firstMenuItem],
+  );
+  // Below the filter threshold there is no MenuFilter to arrow up into — the DS registers its
+  // Up-from-first-row→filter bridge only when a filter is mounted — so the header would be
+  // unreachable when focus opens on the first row. Bridge Up-from-first-row to the first action
+  // button instead. The listener sits on `document` in the capture phase so it runs before Radix's
+  // roving-focus handler (a React-synthetic listener on the app root) gets to loop focus.
+  useEffect(() => {
+    if (!menuOpen || isMobile || showFilter || typeof document === "undefined") return;
+    const onCapture = (ev: Event) => {
+      const ke = ev as KeyboardEvent;
+      if (ke.key !== "ArrowUp") return;
+      const menu = document.querySelector(".pl-menu:not(.fleet-rowmenu)");
+      if (!menu) return;
+      const first = menu.querySelector(
+        '[role="menuitem"]:not([data-disabled]),[role="menuitemradio"]:not([data-disabled]),[role="menuitemcheckbox"]:not([data-disabled])',
+      );
+      if (first && document.activeElement === first) {
+        const btn = menu.querySelector<HTMLElement>(".fleet-header-actions button:not([disabled])");
+        if (btn) {
+          ke.preventDefault();
+          ke.stopPropagation();
+          btn.focus();
+        }
+      }
+    };
+    document.addEventListener("keydown", onCapture, { capture: true });
+    return () => document.removeEventListener("keydown", onCapture, { capture: true });
   }, [menuOpen, isMobile, showFilter]);
 
   // Only a hard fleet-API error hides the switcher; otherwise it's always available.
@@ -327,30 +392,12 @@ export function FleetSwitcher({
   const pushSep = () => {
     if (desktopBody.length) desktopBody.push(<MenuSeparator key={`sep-${sepId++}`} />);
   };
-  if (showFilter) {
-    desktopBody.push(
-      <MenuFilter
-        key="filter"
-        value={filter}
-        onValueChange={setFilter}
-        onSubmit={onFilterSubmit}
-        placeholder="Find an agent"
-        aria-label="Find an agent by name or group"
-      />,
-    );
+  if (shownCurrent) desktopBody.push(agentRow(shownCurrent, "current"));
+  if (shownPinned.length) {
+    pushSep();
+    desktopBody.push(<MenuLabel key="pinned-label">Pinned</MenuLabel>, ...shownPinned.map((a) => agentRow(a, "pinned")));
   }
-  if (!filtering) {
-    if (current) desktopBody.push(agentRow(current, "current"));
-    if (pinned.length) {
-      pushSep();
-      desktopBody.push(<MenuLabel key="pinned-label">Pinned</MenuLabel>, ...pinned.map((a) => agentRow(a, "pinned")));
-    }
-    if (recentAgents.length) {
-      pushSep();
-      desktopBody.push(<MenuLabel key="recent-label">Recent</MenuLabel>, ...recentAgents.map((a) => agentRow(a, "recent")));
-    }
-  }
-  let matchCount = 0;
+  let matchCount = (shownCurrent ? 1 : 0) + shownPinned.length;
   for (const s of sections) {
     const shown = filtering ? s.agents.filter((a) => matches(a, s.name)) : s.agents;
     if (!shown.length) continue; // empty sections (and empty groups) are hidden
@@ -379,8 +426,6 @@ export function FleetSwitcher({
       </MenuItem>,
     );
   }
-  pushSep();
-  desktopBody.push(...footerItems({ fleetSettingsBlocked, onNewAgent, onManageFleet }));
 
   // ── phone bottom sheet ──────────────────────────────────────────────────────────────────────
   const triggerLabel = current ? nameOf(current) : fallbackName;
@@ -395,9 +440,8 @@ export function FleetSwitcher({
         onFilterSubmit={onFilterSubmit}
         filtering={filtering}
         matches={matches}
-        current={current}
-        pinned={pinned}
-        recentAgents={recentAgents}
+        current={shownCurrent}
+        pinned={shownPinned}
         sections={sections}
         slug={slug}
         isCollapsed={isCollapsed}
@@ -418,6 +462,8 @@ export function FleetSwitcher({
   return (
     <>
       <Menu
+        ref={menuRef}
+        className="fleet-switcher-menu"
         align="start"
         onOpenChange={(open) => {
           setMenuOpen(open);
@@ -430,6 +476,28 @@ export function FleetSwitcher({
           </button>
         }
       >
+        <div className="fleet-switcher-header" ref={headerRef} onKeyDown={onHeaderKeyDown}>
+          {showFilter ? (
+            <MenuFilter
+              value={filter}
+              onValueChange={setFilter}
+              onSubmit={onFilterSubmit}
+              placeholder="Find an agent"
+              aria-label="Find an agent by name or group"
+            />
+          ) : null}
+          <HeaderButtons
+            fleetSettingsBlocked={fleetSettingsBlocked}
+            onNewAgent={() => {
+              menuRef.current?.close();
+              onNewAgent?.();
+            }}
+            onManageFleet={() => {
+              menuRef.current?.close();
+              onManageFleet?.();
+            }}
+          />
+        </div>
         {desktopBody}
       </Menu>
       {canWrite ? (
@@ -437,45 +505,6 @@ export function FleetSwitcher({
       ) : null}
     </>
   );
-}
-
-// Footer rows (New agent · Fleet settings), gated exactly as before (#1708/#1999): on a directly
-// reached member they are disabled with a tooltip saying WHERE fleet settings live, not hidden.
-function footerItems({
-  fleetSettingsBlocked,
-  onNewAgent,
-  onManageFleet,
-}: {
-  fleetSettingsBlocked: string | null;
-  onNewAgent?: () => void;
-  onManageFleet?: () => void;
-}): ReactNode[] {
-  return [
-    fleetSettingsBlocked ? (
-      // The DS Tooltip's wrapper span is the hover target — a disabled Radix menu item is
-      // pointer-events:none, so the item itself can't fire the tooltip.
-      <Tooltip key="new" label={fleetSettingsBlocked} side="left">
-        <MenuItem icon={<Plus size={14} />} disabled>
-          New agent
-        </MenuItem>
-      </Tooltip>
-    ) : (
-      <MenuItem key="new" icon={<Plus size={14} />} onSelect={() => onNewAgent?.()}>
-        New agent
-      </MenuItem>
-    ),
-    fleetSettingsBlocked ? (
-      <Tooltip key="settings" label={fleetSettingsBlocked} side="left">
-        <MenuItem icon={<Settings size={14} />} disabled>
-          Fleet settings
-        </MenuItem>
-      </Tooltip>
-    ) : (
-      <MenuItem key="settings" icon={<Settings size={14} />} onSelect={() => onManageFleet?.()}>
-        Fleet settings
-      </MenuItem>
-    ),
-  ];
 }
 
 // ─────────────────────────────────────────────────────────────────────────────────────────────
@@ -635,7 +664,6 @@ type PhoneProps = {
   matches: (a: FleetAgent, groupName: string) => boolean;
   current?: FleetAgent;
   pinned: FleetAgent[];
-  recentAgents: FleetAgent[];
   sections: HomeSection[];
   slug: string;
   isCollapsed: (key: string) => boolean;
@@ -682,7 +710,7 @@ function PhoneSwitcher(props: PhoneProps) {
     if (sheet === "switcher") listRef.current?.focus({ preventScroll: true });
   }, [sheet]);
 
-  const { current, pinned, recentAgents, sections, slug, filtering, matches } = props;
+  const { current, pinned, sections, slug, filtering, matches } = props;
 
   const phoneRow = (a: FleetAgent, section: string) => (
     <PhoneRow
@@ -699,26 +727,14 @@ function PhoneSwitcher(props: PhoneProps) {
   );
 
   const list: ReactNode[] = [];
-  if (!filtering) {
-    if (current) list.push(phoneRow(current, "current"));
-    if (pinned.length) {
-      list.push(
-        <div className="fleet-slabel pl-menu__group-label" key="pinned-label">
-          Pinned
-        </div>,
-        ...pinned.map((a) => phoneRow(a, "pinned")),
-      );
-    }
-    if (recentAgents.length) {
-      list.push(
-        <div className="fleet-slabel pl-menu__group-label" key="recent-label">
-          Recent
-        </div>,
-        ...recentAgents.map((a) => phoneRow(a, "recent")),
-      );
-    }
+  if (current) list.push(phoneRow(current, "current"));
+  if (pinned.length) {
+    list.push(
+      <div className="fleet-slabel pl-menu__group-label" key="pinned-label">Pinned</div>,
+      ...pinned.map((a) => phoneRow(a, "pinned")),
+    );
   }
-  let matchCount = 0;
+  let matchCount = (current ? 1 : 0) + pinned.length;
   for (const s of sections) {
     const shown = filtering ? s.agents.filter((a) => matches(a, s.name)) : s.agents;
     if (!shown.length) continue;
@@ -770,8 +786,32 @@ function PhoneSwitcher(props: PhoneProps) {
         <ChevronDown size={14} aria-hidden />
       </button>
 
-      <Drawer open={sheet === "switcher"} onClose={closeSheets} side="bottom" size="85dvh" title="Switch agent" className="fleet-sheet">
+      <Drawer
+        open={sheet === "switcher"}
+        onClose={closeSheets}
+        side="bottom"
+        size="85dvh"
+        title={
+          <span className="fleet-sheet-title">
+            <span>Switch agent</span>
+            <HeaderButtons
+              fleetSettingsBlocked={props.fleetSettingsBlocked}
+              onNewAgent={() => {
+                closeSheets();
+                props.onNewAgent?.();
+              }}
+              onManageFleet={() => {
+                closeSheets();
+                props.onManageFleet?.();
+              }}
+            />
+          </span>
+        }
+        className="fleet-sheet"
+      >
         <div className="fleet-sheet-inner">
+          {/* On touch the header icons' disabled-reason tooltip is never seen, so spell it out. */}
+          {props.fleetSettingsBlocked ? <p className="fleet-sheet-note fleet-act-note">{props.fleetSettingsBlocked}</p> : null}
           {props.showFilter ? (
             <MenuFilter
               value={props.filter}
@@ -783,19 +823,6 @@ function PhoneSwitcher(props: PhoneProps) {
           ) : null}
           <div className="fleet-sheet-list" ref={listRef} tabIndex={-1}>
             {list}
-            <div className="fleet-sheet-foot">
-              <FooterButtons
-                fleetSettingsBlocked={props.fleetSettingsBlocked}
-                onNewAgent={() => {
-                  closeSheets();
-                  props.onNewAgent?.();
-                }}
-                onManageFleet={() => {
-                  closeSheets();
-                  props.onManageFleet?.();
-                }}
-              />
-            </div>
           </div>
         </div>
       </Drawer>
@@ -927,7 +954,7 @@ function PhoneSwitcher(props: PhoneProps) {
   );
 }
 
-function FooterButtons({
+function HeaderButtons({
   fleetSettingsBlocked,
   onNewAgent,
   onManageFleet,
@@ -937,21 +964,25 @@ function FooterButtons({
   onManageFleet?: () => void;
 }) {
   return (
-    <>
-      <button type="button" className="fleet-prow fleet-foot-item" disabled={!!fleetSettingsBlocked} onClick={() => onNewAgent?.()}>
-        <Plus size={16} aria-hidden /> New agent
-      </button>
-      <button
-        type="button"
-        className="fleet-prow fleet-foot-item"
-        disabled={!!fleetSettingsBlocked}
-        title={fleetSettingsBlocked ?? undefined}
-        onClick={() => onManageFleet?.()}
-      >
-        <Settings size={16} aria-hidden /> Fleet settings
-      </button>
-      {fleetSettingsBlocked ? <p className="fleet-act-note">{fleetSettingsBlocked}</p> : null}
-    </>
+    <span className="fleet-header-actions">
+      {[
+        { label: "New agent", Icon: Plus, onClick: onNewAgent },
+        { label: "Fleet settings", Icon: Settings, onClick: onManageFleet },
+      ].map(({ label, Icon, onClick }) => (
+        <Tooltip key={label} label={fleetSettingsBlocked ?? label}>
+          <button
+            type="button"
+            className="pl-iconbtn"
+            aria-label={label}
+            title={fleetSettingsBlocked ?? label}
+            disabled={!!fleetSettingsBlocked}
+            onClick={onClick}
+          >
+            <Icon size={16} aria-hidden />
+          </button>
+        </Tooltip>
+      ))}
+    </span>
   );
 }
 
