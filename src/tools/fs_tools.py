@@ -42,6 +42,7 @@ from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from langchain_core.tools import ToolException, tool
 from langgraph.prebuilt import InjectedState
 
+from graph.multimodal import multimodal_tool_result
 from infra.proc import child_env, detached_kwargs, scrub_agent_env
 from tools.fs_view import split_lines
 from tools.run_auto_approve import compile_auto_approve, match_auto_approve
@@ -53,6 +54,15 @@ log = logging.getLogger("protoagent.fs")
 
 _MAX_READ_CHARS = 50_000
 _DEFAULT_READ_LINES = 1000  # ~_MAX_READ_CHARS worth of typical 40-60 char source lines
+# Image extensions `view_image` accepts → their `image/*` mime. `read_file` also consults
+# this map to bounce an image path to `view_image` instead of returning decode garbage.
+_IMAGE_MIMES = {
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".gif": "image/gif",
+    ".webp": "image/webp",
+}
 _MAX_LIST = 400
 _MAX_MATCHES = 200
 _MAX_CONTEXT_LINES = 20  # clamp on search_files(context_lines=…) — a runaway value shouldn't blow the result budget
@@ -1073,6 +1083,10 @@ def build_fs_tools(config) -> list:
             return f"Error: {exc}"
         if not target.is_file():
             return f"Error: no such file: {path}"
+        if target.suffix.lower() in _IMAGE_MIMES:
+            # A text read of an image is garbage or a decode error — point at the
+            # tool that can actually show it to a vision model.
+            return f"Error: {path} is an image — use view_image to look at it (read_file is text-only)."
         offset = max(1, offset)
         explicit_limit = None if limit is None else max(1, limit)
         effective_limit = explicit_limit if explicit_limit is not None else _DEFAULT_READ_LINES
@@ -1145,6 +1159,37 @@ def build_fs_tools(config) -> list:
             note += f"; call again with offset={end_line + 1} for more"
         note += ")"
         return chunk + note
+
+    @tool
+    def view_image(project: str, path: str) -> str:
+        """Look at an image file inside a managed project (PNG/JPEG/GIF/WebP); read_file is text-only."""
+        registry = registry_ref.get()
+        try:
+            target = registry.resolve(project, path)
+        except ValueError as exc:
+            return f"Error: {exc}"
+        if not target.is_file():
+            return f"Error: no such file: {path}"
+        mime = _IMAGE_MIMES.get(target.suffix.lower())
+        if mime is None:
+            return f"Error: {path} is not a viewable image — view_image supports .png, .jpg/.jpeg, .gif and .webp."
+        try:
+            size = target.stat().st_size
+        except OSError as exc:
+            return f"Error: cannot read {path}: {exc}"
+        text = f"{project}/{path} ({size} bytes, {mime})"
+        # multimodal_tool_result reads the file, fits/downscales it and builds the
+        # sentinel envelope the middleware turns into image blocks (vision) or a
+        # described/text-only fallback. A ValueError (e.g. an unreadable file) comes
+        # back as an Error string — this tool never raises into the runner.
+        try:
+            return multimodal_tool_result(text, images=[{"path": str(target), "mime": mime}])
+        except ValueError as exc:
+            return f"Error: {exc}"
+        except OSError as exc:
+            # The file vanished / became unreadable between the stat above and the
+            # read inside the helper — still an Error string, never a raise.
+            return f"Error: cannot read {path}: {exc}"
 
     @tool
     def find_files(project: str, pattern: str = "**/*") -> str:
@@ -1489,7 +1534,7 @@ def build_fs_tools(config) -> list:
         # sentinel on into the component frame and keeps this prefix as the tool card.
         return f"Showing {project}/{rel}:{where} to the operator. {echo}\n" + encode_component("code-ref", props)
 
-    tools = [list_projects, list_dir, read_file, find_files, search_files]
+    tools = [list_projects, list_dir, read_file, view_image, find_files, search_files]
     # `show_code` — the code pane's pointer tool (ADR 0112), an opt-in toolset
     # (`filesystem.code_pane`, default off): without the console pane there is nothing for
     # its `code-ref` chip to open, so the model never sees it. A save rebuilds the graph.
