@@ -97,6 +97,23 @@ export function RunInspectorBody({ runId }: { runId: string }) {
   );
 }
 
+/** What the completion check found across a run whose root it didn't rule on. */
+export function checksPassedLine(checked: number, rescued: number): string {
+  if (checked === 1) return rescued ? "The completion check passed its one subagent after a nudge." : "The completion check passed its one subagent.";
+  const after = rescued === 0 ? "" : rescued === checked ? ", each after a nudge" : `, ${rescued} after a nudge`;
+  return `The completion check passed all ${checked} subagents it ran on${after}.`;
+}
+
+export function shortfallLine(shortfalls: number, checked: number): string {
+  const who =
+    checked > shortfalls
+      ? `${shortfalls === 1 ? "One" : shortfalls} of ${checked} checked subagents`
+      : shortfalls === 1
+        ? "One subagent"
+        : `${shortfalls} subagents`;
+  return `${who} came back without the full deliverable.`;
+}
+
 function RunHeader({ tree, asked }: { tree: RunTree; asked: string }) {
   const resolvedNode = tree.resolvedFrom ? findNode(tree.roots, (n) => n.taskId === tree.resolvedFrom || n.id === tree.resolvedFrom) : null;
   const via = !resolvedNode
@@ -135,9 +152,14 @@ function RunHeader({ tree, asked }: { tree: RunTree; asked: string }) {
           {tree.nudges ? ` after ${tree.nudges} nudge${tree.nudges === 1 ? "" : "s"}` : ""}.
         </p>
       ) : null}
+      {!tree.completion && tree.checked && !tree.shortfalls ? (
+        <p className="run-inspector__meta" data-testid="run-checks">
+          {checksPassedLine(tree.checked, tree.rescued)}
+        </p>
+      ) : null}
       {tree.shortfalls ? (
         <p className="run-inspector__meta run-inspector__warn" data-testid="run-shortfalls">
-          {tree.shortfalls === 1 ? "One subagent" : `${tree.shortfalls} subagents`} came back without the full deliverable.
+          {shortfallLine(tree.shortfalls, tree.checked)}
         </p>
       ) : null}
       {tree.resolvedFrom ? (

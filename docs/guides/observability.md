@@ -70,7 +70,9 @@ the history rows and live cards in its node drawer.
 The top of the drawer shows the run id, the overall outcome, the total cost and how long the
 run took from its first start to its last end. When the run started from a subagent or
 workflow that the completion check looked at, the verdict and the number of nudges are
-shown too. If you opened the drawer from a job, a workflow run or one delegation inside the
+shown too. A run that started from chat has no verdict of its own, since the check runs on
+subagents and not on the lead turn, so the header sums up the subagents it did check: how
+many passed, how many needed a nudge, and how many came back short. If you opened the drawer from a job, a workflow run or one delegation inside the
 run, it says which.
 
 Below that, each delegation is one node in the tree, nested under the one that started it.

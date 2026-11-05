@@ -8,7 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { api } from "../lib/api";
 import type { RunEdgeRow, RunRecord, TelemetryTurn } from "../lib/types";
-import { NO_RUN, RunInspector, RunInspectorBody } from "./RunInspector";
+import { checksPassedLine, NO_RUN, RunInspector, RunInspectorBody, shortfallLine } from "./RunInspector";
 import { closeRunInspector, openRunInspector } from "./store";
 
 const promptViewer = vi.hoisted(() => vi.fn());
@@ -87,6 +87,8 @@ describe("RunInspectorBody states", () => {
     expect(head).toContain("$0.42");
     expect(head).toContain("3m12s");
     expect(q('[data-testid="run-completion"]')).toBeNull(); // the root is a turn, not a checked edge
+    // ...but the check did rule on a subagent inside it, so the header rolls that up.
+    expect(q('[data-testid="run-checks"]')!.textContent).toBe("The completion check passed its one subagent after a nudge.");
     const items = all('[role="treeitem"]');
     expect(items.map((i) => i.getAttribute("aria-label"))).toEqual(["turn console, completed", "subagent research, completed", "coder codex, failed"]);
     expect(items.map((i) => i.getAttribute("aria-level"))).toEqual(["1", "2", "3"]);
@@ -118,7 +120,8 @@ describe("RunInspectorBody states", () => {
     });
     await mount("bg-7");
     expect(q('[data-testid="run-resolved-from"]')!.textContent).toBe("Opened from job bg-7.");
-    expect(q('[data-testid="run-shortfalls"]')!.textContent).toContain("One subagent came back without the full deliverable");
+    expect(q('[data-testid="run-shortfalls"]')!.textContent).toBe("One of 2 checked subagents came back without the full deliverable.");
+    expect(q('[data-testid="run-checks"]')).toBeNull(); // the warning says it; no "passed" line beside it
   });
 });
 
@@ -202,5 +205,20 @@ describe("RunInspector host", () => {
     expect(document.querySelector('[data-testid="run-inspector"]')).not.toBeNull();
     await act(async () => closeRunInspector());
     expect(document.querySelector('[data-testid="run-inspector"]')).toBeNull();
+  });
+});
+
+describe("completion roll-up lines", () => {
+  it("says how many checked subagents passed and how many needed a nudge", () => {
+    expect(checksPassedLine(1, 0)).toBe("The completion check passed its one subagent.");
+    expect(checksPassedLine(3, 0)).toBe("The completion check passed all 3 subagents it ran on.");
+    expect(checksPassedLine(3, 1)).toBe("The completion check passed all 3 subagents it ran on, 1 after a nudge.");
+    expect(checksPassedLine(2, 2)).toBe("The completion check passed all 2 subagents it ran on, each after a nudge.");
+  });
+
+  it("puts shortfalls against the checked count when some passed", () => {
+    expect(shortfallLine(1, 1)).toBe("One subagent came back without the full deliverable.");
+    expect(shortfallLine(2, 2)).toBe("2 subagents came back without the full deliverable.");
+    expect(shortfallLine(2, 5)).toBe("2 of 5 checked subagents came back without the full deliverable.");
   });
 });

@@ -67,8 +67,16 @@ export type RunTree = {
   nudges: number;
   /** Subagents whose deliverable didn't arrive (`incomplete`) or that hard-stopped (`partial`). */
   shortfalls: number;
+  /** Edges anywhere in the run the completion check ruled on (complete, incomplete or partial).
+   *  A chat-rooted run has no root verdict (the lead turn isn't checked), so this roll-up is
+   *  what its header can say about the check. */
+  checked: number;
+  /** Checked edges that passed only after the check nudged them. */
+  rescued: number;
   empty: boolean;
 };
+
+const CHECKED = new Set(["complete", "incomplete", "partial"]);
 
 const ms = (iso: string | null | undefined): number | null => {
   if (!iso) return null;
@@ -303,6 +311,8 @@ export function buildRunTree(run: RunRecord, now = Date.now()): RunTree {
     completion: rootEdge?.completion || "",
     nudges: rootEdge?.nudges || 0,
     shortfalls: nodes.filter((n) => n.completion === "incomplete" || n.completion === "partial").length,
+    checked: nodes.filter((n) => CHECKED.has(n.completion)).length,
+    rescued: nodes.filter((n) => n.completion === "complete" && n.nudges > 0).length,
     empty: !nodes.length && !(run.turns ?? []).length,
   };
 }
