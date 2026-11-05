@@ -11,6 +11,7 @@ CORE_READ_TOOLS: frozenset[str] = frozenset(
         "list_projects",
         "list_dir",
         "read_file",
+        "view_image",
         "find_files",
         "search_files",
     }

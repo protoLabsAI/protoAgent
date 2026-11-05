@@ -1765,3 +1765,114 @@ def test_write_file_serialises_with_edit_file(workspace, monkeypatch):
     # Serialised: the edit finished first, then the whole-file write landed on top. Unlocked,
     # the edit's stale snapshot would have been written last and dropped "owner: kj".
     assert (a / "notes.md").read_text() == "status: open\nowner: kj\n"
+
+
+# ── view_image (#4749) ────────────────────────────────────────────────────────
+
+# A PNG signature + filler — enough for the extension map and for the multimodal
+# helper (image_limits leaves an undecodable-but-signed blob unchanged); no real
+# pixels needed to exercise the envelope.
+_PNG_BYTES = b"\x89PNG\r\n\x1a\n" + b"x" * 64
+
+
+def test_view_image_is_registered_whenever_read_file_is(workspace):
+    _, a, _ = workspace
+    names = {t.name for t in build_fs_tools(_Cfg(filesystem_projects=[{"name": "a", "path": str(a)}]))}
+    assert {"read_file", "view_image"} <= names
+
+
+def test_view_image_png_returns_a_multimodal_envelope(workspace):
+    from graph.multimodal import is_multimodal_result, parse_multimodal_result
+
+    _, a, _ = workspace
+    (a / "shot.png").write_bytes(_PNG_BYTES)
+    t = _tools(_Cfg(filesystem_projects=[{"name": "a", "path": str(a)}]))
+    out = t["view_image"].invoke({"project": "a", "path": "shot.png"})
+    assert is_multimodal_result(out)
+    env = parse_multimodal_result(out)
+    assert len(env["images"]) == 1
+    assert env["images"][0]["mime"] == "image/png"
+    # The text part names project/path, the byte size and the mime.
+    assert "a/shot.png" in env["text"]
+    assert str(len(_PNG_BYTES)) in env["text"]
+    assert "image/png" in env["text"]
+
+
+@pytest.mark.parametrize(
+    "name,mime",
+    [("p.png", "image/png"), ("p.jpg", "image/jpeg"), ("p.jpeg", "image/jpeg"), ("p.webp", "image/webp")],
+)
+def test_view_image_maps_each_extension_to_its_mime(workspace, name, mime):
+    from graph.multimodal import parse_multimodal_result
+
+    _, a, _ = workspace
+    (a / name).write_bytes(_PNG_BYTES)
+    t = _tools(_Cfg(filesystem_projects=[{"name": "a", "path": str(a)}]))
+    env = parse_multimodal_result(t["view_image"].invoke({"project": "a", "path": name}))
+    assert env is not None and env["images"][0]["mime"] == mime
+
+
+def test_view_image_fence_violation_is_an_error(workspace):
+    _, a, _ = workspace
+    t = _tools(_Cfg(filesystem_projects=[{"name": "a", "path": str(a)}]))
+    out = t["view_image"].invoke({"project": "a", "path": "../../etc/hosts.png"})
+    assert out.startswith("Error:")
+
+
+def test_view_image_missing_file_is_an_error(workspace):
+    _, a, _ = workspace
+    t = _tools(_Cfg(filesystem_projects=[{"name": "a", "path": str(a)}]))
+    out = t["view_image"].invoke({"project": "a", "path": "nope.png"})
+    assert out.startswith("Error:") and "no such file" in out
+
+
+def test_view_image_rejects_a_non_image_extension(workspace):
+    _, a, _ = workspace
+    t = _tools(_Cfg(filesystem_projects=[{"name": "a", "path": str(a)}]))
+    # README.md exists in the fixture — a real file, just not a viewable image.
+    out = t["view_image"].invoke({"project": "a", "path": "README.md"})
+    assert out.startswith("Error:") and "view_image supports" in out
+
+
+def test_read_file_on_an_image_points_at_view_image(workspace):
+    _, a, _ = workspace
+    (a / "shot.png").write_bytes(_PNG_BYTES)
+    t = _tools(_Cfg(filesystem_projects=[{"name": "a", "path": str(a)}]))
+    out = t["read_file"].invoke({"project": "a", "path": "shot.png"})
+    assert out.startswith("Error:") and "view_image" in out
+
+
+def test_read_file_on_text_is_unchanged_by_the_image_guard(workspace):
+    _, a, _ = workspace
+    t = _tools(_Cfg(filesystem_projects=[{"name": "a", "path": str(a)}]))
+    assert "hello" in t["read_file"].invoke({"project": "a", "path": "src/main.py"})
+
+
+def test_view_image_is_an_inherited_read_tool_like_read_file(workspace):
+    """The gating contract: `read_file` bounces image paths to `view_image`, so a
+    subagent that inherits `read_file` MUST also inherit `view_image` — otherwise the
+    error points at a tool it never received. Both are core reads, so
+    `inherited_read_tools` selects them together (#4749 review)."""
+    from types import SimpleNamespace
+
+    from graph.tool_access import inherited_read_tools, is_read_tool
+
+    _, a, _ = workspace
+    tools = build_fs_tools(_Cfg(filesystem_projects=[{"name": "a", "path": str(a)}]))
+    by_name = {t.name: t for t in tools}
+    assert is_read_tool(by_name["view_image"]) and is_read_tool(by_name["read_file"])
+    inherited = {t.name for t in inherited_read_tools(tools, SimpleNamespace(tools_subagent_only=[]))}
+    assert {"read_file", "view_image"} <= inherited
+
+
+def test_view_image_refuses_an_oversized_file_without_reading_it(workspace, monkeypatch):
+    """A huge or misnamed file is refused from its size, before the multimodal helper
+    reads and base64-encodes the whole thing into memory."""
+    import tools.fs_tools as fs_mod
+
+    _, a, _ = workspace
+    monkeypatch.setattr(fs_mod, "_MAX_IMAGE_SOURCE_BYTES", 16)
+    (a / "huge.png").write_bytes(_PNG_BYTES)  # 72 bytes > the patched 16-byte cap
+    t = _tools(_Cfg(filesystem_projects=[{"name": "a", "path": str(a)}]))
+    out = t["view_image"].invoke({"project": "a", "path": "huge.png"})
+    assert out.startswith("Error:") and "view_image limit" in out

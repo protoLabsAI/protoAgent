@@ -272,6 +272,7 @@ def _build_projects_section(projects, bound_tool_names: frozenset[str] | None = 
     ordered = (
         "list_projects",
         "read_file",
+        "view_image",
         "list_dir",
         "find_files",
         "search_files",

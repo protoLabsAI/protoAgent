@@ -226,6 +226,7 @@ _TOOL_CATEGORY = {
     # Filesystem / operator workspace
     "list_dir": "Filesystem",
     "read_file": "Filesystem",
+    "view_image": "Filesystem",
     "find_files": "Filesystem",
     "search_files": "Filesystem",
     "write_file": "Filesystem",
