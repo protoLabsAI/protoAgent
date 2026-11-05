@@ -141,6 +141,14 @@ def run_scope(*, session_id: str = "", run_id: str = "", parent_uuid: str = ""):
         end_run_scope(token)
 
 
+def current_session_id() -> str:
+    """The session an edge would inherit from its parent or enclosing run scope."""
+    scope = _SCOPE.get() or {}
+    parent_id = _CURRENT.get() or scope.get("parent_uuid") or ""
+    parent = _LIVE.get(parent_id) or {}
+    return str(parent.get("session_id") or scope.get("session_id") or "")
+
+
 def current_run_id() -> str:
     """The run the calling task belongs to: the open edge's run, else the scope's, else ""."""
     edge = _LIVE.get(_CURRENT.get() or "")

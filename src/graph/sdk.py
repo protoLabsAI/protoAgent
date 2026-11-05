@@ -178,6 +178,7 @@ async def run_subagent(
     truncate: int | None = None,
     turn_model: str | None = None,
     check_prompt_tools: bool = True,
+    session_id: str = "",
 ) -> str:
     """Run a subagent to completion and return its text output.
 
@@ -203,6 +204,12 @@ async def run_subagent(
     Pass ``False`` when the prompt is your own fixed template with other steps' output
     interpolated into it: a tool name inside that data is not a request for the tool, and
     the check would refuse a step whose input merely mentions one (#4501).
+
+    ``session_id`` supplies a ledger-only fallback identity (#4612). An enclosing
+    edge or run scope's session takes precedence, so workflow steps inside a chat
+    stay in that chat's session. Outside a session the workflows plugin supplies
+    ``workflow:<run_id>``. This value never enters the subagent's tool state or
+    telemetry session. The default ``""`` preserves existing behavior.
     """
     from graph.agent import run_manual_subagent
     from graph.subagent_model import current_turn_model
@@ -221,6 +228,7 @@ async def run_subagent(
         truncate=truncate,
         turn_model=current_turn_model() if turn_model is None else turn_model,
         check_prompt_tools=check_prompt_tools,
+        ledger_session_id=session_id,
     )
 
 

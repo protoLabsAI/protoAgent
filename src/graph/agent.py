@@ -928,6 +928,7 @@ async def _run_subagent(
     parent_task_id: str | None = None,
     usage_sink: list[dict] | None = None,
     session_id: str = "",
+    ledger_session_id: str | None = None,
     turn_model: str = "",
 ) -> str:
     """Run a subagent delegation, recording the edge in the delegation ledger.
@@ -960,7 +961,7 @@ async def _run_subagent(
         to_kind="subagent",
         to_name=subagent_type,
         what=description,
-        session_id=session_id,
+        session_id=(ledger.current_session_id() or ledger_session_id) if ledger_session_id is not None else session_id,
         parent_task_id=parent_task_id or "",
         origin="task",
     ) as edge:
@@ -1389,10 +1390,15 @@ async def run_manual_subagent(
     extra_tools=None,
     reload_callback=None,
     session_id: str = "",
+    ledger_session_id: str | None = None,
     turn_model: str = "",
     check_prompt_tools: bool = True,
 ) -> str:
     """Run a subagent outside the lead agent's ``task`` tool.
+
+    ``ledger_session_id`` supplies a ledger-only fallback when no enclosing edge or
+    run scope has a session. It never changes the tool state or telemetry session;
+    ``None`` preserves the existing ``session_id`` behavior.
 
     The React operator console uses this to let a human explicitly fan out
     work. It intentionally uses the same private runner as ``task`` so audit,
@@ -1482,6 +1488,7 @@ async def run_manual_subagent(
         subagent_type=subagent_type,
         truncate=truncate,
         session_id=session_id,
+        ledger_session_id=ledger_session_id,
         turn_model=turn_model,
     )
 
