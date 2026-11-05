@@ -263,7 +263,7 @@ def test_shell_honours_a_refused_pdf_preflight(monkeypatch, tmp_path):
     )
     assert got == [True, False, False, False]
     card = _js_function(js, "fileCard")
-    assert "if(pdfOk(v)) return pdfDoc(v);" in card
+    assert "if(pdfOk(v)) return pdfDoc(v, page);" in card
     assert "Page preview unavailable" in card
     assert "saved before page previews" in card
 
