@@ -15,6 +15,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.230.0] - 2026-11-06
+
+### Added
+- **Agent self-restart scheduler (#4577).** `schedule_restart()` in the operator runtime routes writes the restart audit row and then arms the graceful re-exec from a background task that waits for the calling turn to finish (the agent can't restart from inside a turn the way `POST /api/restart` demands). The route's when-idle drain now reuses the same wait-then-arm helper, so there is one implementation; unsupervised processes get `scheduled=False` with the how-to text, and a time-out or an in-progress shutdown abandons without arming.
+- **Consent-gated agent restart (#4577).** The lead agent can request an operator-approved restart after plugin updates; unattended turns and subagents cannot schedule it.
+
+- **PDF citation page hints (#4748).** File artifact saves accept a PDF page and carry it in the artifact-ref chip for linked and copied citations.
+- **Open a PDF citation at its page (#4748).** Clicking (or auto-opening) an artifact-ref chip that carries a page now opens the Artifact panel scrolled to that page of the PDF; a page past the end lands on the last page, and the jump happens once per select, including repeated citations into the PDF already on screen. Page requests for versions without a PDF preview are discarded.
+
+- **Agents can now look at images in a managed project (#4749).** A new `view_image` tool in the filesystem toolset returns a PNG/JPEG/GIF/WebP file as an image a vision model can actually see, alongside `read_file` and gated the same way; `read_file` on an image now points you at `view_image` instead of returning decode garbage.
+
+### Fixed
+- **Freeze merges during release preparation (#4576).** Review at head holds non-release PRs pending while a same-repository prepare-release/* or release/* PR is open, with a skip-release-freeze escape hatch and an immediate refresh when the release PR closes. A fork PR merely named release/* does not freeze the queue.
+
+- **Workflow subagent usage (#4612).** Record orphan in-process delegation spend in turn telemetry so account usage includes workflow review gates without double-counting parent turns.
+- **Workflow step delegation identity (#4612).** `sdk.run_subagent` now takes an optional `session_id` as a ledger-only fallback, preserving enclosing chat sessions and tool state; the workflows plugin passes its run identity (`workflow:<run_id>`) so a review-gate step's row is no longer orphaned with an empty session id.
+
+- **Settings ▸ Secrets "Test connection" now tests the typed-in values (#4702).** The probe
+  sends the unsaved form fields (provider, host, project ID, environment, path, credentials,
+  timeout) under the server's field names instead of an empty body, so you can verify a
+  secrets-manager connection before saving it; blank fields still fall back to the saved
+  config and the redacted placeholder a stored secret shows is never posted as a credential.
+
+### Docs
+- **The v0.229.0 changelog's fleet group/pin and fleet switcher PR links were corrected (#4741, #4745).** Two entries were collated from fragments whose filenames carried no PR number, so they cited #4735; CHANGELOG.md and the marketing `/changelog` now match the GitHub release notes.
+
 ## [0.229.0] - 2026-11-05
 
 ### Changed
