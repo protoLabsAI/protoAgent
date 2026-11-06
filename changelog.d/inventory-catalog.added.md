@@ -1,4 +1,0 @@
-- **Inventory joins the plugin catalog.** [Inventory](https://github.com/protoLabsAI/inventory-plugin) — for
-  resellers who buy in lots and sell piece by piece: phone box scanning, QR labels and bins, prices with
-  their evidence, listing drafts you post yourself, and profit per lot — is now listed in Discover and on the
-  plugins page.
