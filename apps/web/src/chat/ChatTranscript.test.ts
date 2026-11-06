@@ -4,7 +4,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 
-import type { ChatMessage, TurnUsage } from "../lib/types";
+import type { ChatMessage, RuntimeStatus, TurnUsage } from "../lib/types";
 import { useUI } from "../state/uiStore";
 import { CANCELLED_DELEGATION_PREFIX } from "./dismissedToolCalls";
 
@@ -144,7 +144,10 @@ describe("ChatTranscript render isolation", () => {
     host.remove();
   });
 
-  async function renderEmpty(onStarterPrompt?: (text: string) => void) {
+  async function renderEmpty(
+    onStarterPrompt?: (text: string) => void,
+    starterPrompts?: RuntimeStatus["starter_prompts"],
+  ) {
     await act(async () => root.render(createElement(ChatTranscript, {
       sessionId: "empty-session",
       messages: [],
@@ -157,10 +160,11 @@ describe("ChatTranscript render isolation", () => {
       onDismissToolCall: noop,
       onCancelSteer: noop,
       onStarterPrompt,
+      starterPrompts,
     })));
   }
 
-  it("offers four starter prompts and a visible Claude Code prerequisite in an empty chat", async () => {
+  it("falls back to four built-in starters with their notes when starterPrompts is undefined", async () => {
     await renderEmpty(vi.fn());
     expect(host.textContent).toContain("Try one of these");
     expect(host.textContent).not.toContain("No messages in this session.");
@@ -181,6 +185,49 @@ describe("ChatTranscript render isolation", () => {
     }
     expect(onStarterPrompt).toHaveBeenCalledTimes(4);
     expect(messageRender).not.toHaveBeenCalled();
+  });
+
+  it("renders only custom starters with their notes and fills the composer without submitting", async () => {
+    const custom = [
+      { label: "Plan my day", prompt: "Help me plan tomorrow.", note: "Needs a calendar" },
+      { label: "Review my draft", prompt: "Review this draft with me." },
+    ];
+    const onStarterPrompt = vi.fn();
+    const onSubmit = vi.fn((event: Event) => event.preventDefault());
+    const form = document.createElement("form");
+    document.body.appendChild(form);
+    form.appendChild(host);
+    form.addEventListener("submit", onSubmit);
+    try {
+      await renderEmpty(onStarterPrompt, custom);
+      const chips = host.querySelectorAll<HTMLButtonElement>("button");
+      expect(chips).toHaveLength(custom.length);
+      for (const [index, { label, prompt, note }] of custom.entries()) {
+        expect(chips[index].textContent).toBe(label + (note ?? ""));
+        expect(chips[index].type).toBe("button");
+        await act(async () => chips[index].click());
+        expect(onStarterPrompt).toHaveBeenNthCalledWith(index + 1, prompt);
+      }
+      for (const { label } of STARTER_PROMPTS) expect(host.textContent).not.toContain(label);
+      expect(onStarterPrompt).toHaveBeenCalledTimes(custom.length);
+      expect(onSubmit).not.toHaveBeenCalled();
+      expect(messageRender).not.toHaveBeenCalled();
+    } finally {
+      document.body.appendChild(host);
+      form.remove();
+    }
+  });
+
+  it("hides the starter title and chips for an empty runtime list, including after an update", async () => {
+    const onStarterPrompt = vi.fn();
+    await renderEmpty(onStarterPrompt);
+    expect(host.querySelectorAll("button")).toHaveLength(4);
+    await renderEmpty(onStarterPrompt, []);
+    expect(host.textContent).not.toContain("Try one of these");
+    expect(host.querySelector(".chat-starter-prompts")).toBeNull();
+    expect(host.querySelectorAll("button")).toHaveLength(0);
+    for (const { label } of STARTER_PROMPTS) expect(host.textContent).not.toContain(label);
+    expect(onStarterPrompt).not.toHaveBeenCalled();
   });
 
   it("renders inert starter chips when no callback is supplied", async () => {

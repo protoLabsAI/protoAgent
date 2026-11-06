@@ -16,6 +16,8 @@ export type RuntimeStatus = {
    *  to true (and the graph compiles) with no restart. */
   // Older servers omit this flag and are treated as configured.
   model_configured?: boolean;
+  /** Resolved per-agent starters. Omitted by older servers; an empty list disables them. */
+  starter_prompts?: { label: string; prompt: string; note?: string }[];
   /** App version (pyproject [project].version; the frozen desktop sidecar reports
    *  its bundled version — #894). Surfaced in Settings ▸ Global ▸ Overview. */
   version?: string;
