@@ -1,1 +1,0 @@
-- **The v0.229.0 changelog's fleet group/pin and fleet switcher PR links were corrected (#4741, #4745).** Two entries were collated from fragments whose filenames carried no PR number, so they cited #4735; CHANGELOG.md and the marketing `/changelog` now match the GitHub release notes.

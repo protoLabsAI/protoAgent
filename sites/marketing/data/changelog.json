@@ -1,5 +1,21 @@
 [
   {
+    "version": "v0.230.0",
+    "date": "2026-11-06",
+    "changes": [
+      "Agent self-restart scheduler (#4577).",
+      "Consent-gated agent restart (#4577).",
+      "PDF citation page hints (#4748).",
+      "Open a PDF citation at its page (#4748).",
+      "Agents can now look at images in a managed project (#4749).",
+      "Freeze merges during release preparation (#4576).",
+      "Workflow subagent usage (#4612).",
+      "Workflow step delegation identity (#4612).",
+      "Settings ▸ Secrets \"Test connection\" now tests the typed-in values (#4702).",
+      "The v0.229.0 changelog's fleet group/pin and fleet switcher PR links were corrected (#4741, #4745)."
+    ]
+  },
+  {
     "version": "v0.229.0",
     "date": "2026-11-05",
     "changes": [
