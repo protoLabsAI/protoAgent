@@ -41,6 +41,8 @@ and downloads, see [Work with documents and files](../../docs/guides/documents-a
     take over an artifact you didn't author (read it, then `update_artifact`/`rewrite_artifact`).
   - `check_artifact(artifact_id?)` — the latest **render verdict** (rendered cleanly / failed with the
     captured error / no result yet), so a render failure feeds back into a fix instead of a silent blank.
+  - `cite_artifact(artifact_id, page, version=0)` — a read-only PDF citation; see
+    [Opening a PDF at a page](#opening-a-pdf-at-a-page).
   - `pin_artifact(artifact_id, pinned?)` — **pin** a long-lived artifact (a master resume, a
     reference doc) so history eviction skips it; `pinned=False` unpins. Pins are capped by
     **Pinned artifacts** below (refused at the cap), don't count toward **Artifacts kept**, and
@@ -318,6 +320,15 @@ image, 150 MP drawn on one page. Password-protected files, unreadable files and 
 PDF, or one saved before page previews existed, shows the extracted-text card with the reason.
 `PDF_CAPS` in `shell.js` mirrors the caps (drift-guarded); the frame adds a 20 s parse budget and
 the shell's 45 s watchdog swaps in the text card if the frame never answers.
+
+### Opening a PDF at a page
+
+For a PDF that's already an artifact, use `cite_artifact(artifact_id, page=N)` — no save,
+no new version. To save a new file, use `save_file_artifact(path, page=N)` (copied or linked).
+`page` is a positive, 1-based page number; omit it on save or use `0` for no page hint.
+A page past the end opens the last page. Pages work only for a PDF whose page preview was
+approved when it was saved. Otherwise the PDF shows as text: `cite_artifact` refuses the page,
+while a save goes ahead without it and says why.
 
 ## Word documents (.docx)
 
