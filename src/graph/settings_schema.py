@@ -568,11 +568,15 @@ FIELDS: list[Field] = [
         maximum=10,
     ),
     # ── Chat (empty-chat presentation, #4570) ────────────────────────────────
-    # The "Try one of these" starter chips a fresh chat shows. The toggle hot-reloads
-    # (runtime status recomputes the resolved list each poll); the list itself is a
-    # list-of-dicts the string_list Field shape can't express, so it rides ui_hidden —
-    # kept in FIELDS so it round-trips through config_to_dict / the YAML writer / the
-    # /api/settings save, but edited as structured config, not in the generic UI.
+    # The "Try one of these" starter chips a fresh chat shows. BOTH fields are ui_hidden
+    # (#1076 one-editor-per-key): the dedicated Settings ▸ Chat ▸ "Starter prompts" editor
+    # (bd-4wss) owns the toggle AND the list together, so neither renders in the generic
+    # Behavior panel — editing them in two places would fork the state. They stay in FIELDS
+    # so they round-trip through config_to_dict / the YAML writer / the /api/settings save.
+    # The toggle still hot-reloads (restart False — runtime status recomputes the resolved
+    # list each poll); the list is a list-of-dicts the string_list Field shape can't express.
+    # "Chat" remains mapped in _SECTION_CATEGORY so the core-section→category guard stays
+    # green even though the section now renders no generic group.
     Field(
         "chat.show_starter_prompts",
         "chat_show_starter_prompts",
@@ -580,6 +584,7 @@ FIELDS: list[Field] = [
         "bool",
         "Chat",
         "The 'Try one of these' suggestions in an empty chat. Off hides them for this agent.",
+        ui_hidden=True,
     ),
     Field(
         "chat.starter_prompts",

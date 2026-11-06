@@ -1485,6 +1485,13 @@ export type AgentConfig = {
   plugins?: {
     enabled?: string[];
   };
+  // Empty-chat starter chips (#4570). `show_starter_prompts` toggles them for this agent;
+  // `starter_prompts` is the operator's list ({label, prompt, note?}) — absent/null keeps
+  // the built-in defaults, `[]` shows none. Edited in Settings ▸ Chat ▸ "Starter prompts".
+  chat?: {
+    show_starter_prompts?: boolean;
+    starter_prompts?: { label: string; prompt: string; note?: string }[] | null;
+  };
 };
 
 export type ConfigPayload = {

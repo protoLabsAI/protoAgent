@@ -1,6 +1,7 @@
 import { PanelHeader } from "@protolabsai/ui/navigation";
 import { DropdownSelect, Switch } from "@protolabsai/ui/forms";
 
+import { StarterPromptsEditor } from "./StarterPromptsEditor";
 import { useCodePaneEnabled } from "../codeviewer/enabled";
 import { EDITOR_OPTIONS, isEditorId } from "../lib/editorLinks";
 import { setExternalEditor, setOpenFilesChoice, useEditorPref, useOpenFilesIn } from "../lib/editorPref";
@@ -115,6 +116,9 @@ export function ChatSettingsPanel() {
             />
           </div>
         ) : null}
+        {/* The one exception to this panel's per-device rule: the empty-chat starter chips are
+            saved to THIS AGENT's config (#4570). Its own block, with a sub-label that says so. */}
+        <StarterPromptsEditor />
       </div>
     </section>
   );
