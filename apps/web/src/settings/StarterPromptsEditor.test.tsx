@@ -119,9 +119,47 @@ describe("StarterPromptsEditor", () => {
 
     await click("starter-customize");
     expect(byTestId("starter-rows")).not.toBeNull();
-    expect(labelValues()).toEqual(["A"]);
+    expect(labelValues()).toEqual(STARTER_PROMPTS.map((p) => p.label));
     // Pinning the defaults into an explicit list is itself a change → Save enabled.
     expect(byTestId<HTMLButtonElement>("starter-save")!.disabled).toBe(false);
+  });
+
+  it("shows and customizes defaults after enabling a saved-off switch", async () => {
+    const { saveSpy } = await mount({
+      chat: { show_starter_prompts: false },
+      runtimePrompts: [],
+    });
+
+    await click("starter-show");
+    expect(byTestId("starter-builtins")!.querySelectorAll("li")).toHaveLength(STARTER_PROMPTS.length);
+    for (const prompt of STARTER_PROMPTS) {
+      expect(byTestId("starter-builtins")!.textContent).toContain(prompt.prompt);
+    }
+    await click("starter-customize");
+    expect(labelValues()).toEqual(STARTER_PROMPTS.map((p) => p.label));
+    await click("starter-save");
+    await flush();
+    expect(saveSpy).toHaveBeenCalledWith({
+      "chat.show_starter_prompts": true,
+      "chat.starter_prompts": [...STARTER_PROMPTS],
+    });
+  });
+
+  it("previews and customizes defaults after an unsaved reset of saved custom prompts", async () => {
+    const saved = [{ label: "Saved custom", prompt: "Saved custom prompt" }];
+    const { saveSpy } = await mount({ chat: { starter_prompts: saved }, runtimePrompts: saved });
+
+    await click("starter-reset");
+    expect(byTestId("starter-builtins")!.querySelectorAll("li")).toHaveLength(STARTER_PROMPTS.length);
+    expect(byTestId("starter-builtins")!.textContent).not.toContain("Saved custom");
+    for (const prompt of STARTER_PROMPTS) {
+      expect(byTestId("starter-builtins")!.textContent).toContain(prompt.prompt);
+    }
+    await click("starter-customize");
+    expect(labelValues()).toEqual(STARTER_PROMPTS.map((p) => p.label));
+    await click("starter-save");
+    await flush();
+    expect(saveSpy).toHaveBeenCalledWith({ "chat.starter_prompts": [...STARTER_PROMPTS] });
   });
 
   it("adds, removes, and reorders rows", async () => {
@@ -169,9 +207,8 @@ describe("StarterPromptsEditor", () => {
   });
 
   it("saves a custom list — only the changed key, cleaned", async () => {
-    const { saveSpy } = await mount({ runtimePrompts: [{ label: "A", prompt: "do a" }] });
+    const { saveSpy } = await mount({ chat: { starter_prompts: [{ label: "A", prompt: "do a" }] } });
 
-    await click("starter-customize"); // 1 row: A / do a
     await click("starter-add"); // blank second row
     await type("starter-label-1", " Build ");
     await type("starter-prompt-1", " open a PR ");

@@ -8,7 +8,7 @@ import { ArrowDown, ArrowUp, Pencil, Plus, RotateCcw, Save, Trash2 } from "lucid
 
 import { STARTER_PROMPTS } from "../chat/starterPrompts";
 import { api } from "../lib/api";
-import { queryKeys, runtimeStatusQuery } from "../lib/queries";
+import { queryKeys } from "../lib/queries";
 
 // Settings ▸ Chat ▸ "Starter prompts" (#4570, bd-4wss). The one console editor for the
 // empty-chat starter chips — the schema keeps `chat.show_starter_prompts` /
@@ -42,7 +42,6 @@ export function StarterPromptsEditor() {
   const qc = useQueryClient();
   const toast = useToast();
   const { data, isLoading } = useQuery({ queryKey: ["config"], queryFn: () => api.config() });
-  const { data: runtime } = useQuery(runtimeStatusQuery());
 
   const [show, setShow] = useState(true);
   // null ⇒ the default state (built-ins, read-only); an array ⇒ an explicit edited list
@@ -62,11 +61,9 @@ export function StarterPromptsEditor() {
   const baseShow = data?.config?.chat?.show_starter_prompts ?? true;
   const baseList = data?.config?.chat?.starter_prompts ?? null;
 
-  // The read-only built-ins shown in the default state: the live resolved list when the
-  // switch is on (runtime recomputes it each poll — with no custom list that IS the four
-  // defaults), else the hard-coded fallback so the operator still sees WHAT the built-ins
-  // are while they're hidden.
-  const builtins: StarterPrompt[] = (show ? runtime?.starter_prompts : undefined) ?? [...STARTER_PROMPTS];
+  // Runtime reflects saved visibility and custom prompts, not unsaved form changes.
+  // Always preview and copy the actual defaults when the form's list is null.
+  const builtins = STARTER_PROMPTS;
 
   const cleanedCustom = cleanStarterPrompts(custom);
   const listDirty = JSON.stringify(cleanedCustom) !== JSON.stringify(cleanStarterPrompts(baseList));
