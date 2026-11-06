@@ -473,6 +473,10 @@ archetype_repos:
     repo: protoLabsAI/analyst-archetype
     archetype: analyst   # held from the picker (archetype-catalog.json `held`) until Josh has tested it (2026-10-03)
     tagline: "Analyst — answers questions from your local data files with read-only SQL and one live chart; cites the file, states its assumptions."
+  - id: merchant-archetype
+    repo: protoLabsAI/merchant-archetype
+    archetype: merchant   # held from the picker (archetype-catalog.json `held`) until Josh has tested it (2026-11-06)
+    tagline: "Merchant — inventory for resellers: phone box scanning, QR labels and bins, prices with their evidence, listing drafts the operator posts, profit per lot. Never posts."
   - id: project-manager-archetype
     repo: protoLabsAI/project-manager-archetype
     archetype: project-manager

@@ -472,6 +472,47 @@ def test_analyst_archetype_is_held() -> None:
     assert ids[-1] == "custom", f"'custom' must stay LAST in the archetype list, got {ids}"
 
 
+def test_merchant_archetype_is_held() -> None:
+    """The Merchant archetype (inventory for resellers: phone box scanning, QR labels and bins,
+    prices with their evidence, listing drafts the operator posts, profit per lot, via the
+    inventory plugin) ships HELD until the operator has tested it (2026-11-06). Pins both
+    directions: not served in ``archetypes``, parked exactly once in ``held`` with a resolving
+    soul preset, its bundle URL and its capability contract, so listing it is one move (into
+    ``archetypes`` before ``custom``, dropping `_held`)."""
+    catalog = json.loads((CONFIG / "archetype-catalog.json").read_text())
+    ids = [a["id"] for a in catalog["archetypes"]]
+    held = [a["id"] for a in catalog.get("held") or []]
+
+    assert "merchant" not in ids, f"'merchant' is held until tested — it must not be in archetypes, got {ids}"
+    assert held.count("merchant") == 1, f"'merchant' must be parked exactly once in `held`, got {held}"
+    (row,) = (a for a in catalog["held"] if a["id"] == "merchant")
+    assert row.get("_held"), "the held row says why it's parked"
+    assert row.get("bundle") == "https://github.com/protoLabsAI/merchant-archetype"
+    assert row.get("requires_tools") == [
+        "inventory_summary",
+        "inventory_upsert_item",
+        "inventory_set_price",
+        "inventory_mark_sold",
+    ]
+    preset = CONFIG / "soul-presets" / f"{row['soul_preset']}.md"
+    assert preset.is_file(), f"held archetype 'merchant' points at a missing soul preset {preset}"
+
+    # The persona's hard rules: it never posts or contacts a buyer, a price needs a basis,
+    # sold is a recorded sale, it never invents item facts or numbers.
+    soul = preset.read_text().lower()
+    for needle in (
+        "i prepare. the operator acts.",
+        "contacts a buyer",
+        "prices need a basis",
+        "sold means a recorded sale",
+        "never invent facts about an item",
+        "never invent a comp, a fee, a review, or a number",
+    ):
+        assert needle in soul, f"merchant persona lost a hard rule: {needle!r}"
+
+    assert ids[-1] == "custom", f"'custom' must stay LAST in the archetype list, got {ids}"
+
+
 def _sidecar_cli_hidden_imports() -> set[str]:
     """The `CLI_FORWARD_MODULES` list in build_sidecar.py, read statically (AST) —
     the dynamically-dispatched CLI modules the frozen build must hidden-import."""
