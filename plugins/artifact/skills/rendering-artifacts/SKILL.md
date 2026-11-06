@@ -253,6 +253,8 @@ guess; read the error and make the targeted edit.
 - **`list_artifacts()`** — see the ids/kinds/titles/version counts and which are pinned (to target
   an edit, pin or delete).
 - **`check_artifact(artifact_id?)`** — the latest render verdict (see above).
+- **`cite_artifact(artifact_id, page, version=0)`** — a read-only PDF citation (see “Citing a page
+  in a PDF” below).
 - **`pin_artifact(artifact_id, pinned=True)`** — keep a **long-lived** artifact (a master resume, a
   reference doc, a plan you'll revisit) from being evicted. Only the most recent ~200 unpinned
   artifacts are kept, counting everything rendered on this agent; an unpinned one survives while a
@@ -295,9 +297,12 @@ path outside every project, or a symlink escaping one, is refused). A linked art
 default). Downloads serve the file in place, re-checked against the project fence on every request:
 403 once it's no longer reachable, 409 if it changed or disappeared since it was linked.
 
-**Citing a page in a PDF.** Use `save_file_artifact(path, link=True, page=46)` to open
-the citation at page 46 (1-based). One linked save per citation is fine. `page` also works
-for copied PDFs; omit it or use `0` for no page hint. Other file types do not accept a page.
+**Citing a page in a PDF.** For a PDF that's already an artifact, use
+`cite_artifact(artifact_id, page=N)` — no save, no new version. To save a new file, use
+`save_file_artifact(path, page=N)` (copied or linked). `page` is a positive, 1-based page number;
+omit it on save or use `0` for no page hint. A page past the end opens the last page.
+Pages work only for a PDF whose page preview was approved when it was saved. Otherwise the PDF
+shows as text: `cite_artifact` refuses the page, while a save goes ahead without it and says why.
 
 This is for files that already exist on disk. To *render* HTML/React/SVG/Markdown/charts, use
 `show_artifact` (above) — don't write those to a file first.

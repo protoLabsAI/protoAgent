@@ -312,7 +312,10 @@ def save_file_artifact(
     ``link=True`` links reference material you did NOT produce in place, without copying; it must
     be inside a registered project. A linked artifact is READ-ONLY with no versions — never pass
     ``artifact_id`` with it — and is served from the file in place (re-checked on every download).
-    ``page``: open a PDF at that page, e.g. a cited page; one linked save per citation is fine.
+    ``page``: positive, 1-based PDF page (0 = none); past the end opens the last page. Requires
+    a page preview approved at save time; otherwise the PDF shows as text and saves without the
+    page, with a reason. For already-saved PDFs use ``cite_artifact`` (no save or new version;
+    refuses pages without an approved preview); for a new file use ``save_file_artifact(page=N)``.
     """
     # Maintainer notes (kept out of the model-facing schema; the model-facing manual is the
     # rendering-artifacts skill): previews by type — .docx/.pdf → rendered pages, .pptx →
