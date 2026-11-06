@@ -743,6 +743,48 @@ def _string_list(value) -> list[str]:
     return [s for s in (str(v).strip() for v in value if v is not None) if s]
 
 
+#: Most chat starter chips (#4570) one agent may advertise — the empty-chat "Try one of
+#: these" list stays a glanceable handful, not a menu. An over-long configured list is
+#: capped rather than rejected (a malformed value must never break config load).
+_STARTER_PROMPTS_MAX = 8
+
+
+def _valid_starter_prompts(value) -> list[dict] | None:
+    """Validate ``chat.starter_prompts`` — the empty-chat starter chips (#4570).
+
+    Mirrors ``_valid_a2a_skills``' defensive contract: ``None``/absent reads as "use the
+    built-in defaults" (resolved at runtime-status build), an explicit ``[]`` means "none",
+    and any other value is validated entry by entry. Each entry must be a dict carrying a
+    non-empty ``label`` and ``prompt`` (both coerced to ``str``); ``note`` is kept only when
+    non-empty. Malformed entries are dropped WITH an attributed warning rather than raising —
+    a hand-edited typo must not take the agent down — and the list is capped at
+    ``_STARTER_PROMPTS_MAX``. A non-list value (scalar junk) falls back to the defaults."""
+    if value is None:
+        return None
+    if not isinstance(value, list):
+        log.warning("chat.starter_prompts: expected a list of entries, got %s — using the defaults", type(value).__name__)
+        return None
+    kept: list[dict] = []
+    for e in value:
+        if not isinstance(e, dict):
+            log.warning("chat.starter_prompts: skipping a non-mapping entry: %r", e)
+            continue
+        label = str(e.get("label", "") or "").strip()
+        prompt = str(e.get("prompt", "") or "").strip()
+        if not label or not prompt:
+            log.warning("chat.starter_prompts: skipping entry missing a label/prompt: %r", e)
+            continue
+        entry = {"label": label, "prompt": prompt}
+        note = str(e.get("note", "") or "").strip()
+        if note:
+            entry["note"] = note
+        kept.append(entry)
+    if len(kept) > _STARTER_PROMPTS_MAX:
+        log.warning("chat.starter_prompts: capping %d entries at %d", len(kept), _STARTER_PROMPTS_MAX)
+        kept = kept[:_STARTER_PROMPTS_MAX]
+    return kept
+
+
 def _public_console_url(value) -> str:
     """``network.public_console_url`` normalised to ``https://host[:port]`` (ADR 0121 D2).
     Raises ``ValueError`` naming the key for http, a path/query/fragment, or loopback: a bad
@@ -1654,6 +1696,15 @@ class LangGraphConfig:
     # server/a2a.py::assert_routable_card_url() at startup.
     a2a_require_routable_url: bool = False
 
+    # Empty-chat starter prompts (#4570) — the "Try one of these" chips a fresh chat shows.
+    # ``chat_show_starter_prompts`` hides them for this agent when False.
+    # ``chat_starter_prompts`` REPLACES the built-in defaults with an operator list of
+    # {label, prompt, note?} dicts; None (absent) keeps the defaults, [] shows none. Parsed
+    # defensively by ``_valid_starter_prompts``. The RESOLVED list is served in runtime
+    # status (operator_api/runtime.py build_runtime_status); console card 2/2 renders it.
+    chat_show_starter_prompts: bool = True
+    chat_starter_prompts: list[dict] | None = None
+
     # Instance id for multi-instance data scoping (ADR 0004). When set, every
     # store nests under <base>/<id>/ so several instances can share one
     # filesystem without clobbering each other. Empty = single-instance (legacy)
@@ -2168,6 +2219,8 @@ class LangGraphConfig:
         # YAML parses to None, and `.get(...)` on the default arg wouldn't catch
         # that — the example ships an all-commented `a2a:` block.
         a2a = data.get("a2a") or {}
+        # `or {}` like a2a above: a present-but-empty `chat:` block parses to None.
+        chat = data.get("chat") or {}
         auth = data.get("auth", {})
         runtime = data.get("runtime", {})
         operator = data.get("operator", {})
@@ -2472,6 +2525,8 @@ class LangGraphConfig:
             a2a_skills=_valid_a2a_skills(a2a.get("skills", []) or []),
             a2a_description=a2a.get("description", "") or "",
             a2a_require_routable_url=bool(a2a.get("require_routable_url", False)),
+            chat_show_starter_prompts=bool(chat.get("show_starter_prompts", cls.chat_show_starter_prompts)),
+            chat_starter_prompts=_valid_starter_prompts(chat.get("starter_prompts")),
             instance_id=data.get("instance", {}).get("id", "") or data.get("instance_id", cls.instance_id),
             auth_token=secret_auth_token or auth.get("token", cls.auth_token),
             federation_token=secret_federation_token or auth.get("federation_token", cls.federation_token),
