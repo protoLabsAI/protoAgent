@@ -215,6 +215,10 @@ _VALIDATED_SENTINELS: dict[str, object] = {
     # ADR 0121 D2: https origin only.
     "network.public_console_url": "https://drift.example.com",
     "network.public_url": "https://drift.example.com",
+    # chat.starter_prompts (#4570) is validated entry-by-entry (_valid_starter_prompts): a
+    # bare string sentinel would normalize to None, so use a canonical list-of-dicts that
+    # survives validation unchanged.
+    "chat.starter_prompts": [{"label": "Drift", "prompt": "Drift check"}],
 }
 
 

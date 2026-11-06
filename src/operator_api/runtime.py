@@ -4,6 +4,41 @@ from __future__ import annotations
 
 from typing import Any
 
+# The empty-chat "Try one of these" starter chips (#4570). The console used to hard-code
+# these four in apps/web/src/chat/starterPrompts.ts; this is the server-side source of
+# truth the runtime status resolves and card 2/2 renders. Keep in lock-step with the TS
+# fallback: same labels, same prompts, the note on the last one. An operator replaces them
+# via ``chat.starter_prompts`` or hides them via ``chat.show_starter_prompts: false``.
+DEFAULT_STARTER_PROMPTS: list[dict[str, str]] = [
+    {"label": "Take a quick tour", "prompt": "What can you do? Give me a quick tour of your tools."},
+    {"label": "Summarise a web page", "prompt": "Summarise this web page for me: https://agent.protolabs.studio"},
+    {
+        "label": "Remember my preferences",
+        "prompt": "Remember that I prefer short answers, then tell me what you remember about me.",
+    },
+    {
+        "label": "Ask Claude Code to add a test",
+        "prompt": "Ask Claude Code to add a test to a small Python function.",
+        "note": "Needs Claude Code installed",
+    },
+]
+
+
+def _resolve_starter_prompts(config: Any) -> list[dict[str, str]]:
+    """The starter chips to serve (#4570), resolved from config.
+
+    The built-in defaults when ``config is None``; ``[]`` when the toggle is off; the
+    validated ``chat.starter_prompts`` list when the operator set one; otherwise the
+    defaults. Each dict is copied so a caller mutating the result can't scribble on the
+    module constant."""
+    if config is None:
+        return [dict(p) for p in DEFAULT_STARTER_PROMPTS]
+    if not getattr(config, "chat_show_starter_prompts", True):
+        return []
+    configured = getattr(config, "chat_starter_prompts", None)
+    source = DEFAULT_STARTER_PROMPTS if configured is None else configured
+    return [dict(p) for p in source]
+
 
 def build_runtime_status(
     *,
@@ -75,6 +110,8 @@ def build_runtime_status(
             "graph_auth_error": graph_auth_error,
             "project": project,
             "agent_runtime": "native",
+            # No config loaded yet → the built-in starter chips (#4570).
+            "starter_prompts": _resolve_starter_prompts(config),
             "model": None,
             "identity": None,
             "middleware": {},
@@ -109,6 +146,10 @@ def build_runtime_status(
         # misrepresenting an ACP turn as the gateway model + to flag that protoAgent
         # skills/commands don't apply in coding-agent mode.
         "agent_runtime": str(getattr(config, "agent_runtime", "native") or "native"),
+        # The empty-chat starter chips (#4570), RESOLVED: [] when the toggle is off, the
+        # operator's ``chat.starter_prompts`` when set, else the built-in defaults. Recomputed
+        # each poll, so toggling it hot-reloads with no restart; card 2/2 renders this.
+        "starter_prompts": _resolve_starter_prompts(config),
         "model": {
             "provider": getattr(config, "model_provider", ""),
             "name": getattr(config, "model_name", ""),

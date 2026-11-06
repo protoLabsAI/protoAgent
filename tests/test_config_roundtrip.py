@@ -111,6 +111,10 @@ FROM_YAML_EXAMPLE_FIELDS = {
     "device_idle_ttl_days": 30,
     "cache_warming_enabled": False,
     "cache_warming_interval_seconds": 3300,
+    # Starter chips (#4570): the example ships no `chat:` section, so defaults hold —
+    # show=True, list=None (None ⇒ the built-in defaults resolve at runtime-status build).
+    "chat_show_starter_prompts": True,
+    "chat_starter_prompts": None,
     "chat_template_kwargs": None,
     "checkpoint_db_path": "/sandbox/checkpoints.db",
     "checkpoint_harvest_enabled": True,

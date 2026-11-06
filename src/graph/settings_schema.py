@@ -567,6 +567,31 @@ FIELDS: list[Field] = [
         minimum=1,
         maximum=10,
     ),
+    # ── Chat (empty-chat presentation, #4570) ────────────────────────────────
+    # The "Try one of these" starter chips a fresh chat shows. The toggle hot-reloads
+    # (runtime status recomputes the resolved list each poll); the list itself is a
+    # list-of-dicts the string_list Field shape can't express, so it rides ui_hidden —
+    # kept in FIELDS so it round-trips through config_to_dict / the YAML writer / the
+    # /api/settings save, but edited as structured config, not in the generic UI.
+    Field(
+        "chat.show_starter_prompts",
+        "chat_show_starter_prompts",
+        "Show starter prompts",
+        "bool",
+        "Chat",
+        "The 'Try one of these' suggestions in an empty chat. Off hides them for this agent.",
+    ),
+    Field(
+        "chat.starter_prompts",
+        "chat_starter_prompts",
+        "Starter prompts",
+        "object_list",
+        "Chat",
+        "Operator list of starter chips ({label, prompt, note?}) that replaces the built-in "
+        "defaults; absent keeps the defaults, an empty list shows none. Validated defensively "
+        "and capped; edited as structured config rather than in the generic Settings UI.",
+        ui_hidden=True,
+    ),
     # ── Persona (self-authored SOUL) ─────────────────────────────────────────
     # Guarded, default OFF. When on, the lead agent gets the `edit_soul` tool and can
     # rewrite sections of its own SOUL.md (persona only — ADR 0079; every edit snapshotted
@@ -2277,6 +2302,9 @@ _SECTION_CATEGORY = {
     # Room (#3042) — the `@name` group chat's bounds. Behavior, not Capabilities: `@`
     # addressing is always available; these only say how far one address may run.
     "Room": "Behavior",
+    # Chat (#4570) — the empty-chat starter-chip presentation. A conversational-surface
+    # knob, so it sits in Behavior alongside Room.
+    "Chat": "Behavior",
     "Self-improvement": "Behavior",
     # Watches (ADR 0067) sit beside Goal mode, not inside it: the two are independent
     # dispositions (drive vs. supervise) and each has its own enable flag.
