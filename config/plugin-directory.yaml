@@ -309,6 +309,13 @@ plugins:
     tagline: "Code-grounded docs, guides, and tutorials; section audits, reader paths, media planning, and verified delivery. Prompt-only; off by default."
     adds: [skill]
 
+  - id: plain_language
+    name: Plain Language (clear writing)
+    category: Productivity
+    bundled: true
+    tagline: "Clearer writing, using digital.gov's plain language guide. Every reply gets a short set of core rules. Adds skills for long drafts and rewrites, /plain-review and /paraphrase-test, and a checker for the mechanical rules. Off by default."
+    adds: [skill, tool]
+
   # Moved in-tree in #3450 from cowork-plugin (now retired; the bundled manifest's
   # `supersedes` retires an installed copy). On by default, like notes/docs/craft.
   - id: cowork
