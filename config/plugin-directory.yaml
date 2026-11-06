@@ -207,6 +207,13 @@ plugins:
     tagline: "A real 26×15 Blood Bowl pitch in the console — drag positionals onto squares, hover for stats, and set scenarios up by hand or by asking the agent. Ships roster data for 30 teams."
     adds: [tool, skill, view]
 
+  - id: inventory
+    name: Inventory
+    category: Finance
+    repo: https://github.com/protoLabsAI/inventory-plugin
+    tagline: "Inventory for resellers who buy in lots and sell piece by piece: scan boxes in from your phone, QR labels and bins, prices with their evidence, listing drafts you post yourself, and profit per lot."
+    adds: [tool, skill, view]
+
   # ── Bundled built-ins (ship in-tree under plugins/<id>) ───────────────────────────
   #    These are LISTED in in-app Discover (#2249): Discover is where an operator finds
   #    out what a plugin does, and a bundled plugin has no other surface that says so.

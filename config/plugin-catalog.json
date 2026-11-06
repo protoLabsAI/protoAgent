@@ -302,6 +302,20 @@
       "docs": "https://github.com/protoLabsAI/bloodbowl-plugin#readme"
     },
     {
+      "id": "inventory",
+      "name": "Inventory",
+      "category": "Finance",
+      "official": true,
+      "repo": "https://github.com/protoLabsAI/inventory-plugin",
+      "tagline": "Inventory for resellers who buy in lots and sell piece by piece: scan boxes in from your phone, QR labels and bins, prices with their evidence, listing drafts you post yourself, and profit per lot.",
+      "adds": [
+        "tool",
+        "skill",
+        "view"
+      ],
+      "docs": "https://github.com/protoLabsAI/inventory-plugin#readme"
+    },
+    {
       "id": "plugin-devkit",
       "name": "Plugin Devkit",
       "category": "Authoring",
