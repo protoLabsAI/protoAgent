@@ -490,9 +490,14 @@ def test_merchant_archetype_is_held() -> None:
     assert row.get("bundle") == "https://github.com/protoLabsAI/merchant-archetype"
     assert row.get("requires_tools") == [
         "inventory_summary",
+        "inventory_list",
+        "inventory_get",
+        "inventory_upsert_lot",
         "inventory_upsert_item",
         "inventory_set_price",
         "inventory_mark_sold",
+        "inventory_move_to_bin",
+        "inventory_packing",
     ]
     preset = CONFIG / "soul-presets" / f"{row['soul_preset']}.md"
     assert preset.is_file(), f"held archetype 'merchant' points at a missing soul preset {preset}"

@@ -126,9 +126,14 @@
       "soul_preset": "merchant",
       "requires_tools": [
         "inventory_summary",
+        "inventory_list",
+        "inventory_get",
+        "inventory_upsert_lot",
         "inventory_upsert_item",
         "inventory_set_price",
-        "inventory_mark_sold"
+        "inventory_mark_sold",
+        "inventory_move_to_bin",
+        "inventory_packing"
       ]
     }
   ]
