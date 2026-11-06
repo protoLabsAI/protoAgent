@@ -1,0 +1,1 @@
+- **Console starter prompts follow agent configuration (#4570).** Empty chats display runtime-provided prompts and notes, hide suggestions when the list is empty, and retain built-in starters for older servers. Selecting a prompt fills the composer without sending it.

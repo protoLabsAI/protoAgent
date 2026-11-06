@@ -5,7 +5,7 @@ import { TerminalSquare } from "lucide-react";
 import { memo, useMemo } from "react";
 import { createPortal } from "react-dom";
 
-import type { ChatMessage, QueuedSteer } from "../lib/types";
+import type { ChatMessage, QueuedSteer, RuntimeStatus } from "../lib/types";
 import type { SessionStatus } from "./chat-store";
 import { ChatMessageView, type ChatMessageActions } from "./ChatMessageView";
 import { hideDismissedToolCalls } from "./dismissedToolCalls";
@@ -27,6 +27,7 @@ type ChatTranscriptProps = {
   onDismissToolCall: (id: string) => void;
   onCancelSteer: (id: string) => void;
   onStarterPrompt?: (text: string) => void;
+  starterPrompts?: Readonly<RuntimeStatus["starter_prompts"]>;
   /** Bumped on every send: re-pins the transcript to the bottom (it always follows a send). */
   followSignal?: number;
 };
@@ -89,6 +90,7 @@ export const ChatTranscript = memo(function ChatTranscript({
   onDismissToolCall,
   onCancelSteer,
   onStarterPrompt,
+  starterPrompts = STARTER_PROMPTS,
   followSignal = 0,
 }: ChatTranscriptProps) {
   const feedback = useSessionFeedback(sessionId, messages, actions.incognito);
@@ -114,16 +116,18 @@ export const ChatTranscript = memo(function ChatTranscript({
     <Conversation id={rootId} autoScroll={false}>
       {feedback.error ? <p role="alert">{feedback.error}</p> : null}
       {messages.length === 0 ? (
-        <Empty icon={<TerminalSquare />} title="Try one of these">
-          <div className="chat-starter-prompts" style={{ display: "grid", gap: 8, maxWidth: "100%", textAlign: "left" }}>
-            {STARTER_PROMPTS.map(({ label, prompt, note }) =>
-              onStarterPrompt ? (
-                <Chip key={label} block label={label} note={note} onClick={() => onStarterPrompt(prompt)} />
-              ) : (
-                <Chip key={label} block label={label} note={note} />
-              ),
-            )}
-          </div>
+        <Empty icon={<TerminalSquare />} title={starterPrompts.length ? "Try one of these" : undefined}>
+          {starterPrompts.length ? (
+            <div className="chat-starter-prompts" style={{ display: "grid", gap: 8, maxWidth: "100%", textAlign: "left" }}>
+              {starterPrompts.map(({ label, prompt, note }) =>
+                onStarterPrompt ? (
+                  <Chip key={label} block label={label} note={note} onClick={() => onStarterPrompt(prompt)} />
+                ) : (
+                  <Chip key={label} block label={label} note={note} />
+                ),
+              )}
+            </div>
+          ) : null}
         </Empty>
       ) : (
         messages.map((message) => (
