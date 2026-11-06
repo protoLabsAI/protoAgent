@@ -8,6 +8,11 @@ const outcomes = [
   { title: 'Give recurring work a home', body: 'Use schedules for timed jobs, watches for events, and goals for work that needs to continue. Follow progress and stop work from the app.', href: '/docs/guides/automate-work', label: 'Choose an automation' },
   { title: 'Connect the tools you use', body: 'Add a reusable skill, connect an MCP server, or install a plugin with its own tools and interface. Enable the capabilities your task needs.', href: '/docs/guides/use-protoagent#tools-and-integrations', label: 'Connect and extend' },
 ];
+const devs = [
+  { title: 'Uses the agents you already have', body: 'Drives Claude Code, Codex, or any CLI agent that speaks the Agent Client Protocol, so your existing plan does the coding. Their work streams into your chat.', href: '/docs/guides/coding-agents', label: 'CLI coding agents' },
+  { title: 'From brief to merged PR', body: 'The Project Manager archetype turns a brief into a board card, builds it in a disposable worktree, opens the pull request and waits for CI before merging.', href: '/docs/guides/build-with-a-coding-agent', label: 'Build with a coding agent' },
+  { title: 'Remembers between sessions', body: 'Memory, knowledge and tasks stay in SQLite on your machine, so context carries from one session to the next. MIT-licensed, with no telemetry.', href: '/docs/guides/manage-memory', label: 'Memory you can inspect' },
+];
 const paths = [
   { title: 'Use the app', body: 'Install, connect a model, and get your first reply. Then work with files, tools, and memory.', href: '/docs/tutorials/first-agent', label: 'Start here' },
   { title: 'Build on it', body: 'Write a skill or plugin, add a custom view, and keep your domain logic alongside your code.', href: '/docs/guides/extend', label: 'Builder guides' },
@@ -36,6 +41,14 @@ const paths = [
       <a href={item.href}>{item.label} →</a>
     </div>)}</div>
     <div class="actions"><a href="/features" class="pl-btn">See the full feature set</a></div>
+  </div></section>
+  <section class="pl-section"><div class="pl-container">
+    <p class="pl-eyebrow">For developers</p><h2 class="pl-heading">Hand coding work to Claude Code and Codex</h2>
+    <div class="pl-deliverables">{devs.map((item) => <div class="pl-deliverable">
+      <h3 class="pl-deliverable__title">{item.title}</h3><p class="pl-deliverable__body">{item.body}</p>
+      <a href={item.href}>{item.label} →</a>
+    </div>)}</div>
+    <div class="actions"><a href="https://github.com/protoLabsAI/protoAgent" class="pl-btn" target="_blank" rel="noopener noreferrer">View on GitHub</a></div>
   </div></section>
   <section class="pl-section"><div class="pl-container">
     <p class="pl-eyebrow">Get started</p><h2 class="pl-heading">From install to a useful first task</h2>
