@@ -46,7 +46,7 @@ def _rules(text: str) -> list[str]:
 def test_manifest_parses_and_declares_no_reach():
     data = yaml.safe_load((ROOT / "protoagent.plugin.yaml").read_text(encoding="utf-8"))
     assert data["id"] == "plain_language"
-    assert data["enabled"] is False
+    assert data["enabled"] is True
     assert data["version"] and data["min_protoagent_version"]
     assert data["capabilities"] == {"network": [], "filesystem": "none"}
     assert data["config"] == {"always_on": True}

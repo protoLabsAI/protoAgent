@@ -12,7 +12,10 @@ description: >-
   (/plain-review) or test it with simulated readers (/paraphrase-test). A
   plain_language_check tool checks the mechanical rules the same way every time.
   No network or filesystem access.
-enabled: false
+# On by default (2026-11-06): in a blind A/B on 12 writing tasks (eval/ab.py) a judge
+# preferred replies with the plugin 24 to 5, at the same latency. Turn it off per instance
+# with `plugins: { disabled: [plain_language] }`.
+enabled: true
 capabilities:
   network: []
   filesystem: none

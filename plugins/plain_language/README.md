@@ -26,14 +26,14 @@ they're cached along with the rest of the system prompt.
 If you also use the Cowork writing-voice profile, the profile sets tone and
 personality and these rules cover clarity.
 
-## Turn it on
+## Turn it off
 
-The plugin is off by default. To turn it on, open **Settings ▸ Plugins**, or add
+The plugin is on by default. To turn it off, open **Settings ▸ Plugins**, or add
 it to your config:
 
 ```yaml
 plugins:
-  enabled: [plain_language]
+  disabled: [plain_language]
 ```
 
 To keep the skills and commands but drop the rules from every reply, turn off
