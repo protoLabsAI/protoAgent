@@ -107,7 +107,7 @@ def _seed_config(arm: str, ts: int) -> Path:
     return out
 
 
-def _boot(arm: str, port: int, ts: int, token: str, model: str) -> tuple[subprocess.Popen, str, Path, str]:
+def _boot(arm: str, port: int, ts: int, model: str) -> tuple[subprocess.Popen, str, Path, str]:
     instance = f"plainlang-{arm.lower()}-{ts}"
     env = {
         **os.environ,
@@ -115,7 +115,6 @@ def _boot(arm: str, port: int, ts: int, token: str, model: str) -> tuple[subproc
         "PROTOAGENT_UI": "none",
         "PROTOAGENT_SEED_CONFIG": str(_seed_config(arm, ts)),
         "PROTOAGENT_MODEL": model,
-        "A2A_AUTH_TOKEN": token,
     }
     log_path = RESULTS / f"plain-language-server-{ts}-{arm}.log"
     log_f = open(log_path, "w", encoding="utf-8")  # noqa: SIM115 — closed with the process
@@ -383,13 +382,14 @@ async def _run(args) -> int:
         cases = [c for c in cases if c["id"] in wanted]
     ts = int(time.time())
     token = f"plainlang-ab-{ts}"
-    os.environ["A2A_AUTH_TOKEN"] = token  # the client reads it too
+    # Set before booting: each arm copies os.environ, and the client reads it too.
+    os.environ["A2A_AUTH_TOKEN"] = token
     RESULTS.mkdir(parents=True, exist_ok=True)
 
     arms = {}
     try:
         for i, arm in enumerate(("A", "B")):
-            proc, url, log_path, instance = _boot(arm, args.port_base + i, ts, token, args.model)
+            proc, url, log_path, instance = _boot(arm, args.port_base + i, ts, args.model)
             arms[arm] = {"proc": proc, "url": url, "log": log_path, "instance": instance}
             print(f"  · arm {arm}: booting {url} (instance {instance})")
         health = {}
