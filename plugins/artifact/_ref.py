@@ -112,20 +112,35 @@ def page_hint(
     return None, refusal, f" — {refusal}"
 
 
-def ref_props(art: dict, *, inline: bool = False, height: int | None = None, page: int | None = None) -> dict:
-    """The ``artifact-ref`` props for ``art``'s LATEST version (the one a tool just wrote).
+def ref_props(
+    art: dict,
+    *,
+    inline: bool = False,
+    height: int | None = None,
+    page: int | None = None,
+    version_pos: int | None = None,
+) -> dict:
+    """The ``artifact-ref`` props for a version of ``art`` — its LATEST by default (the one a
+    tool just wrote), or the 1-based list position ``version_pos`` (what cite_artifact points at
+    an ALREADY-saved version, #4761).
 
     ``inline`` adds the inline-placement flag (ADR 0118 D2); ``height`` adds a clamped px hint.
-    ``page`` adds a 1-based PDF page hint.
-    The defaults emit none of these, so a plain panel call's props are byte-for-byte as before."""
-    n = _store._version_key(art)[0]
+    ``page`` adds a 1-based PDF page hint. ``version_pos`` defaults to ``None`` → the latest
+    version, so a plain panel/save call's props are byte-for-byte as before."""
+    # ``versions_total`` is the LATEST version's lifetime number (``_store._version_key``), which
+    # is the version total. The prop ``version`` is a version's own lifetime number — NOT its list
+    # position, which the max_versions trim shifts (see the module docstring): for the latest that
+    # IS the total; for an earlier position it's offset by how many versions have been trimmed off
+    # the front (``total - len(versions)``), the same arithmetic ``_store._locate_version`` inverts.
+    total = _store._version_key(art)[0]
+    n = total if version_pos is None else version_pos + total - len(art.get("versions") or [])
     title = " ".join(str(art.get("title") or "").split())  # one line — it's a chip label
     if len(title) > TITLE_MAX:
         title = title[: TITLE_MAX - 1] + "…"
     props = {
         "artifact_id": str(art["id"]),
         "version": int(n),
-        "versions_total": int(n),
+        "versions_total": int(total),
         "title": title,
         "kind": str(art.get("kind") or ""),
     }
@@ -138,14 +153,22 @@ def ref_props(art: dict, *, inline: bool = False, height: int | None = None, pag
     return props
 
 
-def ref_tail(art: dict, *, inline: bool = False, height: int | None = None, page: int | None = None) -> str:
+def ref_tail(
+    art: dict,
+    *,
+    inline: bool = False,
+    height: int | None = None,
+    page: int | None = None,
+    version_pos: int | None = None,
+) -> str:
     """The component tail a tool appends to its reply: ``"\\n" + <sentinel payload>``, or
     ``""`` when the props wouldn't validate (never let a pointer break the reply).
 
-    ``inline``/``height`` carry the inline-placement hints (ADR 0118 D2) into the props."""
+    ``inline``/``height`` carry the inline-placement hints (ADR 0118 D2) into the props;
+    ``version_pos`` points the chip at a non-latest version (cite_artifact, #4761)."""
     if not EMIT:
         return ""
-    props = ref_props(art, inline=inline, height=height, page=page)
+    props = ref_props(art, inline=inline, height=height, page=page, version_pos=version_pos)
     if validate_artifact_ref(props) is not None:
         return ""
     from graph.sdk import encode_component

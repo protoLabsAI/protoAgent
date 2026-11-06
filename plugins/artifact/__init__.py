@@ -59,6 +59,7 @@ from ._store import (
 from ._tools import (
     _SAVE_NUDGE_WINDOW_MS,
     check_artifact,
+    cite_artifact,
     delete_artifact,
     get_artifact,
     list_artifacts,
@@ -87,6 +88,7 @@ __all__ = [
     "list_artifacts",
     "get_artifact",
     "check_artifact",
+    "cite_artifact",
     "pin_artifact",
     "delete_artifact",
 ]
@@ -102,6 +104,7 @@ def register(registry) -> None:
         list_artifacts,
         get_artifact,
         check_artifact,
+        cite_artifact,
         pin_artifact,
         delete_artifact,
     ):

@@ -1194,6 +1194,46 @@ def get_artifact(artifact_id: str = "") -> str:
 
 
 @tool
+def cite_artifact(artifact_id: str, page: int, version: int = 0) -> str:
+    """Cite a page of a PDF that is ALREADY an artifact: no save, no new version; for a new file
+    use save_file_artifact(page=N). ``version=0`` cites the latest version, otherwise a 1-based
+    version number. Returns a chip that opens the artifact's PDF at that page. Read-only.
+    """
+    # Read-only by design (#4761): it reads the store but NEVER writes it, creates a version, or
+    # reads the source file — so it costs no upload and adds no panel entry per citation, and a
+    # copied artifact can be cited after its source file is gone. Because it never writes, it also
+    # can't stamp the calling chat (the eviction guard, #4138): the artifact must already exist and
+    # its own lifecycle governs eviction, exactly as for linked and copied artifacts alike.
+    store = _store._read_store()
+    art = _store._find(store, artifact_id)
+    if art is None:
+        return f"No artifact {artifact_id!r}. Use list_artifacts to see the ids."
+    versions = art.get("versions") or []
+    total = len(versions)
+    if version == 0:
+        pos = total  # the latest
+    elif 1 <= version <= total:
+        pos = version
+    else:
+        return (
+            f"Artifact {art['id']} has {total} version(s) — version must be between 1 and {total}, "
+            f"or 0 for the latest."
+        )
+    # The SAME page rule as every save path, from card 1's one helper — on the chosen version's
+    # stored `file` meta (its pdf preview verdict) and the artifact's kind. Its refusal/note is
+    # used verbatim: a non-PDF, a bad page, or a PDF that can't render pages is refused here just
+    # as it would be on a save; a page past the end clamps to the last page.
+    accepted_page, refusal, note = _ref.page_hint(versions[pos - 1].get("file"), art.get("kind", ""), page)
+    if refusal is not None:
+        return refusal
+    title = art.get("title") or "(untitled)"
+    return (
+        f"Cited artifact {art['id']} v{pos}: {title}{note}."
+        + _ref.ref_tail(art, page=accepted_page, version_pos=pos)
+    )
+
+
+@tool
 def check_artifact(artifact_id: str = "", state: Annotated[Any, InjectedState] = None) -> str:
     """Report whether an artifact's latest version RENDERED: clean, FAILED with the error, or
     "no result yet". Waits briefly for a pending verdict, so call it right after a create/edit.
