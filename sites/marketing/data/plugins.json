@@ -694,6 +694,24 @@
     }
   },
   {
+    "id": "inventory",
+    "name": "Inventory",
+    "category": "Finance",
+    "official": true,
+    "tagline": "Inventory for resellers who buy in lots and sell piece by piece: scan boxes in from your phone, QR labels and bins, prices with their evidence, listing drafts you post yourself, and profit per lot.",
+    "adds": [
+      "tool",
+      "skill",
+      "view"
+    ],
+    "bundled": false,
+    "install": "https://github.com/protoLabsAI/inventory-plugin",
+    "links": {
+      "source": "https://github.com/protoLabsAI/inventory-plugin",
+      "docs": "https://github.com/protoLabsAI/inventory-plugin#readme"
+    }
+  },
+  {
     "id": "promptlab",
     "name": "Prompt Lab",
     "category": "Engineering",
@@ -731,24 +749,6 @@
     "links": {
       "source": "https://github.com/protoLabsAI/reddit-plugin",
       "docs": "https://github.com/protoLabsAI/reddit-plugin#readme"
-    }
-  },
-  {
-    "id": "inventory",
-    "name": "Inventory",
-    "category": "Finance",
-    "official": true,
-    "tagline": "Inventory for resellers who buy in lots and sell piece by piece: scan boxes in from your phone, QR labels and bins, prices with their evidence, listing drafts you post yourself, and profit per lot.",
-    "adds": [
-      "tool",
-      "skill",
-      "view"
-    ],
-    "bundled": false,
-    "install": "https://github.com/protoLabsAI/inventory-plugin",
-    "links": {
-      "source": "https://github.com/protoLabsAI/inventory-plugin",
-      "docs": "https://github.com/protoLabsAI/inventory-plugin#readme"
     }
   },
   {
