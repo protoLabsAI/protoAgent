@@ -24,6 +24,15 @@
 
 <p align="center"><em>protoAgent hands a coding task to Claude Code. The diff pane fills in as the files change, and the tests pass.</em></p>
 
+## Why protoAgent?
+
+Claude Code and Codex are good at writing code in a session. protoAgent is what sits around them:
+
+- **It uses the agents you already pay for.** It drives Claude Code, Codex, or any ACP-speaking CLI agent, so your Claude Pro/Max or ChatGPT Plus/Pro plan does the coding. [CLI coding agents →](./docs/guides/coding-agents.md)
+- **It remembers across sessions.** Memory, knowledge and tasks stay in SQLite on your disk, and you can inspect and correct what it remembers.
+- **It runs the work, not just the chat.** Schedules, watches and goals keep work moving. The Project Manager archetype takes a brief from board card to worktree, pull request, CI and merge. [Build with a coding agent →](./docs/guides/build-with-a-coding-agent.md)
+- **It stays yours.** Local-first and MIT, with no telemetry. Add plugins from any git URL, or reach it over A2A 1.0 or an OpenAI-compatible API.
+
 ## Get it running
 
 **What you need:** a Claude Pro/Max or ChatGPT Plus/Pro plan, an API key
@@ -123,14 +132,6 @@ See [Run headless](./docs/guides/headless.md) for setup, API requests, and authe
 | <a href="docs/public/readme/hero-code-pane.webp"><img src="docs/public/readme/hero-code-pane-poster.png" alt="Claude Code's finished run in a protoAgent chat tab: todo list done, pytest 3 passed, and the Diff pane showing the changes to calc.py and test_calc.py" width="280"></a> | <img src="docs/public/readme/board-builds.webp" alt="Project board: a card marked ready from chat builds while the coder's live drawer streams, moves to In Review with auto-merge pending, then lands in Done with its PR link" width="280"> | <img src="docs/public/readme/install-plugin.webp" alt="Settings, Plugins: the terminal plugin is installed from its git URL, a Terminal icon appears in the rail with no restart, and the shell runs a command" width="280"> |
 | `delegate_to` hands a coding task to a CLI coding agent over ACP, streams its work into your chat, and brings the result back. [Spawn CLI coding agents →](./docs/guides/coding-agents.md) | The **Project Manager** archetype runs the pipeline: brief → board card → disposable worktree → pull request → CI gates → merge. [Build with a coding agent →](./docs/guides/build-with-a-coding-agent.md) | Runs on your machine. Plugins installed from any git URL add tools and console views. [Download →](https://agent.protolabs.studio/download) |
 
-## Repository layout
-
-Runtime Python code lives in `src/`, with unchanged import names such as `graph`
-and `server`. `apps/` contains the web console and desktop shell; `plugins/`
-contains bundled plugins. Tests, development scripts, documentation and deployment
-files live in `tests/`, `scripts/`, `docs/` and `deploy/`. `uv sync` installs the
-application editably, so each checkout's CLI uses its own source and assets.
-
 ## What you can do
 
 | Task | Guide |
@@ -160,6 +161,14 @@ Tracing is optional. See [Network egress](./docs/explanation/network-egress.md).
 To locate the active config and stores, run `protoagent config explain`. A normal
 source or package install uses `~/.protoagent/default/`; desktop and Docker have
 their own roots. See [Configuration](./docs/reference/configuration.md).
+
+## Repository layout
+
+Runtime Python code lives in `src/`, with unchanged import names such as `graph`
+and `server`. `apps/` contains the web console and desktop shell; `plugins/`
+contains bundled plugins. Tests, development scripts, documentation and deployment
+files live in `tests/`, `scripts/`, `docs/` and `deploy/`. `uv sync` installs the
+application editably, so each checkout's CLI uses its own source and assets.
 
 ## Plugins
 
@@ -214,6 +223,7 @@ Desktop and Python publishing have separate steps. Follow the
 
 Read [CONTRIBUTING.md](./CONTRIBUTING.md) for issues and pull requests, and
 [PROTO.md](./PROTO.md) for development rules and required checks.
+See [ROADMAP.md](./ROADMAP.md) for what's planned and in progress.
 
 ## License
 
