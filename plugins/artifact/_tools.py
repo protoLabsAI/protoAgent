@@ -321,8 +321,9 @@ def save_file_artifact(
     # refused. The max_blob_kb cap doesn't apply — a linked file has its own max_linked_kb cap
     # (200 MB default). The blob route serves a linked version through the live fence on every
     # request (#4370): 403 once it leaves the fence, 409 when the file changed or is gone.
-    if page < 0:
-        return "page must be a positive PDF page number (1-based), or 0 for no page hint."
+    _, refusal, _ = _ref.page_hint(None, "file", page, input_only=True)
+    if refusal:
+        return refusal
     if link and artifact_id:
         return (
             "link=True can't be combined with artifact_id: a linked artifact serves a file in "
@@ -332,8 +333,11 @@ def save_file_artifact(
     p, why = _resolve_file(path, project)
     if p is None:
         return why
-    if page and not _pdfview.is_pdf(p.name, _preview._guess_mime(p)):
-        return "page is only supported for a PDF. Omit page or use 0 for other files."
+    _, refusal, _ = _ref.page_hint(
+        {"filename": p.name, "mime": _preview._guess_mime(p)}, "file", page, input_only=True
+    )
+    if refusal:
+        return refusal
     if link:
         return _save_linked_artifact(p, path, project, title, _chat_session(state), page=page)
     prepared = _prepare_file(p)
@@ -492,6 +496,7 @@ def _save_file(
     blob_file.write_bytes(data)
 
     file_meta = _file_meta(filename, mime, len(data), thumb, slides, pdf, docx)
+    accepted_page, _, page_note = _ref.page_hint(file_meta, "file", page)
     if art is None:
         nv = _store._new_version(preview, extra={"file": file_meta, "blob": blob_name})
         art = {
@@ -518,8 +523,8 @@ def _save_file(
     return (
         f"Saved file artifact {art_id} → v{v}: {filename} ({mime}, {kb} KB) — now in the "
         f"Artifact panel with a preview and a Download button."
-        + (f" — opens at page {page}" if page else "")
-    ), (art_id, v, _ref.ref_tail(art, page=page))
+        + page_note
+    ), (art_id, v, _ref.ref_tail(art, page=accepted_page))
 
 
 # ── linked file artifacts (ADR 0092 D2 extension, #4370) ─────────────────────────────
@@ -619,6 +624,7 @@ def _save_linked(
     store = _store._read_store()
     art_id = _store._new_id()
     file_meta = _file_meta(filename, mime, link["size"], thumb, slides, pdf, docx)
+    accepted_page, _, page_note = _ref.page_hint(file_meta, "file", page)
     nv = _store._new_version(preview, extra={"file": file_meta, "link": link})
     art = {
         "id": art_id,
@@ -640,8 +646,8 @@ def _save_linked(
         f"Linked file artifact {art_id} → v1: {filename} ({mime}, {kb} KB) from "
         f"{link['project']}/{link['path']} — now in the Artifact panel as a reference "
         f"(read-only, no copy). Downloads serve the file in place, re-checked on every request."
-        + (f" — opens at page {page}" if page else "")
-    ) + _ref.ref_tail(art, page=page)
+        + page_note
+    ) + _ref.ref_tail(art, page=accepted_page)
 
 
 def _service_roots(plugin_id: str, roots: Any) -> tuple[list[Path], str]:

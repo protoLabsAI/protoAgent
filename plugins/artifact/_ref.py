@@ -17,7 +17,7 @@ agree until the cap is hit.
 
 from __future__ import annotations
 
-from . import _store
+from . import _pdfview, _store
 
 ARTIFACT_REF = "artifact-ref"
 
@@ -76,6 +76,40 @@ def validate_artifact_ref(props: dict) -> str | None:
     if "page" in props and not _pos_int(props["page"]):
         props.pop("page")
     return None
+
+
+def page_hint(
+    file_meta: dict | None, kind: str, page: int, *, input_only: bool = False
+) -> tuple[int | None, str | None, str]:
+    """Return the accepted page, refusal, and reply note for a PDF page hint.
+
+    Saves use ``input_only`` before preparing the file: absent metadata means its
+    type is not known yet. That pass checks arguments only, never accepts a hint;
+    the final pass must use the stored preview verdict.
+    """
+    if page == 0:
+        return None, None, ""
+    if page < 0:
+        refusal = "page must be a positive PDF page number (1-based), or 0 for no page hint."
+    elif input_only and file_meta is None and kind == "file":
+        return None, None, ""
+    elif kind != "file" or not _pdfview.is_pdf(
+        (file_meta or {}).get("filename", ""), (file_meta or {}).get("mime", "")
+    ):
+        refusal = "page is only supported for a PDF. Omit page or use 0 for other files."
+    elif input_only:
+        return None, None, ""
+    else:
+        pdf = (file_meta or {}).get("pdf") or {}
+        if pdf.get("render") is not True:
+            reason = pdf.get("reason") or "no approved PDF preview verdict"
+            refusal = f"The PDF shows as text ({reason}), so it can't open at a page."
+        else:
+            pages = pdf.get("pages")
+            if _pos_int(pages) and page > pages:
+                return pages, None, f" — the PDF has {pages} pages — opens at page {pages}"
+            return page, None, f" — opens at page {page}"
+    return None, refusal, f" — {refusal}"
 
 
 def ref_props(art: dict, *, inline: bool = False, height: int | None = None, page: int | None = None) -> dict:
