@@ -1,0 +1,89 @@
+{
+  "_comment": "Writing tasks for the plain_language A/B (eval/ab.py). 'reader' is who the judge reads as; it is NOT sent to the agent unless the prompt itself says so, because real requests often don't name the reader. 'facts' are case-insensitive substrings a complete answer must keep (any one of a '|'-separated group counts).",
+  "cases": [
+    {
+      "id": "quick_process_thread",
+      "kind": "everyday answer",
+      "reader": "A junior developer who asked in chat and wants a quick, correct answer.",
+      "prompt": "What's the difference between a process and a thread?",
+      "facts": ["memory"]
+    },
+    {
+      "id": "explain_prompt_cache",
+      "kind": "explanation",
+      "reader": "A product manager with no engineering background who must decide whether to fund the work.",
+      "prompt": "Our engineers want to turn on prompt caching for the LLM calls. Explain to our product manager, in a short paragraph or two, what that is and why it saves money.",
+      "facts": ["cost|cheaper|money|bill"]
+    },
+    {
+      "id": "status_email",
+      "kind": "email",
+      "reader": "Members of a cross-functional launch team (engineering, QA, marketing) reading on their phones between meetings.",
+      "prompt": "Draft an email to my launch team. The v2 launch moves from March 3 to March 17. Reason: the payment provider hasn't finished reviewing our API integration and we can't go live without their approval. QA's schedule doesn't change. I need marketing to move the announcement and the paid ads to the new date by Friday. Engineering keeps going on the backlog in the meantime.",
+      "facts": ["March 17", "payment", "Friday", "marketing|announcement", "QA"]
+    },
+    {
+      "id": "release_notes",
+      "kind": "release note",
+      "reader": "Customers of a note-taking app who skim release notes to see what changed for them.",
+      "prompt": "Turn these merged changes into user-facing release notes for version 4.2:\n- feat(sync): implement delta-based conflict resolution for concurrent edits across devices\n- fix(export): PDF export no longer truncates tables wider than the page margin\n- perf(search): FTS index rebuilt incrementally, reducing query latency p95 from 900ms to 120ms\n- chore(deps): bump electron 30 -> 31\n- feat(ui): dark mode now follows the OS setting by default",
+      "facts": ["conflict|both devices|same note", "PDF", "search", "dark mode"]
+    },
+    {
+      "id": "rewrite_notice",
+      "kind": "rewrite",
+      "reader": "A tenant receiving this notice from their property manager.",
+      "prompt": "Rewrite this notice so our tenants can understand it:\n\n\"Pursuant to the provisions of the lease agreement, residents are hereby notified that, in the event that rental remittance has not been received by the management office prior to the fifth (5th) calendar day of the month, a late charge in the amount of $50.00 shall be assessed and/or applied to the resident's ledger. Furthermore, it should be noted that payments remitted via personal check that are subsequently returned due to insufficient funds shall be subject to an additional processing fee of $35.00, and the utilization of personal checks for remittance purposes will thereafter be discontinued for the duration of the tenancy.\"",
+      "facts": ["$50", "5th|fifth", "$35", "check"]
+    },
+    {
+      "id": "upload_error",
+      "kind": "UI message",
+      "reader": "A user of a web app whose file upload just failed.",
+      "prompt": "Write the error message our web app shows when a file upload fails because the file is bigger than the 25 MB limit. Give me the message itself, ready to paste.",
+      "facts": ["25 MB|25MB"]
+    },
+    {
+      "id": "ssh_setup",
+      "kind": "instructions",
+      "reader": "A designer on a Mac who has used the terminal a few times and needs to push to GitHub.",
+      "prompt": "How do I set up SSH keys so I can push to GitHub from my Mac?",
+      "facts": ["ssh-keygen", "github"]
+    },
+    {
+      "id": "decision_db",
+      "kind": "recommendation",
+      "reader": "A solo developer who asked for a recommendation and wants to get back to building.",
+      "prompt": "I'm building a single-user desktop app that stores notes and tags locally. Should I use Postgres or SQLite? Give me a recommendation.",
+      "facts": ["SQLite"]
+    },
+    {
+      "id": "incident_summary",
+      "kind": "report",
+      "reader": "Company leadership (non-engineers) who need to know what happened, the impact, and whether it's fixed.",
+      "prompt": "Write a short incident summary for leadership from this timeline:\n09:12 deploy of api v3.8 starts\n09:14 error rate on checkout climbs to 40% (null pointer in new tax calc for orders with no shipping address, i.e. digital goods)\n09:21 on-call paged\n09:33 rollback to v3.7 completed, errors back to baseline\nImpact: about 1,900 failed checkout attempts, all digital-goods orders; estimated $23k in delayed revenue, most customers retried successfully.\nFollow-ups: add test for orders without shipping address; add automatic rollback when checkout error rate > 5%.",
+      "facts": ["1,900|1900", "$23k|$23,000|23,000", "rollback|rolled back", "digital"]
+    },
+    {
+      "id": "volunteer_welcome",
+      "kind": "message",
+      "reader": "A new volunteer at a food bank, some of whom read English as a second language.",
+      "prompt": "Write a welcome message for new volunteers at our food bank. Facts: first shift is Saturday 8:30 to 11:30 am; check in at the side door on Elm Street, not the main entrance; wear closed-toe shoes; we give you gloves and an apron; parking is free in the church lot across the street; if you can't make it, text Maria at 555-0142 at least 24 hours ahead.",
+      "facts": ["8:30", "Elm", "closed-toe|closed toe", "555-0142", "24 hours"]
+    },
+    {
+      "id": "bank_transfer",
+      "kind": "customer reply",
+      "reader": "A frustrated customer asking support why their money hasn't arrived.",
+      "prompt": "A customer wrote to support: 'I sent money on Monday and it still isn't in my other account. Where is it?' Draft our reply. Facts: transfers between banks take up to 3 business days; weekends and bank holidays don't count; this transfer shows as 'in progress' and should arrive by end of day Thursday; if it hasn't arrived by Friday they should reply and we'll trace it.",
+      "facts": ["3 business days|three business days", "Thursday", "Friday"]
+    },
+    {
+      "id": "policy_summary",
+      "kind": "summary",
+      "reader": "An employee who wants to know whether they can work from another country for a few weeks.",
+      "prompt": "Summarize this policy for employees:\n\n\"Remote Work Abroad Policy. Employees may perform work from a location outside their country of employment for a cumulative period not exceeding 30 calendar days per calendar year, subject to prior written approval from their direct manager and the People Operations team, which must be requested no fewer than 15 business days prior to the intended start date. Requests for locations designated as restricted by the Security team will not be approved. Employees are responsible for ensuring compliance with applicable visa and immigration requirements. Periods exceeding 30 days require additional review by the Legal and Tax departments and may be denied at the Company's discretion.\"",
+      "facts": ["30", "15 business days|15 working days|three weeks", "manager", "visa"]
+    }
+  ]
+}

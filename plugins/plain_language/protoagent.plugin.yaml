@@ -1,0 +1,31 @@
+id: plain_language
+name: Plain Language (clear writing)
+version: 0.1.0
+# Plugin middleware (ADR 0032), register_subagent and register_skill_dir all predate
+# this floor; 0.208.0 matches the other in-tree skill packs.
+min_protoagent_version: "0.208.0"
+description: >-
+  Makes the agent write so the reader understands it the first time, using
+  digital.gov's plain language guide. Every reply carries a short set of core rules
+  (bottom line first, active voice, common words, short paragraphs, one term per
+  idea). Two skills cover long drafts and rewrites, and two commands review a text
+  (/plain-review) or test it with simulated readers (/paraphrase-test). A
+  plain_language_check tool checks the mechanical rules the same way every time.
+  No network or filesystem access.
+# On by default (2026-11-06): in a blind A/B on 12 writing tasks (eval/ab.py) a judge
+# preferred replies with the plugin 24 to 5, at the same latency. Turn it off per instance
+# with `plugins: { disabled: [plain_language] }`.
+enabled: true
+capabilities:
+  network: []
+  filesystem: none
+
+config_section: plain_language
+config:
+  always_on: true   # add the core rules to every model call
+
+settings:
+  - key: always_on
+    label: "Apply the core plain-language rules to every reply"
+    type: bool
+    description: "When off, the agent still has the plain-language skills, the /plain-review and /paraphrase-test commands, and the check tool. It only uses them when a task calls for them."

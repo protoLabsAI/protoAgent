@@ -409,6 +409,20 @@
       "docs": "https://agent.protolabs.studio/docs/guides/plugins"
     },
     {
+      "id": "plain_language",
+      "name": "Plain Language (clear writing)",
+      "category": "Productivity",
+      "official": true,
+      "repo": "https://github.com/protoLabsAI/protoAgent/tree/main/plugins/plain_language",
+      "tagline": "Clearer writing, using digital.gov's plain language guide. Every reply gets a short set of core rules. Adds skills for long drafts and rewrites, /plain-review and /paraphrase-test, and a checker for the mechanical rules. On by default.",
+      "adds": [
+        "skill",
+        "tool",
+        "subagent"
+      ],
+      "docs": "https://agent.protolabs.studio/docs/guides/plugins"
+    },
+    {
       "id": "cowork",
       "name": "Cowork (document skills)",
       "category": "Productivity",
