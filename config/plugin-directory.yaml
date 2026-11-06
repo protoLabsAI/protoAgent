@@ -385,6 +385,13 @@ plugins:
     adds: [tool, skill, view, settings, secrets]
     status: incubating   # v0.1.0, never released
 
+  - id: inventory
+    name: Inventory
+    category: Finance
+    repo: https://github.com/protoLabsAI/inventory-plugin
+    tagline: "Inventory for resellers who buy in lots and sell piece by piece: scan boxes in from your phone, QR labels and bins, prices with their evidence, listing drafts you post yourself, and profit per lot."
+    adds: [tool, skill, view]
+
   - id: ebay
     name: Marketplace prices
     category: Finance
