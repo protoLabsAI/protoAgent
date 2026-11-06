@@ -1,0 +1,1 @@
+- **Starter prompts editor (#4768).** Settings ▸ Chat now has a per-agent "Starter prompts" block: toggle the empty-chat suggestions on/off, or Customize to add, edit, reorder and remove up to eight chips. "Reset to defaults" restores the built-in suggestions and saving an emptied list hides them entirely. The list previously could only be edited in YAML.

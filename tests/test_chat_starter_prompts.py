@@ -34,23 +34,38 @@ def test_defaults_match_the_shipped_four() -> None:
 
 
 # --------------------------------------------------------------------------- #
-# Settings schema — the visible toggle + the ui_hidden list (#4570).
+# Settings schema — both fields owned by the dedicated editor (#4570, bd-4wss).
 # --------------------------------------------------------------------------- #
 
 
-def test_show_toggle_is_a_hot_reload_bool_in_the_schema() -> None:
+def test_chat_fields_are_ui_hidden_owned_by_the_dedicated_editor() -> None:
+    # One-editor-per-key (#1076): the Settings ▸ Chat ▸ "Starter prompts" editor owns BOTH
+    # the toggle and the list, so NEITHER renders in the generic Behavior panel.
     groups = build_schema(LangGraphConfig())
     by_key = {f["key"]: f for g in groups for f in g["fields"]}
-    toggle = by_key.get("chat.show_starter_prompts")
-    assert toggle is not None, "the toggle must render in the generic Settings UI"
-    assert toggle["type"] == "bool"
-    assert toggle["restart"] is False  # hot-reloads — runtime status recomputes each poll
-    assert toggle["description"] == (
+    assert "chat.show_starter_prompts" not in by_key, "the dedicated editor owns the toggle now"
+    assert "chat.starter_prompts" not in by_key
+
+    # Still in FIELDS for config round-trip, and the toggle is a hot-reload bool
+    # (restart False — runtime status recomputes the resolved list each poll).
+    toggle = next(f for f in FIELDS if f.key == "chat.show_starter_prompts")
+    assert toggle.ui_hidden is True
+    assert toggle.type == "bool"
+    assert toggle.restart is False
+    assert toggle.description == (
         "The 'Try one of these' suggestions in an empty chat. Off hides them for this agent."
     )
-    # The list itself is ui_hidden — in FIELDS for round-trip, but not rendered.
-    assert "chat.starter_prompts" not in by_key
     assert any(f.key == "chat.starter_prompts" and f.ui_hidden for f in FIELDS)
+
+
+def test_chat_section_stays_mapped_to_a_category_even_without_a_rendered_group() -> None:
+    # With both fields ui_hidden the "Chat" section renders no generic group, but it is still
+    # declared by a core FIELD, so it must keep its _SECTION_CATEGORY entry (the core
+    # section→category guard, test_settings_schema.py) — and it routes to Behavior.
+    from graph.settings_schema import _SECTION_CATEGORY
+
+    assert _SECTION_CATEGORY["Chat"] == "Behavior"
+    assert not any(g["section"] == "Chat" for g in build_schema(LangGraphConfig()))
 
 
 # --------------------------------------------------------------------------- #
