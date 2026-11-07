@@ -731,7 +731,38 @@ def test_an_over_long_report_is_marked_as_clipped_not_cut_mid_word(ledger):
     rec = _recs(ledger)[0]
 
     assert len(rec["summary"]) == 200 and rec["summary"].endswith("…")
-    assert len(rec["detail"]) == 600 and rec["detail"].endswith("…")
+    # The detail cap is now _DETAIL_MAX (2000), so 900 chars rides under it whole — it used
+    # to clip at 600, which dropped the trailing "what would help" ask (protoAgent#4779).
+    assert rec["detail"] == "d" * 900
+
+
+def test_a_long_agent_detail_is_kept_whole_up_to_the_new_cap(ledger):
+    """A 1900-char detail — the problem up front, the ask at the very end — now survives
+    intact, where the old 600-char head clip would have cut the ask off."""
+    head = "The problem: read_file chokes on a 2MB log and there is no byte-range read. "
+    ask = " What would help: a streaming read_file that takes an offset and a length."
+    detail = head + "x" * (1900 - len(head) - len(ask)) + ask
+    assert len(detail) == 1900
+
+    asyncio.run(record_friction.ainvoke({"kind": "harness", "summary": "big read", "detail": detail}))
+
+    assert _recs(ledger)[0]["detail"] == detail
+
+
+def test_an_over_long_agent_detail_keeps_head_and_tail_with_a_marker(ledger):
+    """Past the cap the detail keeps BOTH ends around an explicit omission marker, so the
+    first sentence (the problem) and the last (the ask) both survive the clip."""
+    first = "The problem is that read_file chokes on a 2MB log. "
+    last = " What would help: a streaming read_file that takes a byte range."
+    detail = first + "x" * 5000 + last
+
+    asyncio.run(record_friction.ainvoke({"kind": "harness", "summary": "big read", "detail": detail}))
+
+    stored = _recs(ledger)[0]["detail"]
+    assert len(stored) <= 2000
+    assert stored.startswith(first)  # the problem statement leads
+    assert stored.endswith(last)  # the ask at the end is not dropped
+    assert "chars omitted" in stored  # an explicit gap marker, not a silent cut
 
 
 def test_a_report_within_the_cap_is_untouched(ledger):
@@ -983,6 +1014,24 @@ def test_the_view_calls_the_namespaced_api(monkeypatch):
 
     assert 'apiFetch("/api/plugins/friction/?' in page
     assert 'apiFetch("/api/plugins/friction/resolve"' in page
+
+
+def test_the_truncation_banner_keys_off_the_omission_marker_not_a_stale_length_cap():
+    """#4779 raised the detail cap to 2000 and, past it, keeps head + tail around a
+    "… [N chars omitted] …" marker. The dashboard's "cut off" banner must track that marker,
+    not the old 600-char length — otherwise every whole 600–2000-char detail (which this
+    change now stores intact) gets a false banner naming the wrong cap."""
+    from pathlib import Path as _P
+
+    from plugins import friction
+
+    page = (_P(friction.__file__).parent / "view.html").read_text(encoding="utf-8")
+
+    # The stale length cap and its "600" wording are gone — both the check and the comment.
+    assert '(item.detail || "").length >= 600' not in page
+    assert "600 characters" not in page
+    # The banner fires on the clipper's marker, which only a genuinely clipped detail carries.
+    assert r'/\[\d+ chars omitted\]/.test(item.detail || "")' in page
 
 
 # ── #2595 acceptance 3: "an entry can be turned into a GitHub issue in one step" ──
@@ -1847,6 +1896,57 @@ await dom.window.reloadLedger();
 assert.equal(doc.querySelectorAll(".entry").length, 3);
 assert(doc.getElementById("list").textContent.includes("trace: trace/42"));
 assert(![...doc.querySelectorAll("a")].some(a => a.textContent === "Trace"));
+dom.window.close();
+"""
+    result = subprocess.run(
+        ["node", "--input-type=module"], input=script, text=True, capture_output=True, cwd=root, timeout=30
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
+@pytest.mark.platform_sensitive
+def test_the_view_flags_only_a_marker_clipped_detail_not_a_long_whole_one():
+    """Render the shipped view and confirm the "cut off" banner tracks the clipper's
+    "… [N chars omitted] …" marker: a 1200-char detail stored whole (now under the 2000 cap)
+    is complete and must carry no banner, while a head+tail detail with the marker is flagged
+    exactly once — and the stale "capped at 600" wording is nowhere on the page (#4779)."""
+    import shutil
+    import subprocess
+
+    root = Path(__file__).resolve().parents[1]
+    if not shutil.which("node") or not (root / "node_modules/jsdom").exists():
+        pytest.skip("view DOM test requires npm ci and Node")
+    script = r"""
+import { JSDOM } from "jsdom";
+import { readFileSync } from "node:fs";
+import assert from "node:assert/strict";
+const html = readFileSync("plugins/friction/view.html", "utf8");
+const dom = new JSDOM(html, {url: "https://agent.example", runScripts: "outside-only"});
+const source = html.match(/<script type="module">([\s\S]*?)<\/script>/)[1]
+  .replace('const kit = await import(window.__base + "/_ds/plugin-kit.js");', 'const kit = window.kit;');
+dom.window.setTimeout = () => 0;
+dom.window.setInterval = () => 0;
+dom.window.kit = {
+  initPluginView() {},
+  async apiFetch(url) {
+    if (url.startsWith("/api/telemetry/recent")) return {ok: true, json: async () => ({})};
+    return {ok: true, json: async () => ({items: [
+      {kind: "harness", summary: "long but whole", detail: "x".repeat(1200)},
+      {kind: "harness", summary: "clipped", detail: "the problem … [4321 chars omitted] … the ask"},
+    ], counts: {harness: 2}})};
+  },
+};
+await dom.window.eval('(async () => {' + source + `
+  await load();
+})()`);
+const doc = dom.window.document;
+assert.equal(doc.querySelectorAll(".entry").length, 2);
+// The detail block (and its banner) is appended regardless of open state, so a global
+// count attributes the banner without depending on which card is expanded.
+const banners = doc.querySelectorAll(".truncated");
+assert.equal(banners.length, 1, "only the marker-clipped detail is flagged");
+assert(banners[0].textContent.toLowerCase().includes("middle"));
+assert(!doc.getElementById("list").textContent.includes("capped at 600"));
 dom.window.close();
 """
     result = subprocess.run(
