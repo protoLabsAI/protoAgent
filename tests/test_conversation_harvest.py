@@ -129,16 +129,19 @@ def test_harvest_thread_summarizes_into_history(tmp_path, history_store):
 
 
 def test_harvest_extracts_facts_when_enabled(tmp_path, history_store):
-    """ADR 0021: the session-end pass also distils facts (gated on
-    knowledge_facts), stamped with the namespace, into a real store."""
+    """ADR 0021 + ADR 0125 P2-D3: the session-end pass distils facts (gated on
+    knowledge_facts) into the core MemoryStore — provenance='extracted', pending,
+    scoped to the namespace — and writes NOTHING to the knowledge store/chunks."""
     from types import SimpleNamespace
 
+    from knowledge.memories import MemoryStore
     from knowledge.store import KnowledgeStore
 
     db = str(tmp_path / "c.db")
     _seed(db)
     saver = build_sqlite_checkpointer(db)
-    store = KnowledgeStore(tmp_path / "kb.db")
+    knowledge = KnowledgeStore(tmp_path / "kb.db")
+    memory = MemoryStore(tmp_path / "agent.db")
     cfg = SimpleNamespace(knowledge_facts=True)
 
     async def fake_summarizer(transcript, config):
@@ -151,7 +154,8 @@ def test_harvest_extracts_facts_when_enabled(tmp_path, history_store):
         harvest_thread(
             "a2a:chat-1",
             checkpointer=saver,
-            knowledge_store=store,
+            knowledge_store=knowledge,
+            memory_store=memory,
             config=cfg,
             summarizer=fake_summarizer,
             namespace="proj-x",
@@ -159,27 +163,30 @@ def test_harvest_extracts_facts_when_enabled(tmp_path, history_store):
         )
     )
     assert cid is not None
-    # Episodic summary (conversation) + semantic fact (fact), both namespaced.
+    # Episodic summary → history (namespaced); semantic fact → memories, nothing to chunks.
     summaries = history_store.list_for_session("a2a:chat-1")
-    assert store.list_chunks(domain="conversation") == []
-    assert summaries[0].namespace == "proj-x"
-    assert len(summaries) == 1
-    facts = store.list_chunks(domain="fact", namespace="proj-x")
-    assert len(facts) == 1 and "teal" in facts[0].content
-    # Provenance (ADR 0069 D5): both rows carry the originating thread id.
+    assert len(summaries) == 1 and summaries[0].namespace == "proj-x"
     assert summaries[0].thread_id == "a2a:chat-1"
-    assert facts[0].source == "a2a:chat-1"
+    assert knowledge.list_chunks(domain="fact") == []
+    assert knowledge.list_chunks(domain="conversation") == []
+    facts = memory.list(kind="fact", provenance="extracted", scope="proj-x")
+    assert len(facts) == 1 and "teal" in facts[0].content
+    assert facts[0].review_state == "pending"
+    # Provenance (ADR 0069 D5): the fact carries the originating session/thread id.
+    assert facts[0].source_session == "a2a:chat-1" and facts[0].thread_id == "a2a:chat-1"
 
 
 def test_harvest_skips_facts_when_disabled(tmp_path):
     from types import SimpleNamespace
 
+    from knowledge.memories import MemoryStore
     from knowledge.store import KnowledgeStore
 
     db = str(tmp_path / "c.db")
     _seed(db)
     saver = build_sqlite_checkpointer(db)
-    store = KnowledgeStore(tmp_path / "kb.db")
+    knowledge = KnowledgeStore(tmp_path / "kb.db")
+    memory = MemoryStore(tmp_path / "agent.db")
 
     async def fake_summarizer(transcript, config):
         return "summary"
@@ -191,13 +198,96 @@ def test_harvest_skips_facts_when_disabled(tmp_path):
         harvest_thread(
             "a2a:chat-1",
             checkpointer=saver,
-            knowledge_store=store,
+            knowledge_store=knowledge,
+            memory_store=memory,
             config=SimpleNamespace(knowledge_facts=False),
             summarizer=fake_summarizer,
             fact_extractor=boom_facts,
         )
     )
-    assert store.list_chunks(domain="fact") == []
+    assert memory.list(kind="fact") == []
+    assert knowledge.list_chunks(domain="fact") == []
+
+
+def test_harvest_skips_facts_without_memory_store(tmp_path, caplog):
+    """ADR 0125 P2-D3: with no MemoryStore (plugin hosts, tests) the session-end pass logs
+    the skip and extracts no facts — it never falls back to writing memory through chunks."""
+    from types import SimpleNamespace
+
+    from knowledge.store import KnowledgeStore
+
+    db = str(tmp_path / "c.db")
+    _seed(db)
+    saver = build_sqlite_checkpointer(db)
+    knowledge = KnowledgeStore(tmp_path / "kb.db")
+
+    async def fake_summarizer(transcript, config):
+        return "User prefers teal."
+
+    async def boom_facts(transcript, config):
+        raise AssertionError("extraction must be skipped when there is no memory store")
+
+    with caplog.at_level("INFO"):
+        cid = asyncio.run(
+            harvest_thread(
+                "a2a:chat-1",
+                checkpointer=saver,
+                knowledge_store=knowledge,
+                memory_store=None,
+                config=SimpleNamespace(knowledge_facts=True),
+                summarizer=fake_summarizer,
+                fact_extractor=boom_facts,
+            )
+        )
+    assert cid is not None  # the episodic summary still lands
+    assert knowledge.list_chunks(domain="fact") == []  # chunks untouched — no chunk fallback
+    assert "no memory store" in caplog.text
+
+
+def test_harvest_does_not_re_raise_on_fact_write_failure(tmp_path, history_store):
+    """ADR 0125 P2-D3: MemoryStore.add/supersede raise on SQLite errors (where add_chunk
+    returned None). A fact-write failure must NOT propagate out of harvest_thread, even under
+    raise_on_error — the episodic summary already wrote, so a re-raise would make the retire
+    sweep keep the thread and re-harvest it. Fact capture is best-effort."""
+    import sqlite3
+    from types import SimpleNamespace
+
+    db = str(tmp_path / "c.db")
+    _seed(db)
+
+    class _RaisingMemory:
+        def list(self, **kw):
+            return []
+
+        def add(self, *a, **kw):
+            raise sqlite3.OperationalError("database is locked")
+
+        def supersede(self, *a, **kw):
+            return False
+
+    async def fake_summarizer(transcript, config):
+        return "User prefers teal."
+
+    async def fake_facts(transcript, config):
+        return ["The user's favorite color is teal"]
+
+    cid = asyncio.run(
+        harvest_thread(
+            "a2a:chat-1",
+            checkpointer=build_sqlite_checkpointer(db),
+            knowledge_store=None,
+            memory_store=_RaisingMemory(),
+            config=SimpleNamespace(knowledge_facts=True),
+            summarizer=fake_summarizer,
+            namespace="proj-x",
+            fact_extractor=fake_facts,
+            raise_on_error=True,
+        )
+    )
+    # The summary landed and harvest did NOT re-raise despite the fact-write failure.
+    assert cid is not None
+    summaries = history_store.list_for_session("a2a:chat-1")
+    assert len(summaries) == 1 and summaries[0].thread_id == "a2a:chat-1"
 
 
 def test_harvest_noop_without_history_store(tmp_path):
@@ -395,9 +485,11 @@ def test_harvest_dates_summary_and_facts_to_the_conversation(tmp_path, history_s
     from datetime import UTC, datetime
     from types import SimpleNamespace
 
+    from knowledge.memories import MemoryStore
+
     db = str(tmp_path / "c.db")
     _seed(db)
-    kb = _FakeKnowledge()
+    memory = MemoryStore(tmp_path / "agent.db")
 
     async def fake_summarizer(transcript, config):
         return "User prefers teal."
@@ -409,7 +501,8 @@ def test_harvest_dates_summary_and_facts_to_the_conversation(tmp_path, history_s
         harvest_thread(
             "a2a:chat-1",
             checkpointer=build_sqlite_checkpointer(db),
-            knowledge_store=kb,
+            knowledge_store=None,
+            memory_store=memory,
             config=SimpleNamespace(knowledge_facts=True),
             summarizer=fake_summarizer,
             fact_extractor=fake_facts,
@@ -419,5 +512,5 @@ def test_harvest_dates_summary_and_facts_to_the_conversation(tmp_path, history_s
     summary = history_store.list_for_session("a2a:chat-1")[0]
     assert summary.content.startswith(f"[as of {day}] ")
     assert summary.heading.endswith(f", last active {day})")
-    facts = [c for c in kb.chunks if c["domain"] == "fact"]
-    assert facts and facts[0]["content"] == f"[as of {day}] The user prefers teal."
+    facts = memory.list(kind="fact", provenance="extracted")
+    assert facts and facts[0].content == f"[as of {day}] The user prefers teal."
