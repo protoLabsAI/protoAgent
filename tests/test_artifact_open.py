@@ -29,7 +29,7 @@ def test_open_and_fallback(artifact, tmp_path, monkeypatch):
     monkeypatch.setattr(artifact._store, "_emit", lambda topic, data: events.append((topic, data)))
     result = artifact.open_artifact.invoke({"artifact_id": aid, "state": {"session_id": "chat"}})
     url = _url(result)
-    assert events == [("open_url", {"session_id": "chat", "path": url.removeprefix("http://testserver")})]
+    assert events == [("open_url", {"session_id": "chat", "id": aid, "path": url.removeprefix("http://testserver")})]
     assert "token=" not in url and "bearer" not in url
     response = _client(artifact).get(url)
     assert response.status_code == 200 and response.content == b"first"
@@ -93,3 +93,18 @@ def test_missing_file_is_readable_error(artifact, tmp_path):
     value = artifact._read_store()["artifacts"][0]["versions"][0]
     artifact._blob_path(aid, value["blob"]).unlink()
     assert "blob missing" in artifact.open_artifact.invoke({"artifact_id": aid})
+
+
+def test_open_link_survives_render_stamp(artifact, tmp_path):
+    # The open grant must bind the version's BYTES, not its whole record: the console relays a
+    # render verdict onto the version through POST /render-status (markdown/file previews do),
+    # a MUTABLE field. Signing it would make an unexpired link 404 the moment a verdict lands,
+    # though the file is unchanged.
+    aid = _save(artifact, tmp_path, "report.txt", b"first")
+    url = _url(artifact.open_artifact.invoke({"artifact_id": aid}))
+    client = _client(artifact)
+    assert client.get(url).content == b"first"
+    stamp = client.post("/api/plugins/artifact/render-status", json={"id": aid, "version": 1, "ok": True})
+    assert stamp.status_code == 200 and stamp.json()["recorded"] is True
+    assert artifact._read_store()["artifacts"][0]["versions"][0].get("render")  # it really stamped one
+    assert client.get(url).content == b"first"  # the link still serves, unexpired

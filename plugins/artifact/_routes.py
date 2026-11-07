@@ -311,9 +311,17 @@ def _open_version(art_id: str, version: int) -> tuple[int, dict]:
 
 
 def _open_ticket_subject(art_id: str, version: int, value: dict) -> str:
-    # Domain separation from core media signatures; bind the complete version so trimming
-    # or replacing a linked file cannot redirect an existing grant to different bytes.
-    return "artifact-open:" + json.dumps([art_id, version, value], sort_keys=True, separators=(",", ":"))
+    # Domain separation from core media signatures. Bind the grant to the BYTES this version
+    # serves — never the whole version record. A stored version also carries a MUTABLE `render`
+    # verdict that POST /render-status stamps (with a fresh ts) after the console previews it,
+    # which markdown/file previews do; signing the whole dict would 404 the still-valid link the
+    # moment a verdict lands, though the file is unchanged. The sidecar `blob` token (random and
+    # unique per save) and the `link` reference (project/path + size/mtime/sha256) are exactly
+    # what pick the bytes: a version-cap trim that shifts this position onto another version, or a
+    # replaced linked file, changes one of them and the grant stops verifying — a render stamp
+    # changes neither. ``_open_version`` has already guaranteed one of the two is present.
+    identity = {k: value[k] for k in ("blob", "link") if k in value}
+    return "artifact-open:" + json.dumps([art_id, version, identity], sort_keys=True, separators=(",", ":"))
 
 
 def _open_artifact_path(art_id: str, version: int) -> str:

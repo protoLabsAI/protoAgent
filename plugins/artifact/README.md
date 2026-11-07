@@ -43,6 +43,11 @@ and downloads, see [Work with documents and files](../../docs/guides/documents-a
     captured error / no result yet), so a render failure feeds back into a fix instead of a silent blank.
   - `cite_artifact(artifact_id, page, version=0)` — a read-only PDF citation; see
     [Opening a PDF at a page](#opening-a-pdf-at-a-page).
+  - `open_artifact(artifact_id, version=0)` — **open a saved file artifact in a new browser tab**
+    of the attached console (file artifacts only, never arbitrary URLs). It asks the console (via
+    the `artifact.open_url` event) to open the `/blob` download through a short-lived, version-bound
+    media grant — **no bearer in the URL** — and returns that same expiring link in text as a
+    fallback when no console is attached (an A2A/scheduled turn).
   - `pin_artifact(artifact_id, pinned?)` — **pin** a long-lived artifact (a master resume, a
     reference doc) so history eviction skips it; `pinned=False` unpins. Pins are capped by
     **Pinned artifacts** below (refused at the cap), don't count toward **Artifacts kept**, and
@@ -83,7 +88,9 @@ and downloads, see [Work with documents and files](../../docs/guides/documents-a
   trimmed, and the panel labels versions the same way (`v48 of 52`), so a chip keeps naming the
   version it was made for.
 - **Events** `artifact.created` / `artifact.updated` / `artifact.deleted` (ADR 0039) — broadcast on
-  the bus so the console lights the Artifact rail icon even when the panel is closed.
+  the bus so the console lights the Artifact rail icon even when the panel is closed; plus
+  `artifact.open_url`, the chat-scoped request `open_artifact` emits so the attended console opens a
+  file artifact's download in a new browser tab.
 - **Skills** `rendering-artifacts` — teaches render-don't-write-files and the edit-don't-recreate
   workflow; `diagramming-code` — grounded, code-linked mermaid diagrams (read first, cite real
   lines, pick the right diagram, keep it small, revise the same artifact).

@@ -15,7 +15,7 @@ from typing import Annotated, Any
 from langchain_core.tools import tool
 from langgraph.prebuilt import InjectedState
 
-from . import _config, _docx, _links, _pdfview, _preview, _ref, _render_status, _slides, _store
+from . import _config, _docx, _links, _media, _pdfview, _preview, _ref, _render_status, _slides, _store
 
 log = logging.getLogger("protoagent.plugins.artifact")
 
@@ -285,6 +285,14 @@ def _resolve_file(path: str, project: str = "") -> tuple[Path | None, str]:
     return None, f"No file at {raw!r}{looked}. Write the file first, then pass its path."
 
 
+def _open_link_expiry() -> str:
+    """How long an open link lives, in the model/operator-facing sentence — derived from
+    ``_media.TTL_S``, the TTL that actually stamps the link's ``exp`` (``_open_artifact_path``),
+    so the text can never drift from the real lifetime if that constant changes."""
+    minutes = max(1, _media.TTL_S // 60)
+    return f"This link expires in {minutes} minute{'s' if minutes != 1 else ''}."
+
+
 @tool
 def open_artifact(
     artifact_id: str,
@@ -304,14 +312,18 @@ def open_artifact(
     except HTTPException as exc:
         return f"Cannot open artifact: {exc.detail}."
     url = public_base_url() + path
+    expires = _open_link_expiry()
     session = _chat_session(state)
     if session and _renders_ui(state):
-        _store._emit("open_url", {"session_id": session, "path": path})
+        # Carry the artifact `id` so the console's `onTopic("artifact.#")` chip handler refreshes
+        # only THIS artifact's ref chip, not every mounted chip in the transcript (a bare payload
+        # reads as "which artifact? refresh them all").
+        _store._emit("open_url", {"session_id": session, "id": artifact_id, "path": path})
         return (
             f"Requested a new browser tab in the attached console. If no console is attached "
-            f"or the browser blocks the tab, [open artifact]({url}). This link expires in 30 minutes."
+            f"or the browser blocks the tab, [open artifact]({url}). {expires}"
         )
-    return f"No console attached. [Open artifact]({url}). This link expires in 30 minutes."
+    return f"No console attached. [Open artifact]({url}). {expires}"
 
 
 @tool
