@@ -1138,6 +1138,20 @@ def test_persona_doc_names_only_exposed_tools(monkeypatch):
     assert "subagent" not in wide  # no task tool rides the bus — never promised
 
 
+def test_persona_doc_routes_lookup_to_knowledge_search(monkeypatch):
+    """ADR 0125 P2-D2c: with knowledge_search on the bus, the operating note tells the brain
+    to look up an ingested document via `knowledge_search` — alongside the memory_save rule —
+    and never names a retired tool."""
+    import runtime.acp_runtime as rt_mod
+
+    monkeypatch.setattr("graph.config_io.read_soul", lambda: "You are Aria.")
+    doc = rt_mod.persona_doc(_cfg(), exposed={"memory_save", "knowledge_search", "calculator"})
+    assert "remembering a fact → `memory_save`" in doc
+    assert "looking up an ingested document → `knowledge_search`" in doc
+    for old in ("memory_recall", "memory_stats", "memory_ingest", "forget_memory"):
+        assert old not in doc
+
+
 def test_persona_files_and_prefix_share_one_exposed_set(tmp_path, monkeypatch):
     """persona_doc(config) resolves the bus's exposed set itself, through the same derivation
     the assembler uses for the prefix — so AGENTS.md and the prefix always agree."""
