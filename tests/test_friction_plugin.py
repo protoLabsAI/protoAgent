@@ -754,7 +754,7 @@ def test_an_over_long_agent_detail_keeps_head_and_tail_with_a_marker(ledger):
     first sentence (the problem) and the last (the ask) both survive the clip."""
     first = "The problem is that read_file chokes on a 2MB log. "
     last = " What would help: a streaming read_file that takes a byte range."
-    detail = first + "x" * 5000 + last
+    detail = first + "x" * (5000 - len(first) - len(last)) + last
 
     asyncio.run(record_friction.ainvoke({"kind": "harness", "summary": "big read", "detail": detail}))
 
@@ -1821,8 +1821,25 @@ await dom.window.eval('(async () => {' + source + `
   await load();
   window.resetTrace = () => { state.traceTemplate = ""; };
   window.reloadLedger = load;
+  window.renderFrictionCard = renderCard;
 })()`);
 const doc = dom.window.document;
+// Complete details at the old threshold and through the new cap need no warning.
+for (const detail of [undefined, "", "d".repeat(599), "d".repeat(600),
+                      "d".repeat(1900), "d".repeat(2000)]) {
+  const card = dom.window.renderFrictionCard({kind: "harness", summary: "complete", detail});
+  assert.equal(card.querySelector(".truncated"), null);
+}
+// The marker is authoritative even for a short detail; never infer clipping from length.
+for (const detail of ["Problem … [42 chars omitted] … What would help: a fix.",
+                      "d".repeat(980) + " … [3027 chars omitted] … " + "t".repeat(980)]) {
+  const card = dom.window.renderFrictionCard({kind: "harness", summary: "clipped", detail});
+  const banner = card.querySelector(".truncated");
+  assert(banner);
+  assert(banner.textContent.includes("2000 characters"));
+  assert(banner.textContent.includes("middle is omitted"));
+  assert.equal(card.querySelector("code").textContent, detail);
+}
 assert(calls.includes("/api/telemetry/recent?limit=1"));
 assert.equal(doc.querySelectorAll(".entry").length, 3);
 assert(doc.getElementById("list").textContent.includes("legacy row"));

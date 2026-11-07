@@ -669,11 +669,11 @@
       item.detail ? prettyDetail(item.detail) : "(no detail recorded)"));
     block.append(bhead, pre);
     detail.appendChild(block);
-    // The ledger caps a detail at 600 chars and a summary at 200 on write, mid-word and
-    // with no marker — so say so rather than letting a sentence just stop.
-    if ((item.detail || "").length >= 600) {
+    // Agent details keep both ends around an omission marker when capped on write.
+    // Length alone cannot tell us whether a detail was clipped.
+    if (/… \[\d+ chars omitted\] …/.test(item.detail || "")) {
       detail.appendChild(el("div", "truncated",
-        "Detail is capped at 600 characters on write — this entry is cut off."));
+        "Detail is capped at 2000 characters on write — the start and end are kept; the middle is omitted."));
     }
     card.appendChild(detail);
     return card;

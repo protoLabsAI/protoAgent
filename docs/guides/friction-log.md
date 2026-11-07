@@ -241,9 +241,10 @@ A group takes the **worst** severity among its entries. One `major` occurrence m
 whole row major.
 
 Expanding a row shows the detail. For auto-captured rows this is the captured tool
-payload, pretty-printed as JSON, with a **Copy** button. The ledger caps a detail at 600
-characters and a summary at 200 when the entry is written. The view tells you when a
-detail was cut off.
+payload, pretty-printed as JSON, with a **Copy** button. Agent-written details are capped
+at 2000 characters, keeping the start and end around an explicit `… [N chars omitted] …`
+marker. The view flags details containing that marker. Auto-captured payloads retain
+their 300-character clip, and summaries retain their 200-character clip.
 
 Each row has two actions: **File issue** (or **Copy as issue**) and **Resolve** (or
 **Reopen**). Both are covered in [Triage](#triage).
