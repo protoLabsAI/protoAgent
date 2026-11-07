@@ -16,11 +16,15 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+import pytest
+
 from graph.config import LangGraphConfig
 from graph.subagents.config import SUBAGENT_REGISTRY
 from knowledge.store import KnowledgeStore
 from tools.fs_tools import build_fs_tools
 from tools.lg_tools import get_all_tools
+
+pytestmark = pytest.mark.platform_sensitive
 
 # The retired spellings P2-D1 removed. A built-in that still names one has lost the
 # tool (unknown names are dropped at build time), so they must appear nowhere in the
