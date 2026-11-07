@@ -200,6 +200,15 @@ export const knowledgeApi = {
       { method: "POST", body },
     );
   },
+  // Core memories have their own id sequence (ADR 0125); never review them as chunks.
+  memoryReview(id: number | string, state: ReviewState) {
+    // Hot-list handles can be prefixed; the dedicated route takes the table id.
+    const memoryId = String(id).replace(/^memory:/, "");
+    return request<{ enabled?: boolean; id?: number | string | null; review_state?: ReviewState | null }>(
+      `/api/memory/memories/${memoryId}/review`,
+      { method: "POST", body: { state } },
+    );
+  },
   // Injection record (ADR 0069 D6): which memory entered which turn.
   memoryInjections(sessionId = "", limit = 50) {
     const q = new URLSearchParams();

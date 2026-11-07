@@ -347,7 +347,7 @@ const secretsStatusNow = () =>
 // POST /api/__test__/memory/reset.
 const cloneMemory = () => ({
   sessions: JSON.parse(JSON.stringify(MEMORY_SESSIONS)),
-  hot: JSON.parse(JSON.stringify(MEMORY_HOT)),
+  hot: JSON.parse(JSON.stringify(MEMORY_HOT)).map((row) => ({ ...row, store: "memories", review_state: "pending" })),
   // History view (ADR 0125 D6): the per-session rollup + full entries the History
   // tab reads; deletes mutate these working copies.
   history: JSON.parse(JSON.stringify(HISTORY_SESSIONS)),
@@ -1662,7 +1662,7 @@ const server = createServer(async (req, res) => {
         if (memoryMode.fail === "hot") return sendJson(res, { detail: "kaboom (mock)" }, 500);
         if (!memoryMode.enabled) return sendJson(res, { enabled: false, chunks: [] });
         let rows = memoryMode.empty ? [] : memory.hot;
-        if (memoryMode.legacy) rows = stripFields(rows, ["injecting"]);
+        if (memoryMode.legacy) rows = stripFields(rows, ["injecting", "store"]);
         return sendJson(res, { enabled: true, chunks: rows });
       }
       if (pathname === "/api/memory/injections") {
@@ -2166,6 +2166,20 @@ const server = createServer(async (req, res) => {
         if (i < 0) return sendJson(res, { detail: "no session summary with that id" }, 404);
         memory.sessions.splice(i, 1);
         return sendJson(res, { deleted: true, session_id: sid });
+      }
+      const review = pathname.match(/^\/api\/memory\/(memories|chunks)\/(\d+)\/review$/);
+      if (review && req.method === "POST") {
+        if (!memoryMode.enabled) return sendJson(res, { enabled: false });
+        if (!["confirmed", "pending", "rejected"].includes(body.state)) {
+          return sendJson(res, { detail: "invalid review state" }, 400);
+        }
+        // Legacy mode serves chunk rows; modern ids belong only to memories.
+        const store = memoryMode.legacy ? "chunks" : "memories";
+        const row = review[1] === store && memory.hot.find((x) => x.id === Number(review[2]));
+        if (!row) return sendJson(res, { detail: "no memory row with that id" }, 404);
+        row.review_state = body.state;
+        if (body.state === "rejected") row.injecting = false;
+        return sendJson(res, { enabled: true, id: row.id, review_state: row.review_state });
       }
       const h = pathname.match(/^\/api\/memory\/hot\/(\d+)$/);
       if (h && req.method === "DELETE") {
