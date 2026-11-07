@@ -25,6 +25,7 @@ import re
 import secrets
 import time
 
+import anyio
 import httpx
 from starlette.responses import JSONResponse, Response, StreamingResponse
 
@@ -415,7 +416,7 @@ async def _forward_to_base(
                     yield item
             finally:
                 reader.cancel()
-                with contextlib.suppress(BaseException):
+                with anyio.CancelScope(shield=True), contextlib.suppress(BaseException):
                     await reader
         except httpx.ReadTimeout:
             # Stalled mid-body (non-SSE lane). The status line is already sent, so the only
@@ -424,10 +425,42 @@ async def _forward_to_base(
                 "[fleet] proxied %s %s stalled mid-response — closing the stream", request.method, _redact_media(url)
             )
         finally:
-            await upstream.aclose()  # close the response, not the shared client
+            # Close the response, not the shared client — and SHIELDED. When the client leaves,
+            # Starlette cancels this body inside an anyio cancel scope, and anyio cancellation
+            # is level-triggered: an unshielded ``await`` here is cancelled again before httpx
+            # can hand the connection back, so the upstream stayed checked out of the shared
+            # pool for good. One leaked slot per abandoned stream (an EventSource reconnect, a
+            # remounted plugin view) filled all 100 on the desktop app 2026-11-06, and every
+            # proxied request then waited on the pool (PoolTimeout) — the console froze loading.
+            with anyio.CancelScope(shield=True):
+                await upstream.aclose()
 
     resp_headers = {k: v for k, v in upstream.headers.items() if k.lower() not in _HOP}
-    return StreamingResponse(_pipe(), status_code=upstream.status_code, headers=resp_headers)
+    return _UpstreamStreamingResponse(upstream, _pipe(), status_code=upstream.status_code, headers=resp_headers)
+
+
+class _UpstreamStreamingResponse(StreamingResponse):
+    """A StreamingResponse that releases its upstream however the response ends.
+
+    ``_pipe``'s own ``finally`` only runs once the body generator has STARTED. Behind a
+    ``BaseHTTPMiddleware`` (the hub's auth middleware is one), a client that leaves before the
+    response starts gets this response cancelled before the first ``__anext__`` — the generator
+    never starts, its ``finally`` never runs, and the upstream stays checked out of the shared
+    pool forever. Closing here as well covers that path; ``aclose`` is idempotent, and the close
+    is shielded for the same level-triggered-cancellation reason as in ``_pipe``."""
+
+    def __init__(self, upstream, content, **kwargs) -> None:
+        super().__init__(content, **kwargs)
+        self._upstream = upstream
+
+    async def __call__(self, scope, receive, send) -> None:
+        try:
+            await super().__call__(scope, receive, send)
+        finally:
+            with anyio.CancelScope(shield=True):
+                with contextlib.suppress(Exception):
+                    await self.body_iterator.aclose()  # runs _pipe's cleanup if it started
+                await self._upstream.aclose()
 
 
 def _detach_chat_body(raw: bytes) -> bytes | None:
