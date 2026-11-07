@@ -713,7 +713,7 @@ FIELDS: list[Field] = [
         "Restrict per-turn auto-injected knowledge (RAG) to chunks in these namespaces — "
         'comma- or newline-separated; enter `""` (quoted) to match un-namespaced chunks '
         "(a bare blank line is dropped as noise). Empty = no filter (everything is "
-        "eligible, today's behavior). Tool-driven recall (memory_recall) is not affected.",
+        "eligible, today's behavior). Tool-driven recall (memory_search) is not affected.",
     ),
     # Trust floor for the auto-inject RAG hits (ADR 0069 D8).
     Field(
@@ -725,7 +725,7 @@ FIELDS: list[Field] = [
         "Minimum trust tier a knowledge chunk needs to be auto-injected into the prompt. "
         "1 = everything (low-trust hits are only ranked below higher tiers); 2 = exclude "
         "ingested/external content (web, YouTube, PDFs, media); 3 = operator-authored rows "
-        "only. Tool-driven recall (memory_recall) is never gated — excluded content stays "
+        "only. Tool-driven recall (memory_search) is never gated — excluded content stays "
         "reachable on demand, tier visible.",
         minimum=1,
         maximum=3,
@@ -803,8 +803,8 @@ FIELDS: list[Field] = [
         "Confirm agent hot-memory writes",
         "bool",
         "Knowledge",
-        "When on, the agent's memory_ingest and knowledge_ingest tools refuse to write "
-        'always-on memory (domain "hot" or delivery_policy "always") and instruct the model '
+        "When on, the agent's memory_save and knowledge_ingest tools refuse to write "
+        'always-on memory (memory delivery "always" or knowledge domain "hot") and instruct the model '
         "to ask you instead — only operator surfaces (the knowledge browser / memory "
         "inspector) can put facts in front of the model every turn. Every hot write emits a "
         "memory.hot_written event either way.",

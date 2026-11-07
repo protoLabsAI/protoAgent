@@ -167,8 +167,8 @@ def _tool_families_note(exposed: set[str] | None) -> tuple[str, str]:
         )
     if any(n.startswith("memory_") for n in names):
         families.append("`memory_*`")
-    if "memory_ingest" in names:
-        rules.append("remembering a fact → `memory_ingest`")
+    if "memory_save" in names:
+        rules.append("remembering a fact → `memory_save`")
     if any(n.startswith("notes_") for n in names):
         families.append("`notes_*`")
         rules.append("saving a note → `notes_*`")

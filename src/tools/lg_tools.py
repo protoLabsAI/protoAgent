@@ -12,15 +12,17 @@ a fresh clone can demonstrate real agent behaviour out of the box:
 - ``web_search`` — DuckDuckGo text search (via ``ddgs``, no API key)
 - ``fetch_url`` — fetch a URL and return cleaned text
 
-Plus memory tools that bind to a ``KnowledgeStore`` (constructed in
-``server.py`` and threaded through ``get_all_tools(knowledge_store)``):
+Plus the memory / knowledge / history tools (ADR 0125 D3), constructed in
+``server/`` and threaded through ``get_all_tools(knowledge_store)``:
 
-- ``memory_ingest`` — store a fact / preference / note
-- ``memory_recall`` — search the store for relevant chunks
+- ``memory_save``   — save a durable memory (preference / decision / rule / fact)
+- ``memory_search`` — search durable memory
+- ``memory_list``   — list recent memories (ends with a per-kind count)
+- ``memory_forget`` — hard-delete one memory by id
+- ``knowledge_ingest`` — fetch + store a URL/file into a knowledge collection
+- ``knowledge_search`` — search ingested knowledge documents
 - ``session_search`` — search prior session transcripts by content
 - ``recall_session`` — expand one <prior_sessions> digest entry in full
-- ``memory_list``   — list recent chunks (optionally per domain)
-- ``memory_stats``  — per-domain counts
 
 Replace or extend this file with your agent's real tools and update
 ``get_all_tools()`` to return the full list.
@@ -715,13 +717,14 @@ SCHEDULER_TOOL_NAMES: tuple[str, ...] = (
     "cancel_schedule",
 )
 MEMORY_TOOL_NAMES: tuple[str, ...] = (
-    "memory_ingest",
+    "memory_save",
     "knowledge_ingest",
-    "memory_recall",
+    "knowledge_search",
+    "memory_search",
     "session_search",
     "recall_session",
     "memory_list",
-    "memory_stats",
+    "memory_forget",
 )
 INBOX_TOOL_NAMES: tuple[str, ...] = ("check_inbox",)
 
@@ -959,9 +962,10 @@ def get_all_tools(
 
     Optional dependencies:
 
-    - ``knowledge_store`` enables the memory tools (memory_ingest,
-      knowledge_ingest, memory_recall, session_search, recall_session, memory_list,
-      memory_stats).
+    - ``knowledge_store`` enables the knowledge + history tools (knowledge_ingest,
+      knowledge_search, session_search, recall_session); the memory tools
+      (memory_save, memory_search, memory_list, memory_forget) bind to the core
+      ``MemoryStore`` resolved from ``STATE.memory_store`` at invocation.
     - ``scheduler`` enables the scheduler tools (schedule_task,
       list_schedules, cancel_schedule). Accepts any backend that
       implements ``scheduler.interface.SchedulerBackend``.
@@ -1037,6 +1041,7 @@ def get_all_tools(
                 graph_config,
                 background_mgr,
                 history_store_getter=lambda: STATE.history_store,
+                memory_store_getter=lambda: STATE.memory_store,
             )
         )
     if scheduler is not None:

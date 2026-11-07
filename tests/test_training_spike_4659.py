@@ -59,7 +59,7 @@ def test_routing_oracle_rejects_extra_forbidden_calls_even_when_they_error(case,
 
 def test_save_probe_requires_persistence_and_cleans_up_on_failure(oracle):
     case = next(c for c in CASES if c["id"] == "route4659_save")
-    oracle["audit"] = [{"tool": "memory_ingest", "success": True}]
+    oracle["audit"] = [{"tool": "memory_save", "success": True}]
     oracle["chunk"] = None
     result = run_case(case)
     assert not result.passed

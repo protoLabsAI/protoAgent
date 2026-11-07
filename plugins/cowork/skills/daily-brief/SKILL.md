@@ -17,7 +17,7 @@ deliver the page.
 Use what's connected; skip what isn't — the brief adapts rather than
 apologizing. In order of value:
 
-1. **Memory** — `memory_recall` for the operator's active projects, stated
+1. **Memory** — `memory_search` for the operator's active projects, stated
    priorities, and preferences. This is what makes the brief *theirs*: an
    event titled "sync" means nothing until memory says which project it
    belongs to.
@@ -29,7 +29,7 @@ apologizing. In order of value:
    fall back to what's unread and recent, clearly labeled as such.
 4. **Overnight work** — anything that ran unattended since yesterday:
    `list_schedules` for what fired, and scheduled/background results are
-   indexed into memory, so `memory_recall` surfaces what a run produced.
+   indexed into memory, so `memory_search` surfaces what a run produced.
    Something finished while the operator slept belongs on the page; a run
    that failed belongs higher.
 5. **Work folders** — files modified in the last day or two in the fenced

@@ -344,19 +344,22 @@ def _init_langgraph_agent(headless_setup: bool = False):
     from graph.providers.oauth import OAuthCredentialError
     from tools.lg_tools import get_all_tools
 
-    # Construct the default KnowledgeStore so memory tools (memory_ingest,
-    # memory_recall, memory_list, memory_stats) and KnowledgeMiddleware have something to
-    # bind to. Forks that don't want a store can set
+    # Construct the default KnowledgeStore so the knowledge/memory tools
+    # (knowledge_ingest/search, memory_save/search/list/forget) and KnowledgeMiddleware
+    # have something to bind to. Forks that don't want a store can set
     # ``middleware.knowledge: false`` and remove the memory tools from
     # the worker subagent — the store is still cheap to construct.
     with _timed_boot_phase("knowledge_store", _boot_phases):
         STATE.knowledge_store = _build_knowledge_store(STATE.graph_config)
         STATE.history_store = _build_history_store(STATE.graph_config)
         STATE.memory_store = _build_memory_store(STATE.graph_config)
-        # ADR 0125 D6: one-shot, idempotent boot migration draining legacy
-        # domain='conversation' chunks into the history table (same agent.db).
-        # Runs now that both stores exist and have created their schemas.
+        # ADR 0125 D6: one-shot, idempotent boot migrations draining legacy chunks into
+        # their new tables in the same core agent.db — history first (domain='conversation'),
+        # then durable memories. Run now that every store exists and has created its schema.
+        # Both are idempotent (a `_kb_meta` marker + moved-rows-are-gone), so a hot-reload
+        # that re-enters this path never re-moves anything destructively.
         _migrate_conversation_history(STATE.history_store)
+        _migrate_memory_chunks(STATE.memory_store)
 
     # Scheduler — the bundled local sqlite backend (or None when disabled).
     # Agent-tool surface: schedule_task / list_schedules / cancel_schedule.
@@ -574,6 +577,34 @@ def _migrate_conversation_history(history_store) -> None:
         migrate_conversation_chunks_to_history(path)
     except Exception:  # noqa: BLE001 — a migration hiccup must never fail boot
         log.exception("[server] 0125 history migration skipped")
+
+
+def _migrate_memory_chunks(memory_store) -> None:
+    """ADR 0125 D6 / P2-B: move durable memory ``chunks`` into the ``memories`` table in
+    the same core agent.db. Runs right after the history migration (which owns the
+    ``domain='conversation'`` rows) so a build of main never has memory split across two
+    stores. Idempotent (``_kb_meta`` marker + moved-rows-are-gone), so a reload re-entering
+    this path never re-moves anything destructively. Core agent.db only — a plugin
+    KnowledgeBackend's own ``chunks`` store is never touched, since memory is always core
+    SQLite and ``memory_store.path`` IS the core agent.db. Best-effort: a failure logs and
+    leaves the chunks in place (still reachable) rather than blocking boot."""
+    if memory_store is None:
+        return
+    path = getattr(memory_store, "path", None)
+    if path is None:
+        return
+    try:
+        from knowledge.memories_migration import migrate_memory_chunks_to_memories
+
+        counts = migrate_memory_chunks_to_memories(path)
+        if counts.get("memories") or counts.get("chunks"):
+            log.info(
+                "[server] 0125 memory migration: %d row(s) → memories, %d chunk(s) tagged with a collection",
+                counts.get("memories", 0),
+                counts.get("chunks", 0),
+            )
+    except Exception:  # noqa: BLE001 — a migration hiccup must never fail boot
+        log.exception("[server] 0125 memory migration skipped")
 
 
 def _build_memory_store(config):

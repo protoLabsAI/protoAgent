@@ -678,6 +678,45 @@ async def knowledge_purge(domain: str, *, before: str | None = None) -> int:
     return await asyncio.to_thread(purge, domain, before=before)
 
 
+# ── durable memory (ADR 0125) ──────────────────────────────────────────────────────────
+# memory_search / memory_save tap the CORE MemoryStore (STATE.memory_store) — preferences,
+# decisions, standing rules and facts the agent deliberately keeps — kept separate from the
+# knowledge graph (knowledge_search/_add, over the KnowledgeStore chunks). Both degrade to a
+# no-op ([] / None) when no memory store is configured, and run off the event loop.
+
+
+async def memory_search(query: str, *, k: int = 5, kind: str | None = None) -> list[dict]:
+    """Search the agent's durable MEMORY and return the top-``k`` matching entries as dicts
+    (each the ``MemoryEntry`` fields: ``id``, ``kind``, ``subject``, ``content``, ``delivery``,
+    ``review_state``, ``provenance`` …), or ``[]`` when no memory store is configured. ``kind``
+    scopes to one of ``profile|standing|fact|decision``. Memory only — ingested documents are
+    :func:`knowledge_search`, and prior-conversation history is the session-search path."""
+    from dataclasses import asdict
+
+    store = getattr(STATE, "memory_store", None)
+    if store is None:
+        return []
+    entries = await asyncio.to_thread(store.search, query, k, kind=kind)
+    return [asdict(e) for e in entries]
+
+
+async def memory_save(
+    content: str, *, kind: str = "fact", subject: str | None = None, heading: str | None = None
+) -> int | None:
+    """Save one durable memory and return its id, or ``None`` when no memory store is
+    configured. A plugin write is ``provenance="agent"`` and starts ``review_state="pending"``
+    (the store stamps it) until an operator confirms it. ``kind`` is ``profile|standing|fact|
+    decision`` (default ``fact``); ``subject`` is the entity it is ABOUT, so a later fact on
+    the same subject can supersede it; ``heading`` is an optional short label. For an ingested
+    document use :func:`knowledge_add` instead."""
+    store = getattr(STATE, "memory_store", None)
+    if store is None:
+        return None
+    return await asyncio.to_thread(
+        lambda: store.add(content, kind=kind, provenance="agent", subject=subject, heading=heading)
+    )
+
+
 # ── goal-driven recurring loop (the OODA pattern) ──────────────────────────────────────
 # Composing a self-driving "run a tick every N toward a goal until its verifier passes" loop
 # means stitching three primitives by hand: a WATCH ground-truthed by a plugin verifier

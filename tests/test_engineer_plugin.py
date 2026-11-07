@@ -79,7 +79,7 @@ def test_repo_onboard_renders_readme_manifest_and_a_linked_overview():
         "flowchart",
         "anchor",
         "`diagramming-code`",
-        "memory_ingest",
+        "memory_save",
         "Never change code during onboarding",
     ):
         assert must in body, f"repo-onboard no longer says {must!r}"

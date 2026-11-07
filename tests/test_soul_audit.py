@@ -13,7 +13,7 @@ import graph.config_io as config_io
 from graph.soul_audit import audit_untooled_actions
 
 # The bound set of a small but realistic build: core tools only, github.write off.
-CORE_TOOLS = ["task", "memory_recall", "knowledge_ingest", "schedule_task", "github_list_issues"]
+CORE_TOOLS = ["task", "memory_search", "knowledge_ingest", "schedule_task", "github_list_issues"]
 
 
 # ── capability tier ──────────────────────────────────────────────────────────
@@ -72,7 +72,7 @@ def test_run_shell_commands_is_backed_by_run_command():
 
 
 def test_an_unbound_verb_led_tool_mention_is_found_and_a_bound_one_is_not():
-    soul = "Use `run_command` for cleanups, and memory_recall before answering."
+    soul = "Use `run_command` for cleanups, and memory_search before answering."
 
     findings = audit_untooled_actions(soul, CORE_TOOLS)
 

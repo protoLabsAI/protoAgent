@@ -32,7 +32,7 @@
     "name": "Daily brief consults memory and renders an artifact page",
     "prompt": "Give me my daily brief.",
     "expected_tools": [
-      "memory_recall",
+      "memory_search",
       "show_artifact"
     ],
     "setup": [

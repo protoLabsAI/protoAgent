@@ -431,21 +431,14 @@ def compose_projected_context(
         if not digest:
             digest_entries, digest_ids = [], []
 
-    # 2. Always-on memory — delivery_policy="always" (ADR 0108 D6; every
-    #    domain="hot" row carries it). Read per turn (not cached) so a
-    #    freshly-added always-on fact is seen immediately.
+    # 2. Always-on memory — delivery="always" (ADR 0125 D2). After the P2 migration every
+    #    hot row lives in the core MemoryStore (STATE.memory_store), so read it there when
+    #    present — a migrated domain="hot" chunk no longer lives in `chunks` and would
+    #    otherwise vanish from the prompt. Read per turn (not cached) so a freshly-added
+    #    always-on fact is seen immediately. (P2-F splits the rest of this projection.)
     hot, hot_ids = "", []
-    if not incognito and knowledge_store is not None and hasattr(knowledge_store, "get_hot_memory"):
-        try:
-            if hasattr(knowledge_store, "get_hot_memory_entries"):
-                entries = knowledge_store.get_hot_memory_entries()
-                hot_ids = [cid for cid, _ in entries]
-                hot = "\n".join(piece for _, piece in entries)
-            else:  # custom backend without the id-attributed reader
-                hot = knowledge_store.get_hot_memory()
-        except Exception as exc:  # noqa: BLE001 - never break the loop on memory
-            log.debug("[projection] hot memory load failed: %s", exc)
-            hot, hot_ids = "", []
+    if not incognito:
+        hot, hot_ids = _always_on_memory(knowledge_store)
 
     # Always-on skill index (progressive disclosure, ADR 0060) — built before the RAG
     # search, the order the native composer always had (same side effects, same order).
@@ -893,6 +886,43 @@ def _load_digest(
     except Exception:  # noqa: BLE001 — a digest hiccup skips the digest, never the turn
         log.debug("[projection] prior-sessions digest skipped", exc_info=True)
         return "", [], []
+
+
+def _always_on_memory(knowledge_store) -> tuple[str, list[int]]:
+    """The always-on (``delivery="always"``) memory block + the ids that entered it.
+
+    Prefers the core ``MemoryStore`` (``STATE.memory_store``) — where ADR 0125's P2 migration
+    moved every always-on / hot row — so a migrated ``domain="hot"`` chunk still reaches the
+    prompt even though it no longer lives in ``chunks``. When the memory store yields nothing
+    (none wired — an external runtime or a test — or genuinely no always-on memory) it degrades
+    to the knowledge store's ``get_hot_memory``, which also covers an always-on row a failed
+    boot migration stranded in ``chunks`` (same spirit as :func:`deliverable_hit`'s history
+    guard). Never raises — a memory hiccup must never break the turn."""
+    try:
+        from runtime.state import STATE
+
+        memory_store = getattr(STATE, "memory_store", None)
+    except Exception:  # noqa: BLE001 — no runtime state (bare composer) → chunks fallback
+        memory_store = None
+    if memory_store is not None and hasattr(memory_store, "always_on"):
+        try:
+            text = memory_store.always_on()
+            if text:
+                ids = [e.id for e in memory_store.list(delivery="always")]
+                return text, ids
+        except Exception as exc:  # noqa: BLE001 — never break the loop on memory
+            log.debug("[projection] memory-store always-on load failed: %s", exc)
+    # Pre-0125 fallback: always-on rows still in the chunks store (no memory store, or a
+    # row a failed migration left behind there).
+    if knowledge_store is not None and hasattr(knowledge_store, "get_hot_memory"):
+        try:
+            if hasattr(knowledge_store, "get_hot_memory_entries"):
+                entries = knowledge_store.get_hot_memory_entries()
+                return "\n".join(piece for _, piece in entries), [cid for cid, _ in entries]
+            return knowledge_store.get_hot_memory(), []  # custom backend without the id-attributed reader
+        except Exception as exc:  # noqa: BLE001 — never break the loop on memory
+            log.debug("[projection] hot memory load failed: %s", exc)
+    return "", []
 
 
 def search_scoped(knowledge_store, query: str, opts: ProjectionOptions) -> list[dict]:

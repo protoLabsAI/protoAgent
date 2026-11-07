@@ -140,7 +140,7 @@ not something to fix yet.** Report it and keep going. No test suite → say so.
 
 ## 7. Repo card, then hand over
 Reply with a card (≤ 25 lines) and save it with
-`memory_ingest(content=<card>, domain="repo:<name>", heading="<name> repo card")`:
+`memory_save(content=<card>, domain="repo:<name>", heading="<name> repo card")`:
 
 ```
 <name> — <one-line purpose>

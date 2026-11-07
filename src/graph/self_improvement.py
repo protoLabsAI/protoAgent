@@ -15,7 +15,7 @@ from types import SimpleNamespace
 log = logging.getLogger(__name__)
 
 MODES = frozenset({"off", "propose", "auto"})
-_REVIEW_READ_TOOLS = frozenset({"current_time", "recent_activity", "memory_recall", "list_skills", "load_skill"})
+_REVIEW_READ_TOOLS = frozenset({"current_time", "recent_activity", "memory_search", "list_skills", "load_skill"})
 
 
 def mode(config, field: str) -> str:
