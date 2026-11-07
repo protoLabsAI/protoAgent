@@ -120,8 +120,14 @@ async def test_manual_archive_failure_preserves_checkpoint_unless_forced(stores,
 
 
 @pytest.mark.parametrize("multipart", [False, True])
-async def test_summary_uses_checkpoint_session_and_keeps_facts_in_chunks(stores, multipart):
+async def test_summary_uses_checkpoint_session_and_writes_facts_to_memories(stores, tmp_path, multipart):
+    """ADR 0125 P2-D3: the session-end pass summarizes to history AND writes extracted facts
+    to the core MemoryStore (kind='fact', provenance='extracted', pending), scoped to the
+    harvest namespace and dated to the conversation — never to knowledge chunks."""
+    from knowledge.memories import MemoryStore
+
     knowledge, history = stores
+    memory = MemoryStore(tmp_path / "memory.db")
     content = [{"type": "text", "text": "I prefer teal"}] if multipart else "I prefer teal"
     checkpoint = SimpleNamespace(
         checkpoint={
@@ -134,6 +140,7 @@ async def test_summary_uses_checkpoint_session_and_keeps_facts_in_chunks(stores,
         "custom:thread:goal-iter-2",
         checkpointer=SimpleNamespace(aget_tuple=AsyncMock(return_value=checkpoint)),
         knowledge_store=knowledge,
+        memory_store=memory,
         config=SimpleNamespace(knowledge_facts=True),
         summarizer=summarizer,
         fact_extractor=AsyncMock(return_value=["The user prefers teal."]),
@@ -143,8 +150,13 @@ async def test_summary_uses_checkpoint_session_and_keeps_facts_in_chunks(stores,
     assert "User: I prefer teal" in summarizer.call_args.args[0]
     assert (entry.session_id, entry.thread_id, entry.kind) == ("session", "custom:thread:goal-iter-2", "summary")
     assert entry.namespace == "project"
-    chunks = knowledge.list_chunks()
-    assert len(chunks) == 1 and chunks[0].domain == "fact"
+    # The semantic fact lands in memories (provenance='extracted', pending), scoped to the
+    # namespace and stamped with the checkpoint's `[as of]` date — nothing goes to chunks.
+    facts = memory.list(kind="fact", provenance="extracted", scope="project")
+    assert len(facts) == 1
+    assert (facts[0].kind, facts[0].provenance, facts[0].review_state) == ("fact", "extracted", "pending")
+    assert facts[0].content == "[as of 2026-08-02] The user prefers teal."
+    assert knowledge.list_chunks() == []
 
 
 async def test_summary_does_not_require_a_knowledge_store(stores, monkeypatch):
