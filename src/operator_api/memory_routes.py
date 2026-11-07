@@ -20,6 +20,9 @@ KB rows). Session-summary ids share the ``recall_session`` filename guard, so
 a crafted id can't path-traverse out of the memory dir. The review verdict
 (ADR 0108 D7.2 — confirm / reject / re-open an agent-derived or ingested row)
 is an operator act, so it lives here and nowhere on the agent's tool surface.
+Reverting a wrong automatic supersession (ADR 0125 P3-A — a ``memory_save`` on the
+same subject retired the prior row) is the same kind of operator-only act: the
+revert route flips one supersession back, keeping both rows for audit.
 
 The History view (ADR 0125 D6) is the fourth surface: the conversation ``history``
 table (compaction archives, retired-thread summaries, background-job reports) behind
@@ -610,6 +613,24 @@ def register_memory_routes(app) -> None:
         if not updated:
             return JSONResponse({"detail": "no memory with that id"}, status_code=404)
         return {"enabled": True, "id": memory_id, "review_state": state}
+
+    @app.post("/api/memory/memories/{memory_id}/revert")
+    async def _api_memory_memory_revert(memory_id: int):
+        # Undo one automatic supersession (ADR 0125 P3-A): a subject consolidation retired
+        # this row by stamping its ``superseded_by``; revert clears that so the row is live
+        # again and stamps the row that replaced it superseded instead — both survive for
+        # audit, exactly one is live. 404 when there is no eligible pair to undo.
+        store = STATE.memory_store
+        if store is None:
+            return {"enabled": False, "id": None, "reverted": False}
+        try:
+            reverted = await asyncio.to_thread(store.revert_supersession, memory_id)
+        except Exception:  # noqa: BLE001 — never 500 the console with a traceback
+            log.exception("[memory] revert of memory %s failed", memory_id)
+            return JSONResponse({"detail": "revert failed"}, status_code=500)
+        if not reverted:
+            return JSONResponse({"detail": "memory has no revertible supersession"}, status_code=404)
+        return {"enabled": True, "id": memory_id, "reverted": True}
 
     # --- History (ADR 0125 D6) -----------------------------------------------
     # The conversation ``history`` table behind ``STATE.history_store`` — archives,
