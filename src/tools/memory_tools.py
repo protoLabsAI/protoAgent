@@ -343,13 +343,20 @@ def _build_memory_tools(
                 source_session=session_id or None,
             )
 
-        memory_id = await asyncio.to_thread(_write)
+        # Deliberately DON'T echo the shared row's #<id>: that handle belongs to profile.db's
+        # own numbering, but ``memory_forget`` only deletes from the agent's PRIVATE store, so
+        # an agent that read it back as "#N" and tried to withdraw its proposal would hard-delete
+        # an unrelated private memory #N and leave the shared row standing. The agent can't
+        # withdraw a shared proposal at all — only the operator curates the shared profile.
+        await asyncio.to_thread(_write)
         bits = [f"kind={kind_norm}", f"delivery={delivery_norm}"]
         if subject:
             bits.append(f"subject={subject!r}")
         return (
-            f"Proposed memory #{memory_id} ({', '.join(bits)}) to the shared operator profile; "
-            "it reaches no agent until the operator confirms it."
+            f"Proposed to the shared operator profile ({', '.join(bits)}); "
+            "it reaches no agent until the operator confirms it. You can't withdraw it "
+            "yourself — the operator curates the shared profile (memory_forget only "
+            "deletes your own private memories)."
         )
 
     async def _save_memory_impl(content, kind, subject, heading, delivery, expires_in_days, shared, state) -> str:

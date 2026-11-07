@@ -295,6 +295,39 @@ def test_memory_save_shared_profile_lands_pending(tmp_path, monkeypatch):
     assert row.source_session == "a2a:chat-7"
 
 
+def test_memory_save_shared_result_exposes_no_private_forget_handle(tmp_path, monkeypatch):
+    # The shared row gets its #id from profile.db's own numbering, but memory_forget only
+    # deletes from the PRIVATE store. If the result echoed "#N", an agent trying to withdraw
+    # its proposal would hard-delete an unrelated private memory #N. So the result must NOT
+    # expose a bare #<id>, and it must say memory_forget can't withdraw a shared proposal.
+    import re
+
+    store = SharedProfileStore(tmp_path / "commons")
+    monkeypatch.setattr("runtime.state.STATE.shared_profile_store", store, raising=False)
+    private = MemoryStore(tmp_path / "agent.db")
+    private_id = private.add("a private fact the agent must not lose", kind="fact", provenance="operator")
+    tools = _memory_tools(shared_store=store, enabled=True, private=private)
+
+    out = asyncio.run(
+        tools["memory_save"].ainvoke(
+            {"content": "Operator identity line", "kind": "profile", "shared": True}
+        )
+    )
+
+    # No collidable private handle in the shared-save result.
+    assert re.search(r"#\d", out) is None
+    assert "memory_forget" in out  # names the tool that would NOT withdraw it
+    # The private row the shared id numerically collides with is untouched by the save.
+    assert store.list(review_state="pending")[0].id == private_id  # same number, different store
+    assert len(private.list()) == 1
+
+    # And following the trap literally — memory_forget(that number) — does NOT remove the
+    # shared row (it isn't in the private store); it only ever acts on private memories.
+    forget = asyncio.run(tools["memory_forget"].ainvoke({"memory_id": private_id}))
+    assert store.count() == 1  # the proposed shared row survives
+    assert "Forgot" in forget  # it deleted the private row instead, proving the collision risk
+
+
 def test_memory_save_shared_rejects_non_profile_kind(tmp_path, monkeypatch):
     store = SharedProfileStore(tmp_path / "commons")
     monkeypatch.setattr("runtime.state.STATE.shared_profile_store", store, raising=False)
