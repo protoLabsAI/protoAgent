@@ -400,7 +400,7 @@ def _clip_detail(text: str, limit: int = _DETAIL_MAX) -> str:
 
 def _log(
     kind: str, summary: str, detail: str, severity: str, source: str, tool_name: str = "", suggest: str = "",
-    *, session_id: str = "", trace_id: str = "",
+    *, plugin: str = "", tool_unbound: bool = False, session_id: str = "", trace_id: str = "",
 ) -> None:
     path = _ledger_path()
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -418,6 +418,12 @@ def _log(
         rec["trace_id"] = trace_id
     if tool_name:
         rec["tool"] = tool_name
+    if plugin:
+        rec["plugin"] = plugin  # the id of the plugin that owns ``tool_name`` (core tools: unset)
+    if tool_unbound:
+        # The named tool isn't among this agent's bound tools — recorded anyway (a
+        # missing-tool report is never worth losing to a typo), flagged for triage.
+        rec["tool_unbound"] = True
     if suggest:
         rec["suggest"] = suggest  # the first-class tool an escape-hatch command duplicated
     # encoding is explicit for the same reason it is everywhere else in this repo (#2521):
@@ -537,6 +543,9 @@ def grouped_entries(kind: str = "", include_resolved: bool = False) -> list[dict
                 "severity": rec.get("severity", "minor"),
                 "source": rec.get("source", ""),
                 "tool": rec.get("tool", ""),
+                # The owning plugin id (core tools: ""), so the read API — and
+                # `protoagent fleet friction --json` reading it — can route a row to a repo.
+                "plugin": rec.get("plugin", ""),
                 "suggest": rec.get("suggest", ""),
                 "detail": rec.get("detail", ""),
                 "count": 1,
@@ -577,9 +586,43 @@ def grouped_entries(kind: str = "", include_resolved: bool = False) -> list[dict
     return ordered
 
 
+# Every tool name observed bound to a model call this process, learned by
+# ``FrictionMiddleware.observe_tools`` — the SAME source the escape-hatch check reads
+# (``_duplicated_tool``'s ``bound``). ``record_friction`` validates its optional ``tool=``
+# against this: a name that isn't here is still recorded, only flagged ``tool_unbound`` so a
+# missing-tool report is never dropped on a typo. Accumulates across model calls (a deferred
+# tool that surfaces later still counts as bound), matching the middleware's own set.
+_BOUND_TOOL_NAMES: set[str] = set()
+
+
+def _bound_tool_names() -> set[str]:
+    """The tool names bound for this agent (core + plugin), as the middleware has seen them."""
+    return _BOUND_TOOL_NAMES
+
+
+def _tool_plugin_id(tool_name: str) -> str:
+    """The id of the plugin that contributed ``tool_name``, or "" for a core tool / unknown name.
+
+    Read from the live plugin meta (``STATE.plugin_meta``: one entry per plugin, each carrying
+    its ``id`` and the ``tools`` it registered), so a plugin tool is attributed to its OWNING
+    plugin and a core tool — present in no entry — carries no plugin. Best-effort: any failure
+    to resolve just means an empty plugin, never a lost record."""
+    if not tool_name:
+        return ""
+    try:
+        from runtime.state import STATE
+
+        for entry in getattr(STATE, "plugin_meta", None) or []:
+            if isinstance(entry, dict) and tool_name in (entry.get("tools") or []):
+                return str(entry.get("id") or "")
+    except Exception:  # noqa: BLE001 — a missing owner is not a reason to drop the row
+        return ""
+    return ""
+
+
 @tool
 async def record_friction(
-    kind: str, summary: str, detail: str = "", severity: str = "minor",
+    kind: str, summary: str, detail: str = "", severity: str = "minor", tool: str = "",
     *, state: Annotated[Any, InjectedState] = None,
 ) -> str:
     """Record a friction point the moment you hit one — this is how the harness and the
@@ -590,6 +633,7 @@ async def record_friction(
       first-class tool → a candidate framework/tooling improvement.
     kind='model': you took a wrong path, made a mistake, or gave a weak/slow answer → this
       turn is a labeled trace worth learning from.
+    tool: the tool or plugin tool this is about, if any.
 
     Be specific: what happened, and what would have helped."""
     if kind not in _KINDS:
@@ -598,11 +642,24 @@ async def record_friction(
         severity = "minor"
     if not summary.strip():
         return "summary is required (one line: what was the friction?)"
+    tool = (tool or "").strip()
+    plugin, tool_unbound = "", False
+    if tool:
+        # Validate against the agent's bound tools, but only when we actually know them: an
+        # unknown name is flagged (never rejected), and with no bound set yet we can't tell,
+        # so we don't guess. When the tool belongs to a plugin, stamp its owning plugin id.
+        bound = _bound_tool_names()
+        tool_unbound = bool(bound) and tool not in bound
+        plugin = _tool_plugin_id(tool)
     # trace_session encloses the runtime and propagates its trace into tool tasks;
     # session identity comes from InjectedState (never current_session_id()).
-    _log(kind, summary, detail, severity, source="agent",
+    _log(kind, summary, detail, severity, source="agent", tool_name=tool,
+         plugin=plugin, tool_unbound=tool_unbound,
          session_id=(state or {}).get("session_id", ""), trace_id=tracing.current_trace_id())
-    return f"logged {severity} {kind} friction: “{summary}”."
+    msg = f"logged {severity} {kind} friction: “{summary}”."
+    if tool_unbound:
+        msg += f" (note: “{tool}” isn’t one of your bound tools — recorded anyway.)"
+    return msg
 
 
 # A plugin's `source` lands in the ledger as-is, so it is held to a short, plain label.
@@ -944,6 +1001,8 @@ class FrictionMiddleware(AgentMiddleware):
                 name = getattr(t, "name", None)
             if isinstance(name, str) and name:
                 self._bound_tools.add(name)
+                # Share the same bound-names view with record_friction's ``tool=`` validation.
+                _BOUND_TOOL_NAMES.add(name)
 
     def wrap_model_call(self, request, handler):
         self.observe_tools(getattr(request, "tools", None))
@@ -1535,6 +1594,7 @@ async def fleet_rollup(*, timeout_s: float = 4.0) -> dict:
                     "kind": key[0], "summary": key[1],
                     "severity": item.get("severity", "minor"),
                     "source": item.get("source", ""), "tool": item.get("tool", ""),
+                    "plugin": item.get("plugin", ""),
                     "detail": item.get("detail", ""), "count": 0,
                     "first_seen": str(item.get("first_seen") or ""),
                     "last_seen": str(item.get("last_seen") or ""),

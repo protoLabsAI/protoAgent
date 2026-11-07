@@ -56,6 +56,142 @@ def test_review_empty(ledger):
     assert "empty" in asyncio.run(friction_review.ainvoke({}))
 
 
+# ── #4780: record_friction names the tool, rows carry tool + owning plugin ───
+
+
+def _bind(monkeypatch, bound, meta=()):
+    """Control the two seams record_friction reads: the agent's bound-tool names and the
+    plugin meta that attributes a tool to its owning plugin."""
+    from runtime.state import STATE
+
+    from plugins import friction
+
+    monkeypatch.setattr(friction, "_BOUND_TOOL_NAMES", set(bound))
+    monkeypatch.setattr(STATE, "plugin_meta", list(meta))
+
+
+def test_record_friction_stamps_tool_and_owning_plugin(ledger, monkeypatch):
+    """A plugin tool resolves to its owning plugin id — the triager no longer routes by hand."""
+    _bind(monkeypatch, {"github_run_failure", "read_file"},
+          meta=[{"id": "github", "tools": ["github_run_failure"]}])
+
+    out = asyncio.run(record_friction.ainvoke(
+        {"kind": "harness", "summary": "run-failure tool is clumsy", "tool": "github_run_failure"}))
+
+    assert "logged" in out
+    (rec,) = _recs(ledger)
+    assert rec["tool"] == "github_run_failure"
+    assert rec["plugin"] == "github"
+    assert "tool_unbound" not in rec
+
+
+def test_a_core_tool_records_the_tool_but_no_plugin(ledger, monkeypatch):
+    """A core tool is owned by no plugin, so no `plugin` field is written."""
+    _bind(monkeypatch, {"read_file"}, meta=[{"id": "github", "tools": ["github_run_failure"]}])
+
+    asyncio.run(record_friction.ainvoke(
+        {"kind": "harness", "summary": "read_file keeps truncating", "tool": "read_file"}))
+
+    (rec,) = _recs(ledger)
+    assert rec["tool"] == "read_file"
+    assert "plugin" not in rec
+    assert "tool_unbound" not in rec
+
+
+def test_an_unknown_tool_is_recorded_and_flagged_unbound(ledger, monkeypatch):
+    """A name that isn't bound is marked, never rejected — a missing-tool report is never lost."""
+    _bind(monkeypatch, {"read_file", "github_run_failure"})
+
+    out = asyncio.run(record_friction.ainvoke(
+        {"kind": "harness", "summary": "wish there were a frobnicate tool", "tool": "frobnicate"}))
+
+    assert "logged" in out  # the call still succeeds
+    (rec,) = _recs(ledger)
+    assert rec["tool"] == "frobnicate"
+    assert rec["tool_unbound"] is True
+    assert "plugin" not in rec  # an unknown name has no owner to resolve
+
+
+def test_an_empty_bound_set_does_not_falsely_flag_a_tool(ledger, monkeypatch):
+    """With no bound set learned yet we can't validate, so we don't guess an unbound flag."""
+    _bind(monkeypatch, set())
+
+    asyncio.run(record_friction.ainvoke(
+        {"kind": "harness", "summary": "something about a tool", "tool": "github_run_failure"}))
+
+    (rec,) = _recs(ledger)
+    assert rec["tool"] == "github_run_failure"
+    assert "tool_unbound" not in rec
+
+
+def test_omitting_tool_behaves_exactly_as_before(ledger, monkeypatch):
+    _bind(monkeypatch, {"read_file"})
+
+    out = asyncio.run(record_friction.ainvoke({"kind": "model", "summary": "took a wrong path"}))
+
+    assert out == "logged minor model friction: “took a wrong path”."
+    (rec,) = _recs(ledger)
+    assert "tool" not in rec and "plugin" not in rec and "tool_unbound" not in rec
+
+
+def test_read_api_rows_carry_tool_and_plugin(ledger, monkeypatch):
+    """`protoagent fleet friction --json` reads the (grouped) /api/friction rows, so each
+    must carry tool + plugin — including a core-tool row whose plugin is empty."""
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from plugins import friction
+
+    friction._log("harness", "run-failure tool is clumsy", "d", "minor",
+                  source="agent", tool_name="github_run_failure", plugin="github")
+    friction._log("harness", "read_file keeps truncating", "d", "minor",
+                  source="agent", tool_name="read_file")
+    app = FastAPI()
+    app.include_router(friction._build_router(), prefix="/api/plugins/friction")
+    app.include_router(friction._build_router(legacy=True))
+    client = TestClient(app)
+
+    grouped = {i["summary"]: i for i in client.get("/api/friction").json()["items"]}
+    assert grouped["run-failure tool is clumsy"]["tool"] == "github_run_failure"
+    assert grouped["run-failure tool is clumsy"]["plugin"] == "github"
+    # Every grouped row carries both keys, even the core-tool row with no owner.
+    assert grouped["read_file keeps truncating"]["tool"] == "read_file"
+    assert grouped["read_file keeps truncating"]["plugin"] == ""
+
+    raw = {r["summary"]: r for r in
+           client.get("/api/friction", params={"grouped": False}).json()["items"]}
+    assert raw["run-failure tool is clumsy"]["tool"] == "github_run_failure"
+    assert raw["run-failure tool is clumsy"]["plugin"] == "github"
+
+
+def test_observe_tools_feeds_the_bound_name_validation(monkeypatch):
+    """The bound-name source record_friction validates against is the one the middleware
+    learns from each model call — the same set the escape-hatch check reads."""
+    from plugins import friction
+
+    monkeypatch.setattr(friction, "_BOUND_TOOL_NAMES", set())
+    mw = FrictionMiddleware()
+    mw.observe_tools([{"name": "read_file"},
+                      type("T", (), {"name": "github_run_failure"})()])
+
+    assert friction._bound_tool_names() == {"read_file", "github_run_failure"}
+
+
+def test_tool_plugin_id_resolves_owner_from_meta(monkeypatch):
+    from runtime.state import STATE
+
+    from plugins import friction
+
+    monkeypatch.setattr(STATE, "plugin_meta",
+                        [{"id": "github", "tools": ["github_run_failure", "github_pr"]},
+                         {"id": "notes", "tools": ["note_add"]}])
+
+    assert friction._tool_plugin_id("github_pr") == "github"
+    assert friction._tool_plugin_id("note_add") == "notes"
+    assert friction._tool_plugin_id("read_file") == ""  # a core tool is owned by no plugin
+    assert friction._tool_plugin_id("") == ""
+
+
 # ── FrictionMiddleware auto-capture ──────────────────────────────────────────
 
 
