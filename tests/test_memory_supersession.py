@@ -9,12 +9,14 @@ audit and never delivers.
 from __future__ import annotations
 
 import asyncio
+import sqlite3
 from types import SimpleNamespace
 
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from graph.conversation_harvest import abort_forget, begin_forget, finish_forget
 from knowledge.memories import MemoryStore
 from knowledge.store import KnowledgeStore
 from operator_api.memory_routes import register_memory_routes
@@ -250,6 +252,75 @@ def test_deleting_a_replacement_restores_the_row_it_retired(store):
     assert store.delete(new)
     assert store.get(new) is None  # hard-deleted
     assert store.get(old).superseded_by is None  # the retired row is live again
+    assert [e.id for e in store.list()] == [old]
+
+
+@pytest.mark.parametrize("keep_tip", [False, True])
+@pytest.mark.parametrize("reverse_chain", [False, True])
+def test_forgetting_replacements_relinks_surviving_memories(store, keep_tip, reverse_chain):
+    sessions = ["kept", "forgotten", "forgotten", "kept"] if keep_tip else ["kept", "forgotten", "forgotten"]
+    if reverse_chain:
+        sessions.reverse()
+    ids = [
+        add(store, f"floor {i}", subject="floor", provenance="agent", source_session=session)
+        for i, session in enumerate(sessions)
+    ]
+    if reverse_chain:
+        # Reverts produce valid chains whose pointers run toward lower ids.
+        for old in reversed(ids[:-1]):
+            assert store.revert_supersession(old)
+        ids.reverse()
+    survivor = ids[-1] if keep_tip else ids[0]
+    marker = begin_forget(None, "forgotten", [], memory_store=store)
+    assert finish_forget(None, marker, memory_store=store) == 2
+    assert [e.id for e in store.list()] == [survivor]
+    assert all(store.get(id) is None for id in ids[1:3])
+    if keep_tip:
+        assert store.get(ids[0]).superseded_by == survivor
+        assert store.revert_supersession(ids[0])
+    else:
+        assert store.get(ids[0]).superseded_by is None
+    assert finish_forget(None, marker, memory_store=store) == 0
+
+
+def test_aborting_forget_preserves_supersession_links(store):
+    old = add(store, subject="floor", provenance="agent", source_session="kept")
+    new = add(store, subject="floor", provenance="agent", source_session="forgotten")
+    before = (store.get(old), store.get(new))
+    marker = begin_forget(None, "forgotten", [], memory_store=store)
+    assert store.get(old).superseded_by == new
+    assert abort_forget(None, marker, memory_store=store) == 1
+    assert (store.get(old), store.get(new)) == before
+
+
+def test_forgetting_replacement_restores_all_retired_rows(store):
+    old = [
+        add(store, f"floor {i}", subject="floor", provenance="extracted",
+            source_session="kept", supersede=False)
+        for i in range(2)
+    ]
+    new = add(store, subject="floor", provenance="agent", source_session="forgotten")
+    assert all(store.get(id).superseded_by == new for id in old)
+    marker = begin_forget(None, "forgotten", [], memory_store=store)
+    assert finish_forget(None, marker, memory_store=store) == 1
+    assert {e.id for e in store.list()} == set(old)
+    assert store.get(new) is None
+
+
+def test_forget_replacement_cleanup_rolls_back_with_failed_delete(store):
+    old = add(store, subject="floor", provenance="agent", source_session="kept")
+    new = add(store, subject="floor", provenance="agent", source_session="forgotten")
+    marker = begin_forget(None, "forgotten", [], memory_store=store)
+    before = (store.get(old), store.get(new))
+    with store._write() as db:
+        db.execute("CREATE TRIGGER fail_forget BEFORE DELETE ON memories "
+                   "BEGIN SELECT RAISE(ABORT, 'test delete failure'); END")
+    with pytest.raises(sqlite3.DatabaseError, match="test delete failure"):
+        finish_forget(None, marker, memory_store=store)
+    assert (store.get(old), store.get(new)) == before
+    with store._write() as db:
+        db.execute("DROP TRIGGER fail_forget")
+    assert finish_forget(None, marker, memory_store=store) == 1
     assert [e.id for e in store.list()] == [old]
 
 

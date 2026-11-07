@@ -429,6 +429,13 @@ class _MemoryForgetStore:
                     f"DELETE FROM chunk_vectors WHERE chunk_id IN (SELECT id FROM chunks WHERE {held})",
                     args,
                 )
+            # Splice every held memory out before deleting the batch. Reading each
+            # successor after the preceding splice also handles chains with several
+            # held rows, regardless of their order. Keep this in the delete transaction;
+            # marking a forget must remain reversible without changing audit links.
+            now = _now_iso()
+            for row in db.execute(f"SELECT id FROM memories WHERE {held}", args).fetchall():
+                self.memory_store._detach_as_replacement(db, row["id"], now)
             removed = sum(db.execute(f"DELETE FROM {table} WHERE {held}", args).rowcount for table in self._tables(db))
             # MemoryStore's delete trigger maintains memories_fts and memory_vectors.
             db.execute("DELETE FROM memory_forget_prior WHERE marker = ?", (marker,))
