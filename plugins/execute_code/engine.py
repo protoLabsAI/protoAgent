@@ -488,7 +488,7 @@ _DEFAULT_BRIDGE_TOOLS = frozenset(
         "search_files",
         "fetch_url",
         "web_search",
-        "memory_recall",
+        "memory_search",
         "memory_list",
         "current_time",
     }

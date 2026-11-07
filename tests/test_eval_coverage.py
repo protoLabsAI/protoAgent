@@ -122,7 +122,7 @@ def test_assert_any_tool_requires_success_when_asked():
 
 
 def test_assert_tools_not_fired_passes_when_cold():
-    ok, _ = verify.assert_tools_not_fired(_audit("memory_recall", "web_search"), ["show_artifact"])
+    ok, _ = verify.assert_tools_not_fired(_audit("memory_search", "web_search"), ["show_artifact"])
     assert ok
 
 

@@ -177,13 +177,13 @@ export const knowledgeApi = {
   memoryHot() {
     return request<{ enabled: boolean; chunks: MemoryHotChunk[] }>("/api/memory/hot");
   },
-  updateMemoryHot(chunkId: number, body: { content: string; heading?: string }) {
-    return request<{ enabled: boolean; id: number | null; replaced: boolean }>(
+  updateMemoryHot<T extends number | string>(chunkId: T, body: { content: string; heading?: string }) {
+    return request<{ enabled: boolean; id: T | null; replaced: boolean }>(
       `/api/memory/hot/${chunkId}`,
       { method: "PUT", body },
     );
   },
-  deleteMemoryHot(chunkId: number) {
+  deleteMemoryHot(chunkId: number | string) {
     return request<{ enabled: boolean; deleted: boolean }>(`/api/memory/hot/${chunkId}`, {
       method: "DELETE",
     });
@@ -194,8 +194,8 @@ export const knowledgeApi = {
   // land on whatever PRIVATE row shares the number. 400 = bad state or a commons row,
   // 404 = unknown id, 501 = an ADR 0031 backend without verdicts, enabled:false = the
   // store is off. Every non-2xx surfaces as an ApiError carrying the server `detail`.
-  reviewMemoryChunk(chunkId: number, body: { state: ReviewState; tier?: "private" | "commons" | null }) {
-    return request<{ enabled?: boolean; id?: number | null; review_state?: ReviewState | null }>(
+  reviewMemoryChunk(chunkId: number | string, body: { state: ReviewState; tier?: "private" | "commons" | null }) {
+    return request<{ enabled?: boolean; id?: number | string | null; review_state?: ReviewState | null }>(
       `/api/memory/chunks/${chunkId}/review`,
       { method: "POST", body },
     );

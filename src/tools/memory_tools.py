@@ -1,7 +1,18 @@
-"""Long-term memory + knowledge tools (``memory_ingest``, ``knowledge_ingest``,
-``memory_recall``, ``session_search``, ``recall_session``, ``memory_list``,
-``memory_stats``, ``forget_memory``), bound to a ``KnowledgeStore`` by
-``_build_memory_tools``.
+"""Memory + knowledge + history tools (ADR 0125 D3), bound by ``_build_memory_tools``.
+
+One tool family per layer:
+
+- **Memory** — ``memory_save`` / ``memory_search`` / ``memory_list`` / ``memory_forget``,
+  over the core ``MemoryStore`` (``STATE.memory_store``): preferences, decisions, standing
+  rules and facts the agent deliberately keeps.
+- **Knowledge** — ``knowledge_ingest`` / ``knowledge_search``, over the ``KnowledgeStore``
+  ``chunks`` (FTS5 + vectors): ingested documents, organised by collection.
+- **History** — ``session_search`` / ``recall_session``, over the ``HistoryStore``: what
+  happened (archives, summaries, reports).
+
+ADR 0125 D3 is a HARD RENAME with no aliases: ``memory_ingest`` → ``memory_save``,
+``memory_recall`` → ``memory_search``, ``forget_memory`` → ``memory_forget``, and
+``memory_stats`` is folded into ``memory_list``'s per-kind count line.
 
 Split out of ``tools/lg_tools.py`` (#3820, epic #3804). ``lg_tools`` re-exports
 ``_build_memory_tools`` and ``_memory_citation`` so existing imports — tests, plugins,
@@ -17,32 +28,36 @@ from typing import Annotated, Any
 from langchain_core.tools import tool
 from langgraph.prebuilt import InjectedState
 
-from knowledge.store import DELIVERY_ALWAYS, DELIVERY_POLICIES, REVIEW_STATES, superseded_by_id
+from knowledge.store import DELIVERY_ALWAYS, DELIVERY_POLICIES, REVIEW_STATES
 from tools.session import _session_id_from
 
 # ── memory tools ─────────────────────────────────────────────────────────────
 #
-# Each memory tool is built by a factory that closes over the
-# ``KnowledgeStore`` instance. Doing it this way (rather than module-
-# level globals) keeps tests isolated — they pass a temp store and get
-# a fresh tool list bound to it. Production constructs one store in
-# ``server.py`` and reuses the bound tools for the lifetime of the
-# process.
+# Each memory tool is built by a factory that closes over the stores. Doing it
+# this way (rather than module-level globals) keeps tests isolated — they pass a
+# temp store and get a fresh tool list bound to it. Production constructs the
+# stores in ``server/`` and reuses the bound tools for the lifetime of the
+# process. The memory tools resolve ``STATE.memory_store`` through a getter (like
+# ``history_store_getter``) so a reload's new store is picked up at invocation.
 
 
 _MEMORY_RECALL_MAX_K = 20
 _MEMORY_LIST_MAX_LIMIT = 200
-# ``memory_ingest(expires_in_days=...)`` ceiling (ADR 0108 D7.4): ten years. Relative on
+# ``memory_save(expires_in_days=...)`` ceiling (ADR 0108 D7.4): ten years. Relative on
 # purpose — a model asked for an absolute timestamp guesses, and a guess in the past
 # would expire the memory on its first read.
 _MEMORY_EXPIRES_MAX_DAYS = 3650
 _RECALL_SESSION_MAX_CHARS = 6000
 
+# The four ``memories`` kinds (ADR 0125 D1; the ``kind`` CHECK set). Validated at the
+# tool boundary so a bad value returns a clean error instead of a sqlite CHECK failure.
+MEMORY_KINDS: tuple[str, ...] = ("profile", "standing", "fact", "decision")
+
 
 def _memory_handle(chunk_id, tier=None) -> str:
-    # Layered stores have separate ID spaces; forget_memory only deletes private rows.
+    # Layered stores have separate ID spaces; a private handle is deletable, a commons one isn't.
     if tier == "commons":
-        return f"commons:{chunk_id} (shared, not deletable with forget_memory)"
+        return f"commons:{chunk_id} (shared)"
     return f"#{chunk_id}" if chunk_id is not None else ""
 
 
@@ -104,15 +119,16 @@ def _memory_citation(
     namespace: str | None = None,
     source_type: str | None = ...,
 ) -> str:
-    """Compact provenance suffix for a memory row (ADR 0069 D5), e.g.
+    """Compact provenance suffix for a stored row (ADR 0069 D5), e.g.
     ``" (src: a2a:chat-42, 2026-07-01, ns: proj-x, trust: agent)"``. Empty when
     there's nothing to cite; ``created_at`` is trimmed to date precision.
 
     ``source_type`` (ADR 0069 D8) appends the row's trust-tier label —
-    operator / agent / external — so recall output always shows how much the
+    operator / agent / external — so knowledge recall always shows how much the
     content should be trusted. Pass the row's value (``None`` included: an
     unstamped row is labeled ``external`` by design); omit the kwarg entirely
-    (the ``...`` sentinel) to skip the trust part."""
+    (the ``...`` sentinel) to skip the trust part (memory rows cite their
+    ``provenance`` directly instead)."""
     parts: list[str] = []
     if source:
         parts.append(f"src: {source}")
@@ -129,39 +145,67 @@ def _memory_citation(
 
 # The one refusal every agent-side always-on write path returns when the operator has
 # turned `knowledge.hot_write_confirm` on (ADR 0069 D8, widened by ADR 0108 D4): a
-# domain="hot" or delivery_policy="always" chunk is in front of the model EVERY turn,
-# so promotion to always-on is reserved for operator surfaces. Shared by
-# memory_ingest and knowledge_ingest so the two can't drift.
+# delivery="always" memory (or a domain="hot" knowledge chunk) is in front of the model
+# EVERY turn, so promotion to always-on is reserved for operator surfaces. Shared by
+# memory_save and knowledge_ingest so the two can't drift.
 _ALWAYS_ON_REFUSAL = (
-    'Error: always-on memory writes (domain "hot" or delivery_policy "always", via memory_ingest '
-    "or knowledge_ingest) need operator confirmation on this instance (knowledge.hot_write_confirm "
-    "is on). Ask the operator to add it via the console (Knowledge → Store or the Memory "
-    "inspector), or store it in a regular domain with the default (retrieved) policy instead."
+    'Error: always-on writes (memory with delivery "always", or knowledge_ingest into domain "hot") '
+    "need operator confirmation on this instance (knowledge.hot_write_confirm is on). Ask the "
+    "operator to add it via the console (the Memory inspector or Knowledge → Store), or save it with "
+    "the default (retrieved) delivery instead."
 )
 
 
-def _norm_delivery_policy(value) -> tuple[str | None, str | None]:
-    """Validate + normalize a ``delivery_policy`` at the TOOL boundary (the store and
-    SDK stay permissive, like #3205's ``memory_kind``). Returns ``(normalized, None)``
-    — case/whitespace folded so ``"ALWAYS"`` is ``"always"`` — or ``(None, error)`` with
-    the tool-worded refusal for a value outside ``DELIVERY_POLICIES``. ``None`` passes
-    through untouched (= retrieved)."""
+def _norm_delivery(value) -> tuple[str | None, str | None]:
+    """Validate + normalize a ``delivery`` at the TOOL boundary (the store stays
+    permissive). Returns ``(normalized, None)`` — case/whitespace folded so ``"ALWAYS"``
+    is ``"always"`` — or ``(None, error)`` with the tool-worded refusal for a value
+    outside ``DELIVERY_POLICIES``. ``None`` passes through untouched (= retrieved)."""
     if value is None:
         return None, None
     normalized = str(value).strip().lower()
     if normalized not in DELIVERY_POLICIES:
-        return None, (f"Error: delivery_policy must be one of {', '.join(sorted(DELIVERY_POLICIES))} (got {value!r}).")
+        return None, (f"Error: delivery must be one of {', '.join(sorted(DELIVERY_POLICIES))} (got {value!r}).")
     return normalized, None
 
 
-def _superseded_label(row: dict) -> str:
-    """``"[superseded by #17] "`` for a row whose replacement is known from the
-    ADR 0108 D7.3 chain, ``"[superseded] "`` for a legacy (NULL-reason) supersede,
-    ``""`` for a valid row. Keyed on ``invalidated_at`` — the reason only adds the id."""
-    if not row.get("invalidated_at"):
-        return ""
-    new_id = superseded_by_id(row.get("invalidation_reason"))
-    return f"[superseded by #{new_id}] " if new_id is not None else "[superseded] "
+def _expires_at_from_days(expires_in_days) -> tuple[str | None, str | None]:
+    """Turn a relative ``expires_in_days`` into a stored UTC ISO timestamp, or an error.
+    Whole days only (1–``_MEMORY_EXPIRES_MAX_DAYS``): a bool is not a count, and 2.5 would
+    silently become 2. Returns ``(expires_at, None)`` or ``(None, error)``; ``None`` in →
+    ``(None, None)`` (no expiry)."""
+    if expires_in_days is None:
+        return None, None
+    try:
+        days = int(expires_in_days)
+        whole = not isinstance(expires_in_days, bool) and days == expires_in_days
+    except (TypeError, ValueError):
+        days, whole = 0, False
+    if not whole or days < 1 or days > _MEMORY_EXPIRES_MAX_DAYS:
+        return None, (
+            f"Error: expires_in_days must be a whole number of days between 1 and "
+            f"{_MEMORY_EXPIRES_MAX_DAYS} (got {expires_in_days!r})."
+        )
+    return (datetime.now(UTC) + timedelta(days=days)).isoformat(), None
+
+
+def _render_memory(entry, *, verbose: bool = False) -> str:
+    """One ``MemoryEntry`` rendered for memory_search / memory_list:
+    ``#id [superseded] [kind] heading: content (cite) prov=…`` — plus
+    delivery / review / expires tags when ``verbose`` (the list view). The ``#id`` leads
+    so a caller can target a stale row with ``memory_forget``."""
+    sup = "[superseded] " if getattr(entry, "superseded_by", None) is not None else ""
+    head = f"[{entry.kind}]"
+    if entry.heading:
+        head += f" {entry.heading}:"
+    body = (entry.content or "")[:300]
+    cite = _memory_citation(source=entry.source_session, created_at=entry.created_at, namespace=entry.scope)
+    tags = f" prov={entry.provenance}"
+    if verbose:
+        tags += f" delivery={entry.delivery} review={entry.review_state}"
+        if entry.expires_at:  # date precision — enough to see it's lapsing
+            tags += f" expires={str(entry.expires_at)[:10]}"
+    return f"#{entry.id} {sup}{head} {body}{cite}{tags}"
 
 
 def _build_memory_tools(
@@ -171,118 +215,104 @@ def _build_memory_tools(
     *,
     history_store=None,
     history_store_getter=None,
+    memory_store=None,
+    memory_store_getter=None,
 ) -> list:
-    """Bind memory tools to a ``KnowledgeStore``. Returns a list.
+    """Bind the memory / knowledge / history tools to their stores. Returns a list.
 
-    ``graph_config`` (the ``LangGraphConfig``) is threaded so ``knowledge_ingest``
-    can build the gateway speech-to-text / vision functions for audio/video/image
-    sources. It's optional — without it those media paths report "not configured"
-    and the text/URL/PDF paths work unchanged.
+    ``knowledge_store`` backs ``knowledge_ingest`` / ``knowledge_search`` (chunks).
+    ``memory_store`` / ``memory_store_getter`` back ``memory_save`` / ``memory_search`` /
+    ``memory_list`` / ``memory_forget`` (the core ``MemoryStore``); the getter is resolved
+    at invocation so a reload's new store is used (same seam as ``history_store_getter``).
+    ``history_store`` / ``history_store_getter`` back ``session_search`` / ``recall_session``.
 
-    ``background_mgr`` (ADR 0050) lets ``knowledge_ingest`` run a slow source (any URL
-    fetch or media transcription) as a detached background job instead of blocking the
-    turn. Optional — without it the tool ingests inline (blocking, but correct).
+    ``graph_config`` (the ``LangGraphConfig``) is threaded so ``knowledge_ingest`` can build
+    the gateway speech-to-text / vision functions for audio/video/image sources, and so the
+    always-on confirm gate can read ``knowledge_hot_write_confirm``. ``background_mgr``
+    (ADR 0050) lets ``knowledge_ingest`` run a slow source as a detached background job.
+    Both optional.
     """
 
+    def _memory():
+        """Resolve the live ``MemoryStore`` (getter wins) or None."""
+        if memory_store_getter is not None:
+            return memory_store_getter()
+        return memory_store
+
     @tool
-    async def memory_ingest(
+    async def memory_save(
         content: str,
-        domain: str = "general",
-        heading: str | None = None,
-        memory_kind: str | None = None,
+        kind: str = "fact",
         subject: str | None = None,
-        delivery_policy: str | None = None,
+        heading: str | None = None,
+        delivery: str = "retrieved",
         expires_in_days: int | None = None,
         state: Annotated[Any, InjectedState] = None,
     ) -> str:
-        # Maintainer notes: ``heading`` is also the de-dupe key the eval suite and curator use;
-        # ``subject`` lets a later fact about the same entity supersede this row; delivery
-        # policies are ADR 0108 D4, expiry D7.4 (row kept, stops being delivered once lapsed).
-        # Every agent write starts review_state="pending" until the operator confirms it in the
-        # Memory inspector (D7.2) and is stamped with the session id from injected state.
-        """Store a fact, preference or note in long-term memory, for things to remember across sessions.
+        """Save a durable memory — a preference, decision, standing rule or fact worth recalling across sessions.
 
-        Use when the operator asks you to remember or note something: a preference, a fact about
-        their environment, a decision worth recalling later.
+        Use when the operator asks you to remember or note something that will still be true
+        and useful in a month. Work status (a PR, card or SHA with a past-tense event) belongs
+        on the board or the issue, where it stays current — not here. For a document to read
+        or keep, use ``knowledge_ingest``; this is for text you already have.
 
         Args:
-            content: specific, self-contained text (retrieved by keyword search).
-            domain: bucket, e.g. ``"preferences"``, ``"context"``, ``"general"``.
+            content: specific, self-contained text (retrieved by keyword/semantic search).
+            kind: ``profile|standing|fact|decision`` — what the memory IS; defaults to ``fact``.
+            subject: the entity this is ABOUT (e.g. ``"staging-db"``) — pass it whenever there
+                is one so a later fact about it can supersede this row instead of duplicating it.
             heading: optional short stable label (e.g. ``"coffee"``).
-            memory_kind: ``profile|standing|fact|decision|note|episode|reference|legacy``; inferred if omitted.
-            subject: the entity this is ABOUT (e.g. ``"staging-db"``) — pass it whenever there is
-                one, so a later fact about it supersedes this row instead of duplicating it.
-            delivery_policy: ``"always"`` (every turn; ``domain="hot"`` implies it), ``"retrieved"``
-                (default) or ``"on_demand"`` (only via memory_recall).
+            delivery: ``"retrieved"`` (default; surfaced by relevance), ``"always"`` (in front
+                of the model every turn) or ``"on_demand"`` (only via memory_search).
             expires_in_days: optional 1–3650 shelf life for volatile facts.
 
-        New memories stay pending until the operator confirms them.
+        New memories stay pending until the operator confirms them in the Memory inspector.
         """
-        delivery_policy, policy_error = _norm_delivery_policy(delivery_policy)
-        if policy_error:
-            return policy_error
-        expires_at: str | None = None
-        if expires_in_days is not None:
-            # Whole days only: a bool is not a count, and 2.5 would silently become 2.
-            try:
-                days = int(expires_in_days)
-                whole = not isinstance(expires_in_days, bool) and days == expires_in_days
-            except (TypeError, ValueError):
-                days, whole = 0, False
-            if not whole or days < 1 or days > _MEMORY_EXPIRES_MAX_DAYS:
-                return (
-                    f"Error: expires_in_days must be a whole number of days between 1 and "
-                    f"{_MEMORY_EXPIRES_MAX_DAYS} (got {expires_in_days!r})."
-                )
-            expires_at = (datetime.now(UTC) + timedelta(days=days)).isoformat()
-        # Always-on confirm gate (ADR 0069 D8): domain="hot" chunks — and, since
-        # ADR 0108 D4, any chunk with delivery_policy="always" — are injected in
-        # front of the model EVERY turn, so when the operator has turned the gate
-        # on, this (the agent's own write path, alongside knowledge_ingest)
-        # refuses always-on writes with instructions to ask — only operator
-        # surfaces (console knowledge/memory routes) may promote content to
-        # always-on. The domain compare lowercases on purpose (over-refusal is
-        # the safe side); the store itself keys on the exact "hot".
-        wants_always_on = (domain or "").strip().lower() == "hot" or delivery_policy == DELIVERY_ALWAYS
-        if wants_always_on and getattr(graph_config, "knowledge_hot_write_confirm", False):
+        store = _memory()
+        if store is None:
+            return "Error: memory is not available on this instance."
+        kind_norm = str(kind or "").strip().lower()
+        if kind_norm not in MEMORY_KINDS:
+            return f"Error: kind must be one of {', '.join(MEMORY_KINDS)} (got {kind!r})."
+        delivery_norm, delivery_error = _norm_delivery(delivery)
+        if delivery_error:
+            return delivery_error
+        delivery_norm = delivery_norm or "retrieved"
+        expires_at, expires_error = _expires_at_from_days(expires_in_days)
+        if expires_error:
+            return expires_error
+        # Always-on confirm gate (ADR 0069 D8 / ADR 0108 D4): a delivery="always" memory is
+        # injected in front of the model EVERY turn, so when the operator has turned the gate
+        # on, this (the agent's own write path, alongside knowledge_ingest) refuses always-on
+        # writes with instructions to ask — only operator surfaces may promote to always-on.
+        if delivery_norm == DELIVERY_ALWAYS and getattr(graph_config, "knowledge_hot_write_confirm", False):
             return _ALWAYS_ON_REFUSAL
-        # add_chunk embeds over HTTP on hybrid stores — keep it off the loop.
-        # source_type="conversation" ranks the row in the agent-derived trust
-        # tier (ADR 0069 D8) — this write path is model-driven, not operator-.
-        import asyncio
-
-        kw: dict[str, Any] = {"source_type": "conversation"}
-        # Provenance (#3185, ADR 0069 D5): stamp the session this was written in.
-        # `source` is already the machine-readable session/thread link on the OTHER
-        # agent-authored path (conversation_harvest -> memory_facts passes the thread
-        # id), so an agent-written row carries the same shape wherever it came from.
-        # Read from the INJECTED STATE, never from the model: tracing.current_session_id()
-        # reads empty inside a tool body (see _session_id_from), and provenance the model
-        # could set is provenance it could forge. Same seam save_skill uses.
+        # Provenance (#3185, ADR 0069 D5): stamp the session this was written in, read from
+        # the INJECTED STATE, never the model — tracing.current_session_id() reads empty
+        # inside a tool body, and provenance the model could set is provenance it could forge.
+        # Every agent write is provenance="agent" and starts review_state="pending" (the store
+        # defaults it) until the operator confirms it in the Memory inspector (D7.2).
         session_id = _session_id_from(state)
-        if session_id:
-            kw["source"] = session_id
-        if memory_kind is not None:
-            kw["memory_kind"] = memory_kind
-        if subject is not None:
-            kw["subject"] = subject
-        if delivery_policy is not None:
-            kw["delivery_policy"] = delivery_policy
-        if expires_at is not None:
-            kw["expires_at"] = expires_at
 
         def _write():
-            try:
-                return knowledge_store.add_chunk(content, domain=domain, heading=heading, **kw)
-            except TypeError:  # plugin backend predating the new kwargs
-                return knowledge_store.add_chunk(content, domain=domain, heading=heading)
+            return store.add(
+                content,
+                kind=kind_norm,
+                provenance="agent",
+                subject=subject,
+                heading=heading,
+                delivery=delivery_norm,
+                expires_at=expires_at,
+                source_session=session_id or None,
+            )
 
-        chunk_id = await asyncio.to_thread(_write)
-        if chunk_id is None:
-            return "Error: failed to store chunk (knowledge store unavailable)."
-        return f"Stored chunk {chunk_id} in {domain!r}."
+        memory_id = await asyncio.to_thread(_write)
+        bits = [f"kind={kind_norm}", f"delivery={delivery_norm}"]
+        if subject:
+            bits.append(f"subject={subject!r}")
+        return f"Saved memory #{memory_id} ({', '.join(bits)}); pending operator review."
 
-    async def _do_ingest(src: str, dom: str, title: str | None, is_url: bool) -> str:
+    async def _do_ingest(src: str, col: str, title: str | None, is_url: bool) -> str:
         """Ingest one source via the shared ``ops.knowledge.ingest`` op and return a
         one-line summary. Raises ``_KnowledgeIngestError`` (legible message) on an expected
         failure — the inline path returns it, the background work job settles ``failed``
@@ -295,7 +325,7 @@ def _build_memory_tools(
         try:
             result = await ingest(
                 source,
-                domain=dom,
+                domain=col,
                 title=title,
                 ctx=OpContext(knowledge_store=knowledge_store, graph_config=graph_config),
             )
@@ -315,13 +345,13 @@ def _build_memory_tools(
             )
         return (
             f"Ingested {label!r} ({result.source_type}, {result.chars} chars) → "
-            f"{result.chunks} chunk(s){embedded_note} in {dom!r}."
+            f"{result.chunks} chunk(s){embedded_note} in {col!r}."
         )
 
     @tool
     async def knowledge_ingest(
         source: str,
-        domain: str = "general",
+        collection: str = "general",
         title: str | None = None,
         state: Annotated[Any, InjectedState] = None,
     ) -> str:
@@ -334,11 +364,11 @@ def _build_memory_tools(
         (transcribed) and images (described). Never web_search/fetch_url a YouTube or media link
         yourself — this is the only path that gets a transcript. Network/media sources run in
         the background and return a job id: tell the operator it's underway; don't wait or poll.
-        Use ``memory_ingest`` for text you already have.
+        Use ``memory_save`` for a fact/preference you already have in hand.
 
         Args:
             source: an http(s) URL or a local file path.
-            domain: knowledge bucket.
+            collection: knowledge collection bucket (the old ``domain``).
             title: optional heading; defaults to the source's title.
         """
         from pathlib import Path
@@ -346,11 +376,11 @@ def _build_memory_tools(
         src = (source or "").strip()
         if not src:
             return "Error: provide a URL or a local file path to ingest."
-        dom = (domain or "general").strip() or "general"
-        # Same always-on confirm gate as memory_ingest (ADR 0069 D8 / ADR 0108 D4):
-        # a local file filed under domain="hot" is an agent path to an always-on
-        # row too, so it must refuse the same way — before any fetch or job spawn.
-        if dom.lower() == "hot" and getattr(graph_config, "knowledge_hot_write_confirm", False):
+        col = (collection or "general").strip() or "general"
+        # Same always-on confirm gate as memory_save (ADR 0069 D8 / ADR 0108 D4): a local file
+        # filed under collection="hot" is an agent path to an always-on row too, so it must
+        # refuse the same way — before any fetch or job spawn.
+        if col.lower() == "hot" and getattr(graph_config, "knowledge_hot_write_confirm", False):
             return _ALWAYS_ON_REFUSAL
         is_url = src.lower().startswith(("http://", "https://"))
 
@@ -359,7 +389,7 @@ def _build_memory_tools(
         # background manager wired, fall back to inline (blocking, but correct).
         if background_mgr is None or _ingest_should_inline(src, is_url):
             try:
-                return await _do_ingest(src, dom, title, is_url)
+                return await _do_ingest(src, col, title, is_url)
             except _KnowledgeIngestError as exc:
                 return str(exc)
 
@@ -369,72 +399,92 @@ def _build_memory_tools(
             kind="ingest",
             description=f"Ingest {label}",
             detail=src,
-            work=lambda: _do_ingest(src, dom, title, is_url),
+            work=lambda: _do_ingest(src, col, title, is_url),
         )
         return (
-            f"Ingesting {label!r} into knowledge (domain {dom!r}) in the background — job {job_id}. "
+            f"Ingesting {label!r} into knowledge (collection {col!r}) in the background — job {job_id}. "
             "It runs on its own and I'll report the result back to this conversation when it's "
             "indexed; no need to wait or poll."
         )
 
     @tool
-    async def memory_recall(
-        query: str,
-        k: int = 5,
-        domain: str | None = None,
-        memory_kind: str | None = None,
-        delivery_policy: str | None = None,
-        include_superseded: bool = False,
-    ) -> str:
-        # Results carry a #<id> (for forget_memory) on private chunks, and provenance (domain,
-        # date, namespace). include_superseded is ADR 0108 D7.3 audit history.
-        """Search long-term memory for chunks relevant to ``query``; use when stored context beats your training data.
+    async def knowledge_search(query: str, k: int = 5, collection: str | None = None) -> str:
+        """Search ingested knowledge DOCUMENTS (books, PDFs, pages, transcripts) for passages relevant to ``query``.
 
-        E.g. the operator's preferences ("what's my usual order?") or a past decision ("what did we
-        decide about the migration?"). For the most recent entries, use memory_list.
-
-        Returns memory only (preferences, decisions, facts). For what HAPPENED in a prior
-        conversation — a compaction archive, retired-thread summary or background report —
-        use ``session_search`` instead; that history no longer lives here (ADR 0125).
+        Each hit is cited by its collection and source. Use when stored reference material
+        beats your training data. For the operator's preferences, decisions or standing rules
+        use ``memory_search``; for what HAPPENED in a prior conversation use ``session_search``
+        — neither of those lives here.
 
         Args:
-            domain: search ONE domain — e.g. separate your own record from inherited reference
-                such as ``claude-import`` (another agent's history, not your own actions).
-            memory_kind: restrict to one kind (e.g. ``"fact"``, ``"decision"``).
-            delivery_policy: ``"always"|"retrieved"|"on_demand"``; the only way on_demand rows surface.
-            include_superseded: also return replaced rows, tagged ``[superseded]``.
+            k: 1–20 passages.
+            collection: restrict to one collection bucket (e.g. ``"necromunda-core"``). None = all.
         """
-        delivery_policy, policy_error = _norm_delivery_policy(delivery_policy)
-        if policy_error:
-            return policy_error
+        if knowledge_store is None:
+            return "Error: knowledge is not available on this instance."
         clamped_k = max(1, min(int(k), _MEMORY_RECALL_MAX_K))
-        # search embeds the query over HTTP on hybrid stores — keep it off the loop.
-        import asyncio
-
-        search_kw: dict[str, Any] = {"k": clamped_k, "domain": domain or None}
-        if memory_kind is not None:
-            search_kw["memory_kind"] = memory_kind
-        if delivery_policy is not None:
-            search_kw["delivery_policy"] = delivery_policy
-        if include_superseded:  # only forward when set — plugin backends predating it keep working
-            search_kw["include_invalidated"] = True
-
-        results = await asyncio.to_thread(knowledge_store.search, query, **search_kw)
+        # The store filters chunks on ``domain`` (= the collection, backfilled by the
+        # ADR 0125 migration); pass the caller's collection as that filter.
+        results = await asyncio.to_thread(knowledge_store.search, query, clamped_k, domain=collection or None)
         if not results:
             return "No matches."
-        lines = [
-            (_memory_handle(r.get("id"), r.get("tier")) + " ").lstrip()
-            + _superseded_label(r)
-            + f"[{r.get('domain', '?')}] {r['preview']}"
-            + _memory_citation(
+        lines = []
+        for r in results:
+            handle = _memory_handle(r.get("id"), r.get("tier"))
+            coll = r.get("collection") or r.get("domain") or "?"
+            cite = _memory_citation(
                 source=r.get("source"),
                 created_at=r.get("created_at"),
                 namespace=r.get("namespace"),
                 source_type=r.get("source_type"),
             )
-            for r in results
-        ]
+            prefix = (handle + " ") if handle else ""
+            lines.append(f"{prefix}[{coll}] {r['preview']}{cite}")
         return "\n".join(lines)
+
+    @tool
+    async def memory_search(
+        query: str,
+        k: int = 5,
+        kind: str | None = None,
+        delivery: str | None = None,
+        include_superseded: bool = False,
+    ) -> str:
+        """Search durable MEMORY for entries relevant to ``query`` — memory only, not documents or history.
+
+        E.g. the operator's preferences ("what's my usual order?") or a past decision ("what
+        did we decide about the migration?"). For ingested documents use ``knowledge_search``;
+        for what happened in a prior conversation use ``session_search``. For the most recent
+        entries, use ``memory_list``.
+
+        Args:
+            k: 1–20 results.
+            kind: restrict to one kind (``profile|standing|fact|decision``).
+            delivery: ``"always"|"retrieved"|"on_demand"``; the only way on_demand rows surface.
+            include_superseded: also return replaced rows, tagged ``[superseded]``.
+        """
+        store = _memory()
+        if store is None:
+            return "Error: memory is not available on this instance."
+        if kind is not None:
+            kind = str(kind).strip().lower()
+            if kind not in MEMORY_KINDS:
+                return f"Error: kind must be one of {', '.join(MEMORY_KINDS)} (got {kind!r})."
+        delivery, delivery_error = _norm_delivery(delivery)
+        if delivery_error:
+            return delivery_error
+        clamped_k = max(1, min(int(k), _MEMORY_RECALL_MAX_K))
+        results = await asyncio.to_thread(
+            store.search,
+            query,
+            clamped_k,
+            kind=kind,
+            delivery=delivery,
+            include_superseded=include_superseded,
+        )
+        if not results:
+            return "No matches."
+        return "\n".join(_render_memory(e) for e in results)
 
     @tool
     async def session_search(
@@ -558,111 +608,79 @@ def _build_memory_tools(
 
     @tool
     async def memory_list(
-        domain: str | None = None,
-        limit: int = 10,
-        memory_kind: str | None = None,
-        delivery_policy: str | None = None,
+        kind: str | None = None,
+        delivery: str | None = None,
         review_state: str | None = None,
+        limit: int = 10,
     ) -> str:
-        # review_state verdicts are ADR 0108 D7; delivery policies D4.
-        """List the most recent memory chunks, optionally filtered.
+        """List the most recent durable memories, optionally filtered, with a per-kind count line.
 
-        Use for what was recently logged or stored (e.g. today's log entries) or to inspect
-        stored memory; use memory_recall to search by topic.
+        Use for what was recently stored or to inspect memory; use ``memory_search`` to search
+        by topic. The last line always reports the stored count per kind (what the old
+        ``memory_stats`` returned).
 
         Args:
-            domain: one domain bucket.
-            memory_kind: one kind (e.g. ``"profile"``).
-            delivery_policy: ``"always"|"retrieved"|"on_demand"``.
+            kind: one kind (``profile|standing|fact|decision``).
+            delivery: ``"always"|"retrieved"|"on_demand"``.
             review_state: ``"confirmed"|"pending"|"rejected"``. Confirming is the operator's act
                 in the Memory inspector, never yours.
+            limit: 1–200 rows (default 10).
         """
-        delivery_policy, policy_error = _norm_delivery_policy(delivery_policy)
-        if policy_error:
-            return policy_error
+        store = _memory()
+        if store is None:
+            return "Error: memory is not available on this instance."
+        if kind is not None:
+            kind = str(kind).strip().lower()
+            if kind not in MEMORY_KINDS:
+                return f"Error: kind must be one of {', '.join(MEMORY_KINDS)} (got {kind!r})."
+        delivery, delivery_error = _norm_delivery(delivery)
+        if delivery_error:
+            return delivery_error
         if review_state is not None:
             review_state = str(review_state).strip().lower()
             if review_state not in REVIEW_STATES:
                 return f"Error: review_state must be one of {', '.join(sorted(REVIEW_STATES))} (got {review_state!r})."
         clamped_limit = max(1, min(int(limit), _MEMORY_LIST_MAX_LIMIT))
-        list_kw: dict[str, Any] = {"domain": domain, "limit": clamped_limit, "memory_kind": memory_kind}
-        if delivery_policy is not None:  # only forward when set — plugin backends predating it keep working
-            list_kw["delivery_policy"] = delivery_policy
-        if review_state is not None:
-            list_kw["review_state"] = review_state
-        chunks = knowledge_store.list_chunks(**list_kw)
-        if not chunks:
-            return f"No chunks in {domain or 'any domain'}."
-        lines = []
-        for c in chunks:
-            head = f"[{c.domain}]"
-            if c.heading:
-                head += f" {c.heading}:"
-            preview = (c.content or "")[:200]
-            # Lead with the chunk id so a caller (e.g. the `dream` consolidation
-            # pass) can target a stale/superseded fact with `forget_memory`.
-            # created_at already leads the line, so the citation adds
-            # src/ns/trust only.
-            cite = _memory_citation(source=c.source, namespace=c.namespace, source_type=c.source_type)
-            # Show typed-memory classification when present (#3072).
-            kind_tag = ""
-            if getattr(c, "memory_kind", None):
-                kind_tag += f" kind={c.memory_kind}"
-            if getattr(c, "delivery_policy", None):
-                kind_tag += f" policy={c.delivery_policy}"
-            if getattr(c, "review_state", None):
-                kind_tag += f" review={c.review_state}"
-            if getattr(c, "expires_at", None):  # date precision — enough to see it's lapsing
-                kind_tag += f" expires={str(c.expires_at)[:10]}"
-            handle = _memory_handle(c.id, getattr(c, "tier", None))
-            lines.append(f"{handle} {c.created_at} {head} {preview}{cite}{kind_tag}")
+        entries = await asyncio.to_thread(
+            store.list, kind=kind, delivery=delivery, review_state=review_state, limit=clamped_limit
+        )
+        stats = await asyncio.to_thread(store.stats)
+        count_line = "Totals — " + ", ".join(f"{k}: {stats.get(k, 0)}" for k in MEMORY_KINDS) + f" (total {stats.get('total', 0)})"
+        if not entries:
+            return "No memories.\n" + count_line
+        lines = [_render_memory(e, verbose=True) for e in entries]
+        lines.append(count_line)
         return "\n".join(lines)
 
     @tool
-    async def memory_stats() -> str:
-        """Return chunk counts per domain. Useful for sanity checks."""
-        s = knowledge_store.stats()
-        if s.get("total", 0) == 0:
-            return "Knowledge store is empty."
-        lines = [f"Total: {s['total']}"]
-        for k, v in s.items():
-            if k == "total":
-                continue
-            # A layered store (ADR 0041) also reports its tier split; label it so the
-            # model doesn't read "private"/"commons" as domains it could memory_list.
-            if k in ("private", "commons"):
-                lines.append(f"  tier {k}: {v}")
-                continue
-            lines.append(f"  {k}: {v}")
-        return "\n".join(lines)
+    async def memory_forget(memory_id: int, reason: str = "") -> str:
+        # A real delete, not a supersede: fact consolidation marks replaced rows superseded for
+        # audit (ADR 0125 D4), but an explicit forget is operator intent. Used by /dream passes.
+        """HARD-delete ONE memory by its ``#<id>`` from memory_list / memory_search.
 
-    @tool
-    async def forget_memory(chunk_id: int, reason: str = "") -> str:
-        # A real delete, not a supersede: fact consolidation marks replaced rows invalidated_at
-        # for audit (ADR 0069 D9), but an explicit forget is operator intent. Shared commons
-        # rows live in a separate store and can't be deleted here. Used by /dream passes.
-        """HARD-delete ONE private memory chunk by its ``#<id>`` from memory_list / memory_recall.
-
-        Use for a stale, superseded or duplicate fact — ideally after storing the corrected
-        version. Deletes exactly that id (no bulk); only forget what you're sure of. Commons
-        rows can't be deleted. ``reason`` is for the audit trail.
+        Use for a stale, superseded or duplicate fact — ideally after saving the corrected
+        version. Deletes exactly that id (no bulk); only forget what you're sure of.
+        ``reason`` is for the audit trail.
         """
+        store = _memory()
+        if store is None:
+            return "Error: memory is not available on this instance."
         try:
-            cid = int(chunk_id)
+            mid = int(memory_id)
         except (TypeError, ValueError):
-            return f"Error: chunk_id must be an integer (got {chunk_id!r})."
-        removed = knowledge_store.delete_by_id(cid)
+            return f"Error: memory_id must be an integer (got {memory_id!r})."
+        removed = await asyncio.to_thread(store.delete, mid)
         if not removed:
-            return f"No memory chunk #{cid} found — nothing deleted."
-        return f"Forgot memory chunk #{cid}." + (f" ({reason})" if reason else "")
+            return f"No memory #{mid} found — nothing deleted."
+        return f"Forgot memory #{mid}." + (f" ({reason})" if reason else "")
 
     return [
-        memory_ingest,
+        memory_save,
         knowledge_ingest,
-        memory_recall,
+        knowledge_search,
+        memory_search,
         session_search,
         recall_session,
         memory_list,
-        memory_stats,
-        forget_memory,
+        memory_forget,
     ]

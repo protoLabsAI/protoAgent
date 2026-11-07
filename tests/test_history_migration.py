@@ -1,6 +1,6 @@
 """ADR 0125 H1e: the boot migration draining legacy ``domain='conversation'``
 chunks into the ``history`` table (same agent.db), and the readers that follow it —
-``session_search`` picks the archive up, ``memory_recall`` no longer does.
+``session_search`` picks the archive up, ``knowledge_search`` no longer does.
 """
 
 from __future__ import annotations
@@ -72,9 +72,9 @@ def _history_count(path) -> int:
         db.close()
 
 
-def test_migration_evidence_memory_recall_to_session_search(tmp_path):
-    """The issue's 'Done when' evidence: before the migration ``memory_recall`` finds the
-    archive; after it ``session_search`` finds the same archive, ``memory_recall`` does
+def test_migration_evidence_knowledge_search_to_session_search(tmp_path):
+    """The issue's 'Done when' evidence: before the migration ``knowledge_search`` finds the
+    archive; after it ``session_search`` finds the same archive, ``knowledge_search`` does
     not, the fact survives, and a second boot moves nothing."""
     path = tmp_path / "agent.db"
     store = KnowledgeStore(path)
@@ -82,8 +82,8 @@ def test_migration_evidence_memory_recall_to_session_search(tmp_path):
     _seed_conversation_and_fact(store)
     tools = _by_name(_build_memory_tools(store, history_store=history))
 
-    # Before: memory_recall surfaces the archive (history still lives in chunks).
-    before = asyncio.run(tools["memory_recall"].ainvoke({"query": _ARCHIVE_TOKEN}))
+    # Before: knowledge_search surfaces the archive (history still lives in chunks).
+    before = asyncio.run(tools["knowledge_search"].ainvoke({"query": _ARCHIVE_TOKEN}))
     assert _ARCHIVE_TOKEN in before
 
     moved = migrate_conversation_chunks_to_history(path)
@@ -97,10 +97,10 @@ def test_migration_evidence_memory_recall_to_session_search(tmp_path):
     hits = search_sessions(_ARCHIVE_TOKEN, history_store=history, memory_dir=str(mem))
     assert hits and any(h["kind"] == "archive" and h["session_id"] == "sess-1" for h in hits)
 
-    # After: memory_recall no longer carries it; the fact is still recallable.
-    after = asyncio.run(tools["memory_recall"].ainvoke({"query": _ARCHIVE_TOKEN}))
+    # After: knowledge_search no longer carries it; the fact is still recallable.
+    after = asyncio.run(tools["knowledge_search"].ainvoke({"query": _ARCHIVE_TOKEN}))
     assert after == "No matches."
-    fact = asyncio.run(tools["memory_recall"].ainvoke({"query": _FACT_TOKEN}))
+    fact = asyncio.run(tools["knowledge_search"].ainvoke({"query": _FACT_TOKEN}))
     assert _FACT_TOKEN in fact
 
     # Idempotent: a second boot copies and moves nothing.

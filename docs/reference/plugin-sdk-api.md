@@ -35,6 +35,8 @@ the module's own.
 
 **Knowledge graph (the plugin↔knowledge channel, ADR 0043 — "shared knowledge")** — [`knowledge_add()`](#sdk-knowledge-add), [`knowledge_purge()`](#sdk-knowledge-purge), [`knowledge_search()`](#sdk-knowledge-search)
 
+**Durable memory (ADR 0125)** — [`memory_save()`](#sdk-memory-save), [`memory_search()`](#sdk-memory-search)
+
 **Goal-driven recurring loop (the OODA pattern)** — [`clear_watch()`](#sdk-clear-watch), [`create_watch()`](#sdk-create-watch), [`list_watches()`](#sdk-list-watches), [`run_in_session()`](#sdk-run-in-session), [`start_goal_loop()`](#sdk-start-goal-loop), [`stop_goal_loop()`](#sdk-stop-goal-loop), [`update_watch()`](#sdk-update-watch)
 
 **Background jobs (ADR 0050 spawn + ADR 0070 results pipeline)** — [`background_status()`](#sdk-background-status), [`spawn_background()`](#sdk-spawn-background)
@@ -469,6 +471,33 @@ retirement is the `epoch` tag instead (see `knowledge_add`). Returns 0 when
 no store is configured (or the backend has no `purge_domain`), when `domain` is
 empty, or when `before` is unparseable — it refuses rather than risk deleting the
 wrong rows.
+
+## Durable memory (ADR 0125)
+
+### `sdk.memory_search` {#sdk-memory-search}
+
+```python
+await sdk.memory_search(query: str, *, k: int = 5, kind: str | None = None) -> list[dict]
+```
+
+Search the agent's durable MEMORY and return the top-`k` matching entries as dicts
+(each the `MemoryEntry` fields: `id`, `kind`, `subject`, `content`, `delivery`,
+`review_state`, `provenance` …), or `[]` when no memory store is configured. `kind`
+scopes to one of `profile|standing|fact|decision`. Memory only — ingested documents are
+`knowledge_search`, and prior-conversation history is the session-search path.
+
+### `sdk.memory_save` {#sdk-memory-save}
+
+```python
+await sdk.memory_save(content: str, *, kind: str = 'fact', subject: str | None = None, heading: str | None = None) -> int | None
+```
+
+Save one durable memory and return its id, or `None` when no memory store is
+configured. A plugin write is `provenance="agent"` and starts `review_state="pending"`
+(the store stamps it) until an operator confirms it. `kind` is `profile|standing|fact|
+decision` (default `fact`); `subject` is the entity it is ABOUT, so a later fact on
+the same subject can supersede it; `heading` is an optional short label. For an ingested
+document use `knowledge_add` instead.
 
 ## Goal-driven recurring loop (the OODA pattern)
 

@@ -109,7 +109,7 @@ subagents:
       - current_time
       - web_search
       - fetch_url
-      - memory_recall
+      - memory_search
       - memory_list
     max_turns: 40
     # Per-subagent model override (blank = routing.aux_model, then the main model).
@@ -155,19 +155,20 @@ knowledge:
   # Namespace scope for the per-turn AUTO-INJECTED recall (ADR 0069 D3a). Unset =
   # no filter (every chunk is eligible — box-commons sharing keeps working). When
   # set, only chunks whose `namespace` matches a listed value auto-inject; include
-  # "" to also match un-namespaced chunks. memory_recall stays unscoped.
+  # "" to also match un-namespaced chunks. memory_search stays unscoped.
   # inject_namespaces:
   #   - "projects/alpha"
   #   - ""
   # Trust floor for the per-turn AUTO-INJECTED recall (ADR 0069 D8). Chunks rank
   # into deterministic trust tiers by source_type: 3 = operator-authored, 2 =
-  # agent-derived (extracted facts, harvest, memory_ingest), 1 = ingested/external
+  # agent-derived (extracted facts, harvest, memory_save), 1 = ingested/external
   # (web, YouTube, PDFs, media) and unknown. 1 (default) excludes nothing — low
   # tiers are only ranked below higher ones; 2 drops external content from
-  # auto-injection; 3 = operator rows only. memory_recall is never gated.
+  # auto-injection; 3 = operator rows only. memory_search is never gated.
   # inject_min_trust: 1
   # Hot-memory write confirm gate (ADR 0069 D8). When true, the agent's
-  # memory_ingest refuses domain="hot" writes (it must ask the operator);
+  # memory_save refuses delivery="always" (and knowledge_ingest domain="hot")
+  # writes (it must ask the operator);
   # operator surfaces are unaffected. Every hot write emits a
   # `memory.hot_written` bus event either way.
   # hot_write_confirm: false
@@ -321,7 +322,7 @@ checkpoint:
   max_age_days: 30
   prune_interval_hours: 6
   # When a session is retired (aged out or deleted), summarize it into the
-  # knowledge base (searchable via memory_recall) before dropping the raw
+  # knowledge base (searchable via memory_search) before dropping the raw
   # checkpoints. Needs the knowledge middleware enabled.
   harvest_enabled: true
   # A history DB created before incremental vacuum never gives freed space back to

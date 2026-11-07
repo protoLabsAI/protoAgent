@@ -1118,7 +1118,7 @@ def test_persona_doc_names_only_exposed_tools(monkeypatch):
     import runtime.acp_runtime as rt_mod
 
     monkeypatch.setattr("graph.config_io.read_soul", lambda: "You are Aria.")
-    narrow = rt_mod.persona_doc(_cfg(), exposed={"calculator", "memory_recall", "current_time"})
+    narrow = rt_mod.persona_doc(_cfg(), exposed={"calculator", "memory_search", "current_time"})
     for absent in ("set_goal", "schedule_task", "task_create", "notes_", "subagent"):
         assert absent not in narrow, absent
     assert "`memory_*`" in narrow and "You are Aria." in narrow
@@ -1131,9 +1131,9 @@ def test_persona_doc_names_only_exposed_tools(monkeypatch):
 
     wide = rt_mod.persona_doc(
         _cfg(),
-        exposed={"task_create", "task_list", "memory_ingest", "notes_list", "set_goal", "schedule_task", "web_search"},
+        exposed={"task_create", "task_list", "memory_save", "notes_list", "set_goal", "schedule_task", "web_search"},
     )
-    for present in ("`task_create`", "`memory_ingest`", "`notes_*`", "`set_goal`", "`schedule_task`", "IMPORTANT"):
+    for present in ("`task_create`", "`memory_save`", "`notes_*`", "`set_goal`", "`schedule_task`", "IMPORTANT"):
         assert present in wide, present
     assert "subagent" not in wide  # no task tool rides the bus — never promised
 

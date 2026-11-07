@@ -279,7 +279,7 @@ def test_list_chunks_tags_dict_rows_from_a_custom_backend(tmp_path):
     ]
 
 
-def test_memory_list_tool_renders_on_a_layered_store(tmp_path):
+def test_knowledge_search_renders_tier_handles_on_a_layered_store(tmp_path):
     import asyncio
 
     from tools.lg_tools import _build_memory_tools
@@ -290,16 +290,15 @@ def test_memory_list_tool_renders_on_a_layered_store(tmp_path):
     layered = LayeredKnowledgeStore(private, commons)
     tools = {t.name: t for t in _build_memory_tools(layered)}
 
-    listed = asyncio.run(tools["memory_list"].ainvoke({}))
-    assert "[preferences] style:" in listed and "terse replies" in listed
-    assert "deploy window is Friday" in listed
-    # memory_stats labels the tier split so the model doesn't take "private"/"commons"
-    # for domains it could memory_list; domain lines are unchanged.
-    stats = asyncio.run(tools["memory_stats"].ainvoke({}))
-    assert "Total: 2" in stats
-    assert "  tier private: 1" in stats and "  tier commons: 1" in stats
-    assert "  preferences: 1" in stats and "  general: 1" in stats
-    assert "  private: 1" not in stats.replace("tier private", "")
+    # A private hit leads with a deletable #id handle and is tagged by its collection.
+    priv = asyncio.run(tools["knowledge_search"].ainvoke({"query": "terse replies"}))
+    assert "[preferences]" in priv and "terse replies" in priv
+    assert priv.lstrip().startswith("#")
+
+    # A commons hit is marked shared (its id lives in the commons tier's own space).
+    shared = asyncio.run(tools["knowledge_search"].ainvoke({"query": "deploy window Friday"}))
+    assert "deploy window is Friday" in shared and "[general]" in shared
+    assert "commons:" in shared and "(shared)" in shared
 
 
 def test_fact_consolidation_dedups_on_a_layered_store(tmp_path):

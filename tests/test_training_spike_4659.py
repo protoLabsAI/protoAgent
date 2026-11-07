@@ -19,9 +19,9 @@ CASES = [
 @pytest.fixture
 def oracle(monkeypatch):
     """Fake only external evidence; exercise the runner's actual assertions."""
-    evidence = {"audit": [], "chunk": {"id": 1}, "teardown": []}
+    evidence = {"audit": [], "memories": [{"id": 1}], "teardown": []}
     monkeypatch.setattr(verify, "audit_entries_since", lambda _: evidence["audit"])
-    monkeypatch.setattr(verify, "find_chunk_containing", lambda *a, **kw: evidence["chunk"])
+    monkeypatch.setattr(verify, "memories_containing", lambda *a, **kw: evidence["memories"])
     monkeypatch.setattr(verify, "apply_teardown", lambda steps: evidence["teardown"].extend(steps))
     monkeypatch.setattr(runner, "_AUDIT_POLL_DEADLINE_S", 0.0)
     return evidence
@@ -59,9 +59,9 @@ def test_routing_oracle_rejects_extra_forbidden_calls_even_when_they_error(case,
 
 def test_save_probe_requires_persistence_and_cleans_up_on_failure(oracle):
     case = next(c for c in CASES if c["id"] == "route4659_save")
-    oracle["audit"] = [{"tool": "memory_ingest", "success": True}]
-    oracle["chunk"] = None
+    oracle["audit"] = [{"tool": "memory_save", "success": True}]
+    oracle["memories"] = []
     result = run_case(case)
     assert not result.passed
-    assert "no chunk containing" in result.detail
+    assert "no memory containing" in result.detail
     assert oracle["teardown"] == case["teardown"]

@@ -521,27 +521,29 @@ def test_load_skill_makes_no_absence_claim_without_a_committed_graph(tmp_path, m
     assert "## Procedure" in out
 
 
-# ── forget_memory + memory_list id surfacing (dream's prune half) ──────────────
+# ── memory_forget + memory_list id surfacing (dream's prune half) ──────────────
 
 
-def test_memory_list_surfaces_id_and_forget_removes_chunk(tmp_path):
-    ks = KnowledgeStore(db_path=str(tmp_path / "kb.db"))
-    tools = _by_name(_build_memory_tools(ks))
-    memory_ingest, memory_list, forget_memory = (tools["memory_ingest"], tools["memory_list"], tools["forget_memory"])
+def test_memory_list_surfaces_id_and_forget_removes_memory(tmp_path):
+    from knowledge.memories import MemoryStore
 
-    asyncio.run(memory_ingest.ainvoke({"content": "ephemeral fact to prune", "domain": "general"}))
+    mem = MemoryStore(db_path=str(tmp_path / "agent.db"))
+    tools = _by_name(_build_memory_tools(None, memory_store=mem))
+    memory_save, memory_list, memory_forget = (tools["memory_save"], tools["memory_list"], tools["memory_forget"])
+
+    asyncio.run(memory_save.ainvoke({"content": "ephemeral fact to prune"}))
     listed = asyncio.run(memory_list.ainvoke({}))
     assert "ephemeral fact to prune" in listed
     assert listed.lstrip().startswith("#")  # id is led with for targeting
 
     # Pull the id out of the "#<id> ..." line.
-    chunk_id = int(listed.split("#", 1)[1].split()[0])
-    out = asyncio.run(forget_memory.ainvoke({"chunk_id": chunk_id, "reason": "superseded"}))
-    assert f"#{chunk_id}" in out and "Forgot" in out
+    memory_id = int(listed.split("#", 1)[1].split()[0])
+    out = asyncio.run(memory_forget.ainvoke({"memory_id": memory_id, "reason": "superseded"}))
+    assert f"#{memory_id}" in out and "Forgot" in out
 
     after = asyncio.run(memory_list.ainvoke({}))
     assert "ephemeral fact to prune" not in after
 
     # Forgetting a non-existent id is a no-op, not an error.
-    again = asyncio.run(forget_memory.ainvoke({"chunk_id": chunk_id}))
+    again = asyncio.run(memory_forget.ainvoke({"memory_id": memory_id}))
     assert "nothing deleted" in again

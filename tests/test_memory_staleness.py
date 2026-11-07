@@ -148,14 +148,21 @@ def test_hot_memory_excludes_invalidated(tmp_path):
     assert store.get_hot_memory_entries() == []
 
 
-def test_memory_recall_excludes_invalidated(tmp_path):
-    """#1579 cited dates on recall; superseded rows must no longer appear."""
-    store = KnowledgeStore(tmp_path / "kb.db")
-    cid = store.add_chunk("the deploy day is Friday", domain="fact", source="a2a:chat-1")
-    recall = next(t for t in _build_memory_tools(store) if t.name == "memory_recall")
-    assert "Friday" in asyncio.run(recall.ainvoke({"query": "deploy day"}))
-    store.invalidate_chunk(cid)
-    assert asyncio.run(recall.ainvoke({"query": "deploy day"})) == "No matches."
+def test_memory_search_excludes_superseded(tmp_path):
+    """ADR 0125 D4: a superseded memory row must not appear in memory_search by default,
+    but ``include_superseded`` surfaces it, tagged (the #1579 staleness rule, on memories)."""
+    from knowledge.memories import MemoryStore
+
+    mem = MemoryStore(tmp_path / "agent.db")
+    old = mem.add("the deploy day is Friday", kind="fact", provenance="agent", source_session="a2a:chat-1")
+    new = mem.add("the deploy day is Monday", kind="fact", provenance="agent")
+    search = next(t for t in _build_memory_tools(None, memory_store=mem) if t.name == "memory_search")
+    assert "Friday" in asyncio.run(search.ainvoke({"query": "deploy day Friday"}))
+    with mem._write() as db:  # supersede the old row, the way D4 consolidation does
+        db.execute("UPDATE memories SET superseded_by = ? WHERE id = ?", (new, old))
+    assert "Friday" not in asyncio.run(search.ainvoke({"query": "deploy day Friday"}))
+    labelled = asyncio.run(search.ainvoke({"query": "deploy day Friday", "include_superseded": True}))
+    assert "Friday" in labelled and "[superseded]" in labelled
 
 
 # ── supersede semantics in fact consolidation ────────────────────────────────

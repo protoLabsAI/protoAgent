@@ -557,6 +557,13 @@ describe("Explore without a model", () => {
     expect(container.textContent).toContain("No model connected — you can add one any time in Settings ▸ Model.");
     await click(button(/^Finish$/));
     expect(api.testModel).not.toHaveBeenCalled();
+    expect(finish.mock.calls[0][0].subagents).toEqual({
+      researcher: {
+        enabled: true,
+        tools: ["current_time", "web_search", "fetch_url", "memory_search", "memory_list"],
+        max_turns: expect.any(Number),
+      },
+    });
     expect(finish).toHaveBeenCalledWith(expect.objectContaining({ providers: [], model: expect.objectContaining({ name: "" }) }), expect.any(String), []);
   });
 });

@@ -223,7 +223,7 @@ def _normalize_before(before: str | datetime | None) -> str | None:
 _HOT_EVENT_PREVIEW_CHARS = 160
 
 
-def _publish_hot_write(chunk_id: int, source: str | None, source_type: str | None, content: str) -> None:
+def _publish_hot_write(chunk_id: int | str, source: str | None, source_type: str | None, content: str) -> None:
     """Emit ``memory.hot_written`` on the plugin event bus (ADR 0069 D8).
 
     ``domain="hot"`` chunks are injected in front of the model EVERY turn, so a

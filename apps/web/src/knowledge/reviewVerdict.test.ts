@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { api } from "../lib/api";
 import { queryKeys } from "../lib/queries";
-import type { KnowledgeChunk } from "../lib/types";
+import type { KnowledgeChunk, MemoryHotChunk } from "../lib/types";
 import { ReviewActions, ReviewChip, resetReviewSupport, reviewStateOf } from "./ReviewVerdict";
 
 // Review verdicts (ADR 0108 D7) — the console half of the memory write lifecycle.
@@ -43,7 +43,7 @@ function chunk(over: Partial<KnowledgeChunk> = {}): KnowledgeChunk {
   };
 }
 
-function render(c: KnowledgeChunk) {
+function render(c: MemoryHotChunk) {
   act(() => {
     root.render(
       h(
@@ -85,6 +85,16 @@ describe("reviewStateOf", () => {
 });
 
 describe("ReviewActions", () => {
+  it("reviews a core memory without addressing a chunk with the same numeric id", async () => {
+    const review = vi.spyOn(api, "reviewMemoryChunk").mockResolvedValue({
+      enabled: true, id: "memory:7", review_state: "rejected",
+    });
+    render({ ...chunk(), id: "memory:7" });
+    act(() => button("reject entry memory:7")!.click());
+    await flush();
+    expect(review).toHaveBeenCalledWith("memory:7", { state: "rejected", tier: "private" });
+  });
+
   it("confirms a private pending row, sending the tier the route needs, and flips the cached chip", async () => {
     const review = vi.spyOn(api, "reviewMemoryChunk").mockResolvedValue({ enabled: true, id: 7, review_state: "confirmed" });
     const row = chunk();

@@ -419,11 +419,10 @@ SKILL_TOOL_CONTRACT = frozenset(
         "save_file_artifact",  # …and the versioned download card it registers the file as
         "show_artifact",  # daily-brief renders the brief as an HTML artifact, never chat text
         "load_skill",  # daily-brief's description tells the agent to load it first
-        "memory_recall",
-        "memory_ingest",
+        "memory_search",
+        "memory_save",
         "memory_list",
-        "memory_stats",
-        "forget_memory",  # consolidate-memory's merge/retire pass
+        "memory_forget",  # consolidate-memory's merge/retire pass
         "save_skill",  # writing-voice saves the voice profile as a skill
         "schedule_task",
         "list_schedules",

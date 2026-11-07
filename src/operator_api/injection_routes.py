@@ -41,8 +41,18 @@ def _resolve_chunk(store, chunk_id) -> dict | None:
 
 
 def _memory_item(store, chunk_id) -> dict:
-    """A hot-memory chunk → ``{id, heading, snippet, unavailable}``."""
-    row = _resolve_chunk(store, chunk_id)
+    """A chunk id or core memory handle → resolved inspector item."""
+    if str(chunk_id).startswith("memory:"):
+        from dataclasses import asdict
+        from runtime.state import STATE
+
+        try:
+            entry = STATE.memory_store.get(int(str(chunk_id).split(":")[1]))
+            row = asdict(entry) if entry else None
+        except Exception:
+            row = None
+    else:
+        row = _resolve_chunk(store, chunk_id)
     if row is None:
         return {"id": chunk_id, "heading": None, "snippet": None, "unavailable": True}
     return {
@@ -111,7 +121,8 @@ def register_injection_routes(app) -> None:
         ``session_id`` filters to one session; empty/omitted = all sessions.
         Each row: ``ts``, ``session_id``, ``digest_session_ids`` (prior-session
         digest entries injected), ``hot_chunk_ids`` / ``rag_chunk_ids``
-        (knowledge-store chunk ids), ``approx_tokens``.
+        (hot handles may be "memory:<id>"; other ids address chunks),
+        ``approx_tokens``.
         """
         import asyncio
 

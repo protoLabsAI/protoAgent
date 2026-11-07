@@ -36,7 +36,7 @@ def test_verifier_can_check_against_sources():
 
 
 def test_synthesizer_can_persist():
-    assert "memory_ingest" in SUBAGENT_REGISTRY["synthesizer"].tools
+    assert "memory_save" in SUBAGENT_REGISTRY["synthesizer"].tools
 
 
 # ── the recipe ─────────────────────────────────────────────────────────────────

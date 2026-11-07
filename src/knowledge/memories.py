@@ -1,4 +1,4 @@
-"""Core memory storage in the private agent.db (ADR 0125); no delivery readers yet."""
+"""Core memory storage, delivery and operator review in private agent.db (ADR 0125)."""
 
 from __future__ import annotations
 
@@ -187,7 +187,11 @@ class MemoryStore:
             id = int(cur.lastrowid)
             if vec is not None:
                 db.execute("INSERT INTO memory_vectors VALUES (?, ?)", (id, json.dumps(vec)))
-            return id
+        if delivery == "always":
+            from knowledge.store import _publish_hot_write
+
+            _publish_hot_write(f"memory:{id}", source_session, provenance, content)
+        return id
 
     def get(self, id: int) -> MemoryEntry | None:
         """Read a row by id, including its audit state."""
@@ -271,18 +275,66 @@ class MemoryStore:
                 )
             ]
 
-    def always_on(self, max_chars: int = 6000) -> str:
-        """Format eligible always-on memories newest first within a strict character cap."""
-        pieces = []
+    def inspect(self, limit: int = 500) -> list[MemoryEntry]:
+        """Operator listing including rejected, expired and superseded audit rows."""
+        with closing(self._connect()) as db:
+            return [
+                MemoryEntry(**dict(row))
+                for row in db.execute(
+                    "SELECT * FROM memories WHERE invalidated_at IS NULL ORDER BY created_at DESC, id DESC LIMIT ?",
+                    (limit,),
+                )
+            ]
+
+    def update(self, id: int, *, content: str, heading: str | None = None) -> bool:
+        """Edit in place without losing lifecycle or provenance metadata."""
+        vec = self._embed((heading + "\n" if heading else "") + content)
+        with self._write() as db:
+            updated = (
+                db.execute(
+                    "UPDATE memories SET content = ?, heading = ?, updated_at = ? WHERE id = ?",
+                    (content, heading, _now_iso(), id),
+                ).rowcount
+                > 0
+            )
+            if updated and vec is not None:
+                db.execute("INSERT INTO memory_vectors VALUES (?, ?)", (id, json.dumps(vec)))
+            row = db.execute("SELECT delivery, source_session FROM memories WHERE id = ?", (id,)).fetchone()
+        if updated and row["delivery"] == "always":
+            from knowledge.store import _publish_hot_write
+
+            _publish_hot_write(f"memory:{id}", row["source_session"], "operator", content)
+        return updated
+
+    def set_review_state(self, id: int, state: str) -> bool:
+        """Apply an operator review verdict, preserving the row for audit."""
+        if state not in {"pending", "confirmed", "rejected"}:
+            raise ValueError("invalid review state")
+        with self._write() as db:
+            return (
+                db.execute(
+                    "UPDATE memories SET review_state = ?, updated_at = ? WHERE id = ?",
+                    (state, _now_iso(), id),
+                ).rowcount
+                > 0
+            )
+
+    def always_on_entries(self, max_chars: int = 6000) -> list[tuple[int, str]]:
+        """Return exactly the rows rendered in the capped always-on block."""
+        entries = []
         total = 0
         for entry in self.list(delivery="always"):
             piece = (f"[{entry.heading}] " if entry.heading else "") + entry.content
-            size = len(piece) + bool(pieces)
+            size = len(piece) + bool(entries)
             if total + size > max_chars:
                 break
-            pieces.append(piece)
+            entries.append((entry.id, piece))
             total += size
-        return "\n".join(pieces)
+        return entries
+
+    def always_on(self, max_chars: int = 6000) -> str:
+        """Format eligible always-on memories within a strict character cap."""
+        return "\n".join(piece for _, piece in self.always_on_entries(max_chars))
 
     def delete(self, id: int) -> bool:
         """Hard-delete a row; triggers remove its FTS and vector entries atomically."""

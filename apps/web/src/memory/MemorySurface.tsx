@@ -232,7 +232,7 @@ function HotMemoryPanel() {
   const enabled = data?.enabled ?? true;
   const chunks = data?.chunks ?? [];
   const [pendingDelete, setPendingDelete] = useState<MemoryHotChunk | null>(null);
-  const [editingId, setEditingId] = useState<number | null>(null);
+  const [editingId, setEditingId] = useState<number | string | null>(null);
   const [draft, setDraft] = useState("");
   const invalidate = () => void qc.invalidateQueries({ queryKey: queryKeys.memoryHot });
 
@@ -248,7 +248,7 @@ function HotMemoryPanel() {
     });
 
   const del = useMutation({
-    mutationFn: (id: number) => api.deleteMemoryHot(id),
+    mutationFn: (id: number | string) => api.deleteMemoryHot(id),
     onSuccess: (r) => {
       if (r.enabled === false) storeOffToast("deleted");
       else toast({ tone: "success", title: "Memory", message: "Hot-memory entry deleted." });
@@ -258,7 +258,7 @@ function HotMemoryPanel() {
   });
 
   const save = useMutation({
-    mutationFn: ({ id, content }: { id: number; content: string }) =>
+    mutationFn: ({ id, content }: { id: number | string; content: string }) =>
       api.updateMemoryHot(id, { content }),
     onSuccess: (r) => {
       if (r.enabled === false) {
@@ -289,10 +289,9 @@ function HotMemoryPanel() {
     <>
       <div className="memory-panel-head">
         <p className="memory-panel-hint">
-          Always-on memory — the <em>newest</em> entries (roughly 100, under a small character
-          budget) are injected into every turn; older rows are backlog that no longer injects.
-          Keep it small; anything wrong or planted in the window steers the agent until it's
-          removed.
+          Saved memories and always-on knowledge pins. Only always-on entries within
+          the character budget are injected every turn; retrieved memories surface by relevance.
+          Review, edit or delete anything wrong here; rejected entries stop reaching the agent.
         </p>
         <RefreshButton onClick={() => void refetch()} busy={isFetching} />
       </div>
@@ -350,6 +349,9 @@ function HotMemoryPanel() {
                         <span title="Outside the injection window — only the newest hot entries under the character budget ride each turn; this row is kept but not currently sent to the agent.">
                           <Badge status="warning">not injecting</Badge>
                         </span>
+                      ) : null}
+                      {c.delivery_policy && c.delivery_policy !== "always" ? (
+                        <Badge status="neutral">{c.delivery_policy}</Badge>
                       ) : null}
                       <ReviewChip chunk={c} />
                     </span>

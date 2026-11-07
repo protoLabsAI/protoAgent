@@ -95,37 +95,37 @@
   },
 
   {
-    "id": "memory_ingest_intent",
+    "id": "memory_save_intent",
     "category": "tool",
     "kind": "ask",
-    "name": "Stores a stable preference → memory_ingest writes a chunk",
+    "name": "Stores a stable preference → memory_save writes a memory",
     "prompt": "Remember that I prefer protoLabs Studio standups at 9am Eastern.",
-    "expected_tools": ["memory_ingest"],
+    "expected_tools": ["memory_save"],
     "expected_patterns": [],
     "verify_kb": {
-      "find_chunk_containing": "9am"
+      "find_memory_containing": "9am"
     },
     "teardown": [
-      {"kb_delete_by_content": {"contains": "9am"}}
+      {"memory_delete_by_content": {"contains": "9am"}}
     ]
   },
   {
     "id": "memory_note_intent",
     "category": "tool",
     "kind": "ask",
-    "name": "Asks to log an event → memory_ingest writes the chunk",
+    "name": "Asks to log an event → memory_save writes the memory",
     "prompt": "Note this for me: my standup just ended, team is unblocked on the auth migration.",
-    "expected_tools": ["memory_ingest"],
+    "expected_tools": ["memory_save"],
     "expected_patterns": [],
     "verify_kb": {
-      "find_chunk_containing": "auth migration"
+      "find_memory_containing": "auth migration"
     },
     "teardown": [
-      {"kb_delete_by_content": {"contains": "auth migration"}}
+      {"memory_delete_by_content": {"contains": "auth migration"}}
     ]
   },
   {
-    "id": "memory_recall_intent",
+    "id": "memory_search_intent",
     "category": "tool",
     "kind": "ask",
     "name": "Asks about a stored fact → answered from memory (injected or recalled)",
@@ -148,24 +148,24 @@
     "kind": "ask",
     "name": "Asks for recent log entries → memory_list",
     "setup": [
-      {"kb_ingest": {"content": "called the dentist", "domain": "daily-log", "heading": "today"}},
-      {"kb_ingest": {"content": "merged the auth PR", "domain": "daily-log", "heading": "today"}}
+      {"memory_save": {"content": "called the dentist", "kind": "fact", "heading": "today"}},
+      {"memory_save": {"content": "merged the auth PR", "kind": "fact", "heading": "today"}}
     ],
     "prompt": "What did I do today? Summarize from the log.",
     "expected_tools": ["memory_list"],
     "expected_patterns": ["dentist"],
     "teardown": [
-      {"kb_delete_by_content": {"contains": "called the dentist"}},
-      {"kb_delete_by_content": {"contains": "merged the auth PR"}}
+      {"memory_delete_by_content": {"contains": "called the dentist"}},
+      {"memory_delete_by_content": {"contains": "merged the auth PR"}}
     ]
   },
   {
-    "id": "memory_stats_intent",
+    "id": "memory_counts_intent",
     "category": "tool",
     "kind": "ask",
-    "name": "Asks how much is in memory → memory_stats",
+    "name": "Asks how much is in memory → memory_list",
     "prompt": "How much have I got stored across each memory domain?",
-    "expected_tools": ["memory_stats"],
+    "expected_tools": ["memory_list"],
     "expected_patterns": []
   },
 
@@ -175,7 +175,7 @@
     "kind": "ask",
     "name": "Note an event, then recall it later in the same turn",
     "prompt": "Note this for me: 'eval-chain-flag-q9: chained log+recall test'. After saving it, search memory for that flag and quote it back.",
-    "expected_tools": ["memory_ingest", "memory_recall"],
+    "expected_tools": ["memory_save", "memory_search"],
     "expected_patterns": ["eval-chain-flag-q9"],
     "teardown": [
       {"kb_delete_by_content": {"contains": "eval-chain-flag-q9"}}
@@ -533,7 +533,7 @@
     ],
     "prompt": "Explain in two sentences what a database index does and when it hurts.",
     "expected_tools": [],
-    "forbidden_tools": ["session_search", "recall_session", "memory_recall"],
+    "forbidden_tools": ["session_search", "recall_session", "memory_search"],
     "forbidden_patterns": ["sourdough", "pannier", "invoice"],
     "teardown": [
       {"session_purge": {"session_id": "chat-eval-cont-noise-sourdough"}},
@@ -666,10 +666,10 @@
   },
   {
     "id": "route4659_inventory",
-    "name": "Knowledge inventory selects memory statistics",
+    "name": "Knowledge inventory selects memory list",
     "prompt": "How many items are in my saved knowledge, broken down by domain?",
     "expected_tools": [
-      "memory_stats"
+      "memory_list"
     ],
     "forbidden_tools": [
       "web_search"
@@ -683,14 +683,14 @@
     "name": "Durable preference selects memory writing",
     "prompt": "Remember my preference for project EVAL-ROUTE-4659-SAVE: send the weekly digest on Thursdays.",
     "expected_tools": [
-      "memory_ingest"
+      "memory_save"
     ],
     "verify_kb": {
-      "find_chunk_containing": "EVAL-ROUTE-4659-SAVE"
+      "find_memory_containing": "EVAL-ROUTE-4659-SAVE"
     },
     "teardown": [
       {
-        "kb_delete_by_content": {
+        "memory_delete_by_content": {
           "contains": "EVAL-ROUTE-4659-SAVE"
         }
       }

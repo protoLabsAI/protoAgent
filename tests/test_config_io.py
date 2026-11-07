@@ -1114,7 +1114,7 @@ def test_list_available_tools_returns_starter_set():
     # Memory + scheduler tools appear in the wizard checklist even
     # when no store / scheduler has been constructed yet — otherwise
     # the user couldn't enable them on a fresh boot.
-    assert "memory_ingest" in names
+    assert "memory_save" in names
     assert "schedule_task" in names
     assert "list_schedules" in names
     assert "cancel_schedule" in names

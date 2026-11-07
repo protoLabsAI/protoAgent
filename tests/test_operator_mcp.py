@@ -168,8 +168,8 @@ def test_profile_read_only_exposes_reads_not_writes():
     names = {t.name for t in operator_tools(_cfg_profile("read-only"))}
     assert "current_time" in names and "load_skill" in names  # reads/queries
     assert "web_search" in names
-    # writes are absent (no memory_ingest / write_note in the read-only set)
-    assert "memory_ingest" not in names and "write_note" not in names
+    # writes are absent (no memory_save / write_note in the read-only set)
+    assert "memory_save" not in names and "write_note" not in names
 
 
 def test_profile_read_only_exposes_fleet_diagnostics_when_gate_enabled():
@@ -188,7 +188,7 @@ def test_profile_read_only_exposes_fleet_diagnostics_when_gate_enabled():
     assert "fleet_diagnostics" in set(resolve_exposed_names(cfg))  # same on the API surface
     assert "current_time" in names and "load_skill" in names  # ordinary reads intact
     # r3: no lifecycle / mutation / HITL capability joins the profile alongside it
-    for mutating in ("memory_ingest", "write_note", "set_config", "edit_soul", "ask_human"):
+    for mutating in ("memory_save", "write_note", "set_config", "edit_soul", "ask_human"):
         assert mutating not in names
 
 

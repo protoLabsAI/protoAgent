@@ -59,13 +59,13 @@ def test_blank_model_is_base_and_idempotent():
 
 
 def test_default_config_preserves_registry_tools_no_drift():
-    """An un-overridden config must equal the registry default — incl. memory_ingest,
+    """An un-overridden config must equal the registry default — incl. memory_save,
     which the old hardcoded config default was missing (the drift bug)."""
     original = SUBAGENT_REGISTRY.get("researcher")
     try:
         _apply_config_subagents(LangGraphConfig())
         assert SUBAGENT_REGISTRY["researcher"].tools == RESEARCHER_CONFIG.tools
-        assert "memory_ingest" in SUBAGENT_REGISTRY["researcher"].tools
+        assert "memory_save" in SUBAGENT_REGISTRY["researcher"].tools
     finally:
         if original is not None:
             SUBAGENT_REGISTRY["researcher"] = original

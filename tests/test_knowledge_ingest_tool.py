@@ -63,7 +63,7 @@ async def test_knowledge_ingest_url_routes_through_engine(monkeypatch):
         "extract_url",
         lambda url, **kw: ExtractResult(text="article body", title="An Article", source_type="html"),
     )
-    out = await _ingest_tool(store).ainvoke({"source": "https://example.com/post", "domain": "research"})
+    out = await _ingest_tool(store).ainvoke({"source": "https://example.com/post", "collection": "research"})
 
     assert "An Article" in out and "html" in out and "research" in out
     content, kw = store.docs[0]
@@ -127,7 +127,7 @@ async def test_knowledge_ingest_empty_source_rejected():
 async def test_url_goes_background(monkeypatch):
     store = _FakeStore()
     mgr = _FakeBgMgr()
-    out = await _ingest_tool_bg(store, mgr).ainvoke({"source": "https://youtu.be/abc", "domain": "talks"})
+    out = await _ingest_tool_bg(store, mgr).ainvoke({"source": "https://youtu.be/abc", "collection": "talks"})
 
     assert "background" in out.lower() and "bg-fake123" in out
     assert len(mgr.spawned) == 1
@@ -146,7 +146,7 @@ async def test_background_work_coroutine_actually_ingests(monkeypatch):
         "extract_url",
         lambda url, **kw: ExtractResult(text="transcript body", title="Talk", source_type="youtube"),
     )
-    await _ingest_tool_bg(store, mgr).ainvoke({"source": "https://youtu.be/abc", "domain": "talks"})
+    await _ingest_tool_bg(store, mgr).ainvoke({"source": "https://youtu.be/abc", "collection": "talks"})
 
     result = await mgr.spawned[0]["work"]()  # run the detached coroutine
     assert "Talk" in result and "youtube" in result and "talks" in result

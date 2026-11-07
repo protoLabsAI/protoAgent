@@ -95,7 +95,7 @@ _INERT_BUDGET_LOGGED = False
 # bare and sheds the digest as one unit (the D6 behavior).
 DigestLoader = Callable[..., object]
 # How a caller records an injection: ``(state, memory_parts, digest_ids, hot_ids, rag_ids)``.
-InjectionRecorder = Callable[[dict, list[str], list[str], list[int], list[int]], None]
+InjectionRecorder = Callable[[dict, list[str], list[str], list[int | str], list[int]], None]
 
 
 @dataclass(frozen=True)
@@ -336,7 +336,7 @@ class ProjectedContext:
     text: str = ""
     sections: list[dict] = field(default_factory=list)
     digest_ids: list[str] = field(default_factory=list)
-    hot_ids: list[int] = field(default_factory=list)
+    hot_ids: list[int | str] = field(default_factory=list)
     rag_ids: list[int] = field(default_factory=list)
     sources: list[str] = field(default_factory=list)
     budget_chars: int | None = None
@@ -431,21 +431,14 @@ def compose_projected_context(
         if not digest:
             digest_entries, digest_ids = [], []
 
-    # 2. Always-on memory — delivery_policy="always" (ADR 0108 D6; every
-    #    domain="hot" row carries it). Read per turn (not cached) so a
-    #    freshly-added always-on fact is seen immediately.
+    # 2. Always-on memory — delivery="always" (ADR 0125 D2). After the P2 migration every
+    #    hot row lives in the core MemoryStore (STATE.memory_store), so read it there when
+    #    present — a migrated domain="hot" chunk no longer lives in `chunks` and would
+    #    otherwise vanish from the prompt. Read per turn (not cached) so a freshly-added
+    #    always-on fact is seen immediately. (P2-F splits the rest of this projection.)
     hot, hot_ids = "", []
-    if not incognito and knowledge_store is not None and hasattr(knowledge_store, "get_hot_memory"):
-        try:
-            if hasattr(knowledge_store, "get_hot_memory_entries"):
-                entries = knowledge_store.get_hot_memory_entries()
-                hot_ids = [cid for cid, _ in entries]
-                hot = "\n".join(piece for _, piece in entries)
-            else:  # custom backend without the id-attributed reader
-                hot = knowledge_store.get_hot_memory()
-        except Exception as exc:  # noqa: BLE001 - never break the loop on memory
-            log.debug("[projection] hot memory load failed: %s", exc)
-            hot, hot_ids = "", []
+    if not incognito:
+        hot, hot_ids = _always_on_memory(knowledge_store)
 
     # Always-on skill index (progressive disclosure, ADR 0060) — built before the RAG
     # search, the order the native composer always had (same side effects, same order).
@@ -524,7 +517,7 @@ class _Candidates:
     # loader, in which case the budget sheds the digest as one unit.
     digest_entries: list
     hot: str
-    hot_ids: list[int]
+    hot_ids: list[int | str]
     results: list[dict]  # ranked best-first — the budget pops from the END
     skill_block: str
     skill_listed: int
@@ -540,7 +533,7 @@ class _Delivered:
     sections: list[dict]
     memory_parts: list[str]
     digest_ids: list[str]
-    hot_ids: list[int]
+    hot_ids: list[int | str]
     rag_ids: list[int]
     sources: list[str]
     projected: ProjectedContext = field(default_factory=ProjectedContext)
@@ -895,6 +888,48 @@ def _load_digest(
         return "", [], []
 
 
+def _always_on_memory(knowledge_store, *, strict: bool = False) -> tuple[str, list[int | str]]:
+    """Combine core memories and remaining backend pins with unambiguous audit handles.
+
+    Integer handles retain their historical chunks meaning; memory:<id> handles
+    address the core store. Both readers share the existing 6000-character ceiling; ids name only rendered rows.
+    """
+    from runtime.state import STATE
+
+    candidates = []
+    memory_store = getattr(STATE, "memory_store", None)
+    if memory_store is not None:
+        try:
+            candidates.extend((f"memory:{mid}", piece) for mid, piece in memory_store.always_on_entries())
+        except Exception:
+            if strict:
+                raise
+            log.debug("[projection] memory-store always-on load failed", exc_info=True)
+    if knowledge_store is not None:
+        try:
+            if hasattr(knowledge_store, "get_hot_memory_entries"):
+                candidates.extend(knowledge_store.get_hot_memory_entries())
+            elif hasattr(knowledge_store, "get_hot_memory"):
+                candidates.append((None, knowledge_store.get_hot_memory()))
+        except Exception:
+            if strict:
+                raise
+            log.debug("[projection] hot memory load failed", exc_info=True)
+    pieces, ids = [], []
+    total = 0
+    for handle, piece in candidates:
+        if not piece:
+            continue
+        size = len(piece) + bool(pieces)
+        if total + size > 6000:
+            break
+        pieces.append(piece)
+        total += size
+        if handle is not None:
+            ids.append(handle)
+    return "\n".join(pieces), ids
+
+
 def search_scoped(knowledge_store, query: str, opts: ProjectionOptions) -> list[dict]:
     """The auto-inject RAG search, namespace-scoped when configured (ADR 0069
     D3a) and deliverable-only (ADR 0108 D6 — rejected and expired rows never
@@ -1236,7 +1271,7 @@ def record_injection(
     state: dict,
     memory_parts: list[str],
     digest_ids: list[str],
-    hot_ids: list[int],
+    hot_ids: list[int | str],
     rag_ids: list[int],
 ) -> None:
     """Append this model call's injected-memory row to the per-instance

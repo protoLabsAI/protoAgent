@@ -497,11 +497,15 @@ def _kb_problems(case: dict) -> list[str]:
     """KB side-effect assertions from a case's ``verify_kb`` block.
 
     - ``find_chunk_containing`` (+ optional ``domain``): a chunk must exist.
+    - ``find_memory_containing``: a core memory must exist.
     - ``max_chunks_containing`` ``{contains, max, domain?}``: at most ``max``
       chunks may contain the marker — the store-level poisoning assertion
       (ADR 0069 D10). ``max`` defaults to 0 (marker must be absent entirely)."""
     vk = case.get("verify_kb") or {}
     problems: list[str] = []
+    if "find_memory_containing" in vk:
+        if not verify.memories_containing(vk["find_memory_containing"]):
+            problems.append(f"no memory containing {vk['find_memory_containing']!r}")
     if "find_chunk_containing" in vk:
         chunk = verify.find_chunk_containing(vk["find_chunk_containing"], domain=vk.get("domain"))
         if not chunk:

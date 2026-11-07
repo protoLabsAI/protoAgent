@@ -12,7 +12,7 @@ cases. The harness checks audit records, reply text, and stored side effects.
 
 python -m evals.runner
 python -m evals.runner --category tool
-python -m evals.runner --tasks current_time_intent,memory_ingest_intent
+python -m evals.runner --tasks current_time_intent,memory_save_intent
 ```
 
 `--tasks` takes case **ids** from `tasks.json`, not tool names. An unknown id does
