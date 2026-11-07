@@ -31,6 +31,38 @@ from tools.session import _session_id_from
 
 logger = logging.getLogger(__name__)
 
+# Subagent tool-list compatibility only; remove once fleet plugins and configs
+# have moved over (tracked on #4555). Never register these as tool aliases.
+_SUBAGENT_TOOL_NAME_MIGRATIONS = {
+    "memory_ingest": "memory_save",
+    "memory_recall": "memory_search",
+    "forget_memory": "memory_forget",
+    "memory_stats": "memory_list",
+}
+_SUBAGENT_TOOL_WARNINGS: set[tuple[str, str, str]] = set()
+
+
+def _subagent_tool_warning(subagent: str, name: str, kind: str, message: str, *args) -> None:
+    key = (subagent, name, kind)
+    if key not in _SUBAGENT_TOOL_WARNINGS:
+        _SUBAGENT_TOOL_WARNINGS.add(key)
+        logger.warning(message, subagent, name, *args)
+
+
+def _migrated_subagent_tool_names(sub_config) -> list[str]:
+    names = []
+    for name in sub_config.tools or []:
+        replacement = _SUBAGENT_TOOL_NAME_MIGRATIONS.get(name)
+        if replacement:
+            _subagent_tool_warning(
+                sub_config.name, name, "legacy",
+                "[subagent] '%s' lists legacy tool '%s'; using '%s'. "
+                "Update the source config or plugin tools list.",
+                replacement,
+            )
+        names.append(replacement or name)
+    return list(dict.fromkeys(names))
+
 
 def _model_label(model) -> str:
     """A human-readable name for a chat-model instance (gateway clients expose
@@ -701,24 +733,27 @@ def _subagent_tools(sub_config, tool_map: dict) -> list:
             sub_config.name,
             blocked,
         )
-    return [tool_map[name] for name in sub_config.tools if name in tool_map and name not in SUBAGENT_DENIED_TOOLS]
+    resolved = []
+    for name in _migrated_subagent_tool_names(sub_config):
+        if name in SUBAGENT_DENIED_TOOLS:
+            continue
+        if name not in tool_map:
+            _subagent_tool_warning(
+                sub_config.name, name, "missing",
+                "[subagent] '%s' allowlisted tool '%s' is not bound on this host; skipping it.",
+            )
+            continue
+        resolved.append(tool_map[name])
+    return resolved
 
 
 def _effective_subagent_tools(config, sub_config, tool_map: dict) -> list:
     """Allowlist first, then inherited reads, with policy applied to the final set."""
-    import logging
     from dataclasses import replace
 
     from graph.tool_access import inherited_read_tools
 
-    missing = [name for name in sub_config.tools or [] if name not in tool_map]
-    if missing:
-        logging.getLogger(__name__).warning(
-            "[subagent] '%s' allowlisted tool(s) %s are not bound on this host",
-            sub_config.name,
-            missing,
-        )
-    names = list(sub_config.tools or [])
+    names = _migrated_subagent_tool_names(sub_config)
     if names and getattr(sub_config, "inherit_read_tools", True):
         names.extend(t.name for t in inherited_read_tools(tool_map.values(), config))
     effective = replace(sub_config, tools=list(dict.fromkeys(names)))
@@ -728,7 +763,7 @@ def _effective_subagent_tools(config, sub_config, tool_map: dict) -> list:
 def _subagent_tool_names(sub_config, resolvable_names, *, config=None, lead_tools=()) -> list[str]:
     """Resolve detached names, retaining explicit grants to held tools."""
     names = {str(n) for n in resolvable_names}
-    explicit = [n for n in (sub_config.tools or []) if n in names and n not in SUBAGENT_DENIED_TOOLS]
+    explicit = [n for n in _migrated_subagent_tool_names(sub_config) if n in names and n not in SUBAGENT_DENIED_TOOLS]
     inherited = _effective_subagent_tools(config, sub_config, {t.name: t for t in lead_tools})
     combined = dict.fromkeys([*explicit, *(t.name for t in inherited if getattr(t, "name", None))])
     return list(_policy_tool_map(config, sub_config.name, combined))
