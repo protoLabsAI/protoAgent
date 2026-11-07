@@ -130,10 +130,10 @@ When the DB or one session passes `alert_db_mb` / `alert_thread_mb`, the console
 banners it. To reclaim an already-bloated DB, run `protoagent checkpoint compact`, which
 is a dry run until you add `--apply`.
 
-**Harvest to knowledge** (`harvest_enabled`, on): when the pruner ages a session
-out, it's first summarized into the knowledge base (`domain: conversation`, by
-the cheap aux model) and *then* its raw checkpoints are dropped. So past
-conversations stay searchable via `memory_recall` while the bulky raw history is
+**Harvest to history** (`harvest_enabled`, on): when the pruner ages a session
+out, it's first summarized into the `history` table by the cheap aux model and
+*then* its raw checkpoints are dropped. Past conversations stay searchable via
+`session_search` and readable via `recall_session` while the bulky raw history is
 reclaimed — signal kept, space freed. Needs the knowledge middleware enabled. An
 explicit delete (the chat tab's trash button, `DELETE /api/chat/sessions/{id}`)
 harvests only when the dialog's Harvest switch is on, whatever this setting says.
@@ -148,7 +148,9 @@ dialog can forget those too; see
 - **Interruptible turns** — A2A `tasks/cancel` + SSE disconnect stop a run
   cleanly without corrupting history.
 - **Search-don't-load memory** — `KnowledgeMiddleware` retrieves top-k relevant
-  memory rather than replaying full history into every prompt.
+  memory and knowledge under separate budgets rather than replaying full history
+  into every prompt. Use `memory_search` for durable facts and preferences,
+  `knowledge_search` for ingested documents, and history tools for past conversations.
 - **Self-authored skills** — the agent distills proven workflows into reusable
   `SKILL.md` skills (`/distill`), indexed in FTS5 and recalled into later prompts
   (the "closed learning loop").

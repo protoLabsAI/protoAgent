@@ -295,7 +295,7 @@ this change does not touch launchd or any scheduler.
 ```
 prompt → A2A → audit log         (1) tools fired with expected outcome
             → reply text         (2) substrings present in reply
-            → KB chunks table    (3) side effects landed correctly
+            → memories / chunks  (3) side effects landed correctly
 ```
 
 A case passes only when every configured assertion holds. Most cases
@@ -305,15 +305,16 @@ to model paraphrasing and miss hallucinated tool results entirely.
 ### Why side-effect verification beats text-only
 
 A model can produce "Logged: ..." in its reply without actually
-calling `memory_ingest`. Substring matching passes, the DB stays empty,
-and the bug ships. Reading `audit.jsonl` and the `chunks` table
-afterward catches it.
+calling `memory_save`. Substring matching passes, the DB stays empty,
+and the bug ships. Reading `audit.jsonl` and the `memories` table
+afterward catches it. Memory checks read `memories`; document checks read
+`chunks`, the knowledge store searched by `knowledge_search`.
 
 ## The shape of a case
 
 A tool-selection case asks for work the tool is actually needed for. A model answers
 "17 × 23 + 1" in its head (correctly), so that case measured nothing; and a fact the
-runtime already injects into the prompt (ADR 0069) needs no `memory_recall` call, so
+runtime already injects into the prompt (ADR 0069) needs no `memory_search` call, so
 such a case asserts the answer, not the path.
 
 ```json
@@ -516,7 +517,7 @@ all". These probes exercise the whole store-and-inject loop, so — like the oth
 `ask`/`workflow` cases — they need a **live gateway** and run under the same
 `PROTOAGENT_INSTANCE` scoping (the runner's `verify` reads and the agent write
 resolve to the same per-instance knowledge DB — the same requirement the
-`memory_ingest` cases already rely on).
+`memory_save` cases already rely on).
 
 ## Cross-session continuity — and whether the digest earns its keep
 
@@ -575,7 +576,7 @@ side — which is the shape the #3186 default decision is meant to rest on.
 ## Prompt rule
 
 **The tool name never appears in the prompt.** Every prompt must be
-plausibly typed by a real user. "Use `memory_ingest` to record..." tests
+plausibly typed by a real user. "Use `memory_save` to record..." tests
 instruction-following, not tool selection. If the agent needs to
 infer the tool from intent, that *is* the test.
 
@@ -625,9 +626,9 @@ The starter `tasks.json` covers:
 - Agent card discovery (name, skill count, `cost-v1` extension)
 - Bearer auth gating
 - Each shipped tool fires from a plausible operator prompt
-- Memory ingest → recall round-trip
+- Memory save → search round-trip
 - KB-driven middleware injection (no tool call needed)
-- A chained two-tool case (`memory_ingest` then `memory_recall`)
+- A chained two-tool case (`memory_save` then `memory_search`)
 
 When you add a tool, add at least one case for it. When you add a
 skill to the agent card, extend the `card_discovery` case to assert
