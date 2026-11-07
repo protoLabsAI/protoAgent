@@ -604,11 +604,12 @@ def _render_knowledge(results: list[dict]) -> tuple[str, list[int]]:
     for r in results:
         # Cite each hit as ``[collection · source]`` (ADR 0125 P2-F): the
         # knowledge COLLECTION (its source domain, not the physical table —
-        # always "chunks", no signal) and the write-path SOURCE. An imported
+        # always "chunks", no signal) and the source URL/path, falling back to
+        # the write path for legacy rows without a source. An imported
         # collection like `claude-import` reads back as inherited reference, so
         # the model stops narrating another codebase's history as its own (#2161).
         collection = r.get("domain") or "memory"
-        source = r.get("source_type") or "unknown"
+        source = r.get("source") or r.get("source_type") or "unknown"
         line = f"- [{collection} · {source}] {r['preview']}"
         stored = str(r.get("created_at") or "")[:10]
         meta = [f"stored {stored}"] if stored else []
@@ -760,6 +761,11 @@ def _fit_to_budget(c: _Candidates, opts: ProjectionOptions, skills_index, summar
     #    spend the other's slice even when the other is empty.
     kn_budget = None if budget is None else int(budget * opts.knowledge_budget_pct / 100)
     mem_budget = None if budget is None else int(budget * opts.memory_budget_pct / 100)
+    if mem_budget is not None and c.hot:
+        # Always-on rows retain their existing cap and never-shed guarantee,
+        # but spend the memory slice before recalled rows. Otherwise the two
+        # memory sections together could consume knowledge's reserved space.
+        mem_budget = max(0, mem_budget - len(f"[Always-on memory:]\n{c.hot}\n\n"))
     if kn_budget is not None and c.results:
         before_n, before_render = len(c.results), len(_render_knowledge(c.results)[0])
         while c.results and len(_render_knowledge(c.results)[0]) > kn_budget:
