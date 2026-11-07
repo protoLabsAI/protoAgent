@@ -146,6 +146,15 @@ export const queryKeys = {
     return ns("memory", "injections");
   },
   memoryInjectionDetail: (id: number) => ns("memory", "injections", "detail", id),
+  // Review pass (ADR 0125 P3) — the operator's one-time curation of migrated memories
+  // and the shared-profile candidates. Both sit under `memory`, so the subtree
+  // invalidate above refreshes them too.
+  get memoryReview() {
+    return ns("memory", "review");
+  },
+  get memoryProfileCandidates() {
+    return ns("memory", "profile-candidates");
+  },
   // History view (ADR 0125 D6) — the conversation `history` table, its own tab.
   get memoryHistory() {
     return ns("memory", "history");

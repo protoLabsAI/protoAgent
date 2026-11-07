@@ -2073,6 +2073,43 @@ export const MEMORY_INJECTION_DETAILS = {
   },
 };
 
+// Review pass (ADR 0125 P3 D6/D7) — the core MemoryStore rows the operator curates in
+// the Review tab. Migrated rows carry `legacy_domain` (the old chunk domain); one row is
+// superseded (shown only with include_superseded, and offers Revert). Mutated by the
+// review specs, so reset via POST /api/__test__/memory/reset. Ids are disjoint from the
+// hot fixtures (31–33) so the shared review POST route can't confuse the two stores.
+const REVIEW_ROW = (over) => ({
+  id: 0, kind: "fact", subject: null, heading: null, content: "", delivery: "retrieved",
+  review_state: "pending", provenance: "agent", scope: null, legacy_domain: null,
+  valid_from: null, superseded_by: null, expires_at: null, source_session: null,
+  thread_id: null, invalidated_at: null, invalidation_reason: null,
+  created_at: "2026-06-29T10:00:00+00:00", updated_at: "2026-06-29T10:00:00+00:00", ...over,
+});
+export const MEMORY_REVIEW = [
+  REVIEW_ROW({ id: 201, kind: "profile", subject: "time zone", heading: "Operator timezone",
+    content: "The operator works in US/Pacific.", provenance: "extracted", legacy_domain: "preferences",
+    source_session: "chat-1750000000000-abc123" }),
+  REVIEW_ROW({ id: 202, kind: "fact", content: "The staging deploy runs at 2am.",
+    provenance: "agent", legacy_domain: "hot" }),
+  REVIEW_ROW({ id: 203, kind: "standing", subject: "tone", content: "Prefer terse replies.",
+    provenance: "operator", legacy_domain: "preferences", review_state: "confirmed" }),
+  // A superseded row (retired by an automatic subject consolidation): hidden until
+  // include_superseded, then it offers Revert.
+  REVIEW_ROW({ id: 204, kind: "fact", content: "An old note that got consolidated.",
+    provenance: "agent", legacy_domain: "hot", superseded_by: 202 }),
+  REVIEW_ROW({ id: 205, kind: "decision", content: "We chose SQLite over Postgres.",
+    provenance: "agent", review_state: "rejected" }),
+];
+
+// Shared-profile candidates (GET /api/memory/profile-candidates) — the newest profile
+// memory per subject, each flagged whether a live shared row already covers it.
+export const MEMORY_PROFILE_CANDIDATES = [
+  REVIEW_ROW({ id: 301, kind: "profile", subject: "time zone",
+    content: "The operator is based in Portland, Oregon.", provenance: "extracted", already_shared: false }),
+  REVIEW_ROW({ id: 302, kind: "profile", subject: "name",
+    content: "The operator is Jordan.", provenance: "agent", already_shared: true }),
+];
+
 // History view (ADR 0125 D6) — the conversation `history` table surfaced in the
 // Memory inspector's History tab: a per-session rollup (surface / span / kind counts),
 // search hits, the full entries, and the memory/history size split. Mutated by the

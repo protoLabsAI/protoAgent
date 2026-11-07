@@ -176,3 +176,61 @@
 .stage-panel.memory-panel {
   grid-template-rows: auto auto minmax(0, 1fr);
 }
+
+/* Review pass (ADR 0125 P3) — filter chips, paging, the candidates sub-section. */
+.memory-filters {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem 0.75rem;
+  margin-bottom: 0.6rem;
+}
+
+.memory-filter-group {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.3rem;
+}
+
+.memory-filter-label {
+  font-size: var(--pl-font-size-xs);
+  color: var(--pl-color-fg-muted);
+  margin-right: 0.1rem;
+}
+
+.memory-chip {
+  font-size: var(--pl-font-size-xs);
+  padding: 0.15rem 0.5rem;
+  border-radius: var(--pl-radius-pill);
+  border: 1px solid var(--pl-color-border);
+  background: var(--pl-color-bg-subtle);
+  color: var(--pl-color-fg);
+  cursor: pointer;
+}
+
+.memory-chip--on {
+  background: var(--pl-color-accent);
+  border-color: var(--pl-color-accent);
+  color: var(--pl-color-accent-fg);
+  font-weight: 600;
+}
+
+.memory-paging {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-top: 0.6rem;
+}
+
+.memory-review-sub {
+  margin-top: 1.25rem;
+  padding-top: 1rem;
+  border-top: 1px solid var(--pl-color-border);
+}
+
+.memory-review-sub-title {
+  margin: 0 0 0.3rem;
+  font-size: var(--pl-font-size-sm);
+  font-weight: 600;
+}

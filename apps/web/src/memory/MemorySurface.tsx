@@ -5,7 +5,7 @@ import { Input, Textarea } from "@protolabsai/ui/forms";
 import { PanelHeader, Tabs } from "@protolabsai/ui/navigation";
 import { ConfirmDialog, Dialog, Tooltip, useToast } from "@protolabsai/ui/overlays";
 import { Badge, Button, Empty } from "@protolabsai/ui/primitives";
-import { Archive, Flame, History, Pencil, Syringe, Trash2 } from "lucide-react";
+import { Archive, ClipboardCheck, Flame, History, Pencil, Syringe, Trash2 } from "lucide-react";
 
 import { RefreshButton } from "../app/ui-kit";
 import { openDocument } from "../docviewer";
@@ -25,6 +25,7 @@ import { ReviewActions, ReviewChip } from "../knowledge/ReviewVerdict";
 import { DIGEST_POLICY_HINT, sessionBadge } from "./digestPolicy";
 import { HistoryPanel } from "./HistoryPanel";
 import { injectionSummary } from "./injectionSummary";
+import { ReviewPassPanel } from "./ReviewPassPanel";
 import "./memory.css";
 
 // Memory inspector (ADR 0069 D7) — the audit surface over the memory DELIVERY
@@ -35,7 +36,7 @@ import "./memory.css";
 // polish. Distinct from Knowledge → Store (the whole KB): this is only what
 // auto-injects.
 
-type MemoryTab = "sessions" | "hot" | "injections" | "history";
+type MemoryTab = "sessions" | "hot" | "injections" | "history" | "review";
 
 const TABS: { id: MemoryTab; label: string; icon: React.ReactNode }[] = [
   { id: "sessions", label: "Sessions", icon: <History size={15} /> },
@@ -45,6 +46,10 @@ const TABS: { id: MemoryTab; label: string; icon: React.ReactNode }[] = [
   // summaries and background-job reports. Visible only here; the Knowledge browser lists
   // chunks only.
   { id: "history", label: "History", icon: <Archive size={15} /> },
+  // Review (ADR 0125 P3 D6/D7): the operator's one-time curation of the migrated core
+  // memories — keep/edit/forget/reject/revert, plus shared-profile promotion. Nothing
+  // promotes automatically; it all happens here.
+  { id: "review", label: "Review", icon: <ClipboardCheck size={15} /> },
 ];
 
 export function MemorySurface() {
@@ -78,8 +83,10 @@ export function MemorySurface() {
           <HotMemoryPanel />
         ) : tab === "injections" ? (
           <InjectionsPanel filter={injectionFilter} setFilter={setInjectionFilter} />
-        ) : (
+        ) : tab === "history" ? (
           <HistoryPanel />
+        ) : (
+          <ReviewPassPanel />
         )}
       </div>
     </section>

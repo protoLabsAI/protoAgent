@@ -1849,6 +1849,37 @@ export type ReviewState = "confirmed" | "pending" | "rejected";
 // draws the "not injecting" badge on an explicit `false`.
 export type MemoryHotChunk = Omit<KnowledgeChunk, "id"> & { id: number | string; injecting?: boolean; store?: string };
 
+// One core-memory row from the review-pass listing (GET /api/memory/memories,
+// ADR 0125 P3) — the MemoryStore `MemoryEntry` serialized as JSON. The review tab
+// is the operator's one-time pass over migrated/agent-written memories: keep, edit,
+// forget, reject, and revert a wrong supersession. `legacy_domain` is set on rows the
+// P2 boot migration carried over (the old chunk domain); `superseded_by` points at the
+// row that retired this one (a subject consolidation), which the Revert action undoes.
+// `already_shared` rides ONLY on profile-candidate rows (GET /api/memory/profile-candidates).
+export type MemoryKind = "profile" | "standing" | "fact" | "decision";
+export type MemoryRecord = {
+  id: number;
+  kind: MemoryKind | string;
+  subject: string | null;
+  heading: string | null;
+  content: string;
+  delivery: string;
+  review_state: ReviewState | string;
+  provenance: string;
+  scope: string | null;
+  legacy_domain: string | null;
+  valid_from: string | null;
+  superseded_by: number | null;
+  expires_at: string | null;
+  source_session: string | null;
+  thread_id: string | null;
+  invalidated_at: string | null;
+  invalidation_reason: string | null;
+  created_at: string;
+  updated_at: string;
+  already_shared?: boolean;
+};
+
 // Memory inspector (ADR 0069 D7) — the delivery-layer audit surface.
 
 // How the <prior_sessions> digest is chosen each turn (`context.prior_sessions`,
