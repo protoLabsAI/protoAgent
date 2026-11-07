@@ -25,7 +25,7 @@ from typing import Any
 
 from deck import hub as deckhub
 from deck.data import PRESENCE_GLYPH as _PRESENCE_GLYPH
-from deck.data import presence_of  # one definition of the console's presence words (deck.data)
+from deck.data import presence_of, slug_of  # the console's presence words + routing slug (deck.data)
 from graph.fleet import friction_cli, supervisor
 
 __all__ = ["presence_of", "run_deck_cli", "run_fleet_cli"]
@@ -65,6 +65,19 @@ def _common(p: argparse.ArgumentParser, *, top: bool) -> None:
     )
 
 
+def _plugins_flag(p: argparse.ArgumentParser) -> None:
+    """``--plugins`` on ls/status only (protoAgent#4781): read each RUNNING member's loaded
+    plugin ids + versions through the hub, so a triager can check "fixed in plugin vX"
+    against what the agent actually runs. Omitted from ``_common`` so the default roster
+    output is untouched and the extra per-member reads happen only when asked."""
+    p.add_argument(
+        "--plugins",
+        dest="plugins",
+        action="store_true",
+        help="also read each running member's loaded plugin ids + versions (one extra read per member)",
+    )
+
+
 def _build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="protoagent fleet",
@@ -86,8 +99,10 @@ def _build_parser() -> argparse.ArgumentParser:
     pd.add_argument("names", nargs="*")
     _common(pd, top=False)
     pl = sub.add_parser("ls", help="list members with live status")
+    _plugins_flag(pl)
     _common(pl, top=False)
     ps = sub.add_parser("status", help="alias for ls")
+    _plugins_flag(ps)
     _common(ps, top=False)
     # ── manage (#3471): the same operations the deck and the console drive ──
     pn = sub.add_parser("new", help="create a member — blank, or from an archetype / bundle — and start it")
@@ -240,7 +255,72 @@ def _hub_label(conn: deckhub.Connection, roster: list[dict]) -> str:
     return f"live · {conn.client.url} · {name}{f' v{ver}' if ver else ''} · via {via}"
 
 
-def _print_rows(rows: list[dict], host_version: str) -> None:
+# ── loaded plugins per member (protoAgent#4781) ──
+# Read each RUNNING member's loaded plugin ids + versions through the hub's per-member
+# proxy, the same path `fleet friction` reads each ledger through: `/api/runtime/status`
+# already lists every plugin with its id, version and a `loaded` flag (ADR 0026/#1719),
+# so there is no new route to add. A stopped or unreachable member yields `plugins: null`
+# plus a reason — an agent we could not read is not an agent with no plugins.
+
+_PLUGIN_READABLE = ("host", "online", "remote")  # presence words that can answer a read
+
+
+def _plugins_short(err: Exception) -> str:
+    """A one-line reason a member's plugins could not be read (mirrors friction_cli._short)."""
+    if isinstance(err, deckhub.MemberUnauthorized):
+        return "rejected the credential the hub attached"
+    if isinstance(err, deckhub.HubRequestError):
+        # A member on a core that predates the runtime-status route has nothing to read.
+        return "no runtime status route (member predates it)" if err.status == 404 else str(err.detail)
+    return str(err)
+
+
+def _member_plugins(client: Any, slug: str) -> list[dict]:
+    """The LOADED plugins one member actually runs, as sorted ``{id, version}`` rows. Reads
+    ``/api/runtime/status`` (the plugin meta list carries id/version/loaded). Raises HubError."""
+    body = client.member_get(slug, "/api/runtime/status")
+    if not isinstance(body, dict):
+        raise deckhub.HubError(client.url, f"{slug}: runtime status answered with something unreadable")
+    loaded = [p for p in (body.get("plugins") or []) if isinstance(p, dict) and p.get("loaded") and p.get("id")]
+    return sorted(
+        ({"id": str(p.get("id")), "version": str(p.get("version") or "")} for p in loaded),
+        key=lambda p: p["id"],
+    )
+
+
+def _attach_plugins(client: Any, roster: list[dict]) -> list[dict]:
+    """Copies of the roster rows with a ``plugins`` key added: a sorted ``{id, version}``
+    list for each RUNNING member read through the hub, or ``null`` + ``plugins_error`` for a
+    stopped/unreachable member or one that failed the read. Never mutates the input rows, so
+    the default (no ``--plugins``) roster output stays byte-identical."""
+    out: list[dict] = []
+    for row in roster:
+        new = dict(row)
+        pres = presence_of(row)
+        if pres not in _PLUGIN_READABLE:
+            new["plugins"] = None
+            new["plugins_error"] = pres  # `stopped` / `unreachable` — a reason, not an empty list
+        else:
+            try:
+                new["plugins"] = _member_plugins(client, slug_of(row))
+            except deckhub.HubError as exc:
+                new["plugins"] = None
+                new["plugins_error"] = _plugins_short(exc)
+        out.append(new)
+    return out
+
+
+def _plugins_line(a: dict) -> str:
+    """The indented ``plugins:`` sub-line for one member row carrying a ``plugins`` key."""
+    plugins = a.get("plugins")
+    if plugins is None:
+        return f"    plugins: null ({a.get('plugins_error', 'not read')})"
+    if not plugins:
+        return "    plugins: (none loaded)"
+    return "    plugins: " + ", ".join(f"{p['id']}@{p['version'] or '?'}" for p in plugins)
+
+
+def _print_rows(rows: list[dict], host_version: str, *, show_plugins: bool = False) -> None:
     width = max((len(str(a.get("label") or a.get("name") or "")) for a in rows), default=8)
     for a in rows:
         pres = presence_of(a)
@@ -259,19 +339,25 @@ def _print_rows(rows: list[dict], host_version: str) -> None:
         if a.get("bundle"):
             extra.append(f"[{a['bundle']}]")
         print(f"  {glyph} {name:<{width}}  {port:<7} {pres:<11} {'  '.join(extra)}".rstrip())
+        if show_plugins:
+            print(_plugins_line(a))
 
 
 def _cmd_ls(args: argparse.Namespace) -> int:
+    want_plugins = bool(getattr(args, "plugins", False))
     conn = _open_hub(args)
     if conn is not None:
         roster = conn.roster  # the read that opened the connection — no second GET
+        # Reading each member's loaded plugins (--plugins) needs the live client, so do it
+        # BEFORE closing the connection; without the flag the roster is untouched.
+        rows = _attach_plugins(conn.client, roster) if want_plugins else roster
         conn.client.close()
         if args.as_json:
-            _emit({"mode": "live", "hub": conn.client.url, "via": conn.candidate.source, "agents": roster})
+            _emit({"mode": "live", "hub": conn.client.url, "via": conn.candidate.source, "agents": rows})
             return 0
         print(f"protoagent fleet · {_hub_label(conn, roster)}")
         host_version = str(next((a.get("version") for a in roster if a.get("host")), "") or "")
-        _print_rows(roster, host_version)
+        _print_rows(rows, host_version, show_plugins=want_plugins)
         return 0
 
     # offline — the supervisor's disk view, minus its synthesized host row (that row is
@@ -281,6 +367,10 @@ def _cmd_ls(args: argparse.Namespace) -> int:
 
     fleet_json = manager.workspaces_root() / "fleet.json"
     rows = [a for a in supervisor.status() if not a.get("host")]
+    # Offline there is no hub to read loaded plugins through: every member reports null with
+    # that reason (still never an empty list), so --plugins behaves consistently in both modes.
+    if want_plugins:
+        rows = [{**a, "plugins": None, "plugins_error": "offline (no hub to read through)"} for a in rows]
     if args.as_json:
         _emit(
             {
@@ -295,7 +385,7 @@ def _cmd_ls(args: argparse.Namespace) -> int:
     if not rows:
         print("  (no workspaces here — protoagent workspace new <name>; or start a hub: protoagent up)")
         return 0
-    _print_rows(rows, "")
+    _print_rows(rows, "", show_plugins=want_plugins)
     return 0
 
 
