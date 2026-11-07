@@ -351,7 +351,7 @@ def test_core_memories_inspector_crud_review(tmp_path, monkeypatch):
     with TestClient(app) as client:
         rows = client.get("/api/memory/hot").json()["chunks"]
         ids = {c["id"] for c in rows}
-        # The hot listing is the ALWAYS-ON rows only (ADR 0125 P2 — list(delivery='always')):
+        # The hot listing is the ALWAYS-ON rows only (ADR 0125 P2):
         # the knowledge hot chunk and the always memory, never the retrieved or invalidated ones.
         assert ids == {cid, f"memory:{mid}"}
         assert f"memory:{retrieved}" not in ids and f"memory:{hidden}" not in ids
@@ -361,11 +361,12 @@ def test_core_memories_inspector_crud_review(tmp_path, monkeypatch):
         assert mem.search("edited")[0].id == mid
         assert not mem.search("agent")
         assert mem.get(mid).review_state == "confirmed"  # an operator edit confirms a pending pin
-        # Rejecting an always-on pin stops it delivering AND drops it from the listing;
-        # confirming it brings it back, injecting.
+        # Rejecting stops delivery but leaves the pin visible for re-opening;
+        # confirming it resumes injection.
         assert client.post(f"/api/memory/chunks/{handle}/review", json={"state": "rejected"}).status_code == 200
         assert "edited pin" not in _always_on_memory(ks)[0]
-        assert handle not in {c["id"] for c in client.get("/api/memory/hot").json()["chunks"]}
+        row = next(c for c in client.get("/api/memory/hot").json()["chunks"] if c["id"] == handle)
+        assert row["review_state"] == "rejected" and row["injecting"] is False
         assert client.post(f"/api/memory/chunks/{handle}/review", json={"state": "confirmed"}).status_code == 200
         assert "edited pin" in _always_on_memory(ks)[0]
         row = next(c for c in client.get("/api/memory/hot").json()["chunks"] if c["id"] == handle)

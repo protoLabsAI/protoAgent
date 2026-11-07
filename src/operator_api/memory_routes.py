@@ -201,7 +201,9 @@ def _memory_rows() -> list[dict]:
     Hot panel reads memories, not an empty chunk slice. ``store: "memories"`` tags
     the backend and the ``memory:<id>`` handle keeps the row disjoint from the
     numeric chunk ids the knowledge store may still serve alongside it. ``injecting``
-    comes from ``_memory_window_ids`` (the same window the projection renders)."""
+    comes from ``_memory_window_ids`` (the same window the projection renders).
+    Rejected, expired and superseded rows remain visible for operator review,
+    with ``injecting: false``; inspection does not apply retrieval eligibility."""
     from dataclasses import asdict
 
     store = STATE.memory_store
@@ -220,7 +222,7 @@ def _memory_rows() -> list[dict]:
             "store": "memories",
             "injecting": e.id in window,
         }
-        for e in store.list(delivery="always", limit=_HOT_LIST_LIMIT)
+        for e in store.inspect(delivery="always", limit=_HOT_LIST_LIMIT)
     ]
 
 

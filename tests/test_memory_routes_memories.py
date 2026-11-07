@@ -61,6 +61,41 @@ def test_hot_lists_always_rows_with_injecting_window(tmp_path, monkeypatch):
     assert row["content"] == "x" * 5999
 
 
+def test_hot_keeps_inactive_rows_visible_for_review(tmp_path, monkeypatch):
+    store = _store(tmp_path)
+    active = store.add("current pin", kind="fact", provenance="operator", delivery="always")
+    rejected = store.add("reject this pin", kind="fact", provenance="operator", delivery="always")
+    expired = store.add(
+        "expired pin", kind="fact", provenance="operator", delivery="always", expires_at="2000-01-01T00:00:00Z"
+    )
+    superseded = store.add("old pin", kind="fact", provenance="operator", delivery="always")
+    invalidated = store.add("forgotten pin", kind="fact", provenance="operator", delivery="always")
+    with store._write() as db:
+        db.execute("UPDATE memories SET superseded_by = ? WHERE id = ?", (active, superseded))
+        db.execute("UPDATE memories SET invalidated_at = '2000-01-01' WHERE id = ?", (invalidated,))
+    # Newer non-hot rows must not consume the inspector's limit.
+    store.add("retrieved fact", kind="fact", provenance="operator", delivery="retrieved")
+    store.add("on demand fact", kind="fact", provenance="operator", delivery="on_demand")
+    monkeypatch.setattr("operator_api.memory_routes._HOT_LIST_LIMIT", 4)
+    c = _client(monkeypatch, tmp_path, memory=store)
+
+    assert c.post(f"/api/memory/memories/{rejected}/review", json={"state": "rejected"}).status_code == 200
+    rows = {r["id"]: r for r in c.get("/api/memory/hot").json()["chunks"]}
+    assert set(rows) == {f"memory:{mid}" for mid in (active, rejected, expired, superseded)}
+    assert rows[f"memory:{active}"]["injecting"] is True
+    for mid in (rejected, expired, superseded):
+        assert rows[f"memory:{mid}"]["injecting"] is False
+
+    # The visible rejected handle still supports editing and explicit re-opening.
+    handle = rows[f"memory:{rejected}"]["id"]
+    assert c.put(f"/api/memory/hot/{handle}", json={"content": "corrected pin"}).status_code == 200
+    row = next(r for r in c.get("/api/memory/hot").json()["chunks"] if r["id"] == handle)
+    assert (row["content"], row["review_state"], row["injecting"]) == ("corrected pin", "rejected", False)
+    assert c.post(f"/api/memory/memories/{rejected}/review", json={"state": "confirmed"}).status_code == 200
+    row = next(r for r in c.get("/api/memory/hot").json()["chunks"] if r["id"] == handle)
+    assert row["review_state"] == "confirmed" and row["injecting"] is True
+
+
 def test_hot_disabled_when_memory_store_is_none(tmp_path, monkeypatch):
     # r5 (hot half): no memory store and no chunk store → the enabled:false shape.
     c = _client(monkeypatch, tmp_path)

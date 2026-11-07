@@ -275,14 +275,23 @@ class MemoryStore:
                 )
             ]
 
-    def inspect(self, limit: int = 500) -> list[MemoryEntry]:
-        """Operator listing including rejected, expired and superseded audit rows."""
+    def inspect(self, limit: int = 500, *, delivery: str | None = None) -> list[MemoryEntry]:
+        """Operator listing including rejected, expired and superseded audit rows.
+
+        Filter delivery before applying the limit so unrelated rows cannot crowd
+        always-on memories out of the inspector.
+        """
+        where = "invalidated_at IS NULL"
+        params = []
+        if delivery is not None:
+            where += " AND delivery = ?"
+            params.append(delivery)
         with closing(self._connect()) as db:
             return [
                 MemoryEntry(**dict(row))
                 for row in db.execute(
-                    "SELECT * FROM memories WHERE invalidated_at IS NULL ORDER BY created_at DESC, id DESC LIMIT ?",
-                    (limit,),
+                    f"SELECT * FROM memories WHERE {where} ORDER BY created_at DESC, id DESC LIMIT ?",
+                    [*params, limit],
                 )
             ]
 
