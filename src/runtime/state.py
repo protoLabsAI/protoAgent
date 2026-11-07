@@ -37,6 +37,9 @@ class AppState:
     knowledge_store: Any = None
     memory_store: Any = None  # Core SQLite, independent of plugin knowledge backends.
     history_store: Any = None  # Core SQLite, independent of plugin knowledge backends.
+    # Host-shared commons/profile.db (ADR 0125 P2-G1). None unless memory.shared_profile
+    # is enabled — off by default, so profile.db is never opened for a sandboxed agent.
+    shared_profile_store: Any = None
     skills_index: Any = None
     workflow_registry: Any = None  # set by the workflows plugin (None = plugin disabled)
     workflow_run: Any = None  # async (name, inputs, on_step) -> result; set by the workflows plugin

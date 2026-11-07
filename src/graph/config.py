@@ -1359,6 +1359,12 @@ class LangGraphConfig:
     # YAML: `memory.max_sessions` / `memory.max_tokens`.
     memory_max_sessions: int = 10
     memory_max_tokens: int = 2000
+    # Shared operator profile (ADR 0125 P2-G1, D7). When True, this agent opens the
+    # host-shared commons/profile.db (the same commons root as the knowledge commons,
+    # ADR 0041) and may read the operator's standing profile (name, timezone, standing
+    # preferences). Off by default — a sandboxed or client-facing agent never opens
+    # profile.db. YAML: `memory.shared_profile`. Delivery + the write tool are P2-G2.
+    memory_shared_profile: bool = False
     # Always-on write confirm gate (ADR 0069 D8, widened by ADR 0108 D4). When
     # True, the agent's own write paths (memory_save and knowledge_ingest)
     # refuse always-on writes — domain="hot" or delivery_policy="always" — with
@@ -2454,6 +2460,7 @@ class LangGraphConfig:
             memory_max_tokens=_coerce_digest_cap(
                 memory.get("max_tokens", cls.memory_max_tokens), cls.memory_max_tokens, "memory.max_tokens"
             ),
+            memory_shared_profile=memory.get("shared_profile", cls.memory_shared_profile),
             knowledge_vector_k=knowledge.get("vector_k", cls.knowledge_vector_k),
             knowledge_rrf_k=knowledge.get("rrf_k", cls.knowledge_rrf_k),
             knowledge_min_score=knowledge.get("min_score", cls.knowledge_min_score),

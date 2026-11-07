@@ -212,6 +212,7 @@ FROM_YAML_EXAMPLE_FIELDS = {
     "context_prior_sessions": "newest",
     "memory_max_sessions": 10,
     "memory_max_tokens": 2000,
+    "memory_shared_profile": False,
     "knowledge_hot_write_confirm": False,
     "knowledge_middleware": True,
     "knowledge_top_k": 5,
