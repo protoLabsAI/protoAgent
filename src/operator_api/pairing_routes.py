@@ -11,6 +11,7 @@
     POST   /api/pairing/tailscale/serve    → serve this instance over tailnet HTTPS
                                              (refused unless a token is configured)
     DELETE /api/pairing/tailscale/serve    → stop serving it (only OUR handler)
+    POST   /api/devices         → mint a named device-scope token, full-scope callers only
     GET    /api/devices         → list paired devices
     PATCH  /api/devices/{id}    → rename one (``{"name": …}``) and/or promote/limit it
                                   (``{"scope": "full"|"device"}`` — full-scope callers only)
@@ -837,6 +838,25 @@ def register_pairing_routes(app, agent_name=None) -> None:
             # agent (a hub) pairs against one base URL and keeps nothing of this.
             body["addresses"] = await asyncio.to_thread(_address_set, _server_port(request))
         return JSONResponse(body, headers={"Cache-Control": "no-store"})
+
+    @router.post("/api/devices")
+    async def _mint(request: Request):  # noqa: ANN202
+        from a2a_impl.credential_scope import SCOPE_DEVICE, SCOPE_FULL, refusal_body
+        from security.devices import mint_device
+
+        if getattr(request.state, "credential_scope", None) != SCOPE_FULL:
+            return JSONResponse(
+                refusal_body(message="Only a full-access device can mint an access token."),
+                status_code=403,
+            )
+        body = await _json_body(request)
+        try:
+            if body.get("scope", SCOPE_DEVICE) != SCOPE_DEVICE:
+                raise ValueError('scope must be "device"; use PATCH to promote a device')
+            device, token = mint_device(body.get("name"))
+        except ValueError as exc:
+            return JSONResponse({"ok": False, "error": str(exc), "detail": str(exc)}, status_code=400)
+        return JSONResponse({"ok": True, "device": device, "token": token}, headers={"Cache-Control": "no-store"})
 
     @router.get("/api/devices")
     async def _list(request: Request):  # noqa: ANN202

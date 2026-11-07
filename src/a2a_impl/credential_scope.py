@@ -69,6 +69,7 @@ def _rule(methods, path: str, why: str, *, self_ok: bool = False) -> CeilingRule
 CEILING: tuple[CeilingRule, ...] = (
     # Pairing — a device can't pair devices or agents.
     _rule({"POST"}, "/api/pairing/start", "mint a pairing code"),
+    _rule({"POST"}, "/api/devices", "mint an access token"),
     _rule({"POST"}, "/api/pairing/cancel", "cancel pending pairing codes"),
     _rule({"POST"}, "/api/fleet/remotes/pair", "pair another agent"),
     # Reachability + lifecycle (#4336 S4): serving over tailnet HTTPS changes who can reach
