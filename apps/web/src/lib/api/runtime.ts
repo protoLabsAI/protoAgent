@@ -143,6 +143,17 @@ export const runtimeApi = {
       body: { scope },
     });
   },
+  /** Mint a NAMED device-scope access token with no pairing code (#4683). Full-scope callers
+   *  only — the server 403s a device-scope caller (`device_scope`), which `request` surfaces
+   *  as its reason. The `token` is returned ONCE and stored nowhere the operator can read it
+   *  back, so the panel shows it a single time. The new device lands in `GET /api/devices`
+   *  (Limited scope) and is revoked like any other row. */
+  mintDeviceToken(name: string) {
+    return request<{ ok: boolean; device: PairedDevice; token: string }>("/api/devices", {
+      method: "POST",
+      body: { name },
+    });
+  },
   /** Start pairing.
    *
    * Read directly rather than through `request` because the 409 body is MEANINGFUL: a
