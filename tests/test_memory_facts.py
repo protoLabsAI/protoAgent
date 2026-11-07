@@ -3,9 +3,7 @@
 The semantic half of the session-end pass distils durable facts (aux model) and stores them
 as ``kind='fact'``, ``provenance='extracted'``, ``review_state='pending'`` rows scoped to the
 harvest ``namespace`` (the row's ``scope``). Near-identical facts are deduped and revisions
-supersede the earlier extracted row via ``superseded_by`` (ADR 0069 D9 / ADR 0108 D7.3). The
-consolidation runs over the store's OWN extracted fact rows only — agent/operator memories on
-the same subject are never deduped or superseded here (merging those is Phase 3, P3-M).
+use the shared subject supersession funnel across provenances.
 """
 
 from __future__ import annotations
@@ -150,9 +148,7 @@ def test_leaked_reasoning_is_stripped_before_the_row(tmp_path):
     """The chunk path scrubbed <scratch_pad>/<think> inside add_chunk; MemoryStore.add inserts
     verbatim, so consolidation strips — recallable fact rows never carry leaked reasoning."""
     store = MemoryStore(tmp_path / "agent.db")
-    counts = consolidate_and_store(
-        store, ["<think>deciding…</think>The operator prefers metric units"], namespace="p"
-    )
+    counts = consolidate_and_store(store, ["<think>deciding…</think>The operator prefers metric units"], namespace="p")
     assert counts["added"] == 1
     row = _facts(store)[0]
     assert row.content == "The operator prefers metric units"
@@ -209,10 +205,8 @@ def test_unrelated_facts_do_not_supersede(tmp_path):
     assert len(_facts(store)) == 2
 
 
-def test_agent_and_operator_rows_are_never_touched(tmp_path):
-    """Phase boundary (this card does NOT merge extracted facts with agent rows — P3-M does):
-    consolidation runs over its own provenance='extracted' rows, so an agent memory on the
-    same subject is neither deduped against nor superseded."""
+def test_subjectless_agent_row_is_not_superseded(tmp_path):
+    """Rows without a subject remain outside subject supersession."""
     store = MemoryStore(tmp_path / "agent.db")
     agent_id = store.add(_OLD, kind="fact", provenance="agent", scope="p")
     counts = consolidate_and_store(store, [_REVISED], namespace="p")
@@ -233,32 +227,12 @@ def test_failed_insert_never_supersedes_the_old_fact(tmp_path):
         def supersede(self, *a, **kw):
             return store.supersede(*a, **kw)
 
-        def add(self, *a, **kw):
-            return None  # the insert fails
+        def add_with_supersession(self, *a, **kw):
+            return None, []  # the insert fails
 
     counts = consolidate_and_store(_Flaky(), [_REVISED], namespace="p")
     assert counts == {"added": 0, "skipped": 0, "superseded": 0}
     assert [r.content for r in _facts(store)] == [_OLD]  # still valid, nothing chained
-
-
-def test_supersede_failure_after_insert_is_logged_and_keeps_both(tmp_path, caplog):
-    store = MemoryStore(tmp_path / "agent.db")
-    consolidate_and_store(store, [_OLD], namespace="p")
-
-    class _Stuck:
-        def list(self, **kw):
-            return store.list(**kw)
-
-        def add(self, *a, **kw):
-            return store.add(*a, **kw)
-
-        def supersede(self, *a, **kw):
-            return False  # the supersede didn't take
-
-    counts = consolidate_and_store(_Stuck(), [_REVISED], namespace="p")
-    assert counts == {"added": 1, "skipped": 0, "superseded": 0}
-    assert len(_facts(store)) == 2  # both valid, nothing lost
-    assert "both stay valid" in caplog.text
 
 
 def test_insert_that_raises_is_swallowed_and_keeps_the_old_fact(tmp_path):
@@ -276,7 +250,7 @@ def test_insert_that_raises_is_swallowed_and_keeps_the_old_fact(tmp_path):
         def supersede(self, *a, **kw):
             return store.supersede(*a, **kw)
 
-        def add(self, *a, **kw):
+        def add_with_supersession(self, *a, **kw):
             raise sqlite3.OperationalError("database is locked")
 
     counts = consolidate_and_store(_Raising(), [_REVISED], namespace="p")
@@ -284,41 +258,29 @@ def test_insert_that_raises_is_swallowed_and_keeps_the_old_fact(tmp_path):
     assert [r.content for r in _facts(store)] == [_OLD]  # still valid, nothing chained
 
 
-def test_supersede_that_raises_is_swallowed_and_keeps_both(tmp_path, caplog):
-    """MemoryStore.supersede RAISES on SQLite errors too; a failed chain after a landed insert
-    leaves BOTH rows valid (logged), and never aborts consolidation."""
+def test_funnel_failure_rolls_back_insert_and_chain(tmp_path, caplog):
+    store = MemoryStore(tmp_path / "agent.db")
+    consolidate_and_store(store, [_OLD], namespace="p")
+    with store._write() as db:
+        db.execute("""CREATE TRIGGER refuse_chain BEFORE UPDATE OF superseded_by ON memories
+                      BEGIN SELECT RAISE(ABORT, 'chain failed'); END""")
+    counts = consolidate_and_store(store, [_REVISED], namespace="p")
+    assert counts == {"added": 0, "skipped": 0, "superseded": 0}
+    assert [r.content for r in _facts(store, include_superseded=True)] == [_OLD]
+    assert "prior facts left untouched" in caplog.text
+
+
+def test_minimal_non_core_store_keeps_add_only_fallback(tmp_path):
     store = MemoryStore(tmp_path / "agent.db")
     consolidate_and_store(store, [_OLD], namespace="p")
 
-    class _RaisingSupersede:
-        def list(self, **kw):
-            return store.list(**kw)
+    class Minimal:
+        def list(self, **kwargs):
+            return store.list(**kwargs)
 
-        def add(self, *a, **kw):
-            return store.add(*a, **kw)
+        def add(self, *args, **kwargs):
+            return store.add(*args, **kwargs)
 
-        def supersede(self, *a, **kw):
-            raise sqlite3.OperationalError("database is locked")
-
-    counts = consolidate_and_store(_RaisingSupersede(), [_REVISED], namespace="p")
+    counts = consolidate_and_store(Minimal(), [_REVISED], namespace="p")
     assert counts == {"added": 1, "skipped": 0, "superseded": 0}
-    assert len(_facts(store)) == 2  # both valid, nothing lost
-    assert "both stay valid" in caplog.text
-
-
-def test_consolidate_degrades_without_a_supersede_method(tmp_path):
-    """A minimal backend without supersede still gets the new fact (add-only degrade — never
-    raises, never blocks the write)."""
-    store = MemoryStore(tmp_path / "agent.db")
-    consolidate_and_store(store, [_OLD], namespace="p")
-
-    class _Minimal:
-        def list(self, **kw):
-            return store.list(**kw)
-
-        def add(self, *a, **kw):
-            return store.add(*a, **kw)
-
-    counts = consolidate_and_store(_Minimal(), [_REVISED], namespace="p")
-    assert counts["added"] == 1 and counts["superseded"] == 0  # no supersede half
-    assert len(_facts(store)) == 2  # both rows remain valid
+    assert len(_facts(store)) == 2

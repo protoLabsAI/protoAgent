@@ -10,6 +10,7 @@ import time
 from collections.abc import Iterator
 from contextlib import closing, contextmanager
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 
 from knowledge.hybrid_store import EmbedFn, rank_vectors, rrf_scores
@@ -62,6 +63,12 @@ CREATE TRIGGER IF NOT EXISTS memories_au AFTER UPDATE OF heading, content ON mem
 END;
 CREATE TABLE IF NOT EXISTS memory_vectors (memory_id INTEGER PRIMARY KEY, vec TEXT NOT NULL);
 """
+
+
+def _memory_date(value: str) -> datetime:
+    """Compare ISO dates/timestamps as UTC, including legacy naive timestamps."""
+    parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    return parsed.replace(tzinfo=timezone.utc) if parsed.tzinfo is None else parsed
 
 
 def _normalize_subject(subject: str | None) -> str:
@@ -205,6 +212,8 @@ class MemoryStore:
         thread_id: str | None = None,
         legacy_domain: str | None = None,
         supersede: bool = True,
+        as_of: str | None = None,
+        protect_confirmed_operator: bool = False,
     ) -> tuple[int, list[MemoryEntry]]:
         """Persist a memory and retire the rows it supersedes, atomically (ADR 0125 P3-A).
 
@@ -221,6 +230,11 @@ class MemoryStore:
         A replacement must also expire no earlier than the row it retires; temporary
         saves preserve longer-lived memories so expiry cannot strand them.
 
+        Extractor callers supply ``as_of`` and ``protect_confirmed_operator``. A
+        newer live row or a confirmed operator row keeps the incoming row as
+        already-superseded audit history. These options do not affect ordinary saves.
+        ``as_of`` also sets valid_from, preserving conversation time across harvests.
+
         Returns ``(new_id, replaced)`` where ``replaced`` lists the retired rows as they
         were before the stamp (newest first).
         """
@@ -236,8 +250,8 @@ class MemoryStore:
         with self._write() as db:
             cur = db.execute(
                 "INSERT INTO memories (kind, subject, heading, content, delivery, review_state, provenance, "
-                "scope, expires_at, source_session, thread_id, legacy_domain, created_at, updated_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "scope, expires_at, source_session, thread_id, legacy_domain, valid_from, created_at, updated_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     kind,
                     subject,
@@ -251,6 +265,7 @@ class MemoryStore:
                     source_session,
                     thread_id,
                     legacy_domain,
+                    as_of,
                     now,
                     now,
                 ),
@@ -268,9 +283,49 @@ class MemoryStore:
                     "ORDER BY created_at DESC, id DESC",
                     (id, kind, now),
                 ).fetchall()
+                rows = [
+                    row
+                    for row in rows
+                    if _normalize_subject(row["subject"]) == norm_subject and (row["scope"] or None) == norm_scope
+                ]
+                # Decide before retiring ANY predecessor: a protected row must not
+                # leave a partially rewritten chain when several live rows exist.
+                blocker = next(
+                    (
+                        row
+                        for row in rows
+                        if protect_confirmed_operator
+                        and row["provenance"] == "operator"
+                        and row["review_state"] == "confirmed"
+                    ),
+                    None,
+                )
+                if blocker is None and as_of:
+                    blocker = next(
+                        (
+                            row
+                            for row in rows
+                            if _memory_date(row["valid_from"] or row["created_at"]) > _memory_date(as_of)
+                        ),
+                        None,
+                    )
+                if blocker is not None:
+                    db.execute("UPDATE memories SET superseded_by = ? WHERE id = ?", (blocker["id"], id))
+                    log.info(
+                        "[memory] refused extracted replacement old=%s provenance=%s date=%s "
+                        "new=%s provenance=%s as_of=%s reason=%s",
+                        blocker["id"],
+                        blocker["provenance"],
+                        blocker["valid_from"] or blocker["created_at"],
+                        id,
+                        provenance,
+                        as_of,
+                        "confirmed-operator"
+                        if blocker["provenance"] == "operator" and blocker["review_state"] == "confirmed"
+                        else "stale",
+                    )
+                    rows = []
                 for row in rows:
-                    if _normalize_subject(row["subject"]) != norm_subject or (row["scope"] or None) != norm_scope:
-                        continue
                     if expires_at is not None and (row["expires_at"] is None or expires_at < row["expires_at"]):
                         continue
                     if review_state != "confirmed" and (
@@ -284,6 +339,15 @@ class MemoryStore:
                         (id, now, row["id"]),
                     )
                     replaced.append(MemoryEntry(**dict(row)))
+                    log.info(
+                        "[memory] supersession old=%s provenance=%s date=%s new=%s provenance=%s as_of=%s",
+                        row["id"],
+                        row["provenance"],
+                        row["valid_from"] or row["created_at"],
+                        id,
+                        provenance,
+                        as_of or now,
+                    )
         if delivery == "always":
             from knowledge.store import _publish_hot_write
 
