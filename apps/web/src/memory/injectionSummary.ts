@@ -1,15 +1,15 @@
 // Plain-language "what it used" summary for one injection record — the legible
 // replacement for the old forensics columns of comma-joined raw ids. Built
-// from the id arrays the list route already returns, so the table
+// purely from the id-array LENGTHS the list route already returns, so the table
 // needs no backend resolve; the detail dialog fetches the actual items on click.
 //
 // The forensic id groups map to friendly names (ADR 0069 D6):
 //   hot_chunk_ids      → "memories"     (always-on hot memory)
 //   digest_session_ids → "past chats"   (prior-session digest)
-//   rag_chunk_ids      → "memories" for memory:<id>, otherwise "docs"
+//   rag_chunk_ids      → "docs"         (knowledge retrieval)
 // Empty groups are dropped; when the turn injected nothing extra we show a dash.
 
-// Memory handles distinguish retrieved memories from historical chunk ids.
+// Only the length of each id group matters here, so accept the widest shape.
 type InjectionCounts = {
   digest_session_ids: readonly unknown[];
   hot_chunk_ids: readonly unknown[];
@@ -28,12 +28,9 @@ function count(n: number, singular: string, plural: string): string {
 // All three empty → `NOTHING_USED`.
 export function injectionSummary(row: InjectionCounts): string {
   const parts: string[] = [];
-  const retrievedMemories = row.rag_chunk_ids.filter(id => typeof id === "string" && id.startsWith("memory:")).length;
-  const memories = row.hot_chunk_ids.length + retrievedMemories;
-  const docs = row.rag_chunk_ids.length - retrievedMemories;
-  if (memories) parts.push(count(memories, "memory", "memories"));
+  if (row.hot_chunk_ids.length) parts.push(count(row.hot_chunk_ids.length, "memory", "memories"));
   if (row.digest_session_ids.length)
     parts.push(count(row.digest_session_ids.length, "past chat", "past chats"));
-  if (docs) parts.push(count(docs, "doc", "docs"));
+  if (row.rag_chunk_ids.length) parts.push(count(row.rag_chunk_ids.length, "doc", "docs"));
   return parts.length ? parts.join(" · ") : NOTHING_USED;
 }

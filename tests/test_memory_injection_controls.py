@@ -445,6 +445,35 @@ def test_injection_detail_resolves_all_groups(tmp_path, monkeypatch):
     assert body["docs"] == [{"id": 3, "source": "physics.pdf", "snippet": "gravity pulls apples", "unavailable": False}]
 
 
+def test_injection_detail_resolves_recalled_memory(tmp_path, monkeypatch):
+    """A memory recalled by the relevant-memory layer (ADR 0125 P2-F) lands in
+    ``retrieved_memory_ids`` as a ``memory:<id>`` handle — the resolver must surface
+    it in the ``memories`` group ALONGSIDE the always-on hot ids, not drop it."""
+    import runtime.state as rs
+    from knowledge.memories import MemoryStore
+    from observability.injection_log import injection_log
+
+    mem = MemoryStore(tmp_path / "mem.db")
+    always_id = mem.add("always deploy on green", kind="standing", provenance="operator", delivery="always")
+    recalled_id = mem.add("recalled deploy window is 09:00", kind="fact", provenance="operator", delivery="retrieved")
+    monkeypatch.setattr(rs.STATE, "memory_store", mem, raising=False)
+
+    injection_log().record(
+        session_id="sess-recall",
+        hot_chunk_ids=[f"memory:{always_id}"],
+        retrieved_memory_ids=[f"memory:{recalled_id}"],
+        approx_tokens=5,
+    )
+
+    c = _detail_client(monkeypatch, tmp_path, knowledge=_FakeKnowledgeStore({}))
+    body = c.get(f"/api/memory/injections/{_last_record_id()}").json()
+
+    snippets = {m["snippet"] for m in body["memories"]}
+    assert "always deploy on green" in snippets  # always-on memory still resolves
+    assert "recalled deploy window is 09:00" in snippets  # recalled memory now resolves too
+    assert all(m["unavailable"] is False for m in body["memories"])
+
+
 def test_injection_detail_pruned_chunk_marked_unavailable(tmp_path, monkeypatch):
     """A hot/RAG id whose chunk was pruned (get_chunk → None) still renders — as
     an 'unavailable' item — instead of failing the request."""

@@ -260,7 +260,8 @@ def test_standalone_composer_reproduces_native_golden(monkeypatch):
     assert not projected.empty
     assert projected.as_legacy_dict() == golden
     assert (projected.digest_ids, projected.hot_ids, projected.rag_ids) == (_DIGEST_IDS, [7, 9], [31, 32])
-    assert projected.sources == ["prior_sessions", "hot:2", "knowledge:2", "skills:2", "working_state"]
+    # ADR 0125 P2-F order: always-on memory, relevant memory, knowledge, then the digest.
+    assert projected.sources == ["hot:2", "knowledge:2", "prior_sessions", "skills:2", "working_state"]
     assert len(recorded) == 1
 
 
@@ -285,7 +286,7 @@ def test_external_runtime_delta_is_the_native_projection(monkeypatch):
         record=False,
     )
     assert ctx.volatile_delta == _golden()["context"]
-    assert ctx.sources == ["prior_sessions", "hot:2", "knowledge:2", "skills:2", "working_state"]
+    assert ctx.sources == ["hot:2", "knowledge:2", "prior_sessions", "skills:2", "working_state"]
     assert ctx.stable_prefix  # the persona half is untouched by the delta
 
 
@@ -545,7 +546,7 @@ def test_no_query_means_no_rag_search(monkeypatch):
     )
     assert store.search_calls == []
     assert "[Relevant knowledge" not in projected.text
-    assert "[Always-on facts (hot memory):]" in projected.text
+    assert "[Always-on memory:]" in projected.text
     assert projected.sources == ["hot:2"]
 
 
@@ -561,7 +562,7 @@ def test_goal_turn_suppresses_the_digest_only(monkeypatch):
         projected = compose_projected_context(_QUERY, store, None, {}, **kw)
     assert "<prior_sessions>" not in projected.text
     assert projected.digest_ids == []
-    assert "[Always-on facts (hot memory):]" in projected.text and projected.rag_ids == [31, 32]
+    assert "[Always-on memory:]" in projected.text and projected.rag_ids == [31, 32]
     assert projected.sources == ["hot:2", "knowledge:2"]
 
     assert "<prior_sessions>" in compose_projected_context(_QUERY, store, None, {}, **kw).text
@@ -588,7 +589,7 @@ def test_hot_memory_fallback_for_a_backend_without_the_entries_reader(monkeypatc
         options=_options(),
         prior_sessions=lambda: ("", []),
     )
-    assert "[Always-on facts (hot memory):]\noperator prefers dark mode" in projected.text
+    assert "[Always-on memory:]\noperator prefers dark mode" in projected.text
     assert projected.hot_ids == []  # un-attributed, but still delivered
     assert projected.sections[0]["label"] == "Injected memory"  # no id-attributed count to show
     assert projected.sources == ["hot"]
@@ -719,7 +720,7 @@ def test_delivery_boundary_trims_an_over_long_result_set(caplog):
         delivered = _fit_to_budget(c, ProjectionOptions(top_k=5, budget_chars=None), None, [])
 
     assert delivered.rag_ids == [0, 1, 2, 3, 4]
-    assert delivered.text.count("- [fact] hit ") == 5  # the TEXT is trimmed too, not just the ids
+    assert delivered.text.count("- [fact · extracted] hit ") == 5  # the TEXT is trimmed too, not just the ids
     assert any("over-delivery" in r.getMessage() for r in caplog.records)
 
 
@@ -917,76 +918,3 @@ def test_injection_log_decodes_unparseable_stage_counts_to_defaults(tmp_path):
         "final": 0,
         "rag_chunk_ids": 0,
     }
-
-
-def test_retrieved_memories_obey_projection_policy(tmp_path, monkeypatch):
-    from graph.projection import compose_projected_context
-    from knowledge.memories import MemoryStore
-    from runtime.state import STATE
-
-    store = MemoryStore(tmp_path / "agent.db")
-    monkeypatch.setattr(STATE, "memory_store", store)
-    live = store.add("teal preference", kind="fact", provenance="extracted", scope="project")
-    old = store.add("teal obsolete", kind="fact", provenance="extracted", scope="project")
-    store.supersede(old, live)
-    store.add("teal rejected", kind="fact", provenance="extracted", review_state="rejected", scope="project")
-    store.add("teal expired", kind="fact", provenance="extracted", expires_at="2000-01-01", scope="project")
-    store.add("teal private", kind="fact", provenance="extracted", delivery="on_demand", scope="project")
-    # Enough off-scope matches to expose filtering AFTER the store's limit.
-    for _ in range(25):
-        store.add("teal", kind="fact", provenance="extracted", scope="elsewhere")
-
-    def compose(**kwargs):
-        options = kwargs.pop("options", ProjectionOptions(top_k=1, inject_namespaces=("project",)))
-        return compose_projected_context(query="teal", knowledge_store=None, skills_index=None, state={}, options=options, record=False, **kwargs)
-
-    result = compose()
-    assert "teal preference" in result.text
-    assert result.rag_ids == [f"memory:{live}"]
-    assert "trust: agent" in result.text
-    assert all(word not in result.text for word in ("obsolete", "rejected", "expired", "private"))
-    assert compose(incognito=True).rag_ids == []
-    assert compose(options=ProjectionOptions(top_k=0)).rag_ids == []
-    assert compose(options=ProjectionOptions(inject_min_trust=3)).rag_ids == []
-    assert compose(options=ProjectionOptions(budget_chars=1)).rag_ids == []
-
-
-def test_memory_retrieval_failure_preserves_knowledge(tmp_path, monkeypatch):
-    from graph.projection import compose_projected_context
-    from runtime.state import STATE
-
-    class BrokenMemory:
-        def always_on_entries(self):
-            return []
-
-        def search(self, *args, **kwargs):
-            raise RuntimeError("unavailable")
-
-    monkeypatch.setattr(STATE, "memory_store", BrokenMemory())
-    result = compose_projected_context(query="query", knowledge_store=_FakeStore(results=_RAG), skills_index=None, state={}, record=False)
-    assert result.rag_ids == [31, 32]
-
-
-def test_retrieved_memory_audit_resolves_without_chunk_collision(tmp_path, monkeypatch):
-    from graph.projection import compose_projected_context
-    from knowledge.memories import MemoryStore
-    from observability.injection_log import InjectionLog
-    from operator_api.injection_routes import _resolve_injection
-    from runtime.state import STATE
-
-    store = MemoryStore(tmp_path / "agent.db")
-    mid = store.add("teal preference", kind="fact", provenance="extracted")
-    monkeypatch.setattr(STATE, "memory_store", store)
-    monkeypatch.setattr(STATE, "knowledge_store", None)
-    result = compose_projected_context(
-        query="teal", knowledge_store=None, skills_index=None, state={}, record=False,
-    )
-    audit = InjectionLog(tmp_path / "injections.db")
-    audit.record(session_id="later-turn", rag_chunk_ids=result.rag_ids)
-    row = audit.recent(session_id="later-turn")[0]
-    assert row["rag_chunk_ids"] == [f"memory:{mid}"]
-    detail = _resolve_injection(row)
-    assert detail["docs"] == []
-    assert detail["memories"] == [
-        {"id": f"memory:{mid}", "heading": None, "snippet": "teal preference", "unavailable": False}
-    ]

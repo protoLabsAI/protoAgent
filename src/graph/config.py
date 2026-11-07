@@ -1314,15 +1314,15 @@ class LangGraphConfig:
     # default) = unfiltered — today's behavior, so box-commons sharing keeps
     # working. When set, only chunks whose `namespace` matches a listed value
     # are auto-injected; include "" to also match un-namespaced chunks. Gates
-    # only what enters the prompt unasked — memory_recall stays unscoped.
+    # only what enters the prompt unasked — knowledge_search stays unscoped.
     knowledge_inject_namespaces: list[str] = field(default_factory=list)
     # Trust floor for the AUTO-INJECT RAG hits (ADR 0069 D8). Rows rank into
     # deterministic trust tiers by source_type (knowledge/trust.py): 3 =
     # operator-authored, 2 = agent-derived (extracted facts, harvest,
-    # memory_ingest), 1 = ingested/external (web, YouTube, PDF, media) and
+    # memory_save), 1 = ingested/external (web, YouTube, PDF, media) and
     # unknown. 1 (default) excludes nothing — low tiers are only down-weighted
     # (ranked below higher tiers); 2 drops external/ingested content from
-    # auto-injection; 3 auto-injects operator-authored rows only. memory_recall
+    # auto-injection; 3 auto-injects operator-authored rows only. knowledge_search
     # is never gated — excluded content stays reachable on demand.
     knowledge_inject_min_trust: int = 1
     # Projected-context budget (ADR 0108 D6): the per-turn injected context —
@@ -1359,8 +1359,14 @@ class LangGraphConfig:
     # YAML: `memory.max_sessions` / `memory.max_tokens`.
     memory_max_sessions: int = 10
     memory_max_tokens: int = 2000
+    # Shared operator profile (ADR 0125 P2-G1, D7). When True, this agent opens the
+    # host-shared commons/profile.db (the same commons root as the knowledge commons,
+    # ADR 0041) and may read the operator's standing profile (name, timezone, standing
+    # preferences). Off by default — a sandboxed or client-facing agent never opens
+    # profile.db. YAML: `memory.shared_profile`. Delivery + the write tool are P2-G2.
+    memory_shared_profile: bool = False
     # Always-on write confirm gate (ADR 0069 D8, widened by ADR 0108 D4). When
-    # True, the agent's own write paths (memory_ingest and knowledge_ingest)
+    # True, the agent's own write paths (memory_save and knowledge_ingest)
     # refuse always-on writes — domain="hot" or delivery_policy="always" — with
     # an error telling the model to ask the operator; only operator surfaces
     # (console knowledge/memory routes) put facts in front of the model every turn.
@@ -1481,8 +1487,8 @@ class LangGraphConfig:
     checkpoint_max_age_days: int = 30
     checkpoint_prune_interval_hours: int = 6
     # When a session is retired (aged out or deleted), summarize it into the
-    # knowledge base before dropping the raw checkpoints — so past conversations
-    # stay searchable via memory_recall. Needs the knowledge store enabled.
+    # history store before dropping the raw checkpoints — so past conversations
+    # stay searchable via session_search. Needs the history store enabled.
     checkpoint_harvest_enabled: bool = True
     # Vacuum reclaim — after the prune sweep deletes rows, compact the DB file
     # (truncate WAL + free unused pages back to the OS). Best-effort; never
@@ -2454,6 +2460,7 @@ class LangGraphConfig:
             memory_max_tokens=_coerce_digest_cap(
                 memory.get("max_tokens", cls.memory_max_tokens), cls.memory_max_tokens, "memory.max_tokens"
             ),
+            memory_shared_profile=memory.get("shared_profile", cls.memory_shared_profile),
             knowledge_vector_k=knowledge.get("vector_k", cls.knowledge_vector_k),
             knowledge_rrf_k=knowledge.get("rrf_k", cls.knowledge_rrf_k),
             knowledge_min_score=knowledge.get("min_score", cls.knowledge_min_score),

@@ -13,7 +13,7 @@ import type { KnowledgeChunk, MemoryHotChunk, ReviewState } from "../lib/types";
 // lifecycle. Agent-derived memories land as `pending`; the operator confirms or
 // rejects them here, on the Knowledge → Store rows and the Memory → Hot memory rows.
 // A rejected row stays in the store for audit but leaves delivery (D6); re-open puts
-// it back to pending. Backend: POST /api/memory/chunks/{id}/review.
+// it back to pending. Backend: POST /api/memory/{memories|chunks}/{id}/review.
 //
 // Two rules the route relies on the CLIENT for (memory_routes.py):
 //   - a commons row is read-only here (its id would collide with a private row's),
@@ -86,7 +86,9 @@ export function useReviewVerdict() {
 
   const mutation = useMutation({
     mutationFn: ({ chunk, state }: ReviewVars) =>
-      api.reviewMemoryChunk(chunk.id, chunk.tier ? { state, tier: chunk.tier } : { state }),
+      chunk.store === "memories"
+        ? api.memoryReview(chunk.id, state)
+        : api.reviewMemoryChunk(chunk.id, chunk.tier ? { state, tier: chunk.tier } : { state }),
     onMutate: async ({ chunk, state }) => {
       await qc.cancelQueries({ queryKey: queryKeys.knowledge });
       await qc.cancelQueries({ queryKey: queryKeys.memoryHot });

@@ -212,6 +212,7 @@ FROM_YAML_EXAMPLE_FIELDS = {
     "context_prior_sessions": "newest",
     "memory_max_sessions": 10,
     "memory_max_tokens": 2000,
+    "memory_shared_profile": False,
     "knowledge_hot_write_confirm": False,
     "knowledge_middleware": True,
     "knowledge_top_k": 5,
@@ -754,7 +755,7 @@ def test_case8a_researcher_partial_only_model(tmp_path):
     cfg = LangGraphConfig.from_yaml(path)
     assert cfg.researcher == SubagentDef(
         enabled=True,
-        tools=["current_time", "web_search", "fetch_url", "memory_search", "memory_list", "memory_save"],
+        tools=["current_time", "web_search", "fetch_url", "memory_search", "knowledge_search", "memory_list", "memory_save"],
         max_turns=40,
         model="custom-model",
     )
@@ -767,7 +768,7 @@ def test_case8b_researcher_empty_dict(tmp_path):
     cfg = LangGraphConfig.from_yaml(path)
     assert cfg.researcher == SubagentDef(
         enabled=True,
-        tools=["current_time", "web_search", "fetch_url", "memory_search", "memory_list", "memory_save"],
+        tools=["current_time", "web_search", "fetch_url", "memory_search", "knowledge_search", "memory_list", "memory_save"],
         max_turns=40,
         model="",
     )
@@ -780,7 +781,7 @@ def test_case8c_researcher_absent(tmp_path):
     cfg = LangGraphConfig.from_yaml(path)
     assert cfg.researcher == SubagentDef(
         enabled=True,
-        tools=["current_time", "web_search", "fetch_url", "memory_search", "memory_list", "memory_save"],
+        tools=["current_time", "web_search", "fetch_url", "memory_search", "knowledge_search", "memory_list", "memory_save"],
         max_turns=40,
         model="",
     )

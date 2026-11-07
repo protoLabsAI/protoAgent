@@ -24,11 +24,6 @@ describe("injectionSummary", () => {
     expect(injectionSummary(row(0, 1, 3))).toBe("1 past chat · 3 docs");
   });
 
-  it("counts retrieved memory handles as memories alongside chunk documents", () => {
-    expect(injectionSummary({ hot_chunk_ids: ["memory:2"], digest_session_ids: [], rag_chunk_ids: ["memory:1", 1] }))
-      .toBe("2 memories · 1 doc");
-  });
-
   it("shows a dash when the turn injected nothing extra", () => {
     expect(injectionSummary(row(0, 0, 0))).toBe(NOTHING_USED);
   });

@@ -128,7 +128,7 @@ def test_harvest_thread_summarizes_into_history(tmp_path, history_store):
     assert kb.chunks == []
 
 
-def test_harvest_extracts_facts_when_enabled(tmp_path, history_store, monkeypatch):
+def test_harvest_extracts_facts_when_enabled(tmp_path, history_store):
     """ADR 0021 + ADR 0125 P2-D3: the session-end pass distils facts (gated on
     knowledge_facts) into the core MemoryStore — provenance='extracted', pending,
     scoped to the namespace — and writes NOTHING to the knowledge store/chunks."""
@@ -174,17 +174,6 @@ def test_harvest_extracts_facts_when_enabled(tmp_path, history_store, monkeypatc
     assert facts[0].review_state == "pending"
     # Provenance (ADR 0069 D5): the fact carries the originating session/thread id.
     assert facts[0].source_session == "a2a:chat-1" and facts[0].thread_id == "a2a:chat-1"
-    # A later turn recalls the pending extracted fact automatically, without a tool call.
-    from graph.projection import ProjectionOptions, compose_projected_context
-    from runtime.state import STATE
-
-    monkeypatch.setattr(STATE, "memory_store", memory)
-    projected = compose_projected_context(
-        query="teal", knowledge_store=knowledge, skills_index=None, state={},
-        options=ProjectionOptions(inject_namespaces=("proj-x",)), record=False,
-    )
-    assert "teal" in projected.text
-    assert projected.rag_ids == [f"memory:{facts[0].id}"]
 
 
 def test_harvest_skips_facts_when_disabled(tmp_path):

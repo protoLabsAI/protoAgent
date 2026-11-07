@@ -28,7 +28,7 @@ _KINDS: dict[str, str] = {
     "find_files": "search",
     "search_files": "search",
     "session_search": "search",
-    "memory_recall": "search",
+    "memory_search": "search",
     "knowledge_search": "search",
     "web_search": "search",
     "write_file": "edit",

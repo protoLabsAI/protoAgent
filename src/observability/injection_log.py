@@ -1,13 +1,15 @@
 """Per-turn memory-injection record (ADR 0069 D6).
 
 One append-only row per model call that had memory auto-injected: which
-prior-session digest entries, hot-memory chunks, and RAG hits entered the
-prompt, when, for which session, at what approximate token cost, and — for the
-projection audit (#3259) — the effective knowledge ``top_k`` with the bounded
-candidate counts retained at each RAG stage (retrieved → trust-filtered →
-finally injected). This is the forensics substrate for "why did it say that?"
-and for detecting SpAIware-class memory poisoning — the store row → source
-session → turns it was injected into chain ends here.
+prior-session digest entries, hot-memory chunks, recalled memories, and RAG hits
+entered the prompt, when, for which session, at what approximate token cost, and
+— for the projection audit (#3259) — the effective knowledge ``top_k`` with the
+bounded candidate counts retained at each RAG stage (retrieved → trust-filtered →
+finally injected). Each row carries a ``layers`` view (ADR 0125 P2-F) tagging its
+injected ids as memory (always-on + recalled) or knowledge. This is the forensics
+substrate for "why did it say that?" and for detecting SpAIware-class memory
+poisoning — the store row → source session → turns it was injected into chain
+ends here.
 
 Written best-effort from ``KnowledgeMiddleware.before_model`` (a write failure
 never breaks a turn); read by the operator console via
@@ -29,9 +31,11 @@ from pathlib import Path
 log = logging.getLogger(__name__)
 
 # The id-list columns, stored as JSON arrays (TEXT) and decoded on read.
-# hot_chunk_ids and rag_chunk_ids retain integer chunk ids for historical records and backend
+# hot_chunk_ids retains integer chunk ids for historical records and backend
 # pins; ADR 0125 core memories use "memory:<id>" to avoid cross-store collisions.
-_JSON_COLUMNS = ("digest_session_ids", "hot_chunk_ids", "rag_chunk_ids")
+# retrieved_memory_ids is the ADR 0125 P2-F relevant-memory layer (always
+# "memory:<id>"), kept distinct from the always-on hot_chunk_ids.
+_JSON_COLUMNS = ("digest_session_ids", "hot_chunk_ids", "rag_chunk_ids", "retrieved_memory_ids")
 
 # Bounded per-stage RAG provenance (#3259), stored as one JSON object (TEXT)
 # under a FIXED key set — counts ONLY, so the audit stays bounded and carries
@@ -87,18 +91,22 @@ class InjectionLog:
                     hot_chunk_ids      TEXT NOT NULL DEFAULT '[]',
                     rag_chunk_ids      TEXT NOT NULL DEFAULT '[]',
                     approx_tokens      INTEGER NOT NULL DEFAULT 0,
-                    rag_stage_counts   TEXT NOT NULL DEFAULT '{}'
+                    rag_stage_counts   TEXT NOT NULL DEFAULT '{}',
+                    retrieved_memory_ids TEXT NOT NULL DEFAULT '[]'
                 )
                 """
             )
             db.execute("CREATE INDEX IF NOT EXISTS ix_injections_session ON injections(session_id)")
-            # #3259: the RAG-stage provenance column rides the same row. An
-            # existing (legacy) DB predates it — add it in place so an upgraded
-            # instance keeps its history and old rows decode to the explicit
-            # defaults (the '{}' default → _STAGE_COUNT_DEFAULTS, see _decode).
+            # #3259 / ADR 0125 P2-F: the RAG-stage provenance and the
+            # relevant-memory layer each ride the same row. An existing (legacy)
+            # DB predates them — add them in place so an upgraded instance keeps
+            # its history and old rows decode to the explicit defaults ('{}' →
+            # _STAGE_COUNT_DEFAULTS, '[]' → an empty memory layer; see _decode).
             have = {r["name"] for r in db.execute("PRAGMA table_info(injections)").fetchall()}
             if "rag_stage_counts" not in have:
                 db.execute("ALTER TABLE injections ADD COLUMN rag_stage_counts TEXT NOT NULL DEFAULT '{}'")
+            if "retrieved_memory_ids" not in have:
+                db.execute("ALTER TABLE injections ADD COLUMN retrieved_memory_ids TEXT NOT NULL DEFAULT '[]'")
             db.commit()
         finally:
             db.close()
@@ -109,7 +117,8 @@ class InjectionLog:
         session_id: str = "",
         digest_session_ids: list[str] | None = None,
         hot_chunk_ids: list[int | str] | None = None,
-        rag_chunk_ids: list[int | str] | None = None,
+        rag_chunk_ids: list[int] | None = None,
+        retrieved_memory_ids: list[int | str] | None = None,
         approx_tokens: int = 0,
         effective_top_k: int = 0,
         rag_retrieved: int = 0,
@@ -118,6 +127,11 @@ class InjectionLog:
     ) -> None:
         """Append one injection row. Best-effort — never raises (a telemetry
         write must not break the model call that triggered it).
+
+        ``retrieved_memory_ids`` is the ADR 0125 P2-F relevant-memory layer (the
+        memories recalled for the turn, distinct from the always-on
+        ``hot_chunk_ids``); ``_decode`` exposes both memory-layer id-sets and the
+        knowledge layer under a ``layers`` view so a row carries its layer.
 
         The ``rag_*``/``effective_top_k`` counts are the bounded per-stage
         RAG provenance (#3259): the knowledge ``top_k`` in force and how many
@@ -142,8 +156,9 @@ class InjectionLog:
             }
             db.execute(
                 "INSERT INTO injections "
-                "(ts, session_id, digest_session_ids, hot_chunk_ids, rag_chunk_ids, approx_tokens, rag_stage_counts) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                "(ts, session_id, digest_session_ids, hot_chunk_ids, rag_chunk_ids, approx_tokens, rag_stage_counts, "
+                "retrieved_memory_ids) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     datetime.now(UTC).isoformat(),
                     session_id or "",
@@ -152,6 +167,7 @@ class InjectionLog:
                     json.dumps(rag_ids),
                     int(approx_tokens),
                     json.dumps(stage_counts),
+                    json.dumps(list(retrieved_memory_ids or [])),
                 ),
             )
             db.commit()
@@ -165,11 +181,17 @@ class InjectionLog:
         """One row → dict with the JSON id-columns decoded to Python lists and
         the RAG-stage provenance decoded to a fixed-key int dict.
 
-        Legacy rows (no ``rag_stage_counts`` column, a NULL/empty value, or an
-        unparseable one) read back exactly ``_STAGE_COUNT_DEFAULTS`` — the audit
-        is a NEW field, so an old row honestly reports zeros rather than failing
-        to decode. Only the known keys survive, coerced to int, so a
-        hand-tampered blob can't smuggle extra content through the reader."""
+        Legacy rows (no ``rag_stage_counts``/``retrieved_memory_ids`` column, a
+        NULL/empty value, or an unparseable one) read back exactly
+        ``_STAGE_COUNT_DEFAULTS`` / an empty memory layer — the audit is a NEW
+        field, so an old row honestly reports zeros rather than failing to
+        decode. Only the known keys survive, coerced to int, so a hand-tampered
+        blob can't smuggle extra content through the reader.
+
+        ``layers`` (ADR 0125 P2-F) is the per-layer view each row carries:
+        ``memory`` (always-on ``hot_chunk_ids`` + recalled ``retrieved_memory_ids``)
+        and ``knowledge`` (``rag_chunk_ids``) — so a forensic read can ask which
+        injected ids belonged to which layer."""
         d = dict(row)
         for col in _JSON_COLUMNS:
             try:
@@ -183,6 +205,10 @@ class InjectionLog:
         except (json.JSONDecodeError, TypeError):
             parsed = {}
         d["rag_stage_counts"] = {k: _as_int(parsed.get(k), default) for k, default in _STAGE_COUNT_DEFAULTS.items()}
+        d["layers"] = {
+            "memory": list(d["hot_chunk_ids"]) + list(d["retrieved_memory_ids"]),
+            "knowledge": list(d["rag_chunk_ids"]),
+        }
         return d
 
     def recent(self, session_id: str | None = None, limit: int = 50) -> list[dict]:

@@ -798,6 +798,18 @@ FIELDS: list[Field] = [
         minimum=1,
         maximum=100000,
     ),
+    # Shared operator profile (ADR 0125 P2-G1, D7). Its own "Memory" section so the
+    # privacy decision — does this agent see the operator's standing profile? — reads
+    # on its own, not buried among the recall-tuning knobs above.
+    Field(
+        "memory.shared_profile",
+        "memory_shared_profile",
+        "Share operator profile",
+        "bool",
+        "Memory",
+        "Share the operator profile (name, timezone, standing preferences) with this "
+        "agent. Off for sandboxed or client-facing agents.",
+    ),
     # Hot-memory write confirm gate (ADR 0069 D8).
     Field(
         "knowledge.hot_write_confirm",
@@ -2332,6 +2344,11 @@ _SECTION_CATEGORY = {
     "Recall": "Knowledge",
     "Ingestion": "Knowledge",
     "History": "Knowledge",
+    # Memory — the shared-operator-profile toggle (ADR 0125 P2-G1). A privacy/trust
+    # disposition (does this agent see the operator's standing profile?), so it routes
+    # to Behavior like Security, NOT to the Knowledge recall-tuning group. Mapped
+    # explicitly so the core-section→category guard stays honest.
+    "Memory": "Behavior",
     # Observability — the AGENT-scoped half of ADR 0006 (#3017). The Langfuse credentials
     # are per-agent, so they must render in a fleet member's console window; "Box" below is
     # host-console-only, which is exactly where tracing was unreachable before. The

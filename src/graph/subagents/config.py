@@ -153,7 +153,8 @@ invent angles it doesn't have.
 
 ## 2. Gather (per dimension)
 - **Reuse first.** ``memory_search`` for anything the operator/prior research
-  already captured — don't re-derive what's known. (Skip for plainly external
+  already captured, and ``knowledge_search`` for the operator's ingested
+  reference documents — don't re-derive what's known. (Skip for plainly external
   "latest version?" lookups.)
 - **Search wide, then deep.** ``web_search`` the dimension; for technical or
   contested topics run a second angle (add the parent topic, or target
@@ -201,6 +202,10 @@ ones.""",
         "web_search",
         "fetch_url",
         "memory_search",
+        # ADR 0125 split memory (operator-kept facts) from knowledge (ingested
+        # docs): the pre-split recall tool reached both, so the researcher — whose
+        # job is reading "the operator's knowledge base" — keeps both reaches.
+        "knowledge_search",
         "memory_list",
         "memory_save",
     ],

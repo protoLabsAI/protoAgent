@@ -26,8 +26,9 @@ table (compaction archives, retired-thread summaries, background-job reports) be
 ``STATE.history_store``. It is visible only here — the Knowledge browser lists chunks
 only — with a per-session rollup, search (the same query ``session_search`` runs), an
 open-an-entry read, and deletes that reuse the chat-delete forget semantics (#3957)
-rather than a new delete path. The counts/stats route splits the chunk store from
-history so the operator sees the real size of each.
+rather than a new delete path. The counts/stats route splits the stores three ways —
+the core MemoryStore (ADR 0125 P2, where the always-on hot rows live now), the
+knowledge chunk store, and history — so the operator sees the real size of each.
 
 Auth: gated by the server-level ``/api/*`` bearer middleware
 (``a2a_impl.auth``) like every other operator route — nothing here is public.
@@ -185,14 +186,41 @@ def _hot_chunks(store) -> list[dict]:
     ]
 
 
+def _memory_window_ids(store) -> set[int]:
+    """Exactly the memory ids inside the capped always-on window the projection
+    renders (``always_on_entries``), so the listing's ``injecting`` flag and the
+    projection are read off ONE source and can't drift apart."""
+    return {mid for mid, _ in store.always_on_entries()}
+
+
 def _memory_rows() -> list[dict]:
-    """Core memories in the inspector shape, with disjoint store handles."""
+    """Core always-on memories in the inspector's chunk shape (ADR 0125 P2).
+
+    Lists the ``delivery='always'`` rows the MemoryStore keeps now that the boot
+    migration moved the old domain='hot' chunks out of the knowledge store — so the
+    Hot panel reads memories, not an empty chunk slice. ``store: "memories"`` tags
+    the backend and the ``memory:<id>`` handle keeps the row disjoint from the
+    numeric chunk ids the knowledge store may still serve alongside it. ``injecting``
+    comes from ``_memory_window_ids`` (the same window the projection renders).
+    Rejected, expired and superseded rows remain visible for operator review,
+    with ``injecting: false``; inspection does not apply retrieval eligibility.
+
+    Scoped to ``delivery='always'`` ON PURPOSE: the Hot panel is the always-on
+    INJECTION curation surface (it has always listed exactly what rides in front of
+    the model every turn — pre-migration those were the domain='hot' knowledge
+    chunks, which this inspect now mirrors). It removes no prior operator surface:
+    MemoryStore and the retrieved/on_demand delivery tiers are new in P2-D1, and the
+    boot migration moved ONLY the always-on (domain='hot') rows into it. Retrieved
+    and on_demand core memories are curated through the agent's memory tools
+    (``memory_list`` / ``memory_search`` / ``memory_forget`` over the same
+    ``STATE.memory_store`` — tools/memory_tools.py), not this panel, which is why
+    DELETE below refuses a non-always id."""
     from dataclasses import asdict
 
     store = STATE.memory_store
     if store is None:
         return []
-    window = {mid for mid, _ in store.always_on_entries()}
+    window = _memory_window_ids(store)
     return [
         {
             **asdict(e),
@@ -202,9 +230,10 @@ def _memory_rows() -> list[dict]:
             "delivery_policy": e.delivery,
             "source": e.source_session,
             "source_type": e.provenance,
+            "store": "memories",
             "injecting": e.id in window,
         }
-        for e in store.inspect()
+        for e in store.inspect(delivery="always", limit=_HOT_LIST_LIMIT)
     ]
 
 
@@ -273,15 +302,24 @@ def _history_entry_full(entry) -> dict:
 
 
 def _memory_stats() -> dict:
-    """The memory/history size split (ADR 0125): the chunk store's own stats (memory +
-    knowledge; ``domain='conversation'`` history was migrated OUT at boot — H1/#4556)
-    alongside the history store's per-kind counts, so the operator sees the real size of
-    each. A store that is off (or whose stats raise) is an empty block, never a 500."""
+    """The three-way size split (ADR 0125 P2): the core ``MemoryStore`` (where the
+    always-on hot rows live now that the boot migration moved them out of chunks), the
+    knowledge chunk store (``domain='conversation'`` history was itself migrated OUT at
+    boot — H1/#4556), and the history store's per-kind counts — so the operator sees the
+    real size of each. A store that is off (or whose stats raise) is an empty block,
+    never a 500."""
     memory: dict = {}
-    store = STATE.knowledge_store
-    if store is not None:
+    mstore = STATE.memory_store
+    if mstore is not None:
         try:
-            memory = dict(store.stats())
+            memory = dict(mstore.stats())
+        except Exception:  # noqa: BLE001 — never 500 the console
+            log.exception("[memory] memory stats failed")
+    knowledge: dict = {}
+    kstore = STATE.knowledge_store
+    if kstore is not None:
+        try:
+            knowledge = dict(kstore.stats())
         except Exception:  # noqa: BLE001 — never 500 the console
             log.exception("[memory] knowledge stats failed")
     history: dict = {}
@@ -291,7 +329,7 @@ def _memory_stats() -> dict:
             history = dict(hstore.stats())
         except Exception:  # noqa: BLE001 — never 500 the console
             log.exception("[memory] history stats failed")
-    return {"memory": memory, "history": history}
+    return {"memory": memory, "knowledge": knowledge, "history": history}
 
 
 def register_memory_routes(app) -> None:
@@ -375,8 +413,9 @@ def register_memory_routes(app) -> None:
         except Exception:
             log.exception("[memory] hot-memory injection window failed")
         else:
-            for row in memories:
-                row["injecting"] = row["id"] in window_ids
+            # Memory rows already carry the authoritative MemoryStore window flag
+            # (set in _memory_rows); only the backend chunks derive theirs here, off
+            # the combined window — memories lead it and eat into the chunks' budget.
             if hasattr(store, "get_hot_memory_entries"):
                 for row in chunks:
                     row["injecting"] = row["id"] in window_ids
@@ -387,14 +426,22 @@ def register_memory_routes(app) -> None:
         mid = _core_memory_id(chunk_id)
         if mid is not None:
             store = STATE.memory_store
-            entry = await asyncio.to_thread(store.get, mid) if store else None
+            if store is None:
+                return {"enabled": False, "id": None, "replaced": False}
+            entry = await asyncio.to_thread(store.get, mid)
             if entry is None:
                 return JSONResponse({"detail": "no memory with that id"}, status_code=404)
             content = str((body or {}).get("content", "")).strip()
             if not content:
                 return JSONResponse({"detail": "content is required"}, status_code=400)
             heading = str((body or {}).get("heading", "")).strip() or entry.heading
+            # Edit the row IN PLACE (ADR 0125 P2 — no add-then-delete): delivery stays
+            # 'always', lifecycle and provenance are preserved. An edit is an operator
+            # write → confirmed, but a rejected pin stays rejected (an edit isn't a review).
             updated = await asyncio.to_thread(store.update, mid, content=content, heading=heading)
+            if updated:
+                verdict = "rejected" if entry.review_state == "rejected" else "confirmed"
+                await asyncio.to_thread(store.set_review_state, mid, verdict)
             return {"enabled": True, "id": chunk_id, "replaced": updated}
         if not chunk_id.isdigit():
             return JSONResponse({"detail": "invalid memory handle"}, status_code=400)
@@ -462,7 +509,20 @@ def register_memory_routes(app) -> None:
         mid = _core_memory_id(chunk_id)
         if mid is not None:
             store = STATE.memory_store
-            deleted = await asyncio.to_thread(store.delete, mid) if store else False
+            if store is None:
+                return {"enabled": False, "deleted": False}
+            entry = await asyncio.to_thread(store.get, mid)
+            # Only an always-on row is reachable from the Hot panel — a retrieved /
+            # on_demand memory is curated through the agent's memory tools
+            # (memory_list / memory_search / memory_forget over the same
+            # STATE.memory_store, tools/memory_tools.py), not hard-deleted here. This
+            # mirrors the delivery_policy="always" gate on the chunk side and matches
+            # the panel's always-on listing scope (_memory_rows): the Hot panel never
+            # listed retrieved/on_demand rows, so refusing their delete is consistent,
+            # not a removed capability.
+            if entry is None or entry.delivery != "always":
+                return JSONResponse({"detail": "no memory with that id"}, status_code=404)
+            deleted = await asyncio.to_thread(store.delete, mid)
             if not deleted:
                 return JSONResponse({"detail": "no memory with that id"}, status_code=404)
             return {"enabled": True, "deleted": True}
@@ -524,6 +584,32 @@ def register_memory_routes(app) -> None:
         if not updated:
             return JSONResponse({"detail": "no chunk with that id"}, status_code=404)
         return {"enabled": True, "id": chunk_id if mid is not None else row_id, "review_state": state}
+
+    @app.post("/api/memory/memories/{memory_id}/review")
+    async def _api_memory_memory_review(memory_id: int, body: dict | None = None):
+        # The verdict for a CORE memory (ADR 0125 P2) — the dedicated route for the
+        # MemoryStore rows the Hot panel now lists, by the row's own integer id. It
+        # mirrors the chunk review route's validation and status codes; rejecting
+        # keeps the row for audit and only stops it delivering (D6), never deletes it.
+        from knowledge.store import REVIEW_STATES
+
+        store = STATE.memory_store
+        if store is None:
+            return {"enabled": False, "id": None, "review_state": None}
+        body = body or {}
+        state = str(body.get("state", "")).strip().lower()
+        if state not in REVIEW_STATES:
+            return JSONResponse({"detail": f"state must be one of {', '.join(sorted(REVIEW_STATES))}"}, status_code=400)
+        try:
+            updated = await asyncio.to_thread(store.set_review_state, memory_id, state)
+        except ValueError as exc:  # the store's own validation — mirrors the 400 above
+            return JSONResponse({"detail": str(exc)}, status_code=400)
+        except Exception:  # noqa: BLE001 — never 500 the console with a traceback
+            log.exception("[memory] review verdict for memory %s failed", memory_id)
+            return JSONResponse({"detail": "review update failed"}, status_code=500)
+        if not updated:
+            return JSONResponse({"detail": "no memory with that id"}, status_code=404)
+        return {"enabled": True, "id": memory_id, "review_state": state}
 
     # --- History (ADR 0125 D6) -----------------------------------------------
     # The conversation ``history`` table behind ``STATE.history_store`` — archives,
@@ -597,6 +683,7 @@ def register_memory_routes(app) -> None:
 
     @app.get("/api/memory/stats")
     async def _api_memory_stats():
-        # Counts/stats split: the chunk store (memory + knowledge) vs history, each its
-        # own block, so the operator sees the real size of each (ADR 0125).
+        # Counts/stats split three ways: the core MemoryStore, the knowledge chunk store,
+        # and history — each its own block, so the operator sees the real size of each
+        # (ADR 0125 P2). A store that is off is an empty block.
         return await asyncio.to_thread(_memory_stats)

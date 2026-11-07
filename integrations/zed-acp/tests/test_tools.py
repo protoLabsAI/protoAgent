@@ -9,6 +9,9 @@ def roots():
 def test_kinds():
     assert tools.tool_kind("read_file") == "read"
     assert tools.tool_kind("search_files") == "search"
+    assert tools.tool_kind("memory_search") == "search"
+    assert tools.tool_kind("knowledge_search") == "search"
+    assert tools.tool_kind("memory_recall") == "other"
     assert tools.tool_kind("edit_file") == "edit"
     assert tools.tool_kind("run_command") == "execute"
     assert tools.tool_kind("some_plugin_tool") == "other"

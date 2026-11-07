@@ -204,6 +204,42 @@ def test_default_bridge_set_is_curated_not_everything():
     assert "boom_tool" not in ec.description
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("newline", ["\n", "\r\n"], ids=["lf", "crlf"])
+async def test_default_bridge_memory_and_knowledge_search(newline):
+    @tool
+    async def memory_search(query: str) -> str:
+        """Search saved memories."""
+        return f"memory: {query}"
+
+    @tool
+    async def knowledge_search(query: str) -> str:
+        """Search reference documents."""
+        return f"knowledge: {query}"
+
+    @tool
+    async def memory_recall(query: str) -> str:
+        """Retired search name must not be exposed by default."""
+        raise AssertionError("retired tool called")
+
+    ec = build_execute_code_tool([memory_search, knowledge_search, memory_recall])
+    for name in ("memory_search", "knowledge_search"):
+        assert f"tools.{name}(query" in ec.description
+    assert "memory_recall" not in ec.description
+    out = await ec.ainvoke({"code": (
+        "import sys\n"
+        f"sys.stdout.reconfigure(newline={newline!r})\n"
+        "print(tools.memory_search(query='preferences'))\n"
+        "print(tools.knowledge_search(query='reference'))\n"
+        "try:\n"
+        "    tools.memory_recall(query='legacy')\n"
+        "except RuntimeError as exc:\n"
+        "    print(exc)"
+    )})
+    assert out.splitlines()[:2] == ["memory: preferences", "knowledge: reference"]
+    assert "not available" in out
+
+
 def test_hitl_and_delegation_are_never_bridgeable():
     """ADR 0103 D3/D6: an interrupt can't park a subprocess, and delegation from
     model-written code is out of scope — even an EXPLICIT config entry can't

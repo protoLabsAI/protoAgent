@@ -256,7 +256,7 @@ def test_migrated_hot_row_reaches_prompt_as_always_on(tmp_path, monkeypatch):
         options=ProjectionOptions(top_k=0, prior_sessions_policy="off"),
     )
     assert "deploys ship on Fridays" in projected.text
-    assert "Always-on facts" in projected.text
+    assert "Always-on memory" in projected.text
 
 
 # ── r5 — the SDK surface for plugins ──────────────────────────────────────────
@@ -350,22 +350,61 @@ def test_core_memories_inspector_crud_review(tmp_path, monkeypatch):
     register_memory_routes(app)
     with TestClient(app) as client:
         rows = client.get("/api/memory/hot").json()["chunks"]
-        assert {c["id"] for c in rows} == {cid, f"memory:{mid}", f"memory:{retrieved}"}
+        ids = {c["id"] for c in rows}
+        # The hot listing is the ALWAYS-ON rows only (ADR 0125 P2):
+        # the knowledge hot chunk and the always memory, never the retrieved or invalidated ones.
+        assert ids == {cid, f"memory:{mid}"}
+        assert f"memory:{retrieved}" not in ids and f"memory:{hidden}" not in ids
         handle = f"memory:{mid}"
         assert client.put(f"/api/memory/hot/{handle}", json={"content": "edited pin"}).status_code == 200
         assert mem.get(mid).content == "edited pin"
         assert mem.search("edited")[0].id == mid
         assert not mem.search("agent")
-        assert mem.get(mid).review_state == "pending"
-        for state, injected in (("rejected", False), ("confirmed", True)):
-            response = client.post(f"/api/memory/chunks/{handle}/review", json={"state": state})
-            assert response.status_code == 200
-            assert ("edited pin" in _always_on_memory(ks)[0]) is injected
-            row = next(c for c in client.get("/api/memory/hot").json()["chunks"] if c["id"] == handle)
-            assert row["review_state"] == state and row["injecting"] is injected
+        assert mem.get(mid).review_state == "confirmed"  # an operator edit confirms a pending pin
+        # Rejecting stops delivery but leaves the pin visible for re-opening;
+        # confirming it resumes injection.
+        assert client.post(f"/api/memory/chunks/{handle}/review", json={"state": "rejected"}).status_code == 200
+        assert "edited pin" not in _always_on_memory(ks)[0]
+        row = next(c for c in client.get("/api/memory/hot").json()["chunks"] if c["id"] == handle)
+        assert row["review_state"] == "rejected" and row["injecting"] is False
+        assert client.post(f"/api/memory/chunks/{handle}/review", json={"state": "confirmed"}).status_code == 200
+        assert "edited pin" in _always_on_memory(ks)[0]
+        row = next(c for c in client.get("/api/memory/hot").json()["chunks"] if c["id"] == handle)
+        assert row["review_state"] == "confirmed" and row["injecting"] is True
         assert client.delete(f"/api/memory/hot/{handle}").json()["deleted"]
         assert mem.get(mid) is None
         assert ks.get_chunk(cid)["content"] == "chunk untouched"
+
+
+def test_retrieved_memory_the_hot_panel_refuses_is_curated_via_the_memory_tools(tmp_path, monkeypatch):
+    # The Hot panel is scoped to always-on ON PURPOSE (ADR 0125 P2-D4): it never lists
+    # a retrieved/on_demand core memory and DELETE refuses one (404). That is not an
+    # orphaned row — it stays reachable through the agent's own memory tools
+    # (memory_list / memory_forget over the SAME STATE.memory_store), the surface that
+    # curates the retrieved/on_demand tiers. This proves "curated elsewhere" is real.
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from operator_api.memory_routes import register_memory_routes
+    from runtime.state import STATE
+
+    tools, ks, mem = _tools(tmp_path)
+    rid = mem.add("remember the fallback port is 7871", kind="fact", provenance="agent")
+    assert mem.get(rid).delivery == "retrieved"
+    monkeypatch.setattr(STATE, "knowledge_store", ks)
+    monkeypatch.setattr(STATE, "memory_store", mem)
+    app = FastAPI()
+    register_memory_routes(app)
+    with TestClient(app) as client:
+        # Not in the Hot panel, and its delete is refused — the panel's always-on scope.
+        assert all(c["id"] != f"memory:{rid}" for c in client.get("/api/memory/hot").json()["chunks"])
+        assert client.delete(f"/api/memory/hot/memory:{rid}").status_code == 404
+        assert mem.get(rid) is not None  # untouched by the refused delete
+
+    # The curation surface: listable by its delivery tier, and forgettable, via the tools.
+    listed = asyncio.run(tools["memory_list"].ainvoke({"delivery": "retrieved"}))
+    assert f"#{rid}" in listed and "fallback port" in listed
+    assert asyncio.run(tools["memory_forget"].ainvoke({"memory_id": rid})).startswith(f"Forgot memory #{rid}")
+    assert mem.get(rid) is None
 
 
 def test_agent_hot_write_event(tmp_path, monkeypatch):

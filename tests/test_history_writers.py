@@ -120,11 +120,8 @@ async def test_manual_archive_failure_preserves_checkpoint_unless_forced(stores,
 
 
 @pytest.mark.parametrize("multipart", [False, True])
-async def test_summary_uses_checkpoint_session_and_stores_facts_in_memories(stores, multipart, tmp_path):
-    from knowledge.memories import MemoryStore
-
+async def test_summary_uses_checkpoint_session_and_keeps_facts_in_chunks(stores, multipart):
     knowledge, history = stores
-    memory = MemoryStore(tmp_path / "memories.db")
     content = [{"type": "text", "text": "I prefer teal"}] if multipart else "I prefer teal"
     checkpoint = SimpleNamespace(
         checkpoint={
@@ -137,7 +134,6 @@ async def test_summary_uses_checkpoint_session_and_stores_facts_in_memories(stor
         "custom:thread:goal-iter-2",
         checkpointer=SimpleNamespace(aget_tuple=AsyncMock(return_value=checkpoint)),
         knowledge_store=knowledge,
-        memory_store=memory,
         config=SimpleNamespace(knowledge_facts=True),
         summarizer=summarizer,
         fact_extractor=AsyncMock(return_value=["The user prefers teal."]),
@@ -147,10 +143,8 @@ async def test_summary_uses_checkpoint_session_and_stores_facts_in_memories(stor
     assert "User: I prefer teal" in summarizer.call_args.args[0]
     assert (entry.session_id, entry.thread_id, entry.kind) == ("session", "custom:thread:goal-iter-2", "summary")
     assert entry.namespace == "project"
-    assert knowledge.list_chunks() == []
-    (fact,) = memory.list(kind="fact", provenance="extracted", scope="project")
-    assert "teal" in fact.content
-    assert fact.review_state == "pending"
+    chunks = knowledge.list_chunks()
+    assert len(chunks) == 1 and chunks[0].domain == "fact"
 
 
 async def test_summary_does_not_require_a_knowledge_store(stores, monkeypatch):

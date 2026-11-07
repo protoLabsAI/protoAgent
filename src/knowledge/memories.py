@@ -235,21 +235,16 @@ class MemoryStore:
         review_state=None,
         include_superseded: bool = False,
         deliverable: bool = False,
-        scopes: list[str] | None = None,
     ) -> list[MemoryEntry]:
         """Fuse FTS5 and cosine rankings; apply identical eligibility to both halves.
 
         Audit search may include superseded rows, but deliverable=True always
         excludes them. Invalidated, expired and rejected rows never enter search.
-        Nonempty scopes filter both rankings before limiting; "" includes unscoped rows.
         """
         if not query.strip() or k <= 0:
             return []
         vec = self._embed(query)
         where, params = self._filters(kind, delivery, review_state, include_superseded, deliverable)
-        if scopes:
-            where += f" AND COALESCE(m.scope, '') IN ({','.join('?' for _ in scopes)})"
-            params.extend(scopes)
         candidates = max(k, 20)
         with closing(self._connect()) as db:
             rows = db.execute(
@@ -302,35 +297,72 @@ class MemoryStore:
                 )
             ]
 
-    def inspect(self, limit: int = 500) -> list[MemoryEntry]:
-        """Operator listing including rejected, expired and superseded audit rows."""
+    def inspect(self, limit: int = 500, *, delivery: str | None = None) -> list[MemoryEntry]:
+        """Operator listing including rejected, expired and superseded audit rows.
+
+        Filter delivery before applying the limit so unrelated rows cannot crowd
+        always-on memories out of the inspector.
+        """
+        where = "invalidated_at IS NULL"
+        params = []
+        if delivery is not None:
+            where += " AND delivery = ?"
+            params.append(delivery)
         with closing(self._connect()) as db:
             return [
                 MemoryEntry(**dict(row))
                 for row in db.execute(
-                    "SELECT * FROM memories WHERE invalidated_at IS NULL ORDER BY created_at DESC, id DESC LIMIT ?",
-                    (limit,),
+                    f"SELECT * FROM memories WHERE {where} ORDER BY created_at DESC, id DESC LIMIT ?",
+                    [*params, limit],
                 )
             ]
 
-    def update(self, id: int, *, content: str, heading: str | None = None) -> bool:
-        """Edit in place without losing lifecycle or provenance metadata."""
-        vec = self._embed((heading + "\n" if heading else "") + content)
+    def update(
+        self,
+        id: int,
+        *,
+        content: str | None = None,
+        heading: str | None = None,
+        subject: str | None = None,
+        kind: str | None = None,
+    ) -> bool:
+        """Edit in place without losing lifecycle or provenance metadata.
+
+        Only the fields passed change; the FTS/vector triggers re-index a
+        heading/content change, and the embedding is recomputed exactly as ``add``
+        does (heading + content) whenever either moves — the trigger drops the old
+        vector on any heading/content edit, so leaving it would strand the row out
+        of vector search. A subject/kind-only edit touches neither index."""
+        fields = {
+            col: value
+            for col, value in (("content", content), ("heading", heading), ("subject", subject), ("kind", kind))
+            if value is not None
+        }
+        if not fields:
+            return False
+        existing = self.get(id)
+        if existing is None:
+            return False
+        vec = None
+        if content is not None or heading is not None:
+            eff_content = content if content is not None else existing.content
+            eff_heading = heading if heading is not None else existing.heading
+            vec = self._embed((eff_heading + "\n" if eff_heading else "") + eff_content)
+        columns = ", ".join(f"{col} = ?" for col in fields)
         with self._write() as db:
             updated = (
                 db.execute(
-                    "UPDATE memories SET content = ?, heading = ?, updated_at = ? WHERE id = ?",
-                    (content, heading, _now_iso(), id),
+                    f"UPDATE memories SET {columns}, updated_at = ? WHERE id = ?",
+                    (*fields.values(), _now_iso(), id),
                 ).rowcount
                 > 0
             )
             if updated and vec is not None:
                 db.execute("INSERT INTO memory_vectors VALUES (?, ?)", (id, json.dumps(vec)))
-            row = db.execute("SELECT delivery, source_session FROM memories WHERE id = ?", (id,)).fetchone()
-        if updated and row["delivery"] == "always":
+        if updated and content is not None and existing.delivery == "always":
             from knowledge.store import _publish_hot_write
 
-            _publish_hot_write(f"memory:{id}", row["source_session"], "operator", content)
+            _publish_hot_write(f"memory:{id}", existing.source_session, "operator", content)
         return updated
 
     def set_review_state(self, id: int, state: str) -> bool:
