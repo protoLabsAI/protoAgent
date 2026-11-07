@@ -318,6 +318,12 @@ def _build_memory_tools(
         if delivery_error:
             return delivery_error
         delivery_norm = delivery_norm or "retrieved"
+        # Always-on confirm gate (ADR 0069 D8 / ADR 0108 D4), the SAME refusal the private
+        # path makes: a delivery="always" row is injected in front of EVERY agent on the host
+        # once confirmed, so when the operator has turned the gate on the agent may not even
+        # propose an always-on shared row — only operator surfaces promote to always-on.
+        if delivery_norm == DELIVERY_ALWAYS and getattr(graph_config, "knowledge_hot_write_confirm", False):
+            return _ALWAYS_ON_REFUSAL
         expires_at, expires_error = _expires_at_from_days(expires_in_days)
         if expires_error:
             return expires_error

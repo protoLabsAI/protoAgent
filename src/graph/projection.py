@@ -46,10 +46,15 @@ An opted-in agent (``memory.shared_profile``) additionally receives the host-sha
 operator profile (ADR 0125 P2-G2): CONFIRMED rows from ``STATE.shared_profile_store``
 join the memory layer under their own "Operator profile (shared)" section placed
 before "Always-on memory". ``delivery="always"`` rows render every turn;
-``delivery="retrieved"`` rows ride the turn query like private memory; the section
-spends the MEMORY budget slice, never knowledge's. A shared row is dropped when the
-agent's private memory already holds a live row on the same subject+kind (the private
-row wins); the injection-log row tags a shared id ``layer=memory, source=shared_profile``.
+``delivery="retrieved"`` rows ride the turn query like private memory and are
+trust-ranked and trimmed to ``top_k`` the same way. The four gates above (incognito,
+trust floor, namespace scope, injection logging) apply here too — the injection-log row
+tags a shared id ``layer=memory, source=shared_profile``. For the budget it behaves like
+always-on operator identity: it leads the MEMORY slice (never knowledge's) and, like
+always-on memory and working state, is NOT shed by whole-projection pressure (relevant
+memory sheds around it). A shared row is dropped when the agent's private memory already
+holds a live row on the same subject+kind (the private row wins; a null-subject row
+never collides).
 """
 
 from __future__ import annotations
@@ -938,24 +943,27 @@ def _fit_to_budget(c: _Candidates, opts: ProjectionOptions, skills_index, summar
             skills_shed = True
 
     # 4. Never-shed remainder — heard once per distinct standing-context size.
-    #    Relevant memory is never-shed past its own slice (ADR 0125 P2-F), so it
-    #    too can be the cause: name its size and let operators trim it, not only
+    #    Relevant memory is never-shed past its own slice (ADR 0125 P2-F) and the
+    #    shared operator profile is never-shed at all (ADR 0125 P2-G2), so either
+    #    can be the cause: name both sizes and let operators trim them, not only
     #    the always-on memory.
     if len(d.text) > budget:
         rel_mem_chars = len(_render_memory(c.rel_memory)[0]) if c.rel_memory else 0
-        key = (len(c.working_state), len(c.hot), rel_mem_chars)
+        shared_chars = len(_render_shared_profile(c.shared_profile)[0]) if c.shared_profile else 0
+        key = (len(c.working_state), len(c.hot), rel_mem_chars, shared_chars)
         # (Not named `emit` — the plugin-events catalog scanner reads `emit("…")` as a bus topic.)
         say = log.debug if key in _NEVER_SHED_WARNED else log.warning
         _NEVER_SHED_WARNED.add(key)
         say(
             "[projection] never-shed sections exceed the context budget: used=%d budget=%d "
-            "(working_state=%d, always_on=%d, relevant_memory=%d, skills_floor=%d chars) — raise "
-            "context.budget_pct or trim the always-on/relevant memory",
+            "(working_state=%d, always_on=%d, relevant_memory=%d, shared_profile=%d, skills_floor=%d "
+            "chars) — raise context.budget_pct or trim the always-on/relevant/shared memory",
             len(d.text),
             budget,
             len(c.working_state),
             len(c.hot),
             rel_mem_chars,
+            shared_chars,
             len(c.skill_block),
         )
     if overflow:
@@ -1232,6 +1240,30 @@ def _relevant_memory(query: str, opts: ProjectionOptions) -> list[dict]:
 _SHARED_PROFILE_ALWAYS_MAX = 50
 
 
+def _gate_shared_rows(rows: list[dict], deliveries: tuple[str, ...], opts: ProjectionOptions) -> list[dict]:
+    """The shared-profile layer's eligibility gates (ADR 0125 P2-G2), the SAME ones the
+    relevant-memory and knowledge layers ride so the docstring's "every gate applies to
+    both layers" holds for shared rows too:
+
+    - confirmed + auto-injecting ``delivery`` only (belt-and-suspenders for a fallback
+      store that ignored the kwargs — on_demand never auto-injects, pending never delivers;
+      idempotent on the primary path);
+    - the injection namespace scope (ADR 0069 D3a) on the row's ``scope``;
+    - the deliverable predicate (ADR 0108 D6 — rejected/expired/history never auto-inject);
+    - the trust FLOOR (ADR 0069 D8) — a sub-floor shared row is dropped like any other hit.
+
+    Does NOT trim to ``top_k``: the caller trims the retrieved pool with
+    :func:`rank_by_trust`, while the always-on pool keeps its own cap."""
+    from knowledge.trust import trust_tier
+
+    rows = [r for r in rows if r.get("review_state") == "confirmed" and r.get("delivery") in deliveries]
+    namespaces = set(opts.inject_namespaces)
+    if namespaces:
+        rows = [r for r in rows if (r.get("namespace") or "") in namespaces]
+    rows = [r for r in rows if deliverable_hit(r)]
+    return [r for r in rows if trust_tier(r.get("source_type")) >= opts.inject_min_trust]
+
+
 def _shared_profile(query: str, opts: ProjectionOptions) -> list[dict]:
     """CONFIRMED operator-profile rows from the host-shared ``profile.db`` (ADR 0125
     P2-G2), as rank/render dict rows — delivered under "Operator profile (shared)".
@@ -1241,9 +1273,13 @@ def _shared_profile(query: str, opts: ProjectionOptions) -> list[dict]:
     rows deliver — a pending row reaches no agent until the operator confirms it.
     ``delivery="always"`` rows render EVERY turn (query-independent, like the private
     always-on block); ``delivery="retrieved"`` rows are searched with the turn's query,
-    the same way private relevant memory is. A shared row whose subject+kind the agent's
-    OWN private memory already holds a live row for is dropped (the private row wins); a
-    null-subject row never collides. Never raises — a profile hiccup skips the layer."""
+    the same way private relevant memory is. Both pools ride :func:`_gate_shared_rows`
+    (namespace scope + deliverable + trust floor); the retrieved pool is additionally
+    trust-ranked and trimmed back to ``top_k`` by :func:`rank_by_trust` — so the 3×
+    over-fetch here (mirroring :func:`search_scoped`) never leaks past the floor or the
+    cap. A shared row whose subject+kind the agent's OWN private memory already holds a
+    live row for is dropped (the private row wins); a null-subject row never collides.
+    Never raises — a profile hiccup skips the layer."""
     from runtime.state import STATE
 
     store = getattr(STATE, "shared_profile_store", None)
@@ -1266,14 +1302,14 @@ def _shared_profile(query: str, opts: ProjectionOptions) -> list[dict]:
                 retrieved = list(store.search(query, k=k))
         except Exception:  # noqa: BLE001
             log.debug("[projection] shared-profile search skipped", exc_info=True)
-    rows = [_memory_as_row(e) for e in (*always, *retrieved)]
-    # Belt-and-suspenders for a fallback store that ignored the kwargs: confirmed +
-    # auto-injecting delivery only (on_demand never auto-injects), idempotent on the
-    # primary path. Pending shared rows never deliver.
-    rows = [
-        r for r in rows if r.get("review_state") == "confirmed" and r.get("delivery") in ("always", "retrieved")
-    ]
-    return _suppress_private_collisions(rows)
+    always_rows = _gate_shared_rows([_memory_as_row(e) for e in always], ("always",), opts)
+    retrieved_rows = _gate_shared_rows([_memory_as_row(e) for e in retrieved], ("retrieved",), opts)
+    # The retrieved pool rides the SAME trust gate the knowledge/relevant-memory layers use:
+    # rank_by_trust re-applies the floor (idempotent here) then stable-sorts by tier and
+    # trims the 3× over-fetch back to top_k. Always-on rows keep their own cap and render
+    # every turn, so they are not trimmed to top_k.
+    retrieved_rows = rank_by_trust(retrieved_rows, opts)
+    return _suppress_private_collisions([*always_rows, *retrieved_rows])
 
 
 def _suppress_private_collisions(rows: list[dict]) -> list[dict]:

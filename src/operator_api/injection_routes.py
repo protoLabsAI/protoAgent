@@ -41,13 +41,22 @@ def _resolve_chunk(store, chunk_id) -> dict | None:
 
 
 def _memory_item(store, chunk_id) -> dict:
-    """A chunk id or core memory handle → resolved inspector item."""
-    if str(chunk_id).startswith("memory:"):
+    """A chunk id or memory handle → resolved inspector item.
+
+    ``memory:<id>`` addresses the private core store; ``shared_profile:<id>`` the
+    host-shared operator-profile store (ADR 0125 P2-G2) — a shared row has its OWN id
+    space and must be read back from that store, never as a private ``memory:<id>`` nor
+    as a knowledge chunk (``int("shared_profile:N")`` would raise and log a traceback).
+    Anything else is a historical integer knowledge-chunk id."""
+    key = str(chunk_id)
+    if key.startswith("memory:") or key.startswith("shared_profile:"):
         from dataclasses import asdict
         from runtime.state import STATE
 
+        attr = "memory_store" if key.startswith("memory:") else "shared_profile_store"
         try:
-            entry = STATE.memory_store.get(int(str(chunk_id).split(":")[1]))
+            mem_store = getattr(STATE, attr, None)
+            entry = mem_store.get(int(key.split(":", 1)[1])) if mem_store is not None else None
             row = asdict(entry) if entry else None
         except Exception:
             row = None
@@ -104,8 +113,9 @@ def _resolve_injection(row: dict) -> dict:
     # The memory layer (ADR 0125 P2-F) is always-on ``hot_chunk_ids`` PLUS the
     # recalled ``retrieved_memory_ids`` — the same partition ``_decode`` exposes as
     # ``layers["memory"]``. Resolve both so a memory recalled by the relevant-memory
-    # layer isn't invisible in the per-turn detail. (Both id-sets carry
-    # ``memory:<id>`` handles, which ``_memory_item`` resolves.)
+    # layer isn't invisible in the per-turn detail. (The handles are integer chunk ids,
+    # ``memory:<id>`` core-store rows, or ``shared_profile:<id>`` shared-profile rows
+    # (ADR 0125 P2-G2); ``_memory_item`` resolves each from the right store.)
     memory_ids = list(row.get("hot_chunk_ids") or []) + list(row.get("retrieved_memory_ids") or [])
     return {
         "ts": row.get("ts"),

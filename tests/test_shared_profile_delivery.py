@@ -108,6 +108,88 @@ def test_section_leads_before_always_on_memory(tmp_path, monkeypatch):
     assert p.text.index("[Operator profile (shared):]") < p.text.index("[Always-on memory:]")
 
 
+# ── trust floor + namespace scope gate the shared layer, like relevant memory ──
+
+
+def test_trust_floor_and_namespace_gate_shared_retrieved_rows(tmp_path, monkeypatch):
+    store = SharedProfileStore(tmp_path / "commons")
+    # Operator (tier 3), default namespace → survives a floor of 3 and the scope.
+    store.add("deployment schedule window operator preference", kind="standing", provenance="operator", delivery="retrieved")
+    # Confirmed agent-derived (tier 2) → below the floor of 3, dropped.
+    store.add(
+        "deployment schedule window extracted guess",
+        kind="standing",
+        provenance="extracted",
+        delivery="retrieved",
+        review_state="confirmed",
+    )
+    # Confirmed operator row but in a DIFFERENT namespace → dropped by the scope gate.
+    store.add(
+        "deployment schedule window from another namespace",
+        kind="standing",
+        provenance="operator",
+        delivery="retrieved",
+        scope="other-ns",
+    )
+    _use(monkeypatch, shared=store)
+
+    p = _compose(opts=ProjectionOptions(top_k=5, inject_min_trust=3, inject_namespaces=("",)))
+
+    assert "deployment schedule window operator preference" in p.text  # tier-3, in-scope
+    assert "extracted guess" not in p.text  # tier-2 dropped by the trust floor
+    assert "another namespace" not in p.text  # out-of-scope dropped by the namespace gate
+    assert len(p.shared_profile_ids) == 1
+
+
+def test_retrieved_shared_pool_trimmed_to_top_k_under_trust_floor(tmp_path, monkeypatch):
+    # With a floor active the pool is over-fetched 3×; rank_by_trust must trim the
+    # retrieved shared rows back to top_k so the over-fetch never leaks (finding).
+    store = SharedProfileStore(tmp_path / "commons")
+    for i in range(6):
+        store.add(
+            f"deployment schedule window operator note {i}",
+            kind="standing",
+            provenance="operator",
+            delivery="retrieved",
+        )
+    _use(monkeypatch, shared=store)
+
+    p = _compose(opts=ProjectionOptions(top_k=2, inject_min_trust=3))
+
+    assert len(p.shared_profile_ids) == 2  # trimmed to top_k, not 3×
+
+
+def test_shared_profile_is_never_shed_while_relevant_memory_sheds_around_it(tmp_path, monkeypatch):
+    # The shared profile spends the MEMORY slice first and is never shed (like always-on
+    # memory); a tight budget sheds relevant memory around it (ADR 0125 P2-G2 / P2-F).
+    store = SharedProfileStore(tmp_path / "commons")
+    store.add("shared operator identity that must always survive the budget", kind="profile", provenance="operator", delivery="always")
+    private = MemoryStore(tmp_path / "agent.db")
+    for i in range(6):
+        private.add(
+            f"deployment schedule window relevant private recollection number {i} with padding",
+            kind="fact",
+            provenance="operator",
+            delivery="retrieved",
+        )
+    _use(monkeypatch, shared=store, private=private)
+
+    unbounded = _compose(opts=ProjectionOptions(top_k=6))
+    assert "shared operator identity that must always survive" in unbounded.text
+    n_unbounded = len(unbounded.rel_memory_ids)
+    assert n_unbounded >= 2  # several relevant rows delivered with no budget
+
+    sp_chars = len(_profile_section(unbounded.text))
+    tight = _compose(
+        opts=ProjectionOptions(top_k=6, budget_chars=sp_chars + 120, memory_budget_pct=100, knowledge_budget_pct=0)
+    )
+
+    assert "shared operator identity that must always survive" in tight.text  # never shed
+    assert len(tight.shared_profile_ids) == 1
+    assert len(tight.rel_memory_ids) < n_unbounded  # relevant memory shed around it
+    assert any(o["label"] == "Relevant memory" for o in tight.overflow)
+
+
 # ── r2 — a private live row on the same subject+kind suppresses the shared row ─
 
 
@@ -146,10 +228,22 @@ def test_private_row_of_a_different_kind_does_not_suppress(tmp_path, monkeypatch
 # ── r3 — disabled: nothing delivered, profile.db never opened ─────────────────
 
 
-def test_disabled_delivers_nothing_from_profile_db(tmp_path, monkeypatch):
-    # A populated store exists on disk, but it is NOT wired into STATE (disabled).
+def test_disabled_delivers_nothing_and_never_reads_profile_db(tmp_path, monkeypatch):
+    # A populated store exists on disk, but memory.shared_profile is off, so STATE holds
+    # None — the composer reads nothing. (The build-side "profile.db never created" guard
+    # lives in tests/test_shared_profile_store.py; here we prove the DELIVERY path, with a
+    # store on disk, never opens it and delivers nothing.)
     orphan = SharedProfileStore(tmp_path / "commons")
     orphan.add("this must never reach a disabled agent", kind="profile", provenance="operator", delivery="always")
+
+    opened: list[str] = []
+    real_connect = SharedProfileStore._connect
+
+    def _spy_connect(self):
+        opened.append(self.path)
+        return real_connect(self)
+
+    monkeypatch.setattr(SharedProfileStore, "_connect", _spy_connect)
     _use(monkeypatch, shared=None)  # memory.shared_profile off → STATE.shared_profile_store is None
 
     p = _compose(opts=ProjectionOptions(top_k=5))
@@ -157,30 +251,18 @@ def test_disabled_delivers_nothing_from_profile_db(tmp_path, monkeypatch):
     assert "[Operator profile (shared):]" not in p.text
     assert "this must never reach a disabled agent" not in p.text
     assert p.shared_profile_ids == []
-
-
-def test_disabled_build_returns_none_and_never_opens_profile_db(tmp_path, monkeypatch):
-    from graph.config import LangGraphConfig
-    from server.agent_init import _build_shared_profile_store
-
-    monkeypatch.delenv("KNOWLEDGE_DB_PATH", raising=False)
-    commons = tmp_path / "commons"
-    cfg = LangGraphConfig()  # memory_shared_profile defaults False
-    cfg.commons_path = str(commons)
-
-    assert _build_shared_profile_store(cfg) is None
-    assert not (commons / "profile.db").exists()  # never created / opened
+    assert opened == []  # the disabled turn never opened profile.db
 
 
 # ── r4 — memory_save(shared=True): pending in the shared store; errors otherwise
 
 
-def _memory_tools(*, shared_store, enabled, private=None):
+def _memory_tools(*, shared_store, enabled, private=None, confirm=False):
     import runtime.state as rs
     from tools.memory_tools import _build_memory_tools
 
     rs.STATE.shared_profile_store = shared_store
-    cfg = SimpleNamespace(knowledge_hot_write_confirm=False, memory_shared_profile=enabled)
+    cfg = SimpleNamespace(knowledge_hot_write_confirm=confirm, memory_shared_profile=enabled)
     return {t.name: t for t in _build_memory_tools(None, cfg, memory_store=private)}
 
 
@@ -239,6 +321,31 @@ def test_memory_save_shared_errors_when_store_off(tmp_path, monkeypatch):
     assert "memory.shared_profile is disabled" in out
 
 
+def test_memory_save_shared_always_on_refused_when_confirm_gate_on(tmp_path, monkeypatch):
+    # The always-on confirm gate (knowledge.hot_write_confirm) refuses a delivery="always"
+    # shared proposal, exactly as it refuses the private path — only operator surfaces
+    # promote to always-on, and a confirmed shared always row reaches EVERY agent.
+    store = SharedProfileStore(tmp_path / "commons")
+    monkeypatch.setattr("runtime.state.STATE.shared_profile_store", store, raising=False)
+    tools = _memory_tools(shared_store=store, enabled=True, confirm=True)
+
+    out = asyncio.run(
+        tools["memory_save"].ainvoke(
+            {"content": "operator identity", "kind": "profile", "delivery": "always", "shared": True}
+        )
+    )
+    assert out.startswith("Error:")
+    assert "knowledge.hot_write_confirm is on" in out
+    assert store.count() == 0  # refused, nothing proposed
+
+    # A retrieved (default) shared proposal is unaffected by the gate.
+    out2 = asyncio.run(
+        tools["memory_save"].ainvoke({"content": "operator identity", "kind": "profile", "shared": True})
+    )
+    assert out2.startswith("Proposed")
+    assert store.count() == 1
+
+
 def test_shared_arg_hidden_unless_enabled(tmp_path):
     from tools.memory_tools import _build_memory_tools
 
@@ -279,6 +386,38 @@ def test_injection_log_tags_shared_rows(tmp_path, monkeypatch):
     # a private "memory:<id>" row.
     assert all(h.startswith("shared_profile:") for h in mem_layer)
     assert f"shared_profile:{always_id}" in row["retrieved_memory_ids"]
+
+
+def test_injection_detail_resolves_shared_rows(tmp_path, monkeypatch):
+    # The operator's per-turn injection detail must resolve a shared_profile:<id> from the
+    # shared store (not fall through to the knowledge chunk reader, which would mark it
+    # unavailable and log an int("shared_profile:N") traceback).
+    import runtime.state as rs
+    from operator_api.injection_routes import _memory_item, _resolve_injection
+
+    store = SharedProfileStore(tmp_path / "commons")
+    sid = store.add(
+        "shared operator identity for the inspector", kind="profile", provenance="operator", delivery="always"
+    )
+    monkeypatch.setattr(rs.STATE, "shared_profile_store", store, raising=False)
+    monkeypatch.setattr(rs.STATE, "memory_store", None, raising=False)
+    monkeypatch.setattr(rs.STATE, "knowledge_store", None, raising=False)
+
+    item = _memory_item(None, f"shared_profile:{sid}")
+    assert item["unavailable"] is False
+    assert "shared operator identity for the inspector" in item["snippet"]
+
+    detail = _resolve_injection(
+        {
+            "retrieved_memory_ids": [f"shared_profile:{sid}"],
+            "hot_chunk_ids": [],
+            "rag_chunk_ids": [],
+            "digest_session_ids": [],
+        }
+    )
+    assert len(detail["memories"]) == 1
+    assert detail["memories"][0]["unavailable"] is False
+    assert detail["docs"] == []  # a shared id is a memory, never a knowledge doc
 
 
 # ── incognito suppresses the shared profile like every other memory part ──────
