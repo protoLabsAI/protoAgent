@@ -274,6 +274,8 @@ def _build_memory_tools(
             expires_in_days: optional 1–3650 shelf life for volatile facts.
 
         New memories stay pending until the operator confirms them in the Memory inspector.
+        Pending saves preserve operator-authored, confirmed and always-on rows on the
+        same subject; these appear in the result as other live memories.
         """
         store = _memory()
         if store is None:
@@ -303,7 +305,7 @@ def _build_memory_tools(
 
         def _write():
             # Deterministic supersession (ADR 0125 P3-A, no model at write time): a subject
-            # retires the live rows on the SAME subject+kind+scope and we read back what it
+            # retires eligible pending rows on the SAME subject+kind+scope and we read back what it
             # replaced plus the other live rows on that subject, so the agent can see — and
             # the operator can later revert — a wrong supersession.
             memory_id, replaced = store.add_with_supersession(

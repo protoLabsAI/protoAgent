@@ -215,6 +215,9 @@ class MemoryStore:
         whitespace-normalised for matching, stored as given), the same ``kind`` and the
         same ``scope`` is stamped ``superseded_by`` = the new id and its ``updated_at``
         bumped. A row without a subject never supersedes and is never superseded.
+        Pending replacements may retire only pending agent/extracted rows that are
+        not always-on. Replacing operator-authored, confirmed or always-on rows
+        requires a confirmed replacement. Rejected or expired writes retire nothing.
 
         Returns ``(new_id, replaced)`` where ``replaced`` lists the retired rows as they
         were before the stamp (newest first).
@@ -224,6 +227,7 @@ class MemoryStore:
         )
         vec = self._embed((heading + "\n" if heading else "") + content)
         now = _now_iso()
+        expires_at = _normalize_expires_at(expires_at)
         norm_subject = _normalize_subject(subject)
         norm_scope = scope or None
         replaced: list[MemoryEntry] = []
@@ -241,7 +245,7 @@ class MemoryStore:
                     review_state,
                     provenance,
                     scope,
-                    _normalize_expires_at(expires_at),
+                    expires_at,
                     source_session,
                     thread_id,
                     legacy_domain,
@@ -252,7 +256,7 @@ class MemoryStore:
             id = int(cur.lastrowid)
             if vec is not None:
                 db.execute("INSERT INTO memory_vectors VALUES (?, ?)", (id, json.dumps(vec)))
-            if supersede and norm_subject:
+            if supersede and norm_subject and review_state != "rejected" and (expires_at is None or expires_at > now):
                 # Candidate live rows of the same kind; the subject (normalised) and scope
                 # match is applied in Python so the fold matches ``_normalize_subject`` exactly.
                 rows = db.execute(
@@ -263,6 +267,12 @@ class MemoryStore:
                 ).fetchall()
                 for row in rows:
                     if _normalize_subject(row["subject"]) != norm_subject or (row["scope"] or None) != norm_scope:
+                        continue
+                    if review_state != "confirmed" and (
+                        row["provenance"] == "operator"
+                        or row["review_state"] == "confirmed"
+                        or row["delivery"] == "always"
+                    ):
                         continue
                     db.execute(
                         "UPDATE memories SET superseded_by = ?, updated_at = ? WHERE id = ?",
@@ -468,12 +478,21 @@ class MemoryStore:
         ``old_id`` was retired with ``superseded_by`` pointing at the row that replaced
         it; this clears that pointer (``old_id`` goes live again) and stamps the replacing
         row ``superseded_by = old_id`` — so both rows survive and exactly one is live.
-        Returns False when ``old_id`` isn't superseded (nothing to revert)."""
+        Returns False unless the old row is otherwise eligible and its direct
+        replacement is still live. In particular, undo a chain from its live end
+        first; never overwrite an intermediate row's audit link."""
         with self._write() as db:
-            row = db.execute("SELECT superseded_by FROM memories WHERE id = ?", (old_id,)).fetchone()
+            where, params = self._filters(include_superseded=True)
+            row = db.execute(f"SELECT m.* FROM memories m WHERE m.id = ? AND {where}", [old_id, *params]).fetchone()
             if row is None or row["superseded_by"] is None:
                 return False
             new_id = int(row["superseded_by"])
+            where, params = self._filters()
+            replacement = db.execute(
+                f"SELECT m.id FROM memories m WHERE m.id = ? AND {where}", [new_id, *params]
+            ).fetchone()
+            if replacement is None:
+                return False
             now = _now_iso()
             db.execute("UPDATE memories SET superseded_by = NULL, updated_at = ? WHERE id = ?", (now, old_id))
             db.execute("UPDATE memories SET superseded_by = ?, updated_at = ? WHERE id = ?", (old_id, now, new_id))

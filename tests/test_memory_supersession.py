@@ -95,11 +95,11 @@ def test_a_rejected_live_row_is_not_superseded(store):
 # ── r3 — the memory_save tool names the replaced row + the other live rows ───
 
 
-def _save_tool(tmp_path):
+def _save_tool(tmp_path, *, confirm_always_on=False):
     path = str(tmp_path / "agent.db")
     knowledge = KnowledgeStore(db_path=path)
     memory = MemoryStore(db_path=path)
-    cfg = SimpleNamespace(knowledge_hot_write_confirm=False)
+    cfg = SimpleNamespace(knowledge_hot_write_confirm=confirm_always_on)
     tools = {t.name: t for t in _build_memory_tools(knowledge, cfg, memory_store=memory)}
     return tools["memory_save"], memory
 
@@ -198,3 +198,102 @@ def test_superseded_row_never_delivers(store):
     assert old not in [e.id for e in store.search("searchable", 20, deliverable=True)]
     assert new in [e.id for e in store.search("searchable", 20, deliverable=True)]
     assert old not in [e.id for e in store.search("searchable", 20, include_superseded=True, deliverable=True)]
+
+
+@pytest.mark.parametrize("provenance", ["agent", "extracted", "operator"])
+@pytest.mark.parametrize(
+    "protected",
+    [
+        {"provenance": "operator", "review_state": "pending"},
+        {"provenance": "agent", "review_state": "confirmed"},
+        {"provenance": "extracted", "delivery": "always"},
+        {"provenance": "operator", "delivery": "always"},
+    ],
+)
+def test_pending_save_preserves_protected_rows(store, provenance, protected):
+    old = add(store, "protected floor", subject="floor", **protected)
+    new, replaced = store.add_with_supersession(
+        "proposed floor", kind="fact", provenance=provenance,
+        review_state="pending", subject="floor",
+    )
+    assert replaced == []
+    assert store.get(old).superseded_by is None
+    assert {e.id for e in store.live_on_subject("floor")} == {old, new}
+    assert store.set_review_state(new, "rejected")
+    assert [e.id for e in store.live_on_subject("floor")] == [old]
+    assert store.delete(new)
+    assert [e.id for e in store.live_on_subject("floor")] == [old]
+
+
+@pytest.mark.parametrize("old_provenance,new_provenance", [("agent", "extracted"), ("extracted", "agent")])
+def test_pending_agent_and_extracted_rows_supersede_each_other(store, old_provenance, new_provenance):
+    old = add(store, subject="floor", provenance=old_provenance)
+    new = add(store, subject="floor", provenance=new_provenance)
+    assert store.get(old).superseded_by == new
+    assert [e.id for e in store.list()] == [new]
+
+
+@pytest.mark.parametrize("kwargs", [{"review_state": "rejected"}, {"expires_at": "2000-01-01T00:00:00+00:00"}])
+def test_ineligible_new_row_never_supersedes(store, kwargs):
+    old = add(store, subject="floor")
+    _, replaced = store.add_with_supersession(
+        "bad replacement", kind="fact", provenance="operator", subject="floor", **kwargs,
+    )
+    assert replaced == []
+    assert [e.id for e in store.list()] == [old]
+
+
+def test_memory_save_cannot_retire_operator_always_on_row(tmp_path):
+    save, memory = _save_tool(tmp_path, confirm_always_on=True)
+    old = add(memory, "protected floor", subject="floor", delivery="always")
+    out = asyncio.run(save.ainvoke({"content": "proposed floor", "subject": "floor"}))
+    assert "Replaced" not in out
+    assert f"#{old} (fact)" in out
+    assert memory.always_on() == "protected floor"
+    new = next(e.id for e in memory.list() if e.id != old)
+    memory.delete(new)
+    assert memory.always_on() == "protected floor"
+
+
+def test_revert_chain_rejects_non_tip_without_changing_audit_links(store):
+    first = add(store, "v1", subject="floor")
+    second = add(store, "v2", subject="floor")
+    third = add(store, "v3", subject="floor")
+    before = store.inspect()
+    assert store.revert_supersession(first) is False
+    assert store.inspect() == before
+    assert store.revert_supersession(second) is True
+    assert store.revert_supersession(first) is True
+    assert [e.id for e in store.list()] == [first]
+    assert store.get(second).superseded_by == first
+    assert store.get(third).superseded_by == second
+
+
+@pytest.mark.parametrize("target", ["old", "new"])
+@pytest.mark.parametrize("state", ["deleted", "invalidated", "rejected", "expired"])
+def test_revert_ineligible_pair_is_atomic_noop(store, target, state):
+    old = add(store, "v1", subject="floor")
+    new = add(store, "v2", subject="floor")
+    target_id = old if target == "old" else new
+    if state == "deleted":
+        store.delete(target_id)
+    elif state == "rejected":
+        store.set_review_state(target_id, "rejected")
+    else:
+        column = "invalidated_at" if state == "invalidated" else "expires_at"
+        with store._write() as db:
+            db.execute(f"UPDATE memories SET {column} = ? WHERE id = ?", ("2000-01-01T00:00:00+00:00", target_id))
+    before = (store.get(old), store.get(new))
+    assert store.revert_supersession(old) is False
+    assert (store.get(old), store.get(new)) == before
+
+
+@pytest.mark.platform_sensitive
+def test_revert_route_rejects_chain_without_mutation(tmp_path, monkeypatch, store):
+    old = add(store, "v1", subject="floor")
+    add(store, "v2", subject="floor")
+    add(store, "v3", subject="floor")
+    before = store.inspect()
+    client = _route_client(tmp_path, monkeypatch, store)
+    assert client.post(f"/api/memory/memories/{old}/revert").status_code == 404
+    assert store.inspect() == before

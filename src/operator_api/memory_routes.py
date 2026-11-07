@@ -619,7 +619,7 @@ def register_memory_routes(app) -> None:
         # Undo one automatic supersession (ADR 0125 P3-A): a subject consolidation retired
         # this row by stamping its ``superseded_by``; revert clears that so the row is live
         # again and stamps the row that replaced it superseded instead — both survive for
-        # audit, exactly one is live. 404 when the row isn't superseded (nothing to undo).
+        # audit, exactly one is live. 404 when there is no eligible pair to undo.
         store = STATE.memory_store
         if store is None:
             return {"enabled": False, "id": None, "reverted": False}
@@ -629,7 +629,7 @@ def register_memory_routes(app) -> None:
             log.exception("[memory] revert of memory %s failed", memory_id)
             return JSONResponse({"detail": "revert failed"}, status_code=500)
         if not reverted:
-            return JSONResponse({"detail": "memory is not superseded"}, status_code=404)
+            return JSONResponse({"detail": "memory has no revertible supersession"}, status_code=404)
         return {"enabled": True, "id": memory_id, "reverted": True}
 
     # --- History (ADR 0125 D6) -----------------------------------------------
