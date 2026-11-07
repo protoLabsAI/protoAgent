@@ -441,6 +441,8 @@ def serving(monkeypatch):
     is up" signal it gates on. monkeypatch restores the singleton after the test."""
     from runtime.state import STATE
 
+    monkeypatch.delenv("A2A_PUBLIC_URL", raising=False)
+
     def _bind(host, port):
         monkeypatch.setattr(STATE, "main_loop", object())
         monkeypatch.setattr(STATE, "bind_host", host)
@@ -455,6 +457,7 @@ def not_serving(monkeypatch):
     deterministic even if another test left the process-wide singleton populated."""
     from runtime.state import STATE
 
+    monkeypatch.delenv("A2A_PUBLIC_URL", raising=False)
     monkeypatch.setattr(STATE, "main_loop", None)
     return STATE
 
