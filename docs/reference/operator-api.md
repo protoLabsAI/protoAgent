@@ -263,6 +263,7 @@ keeps the set beside the device token for its offline notice and **Move this pho
 | Method | Path | Purpose |
 |---|---|---|
 | GET | `/api/telemetry/{summary,recent,export,insights}` | Cost/usage telemetry |
+| GET | `/api/telemetry/tools?since=7d` | Operator-only tool usage: `{enabled, since, tools}`. Each tool has `tool`, `calls`, `errors`, `error_rate` (fraction), `p50_ms`, and `p95_ms`. Optional `since` accepts an ISO date/time or a relative window such as `7d`; omitted means all retained calls. Invalid cutoffs return 422; a disabled store returns `enabled: false` and an empty tool list. |
 | GET | `/api/usage/fleet` | Operator-only subscription usage, deduplicated by `account_key`; each account lists its member slugs and `members` reports reachability. The host reads its usual usage store; peers supply cached snapshots over the fleet proxy with paired bearers. Host snapshots take precedence. Member reads never poll (`/api/usage?cache_only=true`); cold caches report unknown and stale caches retain last-known windows. Unreachable peers do not fail the rollup. |
 | GET | `/api/telemetry/llm-lanes` | Model in-flight-limiter lane snapshot (ADR 0115) |
 | POST · GET | `/api/feedback` | Per-turn thumbs rating + Langfuse `user_feedback` score (ADR 0126 E2/D3) |

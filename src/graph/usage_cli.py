@@ -61,6 +61,8 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument(
         "--by-agent", action="store_true", help="member share of attributed tokens per account window (operator only)"
     )
+    p.add_argument("--by-tool", action="store_true", help="tool calls, errors and latency (operator only)")
+    p.add_argument("--since", metavar="WINDOW", help="tool telemetry since an ISO date or window like 7d")
     p.add_argument("--account", metavar="ID", help="only this account (provider id or account key)")
     p.add_argument(
         "--warn-at",
@@ -368,13 +370,79 @@ def _render(payload: dict) -> None:
         print(f"\n  ⚠ a window is at or above {payload['warn_at']:g}% — exit 2", file=sys.stderr)
 
 
+def _tool_payload(args, *, hub=None, tools=None, unreachable=None, error=None) -> dict:
+    return {
+        "mode": "fleet" if args.fleet else "local",
+        "ok": error is None,
+        "hub": hub,
+        "since": args.since,
+        "percentiles": "max_of_members" if args.fleet else "local",
+        "tools": tools or [],
+        "unreachable": unreachable or [],
+        "error": error,
+    }
+
+
+def _collect_tools(conn, args) -> dict:
+    groups: dict[str, dict] = {}
+    unreachable = []
+    roster = conn.roster if args.fleet else [{"host": True, "name": "host"}]
+    for member in roster:
+        slug = slug_of(member)
+        reason = None
+        if args.fleet and presence_of(member) not in _READABLE:
+            reason = presence_of(member)
+        else:
+            try:
+                body = conn.client.member_get(slug, "/api/telemetry/tools", **({"since": args.since} if args.since else {}))
+                if not isinstance(body, dict) or not isinstance(body.get("tools"), list):
+                    raise deckhub.HubError(conn.client.url, "invalid tool telemetry snapshot")
+                if body.get("enabled") is False:
+                    reason = "no tool telemetry"
+            except deckhub.HubError as exc:
+                if not args.fleet:
+                    raise
+                reason = "no tool telemetry" if isinstance(exc, deckhub.HubRequestError) and exc.status == 404 else _short(exc)
+        if reason:
+            unreachable.append({"member": display_name(member), "slug": slug, "error": reason})
+            continue
+        for row in body["tools"]:
+            tool = row["tool"]
+            group = groups.setdefault(tool, {"tool": tool, "calls": 0, "errors": 0, "p50_ms": 0, "p95_ms": 0})
+            group["calls"] += row["calls"]
+            group["errors"] += row["errors"]
+            for key in ("p50_ms", "p95_ms"):
+                group[key] = max(group[key], row[key])
+    for group in groups.values():
+        group["error_rate"] = group["errors"] / group["calls"] if group["calls"] else 0
+    records = sorted(groups.values(), key=lambda row: (-row["calls"], row["tool"]))
+    return _tool_payload(args, hub=conn.client.url, tools=records, unreachable=unreachable)
+
+
+def _render_tools(payload: dict) -> None:
+    suffix = " (max of members)" if payload["mode"] == "fleet" else ""
+    rows = [["Tool", "Calls", "Errors", "Error rate", "p50 ms" + suffix, "p95 ms" + suffix]]
+    for row in payload["tools"]:
+        rows.append([row["tool"], str(row["calls"]), str(row["errors"]), f"{row['error_rate']:.1%}",
+                     f"{row['p50_ms']:g}", f"{row['p95_ms']:g}"])
+    widths = [max(len(row[i]) for row in rows) for i in range(6)]
+    for row in rows:
+        print("  ".join(cell.ljust(widths[i]) for i, cell in enumerate(row)).rstrip())
+    if not payload["tools"]:
+        print("  (no tool telemetry)")
+    for member in payload["unreachable"]:
+        print(f"  {member['member']}: {member['error']}", file=sys.stderr)
+
+
 # ── entry ────────────────────────────────────────────────────────────────────
 
 
 def _no_server(args: argparse.Namespace, exc: Exception) -> int:
     mode = "fleet" if args.fleet else "local"
     hub = getattr(exc, "url", "") or (deckhub.redact_url(args.hub) if args.hub else None)
-    if args.as_json:
+    if args.as_json and args.by_tool:
+        _emit(_tool_payload(args, hub=hub or None, error=str(exc)))
+    elif args.as_json:
         _emit(_payload(mode, args, ok=False, hub=hub or None, records=[], unreachable=[], error=str(exc)))
     else:
         what = "--fleet needs a running hub" if args.fleet else "needs a running server"
@@ -383,7 +451,19 @@ def _no_server(args: argparse.Namespace, exc: Exception) -> int:
 
 
 def run_usage_cli(argv: list[str]) -> int:
-    args = _build_parser().parse_args(argv)
+    parser = _build_parser()
+    args = parser.parse_args(argv)
+    if args.by_tool and (args.by_agent or args.account):
+        parser.error("--by-tool cannot be combined with --by-agent or --account")
+    if args.since is not None:
+        if not args.by_tool:
+            parser.error("--since requires --by-tool")
+        from graph.fleet.friction_cli import parse_since
+
+        try:
+            args.since = parse_since(args.since, now=_now())
+        except (ValueError, OverflowError):
+            parser.error("--since must be an ISO date or a window like 7d")
     # The server configures INFO logging at import; keep httpx's per-request narration off
     # the operator's face (errors still surface as typed HubErrors), as the fleet CLI does.
     logging.getLogger("httpx").setLevel(logging.WARNING)
@@ -395,6 +475,10 @@ def run_usage_cli(argv: list[str]) -> int:
 
     hub_url = conn.client.url
     try:
+        if args.by_tool:
+            payload = _collect_tools(conn, args)
+            (_emit if args.as_json else _render_tools)(payload)
+            return 0
         if args.by_agent:
             path = "/api/usage/fleet" if args.fleet else "/api/usage"
             body = conn.client.member_get("host", path, by_agent="true")
