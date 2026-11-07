@@ -218,6 +218,8 @@ class MemoryStore:
         Pending replacements may retire only pending agent/extracted rows that are
         not always-on. Replacing operator-authored, confirmed or always-on rows
         requires a confirmed replacement. Rejected or expired writes retire nothing.
+        A replacement must also expire no earlier than the row it retires; temporary
+        saves preserve longer-lived memories so expiry cannot strand them.
 
         Returns ``(new_id, replaced)`` where ``replaced`` lists the retired rows as they
         were before the stamp (newest first).
@@ -262,11 +264,14 @@ class MemoryStore:
                 rows = db.execute(
                     "SELECT * FROM memories WHERE id != ? AND kind = ? AND subject IS NOT NULL "
                     "AND superseded_by IS NULL AND invalidated_at IS NULL AND review_state != 'rejected' "
+                    "AND (expires_at IS NULL OR expires_at > ?) "
                     "ORDER BY created_at DESC, id DESC",
-                    (id, kind),
+                    (id, kind, now),
                 ).fetchall()
                 for row in rows:
                     if _normalize_subject(row["subject"]) != norm_subject or (row["scope"] or None) != norm_scope:
+                        continue
+                    if expires_at is not None and (row["expires_at"] is None or expires_at < row["expires_at"]):
                         continue
                     if review_state != "confirmed" and (
                         row["provenance"] == "operator"
@@ -510,8 +515,9 @@ class MemoryStore:
         it; this clears that pointer (``old_id`` goes live again) and stamps the replacing
         row ``superseded_by = old_id`` — so both rows survive and exactly one is live.
         Returns False unless the old row is otherwise eligible and its direct
-        replacement is still live. In particular, undo a chain from its live end
-        first; never overwrite an intermediate row's audit link."""
+        replacement is still live and would not outlive the restored row. In particular,
+        undo a chain from its live end first; never overwrite an intermediate row's
+        audit link."""
         with self._write() as db:
             where, params = self._filters(include_superseded=True)
             row = db.execute(f"SELECT m.* FROM memories m WHERE m.id = ? AND {where}", [old_id, *params]).fetchone()
@@ -520,9 +526,13 @@ class MemoryStore:
             new_id = int(row["superseded_by"])
             where, params = self._filters()
             replacement = db.execute(
-                f"SELECT m.id FROM memories m WHERE m.id = ? AND {where}", [new_id, *params]
+                f"SELECT m.* FROM memories m WHERE m.id = ? AND {where}", [new_id, *params]
             ).fetchone()
             if replacement is None:
+                return False
+            if row["expires_at"] is not None and (
+                replacement["expires_at"] is None or row["expires_at"] < replacement["expires_at"]
+            ):
                 return False
             now = _now_iso()
             db.execute("UPDATE memories SET superseded_by = NULL, updated_at = ? WHERE id = ?", (now, old_id))

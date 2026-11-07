@@ -422,3 +422,60 @@ def test_revert_route_rejects_chain_without_mutation(tmp_path, monkeypatch, stor
     client = _route_client(tmp_path, monkeypatch, store)
     assert client.post(f"/api/memory/memories/{old}/revert").status_code == 404
     assert store.inspect() == before
+
+
+@pytest.mark.parametrize("old_expiry", [None, "2099-03-01T00:00:00+00:00"])
+def test_temporary_save_preserves_longer_lived_memory(store, monkeypatch, old_expiry):
+    monkeypatch.setattr("knowledge.memories._now_iso", lambda: "2099-01-01T00:00:00+00:00")
+    old = add(store, "searchable durable floor", subject="floor", delivery="always", expires_at=old_expiry)
+    new, replaced = store.add_with_supersession(
+        "searchable temporary floor", kind="fact", provenance="operator", subject="floor",
+        delivery="always", expires_at="2099-02-01T00:00:00+00:00",
+    )
+    assert replaced == []
+    assert store.get(old).superseded_by is None
+    assert {e.id for e in store.live_on_subject("floor")} == {old, new}
+    monkeypatch.setattr("knowledge.memories._now_iso", lambda: "2099-02-01T00:00:00+00:00")
+    assert [e.id for e in store.list()] == [old]
+    assert [e.id for e in store.live_on_subject("floor")] == [old]
+    assert store.always_on() == "searchable durable floor"
+    assert [e.id for e in store.search("searchable", 20, deliverable=True)] == [old]
+
+
+@pytest.mark.parametrize("new_expiry", [None, "2099-03-01T00:00:00+00:00", "2099-02-01T00:00:00+00:00"])
+def test_replacement_can_retire_row_with_no_longer_lifetime(store, monkeypatch, new_expiry):
+    monkeypatch.setattr("knowledge.memories._now_iso", lambda: "2099-01-01T00:00:00+00:00")
+    old = add(store, subject="floor", expires_at="2099-02-01T00:00:00+00:00")
+    new, replaced = store.add_with_supersession(
+        "replacement", kind="fact", provenance="operator", subject="floor", expires_at=new_expiry,
+    )
+    assert [e.id for e in replaced] == [old]
+    assert store.get(old).superseded_by == new
+    before = (store.get(old), store.get(new))
+    if new_expiry == "2099-02-01T00:00:00+00:00":
+        assert store.revert_supersession(old)
+        assert [e.id for e in store.list()] == [old]
+    else:
+        assert not store.revert_supersession(old)
+        assert (store.get(old), store.get(new)) == before
+        monkeypatch.setattr("knowledge.memories._now_iso", lambda: "2099-02-01T00:00:00+00:00")
+        assert [e.id for e in store.list()] == [new]
+
+
+def test_expired_candidate_is_not_retired(store, monkeypatch):
+    monkeypatch.setattr("knowledge.memories._now_iso", lambda: "2099-02-01T00:00:00+00:00")
+    old = add(store, subject="floor", expires_at="2099-02-01T00:00:00+00:00")
+    _, replaced = store.add_with_supersession("new", kind="fact", provenance="operator", subject="floor")
+    assert replaced == []
+    assert store.get(old).superseded_by is None
+
+
+def test_memory_save_with_expiry_reports_preserved_memory(tmp_path, monkeypatch):
+    save, memory = _save_tool(tmp_path)
+    old = add(memory, "durable floor", subject="floor", provenance="agent")
+    out = asyncio.run(save.ainvoke({"content": "temporary floor", "subject": "floor", "expires_in_days": 1}))
+    assert "Replaced" not in out
+    assert f"#{old} (fact)" in out
+    assert memory.get(old).superseded_by is None
+    monkeypatch.setattr("knowledge.memories._now_iso", lambda: "2099-01-01T00:00:00+00:00")
+    assert [e.id for e in memory.list()] == [old]
