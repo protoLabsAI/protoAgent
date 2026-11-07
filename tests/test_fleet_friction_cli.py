@@ -136,6 +136,12 @@ def test_filters_severity_kind_since_and_agent(monkeypatch, capsys):
     assert [i["summary"] for i in out["results"][0]["items"]] == [SHARED["summary"]]  # 'ancient thing' is too old
 
 
+def test_since_keeps_a_row_whose_timestamp_has_no_offset():
+    since = friction_cli.parse_since("2026-10-01")
+    assert friction_cli._keep({"last_seen": "2026-10-16T10:00:00"}, severity=None, since=since) is True
+    assert friction_cli._keep({"last_seen": "2026-09-01T10:00:00"}, severity=None, since=since) is False
+
+
 def test_since_accepts_windows_and_rejects_nonsense():
     from datetime import datetime, timezone
 

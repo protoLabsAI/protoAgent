@@ -283,8 +283,8 @@ and a dev sandbox are both up. `resolve` stays per-hub: pick one with `--hub URL
 Once a fix has shipped, clear the signal where it was recorded:
 
 ```bash
-protoagent fleet friction resolve 3f9a21c0 --agent alpha --agent beta --reason "fixed in #4321"
-protoagent fleet friction resolve 3f9a21c0 --all-agents --reason "…"
+protoagent fleet friction resolve 3f9a21c0 --agent alpha --agent beta --reason "fixed in protoAgent 4321"
+protoagent fleet friction resolve 3f9a21c0 71be09d4 --all-agents --reason "noise"
 protoagent fleet friction resolve 3f9a21c0 --agent alpha --reopen
 ```
 

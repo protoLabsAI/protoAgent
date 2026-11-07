@@ -100,7 +100,10 @@ def _keep(item: dict, *, severity: str | None, since: str | None) -> bool:
         seen = str(item.get("last_seen") or item.get("ts") or "")
         # Compare as instants where both parse; the ledger writes ISO-8601 with an offset.
         try:
-            return datetime.fromisoformat(seen.replace("Z", "+00:00")) >= datetime.fromisoformat(since)
+            when = datetime.fromisoformat(seen.replace("Z", "+00:00"))
+            if when.tzinfo is None:  # a naive stamp is UTC, the ledger's own clock
+                when = when.replace(tzinfo=timezone.utc)
+            return when >= datetime.fromisoformat(since)
         except ValueError:
             return True  # an unparseable stamp is not evidence the row is old
     return True
