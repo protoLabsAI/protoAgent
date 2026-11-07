@@ -472,9 +472,10 @@ def compose_projected_context(
 
     # 2b. Relevant memory — top-k from the core MemoryStore on the turn's query (ADR 0125
     #     P2-F). A SECOND retrieval alongside the knowledge search below, with its OWN
-    #     store, top_k and budget slice, so a large knowledge collection can't crowd
-    #     recalled memory out of the turn. Suppressed on incognito and with no query, the
-    #     same gates the knowledge layer honours.
+    #     store and budget slice (its top_k derives from knowledge.top_k), so a large
+    #     knowledge collection can't crowd recalled memory out of the turn. delivery=
+    #     "retrieved" only — always-on and on_demand rows do not auto-inject. Suppressed on
+    #     incognito and with no query, the same gates the knowledge layer honours.
     rel_memory: list[dict] = []
     if query and not incognito:
         rel_memory = _relevant_memory(query, opts)
@@ -868,19 +869,24 @@ def _fit_to_budget(c: _Candidates, opts: ProjectionOptions, skills_index, summar
             skills_shed = True
 
     # 4. Never-shed remainder — heard once per distinct standing-context size.
+    #    Relevant memory is never-shed past its own slice (ADR 0125 P2-F), so it
+    #    too can be the cause: name its size and let operators trim it, not only
+    #    the always-on memory.
     if len(d.text) > budget:
-        key = (len(c.working_state), len(c.hot))
+        rel_mem_chars = len(_render_memory(c.rel_memory)[0]) if c.rel_memory else 0
+        key = (len(c.working_state), len(c.hot), rel_mem_chars)
         # (Not named `emit` — the plugin-events catalog scanner reads `emit("…")` as a bus topic.)
         say = log.debug if key in _NEVER_SHED_WARNED else log.warning
         _NEVER_SHED_WARNED.add(key)
         say(
             "[projection] never-shed sections exceed the context budget: used=%d budget=%d "
-            "(working_state=%d, always_on=%d, skills_floor=%d chars) — raise context.budget_pct "
-            "or trim the always-on memory",
+            "(working_state=%d, always_on=%d, relevant_memory=%d, skills_floor=%d chars) — raise "
+            "context.budget_pct or trim the always-on/relevant memory",
             len(d.text),
             budget,
             len(c.working_state),
             len(c.hot),
+            rel_mem_chars,
             len(c.skill_block),
         )
     if overflow:
@@ -1105,31 +1111,40 @@ def _relevant_memory(query: str, opts: ProjectionOptions) -> list[dict]:
     A SECOND retrieval alongside :func:`search_scoped`, over the independent
     ``STATE.memory_store`` (the same store :func:`_always_on_memory` reads), so a
     large knowledge collection can't crowd recalled memory out of the turn — this
-    layer has its own store, its own top_k and its own budget slice. Deliverable-
-    only, namespace-scoped (on the memory's ``scope``) and trust-ranked through
-    the SAME gates the knowledge layer uses. The pool is over-fetched 3× under a
-    trust floor (mirroring :func:`search_scoped`) so floor-dropped hits don't
-    thin the result. ``memory_k`` is derived from ``knowledge.top_k``. Never
-    raises — a memory hiccup skips the layer, not the turn."""
+    layer has its own store and its own budget slice. ``delivery="retrieved"``
+    only: "always" rows belong to the Always-on section and "on_demand" rows are
+    reachable solely through an explicit ``memory_search`` call, so neither
+    auto-injects. Namespace-scoped (on the memory's ``scope``) and trust-ranked
+    through the SAME gates the knowledge layer uses. The pool is over-fetched 3×
+    under a trust floor (mirroring :func:`search_scoped`) so floor-dropped hits
+    don't thin the result. ``memory_k`` is derived from ``knowledge.top_k``
+    (``opts.top_k``). Never raises — a memory hiccup skips the layer, not the
+    turn."""
     from runtime.state import STATE
 
     memory_store = getattr(STATE, "memory_store", None)
     if memory_store is None or not query or opts.top_k <= 0:
         return []
     k = opts.top_k if opts.inject_min_trust <= 1 else opts.top_k * 3
+    # Only "retrieved" memories auto-inject here. "always" memories are already
+    # delivered unconditionally in the "Always-on memory" section (so re-injecting
+    # them would double-inject), and "on_demand" memories are reachable ONLY
+    # through an explicit memory_search tool call — never auto-injected. The
+    # ``delivery="retrieved"`` filter is applied IN the store, so it holds BEFORE
+    # the top-k cut: excluded always-on/on_demand rows never take a result slot
+    # and thin the layer (ADR 0125 P2-F).
     try:
         try:
-            entries = memory_store.search(query, k=k, deliverable=True)
-        except TypeError:  # a store predating the deliverable kwarg
+            entries = memory_store.search(query, k=k, delivery="retrieved", deliverable=True)
+        except TypeError:  # a store predating the delivery/deliverable kwargs
             entries = memory_store.search(query, k=k)
     except Exception:  # noqa: BLE001 — a memory hiccup skips the layer, never the turn
         log.debug("[projection] relevant-memory search skipped", exc_info=True)
         return []
     rows = [_memory_as_row(e) for e in entries]
-    # An always-on memory is already delivered unconditionally in the "Always-on
-    # memory" section — it must not ALSO land here (double injection). The
-    # relevant-memory layer is the retrieved/on-demand memories that MATCH.
-    rows = [r for r in rows if r.get("delivery") != "always"]
+    # Belt-and-suspenders for a fallback store that ignored ``delivery=``: the
+    # whole rule for it, idempotent on the primary path (all already "retrieved").
+    rows = [r for r in rows if r.get("delivery") == "retrieved"]
     namespaces = set(opts.inject_namespaces)
     if namespaces:
         rows = [r for r in rows if (r.get("namespace") or "") in namespaces]

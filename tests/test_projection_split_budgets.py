@@ -170,6 +170,32 @@ def test_memory_cannot_take_an_empty_knowledge_slice(tmp_path, monkeypatch):
     assert len(_memory_section(p.text)) <= int(budget * 0.40)
 
 
+# ── on_demand memory is reachable only via an explicit tool call, never injected ─
+
+
+def test_on_demand_memory_never_auto_injects(tmp_path, monkeypatch):
+    """``on_demand`` memories are reachable ONLY through an explicit ``memory_search``
+    tool call — the relevant-memory layer must never auto-inject them. And because
+    the delivery filter runs IN the store (before the top-k cut), several matching
+    on_demand rows do not take result slots and thin the one retrieved memory
+    (ADR 0125 P2-F)."""
+    ks = KnowledgeStore(tmp_path / "kb.db")
+
+    mem = MemoryStore(tmp_path / "mem.db")
+    # Five on_demand matches that would, under a post-top-k filter, crowd the one
+    # retrieved memory out of a single-slot top_k.
+    for i in range(5):
+        mem.add(f"deployment schedule on-demand secret {i}", kind="fact", provenance="operator", delivery="on_demand")
+    mem.add("deployment schedule retrieved note", kind="fact", provenance="operator", delivery="retrieved")
+    _use_memory_store(monkeypatch, mem)
+
+    p = _compose(ks, opts=ProjectionOptions(top_k=1, budget_chars=None))
+
+    assert "deployment schedule retrieved note" in p.text  # the retrieved memory survives the slot
+    assert "on-demand secret" not in p.text  # no on_demand memory auto-injects
+    assert len(p.rel_memory_ids) == 1
+
+
 # ── r3 — the sections are labelled; knowledge cites [collection · source] ──────
 
 
