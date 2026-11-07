@@ -225,6 +225,60 @@ def test_pending_save_preserves_protected_rows(store, provenance, protected):
     assert [e.id for e in store.live_on_subject("floor")] == [old]
 
 
+# ── rejecting / deleting a replacement must restore the rows it retired ──────
+#
+# The round-2 regression: a pending agent/extracted save supersedes an older row, then
+# the operator rejects or hard-deletes that replacement. The retired row must come back
+# live (its superseded_by cleared) in the SAME transaction — otherwise the subject is
+# left with no live memory and no API can restore it (ADR 0125 P3-A).
+
+
+def test_rejecting_a_replacement_restores_the_row_it_retired(store):
+    old = add(store, "floor v1", subject="floor", provenance="agent", review_state="pending")
+    new = add(store, "floor v2", subject="floor", provenance="agent", review_state="pending")
+    assert store.get(old).superseded_by == new
+    assert store.set_review_state(new, "rejected")
+    assert store.get(old).superseded_by is None  # the retired row is live again
+    assert [e.id for e in store.list()] == [old]  # exactly one live row, the restored one
+    assert store.get(new).review_state == "rejected"  # the rejected replacement survives for audit
+
+
+def test_deleting_a_replacement_restores_the_row_it_retired(store):
+    old = add(store, "floor v1", subject="floor", provenance="agent", review_state="pending")
+    new = add(store, "floor v2", subject="floor", provenance="agent", review_state="pending")
+    assert store.get(old).superseded_by == new
+    assert store.delete(new)
+    assert store.get(new) is None  # hard-deleted
+    assert store.get(old).superseded_by is None  # the retired row is live again
+    assert [e.id for e in store.list()] == [old]
+
+
+def test_rejecting_a_mid_chain_replacement_relinks_survivors_to_its_heir(store):
+    # v1→v2→v3 (v3 live). Rejecting v2 re-homes v1 onto v2's heir (v3) — never strands it.
+    v1 = add(store, "v1", subject="floor", provenance="agent")
+    v2 = add(store, "v2", subject="floor", provenance="agent")
+    v3 = add(store, "v3", subject="floor", provenance="agent")
+    assert store.get(v1).superseded_by == v2
+    assert store.get(v2).superseded_by == v3
+    assert store.set_review_state(v2, "rejected")
+    assert store.get(v1).superseded_by == v3  # spliced onto the live tip
+    assert [e.id for e in store.list()] == [v3]  # v3 is still the one live row
+
+
+def test_rejecting_a_replacement_restores_every_row_it_retired(store):
+    # One save can consolidate several live rows at once (seeded here with supersede=False);
+    # rejecting that save brings them ALL back, not just the newest.
+    a = store.add("a1", kind="fact", provenance="agent", subject="floor", supersede=False)
+    b = store.add("a2", kind="fact", provenance="agent", subject="floor", supersede=False)
+    assert {e.id for e in store.list()} == {a, b}  # both live, neither superseded the other
+    new, replaced = store.add_with_supersession("consolidated", kind="fact", provenance="agent", subject="floor")
+    assert {r.id for r in replaced} == {a, b}
+    assert store.get(a).superseded_by == new and store.get(b).superseded_by == new
+    assert store.set_review_state(new, "rejected")
+    assert store.get(a).superseded_by is None and store.get(b).superseded_by is None
+    assert {e.id for e in store.list()} == {a, b}  # both retired rows are live again
+
+
 @pytest.mark.parametrize("old_provenance,new_provenance", [("agent", "extracted"), ("extracted", "agent")])
 def test_pending_agent_and_extracted_rows_supersede_each_other(store, old_provenance, new_provenance):
     old = add(store, subject="floor", provenance=old_provenance)

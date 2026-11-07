@@ -459,18 +459,49 @@ class MemoryStore:
             _publish_hot_write(f"memory:{id}", existing.source_session, "operator", content)
         return updated
 
+    @staticmethod
+    def _detach_as_replacement(db, dead_id: int, now: str) -> None:
+        """Splice a row out of every supersession chain it was the replacement in
+        (ADR 0125 P3-A). Must run inside the caller's write transaction.
+
+        When ``dead_id`` leaves the live set — the operator rejects it, or it is hard-
+        deleted — the rows it had retired (``superseded_by = dead_id``) must not stay
+        stranded pointing at a row no ``revert_supersession`` can restore: that would
+        leave the subject with no live memory, the pre-PR behavior this card must not
+        regress. Re-point each onto ``dead_id``'s OWN replacement (its ``superseded_by``,
+        which is ``NULL`` when it was the live tip), so the oldest surviving row goes
+        live again and a longer chain keeps exactly one live row. A single ``memory_save``
+        can retire several rows at once, so this may re-home more than one. For a delete
+        the caller runs this BEFORE the row is gone, so its ``superseded_by`` is still
+        readable."""
+        row = db.execute("SELECT superseded_by FROM memories WHERE id = ?", (dead_id,)).fetchone()
+        heir = row["superseded_by"] if row is not None else None
+        db.execute(
+            "UPDATE memories SET superseded_by = ?, updated_at = ? WHERE superseded_by = ?",
+            (heir, now, dead_id),
+        )
+
     def set_review_state(self, id: int, state: str) -> bool:
-        """Apply an operator review verdict, preserving the row for audit."""
+        """Apply an operator review verdict, preserving the row for audit.
+
+        Rejecting a row that had SUPERSEDED others (an agent/extracted ``memory_save``
+        the operator overrules) re-homes those retired rows in the same transaction via
+        ``_detach_as_replacement`` — so the subject keeps a live memory instead of being
+        silently left empty (ADR 0125 P3-A)."""
         if state not in {"pending", "confirmed", "rejected"}:
             raise ValueError("invalid review state")
+        now = _now_iso()
         with self._write() as db:
-            return (
+            updated = (
                 db.execute(
                     "UPDATE memories SET review_state = ?, updated_at = ? WHERE id = ?",
-                    (state, _now_iso(), id),
+                    (state, now, id),
                 ).rowcount
                 > 0
             )
+            if updated and state == "rejected":
+                self._detach_as_replacement(db, id, now)
+            return updated
 
     def revert_supersession(self, old_id: int) -> bool:
         """Undo one supersession for audit (ADR 0125 P3-A, inspector revert).
@@ -516,8 +547,15 @@ class MemoryStore:
         return "\n".join(piece for _, piece in self.always_on_entries(max_chars))
 
     def delete(self, id: int) -> bool:
-        """Hard-delete a row; triggers remove its FTS and vector entries atomically."""
+        """Hard-delete a row; triggers remove its FTS and vector entries atomically.
+
+        If the deleted row had SUPERSEDED others, their ``superseded_by`` is re-homed
+        onto its own replacement FIRST (``_detach_as_replacement``, same transaction), so
+        deleting a replacement never strands the rows it retired with no live memory on
+        the subject (ADR 0125 P3-A)."""
+        now = _now_iso()
         with self._write() as db:
+            self._detach_as_replacement(db, id, now)
             return db.execute("DELETE FROM memories WHERE id = ?", (id,)).rowcount > 0
 
     def stats(self) -> dict[str, int]:
