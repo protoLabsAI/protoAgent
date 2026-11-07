@@ -845,13 +845,34 @@ function WorkspaceApp({ runtime }: { runtime: RuntimeStatus | null }) {
       railOrder.bottom.includes(v.key),
   );
 
+  // The plugin view `id` names when it renders as a plugin view — the same precedence as
+  // renderSurface's default case (a fork surface with that id wins, so it is not a plugin view).
+  function pluginViewFor(id: string): (typeof allPluginViews)[number] | undefined {
+    if (registeredSurfaces().some((s) => s.id === id)) return undefined;
+    return allPluginViews.find((v) => v.key === id);
+  }
+
   // Render a dock's active surface, keeping that dock's background-delivery views
-  // mounted-but-hidden. The active view renders INSIDE its persistent slot (a display
-  // swap, the ChatSlot #613 pattern) so toggling visibility never reloads its iframe.
-  function renderDock(activeId: string, bgViews: typeof allPluginViews): ReactNode {
+  // mounted-but-hidden. Every plugin view the dock shows — the active one AND the background
+  // ones — renders inside ONE keyed slot list (a display swap, the ChatSlot #613 pattern), so
+  // neither switching surfaces nor a page's `background: true` subscribe ever moves a mounted
+  // PluginView in the tree. Before #4802 the active view rendered bare (renderSurface) and
+  // jumped into a slot once it subscribed with background — React destroyed and recreated the
+  // iframe, so the page reloaded mid-init (twice the module imports, a WebGL viewer built
+  // twice). `claimed` holds the keys an earlier dock already mounted this render: a view key
+  // gets ONE mounted copy across all docks, and a second dock asking for it shows a pointer.
+  function renderDock(activeId: string, bgViews: typeof allPluginViews, claimed: Set<string>): ReactNode {
+    const active = pluginViewFor(activeId);
+    const slots = active && !bgViews.some((v) => v.key === active.key) ? [...bgViews, active] : bgViews;
+    const mine = slots.filter((v) => !claimed.has(v.key));
+    const activeElsewhere = active !== undefined && !mine.some((v) => v.key === active.key);
+    for (const v of mine) claimed.add(v.key);
+    if (activeElsewhere && import.meta.env.DEV) {
+      console.warn(`[console] plugin view ${active.key} is already mounted in another dock; not mounting a second copy`);
+    }
     return (
       <>
-        {bgViews.map((v) => (
+        {mine.map((v) => (
           <div
             key={v.key}
             className="plugin-bg-slot"
@@ -860,9 +881,13 @@ function WorkspaceApp({ runtime }: { runtime: RuntimeStatus | null }) {
             <PluginView view={v} />
           </div>
         ))}
-        {activeId !== "chat" && !bgViews.some((v) => v.key === activeId)
-          ? renderSurface(activeId)
-          : null}
+        {activeElsewhere ? (
+          <div className="plugin-view-state" role="status" data-testid="plugin-view-elsewhere">
+            <span>“{active.label}” is open in another panel.</span>
+          </div>
+        ) : activeId !== "chat" && !active ? (
+          renderSurface(activeId)
+        ) : null}
       </>
     );
   }
@@ -938,6 +963,9 @@ function WorkspaceApp({ runtime }: { runtime: RuntimeStatus | null }) {
   // Bottom dock active surface (mirror left/right) — clamp to a member of the bottom dock.
   const bottomMembers = railSurfaces("bottom").map((s) => s.id);
   const bottomActive = bottomMembers.includes(bottomPanel) ? bottomPanel : (bottomMembers[0] ?? "");
+  // One mounted copy per plugin view key across the three docks (#4802) — filled by renderDock
+  // in render order (left, right, bottom), fresh every render.
+  const dockClaims = new Set<string>();
   // Chat mounts unconditionally on whichever dock holds it (streaming continuity, #613) —
   // left, right, OR the bottom dock. Its slot stays mounted while another surface swaps in
   // on the same dock, so an in-flight stream survives a surface switch on any rail.
@@ -1260,6 +1288,7 @@ function WorkspaceApp({ runtime }: { runtime: RuntimeStatus | null }) {
             {renderDock(
               isMobile ? mobileActive : leftActive,
               isMobile ? bgViewsDocked : bgViewsFor("left"),
+              dockClaims,
             )}
           </>
         }
@@ -1275,7 +1304,7 @@ function WorkspaceApp({ runtime }: { runtime: RuntimeStatus | null }) {
             ) : null}
             {/* On mobile the right dock's surfaces render in the mobile pane instead —
                 pass no bg views here so a background iframe is never mounted twice. */}
-            {renderDock(rightActive, isMobile ? [] : bgViewsFor("right"))}
+            {renderDock(rightActive, isMobile ? [] : bgViewsFor("right"), dockClaims)}
           </>
         }
         bottomContent={
@@ -1291,7 +1320,7 @@ function WorkspaceApp({ runtime }: { runtime: RuntimeStatus | null }) {
                 enabledPluginIds={enabledPluginIds}
               />
             ) : null}
-            {renderDock(bottomActive, isMobile ? [] : bgViewsFor("bottom"))}
+            {renderDock(bottomActive, isMobile ? [] : bgViewsFor("bottom"), dockClaims)}
           </>
         }
         utilityBar={
