@@ -10,7 +10,7 @@ Usage:
 
     python -m evals.runner                                # all cases
     python -m evals.runner --category tool                # one category
-    python -m evals.runner --tasks current_time_intent,memory_ingest_intent
+    python -m evals.runner --tasks current_time_intent,memory_save_intent
     python -m evals.runner --tasks instance:my_case       # a per-instance case
     python -m evals.runner --tasks-file plugins/cowork/evals/tasks.json
     python -m evals.runner --base-url http://host:7870

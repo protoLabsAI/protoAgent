@@ -15,8 +15,29 @@ from pathlib import Path
 import pytest
 
 from evals import judge, runner, verify
+from tools.memory_tools import _build_memory_tools
 
 TASKS = json.loads((Path(__file__).parent.parent / "evals" / "tasks.json").read_text())
+
+# The core memory/knowledge/session tools, built OFFLINE — no server, no stores.
+# The ``@tool`` objects exist at build time, so their ``.name`` set is the
+# authoritative registry of what the agent actually exposes; binding to ``None``
+# stores is safe because a tool body only touches a store when it is invoked.
+_REGISTERED_MEMORY_TOOLS = {t.name for t in _build_memory_tools(knowledge_store=None, memory_store=None)}
+
+# The pre-ADR-0125 names (memory_ingest→memory_save, memory_recall→memory_search,
+# forget_memory→memory_forget, memory_stats→memory_list). A case left on one of
+# these names a tool that no longer exists, so its tool-firing assertion can never
+# be satisfied by the real agent — the exact trap the resolution guard below closes.
+_OLD_MEMORY_TOOL_NAMES = {"memory_ingest", "memory_recall", "forget_memory", "memory_stats"}
+
+
+def _case_tool_refs(case: dict) -> set[str]:
+    """Every tool name a case names across its positive and negative assertions."""
+    refs: set[str] = set()
+    for key in ("expected_tools", "expected_any_tools", "forbidden_tools"):
+        refs.update(case.get(key) or [])
+    return refs
 
 
 # ── judge parsing ─────────────────────────────────────────────────────────────
@@ -749,3 +770,49 @@ def test_arm_cleanup_refuses_a_root_it_does_not_own(tmp_path, monkeypatch, capsy
 
     assert sweep._instance_dirs("eval-sweep-9-0") == []
     assert "not deleting anything" in capsys.readouterr().out
+
+
+# ── ADR 0125 P2 D3: memory tool names resolve against the live registry ───────
+
+
+def test_memory_cases_name_only_registered_memory_tools():
+    """Dry/offline resolution of the memory cases (ADR 0125 P2 D3): every
+    memory / knowledge / session tool a case asserts on must resolve to a tool
+    the agent actually registers (built here with no server and no stores).
+
+    This is the guard that the rename is coherent end to end. A case left on a
+    retired name (``memory_ingest`` / ``memory_recall`` / ``memory_stats`` /
+    ``forget_memory``) names a tool that no longer exists, so its ``expected_tools``
+    assertion could never be satisfied by the real agent — and a selective
+    ``forbidden_tools`` entry on a dead name would pass vacuously. Tools outside
+    this subsystem (``current_time``, ``web_search``, ``task`` …) are out of this
+    rename's scope and are not resolved here.
+    """
+    subsystem = _REGISTERED_MEMORY_TOOLS | _OLD_MEMORY_TOOL_NAMES
+    offenders: dict[str, set[str]] = {}
+    for case in TASKS:
+        bad = {r for r in _case_tool_refs(case) if r in subsystem and r not in _REGISTERED_MEMORY_TOOLS}
+        if bad:
+            offenders[case["id"]] = bad
+    assert not offenders, f"cases name unregistered/renamed memory tools: {offenders}"
+
+
+def test_no_retired_memory_tool_name_anywhere_in_tasks():
+    """The rename is total: no case names a pre-0125 memory tool in any tool list."""
+    for case in TASKS:
+        leaked = _case_tool_refs(case) & _OLD_MEMORY_TOOL_NAMES
+        assert not leaked, f"{case['id']} still names retired tool(s): {sorted(leaked)}"
+
+
+def test_renamed_memory_tools_are_actually_exercised():
+    """The suite has to SCORE the renamed tools, not merely avoid the old names:
+    at least one case asserts each of ``memory_save`` / ``memory_search`` /
+    ``memory_list``, and ``knowledge_search`` resolves as a real registered tool
+    even though the chunk-recall cases lean on passive middleware injection rather
+    than an explicit call."""
+    exercised: set[str] = set()
+    for case in TASKS:
+        exercised |= _case_tool_refs(case)
+    for name in ("memory_save", "memory_search", "memory_list"):
+        assert name in exercised, f"no case exercises {name}"
+    assert "knowledge_search" in _REGISTERED_MEMORY_TOOLS

@@ -178,7 +178,7 @@
     "expected_tools": ["memory_save", "memory_search"],
     "expected_patterns": ["eval-chain-flag-q9"],
     "teardown": [
-      {"kb_delete_by_content": {"contains": "eval-chain-flag-q9"}}
+      {"memory_delete_by_content": {"contains": "eval-chain-flag-q9"}}
     ]
   },
 
