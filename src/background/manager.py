@@ -949,11 +949,11 @@ def _declared_tool_refusal(subagent_type: str) -> str | None:
     ]
     if not graph_tools:
         return None
-    from graph.agent import _effective_subagent_tools
+    from graph.agent import _effective_subagent_tools, _migrated_subagent_tool_names
 
     tool_map = {t.name: t for t in graph_tools if getattr(t, "name", None)}
     bound = {t.name for t in _effective_subagent_tools(STATE.graph_config, resolved, tool_map)}
-    if any(name in bound for name in resolved.tools):
+    if any(name in bound for name in _migrated_subagent_tool_names(resolved)):
         return None
     return (
         f"Not dispatched: subagent '{subagent_type}' declares tools "
