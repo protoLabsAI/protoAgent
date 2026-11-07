@@ -1,11 +1,15 @@
-"""AuditMiddleware — logs tool calls to audit.py, Langfuse, and Prometheus.
+"""AuditMiddleware — logs tool calls to audit.py, Langfuse, Prometheus, and SQLite.
 
 Wraps every tool execution with timing, success/failure tracking,
 and observability integration. Reuses existing audit/tracing/metrics modules.
 """
 
+import json
 import logging
 import time
+from concurrent.futures import ThreadPoolExecutor
+from datetime import UTC, datetime
+from threading import BoundedSemaphore, Lock
 
 from langchain.agents.middleware import AgentMiddleware
 
@@ -17,6 +21,83 @@ log = logging.getLogger(__name__)
 # Warn once, not once per tool call: the failure mode this guards against is a
 # retry storm, and a per-call traceback would be the loudest thing in the log.
 _OBS_UNAVAILABLE_LOGGED = False
+
+
+# Bounded, off-thread writes: a busy SQLite store must not stall a tool or grow
+# an unbounded backlog. Only metadata (never args/results) enters this queue.
+_TELEMETRY_WRITER = ThreadPoolExecutor(max_workers=1, thread_name_prefix="tool-telemetry")
+_TELEMETRY_SLOTS = BoundedSemaphore(1024)
+_TELEMETRY_LOG_LOCK = Lock()
+_TELEMETRY_FAILURE_LOGGED = False
+
+
+def _telemetry_failed():
+    global _TELEMETRY_FAILURE_LOGGED
+    with _TELEMETRY_LOG_LOCK:
+        if not _TELEMETRY_FAILURE_LOGGED:
+            _TELEMETRY_FAILURE_LOGGED = True
+            # No exception text: a store exception could contain sensitive data.
+            log.warning("[audit] tool telemetry unavailable; dropping records")
+
+
+def _write_tool_telemetry(store, row):
+    try:
+        store.record_tool_call(row)
+    except Exception:
+        _telemetry_failed()
+    finally:
+        _TELEMETRY_SLOTS.release()
+
+
+def _record_tool_telemetry(request, result, error_class, started):
+    """Capture caller context and enqueue one content-free row, best-effort."""
+    try:
+        from graph import ledger
+        from observability import tracing
+        from runtime.state import STATE
+
+        store = STATE.telemetry_store
+        if store is None:
+            return
+        tool = request.tool_call.get("name", "unknown")
+        # The runtime's tool-owner map contains display names. The loaded catalog
+        # lists kept tools by stable plugin id, including collision filtering.
+        plugin = next(
+            (entry["id"] for entry in STATE.plugin_meta if entry.get("loaded") and tool in entry.get("tools", [])),
+            "core",
+        )
+        edge_id = ledger.current_edge_id()
+        subagent = next(
+            (edge["to_name"] for edge in ledger.live_edges()
+             if edge["id"] == edge_id and edge["to_kind"] == "subagent"),
+            None,
+        ) if edge_id else None
+        content = getattr(result, "content", None)
+        text = "" if content is None else str(content)
+        ok = not error_class and not text.startswith("Error")
+        row = {
+            "ts": datetime.now(UTC).isoformat(),
+            "session_id": tracing.current_session_id() or ledger.current_session_id(),
+            "trace_id": tracing.current_trace_id(),
+            "tool": tool,
+            "plugin": plugin,
+            "ok": int(ok),
+            "error_class": error_class or ("ToolError" if not ok else None),
+            "duration_ms": int((time.monotonic() - started) * 1000),
+            "args_chars": len(json.dumps(request.tool_call.get("args", {}), ensure_ascii=False, default=str)),
+            "result_chars": len(text),
+            "subagent": subagent,
+        }
+        if not _TELEMETRY_SLOTS.acquire(blocking=False):
+            _telemetry_failed()
+            return
+        try:
+            _TELEMETRY_WRITER.submit(_write_tool_telemetry, store, row)
+        except Exception:
+            _TELEMETRY_SLOTS.release()
+            raise
+    except Exception:
+        _telemetry_failed()
 
 
 class _NoopAudit:
@@ -80,7 +161,7 @@ def _observability():
 
 
 class AuditMiddleware(AgentMiddleware):
-    """Log all tool calls to audit, Langfuse, and Prometheus."""
+    """Log all tool calls to audit, Langfuse, Prometheus, and local telemetry."""
 
     def __init__(self):
         super().__init__()
@@ -101,7 +182,15 @@ class AuditMiddleware(AgentMiddleware):
 
         t0 = time.monotonic()
         try:
-            result = handler(request)
+            result = None
+            error_class = None
+            try:
+                result = handler(request)
+            except BaseException as exc:
+                error_class = type(exc).__name__
+                raise
+            finally:
+                _record_tool_telemetry(request, result, error_class, t0)
             duration_ms = int((time.monotonic() - t0) * 1000)
 
             # Transcript redaction: scrub credentials from result.content before it
@@ -184,7 +273,15 @@ class AuditMiddleware(AgentMiddleware):
 
         t0 = time.monotonic()
         try:
-            result = await handler(request)
+            result = None
+            error_class = None
+            try:
+                result = await handler(request)
+            except BaseException as exc:
+                error_class = type(exc).__name__
+                raise
+            finally:
+                _record_tool_telemetry(request, result, error_class, t0)
             duration_ms = int((time.monotonic() - t0) * 1000)
 
             # Transcript redaction — same logic as the sync path above.
