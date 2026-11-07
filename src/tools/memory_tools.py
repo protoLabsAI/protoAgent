@@ -22,6 +22,7 @@ forks — keep working; ``get_all_tools`` there is still the one assembly point.
 from __future__ import annotations
 
 import asyncio
+import re
 from datetime import UTC, datetime, timedelta
 from typing import Annotated, Any
 
@@ -58,6 +59,62 @@ MEMORY_KINDS: tuple[str, ...] = ("profile", "standing", "fact", "decision")
 # ``knowledge.shared_profile.ALLOWED_KINDS``; kept here as the tool-boundary fallback so a
 # clean error precedes the store's ValueError and so the import stays lazy.
 SHARED_PROFILE_KINDS: frozenset[str] = frozenset({"profile", "standing"})
+
+
+# ── work-status detector (ADR 0125 P3-D5) ─────────────────────────────────────
+#
+# Evidence from ADR 0125 P3: ~60 memory_save calls across ~350 threads, most of them
+# work-status logs (a PR merged, a card shipped, a SHA deployed). Work status is not
+# memory — the board, issue or PR keeps it current, while memory is for what will still
+# be true in a month. ``looks_like_status_line`` is a DETERMINISTIC (no-LLM) heuristic
+# that spots a subject-less work-status line so ``memory_save`` can SAVE it as normal and
+# append a nudge toward the board/issue/PR. It never refuses and never blocks the write.
+
+# A work reference: a PR/issue number, a project-board card id, or a hex commit SHA. The
+# card-id and SHA alternatives are matched against the lower-cased content.
+_STATUS_WORK_REF_RE = re.compile(
+    r"#\d+"  # a PR or issue number (e.g. #4553)
+    r"|bd-[a-z0-9.]+"  # a project-board card id (e.g. bd-aknx2.g1)
+    r"|\b[0-9a-f]{7,40}\b"  # a hex commit SHA, 7–40 chars (e.g. b83d744a)
+)
+# A past-tense work-event word — the verb that makes a line read as a status update.
+_STATUS_EVENT_RE = re.compile(
+    r"\b(?:merged|shipped|opened|closed|landed|released|deployed|tagged|cut|fixed|reverted|rebased|pushed)\b"
+)
+
+
+def looks_like_status_line(content: str, subject: str | None) -> bool:
+    """True only when a ``memory_save`` reads like a work-status log (ADR 0125 P3-D5) —
+    ALL of: the ``subject`` is empty; the ``content`` carries a work reference (a ``#\\d+``
+    PR/issue number, a ``bd-…`` board card id, or a 7–40 char hex SHA); and the ``content``
+    carries a past-tense work-event word (merged, shipped, opened, closed, landed,
+    released, deployed, tagged, cut, fixed, reverted, rebased, pushed).
+
+    Deterministic — regex only, no model. The caller still SAVES the row; this only decides
+    whether to append a nudge toward the board/issue/PR."""
+    if subject and str(subject).strip():
+        return False
+    lower = (content or "").lower()
+    if not _STATUS_WORK_REF_RE.search(lower):
+        return False
+    return bool(_STATUS_EVENT_RE.search(lower))
+
+
+# The nudge appended to a saved work-status line (ADR 0125 P3-D5). Held as a constant so
+# the tool body and the test share one source of truth.
+_STATUS_LINE_NUDGE = (
+    "This reads like a work-status update. The board, issue or PR keeps that current; "
+    "memory is for things still true and useful in a month. If there's a lasting lesson "
+    "here, save that with a subject."
+)
+
+# The one "what's worth saving" rule (ADR 0125 P3-D5), shared by the ``memory_save``
+# description below; ``graph/prompts.py`` keeps a matching line in the operating model so
+# the model gets the same rule in both places.
+_WORTH_SAVING_RULE = (
+    "Save things that will still be true and useful in a month (preferences, environment "
+    "facts, decisions and why). Not release logs, PR states or card progress."
+)
 
 
 def _memory_handle(chunk_id, tier=None) -> str:
@@ -224,12 +281,12 @@ def _render_memory(entry, *, verbose: bool = False) -> str:
 # The model-facing ``memory_save`` description. Held as a constant (not a docstring) so the
 # two conditional tool definitions below — one with the ``shared`` arg, one without — share
 # ONE source of truth and can't drift.
-_MEMORY_SAVE_DESC = """Save a durable memory — a preference, decision, standing rule or fact worth recalling across sessions.
+_MEMORY_SAVE_DESC = f"""Save a durable memory — a preference, decision, standing rule or fact worth recalling across sessions.
 
-Use when the operator asks you to remember or note something that will still be true
-and useful in a month. Work status (a PR, card or SHA with a past-tense event) belongs
-on the board or the issue, where it stays current — not here. For a document to read
-or keep, use ``knowledge_ingest``; this is for text you already have.
+{_WORTH_SAVING_RULE} A subject-less work-status line (a PR, card or SHA with a
+past-tense event) still saves, but comes back with a nudge to put it where it stays
+current. For a document to read or keep, use ``knowledge_ingest``; this is for text you
+already have.
 
 Args:
     content: specific, self-contained text (retrieved by keyword/semantic search).
@@ -422,6 +479,10 @@ def _build_memory_tools(
             parts.append(
                 f"Also live on {subject!r}: " + ", ".join(f"#{e.id} ({e.kind})" for e in also_live) + "."
             )
+        # Work status is not memory (ADR 0125 P3-D5): a subject-less work-status line still
+        # SAVED above, but comes back with a nudge toward the board/issue/PR. Never a refusal.
+        if looks_like_status_line(content, subject):
+            parts.append(_STATUS_LINE_NUDGE)
         return " ".join(parts)
 
     # Hide the ``shared`` argument from the model's tool schema unless the shared profile is

@@ -18,6 +18,7 @@ _TASK_TOOLS = frozenset({"task_create", "task_update", "task_close"})
 _SCHEDULE_TOOLS = frozenset({"schedule_task"})
 _WATCH_TOOLS = frozenset({"create_watch"})
 _WAIT_TOOLS = frozenset({"wait"})
+_MEMORY_TOOLS = frozenset({"memory_save"})
 
 #: The capability map, public: group name → the tool names that switch its doctrine on.
 #: ``tests/test_prompt_budgets.py`` iterates this to pin the honesty invariant (binding
@@ -28,6 +29,7 @@ CAPABILITY_GROUPS: dict[str, frozenset[str]] = {
     "schedule": _SCHEDULE_TOOLS,
     "watch": _WATCH_TOOLS,
     "wait": _WAIT_TOOLS,
+    "memory": _MEMORY_TOOLS,
 }
 
 
@@ -42,8 +44,9 @@ def _build_operating_model(bound_tools: frozenset[str] | None = None) -> str:
     has_schedule = bound_tools is None or bool(bound_tools & _SCHEDULE_TOOLS)
     has_watch = bound_tools is None or bool(bound_tools & _WATCH_TOOLS)
     has_wait = bound_tools is None or bool(bound_tools & _WAIT_TOOLS)
+    has_memory = bound_tools is None or bool(bound_tools & _MEMORY_TOOLS)
     has_any = has_goal or has_tasks or has_schedule or has_watch
-    if not has_any and not has_wait:
+    if not has_any and not has_wait and not has_memory:
         return ""
 
     lines = ["# Operating model", ""]
@@ -101,6 +104,13 @@ def _build_operating_model(bound_tools: frozenset[str] | None = None) -> str:
         lines.append(
             "- **Wait:** `wait(seconds, then=…)` ends this turn and resumes you after "
             "a short countdown with the supplied next step."
+        )
+    if has_memory:
+        # ADR 0125 P3-D5 — mirrors the memory_save "what's worth saving" rule (one line).
+        lines.append(
+            "- **Memory:** `memory_save` keeps what will still be true and useful in a month "
+            "(preferences, environment facts, decisions and why). Not release logs, PR states or "
+            "card progress — those stay current on the board, issue or PR."
         )
     lines.append(
         "\nIf progress stalls, change the approach and record the blocker; don't repeat a failed action unchanged."
