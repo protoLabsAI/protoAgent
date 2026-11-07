@@ -1,0 +1,1 @@
+- **Bracket shortcuts for chat tabs (#4797).** Use ⌘[ / ⌘] on macOS or Ctrl+[ / Ctrl+] elsewhere to switch to the previous / next chat tab, including while typing in the composer. These wrap between tabs and are rebindable in Settings ▸ Keyboard alongside the existing Ctrl+Tab shortcuts.

@@ -119,4 +119,24 @@ test("Settings ▸ Keyboard lists the bindings (opened via mod+,)", async ({ pag
   await page.getByText("Keyboard", { exact: true }).click();
   await expect(page.getByText("Command palette", { exact: true })).toBeVisible();
   await expect(page.locator(".kb-row", { hasText: "New chat" })).toBeVisible();
+  for (const [label, key] of [["Previous", "["], ["Next", "]"]]) {
+    const row = page.locator(".kb-row", { hasText: `${label} chat tab (bracket)` });
+    await expect(row).toBeVisible();
+    await expect(row).toContainText(key);
+  }
+});
+
+test("bracket shortcuts switch and wrap chat tabs while composing", async ({ page }) => {
+  await page.goto("/app/", { waitUntil: "load" });
+  const tabs = page.locator(".pl-tabbar__tab");
+  const composer = () => page.locator(".chat-session-slot:not([hidden])").getByPlaceholder(/Message protoAgent/i);
+  await seedCurrentChat(page);
+  await composer().focus();
+  await page.keyboard.press("ControlOrMeta+t");
+  await expect(tabs).toHaveCount(2);
+  for (const [key, target] of [["[", 0], ["[", 1], ["]", 0], ["]", 1]] as const) {
+    await composer().focus();
+    await page.keyboard.press(`ControlOrMeta+${key}`);
+    await expect(tabs.nth(target)).toHaveClass(/pl-tabbar__tab--active/);
+  }
 });

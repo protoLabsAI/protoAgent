@@ -2,8 +2,9 @@
 // palette moved to ⌘⇧K. These pin the swapped DEFAULTS and how they resolve: the
 // chat-scoped clear wins ⌘K inside the chat surface, ⌘K is a no-op elsewhere (the
 // palette no longer claims it), and a Settings ▸ Keyboard override still beats both.
-import { afterEach, beforeAll, describe, expect, it } from "vitest";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
+import { chatStore } from "../chat/chat-store";
 import { registeredKeybindings } from "../ext/keybindingRegistry";
 import { useKeybindingOverrides } from "./overrides";
 import { resolveBinding } from "./resolve";
@@ -14,6 +15,8 @@ beforeAll(async () => {
 
 afterEach(() => {
   useKeybindingOverrides.getState().resetAll();
+  vi.restoreAllMocks();
+  vi.unstubAllGlobals();
 });
 
 const resolve = (combo: string, scopes: string[] = [], editable = false) =>
@@ -54,5 +57,52 @@ describe("swapped ⌘K / ⌘⇧K defaults (#2949)", () => {
     expect(resolve("mod+shift+x", ["chat"])?.id).toBe("chat.clear");
     // …and mod+k goes dead in the chat surface once clear is rebound off it.
     expect(resolve("mod+k", ["chat"])).toBeNull();
+  });
+});
+
+describe("chat tab bracket defaults", () => {
+  it.each([
+    ["prev", "[", "Previous", "ctrl+shift+tab", 0, 2],
+    ["next", "]", "Next", "ctrl+tab", 2, 0],
+  ] as const)("registers and runs %s with wrapping, alongside Ctrl+Tab", (direction, key, label, legacy, current, target) => {
+    const id = `chat.tab.${direction}.bracket`;
+    const binding = registeredKeybindings().find((b) => b.id === id);
+    expect(binding).toMatchObject({
+      label: `${label} chat tab (bracket)`, group: "Chat",
+      defaultKeys: `mod+${key}`, scope: "chat", allowInInput: true,
+    });
+    const snapshot = chatStore.getSnapshot();
+    const sessions = ["first", "middle", "last"].map((id) => ({
+      id, title: id, messages: [], createdAt: 0, updatedAt: 0,
+    }));
+    vi.spyOn(chatStore, "getSnapshot").mockReturnValue({
+      ...snapshot, sessions, currentSessionId: sessions[current].id,
+    });
+    const switchSession = vi.spyOn(chatStore, "switchSession").mockImplementation(() => {});
+    for (const combo of [`mod+${key}`, legacy]) {
+      expect(resolve(combo)).toBeNull();
+      for (const editable of [false, true]) {
+        const hit = resolve(combo, ["chat"], editable);
+        expect(hit?.id).toBe(combo === legacy ? `chat.tab.${direction}` : id);
+        hit!.run(new KeyboardEvent("keydown"));
+        expect(switchSession).toHaveBeenLastCalledWith(sessions[target].id);
+      }
+    }
+    useKeybindingOverrides.getState().setBinding(id, "mod+shift+x");
+    expect(resolve(`mod+${key}`, ["chat"], true)).toBeNull();
+    expect(resolve("mod+shift+x", ["chat"], true)?.id).toBe(id);
+    expect(resolve(legacy, ["chat"], true)?.id).toBe(`chat.tab.${direction}`);
+  });
+
+  it.each(["MacIntel", "Win32", "Linux x86_64"])("normalizes bracket keydowns and displays readable combos on %s", async (platform) => {
+    vi.resetModules();
+    vi.stubGlobal("navigator", { platform, userAgent: platform });
+    const { eventToCombo, formatCombo } = await import("./combo");
+    const mac = platform === "MacIntel";
+    for (const key of ["[", "]"]) {
+      const combo = eventToCombo(new KeyboardEvent("keydown", { key, metaKey: mac, ctrlKey: !mac }));
+      expect(combo).toBe(`mod+${key}`);
+      expect(formatCombo(combo)).toBe(mac ? `⌘${key}` : `Ctrl+${key}`);
+    }
   });
 });
