@@ -21,6 +21,7 @@ log = logging.getLogger(__name__)
 
 # Distinguish an omitted dependency from an explicitly unavailable store in tests.
 _DEFAULT_HISTORY_STORE = object()
+_DEFAULT_MEMORY_STORE = object()
 
 
 def resolve_history_store(store=_DEFAULT_HISTORY_STORE):
@@ -29,6 +30,16 @@ def resolve_history_store(store=_DEFAULT_HISTORY_STORE):
         from runtime.state import STATE
 
         return STATE.history_store
+    return store
+
+
+def resolve_memory_store(store=_DEFAULT_MEMORY_STORE):
+    """Resolve the core MemoryStore at use time, exactly like the history store — so the
+    retire sweep and the delete route need no extra wiring. Tests pass it explicitly."""
+    if store is _DEFAULT_MEMORY_STORE:
+        from runtime.state import STATE
+
+        return STATE.memory_store
     return store
 
 
@@ -664,12 +675,14 @@ async def harvest_thread(
     fact_extractor=None,
     raise_on_error: bool = False,
     history_store=_DEFAULT_HISTORY_STORE,
+    memory_store=_DEFAULT_MEMORY_STORE,
 ) -> int | None:
     """Retire ``thread_id``'s conversation into history (ADR 0021).
 
     The single session-end pass: store an **episodic** summary
     (``kind="summary"``) and, when ``config.knowledge_facts``, also
-    extract **semantic** facts (``finding_type="fact"``) and consolidate them.
+    extract **semantic** facts into the core ``MemoryStore`` (``kind='fact'``,
+    ``provenance='extracted'``, pending) and consolidate them (ADR 0125 P2-D3).
     Both carry ``namespace`` for later per-project scoping.
 
     Returns the history entry id, or None when there's nothing to harvest (no
@@ -679,6 +692,7 @@ async def harvest_thread(
     FAILURE from legitimately-nothing (#2946: the retire path) can.
     """
     history_store = resolve_history_store(history_store)
+    memory_store = resolve_memory_store(memory_store)
     if history_store is None:
         return None
     # Background worker thread (ADR 0070 D3): its transcript is disposable — the
@@ -730,20 +744,26 @@ async def harvest_thread(
         )
         log.info("[harvest] summarized thread %s into history (entry %s)", thread_id, entry_id)
 
-        # Semantic facts — the second half of the session-end pass (ADR 0021).
-        if knowledge_store is not None and getattr(config, "knowledge_facts", False):
-            from graph.memory_facts import extract_and_store_facts
+        # Semantic facts — the second half of the session-end pass (ADR 0021). ADR 0125
+        # P2-D3: extracted facts now land in the core MemoryStore, never in chunks. With no
+        # memory store (tests, plugin hosts) we SKIP extraction and log it — we do not fall
+        # back to the knowledge store, so no code path writes memory through chunks (#4630).
+        if getattr(config, "knowledge_facts", False):
+            if memory_store is None:
+                log.info("[harvest] no memory store — skipping fact extraction for thread %s", thread_id)
+            else:
+                from graph.memory_facts import extract_and_store_facts
 
-            kwargs = {
-                "knowledge_store": knowledge_store,
-                "config": config,
-                "namespace": namespace,
-                "source": thread_id,
-                "as_of": as_of,
-            }
-            if fact_extractor is not None:
-                kwargs["extractor"] = fact_extractor
-            await extract_and_store_facts(transcript, **kwargs)
+                kwargs = {
+                    "memory_store": memory_store,
+                    "config": config,
+                    "namespace": namespace,
+                    "source": thread_id,
+                    "as_of": as_of,
+                }
+                if fact_extractor is not None:
+                    kwargs["extractor"] = fact_extractor
+                await extract_and_store_facts(transcript, **kwargs)
 
         return entry_id
     except Exception:
