@@ -115,6 +115,26 @@
         "data_query",
         "data_chart"
       ]
+    },
+    {
+      "_held": "Josh tests before the picker (2026-11-06).",
+      "id": "merchant",
+      "label": "Merchant",
+      "icon": "Store",
+      "bundle": "https://github.com/protoLabsAI/merchant-archetype",
+      "blurb": "An inventory and selling assistant for resellers \u2014 scan boxes in from your phone, label and bin every piece, price with the evidence kept, draft listings you post yourself, and see profit per lot. Never posts on its own.",
+      "soul_preset": "merchant",
+      "requires_tools": [
+        "inventory_summary",
+        "inventory_list",
+        "inventory_get",
+        "inventory_upsert_lot",
+        "inventory_upsert_item",
+        "inventory_set_price",
+        "inventory_mark_sold",
+        "inventory_move_to_bin",
+        "inventory_packing"
+      ]
     }
   ]
 }
