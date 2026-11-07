@@ -113,7 +113,7 @@ test("Forget removes the row after the confirm dialog", async ({ page }) => {
   const dialog = page.getByRole("dialog", { name: "Forget this memory?" });
   await expect(dialog).toBeVisible();
   const del = page.waitForRequest(
-    (r) => r.method() === "DELETE" && r.url().endsWith("/api/memory/memories/202"),
+    (r) => r.method() === "DELETE" && r.url().endsWith("/api/memory/hot/memory:202"),
   );
   await dialog.getByRole("button", { name: "Forget" }).click();
   await del;
@@ -169,4 +169,82 @@ test("the candidates section is hidden when the shared profile is off", async ({
   // The review list still works; only the candidates section disappears.
   await expect(surface.getByText("The operator works in US/Pacific.")).toBeVisible();
   await expect(surface.getByTestId("profile-candidates")).toHaveCount(0);
+});
+
+test("Forget uses the core route for retrieved memories", async ({ page }) => {
+  const surface = await openReview(page);
+  await surface.getByLabel("forget memory 201").click();
+  const response = page.waitForResponse(
+    (r) => r.request().method() === "DELETE" && r.url().endsWith("/api/memory/memories/201"),
+  );
+  await page.getByRole("dialog").getByRole("button", { name: "Forget" }).click();
+  expect((await response).ok()).toBe(true);
+  await expect(surface.getByLabel("forget memory 201")).toHaveCount(0);
+});
+
+for (const count of [51, 101]) {
+  for (const action of ["keep", "reject", "forget"]) {
+    test(`${action} on the last of ${count} rows returns to the remaining queue`, async ({ page }) => {
+      const initial = await page.request.get("/api/memory/memories");
+      const template = (await initial.json()).memories[0];
+      const rows = Array.from({ length: count }, (_, i) => ({
+        ...template, id: 1000 + i, content: `Review item ${i}`,
+      }));
+      await page.request.post("/api/__test__/memory/review", { data: { rows } });
+      const surface = await openReview(page);
+      for (let i = 0; i < Math.floor(count / 50); i++) {
+        await surface.getByRole("button", { name: "Next", exact: true }).click();
+        await expect(surface.locator(".memory-paging")).toContainText(
+          `${(i + 1) * 50 + 1}–${Math.min((i + 2) * 50, count)} of ${count}`,
+        );
+      }
+      await surface.getByLabel(`${action} memory ${999 + count}`).click();
+      if (action === "forget") {
+        await page.getByRole("dialog").getByRole("button", { name: "Forget" }).click();
+      }
+      await expect(surface.getByLabel(`keep memory ${998 + count}`)).toBeVisible();
+      await expect(surface.getByText("Nothing to review", { exact: true })).toHaveCount(0);
+      await expect(surface.getByLabel(`${action} memory ${999 + count}`)).toHaveCount(0);
+      if (count === 101) {
+        await expect(surface.locator(".memory-paging")).toContainText("51–100 of 100");
+        await surface.getByRole("button", { name: "Previous", exact: true }).click();
+        await expect(surface.getByLabel("keep memory 1000")).toBeVisible();
+      }
+    });
+  }
+}
+
+test("a promotion conflict refreshes the candidate", async ({ page }) => {
+  const surface = await openReview(page);
+  await expect(surface.getByLabel("promote 301")).toBeVisible();
+  await page.request.post("/api/memory/memories/301/promote");
+  const response = page.waitForResponse(
+    (r) => r.request().method() === "POST" && r.url().endsWith("/301/promote"),
+  );
+  await surface.getByLabel("promote 301").click();
+  expect((await response).status()).toBe(409);
+  await expect(surface.getByLabel("shared 301")).toBeDisabled();
+});
+
+for (const [mode, message] of [
+  [{ fail: "review" }, "Couldn't list memories"],
+  [{ empty: true }, "Nothing to review"],
+  [{ enabled: false }, "The memory store is off"],
+] as const) {
+  test(`review state: ${message}`, async ({ page }) => {
+    await page.request.post("/api/__test__/memory/mode", { data: mode });
+    const surface = await openReview(page);
+    await expect(surface.getByText(message, { exact: false })).toBeVisible();
+  });
+}
+
+test("Review screenshots at desktop and phone widths", async ({ page }, testInfo) => {
+  const surface = await openReview(page);
+  await expect(surface.getByLabel("keep memory 202")).toBeVisible();
+  for (const width of [1200, 390]) {
+    await page.setViewportSize({ width, height: 900 });
+    const path = testInfo.outputPath(`review-${width}.png`);
+    await page.screenshot({ path, fullPage: true });
+    await testInfo.attach(`review-${width}`, { path, contentType: "image/png" });
+  }
 });

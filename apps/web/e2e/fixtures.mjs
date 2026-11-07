@@ -2090,13 +2090,13 @@ export const MEMORY_REVIEW = [
     content: "The operator works in US/Pacific.", provenance: "extracted", legacy_domain: "preferences",
     source_session: "chat-1750000000000-abc123" }),
   REVIEW_ROW({ id: 202, kind: "fact", content: "The staging deploy runs at 2am.",
-    provenance: "agent", legacy_domain: "hot" }),
+    provenance: "agent", legacy_domain: "hot", delivery: "always" }),
   REVIEW_ROW({ id: 203, kind: "standing", subject: "tone", content: "Prefer terse replies.",
     provenance: "operator", legacy_domain: "preferences", review_state: "confirmed" }),
   // A superseded row (retired by an automatic subject consolidation): hidden until
   // include_superseded, then it offers Revert.
   REVIEW_ROW({ id: 204, kind: "fact", content: "An old note that got consolidated.",
-    provenance: "agent", legacy_domain: "hot", superseded_by: 202 }),
+    provenance: "agent", legacy_domain: "hot", delivery: "always", superseded_by: 202 }),
   REVIEW_ROW({ id: 205, kind: "decision", content: "We chose SQLite over Postgres.",
     provenance: "agent", review_state: "rejected" }),
 ];

@@ -2191,6 +2191,10 @@ const server = createServer(async (req, res) => {
       memoryMode = defaultMemoryMode();
       return sendJson(res, { ok: true });
     }
+    if (pathname === "/api/__test__/memory/review" && req.method === "POST") {
+      memory.review = body.rows;
+      return sendJson(res, { ok: true });
+    }
     if (pathname === "/api/__test__/memory/mode" && req.method === "POST") {
       memoryMode = { ...memoryMode, ...body };
       return sendJson(res, { ok: true });
@@ -2252,7 +2256,7 @@ const server = createServer(async (req, res) => {
         if (!memoryMode.enabled) return sendJson(res, { enabled: false, deleted: false });
         const i = memory.review.findIndex((x) => x.id === Number(edit[1]));
         if (i < 0) return sendJson(res, { detail: "no memory with that id" }, 404);
-        // An always-on row is curated on the Hot panel, not here (mirrors the real 400).
+        // Always-on rows require the hot delete route (mirrors the real 400).
         if (memory.review[i].delivery === "always") {
           return sendJson(res, { detail: "use the hot memory delete route" }, 400);
         }
@@ -2280,6 +2284,14 @@ const server = createServer(async (req, res) => {
         }
         row.already_shared = true; // promoted: the button becomes a disabled "Shared"
         return sendJson(res, { enabled: true, id: 9000 + row.id });
+      }
+      const coreHot = pathname.match(/^\/api\/memory\/hot\/memory:(\d+)$/);
+      if (coreHot && req.method === "DELETE") {
+        if (!memoryMode.enabled) return sendJson(res, { enabled: false, deleted: false });
+        const i = memory.review.findIndex((x) => x.id === Number(coreHot[1]) && x.delivery === "always");
+        if (i < 0) return sendJson(res, { detail: "no memory with that id" }, 404);
+        memory.review.splice(i, 1);
+        return sendJson(res, { enabled: true, deleted: true });
       }
       const h = pathname.match(/^\/api\/memory\/hot\/(\d+)$/);
       if (h && req.method === "DELETE") {

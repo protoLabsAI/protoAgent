@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Alert } from "@protolabsai/ui/data";
 import { Input, Select, Textarea } from "@protolabsai/ui/forms";
@@ -102,7 +102,7 @@ export function ReviewPassPanel() {
   };
 
   const listKey = [...queryKeys.memoryReview, { ...filters, page }] as const;
-  const { data, isFetching, error, refetch } = useQuery({
+  const { data, isFetching, isPlaceholderData, error, refetch } = useQuery({
     queryKey: listKey,
     queryFn: () =>
       api.memoryMemories({
@@ -119,6 +119,16 @@ export function ReviewPassPanel() {
   const enabled = data?.enabled ?? true;
   const rows = data?.memories ?? [];
   const total = data?.total ?? 0;
+
+  const lastPage = Math.max(0, Math.ceil(total / PAGE_SIZE) - 1);
+  const pageOutOfRange = page > lastPage;
+  // Clamp from this page's response, never the previous page's placeholder.
+  // This also recovers when another operator removes rows before a refresh.
+  useEffect(() => {
+    if (data && !isPlaceholderData && !isFetching && !error && pageOutOfRange) {
+      setPage(lastPage);
+    }
+  }, [data, isPlaceholderData, isFetching, error, pageOutOfRange, lastPage]);
 
   // Every write refreshes the whole memory subtree (the review list and candidates both
   // live under it) so a kept/edited/reverted row and a freshly promotable subject re-read.
@@ -150,7 +160,10 @@ export function ReviewPassPanel() {
   });
 
   const forget = useMutation({
-    mutationFn: (id: number) => api.deleteMemory(id),
+    mutationFn: (memory: MemoryRecord) =>
+      memory.delivery === "always"
+        ? api.deleteMemoryHot(`memory:${memory.id}`)
+        : api.deleteMemory(memory.id),
     onSuccess: () => {
       toast({ tone: "success", title: "Memory", message: "Memory forgotten." });
       invalidate();
@@ -212,7 +225,7 @@ export function ReviewPassPanel() {
         <Empty>
           The memory store is off (enable <code>middleware.knowledge</code>).
         </Empty>
-      ) : !error && rows.length === 0 ? (
+      ) : !error && !isFetching && !pageOutOfRange && rows.length === 0 ? (
         <Empty
           title="Nothing to review"
           description="no memories match these filters — migrated rows that still need a verdict show here by default."
@@ -324,15 +337,15 @@ export function ReviewPassPanel() {
         </ul>
       )}
 
-      {enabled && total > PAGE_SIZE ? (
+      {enabled && (total > PAGE_SIZE || hasPrev) ? (
         <div className="memory-paging">
           <span className="memory-row-meta">
-            {start + 1}–{start + rows.length} of {total}
+            {isFetching || pageOutOfRange ? "Loading…" : `${start + 1}–${start + rows.length} of ${total}`}
           </span>
           <Button type="button" variant="ghost" size="sm" disabled={!hasPrev} onClick={() => setPage((p) => p - 1)}>
             Previous
           </Button>
-          <Button type="button" variant="ghost" size="sm" disabled={!hasNext} onClick={() => setPage((p) => p + 1)}>
+          <Button type="button" variant="ghost" size="sm" disabled={isFetching || pageOutOfRange || !hasNext} onClick={() => setPage((p) => p + 1)}>
             Next
           </Button>
         </div>
@@ -346,7 +359,7 @@ export function ReviewPassPanel() {
         confirmLabel="Forget"
         destructive
         onConfirm={() => {
-          if (pendingForget) forget.mutate(pendingForget.id);
+          if (pendingForget) forget.mutate(pendingForget);
           setPendingForget(null);
         }}
         onClose={() => setPendingForget(null)}
