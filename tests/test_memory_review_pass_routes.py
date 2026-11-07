@@ -214,3 +214,24 @@ def test_review_delete_preserves_hot_memory(review):
     assert store.get(mid) is not None
     assert client.delete(f"/api/memory/hot/memory:{mid}").status_code == 200
     assert store.get(mid) is None
+
+
+def test_promoted_profile_keeps_extractor_protection(review):
+    client, store, shared = review
+    mid = store.add("Pacific", kind="profile", provenance="agent", subject="zone")
+    promoted = client.post(f"{BASE}/{mid}/promote").json()["id"]
+    extracted, replaced = shared.add_with_supersession(
+        "Eastern",
+        kind="profile",
+        provenance="extracted",
+        subject="ZONE",
+        as_of="2026-01-01",
+        protect_confirmed_operator=True,
+    )
+    assert replaced == []
+    assert shared.get(extracted).valid_from == "2026-01-01"
+    assert shared.get(extracted).superseded_by == promoted
+    assert shared.get(promoted).superseded_by is None
+    response = client.post(f"{BASE}/{mid}/promote")
+    assert response.status_code == 409 and response.json()["id"] == promoted
+    assert shared.count() == 2
