@@ -148,15 +148,15 @@
     "kind": "ask",
     "name": "Asks for recent log entries → memory_list",
     "setup": [
-      {"kb_ingest": {"content": "called the dentist", "domain": "daily-log", "heading": "today"}},
-      {"kb_ingest": {"content": "merged the auth PR", "domain": "daily-log", "heading": "today"}}
+      {"memory_save": {"content": "called the dentist", "kind": "fact", "heading": "today"}},
+      {"memory_save": {"content": "merged the auth PR", "kind": "fact", "heading": "today"}}
     ],
     "prompt": "What did I do today? Summarize from the log.",
     "expected_tools": ["memory_list"],
     "expected_patterns": ["dentist"],
     "teardown": [
-      {"kb_delete_by_content": {"contains": "called the dentist"}},
-      {"kb_delete_by_content": {"contains": "merged the auth PR"}}
+      {"memory_delete_by_content": {"contains": "called the dentist"}},
+      {"memory_delete_by_content": {"contains": "merged the auth PR"}}
     ]
   },
   {

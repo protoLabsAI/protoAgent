@@ -358,6 +358,7 @@ def apply_setup(steps: list[dict], *, memory_dir: str | None = None) -> str | No
     Supported step kinds:
 
     - ``kb_ingest``: ``{content, domain, heading?}``
+    - ``memory_save``: ``{content, kind?, heading?}`` (core memories)
     - ``session_seed``: ``{session_id, topic, ...}`` — see :func:`seed_session`
 
     ``memory_dir`` targets the session writes at a specific instance's memory
@@ -381,6 +382,15 @@ def apply_setup(steps: list[dict], *, memory_dir: str | None = None) -> str | No
                     is None
                 ):
                     return f"kb_ingest failed for {args!r}"
+            elif kind == "memory_save":
+                from knowledge.memories import MemoryStore
+
+                MemoryStore().add(
+                    args["content"],
+                    kind=args.get("kind", "fact"),
+                    heading=args.get("heading"),
+                    provenance="agent",
+                )
             elif kind == "session_seed":
                 err = seed_session(args, memory_dir=memory_dir)
                 if err:

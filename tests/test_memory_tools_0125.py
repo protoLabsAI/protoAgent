@@ -375,6 +375,31 @@ def test_agent_hot_write_event(tmp_path, monkeypatch):
     ]
 
 
+def test_memory_list_eval_seeds_lists_and_cleans_core_memories(tmp_path, monkeypatch):
+    import json
+    from pathlib import Path
+
+    from evals import verify
+
+    monkeypatch.setenv("KNOWLEDGE_DB_PATH", str(tmp_path / "agent.db"))
+    tools, ks, mem = _tools(tmp_path)
+    cases = json.loads(Path("evals/tasks.json").read_text(encoding="utf-8"))
+    case = next(c for c in cases if c["id"] == "memory_list_intent")
+    assert case["expected_tools"] == ["memory_list"]
+    assert verify.apply_setup(case["setup"]) is None
+
+    listed = asyncio.run(tools["memory_list"].ainvoke({}))
+    for content in ("called the dentist", "merged the auth PR"):
+        assert content in listed
+        assert ks.search(content) == []
+    assert "fact: 2" in listed.splitlines()[-1]
+    assert len(mem.list()) == 2
+
+    verify.apply_teardown(case["teardown"])
+    assert mem.list() == []
+    assert "No memories." in asyncio.run(tools["memory_list"].ainvoke({}))
+
+
 def test_save_evals_verify_and_clean_memories(tmp_path, monkeypatch):
     import json
     from pathlib import Path
