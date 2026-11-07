@@ -3,6 +3,8 @@
 Each row carries accumulated token usage (incl. prompt-cache), USD cost,
 wall-clock duration, LLM-call + tool-call counts, model, and outcome — and, for a
 turn that did not complete, why (``error``, #4726).
+Individual tool calls carry timing, outcome, ownership and content sizes only;
+AuditMiddleware writes those rows off-thread for both lead and subagent tools.
 This is the *durable, queryable* half of observability inside protoAgent — the
 substrate for "what was expensive/slow over time" and the flywheel's analysis
 (Prometheus is live-scrape-only; Langfuse is opt-in/external).
@@ -59,6 +61,11 @@ _COLUMNS = (
     "context_tokens",  # peak single-call prompt size = context-window fill (#2773, ADR 0101 D6)
     "run_id",  # the delegation-ledger run this leg belongs to (#4726); "" before it
     "error",  # why a non-completed turn ended, redacted + clipped by record_turn (#4726)
+)
+
+_TOOL_COLUMNS = (
+    "ts", "session_id", "trace_id", "tool", "plugin", "ok", "error_class",
+    "duration_ms", "args_chars", "result_chars", "subagent",
 )
 
 #: How many sampled turns a model needs before `outliers()` compares its rows against
@@ -189,6 +196,26 @@ class TelemetryStore:
             # turns by session_id, which had no index — cheap, additive, and the only new
             # query shape this table introduces.
             db.execute("CREATE INDEX IF NOT EXISTS ix_turns_session ON turns(session_id)")
+            db.execute(
+                """
+                CREATE TABLE IF NOT EXISTS tool_calls (
+                    row_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    ts TEXT,
+                    session_id TEXT,
+                    trace_id TEXT,
+                    tool TEXT,
+                    plugin TEXT,
+                    ok INTEGER,
+                    error_class TEXT,
+                    duration_ms INTEGER,
+                    args_chars INTEGER,
+                    result_chars INTEGER,
+                    subagent TEXT NULL
+                )
+                """
+            )
+            db.execute("CREATE INDEX IF NOT EXISTS ix_tool_calls_ts ON tool_calls(ts)")
+            db.execute("CREATE INDEX IF NOT EXISTS ix_tool_calls_tool ON tool_calls(tool)")
             db.commit()
         finally:
             db.close()
@@ -280,6 +307,46 @@ class TelemetryStore:
                 db.close()
         except sqlite3.Error:
             log.warning("[telemetry] could not record turn %s", row.get("task_id"), exc_info=True)
+
+    def record_tool_call(self, row: dict) -> None:
+        """Append metadata only; callers isolate write failures from tool execution."""
+        db = self._connect()
+        try:
+            columns = ",".join(_TOOL_COLUMNS)
+            placeholders = ",".join("?" for _ in _TOOL_COLUMNS)
+            db.execute(
+                f"INSERT INTO tool_calls ({columns}) VALUES ({placeholders})",
+                [row.get(c) for c in _TOOL_COLUMNS],
+            )
+            db.commit()
+        finally:
+            db.close()
+
+    def tool_summary(self, since_iso: str | None = None) -> list[dict]:
+        """Per-tool calls, errors, error fraction and nearest-rank latency percentiles."""
+        where, params = ("WHERE ts >= ?", [since_iso]) if since_iso else ("", [])
+        db = self._connect()
+        try:
+            groups: dict[str, dict] = {}
+            for row in db.execute(
+                f"SELECT tool, ok, duration_ms FROM tool_calls {where} ORDER BY tool, duration_ms", params
+            ):
+                group = groups.setdefault(row["tool"], {"errors": 0, "durations": []})
+                group["errors"] += row["ok"] == 0
+                group["durations"].append(row["duration_ms"] or 0)
+            return [
+                {
+                    "tool": tool,
+                    "calls": len(group["durations"]),
+                    "errors": group["errors"],
+                    "error_rate": group["errors"] / len(group["durations"]),
+                    "p50_ms": _percentile(group["durations"], 50),
+                    "p95_ms": _percentile(group["durations"], 95),
+                }
+                for tool, group in groups.items()
+            ]
+        finally:
+            db.close()
 
     def attributed_tokens(self, account_key: str, since: str, until: str, model: str | None = None) -> int:
         """Bounded aggregate over one account/window; no turn content leaves the store."""
@@ -666,15 +733,16 @@ class TelemetryStore:
         return flagged
 
     def prune(self, keep_days: int = 30, *, now: datetime | None = None) -> int:
-        """Delete turns older than ``keep_days``. Off by default — call from a
+        """Delete turns and tool calls older than ``keep_days``. Off by default — call from a
         host that wants bounded retention. Returns the rows removed."""
         now = now or datetime.now(UTC)
         cutoff = (now - timedelta(days=keep_days)).isoformat()
         db = self._connect()
         try:
             cur = db.execute("DELETE FROM turns WHERE ended_at < ?", (cutoff,))
+            tools = db.execute("DELETE FROM tool_calls WHERE ts < ?", (cutoff,))
             db.commit()
-            return cur.rowcount
+            return cur.rowcount + tools.rowcount
         finally:
             db.close()
 
