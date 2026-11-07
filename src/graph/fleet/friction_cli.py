@@ -61,7 +61,11 @@ def add_parser(sub: Any, common: Any) -> None:
     common(pf, top=False)
     fsub = pf.add_subparsers(dest="friction_cmd", required=False)
     pr = fsub.add_parser("resolve", help="mark a signal resolved (or --reopen) on the named agents")
-    pr.add_argument("id", help="the signal id `fleet friction` printed (8 hex chars)")
+    pr.add_argument(
+        "id",
+        nargs="+",
+        help="the signal id(s) `fleet friction` printed (8 hex chars); several ids share one --agent/--reason",
+    )
     pr.add_argument("--agent", action="append", metavar="NAME", help="resolve on this member (repeatable)")
     pr.add_argument("--all-agents", action="store_true", help="resolve on EVERY member that has it — never the default")
     pr.add_argument("--reason", default="", help="why — stamped on the entry and kept in the ledger")
@@ -124,7 +128,10 @@ def _targets(roster: list[dict], names: list[str] | None) -> tuple[list[tuple[st
     for row in roster:
         slug = slug_of(row)
         label = str(row.get("label") or row.get("name") or slug)
-        keys = {slug.lower(), label.lower(), str(row.get("name") or "").lower()}
+        # The workspace name (`protoEngineer` for `protoEngineer-ba4c`) is what an operator
+        # calls an agent, while the label is its display name (`projectManager`): accept both.
+        keys = {slug.lower(), label.lower(), str(row.get("name") or "").lower(), _workspace_name(slug).lower()}
+        keys.discard("")
         if wanted and not (keys & wanted):
             continue
         matched |= keys & wanted
@@ -135,6 +142,11 @@ def _targets(roster: list[dict], names: list[str] | None) -> tuple[list[tuple[st
             skipped.append({"name": label, "reason": pres})
     unmatched = [n for n in (names or []) if n.lower() not in matched]
     return readable, skipped, unmatched
+
+
+def _workspace_name(slug: str) -> str:
+    """``protoEngineer-ba4c`` → ``protoEngineer``: the id minus its 4-hex workspace suffix."""
+    return re.sub(r"-[0-9a-f]{4}$", "", slug)
 
 
 def _fetch(client: Any, slug: str, *, grouped: bool, resolved: bool, kind: str | None, limit: int) -> list[dict]:
@@ -260,9 +272,10 @@ def render(data: dict, args: argparse.Namespace, header: str) -> None:
 
 
 def resolve(client: Any, roster: list[dict], args: argparse.Namespace) -> list[dict]:
-    """Resolve (or reopen) one signal id on the named agents. Finds the row by id on each
-    agent first — the POST matches the full (kind, summary) exactly, so what is stamped is
-    precisely the row that was listed, never a neighbour whose text overlaps."""
+    """Resolve (or reopen) the listed signal ids on the named agents. Finds each row by id on
+    each agent first — the POST matches the full (kind, summary) exactly, so what is stamped
+    is precisely the row that was listed, never a neighbour whose text overlaps. Several ids
+    are still an explicit list: every one is named, none is inferred."""
     names = args.agent or None
     readable, _, unmatched = _targets(roster, names)
     out: list[dict] = [
@@ -273,40 +286,55 @@ def resolve(client: Any, roster: list[dict], args: argparse.Namespace) -> list[d
         try:
             # Resolving looks at open rows; reopening looks at resolved ones.
             items = _fetch(client, slug, grouped=True, resolved=args.reopen, kind=None, limit=_LIST_CAP)
-            hit = next((i for i in items if str(i.get("id")) == args.id), None)
-            if hit is None:
-                if names:  # named explicitly → say so; a sweep just skips agents without it
-                    out.append(
-                        {
-                            "name": name,
-                            "ok": False,
-                            "error": f"no {'resolved' if args.reopen else 'open'} signal {args.id}",
-                        }
-                    )
-                continue
-            res = client.member_post(
-                slug,
-                "/api/friction/resolve",
-                {
-                    "summary": hit.get("summary"),
-                    "kind": hit.get("kind"),
-                    "reason": args.reason,
-                    "resolved": not args.reopen,
-                },
-            )
         except deckhub.HubError as exc:
             out.append({"name": name, "ok": False, "error": _short(exc)})
             continue
-        if isinstance(res, dict) and res.get("error"):
-            out.append({"name": name, "ok": False, "error": str(res["error"])})
-            continue
-        out.append(
-            {
-                "name": name,
-                "ok": True,
-                "changed": int((res or {}).get("changed") or 0),
-                "summary": hit.get("summary"),
-                "reopened": args.reopen,
-            }
-        )
+        for sid in _ids(args):
+            result = _resolve_one(client, slug, name, sid, items, args, named=bool(names))
+            if result is not None:
+                out.append(result)
     return out
+
+
+def _ids(args: argparse.Namespace) -> list[str]:
+    ids = args.id if isinstance(args.id, list) else [args.id]
+    return list(dict.fromkeys(str(i) for i in ids))  # de-dupe, keep order
+
+
+def _resolve_one(
+    client: Any, slug: str, name: str, sid: str, items: list[dict], args: argparse.Namespace, *, named: bool
+) -> dict | None:
+    """One id on one agent → its result row, or None when a sweep finds nothing to do."""
+    hit = next((i for i in items if str(i.get("id")) == sid), None)
+    if hit is None:
+        if not named:  # a sweep just skips agents without it; a named agent says so
+            return None
+        return {
+            "name": name,
+            "ok": False,
+            "id": sid,
+            "error": f"no {'resolved' if args.reopen else 'open'} signal {sid}",
+        }
+    try:
+        res = client.member_post(
+            slug,
+            "/api/friction/resolve",
+            {
+                "summary": hit.get("summary"),
+                "kind": hit.get("kind"),
+                "reason": args.reason,
+                "resolved": not args.reopen,
+            },
+        )
+    except deckhub.HubError as exc:
+        return {"name": name, "ok": False, "id": sid, "error": _short(exc)}
+    if isinstance(res, dict) and res.get("error"):
+        return {"name": name, "ok": False, "id": sid, "error": str(res["error"])}
+    return {
+        "name": name,
+        "ok": True,
+        "id": sid,
+        "changed": int((res or {}).get("changed") or 0),
+        "summary": hit.get("summary"),
+        "reopened": args.reopen,
+    }

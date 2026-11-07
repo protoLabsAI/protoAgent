@@ -335,7 +335,7 @@ def _cmd_friction(args: argparse.Namespace) -> int:
             results = friction_cli.resolve(conn.client, conn.roster, args)
             verb = "reopened" if args.reopen else "resolved"
             if not results and not args.as_json:
-                print(f"  (no agent has {'a resolved' if args.reopen else 'an open'} signal {args.id})")
+                print(f"  (no agent has {'a resolved' if args.reopen else 'an open'} signal {', '.join(args.id)})")
             for r in results:
                 if r["ok"]:
                     if not args.as_json:

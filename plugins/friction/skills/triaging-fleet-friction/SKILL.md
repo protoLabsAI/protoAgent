@@ -103,12 +103,17 @@ signal was judged noise. Name the agents; there is no default scope:
 protoagent fleet friction resolve 3f9a21c0 --agent alpha --agent beta --reason "fixed in protoAgent 4321, v0.186.0"
 protoagent fleet friction resolve 3f9a21c0 --all-agents --reason "…"   # every agent that has it
 protoagent fleet friction resolve 3f9a21c0 --agent alpha --reopen      # undo
+protoagent fleet friction resolve 3f9a21c0 71be09d4 --agent alpha --reason "noise"  # several ids, one call
 ```
 
 Nothing is deleted — resolving stamps `resolved_at` and the reason, and reopening clears
 it. Always give a `--reason` that names the PR or release, so the next reader can audit it.
 
-Resolve **one id at a time** from the approved plan. A bulk sweep whose scope you cannot
+`--agent` takes the workspace name (`protoEngineer`), the display name (`projectManager`)
+or the full id (`protoEngineer-ba4c`). Several ids can share one call when they share the
+same agents and reason; each one is still named.
+
+Resolve **only ids you listed** from the approved plan. A bulk sweep whose scope you cannot
 list is how you resolve six signals meaning to resolve one.
 
 ## Report

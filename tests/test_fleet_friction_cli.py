@@ -236,6 +236,38 @@ def test_a_mistyped_agent_is_an_error_not_an_empty_result(monkeypatch, capsys):
     assert row["name"] == "alpa" and row["ok"] is False and "no such member" in row["error"]
 
 
+def test_resolve_takes_several_ids_in_one_call(monkeypatch, capsys):
+    c = FakeClient()
+    _live(monkeypatch, c)
+    ids = [friction_id("harness", SHARED["summary"]), friction_id("model", "wrong path guessed")]
+    assert _run(["friction", "resolve", *ids, ids[0], "--agent", "alpha", "--reason", "filed", "--json"]) == 0
+    posts = [call for call in c.calls if call[0] == "post"]
+    # each id once (the repeat is de-duped), on the named agent only
+    assert [(p[1], p[3]["summary"]) for p in posts] == [
+        ("alpha-1", SHARED["summary"]),
+        ("alpha-1", "wrong path guessed"),
+    ]
+    out = json.loads(capsys.readouterr().out)
+    assert [r["id"] for r in out["results"]] == ids
+
+
+def test_resolve_several_ids_reports_the_one_a_named_agent_lacks(monkeypatch, capsys):
+    _live(monkeypatch, FakeClient())
+    sid = friction_id("harness", SHARED["summary"])
+    assert _run(["friction", "resolve", sid, "deadbeef", "--agent", "alpha", "--json"]) == 1
+    results = json.loads(capsys.readouterr().out)["results"]
+    assert [(r["id"], r["ok"]) for r in results] == [(sid, True), ("deadbeef", False)]
+
+
+def test_agent_matches_the_workspace_name_not_only_the_display_name(monkeypatch, capsys):
+    roster = [{"name": "projectManager", "label": "projectManager", "id": "protoEngineer-ba4c", "running": True}]
+    c = FakeClient(roster=roster, ledgers={"protoEngineer-ba4c": [SHARED]})
+    _live(monkeypatch, c)
+    sid = friction_id("harness", SHARED["summary"])
+    assert _run(["friction", "resolve", sid, "--agent", "protoEngineer", "--json"]) == 0
+    assert [call[1] for call in c.calls if call[0] == "post"] == ["protoEngineer-ba4c"]
+
+
 def test_resolve_with_nothing_to_resolve_still_emits_json(monkeypatch, capsys):
     _live(monkeypatch, FakeClient())
     assert _run(["friction", "resolve", "deadbeef", "--all-agents", "--json"]) == 1
