@@ -189,6 +189,13 @@ def _expires_at_from_days(expires_in_days) -> tuple[str | None, str | None]:
     return (datetime.now(UTC) + timedelta(days=days)).isoformat(), None
 
 
+def _memory_excerpt(content: str, limit: int = 40) -> str:
+    """A short, single-line excerpt of a memory's content for the supersession report
+    (ADR 0125 P3-A) — whitespace collapsed, ellipsised past ``limit`` chars."""
+    text = " ".join((content or "").split())
+    return text if len(text) <= limit else text[:limit].rstrip() + "…"
+
+
 def _render_memory(entry, *, verbose: bool = False) -> str:
     """One ``MemoryEntry`` rendered for memory_search / memory_list:
     ``#id [superseded] [kind] heading: content (cite) prov=…`` — plus
@@ -267,6 +274,8 @@ def _build_memory_tools(
             expires_in_days: optional 1–3650 shelf life for volatile facts.
 
         New memories stay pending until the operator confirms them in the Memory inspector.
+        Pending saves preserve operator-authored, confirmed and always-on rows on the
+        same subject; these appear in the result as other live memories.
         """
         store = _memory()
         if store is None:
@@ -295,7 +304,11 @@ def _build_memory_tools(
         session_id = _session_id_from(state)
 
         def _write():
-            return store.add(
+            # Deterministic supersession (ADR 0125 P3-A, no model at write time): a subject
+            # retires eligible pending rows on the SAME subject+kind+scope and we read back what it
+            # replaced plus the other live rows on that subject, so the agent can see — and
+            # the operator can later revert — a wrong supersession.
+            memory_id, replaced = store.add_with_supersession(
                 content,
                 kind=kind_norm,
                 provenance="agent",
@@ -305,12 +318,23 @@ def _build_memory_tools(
                 expires_at=expires_at,
                 source_session=session_id or None,
             )
+            also_live = store.live_on_subject(subject, exclude_id=memory_id) if subject else []
+            return memory_id, replaced, also_live
 
-        memory_id = await asyncio.to_thread(_write)
+        memory_id, replaced, also_live = await asyncio.to_thread(_write)
         bits = [f"kind={kind_norm}", f"delivery={delivery_norm}"]
         if subject:
             bits.append(f"subject={subject!r}")
-        return f"Saved memory #{memory_id} ({', '.join(bits)}); pending operator review."
+        parts = [f"Saved memory #{memory_id} ({', '.join(bits)}); pending operator review."]
+        if replaced:
+            parts.append(
+                "Replaced " + ", ".join(f"#{r.id} ({_memory_excerpt(r.content)!r})" for r in replaced) + "."
+            )
+        if also_live:
+            parts.append(
+                f"Also live on {subject!r}: " + ", ".join(f"#{e.id} ({e.kind})" for e in also_live) + "."
+            )
+        return " ".join(parts)
 
     async def _do_ingest(src: str, col: str, title: str | None, is_url: bool) -> str:
         """Ingest one source via the shared ``ops.knowledge.ingest`` op and return a
