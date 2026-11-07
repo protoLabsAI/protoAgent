@@ -72,18 +72,30 @@ ROSTER = [
 
 
 class FakeClient:
-    def __init__(self, roster=None, *, start=None, stop=None, down=None):
+    def __init__(self, roster=None, *, start=None, stop=None, down=None, plugins=None):
         self.url = "http://127.0.0.1:7870"
         self.roster = list(ROSTER if roster is None else roster)
         self.calls: list[tuple] = []
         self._start = start or (lambda n: {"ok": True, "agent": {"name": n, "port": 7999, "pid": 4242}})
         self._stop = stop or (lambda n: {"ok": True, "stopped": True, "name": n})
         self._down = down or (lambda: {"ok": True, "stopped": ["protoEngineer", "old"]})
+        # slug -> a runtime-status plugin list, a full body dict, or an Exception to raise.
+        # `--plugins` reads /api/runtime/status per running member through this client.
+        self.plugins = dict(plugins or {})
         self.closed = False
 
     def fleet(self):
         self.calls.append(("fleet",))
         return list(self.roster)
+
+    def member_get(self, slug, rel, **params):
+        self.calls.append(("member_get", slug, rel))
+        val = self.plugins.get(slug)
+        if isinstance(val, Exception):
+            raise val
+        if isinstance(val, dict):
+            return val
+        return {"plugins": list(val or [])}
 
     def start(self, name):
         self.calls.append(("start", name))
@@ -518,6 +530,100 @@ def test_offline_supervisor_error_is_json_when_asked(monkeypatch, capsys, sup):
     assert cli.run_fleet_cli(["ls", "--offline", "--json"]) == 1
     data = json.loads(capsys.readouterr().out)
     assert data["mode"] == "error" and "corrupt" in data["error"]
+
+
+# ── ls --plugins (protoAgent#4781) ─────────────────────────────────────────────
+
+# Loaded plugins each running member reports via /api/runtime/status. A `loaded: False`
+# row (discovered-but-disabled) must be dropped; a running member whose read fails, or a
+# stopped/unreachable one, reports null + a reason — never an empty list.
+_PLUGINS = {
+    "host": [
+        {"id": "friction", "version": "1.2.0", "loaded": True},
+        {"id": "artifact", "version": "0.3.1", "loaded": True},
+        {"id": "experimental", "version": "9.9.9", "loaded": False},  # discovered, not running
+    ],
+    "protoEngineer-ba4c": [{"id": "projectBoard", "version": "2.0.0", "loaded": True}],
+    "old-1": deckhub.HubRequestError("http://127.0.0.1:7870", 404, "no such route"),  # running, read fails
+}
+
+
+def test_ls_plugins_lists_each_running_members_loaded_plugins(monkeypatch, capsys):
+    client = FakeClient(plugins=_PLUGINS)
+    _live(monkeypatch, client)
+    assert cli.run_fleet_cli(["status", "--plugins"]) == 0  # `status` alias carries the flag too
+    out = capsys.readouterr().out
+    # running members: loaded ids@version, sorted, the disabled one dropped
+    assert "plugins: artifact@0.3.1, friction@1.2.0" in out  # host (the hub itself)
+    assert "plugins: projectBoard@2.0.0" in out  # protoEngineer
+    assert "experimental" not in out  # loaded: False is not something the agent runs
+    # a stopped / unreachable member is null + its presence as the reason, never an empty list
+    assert "plugins: null (stopped)" in out  # Cindi
+    assert "plugins: null (unreachable)" in out  # ava
+    # a running member we could not read is null + why, not []
+    assert "plugins: null (no runtime status route (member predates it))" in out  # old-1
+    # the reads went through the per-member proxy; a stopped member is never read
+    assert ("member_get", "host", "/api/runtime/status") in client.calls
+    assert ("member_get", "protoEngineer-ba4c", "/api/runtime/status") in client.calls
+    assert not any(c == ("member_get", "Cindi-9f49", "/api/runtime/status") for c in client.calls)
+    assert client.closed
+
+
+def test_ls_plugins_json_adds_a_plugins_list_of_id_version(monkeypatch, capsys):
+    client = FakeClient(plugins=_PLUGINS)
+    _live(monkeypatch, client)
+    assert cli.run_fleet_cli(["ls", "--plugins", "--json"]) == 0
+    agents = {a["name"]: a for a in json.loads(capsys.readouterr().out)["agents"]}
+    assert agents["protoagent"]["plugins"] == [
+        {"id": "artifact", "version": "0.3.1"},
+        {"id": "friction", "version": "1.2.0"},
+    ]
+    assert agents["protoEngineer"]["plugins"] == [{"id": "projectBoard", "version": "2.0.0"}]
+    # null (not []) with a reason for every member we could not read
+    assert agents["Cindi"]["plugins"] is None and agents["Cindi"]["plugins_error"] == "stopped"
+    assert agents["ava"]["plugins"] is None and agents["ava"]["plugins_error"] == "unreachable"
+    assert agents["old"]["plugins"] is None and "runtime status" in agents["old"]["plugins_error"]
+
+
+def test_ls_plugins_a_running_member_with_none_loaded_is_empty_not_null(monkeypatch, capsys):
+    """An empty list is a real answer (a running member with nothing loaded); null is reserved
+    for a member we could not read. The two must stay distinguishable."""
+    client = FakeClient(plugins={"host": [], "protoEngineer-ba4c": [], "old-1": []})
+    _live(monkeypatch, client)
+    assert cli.run_fleet_cli(["ls", "--plugins", "--json"]) == 0
+    agents = {a["name"]: a for a in json.loads(capsys.readouterr().out)["agents"]}
+    assert agents["protoEngineer"]["plugins"] == [] and "plugins_error" not in agents["protoEngineer"]
+    assert agents["Cindi"]["plugins"] is None  # stopped stays null
+    _live(monkeypatch, FakeClient(plugins={"host": [], "protoEngineer-ba4c": [], "old-1": []}))
+    assert cli.run_fleet_cli(["ls", "--plugins"]) == 0
+    assert "plugins: (none loaded)" in capsys.readouterr().out
+
+
+def test_ls_without_plugins_is_unchanged(monkeypatch, capsys):
+    """AC4: without --plugins the roster output is byte-identical and no extra reads happen."""
+    client = FakeClient(plugins=_PLUGINS)
+    _live(monkeypatch, client)
+    assert cli.run_fleet_cli(["ls"]) == 0
+    assert "plugins:" not in capsys.readouterr().out
+    assert not any(c[0] == "member_get" for c in client.calls)  # the flag alone triggers the reads
+    _live(monkeypatch, FakeClient(plugins=_PLUGINS))
+    assert cli.run_fleet_cli(["ls", "--json"]) == 0
+    data = json.loads(capsys.readouterr().out)
+    assert data["agents"] == ROSTER and all("plugins" not in a for a in data["agents"])
+
+
+def test_ls_plugins_offline_reports_null_with_an_offline_reason(monkeypatch, capsys, sup, tmp_path):
+    """Offline there is no hub to read through: --plugins still answers null + a reason per
+    member (never an empty list), and the roster itself prints as usual."""
+    _offline(monkeypatch)
+    monkeypatch.setattr("graph.workspaces.manager.workspaces_root", lambda: tmp_path / "ws")
+    assert cli.run_fleet_cli(["ls", "--plugins", "--json"]) == 0
+    agents = json.loads(capsys.readouterr().out)["agents"]
+    assert agents and all(a["plugins"] is None and "offline" in a["plugins_error"] for a in agents)
+    _offline(monkeypatch)
+    assert cli.run_fleet_cli(["ls", "--plugins"]) == 0
+    out = capsys.readouterr().out
+    assert "○ alpha" in out and "plugins: null (offline" in out
 
 
 # ── up ───────────────────────────────────────────────────────────────────────
