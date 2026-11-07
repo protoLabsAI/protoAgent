@@ -38,8 +38,7 @@
 .dp-failed {
   color: var(--pl-color-status-error);
 }
-.dp-plan,
-.dp-tools {
+.dp-plan {
   display: flex;
   flex-direction: column;
   gap: var(--pl-space-0_5);
@@ -47,19 +46,16 @@
   padding: 0;
   list-style: none;
 }
-.dp-plan-entry,
-.dp-tool {
+.dp-plan-entry {
   display: flex;
   gap: var(--pl-space-1_5);
   align-items: center;
   min-width: 0;
 }
-/* Fixed row geometry: a glyph vs a spinner (and an empty slot) all occupy the same height,
-   so the live tool list — always 1 + RECENT_SHOWN slots — can't change height per frame. */
-.dp-tool {
-  height: 1.5em;
-  line-height: 1.5em;
-}
+/* The tool list is the DS `ToolCardList` (a gapped column of `.pl-toolcard` rows); each row
+   is a DS `ToolCard` carrying `.dp-tool`. While live the list holds a constant 1 + RECENT_SHOWN
+   slots — the empty ones below reserve the height of a collapsed row so a slot filling in
+   can't bounce the card (the #4246 fixed-footprint contract). */
 .dp-tool--empty {
   visibility: hidden;
 }
@@ -95,17 +91,13 @@
   color: var(--pl-color-accent);
   opacity: 1;
 }
-.dp-glyph--failed {
-  color: var(--pl-color-status-error);
-  opacity: 1;
-}
+/* A quiet mono prefix inside the ToolCard name slot (e.g. "read ·") rather than a pill, so
+   the row reads as one mono line: "<kind> · <toolLine>". */
 .dp-kind {
-  flex: 0 0 auto;
-  padding: 0 var(--pl-space-1);
-  font-size: var(--pl-font-size-3xs);
   color: var(--pl-color-fg-subtle);
-  border: 1px solid var(--pl-color-border);
-  border-radius: var(--pl-radius-pill);
+}
+.dp-kind::after {
+  content: " · ";
 }
 /* Only rendered while live. A two-line window with the height reserved up front, anchored to
    the BOTTOM: the tail is built newest-last (DelegateProgressView slices the last chars of
