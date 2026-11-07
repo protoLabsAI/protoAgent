@@ -3,7 +3,7 @@
 - Status: Accepted (2026-10-28; Josh: hard rename, optional shared profile, phase order as written)
 - Date: 2026-10-28
 - Deciders: Josh Mabry; protoAgent maintainers
-- Implementation: Phase 0 in #4553; Phases 1–3 not started.
+- Implementation: Phase 0 in #4553; Phase 1 (history) in #4556/#4557; Phase 2 (memories table, split budgets, tool rename, shared profile) in #4630; Phase 3 in #4631.
 - Builds on: [ADR 0021](./0021-agent-memory-architecture.md) (extract, don't dump),
   [ADR 0031](./0031-pluggable-knowledge-backend.md) (knowledge backend seam),
   [ADR 0041](./0041-workspaces-and-tiered-stores.md) (commons tier),
@@ -144,6 +144,8 @@ status line (a PR, card or SHA reference with a past-tense event and no subject)
 still saves but returns a nudge. It is not refused.
 
 ### D6 — Migration
+
+2026-11-07 refinement: rows are routed by `source_type`, not by domain name, and the Phase 2 backup is `agent.db.pre-0125-p2`.
 
 A one-shot migration runs at boot and is idempotent (`_kb_meta` marker). It routes each
 existing row as follows:

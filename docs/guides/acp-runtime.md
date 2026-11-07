@@ -42,7 +42,7 @@ agent_runtime: acp:proto         # native (default) | acp:<agent>
 # list specific tools to clamp the brain, or omit it entirely for everything. (`execute_code`
 # is excluded from the default set — the coding agent has its own; add it by name to override.)
 # operator_mcp:
-#   tools: [memory_recall, memory_ingest, task_create, task_list, notes_read, run_workflow]
+#   tools: [memory_search, memory_save, knowledge_search, task_create, task_list, notes_read, run_workflow]
 
 # Optional — override an agent's launch command (defaults shown).
 # acp:
@@ -72,21 +72,25 @@ Each agent needs its CLI **installed + authenticated** on the host. Defaults are
 3. **Tools** — protoAgent's operator tools are published as an MCP server (see
    [MCP → Expose this agent](/guides/mcp#expose-this-agent-as-an-mcp-server-operator-tools)) and **mounted into
    the ACP session** (`session/new` `mcpServers`). The coding agent calls `task_create`,
-   `memory_recall`, `run_workflow`, … alongside its own tools. As it works, its tool calls stream
+   `memory_search`, `run_workflow`, … alongside its own tools. As it works, its tool calls stream
    to the chat as **tool cards** (`tool_start`/`tool_end`), the same as the native runtime.
 4. **Drive** — the agent reasons + acts; protoAgent returns the result on its A2A/chat surface.
    The chat's model indicator shows the active runtime (`<agent> · coding agent`) rather than
    the gateway model, since the gateway model never runs the turn.
-5. **Write back** — durable facts persist to the knowledge store after the turn.
+5. **Write back** — durable facts persist to the memory store after the turn.
 
 One stateful ACP session is kept **per conversation thread** and reused across turns.
 
 > **Prefer protoAgent's tools for state.** A coding agent has its *own* todo/memory tools
 > (e.g. proto's `TaskCreate`) and will reach for them by default — state that then vanishes
 > with its session. The persona file steers it to use the `protoagent-operator` tools
-> (`task_create`, `memory_ingest`, `set_goal`, …) for anything that must **persist** in
+> (`task_create`, `memory_save`, `set_goal`, …) for anything that must **persist** in
 > protoAgent — and they're available **by default** (the full toolset rides the bus; clamp
 > it with `operator_mcp.tools` only if you want to restrict the brain).
+
+Use `memory_search` for durable facts and preferences, and `knowledge_search` for
+ingested documents. `memory_list` lists recent memories with per-kind counts;
+`memory_forget` deletes a memory by ID.
 
 ## No gateway? ACP-only works
 
