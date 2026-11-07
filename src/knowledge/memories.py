@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import sqlite3
 import threading
 import time
@@ -69,6 +70,30 @@ def _memory_date(value: str) -> datetime:
     """Compare ISO dates/timestamps as UTC, including legacy naive timestamps."""
     parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
     return parsed.replace(tzinfo=timezone.utc) if parsed.tzinfo is None else parsed
+
+
+def _extraction_date(row) -> str | None:
+    """Use conversation time for extracted rows, save time for deliberate saves.
+
+    Pre-funnel extracted rows kept their date only in the content prefix. An
+    undated extracted row has no known effective date; harvest time is not one.
+    """
+    if row["valid_from"]:
+        return row["valid_from"]
+    if row["provenance"] == "extracted":
+        match = re.match(r"^\[as of (\d{4}-\d{2}-\d{2})\]", row["content"])
+        return match.group(1) if match else None
+    return row["created_at"]
+
+
+def _after_extraction(row, as_of: str) -> bool:
+    old_date = _extraction_date(row)
+    if old_date is None:
+        return False
+    old = _memory_date(old_date).astimezone(timezone.utc)
+    new = _memory_date(as_of).astimezone(timezone.utc)
+    # Harvest dates have day precision: a save later on that day is not newer.
+    return old.date() > new.date() if len(as_of) == 10 else old > new
 
 
 def _normalize_subject(subject: str | None) -> str:
@@ -214,6 +239,7 @@ class MemoryStore:
         supersede: bool = True,
         as_of: str | None = None,
         protect_confirmed_operator: bool = False,
+        matched_extracted_id: int | None = None,
     ) -> tuple[int, list[MemoryEntry]]:
         """Persist a memory and retire the rows it supersedes, atomically (ADR 0125 P3-A).
 
@@ -223,7 +249,10 @@ class MemoryStore:
         ``review_state != 'rejected'``) that shares the subject (case- and
         whitespace-normalised for matching, stored as given), the same ``kind`` and the
         same ``scope`` is stamped ``superseded_by`` = the new id and its ``updated_at``
-        bumped. A row without a subject never supersedes and is never superseded.
+        bumped. A row without a subject never supersedes. Extractors may supply
+        ``matched_extracted_id`` for a content-matched predecessor (including a
+        legacy NULL subject); it is rechecked for kind, scope, provenance and live
+        state inside this transaction and obeys the same protection rules.
         Pending replacements may retire only pending agent/extracted rows that are
         not always-on. Replacing operator-authored, confirmed or always-on rows
         requires a confirmed replacement. Rejected or expired writes retire nothing.
@@ -277,7 +306,7 @@ class MemoryStore:
                 # Candidate live rows of the same kind; the subject (normalised) and scope
                 # match is applied in Python so the fold matches ``_normalize_subject`` exactly.
                 rows = db.execute(
-                    "SELECT * FROM memories WHERE id != ? AND kind = ? AND subject IS NOT NULL "
+                    "SELECT * FROM memories WHERE id != ? AND kind = ? "
                     "AND superseded_by IS NULL AND invalidated_at IS NULL AND review_state != 'rejected' "
                     "AND (expires_at IS NULL OR expires_at > ?) "
                     "ORDER BY created_at DESC, id DESC",
@@ -286,7 +315,15 @@ class MemoryStore:
                 rows = [
                     row
                     for row in rows
-                    if _normalize_subject(row["subject"]) == norm_subject and (row["scope"] or None) == norm_scope
+                    if (row["scope"] or None) == norm_scope
+                    and (
+                        _normalize_subject(row["subject"]) == norm_subject
+                        or (
+                            provenance == "extracted"
+                            and row["id"] == matched_extracted_id
+                            and row["provenance"] == "extracted"
+                        )
+                    )
                 ]
                 # Decide before retiring ANY predecessor: a protected row must not
                 # leave a partially rewritten chain when several live rows exist.
@@ -305,7 +342,7 @@ class MemoryStore:
                         (
                             row
                             for row in rows
-                            if _memory_date(row["valid_from"] or row["created_at"]) > _memory_date(as_of)
+                            if _after_extraction(row, as_of)
                         ),
                         None,
                     )
@@ -316,7 +353,7 @@ class MemoryStore:
                         "new=%s provenance=%s as_of=%s reason=%s",
                         blocker["id"],
                         blocker["provenance"],
-                        blocker["valid_from"] or blocker["created_at"],
+                        _extraction_date(blocker),
                         id,
                         provenance,
                         as_of,
@@ -343,7 +380,7 @@ class MemoryStore:
                         "[memory] supersession old=%s provenance=%s date=%s new=%s provenance=%s as_of=%s",
                         row["id"],
                         row["provenance"],
-                        row["valid_from"] or row["created_at"],
+                        _extraction_date(row),
                         id,
                         provenance,
                         as_of or now,

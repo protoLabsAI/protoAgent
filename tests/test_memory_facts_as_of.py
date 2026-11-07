@@ -9,7 +9,7 @@ be dated EARLIER than the fact it matches and must not supersede it."""
 
 from __future__ import annotations
 
-from graph.memory_facts import consolidate_and_store, _split_as_of
+from graph.memory_facts import consolidate_and_store
 from knowledge.memories import MemoryStore
 
 
@@ -19,10 +19,8 @@ class _Store(MemoryStore):
     def __init__(self, path, rows):
         super().__init__(path / "agent.db")
         for row in rows:
-            as_of, body = _split_as_of(row["content"])
-            self.add_with_supersession(row["content"], kind="fact", provenance="extracted", subject=body, as_of=as_of)
-        with self._write() as db:
-            db.execute("UPDATE memories SET created_at = '2026-01-01T00:00:00+00:00'")
+            # Historical extractor writes had neither subject nor valid_from.
+            self.add(row["content"], kind="fact", provenance="extracted")
 
     @property
     def superseded(self):
@@ -30,20 +28,20 @@ class _Store(MemoryStore):
 
 
 def test_dated_twin_supersedes_an_undated_legacy_fact(tmp_path):
-    kb = _Store(tmp_path, [{"id": 1, "content": "The user prefers teal."}])
+    kb = _Store(tmp_path, [{"content": "The user prefers teal."}])
     counts = consolidate_and_store(kb, ["[as of 2026-09-10] The user prefers teal."])
     assert counts == {"added": 1, "skipped": 0, "superseded": 1}
     assert kb.superseded == [(1, 2)]
 
 
 def test_same_fact_same_date_is_skipped(tmp_path):
-    kb = _Store(tmp_path, [{"id": 1, "content": "[as of 2026-09-10] The user prefers teal."}])
+    kb = _Store(tmp_path, [{"content": "[as of 2026-09-10] The user prefers teal."}])
     counts = consolidate_and_store(kb, ["[as of 2026-09-10] The user prefers teal."])
     assert counts == {"added": 0, "skipped": 1, "superseded": 0}
 
 
 def test_older_date_never_replaces_a_newer_one(tmp_path):
-    kb = _Store(tmp_path, [{"id": 1, "content": "[as of 2026-09-10] The user prefers teal."}])
+    kb = _Store(tmp_path, [{"content": "[as of 2026-09-10] The user prefers teal."}])
     counts = consolidate_and_store(kb, ["[as of 2026-08-11] The user prefers teal."])
     assert counts == {"added": 0, "skipped": 1, "superseded": 0}
     assert kb.superseded == []
@@ -52,7 +50,7 @@ def test_older_date_never_replaces_a_newer_one(tmp_path):
 def test_revision_in_the_supersede_band_still_supersedes(tmp_path):
     old = "[as of 2026-08-11] The user runs DeepSeek-V4-Flash and MiniCPM-V-4.6 as model endpoints."
     new = "[as of 2026-09-13] The user runs Qwen3.8-27B and MiniCPM-V-4.6 as model endpoints."
-    kb = _Store(tmp_path, [{"id": 7, "content": old}])
+    kb = _Store(tmp_path, [{"content": old}])
     counts = consolidate_and_store(kb, [new])
     assert counts["superseded"] == 1 and kb.superseded == [(1, 2)]
 
@@ -70,7 +68,7 @@ def test_the_scenario_lands_in_the_revision_band():
 
 
 def test_an_older_revision_harvested_later_does_not_supersede_the_newer_fact(tmp_path):
-    kb = _Store(tmp_path, [{"id": 7, "content": _NEWER}])
+    kb = _Store(tmp_path, [{"content": _NEWER}])
     counts = consolidate_and_store(kb, [_OLDER])
     assert counts == {"added": 1, "skipped": 0, "superseded": 0}
     assert kb.superseded == [(2, 1)]
@@ -92,7 +90,7 @@ def test_an_older_revision_does_not_supersede_the_newer_fact_in_the_real_store(t
 
 def test_a_same_date_revision_still_supersedes(tmp_path):
     same_day = "[as of 2026-09-10] The user runs DeepSeek-V4-Flash and MiniCPM-V-4.6 as model endpoints."
-    kb = _Store(tmp_path, [{"id": 7, "content": _NEWER}])
+    kb = _Store(tmp_path, [{"content": _NEWER}])
     counts = consolidate_and_store(kb, [same_day])
     assert counts["superseded"] == 1 and kb.superseded == [(1, 2)]
 
@@ -110,13 +108,13 @@ def test_a_newer_revision_supersedes_in_the_real_store(tmp_path):
 
 def test_an_undated_revision_still_supersedes_a_dated_fact(tmp_path):
     undated = "The user runs DeepSeek-V4-Flash and MiniCPM-V-4.6 as model endpoints."
-    kb = _Store(tmp_path, [{"id": 7, "content": _NEWER}])
+    kb = _Store(tmp_path, [{"content": _NEWER}])
     counts = consolidate_and_store(kb, [undated])
     assert counts["superseded"] == 1 and kb.superseded == [(1, 2)]
 
 
 def test_a_dated_revision_still_supersedes_an_undated_fact(tmp_path):
     undated = "The user runs Qwen3.8-27B and MiniCPM-V-4.6 as model endpoints."
-    kb = _Store(tmp_path, [{"id": 7, "content": undated}])
+    kb = _Store(tmp_path, [{"content": undated}])
     counts = consolidate_and_store(kb, [_OLDER])
     assert counts["superseded"] == 1 and kb.superseded == [(1, 2)]

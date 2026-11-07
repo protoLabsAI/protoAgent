@@ -42,7 +42,6 @@ import re
 from langchain_core.messages import HumanMessage
 
 from graph.output_format import strip_reasoning
-from knowledge.memories import _normalize_subject
 
 log = logging.getLogger(__name__)
 
@@ -192,11 +191,8 @@ def _consolidate_into_memories(
             existing = [row for row in existing if (row.scope or None) == (namespace or None)]
         except Exception:  # noqa: BLE001 — minimal stub or read failure ⇒ add-only
             existing = []
-        if subject:
-            matches = [row for row in existing if _normalize_subject(row.subject) == _normalize_subject(subject)]
-        else:
-            matches = existing
-        scored = [(_jaccard(_tokens(body), _tokens(_split_as_of(row.content)[1])), row) for row in matches]
+        # Deduplication also covers legacy NULL subjects and differently named keys.
+        scored = [(_jaccard(_tokens(body), _tokens(_split_as_of(row.content)[1])), row) for row in existing]
         best, match = max(scored, key=lambda pair: pair[0], default=(0.0, None))
         if match is not None and best >= _DEDUP_JACCARD:
             old_as_of, _ = _split_as_of(match.content)
@@ -204,6 +200,10 @@ def _consolidate_into_memories(
             if explicit or match.provenance != "extracted" or not _refreshes(new_as_of, old_as_of):
                 counts["skipped"] += 1
                 continue
+        matched_extracted_id = None
+        if match is not None and best >= _SUPERSEDE_JACCARD and match.provenance == "extracted":
+            if not explicit or not match.subject:
+                matched_extracted_id = match.id
         if not subject:
             subject = match.subject if match is not None and best >= _SUPERSEDE_JACCARD else None
             subject = subject or body
@@ -216,7 +216,7 @@ def _consolidate_into_memories(
             if callable(funnel):
                 rid, replaced = funnel(
                     fact, subject=subject, as_of=new_as_of,
-                    protect_confirmed_operator=True, **metadata,
+                    protect_confirmed_operator=True, matched_extracted_id=matched_extracted_id, **metadata,
                 )
             else:
                 # Minimal non-core stores historically degrade to add-only. Never

@@ -21,7 +21,7 @@ def _seed(store, *, provenance="agent", review_state=None, valid_from=None):
     with store._write() as db:
         db.execute(
             "UPDATE memories SET created_at = ?, valid_from = ? WHERE id = ?",
-            ("2026-10-16T00:00:00+00:00", valid_from, rid),
+            ("2026-10-16T18:34:56+00:00", valid_from, rid),
         )
     return rid
 
@@ -201,3 +201,60 @@ def test_empty_and_null_scope_share_dedup(tmp_path, stored_scope, namespace):
     )
     assert counts == {"added": 0, "skipped": 1, "superseded": 0}
     assert len(store.list(include_superseded=True)) == 1
+
+
+@pytest.mark.parametrize("subject", [None, "comp-minimum"])
+@pytest.mark.parametrize("incoming", [
+    "The user requires a minimum base compensation of 120K annually",
+    "The user requires a minimum base compensation of 120K",
+])
+def test_structured_content_dedup_covers_legacy_and_alternate_keys(tmp_path, subject, incoming):
+    store = MemoryStore(tmp_path / "agent.db")
+    old_id = store.add(
+        "The user requires a minimum base compensation of 120K annually",
+        kind="fact", provenance="extracted", subject=subject, scope="jobCoach",
+    )
+    assert _extract(store, "2026-10-20", content=incoming) == {
+        "added": 0, "skipped": 1, "superseded": 0,
+    }
+    assert [r.id for r in store.list(include_superseded=True)] == [old_id]
+
+
+@pytest.mark.parametrize("old_subject", [None, "deploy-time"])
+@pytest.mark.parametrize("structured", [False, True])
+@pytest.mark.parametrize("old_date, replaced", [(None, True), ("2026-10-14", True), ("2026-10-18", False)])
+def test_extracted_revision_uses_atomic_funnel(tmp_path, structured, old_date, replaced, old_subject):
+    store = MemoryStore(tmp_path / "agent.db")
+    old_body = "The user deploys production services every Friday after standup"
+    new_body = "The user deploys production services every Friday after lunch"
+    old_id = store.add(
+        f"[as of {old_date}] {old_body}" if old_date else old_body,
+        kind="fact", provenance="extracted", scope="jobCoach", subject=old_subject,
+    )
+    # Harvest time is later than every conversation date, including undated rows.
+    with store._write() as db:
+        db.execute("UPDATE memories SET created_at = '2026-11-07T18:00:00Z' WHERE id = ?", (old_id,))
+    new_content = f"[as of 2026-10-16] {new_body}"
+    fact = {"subject": "deploy-time", "content": new_content} if structured else new_content
+    counts = consolidate_and_store(store, [fact], namespace="jobCoach")
+    assert counts["superseded"] == int(replaced)
+    assert len(store.list()) == 1
+    assert len(store.list(include_superseded=True)) == 2
+    new_row = next(r for r in store.list(include_superseded=True) if r.id != old_id)
+    if replaced:
+        assert store.get(old_id).superseded_by == new_row.id
+    else:
+        assert new_row.superseded_by == old_id
+
+
+@pytest.mark.parametrize("subject", [None, "deploy-time"])
+def test_content_match_cannot_cross_scope(tmp_path, subject):
+    store = MemoryStore(tmp_path / "agent.db")
+    old_id = store.add("deploy on Friday after standup", kind="fact", provenance="extracted", scope="other")
+    new_id, replaced = store.add_with_supersession(
+        "deploy on Friday after lunch", kind="fact", provenance="extracted",
+        subject=subject or "new-key", scope="jobCoach", matched_extracted_id=old_id,
+    )
+    assert replaced == []
+    assert store.get(old_id).superseded_by is None
+    assert store.get(new_id).superseded_by is None
