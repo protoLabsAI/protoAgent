@@ -1155,6 +1155,18 @@ def _regression_model(case_id: str) -> str:
     return model
 
 
+class _EvalRunnerError(ValueError):
+    """Unavailable case evidence with bounded, redacted runner diagnostics."""
+
+    def __init__(self, message: str, exit_code: int, stderr: str):
+        from graph.middleware.redaction import redact
+
+        super().__init__(message)
+        self.exit_code = exit_code
+        # Redact before clipping so truncation cannot hide a credential's prefix.
+        self.stderr_tail = redact(stderr or "")[-1500:]
+
+
 def _rerun_eval_case(case_id: str) -> dict:
     """Run one case on a fresh private agent using the recorded nightly model."""
     import shutil
@@ -1227,10 +1239,14 @@ def _rerun_eval_case(case_id: str) -> dict:
                     proc.kill()
                     proc.wait(timeout=15)
         if completed.returncode not in (0, 1) or not report.exists():
-            raise ValueError("Runner did not produce a case result")
+            raise _EvalRunnerError(
+                "Runner did not produce a case result", completed.returncode, completed.stderr,
+            )
         rows = json.loads(report.read_text(encoding="utf-8")).get("results", [])
         if len(rows) != 1 or rows[0].get("id") != case_id:
-            raise ValueError("Runner did not execute exactly the requested case")
+            raise _EvalRunnerError(
+                "Runner did not execute exactly the requested case", completed.returncode, completed.stderr,
+            )
         return rows[0]
 
 
@@ -1246,7 +1262,12 @@ async def eval_rerun_case(case_id: str) -> str:
     try:
         return json.dumps(await asyncio.to_thread(_rerun_eval_case, case_id))
     except Exception as exc:  # noqa: BLE001
-        return json.dumps({"id": case_id, "error": type(exc).__name__, "unavailable": True})
+        from graph.middleware.redaction import redact
+
+        result = {"id": case_id, "error": type(exc).__name__, "message": redact(str(exc)), "unavailable": True}
+        if isinstance(exc, _EvalRunnerError):
+            result.update(exit_code=exc.exit_code, stderr_tail=exc.stderr_tail)
+        return json.dumps(result)
 
 
 def _build_eval_regression_subagent():

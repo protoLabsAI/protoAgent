@@ -198,15 +198,69 @@ def isolated_runner(tmp_path, monkeypatch, regression):
 
 
 @pytest.mark.platform_sensitive
+@pytest.mark.asyncio
 @pytest.mark.parametrize("rows", [[], [{"id": "wrong", "passed": True}], [{"id": "instance:lookup"}, {"id": "extra"}]])
-def test_runner_rejects_empty_or_wrong_report(monkeypatch, rows, isolated_runner):
+async def test_runner_rejects_empty_or_wrong_report(monkeypatch, rows, isolated_runner):
     def run(argv, **kwargs):
         Path(argv[argv.index("--out") + 1]).write_text(json.dumps({"results": rows}), encoding="utf-8")
-        return SimpleNamespace(returncode=0)
+        return SimpleNamespace(returncode=0, stderr="wrong selection")
 
     monkeypatch.setattr("subprocess.run", run)
-    with pytest.raises(ValueError, match="exactly"):
-        friction._rerun_eval_case("instance:lookup")
+    result = json.loads(await friction.eval_rerun_case.ainvoke({"case_id": "instance:lookup"}))
+    assert result == {
+        "id": "instance:lookup", "error": "_EvalRunnerError",
+        "message": "Runner did not execute exactly the requested case",
+        "exit_code": 0, "stderr_tail": "wrong selection", "unavailable": True,
+    }
+
+
+@pytest.mark.platform_sensitive
+@pytest.mark.asyncio
+@pytest.mark.parametrize("exit_code,write_report", [(2, True), (-9, True), (0, False), (1, False)])
+async def test_runner_failure_includes_bounded_diagnostics(monkeypatch, isolated_runner, exit_code, write_report):
+    stderr = "discarded prefix\n" + "x" * 1600 + "\nrunner failed"
+
+    def run(argv, **kwargs):
+        if write_report:
+            Path(argv[argv.index("--out") + 1]).write_text(
+                json.dumps({"results": [{"id": "instance:lookup", "passed": True}]}), encoding="utf-8",
+            )
+        return SimpleNamespace(returncode=exit_code, stderr=stderr)
+
+    monkeypatch.setattr("subprocess.run", run)
+    result = json.loads(await friction.eval_rerun_case.ainvoke({"case_id": "instance:lookup"}))
+    assert result == {
+        "id": "instance:lookup", "error": "_EvalRunnerError",
+        "message": "Runner did not produce a case result",
+        "exit_code": exit_code, "stderr_tail": stderr[-1500:], "unavailable": True,
+    }
+
+
+@pytest.mark.platform_sensitive
+@pytest.mark.asyncio
+async def test_runner_diagnostics_redact_credentials_before_clipping(monkeypatch, isolated_runner):
+    secret = "s" * 1600
+    monkeypatch.setattr("subprocess.run", Mock(return_value=SimpleNamespace(
+        returncode=2, stderr=f"OPENAI_API_KEY={secret}\nAuthorization: Bearer private-token\nfailed",
+    )))
+    result = json.loads(await friction.eval_rerun_case.ainvoke({"case_id": "instance:lookup"}))
+    assert result["stderr_tail"].endswith("\nfailed")
+    assert "s" * 20 not in result["stderr_tail"]
+    assert "private-token" not in result["stderr_tail"]
+    assert "[REDACTED]" in result["stderr_tail"]
+    assert len(result["stderr_tail"]) <= 1500
+
+
+@pytest.mark.asyncio
+async def test_rerun_generic_error_includes_redacted_message(monkeypatch):
+    monkeypatch.setattr(friction, "_rerun_eval_case", Mock(side_effect=ValueError(
+        "Unavailable: Authorization: Bearer private-token",
+    )))
+    result = json.loads(await friction.eval_rerun_case.ainvoke({"case_id": "lookup"}))
+    assert result == {
+        "id": "lookup", "error": "ValueError",
+        "message": "Unavailable: Authorization: Bearer [REDACTED]", "unavailable": True,
+    }
 
 
 @pytest.mark.platform_sensitive
