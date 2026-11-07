@@ -5,6 +5,9 @@ old tool names (memory_ingest/memory_recall/memory_stats/forget_memory) removed.
 from __future__ import annotations
 
 import asyncio
+import ast
+import re
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -55,6 +58,25 @@ def test_old_tool_names_are_gone_new_names_present(tmp_path):
 
 
 # ── r2 — memory_save / search / list / forget over `memories` ─────────────────
+
+
+def test_repo_onboard_documented_save_matches_tool_schema(tmp_path):
+    skill = Path(__file__).resolve().parents[1] / "plugins/engineer/skills/repo-onboard/SKILL.md"
+    calls = re.findall(r"`(memory_save\([^`]+\))`", skill.read_text(encoding="utf-8"))
+    assert len(calls) == 1
+    call = ast.parse(calls[0].replace("<card>", repr("Example repository card")).replace("<name>", "example"), mode="eval").body
+    args = {kw.arg: ast.literal_eval(kw.value) for kw in call.keywords}
+    tools, _ks, mem = _tools(tmp_path)
+    save = tools["memory_save"]
+    # Check unknown kwargs explicitly: schema parsers may silently discard extras.
+    assert set(args) <= set(save.args)
+    save.args_schema.model_validate(args)
+    assert asyncio.run(save.ainvoke(args)).startswith("Saved memory #")
+    entry = mem.list(limit=1)[0]
+    assert entry.content == "Example repository card"
+    assert entry.subject == "repo:example"
+    assert entry.heading == "example repo card"
+    assert entry.kind == "fact"
 
 
 def test_save_search_list_forget_round_trip(tmp_path):
