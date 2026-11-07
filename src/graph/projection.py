@@ -95,7 +95,7 @@ _INERT_BUDGET_LOGGED = False
 # bare and sheds the digest as one unit (the D6 behavior).
 DigestLoader = Callable[..., object]
 # How a caller records an injection: ``(state, memory_parts, digest_ids, hot_ids, rag_ids)``.
-InjectionRecorder = Callable[[dict, list[str], list[str], list[int | str], list[int]], None]
+InjectionRecorder = Callable[[dict, list[str], list[str], list[int | str], list[int | str]], None]
 
 
 @dataclass(frozen=True)
@@ -111,7 +111,7 @@ class _RagStageCounts:
     """
 
     effective_top_k: int = 0  # knowledge.top_k for this projection (0 = auto-injection off)
-    retrieved: int = 0  # candidates from search_scoped (namespace + deliverable filtered)
+    retrieved: int = 0  # memory + knowledge candidates (scope + deliverable filtered)
     trust_filtered: int = 0  # retained after rank_by_trust (trust floor + top_k cap)
     final: int = 0  # RAG hits in the delivered projection (after budget shedding)
 
@@ -337,7 +337,7 @@ class ProjectedContext:
     sections: list[dict] = field(default_factory=list)
     digest_ids: list[str] = field(default_factory=list)
     hot_ids: list[int | str] = field(default_factory=list)
-    rag_ids: list[int] = field(default_factory=list)
+    rag_ids: list[int | str] = field(default_factory=list)
     sources: list[str] = field(default_factory=list)
     budget_chars: int | None = None
     used_chars: int = 0
@@ -449,12 +449,14 @@ def compose_projected_context(
     # 3. RAG hits on the turn's query — trust-ranked, namespace-scoped, deliverable-only
     #    (ADR 0069 D3a/D8, ADR 0108 D6). Ranked best-first: the budget sheds from the end.
     #    ``retrieved`` (the store's deliverable candidates) is kept alongside the ranked
-    #    ``results`` only for the RAG-stage provenance (#3259) — the two calls, their order,
-    #    and their outputs are exactly what the single-expression form produced.
+    #    ``results`` only for the RAG-stage provenance (#3259). Memories share the existing
+    #    cap with knowledge until P2-F introduces separate delivery budgets.
     retrieved: list[dict] = []
     results: list[dict] = []
-    if query and not incognito and knowledge_store is not None:
-        retrieved = search_scoped(knowledge_store, query, opts)
+    if query and not incognito and opts.top_k > 0:
+        retrieved = search_memories(query, opts)
+        if knowledge_store is not None:
+            retrieved.extend(search_scoped(knowledge_store, query, opts))
         results = rank_by_trust(retrieved, opts)
 
     # 4/5. Skills (capability, not memory) and the agent's own live commitments
@@ -534,12 +536,12 @@ class _Delivered:
     memory_parts: list[str]
     digest_ids: list[str]
     hot_ids: list[int | str]
-    rag_ids: list[int]
+    rag_ids: list[int | str]
     sources: list[str]
     projected: ProjectedContext = field(default_factory=ProjectedContext)
 
 
-def _render_rag(results: list[dict]) -> tuple[str, list[int]]:
+def _render_rag(results: list[dict]) -> tuple[str, list[int | str]]:
     """The ``[Relevant knowledge from previous sessions:]`` part, one line per hit."""
     if not results:
         return "", []
@@ -550,7 +552,7 @@ def _render_rag(results: list[dict]) -> tuple[str, list[int]]:
     from knowledge.trust import trust_label
 
     context_parts = ["[Relevant knowledge from previous sessions:]"]
-    rag_ids: list[int] = []
+    rag_ids: list[int | str] = []
     for r in results:
         # Tag each hit with its source DOMAIN, not the physical table
         # (always "chunks" — no signal). An imported domain like
@@ -930,6 +932,38 @@ def _always_on_memory(knowledge_store, *, strict: bool = False) -> tuple[str, li
     return "\n".join(pieces), ids
 
 
+def search_memories(query: str, opts: ProjectionOptions) -> list[dict]:
+    """Recall core memories through the existing bounded RAG policy.
+
+    P2-D3 preserves automatic recall while P2-F owns the separate section/budget
+    split. Prefix audit handles just like always-on memories: chunk ids are a
+    different address space. Scope filtering happens before the store's top-k.
+    """
+    from runtime.state import STATE
+
+    store = getattr(STATE, "memory_store", None)
+    if store is None or opts.top_k <= 0:
+        return []
+    k = opts.top_k if opts.inject_min_trust <= 1 else opts.top_k * 3
+    try:
+        rows = store.search(
+            query, k=k, delivery="retrieved", deliverable=True, scopes=list(opts.inject_namespaces)
+        )
+        return [
+            {
+                "id": f"memory:{row.id}",
+                "domain": "memory",
+                "preview": row.content,
+                "created_at": row.created_at,
+                "source_type": "conversation" if row.provenance == "agent" else row.provenance,
+            }
+            for row in rows
+        ]
+    except Exception:
+        log.debug("[projection] memory-store retrieval failed", exc_info=True)
+        return []
+
+
 def search_scoped(knowledge_store, query: str, opts: ProjectionOptions) -> list[dict]:
     """The auto-inject RAG search, namespace-scoped when configured (ADR 0069
     D3a) and deliverable-only (ADR 0108 D6 — rejected and expired rows never
@@ -1272,7 +1306,7 @@ def record_injection(
     memory_parts: list[str],
     digest_ids: list[str],
     hot_ids: list[int | str],
-    rag_ids: list[int],
+    rag_ids: list[int | str],
 ) -> None:
     """Append this model call's injected-memory row to the per-instance
     injection log (ADR 0069 D6), including the bounded RAG-stage provenance

@@ -235,16 +235,21 @@ class MemoryStore:
         review_state=None,
         include_superseded: bool = False,
         deliverable: bool = False,
+        scopes: list[str] | None = None,
     ) -> list[MemoryEntry]:
         """Fuse FTS5 and cosine rankings; apply identical eligibility to both halves.
 
         Audit search may include superseded rows, but deliverable=True always
         excludes them. Invalidated, expired and rejected rows never enter search.
+        Nonempty scopes filter both rankings before limiting; "" includes unscoped rows.
         """
         if not query.strip() or k <= 0:
             return []
         vec = self._embed(query)
         where, params = self._filters(kind, delivery, review_state, include_superseded, deliverable)
+        if scopes:
+            where += f" AND COALESCE(m.scope, '') IN ({','.join('?' for _ in scopes)})"
+            params.extend(scopes)
         candidates = max(k, 20)
         with closing(self._connect()) as db:
             rows = db.execute(

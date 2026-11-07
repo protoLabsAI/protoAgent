@@ -917,3 +917,76 @@ def test_injection_log_decodes_unparseable_stage_counts_to_defaults(tmp_path):
         "final": 0,
         "rag_chunk_ids": 0,
     }
+
+
+def test_retrieved_memories_obey_projection_policy(tmp_path, monkeypatch):
+    from graph.projection import compose_projected_context
+    from knowledge.memories import MemoryStore
+    from runtime.state import STATE
+
+    store = MemoryStore(tmp_path / "agent.db")
+    monkeypatch.setattr(STATE, "memory_store", store)
+    live = store.add("teal preference", kind="fact", provenance="extracted", scope="project")
+    old = store.add("teal obsolete", kind="fact", provenance="extracted", scope="project")
+    store.supersede(old, live)
+    store.add("teal rejected", kind="fact", provenance="extracted", review_state="rejected", scope="project")
+    store.add("teal expired", kind="fact", provenance="extracted", expires_at="2000-01-01", scope="project")
+    store.add("teal private", kind="fact", provenance="extracted", delivery="on_demand", scope="project")
+    # Enough off-scope matches to expose filtering AFTER the store's limit.
+    for _ in range(25):
+        store.add("teal", kind="fact", provenance="extracted", scope="elsewhere")
+
+    def compose(**kwargs):
+        options = kwargs.pop("options", ProjectionOptions(top_k=1, inject_namespaces=("project",)))
+        return compose_projected_context(query="teal", knowledge_store=None, skills_index=None, state={}, options=options, record=False, **kwargs)
+
+    result = compose()
+    assert "teal preference" in result.text
+    assert result.rag_ids == [f"memory:{live}"]
+    assert "trust: agent" in result.text
+    assert all(word not in result.text for word in ("obsolete", "rejected", "expired", "private"))
+    assert compose(incognito=True).rag_ids == []
+    assert compose(options=ProjectionOptions(top_k=0)).rag_ids == []
+    assert compose(options=ProjectionOptions(inject_min_trust=3)).rag_ids == []
+    assert compose(options=ProjectionOptions(budget_chars=1)).rag_ids == []
+
+
+def test_memory_retrieval_failure_preserves_knowledge(tmp_path, monkeypatch):
+    from graph.projection import compose_projected_context
+    from runtime.state import STATE
+
+    class BrokenMemory:
+        def always_on_entries(self):
+            return []
+
+        def search(self, *args, **kwargs):
+            raise RuntimeError("unavailable")
+
+    monkeypatch.setattr(STATE, "memory_store", BrokenMemory())
+    result = compose_projected_context(query="query", knowledge_store=_FakeStore(results=_RAG), skills_index=None, state={}, record=False)
+    assert result.rag_ids == [31, 32]
+
+
+def test_retrieved_memory_audit_resolves_without_chunk_collision(tmp_path, monkeypatch):
+    from graph.projection import compose_projected_context
+    from knowledge.memories import MemoryStore
+    from observability.injection_log import InjectionLog
+    from operator_api.injection_routes import _resolve_injection
+    from runtime.state import STATE
+
+    store = MemoryStore(tmp_path / "agent.db")
+    mid = store.add("teal preference", kind="fact", provenance="extracted")
+    monkeypatch.setattr(STATE, "memory_store", store)
+    monkeypatch.setattr(STATE, "knowledge_store", None)
+    result = compose_projected_context(
+        query="teal", knowledge_store=None, skills_index=None, state={}, record=False,
+    )
+    audit = InjectionLog(tmp_path / "injections.db")
+    audit.record(session_id="later-turn", rag_chunk_ids=result.rag_ids)
+    row = audit.recent(session_id="later-turn")[0]
+    assert row["rag_chunk_ids"] == [f"memory:{mid}"]
+    detail = _resolve_injection(row)
+    assert detail["docs"] == []
+    assert detail["memories"] == [
+        {"id": f"memory:{mid}", "heading": None, "snippet": "teal preference", "unavailable": False}
+    ]

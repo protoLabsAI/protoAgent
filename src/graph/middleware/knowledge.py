@@ -512,7 +512,7 @@ class KnowledgeMiddleware(AgentMiddleware):
         memory_parts: list[str],
         digest_ids: list[str],
         hot_ids: list[int | str],
-        rag_ids: list[int],
+        rag_ids: list[int | str],
     ) -> None:
         """Append this model call's injected-memory row to the per-instance
         injection log (ADR 0069 D6) — :func:`graph.projection.record_injection`.

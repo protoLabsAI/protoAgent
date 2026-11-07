@@ -105,8 +105,9 @@ def _resolve_injection(row: dict) -> dict:
         "ts": row.get("ts"),
         "session_id": row.get("session_id") or "",
         "past_sessions": [_session_item(str(s)) for s in row.get("digest_session_ids") or []],
-        "memories": [_memory_item(store, c) for c in row.get("hot_chunk_ids") or []],
-        "docs": [_doc_item(store, c) for c in row.get("rag_chunk_ids") or []],
+        "memories": [_memory_item(store, c) for c in row.get("hot_chunk_ids") or []]
+        + [_memory_item(store, c) for c in row.get("rag_chunk_ids") or [] if str(c).startswith("memory:")],
+        "docs": [_doc_item(store, c) for c in row.get("rag_chunk_ids") or [] if not str(c).startswith("memory:")],
         "approx_tokens": int(row.get("approx_tokens") or 0),
     }
 

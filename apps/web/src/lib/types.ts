@@ -1889,7 +1889,7 @@ export type MemoryInjectionRow = {
   session_id: string;
   digest_session_ids: string[];
   hot_chunk_ids: (number | string)[];
-  rag_chunk_ids: number[];
+  rag_chunk_ids: (number | string)[];
   approx_tokens: number;
 };
 

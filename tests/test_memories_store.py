@@ -269,3 +269,14 @@ def test_expiry_is_normalized_to_utc(store):
     id = add(store, expires_at="2100-01-01T03:00:00+03:00")
     assert store.get(id).expires_at == "2100-01-01T00:00:00+00:00"
     assert store.search("searchable", deliverable=True)[0].id == id
+
+
+@pytest.mark.parametrize("hybrid", [False, True])
+def test_search_scopes_filter_before_limit(tmp_path, hybrid):
+    store = MemoryStore(tmp_path / "scoped.db", embed_fn=(lambda _: [1.0, 0.0]) if hybrid else None)
+    for _ in range(25):
+        store.add("teal", kind="fact", provenance="extracted", scope="other")
+    wanted = store.add("teal preference", kind="fact", provenance="extracted", scope="project")
+    unscoped = store.add("teal global", kind="fact", provenance="extracted")
+    assert [row.id for row in store.search("teal", k=1, scopes=["project"])] == [wanted]
+    assert {row.id for row in store.search("teal", scopes=["project", ""])} == {wanted, unscoped}
