@@ -269,3 +269,110 @@ def test_expiry_is_normalized_to_utc(store):
     id = add(store, expires_at="2100-01-01T03:00:00+03:00")
     assert store.get(id).expires_at == "2100-01-01T00:00:00+00:00"
     assert store.search("searchable", deliverable=True)[0].id == id
+
+
+# ── update (ADR 0125 P2-D4 — partial, in-place edit) ─────────────────────────
+
+
+def _vec_count(store, id):
+    with closing(store._connect()) as db:
+        return db.execute("SELECT COUNT(*) FROM memory_vectors WHERE memory_id = ?", (id,)).fetchone()[0]
+
+
+def test_update_content_reindexes_fts(store):
+    # FTS-only store: search reflects content purely through the trigger, no vector half.
+    id = add(store, "original content", heading="Keep")
+    assert store.update(id, content="revised content") is True
+    entry = store.get(id)
+    assert (entry.content, entry.heading) == ("revised content", "Keep")  # heading untouched
+    assert [e.id for e in store.search("revised")] == [id]  # FTS follows the new content
+    assert store.search("original") == []  # the old term is gone from the index
+
+
+def test_update_heading_only_reindexes_fts(store):
+    id = add(store, "bicycle maintenance notes", heading="OldHeading")
+    assert store.update(id, heading="NewHeading") is True
+    entry = store.get(id)
+    assert (entry.heading, entry.content) == ("NewHeading", "bicycle maintenance notes")  # content kept
+    assert [e.id for e in store.search("NewHeading")] == [id]  # FTS has the new heading
+    assert store.search("OldHeading") == []
+
+
+def test_update_reembeds_to_keep_the_row_in_vector_search(store):
+    # The riskiest path: a content OR heading edit fires the FTS/vector trigger, which
+    # DROPS the old vector. update must re-embed (from stored content when only the heading
+    # moves) so the row is never stranded out of vector search. Constant embed → a query
+    # term absent from FTS is reachable by the vector half alone, proving the vector exists.
+    store = MemoryStore(store.path, embed_fn=lambda _: [1.0, 0.0])
+    id = add(store, "bicycle maintenance notes", heading="OldHeading")
+    assert store.update(id, content="revised notes") is True
+    assert _vec_count(store, id) == 1  # re-embedded after the content edit
+    assert [e.id for e in store.search("zzsemanticonlyzz")] == [id]  # vector-reachable
+    assert store.update(id, heading="NewHeading") is True  # heading-only edit
+    assert _vec_count(store, id) == 1  # re-embedded from the STORED content, not stranded
+    assert [e.id for e in store.search("zzsemanticonlyzz")] == [id]
+
+
+def test_update_subject_or_kind_only_skips_reembedding(store):
+    # A subject/kind-only edit changes neither heading nor content, so the trigger never
+    # fires and update must NOT recompute the embedding — the existing vector is kept.
+    seen = []
+    store = MemoryStore(store.path, embed_fn=lambda t: seen.append(t) or [1.0, 0.0])
+    id = add(store, "a fact about ports", kind="fact", subject=None)
+    seen.clear()  # ignore the add() embed; watch only the update
+    before = store.get(id).updated_at
+    assert store.update(id, subject="networking", kind="decision") is True
+    entry = store.get(id)
+    assert (entry.subject, entry.kind) == ("networking", "decision")
+    assert (entry.content, entry.heading) == ("a fact about ports", None)
+    assert seen == []  # no re-embedding was triggered
+    assert _vec_count(store, id) == 1  # untouched vector
+    assert store.get(id).updated_at >= before
+
+
+def test_update_no_fields_is_a_noop(store):
+    id = add(store, "unchanged")
+    before = store.get(id)
+    assert store.update(id) is False  # nothing passed → early return, no write
+    assert store.get(id) == before
+
+
+def test_update_unknown_id_is_false(store):
+    assert store.update(999_999, content="x") is False
+
+
+# ── set_review_state (ADR 0125 P2-D4 — operator verdict) ─────────────────────
+
+
+def test_set_review_state_validates_and_applies(store):
+    id = add(store, provenance="agent")  # starts pending
+    assert store.get(id).review_state == "pending"
+    assert store.set_review_state(id, "confirmed") is True
+    assert store.get(id).review_state == "confirmed"
+    assert store.set_review_state(id, "rejected") is True
+    assert store.get(id).review_state == "rejected"
+    assert store.get(id).content == "searchable"  # a verdict never rewrites content
+    assert store.set_review_state(999_999, "confirmed") is False  # unknown id
+    with pytest.raises(ValueError):
+        store.set_review_state(id, "maybe")
+
+
+# ── inspect (ADR 0125 P2-D4 — operator listing, audit rows included) ─────────
+
+
+def test_inspect_includes_audit_rows_and_filters_delivery(store):
+    always = add(store, "always pin", delivery="always")
+    rejected = add(store, "rejected pin", delivery="always", review_state="rejected")
+    expired = add(store, "expired pin", delivery="always", expires_at="2000-01-01")
+    superseded = add(store, "old pin", delivery="always")
+    retrieved = add(store, "retrieved fact", delivery="retrieved")
+    invalidated = add(store, "gone", delivery="always")
+    with store._write() as db:
+        db.execute("UPDATE memories SET superseded_by = ? WHERE id = ?", (always, superseded))
+        db.execute("UPDATE memories SET invalidated_at = '2000-01-01' WHERE id = ?", (invalidated,))
+    # list() applies eligibility and hides every audit row; inspect() keeps them.
+    assert [e.id for e in store.list()] == [retrieved, always]
+    assert {e.id for e in store.inspect()} == {always, rejected, expired, superseded, retrieved}
+    # The delivery filter scopes to always-on only but still carries the audit rows.
+    assert {e.id for e in store.inspect(delivery="always")} == {always, rejected, expired, superseded}
+    assert all(e.id != invalidated for e in store.inspect())  # invalidated stays hidden
