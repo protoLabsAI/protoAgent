@@ -75,8 +75,9 @@ subagents:
       - current_time
       - web_search
       - fetch_url
-      - memory_recall
+      - memory_search
       - memory_list
+      - knowledge_search
     max_turns: 40
 
 middleware:
