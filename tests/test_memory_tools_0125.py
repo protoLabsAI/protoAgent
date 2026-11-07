@@ -444,3 +444,39 @@ def test_save_evals_verify_and_clean_memories(tmp_path, monkeypatch):
         verify.apply_teardown(case["teardown"])
         assert mem.get(mid) is None
         assert ks.get_chunk(cid) is not None
+
+
+# ── P2-E4 — bundled skills + the memory-hardening dev doc use the new names ────
+
+# The four files ADR 0125 P2-E4 moves onto the renamed memory tools: the three bundled
+# SKILL.md files (whose tool references are already contract-tested by
+# test_cowork_plugin / test_engineer_plugin — they resolve against the in-tree @tool
+# sweep) and the memory-hardening dev doc, which no skill-surface test reaches.
+_E4_FILES = (
+    "plugins/cowork/skills/consolidate-memory/SKILL.md",
+    "plugins/cowork/skills/daily-brief/SKILL.md",
+    "plugins/engineer/skills/repo-onboard/SKILL.md",
+    "docs/dev/memory-hardening-tasklist.md",
+)
+
+
+def test_e4_files_name_no_retired_memory_tool():
+    """A retired tool name left in a skill surfaces as missing_tools; left in the dev doc
+    it points a reader at a tool that no longer exists. Neither is allowed."""
+    repo = Path(__file__).resolve().parents[1]
+    for rel in _E4_FILES:
+        text = (repo / rel).read_text(encoding="utf-8")
+        for gone in ("memory_ingest", "memory_recall", "memory_stats", "forget_memory"):
+            # Word boundaries so recall_session / knowledge_search never trip the sweep.
+            assert not re.search(rf"\b{gone}\b", text), f"{rel} still names {gone}"
+
+
+def test_memory_hardening_doc_recall_name_resolves(tmp_path):
+    """The dev doc's memory_recall → memory_search rename cites a tool that is really
+    registered in a default agent build — the doc is covered by no skill-surface test."""
+    repo = Path(__file__).resolve().parents[1]
+    text = (repo / "docs/dev/memory-hardening-tasklist.md").read_text(encoding="utf-8")
+    assert "`memory_search`" in text and "`memory_recall`" not in text
+    ks = KnowledgeStore(db_path=str(tmp_path / "agent.db"))
+    names = {t.name for t in get_all_tools(knowledge_store=ks)}
+    assert "memory_search" in names

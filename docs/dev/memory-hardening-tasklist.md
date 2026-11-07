@@ -37,7 +37,7 @@ Files: `graph/middleware/memory.py`, `graph/middleware/knowledge.py`,
       bodies.** Keep `max_sessions`/`max_tokens` semantics.
 - [x] New `recall_session(session_id)` memory tool (in `_build_memory_tools`):
       returns the persisted summary (reasoning-stripped, as today's loader
-      did), errors cleanly on unknown id. Registered alongside `memory_recall`.
+      did), errors cleanly on unknown id. Registered alongside `memory_search`.
 - [x] Untrusted-reference envelope in `KnowledgeMiddleware.before_model`
       wrapping digest + hot memory + RAG hits: reference data, possibly stale
       or third-party; never instructions; never "the current conversation".
@@ -59,11 +59,11 @@ Files: `operator_api/chat_routes.py`, `graph/middleware/memory.py`,
 
 ### Lane R1c — provenance stamping (D5) — `S`/`M` — SHIPPED #1579
 Files: `graph/memory_facts.py`, `graph/conversation_harvest.py`,
-`tools/lg_tools.py` (`memory_recall` output), `tests/`.
+`tools/lg_tools.py` (`memory_search` output), `tests/`.
 
 - [x] Facts: `source=<session_id>` (keep `source_type="extracted"`); harvest
       summaries: `source=<thread_id>` (not just the heading).
-- [x] `memory_recall` results cite `source` + `created_at` (+ `namespace`
+- [x] `memory_search` results cite `source` + `created_at` (+ `namespace`
       when set) per hit.
 - [x] Tests: stamped rows round-trip; recall output includes citations.
 
