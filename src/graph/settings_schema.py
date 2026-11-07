@@ -713,7 +713,8 @@ FIELDS: list[Field] = [
         "Restrict per-turn auto-injected knowledge (RAG) to chunks in these namespaces — "
         'comma- or newline-separated; enter `""` (quoted) to match un-namespaced chunks '
         "(a bare blank line is dropped as noise). Empty = no filter (everything is "
-        "eligible, today's behavior). Tool-driven recall (memory_search) is not affected.",
+        "eligible, today's behavior). Tool-driven search (memory_search for memories, "
+        "knowledge_search for ingested documents) is not affected.",
     ),
     # Trust floor for the auto-inject RAG hits (ADR 0069 D8).
     Field(
@@ -725,7 +726,8 @@ FIELDS: list[Field] = [
         "Minimum trust tier a knowledge chunk needs to be auto-injected into the prompt. "
         "1 = everything (low-trust hits are only ranked below higher tiers); 2 = exclude "
         "ingested/external content (web, YouTube, PDFs, media); 3 = operator-authored rows "
-        "only. Tool-driven recall (memory_search) is never gated — excluded content stays "
+        "only. Tool-driven search (memory_search for memories, knowledge_search for ingested documents) "
+        "is never gated — excluded content stays "
         "reachable on demand, tier visible.",
         minimum=1,
         maximum=3,

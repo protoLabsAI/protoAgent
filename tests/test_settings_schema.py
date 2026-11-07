@@ -459,3 +459,17 @@ def test_restart_keys_includes_plugin_fields(monkeypatch):
             "unknown.field": True,
         }
     ) == [keys["workers"], "runtime.autostart_on_boot"]
+
+
+def test_knowledge_help_names_memory_and_document_tools():
+    """Settings distinguish durable memory from ingested document search."""
+    groups = build_schema(LangGraphConfig())
+    descriptions = {f["key"]: f["description"] for g in groups for f in g["fields"]}
+    for key in ("knowledge.inject_namespaces", "knowledge.inject_min_trust"):
+        description = descriptions[key]
+        assert "memory_search for memories" in description
+        assert "knowledge_search for ingested documents" in description
+        assert "memory_recall" not in description
+    hot_write = descriptions["knowledge.hot_write_confirm"]
+    assert "memory_save and knowledge_ingest" in hot_write
+    assert "memory_ingest" not in hot_write
