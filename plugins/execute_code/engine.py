@@ -489,6 +489,7 @@ _DEFAULT_BRIDGE_TOOLS = frozenset(
         "fetch_url",
         "web_search",
         "memory_search",
+        "knowledge_search",
         "memory_list",
         "current_time",
     }
