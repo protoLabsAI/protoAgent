@@ -359,6 +359,20 @@ def list_devices() -> list[dict]:
     return [d.public() for d in _load()]
 
 
+def mint_device(name: object) -> tuple[dict, str]:
+    """Mint a named device-scope token for an authenticated operator, without pairing.
+
+    Invalid names raise ``ValueError``; the token is returned once and never audited.
+    """
+    device, token = _register(validate_device_name(name), KIND_DEVICE)
+    _audit(
+        "device_minted",
+        {"device_id": device.id, "name": device.name},
+        "a named device-scope access token was minted",
+    )
+    return device.public(), token
+
+
 def rename_device(device_id: str, name: object) -> dict | None:
     """Rename a device; returns its public shape, or None if there's no such device.
 

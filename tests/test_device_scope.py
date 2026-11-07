@@ -330,7 +330,7 @@ _PLANE_FAMILIES = (
     "/api/config/oauth/",
     "/api/plugins/",
     "/api/mcp/servers",
-    "/api/devices/",
+    "/api/devices",
 )
 _ALLOWED_WRITES = {
     ("POST", "/api/pairing/claim"),  # unauthenticated by necessity (ADR 0087 D4) — no scope at all
@@ -1074,3 +1074,172 @@ def test_device_scope_cannot_set_the_public_console_url(config_client):
     )
     assert resp.status_code == 403 and resp.json()["keys"] == ["network.public_console_url"]
     assert config_client.writes == []
+
+
+# ── Direct device minting (#4683) ─────────────────────────────────────────────────────────
+
+
+def test_mint_device_without_console_is_hashed_audited_and_revocable(
+    client, devices, monkeypatch, tmp_path, caplog
+):
+    import logging
+    import observability.audit as audit_mod
+
+    audit_path = tmp_path / "mint-audit.jsonl"
+    monkeypatch.setattr(audit_mod, "audit_logger", audit_mod.AuditLogger(audit_path))
+    monkeypatch.setenv("PROTOAGENT_UI", "none")
+    caplog.set_level(logging.DEBUG)
+    response = client.post("/api/devices", headers=_hdr(_SECRET), json={"name": "brandLaunch recorder"})
+    assert response.status_code == 200, response.text
+    assert response.headers["cache-control"] == "no-store"
+    body = response.json()
+    device, token = body["device"], body["token"]
+    assert body["ok"] is True
+    assert device["name"] == "brandLaunch recorder"
+    assert device["kind"] == device["scope"] == "device"
+    assert device == devices.list_devices()[0]
+    assert not devices._PENDING
+    registry = devices._registry_path().read_text("utf-8")
+    assert json.loads(registry)[0]["token_sha256"] == hashlib.sha256(token.encode()).hexdigest()
+    assert token not in registry and "token_sha256" not in device
+    audit = audit_path.read_text("utf-8")
+    entry, = [json.loads(line) for line in audit.splitlines()]
+    assert entry["tool"] == "device_minted" and entry["success"] is True
+    assert entry["args"] == {"device_id": device["id"], "name": device["name"]}
+    assert token not in audit
+    ordinary = client.get("/api/chat", headers=_hdr(token))
+    assert ordinary.status_code == 200 and ordinary.json()["scope"] == "device"
+    refused = client.post("/api/pairing/start", headers=_hdr(token))
+    assert refused.status_code == 403 and refused.json()["error"] == "device_scope"
+    listed = client.get("/api/devices", headers=_hdr(_SECRET))
+    assert listed.json()["devices"][0]["id"] == device["id"]
+    assert token not in listed.text
+    assert client.delete(f"/api/devices/{device['id']}", headers=_hdr(_SECRET)).status_code == 200
+    assert client.get("/api/chat", headers=_hdr(token)).status_code == 401
+    assert token not in caplog.text
+
+
+@pytest.mark.parametrize("body", [
+    {"name": "recorder", "scope": scope} for scope in ("full", "", None, [], {}, 1)
+] + [{"name": name} for name in (None, "", "   ", "bad\x00name", "x" * 65, 123, [])] + [{}])
+def test_mint_rejects_invalid_input_without_writing(client, devices, body):
+    response = client.post("/api/devices", headers=_hdr(_SECRET), json=body)
+    assert response.status_code == 400
+    assert isinstance(response.json()["detail"], str) and response.json()["detail"]
+    assert devices.list_devices() == []
+    assert not devices._registry_path().exists()
+    assert not devices._PENDING
+
+
+def test_mint_accepts_explicit_device_scope_and_full_device_caller(client, devices):
+    _, full_token = _hub(devices)
+    response = client.post(
+        "/api/devices", headers=_hdr(full_token), json={"name": "recorder", "scope": "device"}
+    )
+    assert response.status_code == 200
+    assert response.json()["device"]["scope"] == "device"
+
+
+@pytest.mark.parametrize("scope", [None, "device", "bogus"])
+def test_mint_handler_requires_full_scope_even_without_auth_middleware(devices, scope):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from operator_api.pairing_routes import register_pairing_routes
+
+    app = FastAPI()
+    register_pairing_routes(app)
+
+    @app.middleware("http")
+    async def stamp(request: Request, call_next):
+        if scope is not None:
+            request.state.credential_scope = scope
+        return await call_next(request)
+
+    with TestClient(app) as http:
+        response = http.post("/api/devices", json={"name": "recorder"})
+    assert response.status_code == 403 and response.json()["error"] == "device_scope"
+    assert devices.list_devices() == []
+
+
+def test_minted_devices_follow_idle_expiry_and_rotation(devices, monkeypatch):
+    from runtime.state import STATE
+
+    monkeypatch.setattr(STATE, "graph_config", SimpleNamespace(device_idle_ttl_days=30))
+    now = 1_800_000_000.0
+    monkeypatch.setattr(devices, "_now", lambda: now)
+    device, token = devices.mint_device("recorder")
+    assert devices.self_view(device["id"])["rotate_due"] is False
+    now += 7 * 86400
+    assert devices.self_view(device["id"])["rotate_due"] is True
+    rotated, new_token = devices.rotate_device(device["id"], token)
+    assert rotated["rotate_due"] is False
+    assert devices.verify_token(new_token) is not None
+    now += 30 * 86400
+    assert devices.verify_token(new_token) is None
+
+
+@pytest.mark.asyncio
+async def test_proxy_mints_on_member_registry_only(auth, devices, monkeypatch, tmp_path):
+    """Real fleet routing + HTTP forwarding; transport replaces sockets and instance context."""
+    from contextvars import ContextVar
+
+    import httpx
+    from fastapi import FastAPI
+    from graph.fleet import proxy
+    from operator_api.fleet_routes import register_fleet_routes
+    from operator_api.pairing_routes import register_pairing_routes
+
+    hub_path, member_path = tmp_path / "hub.json", tmp_path / "member.json"
+    fleet_token = "test-fleet-mint-secret"
+    monkeypatch.setattr(auth, "_FLEET", [fleet_token])
+    registry = ContextVar("mint_registry", default=hub_path)
+    monkeypatch.setattr(devices, "_registry_path", registry.get)
+    monkeypatch.setattr(proxy, "_target_for_slug", lambda slug: ("http://member", {}) if slug == "peer" else None)
+    monkeypatch.setattr(proxy, "_remote_slugs", set())
+    monkeypatch.setattr("graph.fleet.service_token.resolve_service_token", lambda: fleet_token)
+
+    member = FastAPI()
+    register_pairing_routes(member)
+    member.add_middleware(auth.A2AAuthMiddleware)
+
+    @member.middleware("http")
+    async def member_registry(request: Request, call_next):
+        marker = registry.set(member_path)
+        try:
+            return await call_next(request)
+        finally:
+            registry.reset(marker)
+
+    hub = FastAPI()
+    register_pairing_routes(hub)
+    register_fleet_routes(hub)
+    hub.add_middleware(auth.A2AAuthMiddleware)
+
+    class RawBody(httpx.AsyncByteStream):
+        def __init__(self, body):
+            self.body = body
+
+        async def __aiter__(self):
+            yield self.body
+
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=member)) as member_http:
+        async def send_to_member(request):
+            assert request.url.host == "member"
+            assert request.headers["authorization"] == f"Bearer {fleet_token}"
+            response = await member_http.send(request)
+            return httpx.Response(response.status_code, headers=response.headers, stream=RawBody(response.content))
+
+        async with httpx.AsyncClient(transport=httpx.MockTransport(send_to_member)) as upstream:
+            monkeypatch.setattr(proxy, "_get_client", lambda: upstream)
+            async with httpx.AsyncClient(transport=httpx.ASGITransport(app=hub), base_url="http://hub") as http:
+                response = await http.post(
+                    "/agents/peer/api/devices", headers=_hdr(fleet_token), json={"name": "member recorder"}
+                )
+                assert response.status_code == 200, response.text
+                assert response.headers["cache-control"] == "no-store"
+                device, token = response.json()["device"], response.json()["token"]
+                assert (await http.get("/api/devices", headers=_hdr(_SECRET))).json()["devices"] == []
+                listed = await http.get("/agents/peer/api/devices", headers=_hdr(_SECRET))
+                assert listed.json()["devices"] == [device]
+    assert not hub_path.exists()
+    assert json.loads(member_path.read_text())[0]["token_sha256"] == hashlib.sha256(token.encode()).hexdigest()
