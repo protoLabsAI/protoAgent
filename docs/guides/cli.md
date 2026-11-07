@@ -223,8 +223,26 @@ protoagent usage --account anthropic-oauth   # one provider id (or account key)
 protoagent usage --fleet                # every member through the hub, deduped by account
 protoagent usage --fleet --by-agent     # member share of attributed tokens per current window
 protoagent usage --warn-at 90           # exit 2 if any window is ≥ 90% used
+protoagent usage --by-tool --since 7d  # tool calls, errors, and latency
+protoagent usage --by-tool --fleet --json  # summed calls/errors across members
 protoagent usage --json | jq '.accounts[].windows[] | select(.over_warn)'
 ```
+
+`--by-tool` reads the operator-only `/api/telemetry/tools` endpoint through the same
+hub connection. Rows sort by descending calls, then tool name. `--since` accepts
+an ISO date/time or a relative window such as `7d` (omitted: all retained calls).
+Fleet mode sums calls and errors, recomputes the error fraction, and labels p50/p95
+as **max of members**, not pooled percentiles. Older members returning 404 appear
+as "no tool telemetry"; other unavailable members are also reported without
+failing the fleet run. Exit codes are 0 for a completed read and 1 when the local
+server or hub cannot be read; subscription warning thresholds do not apply.
+`--by-tool` cannot combine with `--by-agent` or `--account`.
+
+Tool JSON has stable top-level keys `mode` (`local` or `fleet`), `ok`, `hub`,
+`since` (normalized UTC cutoff or null), `percentiles` (`local` or
+`max_of_members`), `tools`, `unreachable`, and `error` (null on success).
+Each tool contains `tool`, `calls`, `errors`, `error_rate` (0–1), `p50_ms`, and
+`p95_ms`; unavailable entries contain `member`, `slug`, and `error`.
 
 `--by-agent` requires operator credentials and works locally or with `--fleet` through
 `GET /api/usage/fleet`. Each account window lists members' shares of **attributed tokens**,

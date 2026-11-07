@@ -17,6 +17,24 @@ from datetime import UTC, datetime
 def register_usage_routes(app) -> None:
     """Register ``GET /api/usage`` on ``app``."""
 
+    @app.get("/api/telemetry/tools")
+    def _api_telemetry_tools(since: str | None = None):
+        """Operator-only tool counts and latency, optionally since an ISO date or window."""
+        from fastapi import HTTPException
+        from graph.fleet.friction_cli import parse_since
+        from runtime.state import STATE
+
+        try:
+            cutoff = parse_since(since) if since is not None else None
+        except (ValueError, OverflowError):
+            raise HTTPException(status_code=422, detail="since must be an ISO date or a window like 7d") from None
+        store = STATE.telemetry_store
+        return {
+            "enabled": store is not None,
+            "since": cutoff,
+            "tools": store.tool_summary(since_iso=cutoff) if store is not None else [],
+        }
+
     @app.get("/api/usage")
     async def _api_usage(
         account: str | None = None,
