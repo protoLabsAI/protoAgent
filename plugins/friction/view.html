@@ -669,11 +669,13 @@
       item.detail ? prettyDetail(item.detail) : "(no detail recorded)"));
     block.append(bhead, pre);
     detail.appendChild(block);
-    // The ledger caps a detail at 600 chars and a summary at 200 on write, mid-word and
-    // with no marker — so say so rather than letting a sentence just stop.
-    if ((item.detail || "").length >= 600) {
+    // A detail over the write cap is stored as head + tail around an explicit
+    // "… [N chars omitted] …" marker (see _clip_detail): flag only those, keyed on the
+    // marker the clipper leaves, not on raw length — a whole detail under the cap, however
+    // long, is complete and must carry no banner.
+    if (/\[\d+ chars omitted\]/.test(item.detail || "")) {
       detail.appendChild(el("div", "truncated",
-        "Detail is capped at 600 characters on write — this entry is cut off."));
+        "Detail ran past the write cap — its middle was dropped; the first and last sections are kept."));
     }
     card.appendChild(detail);
     return card;
