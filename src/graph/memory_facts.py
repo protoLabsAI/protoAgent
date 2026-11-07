@@ -3,30 +3,41 @@
 The episodic side (``conversation_harvest``) summarizes a retired thread. This
 is the **semantic** side: distil discrete, durable *facts* worth recalling in a
 future, unrelated conversation — user preferences, decisions, stable facts about
-their world/projects — and store them as ``finding_type="fact"``.
+their world/projects — and store them as core-memory rows (ADR 0125 P2-D3:
+``kind='fact'``, ``provenance='extracted'``, ``review_state='pending'``). The
+pre-0125 chunk backend (``finding_type="fact"`` chunks) is still handled for
+non-harvest callers on a plugin store, but the retirement path no longer reaches
+it — no code path writes memory through chunks (#4630).
 
-Two rules from the ADR:
+Rules from the ADR:
 
 - **Extract, don't dump.** The aux model returns short fact strings, not a
   transcript. Importance gating lives in the prompt — transient task state and
   pleasantries are dropped; a chatty turn with nothing durable yields ``[]``.
+- **No leaked reasoning (ADR 0021 storage guardrail).** The chunk backend scrubbed
+  leaked ``<scratch_pad>``/``<think>`` blocks inside ``add_chunk`` and refused
+  content empty after stripping; ``MemoryStore.add`` inserts verbatim, so the
+  extractor strips each fact itself (see ``_clean_fact``) and drops any that is
+  pure reasoning — recallable core-memory rows never carry leaked reasoning.
 - **Consolidate.** Before inserting, near-identical facts already in the store
   (scoped to the same ``namespace``) are skipped, so memory doesn't accrete
   duplicates.
 - **Supersede, don't delete** (ADR 0069 D9). A new fact that *revises* an
   existing one — same subject, changed details, detected by a deterministic
   token-overlap band, never an LLM freshness judgment (Mem0's 2026 reversal +
-  arXiv 2606.01435) — inserts the new row FIRST and then marks the old row
-  ``invalidated_at=now`` with ``invalidation_reason="superseded_by:<new id>"``
-  (ADR 0108 D7.3 — the audit chain). Insert-then-invalidate means a failed
-  insert never loses the old fact; the reverse — the insert landed but the
-  invalidation didn't — is logged and leaves BOTH rows valid until the next
-  revision supersedes them (never silently, never by deleting). On a layered
-  store only PRIVATE rows are ever superseded: a commons match still dedups
-  by content, but is never invalidated (ids are per-backend — the commons id
-  would hit an unrelated private row). History is kept for audit; retrieval
-  excludes invalidated rows by default. Nothing here UPDATEs content in place
-  or DELETEs.
+  arXiv 2606.01435) — inserts the new row FIRST and then chains the old row via
+  ``superseded_by`` (ADR 0108 D7.3 — the audit chain); on the core ``MemoryStore``
+  ``invalidated_at`` stays NULL, so the superseded row is kept for audit (the
+  chunk backend used ``invalidated_at``/``invalidation_reason`` instead). Insert-
+  then-supersede means a failed insert never loses the old fact; the reverse — the
+  insert landed but the supersede didn't — is logged and leaves BOTH rows valid
+  until the next revision supersedes them (never silently, never by deleting).
+  This phase only ever supersedes the store's OWN ``provenance='extracted'`` rows:
+  agent/operator memories on the same subject are never touched (merging those is
+  Phase 3, P3-M). On the layered chunk store a commons match still dedups by
+  content but is never invalidated (ids are per-backend — the commons id would hit
+  an unrelated private row). Retrieval excludes superseded rows by default. Nothing
+  here UPDATEs content in place or DELETEs.
 - **An older date never replaces a newer one.** Harvested facts carry the
   conversation's ``[as of YYYY-MM-DD]``, and threads are NOT harvested in
   chronological order (the TTL sweep takes them in DB order; a
@@ -45,6 +56,8 @@ import logging
 import re
 
 from langchain_core.messages import HumanMessage
+
+from graph.output_format import strip_reasoning
 
 log = logging.getLogger(__name__)
 
@@ -111,6 +124,15 @@ async def _default_extractor(transcript: str, config) -> list[str]:
     llm = create_llm(config, model_name=_resolve_aux_model(config, ""))
     resp = await llm.ainvoke([HumanMessage(content=_FACTS_PROMPT.format(transcript=transcript))])
     return _parse_facts(str(resp.content))
+
+
+def _clean_fact(fact: str) -> str:
+    """ADR 0021 storage guardrail: scrub leaked ``<scratch_pad>``/``<think>`` reasoning from a
+    fact before it persists. The chunk path got this for free from ``KnowledgeStore.add_chunk``
+    (which stripped and then refused content empty after stripping); ``MemoryStore.add`` inserts
+    content verbatim, so the extractor applies the same guard here. Returns the trimmed text —
+    empty means the fact was pure leaked reasoning and must not be stored."""
+    return strip_reasoning(fact or "").strip()
 
 
 def _tokens(text: str) -> set[str]:
@@ -186,7 +208,13 @@ def _consolidate_into_memories(
         candidates = []
 
     supersede = getattr(memory_store, "supersede", None)
-    for fact in facts:
+    for raw_fact in facts:
+        # ADR 0021 storage guardrail: the chunk path stripped leaked reasoning (and dropped
+        # content empty after stripping) inside add_chunk; MemoryStore.add inserts verbatim, so
+        # scrub here — before dedup, so comparisons run on the same clean text that lands.
+        fact = _clean_fact(raw_fact)
+        if not fact:
+            continue
         new_as_of, body = _split_as_of(fact)
         ft = _tokens(body)
         scored = [(_jaccard(ft, toks), i) for i, (_, toks, _) in enumerate(candidates)]
@@ -207,19 +235,27 @@ def _consolidate_into_memories(
             counts["skipped"] += 1
             continue
         old_id = candidates[best_idx][0] if best >= _SUPERSEDE_JACCARD else None
-        rid = memory_store.add(
-            fact,
-            kind="fact",
-            provenance="extracted",
-            scope=namespace,
-            source_session=src,
-            thread_id=src,
-        )
+        try:
+            rid = memory_store.add(
+                fact,
+                kind="fact",
+                provenance="extracted",
+                scope=namespace,
+                source_session=src,
+                thread_id=src,
+            )
+        except Exception:  # noqa: BLE001 — MemoryStore.add raises on SQLite errors where the
+            # legacy add_chunk returned None. A fact-write failure is best-effort and must never
+            # abort retirement: harvest_thread runs this AFTER the history summary is written, so
+            # a raise under raise_on_error would make the retire sweep keep the thread and
+            # re-harvest it. The old fact (never invalidated) stays valid.
+            log.warning("[memory] fact insert failed; prior facts left untouched", exc_info=True)
+            continue
         if rid is None:
             continue
         counts["added"] += 1
         if old_id is not None and callable(supersede):
-            if supersede(old_id, rid):
+            if _supersede_memory(supersede, old_id, rid):
                 counts["superseded"] += 1
                 del candidates[best_idx]  # no longer valid — drop from comparisons
             else:
@@ -380,6 +416,17 @@ def _supersede(invalidate, old_id: int, new_id: int) -> bool:
         return bool(invalidate(old_id))
 
 
+def _supersede_memory(supersede, old_id: int, new_id: int) -> bool:
+    """Chain ``old_id`` to its replacement ``new_id`` on the core ``MemoryStore``, never
+    raising. ``MemoryStore.supersede`` raises on SQLite errors (where the chunk path's
+    ``invalidate_chunk`` returned falsy), so a failed chain must leave BOTH rows valid —
+    logged by the caller — rather than abort consolidation and, with it, retirement."""
+    try:
+        return bool(supersede(old_id, new_id))
+    except Exception:  # noqa: BLE001 — a supersede failure is non-fatal; both rows stay valid
+        return False
+
+
 async def extract_and_store_facts(
     transcript: str,
     *,
@@ -406,7 +453,13 @@ async def extract_and_store_facts(
         return {"added": 0, "skipped": 0, "superseded": 0}
     if as_of:
         facts = [f"[as of {as_of}] {f}" for f in facts]
-    counts = consolidate_and_store(memory_store, facts, namespace=namespace, source=source)
+    try:
+        counts = consolidate_and_store(memory_store, facts, namespace=namespace, source=source)
+    except Exception:  # noqa: BLE001 — consolidation is designed never to raise, but a store
+        # failure here must never propagate into harvest_thread (it re-raises under
+        # raise_on_error AFTER the history summary is written). Fact capture is best-effort.
+        log.exception("[memory] fact consolidation failed")
+        return {"added": 0, "skipped": 0, "superseded": 0}
     if counts["added"] or counts["skipped"]:
         log.info(
             "[memory] facts: +%d new, %d dup-skipped, %d superseded (ns=%s)",

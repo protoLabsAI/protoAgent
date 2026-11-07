@@ -244,6 +244,52 @@ def test_harvest_skips_facts_without_memory_store(tmp_path, caplog):
     assert "no memory store" in caplog.text
 
 
+def test_harvest_does_not_re_raise_on_fact_write_failure(tmp_path, history_store):
+    """ADR 0125 P2-D3: MemoryStore.add/supersede raise on SQLite errors (where add_chunk
+    returned None). A fact-write failure must NOT propagate out of harvest_thread, even under
+    raise_on_error — the episodic summary already wrote, so a re-raise would make the retire
+    sweep keep the thread and re-harvest it. Fact capture is best-effort."""
+    import sqlite3
+    from types import SimpleNamespace
+
+    db = str(tmp_path / "c.db")
+    _seed(db)
+
+    class _RaisingMemory:
+        def list(self, **kw):
+            return []
+
+        def add(self, *a, **kw):
+            raise sqlite3.OperationalError("database is locked")
+
+        def supersede(self, *a, **kw):
+            return False
+
+    async def fake_summarizer(transcript, config):
+        return "User prefers teal."
+
+    async def fake_facts(transcript, config):
+        return ["The user's favorite color is teal"]
+
+    cid = asyncio.run(
+        harvest_thread(
+            "a2a:chat-1",
+            checkpointer=build_sqlite_checkpointer(db),
+            knowledge_store=None,
+            memory_store=_RaisingMemory(),
+            config=SimpleNamespace(knowledge_facts=True),
+            summarizer=fake_summarizer,
+            namespace="proj-x",
+            fact_extractor=fake_facts,
+            raise_on_error=True,
+        )
+    )
+    # The summary landed and harvest did NOT re-raise despite the fact-write failure.
+    assert cid is not None
+    summaries = history_store.list_for_session("a2a:chat-1")
+    assert len(summaries) == 1 and summaries[0].thread_id == "a2a:chat-1"
+
+
 def test_harvest_noop_without_history_store(tmp_path):
     db = str(tmp_path / "c.db")
     _seed(db)

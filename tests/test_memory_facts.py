@@ -11,6 +11,7 @@ the same subject are never deduped or superseded here (merging those is Phase 3,
 from __future__ import annotations
 
 import asyncio
+import sqlite3
 
 from graph.memory_facts import (
     _parse_facts,
@@ -113,7 +114,8 @@ def test_extract_and_store_facts_end_to_end(tmp_path):
 
     async def fake_extractor(transcript, config):
         assert "teal" in transcript
-        return ["The user's favorite color is teal", "The user ships releases on Tuesdays"]
+        # The second fact carries leaked model reasoning the extractor must scrub (ADR 0021).
+        return ["The user's favorite color is teal", "<scratch_pad>noise</scratch_pad>also a fact"]
 
     counts = asyncio.run(
         extract_and_store_facts(
@@ -128,6 +130,10 @@ def test_extract_and_store_facts_end_to_end(tmp_path):
     assert counts["added"] == 2
     rows = _facts(store, scope="ns1")
     assert len(rows) == 2
+    # ADR 0021 storage guardrail: leaked <scratch_pad> reasoning is stripped before the row
+    # lands. The chunk path got this from add_chunk; the memory path strips in consolidation.
+    assert all("scratch_pad" not in r.content.lower() for r in rows)
+    assert "also a fact" in {r.content for r in rows}
     # Provenance threads through the extraction path (ADR 0069 D5).
     assert all(r.provenance == "extracted" and r.source_session == "a2a:chat-7" for r in rows)
 
@@ -135,6 +141,32 @@ def test_extract_and_store_facts_end_to_end(tmp_path):
 def test_extract_noop_without_store():
     counts = asyncio.run(extract_and_store_facts("x", memory_store=None, config=object()))
     assert counts == {"added": 0, "skipped": 0, "superseded": 0}
+
+
+# ── leaked-reasoning storage guardrail (ADR 0021) ────────────────────────────
+
+
+def test_leaked_reasoning_is_stripped_before_the_row(tmp_path):
+    """The chunk path scrubbed <scratch_pad>/<think> inside add_chunk; MemoryStore.add inserts
+    verbatim, so consolidation strips — recallable fact rows never carry leaked reasoning."""
+    store = MemoryStore(tmp_path / "agent.db")
+    counts = consolidate_and_store(
+        store, ["<think>deciding…</think>The operator prefers metric units"], namespace="p"
+    )
+    assert counts["added"] == 1
+    row = _facts(store)[0]
+    assert row.content == "The operator prefers metric units"
+    assert "think" not in row.content.lower()
+
+
+def test_a_fact_that_is_only_reasoning_is_dropped(tmp_path):
+    """Empty after stripping ⇒ not stored (the add_chunk 'refuse empty content' guardrail)."""
+    store = MemoryStore(tmp_path / "agent.db")
+    counts = consolidate_and_store(
+        store, ["<scratch_pad>just thinking, nothing durable here</scratch_pad>"], namespace="p"
+    )
+    assert counts == {"added": 0, "skipped": 0, "superseded": 0}
+    assert _facts(store) == []
 
 
 # ── supersession chain (ADR 0108 D7.3) ───────────────────────────────────────
@@ -224,6 +256,51 @@ def test_supersede_failure_after_insert_is_logged_and_keeps_both(tmp_path, caplo
             return False  # the supersede didn't take
 
     counts = consolidate_and_store(_Stuck(), [_REVISED], namespace="p")
+    assert counts == {"added": 1, "skipped": 0, "superseded": 0}
+    assert len(_facts(store)) == 2  # both valid, nothing lost
+    assert "both stay valid" in caplog.text
+
+
+def test_insert_that_raises_is_swallowed_and_keeps_the_old_fact(tmp_path):
+    """MemoryStore.add RAISES on SQLite errors (the old add_chunk returned None). The failure
+    must be swallowed and the old fact left valid — consolidation never raises, so a fact-write
+    failure can't propagate into harvest_thread (after the summary wrote) and make the retire
+    sweep keep the thread and re-harvest it."""
+    store = MemoryStore(tmp_path / "agent.db")
+    consolidate_and_store(store, [_OLD], namespace="p")
+
+    class _Raising:
+        def list(self, **kw):
+            return store.list(**kw)
+
+        def supersede(self, *a, **kw):
+            return store.supersede(*a, **kw)
+
+        def add(self, *a, **kw):
+            raise sqlite3.OperationalError("database is locked")
+
+    counts = consolidate_and_store(_Raising(), [_REVISED], namespace="p")
+    assert counts == {"added": 0, "skipped": 0, "superseded": 0}
+    assert [r.content for r in _facts(store)] == [_OLD]  # still valid, nothing chained
+
+
+def test_supersede_that_raises_is_swallowed_and_keeps_both(tmp_path, caplog):
+    """MemoryStore.supersede RAISES on SQLite errors too; a failed chain after a landed insert
+    leaves BOTH rows valid (logged), and never aborts consolidation."""
+    store = MemoryStore(tmp_path / "agent.db")
+    consolidate_and_store(store, [_OLD], namespace="p")
+
+    class _RaisingSupersede:
+        def list(self, **kw):
+            return store.list(**kw)
+
+        def add(self, *a, **kw):
+            return store.add(*a, **kw)
+
+        def supersede(self, *a, **kw):
+            raise sqlite3.OperationalError("database is locked")
+
+    counts = consolidate_and_store(_RaisingSupersede(), [_REVISED], namespace="p")
     assert counts == {"added": 1, "skipped": 0, "superseded": 0}
     assert len(_facts(store)) == 2  # both valid, nothing lost
     assert "both stay valid" in caplog.text
