@@ -64,6 +64,14 @@ CREATE TABLE IF NOT EXISTS memory_vectors (memory_id INTEGER PRIMARY KEY, vec TE
 """
 
 
+def _normalize_subject(subject: str | None) -> str:
+    """Case- and whitespace-folded subject key for supersession matching (ADR 0125
+    P3-A). The row stores the subject AS GIVEN; this is only the comparison key, so
+    ``"Comp Floor "`` and ``"comp floor"`` consolidate onto one subject. An empty or
+    whitespace-only subject folds to ``""`` — never a supersession key."""
+    return " ".join((subject or "").split()).lower()
+
+
 @dataclass
 class MemoryEntry:
     """One durable memory, including audit metadata."""
@@ -155,13 +163,70 @@ class MemoryStore:
         source_session: str | None = None,
         thread_id: str | None = None,
         legacy_domain: str | None = None,
+        supersede: bool = True,
     ) -> int:
-        """Persist a memory and its embedding atomically; operator rows default confirmed."""
+        """Persist a memory and its embedding atomically; operator rows default confirmed.
+
+        When ``subject`` is set and ``supersede`` (the default), the new row retires every
+        live row on the SAME subject, kind and scope (ADR 0125 P3-A) — see
+        ``add_with_supersession`` for the exact rule. Returns the new id; callers that need
+        the retired rows call ``add_with_supersession`` instead.
+        """
+        id, _ = self.add_with_supersession(
+            content,
+            kind=kind,
+            provenance=provenance,
+            subject=subject,
+            heading=heading,
+            delivery=delivery,
+            review_state=review_state,
+            scope=scope,
+            expires_at=expires_at,
+            source_session=source_session,
+            thread_id=thread_id,
+            legacy_domain=legacy_domain,
+            supersede=supersede,
+        )
+        return id
+
+    def add_with_supersession(
+        self,
+        content: str,
+        *,
+        kind: str,
+        provenance: str,
+        subject: str | None = None,
+        heading: str | None = None,
+        delivery: str = "retrieved",
+        review_state: str | None = None,
+        scope: str | None = None,
+        expires_at: str | None = None,
+        source_session: str | None = None,
+        thread_id: str | None = None,
+        legacy_domain: str | None = None,
+        supersede: bool = True,
+    ) -> tuple[int, list[MemoryEntry]]:
+        """Persist a memory and retire the rows it supersedes, atomically (ADR 0125 P3-A).
+
+        Deterministic — there is no model at write time (ADR 0069's finding). When
+        ``subject`` is set and ``supersede`` is true, within the SAME write transaction
+        every live row (``superseded_by IS NULL``, ``invalidated_at IS NULL``,
+        ``review_state != 'rejected'``) that shares the subject (case- and
+        whitespace-normalised for matching, stored as given), the same ``kind`` and the
+        same ``scope`` is stamped ``superseded_by`` = the new id and its ``updated_at``
+        bumped. A row without a subject never supersedes and is never superseded.
+
+        Returns ``(new_id, replaced)`` where ``replaced`` lists the retired rows as they
+        were before the stamp (newest first).
+        """
         review_state = (
             review_state if review_state is not None else ("confirmed" if provenance == "operator" else "pending")
         )
         vec = self._embed((heading + "\n" if heading else "") + content)
         now = _now_iso()
+        norm_subject = _normalize_subject(subject)
+        norm_scope = scope or None
+        replaced: list[MemoryEntry] = []
         with self._write() as db:
             cur = db.execute(
                 "INSERT INTO memories (kind, subject, heading, content, delivery, review_state, provenance, "
@@ -187,11 +252,28 @@ class MemoryStore:
             id = int(cur.lastrowid)
             if vec is not None:
                 db.execute("INSERT INTO memory_vectors VALUES (?, ?)", (id, json.dumps(vec)))
+            if supersede and norm_subject:
+                # Candidate live rows of the same kind; the subject (normalised) and scope
+                # match is applied in Python so the fold matches ``_normalize_subject`` exactly.
+                rows = db.execute(
+                    "SELECT * FROM memories WHERE id != ? AND kind = ? AND subject IS NOT NULL "
+                    "AND superseded_by IS NULL AND invalidated_at IS NULL AND review_state != 'rejected' "
+                    "ORDER BY created_at DESC, id DESC",
+                    (id, kind),
+                ).fetchall()
+                for row in rows:
+                    if _normalize_subject(row["subject"]) != norm_subject or (row["scope"] or None) != norm_scope:
+                        continue
+                    db.execute(
+                        "UPDATE memories SET superseded_by = ?, updated_at = ? WHERE id = ?",
+                        (id, now, row["id"]),
+                    )
+                    replaced.append(MemoryEntry(**dict(row)))
         if delivery == "always":
             from knowledge.store import _publish_hot_write
 
             _publish_hot_write(f"memory:{id}", source_session, provenance, content)
-        return id
+        return id, replaced
 
     def get(self, id: int) -> MemoryEntry | None:
         """Read a row by id, including its audit state."""
@@ -275,6 +357,30 @@ class MemoryStore:
                 )
             ]
 
+    def live_on_subject(self, subject: str | None, *, exclude_id: int | None = None) -> list[MemoryEntry]:
+        """Live rows on ``subject`` across every kind (ADR 0125 P3-A), newest first.
+
+        The ``also live on this subject`` view ``memory_save`` shows after a write, so the
+        agent can spot a wrong supersession. Live = eligible and unsuperseded (the default
+        ``_filters``: not invalidated, not rejected, not expired, ``superseded_by IS NULL``).
+        Subject matching uses the same case/whitespace fold as supersession; a null or
+        empty subject matches nothing. ``exclude_id`` drops the row just written."""
+        norm = _normalize_subject(subject)
+        if not norm:
+            return []
+        where, params = self._filters()
+        with closing(self._connect()) as db:
+            rows = db.execute(
+                f"SELECT m.* FROM memories m WHERE m.subject IS NOT NULL AND {where} "
+                "ORDER BY m.created_at DESC, m.id DESC",
+                params,
+            ).fetchall()
+        return [
+            MemoryEntry(**dict(row))
+            for row in rows
+            if row["id"] != exclude_id and _normalize_subject(row["subject"]) == norm
+        ]
+
     def inspect(self, limit: int = 500, *, delivery: str | None = None) -> list[MemoryEntry]:
         """Operator listing including rejected, expired and superseded audit rows.
 
@@ -355,6 +461,23 @@ class MemoryStore:
                 ).rowcount
                 > 0
             )
+
+    def revert_supersession(self, old_id: int) -> bool:
+        """Undo one supersession for audit (ADR 0125 P3-A, inspector revert).
+
+        ``old_id`` was retired with ``superseded_by`` pointing at the row that replaced
+        it; this clears that pointer (``old_id`` goes live again) and stamps the replacing
+        row ``superseded_by = old_id`` — so both rows survive and exactly one is live.
+        Returns False when ``old_id`` isn't superseded (nothing to revert)."""
+        with self._write() as db:
+            row = db.execute("SELECT superseded_by FROM memories WHERE id = ?", (old_id,)).fetchone()
+            if row is None or row["superseded_by"] is None:
+                return False
+            new_id = int(row["superseded_by"])
+            now = _now_iso()
+            db.execute("UPDATE memories SET superseded_by = NULL, updated_at = ? WHERE id = ?", (now, old_id))
+            db.execute("UPDATE memories SET superseded_by = ?, updated_at = ? WHERE id = ?", (old_id, now, new_id))
+            return True
 
     def always_on_entries(self, max_chars: int = 6000) -> list[tuple[int, str]]:
         """Return exactly the rows rendered in the capped always-on block."""
