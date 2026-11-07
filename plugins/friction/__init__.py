@@ -366,6 +366,38 @@ def _clip(text: str, limit: int) -> str:
     return text if len(text) <= limit else text[: limit - 1].rstrip() + "\u2026"
 
 
+# Agent-written detail can run long, and a plain head clip loses the wrong half: agents
+# write the problem first and the ask ("What would help: …") last, so clipping the tail
+# dropped the actionable sentence (in the 11-06 fleet triage the jobCoach, cliffNotes and
+# protoEngineer rows all ended mid-sentence, before the ask). Keep a generous cap and, past
+# it, keep BOTH ends around an explicit gap so the final "what would help" sentence survives.
+_DETAIL_MAX = 2000
+_OMIT_MARKER = " … [{} chars omitted] … "
+
+
+def _clip_detail(text: str, limit: int = _DETAIL_MAX) -> str:
+    """Clip a detail to ``limit`` chars, keeping the HEAD and the TAIL around a named gap.
+
+    Under the limit the text is returned whole. Over it, keep the first and last halves and
+    name the dropped middle with an explicit ``… [N chars omitted] …`` marker, so the clip
+    reads as a cap that was hit rather than a thought left unfinished — and the ask at the
+    end survives. The result is at or under ``limit``: the marker's full width (the digits of
+    N included) is reserved up front, so the kept text can never push it past."""
+    text = text or ""
+    if len(text) <= limit:
+        return text
+    # Reserve for the marker in its widest case — N has no more digits than the whole text —
+    # so the result length is exactly ``keep + len(marker)`` ≤ ``limit``.
+    reserve = len(_OMIT_MARKER.format("")) + len(str(len(text)))
+    keep = limit - reserve
+    if keep <= 0:  # a limit too small to hold head + tail + marker — fall back to a plain clip
+        return _clip(text, limit)
+    head_len = (keep + 1) // 2  # head takes the odd char: the problem statement leads
+    tail_len = keep - head_len
+    marker = _OMIT_MARKER.format(len(text) - keep)
+    return text[:head_len] + marker + text[len(text) - tail_len :]
+
+
 def _log(
     kind: str, summary: str, detail: str, severity: str, source: str, tool_name: str = "", suggest: str = "",
     *, session_id: str = "", trace_id: str = "",
@@ -377,7 +409,7 @@ def _log(
         # Mark a clip instead of stopping mid-word. Four of protoEngineer's 27 entries
         # ended mid-sentence with no indication anything was missing, so the report read
         # as a half-finished thought rather than a truncated one.
-        "kind": kind, "summary": _clip(summary, 200), "detail": _clip(detail, 600),
+        "kind": kind, "summary": _clip(summary, 200), "detail": _clip_detail(detail),
         "severity": severity, "source": source,
     }
     if session_id:
