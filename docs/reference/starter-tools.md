@@ -28,7 +28,7 @@ show different tool lists.
 
 | Source | Example tools | Bound when |
 |---|---|---|
-| **Core** — this page | `web_search`, `memory_recall`, `schedule_task` | per-tool gates [below](#at-a-glance) |
+| **Core** — this page | `web_search`, `memory_search`, `schedule_task` | per-tool gates [below](#at-a-glance) |
 | **Plugins** (`register_tool`) | `read_note`, `docs_search`, `delegate_to`, `github_get_pr` | the plugin is enabled — see [Plugin tools](#plugin-tools) |
 | **Subagent delegation** | `task`, `task_batch` | subagents are included in the build ([Subagents](/guides/subagents)) |
 | **Filesystem fence** | `read_file`, `edit_file`, `run_command` | [`filesystem`](/reference/configuration#filesystem) — **on by default**, fenced to `workspace` |
@@ -90,14 +90,14 @@ Built by default; drop the whole group with `middleware.knowledge: false`. See
 
 | Tool | What it does |
 |---|---|
-| [`memory_ingest(content, domain="general", heading=None, memory_kind=None, subject=None, delivery_policy=None, expires_in_days=None)`](#memory_ingest) | Store text you already have — optionally typed (what it is, when it enters the prompt, how long it lasts). |
-| [`knowledge_ingest(source, domain="general", title=None)`](#knowledge_ingest) | Fetch + extract + chunk a URL or file — the only path to a YouTube transcript or a PDF. |
-| [`memory_recall(query, k=5, domain=None, memory_kind=None, delivery_policy=None, include_superseded=False)`](#memory_recall) | Search memory; returns cited matches (optionally the superseded history too). |
+| [`memory_save(content, kind="fact", subject=None, heading=None, delivery="retrieved", expires_in_days=None)`](#memory_save) | Save a durable memory. |
+| [`knowledge_ingest(source, collection="general", title=None)`](#knowledge_ingest) | Fetch + extract + chunk a URL or file — the only path to a YouTube transcript or a PDF. |
+| [`knowledge_search(query, k=5, collection=None)`](#knowledge_search) | Search reference documents by collection. |
+| [`memory_search(query, k=5, kind=None, delivery=None, include_superseded=False)`](#memory_search) | Search memory only. |
 | [`session_search(query, limit=5, surface="")`](#session_search) | Search prior session transcripts by content and return expandable session ids. |
-| [`recall_session(session_id)`](#recall_session) | Expand one `<prior_sessions>` line into that session's full summary. |
-| [`memory_list(domain=None, limit=10, memory_kind=None, delivery_policy=None, review_state=None)`](#memory_list) | Most-recent-first listing, with each chunk's `#id` and typed-memory / review / expiry tags. |
-| [`memory_stats()`](#memory_stats) | Per-domain chunk counts. |
-| [`forget_memory(chunk_id, reason="")`](#forget_memory) | Hard-delete exactly one chunk by id. |
+| [`recall_session(session_id, entry=None)`](#recall_session) | Expand one `<prior_sessions>` line into that session's full summary. |
+| [`memory_list(kind=None, delivery=None, review_state=None, limit=10)`](#memory_list) | List recent memories, ending with per-kind counts. |
+| [`memory_forget(memory_id, reason="")`](#memory_forget) | Hard-delete one memory by ID. |
 
 ### Scheduling — bound when a scheduler backend exists
 
@@ -458,89 +458,83 @@ when both sources are empty.
 See [Memory & the knowledge store](/explanation/memory-and-knowledge) for the model behind
 these, and [Ingestion](/guides/ingestion) for the pipeline `knowledge_ingest` drives.
 The memory tools are defined in `tools/memory_tools.py` (`_build_memory_tools`) and bound by
-`get_all_tools()` when a knowledge store is present.
+`get_all_tools()` with the available stores. Memory uses core SQLite `memories`,
+knowledge uses `chunks` collections, and session tools retrieve history.
 
-### `memory_ingest` {#memory_ingest}
+### `memory_save` {#memory_save}
 
 ```python
-async def memory_ingest(
+async def memory_save(
     content: str,
-    domain: str = "general",
-    heading: str | None = None,
-    memory_kind: str | None = None,
+    kind: str = "fact",
     subject: str | None = None,
-    delivery_policy: str | None = None,
+    heading: str | None = None,
+    delivery: str = "retrieved",
     expires_in_days: int | None = None,
 ) -> str
 ```
 
-Store a chunk of text **you already have** — preferences, environment facts, decisions worth
-recalling later. `domain` is a logical bucket (`"preferences"`, `"context"`, `"general"`, …);
-`heading` is an optional short label that doubles as a stable de-dupe key.
+Save durable text you already have in the `memories` table: a preference, standing rule,
+fact or decision worth recalling across sessions. Work status belongs on the board or issue.
+There is no domain argument. `kind` is `profile`, `standing`, `fact` or `decision`;
+`subject` identifies what the memory is about, and `heading` is an optional short label.
 
-The typed-memory arguments ([ADR 0108 D4](/adr/0108-context-architecture-v2)) are all
-optional: `memory_kind` says what the chunk *is* (`"profile"`, `"standing"`, `"fact"`,
-`"decision"`, `"note"`, `"episode"`, `"reference"`; inferred from the domain when omitted),
-`subject` what it's about, and `delivery_policy` *when* it enters the prompt — `"always"`
-(every turn, the same promotion as `domain="hot"`), `"retrieved"` (on a relevant query; the
-default when omitted) or `"on_demand"` (only through `memory_recall`). When
-`knowledge.hot_write_confirm` is on the tool refuses always-on writes — `domain="hot"` *or*
-`delivery_policy="always"` — and tells the model to ask the operator.
+`delivery` controls when it enters the prompt: `always`, `retrieved` (default), or
+`on_demand` (explicit `memory_search` only). With `knowledge.hot_write_confirm` enabled,
+the tool refuses `delivery="always"` and tells the model to ask the operator.
+`expires_in_days` accepts 1–3650; expired memories remain stored but leave delivery.
 
-`expires_in_days` (ADR 0108 D7, 1–3650) gives a volatile fact a shelf life: the row is kept
-but leaves delivery once it lapses. Every memory the agent stores starts
-`review_state="pending"` until the operator confirms it in the Memory inspector, and carries the
-session it was written in as its `source` — stamped from the graph state, not passed by the model,
-so `memory_recall` can cite `src:` for it later.
-
-Returns `"Stored chunk 17 in 'preferences'."`, or an error string when the store is
-unavailable.
+Agent writes have `provenance="agent"` and `review_state="pending"`. Their `source_session`
+comes from injected graph state, never a model-supplied argument. Confirmation belongs to
+the operator. A successful result reports the memory ID, kind, delivery and pending review.
 
 ### `knowledge_ingest` {#knowledge_ingest}
 
 ```python
-async def knowledge_ingest(source: str, domain: str = "general", title: str | None = None) -> str
+async def knowledge_ingest(source: str, collection: str = "general", title: str | None = None) -> str
 ```
 
-Runs the **full ingestion pipeline** over a source the agent doesn't have the text of yet: it
-pulls the URL or file, extracts text, then chunks and embeds it. Handles web articles, YouTube
-transcripts, PDFs and text documents, and — when a config with a gateway is available — audio,
-video and image sources via STT/vision.
+Fetch, extract, chunk and embed a URL or local file into a named knowledge collection in
+`chunks`. Handles web articles, YouTube transcripts, PDFs and text documents, and — with a
+configured gateway — audio, video and images via STT/vision. Use `memory_save` for facts
+already in hand; use this tool for reference material.
 
-This is the only path that gets a transcript or decodes a file; `web_search` + `fetch_url`
-won't. When a background manager is present ([ADR 0050](/adr/0050-background-subagents-reactive-notifications))
-a slow source is detached as a background job instead of blocking the turn. Filing a source
-under `domain="hot"` is an always-on write, so with `knowledge.hot_write_confirm` on the tool
-refuses it the same way `memory_ingest` does — before anything is fetched.
+This is the path that gets a transcript or decodes a file; `web_search` + `fetch_url`
+won't. With a background manager ([ADR 0050](/adr/0050-background-subagents-reactive-notifications)),
+network/media sources run as detached jobs and report completion to the originating
+conversation; small local text files run inline. Without a manager, ingestion runs inline.
+The compatibility guard still refuses `collection="hot"` before fetching when
+`knowledge.hot_write_confirm` is enabled.
 
-### `memory_recall` {#memory_recall}
+### `knowledge_search` {#knowledge_search}
 
 ```python
-async def memory_recall(
+async def knowledge_search(query: str, k: int = 5, collection: str | None = None) -> str
+```
+
+Search ingested documents, returning passages cited by collection and source, with stored
+date, namespace and trust metadata where available. `collection` restricts the search to
+one bucket; omitted, all collections are eligible. `k` is clamped to 1–20. Returns
+`"No matches."` when empty. Preferences and decisions belong to `memory_search`; prior
+conversation activity belongs to `session_search`.
+
+### `memory_search` {#memory_search}
+
+```python
+async def memory_search(
     query: str,
     k: int = 5,
-    domain: str | None = None,
-    memory_kind: str | None = None,
-    delivery_policy: str | None = None,
+    kind: str | None = None,
+    delivery: str | None = None,
     include_superseded: bool = False,
 ) -> str
 ```
 
-Top-k search over the store (FTS5, LIKE fallback), one match per line, each citing its
-provenance — domain, stored date, namespace:
-
-```
-[preferences] coffee: Operator's preferred coffee is a Gibraltar with oat milk.
-[context] lab: Primary lab is Snickerdoodle in Spokane.
-```
-
-`domain` scopes the search to one bucket — use it to separate the agent's own record from
-inherited or imported knowledge (a domain like `claude-import` is another codebase's history,
-not this agent's actions). `memory_kind` and `delivery_policy` narrow it to one typed-memory
-classification ([ADR 0108 D4](/adr/0108-context-architecture-v2)); `delivery_policy="on_demand"`
-is the only way an on-demand memory surfaces. `include_superseded=True` (D7) also returns
-rows a newer revision replaced, each tagged `[superseded]` — the audit history for "what did
-we believe before?". Returns `"No matches."` when nothing clears the threshold.
+Search only durable memories in `memories`, using FTS5 and optional vector ranking.
+`k` is clamped to 1–20. Optional `kind` and `delivery` filters narrow matches; explicit
+search can reach `on_demand` rows. Results carry memory IDs and provenance metadata.
+`include_superseded=True` includes replaced rows tagged `[superseded]`; rejected,
+expired and invalidated rows remain excluded. Returns `"No matches."` when empty.
 
 ### `session_search` {#session_search}
 
@@ -548,7 +542,7 @@ we believe before?". Returns `"No matches."` when nothing clears the threshold.
 async def session_search(query: str, limit: int = 5, surface: str = "") -> str
 ```
 
-Full-text search over persisted prior-session summaries when the relevant session id is
+Full-text search over persisted prior-session summaries and history when the relevant session id is
 unknown. The disposable FTS5 index is synchronized lazily, so existing histories become
 searchable without migration and session persistence never depends on index health. Results
 are relevance-ranked, credential-redacted, capped at 20, exclude the active session, and
@@ -571,55 +565,46 @@ so on those turns this search is the ONLY way back to a past session, wording gu
 ### `recall_session` {#recall_session}
 
 ```python
-async def recall_session(session_id: str) -> str
+async def recall_session(session_id: str, entry: int | None = None) -> str
 ```
 
 Expands one entry of the auto-injected `<prior_sessions>` digest into that session's full
 persisted summary — messages and final output, reasoning-stripped, capped at ~6 000 chars
 ([ADR 0069](/adr/0069-memory-delivery-layer)). The digest itself carries only one attributed
 line per prior session (id · timestamp · surface · topic · message count), so this is the
-on-demand path to the content. Errors cleanly on an unknown or malformed id.
+on-demand path to the content. The result also lists up to 20 recent history entries;
+pass `entry=<id>` to expand one belonging to the session, capped at 6,000 characters.
+Errors cleanly on an unknown or malformed id.
 
 ### `memory_list` {#memory_list}
 
 ```python
 async def memory_list(
-    domain: str | None = None,
-    limit: int = 10,
-    memory_kind: str | None = None,
-    delivery_policy: str | None = None,
+    kind: str | None = None,
+    delivery: str | None = None,
     review_state: str | None = None,
+    limit: int = 10,
 ) -> str
 ```
 
-Most-recent-first listing, filtered by domain, `memory_kind`, `delivery_policy` and/or
-`review_state` when given. Each row carries the `#<id>` that `forget_memory` takes, plus
-`kind=` / `policy=` / `review=` / `expires=` tags. `review_state="pending"` lists what still
-awaits the operator's verdict — confirmation is theirs to give, never the agent's. Useful for
-"what did I log today?".
+List recent eligible memories, optionally filtered by kind, delivery or review state.
+`limit` is clamped to 1–200. Each row includes its `#<id>` and lifecycle metadata;
+`review_state="pending"` finds memories awaiting the operator's verdict. The final line
+always reports stored counts per kind and a total, even when no rows match. These counts
+cover the store, not just the filtered results. Use the operator inspector for rejected,
+expired or superseded audit rows.
 
-### `memory_stats` {#memory_stats}
-
-```python
-async def memory_stats() -> str
-```
-
-Per-domain chunk counts plus a total — the sanity check that an ingest actually landed.
-
-### `forget_memory` {#forget_memory}
+### `memory_forget` {#memory_forget}
 
 ```python
-async def forget_memory(chunk_id: int, reason: str = "") -> str
+async def memory_forget(memory_id: int, reason: str = "") -> str
 ```
 
-**Hard-deletes exactly one chunk** by the id `memory_list` shows. The forgetting half of a
-`/dream` pass: use it on a fact that is stale, superseded or duplicated, ideally after
-ingesting the corrected version first.
-
-This is a real delete, not a supersede — automatic fact consolidation marks replaced rows
-`invalidated_at` and keeps them for audit, but an explicit forget is operator intent and
-removes the row. No bulk or wildcard form exists, by design. `reason` is recorded for the
-audit trail.
+**Hard-delete exactly one memory** using the ID from `memory_list` or `memory_search`.
+Use for stale, superseded or duplicate facts, ideally after saving the corrected version.
+This removes the row permanently; supersession keeps a row for audit. There is no bulk
+or wildcard form. An optional reason is included in the result. Knowledge chunk IDs
+belong to a separate store and must not be passed here.
 
 ## Scheduling
 
