@@ -14,12 +14,15 @@ import pytest
 pytestmark = pytest.mark.platform_sensitive
 
 
-def _client(monkeypatch, tmp_path, *, knowledge=None, history=None):
+def _client(monkeypatch, tmp_path, *, knowledge=None, history=None, memory=None):
     import runtime.state as rs
 
     monkeypatch.setenv("MEMORY_PATH", str(tmp_path))  # memory_path() resolves per call
     monkeypatch.setattr(rs.STATE, "knowledge_store", knowledge, raising=False)
     monkeypatch.setattr(rs.STATE, "history_store", history, raising=False)
+    # Pin the core memory store explicitly (default None) — the hot routes read it now
+    # (ADR 0125 P2), so a store left in STATE by another test must not leak in here.
+    monkeypatch.setattr(rs.STATE, "memory_store", memory, raising=False)
     app = FastAPI()
     register_memory_routes(app)
     return TestClient(app)
@@ -816,27 +819,32 @@ def test_history_delete_session_keeps_reports_like_the_chat_forget(tmp_path, mon
     assert hs.get(other) is not None  # another session untouched
 
 
-def test_memory_stats_split_memory_from_history(tmp_path, monkeypatch):
-    # r4: counts/stats report the chunk store (memory + knowledge) and history SEPARATELY.
+def test_memory_stats_split_memory_knowledge_history(tmp_path, monkeypatch):
+    # r4: counts/stats report the core MemoryStore, the knowledge chunk store, and
+    # history as THREE separate blocks (ADR 0125 P2 — the always-on rows moved to
+    # MemoryStore, so `memory` is its stats and `knowledge` is the chunk store's).
+    from knowledge.memories import MemoryStore
     from knowledge.store import KnowledgeStore
 
     db = str(tmp_path / "agent.db")
     ks = KnowledgeStore(db)
+    ms = MemoryStore(db_path=str(tmp_path / "mem.db"))
     hs = _history(tmp_path)
-    ks.add_chunk("a memory fact", domain="hot")
+    ms.add("a profile fact", kind="profile", provenance="operator", delivery="always")
     ks.add_chunk("a knowledge chunk", domain="general")
     hs.add("archive one", kind="archive", session_id="chat-1")
     hs.add("summary one", kind="summary", session_id="chat-1")
     hs.add("report one", kind="report", session_id="sched-1", surface="background")
-    c = _client(monkeypatch, tmp_path, knowledge=ks, history=hs)
+    c = _client(monkeypatch, tmp_path, knowledge=ks, history=hs, memory=ms)
     body = c.get("/api/memory/stats").json()
-    assert body["memory"]["total"] == 2  # the chunk store
-    assert "conversation" not in body["memory"]  # history migrated OUT of chunks (H1)
+    assert body["memory"]["total"] == 1  # the core MemoryStore
+    assert body["knowledge"]["total"] == 1  # the knowledge chunk store
+    assert "conversation" not in body["knowledge"]  # history migrated OUT of chunks (H1)
     assert body["history"]["total"] == 3
     assert body["history"]["sessions"] == 2
     assert (body["history"]["archive"], body["history"]["summary"], body["history"]["report"]) == (1, 1, 1)
 
 
 def test_memory_stats_each_store_off_is_an_empty_block(tmp_path, monkeypatch):
-    c = _client(monkeypatch, tmp_path)  # both stores None
-    assert c.get("/api/memory/stats").json() == {"memory": {}, "history": {}}
+    c = _client(monkeypatch, tmp_path)  # all three stores None
+    assert c.get("/api/memory/stats").json() == {"memory": {}, "knowledge": {}, "history": {}}

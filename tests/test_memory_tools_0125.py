@@ -350,19 +350,26 @@ def test_core_memories_inspector_crud_review(tmp_path, monkeypatch):
     register_memory_routes(app)
     with TestClient(app) as client:
         rows = client.get("/api/memory/hot").json()["chunks"]
-        assert {c["id"] for c in rows} == {cid, f"memory:{mid}", f"memory:{retrieved}"}
+        ids = {c["id"] for c in rows}
+        # The hot listing is the ALWAYS-ON rows only (ADR 0125 P2 — list(delivery='always')):
+        # the knowledge hot chunk and the always memory, never the retrieved or invalidated ones.
+        assert ids == {cid, f"memory:{mid}"}
+        assert f"memory:{retrieved}" not in ids and f"memory:{hidden}" not in ids
         handle = f"memory:{mid}"
         assert client.put(f"/api/memory/hot/{handle}", json={"content": "edited pin"}).status_code == 200
         assert mem.get(mid).content == "edited pin"
         assert mem.search("edited")[0].id == mid
         assert not mem.search("agent")
-        assert mem.get(mid).review_state == "pending"
-        for state, injected in (("rejected", False), ("confirmed", True)):
-            response = client.post(f"/api/memory/chunks/{handle}/review", json={"state": state})
-            assert response.status_code == 200
-            assert ("edited pin" in _always_on_memory(ks)[0]) is injected
-            row = next(c for c in client.get("/api/memory/hot").json()["chunks"] if c["id"] == handle)
-            assert row["review_state"] == state and row["injecting"] is injected
+        assert mem.get(mid).review_state == "confirmed"  # an operator edit confirms a pending pin
+        # Rejecting an always-on pin stops it delivering AND drops it from the listing;
+        # confirming it brings it back, injecting.
+        assert client.post(f"/api/memory/chunks/{handle}/review", json={"state": "rejected"}).status_code == 200
+        assert "edited pin" not in _always_on_memory(ks)[0]
+        assert handle not in {c["id"] for c in client.get("/api/memory/hot").json()["chunks"]}
+        assert client.post(f"/api/memory/chunks/{handle}/review", json={"state": "confirmed"}).status_code == 200
+        assert "edited pin" in _always_on_memory(ks)[0]
+        row = next(c for c in client.get("/api/memory/hot").json()["chunks"] if c["id"] == handle)
+        assert row["review_state"] == "confirmed" and row["injecting"] is True
         assert client.delete(f"/api/memory/hot/{handle}").json()["deleted"]
         assert mem.get(mid) is None
         assert ks.get_chunk(cid)["content"] == "chunk untouched"
