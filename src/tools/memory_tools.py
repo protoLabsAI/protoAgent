@@ -53,6 +53,12 @@ _RECALL_SESSION_MAX_CHARS = 6000
 # tool boundary so a bad value returns a clean error instead of a sqlite CHECK failure.
 MEMORY_KINDS: tuple[str, ...] = ("profile", "standing", "fact", "decision")
 
+# The ONLY kinds the shared operator profile accepts (ADR 0125 P2-G2) — the operator's
+# standing identity/preferences, never per-session facts/decisions. Mirrors
+# ``knowledge.shared_profile.ALLOWED_KINDS``; kept here as the tool-boundary fallback so a
+# clean error precedes the store's ValueError and so the import stays lazy.
+SHARED_PROFILE_KINDS: frozenset[str] = frozenset({"profile", "standing"})
+
 
 def _memory_handle(chunk_id, tier=None) -> str:
     # Layered stores have separate ID spaces; a private handle is deletable, a commons one isn't.
@@ -215,6 +221,41 @@ def _render_memory(entry, *, verbose: bool = False) -> str:
     return f"#{entry.id} {sup}{head} {body}{cite}{tags}"
 
 
+# The model-facing ``memory_save`` description. Held as a constant (not a docstring) so the
+# two conditional tool definitions below — one with the ``shared`` arg, one without — share
+# ONE source of truth and can't drift.
+_MEMORY_SAVE_DESC = """Save a durable memory — a preference, decision, standing rule or fact worth recalling across sessions.
+
+Use when the operator asks you to remember or note something that will still be true
+and useful in a month. Work status (a PR, card or SHA with a past-tense event) belongs
+on the board or the issue, where it stays current — not here. For a document to read
+or keep, use ``knowledge_ingest``; this is for text you already have.
+
+Args:
+    content: specific, self-contained text (retrieved by keyword/semantic search).
+    kind: ``profile|standing|fact|decision`` — what the memory IS; defaults to ``fact``.
+    subject: the entity this is ABOUT (e.g. ``"staging-db"``) — pass it whenever there
+        is one so a later fact about it can supersede this row instead of duplicating it.
+    heading: optional short stable label (e.g. ``"coffee"``).
+    delivery: ``"retrieved"`` (default; surfaced by relevance), ``"always"`` (in front
+        of the model every turn) or ``"on_demand"`` (only via memory_search).
+    expires_in_days: optional 1–3650 shelf life for volatile facts.
+
+New memories stay pending until the operator confirms them in the Memory inspector.
+Pending saves preserve operator-authored, confirmed and always-on rows on the
+same subject; these appear in the result as other live memories."""
+
+# Appended to the description ONLY when ``memory.shared_profile`` is enabled, so the
+# ``shared`` arg is both offered and explained precisely when it can do something.
+_MEMORY_SAVE_SHARED_DESC = """
+
+    shared: set True to PROPOSE this to the host-shared operator profile — the operator's
+        standing identity/preferences that reach EVERY agent on this host, not just you.
+        Only ``kind="profile"`` or ``"standing"`` is accepted there. It lands pending and
+        reaches no agent until the operator confirms it; it never supersedes anyone's
+        private memory. Default False (saves privately)."""
+
+
 def _build_memory_tools(
     knowledge_store,
     graph_config=None,
@@ -246,37 +287,84 @@ def _build_memory_tools(
             return memory_store_getter()
         return memory_store
 
-    @tool
-    async def memory_save(
-        content: str,
-        kind: str = "fact",
-        subject: str | None = None,
-        heading: str | None = None,
-        delivery: str = "retrieved",
-        expires_in_days: int | None = None,
-        state: Annotated[Any, InjectedState] = None,
-    ) -> str:
-        """Save a durable memory — a preference, decision, standing rule or fact worth recalling across sessions.
+    def _shared_profile_store():
+        """The host-shared operator-profile store (ADR 0125 P2-G2), or None when
+        ``memory.shared_profile`` is off. Resolved at invocation (like ``_memory``) so a
+        reload's new store is used and a disabled instance never touches ``profile.db``."""
+        from runtime.state import STATE
 
-        Use when the operator asks you to remember or note something that will still be true
-        and useful in a month. Work status (a PR, card or SHA with a past-tense event) belongs
-        on the board or the issue, where it stays current — not here. For a document to read
-        or keep, use ``knowledge_ingest``; this is for text you already have.
+        return getattr(STATE, "shared_profile_store", None)
 
-        Args:
-            content: specific, self-contained text (retrieved by keyword/semantic search).
-            kind: ``profile|standing|fact|decision`` — what the memory IS; defaults to ``fact``.
-            subject: the entity this is ABOUT (e.g. ``"staging-db"``) — pass it whenever there
-                is one so a later fact about it can supersede this row instead of duplicating it.
-            heading: optional short stable label (e.g. ``"coffee"``).
-            delivery: ``"retrieved"`` (default; surfaced by relevance), ``"always"`` (in front
-                of the model every turn) or ``"on_demand"`` (only via memory_search).
-            expires_in_days: optional 1–3650 shelf life for volatile facts.
+    async def _save_to_shared_profile(content, kind, subject, heading, delivery, expires_in_days, state) -> str:
+        """Propose one row to the shared operator profile as provenance=agent / pending
+        (ADR 0125 P2-G2). Errors (as a string) when the shared store is off or the kind
+        isn't ``profile``/``standing``; otherwise writes and says it awaits the operator."""
+        shared_store = _shared_profile_store()
+        if shared_store is None:
+            return (
+                "Error: the shared operator profile is off on this instance "
+                "(memory.shared_profile is disabled), so there is nowhere to propose this to. "
+                "Ask the operator to enable it, or save it privately with shared=False."
+            )
+        kind_norm = str(kind or "").strip().lower()
+        allowed = getattr(shared_store, "ALLOWED_KINDS", SHARED_PROFILE_KINDS)
+        if kind_norm not in allowed:
+            return (
+                f"Error: the shared operator profile holds only {', '.join(sorted(allowed))} memories "
+                f"(the operator's standing identity and preferences), not {kind!r}. "
+                "Save that privately instead (shared=False)."
+            )
+        delivery_norm, delivery_error = _norm_delivery(delivery)
+        if delivery_error:
+            return delivery_error
+        delivery_norm = delivery_norm or "retrieved"
+        # Always-on confirm gate (ADR 0069 D8 / ADR 0108 D4), the SAME refusal the private
+        # path makes: a delivery="always" row is injected in front of EVERY agent on the host
+        # once confirmed, so when the operator has turned the gate on the agent may not even
+        # propose an always-on shared row — only operator surfaces promote to always-on.
+        if delivery_norm == DELIVERY_ALWAYS and getattr(graph_config, "knowledge_hot_write_confirm", False):
+            return _ALWAYS_ON_REFUSAL
+        expires_at, expires_error = _expires_at_from_days(expires_in_days)
+        if expires_error:
+            return expires_error
+        # Same provenance rule as the private path (ADR 0069 D5): stamp the session from the
+        # INJECTED STATE, write provenance="agent" so the store defaults review_state="pending".
+        session_id = _session_id_from(state)
 
-        New memories stay pending until the operator confirms them in the Memory inspector.
-        Pending saves preserve operator-authored, confirmed and always-on rows on the
-        same subject; these appear in the result as other live memories.
-        """
+        def _write():
+            return shared_store.add(
+                content,
+                kind=kind_norm,
+                provenance="agent",
+                subject=subject,
+                heading=heading,
+                delivery=delivery_norm,
+                expires_at=expires_at,
+                source_session=session_id or None,
+            )
+
+        # Deliberately DON'T echo the shared row's #<id>: that handle belongs to profile.db's
+        # own numbering, but ``memory_forget`` only deletes from the agent's PRIVATE store, so
+        # an agent that read it back as "#N" and tried to withdraw its proposal would hard-delete
+        # an unrelated private memory #N and leave the shared row standing. The agent can't
+        # withdraw a shared proposal at all — only the operator curates the shared profile.
+        await asyncio.to_thread(_write)
+        bits = [f"kind={kind_norm}", f"delivery={delivery_norm}"]
+        if subject:
+            bits.append(f"subject={subject!r}")
+        return (
+            f"Proposed to the shared operator profile ({', '.join(bits)}); "
+            "it reaches no agent until the operator confirms it. You can't withdraw it "
+            "yourself — the operator curates the shared profile (memory_forget only "
+            "deletes your own private memories)."
+        )
+
+    async def _save_memory_impl(content, kind, subject, heading, delivery, expires_in_days, shared, state) -> str:
+        """The ``memory_save`` body, shared by the shared-enabled and -disabled tool
+        definitions below. ``shared=True`` routes to the shared operator profile; otherwise
+        the write lands in the private core ``MemoryStore`` exactly as before."""
+        if shared:
+            return await _save_to_shared_profile(content, kind, subject, heading, delivery, expires_in_days, state)
         store = _memory()
         if store is None:
             return "Error: memory is not available on this instance."
@@ -335,6 +423,43 @@ def _build_memory_tools(
                 f"Also live on {subject!r}: " + ", ".join(f"#{e.id} ({e.kind})" for e in also_live) + "."
             )
         return " ".join(parts)
+
+    # Hide the ``shared`` argument from the model's tool schema unless the shared profile is
+    # enabled (ADR 0125 P2-G2): two definitions over the one ``_save_memory_impl`` body — the
+    # disabled one is byte-identical to the pre-P2-G2 tool. ``graph_config`` is read once at
+    # build time; the store itself is still resolved at invocation.
+    if bool(getattr(graph_config, "memory_shared_profile", False)):
+
+        @tool(description=_MEMORY_SAVE_DESC + _MEMORY_SAVE_SHARED_DESC)
+        async def memory_save(
+            content: str,
+            kind: str = "fact",
+            subject: str | None = None,
+            heading: str | None = None,
+            delivery: str = "retrieved",
+            expires_in_days: int | None = None,
+            shared: bool = False,
+            state: Annotated[Any, InjectedState] = None,
+        ) -> str:
+            return await _save_memory_impl(
+                content, kind, subject, heading, delivery, expires_in_days, shared, state
+            )
+
+    else:
+
+        @tool(description=_MEMORY_SAVE_DESC)
+        async def memory_save(
+            content: str,
+            kind: str = "fact",
+            subject: str | None = None,
+            heading: str | None = None,
+            delivery: str = "retrieved",
+            expires_in_days: int | None = None,
+            state: Annotated[Any, InjectedState] = None,
+        ) -> str:
+            return await _save_memory_impl(
+                content, kind, subject, heading, delivery, expires_in_days, False, state
+            )
 
     async def _do_ingest(src: str, col: str, title: str | None, is_url: bool) -> str:
         """Ingest one source via the shared ``ops.knowledge.ingest`` op and return a
