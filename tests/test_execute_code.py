@@ -205,7 +205,8 @@ def test_default_bridge_set_is_curated_not_everything():
 
 
 @pytest.mark.asyncio
-async def test_default_bridge_memory_and_knowledge_search():
+@pytest.mark.parametrize("newline", ["\n", "\r\n"], ids=["lf", "crlf"])
+async def test_default_bridge_memory_and_knowledge_search(newline):
     @tool
     async def memory_search(query: str) -> str:
         """Search saved memories."""
@@ -226,6 +227,8 @@ async def test_default_bridge_memory_and_knowledge_search():
         assert f"tools.{name}(query" in ec.description
     assert "memory_recall" not in ec.description
     out = await ec.ainvoke({"code": (
+        "import sys\n"
+        f"sys.stdout.reconfigure(newline={newline!r})\n"
         "print(tools.memory_search(query='preferences'))\n"
         "print(tools.knowledge_search(query='reference'))\n"
         "try:\n"
@@ -233,7 +236,7 @@ async def test_default_bridge_memory_and_knowledge_search():
         "except RuntimeError as exc:\n"
         "    print(exc)"
     )})
-    assert "memory: preferences\nknowledge: reference" in out
+    assert out.splitlines()[:2] == ["memory: preferences", "knowledge: reference"]
     assert "not available" in out
 
 
