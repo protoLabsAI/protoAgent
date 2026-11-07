@@ -448,7 +448,7 @@ test("History tab degrades: a 500 shows the error alert, store-off shows the not
 test("core memory handles support edit, reject and delete in the inspector", async ({ page }) => {
   let row = {
     id: "memory:31", domain: "fact", content: "Core remembered fact", heading: "Core memory",
-    review_state: "pending", delivery_policy: "always", injecting: true,
+    review_state: "pending", delivery_policy: "always", injecting: true, store: "memories",
   };
   let deleted = false;
   await page.route("**/api/memory/hot", async (route) => {
@@ -463,7 +463,7 @@ test("core memory handles support edit, reject and delete in the inspector", asy
       await route.fulfill({ json: { enabled: true, id: row.id, replaced: true } });
     }
   });
-  await page.route("**/api/memory/chunks/memory:31/review", async (route) => {
+  await page.route("**/api/memory/memories/31/review", async (route) => {
     row = { ...row, review_state: route.request().postDataJSON().state, injecting: false };
     await route.fulfill({ json: { enabled: true, id: row.id, review_state: row.review_state } });
   });
@@ -480,3 +480,29 @@ test("core memory handles support edit, reject and delete in the inspector", asy
   await page.getByRole("dialog").getByRole("button", { name: "Delete entry" }).click();
   await expect(surface.getByText("Corrected remembered fact")).toHaveCount(0);
 });
+
+for (const legacy of [false, true]) {
+  test(`Hot memory review uses ${legacy ? "chunks for untagged rows" : "memories for tagged rows"}`, async ({ page }) => {
+    await page.request.post("/api/__test__/memory/mode", { data: { legacy } });
+    await openMemory(page);
+    const surface = page.getByTestId("memory-surface");
+    await surface.getByRole("tab", { name: "Hot memory" }).click();
+    const posts: string[] = [];
+    page.on("request", (request) => {
+      if (request.method() === "POST" && request.url().endsWith("/review")) posts.push(request.url());
+    });
+    const route = `/api/memory/${legacy ? "chunks" : "memories"}/31/review`;
+    const response = page.waitForResponse((r) => r.url().endsWith(route));
+    await surface.getByLabel("confirm entry 31", { exact: true }).click();
+    const result = await response;
+    expect(result.ok()).toBe(true);
+    expect(result.request().postDataJSON()).toEqual({ state: "confirmed" });
+    await expect(surface.locator('[data-review-state="confirmed"]')).toBeVisible();
+    expect(posts).toHaveLength(1);
+    expect(posts[0]).toContain(route);
+    // A reload proves the mock persisted the verdict, beyond the optimistic chip.
+    await openMemory(page);
+    await surface.getByRole("tab", { name: "Hot memory" }).click();
+    await expect(surface.locator('[data-review-state="confirmed"]')).toBeVisible();
+  });
+}

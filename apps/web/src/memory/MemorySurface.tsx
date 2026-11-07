@@ -359,8 +359,8 @@ function HotMemoryPanel() {
                     <span className="memory-row-meta">{ago(c.created_at)}</span>
                   </div>
                   <span className="knowledge-chunk-actions">
-                    {/* Review verdict (ADR 0108 D7): hot rows are private-tier, so the
-                        actions always apply here (a rejected hot row leaves the window). */}
+                    {/* Pass the store tag through: memories use their own review route;
+                        untagged rows from older servers still use the chunks route. */}
                     <ReviewActions chunk={c} />
                     <Button
                       icon

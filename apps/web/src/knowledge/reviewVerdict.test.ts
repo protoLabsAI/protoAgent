@@ -85,6 +85,23 @@ describe("reviewStateOf", () => {
 });
 
 describe("ReviewActions", () => {
+  it.each(["confirmed", "rejected", "pending"] as const)("routes a tagged memory verdict %s to memories", async (state) => {
+    const review = vi.spyOn(api, "memoryReview").mockResolvedValue({ enabled: true, id: 7, review_state: state });
+    const chunks = vi.spyOn(api, "reviewMemoryChunk");
+    const invalidate = vi.spyOn(client, "invalidateQueries");
+    const row = { ...chunk({ review_state: state === "pending" ? "rejected" : "pending" }), store: "memories" };
+    client.setQueryData(queryKeys.memoryHot, { enabled: true, chunks: [row] });
+    render(row);
+    const action = state === "confirmed" ? "confirm" : state === "rejected" ? "reject" : "reopen";
+    act(() => button(`${action} entry 7`)!.click());
+    await flush();
+    await flush();
+    expect(review).toHaveBeenCalledWith(7, state);
+    expect(chunks).not.toHaveBeenCalled();
+    expect(client.getQueryData<{ chunks: MemoryHotChunk[] }>(queryKeys.memoryHot)?.chunks[0].review_state).toBe(state);
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: queryKeys.memoryHot });
+  });
+
   it("reviews a core memory without addressing a chunk with the same numeric id", async () => {
     const review = vi.spyOn(api, "reviewMemoryChunk").mockResolvedValue({
       enabled: true, id: "memory:7", review_state: "rejected",
@@ -197,5 +214,19 @@ describe("knowledgeSearch review filter", () => {
     expect(calls[0]).toContain("/api/knowledge/search?q=");
     expect(calls[0]).not.toContain("review_state");
     expect(calls[1]).toContain("review_state=pending");
+  });
+});
+
+describe("memoryReview", () => {
+  it.each([7, "memory:7"])("posts %s to the dedicated route with the table id", async (id) => {
+    const fetcher = vi.fn().mockResolvedValue(new Response(JSON.stringify({ enabled: true, id: 7, review_state: "confirmed" })));
+    vi.stubGlobal("fetch", fetcher);
+    try {
+      await api.memoryReview(id, "confirmed");
+      expect(String(fetcher.mock.calls[0][0])).toContain("/api/memory/memories/7/review");
+      expect(fetcher.mock.calls[0][1]).toMatchObject({ method: "POST", body: JSON.stringify({ state: "confirmed" }) });
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 });
