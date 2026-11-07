@@ -123,6 +123,24 @@ registerKeybinding({
   allowInInput: true,
   run: () => switchByOffset(-1),
 });
+registerKeybinding({
+  id: "chat.tab.prev.bracket",
+  label: "Previous chat tab (bracket)",
+  group: "Chat",
+  defaultKeys: "mod+[",
+  scope: "chat",
+  allowInInput: true,
+  run: () => switchByOffset(-1),
+});
+registerKeybinding({
+  id: "chat.tab.next.bracket",
+  label: "Next chat tab (bracket)",
+  group: "Chat",
+  defaultKeys: "mod+]",
+  scope: "chat",
+  allowInInput: true,
+  run: () => switchByOffset(1),
+});
 for (let n = 1; n <= 9; n++) {
   registerKeybinding({
     id: `chat.tab.${n}`,

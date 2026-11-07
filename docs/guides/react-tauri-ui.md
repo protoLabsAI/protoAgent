@@ -34,7 +34,9 @@ separate windows to work with more than one at once.
 
 1. Use **+** in the chat tab bar to start a conversation. Write a message and send it.
 2. Return to a conversation by selecting its tab or searching its title in the
-   [command palette](/guides/command-palette). Switching tabs does not stop its work.
+   [command palette](/guides/command-palette). Switching tabs does not stop its work. With focus in chat (including the composer),
+   use **⌘[** / **⌘]** on macOS or **Ctrl+[** / **Ctrl+]** elsewhere for the previous / next
+   tab, wrapping at either end. Rebind these in **Settings ▸ Keyboard**.
 3. To change direction while it works, send a follow-up message. To stop the
    current turn, use the composer’s stop control.
 
