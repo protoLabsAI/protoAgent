@@ -49,6 +49,12 @@ SET_ACK_PREFIX = "Goal set. "
 # ``llm`` judges the turn's final text and costs a model call, so it waits for the turn to end.
 _PROBE_TYPES = frozenset({"command", "test", "ci", "data", "plugin"})
 
+# The deterministic verifier types — DONE is decided mechanically (a shell exit code, a CI
+# status, a data check, a plugin probe), not by a model reading the turn. Same membership as
+# the mid-turn probe set. The kickoff (#4833) uses this to tell the agent that a condition it
+# can't locate in the workspace is not grounds to abandon a goal gated on one of these.
+_DETERMINISTIC_VERIFIERS = _PROBE_TYPES
+
 # Appended to every kickoff + continuation prompt (ADR 0079): point the drive loop at the full
 # toolkit so it composes goals with tasks/watches/scheduling instead of spinning. The system
 # prompt carries the full operating model; this is the goal-loop-specific reminder.
@@ -218,8 +224,18 @@ class GoalController:
                 "is persisted and fed back to you each iteration). If it is impossible or out "
                 "of scope, call the `abandon_goal` tool with a reason and stop."
             )
+        # Always name WHO decides DONE — the verifier (#4833). Before this, the kickoff
+        # described only the condition, so a goal with an operator-set `command` verifier (and
+        # no contract) was never told about the verifier: the agent hunted the condition's
+        # wording in the workspace, found none, and called `abandon_goal` on iteration 0. The
+        # line is suppressed when the contract block already names the verifier (no duplicate).
+        verifier_line = self._kickoff_verifier_line(state)
         contract = self._contract_prompt(state)
-        body = f"{lead}\n\n{contract}" if contract else lead
+        body = lead
+        if verifier_line:
+            body = f"{body}\n\n{verifier_line}"
+        if contract:
+            body = f"{body}\n\n{contract}"
         body = f"{body}\n\n{_DRIVE_TACTIC}"
         # A plain inbound message that arrived alongside an already-active goal (not a
         # /goal command) is folded in so the operator's words aren't lost.
@@ -227,6 +243,31 @@ class GoalController:
         if extra and not extra.lower().startswith("/goal"):
             body = f"{body}\n\nThe operator also said: {extra}"
         return body
+
+    def _kickoff_verifier_line(self, state: GoalState) -> str:
+        """One line for the kickoff prompt naming WHO decides DONE — the verifier, not the
+        agent (#4833). Built from ``_verifier_summary`` so the first turn learns the
+        operator-set check (e.g. a ``command``) instead of searching the workspace for the
+        condition's wording and abandoning when it finds none. Returns ``""`` when the goal
+        has a contract: ``_contract_prompt`` already names the verifier there, so emitting
+        this too would state it twice."""
+        if state.has_contract:
+            return ""
+        line = (
+            f"DONE is decided by the verifier ({self._verifier_summary(state.verifier)}), "
+            "not by you. Work toward making it pass."
+        )
+        # A deterministic, operator-set verifier decides DONE mechanically, so the condition
+        # is a human description of intent, not a string to locate in the tree: not finding it
+        # is no reason to give up. (The fuzzy ``llm`` verifier judges the turn's text itself,
+        # so this note would be noise — gate it on the mechanical types.)
+        if (state.verifier or {}).get("type", "llm") in _DETERMINISTIC_VERIFIERS:
+            line += (
+                " If you cannot find the condition's wording in the workspace, that is not "
+                "grounds to call `abandon_goal` — reserve `abandon_goal` for a goal that is "
+                "genuinely impossible or out of scope."
+            )
+        return line
 
     @staticmethod
     def _chat_verifier_allowed(verifier: dict) -> bool:

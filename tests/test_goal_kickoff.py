@@ -95,6 +95,66 @@ def test_kickoff_prompt_fresh_context_variant(tmp_path):
     assert "update_goal_plan" in prompt
 
 
+# ── #4833: kickoff names the verifier so an operator goal isn't abandoned iter 0 ──
+def test_kickoff_names_the_verifier_without_a_contract(tmp_path):
+    """A command-verifier goal with NO contract must still learn its verifier in the kickoff
+    (both the normal and fresh-context branches), so the agent works toward the check instead
+    of hunting the condition's wording and abandoning on iteration 0 (#4833)."""
+    c = _ctrl(tmp_path)
+    c.set_goal_operator("s1", "the readiness check passes", {"type": "command", "command": "false"})
+    gs = c.active_goal("s1")
+    assert not gs.has_contract  # precondition: no contract, so the contract block is absent
+    for fresh in (False, True):
+        gs.fresh_context = fresh
+        prompt = c.kickoff_prompt(gs)
+        assert "command: false" in prompt  # the verifier summary is present
+        assert "decided by the verifier" in prompt
+
+
+def test_kickoff_with_a_contract_does_not_state_the_verifier_twice(tmp_path):
+    """When a goal HAS a contract, the contract block already names the verifier; the kickoff
+    must not add a second, standalone verifier statement (#4833)."""
+    c = _ctrl(tmp_path)
+    c.set_goal_operator(
+        "s1",
+        "cond",
+        {"type": "command", "command": "pytest -q"},
+        outcome="green CI",
+    )
+    prompt = c.kickoff_prompt(c.active_goal("s1"))
+    # the verifier summary appears exactly once — only inside the contract block
+    assert prompt.count("command: pytest -q") == 1
+    # and the standalone kickoff verifier line is suppressed
+    assert "decided by the verifier" not in prompt
+
+
+def test_kickoff_deterministic_verifier_says_missing_condition_is_not_abandon(tmp_path):
+    """For a deterministic (command/test/ci/data/plugin) verifier, the kickoff tells the
+    agent that failing to find the condition's wording in the workspace is not grounds to
+    abandon the goal — while keeping abandon_goal for impossible/out-of-scope goals (#4833)."""
+    c = _ctrl(tmp_path)
+    c.set_goal_operator("s1", "the readiness check passes", {"type": "command", "command": "false"})
+    gs = c.active_goal("s1")
+    for fresh in (False, True):
+        gs.fresh_context = fresh
+        prompt = c.kickoff_prompt(gs)
+        assert "abandon_goal" in prompt
+        assert "not grounds" in prompt
+        assert "workspace" in prompt
+
+
+def test_kickoff_llm_verifier_gets_summary_line_but_not_the_deterministic_note(tmp_path):
+    """The fuzzy llm verifier still gets the one-line verifier statement (so the agent knows a
+    model judges DONE), but NOT the deterministic 'can't locate the condition' note, which
+    would be noise for a judge that reads the turn's text (#4833)."""
+    c = _ctrl(tmp_path)
+    c.set_goal_operator("s1", "ship the thing", {"type": "llm"})
+    prompt = c.kickoff_prompt(c.active_goal("s1"))
+    assert "llm judgment" in prompt
+    assert "decided by the verifier" in prompt
+    assert "not grounds" not in prompt
+
+
 # ── #1911: declared-unattended + goal-autonomy in _is_autonomous ───────────
 def test_is_autonomous_honors_unattended_and_origins():
     from server.chat import _is_autonomous
