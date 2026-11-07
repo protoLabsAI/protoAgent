@@ -65,17 +65,23 @@ def _count(path, table):
 
 def _seed_fleet(store):
     """A fixture modelled on the live fleet audit (2026-11-07)."""
-    # → memories: agent-written freeform domains, a hot row, an extracted fact, an operator row.
+    # → memories: agent-written freeform domains, a hot row, an extracted fact, and operator
+    #   memory-curation rows (a preferences edit, a hot-pinned always-on row).
     store.add_chunk("app note", domain="applications", source_type="conversation")
     store.add_chunk("research note", domain="research", source_type="conversation")
     store.add_chunk("loop lesson", domain="loop-lessons", source_type="conversation")
     store.add_chunk("hot pinned", domain="hot", source_type="conversation")
     store.add_chunk("extracted fact", domain="finding", source_type="extracted")
     store.add_chunk("operator pref", domain="preferences", source_type="operator")
-    # stays in chunks (collection = the old domain): pdf, youtube, text, and a NULL-source_type row.
+    store.add_chunk("operator pin", domain="voice", source_type="operator", delivery_policy="always")
+    # stays in chunks (collection = the old domain): pdf, youtube, text, a NULL-source_type row,
+    # AND operator-curated KNOWLEDGE — a pasted doc (general) and an operator-edited ingested
+    # chunk (docs). Both carry source_type='operator' but are KB, not memory, so they must stay.
     store.add_chunk("a pdf chunk", domain="docs", source_type="pdf")
     store.add_chunk("a yt transcript", domain="media", source_type="youtube")
     store.add_chunk("a text blob", domain="notes", source_type="text")
+    store.add_chunk("operator pasted doc", domain="general", source_type="operator")
+    store.add_chunk("operator edited pdf", domain="docs", source_type="operator")
     _insert_raw_chunk(store.path, content="claude import", domain="imported", source_type=None)
     # untouched: the history domain (the H1e migration owns these).
     store.add_chunk("conv archive", domain="conversation", source_type="conversation", namespace="chat-archive:s1")
@@ -90,9 +96,10 @@ def test_routes_live_fleet_fixture_with_exact_counts(tmp_path):
     MemoryStore(store.path)  # create the memories table in the same file
     _seed_fleet(store)
 
-    assert migrate_memory_chunks_to_memories(store.path) == {"memories": 6, "chunks": 4}
+    assert migrate_memory_chunks_to_memories(store.path) == {"memories": 7, "chunks": 6}
 
-    # Six durable memories moved; their old domains are preserved as legacy_domain.
+    # Seven durable memories moved; their old domains are preserved as legacy_domain. The two
+    # operator rows that moved are memory-curation (a preferences edit, an always-on pin).
     memories = _rows_by_content(store.path, "memories")
     assert {m["legacy_domain"] for m in memories.values()} == {
         "applications",
@@ -101,15 +108,20 @@ def test_routes_live_fleet_fixture_with_exact_counts(tmp_path):
         "hot",
         "finding",
         "preferences",
+        "voice",
     }
-    assert _count(store.path, "memories") == 6
+    assert _count(store.path, "memories") == 7
 
-    # Four rows stayed with collection = old domain; the two history rows are untouched.
+    # Six rows stayed with collection = old domain; the two history rows are untouched. The two
+    # operator KB rows (pasted doc, edited pdf) stay — source_type='operator' is NOT a blanket
+    # move, so knowledge-base curation is not misfiled into memories.
     chunks = _rows_by_content(store.path, "chunks")
     assert set(chunks) == {
         "a pdf chunk",
         "a yt transcript",
         "a text blob",
+        "operator pasted doc",
+        "operator edited pdf",
         "claude import",
         "conv archive",
         "conv summary",
@@ -118,6 +130,8 @@ def test_routes_live_fleet_fixture_with_exact_counts(tmp_path):
         ("a pdf chunk", "docs"),
         ("a yt transcript", "media"),
         ("a text blob", "notes"),
+        ("operator pasted doc", "general"),
+        ("operator edited pdf", "docs"),
         ("claude import", "imported"),
     ):
         assert chunks[content]["collection"] == domain
@@ -125,6 +139,37 @@ def test_routes_live_fleet_fixture_with_exact_counts(tmp_path):
     assert chunks["conv archive"]["collection"] is None
     assert chunks["conv summary"]["collection"] is None
     assert chunks["conv archive"]["domain"] == "conversation"
+
+
+def test_operator_knowledge_base_rows_are_not_misfiled(tmp_path):
+    """source_type='operator' is stamped by BOTH memory curation and knowledge-base curation
+    (POST /api/knowledge/chunks pastes docs as 'operator'; PUT re-stamps it on edited ingested
+    chunks). Only the memory-shaped operator rows move; KB documents stay in chunks."""
+    path = tmp_path / "agent.db"
+    store = KnowledgeStore(path)
+    MemoryStore(store.path)
+
+    # Operator MEMORY curation (Memory inspector) → moves: a canonical memory domain, or an
+    # always-on pin that may live in a freeform domain.
+    store.add_chunk("pref edit", domain="preferences", source_type="operator")
+    store.add_chunk("decision", domain="decisions", source_type="operator")
+    store.add_chunk("hot pin", domain="hot", source_type="operator")
+    store.add_chunk("pinned in freeform", domain="research", source_type="operator", delivery_policy="always")
+    # Operator KNOWLEDGE curation → stays: a pasted doc (general), an edited ingested pdf
+    # (docs), and even a pasted doc filed under a freeform domain (not always-on).
+    store.add_chunk("pasted doc", domain="general", source_type="operator")
+    store.add_chunk("edited pdf", domain="docs", source_type="operator")
+    store.add_chunk("pasted in freeform", domain="research", source_type="operator")
+
+    assert migrate_memory_chunks_to_memories(store.path) == {"memories": 4, "chunks": 3}
+
+    moved = set(_rows_by_content(store.path, "memories"))
+    assert moved == {"pref edit", "decision", "hot pin", "pinned in freeform"}
+    stayed = _rows_by_content(store.path, "chunks")
+    assert set(stayed) == {"pasted doc", "edited pdf", "pasted in freeform"}
+    assert stayed["pasted doc"]["collection"] == "general"
+    assert stayed["edited pdf"]["collection"] == "docs"
+    assert stayed["pasted in freeform"]["collection"] == "research"
 
 
 def test_field_mapping_supersede_chain_and_vectors(tmp_path):
@@ -145,8 +190,11 @@ def test_field_mapping_supersede_chain_and_vectors(tmp_path):
     store.add_chunk("decision row", domain="decisions", source_type="operator")
     store.add_chunk("on demand note", domain="notes", source_type="conversation", delivery_policy="on_demand")
     store.add_chunk("hot note", domain="hot", source_type="conversation")
-    _insert_raw_chunk(store.path, content="null rs operator", domain="general", source_type="operator")
+    # An operator row in a memory domain (preferences) with a NULL review_state → the tier rule.
+    _insert_raw_chunk(store.path, content="null rs operator", domain="preferences", source_type="operator")
     _insert_raw_chunk(store.path, content="null rs agent", domain="general", source_type="conversation")
+    # An operator-curated KB document (general domain, not always-on) must STAY in chunks.
+    _insert_raw_chunk(store.path, content="operator kb doc", domain="general", source_type="operator")
 
     # A sentinel vector proves the row is COPIED, not re-embedded (embed_fn returns [1,0]).
     sentinel = json.dumps([9.0, 9.0])
@@ -185,12 +233,17 @@ def test_field_mapping_supersede_chain_and_vectors(tmp_path):
     # NULL review_state → the trust-tier rule.
     assert mem["null rs operator"]["review_state"] == "confirmed"
     assert mem["null rs agent"]["review_state"] == "pending" and mem["null rs agent"]["provenance"] == "agent"
+    # The operator-curated KB document is NOT misfiled into memories; it stays in chunks.
+    assert "operator kb doc" not in mem
+    stayed = _rows_by_content(store.path, "chunks")
+    assert stayed["operator kb doc"]["collection"] == "general"
 
     # Vectors copied verbatim into memory_vectors (sentinel survives → no re-embed).
     vecs = {r[0]: r[1] for r in sqlite3.connect(str(store.path)).execute("SELECT memory_id, vec FROM memory_vectors")}
     assert vecs[new["id"]] == sentinel == pre_vecs[new_id]
     assert vecs[old["id"]] == pre_vecs[old_id]
-    # Five rows were added through the embedding store; the two raw-inserted rows get none.
+    # Five rows were added through the embedding store and moved; the moved raw-inserted rows
+    # (null rs operator, null rs agent) carry no vector.
     assert len(vecs) == 5
 
 
