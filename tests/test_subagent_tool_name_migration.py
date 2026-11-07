@@ -2,6 +2,7 @@
 
 from dataclasses import replace
 import logging
+from types import SimpleNamespace
 
 import pytest
 from langchain_core.messages import AIMessage
@@ -56,6 +57,50 @@ def test_plugin_registered_subagent(tmp_path, tool_map, caplog):
     sub = agent.SUBAGENT_REGISTRY["plugin-worker"]
     assert [t.name for t in agent._effective_subagent_tools(LangGraphConfig(), sub, tool_map)] == ["memory_search"]
     assert "plugin-worker" in caplog.text
+
+
+@pytest.mark.parametrize("source", ["config", "plugin"])
+@pytest.mark.parametrize("old,new", [
+    ("memory_ingest", "memory_save"), ("memory_recall", "memory_search"),
+    ("forget_memory", "memory_forget"), ("memory_stats", "memory_list"),
+])
+@pytest.mark.parametrize("available", [True, False])
+def test_background_refusal_uses_migrated_declared_names(
+    source, old, new, available, tmp_path, tool_map, monkeypatch, caplog,
+):
+    from background.manager import _declared_tool_refusal, _subagent_fence
+    from runtime.state import STATE
+
+    if source == "config":
+        path = tmp_path / "config.yaml"
+        path.write_text(f"subagents:\n  researcher:\n    tools: [{old}]\n")
+        config = LangGraphConfig.from_yaml(path)
+        name = "researcher"
+    else:
+        config = LangGraphConfig()
+        name = "plugin-worker"
+        registry = PluginRegistry("migration-plugin", tmp_path)
+        registry.register_subagent(replace(spec([old], name), inherit_read_tools=True))
+        agent_init._register_plugin_subagents(registry.subagents)
+
+    # An inherited read alone must not satisfy the declared-tool guard.
+    bound_tools = [tool_map["current_time"]]
+    if available:
+        bound_tools.append(tool_map[new])
+    monkeypatch.setattr(STATE, "graph_config", config)
+    monkeypatch.setattr(STATE, "graph", SimpleNamespace(bound_tools=bound_tools))
+    for _ in range(2):
+        refusal = _declared_tool_refusal(name)
+        if available:
+            assert refusal is None
+            fence = _subagent_fence(name)
+            assert new in fence and old not in fence
+        else:
+            assert refusal is not None
+            assert "none of them is bound" in refusal
+    warnings = [r for r in caplog.records if "lists legacy tool" in r.message]
+    assert len(warnings) == 1
+    assert name in warnings[0].message and old in warnings[0].message
 
 
 @pytest.mark.parametrize("old,new", [
