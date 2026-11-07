@@ -1,7 +1,14 @@
+import type { ChatSession } from "./chat-store";
+
 // Bulk chat-tab close (Close others / left / right, #context-menu). Pure index math over the
 // ordered session list so it can be unit-tested without React or the store — ChatSurface owns
 // the side effects (confirm dialog, deleteSession). Chat sessions have no "pinned" concept
 // (unlike model favorites), so nothing needs excluding beyond the right-clicked anchor itself.
+
+/** Running turns are checked by the caller; ephemeral notices are not history. */
+export function isEmptyChatSession(session: Pick<ChatSession, "messages">): boolean {
+  return !session.messages.some((message) => !message.ephemeral);
+}
 
 export type BulkCloseMode = "others" | "left" | "right";
 

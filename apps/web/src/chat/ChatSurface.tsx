@@ -25,10 +25,10 @@ import { brandName } from "../lib/brand";
 import { queryClient } from "../lib/queryClient";
 import { isCodePaneEnabled } from "../codeviewer/enabled";
 import { useCodeViewer } from "../codeviewer/store";
-import { useServerTurnSessions } from "./server-turn-store";
+import { serverTurnLabel, useServerTurnSessions } from "./server-turn-store";
 import { useSessionsWithBackgroundWork } from "./backgroundJobStore";
 import { ADD_SELECTOR, isIncognitoAddClick, trackShiftHeld } from "./shiftCue";
-import { resolveGoalCloseDisposition, sessionsToClose } from "./bulkClose";
+import { isEmptyChatSession, resolveGoalCloseDisposition, sessionsToClose } from "./bulkClose";
 import { NO_MEMORY_CHANGE, canClearSession, defaultMemoryChoice, retireChatSession, type ChatMemoryChoice } from "./sessionRetirement";
 import { ChatSessionSlot } from "./ChatSessionSlot";
 
@@ -132,7 +132,7 @@ export function ChatSurface({
   }, [chat.currentSessionId, chat.sessions.length]);
 
   // Deletes asked for outside the tab strip (the mobile SessionSheet, #2512) arrive as a
-  // store-level request and fold into the SAME pendingClose dialog — harvest opt-in, server
+  // store-level request and use the same close handling — harvest opt-in, server
   // purge, goal Stop-vs-Detach and all. Consumed only while no dialog is open, so a request
   // landing mid-bulk-close waits its turn instead of clobbering the queue. A stale id (the
   // session vanished, e.g. deleted from another tab) is dropped without a dialog.
@@ -140,7 +140,7 @@ export function ChatSurface({
     const requested = chat.pendingDeleteRequest;
     if (!requested || pendingClose !== null) return;
     chatStore.clearDeleteRequest();
-    if (chat.sessions.some((s) => s.id === requested)) setPendingClose(requested);
+    requestClose(requested);
   }, [chat.pendingDeleteRequest, pendingClose, chat.sessions]);
 
   // Re-initialise the delete dialog's memory choice from the TARGET tab's incognito flag
@@ -162,6 +162,41 @@ export function ChatSurface({
     } catch (error) {
       onError(`Couldn't delete chat: ${errMsg(error)}. The tab was kept so you can retry.`);
       return false;
+    }
+  }
+
+  function canCloseEmptyChat(id: string): boolean {
+    const snapshot = chatStore.getSnapshot();
+    const session = snapshot.sessions.find((candidate) => candidate.id === id);
+    return !!session && isEmptyChatSession(session)
+      && snapshot.sessionStatusMap[id] !== "streaming"
+      && serverTurnLabel(id) === null
+      && !backgroundSessions.has(id);
+  }
+
+  function requestClose(id: string) {
+    if (!chatStore.getSnapshot().sessions.some((session) => session.id === id)) return;
+    if (canCloseEmptyChat(id)) void closeAfterGoalCheck(id, true);
+    else setPendingClose(id);
+  }
+
+  // Both no-confirm gestures require a fresh ownership read; stale cached absence
+  // must never authorize deleting a goal's session.
+  async function closeAfterGoalCheck(id: string, emptyOnly = false) {
+    const disposition = await resolveGoalCloseDisposition(id, async () => {
+      const result = await goalsState.refetch();
+      // Failed background refetches may retain stale successful data.
+      return result.error === null && result.data ? result.data.goals : undefined;
+    });
+    if (!chatStore.getSnapshot().sessions.some((session) => session.id === id)) return;
+    if (disposition === "blocked") {
+      onError("Couldn't verify whether this chat owns an active goal. The tab was kept; try again.");
+    } else if (disposition === "confirm-goal" || (emptyOnly && !canCloseEmptyChat(id))) {
+      // A message or turn may have arrived while ownership was being checked.
+      setPendingClose(id);
+    } else {
+      // No confirm, harvest, or forget — including the existing Shift+click contract.
+      await closeSession(id, NO_MEMORY_CHANGE);
     }
   }
 
@@ -241,7 +276,7 @@ export function ChatSurface({
   // One "is Shift held" signal drives both, via the `--incognito`/`--del` wrapper classes → CSS.
   const [shiftHeld, setShiftHeld] = useState(false);
   useEffect(() => trackShiftHeld(setShiftHeld), []);
-  // The DS TabBar's onClose always opens the confirm dialog, so intercept the close-button
+  // Shift+click also skips confirmation for non-empty chats: intercept the close-button
   // click in the CAPTURE phase (before the DS button's own onClick) when Shift is down and
   // delete directly. Maps the clicked ✕ to its session by sibling index (DOM = sessions order).
   function onTabBarClickCapture(e: ReactMouseEvent) {
@@ -265,30 +300,7 @@ export function ChatSurface({
     if (!session) return;
     e.preventDefault();
     e.stopPropagation(); // beat the DS close button's onClick → no confirm dialog
-    // Cached absence is not authoritative: the query may still be mounting or
-    // refetching after a goal changed. Always refresh before the no-confirm
-    // shortcut, and fail closed if ownership cannot be verified.
-    void (async () => {
-      const disposition = await resolveGoalCloseDisposition(session.id, async () => {
-        const result = await goalsState.refetch();
-        // A failed background refetch may retain previously successful data;
-        // that cache is still stale and must not authorize deletion.
-        return result.error === null && result.data ? result.data.goals : undefined;
-      });
-      // The tab may have disappeared while the authoritative read was in flight.
-      if (!chatStore.getSnapshot().sessions.some((candidate) => candidate.id === session.id)) return;
-      if (disposition === "confirm-goal") {
-        setPendingClose(session.id);
-      } else if (disposition === "direct") {
-        // #1373 quick-delete: no confirm, no harvest, no forget — the original contract.
-        // Harvesting is a server-side model call that runs before the purge, so auto-harvesting
-        // here (as #4055 did) left the ✕ looking dead for the 10–30s it took. The normal dialog
-        // is where you choose to save a summary; the quick gesture just drops the tab.
-        await closeSession(session.id, NO_MEMORY_CHANGE);
-      } else {
-        onError("Couldn't verify whether this chat owns an active goal. The tab was kept; try again.");
-      }
-    })();
+    void closeAfterGoalCheck(session.id);
   }
 
   // Keyboard twin of the Shift+click incognito gesture (#1697): Shift+Enter/Space on the
@@ -330,7 +342,7 @@ export function ChatSurface({
       // Hidden for incognito chats: a Zed thread would continue them WITHOUT the incognito
       // flag (the shim sends ordinary turns), silently writing the chat to memory.
       onContinueInZed: editorPref === "zed" && !target?.incognito ? () => handOffToZed(id) : undefined,
-      onClose: () => setPendingClose(id),
+      onClose: () => requestClose(id),
       onCloseOthers: others.length ? () => startBulkClose(others) : undefined,
       onCloseLeft: left.length ? () => startBulkClose(left) : undefined,
       onCloseRight: right.length ? () => startBulkClose(right) : undefined,
@@ -400,7 +412,7 @@ export function ChatSurface({
             };
           })}
           onSelect={(id) => chatStore.switchSession(id)}
-          onClose={(id) => setPendingClose(id)}
+          onClose={requestClose}
           onRename={(id, label) => chatStore.renameSession(id, label)}
           onReorder={(next) => chatStore.reorderSessions(next.map((t) => t.id))}
           onAdd={() => chatStore.createSession()}

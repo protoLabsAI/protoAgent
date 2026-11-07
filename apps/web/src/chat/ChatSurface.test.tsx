@@ -1,7 +1,14 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { act, createElement as h } from "react";
+import { createRoot, type Root } from "react-dom/client";
+import { chatStore, type ChatSession, type SessionStatus } from "./chat-store";
+import { retireChatSession, NO_MEMORY_CHANGE } from "./sessionRetirement";
+import { noteTurnStarted, resetServerTurns } from "./server-turn-store";
+import { openContextMenu } from "../contextMenu";
 
 import type { ChatMessage } from "../lib/types";
 import {
+  ChatSurface,
   canSubmitChatDraft,
   chatComposerBusy,
   resolveComposerStopTarget,
@@ -178,5 +185,161 @@ describe("consumed ↑-recall duplicate-risk marker (#3413)", () => {
       // And a no-op draft event against no marker stays null (also a bail-out).
       expect(nextDuplicateRisk(null, { type: "draft", sessionId: SID, draft: "typing…" })).toBeNull();
     });
+  });
+});
+
+const closeHarness = vi.hoisted(() => ({
+  refetch: vi.fn(),
+  goals: [] as { session_id: string; status: string; condition: string }[],
+}));
+vi.mock("@tanstack/react-query", async (original) => ({
+  ...await original<typeof import("@tanstack/react-query")>(),
+  useQuery: () => ({ data: { goals: closeHarness.goals }, refetch: closeHarness.refetch }),
+}));
+vi.mock("./ChatSessionSlot", async (original) => ({
+  ...await original<typeof import("./ChatSessionSlot")>(),
+  ChatSessionSlot: () => null,
+}));
+vi.mock("./sessionRetirement", async (original) => ({
+  ...await original<typeof import("./sessionRetirement")>(),
+  retireChatSession: vi.fn().mockResolvedValue(undefined),
+}));
+vi.mock("../contextMenu", () => ({ openContextMenu: vi.fn() }));
+vi.mock("@protolabsai/ui/overlays", async (original) => ({
+  ...await original<typeof import("@protolabsai/ui/overlays")>(),
+  useToast: () => vi.fn(),
+}));
+
+describe("ChatSurface close requests", () => {
+  let container: HTMLDivElement;
+  let root: Root;
+  let session: ChatSession;
+  let snapshot: ReturnType<typeof chatStore.getSnapshot>;
+  const onError = vi.fn();
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    resetServerTurns();
+    closeHarness.goals = [];
+    closeHarness.refetch.mockImplementation(async () => ({
+      error: null, data: { goals: closeHarness.goals },
+    }));
+    session = { id: "empty", title: "Empty chat", messages: [], createdAt: 1, updatedAt: 1 };
+    snapshot = {
+      ...chatStore.getSnapshot(), sessions: [session], currentSessionId: session.id,
+      activeSessions: [], sessionStatusMap: {}, pendingDeleteRequest: null, pendingClearRequest: null,
+    };
+    vi.spyOn(chatStore, "getSnapshot").mockImplementation(() => snapshot);
+    vi.spyOn(chatStore, "clearDeleteRequest").mockImplementation(() => {
+      snapshot = { ...snapshot, pendingDeleteRequest: null };
+    });
+    window.matchMedia = vi.fn().mockReturnValue({
+      matches: false, addEventListener() {}, removeEventListener() {},
+    });
+    container = document.createElement("div");
+    document.body.appendChild(container);
+    root = createRoot(container);
+  });
+
+  afterEach(() => {
+    act(() => root.unmount());
+    container.remove();
+    resetServerTurns();
+    vi.restoreAllMocks();
+  });
+
+  async function mount() {
+    await act(async () => root.render(h(ChatSurface, { onError })));
+  }
+
+  async function close(shiftKey = false) {
+    await act(async () => {
+      container.querySelector(".pl-tabbar__close")!.dispatchEvent(
+        new MouseEvent("click", { bubbles: true, shiftKey }),
+      );
+    });
+  }
+
+  function expectDialog(title = "Delete this chat?") {
+    expect(document.body.textContent).toContain(title);
+    expect(retireChatSession).not.toHaveBeenCalled();
+  }
+
+  it.each([false, true])("closes empty history without a dialog (ephemeral=%s)", async (ephemeral) => {
+    if (ephemeral) session.messages = [{ id: "notice", role: "assistant", content: "notice", ephemeral }];
+    await mount();
+    await close();
+    expect(retireChatSession).toHaveBeenCalledWith(session.id, NO_MEMORY_CHANGE);
+    expect(document.body.textContent).not.toContain("Delete this chat?");
+  });
+
+  it("confirms a conversation containing a message", async () => {
+    session.messages = [{ id: "user", role: "user", content: "hello" }];
+    await mount();
+    await close();
+    expectDialog();
+    expect(closeHarness.refetch).not.toHaveBeenCalled();
+  });
+
+  it("confirms an empty tab's active goal after refreshing ownership", async () => {
+    await mount();
+    closeHarness.goals = [{ session_id: session.id, status: "active", condition: "Finish work" }];
+    await close();
+    expectDialog("Close this goal tab?");
+  });
+
+  it("keeps the tab when a failed refetch retains stale data", async () => {
+    closeHarness.refetch.mockResolvedValue({ error: new Error("offline"), data: { goals: [] } });
+    await mount();
+    await close();
+    expect(retireChatSession).not.toHaveBeenCalled();
+    expect(onError).toHaveBeenCalledWith(
+      "Couldn't verify whether this chat owns an active goal. The tab was kept; try again.",
+    );
+  });
+
+  it.each(["foreground", "server"])("confirms an empty tab with a %s turn", async (source) => {
+    if (source === "foreground") snapshot.sessionStatusMap[session.id] = "streaming" as SessionStatus;
+    else noteTurnStarted(session.id, "working");
+    await mount();
+    await close();
+    expectDialog();
+  });
+
+  it("routes the context menu Close through the empty-chat shortcut", async () => {
+    await mount();
+    await act(async () => {
+      container.querySelector(".pl-tabbar__tab")!.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true }));
+    });
+    const context = vi.mocked(openContextMenu).mock.calls[0][2] as { onClose: () => void };
+    await act(async () => context.onClose());
+    expect(retireChatSession).toHaveBeenCalledWith(session.id, NO_MEMORY_CHANGE);
+  });
+
+  it("routes store delete requests through the empty-chat shortcut", async () => {
+    snapshot.pendingDeleteRequest = session.id;
+    await mount();
+    expect(chatStore.clearDeleteRequest).toHaveBeenCalled();
+    expect(retireChatSession).toHaveBeenCalledWith(session.id, NO_MEMORY_CHANGE);
+  });
+
+  it("preserves Shift+click quick-delete for non-empty chats", async () => {
+    session.messages = [{ id: "user", role: "user", content: "hello" }];
+    await mount();
+    await close(true);
+    expect(retireChatSession).toHaveBeenCalledWith(session.id, NO_MEMORY_CHANGE);
+  });
+
+  it.each(["removed", "message", "turn"])("rechecks the tab after awaiting ownership: %s", async (change) => {
+    let resolve!: (value: unknown) => void;
+    closeHarness.refetch.mockReturnValue(new Promise((done) => { resolve = done; }));
+    await mount();
+    await close();
+    if (change === "removed") snapshot.sessions = [];
+    else if (change === "message") session.messages = [{ id: "user", role: "user", content: "hello" }];
+    else snapshot.sessionStatusMap[session.id] = "streaming";
+    await act(async () => resolve({ error: null, data: { goals: [] } }));
+    expect(retireChatSession).not.toHaveBeenCalled();
+    if (change !== "removed") expectDialog();
   });
 });
