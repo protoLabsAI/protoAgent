@@ -147,6 +147,11 @@ test("an incognito chat has no 'Save a summary' option and deletes with harvest=
     .locator(".pl-tabbar__tab")
     .filter({ has: page.locator(".session-incognito-icon") });
   await expect(incognitoTab).toHaveCount(1);
+  // Only non-empty chats need the dialog; the previous tab's composer stays mounted.
+  const composer = page.getByPlaceholder(/Message protoAgent/i).filter({ visible: true });
+  await composer.fill("incognito conversation");
+  await composer.press("Enter");
+  await expect(page.locator(".pl-message--user").filter({ hasText: "incognito conversation" })).toBeVisible();
 
   await incognitoTab.locator(".pl-tabbar__close").click();
   const dialog = page.getByRole("dialog", { name: "Delete this chat?" });
@@ -283,4 +288,21 @@ test("with 'Save summaries when closing tabs in bulk' on, Close others deletes w
     expect(url.searchParams.get("harvest")).toBe("true");
     expect(url.searchParams.get("forget")).not.toBe("true");
   }
+});
+
+test("closing a fresh empty tab deletes it on the server without confirmation or memory changes", async ({ page }) => {
+  await page.goto("/app/", { waitUntil: "load" });
+  await seedCurrentChat(page);
+  await page.locator(".pl-tabbar__add:visible").click();
+  const tabs = page.locator(".pl-tabbar__tab");
+  await expect(tabs).toHaveCount(2);
+  const deleted = page.waitForRequest(
+    (req) => req.method() === "DELETE" && /\/api\/chat\/sessions\/[^/?]+\?/.test(req.url()),
+  );
+  await tabs.last().locator(".pl-tabbar__close").click();
+  const url = new URL((await deleted).url());
+  expect(url.searchParams.get("harvest")).toBe("false");
+  expect(url.searchParams.get("forget")).not.toBe("true");
+  await expect(tabs).toHaveCount(1);
+  await expect(page.getByRole("dialog", { name: "Delete this chat?" })).toHaveCount(0);
 });

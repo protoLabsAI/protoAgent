@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 import {
+  isEmptyChatSession,
   requiresGoalCloseConfirmation,
   resolveGoalCloseDisposition,
   sessionsToClose,
@@ -116,5 +117,21 @@ describe("resolveGoalCloseDisposition", () => {
         throw new Error("offline");
       }),
     ).resolves.toBe("blocked");
+  });
+});
+
+describe("isEmptyChatSession", () => {
+  it("accepts empty and ephemeral-only histories", () => {
+    expect(isEmptyChatSession({ messages: [] })).toBe(true);
+    expect(isEmptyChatSession({ messages: [
+      { id: "notice", role: "assistant", content: "notice", ephemeral: true },
+    ] })).toBe(true);
+  });
+
+  it("rejects any persisted message, including blank content", () => {
+    expect(isEmptyChatSession({ messages: [
+      { id: "message", role: "user", content: "" },
+      { id: "notice", role: "assistant", content: "notice", ephemeral: true },
+    ] })).toBe(false);
   });
 });
