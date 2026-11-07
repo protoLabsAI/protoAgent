@@ -21,8 +21,10 @@ ledger through the hub, so it reaches local and remote members alike.
 **Run it so it can be auto-approved.** An operator can list `protoagent fleet friction`
 in `filesystem.run_auto_approve`, so a triage pass runs without approval prompts. That
 allowlist refuses any command containing shell metacharacters. So run the command bare:
-no `| head`, no `2>&1`, no redirects. And write issue refs in `--reason` without `#`
-(`protoAgent 4321`, not `#4321`). One stray character turns an auto-approved command
+no `| head`, no `2>&1`, no redirects, one command per call. Keep `--reason` to plain
+words, commas, periods and dashes. It must have no `#`, `;`, `&`, `(`, `)`, `$`, `!`, `*`, `?`
+or `~`: write `model-behavior trace, filed as protoAgent 4321`, not
+`model-behavior trace; #4321`. One stray character turns an auto-approved command
 into an approval prompt the operator has to answer.
 
 ## 1. Pull everything
