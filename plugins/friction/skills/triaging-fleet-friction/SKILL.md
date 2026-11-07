@@ -18,12 +18,31 @@ wrong.** This skill is the pass that reads the map.
 It needs a running hub and a shell. `protoagent fleet friction` reads each member's
 ledger through the hub, so it reaches local and remote members alike.
 
+**Run it so it can be auto-approved.** An operator can list `protoagent fleet friction`
+in `filesystem.run_auto_approve`, so a triage pass runs without approval prompts. That
+entry covers **resolve too**, including `--all-agents`. An operator who wants to approve
+every change should list the read form `protoagent fleet friction --json` instead, which
+leaves `resolve` gated. Auto-approval only applies under the POSIX `sh` runner;
+cmd.exe and PowerShell always ask. The allowlist refuses any command containing shell
+metacharacters. So run the command bare:
+no `| head`, no `2>&1`, no redirects, one command per call. Keep `--reason` to plain
+words, commas, periods and dashes. It must have no `#`, `;`, `&`, `(`, `)`, `$`, `!`, `*`, `?`
+or `~`: write `model-behavior trace, filed as protoAgent 4321`, not
+`model-behavior trace; #4321`. One stray character turns an auto-approved command
+into an approval prompt the operator has to answer.
+
 ## 1. Pull everything
 
+Open friction on every member, then harness friction only, with detail:
+
 ```bash
-protoagent fleet friction --json --since 14d            # open friction, every member
-protoagent fleet friction --json --kind harness -v      # harness only, with detail
+protoagent fleet friction --json --since 14d
+protoagent fleet friction --json --kind harness -v
 ```
+
+The shell tool caps output at about 50,000 characters. With a large fleet, narrow each
+read with `--agent NAME`, `--kind`, `--severity major` or a shorter `--since` instead of
+piping it. Reading one agent at a time covers everything.
 
 The JSON has `results` (one row per agent, each with `items`), `shared` (signals more
 than one agent hit), and `skipped` (stopped or unreachable members). Read `skipped`
@@ -90,16 +109,24 @@ Resolving tells every agent's `<working_state>` to stop reporting the item. Do i
 when the fix has **shipped** (released, not just merged — `git tag --contains`), or the
 signal was judged noise. Name the agents; there is no default scope:
 
+In order: resolve on named agents, resolve on every agent that has it, undo, and
+several ids in one call:
+
 ```bash
-protoagent fleet friction resolve 3f9a21c0 --agent alpha --agent beta --reason "fixed in #4321, v0.186.0"
-protoagent fleet friction resolve 3f9a21c0 --all-agents --reason "…"   # every agent that has it
-protoagent fleet friction resolve 3f9a21c0 --agent alpha --reopen      # undo
+protoagent fleet friction resolve 3f9a21c0 --agent alpha --agent beta --reason "fixed in protoAgent 4321, v0.186.0"
+protoagent fleet friction resolve 3f9a21c0 --all-agents --reason "fixed in protoAgent 4321"
+protoagent fleet friction resolve 3f9a21c0 --agent alpha --reopen
+protoagent fleet friction resolve 3f9a21c0 71be09d4 --agent alpha --reason "noise"
 ```
 
 Nothing is deleted — resolving stamps `resolved_at` and the reason, and reopening clears
 it. Always give a `--reason` that names the PR or release, so the next reader can audit it.
 
-Resolve **one id at a time** from the approved plan. A bulk sweep whose scope you cannot
+`--agent` takes the workspace name (`protoEngineer`), the display name (`projectManager`)
+or the full id (`protoEngineer-ba4c`). Several ids can share one call when they share the
+same agents and reason; each one is still named.
+
+Resolve **only ids you listed** from the approved plan. A bulk sweep whose scope you cannot
 list is how you resolve six signals meaning to resolve one.
 
 ## Report
