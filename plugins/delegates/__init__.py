@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import functools
+import hashlib
 import logging
 import os
 from typing import Annotated, Any
@@ -31,6 +32,95 @@ from .registry import DelegateRegistry
 log = logging.getLogger("protoagent.plugins.delegates")
 
 
+# In-flight background-delegation dedup (protoAgent#4832). Maps a delegation's dedupe
+# key -> the id of the background job that owns it. Liveness is NOT tracked here: it is
+# read from the background-job store (the authoritative registry) in
+# ``_live_background_job``, so this is an index, not a parallel liveness store. The key is
+# freed when the job settles — promptly in ``_work``'s ``finally`` and lazily whenever the
+# store reports the job non-running — so an identical re-send is refused only while the
+# first run is actually running. The managed-git ``item_id`` claim is a separate, older
+# dedup inside ``registry.dispatch`` and is left untouched.
+_INFLIGHT_DELEGATIONS: dict[str, str] = {}
+
+
+def _background_dedupe_key(target: str, query: str) -> str:
+    """Stable identity for a background delegation: the target plus a sha256 of the query
+    with whitespace collapsed and letter case folded, so a re-send that differs only in
+    spacing or case still hashes to the same key — that is exactly the duplicate that
+    produced conflicting side effects in friction 4512aeca."""
+    normalized = " ".join(str(query).split()).casefold()
+    digest = hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+    return f"{target}\x00{digest}"
+
+
+def _live_background_job(mgr, key: str):
+    """The still-``running`` background job that owns ``key``, read from the background-job
+    store (the authoritative registry), or ``None``.
+
+    A finished / failed / stopped / pruned / unknown job frees the key and returns
+    ``None``. Falls OPEN (no dedup, key freed) when the manager exposes no store or the
+    store can't be read — a send is never refused on a signal we cannot verify.
+    """
+    job_id = _INFLIGHT_DELEGATIONS.get(key)
+    if not job_id:
+        return None
+    store = getattr(mgr, "store", None)
+    if store is None:
+        _INFLIGHT_DELEGATIONS.pop(key, None)
+        return None
+    try:
+        job = store.get(job_id)
+    except Exception:  # noqa: BLE001 — an unreadable store must never block a send
+        _INFLIGHT_DELEGATIONS.pop(key, None)
+        return None
+    if job is None or getattr(job, "status", None) != "running":
+        _INFLIGHT_DELEGATIONS.pop(key, None)
+        return None
+    return job
+
+
+def _release_inflight_delegation(key: str, job_id: str | None) -> None:
+    """Free ``key`` once its job settles, but only if it still points at THIS job — a
+    later, distinct job that reclaimed the key (same target + query) must not be cleared
+    by the earlier job's teardown."""
+    if job_id and _INFLIGHT_DELEGATIONS.get(key) == job_id:
+        _INFLIGHT_DELEGATIONS.pop(key, None)
+
+
+def _inflight_age_seconds(job) -> int | None:
+    """How long the in-flight job has been running, from its ``created_at`` stamp, or
+    ``None`` if it can't be read — the refusal then just omits the age."""
+    created = getattr(job, "created_at", None)
+    if not created:
+        return None
+    from datetime import UTC, datetime
+
+    try:
+        started = datetime.fromisoformat(str(created))
+    except (TypeError, ValueError):
+        return None
+    try:
+        return max(0, int((datetime.now(UTC) - started).total_seconds()))
+    except (TypeError, ValueError):
+        return None
+
+
+def _duplicate_delegation_refusal(target: str, job) -> str:
+    """The refusal returned for a background re-send that duplicates a still-running job.
+    Names the running job id, its target and its age so the agent can find it, and points
+    at ``force=true`` as the deliberate override."""
+    job_id = getattr(job, "id", "") or "?"
+    age = _inflight_age_seconds(job)
+    age_str = f", running for {age}s" if age is not None else ""
+    return (
+        f"Refused: a background delegation to {target!r} with this same query is already "
+        f"in flight (job `{job_id}`{age_str}). Re-sending it would run the work twice and "
+        "duplicate its side effects (posts, queue writes, brand-kit/state updates). Don't "
+        "re-delegate — the running job's reply comes back to you automatically on a later "
+        "turn. If you truly need to send it again anyway, pass force=true."
+    )
+
+
 def _build_delegate_to(registry: DelegateRegistry):
     listing = registry.listing()
 
@@ -40,6 +130,7 @@ def _build_delegate_to(registry: DelegateRegistry):
         query: str,
         summary: str = "",
         background: bool = False,
+        force: bool = False,
         item_id: str = "",
         resume_task_id: str = "",
         timeout: int = 0,
@@ -80,6 +171,10 @@ def _build_delegate_to(registry: DelegateRegistry):
                 instead of the full query, which stays one click away. Always set it.
             background: run the delegation detached and get the reply back on
                 completion, instead of waiting inline (default False).
+            force: send a background delegation even when an identical one (same target,
+                same query) is still running (default False). A background re-send is
+                refused by default so a delegate's side effects can't be applied twice;
+                set this only when you deliberately want a second concurrent run.
             fresh_session: ACP session policy for this dispatch. Defaults to fresh for
                 background jobs and reuse for foreground calls. False continues the
                 current conversation. Explicit task resumes always keep their task.
@@ -161,6 +256,7 @@ def _build_delegate_to(registry: DelegateRegistry):
                 summary=summary,
                 project=scope,
                 fresh_session=fresh_session,
+                force=force,
             )
         from graph.delegate_progress import progress_sink
 
@@ -479,12 +575,20 @@ async def _spawn_background_delegation(
     summary: str = "",
     project=None,
     fresh_session: bool | None = None,
+    force: bool = False,
 ) -> str:
     """Run a delegation as a detached background job (ADR 0050): return a handle now and
     drain the delegate's reply back into the spawning session on completion — the same
     durable store + concurrency cap + drain-on-next-turn notification that
     ``task(run_in_background=True)`` uses, so a slow delegate (a coding agent building a
     PR) never holds the caller's turn open.
+
+    Refuses an in-flight DUPLICATE (protoAgent#4832): a second background delegation with
+    the same target and the same (whitespace-/case-normalised) query, while the first is
+    still running, is refused rather than run twice — two concurrent runs of the same ask
+    apply conflicting side effects. ``force=True`` overrides it; a managed-git ``item_id``
+    job keeps its own older claim-based dedup (``registry.dispatch``) and is not touched
+    here; a resume (``resume_task_id``) is a continuation, not a new send, so it is exempt.
 
     Degrades gracefully: an unknown target fails fast (no orphan job), and if no
     ``BackgroundManager`` is wired (a lean/CLI/test context) it falls back to a plain
@@ -508,6 +612,19 @@ async def _spawn_background_delegation(
             target, query, item_id=item_id or None, resume_task_id=resume_task_id or None, timeout=timeout, **extra
         )
 
+    # In-flight duplicate guard (protoAgent#4832). A managed-git coding job keeps its own
+    # claim-based dedup in ``registry.dispatch`` (so ``item_id`` is exempt here), and a
+    # resume is a continuation rather than a fresh send — both bypass this. Everything else
+    # gets one key per (target, normalised query); while a job holding that key is still
+    # running we refuse the re-send unless ``force`` says otherwise.
+    dedupe_key: str | None = None
+    if not resume_task_id and not item_id:
+        dedupe_key = _background_dedupe_key(target, query)
+        if not force:
+            live = _live_background_job(mgr, dedupe_key)
+            if live is not None:
+                return _duplicate_delegation_refusal(target, live)
+
     try:
         from tools.session import _session_id_from
 
@@ -517,6 +634,10 @@ async def _spawn_background_delegation(
     except Exception:  # noqa: BLE001 — best-effort; job still runs, drain is degraded
         session = ""
 
+    # Filled with this job's id right after spawn so ``_work``'s teardown frees exactly the
+    # key THIS job claimed (and never one a later same-key job reclaimed).
+    inflight_owner: dict[str, str] = {}
+
     async def _work() -> str:
         # This coroutine runs in a COPY of the tool body's context (asyncio.create_task),
         # LangChain run context and all — so without saying otherwise it could still
@@ -525,15 +646,23 @@ async def _spawn_background_delegation(
         # the spawning turn's spend; mark it so the billing is skipped either way rather
         # than decided by the peer's latency.
         mark_delegation_detached()
-        # item_id rides into the dispatch itself, so the managed-git claim/dedup
-        # applies identically to background and foreground fan-out (one registry,
-        # one event loop). timeout rides down the same way so a per-call override
-        # holds for a detached long-running coding job too. The resolved project scope is
-        # captured HERE, at spawn — the job runs in the project it was started for even if
-        # the registry changes before it finishes.
-        return await registry.dispatch(
-            target, query, item_id=item_id or None, resume_task_id=resume_task_id or None, timeout=timeout, **extra
-        )
+        try:
+            # item_id rides into the dispatch itself, so the managed-git claim/dedup
+            # applies identically to background and foreground fan-out (one registry,
+            # one event loop). timeout rides down the same way so a per-call override
+            # holds for a detached long-running coding job too. The resolved project scope is
+            # captured HERE, at spawn — the job runs in the project it was started for even if
+            # the registry changes before it finishes.
+            return await registry.dispatch(
+                target, query, item_id=item_id or None, resume_task_id=resume_task_id or None, timeout=timeout, **extra
+            )
+        finally:
+            # Finished, failed or stopped (a cancel surfaces as CancelledError through here)
+            # ⇒ free the in-flight key promptly so an identical re-send is accepted again.
+            # The dedup check still reads liveness authoritatively from the background store,
+            # so this is the fast path, not the source of truth.
+            if dedupe_key is not None:
+                _release_inflight_delegation(dedupe_key, inflight_owner.get("id"))
 
     # The job's title everywhere it's listed (the Background panel, the console's delegation
     # row): the agent's one-line summary when it wrote one, else the query's first sentence —
@@ -549,6 +678,11 @@ async def _spawn_background_delegation(
         work=_work,
         result_author=target,
     )
+    # Claim the key for this job now that we have its id. No await separates ``spawn_work``
+    # returning from here, so ``_work`` (scheduled, not yet run) cannot have cleared it first.
+    if dedupe_key is not None:
+        inflight_owner["id"] = job_id
+        _INFLIGHT_DELEGATIONS[dedupe_key] = job_id
     return (
         f"Started a background delegation to {target!r} (job `{job_id}`). It runs detached — "
         f"its reply comes back to me automatically on a later turn, so I should END my turn "
