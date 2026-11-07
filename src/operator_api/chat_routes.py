@@ -880,7 +880,7 @@ def register_chat_routes(app, ui: str) -> None:
         from graph import conversation_harvest as _harvest
 
         store = STATE.knowledge_store
-        forget_store = _harvest.conversation_forget_store(store, STATE.history_store)
+        forget_store = _harvest.conversation_forget_store(store, STATE.history_store, STATE.memory_store)
         forget = forget and forget_store is not None
         # Resolved only when forgetting: a resolver replay without request metadata is a
         # best-effort call this route otherwise makes exactly where it always did.
