@@ -862,7 +862,7 @@ def register_chat_routes(app, ui: str) -> None:
         checkpoint purge never touch. Exactly two kinds of row: the compaction
         archives (``chat-archive:<session_id>``) and the summaries/facts harvested
         with one of this chat's threads as their ``source``. Not the memories the
-        agent was asked to keep (``memory_ingest``, hot memory), and not rows
+        agent was asked to keep (``memory_save``, hot memory), and not rows
         written before provenance existed (a fact stored with the legacy
         ``source="harvest"`` names no thread). Two phases around retirement (#3957):
         the rows are hidden first and hard-deleted last, so a failed retirement

@@ -162,7 +162,7 @@ def archive_payload(
 
 
 # What "forget what this chat saved" removes by ``source`` — the harvest's summaries
-# and extracted facts. NOT "conversation": memory_ingest writes that type with the
+# and extracted facts. NOT "conversation": memory_save writes that type with the
 # session as its source, and a fork's thread-id resolver may BE the session id.
 # Compaction archives are reached through their namespace instead.
 _FORGET_SOURCE_TYPES = ("harvest", "extracted")
@@ -181,7 +181,7 @@ def forget_conversation_memory(knowledge_store, session_id: str, thread_ids, mem
       TTL sweep can harvest on their own), ``source_type`` harvest/extracted.
 
     Out of reach, by design or by history: memories the agent was asked to keep
-    (``memory_ingest``, hot memory), background-job reports, and facts stored before
+    (``memory_save``, hot memory), background-job reports, and facts stored before
     provenance existed (``source="harvest"``, which names no thread). A fact from
     ANOTHER chat that one of this chat's facts superseded stays superseded.
 

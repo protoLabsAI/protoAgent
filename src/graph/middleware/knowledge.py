@@ -274,7 +274,7 @@ class KnowledgeMiddleware(AgentMiddleware):
         # low-trust hits are only DOWN-WEIGHTED (ranked below higher tiers);
         # 2 drops ingested/web/external content from auto-injection entirely;
         # 3 auto-injects operator-authored rows only. Tool-driven recall
-        # (memory_recall) is never gated — excluded content stays reachable
+        # (memory_search / knowledge_search) is never gated — excluded content stays reachable
         # on demand, with the tier visible in the tool output.
         self._inject_min_trust = max(1, int(inject_min_trust))
         self._skills_index = skills_index
@@ -288,7 +288,7 @@ class KnowledgeMiddleware(AgentMiddleware):
         # Namespace scope for the auto-inject RAG search (ADR 0069 D3a,
         # `knowledge.inject_namespaces`). Empty/None = unfiltered (today's
         # behavior — box-commons sharing keeps working); "" in the list matches
-        # un-namespaced chunks. Tool-driven recall (memory_recall) is NOT
+        # un-namespaced chunks. Tool-driven recall (memory_search / knowledge_search) is NOT
         # scoped by this — it only gates what enters the prompt unasked.
         self._inject_namespaces = list(inject_namespaces or [])
         # Lazily loaded on first before_model call; None = not yet loaded.
