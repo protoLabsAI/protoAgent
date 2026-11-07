@@ -124,13 +124,125 @@ def _jaccard(a: set[str], b: set[str]) -> float:
 
 
 def consolidate_and_store(
+    store,
+    facts: list[str],
+    *,
+    namespace: str | None = None,
+    source: str | None = None,
+) -> dict:
+    """Consolidate extracted ``facts`` into ``store``, deduping near-duplicates and
+    SUPERSEDING revisions (ADR 0069 D9). Returns counts (``added`` / ``skipped`` /
+    ``superseded``). Best-effort: never raises.
+
+    ADR 0125 P2-D3: the session-end extractor now writes to the core ``MemoryStore``
+    (``kind='fact'``, ``provenance='extracted'``, ``pending``) — see
+    :func:`_consolidate_into_memories`. A store exposing ``add_chunk`` is the pre-0125
+    knowledge-chunk backend (plugin hosts, the forget/layered tests) and still gets the
+    legacy chunk path below; nothing in the harvest path reaches it anymore. The dedup +
+    supersede *rules* are identical across both — only the row shape differs.
+    """
+    if hasattr(store, "add_chunk"):
+        return _consolidate_into_chunks(store, facts, namespace=namespace, source=source)
+    return _consolidate_into_memories(store, facts, namespace=namespace, source=source)
+
+
+def _consolidate_into_memories(
+    memory_store,
+    facts: list[str],
+    *,
+    namespace: str | None = None,
+    source: str | None = None,
+) -> dict:
+    """Store ``facts`` as ``MemoryStore`` rows (``kind='fact'``, ``provenance='extracted'``,
+    ``review_state='pending'``), scoped to ``namespace`` (the row's ``scope``) and stamped
+    with the originating session/thread (``source``). Deduping and supersession run over the
+    store's own currently-valid *extracted* fact rows — NOT agent/operator rows, which this
+    phase deliberately never touches (merging those is Phase 3, P3-M).
+
+    The deterministic rule is the same one the chunk path used (ADR 0069 D9): a revision in
+    the token-overlap band ``[_SUPERSEDE_JACCARD, _DEDUP_JACCARD)`` inserts the new row FIRST
+    and then chains the old one via ``superseded_by`` (ADR 0108 D7.3 — supersede, don't
+    delete; a failed insert never invalidates anything, and a landed insert whose supersede
+    did not take leaves BOTH rows valid, logged). The ``[as of]`` date rules carry over
+    verbatim: an incoming fact dated before the one it matches never supersedes it.
+
+    ``source`` is the originating session/thread id (provenance, ADR 0069 D5); with none it
+    falls back to the legacy ``"harvest"`` literal rather than an empty source. A store
+    without ``supersede`` (a minimal stub) degrades to add-only. Never raises."""
+    counts = {"added": 0, "skipped": 0, "superseded": 0}
+    if not facts:
+        return counts
+    src = source or "harvest"
+    try:
+        existing = memory_store.list(kind="fact", provenance="extracted", scope=namespace, limit=500)
+        # (row id, token set, as-of date) per currently-valid extracted fact. list() already
+        # excludes superseded/invalidated/rejected rows, so comparisons run only against live
+        # facts — exactly what the chunk path got from list_chunks' default exclusion.
+        candidates: list[tuple[int, set[str], str | None]] = []
+        for row in existing:
+            as_of, body = _split_as_of(row.content or "")
+            candidates.append((row.id, _tokens(body), as_of))
+    except Exception:  # noqa: BLE001 — minimal stub or read failure ⇒ add-only
+        candidates = []
+
+    supersede = getattr(memory_store, "supersede", None)
+    for fact in facts:
+        new_as_of, body = _split_as_of(fact)
+        ft = _tokens(body)
+        scored = [(_jaccard(ft, toks), i) for i, (_, toks, _) in enumerate(candidates)]
+        best, best_idx = max(scored, default=(0.0, -1))
+        if best >= _DEDUP_JACCARD:
+            _, _, cand_as_of = candidates[best_idx]
+            # Same fact: keep the stored row unless this one carries a NEWER date (or the
+            # stored one has none), in which case fall through and supersede it so the date
+            # stays current.
+            if not _refreshes(new_as_of, cand_as_of):
+                counts["skipped"] += 1
+                continue
+        elif best >= _SUPERSEDE_JACCARD and _predates(new_as_of, candidates[best_idx][2]):
+            # A revision dated BEFORE the fact it revises: harvest order isn't chronological,
+            # so this is the past state of something we already hold a newer state for. Skip
+            # it (never stored as already-superseded history — that is the very insert-then-
+            # invalidate race this ordering exists to avoid).
+            counts["skipped"] += 1
+            continue
+        old_id = candidates[best_idx][0] if best >= _SUPERSEDE_JACCARD else None
+        rid = memory_store.add(
+            fact,
+            kind="fact",
+            provenance="extracted",
+            scope=namespace,
+            source_session=src,
+            thread_id=src,
+        )
+        if rid is None:
+            continue
+        counts["added"] += 1
+        if old_id is not None and callable(supersede):
+            if supersede(old_id, rid):
+                counts["superseded"] += 1
+                del candidates[best_idx]  # no longer valid — drop from comparisons
+            else:
+                log.warning(
+                    "[memory] fact %s landed but its predecessor %s could not be superseded — "
+                    "both stay valid until the next revision",
+                    rid,
+                    old_id,
+                )
+        candidates.append((rid, ft, new_as_of))  # dedup/supersede within this batch too
+    return counts
+
+
+def _consolidate_into_chunks(
     knowledge_store,
     facts: list[str],
     *,
     namespace: str | None = None,
     source: str | None = None,
 ) -> dict:
-    """Store ``facts`` as ``finding_type="fact"``, skipping near-duplicates of
+    """Legacy pre-0125 chunk-backend consolidation (``domain="fact"`` chunks).
+
+    Store ``facts`` as ``finding_type="fact"``, skipping near-duplicates of
     facts already present in the same ``namespace`` and SUPERSEDING revised
     ones (ADR 0069 D9). Returns counts
     (``added`` / ``skipped`` / ``superseded``).
@@ -271,21 +383,21 @@ def _supersede(invalidate, old_id: int, new_id: int) -> bool:
 async def extract_and_store_facts(
     transcript: str,
     *,
-    knowledge_store,
+    memory_store,
     config,
     namespace: str | None = None,
     source: str | None = None,
     extractor=_default_extractor,
     as_of: str | None = None,
 ) -> dict:
-    """Extract durable facts from ``transcript`` and consolidate them into the
-    store. Never raises — fact capture is best-effort and must not block thread
-    retirement.
+    """Extract durable facts from ``transcript`` and consolidate them into the core
+    ``MemoryStore`` (ADR 0125 P2-D3). Never raises — fact capture is best-effort and
+    must not block thread retirement.
 
     ``as_of`` (``YYYY-MM-DD``) is when the conversation happened. Each fact is
     prefixed ``[as of …]`` so one harvested from an old thread reads as what was
     true THEN, not as the current state."""
-    if knowledge_store is None or not transcript.strip():
+    if memory_store is None or not transcript.strip():
         return {"added": 0, "skipped": 0, "superseded": 0}
     try:
         facts = await extractor(transcript, config)
@@ -294,7 +406,7 @@ async def extract_and_store_facts(
         return {"added": 0, "skipped": 0, "superseded": 0}
     if as_of:
         facts = [f"[as of {as_of}] {f}" for f in facts]
-    counts = consolidate_and_store(knowledge_store, facts, namespace=namespace, source=source)
+    counts = consolidate_and_store(memory_store, facts, namespace=namespace, source=source)
     if counts["added"] or counts["skipped"]:
         log.info(
             "[memory] facts: +%d new, %d dup-skipped, %d superseded (ns=%s)",

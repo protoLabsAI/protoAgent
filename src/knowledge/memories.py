@@ -200,7 +200,9 @@ class MemoryStore:
             return MemoryEntry(**dict(row)) if row else None
 
     @staticmethod
-    def _filters(kind=None, delivery=None, review_state=None, include_superseded=False, deliverable=False):
+    def _filters(
+        kind=None, delivery=None, review_state=None, include_superseded=False, deliverable=False, scope=None, provenance=None
+    ):
         # Pending is eligible, identically to chunks' _deliverable_clauses. There
         # is deliberately no domain or legacy_domain delivery predicate here.
         where = [
@@ -211,7 +213,13 @@ class MemoryStore:
         params = [_now_iso()]
         if not include_superseded or deliverable:
             where.append("m.superseded_by IS NULL")
-        for column, value in (("kind", kind), ("delivery", delivery), ("review_state", review_state)):
+        for column, value in (
+            ("kind", kind),
+            ("delivery", delivery),
+            ("review_state", review_state),
+            ("scope", scope),
+            ("provenance", provenance),
+        ):
             if value is not None:
                 where.append(f"m.{column} = ?")
                 params.append(value)
@@ -260,12 +268,26 @@ class MemoryStore:
             return [by_id[id] for id in sorted(scores, key=scores.get, reverse=True)[:k]]
 
     def list(
-        self, *, kind=None, delivery=None, review_state=None, limit: int = 100, include_superseded: bool = False
+        self,
+        *,
+        kind=None,
+        delivery=None,
+        review_state=None,
+        limit: int = 100,
+        include_superseded: bool = False,
+        scope=None,
+        provenance=None,
     ) -> list[MemoryEntry]:
-        """List eligible memories newest first, optionally including superseded rows."""
+        """List eligible memories newest first, optionally including superseded rows.
+
+        ``scope`` / ``provenance`` narrow to one namespace or writer (e.g. the
+        session-end extractor consolidating its own ``provenance='extracted'``
+        facts within a project ``scope``)."""
         if limit <= 0:
             return []
-        where, params = self._filters(kind, delivery, review_state, include_superseded)
+        where, params = self._filters(
+            kind, delivery, review_state, include_superseded, scope=scope, provenance=provenance
+        )
         with closing(self._connect()) as db:
             return [
                 MemoryEntry(**dict(row))
@@ -315,6 +337,23 @@ class MemoryStore:
                 db.execute(
                     "UPDATE memories SET review_state = ?, updated_at = ? WHERE id = ?",
                     (state, _now_iso(), id),
+                ).rowcount
+                > 0
+            )
+
+    def supersede(self, old_id: int, new_id: int) -> bool:
+        """Chain ``old_id`` to its replacement ``new_id`` (ADR 0069 D9 / ADR 0108 D7.3).
+
+        Sets ``superseded_by`` only — ``invalidated_at`` stays NULL — so the row is kept
+        for audit (``inspect`` still shows it, the console labels it ``[superseded]``) but
+        is excluded from delivery and from default ``list``/``search`` by ``_filters``.
+        Never UPDATEs content in place, never DELETEs. Idempotent: an already-superseded or
+        missing row returns False so a caller can tell the chain did not take."""
+        with self._write() as db:
+            return (
+                db.execute(
+                    "UPDATE memories SET superseded_by = ?, updated_at = ? WHERE id = ? AND superseded_by IS NULL",
+                    (new_id, _now_iso(), old_id),
                 ).rowcount
                 > 0
             )

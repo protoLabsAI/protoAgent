@@ -1,33 +1,41 @@
-"""Fact consolidation with ``[as of YYYY-MM-DD]`` leads.
+"""Fact consolidation with ``[as of YYYY-MM-DD]`` leads, over the core MemoryStore (ADR 0125).
 
-Harvested facts are dated to the conversation. The date must not decide whether two
-facts are "the same": the lead adds about five tokens, and before this was measured on
-the body, an undated legacy fact and its dated twin scored 0.44 (below the supersede
-band) and the same fact got stored twice."""
+Harvested facts are dated to the conversation. The date must not decide whether two facts are
+"the same": the lead adds about five tokens, and before this was measured on the body, an
+undated legacy fact and its dated twin scored 0.44 (below the supersede band) and the same
+fact got stored twice. Harvest order is not chronological either (the TTL sweep retires
+threads in DB order; a delete-with-harvest runs any time), so a revision harvested LATER can
+be dated EARLIER than the fact it matches and must not supersede it."""
 
 from __future__ import annotations
+
+from types import SimpleNamespace
 
 from graph.memory_facts import consolidate_and_store
 
 
 class _Store:
+    """A minimal MemoryStore-shaped stub. ``list`` returns the live extracted facts as rows
+    carrying ``.id``/``.content`` (what the memory path reads); ``supersede`` chains the old
+    row and hides it from subsequent ``list`` calls. No ``add_chunk`` → the memory path."""
+
     def __init__(self, rows):
         self.rows = [dict(r) for r in rows]
-        self.invalidated: list[tuple[int, int | None]] = []
+        self.superseded: list[tuple[int, int | None]] = []
 
-    def list_chunks(self, domain=None, namespace=None, limit=500):
-        return [r for r in self.rows if not r.get("_invalid")]
+    def list(self, *, kind=None, provenance=None, scope=None, limit=500, include_superseded=False):
+        return [SimpleNamespace(id=r["id"], content=r["content"]) for r in self.rows if not r.get("_superseded")]
 
-    def add_chunk(self, content, **kw):
+    def add(self, content, **kw):
         rid = 1000 + len(self.rows)
         self.rows.append({"id": rid, "content": content})
         return rid
 
-    def invalidate_chunk(self, chunk_id, superseded_by=None):
+    def supersede(self, old_id, new_id):
         for r in self.rows:
-            if r.get("id") == chunk_id and not r.get("_invalid"):
-                r["_invalid"] = True
-                self.invalidated.append((chunk_id, superseded_by))
+            if r.get("id") == old_id and not r.get("_superseded"):
+                r["_superseded"] = True
+                self.superseded.append((old_id, new_id))
                 return True
         return False
 
@@ -36,7 +44,7 @@ def test_dated_twin_supersedes_an_undated_legacy_fact():
     kb = _Store([{"id": 1, "content": "The user prefers teal."}])
     counts = consolidate_and_store(kb, ["[as of 2026-09-10] The user prefers teal."])
     assert counts == {"added": 1, "skipped": 0, "superseded": 1}
-    assert kb.invalidated == [(1, 1001)]
+    assert kb.superseded == [(1, 1001)]
 
 
 def test_same_fact_same_date_is_skipped():
@@ -49,7 +57,7 @@ def test_older_date_never_replaces_a_newer_one():
     kb = _Store([{"id": 1, "content": "[as of 2026-09-10] The user prefers teal."}])
     counts = consolidate_and_store(kb, ["[as of 2026-08-11] The user prefers teal."])
     assert counts == {"added": 0, "skipped": 1, "superseded": 0}
-    assert kb.invalidated == []
+    assert kb.superseded == []
 
 
 def test_revision_in_the_supersede_band_still_supersedes():
@@ -57,19 +65,10 @@ def test_revision_in_the_supersede_band_still_supersedes():
     new = "[as of 2026-09-13] The user runs Qwen3.8-27B and MiniCPM-V-4.6 as model endpoints."
     kb = _Store([{"id": 7, "content": old}])
     counts = consolidate_and_store(kb, [new])
-    assert counts["superseded"] == 1 and kb.invalidated == [(7, 1001)]
-
-
-def test_commons_row_dedups_because_it_cannot_be_invalidated_here():
-    kb = _Store([{"id": 3, "tier": "commons", "content": "The user prefers teal."}])
-    counts = consolidate_and_store(kb, ["[as of 2026-09-10] The user prefers teal."])
-    assert counts == {"added": 0, "skipped": 1, "superseded": 0}
+    assert counts["superseded"] == 1 and kb.superseded == [(7, 1001)]
 
 
 # ── the date rule in the revision band [0.6, 0.85) (#3494 re-review) ───────────────
-# Harvest order is not chronological: the TTL sweep retires threads in DB order and a
-# delete-with-harvest can run any time. So a revision harvested LATER can be dated EARLIER
-# than the fact it matches, and must not invalidate it.
 _NEWER = "[as of 2026-09-10] The user runs Qwen3.8-27B and MiniCPM-V-4.6 as model endpoints."
 _OLDER = "[as of 2026-08-11] The user runs DeepSeek-V4-Flash and MiniCPM-V-4.6 as model endpoints."
 
@@ -85,19 +84,19 @@ def test_an_older_revision_harvested_later_does_not_supersede_the_newer_fact():
     kb = _Store([{"id": 7, "content": _NEWER}])
     counts = consolidate_and_store(kb, [_OLDER])
     assert counts == {"added": 0, "skipped": 1, "superseded": 0}
-    assert kb.invalidated == []
-    assert [r["content"] for r in kb.list_chunks()] == [_NEWER]
+    assert kb.superseded == []
+    assert [r.content for r in kb.list()] == [_NEWER]
 
 
 def test_an_older_revision_does_not_supersede_the_newer_fact_in_the_real_store(tmp_path):
-    from knowledge.store import KnowledgeStore
+    from knowledge.memories import MemoryStore
 
-    ks = KnowledgeStore(tmp_path / "k.db")
+    ms = MemoryStore(tmp_path / "agent.db")
     # Thread B (last active 09-10) is retired first, e.g. deleted from the console with
     # harvest; thread A (last active 08-11) is retired later by the TTL sweep.
-    consolidate_and_store(ks, [_NEWER], source="thread-B")
-    counts = consolidate_and_store(ks, [_OLDER], source="thread-A")
-    valid = [c.content for c in ks.list_chunks(domain="fact", limit=50)]
+    consolidate_and_store(ms, [_NEWER], source="thread-B")
+    counts = consolidate_and_store(ms, [_OLDER], source="thread-A")
+    valid = [r.content for r in ms.list(kind="fact", provenance="extracted", limit=50)]
     assert counts == {"added": 0, "skipped": 1, "superseded": 0}
     assert valid == [_NEWER]
 
@@ -106,16 +105,16 @@ def test_a_same_date_revision_still_supersedes():
     same_day = "[as of 2026-09-10] The user runs DeepSeek-V4-Flash and MiniCPM-V-4.6 as model endpoints."
     kb = _Store([{"id": 7, "content": _NEWER}])
     counts = consolidate_and_store(kb, [same_day])
-    assert counts["superseded"] == 1 and kb.invalidated == [(7, 1001)]
+    assert counts["superseded"] == 1 and kb.superseded == [(7, 1001)]
 
 
 def test_a_newer_revision_supersedes_in_the_real_store(tmp_path):
-    from knowledge.store import KnowledgeStore
+    from knowledge.memories import MemoryStore
 
-    ks = KnowledgeStore(tmp_path / "k.db")
-    consolidate_and_store(ks, [_OLDER], source="thread-A")
-    counts = consolidate_and_store(ks, [_NEWER], source="thread-B")
-    valid = [c.content for c in ks.list_chunks(domain="fact", limit=50)]
+    ms = MemoryStore(tmp_path / "agent.db")
+    consolidate_and_store(ms, [_OLDER], source="thread-A")
+    counts = consolidate_and_store(ms, [_NEWER], source="thread-B")
+    valid = [r.content for r in ms.list(kind="fact", provenance="extracted", limit=50)]
     assert counts == {"added": 1, "skipped": 0, "superseded": 1}
     assert valid == [_NEWER]
 
@@ -124,11 +123,11 @@ def test_an_undated_revision_still_supersedes_a_dated_fact():
     undated = "The user runs DeepSeek-V4-Flash and MiniCPM-V-4.6 as model endpoints."
     kb = _Store([{"id": 7, "content": _NEWER}])
     counts = consolidate_and_store(kb, [undated])
-    assert counts["superseded"] == 1 and kb.invalidated == [(7, 1001)]
+    assert counts["superseded"] == 1 and kb.superseded == [(7, 1001)]
 
 
 def test_a_dated_revision_still_supersedes_an_undated_fact():
     undated = "The user runs Qwen3.8-27B and MiniCPM-V-4.6 as model endpoints."
     kb = _Store([{"id": 7, "content": undated}])
     counts = consolidate_and_store(kb, [_OLDER])
-    assert counts["superseded"] == 1 and kb.invalidated == [(7, 1001)]
+    assert counts["superseded"] == 1 and kb.superseded == [(7, 1001)]
