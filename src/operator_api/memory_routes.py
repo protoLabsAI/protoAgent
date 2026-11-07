@@ -43,7 +43,10 @@ import asyncio
 import json
 import logging
 import os
+from contextlib import closing
+from dataclasses import asdict
 
+from fastapi import Query
 from fastapi.responses import JSONResponse
 
 from operator_api.knowledge_routes import _knowledge_row
@@ -54,6 +57,68 @@ log = logging.getLogger("protoagent.server")
 # get_hot_memory injects the 100 newest hot chunks; the inspector lists a wider
 # window so the operator can also curate the backlog that no longer injects.
 _HOT_LIST_LIMIT = 500
+
+# Mirrors the CHECK constraint on memories.kind.
+_MEMORY_KINDS = frozenset({"profile", "standing", "fact", "decision"})
+
+
+def _review_memories(store, kind, review_state, provenance, legacy_domain, include_superseded, limit, offset):
+    # Audit listing deliberately retains rejected, expired and invalidated rows.
+    where, params = [], []
+    for column, value in (("kind", kind), ("review_state", review_state),
+                          ("provenance", provenance), ("legacy_domain", legacy_domain)):
+        if value:
+            where.append(f"{column} = ?")
+            params.append(value)
+    if not include_superseded:
+        where.append("superseded_by IS NULL")
+    predicate = " AND ".join(where) or "1"
+    with closing(store._connect()) as db:
+        db.execute("BEGIN")  # Count and page describe the same snapshot.
+        total = db.execute(f"SELECT COUNT(*) FROM memories WHERE {predicate}", params).fetchone()[0]
+        rows = db.execute(
+            f"SELECT * FROM memories WHERE {predicate} ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?",
+            [*params, limit, offset],
+        ).fetchall()
+    return {"enabled": True, "memories": [dict(row) for row in rows], "total": total}
+
+
+def _profile_candidates(store, shared):
+    from knowledge.memories import _normalize_subject
+
+    where, params = store._filters(kind="profile")
+    with closing(store._connect()) as db:
+        rows = db.execute(
+            f"SELECT m.* FROM memories m WHERE {where} ORDER BY created_at DESC, id DESC", params
+        ).fetchall()
+    seen, candidates = set(), []
+    for row in rows:
+        subject = _normalize_subject(row["subject"])
+        # An absent subject is not a shared-profile identity key.
+        if not subject or subject in seen:
+            continue
+        seen.add(subject)
+        candidates.append({
+            **dict(row),
+            "already_shared": any(e.kind == row["kind"] for e in shared.live_on_subject(row["subject"])),
+        })
+    return {"enabled": True, "candidates": candidates}
+
+
+def _promote_memory(shared, entry):
+    from knowledge.memories import LiveSubjectConflict
+
+    try:
+        mid = shared.add(
+            entry.content, kind=entry.kind, subject=entry.subject, heading=entry.heading,
+            delivery=entry.delivery, expires_at=entry.expires_at,
+            provenance="operator", review_state="confirmed", reject_live_subject=True,
+        )
+    except LiveSubjectConflict as exc:
+        return JSONResponse(
+            {"detail": "a live shared memory already exists", "id": exc.memory_id}, status_code=409
+        )
+    return {"enabled": True, "id": mid}
 
 
 def _session_paths(session_id: str) -> list[str] | None:
@@ -337,6 +402,84 @@ def _memory_stats() -> dict:
 
 def register_memory_routes(app) -> None:
     """Register the ``/api/memory/*`` memory-inspector routes."""
+
+    # --- Operator review pass (ADR 0125 D6/D7) -------------------------------
+
+    @app.get("/api/memory/memories")
+    async def _api_memory_list(
+        kind: str = "", review_state: str = "", provenance: str = "", legacy_domain: str = "",
+        include_superseded: bool = False,
+        limit: int = Query(100, ge=1, le=500), offset: int = Query(0, ge=0),
+    ):
+        store = STATE.memory_store
+        if store is None:
+            return {"enabled": False, "memories": [], "total": 0}
+        return await asyncio.to_thread(
+            _review_memories, store, kind, review_state, provenance, legacy_domain, include_superseded, limit, offset
+        )
+
+    @app.patch("/api/memory/memories/{memory_id}")
+    async def _api_memory_edit(memory_id: int, body: dict | None = None):
+        store = STATE.memory_store
+        if store is None:
+            return {"enabled": False}
+        fields = {k: v for k, v in (body or {}).items() if k in {"content", "heading", "subject", "kind"}}
+        if not fields or any(not isinstance(v, str) for v in fields.values()):
+            return JSONResponse({"detail": "provide content, heading, subject or kind as strings"}, status_code=400)
+        if "kind" in fields and fields["kind"] not in _MEMORY_KINDS:
+            return JSONResponse({"detail": "invalid memory kind"}, status_code=400)
+        if "content" in fields and not fields["content"].strip():
+            return JSONResponse({"detail": "content must not be empty"}, status_code=400)
+        entry = await asyncio.to_thread(store.get, memory_id)
+        if entry is None or not await asyncio.to_thread(store.update, memory_id, **fields):
+            return JSONResponse({"detail": "no memory with that id"}, status_code=404)
+        if entry.review_state != "rejected":
+            await asyncio.to_thread(store.set_review_state, memory_id, "confirmed")
+        updated = await asyncio.to_thread(store.get, memory_id)
+        return {"enabled": True, "memory": asdict(updated) if updated else None}
+
+    @app.get("/api/memory/profile-candidates")
+    async def _api_memory_profile_candidates():
+        store, shared = STATE.memory_store, STATE.shared_profile_store
+        if shared is None:
+            return {"enabled": False}
+        if store is None:
+            return {"enabled": True, "candidates": []}
+        return await asyncio.to_thread(_profile_candidates, store, shared)
+
+    @app.post("/api/memory/memories/{memory_id}/promote")
+    async def _api_memory_promote(memory_id: int):
+        from knowledge.memories import _normalize_subject
+        from knowledge.shared_profile import ALLOWED_KINDS
+        from knowledge.store import _now_iso
+
+        store, shared = STATE.memory_store, STATE.shared_profile_store
+        if store is None or shared is None:
+            return {"enabled": False}
+        entry = await asyncio.to_thread(store.get, memory_id)
+        if entry is None:
+            return JSONResponse({"detail": "no memory with that id"}, status_code=404)
+        if entry.kind not in ALLOWED_KINDS:
+            return JSONResponse({"detail": "only profile and standing memories can be promoted"}, status_code=400)
+        if not _normalize_subject(entry.subject):
+            return JSONResponse({"detail": "a subject is required for promotion"}, status_code=400)
+        if (entry.review_state == "rejected" or entry.superseded_by is not None
+                or entry.invalidated_at is not None
+                or (entry.expires_at is not None and entry.expires_at <= _now_iso())):
+            return JSONResponse({"detail": "only active memories can be promoted"}, status_code=400)
+        return await asyncio.to_thread(_promote_memory, shared, entry)
+
+    @app.delete("/api/memory/memories/{memory_id}")
+    async def _api_memory_delete(memory_id: int):
+        store = STATE.memory_store
+        if store is None:
+            return {"enabled": False, "deleted": False}
+        entry = await asyncio.to_thread(store.get, memory_id)
+        if entry is not None and entry.delivery == "always":
+            return JSONResponse({"detail": "use the hot memory delete route"}, status_code=400)
+        if not await asyncio.to_thread(store.delete, memory_id):
+            return JSONResponse({"detail": "no memory with that id"}, status_code=404)
+        return {"enabled": True, "deleted": True}
 
     # --- Session summaries ---------------------------------------------------
     # The files SessionSummaryMiddleware persists — the source the digest is
