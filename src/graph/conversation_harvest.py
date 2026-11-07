@@ -9,7 +9,13 @@ from langchain_core.messages import AIMessage, HumanMessage
 
 from graph.message_blocks import text_of
 from graph.output_format import extract_output
-from knowledge.store import FORGET_PENDING_PREFIX  # the store owns the marker format
+from knowledge.store import (
+    FORGET_PENDING_PREFIX,
+    FORGET_PREV_SEP,
+    _forget_selection,
+    _history_forget_where,
+    _now_iso,
+)
 
 log = logging.getLogger(__name__)
 
@@ -162,7 +168,7 @@ def archive_payload(
 _FORGET_SOURCE_TYPES = ("harvest", "extracted")
 
 
-def forget_conversation_memory(knowledge_store, session_id: str, thread_ids) -> int:
+def forget_conversation_memory(knowledge_store, session_id: str, thread_ids, memory_store=None) -> int:
     """Delete what a chat already wrote to the knowledge store (#3493, the delete
     dialog's opt-in). Returns the number of rows removed.
 
@@ -179,8 +185,19 @@ def forget_conversation_memory(knowledge_store, session_id: str, thread_ids) -> 
     provenance existed (``source="harvest"``, which names no thread). A fact from
     ANOTHER chat that one of this chat's facts superseded stays superseded.
 
+    With ``memory_store``, core memories whose session/thread provenance matches are
+    included regardless of kind or delivery. Tables in its database share the same
+    forget transactions; the exclusions above describe legacy chunks.
+
     Hard delete, like the chat delete it rides on. Stores without the method (a plugin
     backend) are skipped with a warning rather than failing the delete."""
+    if memory_store is not None and session_id:
+        combined = conversation_forget_store(knowledge_store, None, memory_store)
+        marker = begin_forget(combined, session_id, thread_ids)
+        removed = finish_forget(combined, marker)
+        if knowledge_store is not None and not callable(getattr(knowledge_store, "mark_forget_pending", None)):
+            removed += forget_conversation_memory(knowledge_store, session_id, thread_ids)
+        return removed
     if knowledge_store is None or not session_id:
         return 0
     removed = 0
@@ -286,12 +303,174 @@ class _ForgetStores:
         return pending
 
 
-def conversation_forget_store(knowledge_store, history_store):
+class _MemoryForgetStore:
+    """Forget all conversation tables in the private memory database atomically.
+
+    Other database files still use _ForgetStores' existing recovery protocol.
+    The undo journal preserves NULL versus empty reasons and the original timestamps;
+    marker reasons retain the same on-row format as chunks and history.
+    """
+
+    def __init__(self, memory_store):
+        self.memory_store = memory_store
+
+    @staticmethod
+    def _tables(db):
+        return [
+            name
+            for name in ("chunks", "history", "memories")
+            if db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (name,)).fetchone()
+        ]
+
+    @staticmethod
+    def _held(marker):
+        prefix = marker + FORGET_PREV_SEP
+        return "(invalidation_reason = ? OR substr(invalidation_reason, 1, ?) = ?)", (marker, len(prefix), prefix)
+
+    @staticmethod
+    def _journal(db):
+        db.execute(
+            "CREATE TABLE IF NOT EXISTS memory_forget_prior ("
+            "memory_id INTEGER PRIMARY KEY, marker TEXT NOT NULL, "
+            "invalidated_at TEXT, invalidation_reason TEXT, updated_at TEXT)"
+        )
+
+    def mark_forget_pending(self, marker, **selection):
+        if not marker:
+            return 0
+        cw, cp = _forget_selection(selection["namespace"], selection["sources"], selection["source_types"])
+        hw, hp = _history_forget_where(selection["session_id"], selection["thread_ids"])
+        arms, params = [], []
+        for tid in dict.fromkeys([selection["session_id"], *selection["thread_ids"]]):
+            if not tid:
+                continue
+            for column in ("source_session", "thread_id"):
+                # substr avoids SQL LIKE wildcard interpretation in session/thread ids.
+                prefix = f"{tid}:goal-iter-"
+                arms.append(f"({column} = ? OR substr({column}, 1, ?) = ?)")
+                params.extend([tid, len(prefix), prefix])
+        predicates = {"chunks": (cw, cp), "history": (hw, hp), "memories": (" OR ".join(arms), params)}
+        now = _now_iso()
+        hidden = 0
+        with self.memory_store._write() as db:
+            self._journal(db)
+            for table in self._tables(db):
+                where, args = predicates[table]
+                if not where:
+                    continue
+                eligible = f"({where}) AND substr(COALESCE(invalidation_reason, ''), 1, ?) != ?"
+                eligible_args = [*args, len(FORGET_PENDING_PREFIX), FORGET_PENDING_PREFIX]
+                if table == "memories":
+                    db.execute(
+                        "INSERT INTO memory_forget_prior SELECT id, ?, invalidated_at, invalidation_reason, updated_at "
+                        f"FROM memories WHERE {eligible}",
+                        [marker, *eligible_args],
+                    )
+                stamp = ", updated_at = ?" if table in ("chunks", "memories") else ""
+                stamps = [now] if stamp else []
+                db.execute(
+                    f"UPDATE {table} SET invalidation_reason = ? || COALESCE(invalidation_reason, ''){stamp} "
+                    f"WHERE {eligible} AND invalidated_at IS NOT NULL",
+                    [marker + FORGET_PREV_SEP, *stamps, *eligible_args],
+                )
+                hidden += db.execute(
+                    f"UPDATE {table} SET invalidated_at = ?, invalidation_reason = ?{stamp} "
+                    f"WHERE ({where}) AND invalidated_at IS NULL",
+                    [now, marker, *stamps, *args],
+                ).rowcount
+        return hidden
+
+    def count_forget_pending(self, marker):
+        if not marker:
+            return 0
+        held, args = self._held(marker)
+        with self.memory_store._write() as db:
+            return sum(
+                db.execute(f"SELECT COUNT(*) FROM {table} WHERE {held}", args).fetchone()[0]
+                for table in self._tables(db)
+            )
+
+    def restore_forget_pending(self, marker):
+        if not marker:
+            return 0
+        restored = 0
+        prefix = marker + FORGET_PREV_SEP
+        with self.memory_store._write() as db:
+            self._journal(db)
+            for table in self._tables(db):
+                restored += db.execute(
+                    f"UPDATE {table} SET invalidated_at = NULL, invalidation_reason = NULL WHERE invalidation_reason = ?",
+                    (marker,),
+                ).rowcount
+                db.execute(
+                    f"UPDATE {table} SET invalidation_reason = NULLIF(substr(invalidation_reason, ?), '') "
+                    "WHERE substr(invalidation_reason, 1, ?) = ?",
+                    (len(prefix) + 1, len(prefix), prefix),
+                )
+            db.execute(
+                "UPDATE memories SET (invalidated_at, invalidation_reason, updated_at) = "
+                "(SELECT invalidated_at, invalidation_reason, updated_at FROM memory_forget_prior WHERE memory_id = memories.id) "
+                "WHERE id IN (SELECT memory_id FROM memory_forget_prior WHERE marker = ?)",
+                (marker,),
+            )
+            db.execute("DELETE FROM memory_forget_prior WHERE marker = ?", (marker,))
+        return restored
+
+    def delete_forget_pending(self, marker):
+        if not marker:
+            return 0
+        held, args = self._held(marker)
+        with self.memory_store._write() as db:
+            self._journal(db)
+            # Hybrid knowledge stores keep embeddings in a side table without a
+            # delete trigger. Preserve their cleanup, in this transaction too.
+            if db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='chunk_vectors'").fetchone():
+                db.execute(
+                    f"DELETE FROM chunk_vectors WHERE chunk_id IN (SELECT id FROM chunks WHERE {held})",
+                    args,
+                )
+            removed = sum(db.execute(f"DELETE FROM {table} WHERE {held}", args).rowcount for table in self._tables(db))
+            # MemoryStore's delete trigger maintains memories_fts and memory_vectors.
+            db.execute("DELETE FROM memory_forget_prior WHERE marker = ?", (marker,))
+        return removed
+
+    def forget_pending_markers(self):
+        pending = {}
+        with self.memory_store._write() as db:
+            for table in self._tables(db):
+                stamp = "invalidated_at" if table == "history" else "updated_at"
+                rows = db.execute(
+                    f"SELECT invalidation_reason, MIN({stamp}) FROM {table} "
+                    "WHERE substr(invalidation_reason, 1, ?) = ? GROUP BY invalidation_reason",
+                    (len(FORGET_PENDING_PREFIX), FORGET_PENDING_PREFIX),
+                )
+                for reason, at in rows:
+                    marker = reason.split(FORGET_PREV_SEP, 1)[0]
+                    pending[marker] = min(pending.get(marker, at or ""), at or "")
+        return pending
+
+
+def conversation_forget_store(knowledge_store, history_store, memory_store=None):
     """Resolve the databases that own conversation rows, independent of knowledge scope.
 
     Plugin knowledge backends without two-phase primitives keep their existing
-    post-retirement fallback; private history always participates in two phases.
+    post-retirement fallback; private history and optional memory participate in two
+    phases. Tables sharing the memory database change through one connection.
     """
+    if memory_store is not None:
+        # Group by file before coordinating: private chunks/history/memories must
+        # never commit independently. Separate commons/plugin stores stay separate.
+        remaining_knowledge = knowledge_store
+        remaining_history = history_store
+        if getattr(knowledge_store, "path", None) == memory_store.path:
+            remaining_knowledge = None
+        if getattr(history_store, "path", None) == memory_store.path:
+            remaining_history = None
+        other = conversation_forget_store(remaining_knowledge, remaining_history)
+        private = _MemoryForgetStore(memory_store)
+        if callable(getattr(other, "mark_forget_pending", None)):
+            return _ForgetStores([other, private])
+        return private
     if history_store is None:
         return knowledge_store
     capable = callable(getattr(knowledge_store, "mark_forget_pending", None))
@@ -301,7 +480,7 @@ def conversation_forget_store(knowledge_store, history_store):
     return _ForgetStores(stores)
 
 
-def begin_forget(knowledge_store, session_id: str, thread_ids) -> str | None:
+def begin_forget(knowledge_store, session_id: str, thread_ids, *, memory_store=None) -> str | None:
     """Phase 1 — before the chat is retired: hide exactly the rows
     :func:`forget_conversation_memory` would delete. Returns the marker to finish or
     abort with, or ``None`` when the store can't do it in two phases (a plugin backend):
@@ -311,6 +490,8 @@ def begin_forget(knowledge_store, session_id: str, thread_ids) -> str | None:
     the chat but did not finish) hides nothing new: everything the chat wrote before that
     attempt is already hidden, and what was written since is that attempt's harvest,
     which must survive. Raises on a store error — nothing has been retired yet."""
+    if memory_store is not None:
+        knowledge_store = conversation_forget_store(knowledge_store, None, memory_store)
     mark = getattr(knowledge_store, "mark_forget_pending", None)
     count = getattr(knowledge_store, "count_forget_pending", None)
     if knowledge_store is None or not session_id or not callable(mark) or not callable(count):
@@ -324,9 +505,11 @@ def begin_forget(knowledge_store, session_id: str, thread_ids) -> str | None:
     return marker
 
 
-def abort_forget(knowledge_store, marker: str | None) -> int:
+def abort_forget(knowledge_store, marker: str | None, *, memory_store=None) -> int:
     """The retirement failed: un-hide the rows (nothing is forgotten). Never raises — it
     runs on the failure path and must not mask the retirement's own error."""
+    if memory_store is not None:
+        knowledge_store = conversation_forget_store(knowledge_store, None, memory_store)
     restore = getattr(knowledge_store, "restore_forget_pending", None)
     if not marker or not callable(restore):
         return 0
@@ -337,9 +520,11 @@ def abort_forget(knowledge_store, marker: str | None) -> int:
         return 0
 
 
-def finish_forget(knowledge_store, marker: str) -> int:
+def finish_forget(knowledge_store, marker: str, *, memory_store=None) -> int:
     """Phase 2 — the chat is retired: hard-delete exactly the hidden rows. Raises on a
     store error (the delete fails and can be retried; the rows stay hidden meanwhile)."""
+    if memory_store is not None:
+        knowledge_store = conversation_forget_store(knowledge_store, None, memory_store)
     removed = int(knowledge_store.delete_forget_pending(marker) or 0)
     log.info("[forget] removed %d knowledge row(s) under %s", removed, marker)
     return removed
@@ -401,7 +586,7 @@ def settle_failed_retirement(
     return "kept"
 
 
-def sweep_orphaned_forgets(knowledge_store, *, retirement_incomplete) -> dict[str, int]:
+def sweep_orphaned_forgets(knowledge_store, *, retirement_incomplete, memory_store=None) -> dict[str, int]:
     """Settle forgets a crash (or a failed final delete nobody retried) left behind
     (review #3957 B1): rows hidden under a ``forget_pending:<session>`` marker that no
     running delete owns. For each such marker:
@@ -415,6 +600,8 @@ def sweep_orphaned_forgets(knowledge_store, *, retirement_incomplete) -> dict[st
     A predicate that raises leaves the marker alone for the next sweep. Returns
     ``{"finished": n, "restored": n}`` (markers, not rows). Never raises."""
     out = {"finished": 0, "restored": 0}
+    if memory_store is not None:
+        knowledge_store = conversation_forget_store(knowledge_store, None, memory_store)
     markers = getattr(knowledge_store, "forget_pending_markers", None)
     if not callable(markers):
         return out

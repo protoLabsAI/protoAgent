@@ -64,7 +64,7 @@ async def _sweep_orphaned_forgets() -> None:
 
     from graph.conversation_harvest import conversation_forget_store, sweep_orphaned_forgets
 
-    store = conversation_forget_store(STATE.knowledge_store, STATE.history_store)
+    store = conversation_forget_store(STATE.knowledge_store, STATE.history_store, STATE.memory_store)
     if store is None:
         return
 
