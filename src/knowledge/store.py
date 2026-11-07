@@ -1,9 +1,12 @@
 """KnowledgeStore — sqlite-backed chunk storage with FTS5 search.
 
 The template's default knowledge surface. One ``chunks`` table holds
-every piece of stored content (operator notes via ``memory_ingest``,
+every piece of stored knowledge (ingested collections via ``knowledge_ingest``,
 daily-log entries, conversation findings extracted by
-``conversation_harvest``); the ``domain`` column distinguishes them.
+``conversation_harvest``); the ``domain`` column distinguishes them. Since ADR
+0125 Phase 2 these chunks hold knowledge, not agent memory — durable memory
+lives in the ``memories`` table (``knowledge/memories.py``), written by
+``memory_save``.
 
 Search uses sqlite FTS5 when available (true on virtually all modern
 sqlite builds). When FTS5 is missing — sandboxed sqlite, custom builds
@@ -1186,7 +1189,7 @@ class KnowledgeStore:
         namespace: str | None = None,
     ) -> int | None:
         """Add a finding chunk (``domain='finding'``) so memory_list /
-        memory_recall surface it alongside operator-set chunks. ``namespace``
+        knowledge_search surface it alongside operator-set chunks. ``namespace``
         carries an optional per-project/owner scope (ADR 0021)."""
         return self.add_chunk(
             content,
@@ -1352,7 +1355,7 @@ class KnowledgeStore:
         ``deliverable=True`` (ADR 0108 D6) applies the delivery layer's
         eligibility predicate — rejected (``review_state='rejected'``) and
         expired (``expires_at`` in the past) rows are excluded. The projection
-        passes it; tool-driven recall (``memory_recall``) does not, so excluded
+        passes it; tool-driven recall (``knowledge_search``) does not, so excluded
         rows stay reachable on demand.
 
         Uses FTS5 when available, else a tokenized LIKE fallback. Returns
@@ -1383,7 +1386,7 @@ class KnowledgeStore:
         matches" rather than "still typing". Only the trailing token is widened —
         the earlier ones are words the operator has already finished, and widening
         a complete word only adds noise. Default OFF: recall paths
-        (``memory_recall``, the per-turn injection, the Knowledge browser) search
+        (``knowledge_search``, the per-turn injection, the Knowledge browser) search
         a settled query, where a prefix term would silently broaden it.
         No-op on the LIKE fallback, which is substring-matching already.
         """
@@ -1636,7 +1639,7 @@ class KnowledgeStore:
 
     def delete_by_id(self, chunk_id: int) -> bool:
         """HARD-delete one chunk by id. This is the operator-intent path
-        (``forget_memory``, the inspector's DELETE routes) — an explicit
+        (the inspector's DELETE routes) — an explicit
         delete removes the row outright, history-keeping notwithstanding.
         Automatic supersession uses :meth:`invalidate_chunk` instead
         (ADR 0069 D9). Returns True if a row was removed."""

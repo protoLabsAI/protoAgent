@@ -4,7 +4,7 @@ Every chunk carries a ``source_type`` naming the write path that created it.
 This module ranks those write paths into three deterministic trust tiers, so
 the delivery layer can down-weight (or, via ``knowledge.inject_min_trust``,
 exclude) low-trust content from the per-turn auto-injection while keeping it
-reachable on demand through ``memory_recall`` — with the tier visible either
+reachable on demand through ``knowledge_search`` — with the tier visible either
 way.
 
 The tiers (higher = more trusted):
@@ -13,7 +13,7 @@ The tiers (higher = more trusted):
   surface (knowledge browser add/edit, memory-inspector hot edit). These rows
   are direct operator intent.
 - **2 — agent.** The agent derived it from conversation with the operator:
-  extracted facts, harvest summaries, compaction archives, ``memory_ingest``
+  extracted facts, harvest summaries, compaction archives, ``memory_save``
   notes. Trustworthy in the main, but a model can be induced to write them —
   the MINJA-style poisoning surface.
 - **1 — external.** Ingested third-party content: web pages, YouTube
@@ -48,7 +48,7 @@ TRUST_TIERS: dict[str, int] = {
     # Tier 2 — agent-derived from conversation.
     "extracted": 2,  # graph/memory_facts.py — session-end fact extraction
     "harvest": 2,  # graph/conversation_harvest.py — retired-thread summaries
-    "conversation": 2,  # memory_ingest tool + compaction archives
+    "conversation": 2,  # memory_save tool + compaction archives
     "chat": 2,  # knowledge/store.add_finding default
     "background_report": 2,  # server/a2a.py — background job reports indexed at completion (ADR 0070 D2)
     # Tier 1 — ingested / third-party content (ingestion/engine.py source types).
