@@ -260,9 +260,15 @@ async def test_history_readers_are_wired_and_recall_entries(monkeypatch, tmp_pat
     # Reload publishes the history store after tool construction.
     monkeypatch.setattr(STATE, "history_store", history)
     output = await tools["session_search"].ainvoke({"query": "needle"})
-    for label in ("session summary", "archive", "report", f"entry={archive}"):
+    assert "recall_session(session_id, entry=<id>)" in output.splitlines()[0]
+    for label in ("session summary", "archive", "report", f"entry={archive}", f"entry={report}"):
         assert label in output
     recall = tools["recall_session"]
+    for line in output.splitlines():
+        if line.startswith("- ") and "entry=" in line:
+            entry_id = int(line.rsplit("entry=", 1)[1])
+            full = await recall.ainvoke({"session_id": "chat-prior", "entry": entry_id})
+            assert history.get(entry_id).content in full
     output = await recall.ainvoke({"session_id": "chat-prior"})
     assert "needle file" in output
     assert f"entry={archive}" in output and f"entry={report}" in output
@@ -311,21 +317,55 @@ async def test_recall_without_history_preserves_summary(monkeypatch, tmp_path):
 
 
 async def test_history_readers_redact_and_bound_results(monkeypatch, tmp_path, history):
-    from tools.memory_tools import _build_memory_tools
+    from tools.memory_tools import _RECALL_SESSION_MAX_CHARS, _build_memory_tools
 
     monkeypatch.setenv("MEMORY_PATH", str(tmp_path))
     secret = "api_key=" + "redactionfixture" * 3
-    entry = history.add(
-        f"needle {secret} <scratch_pad>private reasoning</scratch_pad>", session_id="chat-history", kind="archive"
-    )
+    entries = []
     for _ in range(25):
-        history.add("needle", session_id="chat-history", kind="report")
+        entries.append(history.add("needle", session_id="chat-history", kind="report"))
+    entry = history.add(
+        f"needle {secret} <scratch_pad>private reasoning</scratch_pad>\nlatest\t report " + "x" * 10000,
+        session_id="chat-history",
+        kind="archive",
+    )
+    entries.append(entry)
     tools = {item.name: item for item in _build_memory_tools(object(), history_store=history)}
     output = await tools["session_search"].ainvoke({"query": "needle", "limit": 99})
     assert output.count("- chat-history") == 20
     assert secret not in output and "private reasoning" not in output
+    output = await tools["session_search"].ainvoke({"query": "latest"})
+    assert f"entry={entry}" in output
+    assert secret not in output and "private reasoning" not in output
     output = await tools["recall_session"].ainvoke({"session_id": "chat-history", "entry": entry})
     assert secret not in output and "private reasoning" not in output
+    assert len(output) <= _RECALL_SESSION_MAX_CHARS
+    assert output.endswith("… (truncated)")
     output = await tools["recall_session"].ainvoke({"session_id": "chat-history"})
-    assert "entry list truncated" in output
-    assert len(output) < 6100
+    assert "older entries omitted; use session_search" in output
+    assert len(output) <= _RECALL_SESSION_MAX_CHARS
+    assert secret not in output and "private reasoning" not in output and "<scratch_pad>" not in output
+    lines = [line for line in output.splitlines() if line.startswith("- entry=")]
+    assert [int(line.split(" · ")[0].removeprefix("- entry=")) for line in lines] == entries[-20:][::-1]
+    excerpts = [line.split(" · ", 3)[3] for line in lines]
+    assert all(excerpt.startswith("needle") and len(excerpt) <= 120 for excerpt in excerpts)
+    assert "latest report" in excerpts[0]
+    assert len(excerpts[0]) == 120
+
+
+async def test_recall_history_and_large_summary_stay_within_cap(monkeypatch, tmp_path, history):
+    from tools.memory_tools import _RECALL_SESSION_MAX_CHARS, _build_memory_tools
+
+    monkeypatch.setenv("MEMORY_PATH", str(tmp_path))
+    path = _write(tmp_path, "chat-history", "summary " * 100)
+    summary = json.loads(path.read_text())
+    summary["messages"] *= 10
+    path.write_text(json.dumps(summary), encoding="utf-8")
+    entries = [history.add("report " * 100, session_id="chat-history", kind="report") for _ in range(26)]
+    recall = {item.name: item for item in _build_memory_tools(object(), history_store=history)}["recall_session"]
+    output = await recall.ainvoke({"session_id": "chat-history"})
+    assert len(output) <= _RECALL_SESSION_MAX_CHARS
+    assert output.endswith("… (truncated)")
+    assert f"- entry={entries[-1]} ·" in output
+    assert output.count("- entry=") == 20
+    assert "older entries omitted; use session_search" in output
