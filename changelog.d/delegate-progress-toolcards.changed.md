@@ -1,0 +1,1 @@
+- **Delegation progress tool cards (#4800).** A delegation's live tool calls now render as design-system tool cards — a bordered mono row with a status glyph — instead of the bespoke checkmark list.

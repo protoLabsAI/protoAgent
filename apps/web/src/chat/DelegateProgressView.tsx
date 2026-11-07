@@ -1,6 +1,6 @@
 import "./delegate-progress.css";
-import { Spinner } from "@protolabsai/ui/data";
-import { Check, Circle, CircleDot, X } from "lucide-react";
+import { ToolCard, ToolCardList } from "@protolabsai/ui/tool-card";
+import { Check, Circle, CircleDot } from "lucide-react";
 
 import type { DelegateProgress, DelegatePlanEntry, DelegateTool } from "../lib/types";
 import { narrationTail, planProgress, toolLine } from "./delegateProgress";
@@ -25,26 +25,45 @@ function PlanGlyph({ status }: { status: string }) {
   return <Circle size={12} aria-label="pending" className="dp-glyph" />;
 }
 
-function ToolGlyph({ status, live }: { status: string; live: boolean }) {
-  if (status === "failed") return <X size={12} aria-label="failed" className="dp-glyph dp-glyph--failed" />;
-  if (status === "running" && live) return <Spinner size={10} />;
-  return <Check size={12} aria-label="done" className="dp-glyph dp-glyph--done" />;
+/** The DS ToolCard status for a delegate tool — the same mapping the old ToolGlyph used:
+ *  a failure is an error, a tool running RIGHT NOW (live) spins, everything else reads done. */
+function toolStatus(status: string, live: boolean): "running" | "done" | "error" {
+  if (status === "failed") return "error";
+  if (status === "running" && live) return "running";
+  return "done";
 }
 
+/** One tool call as a DS ToolCard: the status glyph + a mono name slot carrying the quiet
+ *  `kind` prefix and the `toolLine`. Body-less (not expandable) and duration-less — a
+ *  DelegateTool has neither. The row's hooks (`dp-kind`, `dp-tool-name`, `dp-tool--current`)
+ *  are preserved so the existing styling and tests keep working. */
 function Tool({ tool, live, current = false }: { tool: DelegateTool; live: boolean; current?: boolean }) {
   const loc = tool.locations?.[0];
   return (
-    <li className={`dp-tool${current ? " dp-tool--current" : ""}`} title={loc?.path}>
-      <ToolGlyph status={tool.status} live={live} />
-      {tool.kind ? <span className="dp-kind">{tool.kind}</span> : null}
-      <span className="dp-tool-name">{toolLine(tool)}</span>
-    </li>
+    <ToolCard
+      status={toolStatus(tool.status, live)}
+      className={`dp-tool${current ? " dp-tool--current" : ""}`}
+      name={
+        <>
+          {tool.kind ? <span className="dp-kind">{tool.kind}</span> : null}
+          <span className="dp-tool-name" title={loc?.path}>
+            {toolLine(tool)}
+          </span>
+        </>
+      }
+    />
   );
 }
 
-/** A reserved, aria-hidden row slot so the live tool list keeps a fixed height. */
+/** A reserved, aria-hidden row slot so the live tool list keeps a fixed height. It wraps a
+ *  hidden collapsed ToolCard so the slot is EXACTLY the height a real row will be — a slot
+ *  filling in never changes the list's height (the #4246 fixed-footprint contract). */
 function EmptyTool() {
-  return <li className="dp-tool dp-tool--empty" aria-hidden="true" />;
+  return (
+    <div className="dp-tool dp-tool--empty" aria-hidden="true">
+      <ToolCard status="done" name={"\u00a0"} />
+    </div>
+  );
 }
 
 /** The capped window of plan entries shown while live: at most PLAN_SHOWN entries centred
@@ -117,21 +136,25 @@ export function DelegateProgressView({
       </div>
       {plan.length ? <Plan entries={plan} windowed={running} /> : null}
       {running ? (
-        <ul className="dp-tools" aria-label="Tool calls">
-          {current ? <Tool tool={current} live current /> : <EmptyTool />}
-          {recent.map((t, i) => (
-            <Tool key={`${t.id ?? t.name}-${i}`} tool={t} live={running} />
-          ))}
-          {Array.from({ length: pad }, (_, i) => (
-            <EmptyTool key={`empty-${i}`} />
-          ))}
-        </ul>
+        <div aria-label="Tool calls">
+          <ToolCardList className="dp-tools">
+            {current ? <Tool tool={current} live current /> : <EmptyTool />}
+            {recent.map((t, i) => (
+              <Tool key={`${t.id ?? t.name}-${i}`} tool={t} live={running} />
+            ))}
+            {Array.from({ length: pad }, (_, i) => (
+              <EmptyTool key={`empty-${i}`} />
+            ))}
+          </ToolCardList>
+        </div>
       ) : recent.length ? (
-        <ul className="dp-tools" aria-label="Tool calls">
-          {recent.map((t, i) => (
-            <Tool key={`${t.id ?? t.name}-${i}`} tool={t} live={running} />
-          ))}
-        </ul>
+        <div aria-label="Tool calls">
+          <ToolCardList className="dp-tools">
+            {recent.map((t, i) => (
+              <Tool key={`${t.id ?? t.name}-${i}`} tool={t} live={running} />
+            ))}
+          </ToolCardList>
+        </div>
       ) : null}
       {running ? <p className="dp-text">{tail}</p> : null}
     </div>

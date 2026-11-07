@@ -244,14 +244,37 @@ describe("DelegateProgressView", () => {
     expect(text(el.querySelector(".dp-head"))).toContain("plan 1/3");
     const current = el.querySelector(".dp-tool--current")!;
     expect(toolText(current)).toBe("edit Edit · src/calc.py:4");
-    expect(current.getAttribute("title")).toBe("/home/me/repo/src/calc.py");
+    // The current tool is a DS ToolCard in its running state; the path hover rides the name.
+    expect(current.classList.contains("pl-toolcard")).toBe(true);
+    expect(current.classList.contains("pl-toolcard--running")).toBe(true);
+    expect(current.querySelector(".dp-tool-name")?.getAttribute("title")).toBe("/home/me/repo/src/calc.py");
     // The current tool is not listed twice (empty reserved slots carry no tool text).
-    expect([...el.querySelectorAll(".dp-tool:not(.dp-tool--empty)")].map(toolText)).toEqual([
-      "edit Edit · src/calc.py:4",
-      "read Read calc.py",
-    ]);
+    const rows = [...el.querySelectorAll(".dp-tool:not(.dp-tool--empty)")];
+    expect(rows.map(toolText)).toEqual(["edit Edit · src/calc.py:4", "read Read calc.py"]);
+    // The settled recent tool reads as a done ToolCard.
+    expect(rows[1].classList.contains("pl-toolcard--done")).toBe(true);
     expect(text(el.querySelector(".dp-text"))).toContain("adding subtract now");
     expect(el.querySelector(".delegate-progress--live")).not.toBeNull();
+  });
+
+  it("maps a delegate tool's status onto the ToolCard: running · done · error", async () => {
+    const p: DelegateProgress = {
+      target: "claude-code",
+      currentTool: { id: "c", name: "Edit", kind: "edit", status: "running" },
+      recentTools: [
+        { id: "d", name: "Read", kind: "read", status: "completed" },
+        { id: "e", name: "pytest", kind: "execute", status: "failed" },
+      ],
+      toolCount: 3,
+      done: false,
+      ok: true,
+    };
+    const el = await mount(createElement(DelegateProgressView, { progress: p, live: true }));
+    expect(el.querySelector(".dp-tool--current")!.classList.contains("pl-toolcard--running")).toBe(true);
+    const rows = [...el.querySelectorAll(".dp-tool:not(.dp-tool--empty)")];
+    const byText = (needle: string) => rows.find((li) => toolText(li).includes(needle))!;
+    expect(byText("Read").classList.contains("pl-toolcard--done")).toBe(true);
+    expect(byText("pytest").classList.contains("pl-toolcard--error")).toBe(true);
   });
 
   it("settled, it reads as the final state: no live tail, no spinner", async () => {
@@ -259,6 +282,8 @@ describe("DelegateProgressView", () => {
     expect(el.querySelector(".delegate-progress--live")).toBeNull();
     expect(el.querySelector(".dp-text")).toBeNull();
     expect(el.querySelector(".dp-tool--current")).toBeNull();
+    // No spinner: a settled view has no running ToolCard (even a tool left mid-run reads done).
+    expect(el.querySelector(".pl-toolcard--running")).toBeNull();
     // Settled stays compact: no reserved empty slots.
     expect(el.querySelector(".dp-tool--empty")).toBeNull();
   });
