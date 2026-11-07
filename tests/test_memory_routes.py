@@ -831,13 +831,15 @@ def test_memory_stats_split_memory_knowledge_history(tmp_path, monkeypatch):
     ms = MemoryStore(db_path=str(tmp_path / "mem.db"))
     hs = _history(tmp_path)
     ms.add("a profile fact", kind="profile", provenance="operator", delivery="always")
+    ms.add("a standing fact", kind="standing", provenance="operator", delivery="always")
     ks.add_chunk("a knowledge chunk", domain="general")
     hs.add("archive one", kind="archive", session_id="chat-1")
     hs.add("summary one", kind="summary", session_id="chat-1")
     hs.add("report one", kind="report", session_id="sched-1", surface="background")
     c = _client(monkeypatch, tmp_path, knowledge=ks, history=hs, memory=ms)
     body = c.get("/api/memory/stats").json()
-    assert body["memory"]["total"] == 1  # the core MemoryStore
+    assert body["memory"]["total"] == 2  # the core MemoryStore, split per kind
+    assert (body["memory"]["profile"], body["memory"]["standing"]) == (1, 1)
     assert body["knowledge"]["total"] == 1  # the knowledge chunk store
     assert "conversation" not in body["knowledge"]  # history migrated OUT of chunks (H1)
     assert body["history"]["total"] == 3

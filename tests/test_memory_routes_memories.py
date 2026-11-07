@@ -229,31 +229,7 @@ def test_memories_review_degrades_without_store(tmp_path, monkeypatch):
     }
 
 
-# ── GET /api/memory/stats (r5) ────────────────────────────────────────────────
-
-
-def test_stats_split_three_ways(tmp_path, monkeypatch):
-    # r5: memory / knowledge / history are three separate blocks with their own counts.
-    from knowledge.history import HistoryStore
-    from knowledge.store import KnowledgeStore
-
-    store = _store(tmp_path)
-    store.add("a profile", kind="profile", provenance="operator", delivery="always")
-    store.add("a standing fact", kind="standing", provenance="operator", delivery="always")
-    ks = KnowledgeStore(str(tmp_path / "kb.db"))
-    ks.add_chunk("a knowledge chunk", domain="general")
-    hs = HistoryStore(db_path=str(tmp_path / "hist.db"))
-    hs.add("an archive", kind="archive", session_id="chat-1")
-    c = _client(monkeypatch, tmp_path, memory=store, knowledge=ks, history=hs)
-
-    body = c.get("/api/memory/stats").json()
-    assert set(body) == {"memory", "knowledge", "history"}
-    assert body["memory"]["total"] == 2
-    assert (body["memory"]["profile"], body["memory"]["standing"]) == (1, 1)
-    assert body["knowledge"]["total"] == 1
-    assert body["history"]["total"] == 1
-
-
-def test_stats_each_store_off_is_an_empty_block(tmp_path, monkeypatch):
-    c = _client(monkeypatch, tmp_path)
-    assert c.get("/api/memory/stats").json() == {"memory": {}, "knowledge": {}, "history": {}}
+# GET /api/memory/stats (r5) — the three-way split (memory / knowledge / history) and the
+# all-stores-off empty blocks live in ONE home, tests/test_memory_routes.py
+# (test_memory_stats_split_memory_knowledge_history + _each_store_off_is_an_empty_block),
+# so the response shape has a single place to update. They are not duplicated here.

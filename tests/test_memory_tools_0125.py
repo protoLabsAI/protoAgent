@@ -376,6 +376,37 @@ def test_core_memories_inspector_crud_review(tmp_path, monkeypatch):
         assert ks.get_chunk(cid)["content"] == "chunk untouched"
 
 
+def test_retrieved_memory_the_hot_panel_refuses_is_curated_via_the_memory_tools(tmp_path, monkeypatch):
+    # The Hot panel is scoped to always-on ON PURPOSE (ADR 0125 P2-D4): it never lists
+    # a retrieved/on_demand core memory and DELETE refuses one (404). That is not an
+    # orphaned row — it stays reachable through the agent's own memory tools
+    # (memory_list / memory_forget over the SAME STATE.memory_store), the surface that
+    # curates the retrieved/on_demand tiers. This proves "curated elsewhere" is real.
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from operator_api.memory_routes import register_memory_routes
+    from runtime.state import STATE
+
+    tools, ks, mem = _tools(tmp_path)
+    rid = mem.add("remember the fallback port is 7871", kind="fact", provenance="agent")
+    assert mem.get(rid).delivery == "retrieved"
+    monkeypatch.setattr(STATE, "knowledge_store", ks)
+    monkeypatch.setattr(STATE, "memory_store", mem)
+    app = FastAPI()
+    register_memory_routes(app)
+    with TestClient(app) as client:
+        # Not in the Hot panel, and its delete is refused — the panel's always-on scope.
+        assert all(c["id"] != f"memory:{rid}" for c in client.get("/api/memory/hot").json()["chunks"])
+        assert client.delete(f"/api/memory/hot/memory:{rid}").status_code == 404
+        assert mem.get(rid) is not None  # untouched by the refused delete
+
+    # The curation surface: listable by its delivery tier, and forgettable, via the tools.
+    listed = asyncio.run(tools["memory_list"].ainvoke({"delivery": "retrieved"}))
+    assert f"#{rid}" in listed and "fallback port" in listed
+    assert asyncio.run(tools["memory_forget"].ainvoke({"memory_id": rid})).startswith(f"Forgot memory #{rid}")
+    assert mem.get(rid) is None
+
+
 def test_agent_hot_write_event(tmp_path, monkeypatch):
     from graph.plugins.host import HOST
 

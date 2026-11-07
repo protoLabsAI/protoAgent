@@ -203,7 +203,18 @@ def _memory_rows() -> list[dict]:
     numeric chunk ids the knowledge store may still serve alongside it. ``injecting``
     comes from ``_memory_window_ids`` (the same window the projection renders).
     Rejected, expired and superseded rows remain visible for operator review,
-    with ``injecting: false``; inspection does not apply retrieval eligibility."""
+    with ``injecting: false``; inspection does not apply retrieval eligibility.
+
+    Scoped to ``delivery='always'`` ON PURPOSE: the Hot panel is the always-on
+    INJECTION curation surface (it has always listed exactly what rides in front of
+    the model every turn — pre-migration those were the domain='hot' knowledge
+    chunks, which this inspect now mirrors). It removes no prior operator surface:
+    MemoryStore and the retrieved/on_demand delivery tiers are new in P2-D1, and the
+    boot migration moved ONLY the always-on (domain='hot') rows into it. Retrieved
+    and on_demand core memories are curated through the agent's memory tools
+    (``memory_list`` / ``memory_search`` / ``memory_forget`` over the same
+    ``STATE.memory_store`` — tools/memory_tools.py), not this panel, which is why
+    DELETE below refuses a non-always id."""
     from dataclasses import asdict
 
     store = STATE.memory_store
@@ -502,8 +513,13 @@ def register_memory_routes(app) -> None:
                 return {"enabled": False, "deleted": False}
             entry = await asyncio.to_thread(store.get, mid)
             # Only an always-on row is reachable from the Hot panel — a retrieved /
-            # on_demand memory is curated elsewhere and must not be hard-deleted here
-            # (the inverse of the delivery_policy="always" gate on the chunk side).
+            # on_demand memory is curated through the agent's memory tools
+            # (memory_list / memory_search / memory_forget over the same
+            # STATE.memory_store, tools/memory_tools.py), not hard-deleted here. This
+            # mirrors the delivery_policy="always" gate on the chunk side and matches
+            # the panel's always-on listing scope (_memory_rows): the Hot panel never
+            # listed retrieved/on_demand rows, so refusing their delete is consistent,
+            # not a removed capability.
             if entry is None or entry.delivery != "always":
                 return JSONResponse({"detail": "no memory with that id"}, status_code=404)
             deleted = await asyncio.to_thread(store.delete, mid)
