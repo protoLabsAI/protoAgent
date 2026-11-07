@@ -121,7 +121,7 @@ The bundled `KnowledgeStore` (sqlite + FTS5) is enabled by default. See [Configu
 |---|---|---|
 | `KNOWLEDGE_DB_PATH` | `<instance_root>/knowledge/agent.db` | Explicit SQLite path override. Legacy `/sandbox` config defaults resolve through the instance root; an explicit non-`/sandbox` YAML path is also an override. |
 
-To opt out entirely, set `middleware.knowledge: false` in YAML. The memory tools (`memory_ingest`, `memory_recall`, etc.) are dropped from the agent loop when the store is disabled.
+To opt out entirely, set `middleware.knowledge: false` in YAML. The memory tools (`memory_save`, `memory_search`, `memory_forget`, `memory_list`) and knowledge tools (`knowledge_ingest`, `knowledge_search`) are dropped from the agent loop when the store is disabled.
 
 ## Notes, tasks & goals (agent-global working stores)
 

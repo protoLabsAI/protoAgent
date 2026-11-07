@@ -63,9 +63,14 @@ with `config explain`:
 subagents:
   researcher:
     enabled: true
-    tools: [current_time, web_search, fetch_url, memory_recall, memory_list, memory_ingest]
+    tools: [current_time, web_search, fetch_url, memory_search, memory_list, memory_save, knowledge_search]
     max_turns: 40
 ```
+
+Subagent tool lists that name `memory_ingest`, `memory_recall`, `forget_memory`, or `memory_stats` are translated to `memory_save`, `memory_search`, `memory_forget`, or `memory_list`, respectively, with a warning; update the source configuration or plugin tool list to the new names.
+An unknown tool name now logs a warning and is omitted from the subagent's tools.
+This compatibility translation applies only to subagent tool lists; the old names
+are not registered tool aliases.
 
 Other plugin roles use their plugin's declared configuration; an arbitrary
 `subagents.<name>` block does not automatically create a role.
@@ -122,7 +127,7 @@ next manual turn — the ADR 0050 Activity idle-wake then covers autonomous reac
 A **substantial report** (> ~800 chars) is also **indexed into the knowledge store** at
 completion, keyed to the origin session (`source_type: background_report`, trust tier 2 —
 agent-derived), so only a 3 000-char excerpt rides in-context while the full text stays
-searchable via `memory_recall` and openable from the console report card
+searchable via `knowledge_search` and openable from the console report card
 (`GET /api/background/{job_id}`). Worker transcripts are **disposable**: `background:*`
 sessions are excluded from session-summary persistence, the `<prior_sessions>` digest, and
 retirement harvest — the jobs DB is the system of record. Jobs spawned from an **incognito**
