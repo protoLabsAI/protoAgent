@@ -7,6 +7,21 @@ comparison procedure and [Manage memory](/guides/manage-memory) for curation.
 These settings control automatic delivery when `middleware.knowledge` is enabled.
 The tool signatures are maintained in [Starter tools](/reference/starter-tools#memory-knowledge).
 
+## Memories and document collections
+
+Knowledge is reference material: books, PDFs, web pages and transcripts stored as
+`chunks` in named **collections**. Use `knowledge_ingest(source, collection="manuals")`
+to add documents and `knowledge_search(query="deployment", collection="manuals")` to
+retrieve passages from that collection. Omit the search filter to search all collections.
+Results cite their collection and source. The backend's `domain` parameter still carries
+the collection internally; the agent tools expose `collection`.
+
+Memory is durable preferences, standing rules, facts and decisions in the separate
+`memories` table, with `kind`, `subject`, `delivery`, `review_state` and `provenance`.
+It has no domain. `memory_search` searches only memory. Conversation archives, summaries
+and reports are history, reached through `session_search` and `recall_session`.
+See [Memory storage and delivery](/reference/memory-delivery) for the field contract.
+
 ## Store selection
 
 Keyword-only FTS5 is the default (`embeddings: false`). `embeddings: true`
@@ -68,14 +83,14 @@ values restore defaults with a warning. Token cost is estimated as characters
 
 | Tool | Contract |
 | --- | --- |
-| `memory_ingest(content, domain, heading?, memory_kind?, subject?, delivery_policy?, expires_in_days?)` | Save a fact or note. Agent writes start pending. Delivery policy is `always`, `retrieved` (default), or `on_demand` |
-| `knowledge_ingest(source, domain, title?)` | Fetch and ingest a URL or local file through the document/media pipeline |
-| `memory_recall(query, k=5, domain?, memory_kind?, delivery_policy?, include_superseded=False)` | Search memory; optional typed filters narrow results. Superseded rows appear only when requested, tagged accordingly |
-| `session_search(query, limit=5, surface?)` | Search prior session transcripts |
-| `recall_session(session_id)` | Read a saved session summary |
-| `memory_list(domain?, limit=10, memory_kind?, delivery_policy?, review_state?)` | Browse recent chunks, including typed-memory metadata |
-| `memory_stats()` | Count chunks per domain |
-| `forget_memory(chunk_id, reason?)` | Permanently delete one chunk |
+| `memory_save(content, kind="fact", subject?, heading?, delivery="retrieved", expires_in_days?)` | Save durable text; agent memories start pending |
+| `knowledge_ingest(source, collection="general", title?)` | Fetch and ingest a URL or file into a document collection |
+| `knowledge_search(query, k=5, collection?)` | Search document passages, cited by collection and source |
+| `memory_search(query, k=5, kind?, delivery?, include_superseded=False)` | Search only memory, optionally including superseded rows |
+| `session_search(query, limit=5, surface?)` | Search prior sessions and history |
+| `recall_session(session_id, entry?)` | Expand a prior session |
+| `memory_list(kind?, delivery?, review_state?, limit=10)` | List recent eligible memories, ending with stored counts per kind and a total |
+| `memory_forget(memory_id, reason?)` | Permanently delete one memory |
 
 The console uses `GET /api/knowledge/search`; `GET /api/runtime/status` reports
 store status. Keyword recall matches whole words. The search endpoint's opt-in
@@ -94,7 +109,7 @@ knowledge:
 
 A nonempty list restricts automatic document injection; `""` selects
 unnamespaced chunks. Session attachments use `attach:<session_id>`. Both keyword
-and vector rankings are filtered. Tool-driven `memory_recall` remains unscoped.
+and vector rankings are filtered. Tool-driven `knowledge_search` remains unscoped.
 
 ### Trust floor {#trust-tiers-adr-0069-d8}
 
@@ -102,36 +117,35 @@ and vector rankings are filtered. Tool-driven `memory_recall` remains unscoped.
 to `2` to admit agent-derived and operator-authored content, or `3` for operator
 content only. Automatic hits sort by trust tier after retrieval, preserving
 relevance within each tier. The floor affects automatic injection, not
-`memory_recall`; citations expose the source's trust tier.
+`knowledge_search`; citations expose the source's trust tier.
 
 ### Always-on writes {#hot-memory-write-visibility-adr-0069-d8}
 
-`knowledge.hot_write_confirm: true` refuses the agent's always-on writes through
-`memory_ingest` and hot-domain `knowledge_ingest`, instructing it to ask the
-operator. Nothing is queued for approval or partly stored. The default is
-`false`. Console writes are unaffected; this is not a universal plugin-write gate.
+`knowledge.hot_write_confirm: true` refuses `memory_save(delivery="always")`,
+instructing the agent to ask the operator. The ingestion tool also retains a
+compatibility guard for `knowledge_ingest(collection="hot")`, before fetching.
+Nothing is queued for approval or partly stored. The default is `false`.
+Console writes are unaffected; this is not a universal plugin-write gate.
 
-Always-on is a delivery policy. A `hot` domain write receives it automatically,
-and another domain can request `delivery_policy="always"`. These writes emit
-`memory.hot_written` with chunk ID, source, source type, and preview.
+Always-on memory uses `delivery="always"` in `memories`, independently of kind.
+Knowledge collections group documents; they are not memory kinds.
 
 For incognito request fields and retention boundaries, see
 [Memory delivery](/explanation/memory-and-knowledge#incognito-threads).
 
 ## Review and removal {#staleness-supersede-dont-delete}
 
-Operator writes start confirmed; agent and external writes start pending.
-Pending content remains eligible for delivery. A rejected row stays stored but
-is excluded from delivery. `POST /api/memory/chunks/{id}/review` accepts
-`{"state": "confirmed" | "rejected" | "pending"}`. Editing preserves lifecycle
-metadata and confirms the new revision, except a rejected row stays rejected.
-Commons rows must use curated sharing/removal rather than this private-tier
-verdict route; explicitly sending `"tier": "commons"` is refused.
+Memory operator writes start confirmed; agent and extracted memories start pending.
+Pending private memories remain eligible for delivery. Rejected, expired and invalidated
+rows stay stored but do not enter search or delivery. Superseded memories are excluded
+by default; `memory_search(include_superseded=True)` exposes replaced rows for audit.
+Use the Memory inspector for operator review and `memory_forget` for a permanent deletion.
 
-Automatically revised facts keep history: the new row is inserted before the
-old one is invalidated with `superseded_by:<new id>`. Default retrieval excludes
-invalidated rows. `memory_recall(include_superseded=True)` or store APIs with
-`include_invalidated=True` expose the history.
+Knowledge chunk review remains a separate backend lifecycle. Its private-tier verdict
+route is `POST /api/memory/chunks/{id}/review`, accepting
+`{"state": "confirmed" | "rejected" | "pending"}`. Explicit `"tier": "commons"` is
+refused; commons removal uses curated sharing controls. Chunk revisions retain audit
+history through invalidation; store APIs with `include_invalidated=True` expose it.
 
 Single-entry operator deletes are permanent. Bulk source deletion uses
 `invalidate_by_source`; the Undo action calls `restore_by_source` during the
@@ -153,7 +167,7 @@ The API still accepts both flags: forget runs first, so the new harvest is retai
   and vector indexes. Empty domains and invalid dates refuse with count `0`.
   A layered store does not purge its commons. Older custom backends without
   this operation return a no-op count of `0`.
-- `sdk.knowledge_add(..., epoch=...)` tags an era; `knowledge_search(..., epoch=...)`
+- `sdk.knowledge_add(..., epoch=...)` tags an era; `sdk.knowledge_search(..., epoch=...)`
   selects that exact era in both rankings and layered tiers. Untagged and other
   eras are excluded. Omitting the filter searches every era. Store APIs expose
   equivalent `purge_domain` and `epoch` arguments.

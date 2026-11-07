@@ -144,15 +144,22 @@ server with one tool (`echo__echo`).
 
 The reverse direction (ADR 0033): publish this agent's own tools as an MCP server, so any
 MCP client — Claude Desktop, Cursor, or an ACP coding-agent runtime — can **operate the
-instance** (read/write notes & tasks, recall/ingest memory, run workflows, delegate to
+instance** (read/write notes & tasks, search/save memory and ingest/search knowledge, run workflows, delegate to
 subagents, set goals, schedule work). It's **opt-in + allowlist-gated** — only the tools you
 name are exposed:
 
 ```yaml
 operator_mcp:
   enabled: true
-  tools: [memory_recall, memory_ingest, task_list, task_create, notes_read, run_workflow]
+  tools: [memory_search, memory_save, knowledge_search, knowledge_ingest, task_list, task_create, notes_read, run_workflow]
 ```
+
+The memory tools (`memory_save`, `memory_search`, `memory_list`, `memory_forget`)
+operate on durable memories in `memories`. Document tools (`knowledge_ingest`,
+`knowledge_search`) use `chunks` collections and accept `collection`; memory has no
+domain. Use `session_search` / `recall_session` for conversation history. See
+[Starter tools](/reference/starter-tools#memory-knowledge) for signatures and
+[Renamed tools](/reference/memory-delivery#renamed-tools) when updating allowlists.
 
 ### Profiles (ADR 0075)
 
