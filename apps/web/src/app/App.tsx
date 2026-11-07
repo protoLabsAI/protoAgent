@@ -20,6 +20,7 @@ import { BackgroundWatch } from "./BackgroundWatch";
 import { DownloadWatch } from "./DownloadWatch";
 import { ScheduledWatch } from "./ScheduledWatch";
 import { ChatResumeWatch } from "./ChatResumeWatch";
+import { ArtifactOpenWatch } from "./ArtifactOpenWatch";
 import { ChatAttendance } from "./ChatAttendance";
 import { PluginChangeWatch } from "./PluginChangeWatch";
 import { ServerTurnWatch } from "./ServerTurnWatch";
@@ -1026,6 +1027,7 @@ function WorkspaceApp({ runtime }: { runtime: RuntimeStatus | null }) {
           a background-resume delivered into it can park for HITL (an operator is watching) instead
           of auto-answering. Released on session switch / unmount → the session reads unattended. */}
       <ChatAttendance />
+      <ArtifactOpenWatch />
       {/* Server-initiated turns (#1767): background push-resume / scheduled / watch fires
           hold the connection open for the whole turn but never stream to the browser —
           drive the chat typing indicator off turn.started/turn.finished so the app doesn't
