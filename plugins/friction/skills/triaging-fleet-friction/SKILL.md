@@ -18,6 +18,13 @@ wrong.** This skill is the pass that reads the map.
 It needs a running hub and a shell. `protoagent fleet friction` reads each member's
 ledger through the hub, so it reaches local and remote members alike.
 
+**Run it so it can be auto-approved.** An operator can list `protoagent fleet friction`
+in `filesystem.run_auto_approve`, so a triage pass runs without approval prompts. That
+allowlist refuses any command containing shell metacharacters. So run the command bare:
+no `| head`, no `2>&1`, no redirects. And write issue refs in `--reason` without `#`
+(`protoAgent 4321`, not `#4321`). One stray character turns an auto-approved command
+into an approval prompt the operator has to answer.
+
 ## 1. Pull everything
 
 ```bash
@@ -91,7 +98,7 @@ when the fix has **shipped** (released, not just merged — `git tag --contains`
 signal was judged noise. Name the agents; there is no default scope:
 
 ```bash
-protoagent fleet friction resolve 3f9a21c0 --agent alpha --agent beta --reason "fixed in #4321, v0.186.0"
+protoagent fleet friction resolve 3f9a21c0 --agent alpha --agent beta --reason "fixed in protoAgent 4321, v0.186.0"
 protoagent fleet friction resolve 3f9a21c0 --all-agents --reason "…"   # every agent that has it
 protoagent fleet friction resolve 3f9a21c0 --agent alpha --reopen      # undo
 ```
