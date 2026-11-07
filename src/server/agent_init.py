@@ -315,6 +315,7 @@ def _init_langgraph_agent(headless_setup: bool = False):
             STATE.knowledge_store = None
             STATE.history_store = None
             STATE.memory_store = None
+            STATE.shared_profile_store = None
             # Load plugins for their ROUTES + SURFACES even without a compiled
             # graph. The Connect Discord / Connect Google / Test-connection routes
             # are how the setup wizard *configures* the agent, so they must be
@@ -353,6 +354,7 @@ def _init_langgraph_agent(headless_setup: bool = False):
         STATE.knowledge_store = _build_knowledge_store(STATE.graph_config)
         STATE.history_store = _build_history_store(STATE.graph_config)
         STATE.memory_store = _build_memory_store(STATE.graph_config)
+        STATE.shared_profile_store = _build_shared_profile_store(STATE.graph_config)
         # ADR 0125 D6: one-shot, idempotent boot migrations draining legacy chunks into
         # their new tables in the same core agent.db — history first (domain='conversation'),
         # then durable memories. Run now that every store exists and has created its schema.
@@ -625,6 +627,34 @@ def _build_memory_store(config):
         return MemoryStore(db_path=config.knowledge_db_path, embed_fn=embed_fn)
     except Exception as exc:
         log.warning("[server] memory store init failed: %s; memory unavailable", exc)
+        return None
+
+
+def _build_shared_profile_store(config):
+    """The host-shared operator profile (ADR 0125 P2-G1, D7) — commons/profile.db.
+
+    Built ONLY when ``memory.shared_profile`` is enabled; off by default returns None
+    and profile.db is never created or opened (a sandboxed / client-facing agent). The
+    commons root matches the knowledge commons (ADR 0041, ``_commons_dir``). Delivery and
+    the write tool are P2-G2."""
+    if not getattr(config, "memory_shared_profile", False):
+        return None
+    if not getattr(config, "knowledge_middleware", True):
+        return None
+    from knowledge.shared_profile import SharedProfileStore
+
+    embed_fn = None
+    if getattr(config, "knowledge_embeddings", False):
+        try:
+            from graph.llm import create_embed_fn
+
+            embed_fn = create_embed_fn(config)
+        except Exception as exc:
+            log.warning("[server] shared profile embed fn init failed: %s; FTS5 only", exc)
+    try:
+        return SharedProfileStore(_commons_dir(config), embed_fn=embed_fn)
+    except Exception as exc:
+        log.warning("[server] shared profile store init failed: %s; shared profile unavailable", exc)
         return None
 
 
@@ -1314,6 +1344,7 @@ def _reload_langgraph_agent(*, reload_plugins: bool = True) -> tuple[bool, str]:
     new_store = None
     new_history_store = None
     new_memory_store = None
+    new_shared_profile_store = None
     new_skills = None
     new_mcp_clients, new_mcp_tools, new_mcp_meta = [], [], []
     new_plugin_tools, new_plugin_skill_dirs, new_plugin_meta = [], [], []
@@ -1346,6 +1377,7 @@ def _reload_langgraph_agent(*, reload_plugins: bool = True) -> tuple[bool, str]:
             new_store = _build_knowledge_store(new_config)
             new_history_store = _build_history_store(new_config)
             new_memory_store = _build_memory_store(new_config)
+            new_shared_profile_store = _build_shared_profile_store(new_config)
             # Plugins before MCP — a plugin's managed MCP server (e.g. Google)
             # is injected into the MCP discovery below (matches _main ordering).
             # Prompt-only rebuild (#3365): reuse the live bundle + MCP clients. Only
@@ -1490,6 +1522,7 @@ def _reload_langgraph_agent(*, reload_plugins: bool = True) -> tuple[bool, str]:
     STATE.knowledge_store = new_store
     STATE.history_store = new_history_store
     STATE.memory_store = new_memory_store
+    STATE.shared_profile_store = new_shared_profile_store
     STATE.skills_index = new_skills
     # Swap in the new MCP clients, then release the old ones — persistent session
     # pools hold live subprocesses that would otherwise leak on every reload. A
