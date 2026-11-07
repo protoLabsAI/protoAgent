@@ -511,7 +511,7 @@ class KnowledgeMiddleware(AgentMiddleware):
         state,
         memory_parts: list[str],
         digest_ids: list[str],
-        hot_ids: list[int],
+        hot_ids: list[int | str],
         rag_ids: list[int],
     ) -> None:
         """Append this model call's injected-memory row to the per-instance

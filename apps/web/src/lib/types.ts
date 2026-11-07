@@ -1847,7 +1847,7 @@ export type ReviewState = "confirmed" | "pending" | "rejected";
 // chunks under the character budget). Absent on backends that predate the field
 // (or custom stores without get_hot_memory_entries) → unknown; the console only
 // draws the "not injecting" badge on an explicit `false`.
-export type MemoryHotChunk = KnowledgeChunk & { injecting?: boolean };
+export type MemoryHotChunk = Omit<KnowledgeChunk, "id"> & { id: number | string; injecting?: boolean };
 
 // Memory inspector (ADR 0069 D7) — the delivery-layer audit surface.
 
@@ -1888,7 +1888,7 @@ export type MemoryInjectionRow = {
   ts: string;
   session_id: string;
   digest_session_ids: string[];
-  hot_chunk_ids: number[];
+  hot_chunk_ids: (number | string)[];
   rag_chunk_ids: number[];
   approx_tokens: number;
 };
@@ -1899,7 +1899,7 @@ export type MemoryInjectionRow = {
 // `unavailable` (the dialog shows "no longer stored") rather than dropping it.
 export type InjectionPastSession = { id: string; title: string | null };
 export type InjectionMemoryItem = {
-  id: number;
+  id: number | string;
   heading: string | null;
   snippet: string | null;
   unavailable: boolean;

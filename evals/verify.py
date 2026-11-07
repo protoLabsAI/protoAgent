@@ -8,8 +8,8 @@ Two channels:
   ``assert_tools_fired`` confirms a tool name appears with the
   expected outcome.
 - **Knowledge store** — sqlite DB at ``KNOWLEDGE_DB_PATH`` (or the
-  template default). ``find_chunk_containing`` confirms a memory
-  write actually landed; ``setup_chunk`` / ``teardown`` mutate the
+  template default). ``find_chunk_containing`` verifies document writes;
+  ``memories_containing`` verifies memory writes in the core memories table; ``setup_chunk`` / ``teardown`` mutate the
   store directly so cases start from a known state.
 - **Session summaries** — the JSON files behind the ``<prior_sessions>``
   digest (``MEMORY_PATH`` / the instance store). ``seed_session`` writes
@@ -19,7 +19,7 @@ Two channels:
 
 The store is opened read/write so setup steps can pre-seed (BFCL's
 ``initial_config`` pattern). The model never sees these direct writes
-— it discovers them via ``memory_recall`` / ``memory_list`` tools as
+— it discovers them via ``memory_search`` / ``memory_list`` tools as
 real users would.
 """
 
@@ -224,6 +224,24 @@ def find_chunk_containing(text: str, *, domain: str | None = None) -> dict | Non
     return chunk.as_dict() if chunk else None
 
 
+def memories_containing(text: str) -> list[dict]:
+    """Find literal content/heading matches in core memories, including audit rows."""
+    from contextlib import closing
+    from knowledge.memories import MemoryStore
+    from knowledge.store import _escape_like
+
+    store = MemoryStore()
+    with closing(store._connect()) as db:
+        needle = f"%{_escape_like(text)}%"
+        return [
+            dict(row)
+            for row in db.execute(
+                "SELECT * FROM memories WHERE content LIKE ? ESCAPE '\\' OR heading LIKE ? ESCAPE '\\'",
+                (needle, needle),
+            )
+        ]
+
+
 def chunks_in_domain(domain: str, *, limit: int = 50) -> list[dict]:
     store = _kb_store()
     return [c.as_dict() for c in store.list_chunks(domain=domain, limit=limit)]
@@ -378,7 +396,8 @@ def apply_teardown(steps: list[dict], *, memory_dir: str | None = None) -> None:
 
     Supported step kinds:
 
-    - ``kb_delete_by_content``: ``{contains}``
+    - ``kb_delete_by_content``: ``{contains}`` (chunks)
+    - ``memory_delete_by_content``: ``{contains}`` (core memories)
     - ``kb_delete_by_heading``: ``{domain, heading}``
     - ``session_purge``: ``{session_id}``
 
@@ -389,7 +408,13 @@ def apply_teardown(steps: list[dict], *, memory_dir: str | None = None) -> None:
     for step in steps:
         for kind, args in step.items():
             try:
-                if kind == "kb_delete_by_content":
+                if kind == "memory_delete_by_content":
+                    from knowledge.memories import MemoryStore
+
+                    memories = MemoryStore()
+                    for row in memories_containing(args["contains"]):
+                        memories.delete(row["id"])
+                elif kind == "kb_delete_by_content":
                     store = store or _kb_store()
                     store.delete_by_content(args["contains"])
                 elif kind == "kb_delete_by_heading":

@@ -7,7 +7,7 @@ import { useState } from "react";
 import { api } from "../lib/api";
 import { errMsg } from "../lib/format";
 import { queryKeys } from "../lib/queries";
-import type { KnowledgeChunk, ReviewState } from "../lib/types";
+import type { KnowledgeChunk, MemoryHotChunk, ReviewState } from "../lib/types";
 
 // Operator review verdicts (ADR 0108 D7) — the console half of the memory write
 // lifecycle. Agent-derived memories land as `pending`; the operator confirms or
@@ -69,11 +69,11 @@ export function ReviewChip({ chunk }: { chunk: Pick<KnowledgeChunk, "review_stat
   );
 }
 
-type ReviewVars = { chunk: KnowledgeChunk; state: ReviewState };
+type ReviewVars = { chunk: MemoryHotChunk; state: ReviewState };
 type KnowledgeListData = { results?: KnowledgeChunk[] };
-type HotListData = { chunks?: KnowledgeChunk[] };
+type HotListData = { chunks?: MemoryHotChunk[] };
 
-function restamp<T extends KnowledgeChunk>(rows: T[] | undefined, id: number, state: ReviewState): T[] | undefined {
+function restamp<T extends MemoryHotChunk>(rows: T[] | undefined, id: number | string, state: ReviewState): T[] | undefined {
   return rows?.map((row) => (row.id === id ? { ...row, review_state: state } : row));
 }
 
@@ -139,7 +139,7 @@ export function useReviewVerdict() {
   }
 
   return {
-    setVerdict: (chunk: KnowledgeChunk, state: ReviewState) => mutation.mutate({ chunk, state }),
+    setVerdict: (chunk: MemoryHotChunk, state: ReviewState) => mutation.mutate({ chunk, state }),
     pendingId: mutation.isPending ? mutation.variables?.chunk.id : undefined,
     unsupported,
   };
@@ -148,9 +148,9 @@ export function useReviewVerdict() {
 /** Confirm / Reject / Re-open for one row. Nothing for commons rows (read-only here) or
  *  once the backend has said it has no verdicts. A row with no verdict from the backend
  *  is treated as pending (ADR 0108 D4: NULL reads as pending). */
-export function ReviewActions({ chunk }: { chunk: KnowledgeChunk }) {
+export function ReviewActions({ chunk }: { chunk: MemoryHotChunk }) {
   const { setVerdict, pendingId, unsupported } = useReviewVerdict();
-  if (unsupported || chunk.tier === "commons") return null;
+  if ((unsupported && typeof chunk.id === "number") || chunk.tier === "commons") return null;
   const state = reviewStateOf(chunk) ?? "pending";
   const busy = pendingId === chunk.id;
   const confirm = (

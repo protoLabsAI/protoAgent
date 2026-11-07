@@ -95,7 +95,7 @@ _INERT_BUDGET_LOGGED = False
 # bare and sheds the digest as one unit (the D6 behavior).
 DigestLoader = Callable[..., object]
 # How a caller records an injection: ``(state, memory_parts, digest_ids, hot_ids, rag_ids)``.
-InjectionRecorder = Callable[[dict, list[str], list[str], list[int], list[int]], None]
+InjectionRecorder = Callable[[dict, list[str], list[str], list[int | str], list[int]], None]
 
 
 @dataclass(frozen=True)
@@ -336,7 +336,7 @@ class ProjectedContext:
     text: str = ""
     sections: list[dict] = field(default_factory=list)
     digest_ids: list[str] = field(default_factory=list)
-    hot_ids: list[int] = field(default_factory=list)
+    hot_ids: list[int | str] = field(default_factory=list)
     rag_ids: list[int] = field(default_factory=list)
     sources: list[str] = field(default_factory=list)
     budget_chars: int | None = None
@@ -517,7 +517,7 @@ class _Candidates:
     # loader, in which case the budget sheds the digest as one unit.
     digest_entries: list
     hot: str
-    hot_ids: list[int]
+    hot_ids: list[int | str]
     results: list[dict]  # ranked best-first — the budget pops from the END
     skill_block: str
     skill_listed: int
@@ -533,7 +533,7 @@ class _Delivered:
     sections: list[dict]
     memory_parts: list[str]
     digest_ids: list[str]
-    hot_ids: list[int]
+    hot_ids: list[int | str]
     rag_ids: list[int]
     sources: list[str]
     projected: ProjectedContext = field(default_factory=ProjectedContext)
@@ -888,41 +888,46 @@ def _load_digest(
         return "", [], []
 
 
-def _always_on_memory(knowledge_store) -> tuple[str, list[int]]:
-    """The always-on (``delivery="always"``) memory block + the ids that entered it.
+def _always_on_memory(knowledge_store, *, strict: bool = False) -> tuple[str, list[int | str]]:
+    """Combine core memories and remaining backend pins with unambiguous audit handles.
 
-    Prefers the core ``MemoryStore`` (``STATE.memory_store``) — where ADR 0125's P2 migration
-    moved every always-on / hot row — so a migrated ``domain="hot"`` chunk still reaches the
-    prompt even though it no longer lives in ``chunks``. When the memory store yields nothing
-    (none wired — an external runtime or a test — or genuinely no always-on memory) it degrades
-    to the knowledge store's ``get_hot_memory``, which also covers an always-on row a failed
-    boot migration stranded in ``chunks`` (same spirit as :func:`deliverable_hit`'s history
-    guard). Never raises — a memory hiccup must never break the turn."""
-    try:
-        from runtime.state import STATE
+    Integer handles retain their historical chunks meaning; memory:<id> handles
+    address the core store. Both readers share the existing 6000-character ceiling; ids name only rendered rows.
+    """
+    from runtime.state import STATE
 
-        memory_store = getattr(STATE, "memory_store", None)
-    except Exception:  # noqa: BLE001 — no runtime state (bare composer) → chunks fallback
-        memory_store = None
-    if memory_store is not None and hasattr(memory_store, "always_on"):
+    candidates = []
+    memory_store = getattr(STATE, "memory_store", None)
+    if memory_store is not None:
         try:
-            text = memory_store.always_on()
-            if text:
-                ids = [e.id for e in memory_store.list(delivery="always")]
-                return text, ids
-        except Exception as exc:  # noqa: BLE001 — never break the loop on memory
-            log.debug("[projection] memory-store always-on load failed: %s", exc)
-    # Pre-0125 fallback: always-on rows still in the chunks store (no memory store, or a
-    # row a failed migration left behind there).
-    if knowledge_store is not None and hasattr(knowledge_store, "get_hot_memory"):
+            candidates.extend((f"memory:{mid}", piece) for mid, piece in memory_store.always_on_entries())
+        except Exception:
+            if strict:
+                raise
+            log.debug("[projection] memory-store always-on load failed", exc_info=True)
+    if knowledge_store is not None:
         try:
             if hasattr(knowledge_store, "get_hot_memory_entries"):
-                entries = knowledge_store.get_hot_memory_entries()
-                return "\n".join(piece for _, piece in entries), [cid for cid, _ in entries]
-            return knowledge_store.get_hot_memory(), []  # custom backend without the id-attributed reader
-        except Exception as exc:  # noqa: BLE001 — never break the loop on memory
-            log.debug("[projection] hot memory load failed: %s", exc)
-    return "", []
+                candidates.extend(knowledge_store.get_hot_memory_entries())
+            elif hasattr(knowledge_store, "get_hot_memory"):
+                candidates.append((None, knowledge_store.get_hot_memory()))
+        except Exception:
+            if strict:
+                raise
+            log.debug("[projection] hot memory load failed", exc_info=True)
+    pieces, ids = [], []
+    total = 0
+    for handle, piece in candidates:
+        if not piece:
+            continue
+        size = len(piece) + bool(pieces)
+        if total + size > 6000:
+            break
+        pieces.append(piece)
+        total += size
+        if handle is not None:
+            ids.append(handle)
+    return "\n".join(pieces), ids
 
 
 def search_scoped(knowledge_store, query: str, opts: ProjectionOptions) -> list[dict]:
@@ -1266,7 +1271,7 @@ def record_injection(
     state: dict,
     memory_parts: list[str],
     digest_ids: list[str],
-    hot_ids: list[int],
+    hot_ids: list[int | str],
     rag_ids: list[int],
 ) -> None:
     """Append this model call's injected-memory row to the per-instance

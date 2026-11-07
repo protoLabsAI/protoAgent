@@ -444,3 +444,39 @@ test("History tab degrades: a 500 shows the error alert, store-off shows the not
   surface = await openHistory(page);
   await expect(surface.getByText(/History is off/)).toBeVisible();
 });
+
+test("core memory handles support edit, reject and delete in the inspector", async ({ page }) => {
+  let row = {
+    id: "memory:31", domain: "fact", content: "Core remembered fact", heading: "Core memory",
+    review_state: "pending", delivery_policy: "always", injecting: true,
+  };
+  let deleted = false;
+  await page.route("**/api/memory/hot", async (route) => {
+    await route.fulfill({ json: { enabled: true, chunks: deleted ? [] : [row] } });
+  });
+  await page.route("**/api/memory/hot/memory:31", async (route) => {
+    if (route.request().method() === "DELETE") {
+      deleted = true;
+      await route.fulfill({ json: { enabled: true, deleted: true } });
+    } else {
+      row = { ...row, content: route.request().postDataJSON().content };
+      await route.fulfill({ json: { enabled: true, id: row.id, replaced: true } });
+    }
+  });
+  await page.route("**/api/memory/chunks/memory:31/review", async (route) => {
+    row = { ...row, review_state: route.request().postDataJSON().state, injecting: false };
+    await route.fulfill({ json: { enabled: true, id: row.id, review_state: row.review_state } });
+  });
+  await openMemory(page);
+  const surface = page.getByTestId("memory-surface");
+  await surface.getByRole("tab", { name: "Hot memory" }).click();
+  await surface.getByLabel("edit hot entry memory:31").click();
+  await surface.getByLabel("hot entry memory:31 content").fill("Corrected remembered fact");
+  await surface.getByRole("button", { name: "Save", exact: true }).click();
+  await expect(surface.getByText("Corrected remembered fact")).toBeVisible();
+  await surface.getByLabel("reject entry memory:31").click();
+  await expect(surface.locator('[data-review-state="rejected"]')).toBeVisible();
+  await surface.getByLabel("delete hot entry memory:31").click();
+  await page.getByRole("dialog").getByRole("button", { name: "Delete entry" }).click();
+  await expect(surface.getByText("Corrected remembered fact")).toHaveCount(0);
+});

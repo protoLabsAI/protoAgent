@@ -795,7 +795,7 @@ export function SetupWizard({
           subagents: {
             researcher: {
               enabled: true,
-              tools: ["current_time", "web_search", "fetch_url", "memory_recall", "memory_list"],
+              tools: ["current_time", "web_search", "fetch_url", "memory_search", "memory_list"],
               max_turns: Number(state.researcherTurns),
             },
           },

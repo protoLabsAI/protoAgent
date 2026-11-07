@@ -130,7 +130,9 @@ def test_expires_in_days_validation(tmp_path):
     for bad in (0, -1, 4000):
         out = asyncio.run(tools["memory_save"].ainvoke({"content": "x", "expires_in_days": bad}))
         assert out.startswith("Error: expires_in_days must be"), bad
-    assert asyncio.run(tools["memory_save"].ainvoke({"content": "y", "expires_in_days": 30})).startswith("Saved memory #")
+    assert asyncio.run(tools["memory_save"].ainvoke({"content": "y", "expires_in_days": 30})).startswith(
+        "Saved memory #"
+    )
     # The helper also rejects fractional / bool counts (for direct + SDK callers; the tool
     # schema already blocks a non-int at the boundary).
     from tools.memory_tools import _expires_at_from_days
@@ -269,3 +271,129 @@ async def test_sdk_knowledge_search_domain_unchanged(tmp_path, monkeypatch):
     monkeypatch.setattr(rs.STATE, "knowledge_store", ks, raising=False)
     out = await sdk.knowledge_search("routing lesson", k=3, domain="loop-lessons")
     assert out and "routing lesson" in out[0]["preview"]
+
+
+def test_mixed_hot_sources_audit_exact_rows(tmp_path, monkeypatch):
+    from graph.projection import _always_on_memory
+    from operator_api.injection_routes import _resolve_injection
+    from observability.injection_log import InjectionLog
+    from runtime.state import STATE
+
+    _, ks, mem = _tools(tmp_path)
+    # Separate stores deliberately allocate the same numeric id.
+    cid = ks.add_chunk("backend pin", domain="hot", source_type="operator")
+    mid = mem.add("core pin", kind="standing", provenance="operator", delivery="always")
+    assert cid == mid
+    monkeypatch.setattr(STATE, "memory_store", mem)
+    monkeypatch.setattr(STATE, "knowledge_store", ks)
+    text, ids = _always_on_memory(ks)
+    assert "backend pin" in text and "core pin" in text
+    assert ids == [f"memory:{mid}", cid]
+    log = InjectionLog(str(tmp_path / "injections.db"))
+    log.record(hot_chunk_ids=ids)
+    detail = _resolve_injection(log.recent()[0])
+    assert [r["snippet"] for r in detail["memories"]] == ["core pin", "backend pin"]
+    # Newest row fills the memory cap; omitted rows must never be attributed.
+    large = mem.add("x" * 6000, kind="fact", provenance="operator", delivery="always")
+    text, ids = _always_on_memory(ks)
+    assert f"memory:{large}" in ids and f"memory:{mid}" not in ids
+    assert "core pin" not in text and "backend pin" not in text
+    assert len(text) == 6000
+    mem.delete(large)
+
+    class PluginBackend:
+        def get_hot_memory(self):
+            return "legacy plugin pin"
+
+    assert "legacy plugin pin" in _always_on_memory(PluginBackend())[0]
+
+
+def test_core_memories_inspector_crud_review(tmp_path, monkeypatch):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from graph.projection import _always_on_memory
+    from operator_api.memory_routes import register_memory_routes
+    from runtime.state import STATE
+
+    _, ks, mem = _tools(tmp_path)
+    cid = ks.add_chunk("chunk untouched", domain="hot", source_type="operator")
+    mid = mem.add("agent pin", kind="fact", provenance="agent", delivery="always")
+    retrieved = mem.add("retrieved fact", kind="fact", provenance="agent")
+    hidden = mem.add("forget in progress", kind="fact", provenance="agent")
+    with mem._write() as db:
+        db.execute("UPDATE memories SET invalidated_at = '2026-01-01' WHERE id = ?", (hidden,))
+    monkeypatch.setattr(STATE, "knowledge_store", ks)
+    monkeypatch.setattr(STATE, "memory_store", mem)
+    app = FastAPI()
+    register_memory_routes(app)
+    with TestClient(app) as client:
+        rows = client.get("/api/memory/hot").json()["chunks"]
+        assert {c["id"] for c in rows} == {cid, f"memory:{mid}", f"memory:{retrieved}"}
+        handle = f"memory:{mid}"
+        assert client.put(f"/api/memory/hot/{handle}", json={"content": "edited pin"}).status_code == 200
+        assert mem.get(mid).content == "edited pin"
+        assert mem.search("edited")[0].id == mid
+        assert not mem.search("agent")
+        assert mem.get(mid).review_state == "pending"
+        for state, injected in (("rejected", False), ("confirmed", True)):
+            response = client.post(f"/api/memory/chunks/{handle}/review", json={"state": state})
+            assert response.status_code == 200
+            assert ("edited pin" in _always_on_memory(ks)[0]) is injected
+            row = next(c for c in client.get("/api/memory/hot").json()["chunks"] if c["id"] == handle)
+            assert row["review_state"] == state and row["injecting"] is injected
+        assert client.delete(f"/api/memory/hot/{handle}").json()["deleted"]
+        assert mem.get(mid) is None
+        assert ks.get_chunk(cid)["content"] == "chunk untouched"
+
+
+def test_agent_hot_write_event(tmp_path, monkeypatch):
+    from graph.plugins.host import HOST
+
+    events = []
+    monkeypatch.setattr(HOST, "publish", lambda topic, payload: events.append((topic, payload)))
+    tools, _, mem = _tools(tmp_path)
+    asyncio.run(
+        tools["memory_save"].ainvoke(
+            {
+                "content": "visible pin",
+                "delivery": "always",
+                "state": {"session_id": "chat-event"},
+            }
+        )
+    )
+    mid = mem.list()[0].id
+    assert events == [
+        (
+            "memory.hot_written",
+            {
+                "chunk_id": f"memory:{mid}",
+                "source": "chat-event",
+                "source_type": "agent",
+                "preview": "visible pin",
+            },
+        )
+    ]
+
+
+def test_save_evals_verify_and_clean_memories(tmp_path, monkeypatch):
+    import json
+    from pathlib import Path
+    from evals import verify
+    from evals.runner import _kb_problems
+
+    monkeypatch.setenv("KNOWLEDGE_DB_PATH", str(tmp_path / "eval.db"))
+    mem = MemoryStore()
+    ks = KnowledgeStore()
+    cases = json.loads(Path("evals/tasks.json").read_text(encoding="utf-8"))
+    selected = [c for c in cases if c["id"] in {"memory_save_intent", "memory_note_intent", "route4659_save"}]
+    assert len(selected) == 3
+    for case in selected:
+        marker = case["verify_kb"]["find_memory_containing"]
+        assert _kb_problems(case)
+        cid = ks.add_chunk(marker, domain="document")
+        assert _kb_problems(case)  # a matching chunk cannot satisfy memory verification
+        mid = mem.add(marker, kind="fact", provenance="agent")
+        assert not _kb_problems(case)
+        verify.apply_teardown(case["teardown"])
+        assert mem.get(mid) is None
+        assert ks.get_chunk(cid) is not None

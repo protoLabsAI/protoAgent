@@ -98,30 +98,30 @@
     "id": "memory_save_intent",
     "category": "tool",
     "kind": "ask",
-    "name": "Stores a stable preference → memory_save writes a chunk",
+    "name": "Stores a stable preference → memory_save writes a memory",
     "prompt": "Remember that I prefer protoLabs Studio standups at 9am Eastern.",
     "expected_tools": ["memory_save"],
     "expected_patterns": [],
     "verify_kb": {
-      "find_chunk_containing": "9am"
+      "find_memory_containing": "9am"
     },
     "teardown": [
-      {"kb_delete_by_content": {"contains": "9am"}}
+      {"memory_delete_by_content": {"contains": "9am"}}
     ]
   },
   {
     "id": "memory_note_intent",
     "category": "tool",
     "kind": "ask",
-    "name": "Asks to log an event → memory_save writes the chunk",
+    "name": "Asks to log an event → memory_save writes the memory",
     "prompt": "Note this for me: my standup just ended, team is unblocked on the auth migration.",
     "expected_tools": ["memory_save"],
     "expected_patterns": [],
     "verify_kb": {
-      "find_chunk_containing": "auth migration"
+      "find_memory_containing": "auth migration"
     },
     "teardown": [
-      {"kb_delete_by_content": {"contains": "auth migration"}}
+      {"memory_delete_by_content": {"contains": "auth migration"}}
     ]
   },
   {
@@ -686,11 +686,11 @@
       "memory_save"
     ],
     "verify_kb": {
-      "find_chunk_containing": "EVAL-ROUTE-4659-SAVE"
+      "find_memory_containing": "EVAL-ROUTE-4659-SAVE"
     },
     "teardown": [
       {
-        "kb_delete_by_content": {
+        "memory_delete_by_content": {
           "contains": "EVAL-ROUTE-4659-SAVE"
         }
       }

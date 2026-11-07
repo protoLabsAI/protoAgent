@@ -3,8 +3,9 @@
 The audit surface for the memory *delivery* layer: which session summaries
 exist on disk (the ``memory_path()`` files — named via the shared
 ``session_filename`` mapper — behind the ``<prior_sessions>`` digest) and
-which hot-memory chunks ride every turn — view/delete for summaries,
-view/edit/delete for hot chunks. A security control first (SpAIware-class
+which memories and backend hot-memory chunks are stored — view/delete for
+summaries, view/edit/delete/review for memories and hot chunks. Core memory
+handles use "memory:<id>"; numeric handles keep addressing knowledge chunks. A security control first (SpAIware-class
 memory poisoning gets *detected* here), UX second. List rows carry the
 injection truth: ``in_digest`` (the agent is being told about this session,
 under the configured ``context.prior_sessions`` policy) and ``injecting`` (hot
@@ -184,6 +185,35 @@ def _hot_chunks(store) -> list[dict]:
     ]
 
 
+def _memory_rows() -> list[dict]:
+    """Core memories in the inspector shape, with disjoint store handles."""
+    from dataclasses import asdict
+
+    store = STATE.memory_store
+    if store is None:
+        return []
+    window = {mid for mid, _ in store.always_on_entries()}
+    return [
+        {
+            **asdict(e),
+            "id": f"memory:{e.id}",
+            "domain": e.kind,
+            "memory_kind": e.kind,
+            "delivery_policy": e.delivery,
+            "source": e.source_session,
+            "source_type": e.provenance,
+            "injecting": e.id in window,
+        }
+        for e in store.inspect()
+    ]
+
+
+def _core_memory_id(handle: str) -> int | None:
+    if handle.startswith("memory:") and handle[7:].isdigit():
+        return int(handle[7:])
+    return None
+
+
 # ── History (ADR 0125 D6) ─────────────────────────────────────────────────────
 # The conversation ``history`` table — its own HistoryStore, surfaced ONLY in the
 # Memory inspector's History tab (never the Knowledge browser, which lists chunks
@@ -324,34 +354,51 @@ def register_memory_routes(app) -> None:
     @app.get("/api/memory/hot")
     async def _api_memory_hot():
         store = STATE.knowledge_store
+        try:
+            memories = await asyncio.to_thread(_memory_rows)
+        except Exception:  # a core-store failure must not hide backend pins
+            log.exception("[memory] core-memory list failed")
+            memories = []
         if store is None:
-            return {"enabled": False, "chunks": []}
+            return {"enabled": STATE.memory_store is not None, "chunks": memories}
         try:
             chunks = await asyncio.to_thread(_hot_chunks, store)
         except Exception:  # noqa: BLE001 — never 500 the console
             log.exception("[memory] hot-memory list failed")
-            return {"enabled": True, "chunks": []}
-        # "injecting" = the chunk is in the CURRENT per-turn window: the ids
-        # get_hot_memory_entries returns (newest 100 delivery_policy="always"
-        # chunks under the 6000-char budget, minus rejected/expired ones) — the
-        # same reader the projection injects from.
-        # On a LayeredKnowledgeStore, __getattr__ delegates it to the PRIVATE
-        # store, whose ids are consistent with the listed rows (commons rows
-        # are already excluded by _hot_chunks). A custom backend without the
-        # reader gets NO field — the console renders a missing flag as unknown.
-        if hasattr(store, "get_hot_memory_entries"):
-            try:
-                window = await asyncio.to_thread(store.get_hot_memory_entries)
-                window_ids = {cid for cid, _ in window}
-            except Exception:  # noqa: BLE001 — the flag is best-effort; the list still serves
-                log.exception("[memory] hot-memory injection window failed")
-            else:
+            return {"enabled": True, "chunks": memories}
+        # Derive badges from the same combined, capped window as projection.
+        # A backend without attributed reads still has unknown chunk badges.
+        from graph.projection import _always_on_memory
+
+        try:
+            _, window_ids = await asyncio.to_thread(_always_on_memory, store, strict=True)
+        except Exception:
+            log.exception("[memory] hot-memory injection window failed")
+        else:
+            for row in memories:
+                row["injecting"] = row["id"] in window_ids
+            if hasattr(store, "get_hot_memory_entries"):
                 for row in chunks:
-                    row["injecting"] = row.get("id") in window_ids
-        return {"enabled": True, "chunks": chunks}
+                    row["injecting"] = row["id"] in window_ids
+        return {"enabled": True, "chunks": memories + chunks}
 
     @app.put("/api/memory/hot/{chunk_id}")
-    async def _api_memory_hot_update(chunk_id: int, body: dict | None = None):
+    async def _api_memory_hot_update(chunk_id: str, body: dict | None = None):
+        mid = _core_memory_id(chunk_id)
+        if mid is not None:
+            store = STATE.memory_store
+            entry = await asyncio.to_thread(store.get, mid) if store else None
+            if entry is None:
+                return JSONResponse({"detail": "no memory with that id"}, status_code=404)
+            content = str((body or {}).get("content", "")).strip()
+            if not content:
+                return JSONResponse({"detail": "content is required"}, status_code=400)
+            heading = str((body or {}).get("heading", "")).strip() or entry.heading
+            updated = await asyncio.to_thread(store.update, mid, content=content, heading=heading)
+            return {"enabled": True, "id": chunk_id, "replaced": updated}
+        if not chunk_id.isdigit():
+            return JSONResponse({"detail": "invalid memory handle"}, status_code=400)
+        chunk_id = int(chunk_id)
         store = STATE.knowledge_store
         if store is None:
             return {"enabled": False, "id": None, "replaced": False}
@@ -411,7 +458,17 @@ def register_memory_routes(app) -> None:
         return {"enabled": True, "id": new_id, "replaced": bool(deleted)}
 
     @app.delete("/api/memory/hot/{chunk_id}")
-    async def _api_memory_hot_delete(chunk_id: int):
+    async def _api_memory_hot_delete(chunk_id: str):
+        mid = _core_memory_id(chunk_id)
+        if mid is not None:
+            store = STATE.memory_store
+            deleted = await asyncio.to_thread(store.delete, mid) if store else False
+            if not deleted:
+                return JSONResponse({"detail": "no memory with that id"}, status_code=404)
+            return {"enabled": True, "deleted": True}
+        if not chunk_id.isdigit():
+            return JSONResponse({"detail": "invalid memory handle"}, status_code=400)
+        chunk_id = int(chunk_id)
         # Deliberately a HARD delete (ADR 0069 D9): automatic supersession keeps
         # invalidated rows for audit, but an operator delete is explicit intent
         # and removes the row outright.
@@ -436,10 +493,14 @@ def register_memory_routes(app) -> None:
     # numeric id; an omitted tier means private.
 
     @app.post("/api/memory/chunks/{chunk_id}/review")
-    async def _api_memory_chunk_review(chunk_id: int, body: dict | None = None):
+    async def _api_memory_chunk_review(chunk_id: str, body: dict | None = None):
         from knowledge.store import REVIEW_STATES
 
-        store = STATE.knowledge_store
+        mid = _core_memory_id(chunk_id)
+        if mid is None and not chunk_id.isdigit():
+            return JSONResponse({"detail": "invalid memory handle"}, status_code=400)
+        store = STATE.memory_store if mid is not None else STATE.knowledge_store
+        row_id = mid if mid is not None else int(chunk_id)
         if store is None:
             return {"enabled": False, "id": None, "review_state": None}
         body = body or {}
@@ -454,7 +515,7 @@ def register_memory_routes(app) -> None:
         if not callable(setter):
             return JSONResponse({"detail": "this knowledge backend has no review states"}, status_code=501)
         try:
-            updated = await asyncio.to_thread(setter, chunk_id, state)
+            updated = await asyncio.to_thread(setter, row_id, state)
         except ValueError as exc:  # the store's own validation — mirrors the 400 above
             return JSONResponse({"detail": str(exc)}, status_code=400)
         except Exception:  # noqa: BLE001 — never 500 the console with a traceback
@@ -462,7 +523,7 @@ def register_memory_routes(app) -> None:
             return JSONResponse({"detail": "review update failed"}, status_code=500)
         if not updated:
             return JSONResponse({"detail": "no chunk with that id"}, status_code=404)
-        return {"enabled": True, "id": chunk_id, "review_state": state}
+        return {"enabled": True, "id": chunk_id if mid is not None else row_id, "review_state": state}
 
     # --- History (ADR 0125 D6) -----------------------------------------------
     # The conversation ``history`` table behind ``STATE.history_store`` — archives,

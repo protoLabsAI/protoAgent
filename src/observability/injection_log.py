@@ -29,6 +29,8 @@ from pathlib import Path
 log = logging.getLogger(__name__)
 
 # The id-list columns, stored as JSON arrays (TEXT) and decoded on read.
+# hot_chunk_ids retains integer chunk ids for historical records and backend
+# pins; ADR 0125 core memories use "memory:<id>" to avoid cross-store collisions.
 _JSON_COLUMNS = ("digest_session_ids", "hot_chunk_ids", "rag_chunk_ids")
 
 # Bounded per-stage RAG provenance (#3259), stored as one JSON object (TEXT)
@@ -106,7 +108,7 @@ class InjectionLog:
         *,
         session_id: str = "",
         digest_session_ids: list[str] | None = None,
-        hot_chunk_ids: list[int] | None = None,
+        hot_chunk_ids: list[int | str] | None = None,
         rag_chunk_ids: list[int] | None = None,
         approx_tokens: int = 0,
         effective_top_k: int = 0,
