@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import functools
 import hashlib
+import json
 import logging
 import os
 import threading
+import time
 from collections import OrderedDict
 from pathlib import Path
 from urllib.parse import quote
@@ -292,6 +294,41 @@ def _is_int(x) -> bool:
     return isinstance(x, int) and not isinstance(x, bool)
 
 
+def _open_version(art_id: str, version: int) -> tuple[int, dict]:
+    from fastapi import HTTPException
+
+    art = _store._find(_store._read_store(), art_id)
+    if art is None:
+        raise HTTPException(404, f"unknown artifact {art_id}")
+    versions = art.get("versions") or []
+    n = version or len(versions)
+    if not 1 <= n <= len(versions):
+        raise HTTPException(404, f"no version {version}")
+    v = versions[n - 1]
+    if not v.get("blob") and not v.get("link"):
+        raise HTTPException(404, "not a file artifact")
+    return n, v
+
+
+def _open_ticket_subject(art_id: str, version: int, value: dict) -> str:
+    # Domain separation from core media signatures; bind the complete version so trimming
+    # or replacing a linked file cannot redirect an existing grant to different bytes.
+    return "artifact-open:" + json.dumps([art_id, version, value], sort_keys=True, separators=(",", ":"))
+
+
+def _open_artifact_path(art_id: str, version: int) -> str:
+    # Core media signing is shared across the server and operator-MCP processes; the
+    # inline preview ticket table is process-local and cannot serve tool-issued grants.
+    from infra.media import sign_name
+
+    n, value = _open_version(art_id, version)
+    fh, _, _ = _open_blob(art_id, n)
+    fh.close()
+    exp = int(time.time()) + _media.TTL_S
+    ticket = sign_name(_open_ticket_subject(art_id, n, value), exp)
+    return f"/plugins/artifact/media/artifact/{quote(art_id, safe='')}/blob?version={n}&exp={exp}&t={ticket}"
+
+
 def _build_view_router():
     """The shell PAGE — served under the PUBLIC ``/plugins/artifact`` prefix
     (plugin-view rule 2): a browser iframe page-load can't carry an Authorization
@@ -333,6 +370,35 @@ def _build_view_router():
             return Response(status_code=404)
         return _open_file_response()(
             fh, mt, meta.get("filename") or name, range_header=req_range, disposition="inline", headers=_media.SAFE_HEADERS
+        )
+
+    @router.api_route("/media/artifact/{art_id}/blob", methods=["GET", "HEAD"], include_in_schema=False)
+    def _open_download(
+        art_id: str, version: int = 0, exp: str = "", t: str = "",
+        req_range: str | None = Header(None, alias="range"),
+    ):
+        from infra.media import verify_name
+
+        if len(t) != 64 or any(c not in "0123456789abcdef" for c in t):
+            return Response(status_code=404)
+        if version < 1 or not exp.isascii() or not exp.isdigit() or len(exp) > 12 or int(exp) <= time.time():
+            return Response(status_code=404)
+        try:
+            n, value = _open_version(art_id, version)
+            if not verify_name(_open_ticket_subject(art_id, n, value), t, exp):
+                return Response(status_code=404)
+            if value.get("link"):
+                fh, meta, name = _open_linked(value["link"], value.get("file") or {})
+            else:
+                fh, meta, name = _open_blob(art_id, n)
+                if name != _store._blob_path(art_id, value["blob"]).name:
+                    fh.close()
+                    return Response(status_code=404)
+        except HTTPException:
+            return Response(status_code=404)
+        return _open_file_response()(
+            fh, meta.get("mime") or "application/octet-stream", meta.get("filename") or name,
+            range_header=req_range, disposition="inline", headers=_media.SAFE_HEADERS,
         )
 
     # The shell's module script, same-origin beside the page (its relative ``src``

@@ -286,6 +286,35 @@ def _resolve_file(path: str, project: str = "") -> tuple[Path | None, str]:
 
 
 @tool
+def open_artifact(
+    artifact_id: str,
+    version: int = 0,
+    state: Annotated[Any, InjectedState] = None,
+) -> str:
+    """Ask the attached console to open a saved file artifact in a new browser tab.
+    version=0 opens the latest version; positive versions are 1-based. Only file artifacts
+    are supported, never arbitrary URLs. Returns a short-lived clickable link as a fallback.
+    """
+    from fastapi import HTTPException
+    from infra.media import public_base_url
+    from ._routes import _open_artifact_path
+
+    try:
+        path = _open_artifact_path(artifact_id, version)
+    except HTTPException as exc:
+        return f"Cannot open artifact: {exc.detail}."
+    url = public_base_url() + path
+    session = _chat_session(state)
+    if session and _renders_ui(state):
+        _store._emit("open_url", {"session_id": session, "path": path})
+        return (
+            f"Requested a new browser tab in the attached console. If no console is attached "
+            f"or the browser blocks the tab, [open artifact]({url}). This link expires in 30 minutes."
+        )
+    return f"No console attached. [Open artifact]({url}). This link expires in 30 minutes."
+
+
+@tool
 @_busy_reply
 def save_file_artifact(
     path: str,

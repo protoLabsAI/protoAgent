@@ -60,6 +60,7 @@ emits:
   - artifact.created
   - artifact.updated
   - artifact.deleted
+  - artifact.open_url
 
 # The vendored render libs (mermaid, react, babel…) the artifact view imports. Same trap as
 # notes: `_view_public_paths` exempts the view PAGE, but an ES-module `import` carries no
@@ -79,5 +80,7 @@ public_paths:
   # Inline image/video (#4257): a <video>/<img> load carries no Authorization header either.
   # NOT open data: the route SELF-GATES on a short-lived ticket bound to one artifact version,
   # minted by the bearer-gated POST /api/plugins/artifact/artifact/{id}/media-ticket (_media.py),
-  # and serves only allowlisted image/video types — no ticket, no bytes (a bare 404).
+  # and serves only allowlisted image/video types. open_artifact also serves file downloads
+  # under this prefix using expiring, version-bound core media signatures.
+  # Neither route serves bytes without a valid ticket (a bare 404).
   - "/plugins/artifact/media/"
