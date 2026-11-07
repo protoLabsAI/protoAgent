@@ -101,11 +101,17 @@ def _resolve_injection(row: dict) -> dict:
     from runtime.state import STATE
 
     store = STATE.knowledge_store
+    # The memory layer (ADR 0125 P2-F) is always-on ``hot_chunk_ids`` PLUS the
+    # recalled ``retrieved_memory_ids`` — the same partition ``_decode`` exposes as
+    # ``layers["memory"]``. Resolve both so a memory recalled by the relevant-memory
+    # layer isn't invisible in the per-turn detail. (Both id-sets carry
+    # ``memory:<id>`` handles, which ``_memory_item`` resolves.)
+    memory_ids = list(row.get("hot_chunk_ids") or []) + list(row.get("retrieved_memory_ids") or [])
     return {
         "ts": row.get("ts"),
         "session_id": row.get("session_id") or "",
         "past_sessions": [_session_item(str(s)) for s in row.get("digest_session_ids") or []],
-        "memories": [_memory_item(store, c) for c in row.get("hot_chunk_ids") or []],
+        "memories": [_memory_item(store, c) for c in memory_ids],
         "docs": [_doc_item(store, c) for c in row.get("rag_chunk_ids") or []],
         "approx_tokens": int(row.get("approx_tokens") or 0),
     }
@@ -120,9 +126,9 @@ def register_injection_routes(app) -> None:
 
         ``session_id`` filters to one session; empty/omitted = all sessions.
         Each row: ``ts``, ``session_id``, ``digest_session_ids`` (prior-session
-        digest entries injected), ``hot_chunk_ids`` / ``rag_chunk_ids``
-        (hot handles may be "memory:<id>"; other ids address chunks),
-        ``approx_tokens``.
+        digest entries injected), ``hot_chunk_ids`` / ``retrieved_memory_ids``
+        (the always-on and recalled memory layers — handles may be "memory:<id>")
+        / ``rag_chunk_ids`` (knowledge chunks), ``approx_tokens``.
         """
         import asyncio
 

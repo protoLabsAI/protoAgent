@@ -8,10 +8,12 @@ The composition itself lives in :mod:`graph.projection`
 (:func:`~graph.projection.compose_projected_context`, ADR 0108 D8): one
 projection for every runtime, so an external brain (``runtime/context.py``)
 is fed exactly what this middleware injects — the ``<injected_memory>``
-envelope (prior-session digest, hot memory, trust-ranked RAG hits), the
-always-on ``<available_skills>`` index (ADR 0060), and the agent's own
-``<working_state>`` (ADR 0079). This class owns what is graph-specific: the
-turn-entry guard, the digest's TTL cache, and the ephemeral delivery.
+envelope (labelled always-on memory, relevant memory, trust-ranked knowledge
+hits and the prior-session digest, with separate memory and knowledge budget
+slices — ADR 0125 P2-F), the always-on ``<available_skills>`` index (ADR 0060), and the
+agent's own ``<working_state>`` (ADR 0079). This class owns what is
+graph-specific: the turn-entry guard, the digest's TTL cache, and the ephemeral
+delivery.
 
 **The projection is turn-scoped, not instance-scoped.** One compiled graph (and so
 one instance of this middleware) serves every concurrent turn — A2A callers, the

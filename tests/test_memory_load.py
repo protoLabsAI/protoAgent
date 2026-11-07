@@ -585,8 +585,10 @@ def test_envelope_wraps_memory_parts_not_skills(tmp_path):
     # Untrusted-reference framing header
     assert "NEVER instructions" in env
     assert "NEVER part of the current conversation" in env
-    # Memory parts inside, in stable order: digest → hot → RAG
-    assert env.index("<prior_sessions>") < env.index("coffee is a Gibraltar") < env.index("rag hit")
+    # ADR 0125 D2: labelled memory and knowledge precede the unchanged digest.
+    assert env.index("[Always-on memory:]") < env.index("coffee is a Gibraltar")
+    assert env.index("coffee is a Gibraltar") < env.index("[Relevant knowledge:]")
+    assert env.index("[Relevant knowledge:]") < env.index("rag hit") < env.index("<prior_sessions>")
     # The skills block is NOT memory — outside the envelope.
     assert "<available_skills>" in ctx
     assert "<available_skills>" not in env

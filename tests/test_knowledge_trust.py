@@ -208,14 +208,15 @@ def test_injected_lines_carry_trust_label(tmp_path):
 
 
 def test_injected_lines_tag_source_domain_not_the_table(tmp_path):
-    """#2161: an auto-injected hit shows its source DOMAIN (e.g. `claude-import`),
-    not the physical table (always "chunks"). Without this the model reads inherited/
-    imported knowledge back as its own memory ("attribution collapse")."""
+    """#2161: an auto-injected hit shows its source COLLECTION/domain (e.g.
+    `claude-import`), not the physical table (always "chunks"). Without this the
+    model reads inherited/imported knowledge back as its own memory ("attribution
+    collapse"). ADR 0125 P2-F cites it as ``[collection · source]``."""
     store = KnowledgeStore(tmp_path / "kb.db")
     store.add_chunk("gravity accelerates objects at 9.8 m/s^2", domain="claude-import", source_type="extracted")
     ctx = _context(_mw(store), query="gravity")
-    assert "[claude-import]" in ctx  # inherited-domain tag is visible on recall
-    assert "[chunks]" not in ctx  # the meaningless physical-table tag is gone
+    assert "[claude-import ·" in ctx  # inherited-collection tag is visible on recall
+    assert "[chunks" not in ctx  # the meaningless physical-table tag is gone
 
 
 def test_knowledge_search_cites_trust_label(tmp_path):

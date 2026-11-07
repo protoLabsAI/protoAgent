@@ -37,7 +37,7 @@ def test_middleware_injects_hot_memory(tmp_path):
     km._prior_sessions_cache = ""  # skip session loading
     _upd = km.before_agent({"messages": [HumanMessage(content="anything")]}, runtime=None)
     ctx = turn_projection(_upd)[0] or ""
-    assert "Always-on facts (hot memory)" in ctx
+    assert "Always-on memory" in ctx
     assert "deploys go out Fridays" in ctx
 
 

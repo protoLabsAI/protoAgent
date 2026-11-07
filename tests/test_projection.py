@@ -260,7 +260,8 @@ def test_standalone_composer_reproduces_native_golden(monkeypatch):
     assert not projected.empty
     assert projected.as_legacy_dict() == golden
     assert (projected.digest_ids, projected.hot_ids, projected.rag_ids) == (_DIGEST_IDS, [7, 9], [31, 32])
-    assert projected.sources == ["prior_sessions", "hot:2", "knowledge:2", "skills:2", "working_state"]
+    # ADR 0125 P2-F order: always-on memory, relevant memory, knowledge, then the digest.
+    assert projected.sources == ["hot:2", "knowledge:2", "prior_sessions", "skills:2", "working_state"]
     assert len(recorded) == 1
 
 
@@ -285,7 +286,7 @@ def test_external_runtime_delta_is_the_native_projection(monkeypatch):
         record=False,
     )
     assert ctx.volatile_delta == _golden()["context"]
-    assert ctx.sources == ["prior_sessions", "hot:2", "knowledge:2", "skills:2", "working_state"]
+    assert ctx.sources == ["hot:2", "knowledge:2", "prior_sessions", "skills:2", "working_state"]
     assert ctx.stable_prefix  # the persona half is untouched by the delta
 
 
@@ -545,7 +546,7 @@ def test_no_query_means_no_rag_search(monkeypatch):
     )
     assert store.search_calls == []
     assert "[Relevant knowledge" not in projected.text
-    assert "[Always-on facts (hot memory):]" in projected.text
+    assert "[Always-on memory:]" in projected.text
     assert projected.sources == ["hot:2"]
 
 
@@ -561,7 +562,7 @@ def test_goal_turn_suppresses_the_digest_only(monkeypatch):
         projected = compose_projected_context(_QUERY, store, None, {}, **kw)
     assert "<prior_sessions>" not in projected.text
     assert projected.digest_ids == []
-    assert "[Always-on facts (hot memory):]" in projected.text and projected.rag_ids == [31, 32]
+    assert "[Always-on memory:]" in projected.text and projected.rag_ids == [31, 32]
     assert projected.sources == ["hot:2", "knowledge:2"]
 
     assert "<prior_sessions>" in compose_projected_context(_QUERY, store, None, {}, **kw).text
@@ -588,7 +589,7 @@ def test_hot_memory_fallback_for_a_backend_without_the_entries_reader(monkeypatc
         options=_options(),
         prior_sessions=lambda: ("", []),
     )
-    assert "[Always-on facts (hot memory):]\noperator prefers dark mode" in projected.text
+    assert "[Always-on memory:]\noperator prefers dark mode" in projected.text
     assert projected.hot_ids == []  # un-attributed, but still delivered
     assert projected.sections[0]["label"] == "Injected memory"  # no id-attributed count to show
     assert projected.sources == ["hot"]
@@ -719,7 +720,7 @@ def test_delivery_boundary_trims_an_over_long_result_set(caplog):
         delivered = _fit_to_budget(c, ProjectionOptions(top_k=5, budget_chars=None), None, [])
 
     assert delivered.rag_ids == [0, 1, 2, 3, 4]
-    assert delivered.text.count("- [fact] hit ") == 5  # the TEXT is trimmed too, not just the ids
+    assert delivered.text.count("- [fact · extracted] hit ") == 5  # the TEXT is trimmed too, not just the ids
     assert any("over-delivery" in r.getMessage() for r in caplog.records)
 
 
