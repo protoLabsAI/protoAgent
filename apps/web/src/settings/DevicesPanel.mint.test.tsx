@@ -1,7 +1,7 @@
 // "New access token" (#4683): Settings ▸ Devices mints a NAMED device-scope token with no
 // phone to pair, shown ONCE. The button is for full-scope callers only — a device-scope caller
 // (whose server would 403 the mint) must not see a dead button, mirroring how DeviceList hides
-// Promote/Limit. The panel is mounted for real; only the toast, the API and the clipboard are
+// Promote/Limit. The panel is mounted for real; only the toast, fetch and the clipboard are
 // stubbed.
 
 import { act, createElement as h } from "react";
@@ -23,10 +23,6 @@ vi.mock("@protolabsai/ui/overlays", () => ({
   },
 }));
 vi.mock("../lib/clipboard", () => ({ copyText: mocks.copyText }));
-vi.mock("../lib/api", () => ({
-  api: { devices: mocks.devices, mintDeviceToken: mocks.mintDeviceToken },
-  DEVICE_SCOPE_MESSAGE: "This device can't change pairing or credentials — use a full-access device.",
-}));
 
 import { DevicesPanel } from "./DevicesPanel";
 
@@ -40,6 +36,9 @@ const deviceCaller = { scope: "device", device_id: "self" as string | null };
 function listResult(devices: PairedDevice[] = [], caller = fullCaller) {
   return { devices, caller, public_console_url: "" };
 }
+
+// Deliberately obvious placeholder: this UI does not require credential-shaped fixtures.
+const sampleToken = "test-token";
 
 const newRow = {
   id: "d-new",
@@ -123,11 +122,19 @@ beforeEach(() => {
   mocks.mintDeviceToken.mockReset();
   mocks.copyText.mockReset();
   mocks.copyText.mockResolvedValue(true);
+  vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
+    if (url !== "/api/devices") throw new Error(`Unexpected request: ${url}`);
+    if (init?.method === "POST") {
+      return mocks.mintDeviceToken(JSON.parse(init.body as string).name);
+    }
+    return Response.json(await mocks.devices());
+  }));
 });
 
 afterEach(async () => {
   await act(async () => root?.unmount());
   host?.remove();
+  vi.unstubAllGlobals();
   root = null;
   host = null;
 });
@@ -147,7 +154,7 @@ describe("DevicesPanel ▸ New access token", () => {
 
   it("mints a named token, shows it once with a working Copy, and refreshes the list", async () => {
     mocks.devices.mockResolvedValue(listResult([], fullCaller));
-    mocks.mintDeviceToken.mockResolvedValue({ ok: true, device: newRow, token: "tok_live_abc123" });
+    mocks.mintDeviceToken.mockImplementation(() => Response.json({ ok: true, device: newRow, token: sampleToken }));
     await mount();
 
     await openMint();
@@ -158,13 +165,18 @@ describe("DevicesPanel ▸ New access token", () => {
     await flush();
 
     expect(mocks.mintDeviceToken).toHaveBeenCalledWith("CI uploader");
-    expect(tokenCode()?.textContent).toBe("tok_live_abc123");
+    expect(fetch).toHaveBeenCalledWith("/api/devices", expect.objectContaining({
+      method: "POST",
+      body: JSON.stringify({ name: "CI uploader" }),
+    }));
+    expect(mocks.devices).toHaveBeenCalledTimes(2);
+    expect(tokenCode()?.textContent).toBe(sampleToken);
     // The new device row is now in the list below.
     expect(host!.querySelector('[data-testid="device-row-d-new"]')).not.toBeNull();
 
     await act(async () => buttonWith("Copy")!.click());
     await flush();
-    expect(mocks.copyText).toHaveBeenCalledWith("tok_live_abc123");
+    expect(mocks.copyText).toHaveBeenCalledWith(sampleToken);
     expect(mocks.toasts).toContainEqual({ title: "Token copied", message: "Keep it somewhere safe." });
   });
 
@@ -180,9 +192,12 @@ describe("DevicesPanel ▸ New access token", () => {
     expect(tokenCode()).toBeNull();
   });
 
-  it("surfaces the server's detail on a refusal (400/403) and shows no token", async () => {
+  it.each([
+    [400, "A device name is required."],
+    [403, { code: "device_scope", reason: "Only a full-access device can mint an access token." }],
+  ])("surfaces the server's detail on a %s refusal and shows no token", async (status, detail) => {
     mocks.devices.mockResolvedValue(listResult([], fullCaller));
-    mocks.mintDeviceToken.mockRejectedValue(new Error("Only a full-access device can mint an access token."));
+    mocks.mintDeviceToken.mockImplementation(() => Response.json({ detail }, { status }));
     await mount();
 
     await openMint();
@@ -193,14 +208,14 @@ describe("DevicesPanel ▸ New access token", () => {
     expect(mocks.toasts).toContainEqual({
       tone: "error",
       title: "Couldn't create an access token",
-      message: "Only a full-access device can mint an access token.",
+      message: typeof detail === "string" ? detail : detail.reason,
     });
     expect(tokenCode()).toBeNull();
   });
 
   it("dismissing the token block removes it from the DOM", async () => {
     mocks.devices.mockResolvedValue(listResult([], fullCaller));
-    mocks.mintDeviceToken.mockResolvedValue({ ok: true, device: newRow, token: "tok_live_abc123" });
+    mocks.mintDeviceToken.mockImplementation(() => Response.json({ ok: true, device: newRow, token: sampleToken }));
     await mount();
 
     await openMint();
@@ -212,5 +227,7 @@ describe("DevicesPanel ▸ New access token", () => {
 
     await act(async () => buttonExactly("Dismiss")!.click());
     expect(tokenCode()).toBeNull();
+    expect(host!.textContent).not.toContain(sampleToken);
+    expect(window.localStorage.length).toBe(0);
   });
 });
