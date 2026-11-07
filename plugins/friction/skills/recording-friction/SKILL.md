@@ -58,8 +58,9 @@ the part people forget — **what would have helped**. "A `from_line`/`to_line`
 parameter would have made this one call" is the sentence that turns a report into
 a ticket.
 
-Keep the summary under ~200 characters and the detail under ~600: the ledger caps
-both on write, and it cuts mid-word.
+Keep the summary under ~200 characters and the detail under ~2000. Longer summaries
+are clipped with an ellipsis. Longer details keep the start and end around an explicit
+`… [N chars omitted] …` marker, so the closing "What would help" ask survives.
 
 ## Do not record
 
