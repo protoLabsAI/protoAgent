@@ -256,7 +256,7 @@ def test_migrated_hot_row_reaches_prompt_as_always_on(tmp_path, monkeypatch):
         options=ProjectionOptions(top_k=0, prior_sessions_policy="off"),
     )
     assert "deploys ship on Fridays" in projected.text
-    assert "Always-on facts" in projected.text
+    assert "Always-on memory" in projected.text
 
 
 # ── r5 — the SDK surface for plugins ──────────────────────────────────────────
