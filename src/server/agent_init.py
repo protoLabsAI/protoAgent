@@ -314,6 +314,7 @@ def _init_langgraph_agent(headless_setup: bool = False):
             STATE.graph = None
             STATE.knowledge_store = None
             STATE.history_store = None
+            STATE.memory_store = None
             # Load plugins for their ROUTES + SURFACES even without a compiled
             # graph. The Connect Discord / Connect Google / Test-connection routes
             # are how the setup wizard *configures* the agent, so they must be
@@ -351,6 +352,7 @@ def _init_langgraph_agent(headless_setup: bool = False):
     with _timed_boot_phase("knowledge_store", _boot_phases):
         STATE.knowledge_store = _build_knowledge_store(STATE.graph_config)
         STATE.history_store = _build_history_store(STATE.graph_config)
+        STATE.memory_store = _build_memory_store(STATE.graph_config)
         # ADR 0125 D6: one-shot, idempotent boot migration draining legacy
         # domain='conversation' chunks into the history table (same agent.db).
         # Runs now that both stores exist and have created their schemas.
@@ -572,6 +574,27 @@ def _migrate_conversation_history(history_store) -> None:
         migrate_conversation_chunks_to_history(path)
     except Exception:  # noqa: BLE001 — a migration hiccup must never fail boot
         log.exception("[server] 0125 history migration skipped")
+
+
+def _build_memory_store(config):
+    """Core memory stays in private agent.db, independent of the knowledge backend."""
+    if not getattr(config, "knowledge_middleware", True):
+        return None
+    from knowledge.memories import MemoryStore
+
+    embed_fn = None
+    if getattr(config, "knowledge_embeddings", False):
+        try:
+            from graph.llm import create_embed_fn
+
+            embed_fn = create_embed_fn(config)
+        except Exception as exc:
+            log.warning("[server] memory embed fn init failed: %s; FTS5 only", exc)
+    try:
+        return MemoryStore(db_path=config.knowledge_db_path, embed_fn=embed_fn)
+    except Exception as exc:
+        log.warning("[server] memory store init failed: %s; memory unavailable", exc)
+        return None
 
 
 def _build_history_store(config):
@@ -1259,6 +1282,7 @@ def _reload_langgraph_agent(*, reload_plugins: bool = True) -> tuple[bool, str]:
 
     new_store = None
     new_history_store = None
+    new_memory_store = None
     new_skills = None
     new_mcp_clients, new_mcp_tools, new_mcp_meta = [], [], []
     new_plugin_tools, new_plugin_skill_dirs, new_plugin_meta = [], [], []
@@ -1290,6 +1314,7 @@ def _reload_langgraph_agent(*, reload_plugins: bool = True) -> tuple[bool, str]:
         try:
             new_store = _build_knowledge_store(new_config)
             new_history_store = _build_history_store(new_config)
+            new_memory_store = _build_memory_store(new_config)
             # Plugins before MCP — a plugin's managed MCP server (e.g. Google)
             # is injected into the MCP discovery below (matches _main ordering).
             # Prompt-only rebuild (#3365): reuse the live bundle + MCP clients. Only
@@ -1433,6 +1458,7 @@ def _reload_langgraph_agent(*, reload_plugins: bool = True) -> tuple[bool, str]:
         log.exception("[config] host model-layer sync failed")
     STATE.knowledge_store = new_store
     STATE.history_store = new_history_store
+    STATE.memory_store = new_memory_store
     STATE.skills_index = new_skills
     # Swap in the new MCP clients, then release the old ones — persistent session
     # pools hold live subprocesses that would otherwise leak on every reload. A

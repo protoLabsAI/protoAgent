@@ -72,6 +72,35 @@ def _record_op(op: str, started: float) -> None:
         pass
 
 
+def rank_vectors(query_vec: list[float], rows, k: int) -> list[int]:
+    """Rank (id, JSON vector) pairs by cosine similarity, skipping incompatible vectors."""
+    qn = math.sqrt(sum(x * x for x in query_vec)) or 1.0
+    scored: list[tuple[float, int]] = []
+    for row_id, encoded in rows:
+        try:
+            vec = json.loads(encoded)
+        except (json.JSONDecodeError, TypeError):
+            continue
+        if len(vec) != len(query_vec):
+            continue
+        dot = sum(a * b for a, b in zip(query_vec, vec))
+        vn = math.sqrt(sum(x * x for x in vec)) or 1.0
+        scored.append((dot / (qn * vn), int(row_id)))
+    scored.sort(reverse=True)
+    return [cid for _, cid in scored[:k]]
+
+
+def rrf_scores(rankings, rrf_k: int = 60) -> dict[int, float]:
+    """Fuse ordered id lists using the knowledge store's reciprocal-rank convention."""
+    scores: dict[int, float] = {}
+    for ranking in rankings:
+        for rank, row_id in enumerate(ranking):
+            if row_id is None:
+                continue
+            scores[row_id] = scores.get(row_id, 0.0) + 1.0 / (rrf_k + rank)
+    return scores
+
+
 class HybridKnowledgeStore(KnowledgeStore):
     """KnowledgeStore + optional semantic search (RRF over FTS5 ∪ vectors)."""
 
@@ -585,20 +614,7 @@ class HybridKnowledgeStore(KnowledgeStore):
         finally:
             db.close()
 
-        qn = math.sqrt(sum(x * x for x in query_vec)) or 1.0
-        scored: list[tuple[float, int]] = []
-        for r in rows:
-            try:
-                vec = json.loads(r["vec"])
-            except (json.JSONDecodeError, TypeError):
-                continue
-            if len(vec) != len(query_vec):
-                continue
-            dot = sum(a * b for a, b in zip(query_vec, vec))
-            vn = math.sqrt(sum(x * x for x in vec)) or 1.0
-            scored.append((dot / (qn * vn), int(r["chunk_id"])))
-        scored.sort(reverse=True)
-        return [cid for _, cid in scored[:k]]
+        return rank_vectors(query_vec, ((r["chunk_id"], r["vec"]) for r in rows), k)
 
     # ── hybrid search ────────────────────────────────────────────────────────────
 
@@ -673,16 +689,8 @@ class HybridKnowledgeStore(KnowledgeStore):
                 return base[:k]
 
             # Reciprocal Rank Fusion over the two rankings, keyed by chunk id.
-            scores: dict[int, float] = {}
-            by_id: dict[int, dict] = {}
-            for rank, item in enumerate(base):
-                cid = item.get("id")
-                if cid is None:
-                    continue
-                scores[cid] = scores.get(cid, 0.0) + 1.0 / (self._rrf_k + rank)
-                by_id[cid] = item
-            for rank, cid in enumerate(vec_ids):
-                scores[cid] = scores.get(cid, 0.0) + 1.0 / (self._rrf_k + rank)
+            by_id = {item["id"]: item for item in base if item.get("id") is not None}
+            scores = rrf_scores(([item.get("id") for item in base], vec_ids), self._rrf_k)
 
             ordered = sorted(scores, key=lambda c: scores[c], reverse=True)
             if self._min_score > 0:
