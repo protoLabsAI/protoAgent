@@ -91,19 +91,36 @@ def test_candidates_dedupe_live_subjects_and_flag_same_kind(review):
 
 
 @pytest.mark.parametrize("kind", ["profile", "standing"])
-def test_promote_once_per_subject_preserves_private(review, kind):
+@pytest.mark.parametrize("delivery", ["always", "retrieved", "on_demand"])
+def test_promote_once_per_subject_preserves_private(review, kind, delivery, monkeypatch):
+    from graph.plugins.host import HOST
+
     client, store, shared = review
-    mid = store.add("Pacific", kind=kind, provenance="agent", subject=" Time Zone ", delivery="always")
+    mid = store.add("Pacific", kind=kind, provenance="agent", subject=" Time Zone ", delivery=delivery, expires_at="2099-01-01")
+    events = []
+
+    def publish(topic, payload):
+        # Publication happens after commit: another connection can read the row.
+        assert shared.get(int(payload["chunk_id"].split(":")[1])) is not None
+        events.append((topic, payload))
+
+    monkeypatch.setattr(HOST, "publish", publish)
     before = asdict(store.get(mid))
     response = client.post(f"{BASE}/{mid}/promote")
     assert response.status_code == 200
     entry = shared.get(response.json()["id"])
-    assert (entry.kind, entry.subject, entry.content, entry.provenance, entry.review_state, entry.delivery) == (kind, " Time Zone ", "Pacific", "operator", "confirmed", "always")
+    assert (entry.kind, entry.subject, entry.content, entry.provenance, entry.review_state, entry.delivery) == (kind, " Time Zone ", "Pacific", "operator", "confirmed", delivery)
     other = store.add("Eastern", kind=kind, provenance="agent", subject="time   zone", supersede=False)
     for duplicate in (mid, other):
         response = client.post(f"{BASE}/{duplicate}/promote")
         assert response.status_code == 409 and response.json()["id"] == entry.id
     assert shared.count() == 1
+    assert entry.expires_at == store.get(mid).expires_at
+    assert events == ([
+        ("memory.hot_written", {
+            "chunk_id": f"memory:{entry.id}", "source": "", "source_type": "operator", "preview": "Pacific",
+        })
+    ] if delivery == "always" else [])
     assert asdict(store.get(mid)) == before
 
 
@@ -170,3 +187,30 @@ def test_pending_shared_profile_already_counts_as_live(review):
     response = client.post(f"{BASE}/{mid}/promote")
     assert response.status_code == 409 and response.json()["id"] == existing
     assert shared.get(existing).review_state == "pending"
+
+
+@pytest.mark.parametrize("state", ["rejected", "expired", "superseded", "invalidated"])
+def test_inactive_private_memory_cannot_be_promoted(review, state):
+    client, store, shared = review
+    mid = store.add("old", kind="profile", provenance="agent", subject="zone")
+    if state == "rejected":
+        store.set_review_state(mid, "rejected")
+    elif state == "superseded":
+        store.add("new", kind="profile", provenance="operator", subject="zone")
+    else:
+        column = "expires_at" if state == "expired" else "invalidated_at"
+        with store._write() as db:
+            db.execute(f"UPDATE memories SET {column}='2000-01-01' WHERE id=?", (mid,))
+    before = asdict(store.get(mid))
+    assert client.post(f"{BASE}/{mid}/promote").status_code == 400
+    assert shared.count() == 0
+    assert asdict(store.get(mid)) == before
+
+
+def test_review_delete_preserves_hot_memory(review):
+    client, store, _ = review
+    mid = store.add("pinned", kind="profile", provenance="operator", delivery="always")
+    assert client.delete(f"{BASE}/{mid}").status_code == 400
+    assert store.get(mid) is not None
+    assert client.delete(f"/api/memory/hot/memory:{mid}").status_code == 200
+    assert store.get(mid) is None

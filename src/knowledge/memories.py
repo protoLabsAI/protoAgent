@@ -97,6 +97,14 @@ class MemoryEntry:
     updated_at: str
 
 
+class LiveSubjectConflict(ValueError):
+    """A live row already owns the requested subject and kind."""
+
+    def __init__(self, memory_id: int):
+        self.memory_id = memory_id
+        super().__init__(f"a live memory already exists: {memory_id}")
+
+
 class MemoryStore:
     """Synchronous, thread-safe SQLite memory with optional hybrid retrieval.
 
@@ -164,6 +172,7 @@ class MemoryStore:
         thread_id: str | None = None,
         legacy_domain: str | None = None,
         supersede: bool = True,
+        reject_live_subject: bool = False,
     ) -> int:
         """Persist a memory and its embedding atomically; operator rows default confirmed.
 
@@ -171,6 +180,8 @@ class MemoryStore:
         live row on the SAME subject, kind and scope (ADR 0125 P3-A) — see
         ``add_with_supersession`` for the exact rule. Returns the new id; callers that need
         the retired rows call ``add_with_supersession`` instead.
+        ``reject_live_subject`` raises ``LiveSubjectConflict`` when any live row
+        has the same normalized subject and kind, regardless of scope.
         """
         id, _ = self.add_with_supersession(
             content,
@@ -186,6 +197,7 @@ class MemoryStore:
             thread_id=thread_id,
             legacy_domain=legacy_domain,
             supersede=supersede,
+            reject_live_subject=reject_live_subject,
         )
         return id
 
@@ -205,6 +217,7 @@ class MemoryStore:
         thread_id: str | None = None,
         legacy_domain: str | None = None,
         supersede: bool = True,
+        reject_live_subject: bool = False,
     ) -> tuple[int, list[MemoryEntry]]:
         """Persist a memory and retire the rows it supersedes, atomically (ADR 0125 P3-A).
 
@@ -221,6 +234,10 @@ class MemoryStore:
         A replacement must also expire no earlier than the row it retires; temporary
         saves preserve longer-lived memories so expiry cannot strand them.
 
+        With ``reject_live_subject``, check subject/kind ownership inside the same
+        write transaction before inserting. Conflicts raise ``LiveSubjectConflict``
+        without writing or publishing an event, including across store instances.
+
         Returns ``(new_id, replaced)`` where ``replaced`` lists the retired rows as they
         were before the stamp (newest first).
         """
@@ -234,6 +251,15 @@ class MemoryStore:
         norm_scope = scope or None
         replaced: list[MemoryEntry] = []
         with self._write() as db:
+            if reject_live_subject and norm_subject:
+                where, params = self._filters(kind=kind)
+                rows = db.execute(
+                    f"SELECT m.id, m.subject FROM memories m WHERE {where} ORDER BY m.created_at DESC, m.id DESC",
+                    params,
+                )
+                for row in rows:
+                    if _normalize_subject(row["subject"]) == norm_subject:
+                        raise LiveSubjectConflict(row["id"])
             cur = db.execute(
                 "INSERT INTO memories (kind, subject, heading, content, delivery, review_state, provenance, "
                 "scope, expires_at, source_session, thread_id, legacy_domain, created_at, updated_at) "

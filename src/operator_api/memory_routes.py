@@ -106,28 +106,18 @@ def _profile_candidates(store, shared):
 
 
 def _promote_memory(shared, entry):
-    from knowledge.memories import _normalize_subject
-    from knowledge.store import _now_iso
+    from knowledge.memories import LiveSubjectConflict
 
-    subject = _normalize_subject(entry.subject)
-    vec = shared._embed((entry.heading + "\n" if entry.heading else "") + entry.content)
-    # BEGIN IMMEDIATE serializes the check and insert across agents/processes sharing
-    # profile.db. Calling add after live_on_subject would race and supersede a winner.
-    with shared._write() as db:
-        where, params = shared._filters(kind=entry.kind)
-        rows = db.execute(f"SELECT m.id, m.subject FROM memories m WHERE {where}", params)
-        existing = next((r["id"] for r in rows if _normalize_subject(r["subject"]) == subject), None)
-        if existing is not None:
-            return JSONResponse({"detail": "a live shared memory already exists", "id": existing}, status_code=409)
-        now = _now_iso()
-        cur = db.execute(
-            "INSERT INTO memories (kind, subject, heading, content, delivery, provenance, review_state, "
-            "created_at, updated_at) VALUES (?, ?, ?, ?, ?, 'operator', 'confirmed', ?, ?)",
-            (entry.kind, entry.subject, entry.heading, entry.content, entry.delivery, now, now),
+    try:
+        mid = shared.add(
+            entry.content, kind=entry.kind, subject=entry.subject, heading=entry.heading,
+            delivery=entry.delivery, expires_at=entry.expires_at,
+            provenance="operator", review_state="confirmed", reject_live_subject=True,
         )
-        mid = int(cur.lastrowid)
-        if vec is not None:
-            db.execute("INSERT INTO memory_vectors VALUES (?, ?)", (mid, json.dumps(vec)))
+    except LiveSubjectConflict as exc:
+        return JSONResponse(
+            {"detail": "a live shared memory already exists", "id": exc.memory_id}, status_code=409
+        )
     return {"enabled": True, "id": mid}
 
 
@@ -461,6 +451,7 @@ def register_memory_routes(app) -> None:
     async def _api_memory_promote(memory_id: int):
         from knowledge.memories import _normalize_subject
         from knowledge.shared_profile import ALLOWED_KINDS
+        from knowledge.store import _now_iso
 
         store, shared = STATE.memory_store, STATE.shared_profile_store
         if store is None or shared is None:
@@ -472,6 +463,10 @@ def register_memory_routes(app) -> None:
             return JSONResponse({"detail": "only profile and standing memories can be promoted"}, status_code=400)
         if not _normalize_subject(entry.subject):
             return JSONResponse({"detail": "a subject is required for promotion"}, status_code=400)
+        if (entry.review_state == "rejected" or entry.superseded_by is not None
+                or entry.invalidated_at is not None
+                or (entry.expires_at is not None and entry.expires_at <= _now_iso())):
+            return JSONResponse({"detail": "only active memories can be promoted"}, status_code=400)
         return await asyncio.to_thread(_promote_memory, shared, entry)
 
     @app.delete("/api/memory/memories/{memory_id}")
@@ -479,6 +474,9 @@ def register_memory_routes(app) -> None:
         store = STATE.memory_store
         if store is None:
             return {"enabled": False, "deleted": False}
+        entry = await asyncio.to_thread(store.get, memory_id)
+        if entry is not None and entry.delivery == "always":
+            return JSONResponse({"detail": "use the hot memory delete route"}, status_code=400)
         if not await asyncio.to_thread(store.delete, memory_id):
             return JSONResponse({"detail": "no memory with that id"}, status_code=404)
         return {"enabled": True, "deleted": True}
