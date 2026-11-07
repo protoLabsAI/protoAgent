@@ -1,8 +1,11 @@
-"""Knowledge store — sqlite-backed chunk storage for memory tools and middleware.
+"""Knowledge store — sqlite-backed chunk storage for the knowledge tools and middleware.
 
 The template ships this enabled by default so a fresh fork has a working
-memory loop on day one (memory_ingest, memory_recall, memory_list) and the
-eval harness can assert side effects against real DB state.
+knowledge loop on day one (``knowledge_search`` over the stored collections)
+and the eval harness can assert side effects against real DB state. Since ADR
+0125 Phase 2 these ``chunks`` hold knowledge (collections); agent memory lives
+in the ``memories`` table (``knowledge/memories.py``), reached through
+``memory_save`` / ``memory_search`` / ``memory_list`` / ``memory_forget``.
 
 See ``knowledge.store.KnowledgeStore`` for the public API.
 """

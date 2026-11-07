@@ -198,7 +198,7 @@ class LayeredKnowledgeStore:
         Shape: ``{<domain>: n, ..., "total": N, "private": P, "commons": C}`` — the same
         per-domain keys a single ``KnowledgeStore.stats()`` returns (summed over the
         tiers) so readers that treat every non-``total`` key as a domain
-        (``memory_stats``, the snapshot seed's domain discovery, the Store view) see
+        (``memory_list``, the snapshot seed's domain discovery, the Store view) see
         real domains, while readers of the split keys keep working. A domain literally
         named ``private``/``commons``/``total`` is shadowed by the split keys."""
         priv = self._private.stats() or {}
