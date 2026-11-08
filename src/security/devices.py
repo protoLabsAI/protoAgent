@@ -359,15 +359,18 @@ def list_devices() -> list[dict]:
     return [d.public() for d in _load()]
 
 
-def mint_device(name: object) -> tuple[dict, str]:
+def mint_device(name: object, *, minted_by: str | None = None) -> tuple[dict, str]:
     """Mint a named device-scope token for an authenticated operator, without pairing.
 
-    Invalid names raise ``ValueError``; the token is returned once and never audited.
+    ``minted_by`` is the caller's own device id, or None for a shared credential (the
+    operator bearer, ``X-API-Key`` or the fleet service token); the audit entry records it
+    as ``"shared"`` then. Invalid names raise ``ValueError``; the token is returned once
+    and never audited.
     """
     device, token = _register(validate_device_name(name), KIND_DEVICE)
     _audit(
-        "device_minted",
-        {"device_id": device.id, "name": device.name},
+        "device.minted",
+        {"device_id": device.id, "name": device.name, "minted_by": minted_by or "shared"},
         "a named device-scope access token was minted",
     )
     return device.public(), token

@@ -1104,8 +1104,8 @@ def test_mint_device_without_console_is_hashed_audited_and_revocable(
     assert token not in registry and "token_sha256" not in device
     audit = audit_path.read_text("utf-8")
     entry, = [json.loads(line) for line in audit.splitlines()]
-    assert entry["tool"] == "device_minted" and entry["success"] is True
-    assert entry["args"] == {"device_id": device["id"], "name": device["name"]}
+    assert entry["tool"] == "device.minted" and entry["success"] is True
+    assert entry["args"] == {"device_id": device["id"], "name": device["name"], "minted_by": "shared"}
     assert token not in audit
     ordinary = client.get("/api/chat", headers=_hdr(token))
     assert ordinary.status_code == 200 and ordinary.json()["scope"] == "device"
@@ -1131,13 +1131,23 @@ def test_mint_rejects_invalid_input_without_writing(client, devices, body):
     assert not devices._PENDING
 
 
-def test_mint_accepts_explicit_device_scope_and_full_device_caller(client, devices):
-    _, full_token = _hub(devices)
+def test_mint_accepts_explicit_device_scope_and_full_device_caller(client, devices, monkeypatch, tmp_path):
+    import observability.audit as audit_mod
+
+    audit_path = tmp_path / "mint-by-device-audit.jsonl"
+    monkeypatch.setattr(audit_mod, "audit_logger", audit_mod.AuditLogger(audit_path))
+    hub, full_token = _hub(devices)
     response = client.post(
         "/api/devices", headers=_hdr(full_token), json={"name": "recorder", "scope": "device"}
     )
     assert response.status_code == 200
     assert response.json()["device"]["scope"] == "device"
+    # The audit names WHICH full-access device minted the token, not just the new device.
+    minted = [json.loads(line) for line in audit_path.read_text("utf-8").splitlines()]
+    minted = [e for e in minted if e["tool"] == "device.minted"]
+    assert [e["args"]["minted_by"] for e in minted] == [hub["id"]]
+    audit = audit_path.read_text("utf-8")
+    assert full_token not in audit and response.json()["token"] not in audit
 
 
 @pytest.mark.parametrize("scope", [None, "device", "bogus"])
