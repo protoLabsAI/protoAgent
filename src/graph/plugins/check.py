@@ -240,7 +240,16 @@ def check_plugin(directory: str | Path) -> list[Finding]:
                 f"Declared {kind} topic {topic!r} has no literal use.",
                 f"Use the topic in code or remove it from {kind}; review dynamic uses manually.",
             )
-    served_routes = {prefix + route for router, route in routes for prefix in mounts.get(router, {""})}
+    # A route decorator's receiver (``router``) rarely unparses to the text of the
+    # ``register_router`` argument that mounts it — the router is built in a factory
+    # (``register_router(_build_view_router(), …)``, as the artifact plugin does),
+    # aliased/qualified, or defined in another file — so a route cannot be tied to one
+    # specific mount statically. Treat every literal mount prefix (plus a bare fallback)
+    # as applicable to every route. Over-generating served routes can only MISS a real
+    # error, never invent the false ``public-path-missing`` that tying a factory-built
+    # router to an empty prefix produced (#4809).
+    mount_prefixes = {prefix for prefixes in mounts.values() for prefix in prefixes} | {""}
+    served_routes = {prefix + route for _, route in routes for prefix in mount_prefixes}
     for public in manifest.public_paths:
         suffix = public
         for prefix in (f"/plugins/{manifest.id}/", f"/api/plugins/{manifest.id}/"):

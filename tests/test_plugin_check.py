@@ -173,3 +173,37 @@ def test_router_mount_prefix(plugin, mount, public):
         f"public_paths: [{public}]\n",
     )
     assert check_plugin(root) == []
+
+
+def test_router_built_in_factory_in_another_file(plugin):
+    """A route on a factory-built router, mounted from another file, counts as served.
+
+    The decorator receiver (``router``) never matches the ``register_router`` argument
+    (``_build_view_router()``), and the two live in different files — the artifact
+    plugin's shape. A literal mount prefix must still apply so the declared public path
+    is not a false ``public-path-missing`` error (#4809)."""
+    root = plugin(
+        "from ._routes import _build_view_router\n"
+        "def register(registry):\n"
+        '    registry.register_router(_build_view_router(), prefix="/plugins/example")\n',
+        "public_paths: [/plugins/example/media/]\n",
+        {
+            "_routes.py": (
+                "def _build_view_router():\n"
+                "    router = APIRouter()\n"
+                '    @router.api_route("/media/{art_id}", methods=["GET", "HEAD"])\n'
+                "    def media(art_id):\n"
+                "        pass\n"
+                "    return router\n"
+            )
+        },
+    )
+    assert check_plugin(root) == []
+
+
+def test_source_unreadable(plugin):
+    """A plugin file that is not valid UTF-8 is reported, not crashed on (#4809)."""
+    root = plugin()
+    (root / "broken.py").write_bytes(b"def register(registry):\n    x = '\xff\xfe'\n")
+    findings = check_plugin(root)
+    assert [(f.code, f.severity, f.file) for f in findings] == [("source-unreadable", "error", "broken.py")]
