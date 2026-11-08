@@ -1805,7 +1805,17 @@ async def record_directive_withdrawal(session_id: str, directive, reason: str = 
     next model call. The steering frame classifies OPERATOR (``STEERING_PREFIX``) but the
     marker CANNOT ride the steering path, so a note queued this way reaches the agent yet
     carries no tag for the console to style. When idle, it is written straight to the
-    checkpoint under the thread lock so it can't race a turn that is just starting.
+    checkpoint under the thread lock so it can't race a turn that is just starting — EXCEPT
+    when that idle thread is parked at a HITL form/approval ``interrupt()`` (no live turn, so
+    :func:`runtime.turn_activity.is_active` is False yet the checkpoint still holds an
+    unanswered interrupt). Writing a fresh ``HumanMessage`` there is the "fresh input on an
+    interrupted thread" LangGraph treats as *abandon the interrupt*
+    (:func:`server.turn_control._hold_if_hitl_pending`): the un-answered tool_call would
+    dangle, the model would see the note before the form answer, and the paused form could
+    never resolve. So a pending interrupt diverts the note to the steering queue too (the
+    same hold the HITL path uses for any other operator message — it folds in at the first
+    model call after the form resolves, in arrival order, likewise losing the marker). The
+    interrupt check is made UNDER the thread lock so it can't race a turn that is parking.
     """
     graph = STATE.graph
     if graph is None:
@@ -1826,14 +1836,29 @@ async def record_directive_withdrawal(session_id: str, directive, reason: str = 
         from langchain_core.messages import HumanMessage  # lazy, like record_failed_turn
 
         tid = _turn_control._resolve_thread_id(None, session_id)
-        msg = HumanMessage(
-            content=text,
-            additional_kwargs={**sent_at_kwargs(), DIRECTIVE_WITHDRAWN_KWARG: {"id": directive.id}},
-        )
+        config = {"configurable": {"thread_id": tid}}
         # The lock serializes with a turn that is just starting on this thread, so the
-        # out-of-band append can't lost-update the turn's own history write.
+        # out-of-band append can't lost-update the turn's own history write, and the
+        # pending-interrupt check below can't race a turn that is parking on a form.
         async with _turn_control._thread_lock(tid):
-            await graph.aupdate_state({"configurable": {"thread_id": tid}}, {"messages": [msg]})
+            if await _pending_interrupt_value(config) is not None:
+                # No live turn (is_active was False), yet the thread is parked at a HITL
+                # form/approval interrupt. Writing a fresh HumanMessage straight to the
+                # checkpoint is the "fresh input on an interrupted thread" LangGraph treats
+                # as abandoning the interrupt (_turn_control._hold_if_hitl_pending): it
+                # strands the unanswered tool_call, the model sees the note before the form
+                # answer, and the paused form can never resolve. Hold the note on the
+                # steering queue instead — it folds in at the first model call after the
+                # form resolves, in arrival order (losing the marker, as the live-turn path
+                # above does). enqueue is a cheap in-memory op, safe under the lock.
+                from graph import steering
+
+                return steering.enqueue(session_id, text) is not None
+            msg = HumanMessage(
+                content=text,
+                additional_kwargs={**sent_at_kwargs(), DIRECTIVE_WITHDRAWN_KWARG: {"id": directive.id}},
+            )
+            await graph.aupdate_state(config, {"messages": [msg]})
         return True
     except Exception:  # noqa: BLE001 — a bookkeeping append must never fail the revoke
         log.warning("[chat] could not record the directive withdrawal for session=%s", session_id, exc_info=True)

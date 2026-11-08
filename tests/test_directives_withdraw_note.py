@@ -9,6 +9,8 @@ leaves the operator's own message, so that path gets no second note.
 
 from __future__ import annotations
 
+import types
+
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -40,7 +42,11 @@ APPROVAL = (
 
 
 class FakeGraph:
-    """Records the out-of-band ``aupdate_state`` writes the note makes (or raises on them)."""
+    """Records the out-of-band ``aupdate_state`` writes the note makes (or raises on them).
+
+    No ``aget_state`` by default — the idle append's pending-interrupt check calls it and
+    treats the resulting ``AttributeError`` as "no interrupt" (``_pending_interrupt`` swallows
+    it), so a plain thread is written straight to the checkpoint, as before."""
 
     def __init__(self, *, fail: bool = False):
         self.updates: list[tuple[dict, dict]] = []
@@ -51,6 +57,16 @@ class FakeGraph:
             raise RuntimeError("checkpointer is down")
         self.updates.append((config, values))
         return config
+
+
+class FakeInterruptedGraph(FakeGraph):
+    """A thread parked at a HITL form/approval ``interrupt()``: ``aget_state`` surfaces a
+    pending interrupt, so the idle append must divert the note to the steering queue rather
+    than write a fresh HumanMessage into the interrupted checkpoint."""
+
+    async def aget_state(self, config):
+        interrupt = types.SimpleNamespace(id="int-1", value={"question": "approve the release?"})
+        return types.SimpleNamespace(tasks=(), interrupts=[interrupt])
 
 
 @pytest.fixture
@@ -210,6 +226,25 @@ def test_an_active_turn_queues_on_the_steering_queue_not_aupdate_state(store, mo
 
     assert c.delete(f"/api/chat/sessions/chat-a/directives/{d.id}?reason=plan changed").status_code == 200
     assert graph.updates == []  # did NOT block the DELETE on the running turn's thread lock
+    queued = steering.drain("chat-a")
+    assert [item["text"] for item in queued] == [f'You withdrew: "{APPROVAL}" — plan changed']
+
+
+def test_a_pending_hitl_form_queues_on_steering_not_the_interrupted_checkpoint(store, monkeypatch):
+    # Idle (no live turn, so is_active is False) but the thread is parked at a HITL
+    # form/approval interrupt. Writing a fresh HumanMessage straight to the checkpoint would
+    # abandon the unanswered interrupt — the dangling tool_call, the note landing before the
+    # form answer, the form unable to resolve — so the note is held on the steering queue
+    # instead (it folds in at the first model call after the form resolves).
+    graph = FakeInterruptedGraph()
+    c = _client(monkeypatch, graph)
+    from graph import steering
+
+    steering.drain("chat-a")  # start clean
+    d = store.record("chat-a", APPROVAL)
+
+    assert c.delete(f"/api/chat/sessions/chat-a/directives/{d.id}?reason=plan changed").status_code == 200
+    assert graph.updates == []  # NOT written into the interrupted checkpoint
     queued = steering.drain("chat-a")
     assert [item["text"] for item in queued] == [f'You withdrew: "{APPROVAL}" — plan changed']
 
