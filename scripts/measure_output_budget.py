@@ -77,7 +77,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
-from datetime import datetime
+from datetime import datetime, timezone
 
 #: A call emitting more than this many output tokens is "large" (ADR 0128 finding F6:
 #: 296 of 20,225 calls, 1.5%, were 25% of all output tokens).
@@ -185,16 +185,22 @@ def _norm_reason(value):
 # Reading + window filtering.
 # --------------------------------------------------------------------------- #
 def _parse_dt(value):
-    """Lenient ISO-8601 parse; a trailing ``Z`` becomes ``+00:00``. None on failure."""
+    """Parse ISO-8601 as an aware instant; timezone-less values assume UTC.
+
+    Date-only values mean midnight UTC. Return None on failure.
+    """
     if not value:
         return None
     text = str(value)
     if text.endswith("Z"):
         text = text[:-1] + "+00:00"
     try:
-        return datetime.fromisoformat(text)
+        moment = datetime.fromisoformat(text)
     except ValueError:
         return None
+    if moment.tzinfo is None:
+        moment = moment.replace(tzinfo=timezone.utc)
+    return moment
 
 
 def iter_jsonl(text: str):
@@ -386,8 +392,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--source", choices=sorted(_NORMALIZERS), required=True, help="Input row shape.")
     parser.add_argument("--panels", help="Optional pr-reviewer telemetry JSONL (step_s) for finder-stage wall time.")
     parser.add_argument("--log", help="Optional plain-text log for the recovered-after-retry count.")
-    parser.add_argument("--since", help="Keep calls at or after this ISO-8601 instant.")
-    parser.add_argument("--until", help="Keep calls at or before this ISO-8601 instant.")
+    parser.add_argument("--since", help="Keep calls at or after this ISO-8601 instant (timezone-less: UTC; date-only: midnight UTC).")
+    parser.add_argument("--until", help="Keep calls at or before this ISO-8601 instant (timezone-less: UTC; date-only: midnight UTC).")
     parser.add_argument("--json", action="store_true", help="Emit the report as JSON instead of text.")
     return parser
 

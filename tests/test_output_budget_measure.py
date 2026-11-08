@@ -6,6 +6,7 @@ import importlib.util
 import json
 from pathlib import Path
 
+import pytest
 from langchain_core.messages import AIMessage
 
 from graph.agent import _extract_subagent_usage
@@ -219,6 +220,35 @@ def test_window_filter_drops_rows_outside_since_until():
     calls, dropped = measure.load_calls(_jsonl(rows), "ledger", since=since)
     assert dropped == 1
     assert [c["output_tokens"] for c in calls] == [200]
+
+
+@pytest.mark.parametrize("source, timestamp_key", [("ledger", "at"), ("langfuse", "startTime")])
+@pytest.mark.parametrize(
+    "since, until",
+    [
+        ("2026-10-30", "2026-11-08"),
+        ("2026-10-30T00:00:00", "2026-11-08T00:00:00"),
+        ("2026-10-30T02:00:00+02:00", "2026-11-07T19:00:00-05:00"),
+    ],
+)
+def test_cli_window_handles_mixed_timezones(tmp_path, capsys, source, timestamp_key, since, until):
+    timestamps = [
+        "2026-10-29T23:59:59Z",  # before since
+        "2026-10-30T00:00:00Z",  # inclusive since
+        "2026-11-01T12:00:00",  # timezone-less row assumes UTC too
+        "2026-11-08T02:00:00+02:00",  # inclusive until
+        "2026-11-07T20:00:00-05:00",  # after until in UTC
+        "2026-11-08T00:00:01Z",
+    ]
+    rows_file = tmp_path / "rows.jsonl"
+    rows_file.write_text(_jsonl([{timestamp_key: stamp} for stamp in timestamps]), encoding="utf-8")
+
+    assert measure.run([
+        str(rows_file), "--source", source, "--since", since, "--until", until, "--json",
+    ]) == 0
+    report = json.loads(capsys.readouterr().out)
+    assert report["calls"] == 3
+    assert report["dropped_outside_window"] == 3
 
 
 def test_recovered_count_from_log_when_rows_lack_flag():
