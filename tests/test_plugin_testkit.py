@@ -432,3 +432,46 @@ def test_default_graph_sdk_stub_console_url_is_none(monkeypatch):
     from graph.sdk import console_url
 
     assert console_url() is None
+
+
+def test_default_graph_sdk_stub_plugin_store_roots_under_temp(monkeypatch):
+    # #4808: host-free there is no instance root, so plugin_store returns a real CREATED dir under
+    # a throwaway temp root (instead of the raise-when-called placeholder a plugin used to
+    # hand-roll a fallback around). Masking graph.sdk with the stub module exercises exactly the
+    # standalone code path a vendored plugin runs (in-repo install_host_stubs no-ops the real sdk).
+    specs = testkit._default_stubs()
+    monkeypatch.setitem(sys.modules, "graph.sdk", testkit._StubModule("graph.sdk", specs["graph.sdk"]))
+    from graph.sdk import plugin_store
+
+    d = plugin_store("cache", plugin_id="demo")
+    assert d.is_dir()  # created on disk
+    assert d.name == "cache" and d.parent.name == "demo"  # ends in demo/cache, cross-platform
+
+    # A bare call (no subdir) is the plugin's own store root.
+    root = plugin_store(plugin_id="demo")
+    assert root.is_dir() and root.name == "demo"
+    assert d.parent.samefile(root)  # the "cache" subdir lives under it
+
+
+def test_default_graph_sdk_stub_plugin_store_rejects_unsafe_paths(monkeypatch):
+    # #4808: the stub keeps the real seam's guards so a traversal bug fails loudly host-free too.
+    specs = testkit._default_stubs()
+    monkeypatch.setitem(sys.modules, "graph.sdk", testkit._StubModule("graph.sdk", specs["graph.sdk"]))
+    from graph.sdk import plugin_store
+
+    with pytest.raises(ValueError):  # upward escape
+        plugin_store("../escape", plugin_id="demo")
+    with pytest.raises(ValueError):  # non-bare plugin id
+        plugin_store(plugin_id="../bad")
+    with pytest.raises(ValueError):  # empty plugin id
+        plugin_store(plugin_id="")
+
+
+def test_plugin_store_stub_uses_one_root_per_install():
+    # "One root per install_host_stubs call": two independently-built stubs must not share a dir,
+    # so parallel plugin tests can't clobber each other's temp state.
+    store_a = testkit._default_stubs()["graph.sdk"]["plugin_store"]
+    store_b = testkit._default_stubs()["graph.sdk"]["plugin_store"]
+    root_a = store_a(plugin_id="demo").parent
+    root_b = store_b(plugin_id="demo").parent
+    assert root_a != root_b

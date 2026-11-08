@@ -29,6 +29,7 @@ from __future__ import annotations
 import importlib.util
 import re
 import sys
+import tempfile
 import types
 from pathlib import Path, PurePosixPath
 
@@ -185,6 +186,42 @@ def _make_attach_file_stub():
     return attach_file
 
 
+def _make_plugin_store_stub():
+    """Stand-in for ``graph.sdk.plugin_store`` (part of #4808): host-free there is no instance
+    root, so this roots every plugin's store under a throwaway temp dir (``tempfile.mkdtemp``,
+    created lazily — one root per ``install_host_stubs`` call) and returns the created
+    ``<root>/<plugin_id>/<subdir>``. It keeps the real seam's guards — a non-bare ``plugin_id``
+    or an absolute / upward-escaping ``subdir`` raises ValueError — so a plugin that writes under
+    its own store (``sdk.plugin_store(plugin_id=registry.plugin_id) / "state.db"``) runs under
+    the testkit instead of hitting the raise-when-called placeholder, and a test can exercise the
+    path with no host. ``.root`` exposes the chosen temp root once materialized (``None`` until
+    the first call), mirroring how ``_make_attach_file_stub`` exposes ``.calls``."""
+    state: dict = {"root": None}
+
+    def plugin_store(subdir: str = "", *, plugin_id: str) -> Path:
+        pid = (plugin_id or "").strip()
+        if not pid or ":" in pid or "/" in pid or "\\" in pid or pid in (".", ".."):
+            raise ValueError(f"plugin_id must be a bare plugin id, got {plugin_id!r}")
+        if state["root"] is None:
+            state["root"] = Path(tempfile.mkdtemp(prefix="protoagent-plugin-store-"))
+            plugin_store.root = state["root"]  # type: ignore[attr-defined]
+        base = state["root"] / pid
+        target = base
+        if subdir:
+            candidate = Path(subdir)
+            if candidate.is_absolute():
+                raise ValueError(f"subdir must be relative, got {subdir!r}")
+            target = (base / candidate).resolve()
+            # `..` in a subdir would hand a plugin the whole temp root (or the disk).
+            if not target.is_relative_to(base.resolve()):
+                raise ValueError(f"subdir must stay inside the plugin's store, got {subdir!r}")
+        target.mkdir(parents=True, exist_ok=True)
+        return target
+
+    plugin_store.root = None  # type: ignore[attr-defined]
+    return plugin_store
+
+
 # Default host surface, derived from what real plugins import (spacetraders, project_board,
 # notes, …). `extra` lets a plugin add its own; anything already importable is left alone.
 def _default_stubs() -> dict:
@@ -194,12 +231,16 @@ def _default_stubs() -> dict:
         # raise-when-called); the rest (run_subagent / subagent_types / config / complete) stay
         # raise-unpatched placeholders — patch them in a test that exercises the model seam.
         # attach_file is a record-only False (no armed turn host-free), never raise-unpatched;
-        # console_url is None — host-free no server is serving, which is what the real seam
-        # returns outside one (#4256). Patch it to exercise a plugin's own-console path.
+        # plugin_store is a temp-rooted stand-in (part of #4808) — host-free there is no instance
+        # root, so it hands back a real created dir under a throwaway temp root instead of the
+        # raise-when-called placeholder; console_url is None — host-free no server is serving,
+        # which is what the real seam returns outside one (#4256). Patch console_url to exercise
+        # a plugin's own-console path.
         "graph.sdk": {
             "Knobs": _StubKnobs,
             "make_knob_tools": _make_knob_tools,
             "attach_file": _make_attach_file_stub(),
+            "plugin_store": _make_plugin_store_stub(),
             "console_url": lambda: None,
         },
         "graph.config": {"LangGraphConfig": type("LangGraphConfig", (), {})},
