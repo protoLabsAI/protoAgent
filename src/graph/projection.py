@@ -77,6 +77,15 @@ _WS_PLAN_CAP = 1500
 _WS_TASK_CAP = 12
 _WS_WATCH_CAP = 10
 _WS_SCHED_CAP = 10
+# ADR 0127 D5: pending schedules and watches are scoped to the chat. THIS chat's entries
+# render in full — the resume instruction / reaction is what will actually run, and a
+# 60-char preview hid "squash-merge on PASS" from the agent that queued it (2026-11-07).
+# Each is capped generously (with an explicit marker) and only this many render in full;
+# agent-wide entries (not tied to any chat) stay one compact line each; other chats' are
+# a count only.
+_WS_CHAT_ITEM_CAP = 5
+_WS_INSTRUCTION_CAP = 1500
+_WS_AGENT_WIDE_PREVIEW = 120
 # Per-provider cap for plugin-contributed work (ADR 0079 Observe seam). Per PROVIDER,
 # not total: two plugins each with a queue should not starve one another.
 _WS_WORK_CAP = 8
@@ -1575,9 +1584,102 @@ def _is_firing_now(job) -> bool:
         return False
 
 
+_FIRING_NOW_TAG = " [FIRING NOW — this is the turn you are in, not another wake]"
+
+
+def _is_recurring(job) -> bool:
+    try:
+        from scheduler.interface import is_cron
+
+        return is_cron(str(getattr(job, "schedule", "") or ""))
+    except Exception:  # noqa: BLE001 — unknown shape: treat as a one-shot
+        return False
+
+
+def _full_text(text: str) -> str:
+    """A resume instruction / reaction prompt as the agent will see it run — in full up to
+    ``_WS_INSTRUCTION_CAP``, then an explicit marker, indented under its entry line."""
+    text = (text or "").strip() or "(no instruction recorded)"
+    if len(text) > _WS_INSTRUCTION_CAP:
+        text = text[:_WS_INSTRUCTION_CAP] + f" …[truncated, {len(text) - _WS_INSTRUCTION_CAP} more chars]"
+    return "\n".join("  " + line for line in text.splitlines())
+
+
+def _preview(text: str) -> str:
+    text = " ".join((text or "").split())
+    return text if len(text) <= _WS_AGENT_WIDE_PREVIEW else text[:_WS_AGENT_WIDE_PREVIEW] + "…"
+
+
+def _schedule_scope(job, session_id: str) -> str:
+    """``"chat"`` (this chat), ``"other"`` (another chat — count only) or ``"agent"``
+    (agent-wide — compact line). A job belongs to the chat it fires INTO (``context_id``:
+    a ``wait`` or one-shot resume) or, failing that, the chat that created it
+    (``origin_session``: a schedule whose result is delivered back there). A job with
+    neither is agent-wide (an Activity-thread cron, a plugin's job). A RECURRING job from
+    another chat is agent-wide too: it fires into the Activity thread whichever chat is
+    open. The job firing this very turn always renders, so its [FIRING NOW] mark is seen."""
+    home = str(getattr(job, "context_id", None) or getattr(job, "origin_session", None) or "")
+    if (home and home == session_id) or _is_firing_now(job):
+        return "chat"
+    if home and not _is_recurring(job):
+        return "other"
+    return "agent"
+
+
+def _schedule_entry(job) -> str:
+    """One of THIS chat's pending schedules, in full: id, next fire, that it runs on its own
+    unless cancelled (naming the tool), then the whole resume instruction."""
+    firing = _is_firing_now(job)
+    head = f"- {job.id}{_FIRING_NOW_TAG if firing else ''} next={job.next_fire or '?'}"
+    if _is_recurring(job):
+        head += f" (recurring {getattr(job, 'schedule', '')!r})"
+    if not firing or _is_recurring(job):
+        head += f' — runs automatically unless you cancel it with cancel_schedule("{job.id}")'
+    return head + "; it will run:\n" + _full_text(job.prompt)
+
+
 def _schedule_line(job) -> str:
-    tag = " [FIRING NOW — this is the turn you are in, not another wake]" if _is_firing_now(job) else ""
-    return f"- {job.id}{tag} next={job.next_fire or '?'}: {(job.prompt or '')[:60]}"
+    """An agent-wide pending schedule: one compact line."""
+    tag = _FIRING_NOW_TAG if _is_firing_now(job) else ""
+    return f"- {job.id}{tag} next={job.next_fire or '?'}: {_preview(job.prompt)}"
+
+
+def _watch_entry(w) -> str:
+    """One of THIS chat's active watches: its status line, when it is next checked (when
+    that is knowable), and the full reaction it will run on its own unless cleared."""
+    head = f"- {w.status_line()}"
+    interval, last = getattr(w, "interval_s", None), getattr(w, "last_checked", None)
+    if interval and last:
+        try:
+            nxt = datetime.fromtimestamp(float(last) + float(interval), tz=timezone.utc)
+            head += f" next check≈{nxt.isoformat(timespec='seconds')}"
+        except (TypeError, ValueError, OverflowError):
+            pass
+    reaction = (getattr(w, "run_prompt", "") or "").strip()
+    if not reaction:
+        return head
+    wid = getattr(w, "id", "")
+    return (
+        head
+        + f' — when it trips, runs automatically unless you clear it with clear_watch("{wid}"):\n'
+        + _full_text(reaction)
+    )
+
+
+def _scoped_section(chat: list[str], agent: list[str], *, chat_heading: str, agent_heading: str) -> list[str]:
+    out = []
+    if chat:
+        out.append(f"{chat_heading}:\n" + "\n".join(chat))
+    if agent:
+        out.append(f"{agent_heading}:\n" + "\n".join(agent))
+    return out
+
+
+def _capped(items: list, cap: int, render, more_hint: str) -> list[str]:
+    lines = [render(i) for i in items[:cap]]
+    if len(items) > cap:
+        lines.append(f"- …+{len(items) - cap} more ({more_hint})")
+    return lines
 
 
 def working_state_block(state: dict | None) -> str:
@@ -1646,26 +1748,61 @@ def working_state_block(state: dict | None) -> str:
     except Exception as exc:  # noqa: BLE001
         log.debug("[working_state] work provider read failed: %s", exc)
 
-    # Active watches — external conditions you're supervising out-of-band.
+    # Active watches and pending schedules, scoped to THIS chat (ADR 0127 D5). This chat's
+    # render in full — what each will run on its own, and how to stop it — so the agent
+    # can never tell the operator nothing will happen while its own queued action says
+    # otherwise. Agent-wide ones are compact; other chats' are a count only.
+    other_watches = other_jobs = 0
     try:
         wc = STATE.watch_controller
         if wc is not None:
-            watches = [w for w in wc.list_watches() if getattr(w, "status", "") == "active"][:_WS_WATCH_CAP]
-            if watches:
-                sections.append("ACTIVE WATCHES:\n" + "\n".join(f"- {w.status_line()}" for w in watches))
+            watches = [w for w in wc.list_watches() if getattr(w, "status", "") == "active"]
+            mine, agent_wide = [], []
+            for w in watches:
+                run_session = str(getattr(w, "run_session", "") or "")
+                if run_session and run_session == session_id:
+                    mine.append(w)
+                elif run_session:
+                    other_watches += 1
+                else:
+                    agent_wide.append(w)
+            sections += _scoped_section(
+                _capped(mine, _WS_CHAT_ITEM_CAP, _watch_entry, "list_watches shows them all"),
+                _capped(agent_wide, _WS_WATCH_CAP, lambda w: f"- {w.status_line()}", "list_watches"),
+                chat_heading="ACTIVE WATCHES (this chat)",
+                agent_heading="AGENT-WIDE WATCHES (not tied to a chat)",
+            )
     except Exception as exc:  # noqa: BLE001
         log.debug("[working_state] watch read failed: %s", exc)
 
-    # Pending schedules — future turns you've queued.
     try:
         sched = STATE.scheduler
         if sched is not None:
-            jobs = list(sched.list_jobs())[:_WS_SCHED_CAP]
-            if jobs:
-                lines = "\n".join(_schedule_line(j) for j in jobs)
-                sections.append(f"PENDING SCHEDULES:\n{lines}")
+            mine, agent_wide = [], []
+            for j in sched.list_jobs():
+                scope = _schedule_scope(j, session_id)
+                if scope == "chat":
+                    mine.append(j)
+                elif scope == "other":
+                    other_jobs += 1
+                else:
+                    agent_wide.append(j)
+            sections += _scoped_section(
+                _capped(mine, _WS_CHAT_ITEM_CAP, _schedule_entry, "list_schedules shows them all"),
+                _capped(agent_wide, _WS_SCHED_CAP, _schedule_line, "list_schedules"),
+                chat_heading="PENDING SCHEDULES (this chat)",
+                agent_heading="AGENT-WIDE SCHEDULES (not tied to a chat)",
+            )
     except Exception as exc:  # noqa: BLE001
         log.debug("[working_state] schedule read failed: %s", exc)
+
+    if other_jobs or other_watches:
+        counts = []
+        if other_jobs:
+            counts.append(f"{other_jobs} pending schedule{'s' if other_jobs != 1 else ''}")
+        if other_watches:
+            counts.append(f"{other_watches} active watch{'es' if other_watches != 1 else ''}")
+        sections.append(f"OTHER CHATS: {', '.join(counts)} (not shown here — they run in their own chats).")
 
     if not sections:
         return ""
