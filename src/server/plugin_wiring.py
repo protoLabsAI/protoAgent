@@ -389,12 +389,9 @@ def _bind_plugin_event_subscriptions(bundle, *, warn_if_unbound: bool = False) -
 
 
 def _teardown_plugin_event_subscriptions(bundle) -> None:
-    """Unsubscribe every ``on()`` handler the given bundle's registries bound (ADR 0039,
-    #4800). The reload commit calls this on the OUTGOING bundle before the reloaded one binds,
-    so a plugin reloaded N times leaves exactly one live handler. Iterates EVERY registry the
-    bundle carries, so a handler bound by an ``on()`` that ran after load (a surface start, a
-    route handler, a lifecycle hook) is torn down too — not just the load-time subscribers. A
-    ``None`` bundle is a no-op; failures are isolated per registry."""
+    """Remove only the outgoing bundle's load-phase/queued subscriptions (ADR 0039,
+    #4800). Immediate post-load subscriptions belong to callers and survive reload.
+    A ``None`` bundle is a no-op; failures are isolated per registry."""
     for registry in getattr(bundle, "plugin_registries", None) or []:
         try:
             registry._teardown_event_subscriptions()

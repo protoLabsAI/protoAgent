@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import logging
 import re
+from collections.abc import Callable
 from pathlib import Path, PurePosixPath
 
 log = logging.getLogger("protoagent.plugins")
@@ -187,16 +188,9 @@ class PluginRegistry:
         self.component_reads: dict = {}
         self.services: dict = {}  # "<plugin_id>.<name>" -> callable, other plugins' sdk.service (ADR 0116)
         self.service_meta: dict = {}  # name -> {"plugin_id", "description"}; parallel, see goal_verifier_meta
-        # Event-bus subscriptions (ADR 0039, #4800). ``on()`` parks each ``(topic, handler)``
-        # here and binds it right away when ``HOST.on`` is already wired; it stays queued only
-        # when ``register()`` runs BEFORE the server wires the bus (the desktop cold boot:
-        # ``_build_plugins`` precedes ``_populate_plugin_host``), and a later bind step delivers
-        # it once the bus exists. We also keep every unsubscribe the bus hands back so a
-        # reload/disable tears THIS load's handlers down before the successor subscribes —
-        # otherwise each reload stacks another live handler closed over stale state. Both are
-        # per-load state; the loader carries EVERY registry forward in the bundle
-        # (``plugin_registries``) so the server can drive bind/teardown across reloads no matter
-        # when ``on()`` was called — a first subscription made after load is covered too.
+        # Only queued subscriptions belong to this bundle. Immediate post-load
+        # subscriptions belong to callers and never enter the owned unsubscribe list.
+        self._in_register = False
         self._pending_subscriptions: list[tuple[str, object]] = []
         self._subscription_unsubs: list = []
 
@@ -532,30 +526,33 @@ class PluginRegistry:
         else:  # non-server context (tests, headless) — no bus wired
             log.debug("[plugins] %s: navigate(%s) dropped — no bus", self.plugin_id, view)
 
-    def on(self, topic: str, handler) -> None:
+    def on(self, topic: str, handler) -> Callable[[], None] | None:
         """Subscribe an in-process handler to bus topics (ADR 0039). ``topic`` may use
         ``*`` (one segment) / ``#`` (tail) wildcards and match ANY plugin's namespace —
         subscribing is read-only and safe. ``handler(payload)`` gets ``{event, data, seq}``,
         may be sync or async; exceptions are isolated by the bus.
 
-        The subscription is QUEUED, then bound to the bus (#4800). When ``HOST.on`` is already
-        wired — the usual case for a call made after load (a surface start, a route handler, a
-        lifecycle hook, a delayed callback over a captured registry, or a hot-reload
-        ``register()``) — it binds RIGHT NOW, so the handler is live the moment this returns.
-        When the bus is not up yet (the desktop cold boot: ``register()`` runs before the server
-        sets ``HOST.on``) it stays queued, and a later host-driven bind step delivers it once the
-        bus is wired — right after wiring and again at each (re)load commit. Either way the
-        registry keeps the unsubscribe the bus hands back, so a reload/disable tears THIS load's
-        handlers down (see :meth:`_teardown_event_subscriptions`) before the successor
-        subscribes, instead of stacking a second live handler closed over stale state."""
+        Ownership is decided when this is called. During ``register()``, subscriptions
+        ALWAYS queue, even if the bus is wired. The bundle owns them: the server binds
+        them after cold-boot wiring or at reload commit, immediately after tearing down
+        the outgoing bundle's load-phase handlers. A failed build binds nothing.
+
+        After load, a wired bus binds immediately and returns an unsubscribe callable.
+        The CALLER owns that unsubscribe (for example, a surface calls it in ``stop()``);
+        plugin reload/disable does not remove it. If the bus is not wired, the subscription
+        queues and becomes bundle-owned like a load-phase subscription, binding at the
+        next server bind point. Returns None when queued or the handler is invalid."""
         if not callable(handler):
             log.warning("[plugins] %s: on(%s) needs a callable handler", self.plugin_id, topic)
-            return
+            return None
+        on = getattr(self.host, "on", None) if self.host else None
+        if not self._in_register and callable(on):
+            try:
+                return on(topic, handler)
+            except Exception:  # noqa: BLE001 — preserve best-effort binding and retry
+                log.exception("[plugins] %s: on(%s) failed to bind", self.plugin_id, topic)
         self._pending_subscriptions.append((topic, handler))
-        # Bind immediately when the bus is already wired (an on() made after load); otherwise
-        # leave it queued for the host's bind step. _bind_event_subscriptions is a quiet no-op
-        # when ``HOST.on`` isn't set and idempotent when it is, so this never double-subscribes.
-        self._bind_event_subscriptions()
+        return None
 
     def _bind_event_subscriptions(self, *, warn_if_unbound: bool = False) -> int:
         """Bind queued :meth:`on` subscriptions to the host event bus (ADR 0039, #4800).
@@ -597,7 +594,7 @@ class PluginRegistry:
         return len(self._pending_subscriptions)
 
     def _teardown_event_subscriptions(self) -> None:
-        """Unsubscribe every :meth:`on` handler this load bound (ADR 0039, #4800).
+        """Unsubscribe only bundle-owned queued :meth:`on` handlers this load bound (ADR 0039, #4800).
 
         Server-internal, not plugin-author SDK. The server calls this on the OUTGOING registry
         before the reloaded one subscribes, so a plugin reloaded N times leaves exactly ONE

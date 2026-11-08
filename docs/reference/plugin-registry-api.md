@@ -131,7 +131,7 @@ handler, no per-plugin code), so any plugin gets agent-driven navigation for fre
 ### `registry.on` {#registry-on}
 
 ```python
-registry.on(topic: str, handler) -> None
+registry.on(topic: str, handler) -> Callable[[], None] | None
 ```
 
 Subscribe an in-process handler to bus topics ([ADR 0039](/adr/0039-plugin-event-bus)). `topic` may use
@@ -139,16 +139,16 @@ Subscribe an in-process handler to bus topics ([ADR 0039](/adr/0039-plugin-event
 subscribing is read-only and safe. `handler(payload)` gets `{event, data, seq}`,
 may be sync or async; exceptions are isolated by the bus.
 
-The subscription is QUEUED, then bound to the bus ([#4800](https://github.com/protoLabsAI/protoAgent/issues/4800)). When `HOST.on` is already
-wired — the usual case for a call made after load (a surface start, a route handler, a
-lifecycle hook, a delayed callback over a captured registry, or a hot-reload
-`register()`) — it binds RIGHT NOW, so the handler is live the moment this returns.
-When the bus is not up yet (the desktop cold boot: `register()` runs before the server
-sets `HOST.on`) it stays queued, and a later host-driven bind step delivers it once the
-bus is wired — right after wiring and again at each (re)load commit. Either way the
-registry keeps the unsubscribe the bus hands back, so a reload/disable tears THIS load's
-handlers down (see `_teardown_event_subscriptions`) before the successor
-subscribes, instead of stacking a second live handler closed over stale state.
+Ownership is decided when this is called. During `register()`, subscriptions
+ALWAYS queue, even if the bus is wired. The bundle owns them: the server binds
+them after cold-boot wiring or at reload commit, immediately after tearing down
+the outgoing bundle's load-phase handlers. A failed build binds nothing.
+
+After load, a wired bus binds immediately and returns an unsubscribe callable.
+The CALLER owns that unsubscribe (for example, a surface calls it in `stop()`);
+plugin reload/disable does not remove it. If the bus is not wired, the subscription
+queues and becomes bundle-owned like a load-phase subscription, binding at the
+next server bind point. Returns None when queued or the handler is invalid.
 
 ### `registry.register_a2a_skill` {#registry-register-a2a-skill}
 

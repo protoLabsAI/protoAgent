@@ -71,13 +71,8 @@ class PluginLoadResult:
     component_frames: dict = field(default_factory=dict)
     services: dict = field(default_factory=dict)  # "<plugin_id>.<name>" -> callable (ADR 0116)
     service_meta: dict = field(default_factory=dict)  # name -> {plugin_id, description}
-    # Every registry this load produced (ADR 0039, #4800). Carried forward (the registry
-    # objects, not just data) so the server can bind their queued ``on()`` subscriptions once
-    # the bus is wired and tear THIS load's handlers down on the next reload — otherwise each
-    # reload stacks another live handler closed over stale state. EVERY registry is kept, not
-    # just the ones subscribed when register() finished: a plugin's first ``on()`` can come
-    # after load (a surface start, a route handler, a lifecycle hook, a delayed callback over a
-    # captured registry), and that handler still has to be torn down on the next reload.
+    # Retain registries for binding and teardown of bundle-owned queued subscriptions.
+    # Immediate post-load subscriptions belong to callers.
     plugin_registries: list = field(default_factory=list)
     meta: list[dict] = field(default_factory=list)
 
@@ -1060,7 +1055,6 @@ def load_plugins(config, *, core_tool_names: set[str] | None = None) -> PluginLo
         # config (resolved-config binding), registration (register(registry)). The
         # helper records in `finally`, so a stage that raises into the except below
         # still gets timed — that's the plugin worth diagnosing.
-        registry = None  # so the except below can tell whether register() ran (#4800)
         try:
             with timed_lifecycle_phase(manifest.id, "load"):
                 register = _import_register(manifest)
@@ -1081,7 +1075,14 @@ def load_plugins(config, *, core_tool_names: set[str] | None = None) -> PluginLo
                 )
                 registry.display_name = str(manifest.name or manifest.id)
             with timed_lifecycle_phase(manifest.id, "registration"):
-                register(registry)
+                registry._in_register = True
+                try:
+                    register(registry)
+                except Exception:
+                    registry._pending_subscriptions.clear()
+                    raise
+                finally:
+                    registry._in_register = False
         except Exception as exc:  # noqa: BLE001 — a bad plugin must not break boot
             # Clear diagnostic when an enabled plugin's declared deps aren't
             # installed (ADR 0027 D4: install fetches code; deps are explicit).
@@ -1102,12 +1103,6 @@ def load_plugins(config, *, core_tool_names: set[str] | None = None) -> PluginLo
             from graph.plugins import setup_gaps as _setup_gaps
 
             _setup_gaps.clear_plugin(manifest.id)
-            # If register() called registry.on() before it raised and the bus was already wired
-            # (a hot reload), that handler bound inline — and this plugin never loads, so it is
-            # not carried into result.plugin_registries and no later reload can reach it. Tear it
-            # down now, or it stays live on the bus for the life of the process (ADR 0039, #4800).
-            if registry is not None and getattr(registry, "_teardown_event_subscriptions", None):
-                registry._teardown_event_subscriptions()
             result.meta.append(entry)
             continue
 
@@ -1276,12 +1271,8 @@ def load_plugins(config, *, core_tool_names: set[str] | None = None) -> PluginLo
             smeta = getattr(registry, "service_meta", {}).get(name)
             if smeta:
                 result.service_meta[name] = smeta
-        # Carry EVERY registry forward (ADR 0039, #4800): the server binds its queued on()
-        # subscriptions once the bus is wired and tears this load's live handlers down on the
-        # next reload. We keep it even when it hasn't subscribed yet — a plugin's first on()
-        # often comes after load (a surface start, a route handler, a lifecycle hook), and that
-        # handler must still be torn down on the next reload; filtering on a load-time snapshot
-        # of its subscriptions would strand it and stack a live handler per reload.
+        # Keep every registry so subscriptions queued before bus wiring can bind later.
+        # Immediate post-load subscriptions belong to callers, not this bundle.
         result.plugin_registries.append(registry)
         entry["loaded"] = True
         entry["tools"] = [t.name for t in kept]
