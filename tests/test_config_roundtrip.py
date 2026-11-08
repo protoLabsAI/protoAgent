@@ -89,6 +89,7 @@ _GOLDEN_PROVIDERS = [
 ]
 
 FROM_YAML_EXAMPLE_FIELDS = {
+    "model_profiles": {},
     "a2a_description": "",
     "a2a_require_routable_url": False,
     "a2a_skills": [],

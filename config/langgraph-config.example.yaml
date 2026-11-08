@@ -102,6 +102,12 @@ model:
   #   thinking: enabled
   #   reasoning_effort: high
 
+  # Named generation profiles (ADR 0128). These numbers are examples, NOT defaults.
+  # Core supplies no profiles; omit this block to keep existing behavior.
+  # profiles:
+  #   routing: { thinking: disabled, max_tokens: 4096 }
+  #   judgement: { thinking: enabled, reasoning_effort: high, max_tokens: 16384 }
+
 subagents:
   researcher:
     enabled: true

@@ -734,6 +734,13 @@ def config_to_dict(config: LangGraphConfig) -> dict[str, Any]:
     d: dict[str, Any] = {}
     for f in FIELDS:
         val = "" if f.type == "secret" else getattr(config, f.attr)
+        if f.attr == "model_profiles":
+            from dataclasses import asdict
+
+            val = {
+                name: {key: value for key, value in asdict(profile).items() if value is not None}
+                for name, profile in val.items()
+            }
         if isinstance(val, (list, tuple)):
             val = list(val)
         cursor = d

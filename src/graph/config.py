@@ -857,6 +857,54 @@ def _non_negative_int(value, default: int) -> int:
 
 
 @dataclass
+class GenerationProfile:
+    """Partial, operator-defined generation settings (ADR 0128); None inherits."""
+
+    max_tokens: int | None = None
+    thinking: str | None = None
+    reasoning_effort: str | None = None
+    thinking_budget: int | None = None
+    chat_template_kwargs: dict | None = None
+    context_budget: int | None = None
+
+
+def _parse_generation_profiles(raw) -> dict[str, GenerationProfile]:
+    if raw is None:
+        return {}
+    if not isinstance(raw, dict):
+        log.warning("model.profiles must be a mapping; dropping it")
+        return {}
+    profiles = {}
+    enums = {
+        "thinking": ("", "enabled", "disabled"),
+        "reasoning_effort": ("low", "medium", "high", "max"),
+    }
+    for name, values in raw.items():
+        if not isinstance(name, str) or not isinstance(values, dict):
+            log.warning("model.profiles.%s must have a string name and a mapping value; dropping profile", name)
+            continue
+        valid = {}
+        for key, value in values.items():
+            if key not in GenerationProfile.__dataclass_fields__:
+                log.warning("model.profiles.%s: unknown key %s; dropping value", name, key)
+                continue
+            if value is None:
+                continue
+            if key in enums:
+                ok = isinstance(value, str) and value in enums[key]
+            elif key == "chat_template_kwargs":
+                ok = isinstance(value, dict)
+            else:
+                ok = isinstance(value, int) and not isinstance(value, bool) and value > 0
+            if not ok:
+                log.warning("model.profiles.%s.%s: invalid value; dropping value", name, key)
+                continue
+            valid[key] = copy.deepcopy(value)
+        profiles[name] = GenerationProfile(**valid)
+    return profiles
+
+
+@dataclass
 class LangGraphConfig:
     # Model settings — route through the LiteLLM gateway by default
     model_provider: str = "openai"
@@ -970,6 +1018,7 @@ class LangGraphConfig:
     #     and xhigh→max server-side; we just pass the string through.
     thinking: str = ""
     reasoning_effort: str | None = None
+    model_profiles: dict[str, GenerationProfile] = field(default_factory=dict)
 
     # Subagents — template ships one example, `researcher` (see
     # graph/subagents/config.py). Add fields here as you add entries to
@@ -2336,6 +2385,7 @@ class LangGraphConfig:
             chat_template_kwargs=model.get("chat_template_kwargs", cls.chat_template_kwargs),
             thinking=model.get("thinking", cls.thinking),
             reasoning_effort=model.get("reasoning_effort", cls.reasoning_effort),
+            model_profiles=_parse_generation_profiles(model.get("profiles")),
             knowledge_middleware=middleware.get("knowledge", cls.knowledge_middleware),
             audit_middleware=middleware.get("audit", cls.audit_middleware),
             memory_middleware=middleware.get("memory", cls.memory_middleware),

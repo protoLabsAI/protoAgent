@@ -32,7 +32,7 @@ from __future__ import annotations
 
 import pytest
 
-from graph.config import LangGraphConfig
+from graph.config import GenerationProfile, LangGraphConfig
 from graph.config_io import config_to_dict
 from graph.settings_schema import FIELDS
 
@@ -212,6 +212,8 @@ FROM_DICT_UNCONSUMED_KEYS: set[str] = set()
 # Keys whose value from_dict VALIDATES (and refuses), so the generic sentinel would raise
 # rather than round-trip. Each maps to a valid, non-default value in its canonical form.
 _VALIDATED_SENTINELS: dict[str, object] = {
+    # ADR 0128: named profiles must be mappings of supported generation settings.
+    "model.profiles": {"__drift__": {"max_tokens": 1234}},
     # ADR 0121 D2: https origin only.
     "network.public_console_url": "https://drift.example.com",
     "network.public_url": "https://drift.example.com",
@@ -264,6 +266,8 @@ def _from_dict_consumes(field) -> tuple[object, object]:
     """Run from_dict over a sentinel-bearing dict; return (sentinel, parsed)."""
     sentinel = _sentinel_for(field)
     cfg = LangGraphConfig.from_dict(_nest(field.key, sentinel))
+    if field.key == "model.profiles":
+        sentinel = {name: GenerationProfile(**values) for name, values in sentinel.items()}
     return sentinel, getattr(cfg, field.attr)
 
 
