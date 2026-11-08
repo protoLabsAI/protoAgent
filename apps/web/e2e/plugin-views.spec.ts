@@ -164,6 +164,36 @@ test("a background:true subscribe never reloads the open view's page (#4802)", a
   expect(await marked()).toBe(1);
 });
 
+test("a view placed on two docks mounts ONE copy; the other dock points at it (#4813)", async ({ page }) => {
+  // A stale or hand-edited layout can list one plugin view on two rails and make it the active
+  // surface of both. Two iframes of the same page double every import and every WebGL init, so
+  // the console mounts it once and the second dock says where it is instead.
+  await page.addInitScript(() => {
+    localStorage.setItem(
+      "protoagent.ui",
+      JSON.stringify({
+        state: {
+          railOrder: {
+            left: ["chat", "plugin:boardy:board"],
+            right: ["work", "plugin:boardy:board"],
+            bottom: [],
+            hidden: [],
+          },
+          surface: "plugin:boardy:board",
+          rightPanel: "plugin:boardy:board",
+          rightCollapsed: false,
+          leftCollapsed: false,
+        },
+        version: 14,
+      }),
+    );
+  });
+  await page.goto("/app/", { waitUntil: "load" });
+  await expect(page.getByTestId("plugin-view-elsewhere")).toBeVisible();
+  await expect(page.getByTestId("plugin-view-elsewhere")).toContainText("open in another panel");
+  await expect(page.locator('iframe.plugin-view-frame[src*="/plugins/boardy/board"]')).toHaveCount(1);
+});
+
 test("a plugin bus event lights the rail notification dot, cleared on open", async ({ page }) => {
   // ADR 0039 — the mock pushes a `boardy.created` event on the /api/events stream; the
   // console routes it by topic and lights the boardy surface's rail icon until it's opened.
