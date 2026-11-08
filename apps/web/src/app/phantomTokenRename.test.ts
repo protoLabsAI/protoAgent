@@ -56,9 +56,10 @@ describe("phantom CSS tokens re-pointed to real DS tokens (#3682)", () => {
     // #3682's rename target still holds — no phantom --pl-color-text-muted survives.
     expect(mem).not.toContain("--pl-color-text-muted");
     // #3685 (d2) then deleted the dark-only hex fallbacks: the seven renamed sites plus the
-    // pre-existing .memory-injections-context site now all read the bare real token.
+    // pre-existing .memory-injections-context site now all read the bare real token. The
+    // ADR 0125 P3 Review tab's .memory-filter-label adds a ninth bare-token muted site.
     expect(count(mem, "var(--pl-color-fg-muted, #8a8f98)")).toBe(0);
-    expect(count(mem, "var(--pl-color-fg-muted)")).toBe(8);
+    expect(count(mem, "var(--pl-color-fg-muted)")).toBe(9);
   });
 
   it("chat.css: the model-lane label reads a bare --pl-color-fg-muted (its #8b8b93 fallback dropped in #3685)", () => {

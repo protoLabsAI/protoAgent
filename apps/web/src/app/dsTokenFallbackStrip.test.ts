@@ -88,7 +88,7 @@ describe("DS token fallbacks + brand-* aliases stripped from settings/* and memo
   it("memory.css: all seven renamed muted-text sites now read the bare token", () => {
     const mem = source("/memory/memory.css");
     expect(count(mem, "var(--pl-color-fg-muted, #8a8f98)")).toBe(0);
-    expect(count(mem, "var(--pl-color-fg-muted)")).toBe(8); // 7 stripped here + the injections-context site
+    expect(count(mem, "var(--pl-color-fg-muted)")).toBe(9); // 7 stripped here + injections-context + the P3 Review filter label
   });
 
   it("sweeps real stylesheet text — a stubbed (empty) css import would blind the guard", () => {

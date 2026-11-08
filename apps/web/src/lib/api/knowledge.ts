@@ -16,6 +16,7 @@ import type {
   MemoryHotChunk,
   MemoryInjectionDetail,
   MemoryInjectionRow,
+  MemoryRecord,
   MemorySessionDigest,
   MemoryStats,
   PromptBreakdown,
@@ -207,6 +208,81 @@ export const knowledgeApi = {
     return request<{ enabled?: boolean; id?: number | string | null; review_state?: ReviewState | null }>(
       `/api/memory/memories/${memoryId}/review`,
       { method: "POST", body: { state } },
+    );
+  },
+  // --- Review pass (ADR 0125 P3) — the operator's curation of migrated memories ---
+  // The core-memory listing (GET /api/memory/memories): every MemoryStore row, filtered
+  // by the review tab's chips. `reviewState`/`kind`/`provenance` are exact-match filters
+  // (omit = all). `includeSuperseded` brings the retired rows (whose Revert undoes a wrong
+  // automatic supersession) into view. `limit`/`offset` page the (audit-complete) listing;
+  // `total` is the count under the same filters. `enabled:false` = the memory store is off.
+  memoryMemories(
+    opts: {
+      kind?: string;
+      reviewState?: string;
+      provenance?: string;
+      legacyDomain?: string;
+      includeSuperseded?: boolean;
+      limit?: number;
+      offset?: number;
+    } = {},
+  ) {
+    const q = new URLSearchParams();
+    if (opts.kind) q.set("kind", opts.kind);
+    if (opts.reviewState) q.set("review_state", opts.reviewState);
+    if (opts.provenance) q.set("provenance", opts.provenance);
+    if (opts.legacyDomain) q.set("legacy_domain", opts.legacyDomain);
+    if (opts.includeSuperseded) q.set("include_superseded", "true");
+    if (opts.limit != null) q.set("limit", String(opts.limit));
+    if (opts.offset != null) q.set("offset", String(opts.offset));
+    const qs = q.toString();
+    return request<{ enabled: boolean; memories: MemoryRecord[]; total: number }>(
+      `/api/memory/memories${qs ? `?${qs}` : ""}`,
+    );
+  },
+  // Edit one memory's content/heading/subject/kind (PATCH). A non-rejected row is
+  // confirmed by the edit (an operator write); a rejected row keeps its verdict. 400 on a
+  // bad kind / empty content, 404 for an unknown id. `kind` is one of profile|standing|fact|decision.
+  editMemory(id: number, body: { content?: string; heading?: string; subject?: string; kind?: string }) {
+    return request<{ enabled: boolean; memory: MemoryRecord | null }>(
+      `/api/memory/memories/${id}`,
+      { method: "PATCH", body },
+    );
+  },
+  // Forget a memory outright (DELETE). An always-on row is refused (400 — curate it on the
+  // Hot panel); 404 for an unknown id. The review verdict (confirm/reject) rides the shared
+  // `api.memoryReview` instead — rejecting keeps the row for audit.
+  deleteMemory(id: number) {
+    return request<{ enabled: boolean; deleted: boolean }>(
+      `/api/memory/memories/${id}`,
+      { method: "DELETE" },
+    );
+  },
+  // Undo one automatic supersession (ADR 0125 P3-A): the retired row goes live again and the
+  // row that replaced it is stamped superseded instead — both survive for audit. 404 when the
+  // row has no revertible supersession.
+  revertMemory(id: number) {
+    return request<{ enabled: boolean; id?: number; reverted: boolean }>(
+      `/api/memory/memories/${id}/revert`,
+      { method: "POST" },
+    );
+  },
+  // Shared-profile candidates (GET): the newest profile memory per subject, each flagged
+  // `already_shared` when a live shared row of the same kind exists. `enabled:false` = the
+  // shared profile is off (the whole candidates section hides).
+  memoryProfileCandidates() {
+    return request<{ enabled: boolean; candidates?: MemoryRecord[] }>(
+      "/api/memory/profile-candidates",
+    );
+  },
+  // Promote one profile/standing memory into the shared profile (POST). The server copies it
+  // in as a confirmed operator row once per subject; a subject already shared answers 409 (the
+  // ApiError carries status 409 so the caller can refresh the candidate list). 400 = not a
+  // promotable kind / no subject / inactive row, 404 = unknown id.
+  promoteMemory(id: number) {
+    return request<{ enabled?: boolean; id?: number }>(
+      `/api/memory/memories/${id}/promote`,
+      { method: "POST" },
     );
   },
   // Injection record (ADR 0069 D6): which memory entered which turn.

@@ -44,6 +44,8 @@ import {
   MEMORY_HOT,
   MEMORY_INJECTIONS,
   MEMORY_INJECTION_DETAILS,
+  MEMORY_REVIEW,
+  MEMORY_PROFILE_CANDIDATES,
   MEMORY_SESSIONS,
   MEMORY_SESSION_RENDERED,
   MEMORY_STATS,
@@ -353,12 +355,16 @@ const cloneMemory = () => ({
   history: JSON.parse(JSON.stringify(HISTORY_SESSIONS)),
   historyEntries: JSON.parse(JSON.stringify(HISTORY_ENTRIES)),
   stats: JSON.parse(JSON.stringify(MEMORY_STATS)),
+  // Review pass (ADR 0125 P3): the core-memory rows + shared-profile candidates the
+  // Review tab curates; keep/edit/forget/reject/revert/promote mutate these copies.
+  review: JSON.parse(JSON.stringify(MEMORY_REVIEW)),
+  candidates: JSON.parse(JSON.stringify(MEMORY_PROFILE_CANDIDATES)),
 });
-let memory = cloneMemory();
 
 // Degradation switches the memory spec flips via POST /api/__test__/memory/mode
 // (merged; /api/__test__/memory/reset restores the defaults):
-//   fail: "sessions"|"hot"|"injections"|"history" → that GET answers 500
+//   fail: "sessions"|"hot"|"injections"|"history"|"review" → that GET answers 500
+//   sharedProfile: false                → profile-candidates reports the shared profile off
 //   enabled: false                      → the hot + history routes report the store off
 //                                         (GET list; PUT/DELETE drop the write)
 //   empty: true                         → all four lists serve zero rows
@@ -375,8 +381,21 @@ const defaultMemoryMode = () => ({
   replaced: true,
   legacy: false,
   policy: "newest",
+  // Review pass (ADR 0125 P3): false → the shared profile is off, so the
+  // profile-candidates GET answers {enabled:false} and the whole section hides.
+  sharedProfile: true,
 });
-let memoryMode = defaultMemoryMode();
+// The memory state (fixtures + mode) is MUTATED by the memory specs, so isolate it
+// PER SCOPE like fleet/mcp above: each `x-e2e-memory` request header gets its own lazy
+// deep-clone of the fixtures and a fresh default mode. Requests with no header share
+// the "default" scope — the memory-inspector spec mutates serially and sends no header,
+// so the parallel review spec (its own `x-e2e-memory` scope) can't clobber its mode.
+const memoryScopes = new Map();
+function memoryFor(req) {
+  const key = req.headers["x-e2e-memory"] || "default";
+  if (!memoryScopes.has(key)) memoryScopes.set(key, { data: cloneMemory(), mode: defaultMemoryMode() });
+  return memoryScopes.get(key);
+}
 const stripFields = (rows, keys) =>
   rows.map((r) => {
     const copy = { ...r };
@@ -1145,6 +1164,13 @@ const server = createServer(async (req, res) => {
   // specific agent. The mock strips the /agents/<slug> prefix and serves the same handlers.
   const pathname = url.pathname.replace(/^\/agents\/[^/]+/, "") || url.pathname;
 
+  // This request's memory scope (keyed by the `x-e2e-memory` header; "default" otherwise).
+  // The handlers below use these aliases exactly as before — only the /reset and /mode
+  // routes rebind the scope object (and these locals) wholesale.
+  const memScope = memoryFor(req);
+  let memory = memScope.data;
+  let memoryMode = memScope.mode;
+
   // Bearer-gate mode (see the GATE_* block above): a context that booted with
   // ?gated=1 gets real 401 semantics on everything non-public. No Playwright
   // route interception anywhere, so subresource loads and EventSource face the
@@ -1665,6 +1691,35 @@ const server = createServer(async (req, res) => {
         if (memoryMode.legacy) rows = stripFields(rows, ["injecting", "store"]);
         return sendJson(res, { enabled: true, chunks: rows });
       }
+      // Review pass (ADR 0125 P3): the core-memory listing with the tab's filters +
+      // paging, and the shared-profile candidates. Needs the query string, so it's here
+      // rather than in the pathname-only handleApiGet switch.
+      if (pathname === "/api/memory/memories") {
+        if (memoryMode.fail === "review") return sendJson(res, { detail: "kaboom (mock)" }, 500);
+        if (!memoryMode.enabled) return sendJson(res, { enabled: false, memories: [], total: 0 });
+        const kind = url.searchParams.get("kind") || "";
+        const state = url.searchParams.get("review_state") || "";
+        const provenance = url.searchParams.get("provenance") || "";
+        const legacyDomain = url.searchParams.get("legacy_domain") || "";
+        const includeSuperseded = url.searchParams.get("include_superseded") === "true";
+        const limit = Number(url.searchParams.get("limit") || 100);
+        const offset = Number(url.searchParams.get("offset") || 0);
+        const rows = (memoryMode.empty ? [] : memory.review).filter(
+          (r) =>
+            (!kind || r.kind === kind) &&
+            (!state || r.review_state === state) &&
+            (!provenance || r.provenance === provenance) &&
+            (!legacyDomain || r.legacy_domain === legacyDomain) &&
+            (includeSuperseded || r.superseded_by == null),
+        );
+        return sendJson(res, { enabled: true, memories: rows.slice(offset, offset + limit), total: rows.length });
+      }
+      if (pathname === "/api/memory/profile-candidates") {
+        // The shared profile off → the whole candidates section hides on {enabled:false}.
+        if (!memoryMode.sharedProfile) return sendJson(res, { enabled: false });
+        if (!memoryMode.enabled) return sendJson(res, { enabled: true, candidates: [] });
+        return sendJson(res, { enabled: true, candidates: memoryMode.empty ? [] : memory.candidates });
+      }
       if (pathname === "/api/memory/injections") {
         if (memoryMode.fail === "injections") return sendJson(res, { detail: "kaboom (mock)" }, 500);
         if (memoryMode.empty) return sendJson(res, { injections: [] });
@@ -2148,12 +2203,16 @@ const server = createServer(async (req, res) => {
       return sendJson(res, { ok: true });
     }
     if (pathname === "/api/__test__/memory/reset" && req.method === "POST") {
-      memory = cloneMemory();
-      memoryMode = defaultMemoryMode();
+      memScope.data = memory = cloneMemory();
+      memScope.mode = memoryMode = defaultMemoryMode();
+      return sendJson(res, { ok: true });
+    }
+    if (pathname === "/api/__test__/memory/review" && req.method === "POST") {
+      memory.review = body.rows;
       return sendJson(res, { ok: true });
     }
     if (pathname === "/api/__test__/memory/mode" && req.method === "POST") {
-      memoryMode = { ...memoryMode, ...body };
+      memScope.mode = memoryMode = { ...memoryMode, ...body };
       return sendJson(res, { ok: true });
     }
     // Memory inspector writes (ADR 0069 D7): delete a session summary / edit + delete
@@ -2173,13 +2232,82 @@ const server = createServer(async (req, res) => {
         if (!["confirmed", "pending", "rejected"].includes(body.state)) {
           return sendJson(res, { detail: "invalid review state" }, 400);
         }
-        // Legacy mode serves chunk rows; modern ids belong only to memories.
+        const id = Number(review[2]);
+        // Review-pass rows (P3-D2) live in their own list and are addressed only by the
+        // `memories` route (the Keep/Reject verdict) — look there first, then fall back to
+        // the Hot panel's rows. Legacy mode serves chunk rows; modern ids belong to memories.
         const store = memoryMode.legacy ? "chunks" : "memories";
-        const row = review[1] === store && memory.hot.find((x) => x.id === Number(review[2]));
+        const row =
+          (review[1] === "memories" && memory.review.find((x) => x.id === id)) ||
+          (review[1] === store && memory.hot.find((x) => x.id === id));
         if (!row) return sendJson(res, { detail: "no memory row with that id" }, 404);
         row.review_state = body.state;
         if (body.state === "rejected") row.injecting = false;
         return sendJson(res, { enabled: true, id: row.id, review_state: row.review_state });
+      }
+      // Review-pass writes (ADR 0125 P3): edit / forget / revert / promote a core memory,
+      // plus the candidates promote. Placed BEFORE the hot-chunk routes — the id regexes
+      // here are more specific (`/memories/`, `/revert`, `/promote`), so no overlap.
+      const edit = pathname.match(/^\/api\/memory\/memories\/(\d+)$/);
+      if (edit && req.method === "PATCH") {
+        if (!memoryMode.enabled) return sendJson(res, { enabled: false });
+        const row = memory.review.find((x) => x.id === Number(edit[1]));
+        if (!row) return sendJson(res, { detail: "no memory with that id" }, 404);
+        const fields = ["content", "heading", "subject", "kind"].filter((k) => k in body);
+        if (!fields.length || fields.some((k) => typeof body[k] !== "string")) {
+          return sendJson(res, { detail: "provide content, heading, subject or kind as strings" }, 400);
+        }
+        if ("kind" in body && !["profile", "standing", "fact", "decision"].includes(body.kind)) {
+          return sendJson(res, { detail: "invalid memory kind" }, 400);
+        }
+        if ("content" in body && !String(body.content).trim()) {
+          return sendJson(res, { detail: "content must not be empty" }, 400);
+        }
+        for (const k of fields) row[k] = body[k];
+        // An edit is an operator write → confirmed, but a rejected row keeps its verdict.
+        if (row.review_state !== "rejected") row.review_state = "confirmed";
+        return sendJson(res, { enabled: true, memory: row });
+      }
+      if (edit && req.method === "DELETE") {
+        if (!memoryMode.enabled) return sendJson(res, { enabled: false, deleted: false });
+        const i = memory.review.findIndex((x) => x.id === Number(edit[1]));
+        if (i < 0) return sendJson(res, { detail: "no memory with that id" }, 404);
+        // Always-on rows require the hot delete route (mirrors the real 400).
+        if (memory.review[i].delivery === "always") {
+          return sendJson(res, { detail: "use the hot memory delete route" }, 400);
+        }
+        memory.review.splice(i, 1);
+        return sendJson(res, { enabled: true, deleted: true });
+      }
+      const revert = pathname.match(/^\/api\/memory\/memories\/(\d+)\/revert$/);
+      if (revert && req.method === "POST") {
+        if (!memoryMode.enabled) return sendJson(res, { enabled: false, id: null, reverted: false });
+        const row = memory.review.find((x) => x.id === Number(revert[1]));
+        if (!row || row.superseded_by == null) {
+          return sendJson(res, { detail: "memory has no revertible supersession" }, 404);
+        }
+        row.superseded_by = null; // live again — the Revert button disappears on refetch
+        return sendJson(res, { enabled: true, id: row.id, reverted: true });
+      }
+      const promote = pathname.match(/^\/api\/memory\/memories\/(\d+)\/promote$/);
+      if (promote && req.method === "POST") {
+        if (!memoryMode.sharedProfile) return sendJson(res, { enabled: false });
+        const row = memory.candidates.find((x) => x.id === Number(promote[1]));
+        if (!row) return sendJson(res, { detail: "no memory with that id" }, 404);
+        // Already shared → 409 carrying the live shared id (the client refreshes the list).
+        if (row.already_shared) {
+          return sendJson(res, { detail: "a live shared memory already exists", id: 9000 + row.id }, 409);
+        }
+        row.already_shared = true; // promoted: the button becomes a disabled "Shared"
+        return sendJson(res, { enabled: true, id: 9000 + row.id });
+      }
+      const coreHot = pathname.match(/^\/api\/memory\/hot\/memory:(\d+)$/);
+      if (coreHot && req.method === "DELETE") {
+        if (!memoryMode.enabled) return sendJson(res, { enabled: false, deleted: false });
+        const i = memory.review.findIndex((x) => x.id === Number(coreHot[1]) && x.delivery === "always");
+        if (i < 0) return sendJson(res, { detail: "no memory with that id" }, 404);
+        memory.review.splice(i, 1);
+        return sendJson(res, { enabled: true, deleted: true });
       }
       const h = pathname.match(/^\/api\/memory\/hot\/(\d+)$/);
       if (h && req.method === "DELETE") {
