@@ -27,6 +27,7 @@ paths the runtime uses — keep the two in sync.
 from __future__ import annotations
 
 import importlib.util
+import inspect
 import re
 import sys
 import tempfile
@@ -353,6 +354,145 @@ def _accept_component_read(plugin_id: str, pattern) -> str | None:
     return s
 
 
+# ── footgun guards (#4804) — duplicated from graph.plugins.registry (host-free by contract, so
+# this file can't import it; a parity test keeps the copies in sync, same as the validators
+# above). Both are duck-typed so this copy needs neither FastAPI nor LangChain imported. ──────
+_ASGI_INJECTED_TYPES = ("Request", "WebSocket", "Response", "BackgroundTasks")
+_TOOL_RESERVED_PARAMS = ("config", "callbacks", "run_manager")
+
+
+def _unresolved_annotation_name(annotation) -> str | None:
+    """Return the type name carried by ``annotation`` when it is a bare string or an unresolved
+    ``ForwardRef`` — the shape FastAPI leaves a parameter in when its class was imported inside a
+    function under ``from __future__ import annotations``. ``None`` for a resolved annotation."""
+    if isinstance(annotation, str):
+        return annotation.strip()
+    forward_arg = getattr(annotation, "__forward_arg__", None)  # typing.ForwardRef, duck-typed
+    if isinstance(forward_arg, str):
+        return forward_arg.strip()
+    return None
+
+
+def _annotation_names_type(annotation_name: str, type_name: str) -> bool:
+    """True if the unresolved annotation string names ``type_name`` — bare, qualified or wrapped.
+    A word boundary keeps ``MyRequest`` / ``RequestBody`` from matching ``Request``."""
+    return bool(re.search(rf"\b{re.escape(type_name)}\b", annotation_name))
+
+
+def _iter_router_api_routes(router, prefix: str = ""):
+    """Yield ``(methods, path, route)`` for every route a plugin router carries, nested includes
+    included. Duck-typed: a nested include exposes ``original_router``; a real route exposes a
+    ``dependant``. Mirrors ``graph.plugins.registry._iter_router_api_routes``."""
+    for entry in getattr(router, "routes", ()) or ():
+        inner = getattr(entry, "original_router", None)
+        if inner is not None:
+            nested = getattr(getattr(entry, "include_context", None), "prefix", "") or ""
+            yield from _iter_router_api_routes(inner, prefix + nested)
+            continue
+        if getattr(entry, "dependant", None) is None:
+            continue  # a Mount / sub-app — no dependant to inspect
+        path = prefix + (getattr(entry, "path", "") or "")
+        methods = ",".join(sorted(getattr(entry, "methods", None) or ())) or "WS"
+        yield methods, path, entry
+
+
+def _query_param_unresolved_type(route, query_param) -> str | None:
+    """The unresolved type name of one ``dependant.query_params`` entry, from the pydantic
+    ``field_info.annotation`` or the endpoint's raw ``__annotations__`` — else ``None``."""
+    candidates = [getattr(getattr(query_param, "field_info", None), "annotation", None)]
+    raw = getattr(getattr(route, "endpoint", None), "__annotations__", None) or {}
+    name = getattr(query_param, "name", None)
+    if name in raw:
+        candidates.append(raw[name])
+    for candidate in candidates:
+        resolved = _unresolved_annotation_name(candidate)
+        if resolved:
+            return resolved
+    return None
+
+
+def _router_param_footguns(router):
+    """Yield ``(methods, path, param, type_name)`` for every plugin route whose query params
+    carry an unresolved string/ForwardRef annotation naming an ASGI-injected type (footgun A)."""
+    for methods, path, route in _iter_router_api_routes(router):
+        for query_param in getattr(getattr(route, "dependant", None), "query_params", None) or ():
+            resolved = _query_param_unresolved_type(route, query_param)
+            if not resolved:
+                continue
+            for type_name in _ASGI_INJECTED_TYPES:
+                if _annotation_names_type(resolved, type_name):
+                    yield methods, path, getattr(query_param, "name", "?"), type_name
+                    break
+
+
+def _router_footgun_message(plugin_id: str, methods: str, path: str, param: str, type_name: str) -> str:
+    """The one message both the live WARNING and the FakeRegistry ValueError use (footgun A)."""
+    return (
+        f"[plugins] {plugin_id}: route {methods} {path} parameter {param!r} is annotated "
+        f"{type_name!r} as an unresolved forward reference, so FastAPI treated it as a required "
+        f"query parameter and the route will answer 422 instead of receiving the {type_name}. "
+        f"Import {type_name} at module level, or drop `from __future__ import annotations` from "
+        f"the plugin module."
+    )
+
+
+def _tool_param_annotation_is_injected(param_name: str, annotation) -> bool:
+    """True if ``annotation`` marks the parameter as the injected type LangChain reserves its
+    name for: ``RunnableConfig`` for ``config``, a callback manager/handler for ``callbacks`` /
+    ``run_manager``. An unannotated parameter is NOT injected."""
+    if annotation is inspect.Parameter.empty:
+        return False
+    text = (getattr(annotation, "__name__", "") or "") + " " + (
+        annotation if isinstance(annotation, str) else str(annotation)
+    )
+    if param_name == "config":
+        return "RunnableConfig" in text
+    return "Callback" in text  # Callbacks / BaseCallbackManager / *CallbackManagerForToolRun
+
+
+def _tool_reserved_param_footgun(tool) -> str | None:
+    """The name of a ``tool`` parameter LangChain reserves for an injected arg
+    (``config`` / ``callbacks`` / ``run_manager``) but that the author did NOT annotate as that
+    injected type — so the model never supplies it and its value arrives as ``None`` (footgun B).
+    ``None`` when the tool is clean or has no introspectable callable."""
+    func = getattr(tool, "func", None) or getattr(tool, "coroutine", None)
+    # Explicit schemas also occur on tools with no func/coroutine to inspect.
+    schema = getattr(tool, "args_schema", None)
+    fields = getattr(schema, "model_fields", None)
+    if fields is None:
+        fields = getattr(schema, "__fields__", None)
+    if isinstance(schema, dict):
+        fields = schema.get("properties", {})
+    for name in _TOOL_RESERVED_PARAMS:
+        if fields and name in fields:
+            annotation = getattr(fields[name], "annotation", None)
+            if not _tool_param_annotation_is_injected(name, annotation):
+                return name
+    if func is None:
+        return None
+    try:
+        params = inspect.signature(func).parameters
+    except (TypeError, ValueError):
+        return None
+    for name in _TOOL_RESERVED_PARAMS:
+        param = params.get(name)
+        if param is None:
+            continue
+        if _tool_param_annotation_is_injected(name, param.annotation):
+            continue
+        return name
+    return None
+
+
+def _tool_footgun_message(plugin_id: str, tool_name, param: str) -> str:
+    """The one message both the live WARNING and the FakeRegistry ValueError use (footgun B)."""
+    return (
+        f"[plugins] {plugin_id}: tool {tool_name!r} has a parameter named {param!r}, which "
+        f"LangChain reserves for an injected RunnableConfig/callback manager — the model never "
+        f"supplies it, so its value arrives as None. Rename the parameter so the model can pass it."
+    )
+
+
 class FakeRegistry:
     """Records what ``register(registry)`` contributes, with no host — mirrors the real
     ``graph.plugins.registry.PluginRegistry`` surface so a plugin's ``register()`` runs
@@ -458,10 +598,14 @@ class FakeRegistry:
 
     # contributions
     def register_tool(self, tool) -> None:
+        footgun = _tool_reserved_param_footgun(tool)  # #4804 footgun B — live warns, fake raises
+        if footgun:
+            raise ValueError(_tool_footgun_message(self.plugin_id, getattr(tool, "name", "?"), footgun))
         self.tools.append(tool)
 
     def register_tools(self, tools) -> None:
-        self.tools.extend(tools)
+        for tool in tools or []:  # per-tool, so a footgun in any one raises (mirrors the host)
+            self.register_tool(tool)
 
     def register_component(self, name: str, validator, frame: str | None = None, reads=None) -> None:
         """Capture a component-v1 kind (``self.components[name] = validator``) so a plugin
@@ -536,6 +680,8 @@ class FakeRegistry:
         self.chat_commands[token] = handler
 
     def register_router(self, router, prefix: str | None = None) -> None:
+        for methods, path, param, type_name in _router_param_footguns(router):  # #4804 footgun A
+            raise ValueError(_router_footgun_message(self.plugin_id, methods, path, param, type_name))
         self.routers.append((prefix, router))
 
     def register_surface(self, start, stop=None, name: str | None = None, reload=None) -> None:
