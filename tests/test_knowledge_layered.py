@@ -471,6 +471,29 @@ def test_promoted_search_returns_one_editable_record(tmp_path):
     assert store.search("kestrel", namespace="other") == []
 
 
+def test_promote_carries_the_collection_into_the_commons(tmp_path):
+    """Promoting a private chunk copies its collection bucket onto the commons copy
+    (ADR 0125 P2 slice 6), so it lists and filters under the same collection in the
+    commons tier as it did privately."""
+    private, commons = _stores(tmp_path)
+    store = LayeredKnowledgeStore(private, commons)
+    cid = private.add_chunk(
+        "kestrel launch checklist",
+        domain="reference",
+        source="runbook",
+        source_type="file",
+        collection="flight-ops",
+    )
+    assert store.promote(cid) is not None
+
+    comm_rows = {r["collection"]: r for r in commons.list_collections()}
+    assert "flight-ops" in comm_rows and comm_rows["flight-ops"]["chunks"] == 1
+    promoted = commons.search("kestrel", collection="flight-ops")
+    assert [h["content"] for h in promoted] == ["kestrel launch checklist"]
+    # A different collection never returns the promoted chunk.
+    assert commons.search("kestrel", collection="other") == []
+
+
 def test_list_collections_merges_both_tiers(tmp_path):
     """list_collections sums chunk/source counts across tiers, keeps the later
     last_ingested_at for a shared bucket, and re-sorts biggest-first then by name

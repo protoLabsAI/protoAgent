@@ -623,7 +623,7 @@ def register_knowledge_routes(app) -> None:
                 # (``collection = domain``). Without it the column stays NULL until the
                 # next reboot, so an operator-added chunk lists under "general", is
                 # missing from ``?collection=<dom>``, yet comes back from
-                # ``?collection=general`` — the same bug this PR fixed for ingest.
+                # ``?collection=general``.
                 collection=dom,
             )
         )
@@ -831,20 +831,21 @@ def register_knowledge_routes(app) -> None:
         if cur is None and callable(get_chunk):
             return JSONResponse({"detail": "no chunk with that id"}, status_code=404)
         cur = cur or {}
-        # ``collection`` (ADR 0125 P2 slice 6) rides along like the other lifecycle
-        # columns: an edit is a new revision, and without copying it the revision
-        # loses its collection — missing from ``?collection=<name>``, counted and
-        # returned under "general", until the P2-B boot backfill (``collection =
-        # domain``) later files it under the WRONG bucket when it differs from the
-        # domain. A NULL collection (conversation history) stays NULL, as before.
         carry = {
             key: cur.get(key)
-            for key in ("memory_kind", "subject", "delivery_policy", "expires_at", "namespace", "epoch", "collection")
+            for key in ("memory_kind", "subject", "delivery_policy", "expires_at", "namespace", "epoch")
             if cur.get(key) is not None
         }
         if cur.get("review_state") == "rejected":
             carry["review_state"] = "rejected"
         domain = str(body.get("domain", "") or cur.get("domain") or "general")
+        # ``collection`` (ADR 0125 P2 slice 6) follows the (possibly edited) domain,
+        # exactly as the add and ingest routes stamp it (collection = domain) and the
+        # P2-B boot backfill fills it. Carrying the OLD collection instead would strand
+        # a domain edit in its former bucket for good — listed under the old name,
+        # missing from ``?collection=<new domain>``, out of step with the agent's
+        # domain-scoped search — because the backfill only ever fills NULLs.
+        carry["collection"] = domain
         heading = str(body.get("heading", "")).strip() or None
         source = body.get("source") or "console"
 

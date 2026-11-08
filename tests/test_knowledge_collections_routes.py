@@ -221,9 +221,10 @@ def test_operator_add_lands_in_its_collection(monkeypatch, tmp_path):
     and findable in — its collection IMMEDIATELY, not NULL ("general") until reboot.
 
     The console add route stamps the ``collection`` column with the chunk's domain,
-    mirroring the ingest op and the P2-B boot backfill (``collection = domain``).
-    Before the fix the column stayed NULL, so the add listed under "general", was
-    missing from ``?collection=recipes``, and came back from ``?collection=general``.
+    mirroring the ingest op and the P2-B boot backfill (``collection = domain``), so
+    the column carries its value on the row itself rather than staying NULL (which
+    would list the add under "general", miss ``?collection=recipes``, and surface it
+    under ``?collection=general``) until the next reboot backfilled it.
     """
     store = KnowledgeStore(tmp_path / "agent.db")
     client = _wire(monkeypatch, store)
@@ -251,16 +252,16 @@ def test_operator_add_lands_in_its_collection(monkeypatch, tmp_path):
 
 
 def test_edit_keeps_the_chunks_collection(monkeypatch, tmp_path):
-    """Editing a chunk (PUT /api/knowledge/chunks/{id}) is a new revision; it keeps
-    the chunk's collection rather than dropping it into "general".
+    """Editing a chunk's content (PUT /api/knowledge/chunks/{id}) is a new revision;
+    with the domain unchanged the revision keeps its collection rather than dropping
+    into "general".
 
-    The edit copies ``collection`` onto the revision alongside the other lifecycle
-    columns. Without it the edited chunk would be missing from ``?collection=necromunda``,
-    counted under "general", and later mis-filed by the backfill when the collection
-    differs from the domain (here ``necromunda`` vs ``docs``).
+    The edit stamps ``collection`` from the (unchanged) domain, exactly as the add and
+    ingest routes do. Without it the edited chunk would be missing from
+    ``?collection=necromunda`` and counted under "general" until the next reboot.
     """
     store = KnowledgeStore(tmp_path / "agent.db")
-    cid = _add(store, f"{_TOKEN} gang rules", collection="necromunda", domain="docs", source="rulebook.pdf")
+    cid = _add(store, f"{_TOKEN} gang rules", collection="necromunda", domain="necromunda", source="rulebook.pdf")
     client = _wire(monkeypatch, store)
 
     resp = client.put(f"/api/knowledge/chunks/{cid}", json={"content": f"{_TOKEN} revised gang rules"})
@@ -280,6 +281,41 @@ def test_edit_keeps_the_chunks_collection(monkeypatch, tmp_path):
     assert [r["content"] for r in scoped["results"]] == [f"{_TOKEN} revised gang rules"]
     gen = client.get(f"/api/knowledge/search?q={_TOKEN}&collection=general").json()
     assert gen["results"] == []
+
+
+def test_edit_domain_moves_the_collection(monkeypatch, tmp_path):
+    """Editing a chunk's domain (PUT /api/knowledge/chunks/{id}) moves it to the new
+    collection: the revision's collection follows the domain, matching the add and
+    ingest routes (collection = domain) and the agent's domain-scoped search.
+
+    A domain edit must not strand the revision in its former bucket — the boot
+    backfill (collection = domain) only fills NULLs, so a carried-over old collection
+    would never be corrected.
+    """
+    store = KnowledgeStore(tmp_path / "agent.db")
+    cid = _add(store, f"{_TOKEN} gang rules", collection="necromunda", domain="necromunda", source="rulebook.pdf")
+    client = _wire(monkeypatch, store)
+
+    resp = client.put(
+        f"/api/knowledge/chunks/{cid}",
+        json={"content": f"{_TOKEN} gang rules", "domain": "warhammer"},
+    )
+    assert resp.status_code == 200
+    new_id = resp.json()["id"]
+    assert new_id is not None
+
+    # The revision's collection followed the new domain onto its own row.
+    revised = store.get_chunk(new_id)
+    assert revised["domain"] == "warhammer"
+    assert revised["collection"] == "warhammer"
+
+    # Now listed/findable under the NEW collection, gone from the old one.
+    rows = client.get("/api/knowledge/collections").json()["collections"]
+    assert {c["collection"] for c in rows} == {"warhammer"}
+    moved = client.get(f"/api/knowledge/search?q={_TOKEN}&collection=warhammer").json()
+    assert [r["content"] for r in moved["results"]] == [f"{_TOKEN} gang rules"]
+    old = client.get(f"/api/knowledge/search?q={_TOKEN}&collection=necromunda").json()
+    assert old["results"] == []
 
 
 def test_collections_disabled_when_store_off(monkeypatch):

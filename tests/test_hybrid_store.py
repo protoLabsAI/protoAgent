@@ -96,6 +96,32 @@ def test_vector_only_hit_is_hydrated(tmp_path):
     assert all("preview" in r for r in results)
 
 
+def test_collection_filter_excludes_other_collections_vector_only(tmp_path):
+    """The ``collection`` filter (ADR 0125 P2 slice 6) scopes the VECTOR ranking too,
+    so a chunk from another collection can't leak in as a vector-only hit — the case
+    FTS5's token filter would never catch."""
+    const_vec = lambda text: [1.0, 0.0]  # every chunk gets cosine 1.0 to any query
+    store = HybridKnowledgeStore(_db(tmp_path), embed_fn=const_vec)
+    keep = store.add_chunk("alpha beta gamma", domain="docs", collection="keep")
+    store.add_chunk("delta epsilon zeta", domain="docs", collection="other")
+    # Query shares no lexical tokens with either chunk: both are vector-only candidates.
+    scoped = store.search("zzzzz", k=5, collection="keep")
+    assert [r["id"] for r in scoped] == [keep]
+
+
+def test_add_chunk_folds_blank_or_padded_collection_to_null(tmp_path):
+    """``add_chunk`` trims and blank-folds the collection column (ADR 0125 P2 slice 6):
+    a padded value is stored trimmed, and an empty/whitespace value becomes NULL so it
+    groups under the ``knowledge_ingest`` default — not a distinct "   " bucket."""
+    store = HybridKnowledgeStore(_db(tmp_path), embed_fn=_bow_embed)
+    padded = store.add_chunk("calculator math one", domain="general", collection="  recipes  ")
+    blank = store.add_chunk("calculator math two", domain="general", collection="   ")
+    empty = store.add_chunk("calculator math three", domain="general", collection="")
+    assert store.get_chunk(padded)["collection"] == "recipes"
+    assert store.get_chunk(blank)["collection"] is None
+    assert store.get_chunk(empty)["collection"] is None
+
+
 def test_circuit_breaker_falls_back_to_fts(tmp_path):
     calls = {"n": 0}
 
