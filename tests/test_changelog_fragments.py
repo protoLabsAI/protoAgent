@@ -303,6 +303,7 @@ def _commit_fragment(repo: Path, name: str, body: str, subject: str) -> Path:
 
 
 @_needs_git
+@pytest.mark.platform_sensitive  # shells out to git; the Windows lane must run it
 def test_pr_for_fragment_reads_the_squash_merge_subject(tmp_path):
     repo = _repo(tmp_path)
     path = _commit_fragment(repo, "fix-a.fixed.md", "- **A.** b\n", "fix: a thing (#4880)")
@@ -312,6 +313,7 @@ def test_pr_for_fragment_reads_the_squash_merge_subject(tmp_path):
 
 
 @_needs_git
+@pytest.mark.platform_sensitive  # shells out to git; the Windows lane must run it
 def test_pr_for_fragment_reads_a_merge_commit(tmp_path):
     """A fragment that came in on a merged branch belongs to the merge, not the branch commit."""
     repo = _repo(tmp_path)
@@ -324,6 +326,7 @@ def test_pr_for_fragment_reads_a_merge_commit(tmp_path):
 
 
 @_needs_git
+@pytest.mark.platform_sensitive  # shells out to git; the Windows lane must run it
 def test_pr_for_fragment_uses_the_newest_add_of_a_reused_name(tmp_path):
     """`collate` deletes fragments, so a name can come back in a later PR."""
     repo = _repo(tmp_path)
