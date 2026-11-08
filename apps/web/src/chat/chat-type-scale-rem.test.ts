@@ -84,7 +84,8 @@ describe("Chat rem/em font-sizes → DS type scale (DS audit type-scale 2b)", ()
     // + one more for the `.chat-note-card` system-note card body (base), which resets the DS
     // system pill's font when a slash-command renders a structured component card, + two more
     // when plain notes became NoteCards: the `.note-card__title` and `.note-card__body` (sm).
-    expect((chatCss.match(new RegExp(TOKEN_FONT_SIZE, "g")) ?? []).length).toBe(40);
+    // + the standing-instruction ledger strip (xs), Part of #4861.
+    expect((chatCss.match(new RegExp(TOKEN_FONT_SIZE, "g")) ?? []).length).toBe(41);
     // 18 migrated sites plus the visible wait summary (#4852).
     expect((toolCallsCss.match(new RegExp(TOKEN_FONT_SIZE, "g")) ?? []).length).toBe(19);
   });
