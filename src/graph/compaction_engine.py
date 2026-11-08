@@ -570,8 +570,13 @@ def chunk_blocks(blocks: list[str], budget_chars: int) -> list[str]:
     chunks rather than trimmed — the engine never drops part of the span. Every slice after
     the first carries the block's role label (``OPERATOR (continued): `` …), with room
     reserved for that prefix so no slice — and so no chunk — goes over budget."""
+    return ["\n\n".join(group) for group in _chunk_groups(blocks, budget_chars)]
+
+
+def _chunk_groups(blocks: list[str], budget_chars: int) -> list[list[str]]:
+    """Keep block boundaries so re-planning never gives a later block an earlier role."""
     budget = max(_MIN_CHUNK_CHARS, int(budget_chars))
-    chunks: list[str] = []
+    chunks: list[list[str]] = []
     current: list[str] = []
     size = 0
     for block in blocks:
@@ -584,12 +589,12 @@ def chunk_blocks(blocks: list[str], budget_chars: int) -> list[str]:
             pieces = [raw[0]] + [f"{prefix}{p}" for p in raw[1:]]
         for piece in pieces:
             if current and size + len(piece) + 2 > budget:
-                chunks.append("\n\n".join(current))
+                chunks.append(current)
                 current, size = [], 0
             current.append(piece)
             size += len(piece) + 2
     if current:
-        chunks.append("\n\n".join(current))
+        chunks.append(current)
     return chunks
 
 
@@ -689,11 +694,37 @@ def _plan(messages: list, budget_chars: int | None) -> tuple[str, list[str], int
     return seed, blocks, budget
 
 
-def _chunks_for(blocks: list[str], budget: int, running: str) -> list[str]:
+def _window_ceiling_chars(budget: int) -> int:
+    """The summarizer's whole input window, in characters, recovered from the per-call chunk
+    budget.
+
+    ``budget`` is :data:`_CHUNK_WINDOW_SHARE` of the window (see
+    :func:`summarizer_budget_chars`), so dividing it back out gives the full window — the
+    HARD limit a single prompt must fit within, as distinct from the conservative chunk
+    budget that sizes chunks in the common case."""
+    return max(budget, int(budget / _CHUNK_WINDOW_SHARE))
+
+
+def _chunks_for(blocks: list[str], budget: int, running: str, *, part: int = 1) -> list[list[str]]:
     # The running notes ride every call, so the transcript gets what is left of the budget.
-    reserve = max(len(running), _NOTES_RESERVE_CHARS)
-    room = max(_MIN_CHUNK_CHARS, budget - reserve - len(build_prompt("", "")))
-    return chunk_blocks(blocks, room)
+    # Bound the part-count digits before planning; even one character per remaining
+    # chunk cannot exceed this count. Include the previous-notes framing as well.
+    parts_bound = part + sum(map(len, blocks))
+    framing = len(build_prompt("", running, part=part, parts=parts_bound))
+    room = budget - framing
+    if room < _MIN_CHUNK_CHARS:
+        # The running notes have outgrown the conservative chunk budget (~45% of the
+        # summarizer's window). Refusing right here would strand EVERY retry — the notes
+        # are a fixed seed (a previous compaction's summary) that never shrinks — while the
+        # window itself still has room. So fall back to a single minimum chunk, letting
+        # this one prompt run past the soft budget, as long as those notes, that chunk and
+        # room for the answer still fit the real window. Only when even that overflows do
+        # the notes genuinely leave less than a minimum chunk: raise.
+        if framing + _MIN_CHUNK_CHARS + len(running) > _window_ceiling_chars(budget):
+            raise CompactionSummaryError("the running notes leave less than the minimum transcript chunk budget")
+        return _chunk_groups(blocks, _MIN_CHUNK_CHARS)
+    reserve = max(0, _NOTES_RESERVE_CHARS - len(running))
+    return _chunk_groups(blocks, max(_MIN_CHUNK_CHARS, room - reserve))
 
 
 def _clean(answer) -> str:
@@ -728,9 +759,13 @@ def summarize_span(
     running = seed
     if not blocks:
         return with_operator_block(running, block)
-    chunks = _chunks_for(blocks, budget, running)
-    for i, chunk in enumerate(chunks, 1):
-        running = _clean(summarize(build_prompt(chunk, running, part=i, parts=len(chunks))))
+    part = 1
+    while blocks:
+        chunks = _chunks_for(blocks, budget, running, part=part)
+        prompt = build_prompt("\n\n".join(chunks[0]), running, part=part, parts=part + len(chunks) - 1)
+        running = _clean(summarize(prompt))
+        blocks = [piece for group in chunks[1:] for piece in group]
+        part += 1
     return with_operator_block(running, block)
 
 
@@ -749,7 +784,11 @@ async def asummarize_span(
     running = seed
     if not blocks:
         return with_operator_block(running, block)
-    chunks = _chunks_for(blocks, budget, running)
-    for i, chunk in enumerate(chunks, 1):
-        running = _clean(await summarize(build_prompt(chunk, running, part=i, parts=len(chunks))))
+    part = 1
+    while blocks:
+        chunks = _chunks_for(blocks, budget, running, part=part)
+        prompt = build_prompt("\n\n".join(chunks[0]), running, part=part, parts=part + len(chunks) - 1)
+        running = _clean(await summarize(prompt))
+        blocks = [piece for group in chunks[1:] for piece in group]
+        part += 1
     return with_operator_block(running, block)

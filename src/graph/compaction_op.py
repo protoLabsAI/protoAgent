@@ -84,9 +84,9 @@ def _default_budget_chars(config) -> int:
     """The engine's per-call budget from the aux model's window; the conservative
     fallback when it is unknown."""
     try:
-        from graph.model_window import context_window_for
+        from graph.model_window import context_window_for_slot
 
-        window = context_window_for(config, model_name=_aux_model_name(config))
+        window = context_window_for_slot(config, _aux_model_name(config) or getattr(config, "model_name", None))
     except Exception:  # noqa: BLE001 — unknown window → the engine's fallback
         window = None
     return compaction_engine.summarizer_budget_chars(window)
