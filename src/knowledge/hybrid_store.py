@@ -36,6 +36,7 @@ from knowledge.store import (
     KnowledgeStore,
     _deliverable_clauses,
     _delivery_policy_clause,
+    _ensure_chunk_vector_hygiene,
     _namespace_clause,
     _normalize_before,
 )
@@ -259,6 +260,9 @@ class HybridKnowledgeStore(KnowledgeStore):
             return
         try:
             db.execute("CREATE TABLE IF NOT EXISTS chunk_vectors (chunk_id INTEGER PRIMARY KEY, vec TEXT NOT NULL)")
+            # Delete trigger + orphan prune (store.py): no chunk delete path can leave a
+            # vector behind, and orphans an older delete path left are dropped at boot.
+            _ensure_chunk_vector_hygiene(db)
             db.commit()
         except sqlite3.DatabaseError as exc:
             log.warning("[knowledge] could not create chunk_vectors: %s", exc)
