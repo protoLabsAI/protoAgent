@@ -179,6 +179,13 @@ def test_extract_subagent_usage_rows_shape_tagging_and_model_fallback():
         ),
         "model": "protolabs/creative",  # the pinned/aux fallback — a model-pinned subagent bills to ITS model
         "subagent_type": "creative",
+        # Additive descriptive fields (#4875 S0): no response_metadata, tool calls or
+        # reasoning details on this reply, so three are None/False and text_chars counts
+        # the visible "draft".
+        "finish_reason": None,
+        "text_chars": len("draft"),
+        "has_tool_calls": False,
+        "reasoning_tokens": None,
     }
     # ...and that really is the discounted price, not the full-rate one.
     assert first["cost_usd"] < pricing.cost_usd("protolabs/creative", {"input_tokens": 120, "output_tokens": 30})

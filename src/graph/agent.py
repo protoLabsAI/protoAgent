@@ -830,6 +830,31 @@ def _dispatch_tool_gap(
     )
 
 
+def _visible_text_chars(msg) -> int:
+    """Length of an ``AIMessage``'s VISIBLE text, excluding reasoning/thinking blocks.
+
+    A str content is counted whole. A block-list content (the Anthropic / Responses
+    shape) counts only genuine ``text`` parts and bare strings — ``thinking`` /
+    ``redacted_thinking`` / ``reasoning`` blocks and ``tool_use`` blocks contribute
+    nothing, so a reasoning-only completion reads as 0 visible characters (the signal
+    ADR 0128 S0 wants to size). Never raises."""
+    try:
+        content = getattr(msg, "content", None)
+        if isinstance(content, str):
+            return len(content)
+        if isinstance(content, list):
+            total = 0
+            for block in content:
+                if isinstance(block, str):
+                    total += len(block)
+                elif isinstance(block, dict) and block.get("type") == "text":
+                    total += len(str(block.get("text") or ""))
+            return total
+    except Exception:  # noqa: BLE001 — a malformed message must not kill the delegation
+        return 0
+    return 0
+
+
 def _extract_subagent_usage(messages, *, subagent_type: str, fallback_model: str = "") -> list[dict]:
     """Per-model-call usage rows from a finished sub-graph's message list (#2872).
 
@@ -843,6 +868,20 @@ def _extract_subagent_usage(messages, *, subagent_type: str, fallback_model: str
     per-reply routed name when the gateway reports one, else ``fallback_model``
     (the pinned/aux resolution) — so a model-pinned subagent attributes to ITS
     model, not the lead's. Never raises: telemetry must never break a delegation.
+
+    Each row also carries four descriptive fields for the ADR 0128 output-budget
+    measurement (#4875 S0); they are ADDITIVE telemetry, summed by nothing — every
+    downstream reader (``observability.turn_telemetry.fold_usage_rows`` /
+    ``telemetry_usage``, the A2A executor's usage accumulator) reads named keys via
+    ``.get`` and ignores the rest:
+
+    - ``finish_reason`` — ``response_metadata['finish_reason']``, or the Anthropic
+      ``stop_reason`` alias; ``None`` when neither is present.
+    - ``text_chars`` — visible text length, reasoning blocks excluded (see
+      :func:`_visible_text_chars`).
+    - ``has_tool_calls`` — whether the reply carried any parsed tool call.
+    - ``reasoning_tokens`` — ``usage_metadata['output_token_details']['reasoning']``
+      when the gateway reports it, else ``None``.
     """
     from observability import pricing
 
@@ -868,6 +907,14 @@ def _extract_subagent_usage(messages, *, subagent_type: str, fallback_model: str
             row["cost_usd"] = pricing.cost_usd(model, row)
             row["model"] = model
             row["subagent_type"] = subagent_type
+            # Descriptive-only fields (#4875 S0). A missing value is None, never a crash.
+            rmeta = getattr(msg, "response_metadata", None) or {}
+            row["finish_reason"] = rmeta.get("finish_reason") or rmeta.get("stop_reason") or None
+            row["text_chars"] = _visible_text_chars(msg)
+            row["has_tool_calls"] = bool(getattr(msg, "tool_calls", None) or [])
+            details = usage.get("output_token_details")
+            reasoning = details.get("reasoning") if isinstance(details, dict) else None
+            row["reasoning_tokens"] = int(reasoning) if reasoning is not None else None
             rows.append(row)
         except Exception:  # noqa: BLE001 — a malformed message must not kill the delegation
             continue
