@@ -377,6 +377,10 @@ def directives_command_reply(session_id: str, rest: str) -> str:
     directive_id, _, reason = tail.strip().partition(" ")
     if not directive_id:
         return _DIRECTIVES_USAGE
+    from observability.tracing import current_trust_tier
+
+    if current_trust_tier() != "operator":
+        return "Only the operator can revoke a directive."
     try:
         d = store.close(
             session_id,

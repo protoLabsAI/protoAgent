@@ -14,6 +14,20 @@ from typing import Annotated, NotRequired
 from langchain.agents import AgentState
 
 
+def _take_last(_current: bool, incoming: bool) -> bool:
+    """Reducer for ``operator_chat_turn``: the latest write wins, so every turn (and
+    resume) overwrites the previous one exactly as a plain LastValue channel would.
+
+    The reducer exists only so that two *identical* writes arriving in one superstep —
+    a resume that drains several parallel HITL interrupts feeds the ``Command.update``
+    stamp into each pending branch — fold instead of raising ``InvalidUpdateError`` the
+    way a bare LastValue channel does on more-than-one-value-per-step. Authority is
+    never widened: the drivers derive the single bool from one authenticated origin, so
+    the folded writes carry the same value.
+    """
+    return incoming
+
+
 class ProtoAgentState(AgentState):
     """Base state schema for the protoAgent LangGraph agent.
 
@@ -25,6 +39,13 @@ class ProtoAgentState(AgentState):
 
     # Session tracking (A2A / chat session ID)
     session_id: NotRequired[str]
+
+    # Server-stamped on every chat turn, including resumes; absent in subagents.
+    # Carries authenticated operator origin into tool execution (ADR 0127 D6). The
+    # ``_take_last`` reducer keeps it a last-write-wins flag while tolerating the
+    # duplicate concurrent writes a resume draining parallel HITL interrupts produces
+    # (a bare LastValue channel raises InvalidUpdateError on those).
+    operator_chat_turn: Annotated[bool, _take_last]
 
     # Incognito thread (ADR 0069 D3b): no session-memory persistence, no memory
     # injection for this thread. Set per turn by the chat entry paths (A2A

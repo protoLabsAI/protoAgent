@@ -63,6 +63,13 @@ def build_directive_tools() -> list:
         session_id = _session_id_from(state)
         if not session_id:
             return _NO_CHAT.format(name="record_directive")
+        # The server derives this stamp from authenticated tier + turn origin on every
+        # pass/resume. Subagents have no stamp; request contextvars are unreliable here.
+        if not isinstance(state, dict) or state.get("operator_chat_turn") is not True or state.get("subagent_fence"):
+            return (
+                "record_directive only records what the operator says in a chat turn; "
+                "this turn did not come from the operator"
+            )
         try:
             d = directive_store().record(session_id, quote, conditions=conditions, scope=scope)
         except DirectiveError as exc:
