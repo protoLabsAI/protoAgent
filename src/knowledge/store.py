@@ -430,7 +430,12 @@ def _delivery_policy_clause(policy: str | None, col: str = "delivery_policy") ->
 DEFAULT_COLLECTION = "general"
 
 
-def _collection_clause(collection: str | None, col: str = "collection") -> tuple[str, list[str]]:
+def _collection_clause(
+    collection: str | None,
+    col: str = "collection",
+    *,
+    history_col: str | None = None,
+) -> tuple[str, list[str]]:
     """SQL predicate + params for a ``collection`` filter (ADR 0125 P2 slice 6).
 
     A chunk's effective collection is its ``collection`` column, with NULL/empty
@@ -439,13 +444,28 @@ def _collection_clause(collection: str | None, col: str = "collection") -> tuple
     :meth:`KnowledgeStore.list_collections`' grouping. An unknown collection
     simply matches no rows (an empty result, never an error). Falsy / blank →
     no predicate (unfiltered).
+
+    ``history_col`` (the chunk's ``domain`` column, prefixed to match ``col``)
+    excludes conversation ``history`` (``domain='conversation'``) from the result,
+    exactly as :meth:`KnowledgeStore.list_collections` does. History is not a
+    browsable knowledge collection: it rides ``chunks`` with a deliberately NULL
+    ``collection`` (the P2-B backfill leaves it NULL), so without this it would
+    fold into the DEFAULT_COLLECTION bucket and a ``?collection=general`` filter
+    would return rows the collection listing never counts. ``None`` = no exclusion
+    (the pre-slice-6 callers that don't filter by collection are unaffected).
     """
     if not collection or not str(collection).strip():
         return "", []
     name = str(collection).strip()
     if name == DEFAULT_COLLECTION:
-        return f"({col} = ? OR {col} IS NULL OR {col} = '')", [name]
-    return f"{col} = ?", [name]
+        sql = f"({col} = ? OR {col} IS NULL OR {col} = '')"
+    else:
+        sql = f"{col} = ?"
+    params = [name]
+    if history_col:
+        sql = f"({sql} AND ({history_col} IS NULL OR {history_col} != ?))"
+        params.append(HISTORY_DOMAIN)
+    return sql, params
 
 
 def _fts_quote(token: str) -> str:
@@ -1592,7 +1612,7 @@ class KnowledgeStore:
         if dp_sql:
             where.append(dp_sql)
             params.extend(dp_params)
-        col_sql, col_params = _collection_clause(collection, col="c.collection")
+        col_sql, col_params = _collection_clause(collection, col="c.collection", history_col="c.domain")
         if col_sql:
             where.append(col_sql)
             params.extend(col_params)
@@ -1662,7 +1682,7 @@ class KnowledgeStore:
         if dp_sql:
             sql += f" AND {dp_sql}"
             params.extend(dp_params)
-        col_sql, col_params = _collection_clause(collection)
+        col_sql, col_params = _collection_clause(collection, history_col="domain")
         if col_sql:
             sql += f" AND {col_sql}"
             params.extend(col_params)
@@ -1729,7 +1749,7 @@ class KnowledgeStore:
         if dp_sql:
             clauses.append(dp_sql)
             params.extend(dp_params)
-        col_sql, col_params = _collection_clause(collection)
+        col_sql, col_params = _collection_clause(collection, history_col="domain")
         if col_sql:
             clauses.append(col_sql)
             params.extend(col_params)

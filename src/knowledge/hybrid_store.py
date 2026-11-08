@@ -650,7 +650,7 @@ class HybridKnowledgeStore(KnowledgeStore):
         if dp_sql:
             where.append(dp_sql)
             params.extend(dp_params)
-        col_sql, col_params = _collection_clause(collection, col="c.collection")
+        col_sql, col_params = _collection_clause(collection, col="c.collection", history_col="c.domain")
         if col_sql:
             where.append(col_sql)
             params.extend(col_params)

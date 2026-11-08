@@ -3,8 +3,10 @@ slice 6, #4630) over a real ``KnowledgeStore``.
 
 Covers the collection counts, the NULL/empty-collection grouping under the
 ``knowledge_ingest`` default ("general"), the search collection filter, the
-unknown-collection empty result, and that agent memory (the separate ``memories``
-table) never leaks into the collection listing.
+unknown-collection empty result, that conversation history is excluded from both
+the listing and the ``?collection=general`` filter, that an indexed chat
+attachment lands in its own "attachment" collection on write, and that agent
+memory (the separate ``memories`` table) never leaks into the collection listing.
 """
 
 from __future__ import annotations
@@ -55,9 +57,10 @@ def _seed(store):
     _add(store, f"{_TOKEN} untagged ingest", domain="general", source="pasted2")  # collection stays NULL
     _add(store, f"{_TOKEN} blank bucket", collection="", domain="notes", source=None)
     # conversation history is NOT a collection (P2-B leaves its collection NULL, and
-    # list_collections excludes domain='conversation' outright). No search token, so it
-    # also can't surface in a keyword search.
-    _add(store, "chat transcript line", domain="conversation", source="chat")
+    # both list_collections and the ?collection= filter exclude domain='conversation'
+    # outright). It carries the search token on purpose, so the FTS and browse arms can
+    # prove it is still kept out of ?collection=general even when the text would match.
+    _add(store, f"{_TOKEN} chat transcript line", domain="conversation", source="chat")
 
 
 def test_collections_counts_grouping_and_ordering(monkeypatch, tmp_path):
@@ -97,7 +100,11 @@ def test_search_collection_filter(monkeypatch, tmp_path):
     contents = {r["content"] for r in hit["results"]}
     assert contents == {f"{_TOKEN} gang rules", f"{_TOKEN} weapon list", f"{_TOKEN} house faq"}
 
-    # "general" folds in the NULL/empty-collection rows too (mirrors the grouping).
+    # "general" folds in the NULL/empty-collection rows too (mirrors the grouping) —
+    # but NOT the conversation-history row, whose collection is also NULL: the filter
+    # excludes domain='conversation' exactly as list_collections does, so the listing
+    # and the scoped search agree on what "general" contains (even though the history
+    # row carries the token and would otherwise match the FTS query).
     gen = client.get(f"/api/knowledge/search?q={_TOKEN}&collection=general").json()
     assert {r["content"] for r in gen["results"]} == {
         f"{_TOKEN} pasted note",
@@ -105,9 +112,11 @@ def test_search_collection_filter(monkeypatch, tmp_path):
         f"{_TOKEN} blank bucket",
     }
 
-    # No filter → every collection's matching chunks (7 valid token-bearing chunks).
+    # No collection filter → every matching chunk, including the conversation-history
+    # row (an unfiltered knowledge search is not collection-scoped, so it still surfaces
+    # history): 7 knowledge chunks + the 1 conversation chunk = 8.
     all_hits = client.get(f"/api/knowledge/search?q={_TOKEN}").json()
-    assert len(all_hits["results"]) == 7
+    assert len(all_hits["results"]) == 8
 
 
 def test_browse_empty_query_collection_filter(monkeypatch, tmp_path):
@@ -129,23 +138,22 @@ def test_browse_empty_query_collection_filter(monkeypatch, tmp_path):
         f"{_TOKEN} house faq",
     }
 
-    # Browse "general": EVERY NULL/empty-collection row folds in — the card's uniform
-    # "NULL/empty groups under the default" rule applied to the filter. That includes
-    # the conversation-history row (its collection is NULL): the filter groups by
-    # collection alone, whereas list_collections separately omits domain='conversation'
-    # from the LISTING because it is not a browsable knowledge collection. (The browse
-    # arm is keyword-free, so the no-search-token conversation row surfaces here where
-    # it couldn't in the FTS search arm above.)
+    # Browse "general": the NULL/empty-collection rows fold in — but NOT the
+    # conversation-history row, whose collection is also NULL. The filter excludes
+    # domain='conversation' exactly as list_collections does, so browse and listing
+    # agree on "general" and conversation history stays out (the browse arm is
+    # keyword-free, so this row WOULD otherwise surface here regardless of its text).
     gen = client.get("/api/knowledge/search?q=&collection=general").json()
-    assert {r["content"] for r in gen["results"]} == {
+    gen_contents = {r["content"] for r in gen["results"]}
+    assert gen_contents == {
         f"{_TOKEN} pasted note",
         f"{_TOKEN} untagged ingest",
         f"{_TOKEN} blank bucket",
-        "chat transcript line",
     }
-    # None of the explicitly-tagged collections leak into the general browse.
-    assert f"{_TOKEN} gang rules" not in {r["content"] for r in gen["results"]}
-    assert f"{_TOKEN} findings" not in {r["content"] for r in gen["results"]}
+    # Neither the conversation history nor any explicitly-tagged collection leaks in.
+    assert f"{_TOKEN} chat transcript line" not in gen_contents
+    assert f"{_TOKEN} gang rules" not in gen_contents
+    assert f"{_TOKEN} findings" not in gen_contents
 
     # Browse an unknown collection: an empty list, never a 404.
     miss = client.get("/api/knowledge/search?q=&collection=does-not-exist")
@@ -316,6 +324,49 @@ def test_edit_domain_moves_the_collection(monkeypatch, tmp_path):
     assert [r["content"] for r in moved["results"]] == [f"{_TOKEN} gang rules"]
     old = client.get(f"/api/knowledge/search?q={_TOKEN}&collection=necromunda").json()
     assert old["results"] == []
+
+
+def test_indexed_attachment_lands_in_the_attachment_collection(monkeypatch, tmp_path):
+    """A chat attachment too large to inline (POST /api/knowledge/attach) is indexed
+    for retrieval; its chunks carry collection="attachment" on write, so the attachment
+    is counted under — and searchable within — its own "attachment" collection
+    immediately, not folded into "general".
+
+    The route stamps the collection with the domain, mirroring the ingest/add/edit
+    routes and the P2-B boot backfill (collection = domain). Without it the column stays
+    NULL, so an indexed attachment would count under "general" and surface under
+    ``?collection=general`` until a reboot moved it, shifting the rail's counts.
+    """
+    import runtime.state as rs
+
+    store = KnowledgeStore(tmp_path / "agent.db")
+    monkeypatch.setattr(rs.STATE, "graph_config", None, raising=False)
+    client = _wire(monkeypatch, store)
+
+    # Text well over the 8000-char inline budget → the route takes the indexed path.
+    big = f"{_TOKEN} meeting notes. " * 1200
+    assert len(big) > 8000
+    resp = client.post(
+        "/api/knowledge/attach",
+        data={"session_id": "sess-1"},
+        files={"file": ("notes.txt", big.encode(), "text/plain")},
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["mode"] == "indexed" and body["chunks"] >= 1
+
+    # Every indexed chunk carries the attachment collection on its own row (not NULL).
+    chunks = store.list_chunks(limit=100)
+    assert chunks
+    assert all(store.get_chunk(c.as_dict()["id"])["collection"] == "attachment" for c in chunks)
+
+    # Listed under "attachment", and findable there — never dumped into "general".
+    rows = client.get("/api/knowledge/collections").json()["collections"]
+    assert "attachment" in {c["collection"] for c in rows}
+    scoped = client.get(f"/api/knowledge/search?q={_TOKEN}&collection=attachment").json()
+    assert scoped["results"]
+    gen = client.get(f"/api/knowledge/search?q={_TOKEN}&collection=general").json()
+    assert gen["results"] == []
 
 
 def test_collections_disabled_when_store_off(monkeypatch):

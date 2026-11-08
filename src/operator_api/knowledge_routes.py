@@ -799,6 +799,13 @@ def register_knowledge_routes(app) -> None:
                 namespace=f"attach:{sid}",
                 source=name,
                 source_type=result.source_type,
+                # Stamp the ``collection`` column with the domain (ADR 0125 P2 slice 6),
+                # matching ingest, the console add/edit routes and the P2-B boot backfill
+                # (``collection = domain``). Without it the column stays NULL, so an indexed
+                # attachment is counted under "general" and returned by ``?collection=general``
+                # until the next reboot moves it into an "attachment" bucket — shifting the
+                # rail's counts out from under the operator.
+                collection="attachment",
             )
         )
         context = _attachment_context(name, text, budget=budget)
