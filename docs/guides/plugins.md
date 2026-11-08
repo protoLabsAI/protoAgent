@@ -125,6 +125,50 @@ SpaceTraders plugin is the worked example: `st_autopilot_start` persists `autopi
 `lifecycle_stop()` halts the trading engine on reload while keeping the flag, and the surface
 `start` resumes it — so a host restart brings the *trading* back, not just the process.
 
+### Let the model see it — return an image the model can read {#let-the-model-see-it}
+
+A tool that produces an image (a render, a chart, a screenshot) should let a vision model **look**
+at it, not hand back a markdown link the model can't open. Return
+`multimodal_tool_result(text, images=[…])` from `graph.sdk` instead of a path or URL string:
+
+```python
+from langchain_core.tools import tool
+from graph.sdk import multimodal_tool_result
+
+@tool
+async def render_chart(spec: str) -> str:
+    """Render the chart and show it to the model."""
+    path = _render(spec)                     # writes a PNG, returns its path
+    return multimodal_tool_result(
+        "Rendered chart for the spec above.",
+        images=[{"path": path, "mime": "image/png"}],
+    )
+```
+
+On a vision model (`model.vision: true`) each image rides the resulting `ToolMessage` as a content
+block the model actually reads — which is what enables a generate → look → refine loop; on a
+text-only model it degrades to the caption (plus a description, when `knowledge.image_describe_model`
+is configured), so the tool is safe to return either way.
+
+**Only these image-dict keys are read:**
+
+| Key | Meaning |
+| --- | --- |
+| `b64` | the image as a base64 string |
+| `path` | a file path the helper reads and encodes for you — use `b64` **or** `path`, not both |
+| `mime` | optional content type; defaults to `image/png`, and must start with `image/` |
+
+Limits are enforced at the call: at most **3** images per result (`MAX_IMAGES_PER_RESULT`) and
+**2 MiB** decoded bytes per image (`MAX_IMAGE_BYTES`), after fitting/downscaling.
+Unsafe images that cannot be fitted are omitted with a note,
+but invalid input (including malformed base64 or too many images) raises `ValueError`;
+unreadable paths can raise file errors. Handle these in your tool as appropriate.
+
+The [`building-plugins` skill](https://github.com/protoLabsAI/protoAgent/blob/main/plugins/plugin-devkit/skills/building-plugins/SKILL.md)
+carries the worked `render_chart` example (and its `save_media` sibling, for handing the **user** a
+file). A console **view** that wants the model to see what it rendered pairs the same helper with a
+companion tool — see [Heavy views](/guides/building-react-plugin-views#heavy-views).
+
 ### Managed MCP servers — `register_mcp_server`
 
 A plugin can ship a **managed MCP server** the agent connects to, instead of

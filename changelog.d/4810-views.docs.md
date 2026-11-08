@@ -1,0 +1,1 @@
+- **Clarify plugin view lifecycle and image results (#4810).** Document when background views reload, how to manage heavy WebGL/WASM views and publish limits, and how tools return images a vision model can read.

@@ -327,11 +327,37 @@ parent.postMessage({
   treat an empty replay after a long absence as "do one full state fetch", not as "nothing
   happened".
 - **`background: true` — hidden delivery.** Per-subscribe opt-in: the console keeps your view
-  mounted (hidden) when the operator switches away, so events keep flowing to your live model
-  (a map, a running chart). Your page is **not** reloaded on re-open. `background: false`
-  opts back out; omitting the field never changes the current mode. The notification dot
-  still lights either way. Use it only when you genuinely keep state — a hidden iframe still
-  costs memory and timers; session-scoped, so ask on every load.
+  mounted (hidden, by toggling `display` rather than moving it in the tree) when the operator
+  switches away, so events keep flowing to your live model (a map, a running chart).
+  `background: false` opts back out; omitting the field never changes the current mode. The
+  notification dot still lights either way. Use it only when you genuinely keep state — a hidden
+  iframe still costs memory and timers.
+
+  **Re-open preserves the page only while its mounted slot survives.** On desktop,
+  switching surfaces within the same dock uses a keyed, display-swapped slot list;
+  subscribing with `background: true` does not itself remount the view (#4802).
+  The exceptions are:
+
+  - **A full console reload, a reopened app, or a new console tab** creates fresh pages.
+    The opt-in is session-scoped and never persisted. Your page must
+    **re-send `background: true` on every load**; inactive views are not restored warm.
+  - **Moving between docks or removing a view from the rails** can remove its slot.
+    Background slots are limited to views assigned to a rendered left, right, or bottom
+    dock; the hidden bucket is excluded. Reopening after unmount creates a fresh page.
+    Only one dock owns a mounted copy: another dock requesting it shows an
+    “open in another panel” pointer, which is not itself a second mount.
+  - **Mobile navigation and layout changes** have a different mount policy. A docked
+    mobile view first opens in the pushed layer; opting into background delivery moves
+    it into the root layer and remounts it. A view outside the docked set stays in the
+    pushed layer and unmounts when navigating away. Switching between desktop and
+    mobile shells also replaces the view tree. The mobile subscribe-time remount is a
+    known issue tracked in [#4810](https://github.com/protoLabsAI/protoAgent/issues/4810).
+  - **Opting out with `background: false`** restores unmount-on-switch behavior.
+    Embedded Configure pages do not participate in the background opt-in.
+
+  Treat a fresh page load as “re-subscribe and recover state,” not as evidence that the
+  previous in-memory model survived. The `sessionStorage` pattern below retains a replay
+  cursor within a tab; rebuild your model from a snapshot when replay alone is insufficient.
 
 **The recommended pattern** for a dashboard that used to poll:
 
@@ -550,6 +576,70 @@ git URL.
 - Adding a view to an existing plugin needs **no restart**: the next reload re-runs `register()` and
   re-mounts the plugin's router with the current code (**Update** also purges its cached submodules),
   and the rail picks up the declaration from `runtime-status` with **no console rebuild**.
+
+## Heavy views (WebGL/WASM) {#heavy-views}
+
+Create a GL context or WASM instance only when the frame is visible and has a non-zero
+size. A `display: none` background frame measures 0×0; wait for visibility and size before
+allocating buffers. **Don't use `background: true` for a heavy view**: the hidden iframe
+retains memory and timers. Rebuild when it is opened again.
+
+Use the [Web Locks API](https://developer.mozilla.org/en-US/docs/Web/API/Web_Locks_API)
+(`navigator.locks.request`, requiring a secure context) to keep one engine per agent across
+same-origin console tabs. Include the plugin and agent identity in the lock name; locks
+cannot coordinate different origins or browser profiles. The example uses the guide's
+slug-aware `base`; supply a stable agent ID if several URLs address the same agent.
+
+Throttle status publishes to a few per second. The
+[bridge limits](/reference/plugin-view-bridge#events-subscribe-event-publish) are
+**100 ms last-value-wins** coalescing per topic, then a per-view **burst of 20 with
+10 tokens refilled per second**, with at most **256** distinct pending topics.
+Over-limit events are dropped and counted, not deferred indefinitely.
+
+Dispose on `pagehide`: lose the GL context, release WASM allocations using your engine's
+cleanup API, and drop references to the instance/memory. Rebuild on `pageshow` or the next
+visible mount. [`pagehide`](https://developer.mozilla.org/en-US/docs/Web/API/Window/pagehide_event)
+is best-effort (it may not fire on process termination), and
+WASM has no universal `dispose()` method; implement cleanup in your engine wrapper.
+
+```js
+const canvas = document.querySelector("#scene");
+const base = location.pathname.split("/plugins/")[0];
+let visible = false, pending = false, suspended = false, release;
+function sized() {
+  const { width, height } = canvas.getBoundingClientRect();
+  return visible && !suspended && width > 0 && height > 0;
+}
+async function start() {
+  if (pending || !sized()) return;
+  pending = true;
+  try {
+    await navigator.locks.request(`myplugin-engine:${base}`, { ifAvailable: true }, async (lock) => {
+      if (!lock || !sized()) return; // Retry via a user “Start” action if another tab owns it.
+      const engine = buildEngine(canvas); // Your GL/WASM wrapper.
+      try {
+        await new Promise((resolve) => { release = resolve; });
+      } finally {
+        engine.gl?.getExtension("WEBGL_lose_context")?.loseContext();
+        engine.dispose(); // Free WASM allocations and stop timers in your wrapper.
+        release = undefined; // Resolving the callback releases the Web Lock too.
+      }
+    });
+  } finally { pending = false; }
+}
+new IntersectionObserver(([entry]) => {
+  visible = entry.isIntersecting;
+  if (visible) void start();
+}).observe(canvas);
+new ResizeObserver(() => { void start(); }).observe(canvas);
+addEventListener("pagehide", () => { suspended = true; release?.(); });
+addEventListener("pageshow", () => { suspended = false; void start(); });
+```
+
+If a heavy view (or a companion tool) produces a frame you want the **model** to look at — a
+rendered scene, a chart — return it from a tool with
+[`multimodal_tool_result`](/guides/plugins#let-the-model-see-it), not a markdown image link the
+model can't open.
 
 ## Fork components (no plugin, no iframe)
 
