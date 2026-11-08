@@ -110,6 +110,49 @@ def test_search_collection_filter(monkeypatch, tmp_path):
     assert len(all_hits["results"]) == 7
 
 
+def test_browse_empty_query_collection_filter(monkeypatch, tmp_path):
+    """An empty-``q`` request is the Knowledge browser's BROWSE path — it lists
+    recent chunks via ``list_chunks`` rather than FTS search. ``?collection=`` must
+    scope that path too (the route forwards the filter to both arms), so the browser
+    can page a single collection without typing a query.
+    """
+    store = KnowledgeStore(tmp_path / "agent.db")
+    _seed(store)
+    client = _wire(monkeypatch, store)
+
+    # Browse necromunda: its 3 valid chunks (the invalidated one is excluded by
+    # list_chunks' default), none from other collections.
+    scoped = client.get("/api/knowledge/search?q=&collection=necromunda").json()
+    assert {r["content"] for r in scoped["results"]} == {
+        f"{_TOKEN} gang rules",
+        f"{_TOKEN} weapon list",
+        f"{_TOKEN} house faq",
+    }
+
+    # Browse "general": EVERY NULL/empty-collection row folds in — the card's uniform
+    # "NULL/empty groups under the default" rule applied to the filter. That includes
+    # the conversation-history row (its collection is NULL): the filter groups by
+    # collection alone, whereas list_collections separately omits domain='conversation'
+    # from the LISTING because it is not a browsable knowledge collection. (The browse
+    # arm is keyword-free, so the no-search-token conversation row surfaces here where
+    # it couldn't in the FTS search arm above.)
+    gen = client.get("/api/knowledge/search?q=&collection=general").json()
+    assert {r["content"] for r in gen["results"]} == {
+        f"{_TOKEN} pasted note",
+        f"{_TOKEN} untagged ingest",
+        f"{_TOKEN} blank bucket",
+        "chat transcript line",
+    }
+    # None of the explicitly-tagged collections leak into the general browse.
+    assert f"{_TOKEN} gang rules" not in {r["content"] for r in gen["results"]}
+    assert f"{_TOKEN} findings" not in {r["content"] for r in gen["results"]}
+
+    # Browse an unknown collection: an empty list, never a 404.
+    miss = client.get("/api/knowledge/search?q=&collection=does-not-exist")
+    assert miss.status_code == 200
+    assert miss.json()["results"] == []
+
+
 def test_unknown_collection_is_empty_not_404(monkeypatch, tmp_path):
     store = KnowledgeStore(tmp_path / "agent.db")
     _seed(store)
