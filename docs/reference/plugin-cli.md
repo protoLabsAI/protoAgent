@@ -16,6 +16,7 @@ passes (required deps go into the app's managed Python runtime as part of the in
 
 | Command | Purpose |
 |---|---|
+| [`check`](#cmd-check) | statically check a plugin without importing its code |
 | [`new`](#cmd-new) | scaffold a new plugin skeleton on disk (ready to fill in + enable) |
 | [`new-bundle`](#cmd-new-bundle) | scaffold a plugin BUNDLE (protoagent.bundle.yaml, ADR 0040) |
 | [`install`](#cmd-install) | install a plugin — or a bundle of plugins — from a git URL (does NOT enable it) |
@@ -25,6 +26,19 @@ passes (required deps go into the app's managed Python runtime as part of the in
 | [`uninstall-bundle`](#cmd-uninstall-bundle) | remove a bundle: its exclusively-owned members + the lock row (shared members stay) |
 | [`sync`](#cmd-sync) | re-clone locked plugins at their pinned SHA (reproducible set) |
 | [`install-deps`](#cmd-install-deps) | pip-install a plugin's declared requires_pip (explicit code-exec) |
+
+## `check` {#cmd-check}
+
+```
+python -m server plugin check [-h] [--json] dir
+```
+
+Statically check a plugin without importing its code.
+
+| Argument | Meaning |
+|---|---|
+| `dir` | plugin directory |
+| `--json` | print machine-readable findings |
 
 ## `new` {#cmd-new}
 

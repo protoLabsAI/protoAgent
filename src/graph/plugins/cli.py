@@ -10,8 +10,10 @@ agent, the devkit's ``enable_plugin`` tool — live, no restart).
 from __future__ import annotations
 
 import argparse
+import json
 import logging
 import sys
+from dataclasses import asdict
 
 from graph.plugins import installer, scaffold
 
@@ -61,6 +63,10 @@ def _build_parser() -> argparse.ArgumentParser:
         description="Scaffold + install/manage plugins (ADR 0027).",
     )
     sub = p.add_subparsers(dest="cmd", required=True)
+
+    pc = sub.add_parser("check", help="statically check a plugin without importing its code")
+    pc.add_argument("dir", help="plugin directory")
+    pc.add_argument("--json", action="store_true", help="print machine-readable findings")
 
     pn = sub.add_parser("new", help="scaffold a new plugin skeleton on disk (ready to fill in + enable)")
     pn.add_argument("name", help='human name (the id is slugified from it, e.g. "My Plugin" -> my-plugin)')
@@ -142,6 +148,16 @@ def run_plugin_cli(argv: list[str]) -> int:
     for noisy in ("httpx", "httpcore"):
         logging.getLogger(noisy).setLevel(logging.WARNING)
     args = _build_parser().parse_args(argv)
+    if args.cmd == "check":
+        from graph.plugins.check import check_plugin
+
+        findings = check_plugin(args.dir)
+        if args.json:
+            print(json.dumps([asdict(f) for f in findings]))
+        else:
+            for f in findings:
+                print(f"{f.file}:{f.line}: {f.severity} [{f.code}] {f.message} Fix: {f.fix}")
+        return int(any(f.severity == "error" for f in findings))
     try:
         if args.cmd == "new":
             try:
