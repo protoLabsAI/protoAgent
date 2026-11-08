@@ -18,6 +18,7 @@ _llm_latency = None
 _llm_tokens = None
 _llm_cache_tokens = None
 _llm_cost = None
+_llm_empty_completions = None
 _tools_deferred = None
 _compactions = None
 _overflow_recoveries = None
@@ -60,7 +61,7 @@ def _prefix() -> str:
 
 
 def init():
-    global _enabled, _llm_calls, _llm_latency, _llm_tokens, _llm_cache_tokens, _llm_cost
+    global _enabled, _llm_calls, _llm_latency, _llm_tokens, _llm_cache_tokens, _llm_cost, _llm_empty_completions
     global _tools_deferred, _compactions, _overflow_recoveries, _prunings, _tool_calls, _tool_latency, _active_sessions
     global _a2a_turns, _a2a_turn_latency, _watch_fires, _watch_flapping, _boot_phase_latency
     global _plugin_lifecycle_latency, _knowledge_op_latency
@@ -96,6 +97,17 @@ def init():
             f"{p}_llm_cost_usd_total",
             "Estimated LLM cost in USD",
             ["model"],
+        )
+        # Empty/degenerate model completions (ADR 0128 S0, #4875) — a reply that
+        # finished carrying no usable output (reasoning-only, or truncated short of
+        # any text / tool call). `reason` is the completion's finish/stop reason
+        # (a closed provider set — stop | length | tool_calls | …, bounded).
+        # `recovered` records whether the completion-guard retry (ADR 0128 S3)
+        # salvaged a usable reply. Defined here only; S3 wires the increments.
+        _llm_empty_completions = Counter(
+            f"{p}_llm_empty_completions_total",
+            "Model completions that returned no usable output (ADR 0128), by reason and retry outcome",
+            ["model", "reason", "recovered"],
         )
         _tools_deferred = Counter(
             f"{p}_llm_tools_deferred_total",
@@ -261,6 +273,21 @@ def record_llm_call(
         _llm_cache_tokens.labels(model=model, kind="creation").inc(cache_creation)
     if cost_usd:
         _llm_cost.labels(model=model).inc(cost_usd)
+
+
+def record_empty_completion(model: str, reason: str, recovered: bool) -> None:
+    """Count one empty/degenerate model completion (ADR 0128 S0, #4875).
+
+    ``reason`` is the completion's finish/stop reason; ``recovered`` is whether the
+    ADR 0128 S3 completion-guard retry turned it into a usable reply. Defined now so
+    S3 can increment it (``recovered=true|false``) without a metrics change of its
+    own; nothing increments it yet. No-op when metrics are off."""
+    if _enabled and _llm_empty_completions is not None:
+        _llm_empty_completions.labels(
+            model=model or "model",
+            reason=str(reason or "unknown"),
+            recovered=str(bool(recovered)).lower(),
+        ).inc()
 
 
 def record_lane_event(event) -> None:
