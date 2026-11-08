@@ -853,7 +853,7 @@ def register_pairing_routes(app, agent_name=None) -> None:
         try:
             if body.get("scope", SCOPE_DEVICE) != SCOPE_DEVICE:
                 raise ValueError('scope must be "device"; use PATCH to promote a device')
-            device, token = mint_device(body.get("name"))
+            device, token = mint_device(body.get("name"), minted_by=getattr(request.state, "device_id", None))
         except ValueError as exc:
             return JSONResponse({"ok": False, "error": str(exc), "detail": str(exc)}, status_code=400)
         return JSONResponse({"ok": True, "device": device, "token": token}, headers={"Cache-Control": "no-store"})
