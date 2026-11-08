@@ -981,23 +981,45 @@ describe("createPublishThrottle", () => {
 });
 
 
-it("relays coalesced iframe publishes with the plugin-bound token and cancels on unmount", async () => {
-  const fetchMock = vi.fn(async () => ({ ok: true, status: 200, json: async () => ({ token: "view-token" }) }));
-  vi.stubGlobal("fetch", fetchMock);
-  const container = document.createElement("div");
-  document.body.appendChild(container);
-  const root = createRoot(container);
+describe("PluginView publish relay", () => {
+  let container: HTMLDivElement;
+  let root: Root;
+  const response = { ok: true, status: 200, json: async () => ({ token: "view-token" }) };
   const view: PluginViewType = { id: "cadview", label: "CAD", path: "/plugins/cadview/view", key: "plugin:cadview:main" };
-  try {
-    await act(async () => { root.render(h(PluginView, { view })); });
+
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval", "setTimeout", "clearTimeout", "performance"] });
+    container = document.createElement("div");
+    document.body.appendChild(container);
+    root = createRoot(container);
+  });
+
+  afterEach(() => {
+    act(() => root.unmount());
+    container.remove();
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  });
+
+  const advance = async () => {
+    await act(async () => { await vi.advanceTimersByTimeAsync(200); });
+  };
+  const post = (value: number, topic = "status") => {
     const frame = container.querySelector("iframe")!;
-    const post = (value: number) => window.dispatchEvent(new MessageEvent("message", {
+    window.dispatchEvent(new MessageEvent("message", {
       source: frame.contentWindow, origin: window.location.origin,
-      data: { type: "protoagent:publish", topic: "status", data: { value } },
+      data: { type: "protoagent:publish", topic, data: { value } },
     }));
+  };
+
+  it("coalesces publishes with the plugin-bound token and cancels on unmount", async () => {
+    const fetchMock = vi.fn(async () => response);
+    const debug = vi.spyOn(console, "debug").mockImplementation(() => {});
+    vi.stubGlobal("fetch", fetchMock);
+    await act(async () => { root.render(h(PluginView, { view })); });
     post(1);
     post(2);
-    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 250)); });
+    await advance();
     const calls = fetchMock.mock.calls as unknown as Array<[string, RequestInit]>;
     const mint = calls.find(([url]) => url.endsWith("/api/events/publish-token"));
     expect(JSON.parse(mint![1].body as string)).toEqual({ plugin_id: "cadview" });
@@ -1005,13 +1027,62 @@ it("relays coalesced iframe publishes with the plugin-bound token and cancels on
     expect(publishes).toHaveLength(1);
     expect(publishes[0][1].headers).toMatchObject({ "X-Plugin-View-Token": "view-token" });
     expect(JSON.parse(publishes[0][1].body as string)).toEqual({ topic: "cadview.status", data: { value: 2 } });
+    expect(debug).toHaveBeenCalledWith("[plugin publish] dropped 1 events (cadview)");
     post(3);
-  } finally {
     act(() => root.unmount());
-    container.remove();
-  }
-  const count = fetchMock.mock.calls.length;
-  await new Promise((resolve) => setTimeout(resolve, 150));
-  expect(fetchMock).toHaveBeenCalledTimes(count);
-  vi.unstubAllGlobals();
+    const count = fetchMock.mock.calls.length;
+    await advance();
+    expect(fetchMock).toHaveBeenCalledTimes(count);
+  });
+
+  it("does not publish after unmount while token minting is pending", async () => {
+    let finishMint!: (value: typeof response) => void;
+    const fetchMock = vi.fn((url: string) => url.endsWith("/api/events/publish-token")
+      ? new Promise<typeof response>((resolve) => { finishMint = resolve; })
+      : Promise.resolve(response));
+    vi.stubGlobal("fetch", fetchMock);
+    await act(async () => { root.render(h(PluginView, { view })); });
+    post(1);
+    await advance();
+    act(() => root.unmount());
+    await act(async () => { finishMint(response); });
+    expect(fetchMock.mock.calls.filter(([url]) => url.endsWith("/api/events/publish"))).toHaveLength(0);
+  });
+
+  it("never falls back to bearer-only publishing when minting fails", async () => {
+    const fetchMock = vi.fn(async (url: string) => url.endsWith("/api/events/publish-token")
+      ? { ...response, ok: false, status: 429 } : response);
+    vi.stubGlobal("fetch", fetchMock);
+    vi.spyOn(console, "debug").mockImplementation(() => {});
+    await act(async () => { root.render(h(PluginView, { view })); });
+    post(1);
+    await advance();
+    expect(fetchMock.mock.calls.some(([url]) => url.endsWith("/api/events/publish-token"))).toBe(true);
+    expect(fetchMock.mock.calls.some(([url]) => url.endsWith("/api/events/publish"))).toBe(false);
+  });
+
+  it("waits for every POST when one fails and counts only the failed event", async () => {
+    let finishPublish!: (value: typeof response) => void;
+    const fetchMock = vi.fn((url: string, init?: RequestInit) => {
+      if (!url.endsWith("/api/events/publish")) return Promise.resolve(response);
+      const { topic } = JSON.parse(init!.body as string);
+      if (topic === "cadview.failed") return Promise.reject(new Error("offline"));
+      if (topic === "cadview.pending") return new Promise<typeof response>((resolve) => { finishPublish = resolve; });
+      return Promise.resolve(response);
+    });
+    const debug = vi.spyOn(console, "debug").mockImplementation(() => {});
+    vi.stubGlobal("fetch", fetchMock);
+    await act(async () => { root.render(h(PluginView, { view })); });
+    post(1, "failed");
+    post(2, "pending");
+    await advance();
+    post(3, "next");
+    await advance();
+    const publishes = () => fetchMock.mock.calls.filter(([url]) => url.endsWith("/api/events/publish"));
+    expect(publishes()).toHaveLength(2);
+    expect(debug).toHaveBeenCalledWith("[plugin publish] dropped 1 event (transport unavailable)");
+    await act(async () => { finishPublish(response); });
+    await advance();
+    expect(publishes()).toHaveLength(3);
+  });
 });

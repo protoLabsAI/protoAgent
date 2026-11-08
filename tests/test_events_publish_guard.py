@@ -66,3 +66,20 @@ def test_invalid_expired_tokens_and_existing_validation(publisher):
                        json={"topic": "cadview.status"}).status_code == 403
     assert client.post("/api/events/publish-token", json={"plugin_id": "bad.id"}).status_code == 400
     publish.assert_not_called()
+
+
+def test_rejected_namespace_does_not_consume_bucket_and_refill_is_capped(publisher):
+    client, publish, now = publisher
+    headers = mint(client)
+    for _ in range(25):
+        assert client.post("/api/events/publish", headers=headers,
+                           json={"topic": "other.status"}).status_code == 403
+    body = {"topic": "cadview.status"}
+    for _ in range(20):
+        assert client.post("/api/events/publish", headers=headers, json=body).status_code == 200
+    assert client.post("/api/events/publish", headers=headers, json=body).status_code == 429
+    now[0] += 100
+    for _ in range(20):
+        assert client.post("/api/events/publish", headers=headers, json=body).status_code == 200
+    assert client.post("/api/events/publish", headers=headers, json=body).status_code == 429
+    assert publish.call_count == 40

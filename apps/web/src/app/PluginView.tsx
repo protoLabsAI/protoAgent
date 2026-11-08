@@ -238,6 +238,9 @@ export function PluginView({
         }).then((response) => {
           if (response.status === 403) token = ""; // restart/expiry: mint again on the next batch
           if (!response.ok) console.debug(`[plugin publish] dropped 1 event (HTTP ${response.status})`);
+        }).catch(() => {
+          // Account for each failed POST and keep the batch busy until all settle.
+          console.debug("[plugin publish] dropped 1 event (transport unavailable)");
         })));
       } catch {
         console.debug(`[plugin publish] dropped ${events.length} events (transport unavailable)`);
