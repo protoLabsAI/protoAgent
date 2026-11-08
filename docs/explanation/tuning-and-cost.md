@@ -28,7 +28,10 @@ results are clipped, but every operator and agent message goes in, folded chunk 
 chunk on long spans, with the previous compaction's notes carried forward. The notes
 keep the operator's standing instructions and approvals quoted verbatim, plus the
 agent's commitments and pending scheduled actions (ADR 0127). `/compact` and the
-overflow safety valve use the same engine.
+overflow safety valve use the same engine. The operator's own messages are also
+carried word for word in an `<operator_messages>` block after the notes (about 20K
+tokens at most, newest kept, older ones pointed at the chat archive), so a compacted
+chat keeps every instruction even when the summary is poor.
 
 ```yaml
 compaction:

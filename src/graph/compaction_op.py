@@ -270,8 +270,13 @@ async def compact_thread(
     async def _call(prompt: str):
         return await summarizer(prompt, config)
 
+    archived = bool(entry_ids)
     try:
-        summary = (await compaction_engine.asummarize_span(messages[:cut], _call, budget_chars=budget_chars)).strip()
+        summary = (
+            await compaction_engine.asummarize_span(
+                messages[:cut], _call, budget_chars=budget_chars, session_id=session_id, archived=archived
+            )
+        ).strip()
     except compaction_engine.EmptySummaryError:
         summary = ""
     except Exception:
@@ -298,6 +303,12 @@ async def compact_thread(
                 if entry_ids
                 else ")"
             )
+        )
+        # The operator's own words never depend on the summarizer (ADR 0127 D3): the
+        # verbatim block is built from the removed messages, so the stub carries it too.
+        summary = compaction_engine.with_operator_block(
+            summary,
+            compaction_engine.operator_messages_block(messages[:cut], session_id=session_id, archived=archived),
         )
 
     # Thinking blocks in the kept tail were produced with the now-summarized history in
@@ -339,7 +350,9 @@ async def compact_thread(
         len(recent_tail),
     )
     return {
-        "summary": summary,
+        # The notes alone: the verbatim operator block is the operator's own words, already
+        # in front of them — it rides the rewritten thread, not the result shown to them.
+        "summary": compaction_engine.split_operator_block(summary)[0],
         "archived_chunks": len(entry_ids),
         "kept": len(recent_tail),
         "removed": cut,
