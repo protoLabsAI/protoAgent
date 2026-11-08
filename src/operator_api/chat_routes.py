@@ -1500,6 +1500,14 @@ def register_chat_routes(app, ui: str) -> None:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         except DirectiveClosed as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
+        # The revoke succeeded (never on the 404/409 above). Append one operator-originated
+        # withdrawal note to the chat thread so a compaction carries it next to the original
+        # approval (ADR 0127 D3, #4861). Pass the raw `reason` query param — a blank one adds
+        # no suffix and the stored default "revoked by the operator" never appears. Best
+        # effort: a failed append is logged inside and never turns a good revoke into an error.
+        from server.chat import record_directive_withdrawal
+
+        await record_directive_withdrawal(session_id, d, (reason or "").strip())
         return {"directive": d.to_dict()}
 
     # Goal-mode read/clear moved to the canonical plural `/api/goals*` in

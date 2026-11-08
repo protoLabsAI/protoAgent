@@ -146,6 +146,16 @@ def summary_notes_of(message) -> str:
 SENT_AT_KWARG = "protoagent_sent_at"
 _TIMESTAMP_KWARGS = (SENT_AT_KWARG, "timestamp", "created_at", "ts")
 
+#: ``additional_kwargs`` marker on the operator's directive-withdrawal note (the
+#: ``DELETE …/directives/{id}`` append — ``server.chat.record_directive_withdrawal``). The
+#: note is operator-originated ON PURPOSE (ADR 0127 D3, #4861): :func:`human_kind` must
+#: classify it :data:`OPERATOR` so compaction carries it verbatim next to the original
+#: approval, and the console ledger view (#4861 part 2) reads this marker to render it as a
+#: quiet event row rather than a chat bubble. Its value carries the withdrawn directive's
+#: id (``{"id": "dir-…"}``). It is deliberately NOT ``protoagent_injected_context`` /
+#: ``protoagent_guard_note`` / ``lc_source``, any of which would make compaction drop it.
+DIRECTIVE_WITHDRAWN_KWARG = "protoagent_directive_withdrawn"
+
 
 def sent_at_kwargs() -> dict:
     """``additional_kwargs`` stamping a message the operator is sending now."""

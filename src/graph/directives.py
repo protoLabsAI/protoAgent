@@ -390,6 +390,30 @@ def render_ledger(items: list[Directive]) -> str:
     return "\n\n".join(parts)
 
 
+def withdrawal_note(quote: str, reason: str = "") -> str:
+    """The operator-withdrawal note the DELETE route appends to the chat transcript
+    (ADR 0127 D3, #4861): ``You withdrew: "<first line of quote>"``, plus `` — <reason>``
+    when the operator gave a reason.
+
+    Only the first line of ``quote`` is shown — a directive can be a short paragraph and the
+    ledger already holds the whole thing. ``reason`` is the operator's own words: the caller
+    passes the raw query param, not the store's default ``"revoked by the operator"``, so a
+    reasonless withdraw shows no suffix. Both the first line and the reason are clipped to
+    :data:`MAX_NOTE_CHARS` with an explicit ``…`` so one very long line can't bloat a note
+    that compaction then carries verbatim every turn."""
+
+    def _clip(text: str) -> str:
+        return text[:MAX_NOTE_CHARS].rstrip() + "…" if len(text) > MAX_NOTE_CHARS else text
+
+    lines = (quote or "").strip().splitlines()
+    head = _clip(lines[0]) if lines else ""
+    note = f'You withdrew: "{head}"'
+    reason = (reason or "").strip()
+    if reason:
+        note += f" — {_clip(reason)}"
+    return note
+
+
 _DIRECTIVES_USAGE = "Usage: /directives  (list)   ·   /directives revoke <id> [reason]"
 
 
