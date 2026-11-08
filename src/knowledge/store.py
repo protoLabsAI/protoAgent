@@ -614,27 +614,23 @@ def _table_present(db: sqlite3.Connection, name: str) -> bool:
 
 
 # ``chunk_vectors`` has no FK to ``chunks``, so a delete path that forgets the side table
-# leaves an orphan vector behind (``delete_by_id`` — the console's knowledge/memory DELETE
-# routes — ``delete_by_content`` and ``delete_by_heading`` never touched it, which is how
-# the hub agent.db collected 43). ``memories`` solved the same problem with a delete
-# trigger; this is its ``chunks`` twin, so every delete path — today's and tomorrow's —
-# drops the vector with the row. Created only once ``chunk_vectors`` exists (a trigger
-# naming a missing table would fail every chunk delete on a vector-less store).
-_CHUNK_VECTORS_DELETE_TRIGGER = """
-CREATE TRIGGER IF NOT EXISTS chunks_vectors_ad AFTER DELETE ON chunks BEGIN
-    DELETE FROM chunk_vectors WHERE chunk_id = old.id;
-END;
-"""
+# leaves an orphan vector behind. ``HybridKnowledgeStore`` drops vectors on every delete it
+# overrides, but ``delete_by_id`` (the console's knowledge/memory DELETE routes),
+# ``delete_by_content`` and ``delete_by_heading`` used to skip it — which is how the hub
+# agent.db collected its orphans. Those paths now drop vectors too; this prune, run on every
+# store open, clears what older deletes (or a vector delete that failed) left behind. Not a
+# delete trigger: a trigger naming ``chunk_vectors`` would make every chunk delete fail
+# once that table is missing, and the forget path deliberately degrades to a chunk-only
+# delete in that case (#3973).
 
 
-def _ensure_chunk_vector_hygiene(db: sqlite3.Connection) -> int:
-    """When this DB has ``chunk_vectors``: install the delete trigger and prune vectors
-    whose chunk is gone (left by a pre-trigger delete). Returns the number pruned. An
-    orphan is unreachable (no chunk to return) and only skews an unfiltered vector scan,
-    so dropping it loses nothing. The caller owns the commit."""
+def _prune_orphan_chunk_vectors(db: sqlite3.Connection) -> int:
+    """Delete ``chunk_vectors`` rows whose chunk is gone; returns the number pruned. An
+    orphan is unreachable (there is no chunk to return) and only skews an unfiltered
+    vector scan, so dropping it loses nothing. A no-op when either table is missing.
+    The caller owns the commit."""
     if not _table_present(db, "chunk_vectors") or not _table_present(db, "chunks"):
         return 0
-    db.execute(_CHUNK_VECTORS_DELETE_TRIGGER)
     pruned = db.execute("DELETE FROM chunk_vectors WHERE chunk_id NOT IN (SELECT id FROM chunks)").rowcount
     if pruned:
         log.info("[knowledge] pruned %d orphan chunk vector(s) whose chunk was deleted", pruned)
@@ -1034,9 +1030,9 @@ class KnowledgeStore:
             else:
                 log.info("[knowledge] FTS5 unavailable — search will use LIKE fallback")
             try:
-                _ensure_chunk_vector_hygiene(db)
+                _prune_orphan_chunk_vectors(db)
             except sqlite3.DatabaseError as exc:
-                log.warning("[knowledge] chunk-vector hygiene skipped: %s", exc)
+                log.warning("[knowledge] orphan chunk-vector prune skipped: %s", exc)
             db.commit()
             db.close()
         except sqlite3.DatabaseError:

@@ -36,9 +36,9 @@ from knowledge.store import (
     KnowledgeStore,
     _deliverable_clauses,
     _delivery_policy_clause,
-    _ensure_chunk_vector_hygiene,
     _namespace_clause,
     _normalize_before,
+    _prune_orphan_chunk_vectors,
 )
 from observability import metrics
 
@@ -260,9 +260,8 @@ class HybridKnowledgeStore(KnowledgeStore):
             return
         try:
             db.execute("CREATE TABLE IF NOT EXISTS chunk_vectors (chunk_id INTEGER PRIMARY KEY, vec TEXT NOT NULL)")
-            # Delete trigger + orphan prune (store.py): no chunk delete path can leave a
-            # vector behind, and orphans an older delete path left are dropped at boot.
-            _ensure_chunk_vector_hygiene(db)
+            # Orphans an older delete path left (store.py) are dropped at boot.
+            _prune_orphan_chunk_vectors(db)
             db.commit()
         except sqlite3.DatabaseError as exc:
             log.warning("[knowledge] could not create chunk_vectors: %s", exc)
@@ -431,6 +430,44 @@ class HybridKnowledgeStore(KnowledgeStore):
             log.warning("[knowledge] batch store vectors failed: %s", exc)
         finally:
             db.close()
+
+    def _drop_vectors_where(self, where: str, params, what: str) -> None:
+        """Delete the vectors of the chunks matching ``where`` BEFORE the chunk delete
+        (the subquery reads ``chunks``). Best-effort like :meth:`delete_by_namespace`: a
+        failure logs and the chunk delete still runs; the boot prune
+        (``_prune_orphan_chunk_vectors``) reaps any vector left behind."""
+        db = self._get_db()
+        if db is None:
+            return
+        try:
+            db.execute(f"DELETE FROM chunk_vectors WHERE chunk_id IN (SELECT id FROM chunks WHERE {where})", params)
+            db.commit()
+        except sqlite3.DatabaseError as exc:
+            log.warning("[knowledge] %s vectors failed: %s", what, exc)
+        finally:
+            db.close()
+
+    def delete_by_id(self, chunk_id: int) -> bool:
+        """Drop the chunk AND its vector — the console's knowledge and memory DELETE
+        routes land here, and the base delete left the vector orphaned."""
+        self._drop_vectors_where("id = ?", (chunk_id,), "delete_by_id")
+        return super().delete_by_id(chunk_id)
+
+    def delete_by_content(self, contains: str) -> int:
+        """Drop the matching chunks AND their vectors (same predicate as the base)."""
+        if not contains or not contains.strip():
+            return 0
+        from knowledge.store import _LIKE_ESCAPE, _escape_like
+
+        self._drop_vectors_where(
+            "content LIKE ? ESCAPE ?", (f"%{_escape_like(contains)}%", _LIKE_ESCAPE), "delete_by_content"
+        )
+        return super().delete_by_content(contains)
+
+    def delete_by_heading(self, domain: str, heading: str) -> int:
+        """Drop the matching chunks AND their vectors (same predicate as the base)."""
+        self._drop_vectors_where("domain = ? AND heading = ?", (domain, heading), "delete_by_heading")
+        return super().delete_by_heading(domain, heading)
 
     def delete_by_namespace(self, namespace: str) -> int:
         """Drop the namespace's chunks AND their vectors (no FK cascade on the

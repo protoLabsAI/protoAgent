@@ -2,8 +2,8 @@
 
 ``chunk_vectors`` has no FK to ``chunks``; ``delete_by_id`` (the console's knowledge and
 memory DELETE routes), ``delete_by_content`` and ``delete_by_heading`` never touched it, so
-each delete left the vector behind. A delete trigger now drops the vector with the row on
-every path, and boot prunes orphans an older delete path left.
+each delete left the vector behind. The hybrid store now drops the vector on those paths
+too, and every store open prunes the orphans an older delete path left.
 """
 
 from __future__ import annotations
@@ -48,37 +48,41 @@ def test_every_delete_path_drops_the_vector(tmp_path, delete):
 
 
 def test_boot_prunes_orphan_vectors_left_by_an_older_delete(tmp_path):
-    """A DB an older core left with orphans (a raw delete, no trigger yet) is cleaned on the
-    next open — by a hybrid store and by a plain store alike — and live vectors stay."""
+    """A DB an older core left with orphans (a delete that skipped the vector) is cleaned
+    on the next open — by a hybrid store and by a plain store alike — and live vectors stay."""
     path = tmp_path / "agent.db"
     store = HybridKnowledgeStore(path, embed_fn=_embed)
     keep = store.add_chunk("kept body", domain="docs")
     gone = store.add_chunk("gone body", domain="docs")
+    gone2 = store.add_chunk("gone too", domain="docs")
     db = sqlite3.connect(str(path))
-    db.execute("DROP TRIGGER IF EXISTS chunks_vectors_ad")  # the pre-fix schema
-    db.execute("DELETE FROM chunks WHERE id = ?", (gone,))
+    db.execute("DELETE FROM chunks WHERE id IN (?, ?)", (gone, gone2))  # the pre-fix delete
     db.commit()
     db.close()
-    assert _vector_ids(path) == {keep, gone}  # the orphan, reproduced
+    assert _vector_ids(path) == {keep, gone, gone2}  # the orphans, reproduced
 
     KnowledgeStore(path)  # a vector-less boot (embeddings off) still prunes
     assert _vector_ids(path) == {keep}
 
-    # …and re-installs the trigger, so a later raw delete cannot orphan either.
     db = sqlite3.connect(str(path))
     db.execute("DELETE FROM chunks WHERE id = ?", (keep,))
     db.commit()
     db.close()
+    HybridKnowledgeStore(path, embed_fn=_embed)  # and so does a hybrid boot
     assert _vector_ids(path) == set()
 
 
-def test_plain_store_without_vectors_table_deletes_fine(tmp_path):
-    """No ``chunk_vectors`` → no trigger (it would name a missing table) and deletes work."""
-    store = KnowledgeStore(tmp_path / "agent.db")
-    cid = store.add_chunk("body", domain="docs")
-    assert store.delete_by_id(cid)
+def test_delete_still_works_when_the_vector_table_is_missing(tmp_path):
+    """No ``chunk_vectors`` (dropped, or a store that never embedded) → the vector step is
+    skipped and the chunk delete still happens, as the forget path expects (#3973)."""
+    store = HybridKnowledgeStore(tmp_path / "agent.db", embed_fn=_embed)
+    cid = store.add_chunk("body", domain="docs", heading="h")
+    other = store.add_chunk("other body", domain="docs", heading="h2")
     db = sqlite3.connect(str(store.path))
-    try:
-        assert db.execute("SELECT 1 FROM sqlite_master WHERE name = 'chunks_vectors_ad'").fetchone() is None
-    finally:
-        db.close()
+    db.execute("DROP TABLE chunk_vectors")
+    db.commit()
+    db.close()
+    assert store.delete_by_id(cid)
+    assert store.delete_by_heading("docs", "h2") == 1
+    assert store.get_chunk(other) is None
+    KnowledgeStore(store.path)  # the boot prune is a no-op without the table
