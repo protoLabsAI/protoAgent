@@ -845,8 +845,38 @@ async def _forward_member(slug: str, request, path: str, raw_path: str, target):
             base, request, raw_path, extra, drop_params=drop_params, ticket_binding=(slug, route, device)
         )
     if drop_params:
-        return await _forward_to_base(base, request, raw_path, extra, drop_params=drop_params)
-    return await _forward_to_base(base, request, raw_path, extra)
+        resp = await _forward_to_base(base, request, raw_path, extra, drop_params=drop_params)
+    else:
+        resp = await _forward_to_base(base, request, raw_path, extra)
+    if request.method == "POST" and path.strip("/") == "api/devices":
+        _audit_proxied_mint(slug, state, resp.status_code, remote=is_remote)
+    return resp
+
+
+def _audit_proxied_mint(slug: str, state, status: int, *, remote: bool) -> None:
+    """Hub-side audit of a ``POST /agents/<slug>/api/devices`` (#4683). The member sees only
+    the fleet token (or the remote's stored bearer), so its own ``device.minted`` entry says
+    ``minted_by: "shared"``; this records WHO asked on the hub. The response body (the new
+    device and its token) streams through untouched and is never read here, so the token can't
+    reach the log; match this row to the member's by slug and time."""
+    try:
+        from observability.audit import audit_logger
+
+        audit_logger.log(
+            session_id="devices",
+            tool="device.mint_proxied",
+            args={
+                "agent": slug,
+                "remote": remote,
+                "minted_by": getattr(state, "device_id", None) or "shared",
+                "status": status,
+            },
+            result_summary=f"a device access token was requested on {slug} through the fleet proxy",
+            duration_ms=0,
+            success=200 <= status < 300,
+        )
+    except Exception:  # noqa: BLE001 — auditing must never break the proxy
+        log.debug("[fleet] audit log failed for a proxied mint on %s", slug, exc_info=True)
 
 
 async def _pump_ws(client_ws, upstream, *, ticket_target: tuple[str, str, str] | None = None) -> None:
