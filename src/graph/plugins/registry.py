@@ -187,6 +187,16 @@ class PluginRegistry:
         self.component_reads: dict = {}
         self.services: dict = {}  # "<plugin_id>.<name>" -> callable, other plugins' sdk.service (ADR 0116)
         self.service_meta: dict = {}  # name -> {"plugin_id", "description"}; parallel, see goal_verifier_meta
+        # Event-bus subscriptions (ADR 0039, #4800). ``register()`` can run BEFORE the server
+        # wires ``HOST.on`` (the desktop cold boot: ``_build_plugins`` precedes
+        # ``_populate_plugin_host``), so ``on()`` parks each ``(topic, handler)`` here and a
+        # later bind step delivers them once the bus exists. We also keep every unsubscribe
+        # the bus hands back so a reload/disable tears THIS load's handlers down before the
+        # successor subscribes — otherwise each reload stacks another live handler closed over
+        # stale state. Both are per-load state; the loader carries the registry forward in the
+        # bundle (``event_subscriptions``) so the server can drive bind/teardown across reloads.
+        self._pending_subscriptions: list[tuple[str, object]] = []
+        self._subscription_unsubs: list = []
 
     def report_setup_gap(self, key: str, message: str | None, *, label: str | None = None, action=None) -> None:
         """Tell the operator this plugin can't do its job until something is fixed
@@ -524,14 +534,79 @@ class PluginRegistry:
         """Subscribe an in-process handler to bus topics (ADR 0039). ``topic`` may use
         ``*`` (one segment) / ``#`` (tail) wildcards and match ANY plugin's namespace —
         subscribing is read-only and safe. ``handler(payload)`` gets ``{event, data, seq}``,
-        may be sync or async; exceptions are isolated by the bus."""
+        may be sync or async; exceptions are isolated by the bus.
+
+        The subscription is QUEUED and bound by a later bind step (#4800), never wired inline —
+        one authoritative signal, so ordering can't regress silently. ``register()`` often runs
+        before the server has set ``HOST.on`` (desktop cold boot), and even when the bus is
+        already up (a hot reload) deferring the bind lets the server tear the OUTGOING load's
+        handlers down FIRST, so a reload never stacks a second live handler.
+        ``bind_event_subscriptions()`` drains the queue once the bus is wired — the host drives
+        it right after wiring the bus and again at each (re)load commit, so by the time any
+        event is published the handler is live. Nothing publishes in the gap between ``on()``
+        and the bind, so the only observable change from binding inline is that gap."""
         if not callable(handler):
             log.warning("[plugins] %s: on(%s) needs a callable handler", self.plugin_id, topic)
             return
-        if self.host and self.host.on:
-            self.host.on(topic, handler)
-        else:
-            log.debug("[plugins] %s: on(%s) dropped — no bus", self.plugin_id, topic)
+        self._pending_subscriptions.append((topic, handler))
+
+    def bind_event_subscriptions(self, *, warn_if_unbound: bool = False) -> int:
+        """Bind queued :meth:`on` subscriptions to the host event bus (ADR 0039, #4800).
+
+        ``register()`` can run before the bus is wired, so :meth:`on` queues each
+        ``(topic, handler)``; this delivers them to ``HOST.on`` once it exists, keeping every
+        unsubscribe the bus returns (for :meth:`teardown_event_subscriptions`). Idempotent:
+        a pair that binds leaves the queue, so re-running it never double-subscribes.
+
+        ``warn_if_unbound`` (the server passes it on the post-load / post-wire bind) logs a
+        WARNING per subscription still queued — in a live server that means the bus never came
+        up for this load, a real misordering worth naming (plugin id + topic). A non-server or
+        test context with no bus leaves it quiet (the default): there is nothing to bind to by
+        design. Returns the number still unbound."""
+        on = getattr(self.host, "on", None) if self.host else None
+        if callable(on):
+            still_pending: list[tuple[str, object]] = []
+            for topic, handler in self._pending_subscriptions:
+                try:
+                    unsub = on(topic, handler)
+                except Exception:  # noqa: BLE001 — a bad bus call must not break plugin load
+                    log.exception("[plugins] %s: on(%s) failed to bind", self.plugin_id, topic)
+                    still_pending.append((topic, handler))
+                    continue
+                if callable(unsub):
+                    self._subscription_unsubs.append(unsub)
+                else:  # an older/duck-typed bus with no unsubscribe — bound, but we can't tear it down
+                    log.debug("[plugins] %s: on(%s) bound without an unsubscribe", self.plugin_id, topic)
+            self._pending_subscriptions = still_pending
+        if warn_if_unbound:
+            for topic, _handler in self._pending_subscriptions:
+                log.warning(
+                    "[plugins] %s: on(%s) never bound — no event bus was wired; "
+                    "this subscription will receive nothing",
+                    self.plugin_id,
+                    topic,
+                )
+        return len(self._pending_subscriptions)
+
+    def teardown_event_subscriptions(self) -> None:
+        """Unsubscribe every :meth:`on` handler this load bound (ADR 0039, #4800).
+
+        The server calls this on the OUTGOING registry before the reloaded one subscribes, so
+        a plugin reloaded N times leaves exactly ONE live handler on the bus — not N, each
+        closed over a prior load's now-stale state. Also drops anything still queued (it never
+        reached the bus). Best-effort per unsubscribe: one that raises can't block the rest."""
+        for unsub in self._subscription_unsubs:
+            try:
+                unsub()
+            except Exception:  # noqa: BLE001 — a bad unsubscribe can't block teardown
+                log.exception("[plugins] %s: an event unsubscribe failed", self.plugin_id)
+        self._subscription_unsubs = []
+        self._pending_subscriptions = []
+
+    def has_event_subscriptions(self) -> bool:
+        """True when this load registered any :meth:`on` subscription (queued or bound) — the
+        loader uses it to carry only subscribing registries forward in the bundle (#4800)."""
+        return bool(self._pending_subscriptions or self._subscription_unsubs)
 
     def register_skill_dir(self, path: str | Path) -> None:
         """Add a directory of ``SKILL.md`` skills bundled with the plugin.

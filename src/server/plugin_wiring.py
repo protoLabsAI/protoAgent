@@ -368,6 +368,34 @@ def _populate_plugin_host() -> None:
         HOST.apply_settings = lambda patch: _agent_init()._apply_settings_changes(config=patch)
     except Exception:  # noqa: BLE001
         log.exception("[plugins] failed to populate plugin host")
+        return
+    # Now the bus is wired, deliver any registry.on() subscription that queued because
+    # register() ran before this point (the desktop cold-boot ordering, #4800). warn: we are
+    # in a live server with the bus up, so anything still unbound is a real misordering.
+    _bind_plugin_event_subscriptions(STATE.plugin_bundle, warn_if_unbound=True)
+
+
+def _bind_plugin_event_subscriptions(bundle, *, warn_if_unbound: bool = False) -> None:
+    """Bind every subscribing plugin registry's queued ``on()`` handlers to the now-wired bus
+    (ADR 0039, #4800). Best-effort per registry so one bad plugin can't block the rest; a
+    ``None`` bundle (nothing built yet) is a no-op."""
+    for registry in getattr(bundle, "event_subscriptions", None) or []:
+        try:
+            registry.bind_event_subscriptions(warn_if_unbound=warn_if_unbound)
+        except Exception:  # noqa: BLE001 — a bad plugin can't break event binding
+            log.exception("[plugins] %s: binding event subscriptions failed", getattr(registry, "plugin_id", "?"))
+
+
+def _teardown_plugin_event_subscriptions(bundle) -> None:
+    """Unsubscribe every ``on()`` handler the given bundle's registries bound (ADR 0039,
+    #4800). The reload commit calls this on the OUTGOING bundle before the reloaded one binds,
+    so a plugin reloaded N times leaves exactly one live handler. A ``None`` bundle is a
+    no-op; failures are isolated per registry."""
+    for registry in getattr(bundle, "event_subscriptions", None) or []:
+        try:
+            registry.teardown_event_subscriptions()
+        except Exception:  # noqa: BLE001 — a bad teardown can't block the reload
+            log.exception("[plugins] %s: tearing down event subscriptions failed", getattr(registry, "plugin_id", "?"))
 
 
 def _surface_key(spec_or_handle) -> tuple:

@@ -71,6 +71,11 @@ class PluginLoadResult:
     component_frames: dict = field(default_factory=dict)
     services: dict = field(default_factory=dict)  # "<plugin_id>.<name>" -> callable (ADR 0116)
     service_meta: dict = field(default_factory=dict)  # name -> {plugin_id, description}
+    # Registries that registered an ``on()`` event-bus subscription (ADR 0039, #4800). Carried
+    # forward (the registry objects, not just data) so the server can bind their queued
+    # subscriptions once the bus is wired and tear THIS load's handlers down on the next reload
+    # — otherwise each reload stacks another live handler closed over stale state.
+    event_subscriptions: list = field(default_factory=list)
     meta: list[dict] = field(default_factory=list)
 
 
@@ -1261,6 +1266,11 @@ def load_plugins(config, *, core_tool_names: set[str] | None = None) -> PluginLo
             smeta = getattr(registry, "service_meta", {}).get(name)
             if smeta:
                 result.service_meta[name] = smeta
+        # Carry the registry forward if it subscribed to the bus (ADR 0039, #4800): the server
+        # binds its queued on() subscriptions once the bus is wired and tears this load's live
+        # handlers down on the next reload. getattr so an older/duck-typed registry still loads.
+        if getattr(registry, "has_event_subscriptions", None) and registry.has_event_subscriptions():
+            result.event_subscriptions.append(registry)
         entry["loaded"] = True
         entry["tools"] = [t.name for t in kept]
         # Count the conventional skills/ dir too (auto-discovered above) — counting only
