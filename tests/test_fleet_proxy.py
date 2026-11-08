@@ -670,3 +670,188 @@ def test_chat_session_mutations_get_the_turn_lane_but_its_polls_stay_bounded():
     view = proxy._READ_TIMEOUT.read
     assert proxy._timeout_for(FakeRequest(method="GET"), "api/chat/attend").read == view
     assert proxy._timeout_for(FakeRequest(method="GET"), "api/chat/sessions/chat-1/turns").read == view
+
+
+# ── the upstream is released however the downstream response ends ─────────────
+#
+# The proxy opens the member request BEFORE it hands Starlette a StreamingResponse, and used to
+# close it only in the body generator's ``finally``. Starlette (ASGI spec 2.3, what uvicorn
+# advertises) runs the body alongside a disconnect listener and cancels the body the moment the
+# client is gone. When the client had already left before the first chunk (an EventSource
+# reconnecting, a plugin view remounting), the generator never started, so its ``finally``
+# never ran: the upstream response stayed checked out of the shared pool forever. On the
+# desktop app 2026-11-06 all 100 pool slots ended up held that way (50 member event streams, 40
+# connections the member had already closed) and every proxied request then waited on the
+# pool, which froze the console on a loading state (PoolTimeout in the hub log).
+
+
+class _ParkedUpstream:
+    """A live member stream: one frame, then silence until closed."""
+
+    def __init__(self, content_type="text/event-stream"):
+        import asyncio
+
+        self.status_code = 200
+        self.headers = {"content-type": content_type}
+        self.closed = False
+        self._gate = asyncio.Event()
+
+    async def aiter_raw(self):
+        yield b"data: hello\n\n"
+        await self._gate.wait()
+
+    async def aclose(self):
+        import asyncio
+
+        # httpx's Response.aclose awaits (it returns the connection to the pool), so a
+        # cleanup that runs inside a cancelled scope never gets past this await.
+        await asyncio.sleep(0)
+        self.closed = True
+        self._gate.set()
+
+
+def _scope():
+    return {"type": "http", "asgi": {"version": "3.0", "spec_version": "2.3"}, "method": "GET", "headers": []}
+
+
+@pytest.mark.parametrize("content_type", ["text/event-stream", "application/json"])
+async def test_upstream_released_when_client_left_before_the_body_started(monkeypatch, content_type):
+    up = _ParkedUpstream(content_type)
+    monkeypatch.setattr(proxy, "_get_client", lambda: FakeClient(upstream=up))
+    resp = await proxy._forward_to_base("http://127.0.0.1:7001", FakeRequest(), "api/events")
+
+    async def receive():
+        return {"type": "http.disconnect"}  # the client is already gone
+
+    async def send(message):
+        pass  # uvicorn drops writes to a disconnected client without raising
+
+    await resp(_scope(), receive, send)
+    assert up.closed, "an abandoned proxied response must release its upstream (pool slot)"
+
+
+async def test_upstream_released_when_client_leaves_mid_stream(monkeypatch):
+    import asyncio
+
+    up = _ParkedUpstream()
+    monkeypatch.setattr(proxy, "_get_client", lambda: FakeClient(upstream=up))
+    resp = await proxy._forward_to_base("http://127.0.0.1:7001", FakeRequest(), "api/events")
+    left = asyncio.Event()
+    sent: list[dict] = []
+
+    async def receive():
+        await left.wait()
+        return {"type": "http.disconnect"}
+
+    async def send(message):
+        sent.append(message)
+        if message.get("body"):
+            left.set()  # the client goes away right after the first frame
+
+    await asyncio.wait_for(resp(_scope(), receive, send), timeout=5)
+    assert any(m.get("body") == b"data: hello\n\n" for m in sent)
+    assert up.closed
+
+
+def _real_proxy_stack(header_delay: float):
+    """A real member (uvicorn, an SSE stream that never ends) behind a real hub (uvicorn, the
+    real ``_forward_to_base`` behind a BaseHTTPMiddleware like the hub's auth middleware), each
+    in its OWN thread and event loop, as the hub and a member are separate processes. Returns
+    (hub_url, live_upstream_streams, stop)."""
+    import asyncio
+    import socket
+    import threading
+
+    import uvicorn
+    from starlette.applications import Starlette
+    from starlette.middleware.base import BaseHTTPMiddleware
+    from starlette.responses import StreamingResponse
+    from starlette.routing import Route
+
+    live = {"n": 0, "arrived": 0}
+    lock = threading.Lock()
+
+    async def events(request):
+        with lock:
+            live["arrived"] += 1
+        await asyncio.sleep(header_delay)  # a busy member: headers come late
+
+        async def gen():
+            with lock:
+                live["n"] += 1
+            try:
+                yield b": connected\n\n"
+                while True:
+                    await asyncio.sleep(0.1)
+                    yield b": keepalive\n\n"  # the member keeps writing, as /api/events does
+            finally:
+                with lock:
+                    live["n"] -= 1
+
+        return StreamingResponse(gen(), media_type="text/event-stream")
+
+    def free_port():
+        with socket.socket() as sock:
+            sock.bind(("127.0.0.1", 0))
+            return sock.getsockname()[1]
+
+    up_port, hub_port = free_port(), free_port()
+
+    async def hub_route(request):
+        return await proxy._forward_to_base(f"http://127.0.0.1:{up_port}", request, "api/events")
+
+    class Passthrough(BaseHTTPMiddleware):
+        async def dispatch(self, request, call_next):
+            return await call_next(request)
+
+    hub = Starlette(routes=[Route("/agents/m/api/events", hub_route)])
+    hub.add_middleware(Passthrough)
+    servers = [
+        uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=port, log_level="error", lifespan="off"))
+        for app, port in ((Starlette(routes=[Route("/api/events", events)]), up_port), (hub, hub_port))
+    ]
+    threads = [threading.Thread(target=s.run, daemon=True) for s in servers]
+    for t in threads:
+        t.start()
+    deadline = time.monotonic() + 10
+    while not all(s.started for s in servers) and time.monotonic() < deadline:
+        time.sleep(0.01)
+
+    def stop():
+        for s in servers:
+            s.should_exit = True
+        for t in threads:
+            t.join(timeout=5)
+
+    return f"http://127.0.0.1:{hub_port}/agents/m/api/events", live, stop
+
+
+async def _wait_for_zero(live, seconds=5.0):
+    import asyncio
+
+    for _ in range(int(seconds / 0.05)):
+        if live["n"] == 0:
+            return
+        await asyncio.sleep(0.05)
+
+
+@pytest.mark.parametrize("leave", ["after_first_frame", "before_headers"])
+async def test_real_proxy_releases_member_stream_when_the_client_leaves(monkeypatch, leave):
+    """End to end with real sockets: every member stream the hub opened is closed once its
+    client is gone. Before the fix both shapes leaked one pooled connection per client."""
+    monkeypatch.setattr(proxy, "_client", None)  # a fresh pool bound to this test's loop
+    url, live, stop = _real_proxy_stack(header_delay=0.4 if leave == "before_headers" else 0.0)
+    try:
+        for _ in range(3):
+            timeout = httpx.Timeout(0.2) if leave == "before_headers" else httpx.Timeout(5.0)
+            try:
+                async with httpx.AsyncClient(timeout=timeout) as c, c.stream("GET", url) as r:
+                    async for _chunk in r.aiter_raw():
+                        break
+            except httpx.TimeoutException:
+                pass  # the client gave up before the member answered
+        await _wait_for_zero(live)
+        assert live["arrived"] == 3, "every client's request must have reached the member"
+        assert live["n"] == 0, f"{live['n']} member stream(s) still held after their clients left"
+    finally:
+        stop()
