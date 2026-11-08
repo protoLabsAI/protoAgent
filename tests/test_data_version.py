@@ -12,7 +12,12 @@ from infra import paths
 
 
 def _mock_data_home(tmp_path):
-    """Return a monkeypatch callable that makes data_home() return tmp_path."""
+    """Return a monkeypatch callable that makes data_home() return tmp_path.
+
+    Since #2416 the marker lives at the BOX root (``PROTOAGENT_BOX_ROOT`` wins over
+    ``data_home()``), so patching ``data_home`` alone only isolates a test while the var
+    is unset. The conftest clears it per test (#2543); ``test_marker_tests_never_write_an
+    _ambient_box_root`` below proves the stamping tests stay out of a spawner's box."""
 
     def _mock():
         return tmp_path
@@ -53,14 +58,24 @@ def test_stamp_data_version_writes_current_constant(tmp_path, monkeypatch):
     monkeypatch.setattr(paths, "data_home", _mock_data_home(tmp_path))
     ret = paths.stamp_data_version()
     assert ret == paths.DATA_VERSION
-    assert json.loads((tmp_path / ".data-version").read_text()) == {"data_version": paths.DATA_VERSION}
+    assert json.loads((tmp_path / ".data-version").read_text())["data_version"] == paths.DATA_VERSION
+
+
+def test_stamp_records_the_build_that_wrote_it(tmp_path, monkeypatch):
+    """The provenance a later boot needs to tell a real newer stamp from a stray."""
+    monkeypatch.setattr(paths, "data_home", _mock_data_home(tmp_path))
+    paths.stamp_data_version()
+    assert json.loads((tmp_path / ".data-version").read_text()) == {
+        "data_version": paths.DATA_VERSION,
+        "written_by": paths.package_version(),
+    }
 
 
 def test_stamp_data_version_writes_explicit_version(tmp_path, monkeypatch):
     monkeypatch.setattr(paths, "data_home", _mock_data_home(tmp_path))
     ret = paths.stamp_data_version(5)
     assert ret == 5
-    assert json.loads((tmp_path / ".data-version").read_text()) == {"data_version": 5}
+    assert json.loads((tmp_path / ".data-version").read_text())["data_version"] == 5
 
 
 def test_data_version_marker_honors_box_root(tmp_path, monkeypatch):
@@ -71,7 +86,7 @@ def test_data_version_marker_honors_box_root(tmp_path, monkeypatch):
 
     assert paths.stamp_data_version(7) == 7
     assert paths.data_version() == 7
-    assert json.loads((box_root / ".data-version").read_text()) == {"data_version": 7}
+    assert json.loads((box_root / ".data-version").read_text())["data_version"] == 7
     assert not (default_home / ".data-version").exists()
 
 
@@ -109,17 +124,110 @@ def test_check_upgrades_when_older(tmp_path, monkeypatch):
 
 
 def test_check_warns_on_newer(tmp_path, monkeypatch):
-    """Acceptance criterion 4: on-disk > DATA_VERSION → warning with 'downgrade', no overwrite."""
+    """Acceptance criterion 4: a stamp a real newer build wrote → warning with
+    'downgrade', no overwrite."""
     monkeypatch.setattr(paths, "data_home", _mock_data_home(tmp_path))
     newer = paths.DATA_VERSION + 5
-    (tmp_path / ".data-version").write_text(json.dumps({"data_version": newer}))
+    marker = tmp_path / ".data-version"
+    marker.write_text(json.dumps({"data_version": newer, "written_by": "9.9.9"}))
     warn = paths.check_data_version()
     assert warn is not None
     assert "downgrade" in warn
     assert str(newer) in warn
     assert str(paths.DATA_VERSION) in warn
     # Marker must NOT be overwritten
-    assert json.loads((tmp_path / ".data-version").read_text()) == {"data_version": newer}
+    assert json.loads(marker.read_text()) == {"data_version": newer, "written_by": "9.9.9"}
+
+
+def test_newer_warning_says_who_wrote_it_and_how_to_recover(tmp_path, monkeypatch):
+    """The warning is actionable: which file, which build wrote it, and the two ways out."""
+    monkeypatch.setattr(paths, "data_home", _mock_data_home(tmp_path))
+    marker = tmp_path / ".data-version"
+    marker.write_text(json.dumps({"data_version": paths.DATA_VERSION + 1, "written_by": "0.400.0"}))
+    warn = paths.check_data_version()
+    assert str(marker) in warn
+    assert "0.400.0" in warn
+    assert "delete" in warn and "restart" in warn
+
+
+def test_check_repairs_a_stray_legacy_stamp(tmp_path, monkeypatch):
+    """The stress-test finding: a ``{"data_version": 5}`` stamp (legacy format, no
+    ``written_by``) sat in the desktop box root from 2026-08-10 and every boot of every
+    fleet member warned about it forever. No build ever wrote a legacy stamp above v1,
+    so it is a provable stray: restamp, report once, and stop warning."""
+    monkeypatch.setattr(paths, "data_home", _mock_data_home(tmp_path))
+    marker = tmp_path / ".data-version"
+    marker.write_text(json.dumps({"data_version": 5}))
+
+    msg = paths.check_data_version()
+    assert msg is not None and msg.startswith("repaired")
+    assert str(marker) in msg and "v5" in msg
+    assert json.loads(marker.read_text()) == {
+        "data_version": paths.DATA_VERSION,
+        "written_by": paths.package_version(),
+    }
+    # One-time: the next boot is quiet.
+    assert paths.check_data_version() is None
+
+
+def test_stray_legacy_stamp_is_not_mistaken_for_a_future_version(tmp_path, monkeypatch):
+    """A later build whose DATA_VERSION equals the stray value must not read it as
+    'already migrated' and skip its migrations: the data under it is v1-era."""
+    monkeypatch.setattr(paths, "data_home", _mock_data_home(tmp_path))
+    monkeypatch.setattr(paths, "DATA_VERSION", 5)
+    marker = tmp_path / ".data-version"
+    marker.write_text(json.dumps({"data_version": 5}))
+
+    msg = paths.check_data_version()
+    assert msg is not None and msg.startswith("repaired")
+    assert json.loads(marker.read_text())["written_by"] == paths.package_version()
+
+
+def test_legacy_v1_stamp_is_left_alone(tmp_path, monkeypatch):
+    """The stamp every real box carries today: valid, quiet, not rewritten."""
+    monkeypatch.setattr(paths, "data_home", _mock_data_home(tmp_path))
+    marker = tmp_path / ".data-version"
+    marker.write_text(json.dumps({"data_version": 1}))
+    assert paths.check_data_version() is None
+    assert json.loads(marker.read_text()) == {"data_version": 1}
+
+
+def test_marker_tests_never_write_an_ambient_box_root(tmp_path):
+    """Root cause of the stray v5: run from inside a desktop-spawned agent, whose env
+    carries ``PROTOAGENT_BOX_ROOT=<desktop box>``, the stamping tests wrote into that
+    real box (they patched only ``data_home``). The conftest now clears the var (#2543);
+    this pins it by running the marker tests the way such an agent would."""
+    import os
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    ambient = tmp_path / "live-desktop-box"
+    ambient.mkdir()
+    env = {**os.environ, "PROTOAGENT_BOX_ROOT": str(ambient)}
+    here = Path(__file__)
+    proc = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "pytest",
+            f"{here}::test_stamp_data_version_writes_explicit_version",
+            f"{here}::test_check_stamps_when_absent",
+            "-q",
+            "-p",
+            "no:cacheprovider",
+            "-p",
+            "no:xdist",
+            f"--basetemp={tmp_path / 'inner'}",
+        ],
+        cwd=here.parent.parent,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=180,
+    )
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert not (ambient / ".data-version").exists()
 
 
 def test_check_stamps_on_malformed_json(tmp_path, monkeypatch):
