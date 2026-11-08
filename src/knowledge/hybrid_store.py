@@ -152,11 +152,9 @@ class HybridKnowledgeStore(KnowledgeStore):
         self._breaker_cooldown_s = breaker_cooldown_s
         self._embed_failures = 0
         self._breaker_open_until = 0.0
-        # Real OS threads mutate the breaker at once — searches via asyncio.to_thread
-        # (graph/sdk.py:604), warm_probe's daemon thread (~218), reset_embed_breaker
-        # from operator_api/config_routes.py:91 — so the read-modify-write of the
-        # counter and the paired breaker flag are serialized (#4201). NEVER held
-        # across embed_fn / embed_batch_fn (those run outside it).
+        # Searches, warm_probe and operator reset share this state across threads.
+        # Serialize the paired writes; embedding callbacks stay outside the lock.
+        # Forced interleavings: tests/test_concurrency_4201.py.
         self._breaker_lock = threading.Lock()
         if embed_fn is not None:
             self._ensure_vectors_table()

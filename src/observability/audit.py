@@ -31,11 +31,9 @@ class AuditLogger:
         self._base = Path(path) if path else None
         self._resolved: Path | None = None
         self._session_stats: "OrderedDict[str, dict]" = OrderedDict()
-        # log() runs on the event loop (async AuditMiddleware) AND on worker threads
-        # (plugin install audits via asyncio.to_thread, the sync ToolNode executor path)
-        # against this one module singleton, so the get/insert/evict/move_to_end and the
-        # counter + tools_used updates are serialized, as is get_session_stats' snapshot
-        # (#4201). NEVER held across the audit file write.
+        # Async middleware and plugin worker threads share the singleton below.
+        # Protect stats updates and snapshots, never the audit file write.
+        # Forced interleavings: tests/test_concurrency_4201.py.
         self._stats_lock = threading.Lock()
 
     def _ensure_path(self) -> Path | None:

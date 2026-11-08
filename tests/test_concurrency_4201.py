@@ -7,26 +7,19 @@ Real OS threads reach both pieces of shared state at the same time:
   searches run through ``asyncio.to_thread`` (graph/sdk.py:604-605,
   tools/memory_tools.py:725, operator_api/knowledge_routes.py:501,
   tools/lg_tools.py:380), ``warm_probe`` starts a daemon thread
-  (hybrid_store.py:218, from server/agent_init.py:767), and
+  (hybrid_store.py:232, from server/agent_init.py:767), and
   ``reset_embed_breaker`` is called from operator_api/config_routes.py:91.
 * ``AuditLogger._session_stats`` (the ``observability.audit.audit_logger``
   singleton): ``log()`` runs both on the event loop (AuditMiddleware async path,
   graph/middleware/audit.py:324/347) AND on worker threads — plugin install
-  audits go through ``asyncio.to_thread(_run_install, ...)``
-  (operator_api/python_routes.py:91, node_routes.py:107, plugin_routes.py:393 →
-  graph/plugins/installer.py:452) and the sync ToolNode path runs parallel tool
-  calls via ``get_executor_for_config(...).map(_run_one, ...)``
-  (langgraph tool_node), each reaching the sync AuditMiddleware
-  (graph/middleware/audit.py:237/260) with the SAME session_id.
+  audits go through ``asyncio.to_thread(_install_deps_and_refresh, ...)``
+  (operator_api/plugin_routes.py:393 → :248 → graph/plugins/installer.py:2053
+  → :452). These use the shared session_id "plugins". Async middleware calls
+  the same singleton directly on the event loop (graph/middleware/audit.py:324).
 
-Each interleaving is FORCED with event hooks, never raced-and-hoped: a chosen
-thread is pinned between a read and the dependent write while a partner runs to
-completion. The pin is a bounded ``Event.wait`` so that once the fix's lock is in
-place — and the partner is parked on that lock instead of finishing — the pinned
-thread proceeds and the operation completes correctly rather than hanging. The
-RESULT is therefore identical on every run: wrong (lost update / torn state /
-KeyError / RuntimeError) without the lock, correct with it. No sleeps, no stress
-loops, no ``setswitchinterval``.
+Each hook waits for an explicit event: either the partner completes (unlocked
+code), or it attempts the already-held production lock (fixed code). Timeouts
+only fail a broken handshake; they never choose the interleaving's outcome.
 """
 
 from __future__ import annotations
@@ -34,36 +27,52 @@ from __future__ import annotations
 import threading
 from collections import OrderedDict
 
+import pytest
+
 from knowledge.hybrid_store import HybridKnowledgeStore
 from observability.audit import AuditLogger
 
-# How long a pinned thread waits for its partner. The partner finishes in
-# microseconds WITHOUT the lock (so this is never actually hit then); WITH the
-# lock the partner is parked on it and never signals, so the pinned thread falls
-# through after this bound and the operation completes correctly. Latency only —
-# the outcome is deterministic either way.
-_PIN_TIMEOUT = 0.75
+pytestmark = pytest.mark.platform_sensitive
+
+_WAIT_TIMEOUT = 10
+
+
+class _ObservedLock:
+    """Delegate to the real lock and signal a proven contending acquisition."""
+
+    def __init__(self, lock, pin):
+        self.lock = lock
+        self.pin = pin
+
+    def __enter__(self):
+        if not self.lock.acquire(blocking=False):
+            self.pin.release()
+            assert self.lock.acquire(timeout=_WAIT_TIMEOUT), "state lock deadlocked"
+        return self
+
+    def __exit__(self, *exc):
+        self.lock.release()
 
 
 class _Pin:
-    """A one-shot, single-thread pause used to force an interleaving.
+    """Pause one chosen thread until its partner completes or contends."""
 
-    Only the armed thread blocks (a symmetric pause would deadlock both sides),
-    and only once. The partner thread runs meanwhile and calls :meth:`release`.
-    """
-
-    def __init__(self, timeout: float = _PIN_TIMEOUT):
+    def __init__(self, owner):
         self._reached = threading.Event()
         self._go = threading.Event()
         self._ident: int | None = None
         self._fired = False
-        self._timeout = timeout
+        name = "_breaker_lock" if isinstance(owner, HybridKnowledgeStore) else "_stats_lock"
+        # Also runs against the pre-fix classes, which have no lock at all.
+        lock = getattr(owner, name, None)
+        if lock is not None:
+            setattr(owner, name, _ObservedLock(lock, self))
 
     def arm(self, ident: int) -> None:
         self._ident = ident
 
-    def wait_reached(self, timeout: float = 5.0) -> None:
-        assert self._reached.wait(timeout), "the pinned thread never reached its hook"
+    def wait_reached(self) -> None:
+        assert self._reached.wait(_WAIT_TIMEOUT), "the pinned thread never reached its hook"
 
     def release(self) -> None:
         self._go.set()
@@ -73,7 +82,37 @@ class _Pin:
             return
         self._fired = True
         self._reached.set()
-        self._go.wait(self._timeout)
+        assert self._go.wait(_WAIT_TIMEOUT), "partner neither completed nor contended"
+
+
+def _run_pair(pin, pinned, partner):
+    """Propagate every worker exception and join both workers, even on failure."""
+    errors = []
+
+    def run(fn, release=False):
+        try:
+            fn()
+        except BaseException as exc:
+            errors.append(exc)
+        finally:
+            if release:
+                pin.release()
+
+    first = threading.Thread(target=run, args=(pinned,), daemon=True)
+    second = threading.Thread(target=run, args=(partner, True), daemon=True)
+    first.start()
+    try:
+        pin.wait_reached()
+        second.start()
+        first.join(_WAIT_TIMEOUT)
+        second.join(_WAIT_TIMEOUT)
+    finally:
+        pin.release()
+        first.join(_WAIT_TIMEOUT)
+        if second.ident is not None:
+            second.join(_WAIT_TIMEOUT)
+    assert not first.is_alive() and not second.is_alive(), "worker did not terminate"
+    assert not errors, f"worker exceptions: {errors!r}"
 
 
 # ── HybridKnowledgeStore breaker ──────────────────────────────────────────────
@@ -135,7 +174,7 @@ def test_concurrent_failures_count_exactly_and_trip_breaker(tmp_path):
     """Two threads each record one failure. The count must be exactly 2 and the
     breaker must open at the threshold — a lost increment leaves it at 1, closed."""
     store = _InstrumentedStore(str(tmp_path / "kb.db"), embed_fn=_bow_embed, breaker_threshold=2)
-    pin = _Pin()
+    pin = _Pin(store)
     store._fail_set_pin = pin  # pin the first thread mid read-modify-write of += 1
 
     def pinned():
@@ -146,15 +185,8 @@ def test_concurrent_failures_count_exactly_and_trip_breaker(tmp_path):
         store._record_embed_failure()
         pin.release()
 
-    a = threading.Thread(target=pinned)
-    a.start()
-    pin.wait_reached()
-    b = threading.Thread(target=partner)
-    b.start()
-    a.join(10)
-    b.join(10)
+    _run_pair(pin, pinned, partner)
     store._fail_set_pin = None
-    assert not a.is_alive() and not b.is_alive()
     assert store._embed_failures == 2, "a concurrent failure increment was lost"
     assert store._breaker_open(), "breaker did not open at the threshold"
 
@@ -164,7 +196,7 @@ def test_success_overlapping_failure_no_torn_breaker(tmp_path):
     failure opening the breaker and the success clearing it must not interleave
     into counter=0 + breaker-open."""
     store = _InstrumentedStore(str(tmp_path / "kb.db"), embed_fn=_bow_embed, breaker_threshold=1)
-    pin = _Pin()
+    pin = _Pin(store)
     store._open_set_pin = pin  # pin the failure thread as it opens the breaker
 
     def pinned():  # the failure: increments to threshold, then opens the breaker (pinned there)
@@ -175,13 +207,7 @@ def test_success_overlapping_failure_no_torn_breaker(tmp_path):
         store._record_embed_success()
         pin.release()
 
-    a = threading.Thread(target=pinned)
-    a.start()
-    pin.wait_reached()
-    b = threading.Thread(target=partner)
-    b.start()
-    a.join(10)
-    b.join(10)
+    _run_pair(pin, pinned, partner)
     store._open_set_pin = None
     _assert_breaker_consistent(store)
 
@@ -190,7 +216,7 @@ def test_reset_overlapping_failure_no_torn_breaker(tmp_path):
     """``reset_embed_breaker`` (the operator "test connection" path) overlapping a
     failure must not leave a torn breaker either."""
     store = _InstrumentedStore(str(tmp_path / "kb.db"), embed_fn=_bow_embed, breaker_threshold=1)
-    pin = _Pin()
+    pin = _Pin(store)
     store._open_set_pin = pin
 
     def pinned():
@@ -201,13 +227,7 @@ def test_reset_overlapping_failure_no_torn_breaker(tmp_path):
         store.reset_embed_breaker()
         pin.release()
 
-    a = threading.Thread(target=pinned)
-    a.start()
-    pin.wait_reached()
-    b = threading.Thread(target=partner)
-    b.start()
-    a.join(10)
-    b.join(10)
+    _run_pair(pin, pinned, partner)
     store._open_set_pin = None
     _assert_breaker_consistent(store)
 
@@ -220,7 +240,7 @@ def test_probe_failure_overlapping_success_no_torn_breaker(tmp_path):
         raise RuntimeError("embed route down")
 
     store = _InstrumentedStore(str(tmp_path / "kb.db"), embed_fn=boom, breaker_threshold=2)
-    pin = _Pin()
+    pin = _Pin(store)
     store._open_set_pin = pin
 
     def pinned():  # the probe fails: failures=threshold, then opens the breaker (pinned)
@@ -231,13 +251,7 @@ def test_probe_failure_overlapping_success_no_torn_breaker(tmp_path):
         store._record_embed_success()
         pin.release()
 
-    a = threading.Thread(target=pinned)
-    a.start()
-    pin.wait_reached()
-    b = threading.Thread(target=partner)
-    b.start()
-    a.join(10)
-    b.join(10)
+    _run_pair(pin, pinned, partner)
     store._open_set_pin = None
     _assert_breaker_consistent(store)
 
@@ -298,7 +312,7 @@ def test_two_first_logs_same_session_both_count(tmp_path):
     a = _audit(tmp_path)
     hd = _HookDict()
     a._session_stats = hd
-    pin = _Pin()
+    pin = _Pin(a)
     hd.get_pin = pin  # pin the first logger after get()->None, before the insert
 
     def pinned():
@@ -309,13 +323,7 @@ def test_two_first_logs_same_session_both_count(tmp_path):
         _log(a, "s", "tb")
         pin.release()
 
-    t1 = threading.Thread(target=pinned)
-    t1.start()
-    pin.wait_reached()
-    t2 = threading.Thread(target=partner)
-    t2.start()
-    t1.join(10)
-    t2.join(10)
+    _run_pair(pin, pinned, partner)
     hd.get_pin = None
     assert a.get_session_stats("s")["tool_calls"] == 2, "a concurrent first log() was lost"
 
@@ -331,7 +339,7 @@ def test_eviction_overlapping_log_no_keyerror(tmp_path, monkeypatch):
     a._session_stats = hd
     _log(a, "old", "t")  # oldest, next to be evicted
     _log(a, "mid", "t")  # now at capacity (2)
-    pin = _Pin()
+    pin = _Pin(a)
     hd.get_pin = pin  # pin the "old" logger after get("old"), before move_to_end
     errors: list[Exception] = []
 
@@ -348,13 +356,7 @@ def test_eviction_overlapping_log_no_keyerror(tmp_path, monkeypatch):
         finally:
             pin.release()
 
-    t1 = threading.Thread(target=pinned)
-    t1.start()
-    pin.wait_reached()
-    t2 = threading.Thread(target=partner)
-    t2.start()
-    t1.join(10)
-    t2.join(10)
+    _run_pair(pin, pinned, partner)
     hd.get_pin = None
     assert errors == [], f"a concurrent eviction raised: {errors!r}"
     assert len(a._session_stats) <= 2, "session stats grew past the cap"
@@ -369,7 +371,7 @@ def test_get_session_stats_overlapping_log_consistent_snapshot(tmp_path):
         _log(a, "s", tool)
     hs = _HookSet(a._session_stats["s"]["tools_used"])
     a._session_stats["s"]["tools_used"] = hs
-    pin = _Pin()
+    pin = _Pin(a)
     hs.iter_pin = pin  # pin the reader mid-iteration
     snap: dict = {}
     errors: list[Exception] = []
@@ -385,13 +387,53 @@ def test_get_session_stats_overlapping_log_consistent_snapshot(tmp_path):
         _log(a, "s", "t4", success=False)  # a NEW tool -> grows tools_used mid-iteration
         pin.release()
 
-    t1 = threading.Thread(target=reader)
-    t1.start()
-    pin.wait_reached()
-    t2 = threading.Thread(target=writer)
-    t2.start()
-    t1.join(10)
-    t2.join(10)
+    _run_pair(pin, reader, writer)
     hs.iter_pin = None
     assert errors == [], f"get_session_stats raised during a concurrent log: {errors!r}"
     assert snap["tool_calls"] == snap["successes"] + snap["failures"], "snapshot not self-consistent"
+    assert snap == {
+        "tool_calls": 4, "successes": 4, "failures": 0,
+        "total_ms": 4, "avg_ms": 1, "tools_used": ["t0", "t1", "t2", "t3"],
+    }
+    assert a.get_session_stats("s")["tool_calls"] == 5
+
+
+@pytest.mark.parametrize("operation", ["_embed", "_embed_batch", "_probe_once"])
+def test_embed_callbacks_run_outside_breaker_lock(tmp_path, operation):
+    store = None
+
+    def embed(_text):
+        assert store._breaker_lock.acquire(blocking=False), "callback holds breaker lock"
+        store._breaker_lock.release()
+        return [1.0]
+
+    store = HybridKnowledgeStore(
+        str(tmp_path / "kb.db"), embed_fn=embed,
+        embed_batch_fn=lambda texts: [embed(text) for text in texts],
+    )
+    if operation == "_probe_once":
+        assert store._probe_once() is True
+    elif operation == "_embed_batch":
+        assert store._embed_batch(["a"]) == [[1.0]]
+    else:
+        assert store._embed("a") == [1.0]
+
+
+def test_audit_file_write_runs_outside_stats_lock(tmp_path, monkeypatch):
+    from pathlib import Path
+
+    logger = _audit(tmp_path)
+    original_open = Path.open
+    writes = []
+
+    def checked_open(path, mode="r", *args, **kwargs):
+        if path == logger.path and mode == "a":
+            assert logger._stats_lock.acquire(blocking=False), "file write holds stats lock"
+            logger._stats_lock.release()
+            writes.append(path)
+        return original_open(path, mode, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "open", checked_open)
+    _log(logger, "s", "tool")
+    assert writes == [logger.path]
+    assert logger.get_session_stats("s")["tool_calls"] == 1
