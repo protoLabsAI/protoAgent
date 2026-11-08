@@ -609,14 +609,22 @@ def register_knowledge_routes(app) -> None:
         # plugin backend that only implements the ADR 0031 surface.
         from knowledge import add_document
 
+        dom = str(body.get("domain", "") or "general").strip() or "general"
         ids = await asyncio.to_thread(
             lambda: add_document(
                 STATE.knowledge_store,
                 content,
-                domain=str(body.get("domain", "") or "general"),
+                domain=dom,
                 heading=(str(body.get("heading", "")).strip() or None),
                 source="console",
                 source_type="operator",
+                # Stamp the ``collection`` column with the domain (ADR 0125 P2 slice 6),
+                # mirroring ops.knowledge.ingest and the P2-B boot backfill
+                # (``collection = domain``). Without it the column stays NULL until the
+                # next reboot, so an operator-added chunk lists under "general", is
+                # missing from ``?collection=<dom>``, yet comes back from
+                # ``?collection=general`` — the same bug this PR fixed for ingest.
+                collection=dom,
             )
         )
         if not ids:
@@ -823,9 +831,15 @@ def register_knowledge_routes(app) -> None:
         if cur is None and callable(get_chunk):
             return JSONResponse({"detail": "no chunk with that id"}, status_code=404)
         cur = cur or {}
+        # ``collection`` (ADR 0125 P2 slice 6) rides along like the other lifecycle
+        # columns: an edit is a new revision, and without copying it the revision
+        # loses its collection — missing from ``?collection=<name>``, counted and
+        # returned under "general", until the P2-B boot backfill (``collection =
+        # domain``) later files it under the WRONG bucket when it differs from the
+        # domain. A NULL collection (conversation history) stays NULL, as before.
         carry = {
             key: cur.get(key)
-            for key in ("memory_kind", "subject", "delivery_policy", "expires_at", "namespace", "epoch")
+            for key in ("memory_kind", "subject", "delivery_policy", "expires_at", "namespace", "epoch", "collection")
             if cur.get(key) is not None
         }
         if cur.get("review_state") == "rejected":
