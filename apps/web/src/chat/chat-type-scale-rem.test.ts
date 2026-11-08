@@ -85,8 +85,8 @@ describe("Chat rem/em font-sizes → DS type scale (DS audit type-scale 2b)", ()
     // system pill's font when a slash-command renders a structured component card, + two more
     // when plain notes became NoteCards: the `.note-card__title` and `.note-card__body` (sm).
     expect((chatCss.match(new RegExp(TOKEN_FONT_SIZE, "g")) ?? []).length).toBe(40);
-    // tool-calls.css had no prior token font-sizes; all 18 come from this migration.
-    expect((toolCallsCss.match(new RegExp(TOKEN_FONT_SIZE, "g")) ?? []).length).toBe(18);
+    // 18 migrated sites plus the visible wait summary (#4852).
+    expect((toolCallsCss.match(new RegExp(TOKEN_FONT_SIZE, "g")) ?? []).length).toBe(19);
   });
 
   it("the rem/em patterns still bite (meta-guard, literals built by concat so this file self-passes)", () => {
