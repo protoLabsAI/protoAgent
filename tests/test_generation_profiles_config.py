@@ -96,6 +96,35 @@ def test_full_round_trip(tmp_path):
     assert reloaded.model_profiles == original.model_profiles
 
 
+def test_sparse_profiles_preserve_nested_template_values(tmp_path):
+    profiles = {
+        "empty": {},
+        "custom": {
+            "thinking": "",
+            "chat_template_kwargs": {"optional": None, "stops": ["end"], "enabled": False},
+        },
+    }
+    config = load(tmp_path, {"model": {"profiles": profiles}})
+    serialized = config_to_dict(config)
+    assert serialized["model"]["profiles"] == profiles
+    schema = build_schema(config, include_hidden=True)
+    entry = next(e for group in schema for e in group["fields"] if e["key"] == "model.profiles")
+    assert entry["value"] == profiles
+    doc = {}
+    apply_updates_to_yaml(doc, serialized)
+    assert load(tmp_path, doc).model_profiles == config.model_profiles
+
+
+def test_delete_saved_profiles_uses_existing_merge_contract(tmp_path):
+    doc = {"model": {"profiles": dict(PROFILES), "max_tokens": 1234}}
+    # Nested maps merge; None explicitly deletes a member, while {} is a no-op.
+    apply_updates_to_yaml(doc, {"model": {"profiles": {}}})
+    assert doc["model"]["profiles"] == PROFILES
+    apply_updates_to_yaml(doc, {"model": {"profiles": dict.fromkeys(PROFILES)}})
+    assert doc == {"model": {"profiles": {}, "max_tokens": 1234}}
+    assert load(tmp_path, doc).model_profiles == {}
+
+
 def test_absent_profiles_preserve_existing_config(tmp_path):
     data = {"model": {"max_tokens": 1234, "thinking": "enabled", "reasoning_effort": "medium"}}
     absent = load(tmp_path, data)
