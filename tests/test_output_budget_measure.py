@@ -251,6 +251,38 @@ def test_cli_window_handles_mixed_timezones(tmp_path, capsys, source, timestamp_
     assert report["dropped_outside_window"] == 3
 
 
+def test_empty_window_reports_zeroes_without_crashing(tmp_path, capsys):
+    # The manager runs this on a real window that may filter down to nothing. No
+    # call and no finder step must stay a report of zeroes, never a ZeroDivisionError.
+    report = measure.analyze([], panels="")  # zero panels -> hours_per_panel guarded
+    assert report["calls"] == 0 and report["output_tokens_total"] == 0
+    assert report["over_8k"]["call_share"] == 0.0 and report["over_8k"]["token_share"] == 0.0
+    assert report["over_8k"]["by_turn_kind"] == {"tool_call": 0, "run_ending": 0}
+    assert report["cap_hits"] == 0
+    assert (report["empty"]["calls"], report["empty"]["recovered"]) == (0, 0)
+    assert report["finder"] == {"panels": 0, "finder_hours": 0.0, "hours_per_panel": 0.0}
+    # render_text must not KeyError on an all-zero report.
+    assert "Calls measured: 0" in measure.render_text(report)
+
+    rows_file = tmp_path / "empty.jsonl"
+    rows_file.write_text("")
+    assert measure.run([str(rows_file), "--source", "langfuse", "--json"]) == 0
+    assert json.loads(capsys.readouterr().out)["calls"] == 0
+
+
+def test_langfuse_reads_usage_block_fallbacks():
+    # Neither fixture exercises the usage.* fallbacks or the output-string text_chars.
+    rows = [
+        {"usage": {"output_tokens": 5000, "output_token_details": {"reasoning": 100}}, "output": "hello"},
+        {"usage": {"completion_tokens": 9000}, "metadata": {"text_chars": 10}},
+    ]
+    calls, _ = measure.load_calls(_jsonl(rows), "langfuse")
+    assert [c["output_tokens"] for c in calls] == [5000, 9000]
+    assert calls[0]["reasoning_tokens"] == 100
+    assert calls[0]["text_chars"] == 5  # len("hello"), no metadata.text_chars
+    assert calls[1]["reasoning_tokens"] is None
+
+
 def test_recovered_count_from_log_when_rows_lack_flag():
     # Empty rows with no recovered flag; recovery comes from the completion-guard log.
     rows = [
