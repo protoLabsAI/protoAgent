@@ -44,6 +44,27 @@ jobs, not one-shots. The local backend checks expiry after a successful fire,
 not at the exact TTL timestamp. They are not fields on the console's scheduler REST API,
 and its jobs do not acquire the tool's default TTL.
 
+## What the agent sees each turn
+
+The agent doesn't have to call `list_schedules()` to remember what it queued. Every
+turn, the `<working_state>` block shows its pending schedules, sorted by chat:
+
+- **This chat.** Each `wait` resume or schedule that fires into this chat, or that
+  this chat created, is shown with its next fire time, a note that it runs
+  automatically unless the agent cancels it with `cancel_schedule("<id>")`, and its
+  full instruction (up to 1,500 characters, with a marker if it's cut). At most five
+  are shown this way.
+- **Agent-wide.** Jobs not tied to any chat, such as an Activity-thread cron, and
+  recurring schedules made in other chats (they fire into Activity whichever chat is
+  open). One short line each.
+- **Other chats.** One-shot jobs that belong to another chat appear only as a count.
+
+The job whose fire started the current turn is marked `[FIRING NOW]`, so the agent
+doesn't take it for another queued wake. Active watches follow the same rules: a
+watch that reacts in this chat shows its full reaction prompt and a reminder that
+`clear_watch("<id>")` stops it. See
+[ADR 0127](/adr/0127-compaction-fidelity) D5.
+
 ## Enabling / disabling
 
 Scheduling is on by default. Set `middleware.scheduler: false` to disable it,

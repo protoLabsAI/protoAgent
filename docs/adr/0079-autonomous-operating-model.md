@@ -127,6 +127,31 @@ open (covered by a legacy-board migration test). `task_create` stamps the sessio
 graph state; `list(session_id=…)` scopes to a goal's backlog; `<working_state>` marks a goal's
 own tasks with "← this goal".
 
+### Amendment (2026-11-07) — pending actions scoped to the chat, shown in full (ADR 0127 D5)
+
+The Observe block used to list the first 10 scheduler jobs for every chat, each cut to
+60 characters, and every active watch, unscoped. In the 2026-11-07 incident the agent
+read "Continue the protoAgent v0.231.0 minor release. The operator approved it, and Jo"
+and never saw the "squash-merge on PASS" its own `wait` would run, so it told the
+operator nothing would merge.
+
+Pending schedules and active watches are now scoped to the current chat:
+
+- **This chat.** A job whose `context_id` (where it fires) or, failing that,
+  `origin_session` (the chat that created it) is this session. A watch whose
+  `run_session` is this session. Each shows its full resume instruction or reaction
+  (capped at `_WS_INSTRUCTION_CAP` = 1,500 characters with an explicit marker), its next
+  fire or check time, and "runs automatically unless you cancel it", naming
+  `cancel_schedule` or `clear_watch`. At most `_WS_CHAT_ITEM_CAP` = 5 of each are shown.
+- **Agent-wide.** A job with neither field (an Activity-thread cron, a plugin's job), a
+  recurring job from another chat (it fires into Activity whichever chat is open), and a
+  watch with no `run_session` (it reacts through hooks only). One compact line each.
+- **Other chats.** One-shot jobs and watches that belong to another chat appear as a
+  single count line.
+
+The job firing the current turn always renders, still marked `[FIRING NOW]`, and is not
+labelled as pending. Every read is still guarded, so the block stays best-effort.
+
 ### Amendment (2026-08-31) — plugin work providers
 
 The working-state block reads four **core** stores, and there was no way in. A plugin that

@@ -182,3 +182,133 @@ def test_a_cron_turn_is_marked_and_keeps_its_next_fire(clear_state, monkeypatch)
 def test_no_request_context_marks_nothing(clear_state, monkeypatch):
     monkeypatch.setattr(rs.STATE, "scheduler", _Sched([_job("watch-gh-x", _PAST, _PAST)]), raising=False)
     assert "FIRING NOW" not in _mw()._working_state_block({"session_id": "gh-alerts"})
+
+
+# ── ADR 0127 D5: this chat's pending actions, in full; other chats a count only ──────
+
+# The 2026-11-07 shape: a multi-step resume instruction whose decisive step ("squash-merge
+# on PASS") sat far past the old 60-char preview.
+_RELEASE_RESUME = (
+    "Continue the protoAgent v0.231.0 minor release. The operator approved it, and Josh's "
+    "condition was: once #4801 and #4808 part 1 have both merged, cut the release.\n"
+    "1. Read the review panel verdict on release PR #4847.\n"
+    "2. If PASS: squash-merge #4847 and push the v0.231.0 tag.\n"
+    "3. If WARN or FAIL: do NOT merge — report back to the operator and stop."
+)
+
+
+def _sjob(jid, prompt, *, context_id=None, origin_session=None, schedule="2026-11-07T18:40:00+00:00"):
+    return SimpleNamespace(
+        id=jid,
+        prompt=prompt,
+        schedule=schedule,
+        next_fire="2026-11-07T18:40:00+00:00",
+        context_id=context_id,
+        origin_session=origin_session,
+    )
+
+
+def test_this_chats_wait_shows_its_full_instruction_and_that_it_runs_on_its_own(clear_state, monkeypatch):
+    job = _sjob("wait:chat-a", _RELEASE_RESUME, context_id="chat-a")
+    monkeypatch.setattr(rs.STATE, "scheduler", _Sched([job]), raising=False)
+
+    block = _mw()._working_state_block({"session_id": "chat-a"})
+
+    assert "squash-merge #4847 and push the v0.231.0 tag" in block  # the step the 60-char cut hid
+    assert "PENDING SCHEDULES (this chat):" in block
+    assert "do NOT merge — report back to the operator and stop." in block
+    assert 'runs automatically unless you cancel it with cancel_schedule("wait:chat-a")' in block
+    assert "next=2026-11-07T18:40:00+00:00" in block
+
+
+def test_a_long_instruction_is_capped_with_an_explicit_marker(clear_state, monkeypatch):
+    from graph.projection import _WS_INSTRUCTION_CAP
+
+    job = _sjob("wait:chat-a", "y" * (_WS_INSTRUCTION_CAP + 300), context_id="chat-a")
+    monkeypatch.setattr(rs.STATE, "scheduler", _Sched([job]), raising=False)
+    block = _mw()._working_state_block({"session_id": "chat-a"})
+    assert "…[truncated, 300 more chars]" in block
+    assert "y" * _WS_INSTRUCTION_CAP in block and "y" * (_WS_INSTRUCTION_CAP + 1) not in block
+
+
+def test_another_chats_jobs_are_a_count_only(clear_state, monkeypatch):
+    jobs = [
+        _sjob("wait:chat-b", "merge the other release", context_id="chat-b"),
+        _sjob("remind-b", "ping the reviewer", origin_session="chat-b", context_id="chat-b"),
+    ]
+    monkeypatch.setattr(rs.STATE, "scheduler", _Sched(jobs), raising=False)
+
+    block = _mw()._working_state_block({"session_id": "chat-a"})
+
+    assert "wait:chat-b" not in block and "merge the other release" not in block
+    assert "remind-b" not in block
+    assert "OTHER CHATS: 2 pending schedules (not shown here" in block
+    assert "PENDING SCHEDULES (this chat)" not in block
+
+
+def test_agent_wide_jobs_are_a_compact_list(clear_state, monkeypatch):
+    jobs = [
+        # An Activity-thread cron created outside any chat.
+        _sjob("digest", "x" * 400, schedule="0 9 * * 1"),
+        # A recurring schedule another chat created: it fires into Activity whichever chat is open.
+        _sjob("standup", "post the standup", origin_session="chat-b", schedule="0 9 * * 1-5"),
+    ]
+    monkeypatch.setattr(rs.STATE, "scheduler", _Sched(jobs), raising=False)
+
+    block = _mw()._working_state_block({"session_id": "chat-a"})
+
+    assert "AGENT-WIDE SCHEDULES (not tied to a chat):" in block
+    assert "- digest next=" in block and "x" * 121 not in block  # compact preview
+    assert "- standup next=" in block and "OTHER CHATS" not in block
+
+
+def test_a_recurring_schedule_made_in_this_chat_shows_in_full(clear_state, monkeypatch):
+    job = _sjob("weekly", _RELEASE_RESUME, origin_session="chat-a", schedule="0 9 * * 1")
+    monkeypatch.setattr(rs.STATE, "scheduler", _Sched([job]), raising=False)
+    block = _mw()._working_state_block({"session_id": "chat-a"})
+    assert "- weekly next=" in block and "(recurring '0 9 * * 1')" in block
+    assert "squash-merge #4847" in block
+
+
+def test_the_firing_job_is_still_marked_and_not_called_pending(clear_state, monkeypatch):
+    job = _sjob("wait:chat-a", _RELEASE_RESUME, context_id="chat-a")
+    monkeypatch.setattr(rs.STATE, "scheduler", _Sched([job]), raising=False)
+    with request_metadata_scope({"scheduler_job_id": "wait:chat-a"}):
+        block = _mw()._working_state_block({"session_id": "chat-a"})
+    assert "wait:chat-a [FIRING NOW — this is the turn you are in, not another wake]" in block
+    assert "runs automatically unless you cancel it" not in block  # it IS this turn
+    assert "squash-merge #4847" in block
+
+
+def test_this_chats_watch_shows_its_full_reaction_others_are_counted(clear_state, monkeypatch):
+    def _w(wid, run_session, run_prompt):
+        return SimpleNamespace(
+            id=wid,
+            status="active",
+            run_session=run_session,
+            run_prompt=run_prompt,
+            interval_s=600.0,
+            last_checked=1_800_000_000.0,
+            status_line=lambda: f"watch [active] ({wid}) via plugin: 'ci green'",
+        )
+
+    watches = [_w("w-a", "chat-a", _RELEASE_RESUME), _w("w-b", "chat-b", "other chat reaction")]
+    monkeypatch.setattr(rs.STATE, "watch_controller", _Watches(watches), raising=False)
+
+    block = _mw()._working_state_block({"session_id": "chat-a"})
+
+    assert "ACTIVE WATCHES (this chat):" in block
+    assert "squash-merge #4847 and push the v0.231.0 tag" in block
+    assert 'runs automatically unless you clear it with clear_watch("w-a")' in block
+    assert "next check≈" in block
+    assert "w-b" not in block and "other chat reaction" not in block
+    assert "OTHER CHATS: 1 active watch (not shown here" in block
+
+
+def test_more_in_chat_entries_than_the_cap_point_at_the_list_tool(clear_state, monkeypatch):
+    from graph.projection import _WS_CHAT_ITEM_CAP
+
+    jobs = [_sjob(f"j{i}", f"step {i}", context_id="chat-a") for i in range(_WS_CHAT_ITEM_CAP + 2)]
+    monkeypatch.setattr(rs.STATE, "scheduler", _Sched(jobs), raising=False)
+    block = _mw()._working_state_block({"session_id": "chat-a"})
+    assert "…+2 more (list_schedules shows them all)" in block
