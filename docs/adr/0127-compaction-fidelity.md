@@ -3,7 +3,8 @@
 - Status: Accepted (2026-11-08; Josh: "yes plan the work and execute systematically")
 - Date: 2026-11-08
 - Deciders: Josh Mabry; protoAgent maintainers
-- Implementation: epic #4848 on `epic/compaction-fidelity`. Not started.
+- Implementation: S0–S5 done on `epic/compaction-fidelity` (epic #4848): S0 #4849 (ADR); S1+S2 #4851 (one engine, whole-span fold, continuation prompt); S3 #4853 (operator messages verbatim); S4 #4850 (scoped `working_state`); S5 #4854 (directive ledger).
+- Completed follow-ups: #4856 (oversized human message regression test); #4866 (role-line hardening); #4870 (chunk budget and compaction-model window); #4873 (directive trust, bd-osrlp); #4877 (working-state cap and never-deferred directive tools, bd-9vwmw); #4872 (reserved `/directives`, bd-dz5f6). Console UI follow-up: #4861.
 - Amends: [ADR 0101](./0101-context-lifecycle-log-surface-pressure.md) D4/D5 (the relief ladder and archive-first compaction) and [ADR 0079](./0079-autonomous-operating-model.md) (the `<working_state>` Observe block).
 
 ## Context
