@@ -1,0 +1,1 @@
+- **Compaction budgets follow growing notes and the summarizer’s connection (#4848).** Re-plan remaining transcript chunks before each summary call, refuse when notes leave insufficient room, and use the configured compaction model’s context window.
