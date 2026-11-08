@@ -1145,10 +1145,16 @@ DEFERRED_BASE_TOOL_NAMES = frozenset(
 
 def resolve_deferred_keep(configured_keep) -> set[str]:
     """Resolve the always-on tool set for deferral: the configured override (if
-    any) else the built-in base. ``search_tools`` is always kept — without it the
-    agent could never load anything back."""
+    any) else the built-in base. ``search_tools`` and the four directive tools
+    (``DIRECTIVE_TOOL_NAMES``) are always kept, even against a configured override —
+    without ``search_tools`` the agent could never load anything back, and a deferred
+    directive tool would stop it recording or consulting an operator approval (ADR 0127 D6)
+    until it first searched for the tool."""
+    from tools.directive_tools import DIRECTIVE_TOOL_NAMES
+
     keep = {str(n) for n in (configured_keep or [])} or set(DEFERRED_BASE_TOOL_NAMES)
     keep.add(SEARCH_TOOLS_NAME)
+    keep.update(DIRECTIVE_TOOL_NAMES)
     return keep
 
 

@@ -49,6 +49,11 @@ MAX_QUOTE_CHARS = 4000
 MAX_NOTE_CHARS = 2000
 #: In-force directives rendered in ``<working_state>``; more point at ``list_directives``.
 WS_DIRECTIVE_CAP = 20
+#: Total character budget for the ``STANDING DIRECTIVES`` section's entry text, in line with
+#: the other ``<working_state>`` caps (``graph.projection``). The entry cap alone could still
+#: let the section reach ~160K chars (20 maximum-size directives) that never shed; this bounds
+#: it so a few large directives can't crowd out the rest of ``<working_state>`` every turn.
+WS_DIRECTIVES_MAX_CHARS = 6000
 
 # One lock for every store object: :func:`directive_store` may hand out a fresh one per call.
 _LOCK = threading.RLock()
@@ -326,16 +331,42 @@ def render_entry(d: Directive, *, closed_detail: bool = False) -> str:
 
 
 def working_state_section(session_id: str) -> str:
-    """The ``STANDING DIRECTIVES`` section of ``<working_state>`` for this chat, or ""."""
+    """The ``STANDING DIRECTIVES`` section of ``<working_state>`` for this chat, or "".
+
+    Bounded two ways so the section can't grow without limit and crowd out the rest of
+    ``<working_state>`` every turn: at most :data:`WS_DIRECTIVE_CAP` entries, and at most
+    :data:`WS_DIRECTIVES_MAX_CHARS` characters of entry text. Whole entries render oldest
+    first until the next one would push the body over budget; the first entry always renders,
+    clipped with an explicit marker if it alone is over budget. Either overflow ends with a
+    ``…+N more`` pointer to the full ledger."""
     if not session_id:
         return ""
     items = directive_store().in_force(session_id)
     if not items:
         return ""
-    shown = items[:WS_DIRECTIVE_CAP]
-    body = "\n".join(render_entry(d) for d in shown)
-    if len(items) > len(shown):
-        body += f"\n…+{len(items) - len(shown)} more (list_directives shows them all)"
+    capped = items[:WS_DIRECTIVE_CAP]
+    rendered: list[str] = []
+    used = 0
+    budget_stop = False
+    for d in capped:
+        entry = render_entry(d)
+        if not rendered and len(entry) > WS_DIRECTIVES_MAX_CHARS:
+            # The first entry always renders; clip it so one giant directive can't blow the budget.
+            dropped = len(entry) - WS_DIRECTIVES_MAX_CHARS
+            rendered.append(entry[:WS_DIRECTIVES_MAX_CHARS] + f" …[clipped, {dropped} more chars]")
+            budget_stop = True
+            break
+        sep = 1 if rendered else 0  # the "\n" the join inserts before this entry
+        if rendered and used + sep + len(entry) > WS_DIRECTIVES_MAX_CHARS:
+            budget_stop = True
+            break
+        rendered.append(entry)
+        used += sep + len(entry)
+    body = "\n".join(rendered)
+    if budget_stop and len(items) > len(rendered):
+        body += f"\n…+{len(items) - len(rendered)} more (/directives to list them)"
+    elif len(items) > len(capped):
+        body += f"\n…+{len(items) - len(capped)} more (list_directives shows them all)"
     return (
         f"{WS_HEADING}:\n{body}\n"
         'These are the operator\'s words, recorded when given. Act on them; close one with fulfil_directive("<id>", '
