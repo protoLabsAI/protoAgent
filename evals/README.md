@@ -288,3 +288,35 @@ contextual enrichment, reranking).
 - Anthropic — [Contextual Retrieval](https://www.anthropic.com/news/contextual-retrieval)
 - BFCL V3 — [Multi-Turn](https://gorilla.cs.berkeley.edu/blogs/13_bfcl_v3_multi_turn.html)
 - [ToolSandbox](https://arxiv.org/html/2408.04682v1)
+
+## Memory retrieval (on demand)
+
+Install the source checkout with `uv sync`, configure a model and embedder using
+normal instance settings, and prepare the [frozen PV4 fixtures](memory_fixtures/README.md).
+No running agent is needed. This runner is **not part of the nightly gate**.
+
+```bash
+uv run python -m evals.memory_retrieval --arms topk --runs 3
+uv run python -m evals.memory_retrieval --arms topk --runs 3 --model MODEL_ALIAS --json memory-comparison.json
+```
+
+Reports are always written to `evals/results/`; `--json` sets the filename.
+Every case/run/arm prints PASS or FAIL. The paired table counts cases won by
+A, won by B, or tied: with three runs, a win means at least two passes against
+at most one. Other positive run counts use a strict majority. A single arm
+produces per-case results and an empty paired table. Additional arms can be
+registered in the plain `ARMS` dict, then selected with `--arms topk,other`.
+
+The `topk` arm calls the runtime's retrieved-memory projection against an isolated
+fixture store. PV4 scoring makes one model call with memories and the question,
+then embeds its response and non-empty choices using the configured embedder;
+the nearest choice by cosine must equal the reference answer. Twenty changed-fact
+cases seed old and new facts through `MemoryStore.add` on fresh PV4 store copies
+with distractors. They pass only when the newer content is retrieved and the
+superseded content is absent. These cases need no answer-model call.
+
+Arms run sequentially because the runtime store is temporarily swapped and
+restored in `finally`. Reports retain retrieved rows and scoring details.
+Missing frozen fixtures are a prerequisite error, never replaced with synthetic
+PV4 data. Never reword prompts to name an expected tool, instruct delegation or
+tool avoidance, or loosen assertions to obtain a pass; model failures are findings.
