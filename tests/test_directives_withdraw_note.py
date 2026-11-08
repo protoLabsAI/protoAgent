@@ -17,6 +17,7 @@ from fastapi.testclient import TestClient
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
 import runtime.state as rs
+from graph import steering
 from graph.compaction_engine import (
     DIRECTIVE_WITHDRAWN_KWARG,
     OPERATOR,
@@ -70,13 +71,36 @@ class FakeInterruptedGraph(FakeGraph):
 
 
 @pytest.fixture
+def sid(request) -> str:
+    """A session id unique to each test.
+
+    The idle append grabs ``_turn_control._thread_lock(f"a2a:{sid}")`` — a module-cached
+    ``asyncio.Lock`` keyed by thread id. Each test here spins its OWN ``TestClient`` (hence
+    its own event loop), and an ``asyncio.Lock`` binds to the loop it is first acquired on
+    and raises if acquired on another. A shared session id would let a later test reuse a
+    lock bound to an earlier test's now-closed loop, so give every test a private id."""
+    raw = request.node.name
+    safe = "".join(c if c.isalnum() else "-" for c in raw).strip("-")
+    return f"chat-{safe}"
+
+
+@pytest.fixture(autouse=True)
+def _clean_steering():
+    """Clear the process-wide steering queues around each test so a queued note from one
+    test can't leak into another's ``drain`` (the registry is a module-level dict)."""
+    steering._reset()
+    yield
+    steering._reset()
+
+
+@pytest.fixture
 def store(tmp_path, monkeypatch) -> DirectiveStore:
     s = DirectiveStore(tmp_path / "directives")
     monkeypatch.setattr(rs.STATE, "directive_store", s, raising=False)
     return s
 
 
-def _client(monkeypatch, graph: FakeGraph) -> TestClient:
+def _client(monkeypatch, graph: FakeGraph | None) -> TestClient:
     import operator_api.chat_routes as cr
 
     monkeypatch.setattr(cr, "agent_name", lambda: "protoagent")
@@ -131,17 +155,17 @@ def test_note_clips_a_very_long_first_line_and_reason():
 # ── the DELETE route appends the note ─────────────────────────────────────────────────
 
 
-def test_delete_with_reason_appends_one_operator_note_with_the_marker(store, monkeypatch):
+def test_delete_with_reason_appends_one_operator_note_with_the_marker(store, monkeypatch, sid):
     graph = FakeGraph()
     c = _client(monkeypatch, graph)
-    d = store.record("chat-a", APPROVAL)
+    d = store.record(sid, APPROVAL)
 
-    r = c.delete(f"/api/chat/sessions/chat-a/directives/{d.id}?reason=plan changed")
+    r = c.delete(f"/api/chat/sessions/{sid}/directives/{d.id}?reason=plan changed")
     assert r.status_code == 200 and r.json()["directive"]["status"] == STATUS_REVOKED
 
     assert len(graph.updates) == 1
     config, values = graph.updates[0]
-    assert config["configurable"]["thread_id"] == "a2a:chat-a"
+    assert config["configurable"]["thread_id"] == f"a2a:{sid}"
     [msg] = values["messages"]
     assert isinstance(msg, HumanMessage)
     assert msg.content == f'You withdrew: "{APPROVAL}" — plan changed'
@@ -150,87 +174,84 @@ def test_delete_with_reason_appends_one_operator_note_with_the_marker(store, mon
     assert human_kind(msg) == OPERATOR
 
 
-def test_delete_without_reason_appends_a_note_without_the_default(store, monkeypatch):
+def test_delete_without_reason_appends_a_note_without_the_default(store, monkeypatch, sid):
     graph = FakeGraph()
     c = _client(monkeypatch, graph)
-    d = store.record("chat-a", APPROVAL)
+    d = store.record(sid, APPROVAL)
 
-    assert c.delete(f"/api/chat/sessions/chat-a/directives/{d.id}").status_code == 200
+    assert c.delete(f"/api/chat/sessions/{sid}/directives/{d.id}").status_code == 200
     [(_, values)] = graph.updates
     [msg] = values["messages"]
     assert msg.content == f'You withdrew: "{APPROVAL}"'
     assert "revoked by the operator" not in msg.content
 
 
-def test_a_404_appends_nothing(store, monkeypatch):
+def test_a_404_appends_nothing(store, monkeypatch, sid):
     graph = FakeGraph()
     c = _client(monkeypatch, graph)
-    d = store.record("chat-a", APPROVAL)
+    d = store.record(sid, APPROVAL)
 
-    assert c.delete(f"/api/chat/sessions/chat-b/directives/{d.id}").status_code == 404
-    assert c.delete("/api/chat/sessions/chat-a/directives/dir-nope").status_code == 404
+    assert c.delete(f"/api/chat/sessions/{sid}-other/directives/{d.id}").status_code == 404
+    assert c.delete(f"/api/chat/sessions/{sid}/directives/dir-nope").status_code == 404
     assert graph.updates == []
 
 
-def test_a_409_appends_nothing(store, monkeypatch):
+def test_a_409_appends_nothing(store, monkeypatch, sid):
     graph = FakeGraph()
     c = _client(monkeypatch, graph)
-    d = store.record("chat-a", APPROVAL)
-    store.close("chat-a", d.id, status=STATUS_FULFILLED, reason="done")
+    d = store.record(sid, APPROVAL)
+    store.close(sid, d.id, status=STATUS_FULFILLED, reason="done")
 
-    assert c.delete(f"/api/chat/sessions/chat-a/directives/{d.id}").status_code == 409
+    assert c.delete(f"/api/chat/sessions/{sid}/directives/{d.id}").status_code == 409
     assert graph.updates == []
 
 
-def test_slash_revoke_appends_no_note(store, operator_tier, monkeypatch):
+def test_slash_revoke_appends_no_note(store, operator_tier, monkeypatch, sid):
     # /directives revoke leaves the operator's own typed message, so it gets no second note.
     graph = FakeGraph()
     monkeypatch.setattr(rs.STATE, "graph", graph, raising=False)
-    from graph import steering
 
-    d = store.record("chat-a", APPROVAL)
-    reply = directives_command_reply("chat-a", f"revoke {d.id} we're not releasing today")
+    d = store.record(sid, APPROVAL)
+    reply = directives_command_reply(sid, f"revoke {d.id} we're not releasing today")
 
     assert reply.startswith(f"Revoked {d.id}")
-    assert store.get("chat-a", d.id).status == STATUS_REVOKED
+    assert store.get(sid, d.id).status == STATUS_REVOKED
     assert graph.updates == []
-    assert steering.drain("chat-a") == []
+    assert steering.drain(sid) == []
 
 
-def test_a_failing_append_still_returns_200_with_the_closed_directive(store, monkeypatch):
+def test_a_failing_append_still_returns_200_with_the_closed_directive(store, monkeypatch, sid):
     graph = FakeGraph(fail=True)
     c = _client(monkeypatch, graph)
-    d = store.record("chat-a", APPROVAL)
+    d = store.record(sid, APPROVAL)
 
-    r = c.delete(f"/api/chat/sessions/chat-a/directives/{d.id}?reason=plan changed")
+    r = c.delete(f"/api/chat/sessions/{sid}/directives/{d.id}?reason=plan changed")
     assert r.status_code == 200
     body = r.json()["directive"]
     assert body["status"] == STATUS_REVOKED and body["closed_by"] == "operator"
     assert graph.updates == []  # the append raised, was logged, and never surfaced
 
 
-def test_no_graph_skips_quietly(store, monkeypatch):
+def test_no_graph_skips_quietly(store, monkeypatch, sid):
     c = _client(monkeypatch, None)  # STATE.graph is None
-    d = store.record("chat-a", APPROVAL)
-    assert c.delete(f"/api/chat/sessions/chat-a/directives/{d.id}").status_code == 200
+    d = store.record(sid, APPROVAL)
+    assert c.delete(f"/api/chat/sessions/{sid}/directives/{d.id}").status_code == 200
 
 
-def test_an_active_turn_queues_on_the_steering_queue_not_aupdate_state(store, monkeypatch):
+def test_an_active_turn_queues_on_the_steering_queue_not_aupdate_state(store, monkeypatch, sid):
     graph = FakeGraph()
     c = _client(monkeypatch, graph)
-    from graph import steering
 
-    steering.drain("chat-a")  # start clean
-    monkeypatch.setattr("runtime.turn_activity.is_active", lambda sid: True)
-    d = store.record("chat-a", APPROVAL)
+    monkeypatch.setattr("runtime.turn_activity.is_active", lambda s: True)
+    d = store.record(sid, APPROVAL)
 
-    assert c.delete(f"/api/chat/sessions/chat-a/directives/{d.id}?reason=plan changed").status_code == 200
+    assert c.delete(f"/api/chat/sessions/{sid}/directives/{d.id}?reason=plan changed").status_code == 200
     assert graph.updates == []  # did NOT block the DELETE on the running turn's thread lock
-    queued = steering.drain("chat-a")
+    queued = steering.drain(sid)
     assert [item["text"] for item in queued] == [f'You withdrew: "{APPROVAL}" — plan changed']
 
 
-def test_a_pending_hitl_form_queues_on_steering_not_the_interrupted_checkpoint(store, monkeypatch):
+def test_a_pending_hitl_form_queues_on_steering_not_the_interrupted_checkpoint(store, monkeypatch, sid):
     # Idle (no live turn, so is_active is False) but the thread is parked at a HITL
     # form/approval interrupt. Writing a fresh HumanMessage straight to the checkpoint would
     # abandon the unanswered interrupt — the dangling tool_call, the note landing before the
@@ -238,27 +259,25 @@ def test_a_pending_hitl_form_queues_on_steering_not_the_interrupted_checkpoint(s
     # instead (it folds in at the first model call after the form resolves).
     graph = FakeInterruptedGraph()
     c = _client(monkeypatch, graph)
-    from graph import steering
 
-    steering.drain("chat-a")  # start clean
-    d = store.record("chat-a", APPROVAL)
+    d = store.record(sid, APPROVAL)
 
-    assert c.delete(f"/api/chat/sessions/chat-a/directives/{d.id}?reason=plan changed").status_code == 200
+    assert c.delete(f"/api/chat/sessions/{sid}/directives/{d.id}?reason=plan changed").status_code == 200
     assert graph.updates == []  # NOT written into the interrupted checkpoint
-    queued = steering.drain("chat-a")
+    queued = steering.drain(sid)
     assert [item["text"] for item in queued] == [f'You withdrew: "{APPROVAL}" — plan changed']
 
 
 # ── the key test: compaction carries both the approval and the withdrawal ─────────────
 
 
-def test_compaction_carries_the_approval_and_the_withdrawal_in_order(store, monkeypatch):
+def test_compaction_carries_the_approval_and_the_withdrawal_in_order(store, monkeypatch, sid):
     graph = FakeGraph()
     c = _client(monkeypatch, graph)
-    d = store.record("chat-a", APPROVAL)
+    d = store.record(sid, APPROVAL)
 
     # The withdrawal note is produced by the real route path.
-    assert c.delete(f"/api/chat/sessions/chat-a/directives/{d.id}?reason=plan changed").status_code == 200
+    assert c.delete(f"/api/chat/sessions/{sid}/directives/{d.id}?reason=plan changed").status_code == 200
     withdrawal = graph.updates[0][1]["messages"][0]
 
     # A realistic compacted span: the operator's approval, the agent working, then the note.
