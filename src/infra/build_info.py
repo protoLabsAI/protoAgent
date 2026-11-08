@@ -71,6 +71,10 @@ def _git(root: Path, *args: str) -> str | None:
             ["git", "-C", str(root), *args],
             capture_output=True,
             text=True,
+            # Git paths/diagnostics need not match the Windows locale. Only the
+            # SHA and whether status is empty matter; tolerate undecodable bytes.
+            encoding="utf-8",
+            errors="replace",
             timeout=_GIT_TIMEOUT_S,
         )
     except (OSError, subprocess.SubprocessError):

@@ -650,31 +650,84 @@ def test_version_section_reports_the_running_build():
     assert "git_sha" in out and "git_dirty" in out
 
 
-def test_version_from_source_checkout_exposes_git_sha_and_dirty():
-    """From a source checkout git identity is real: a short sha and a concrete dirty flag
-    (the test tree is itself a git checkout)."""
+@pytest.mark.platform_sensitive
+def test_version_from_source_checkout_exposes_git_sha_and_dirty(monkeypatch, tmp_path):
+    """An isolated checkout reports clean and dirty states through the tool."""
+    import subprocess
+
     from infra import build_info as bi
 
-    sha, dirty = bi._git_sha_dirty(bi.app_root())
+    def git(*args):
+        return subprocess.run(
+            ["git", "-C", str(tmp_path), *args],
+            check=True, capture_output=True, text=True, timeout=10,
+        ).stdout.strip()
 
-    if sha == "unknown" or dirty is None:
-        pytest.skip("git cannot describe this test tree")
-    assert sha != "unknown"
-    assert re.fullmatch(r"[0-9a-f]{7,40}", sha)
-    assert isinstance(dirty, bool)
+    git("init")
+    (tmp_path / "pyproject.toml").write_text('[project]\nversion = "1.0.0"\n', encoding="utf-8")
+    git("add", "pyproject.toml")
+    git("-c", "user.name=Test", "-c", "user.email=test@example.com",
+        "-c", "commit.gpgsign=false", "commit", "-m", "test build")
+    sha = git("rev-parse", "--short", "HEAD")
+    monkeypatch.setattr(bi, "app_root", lambda: tmp_path)
+    tool = build_config_tools(LangGraphConfig())[0]
+    for dirty in (False, True):
+        if dirty:
+            (tmp_path / "untracked.txt").write_text("dirty", encoding="utf-8")
+        monkeypatch.setattr(bi, "_STATIC_BUILD_INFO", bi._collect())
+        info = json.loads(tool.invoke({"section": "version"}))["version"]
+        assert info["install_kind"] == "source"
+        assert info["install_path"] == str(tmp_path)
+        assert info["git_sha"] == sha
+        assert info["git_dirty"] is dirty
 
 
-def test_version_reports_unknown_sha_when_git_is_unavailable(monkeypatch):
+@pytest.mark.parametrize("failure", ["missing", "timeout", "exit"])
+def test_version_reports_unknown_sha_when_git_is_unavailable(monkeypatch, tmp_path, failure):
     """git absent / failing must degrade to "unknown" without raising — a status field is
     never worth taking a turn down for."""
     from infra import build_info as bi
+    import subprocess
 
-    monkeypatch.setattr(bi, "_git", lambda *a, **k: None)
+    def failed_git(args, **kwargs):
+        assert kwargs["timeout"] == bi._GIT_TIMEOUT_S
+        assert kwargs["encoding"] == "utf-8"
+        assert kwargs["errors"] == "replace"
+        if failure == "missing":
+            raise FileNotFoundError("git unavailable")
+        if failure == "timeout":
+            raise subprocess.TimeoutExpired(args, kwargs["timeout"])
+        return subprocess.CompletedProcess(args, 128, stdout="", stderr="not a repository")
 
-    sha, dirty = bi._git_sha_dirty(bi.app_root())
+    (tmp_path / "pyproject.toml").touch()
+    monkeypatch.setattr(bi, "app_root", lambda: tmp_path)
+    monkeypatch.setattr(bi.subprocess, "run", failed_git)
+    monkeypatch.setattr(bi, "_STATIC_BUILD_INFO", bi._collect())
+    info = json.loads(build_config_tools(LangGraphConfig())[0].invoke({"section": "version"}))["version"]
 
-    assert sha == "unknown"
-    assert dirty is None
+    assert info["git_sha"] == "unknown"
+    assert info["git_dirty"] is None
+
+
+@pytest.mark.platform_sensitive
+def test_version_git_output_tolerates_non_utf8_diagnostics(monkeypatch, tmp_path):
+    """A locale-dependent Git diagnostic must not crash build collection."""
+    import subprocess
+    import sys
+
+    from infra import build_info as bi
+
+    run = subprocess.run
+
+    def git_with_diagnostic(args, **kwargs):
+        # Use a real pipe so subprocess's decoder is exercised on every OS.
+        return run(
+            [sys.executable, "-c", "import os; os.write(1, b'abcdef123\\n'); os.write(2, b'\\xff')"],
+            **kwargs,
+        )
+
+    monkeypatch.setattr(bi.subprocess, "run", git_with_diagnostic)
+    assert bi._git(tmp_path, "rev-parse", "--short", "HEAD") == "abcdef123"
 
 
 def test_version_reports_unknown_sha_for_an_installed_package_path(monkeypatch, tmp_path):
@@ -691,7 +744,8 @@ def test_version_reports_unknown_sha_for_an_installed_package_path(monkeypatch, 
 
     monkeypatch.setattr(bi, "_git", _no_git)
 
-    info = bi._collect()
+    monkeypatch.setattr(bi, "_STATIC_BUILD_INFO", bi._collect())
+    info = json.loads(build_config_tools(LangGraphConfig())[0].invoke({"section": "version"}))["version"]
 
     assert info["install_kind"] == "pypi"
     assert info["git_sha"] == "unknown"
