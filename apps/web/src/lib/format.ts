@@ -71,6 +71,50 @@ export function localStampTitle(iso: string | null | undefined): string {
   return full === iso ? iso : `${full} · ${iso}`;
 }
 
+function dayStart(date: Date) {
+  return new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime();
+}
+
+/** Task timestamp display, preserving legacy parsing and locale formatting. */
+export function formatTimestamp(value?: string | null) {
+  if (!value) return "";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "";
+  return formatTimestampDate(date);
+}
+
+/** Directive given-at text; offsetless instants are UTC, as with localStamp. */
+export function formatGivenAt(value?: string | null): string {
+  const instant = parseInstant(value);
+  if (instant === null) return "";
+  return formatTimestampDate(new Date(instant), true);
+}
+
+function formatTimestampDate(date: Date, joined = false): string {
+  const now = new Date();
+  const dayDelta = Math.round((dayStart(now) - dayStart(date)) / 86_400_000);
+  const time = new Intl.DateTimeFormat(undefined, { hour: "numeric", minute: "2-digit" }).format(date);
+
+  if (dayDelta === 0) return `today at ${time}`;
+  if (dayDelta === 1) return `yesterday at ${time}`;
+
+  const options: Intl.DateTimeFormatOptions = {
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  };
+  if (date.getFullYear() !== now.getFullYear()) {
+    options.year = "numeric";
+  }
+  if (joined) {
+    delete options.hour;
+    delete options.minute;
+    return `${new Intl.DateTimeFormat(undefined, options).format(date)} at ${time}`;
+  }
+  return new Intl.DateTimeFormat(undefined, options).format(date);
+}
+
 /** Epoch ms for an ISO string, treating an offsetless value as UTC. null = unparseable. */
 function parseInstant(iso: string | null | undefined): number | null {
   if (!iso) return null;
