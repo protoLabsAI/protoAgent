@@ -7,6 +7,7 @@ explicit means a plugin never imports protoAgent internals to extend it.
 
 from __future__ import annotations
 
+import inspect
 import logging
 import re
 from collections.abc import Callable
@@ -79,6 +80,153 @@ def _prefix_conforms(prefix: str, plugin_id: str) -> bool:
     plugins that follow the prescribed pattern (#1732). Shared by the server-side
     mount check (server/agent_init.py) so the two never drift."""
     return prefix.startswith(f"/plugins/{plugin_id}") or prefix.startswith(f"/api/plugins/{plugin_id}")
+
+
+# ── footgun guards (#4804) ──────────────────────────────────────────────────────────────
+# Two silent failures a plugin ships green and only notices at runtime, caught at register():
+#
+#   A. Under ``from __future__ import annotations`` a route whose ``Request`` (or ``WebSocket``
+#      / ``Response`` / ``BackgroundTasks``) is imported *inside* ``register()`` keeps a STRING
+#      annotation FastAPI resolves against the module globals — where the class isn't — so it
+#      becomes a required query parameter and every call 422s. (The host already excludes the
+#      return-annotation variant from the schema in server/plugin_wiring.py; this is the
+#      parameter variant, which still serves but 422s.)
+#   B. A LangChain ``@tool`` parameter named ``config`` / ``callbacks`` / ``run_manager`` is
+#      reserved for the injected ``RunnableConfig`` / callback manager, so the model never
+#      supplies it and the value arrives as ``None`` — unless it is actually annotated as that
+#      injected type, in which case the author meant it and LangChain strips it from the schema.
+#
+# The detection lives here as module functions and is duplicated VERBATIM into
+# ``graph/plugins/testkit.py`` (host-free by contract — it can't import this module); a parity
+# test keeps the copies in sync (same arrangement as ``_accept_component_frame``). Both are
+# duck-typed so neither copy has to import FastAPI/LangChain.
+
+_ASGI_INJECTED_TYPES = ("Request", "WebSocket", "Response", "BackgroundTasks")
+_TOOL_RESERVED_PARAMS = ("config", "callbacks", "run_manager")
+
+
+def _unresolved_annotation_name(annotation) -> str | None:
+    """Return the type name carried by ``annotation`` when it is a bare string or an unresolved
+    ``ForwardRef`` — the shape FastAPI leaves a parameter in when its class was imported inside a
+    function under ``from __future__ import annotations``. ``None`` for a resolved annotation."""
+    if isinstance(annotation, str):
+        return annotation.strip()
+    forward_arg = getattr(annotation, "__forward_arg__", None)  # typing.ForwardRef, duck-typed
+    if isinstance(forward_arg, str):
+        return forward_arg.strip()
+    return None
+
+
+def _annotation_names_type(annotation_name: str, type_name: str) -> bool:
+    """True if the unresolved annotation string names ``type_name`` — bare (``Request``),
+    qualified (``starlette.requests.Request``) or wrapped (``Optional[Request]``). A word
+    boundary keeps ``MyRequest`` / ``RequestBody`` from matching ``Request``."""
+    return bool(re.search(rf"\b{re.escape(type_name)}\b", annotation_name))
+
+
+def _iter_router_api_routes(router, prefix: str = ""):
+    """Yield ``(methods, path, route)`` for every route a plugin router carries, nested includes
+    included — mirrors ``server.plugin_wiring._plugin_api_routes`` (graph/ must not import
+    server/). Duck-typed: a nested include exposes ``original_router``; a real route exposes a
+    ``dependant`` (an HTTP ``APIRoute`` has ``methods``, a websocket route does not)."""
+    for entry in getattr(router, "routes", ()) or ():
+        inner = getattr(entry, "original_router", None)
+        if inner is not None:
+            nested = getattr(getattr(entry, "include_context", None), "prefix", "") or ""
+            yield from _iter_router_api_routes(inner, prefix + nested)
+            continue
+        if getattr(entry, "dependant", None) is None:
+            continue  # a Mount / sub-app — no dependant to inspect
+        path = prefix + (getattr(entry, "path", "") or "")
+        methods = ",".join(sorted(getattr(entry, "methods", None) or ())) or "WS"
+        yield methods, path, entry
+
+
+def _query_param_unresolved_type(route, query_param) -> str | None:
+    """The unresolved type name of one ``dependant.query_params`` entry, from the pydantic
+    ``field_info.annotation`` (a ``ForwardRef`` here) or, as a fallback, the endpoint's raw
+    (string) ``__annotations__`` — else ``None``."""
+    candidates = [getattr(getattr(query_param, "field_info", None), "annotation", None)]
+    raw = getattr(getattr(route, "endpoint", None), "__annotations__", None) or {}
+    name = getattr(query_param, "name", None)
+    if name in raw:
+        candidates.append(raw[name])
+    for candidate in candidates:
+        resolved = _unresolved_annotation_name(candidate)
+        if resolved:
+            return resolved
+    return None
+
+
+def _router_param_footguns(router):
+    """Yield ``(methods, path, param, type_name)`` for every plugin route whose query params
+    carry an unresolved string/ForwardRef annotation naming an ASGI-injected type (footgun A)."""
+    for methods, path, route in _iter_router_api_routes(router):
+        for query_param in getattr(getattr(route, "dependant", None), "query_params", None) or ():
+            resolved = _query_param_unresolved_type(route, query_param)
+            if not resolved:
+                continue
+            for type_name in _ASGI_INJECTED_TYPES:
+                if _annotation_names_type(resolved, type_name):
+                    yield methods, path, getattr(query_param, "name", "?"), type_name
+                    break
+
+
+def _router_footgun_message(plugin_id: str, methods: str, path: str, param: str, type_name: str) -> str:
+    """The one message both the live WARNING and the FakeRegistry ValueError use (footgun A)."""
+    return (
+        f"[plugins] {plugin_id}: route {methods} {path} parameter {param!r} is annotated "
+        f"{type_name!r} as an unresolved forward reference, so FastAPI treated it as a required "
+        f"query parameter and the route will answer 422 instead of receiving the {type_name}. "
+        f"Import {type_name} at module level, or drop `from __future__ import annotations` from "
+        f"the plugin module."
+    )
+
+
+def _tool_param_annotation_is_injected(param_name: str, annotation) -> bool:
+    """True if ``annotation`` (a class, a typing form, or a string under
+    ``from __future__ import annotations``) marks the parameter as the injected type LangChain
+    reserves its name for: ``RunnableConfig`` for ``config``, a callback manager/handler for
+    ``callbacks`` / ``run_manager``. An unannotated parameter is NOT injected."""
+    if annotation is inspect.Parameter.empty:
+        return False
+    text = (getattr(annotation, "__name__", "") or "") + " " + (
+        annotation if isinstance(annotation, str) else str(annotation)
+    )
+    if param_name == "config":
+        return "RunnableConfig" in text
+    return "Callback" in text  # Callbacks / BaseCallbackManager / *CallbackManagerForToolRun
+
+
+def _tool_reserved_param_footgun(tool) -> str | None:
+    """The name of a ``tool`` parameter LangChain reserves for an injected arg
+    (``config`` / ``callbacks`` / ``run_manager``) but that the author did NOT annotate as that
+    injected type — so the model never supplies it and its value arrives as ``None`` (footgun B).
+    ``None`` when the tool is clean or has no introspectable callable (a stub, a non-``@tool``)."""
+    func = getattr(tool, "func", None) or getattr(tool, "coroutine", None)
+    if func is None:
+        return None
+    try:
+        params = inspect.signature(func).parameters
+    except (TypeError, ValueError):
+        return None
+    for name in _TOOL_RESERVED_PARAMS:
+        param = params.get(name)
+        if param is None:
+            continue
+        if _tool_param_annotation_is_injected(name, param.annotation):
+            continue
+        return name
+    return None
+
+
+def _tool_footgun_message(plugin_id: str, tool_name, param: str) -> str:
+    """The one message both the live WARNING and the FakeRegistry ValueError use (footgun B)."""
+    return (
+        f"[plugins] {plugin_id}: tool {tool_name!r} has a parameter named {param!r}, which "
+        f"LangChain reserves for an injected RunnableConfig/callback manager — the model never "
+        f"supplies it, so its value arrives as None. Rename the parameter so the model can pass it."
+    )
 
 
 class PluginRegistry:
@@ -302,6 +450,9 @@ class PluginRegistry:
         if tool is None or not hasattr(tool, "name"):
             log.warning("[plugins] %s: register_tool got a non-tool: %r", self.plugin_id, tool)
             return
+        footgun = _tool_reserved_param_footgun(tool)
+        if footgun:  # #4804 footgun B — warn and still register (degrade-safe live)
+            log.warning("%s", _tool_footgun_message(self.plugin_id, getattr(tool, "name", "?"), footgun))
         self.tools.append(tool)
 
     def register_tools(self, tools) -> None:
@@ -841,6 +992,9 @@ class PluginRegistry:
                 self.plugin_id,
                 self.plugin_id,
             )
+        for methods, path, param, type_name in _router_param_footguns(router):
+            # #4804 footgun A — warn and still mount (the route serves, it just 422s).
+            log.warning("%s", _router_footgun_message(self.plugin_id, methods, path, param, type_name))
         self.routers.append({"router": router, "prefix": eff})
 
     def register_surface(self, start, stop=None, name: str | None = None, reload=None) -> None:
