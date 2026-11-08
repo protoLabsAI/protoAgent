@@ -1,1 +1,0 @@
-- **Homepage introduces coding work with Claude Code and Codex (#4770).** Add a For developers section linking to coding-agent workflows, inspectable memory, and GitHub.

@@ -138,3 +138,4 @@ retired behavior; follow linked guides and references for current procedures.
 | [0124](./0124-per-caller-run-command-approval-policy.md) | Per-caller run_command approval policy for A2A callers | Proposed |
 | [0125](./0125-memory-knowledge-history-separation.md) | Separate memory, knowledge and history: three stores, per-layer tools, history never auto-injects, optional shared operator profile | Accepted (2026-10-28) |
 | [0126](./0126-eval-flywheel-traces-feedback-cases.md) | Close the eval loop: three eval tiers, a nightly gate on the host, feedback and friction as scores on the turn's trace, and turns promoted to per-instance eval cases | Accepted (2026-10-29) |
+| [0127](./0127-compaction-fidelity.md) | Compaction fidelity: one engine for all compaction paths, whole-span summaries, operator messages carried verbatim, the agent's pending actions shown in full, and a per-chat directive ledger | Accepted (2026-11-08) |
