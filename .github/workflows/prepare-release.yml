@@ -91,9 +91,11 @@ jobs:
           echo "version=$V" >> "$GITHUB_OUTPUT"
 
       - name: Collate changelog fragments into [Unreleased]
-        # Feature PRs drop changelog.d/<issue>.<kind>.md instead of editing CHANGELOG.md,
+        # Feature PRs drop changelog.d/<slug>.<kind>.md instead of editing CHANGELOG.md,
         # so they can't conflict with each other (#2322). Fold them in — and delete
-        # them — immediately before the roll, so the dated section is complete.
+        # them — immediately before the roll, so the dated section is complete. A lead
+        # with no #N gets its PR number from the commit that added the fragment, which
+        # is why the checkout above needs fetch-depth: 0 (#4874).
         run: python scripts/changelog.py collate
 
       - name: Roll changelog

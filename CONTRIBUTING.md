@@ -18,8 +18,9 @@ runs the fast gate (lint + unit tests, the same script CI invokes) in one
 command; the "Must pass before opening a PR" table there has the full
 breakdown. Beyond green checks:
 
-1. **Add a changelog fragment** — `changelog.d/<pr>.<kind>.md`, a markdown
-   bullet with a **bold lead-in** ending in `(#NNNN)`. Shape and kinds:
+1. **Add a changelog fragment** — `changelog.d/<slug>.<kind>.md` (your branch
+   name works as the slug), a markdown bullet with a **bold lead-in**. Don't put
+   the PR number in it: the release adds it. Shape and kinds:
    [changelog.d/README.md](./changelog.d/README.md). The `Changelog entry` check
    fails without one (or the `skip-changelog` label for CI/test-only changes).
 2. **Tick "Allow edits by maintainers"** so we can push small fixups (a

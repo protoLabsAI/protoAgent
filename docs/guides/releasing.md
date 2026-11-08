@@ -91,8 +91,12 @@ commit. Prepare Release owns version bumps; feature PRs should not bump them.
 
 ## The changelog protocol
 
-Each feature PR adds `changelog.d/<issue-or-pr>.<kind>.md`, with a bold lead-in
-including its issue/PR reference. Follow the
+Each feature PR adds `changelog.d/<slug>.<kind>.md` (a branch name or issue
+number), a bullet with a bold lead-in. The lead can cite an issue (`(#N)`), or it
+can leave the number out: `collate` then stamps in the PR number from the commit
+that added the fragment (a squash-merge subject's `(#N)`, or a `Merge pull
+request #N` commit). It warns about any fragment it can't resolve and collates
+that fragment as written. Follow the
 [fragment format](https://github.com/protoLabsAI/protoAgent/blob/main/changelog.d/README.md);
 do not edit `CHANGELOG.md` directly in feature PRs.
 

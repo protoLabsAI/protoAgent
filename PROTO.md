@@ -108,7 +108,7 @@ when your change touches those surfaces. The full breakdown:
 | Lean-image smoke | `python scripts/live_smoke.py` |
 | Web unit | `npm run test:unit --workspace @protoagent/web` |
 | Web e2e | `npm run test:e2e --workspace @protoagent/web` (Playwright/chromium) |
-| Changelog entry | a `changelog.d/<pr>.<kind>.md` fragment — shape and kinds in [changelog.d/README.md](./changelog.d/README.md) (bullet with a **bold lead-in** ending in `(#NNNN)`; never edit `CHANGELOG.md` directly) |
+| Changelog entry | a `changelog.d/<slug>.<kind>.md` fragment (slug = your branch name or the issue number) — shape and kinds in [changelog.d/README.md](./changelog.d/README.md) (a bullet with a **bold lead-in**; the release stamps the PR number into it, so write it in the first commit and don't guess the number; never edit `CHANGELOG.md` directly) |
 | Windows tests | Runtime changes require the platform-sensitive Windows suite; Tauri-native changes require `cargo test --locked` on Windows. OS-touching tests must carry `@pytest.mark.platform_sensitive`. Never grow the exclusion list; refresh timing data on Windows after major suite shifts. Commands, triggers, and timing procedure: [Windows checks](docs/dev/contributor-workflows.md#windows-checks). |
 
 <a id="dependabot-prs-land-red-on-lint--that-is-expected-and-it-is-your-job-to-fix"></a>

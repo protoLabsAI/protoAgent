@@ -37,9 +37,9 @@ Closes #
 
 ## Checklist
 
-<!-- The `changelog` CI job enforces the first item — a PR that touches neither
-CHANGELOG.md nor an escape hatch (skip-changelog label, release/* branch,
+<!-- The `Changelog entry` CI check enforces the first item. A PR with no
+changelog.d/ fragment and no escape hatch (skip-changelog label, release/* branch,
 dependabot) fails checks. -->
 
-- [ ] CHANGELOG.md has an entry under `[Unreleased]`, or the `skip-changelog` label is applied (and justified)
+- [ ] A `changelog.d/<slug>.<kind>.md` fragment is added (see changelog.d/README.md), or the `skip-changelog` label is applied (and justified)
 - [ ] A `Fixes #N` / `Closes #N` line above points at the issue this PR ships
