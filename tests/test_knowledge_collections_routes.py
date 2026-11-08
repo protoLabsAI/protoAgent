@@ -9,8 +9,6 @@ table) never leaks into the collection listing.
 
 from __future__ import annotations
 
-import sqlite3
-
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -31,23 +29,14 @@ def _wire(monkeypatch, store):
     return TestClient(app)
 
 
-def _set_collection(store, chunk_id, value):
-    db = sqlite3.connect(str(store.path))
-    try:
-        db.execute("UPDATE chunks SET collection = ? WHERE id = ?", (value, chunk_id))
-        db.commit()
-    finally:
-        db.close()
-
-
 def _add(store, content, *, collection=..., domain="general", source=None, source_type="pdf", invalidate=False):
-    """Add a chunk, then stamp its ``collection`` column directly (``add_chunk`` writes
-    ``domain`` only — the P2-B boot migration is what backfills ``collection``).
-    ``collection=...`` (the default sentinel) leaves it NULL, as a fresh ingest does."""
-    cid = store.add_chunk(content, domain=domain, source=source, source_type=source_type)
+    """Add a chunk through the REAL write path: ``add_chunk`` now writes the
+    ``collection`` column itself (ADR 0125 slice 6), so a fresh ingest lands in its
+    collection immediately — no direct SQL stamp / boot backfill. ``collection=...``
+    (the sentinel) passes nothing, leaving it NULL as an untagged write does."""
+    kw = {} if collection is ... else {"collection": collection}
+    cid = store.add_chunk(content, domain=domain, source=source, source_type=source_type, **kw)
     assert cid is not None
-    if collection is not ...:
-        _set_collection(store, cid, collection)
     if invalidate:
         assert store.invalidate_chunk(cid)
     return cid
@@ -144,6 +133,44 @@ def test_memories_rows_never_appear(monkeypatch, tmp_path):
     # The memory introduces no collection, and no chunk count moves: still 3 + 1 + 3 = 7.
     assert {c["collection"] for c in rows} == {"general", "necromunda", "research"}
     assert sum(c["chunks"] for c in rows) == 7
+
+
+async def test_fresh_ingest_lands_in_its_collection_without_backfill(monkeypatch, tmp_path):
+    """The blocking fix (round 1): a chunk written by the ingest op must be listed
+    under — and findable in — its collection IMMEDIATELY, with no boot backfill.
+
+    knowledge_ingest maps its ``collection`` onto ``domain``; the op now stamps the
+    ``collection`` column with the same value. Before the fix the column stayed NULL
+    until reboot, so the chunk listed under "general", was missing from
+    ``?collection=recipes``, and surfaced under ``?collection=general`` instead.
+    """
+    from ops import OpContext
+    from ops.knowledge import IngestSource, ingest
+
+    store = KnowledgeStore(tmp_path / "agent.db")
+    await ingest(
+        IngestSource.from_text(f"{_TOKEN} sourdough starter method", title="Bread"),
+        domain="recipes",
+        ctx=OpContext(knowledge_store=store, graph_config=None),
+    )
+    client = _wire(monkeypatch, store)
+
+    # Listed under "recipes", not "general".
+    rows = client.get("/api/knowledge/collections").json()["collections"]
+    assert {c["collection"] for c in rows} == {"recipes"}
+    assert rows[0]["chunks"] == 1
+
+    # Findable under ?collection=recipes; NOT dumped into ?collection=general.
+    scoped = client.get(f"/api/knowledge/search?q={_TOKEN}&collection=recipes").json()
+    assert [r["content"] for r in scoped["results"]] == [f"{_TOKEN} sourdough starter method"]
+    gen = client.get(f"/api/knowledge/search?q={_TOKEN}&collection=general").json()
+    assert gen["results"] == []
+
+    # And the column itself carries the value (not a reboot-dependent NULL).
+    chunk = store.list_chunks(limit=5)[0].as_dict()
+    assert chunk["domain"] == "recipes"
+    db_collection = store.get_chunk(chunk["id"])["collection"]
+    assert db_collection == "recipes"
 
 
 def test_collections_disabled_when_store_off(monkeypatch):

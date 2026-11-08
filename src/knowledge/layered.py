@@ -272,6 +272,9 @@ class LayeredKnowledgeStore:
             review_state=REVIEW_CONFIRMED,
             expires_at=chunk.get("expires_at"),
             delivery_policy=chunk.get("delivery_policy"),
+            # Carry the collection bucket (ADR 0125 P2 slice 6) so a promoted chunk
+            # lists under the same collection in the commons tier as it did privately.
+            collection=chunk.get("collection"),
         )
         if self._commons.id_for_exact_content(content) is None:
             log.error("[knowledge] promote(%s): commons write did not land — is the commons writable?", chunk_id)

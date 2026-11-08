@@ -1137,6 +1137,7 @@ class KnowledgeStore:
         review_state: str | None = None,
         expires_at: str | None = None,
         delivery_policy: str | None = None,
+        collection: str | None = None,
     ) -> int | None:
         """Insert a chunk. Returns the new row id, or None on failure.
 
@@ -1169,6 +1170,16 @@ class KnowledgeStore:
         writes start ``"pending"``). Explicit caller values always win.
         ``subject`` and ``expires_at`` can't be inferred and stay NULL unless
         given.
+
+        ``collection`` (ADR 0125 P2 slice 6) is the knowledge collection bucket
+        this write lands in — the ``collection`` column :meth:`list_collections`
+        groups on and :func:`_collection_clause` filters by. ``knowledge_ingest``
+        maps its ``collection`` argument onto ``domain`` and the ingest op passes
+        the same value here, so a fresh ingest is immediately listed under — and
+        findable in — its collection, without waiting for the P2-B boot backfill
+        (``collection = domain``) to catch up. Omitted/blank → NULL, which groups
+        under :data:`DEFAULT_COLLECTION`; whitespace is trimmed so a padded value
+        matches its trimmed listing.
         """
         if not content or not content.strip():
             return None
@@ -1200,6 +1211,10 @@ class KnowledgeStore:
         if review_state is None:
             review_state = infer_review_state(source_type)
         expires_at = _normalize_expires_at(expires_at)
+        # Trim/blank-fold the collection so a padded or empty value is stored as
+        # the NULL that groups under DEFAULT_COLLECTION (mirrors list_collections'
+        # NULLIF(TRIM(...)) grouping and _collection_clause's folding).
+        collection = (str(collection).strip() or None) if collection is not None else None
         db = self._get_db()
         if db is None:
             return None
@@ -1210,8 +1225,8 @@ class KnowledgeStore:
                 "INSERT INTO chunks "
                 "(content, domain, heading, source, source_type, finding_type, "
                 "namespace, epoch, memory_kind, subject, review_state, expires_at, "
-                "delivery_policy, created_at, updated_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "delivery_policy, collection, created_at, updated_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     content,
                     domain,
@@ -1226,6 +1241,7 @@ class KnowledgeStore:
                     review_state,
                     expires_at,
                     delivery_policy,
+                    collection,
                     now,
                     now,
                 ),
@@ -1284,6 +1300,7 @@ class KnowledgeStore:
         review_state: str | None = None,
         expires_at: str | None = None,
         delivery_policy: str | None = None,
+        collection: str | None = None,
         max_chars: int | None = None,
         overlap_chars: int | None = None,
         min_chars: int | None = None,
@@ -1332,6 +1349,7 @@ class KnowledgeStore:
                 review_state=review_state,
                 expires_at=expires_at,
                 delivery_policy=delivery_policy,
+                collection=collection,
             )
             if cid is not None:
                 ids.append(cid)
