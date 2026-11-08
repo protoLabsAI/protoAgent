@@ -11,6 +11,7 @@
 import { createServer } from "node:http";
 
 import { CODE_ROOTS, fsDiffResponse, fsFileResponse } from "./codeFixtures.mjs";
+import { HEAVY_PDF_ID, heavyPdf } from "./pdfFixture.mjs";
 import { readFile, stat } from "node:fs/promises";
 import { extname, join, normalize } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -1221,6 +1222,14 @@ const server = createServer(async (req, res) => {
     } catch {
       res.writeHead(404).end("not found");
     }
+    return;
+  }
+  // The heavy PDF behind artifact-pdf-offthread.spec.ts, served as real HTTP bytes (see
+  // pdfFixture.mjs for why not page.route).
+  if (pathname === `/api/plugins/artifact/artifact/${HEAVY_PDF_ID}/blob` && req.method === "GET") {
+    const body = heavyPdf();
+    res.writeHead(200, { "content-type": "application/pdf", "content-length": body.length });
+    res.end(body);
     return;
   }
   if (pathname === "/api/plugins/artifact/history" && req.method === "GET") {

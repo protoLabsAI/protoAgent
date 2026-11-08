@@ -310,13 +310,20 @@ readers, copying, and as the whole view when a file can't be rendered.
 
 The renderer is [pdf.js](https://github.com/mozilla/pdf.js) (`pdfjs-dist` 6.4.299, legacy build,
 Apache-2.0 — notices in `vendor/pdfjs.LICENSES.txt`), vendored byte-for-byte as
-`vendor/pdfjs.min.mjs` + `vendor/pdfjs-worker.min.mjs` and SRI-pinned. It runs on the frame's
-**main thread**: the worker module only registers pdf.js's message handler on `globalThis`, so the
-frame never starts a Worker (its CSP forbids them). No wasm decoders, cMaps or standard-font data
+`vendor/pdfjs.min.mjs` + `vendor/pdfjs-worker.min.mjs` and SRI-pinned. Parsing, stream and image
+decoding and operator lists run in a **dedicated Worker**, so a big file doesn't freeze the console
+(WebKit, which includes the desktop app, runs a sandboxed iframe on the console's own main thread).
+The frame can't fetch anything and a Worker can't load cross-origin, so the shell fetches the worker
+module against its SRI hash and posts the source in with the file's bytes; the frame starts it as a
+classic Worker from a `blob:` URL (the module's one `export` line and its two `import.meta.url`
+reads are rewritten for that, and anything else in the file refuses the rewrite). Only canvas
+drawing stays on the main thread. If the Worker can't start, the frame falls back to running pdf.js
+on its main thread, with the worker module loaded as a nonce + SRI script. No wasm decoders, cMaps or standard-font data
 are vendored: JPEG 2000 / JBIG2 images draw blank and non-embedded fonts fall back to system fonts.
 There's no text or link layer (pages are pictures; use the extracted text to copy).
 
-**Hostile files.** Same sandbox and nonce CSP as slides, plus `worker-src 'none'` and no network of
+**Hostile files.** Same sandbox and nonce CSP as slides, plus `worker-src blob:` (only the pdf.js
+Worker the frame builds; a blob Worker inherits the frame's opaque origin and its CSP) and no network of
 any kind (`useWasm:false`, no streaming or range loads). pdf.js has no decompression limits of its
 own, so the save-time preflight (`_pdfview.py`) decodes every stream the renderer will decode —
 each page's content streams, its image and form XObjects (forms recursively) and embedded font
