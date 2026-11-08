@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import json
 
+import pytest
+
 from infra import paths
 
 
@@ -192,6 +194,7 @@ def test_legacy_v1_stamp_is_left_alone(tmp_path, monkeypatch):
     assert json.loads(marker.read_text()) == {"data_version": 1}
 
 
+@pytest.mark.platform_sensitive  # spawns a real process against a temp box root
 def test_marker_tests_never_write_an_ambient_box_root(tmp_path):
     """Root cause of the stray v5: run from inside a desktop-spawned agent, whose env
     carries ``PROTOAGENT_BOX_ROOT=<desktop box>``, the stamping tests wrote into that
