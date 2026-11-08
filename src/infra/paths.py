@@ -278,30 +278,49 @@ def unscoped_warning() -> str | None:
 
 DATA_VERSION: int = 1
 
+# The highest DATA_VERSION any build that wrote the legacy ``{"data_version": N}`` stamp
+# (no ``written_by``) ever carried. The constant was introduced at 1 (#1018) and has
+# never been bumped, and every stamp written from this release on records the build that
+# wrote it. So a legacy stamp ABOVE this was written by no real build: it is the stray
+# that ``test_stamp_data_version_writes_explicit_version`` left in a desktop box root on
+# 2026-08-10, in the window between #2416 (the marker began honoring
+# ``PROTOAGENT_BOX_ROOT``) and #2570 (the suite began clearing that var). Never raise
+# this: a real bump records ``written_by``, so it never needs the legacy rule.
+LEGACY_STAMP_MAX_DATA_VERSION: int = 1
 
-def data_version() -> int:
-    """Read ``.data-version`` from the box root, return the ``data_version`` int,
-    or 0 if absent/malformed. Best-effort (never raises)."""
+
+def _read_data_version_stamp() -> dict | None:
+    """The parsed ``.data-version`` object, or None if absent/malformed. Never raises."""
     import json
 
     try:
         f = _box_root() / ".data-version"
         if f.exists():
-            return json.loads(f.read_text()).get("data_version", 0)
+            raw = json.loads(f.read_text())
+            return raw if isinstance(raw, dict) else None
     except Exception:  # noqa: BLE001
         pass
-    return 0
+    return None
+
+
+def data_version() -> int:
+    """Read ``.data-version`` from the box root, return the ``data_version`` int,
+    or 0 if absent/malformed. Best-effort (never raises)."""
+    stamp = _read_data_version_stamp() or {}
+    v = stamp.get("data_version", 0)
+    return v if isinstance(v, int) and not isinstance(v, bool) else 0
 
 
 def stamp_data_version(version: int | None = None) -> int:
     """Write ``.data-version`` with ``atomic_write()``. Returns the version written.
-    Best-effort."""
+    Records ``written_by`` (this build's app version) so a later boot can tell a stamp a
+    real build wrote from a stray one. Best-effort."""
     import json
 
     v = version if version is not None else DATA_VERSION
     try:
         f = _box_root() / ".data-version"
-        atomic_write(f, json.dumps({"data_version": v}))
+        atomic_write(f, json.dumps({"data_version": v, "written_by": package_version()}))
         return v
     except Exception:  # noqa: BLE001
         return 0
@@ -309,17 +328,41 @@ def stamp_data_version(version: int | None = None) -> int:
 
 def check_data_version() -> str | None:
     """Compare on-disk vs ``DATA_VERSION``; stamp if absent/older; return a warning
-    string if on-disk is newer; else None. Best-effort."""
+    string if on-disk is newer; else None. Best-effort.
+
+    A newer stamp that is provably stray (legacy format, no ``written_by``, and above
+    every version a legacy-format build ever wrote — see
+    ``LEGACY_STAMP_MAX_DATA_VERSION``) is repaired in place and reported once. A newer
+    stamp a real build wrote is left alone, and the warning names that build, the file,
+    and what to do."""
     try:
+        stamp = _read_data_version_stamp() or {}
         on_disk = data_version()
-        if on_disk == 0:
+        f = _box_root() / ".data-version"
+        repaired = None
+        if not stamp.get("written_by") and on_disk > LEGACY_STAMP_MAX_DATA_VERSION:
+            # Judged by its format, not by comparison with DATA_VERSION, so a later build
+            # whose DATA_VERSION happens to equal the stray value still sees the data as
+            # the v1-era data it really is (and runs its migrations from there).
+            repaired = (
+                f"repaired a stray data-dir version stamp at {f}: it said v{on_disk}, but no "
+                f"protoAgent release ever wrote a data version above v{LEGACY_STAMP_MAX_DATA_VERSION} "
+                "without recording itself (a test run left it, #2543). "
+                f"Restamped v{DATA_VERSION}; no data was changed."
+            )
+            on_disk = LEGACY_STAMP_MAX_DATA_VERSION
+        if on_disk == 0 or on_disk < DATA_VERSION or repaired:
             stamp_data_version(DATA_VERSION)
-            return None
-        if on_disk < DATA_VERSION:
-            stamp_data_version(DATA_VERSION)
-            return None
+            return repaired
         if on_disk > DATA_VERSION:
-            return f"data-dir version mismatch: on-disk v{on_disk} > running v{DATA_VERSION}; downgrade is unsupported"
+            written_by = stamp.get("written_by")
+            return (
+                f"data-dir version mismatch: {f} says v{on_disk}, written by protoAgent "
+                f"{written_by or 'an unknown build'}, but this build ({package_version()}) only "
+                f"understands up to v{DATA_VERSION}; downgrade is unsupported. Run that newer "
+                "version (or later) against this data. If you are sure no newer build ever used "
+                f"it, delete {f} and restart; this build will restamp v{DATA_VERSION}."
+            )
     except Exception:  # noqa: BLE001
         pass
     return None
