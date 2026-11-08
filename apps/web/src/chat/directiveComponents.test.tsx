@@ -140,10 +140,20 @@ it("keeps the reason on failure and disables cancellation while pending", async 
   });
   await click("Withdraw"); expect(buttons("Keep it")[0].disabled).toBe(true);
   expect(buttons("Withdraw")[0].disabled).toBe(true);
+  const escape = new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true });
+  await act(async () => { field.dispatchEvent(escape); });
+  expect(escape.defaultPrevented).toBe(true);
+  expect(close).not.toHaveBeenCalled();
+  expect(document.querySelector('[role="group"]')).not.toBeNull();
   await act(async () => resolve({ error: new Error("offline") }));
   expect(document.querySelector("textarea")?.value).toBe("Wait for Monday");
   expect(document.querySelector('[role="alert"]')?.textContent).toContain("Couldn't withdraw it. It's still active.");
   expect(mocks.revoke).toHaveBeenCalledWith("a", "Wait for Monday");
+  mocks.revoke.mockResolvedValue({ error: new Error("still offline") });
+  await click("Try again");
+  expect(mocks.revoke).toHaveBeenCalledTimes(2);
+  expect(mocks.revoke).toHaveBeenLastCalledWith("a", "Wait for Monday");
+  expect(document.querySelector("textarea")?.value).toBe("Wait for Monday");
 });
 it.each([false, true])("restores the opener or composer fallback on close (removed=%s)", async (removed) => {
   const opener = document.createElement("button"); document.body.append(opener); opener.focus();
