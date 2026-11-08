@@ -67,6 +67,23 @@ def test_scaffold_view_is_served_on_the_public_prefix(tmp_path):
     assert 'prefix="/api/plugins/viewy"' in init
 
 
+def test_scaffold_init_has_no_future_annotations(tmp_path):
+    """`from __future__ import annotations` in the generated __init__ turns a FastAPI
+    `request: Request` (imported inside register()) into a required query param → 422.
+    No scaffolded plugin __init__ may emit it — checked on the default, view, and comms
+    variants. (scaffold.py's own module-level future import is unaffected.)"""
+    future = "from __future__ import annotations"
+
+    scaffold.scaffold_plugin("Plain One", target_dir=str(tmp_path))
+    assert future not in (tmp_path / "plain-one" / "__init__.py").read_text()
+
+    scaffold.scaffold_plugin("Viewy Two", with_view=True, target_dir=str(tmp_path))
+    assert future not in (tmp_path / "viewy-two" / "__init__.py").read_text()
+
+    scaffold.scaffold_plugin("Chatty Three", with_comms=True, target_dir=str(tmp_path))
+    assert future not in (tmp_path / "chatty-three" / "__init__.py").read_text()
+
+
 def test_scaffold_with_tests_is_shippable(tmp_path):
     """with_tests writes a host-free suite + CI + dev deps + pyproject, version-coherent."""
     import yaml
