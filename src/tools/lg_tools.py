@@ -1050,6 +1050,11 @@ def get_all_tools(
         tools.extend(_build_inbox_tools(inbox_store))
     if tasks_store is not None:
         tools.extend(_build_task_tools(tasks_store))
+    # ADR 0127 D6 — the per-chat operator directive ledger. Always bound: an approval the
+    # operator gave must survive compaction whatever else is configured on.
+    from tools.directive_tools import build_directive_tools
+
+    tools.extend(build_directive_tools())
     from graph.goals.verifiers import plugin_verifier_names
 
     _has_verifiers = bool(plugin_verifier_names())
@@ -1127,6 +1132,12 @@ DEFERRED_BASE_TOOL_NAMES = frozenset(
         "task_batch",
         "run_workflow",
         "save_workflow",
+        # ADR 0127 D6 — never deferred: the agent must be able to record an approval the
+        # moment it is given and see/close the ledger without first searching for it.
+        "record_directive",
+        "list_directives",
+        "fulfil_directive",
+        "revoke_directive",
         SEARCH_TOOLS_NAME,
     }
 )

@@ -918,7 +918,7 @@ _RESERVED_PLUGIN_IDS = frozenset(
 # are every top-level dir/file stem core creates under the instance root, derived from
 # ``infra.paths`` (the ``InstancePaths`` instance-tier properties) and the store constructors
 # (``store("knowledge" | "memory" | "media" | …)`` across ``knowledge``, ``graph.middleware.
-# memory``, ``infra.media``, ``graph.goals``, ``tasks``, ``scheduler``, ``observability``,
+# memory``, ``infra.media``, ``graph.goals``, ``graph.directives``, ``tasks``, ``scheduler``, ``observability``,
 # ``a2a_impl.stores``, ``server.stores``). ``.db``/``.json`` stems are reduced to the stem
 # (a plugin id can't contain ``.`` anyway) and reserved defensively. NOT included: ``friction``
 # — the bundled ``friction`` plugin legitimately OWNS ``instance_root/friction`` (it writes
@@ -940,6 +940,7 @@ _CORE_STORE_NAMES = frozenset(
         "audit",
         "scheduler",
         "watches",
+        "directives",
         "trajectory",
         "fleet-traces",
         "inbox",

@@ -1683,8 +1683,8 @@ def _capped(items: list, cap: int, render, more_hint: str) -> list[str]:
 
 
 def working_state_block(state: dict | None) -> str:
-    """The agent's own live commitments — active goal + plan(orient), open tasks, active
-    watches, pending schedules — rendered as one compact ``<working_state>`` block so the
+    """The agent's own live commitments — standing operator directives (ADR 0127 D6), active
+    goal + plan(orient), open tasks, active watches, pending schedules — rendered as one compact ``<working_state>`` block so the
     agent OBSERVES its durable state every turn instead of having to poll for it (ADR 0079,
     the "Observe" step). This is the agent's OWN operational state (trusted — unlike recalled
     memory), so it sits OUTSIDE the ``<injected_memory>`` envelope. Best-effort: every read is
@@ -1702,6 +1702,18 @@ def working_state_block(state: dict | None) -> str:
             session_id = ""
 
     sections: list[str] = []
+
+    # Standing directives (ADR 0127 D6) — the operator's own words, recorded in this chat's
+    # ledger, verbatim. First, because they bound everything below: the ledger is the system
+    # of record for what the operator approved, so a compacted transcript can't erase it.
+    try:
+        from graph.directives import working_state_section
+
+        directives = working_state_section(session_id)
+        if directives:
+            sections.append(directives)
+    except Exception as exc:  # noqa: BLE001
+        log.debug("[working_state] directive read failed: %s", exc)
 
     # Active goal + its plan (the durable orient world-model).
     try:

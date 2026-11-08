@@ -87,7 +87,8 @@ The confirmation dialog asks one **Memory** question with three choices:
 - **Erase from memory** also removes the summaries and archives this chat
   already saved.
 
-Deleting or clearing also removes the chat's session summary and attachments.
+Deleting or clearing also removes the chat's session summary, attachments and
+[standing directives](/guides/scheduler#standing-directives).
 **Don't save anything** leaves previously saved facts in the knowledge store;
 choose **Erase from memory** to remove the conversation-derived material too.
 

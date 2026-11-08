@@ -19,6 +19,7 @@ _SCHEDULE_TOOLS = frozenset({"schedule_task"})
 _WATCH_TOOLS = frozenset({"create_watch"})
 _WAIT_TOOLS = frozenset({"wait"})
 _MEMORY_TOOLS = frozenset({"memory_save"})
+_DIRECTIVE_TOOLS = frozenset({"record_directive", "list_directives", "fulfil_directive", "revoke_directive"})
 
 #: The capability map, public: group name → the tool names that switch its doctrine on.
 #: ``tests/test_prompt_budgets.py`` iterates this to pin the honesty invariant (binding
@@ -30,6 +31,7 @@ CAPABILITY_GROUPS: dict[str, frozenset[str]] = {
     "watch": _WATCH_TOOLS,
     "wait": _WAIT_TOOLS,
     "memory": _MEMORY_TOOLS,
+    "directives": _DIRECTIVE_TOOLS,
 }
 
 
@@ -45,8 +47,9 @@ def _build_operating_model(bound_tools: frozenset[str] | None = None) -> str:
     has_watch = bound_tools is None or bool(bound_tools & _WATCH_TOOLS)
     has_wait = bound_tools is None or bool(bound_tools & _WAIT_TOOLS)
     has_memory = bound_tools is None or bool(bound_tools & _MEMORY_TOOLS)
+    has_directives = bound_tools is None or bool(bound_tools & _DIRECTIVE_TOOLS)
     has_any = has_goal or has_tasks or has_schedule or has_watch
-    if not has_any and not has_wait and not has_memory:
+    if not has_any and not has_wait and not has_memory and not has_directives:
         return ""
 
     lines = ["# Operating model", ""]
@@ -104,6 +107,18 @@ def _build_operating_model(bound_tools: frozenset[str] | None = None) -> str:
         lines.append(
             "- **Wait:** `wait(seconds, then=…)` ends this turn and resumes you after "
             "a short countdown with the supplied next step."
+        )
+    if has_directives:
+        # ADR 0127 D6 — the directive ledger, not the transcript, is the record of approvals.
+        close = " or ".join(f"`{n}`" for n in ("fulfil_directive", "revoke_directive") if available(n))
+        record = "`record_directive` their exact words and conditions. " if available("record_directive") else ""
+        lines.append(
+            "- **Directives:** when the operator approves or instructs something beyond this turn, "
+            + record
+            + "Check STANDING DIRECTIVES"
+            + (" (or `list_directives`)" if available("list_directives") else "")
+            + " before deciding you lack approval"
+            + (f"; close one with {close}." if close else ".")
         )
     if has_memory:
         # ADR 0125 P3-D5 — mirrors the memory_save "what's worth saving" rule (one line).

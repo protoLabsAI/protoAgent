@@ -59,6 +59,7 @@ class AppState:
     a2a_push_engine: Any = None  # push-config store engine — for the orphan sweep (ADR 0051)
     inbox_store: Any = None
     tasks_store: Any = None
+    directive_store: Any = None  # ADR 0127 D6 — per-chat operator directive ledger
     storm_guard: Any = None
     # now-priority inbox delivery hook (ADR 0003 + ADR 0070): an async
     # ``(item) -> bool`` self-A2A fire, registered by ``server.a2a`` at import so
