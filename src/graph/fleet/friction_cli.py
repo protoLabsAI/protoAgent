@@ -163,7 +163,19 @@ def _fetch(client: Any, slug: str, *, grouped: bool, resolved: bool, kind: str |
         raise deckhub.HubError(client.url, f"{slug}: friction answered with something that is not a ledger")
     if body.get("error"):
         raise deckhub.HubError(client.url, f"{slug}: {body['error']}")
-    return [i for i in (body.get("items") or []) if isinstance(i, dict)]
+    return [_row_shape(i) for i in (body.get("items") or []) if isinstance(i, dict)]
+
+
+def _row_shape(item: dict) -> dict:
+    """Every row carries ``tool``, ``plugin`` and ``tool_unbound`` — ``None``/``False`` when
+    unset — whatever core the member runs. A member that predates the fields omits them or
+    sends ``""``; normalising here keeps ``--json`` one shape across the fleet. (Mirrors
+    ``plugins.friction.row_shape``; graph/ does not import plugin code.)"""
+    out = dict(item)
+    out["tool"] = item.get("tool") or None
+    out["plugin"] = item.get("plugin") or None
+    out["tool_unbound"] = bool(item.get("tool_unbound"))
+    return out
 
 
 def _short(err: Exception) -> str:

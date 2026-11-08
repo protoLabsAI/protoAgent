@@ -273,6 +273,9 @@ same kind and summary across agents:
   per-agent counts. One agent seeing something 12 times is a different problem from
   four agents seeing it three times each,
 - the row takes the worst severity any member reported,
+- the row is `tool_unbound` if any member's row was (see the
+  [plugin README](https://github.com/protoLabsAI/protoAgent/blob/main/plugins/friction/README.md#reading-the-ledger)
+  for the row fields),
 - the tally adds the number of agents reached, plus `(N unreachable)` if some members
   didn't answer. Hover over it to see which.
 

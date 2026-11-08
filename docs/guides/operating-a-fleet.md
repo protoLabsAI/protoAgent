@@ -280,6 +280,13 @@ reach. It needs a running hub. `--all` reads every running hub on the box (agent
 `<hub>:<port>/<agent>`, and the shared-signal rollup spans them) — useful when the desktop app
 and a dev sandbox are both up. `resolve` stays per-hub: pick one with `--hub URL`.
 
+Every row in `--json`, grouped or `--raw`, carries `tool`, `plugin` and `tool_unbound`.
+`tool` is the tool the friction is about and `plugin` the plugin that owns it; both are
+`null` when unset (a core tool has no plugin). `tool_unbound` is `true` when the agent
+named a tool it doesn't have, otherwise `false`. A grouped row is `tool_unbound` if any
+entry in it was. Rows from a member on an older core get the same three keys, read as
+unset.
+
 Once a fix has shipped, clear the signal where it was recorded:
 
 ```bash
