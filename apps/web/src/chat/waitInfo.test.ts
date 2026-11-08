@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { humanizeSeconds, parseWaitInput, summarizeThen } from "./waitInfo";
+import { humanizeSeconds, parseWaitInput, resolveWaitInfo, summarizeThen } from "./waitInfo";
 
 describe("parseWaitInput (#1914)", () => {
   it("parses the wait tool's {seconds, then} args", () => {
@@ -29,6 +29,68 @@ describe("parseWaitInput (#1914)", () => {
   it("clamps to >= 1 like the tool itself (max(1, int(seconds)))", () => {
     expect(parseWaitInput('{"seconds": 0}')).toEqual({ seconds: 1, then: "" });
     expect(parseWaitInput('{"seconds": -5}')).toEqual({ seconds: 1, then: "" });
+  });
+});
+
+describe("resolveWaitInfo (#4852)", () => {
+  it("recovers the full plan when the args preview is cut at 800 chars", () => {
+    const then = "x".repeat(900);
+    expect(resolveWaitInfo(
+      JSON.stringify({ seconds: 600, then }).slice(0, 800),
+      `Wait scheduled: 10 minutes. Will resume to: ${then}`,
+    )).toEqual({ seconds: 600, then });
+  });
+
+  it("prefers valid JSON over output details", () => {
+    expect(resolveWaitInfo('{"seconds": 30, "then": "input"}',
+      "Wait scheduled: 1 minute. Will resume to: output",
+    )).toEqual({ seconds: 30, then: "input" });
+  });
+
+  it.each([
+    ["1 hour 30 minutes", 5400],
+    ["1 second", 1],
+    ["2 seconds", 2],
+    ["1 minute", 60],
+    ["2 hours", 7200],
+    ["1 day 2 hours 3 minutes 4 seconds", 93784],
+    ["2 days", 172800],
+  ])("recovers %s from the output", (duration, seconds) => {
+    expect(resolveWaitInfo("garbage", `Wait scheduled: ${duration}. Will resume to: x`))
+      .toEqual({ seconds, then: "x" });
+  });
+
+  it.each(["Error: failed", "  eRrOr: failed", "ERROR scheduling"])(
+    "rejects failed waits: %s", (output) => {
+      expect(resolveWaitInfo('{"seconds": 600}', output)).toBeNull();
+      expect(resolveWaitInfo('{"seconds": 600,', output)).toBeNull();
+    },
+  );
+
+  it("returns null without a recoverable duration", () => {
+    expect(resolveWaitInfo(undefined, undefined)).toBeNull();
+    expect(resolveWaitInfo("garbage", "Wait scheduled: unknown. Will resume to: x")).toBeNull();
+    expect(resolveWaitInfo("garbage", "Wait scheduled: 1 hour garbage.")).toBeNull();
+  });
+
+  it("recovers partial JSON escapes in a single pass", () => {
+    expect(resolveWaitInfo(String.raw`{"seconds": 60, "then": "Check \"release\"\nC:\\new\\n`, undefined))
+      .toEqual({ seconds: 60, then: 'Check "release"\nC:\\new\\n' });
+  });
+
+  it("preserves multiline output plans and prefers them over partial JSON", () => {
+    expect(resolveWaitInfo('{"seconds": 30, "then": "partial',
+      "Wait scheduled: 1 minute. Will resume to: first\nsecond",
+    )).toEqual({ seconds: 30, then: "first\nsecond" });
+  });
+
+  it.each([[-5, 1], [0, 1], [1.5, 2]])("clamps and rounds recovered seconds %s", (raw, seconds) => {
+    expect(resolveWaitInfo(`{"seconds": ${raw},`, undefined)).toEqual({ seconds, then: "" });
+  });
+
+  it("uses an empty plan when neither source supplies one", () => {
+    expect(resolveWaitInfo(undefined, "Wait scheduled: 1 minute."))
+      .toEqual({ seconds: 60, then: "" });
   });
 });
 
