@@ -32,6 +32,7 @@ from graph.watches.types import DEFAULT_KEEP_TERMINAL_H, DEFAULT_WATCH_INTERVAL_
 from graph.config_load import (  # noqa: F401 — re-exports
     _coerce_budget_pct,
     _coerce_digest_cap,
+    _coerce_retention,
     _coerce_prior_sessions,
     _deep_merge_dicts,
     _default_filesystem_allow_run,
@@ -1386,6 +1387,23 @@ class LangGraphConfig:
     # preferences). Off by default — a sandboxed or client-facing agent never opens
     # profile.db. YAML: `memory.shared_profile`. Delivery + the write tool are P2-G2.
     memory_shared_profile: bool = False
+    # Session-summary file retention (the ``memory/*.json`` files behind the prior-session
+    # digest and recall_session). Nothing pruned them before. The periodic maintenance
+    # sweep deletes files last written more than ``session_retention_days`` ago, then the
+    # oldest beyond ``session_max_files``. 0 turns a bound off. YAML:
+    # `memory.session_retention_days` / `memory.session_max_files`.
+    memory_session_retention_days: int = 90
+    memory_session_max_files: int = 500
+    # History-store retention (ADR 0125 history table), per class, in days; 0 keeps the
+    # class forever. Applied by the periodic maintenance sweep. ``history_retention_dry_run``
+    # (default True) only logs what WOULD be deleted, so nothing is removed until the
+    # operator turns it off. Operator chat archives (``archive``) and retirement summaries
+    # are kept by default. YAML: `history.retention_dry_run`, `history.<class>_retention_days`.
+    history_retention_dry_run: bool = True
+    history_report_retention_days: int = 90
+    history_system_retention_days: int = 30
+    history_summary_retention_days: int = 0
+    history_archive_retention_days: int = 0
     # Always-on write confirm gate (ADR 0069 D8, widened by ADR 0108 D4). When
     # True, the agent's own write paths (memory_save and knowledge_ingest)
     # refuse always-on writes — domain="hot" or delivery_policy="always" — with
@@ -2236,6 +2254,7 @@ class LangGraphConfig:
         knowledge = data.get("knowledge", {})
         context = data.get("context") or {}  # ADR 0108 D6 — `or {}`: an all-commented block parses to None
         memory = data.get("memory") or {}  # same `or {}` reason as context
+        history = data.get("history") or {}
         skills = data.get("skills", {})
         mcp = data.get("mcp", {})
         operator_mcp = data.get("operator_mcp", {})
@@ -2488,6 +2507,27 @@ class LangGraphConfig:
                 memory.get("max_tokens", cls.memory_max_tokens), cls.memory_max_tokens, "memory.max_tokens"
             ),
             memory_shared_profile=memory.get("shared_profile", cls.memory_shared_profile),
+            memory_session_retention_days=_coerce_retention(
+                memory.get("session_retention_days"), cls.memory_session_retention_days, "memory.session_retention_days"
+            ),
+            memory_session_max_files=_coerce_retention(
+                memory.get("session_max_files"), cls.memory_session_max_files, "memory.session_max_files"
+            ),
+            history_retention_dry_run=not _falsey(
+                history.get("retention_dry_run"), default=not cls.history_retention_dry_run
+            ),
+            history_report_retention_days=_coerce_retention(
+                history.get("report_retention_days"), cls.history_report_retention_days, "history.report_retention_days"
+            ),
+            history_system_retention_days=_coerce_retention(
+                history.get("system_retention_days"), cls.history_system_retention_days, "history.system_retention_days"
+            ),
+            history_summary_retention_days=_coerce_retention(
+                history.get("summary_retention_days"), cls.history_summary_retention_days, "history.summary_retention_days"
+            ),
+            history_archive_retention_days=_coerce_retention(
+                history.get("archive_retention_days"), cls.history_archive_retention_days, "history.archive_retention_days"
+            ),
             knowledge_vector_k=knowledge.get("vector_k", cls.knowledge_vector_k),
             knowledge_rrf_k=knowledge.get("rrf_k", cls.knowledge_rrf_k),
             knowledge_min_score=knowledge.get("min_score", cls.knowledge_min_score),

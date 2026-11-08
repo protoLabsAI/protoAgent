@@ -358,6 +358,24 @@ def _coerce_prior_sessions(value, default: str) -> str:
     return v
 
 
+def _coerce_retention(value, default: int, key: str) -> int:
+    """A retention bound (days or a file count) → a non-negative int; ``0`` turns it off.
+
+    Absent → the default. A negative or non-numeric value falls back to the default,
+    WARNED, because a retention knob that silently stops working keeps data forever."""
+    if value is None:
+        return default
+    try:
+        n = int(value)
+    except (TypeError, ValueError):
+        log.warning("[config] %s=%r is not a whole number — using the default %s", key, value, default)
+        return default
+    if n < 0:
+        log.warning("[config] %s=%s must be 0 (off) or positive — using the default %s", key, n, default)
+        return default
+    return n
+
+
 def _coerce_digest_cap(value, default: int, key: str) -> int:
     """``memory.max_sessions`` / ``memory.max_tokens`` → a positive int.
 

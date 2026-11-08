@@ -135,9 +135,108 @@ def delete_session_summary(session_id: str, base: str | None = None) -> bool:
     return removed
 
 
+def prune_session_summaries(
+    max_age_days: int = 0,
+    max_files: int = 0,
+    base: str | None = None,
+    *,
+    now: float | None = None,
+) -> dict:
+    """Bounded retention for the session-summary files (``memory.session_retention_days``
+    / ``memory.session_max_files``). Nothing pruned them before, so they only grew.
+
+    Deletes summaries last written more than ``max_age_days`` ago, then the oldest beyond
+    the newest ``max_files``; ``0`` turns that bound off. Age is the file's mtime, which
+    every terminal turn refreshes, so a session in use is never the oldest. Only
+    ``*.json`` files directly in the memory dir are touched (the session-search index
+    reconciles itself on its next sync). Returns ``{"removed": n, "kept": n}``; a file
+    that cannot be removed is logged and counted as kept. Never raises."""
+    import time
+
+    base = base if base is not None else memory_path()
+    out = {"removed": 0, "kept": 0}
+    if (max_age_days <= 0 and max_files <= 0) or not os.path.isdir(base):
+        return out
+    try:
+        names = [n for n in os.listdir(base) if n.endswith(".json")]
+    except OSError:
+        log.warning("[memory] could not list %s for session retention", base, exc_info=True)
+        return out
+    files: list[tuple[float, str]] = []
+    for name in names:
+        fpath = os.path.join(base, name)
+        try:
+            if os.path.isfile(fpath):
+                files.append((os.path.getmtime(fpath), fpath))
+        except OSError:
+            continue
+    files.sort(reverse=True)  # newest first
+    cutoff = (now if now is not None else time.time()) - max_age_days * 86400 if max_age_days > 0 else None
+    for i, (mtime, fpath) in enumerate(files):
+        too_old = cutoff is not None and mtime < cutoff
+        over_cap = max_files > 0 and i >= max_files
+        if not (too_old or over_cap):
+            out["kept"] += 1
+            continue
+        try:
+            os.remove(fpath)
+            out["removed"] += 1
+        except FileNotFoundError:
+            continue
+        except OSError:
+            log.warning("[memory] could not remove old session summary %s", fpath, exc_info=True)
+            out["kept"] += 1
+    return out
+
+
 # ---------------------------------------------------------------------------
 # Session persistence
 # ---------------------------------------------------------------------------
+
+
+# A session summary is an index card, not a transcript (the checkpointer and history
+# store hold the conversation). A 2026-11-08 audit found one agent's 278 files at 24.7 MB,
+# 35 of them over 200 KB and the largest 933 KB, because every message, every tool result
+# and the provider's encrypted reasoning blocks were stored whole. These caps keep what
+# the readers use: the digest's topic (first user message) and count, recall_session's
+# render (500 chars a message, 300 of the final output), and session_search's index.
+_SUMMARY_MESSAGE_MAX_CHARS = 500
+_SUMMARY_MAX_MESSAGES = 40  # the first user message plus the newest 39
+_SUMMARY_TOOL_FIELD_MAX_CHARS = 500
+_SUMMARY_FINAL_MAX_CHARS = 2000
+
+
+def _clip(text: str, limit: int) -> str:
+    return text if len(text) <= limit else text[: limit - 1] + "…"
+
+
+def _summary_text(msg) -> str:
+    """A message's visible text: text parts only (never a reasoning or thinking block's
+    payload, never ``str()`` of a block list), reasoning tags stripped."""
+    from graph.message_blocks import text_of
+    from graph.output_format import strip_reasoning
+
+    return strip_reasoning(text_of(msg)).strip()
+
+
+def _kept_messages(messages: list[dict]) -> list[dict]:
+    """The first user message (the digest's topic) plus the newest messages, in order."""
+    if len(messages) <= _SUMMARY_MAX_MESSAGES:
+        return messages
+    first_user = next((i for i, m in enumerate(messages) if m["role"] == "user"), None)
+    tail_start = len(messages) - (_SUMMARY_MAX_MESSAGES - (1 if first_user is not None else 0))
+    if first_user is None or first_user >= tail_start:
+        return messages[-_SUMMARY_MAX_MESSAGES:]
+    return [messages[first_user], *messages[tail_start:]]
+
+
+def _clip_tool_args(args):
+    """Tool args as given when small; a clipped JSON string when large."""
+    try:
+        dumped = json.dumps(args, ensure_ascii=False, default=str)
+    except (TypeError, ValueError):
+        dumped = str(args)
+    return args if len(dumped) <= _SUMMARY_TOOL_FIELD_MAX_CHARS else _clip(dumped, _SUMMARY_TOOL_FIELD_MAX_CHARS)
 
 
 def _persist_session(state: dict, trace_id: str) -> None:
@@ -146,10 +245,13 @@ def _persist_session(state: dict, trace_id: str) -> None:
     Summary schema:
         session_id       — str
         trace_id         — str
-        messages         — list[{"role": str, "content": str}]
-        tool_calls       — top-5 by duration list[{"name", "args", "result", "duration_ms"}]
+        messages         — list[{"role": str, "content": str}], bounded: the first user
+                           message plus the newest, each clipped to 500 chars
+        message_count    — int, the conversation's full message count
+        tool_calls       — top-5 by duration list[{"name", "args", "result", "duration_ms"}],
+                           args/result clipped
         tool_calls_total_count — int (present when > 5 tool calls)
-        final_output     — str | null
+        final_output     — str | null, clipped
         timestamp        — ISO-8601 UTC string
 
     Writes atomically: temp file → os.replace to avoid partial reads.
@@ -189,19 +291,21 @@ def _persist_session(state: dict, trace_id: str) -> None:
     messages_raw: list = state.get("messages", []) or []
 
     # --- Extract user-visible messages ---
-    # Assistant content is run through strip_reasoning so the session file (later
-    # injected as <prior_sessions>) never carries the model's <scratch_pad> —
-    # the ADR 0021 never-persist-reasoning rule applied to this path too.
-    from graph.output_format import strip_reasoning
-
-    user_messages: list[dict] = []
+    # Text parts only, reasoning stripped (ADR 0021 never-persist-reasoning): a block
+    # list's `str()` used to store a provider's `encrypted_content` reasoning blob and
+    # every inline image as text. Bounded — see _SUMMARY_MAX_MESSAGES.
+    all_messages: list[dict] = []
     for msg in messages_raw:
         if isinstance(msg, HumanMessage):
-            content = msg.content if isinstance(msg.content, str) else str(msg.content)
-            user_messages.append({"role": "user", "content": content})
+            role = "user"
         elif isinstance(msg, AIMessage) and msg.content:
-            content = msg.content if isinstance(msg.content, str) else str(msg.content)
-            user_messages.append({"role": "assistant", "content": strip_reasoning(content)})
+            role = "assistant"
+        else:
+            continue
+        content = _summary_text(msg)
+        if content:
+            all_messages.append({"role": role, "content": _clip(content, _SUMMARY_MESSAGE_MAX_CHARS)})
+    user_messages = _kept_messages(all_messages)
 
     # --- Extract tool call records ---
     # Reconstruct from AI messages (which carry tool_calls) and ToolMessages
@@ -211,7 +315,7 @@ def _persist_session(state: dict, trace_id: str) -> None:
     for msg in messages_raw:
         if isinstance(msg, ToolMessage):
             tool_call_id = getattr(msg, "tool_call_id", "") or ""
-            tool_results[tool_call_id] = msg.content if isinstance(msg.content, str) else str(msg.content)
+            tool_results[tool_call_id] = _clip(_summary_text(msg), _SUMMARY_TOOL_FIELD_MAX_CHARS)
 
     for msg in messages_raw:
         if isinstance(msg, AIMessage) and getattr(msg, "tool_calls", None):
@@ -220,7 +324,7 @@ def _persist_session(state: dict, trace_id: str) -> None:
                 all_tool_calls.append(
                     {
                         "name": tc.get("name", ""),
-                        "args": tc.get("args", {}),
+                        "args": _clip_tool_args(tc.get("args", {})),
                         "result": tool_results.get(tc_id, ""),
                         "duration_ms": 0,  # timing not available in state
                     }
@@ -236,8 +340,7 @@ def _persist_session(state: dict, trace_id: str) -> None:
     final_output: str | None = None
     for msg in reversed(messages_raw):
         if isinstance(msg, AIMessage) and msg.content:
-            raw_final = msg.content if isinstance(msg.content, str) else str(msg.content)
-            final_output = strip_reasoning(raw_final)
+            final_output = _clip(_summary_text(msg), _SUMMARY_FINAL_MAX_CHARS)
             break
 
     # --- Build summary ---
@@ -245,6 +348,7 @@ def _persist_session(state: dict, trace_id: str) -> None:
         "session_id": session_id,
         "trace_id": trace_id,
         "messages": user_messages,
+        "message_count": len(all_messages),
         "tool_calls": top_calls,
         "final_output": final_output,
         "timestamp": datetime.now(timezone.utc).isoformat(),
@@ -356,6 +460,15 @@ def _surface_for(session_id: str) -> str:
     return "a2a/other"
 
 
+def _message_count(summary: dict, msgs: list) -> int:
+    """The conversation's full message count: recorded by bounded summaries, else the
+    length of the stored list (files written before the bound)."""
+    recorded = summary.get("message_count")
+    if isinstance(recorded, int) and not isinstance(recorded, bool) and recorded >= len(msgs):
+        return recorded
+    return len(msgs)
+
+
 def digest_entry(summary: dict) -> dict:
     """Structured digest fields for ONE persisted summary — the derivation
     behind :func:`_digest_line`, shared with the memory-inspector API
@@ -380,7 +493,8 @@ def digest_entry(summary: dict) -> dict:
         "timestamp": str(summary.get("timestamp") or "unknown"),
         "surface": _surface_for(sid),
         "topic": topic,
-        "message_count": len(msgs),
+        # A bounded summary keeps only some messages; it records the full count.
+        "message_count": _message_count(summary, msgs),
     }
 
 

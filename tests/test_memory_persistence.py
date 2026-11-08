@@ -657,3 +657,89 @@ def test_default_memory_path_uses_instance_store(monkeypatch):
     import graph.middleware.memory as mod
 
     assert Path(mod.memory_path()) == instance_paths().store("memory")
+
+
+# ---------------------------------------------------------------------------
+# Bounded summaries + retention (2026-11-08 audit: 278 files, 24.7 MB, largest 933 KB)
+# ---------------------------------------------------------------------------
+
+
+def test_persist_session_bounds_messages_and_records_the_full_count(tmp_path):
+    mod = _reload_memory({"MEMORY_PATH": str(tmp_path), "PROTOAGENT_DISABLE_MEMORY": ""})
+    messages = [HumanMessage(content="first ask: " + "a" * 3000)]
+    for i in range(99):
+        cls = AIMessage if i % 2 == 0 else HumanMessage
+        messages.append(cls(content=f"turn {i} " + "b" * 3000))
+    mod._persist_session(_make_state("long-session", messages=messages), "t")
+
+    path = tmp_path / "long-session.json"
+    data = json.loads(path.read_text())
+    assert data["message_count"] == 100
+    assert len(data["messages"]) == mod._SUMMARY_MAX_MESSAGES
+    assert data["messages"][0]["content"].startswith("first ask: ")  # the digest's topic survives
+    assert data["messages"][-1]["content"].startswith("turn 98 ")  # the newest are kept
+    assert all(len(m["content"]) <= mod._SUMMARY_MESSAGE_MAX_CHARS for m in data["messages"])
+    assert len(data["final_output"]) <= mod._SUMMARY_FINAL_MAX_CHARS
+    assert path.stat().st_size < 40_000  # the unbounded file was ~300 KB
+    assert mod.digest_entry(data)["message_count"] == 100
+
+
+def test_persist_session_clips_tool_args_and_results(tmp_path):
+    mod = _reload_memory({"MEMORY_PATH": str(tmp_path), "PROTOAGENT_DISABLE_MEMORY": ""})
+    messages = [
+        HumanMessage(content="read the log"),
+        _ai_msg_with_tool_calls([{"name": "read_file", "args": {"text": "x" * 5000}, "id": "c1"}]),
+        _tool_msg("c1", "y" * 50_000),
+        AIMessage(content="done"),
+    ]
+    mod._persist_session(_make_state("tool-clip", messages=messages), "t")
+    call = json.loads((tmp_path / "tool-clip.json").read_text())["tool_calls"][0]
+    assert len(call["result"]) <= mod._SUMMARY_TOOL_FIELD_MAX_CHARS
+    assert isinstance(call["args"], str) and len(call["args"]) <= mod._SUMMARY_TOOL_FIELD_MAX_CHARS
+
+
+def test_persist_session_drops_provider_reasoning_blocks(tmp_path):
+    """A Responses/Anthropic block list stored as ``str()`` put the encrypted reasoning blob
+    (and thinking signatures) into the summary text; only the text parts may land."""
+    mod = _reload_memory({"MEMORY_PATH": str(tmp_path), "PROTOAGENT_DISABLE_MEMORY": ""})
+    messages = [
+        HumanMessage(content="alive?"),
+        AIMessage(
+            content=[
+                {"type": "reasoning", "id": "rs_1", "summary": [], "encrypted_content": "gAAAAABqopaque"},
+                {"type": "thinking", "thinking": "", "signature": "CAQSsig"},
+                {"type": "text", "text": "alive"},
+            ]
+        ),
+    ]
+    mod._persist_session(_make_state("blob", messages=messages), "t")
+    raw = (tmp_path / "blob.json").read_text()
+    assert "gAAAAAB" not in raw and "encrypted_content" not in raw and "CAQSsig" not in raw
+    data = json.loads(raw)
+    assert data["final_output"] == "alive"
+    assert data["messages"][-1] == {"role": "assistant", "content": "alive"}
+
+
+def test_prune_session_summaries_by_age_and_count(tmp_path):
+    mod = _reload_memory({"MEMORY_PATH": str(tmp_path), "PROTOAGENT_DISABLE_MEMORY": ""})
+    now = 2_000_000_000.0
+    for i in range(6):  # s0 newest … s5 oldest, one day apart
+        p = tmp_path / f"s{i}.json"
+        p.write_text("{}")
+        os.utime(p, (now - i * 86400, now - i * 86400))
+    (tmp_path / ".session-search.sqlite3").write_text("index")  # never touched
+
+    assert mod.prune_session_summaries(0, 0, str(tmp_path), now=now) == {"removed": 0, "kept": 0}
+    assert mod.prune_session_summaries(3, 0, str(tmp_path), now=now + 1) == {"removed": 3, "kept": 3}
+    assert sorted(p.name for p in tmp_path.glob("*.json")) == ["s0.json", "s1.json", "s2.json"]
+    assert mod.prune_session_summaries(0, 2, str(tmp_path), now=now) == {"removed": 1, "kept": 2}
+    assert sorted(p.name for p in tmp_path.glob("*.json")) == ["s0.json", "s1.json"]
+    assert (tmp_path / ".session-search.sqlite3").exists()
+
+
+def test_legacy_unbounded_summary_still_counts_its_messages():
+    import graph.middleware.memory as mod
+
+    legacy = {"session_id": "old", "messages": [{"role": "user", "content": "hi"}] * 7}
+    assert mod.digest_entry(legacy)["message_count"] == 7
+    assert mod.digest_entry({**legacy, "message_count": "lots"})["message_count"] == 7

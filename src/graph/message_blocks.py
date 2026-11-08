@@ -48,13 +48,14 @@ def text_of(message) -> str:
             elif isinstance(block, dict):
                 if block.get("type") == "text" and block.get("text"):
                     parts.append(str(block["text"]))
-                elif block.get("type") == "reasoning":
+                elif block.get("type") == "reasoning" or block.get("type") in THINKING_BLOCK_TYPES:
                     # Skipped outright, not placeholdered. ADR 0021 says reasoning is
                     # never persisted, and every caller here WRITES what it returns
                     # (exports, session memory, chat bundles). A `_[reasoning]_` marker
                     # would be noise in all three — and on the Responses providers
                     # (openai-codex, ADR 0097) reasoning is a block on EVERY assistant
-                    # turn, so it would be noise on every line.
+                    # turn, so it would be noise on every line. Anthropic `thinking` /
+                    # `redacted_thinking` blocks are the same thing under another name.
                     continue
                 elif block.get("type"):
                     parts.append(f"_[{block['type']}]_")

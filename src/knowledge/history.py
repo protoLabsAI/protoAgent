@@ -7,6 +7,7 @@ import time
 from collections.abc import Iterator, Sequence
 from contextlib import closing, contextmanager
 from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Literal
 
@@ -286,6 +287,51 @@ class HistoryStore:
             return 0
         with self._write() as db:
             return int(db.execute(f"DELETE FROM history WHERE ({where})", params).rowcount)
+
+    def prune(
+        self,
+        retention_days: dict[str, int],
+        *,
+        dry_run: bool = True,
+        now: datetime | None = None,
+    ) -> dict[str, int]:
+        """Age out visible history rows by retention class (``history.*_retention_days``).
+
+        ``retention_days`` maps a class to its maximum age in days (``0`` or absent keeps
+        that class forever):
+
+        - ``system``: every row of a ``system:*`` session (the activity feed's wake
+          sweeps and their compaction archives), whatever its kind;
+        - ``report``: background job reports;
+        - ``summary``: retirement summaries;
+        - ``archive``: compaction archives of every other session, operator chats included.
+
+        Age is ``created_at``. Rows another forget is holding (``invalidated_at`` set) are
+        never touched. With ``dry_run`` (the default) nothing is deleted and the counts
+        say what would be. Returns ``{class: count}`` for each class with a window."""
+        cutoff_base = now or datetime.now(UTC)
+        out: dict[str, int] = {}
+        system = "(session_id LIKE 'system:%' OR COALESCE(thread_id, '') LIKE 'a2a:system:%')"
+        where_for = {
+            "system": system,
+            "report": f"kind = 'report' AND NOT {system}",
+            "summary": f"kind = 'summary' AND NOT {system}",
+            "archive": f"kind = 'archive' AND NOT {system}",
+        }
+        windows = {k: int(retention_days.get(k) or 0) for k in where_for}
+        if not any(days > 0 for days in windows.values()):
+            return out
+        with closing(self._connect()) if dry_run else self._write() as db:
+            for name, days in windows.items():
+                if days <= 0:
+                    continue
+                cutoff = (cutoff_base - timedelta(days=days)).isoformat()
+                where = f"invalidated_at IS NULL AND created_at < ? AND {where_for[name]}"
+                if dry_run:
+                    out[name] = int(db.execute(f"SELECT COUNT(*) FROM history WHERE {where}", (cutoff,)).fetchone()[0])
+                else:
+                    out[name] = int(db.execute(f"DELETE FROM history WHERE {where}", (cutoff,)).rowcount)
+        return out
 
     def mark_forget_pending(self, marker: str, *, session_id="", thread_ids=(), **kwargs) -> int:
         """Hide this session's archives and summaries before retirement. Rows already
