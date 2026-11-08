@@ -336,6 +336,8 @@ pruning:
 
 Wires langchain's `SummarizationMiddleware` to summarize old history near the context limit (enables long-horizon runs; we otherwise only cap via `max_iterations`). On by default.
 
+**What the summarizer reads (ADR 0127).** Automatic compaction, manual `/compact` and the overflow safety valve all use one engine (`graph/compaction_engine.py`). It reads the **whole** span being replaced: operator and agent text in full, each tool result clipped to its head and tail with an explicit `… [N chars of tool output omitted] …` marker, tool calls as name plus brief arguments. A long span is split into chunks sized to the summarizer model's window (a conservative 32k-token window when it is unknown) and folded oldest to newest. When the span starts with an earlier compaction's notes, those notes seed the fold, so an earlier compaction is carried forward instead of dropped. The prompt asks for fixed sections, each filled in or `None`: STANDING INSTRUCTIONS & APPROVALS (the operator's words quoted verbatim, with conditions, stop rules and status), COMMITMENTS, PENDING ACTIONS, SESSION INTENT, STATE & DECISIONS, ARTIFACTS, NEXT STEPS. The summarizer is told never to infer an approval or a revocation. The replacement message is framed as the agent's own notes, not a message from the operator. A compaction costs one summarizer call per chunk. If the summarizer fails, automatic compaction skips and backs off, `/compact` refuses, and the overflow valve writes an honest stub.
+
 ```yaml
 compaction:
   enabled: true

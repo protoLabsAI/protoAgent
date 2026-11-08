@@ -15,6 +15,160 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.231.0] - 2026-11-08
+
+### Added
+- **Core memory storage (#4630).** Add the ADR 0125 memories schema, FTS5 and optional vector retrieval, CRUD, and core runtime initialization/reload wiring. This foundation adds no readers or user-visible behavior.
+
+- **Chat deletion forgets durable memories (#4630).** Memories from the session and its goal-iteration threads now hide, restore, and delete in the same transaction as private chunks and history, with orphan recovery and cleanup of search and vector entries.
+
+- **Memory store migration (#4630).** Add `migrate_memory_chunks_to_memories`, the ADR 0125 P2-B boot migration that moves durable memories out of the legacy `chunks` table into `memories` (same core agent.db), routed by `source_type` so freeform-domain agent writes aren't misfiled while operator-curated knowledge-base documents (pasted or edited ingested chunks) stay put; everything that stays keeps its data in `chunks` with a new `collection` column backfilled from its domain. Field mapping, supersede chains and vectors are carried over, the move takes the write lock before it reads so a concurrent write can't be dropped, runs in one transaction behind a one-time `agent.db.pre-0125-p2` backup, and is idempotent. Not yet wired at boot — the switch-over lands in P2-D1.
+
+- **Shared operator profile store (#4630).** A new `memory.shared_profile` toggle (off by default, Settings ▸ Memory) opens a host-shared `commons/profile.db` — the same commons root as the knowledge commons — holding only the operator's standing `profile`/`standing` memories. Agent writes land for operator review; operator writes are confirmed. Off for sandboxed or client-facing agents, where `profile.db` is never opened. Delivery and the write tool follow in a later slice.
+
+- **Opted-in agents receive the shared operator profile (#4630).** ADR 0125 P2-G2 delivers and writes the host-shared operator profile. When `memory.shared_profile` is on, the per-turn projection joins the shared store's **confirmed** rows to the memory layer under their own "Operator profile (shared)" section, placed before "Always-on memory": `delivery="always"` rows render every turn and `delivery="retrieved"` rows are searched with the turn's query, both drawing on the memory budget slice (never knowledge's). The shared layer rides the same gates as relevant memory — namespace scope and the trust floor apply, and the retrieved pool is trust-ranked and trimmed back to `knowledge.top_k` so a trust floor can't leak the over-fetch — while, like always-on memory, the section itself is never shed by budget pressure (relevant memory sheds around it). A shared row is dropped for an agent whose own private memory already holds a live row on the same subject and kind (the private row wins; a null-subject row never collides), and pending shared rows never deliver. `memory_save` gains a `shared` argument (shown to the model only when the store is enabled): `memory_save(shared=True)` proposes a `profile`/`standing` row to the shared store as `provenance=agent`, `review_state=pending` — reaching no agent until the operator confirms it — while a non-profile kind, a disabled store, or an always-on proposal under `knowledge.hot_write_confirm` returns a clear error. Injection-log rows tag a shared id `layer=memory`, `source=shared_profile`, and the operator's per-turn injection detail resolves a `shared_profile:<id>` from the shared store instead of marking it unavailable.
+
+- **Memory supersession on save (#4631).** A `memory_save` with a `subject` retires matching pending agent/extracted memories on the same subject, kind and scope (subject matching folds case and whitespace), and reports replaced rows and other live rows. Pending saves preserve operator-authored, confirmed and always-on memories; replacing these requires a confirmed write. Temporary saves preserve rows that expire later or never expire; expired rows are not supersession candidates. Revert also refuses to retire a longer-lived replacement. Superseded rows remain readable through `MemoryStore.get`, `MemoryStore.list(include_superseded=True)` and `memory_search(include_superseded=True)`. If the operator later rejects or hard-deletes a replacement (including through conversation forget), the rows it retired are restored to live in the same transaction (re-homed onto that replacement's own successor, or made live when it had none). The new operator API endpoint `POST /api/memory/memories/{id}/revert` swaps an eligible superseded row with its live direct replacement, returning 404 for unsafe or unavailable pairs; inspector UI integration is not included.
+
+- **Memory keeps what lasts, not work status (#4631).** A subject-less `memory_save` that reads like a work-status log — a PR/issue number, board card id or commit SHA paired with a past-tense event (merged, shipped, deployed, …) — still saves, but now comes back with a nudge to put it on the board, issue or PR, where it stays current. The detection is deterministic (regex, no model) and never refuses. The `memory_save` description and the operating model now say what's worth saving: things that will still be true and useful in a month, not release logs, PR states or card progress.
+
+- **Memory review-pass routes (#4631).** Operators can filter and page all memory rows, edit their content and classification, hard-delete non-hot memories, and explicitly promote profile or standing memories into the shared profile once per normalized subject and kind. Promotion preserves expiry, rejects inactive rows, and publishes hot-write events through the standard memory store write path.
+
+- **Memory inspector Review tab (#4631).** A new Review tab in the operator console's Memory surface drives the one-time curation of migrated memories: it lists pending migrated rows by default with filter chips for kind, review state and provenance (plus a superseded toggle) and paging, and each row offers Keep, Edit (content, subject and a profile/standing/fact/decision kind), Forget (behind a confirm), Reject, and Revert for a row an automatic consolidation retired. A "Shared profile candidates" section lists promotable profile facts, disables an already-shared one, and hides entirely when the shared profile is off. Nothing promotes automatically. Forget uses the hot-memory route for always-delivered migrated rows, and shrinking review queues return to the last valid page.
+
+- **Settings ▸ Devices can mint a named access token (#4683).** A "New access token" button (full-access consoles only) names and creates a device-scope token via `POST /api/devices` with no phone to pair, shows the secret once with a Copy button, and adds the new Limited device to the list — revoke it there like any other. The token works only on this agent, can't pair devices or change credentials, and goes in a tool's `storage_state` or an `Authorization: Bearer` header.
+
+- **Named device tokens without pairing (#4683).** Full-access callers can POST `/api/devices` to mint an audited, individually revocable device-scope token, including on headless fleet members through the existing proxy. The token is returned once, with caching disabled, and only its hash is stored. The audit entry (`device.minted`) records which device minted it, or `shared` for the operator bearer, API key or fleet token.
+
+- **Inventory joins the plugin catalog (#4759).** [Inventory](https://github.com/protoLabsAI/inventory-plugin),
+  for resellers who buy in lots and sell piece by piece (phone box scanning, QR labels and bins, prices with
+  their evidence, listing drafts you post yourself, and profit per lot), is now listed in Discover and on the
+  plugins page.
+
+- **Cite an existing PDF artifact at a page (#4761).** New read-only `cite_artifact(artifact_id, page, version=0)` returns an artifact chip that opens an already-saved PDF at a page — no re-save, no new version, no re-upload, and it works after the source file is gone. It shares the one page-hint helper with `save_file_artifact(page=N)`, so the accepted page, clamping and refusals are identical.
+
+- **Plain Language plugin: clearer writing, from digital.gov's plain language guide (#4767).** With
+  the new `plain_language` plugin, every reply follows a short set of core rules: bottom line first, active voice,
+  common words, short paragraphs, and one term for each idea. Two skills cover long documents and
+  rewrites, `/plain-review` and `/paraphrase-test` check a text, and the `plain_language_check` tool
+  checks the mechanical rules. In a blind A/B on 12 writing tasks, a judge preferred the plugin's
+  replies 24 to 5, with latency unchanged. On by default. To turn it off, add
+  `plugins: { disabled: [plain_language] }`.
+
+- **Starter prompts editor (#4768).** Settings ▸ Chat now has a per-agent "Starter prompts" block: toggle the empty-chat suggestions on/off, or Customize to add, edit, reorder and remove up to eight chips. "Reset to defaults" restores the built-in suggestions and saving an emptied list hides them entirely. The list previously could only be edited in YAML.
+
+- **Chat blockquotes have a Copy button (#4773).** Hover or Tab onto a quote in an assistant message to copy its plain text, the same way code blocks copy.
+
+- **Open file artifacts in the browser (#4775).** Add `open_artifact` with a chat-scoped console event and an expiring, bearer-free download link for unattended clients.
+
+- **`record_friction` can name the tool a friction is about (#4780).** The agent tool now takes an optional `tool=`, validated against the agent's bound tools — an unknown name is still recorded, only flagged `tool_unbound`, so a missing-tool report is never lost. When the tool belongs to a plugin, its owning plugin id is resolved and stored as `plugin` on the row (core tools store none), and the ledger read API returns `tool` and `plugin` on every row so `protoagent fleet friction --json` carries them — a triager no longer routes each agent-written row to a repo by hand.
+
+- **`fleet ls/status --plugins` shows what each agent actually runs (#4781).** `protoagent fleet
+  status --plugins` reads every running member's loaded plugin ids and versions through the hub
+  (the same per-member path `fleet friction` uses) and prints an indented `plugins:` line per
+  member — `id@version`, sorted — so a triager can check "fixed in plugin vX" against what an agent
+  is really running. `--json` adds a `plugins` list of `{id, version}` to each agent row. A stopped
+  or unreachable member reports `plugins: null` with the reason, never an empty list. Without the
+  flag, the roster output is unchanged.
+
+- **Tool usage reports (#4786).** Add operator-only `GET /api/telemetry/tools` and `protoagent usage --by-tool` with time filtering, JSON output, and fleet totals. Fleet latency percentiles are labelled as member maxima; older members without tool telemetry are reported without failing the run.
+
+- **Per-tool usage telemetry (#4786).** Record content-free tool-call metadata for lead and subagent calls, with per-tool error rates, latency percentiles, and retention pruning. Writes run off-thread and never block tools on SQLite.
+
+- **Starter prompts are now configurable per agent (#4570).** The empty-chat "Try one of these"
+  chips are no longer hard-coded. A new `chat:` config section — `chat.show_starter_prompts`
+  (a "Show starter prompts" toggle in Settings) and `chat.starter_prompts` (a list of
+  `{label, prompt, note?}`) — lets an operator hide the chips or replace them with prompts that
+  fit their agent. The resolved list is served in the console runtime status: `[]` when the toggle
+  is off, the configured list when set, otherwise the built-in defaults. Malformed entries are
+  dropped without breaking config load, and the list is capped at eight.
+
+- **Bracket shortcuts for chat tabs (#4797).** Use ⌘[ / ⌘] on macOS or Ctrl+[ / Ctrl+] elsewhere to switch to the previous / next chat tab, including while typing in the composer. These wrap between tabs and are rebindable in Settings ▸ Keyboard alongside the existing Ctrl+Tab shortcuts.
+
+### Changed
+- **Eval harness scores the renamed memory tools (#4630).** ADR 0125 P2 D3: the eval harness (`evals/runner.py`, `evals/sweep.py`, `evals/verify.py`, `evals/tasks.json`) carries no retired memory tool name — the `--tasks` doc examples use the current case ids, and the `log_then_recall_chain` teardown now deletes the core memory that the renamed `memory_save` writes instead of a chunk that no longer exists (which had leaked a row into the next case). A new offline guard test resolves every memory / knowledge / session tool a case asserts on against the live tool registry, so a half-finished rename fails fast rather than passing vacuously.
+
+- **Memory tools renamed onto their own store (#4630).** ADR 0125 P2-D1 completes the memory/knowledge switch-over. The agent's memory tools are a hard rename with **no aliases**: `memory_ingest` → `memory_save`, `memory_recall` → `memory_search`, `forget_memory` → `memory_forget`, and `memory_stats` is folded into `memory_list` (which now ends with a per-kind total). They operate on the new core `memories` table; a new `knowledge_search(collection=…)` searches ingested documents in `chunks`, and `knowledge_ingest`'s `domain=` argument is renamed to `collection=`. A one-shot, idempotent boot migration (run right after the history migration, on the core agent.db) drains durable memories out of `chunks` into `memories`, and always-on ("hot") memory is now read from the `MemoryStore` so migrated rows keep reaching the prompt. The plugin SDK gains `memory_search` / `memory_save`; `knowledge_search` / `knowledge_add` keep their `domain=` signature. Bundled subagent tool lists and prompts are updated to the new names.
+- **Memory review and delivery stay connected (#4630).** The inspector can edit, delete and review core memories alongside backend hot chunks. Always-on injection preserves both stores, records only rendered rows with distinct memory handles, and emits hot-write notifications for agent saves. Setup and save-eval verification use the renamed memory tools and store.
+
+- **Built-in subagents keep their memory tools after the rename (#4630).** ADR 0125 P2-D2a follows the P2-D1 memory/knowledge switch-over through the bundled subagents. Subagent tool allowlists drop names they can't resolve silently, so the rename could have quietly stripped the renamed tools from the researcher and the `dream` consolidation pass; their tool lists and prompts now name only the live tools (`memory_save` / `memory_search` / `memory_list` / `memory_forget`). The `researcher` also gains `knowledge_search` so it still reaches the operator's ingested reference documents now that memory and knowledge are separate stores. A new guard builds the default-build tool universe and fails if any built-in subagent names a tool that no longer resolves, so a future rename can't silently degrade a delegation.
+
+- **Migrate subagent memory tool lists (#4630).** Resolve legacy memory tool names to their replacements for config, plugin, and built-in subagents, deduplicate grants, and warn once per subagent and name for legacy or unavailable tools. Background dispatch checks the migrated names too, avoiding false refusals for legacy allowlists. The lead agent exposes only current tool names.
+
+- **Operator MCP, ACP runtime and console tool labels follow the renamed memory tools (#4630).** ADR 0125 P2-D2c points the last three consumers at the P2-D1 names. The operator-MCP read-only allowlist exposes `memory_search`, `memory_list` and `knowledge_search` (no more `memory_recall` / `memory_stats`), so ACP-driven agents keep memory access over the bus. The ACP persona's operating note routes "remembering a fact" to `memory_save` and adds "looking up an ingested document → `knowledge_search`". The console Tools tab groups `memory_save` / `memory_search` / `memory_list` / `memory_forget` and `knowledge_search` under Memory, with the retired names dropped.
+
+- **Memory and knowledge search integrations (#4630).** Expose `memory_search` and `knowledge_search` through the execute_code bridge and setup wizard researcher defaults, and replace the retired `memory_recall` mapping in Zed ACP.
+
+- **Session-end fact extraction now writes to core memory (#4630).** The retirement harvest's semantic fact extractor stores durable facts in the private `MemoryStore` (`kind='fact'`, `provenance='extracted'`, pending operator review) scoped to the harvest namespace, instead of knowledge chunks — keeping its deterministic subject supersession (ADR 0069 D9) inside memories via `superseded_by`. With no memory store available (plugin hosts, tests), fact extraction is skipped and logged rather than falling back to chunks.
+
+- **Memory inspector reads memories (#4630).** The console's Hot panel now lists the always-on rows from the core MemoryStore (ADR 0125 P2) — edit-in-place, hard-delete (always-on rows only), and an operator review verdict (`POST /api/memory/memories/{id}/review`) all run against it — and `/api/memory/stats` splits its counts three ways across the memory, knowledge, and history stores. Rejected, expired, and superseded always-on memories remain visible for review with `injecting: false`.
+
+- **Memory and knowledge get separate projection budgets and labelled sections (#4630).** ADR 0125 P2-F: the per-turn auto-injected layer is split into labelled sections — "Always-on memory" (`MemoryStore.always_on`), "Relevant memory" (top-k `delivery="retrieved"` matches from `MemoryStore.search` — `on_demand` memories stay reachable only through an explicit `memory_search` call and never auto-inject), "Relevant knowledge" (top-k from `KnowledgeStore.search`, each hit cited `[collection · source]` using its source URL or path when available), then the prior-session digest — all inside the one `<injected_memory>` envelope. The memory and knowledge layers each get their OWN char slice of the projection budget (default 40% memory / 60% knowledge), carved deterministically and never shared, with always-on memory charged before relevant memory: a 1 200-chunk knowledge collection can no longer push always-on or relevant memory out of the turn, and a flood of memories can no longer starve the knowledge section. Incognito, the trust-tier floor and namespace scope gate both layers through the same ladder, and each injection-log row (ADR 0069 D6) now carries a `layers` view tagging its injected ids as memory (always-on + recalled) or knowledge.
+
+- **Memory tool terminology (#4630).** Update harvest, knowledge middleware, chat cleanup documentation and Settings help to use current memory tool names and distinguish memory search from ingested document search.
+
+- **Retirement facts share the memory supersession funnel (#4631).** Extracted facts now reconcile with agent memories by subject, kind and scope. Older facts and replacements of confirmed operator facts stay as superseded audit history; conversation dates and unchanged-detail deduplication are preserved. Content deduplication includes legacy and alternate subject keys; legacy revisions remain atomic, and undated harvests and same-day saves no longer falsely block dated revisions.
+
+- **`protoagent fleet friction resolve` takes several ids, and `--agent` accepts the workspace name (#4774).** One call can resolve a list of signal ids on the named agents, and `--agent protoEngineer` now matches the `protoEngineer-ba4c` member whose display name is projectManager. The triage skill also runs these commands bare, with plain-word reasons, so a `filesystem.run_auto_approve` entry covers the whole pass without approval prompts.
+
+- **Friction detail keeps the head and the tail, not just the start (#4779).** Agent-recorded friction detail is now capped at 2000 chars (was 600), and when it runs over the cap the ledger keeps both the first and last sections around an explicit `… [N chars omitted] …` marker instead of a plain head clip — so the closing "What would help: …" ask survives rather than getting cut off mid-sentence. Auto-captured rows' 300-char and the summary's 200-char clips are unchanged.
+
+- **Closing an empty chat tab no longer asks for confirmation (#4783).** Chats with active work or an active goal still require confirmation.
+<!-- Replace the provisional issue reference with the PR number once assigned. -->
+
+- **Console starter prompts follow agent configuration (#4570).** Empty chats display runtime-provided prompts and notes, hide suggestions when the list is empty, and retain built-in starters for older servers. Selecting a prompt fills the composer without sending it.
+
+- **Delegation progress tool cards (#4800).** A delegation's live tool calls now render as design-system tool cards — a bordered mono row with a status glyph — instead of the bespoke checkmark list.
+
+### Fixed
+- **The bundled `web-research` skill and the engineer SOUL preset use the new memory tool names (#4630).**
+  After the ADR 0125 rename they still told the agent to call `memory_recall` and `memory_ingest`,
+  which no longer exist. The skill now uses `memory_search`, `knowledge_search` and `memory_save`,
+  the preset uses `memory_save`, and a test keeps the removed names out of bundled skills and presets.
+
+- **Memory inspector review routing (#4630).** Send verdicts for memories-tagged hot rows to the memories review route, preserving the chunks route for older servers.
+
+- **Unify PDF page hints for saved artifacts (#4761).** Copied and linked saves now share page validation, clamp hints to the last PDF page, and explain text-only previews without claiming they open at a page.
+
+- **Show the newest session history with readable excerpts (#4776).** `recall_session` lists the latest 20 entries first with redacted, reasoning-free excerpts and directs omitted-history searches to `session_search`. Search results explain how to read an entry in full, and recall output includes its truncation notice within the character limit.
+
+- **A plugin page's published topic keeps all its segments (#4801).** The console now prefixes the plugin id only when it's missing (like Python `registry.emit`) instead of always stripping the first dotted segment, so a page publishing `view.status` from `cadview` lands on the bus as `cadview.view.status`, not `cadview.status`.
+
+- **Plugin stores can't land in core's directory (part of #4808).** A plugin id now may not match a core data directory under the instance root (`memory`, `knowledge`, `media`, …) — alongside the existing block on ids that shadow a core `/api/plugins/` route — so a plugin's `plugin_store()` can never resolve onto core's own data. The host-free plugin testkit also stubs `graph.sdk.plugin_store` to a throwaway temp directory, so a plugin that writes under its own store runs under the testkit without hand-rolling a fallback path.
+
+- **The console no longer freezes on "Loading…" after clients drop proxied fleet requests (#4811).** When a browser left a request proxied to a fleet member (an event-stream reconnect, a plugin view remounting, a chat delete still in flight), the hub kept that member connection checked out of its pool for good. Once all 100 slots were held, every proxied request waited, so views hung loading and chat deletes never finished. The hub now releases the member connection however the client leaves.
+
+- **A plugin view that asks to stay open in the background no longer reloads itself (#4813).** When a view's page subscribed with `background: true`, the console moved it into a different container. That destroyed and rebuilt its iframe, so the page loaded twice and redid all its setup, which is heavy for a 3D viewer or a terminal. Views now stay in one place, so the page loads once. Each view also gets a single copy across the docks: if a second dock asks for it, it shows that the view is open in another panel. (On mobile, the first background request still reloads the view once.)
+
+- **Eval rerun failure diagnostics (#4831).** Unavailable case reruns now include the error message and, for runner report failures, the exit code and a redacted stderr tail bounded to 1500 characters, so triage can distinguish environment failures from case failures.
+
+- **Refuse duplicate background delegations (#4832).** A second `delegate_to` with `background=True`, the same target and the same (whitespace-/case-normalised) query — while the first is still running — is now refused instead of run twice, so an a2a peer or any non-coder delegate can no longer apply its side effects twice from a re-send. The refusal names the running job, its target and its age; pass `force=true` to send anyway. Managed-git coder (`item_id`) jobs, foreground calls and `resume_task_id` continuations are unaffected.
+
+- **Goal kickoff names the verifier (#4833).** The first goal-driven turn now states who decides DONE — the goal's verifier, summarized from its spec (e.g. `command: pytest -q`) — in both the normal and fresh-context kickoff prompts, and when the verifier is deterministic (command/test/ci/data/plugin) it adds that a condition the agent can't locate in the workspace is not grounds to abandon the goal. Previously a goal with a `command` verifier and no contract was never told about the verifier, so the agent searched for the condition's wording, found nothing, and called `abandon_goal` on iteration 0 (the `goal_exhausted` nightly eval resolved `unachievable` instead of `exhausted`).
+
+### Docs
+- **Phase 2 memory guides (#4630).** Update ACP, eval, and tuning guidance for the renamed memory tools and separate knowledge/history searches; record ADR 0125 implementation phases and the migration routing and backup refinement.
+
+- **Knowledge-package docstrings describe the memories/chunks split (#4630).** ADR 0125 P2-D2e is a text-only sweep of `knowledge/__init__.py`, `knowledge/store.py`, `knowledge/trust.py` and `knowledge/layered.py`: the retired tool names (`memory_ingest`, `memory_recall`, `forget_memory`, `memory_stats`) are replaced with the current ones (`memory_save`, `memory_search`, `memory_forget`, `memory_list`, `knowledge_search`), and comments that framed `chunks` as agent memory now say `chunks` holds knowledge (collections) while memory lives in the `memories` table (`knowledge/memories.py`). No behavior change.
+
+- **Update memory and knowledge tool documentation (#4630).** Configuration, environment-variable, ingestion, and subagent guides use the ADR 0125 tool names, explain collection-based knowledge search, and document subagent tool-name migration and unknown-tool warnings.
+
+- **Bundled skills and the memory-hardening dev doc use the new memory tool names (#4630).** ADR 0125 P2-E4 finishes the rename sweep for the knowledge-work surfaces: the `consolidate-memory`, `daily-brief` and `repo-onboard` skills already direct the agent at `memory_save` / `memory_search` / `memory_list` / `memory_forget` (D1), and `docs/dev/memory-hardening-tasklist.md` now cites `memory_search` instead of the retired `memory_recall`. A guard test pins all four files against reintroducing a retired name (`memory_ingest`, `memory_recall`, `memory_stats`, `forget_memory`) and checks the dev doc's `memory_search` reference resolves to a tool registered in a default agent build. No behavior change.
+
+- **Memory and knowledge reference updates (#4630).** Document separate memory and knowledge stores, collection-based document tools, memory lifecycle fields, and the renamed memory tools with migration guidance.
+
+- **Document how to open a PDF artifact at a page (#4761).** The artifact plugin README gains
+  an "Opening a PDF at a page" subsection and lists `cite_artifact`; the rendering-artifacts
+  skill and `save_file_artifact`'s `page` docstring now state the page rules once — a positive,
+  1-based page (`0` for none), a page past the end opens the last page, and pages work only for a
+  PDF whose preview was approved at save time (otherwise `cite_artifact` refuses the page while a
+  save goes ahead without it and says why) — and point at `cite_artifact` for a PDF that is
+  already an artifact versus `save_file_artifact(page=N)` for a new file.
+
+- **Homepage introduces coding work with Claude Code and Codex (#4770).** Add a For developers section linking to coding-agent workflows, inspectable memory, and GitHub.
+
+- **README explains why to use protoAgent alongside Claude Code and Codex, and leads with the feature tour (#4771).** A new "Why protoAgent?" section answers "why not just use Claude Code directly?", the "What you can do" feature tour now comes before "Repository layout", and Contributing links the roadmap.
+
 ## [0.230.0] - 2026-11-06
 
 ### Added
