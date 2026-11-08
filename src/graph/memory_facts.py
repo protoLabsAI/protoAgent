@@ -41,6 +41,7 @@ import re
 
 from langchain_core.messages import HumanMessage
 
+from graph.message_blocks import text_of
 from graph.output_format import strip_reasoning
 
 log = logging.getLogger(__name__)
@@ -115,7 +116,8 @@ async def _default_extractor(transcript: str, config) -> list[str | dict[str, st
 
     llm = create_llm(config, model_name=_resolve_aux_model(config, ""))
     resp = await llm.ainvoke([HumanMessage(content=_FACTS_PROMPT.format(transcript=transcript))])
-    return _parse_facts(str(resp.content))
+    # text_of, not str(): a Responses provider's block list carries an opaque reasoning blob.
+    return _parse_facts(text_of(resp))
 
 
 def _clean_fact(fact: str) -> str:

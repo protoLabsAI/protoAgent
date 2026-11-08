@@ -87,17 +87,23 @@ class _FakeKnowledge:
         return f"chunk-{len(self.chunks)}"
 
 
-def _seed(db, thread="a2a:chat-1"):
-    g = StateGraph(MessagesState)
+def _seed(db, thread="a2a:chat-1", *, operator_chat_turn=True):
+    """One checkpointed exchange. ``operator_chat_turn`` is the server's per-turn stamp
+    (True = an authenticated operator chat); ``None`` leaves it unset, like a thread
+    from before the stamp existed."""
+    from graph.state import ProtoAgentState
+
+    g = StateGraph(ProtoAgentState if operator_chat_turn is not None else MessagesState)
     g.add_node("n", lambda s: {"messages": [AIMessage(content="<output>noted</output>")]})
     g.add_edge(START, "n")
     g.add_edge("n", END)
+    inputs = {"messages": [HumanMessage(content="my favorite color is teal")]}
+    if operator_chat_turn is not None:
+        inputs["operator_chat_turn"] = operator_chat_turn
 
     async def main():
         app = g.compile(checkpointer=build_sqlite_checkpointer(db))
-        await app.ainvoke(
-            {"messages": [HumanMessage(content="my favorite color is teal")]}, {"configurable": {"thread_id": thread}}
-        )
+        await app.ainvoke(inputs, {"configurable": {"thread_id": thread}})
 
     asyncio.run(main())
 
@@ -174,6 +180,78 @@ def test_harvest_extracts_facts_when_enabled(tmp_path, history_store):
     assert facts[0].review_state == "pending"
     # Provenance (ADR 0069 D5): the fact carries the originating session/thread id.
     assert facts[0].source_session == "a2a:chat-1" and facts[0].thread_id == "a2a:chat-1"
+
+
+@pytest.mark.parametrize(
+    "thread, operator_chat_turn",
+    [
+        ("a2a:peer-brief", False),  # a delegated peer agent, a /v1 client, a scheduled turn
+        ("a2a:legacy-thread", None),  # retired from before the server stamped the flag
+        ("a2a:system:activity", True),  # system threads never, whatever the flag says
+    ],
+)
+def test_harvest_extracts_facts_only_from_operator_chats(tmp_path, history_store, thread, operator_chat_turn):
+    """2026-11-08 audit: 121 of one agent's memories were facts mined from peer-agent and
+    API threads, recording the peer as "the user". Those threads still get their history
+    summary, but the extractor never runs on them."""
+    from types import SimpleNamespace
+
+    from knowledge.memories import MemoryStore
+
+    db = str(tmp_path / "c.db")
+    _seed(db, thread, operator_chat_turn=operator_chat_turn)
+    memory = MemoryStore(tmp_path / "agent.db")
+
+    async def fake_summarizer(transcript, config):
+        return "A peer asked for a board card."
+
+    calls = []
+
+    async def peer_facts(transcript, config):  # extraction errors are swallowed, so record
+        calls.append(transcript)
+        return [{"subject": "designsystem-role", "content": "The user (designSystem) boards UI work"}]
+
+    cid = asyncio.run(
+        harvest_thread(
+            thread,
+            checkpointer=build_sqlite_checkpointer(db),
+            knowledge_store=None,
+            memory_store=memory,
+            config=SimpleNamespace(knowledge_facts=True),
+            summarizer=fake_summarizer,
+            fact_extractor=peer_facts,
+            raise_on_error=True,
+        )
+    )
+    assert cid is not None and history_store.get(cid).content.endswith("A peer asked for a board card.")
+    assert calls == []
+    assert memory.list(kind="fact") == []
+
+
+def test_default_summarizer_drops_provider_reasoning_blocks(monkeypatch):
+    """A Responses provider's aux reply is a block list: an opaque reasoning block
+    (``encrypted_content``) and then the text. ``str()`` of that list landed in history as
+    the summary (15 such rows in the audit); only the text may."""
+    import graph.agent
+    import graph.llm
+    from graph.conversation_harvest import _default_summarizer
+
+    reply = AIMessage(
+        content=[
+            {"type": "reasoning", "id": "rs_1", "summary": [], "encrypted_content": "gAAAAABqopaque"},
+            {"type": "thinking", "thinking": "", "signature": "CAQSsig"},
+            {"type": "text", "text": "User asked for a one-word reply."},
+        ]
+    )
+
+    class _LLM:
+        async def ainvoke(self, messages):
+            return reply
+
+    monkeypatch.setattr(graph.agent, "_resolve_aux_model", lambda config, name: "aux")
+    monkeypatch.setattr(graph.llm, "create_llm", lambda config, model_name=None: _LLM())
+    out = asyncio.run(_default_summarizer("User: alive?", object()))
+    assert out == "User asked for a one-word reply."
 
 
 def test_harvest_skips_facts_when_disabled(tmp_path):

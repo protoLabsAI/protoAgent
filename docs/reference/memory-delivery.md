@@ -41,7 +41,10 @@ see [Skills](/guides/skills).
 
 1. **Deliberate memory** — `memory_save` records text already in hand. Save durable
    preferences and decisions; keep release logs, PR status and card progress on their
-   board or issue. Agent writes carry `provenance="agent"`, start pending and record
+   board or issue. A save that reads as a work-status log (a release cut, a PR merged
+   or verified, a CI or QA state, a triage outcome) is refused with a pointer to where
+   that fact already lives; a lesson or rule (`Lesson:`, `Rule:`, "never", "always", …)
+   still saves. Agent writes carry `provenance="agent"`, start pending and record
    `source_session` from graph state, never from a model-supplied argument.
 2. **Reference material** — `knowledge_ingest` fetches and extracts URLs or files into
    `chunks`, grouped by `collection`. These are documents, not personal memories.
@@ -49,7 +52,10 @@ see [Skills](/guides/skills).
    reports support `session_search` and `recall_session`. Session summaries strip
    reasoning, skip incognito and disposable `background:*` worker sessions, and keep
    the originating session identity. Durable fact extraction is controlled by
-   `knowledge.facts`; extracted memory provenance is distinct from agent-authored memory.
+   `knowledge.facts` and runs only on operator chat threads (the server's
+   `operator_chat_turn` stamp): a delegated peer agent, a `/v1` client or a `system:*`
+   thread is summarized into history but never mined for facts. Extracted memory
+   provenance is distinct from agent-authored memory.
 
 ### The reasoning guardrail
 

@@ -132,7 +132,11 @@ async def test_summary_uses_checkpoint_session_and_writes_facts_to_memories(stor
     checkpoint = SimpleNamespace(
         checkpoint={
             "ts": "2026-08-02T12:00:00Z",
-            "channel_values": {"session_id": "session", "messages": [HumanMessage(content)]},
+            "channel_values": {
+                "session_id": "session",
+                "messages": [HumanMessage(content)],
+                "operator_chat_turn": True,
+            },
         }
     )
     summarizer = AsyncMock(return_value="Teal preference.")

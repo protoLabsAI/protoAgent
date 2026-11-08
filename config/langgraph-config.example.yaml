@@ -148,8 +148,9 @@ knowledge:
   # /audio/transcriptions alias (e.g. whisper-1). Blank disables audio/video import.
   # Video needs ffmpeg on the host to extract the audio track.
   transcribe_model: whisper-1
-  # Extract durable facts from a conversation on retirement (aux model) and
-  # consolidate them into the store. Rides the harvest pass (ADR 0021).
+  # Extract durable facts from an operator chat on retirement (aux model) into
+  # memory. Peer-agent, /v1 and system threads are never mined. Rides the
+  # harvest pass (ADR 0021).
   facts: true
   top_k: 5
   # Namespace scope for the per-turn AUTO-INJECTED recall (ADR 0069 D3a). Unset =

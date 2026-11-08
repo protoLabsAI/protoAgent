@@ -1536,8 +1536,9 @@ class LangGraphConfig:
     checkpoint_alert_db_mb: int = 5120
     checkpoint_alert_thread_mb: int = 1024
     # Semantic facts (ADR 0021): on retirement, also extract durable facts from
-    # the conversation (aux model) and consolidate them into the store as
-    # finding_type="fact". Rides the harvest pass; needs harvest enabled.
+    # the conversation (aux model) into memories (kind="fact", provenance="extracted").
+    # Only operator chat threads; peer-agent, /v1 and system threads are summarized
+    # into history but never mined for facts. Rides the harvest pass.
     knowledge_facts: bool = True
 
     # Skills — human-authored ``SKILL.md`` folders (AgentSkills open standard)

@@ -61,52 +61,131 @@ MEMORY_KINDS: tuple[str, ...] = ("profile", "standing", "fact", "decision")
 SHARED_PROFILE_KINDS: frozenset[str] = frozenset({"profile", "standing"})
 
 
-# ── work-status detector (ADR 0125 P3-D5) ─────────────────────────────────────
+# ── work-status detector (ADR 0125 D5, 2026-11-08 refinement) ─────────────────
 #
-# Evidence from ADR 0125 P3: ~60 memory_save calls across ~350 threads, most of them
-# work-status logs (a PR merged, a card shipped, a SHA deployed). Work status is not
-# memory — the board, issue or PR keeps it current, while memory is for what will still
-# be true in a month. ``looks_like_status_line`` is a DETERMINISTIC (no-LLM) heuristic
-# that spots a subject-less work-status line so ``memory_save`` can SAVE it as normal and
-# append a nudge toward the board/issue/PR. It never refuses and never blocks the write.
+# Evidence from ADR 0125 P3: most memory_save calls were work-status logs (a PR merged, a
+# card shipped, a SHA deployed). A 2026-11-08 audit of one agent found the nudge alone did
+# not stop them: 48 of its 225 memories were release cuts ("release v0.231.0: I cut …") and
+# PR-progress logs ("I verified PR558 merged …"); the recent ones each under a fresh
+# subject, so neither the subject-less nudge nor D4 supersession ever caught one. Work status is not memory — git tags, the PR and
+# the board keep it current — so ``memory_save`` now REFUSES a save that reads as one and
+# says where the fact already lives. ``work_status_kind`` is DETERMINISTIC (regex, no
+# model). A lesson or rule drawn from the work ("Lesson: …", "never …", "always …") is not
+# status and still saves, with or without a work reference; only the opening sentence
+# is judged (see ``work_status_kind``).
 
 # A work reference: a PR/issue number, a project-board card id, or a hex commit SHA. The
 # card-id and SHA alternatives are matched against the lower-cased content.
 _STATUS_WORK_REF_RE = re.compile(
     r"#\d+"  # a PR or issue number (e.g. #4553)
+    r"|\bpr ?\d+"  # a bare PR number (e.g. PR558)
     r"|bd-[a-z0-9.]+"  # a project-board card id (e.g. bd-aknx2.g1)
     r"|\b[0-9a-f]{7,40}\b"  # a hex commit SHA, 7–40 chars (e.g. b83d744a)
 )
 # A past-tense work-event word — the verb that makes a line read as a status update.
 _STATUS_EVENT_RE = re.compile(
-    r"\b(?:merged|shipped|opened|closed|landed|released|deployed|tagged|cut|fixed|reverted|rebased|pushed)\b"
+    r"\b(?:merged|shipped|opened|closed|landed|released|deployed|tagged|cut|fixed|reverted|rebased|pushed)(?![-\w])"
 )
+# A release cut: "release v0.231.0", "I cut protoAgent v0.218.0", "tagged v1.2.3".
+_STATUS_RELEASE_RE = re.compile(
+    r"\brelease[ :_-]*v?\d+\.\d+(?:\.\d+)?\b"
+    r"|\b(?:cut|tagged|released|published|shipped)\s+(?:[\w@/.-]+\s+){0,2}v\d+\.\d+(?:\.\d+)?\b"
+    r"|\bv\d+\.\d+(?:\.\d+)?\s+(?:\([^)]*\)\s+)?(?:was\s+)?(?:cut|tagged|released|published|shipped)\b"
+)
+# The agent narrating its own work step: "I verified … merged", "I merged #12".
+_STATUS_FIRST_PERSON_RE = re.compile(
+    r"\bi (?:have |had )?(?:verified|merged|shipped|landed|cut|released|tagged|deployed|opened|closed|pushed|"
+    r"rebased|boarded|triaged|dispatched|shepherded|promoted)\b"
+)
+# A CI / check / QA state: "CI green", "seven passing checks", "QA PASS".
+_STATUS_CI_RE = re.compile(
+    r"\b(?:ci|checks?|build|pipeline)\s+(?:is |are |was |were |went |turned )?(?:green|red|passing|failing|passed|failed)\b"
+    r"|\b(?:green|red|passing|failing|passed|failed)\s+(?:ci|checks?|builds?)\b"
+    r"|\b(?:terminal-green|all-green)\b"
+    r"|\bqa (?:\w+ )?(?:pass|warn|fail)\b"
+)
+# A triage or sweep outcome: "triage session 2026-08-20: … boarded".
+_STATUS_TRIAGE_RE = re.compile(
+    r"\btriage\b[^.]{0,80}\b(?:session|sweep|pass|outcome|batch|scored|boarded|triaged)\b"
+)
+# Board progress on a work reference: "batch boarded", "initiative (#217) COMPLETE".
+_STATUS_BOARD_RE = re.compile(
+    r"\b(?:boarded|reboarded|dispatched|unblocked|complete|completed|in progress)(?![-\w])"
+)
+# What makes it a LESSON instead: an explicit lesson/rule marker or a standing instruction.
+_LESSON_RE = re.compile(
+    r"\b(?:lessons?|learned|learnt|rule|rules|correction|gotcha|pitfall|trap|never|always|"
+    r"don't|do not|avoid|next time|from now on|going forward|in future)(?![-\w])"
+)
+
+# Where each kind of status already lives — the refusal names it.
+_STATUS_WHERE = {
+    "release": "the release's git tag and its release PR",
+    "ci": "the PR's checks and review",
+    "triage": "the board and the issues its cards link",
+    "pr": "the PR, the issue it closes and the board card",
+}
+
+
+_OPENING_MAX_CHARS = 240
+_SENTENCE_END_RE = re.compile(r"(?<=[.!?])\s|\n")
+
+
+def _opening(text: str) -> str:
+    """The first sentence or line of ``text``, capped at ``_OPENING_MAX_CHARS``."""
+    return _SENTENCE_END_RE.split(text.strip(), maxsplit=1)[0][:_OPENING_MAX_CHARS]
+
+
+def work_status_kind(content: str, subject: str | None = None) -> str | None:
+    """Which work-status log a ``memory_save`` reads as (ADR 0125 D5), or None.
+
+    ``"release"`` (a release cut), ``"ci"`` (a CI/check/QA state on a work reference),
+    ``"triage"`` (a triage outcome, or board progress on a work reference) or ``"pr"``
+    (the agent narrating a PR/card step, or a subject-less line with a work reference and
+    a past-tense work event). Never for content that carries a lesson or rule marker — the
+    lasting lesson behind a status line is exactly what memory is for.
+
+    Only the OPENING (the first sentence or line, at most 240 chars) is judged: that is
+    what the memory is about. A lesson-led memory that cites a PR later still saves; a
+    status log with "Lessons: …" tacked on the end is still a status log, and the refusal
+    asks for the lesson on its own. Deterministic — regex only, no model. The subject is
+    checked for a release name too ("release v0.231.0"), since that is where the audited
+    release logs put it."""
+    lower = _opening((content or "").lower())
+    subj = str(subject or "").strip().lower()
+    if not lower or _LESSON_RE.search(lower):
+        return None
+    if _STATUS_RELEASE_RE.search(lower) or _STATUS_RELEASE_RE.search(subj):
+        return "release"
+    has_ref = bool(_STATUS_WORK_REF_RE.search(lower))
+    if has_ref and _STATUS_CI_RE.search(lower):
+        return "ci"
+    if _STATUS_TRIAGE_RE.search(lower) or (has_ref and _STATUS_BOARD_RE.search(lower)):
+        return "triage"
+    if has_ref and _STATUS_FIRST_PERSON_RE.search(lower):
+        return "pr"
+    if not subj and has_ref and _STATUS_EVENT_RE.search(lower):
+        return "pr"
+    return None
 
 
 def looks_like_status_line(content: str, subject: str | None) -> bool:
-    """True only when a ``memory_save`` reads like a work-status log (ADR 0125 P3-D5) —
-    ALL of: the ``subject`` is empty; the ``content`` carries a work reference (a ``#\\d+``
-    PR/issue number, a ``bd-…`` board card id, or a 7–40 char hex SHA); and the ``content``
-    carries a past-tense work-event word (merged, shipped, opened, closed, landed,
-    released, deployed, tagged, cut, fixed, reverted, rebased, pushed).
-
-    Deterministic — regex only, no model. The caller still SAVES the row; this only decides
-    whether to append a nudge toward the board/issue/PR."""
-    if subject and str(subject).strip():
-        return False
-    lower = (content or "").lower()
-    if not _STATUS_WORK_REF_RE.search(lower):
-        return False
-    return bool(_STATUS_EVENT_RE.search(lower))
+    """True when ``memory_save`` would refuse ``content`` as a work-status log — see
+    :func:`work_status_kind`."""
+    return work_status_kind(content, subject) is not None
 
 
-# The nudge appended to a saved work-status line (ADR 0125 P3-D5). Held as a constant so
-# the tool body and the test share one source of truth.
-_STATUS_LINE_NUDGE = (
-    "This reads like a work-status update. The board, issue or PR keeps that current; "
-    "memory is for things still true and useful in a month. If there's a lasting lesson "
-    "here, save that with a subject."
-)
+def status_refusal(kind: str) -> str:
+    """The ``memory_save`` refusal for a work-status log of ``kind``: not saved, where the
+    fact already lives, and how to save the lasting part instead."""
+    where = _STATUS_WHERE.get(kind, _STATUS_WHERE["pr"])
+    return (
+        "Not saved: this reads like a work-status log, and memory is for things still true "
+        f"and useful in a month. That fact already lives in {where}, which stay current. "
+        "If there is a lasting lesson or rule in it, save that instead, in its own words "
+        '(for example "Lesson: …" or "Rule: …") with a subject.'
+    )
+
 
 # The one "what's worth saving" rule (ADR 0125 P3-D5), shared by the ``memory_save``
 # description below; ``graph/prompts.py`` keeps a matching line in the operating model so
@@ -283,10 +362,11 @@ def _render_memory(entry, *, verbose: bool = False) -> str:
 # ONE source of truth and can't drift.
 _MEMORY_SAVE_DESC = f"""Save a durable memory — a preference, decision, standing rule or fact worth recalling across sessions.
 
-{_WORTH_SAVING_RULE} A subject-less work-status line (a PR, card or SHA with a
-past-tense event) still saves, but comes back with a nudge to put it where it stays
-current. For a document to read or keep, use ``knowledge_ingest``; this is for text you
-already have.
+{_WORTH_SAVING_RULE} A save that reads as a work-status log (a release cut, a PR
+merged or verified, a CI or QA state, a triage outcome) is refused: git tags, the PR and
+the board already keep it. Save the lasting lesson instead ("Lesson: …", "Rule: …").
+For a document to read or keep, use ``knowledge_ingest``; this is for text you already
+have.
 
 Args:
     content: specific, self-contained text (retrieved by keyword/semantic search).
@@ -420,6 +500,11 @@ def _build_memory_tools(
         """The ``memory_save`` body, shared by the shared-enabled and -disabled tool
         definitions below. ``shared=True`` routes to the shared operator profile; otherwise
         the write lands in the private core ``MemoryStore`` exactly as before."""
+        # Work status is not memory (ADR 0125 D5, 2026-11-08 refinement): refused before
+        # anything is written, private or shared, with where the fact already lives.
+        status = work_status_kind(content, subject)
+        if status:
+            return status_refusal(status)
         if shared:
             return await _save_to_shared_profile(content, kind, subject, heading, delivery, expires_in_days, state)
         store = _memory()
@@ -479,10 +564,6 @@ def _build_memory_tools(
             parts.append(
                 f"Also live on {subject!r}: " + ", ".join(f"#{e.id} ({e.kind})" for e in also_live) + "."
             )
-        # Work status is not memory (ADR 0125 P3-D5): a subject-less work-status line still
-        # SAVED above, but comes back with a nudge toward the board/issue/PR. Never a refusal.
-        if looks_like_status_line(content, subject):
-            parts.append(_STATUS_LINE_NUDGE)
         return " ".join(parts)
 
     # Hide the ``shared`` argument from the model's tool schema unless the shared profile is
