@@ -181,8 +181,9 @@ on submit, calls `on_submit` with the field values — which may itself return
 a reply string or another form (a multi-step wizard).
 
 The token is slugified + lowercased (`/Issue` == `/issue`). The reserved
-core tokens `goal` / `lifecycle` are refused; a collision with a token another
-enabled plugin already registered keeps the first and warns (resolved in the loader).
+core tokens `goal` / `lifecycle` / `directives` are refused; a collision with a
+token another enabled plugin already registered keeps the first and warns (resolved in
+the loader).
 
 ### `registry.register_component` {#registry-register-component}
 

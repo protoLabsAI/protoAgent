@@ -324,8 +324,9 @@ class PluginRegistry:
         a reply string or another form (a multi-step wizard).
 
         The token is slugified + lowercased (``/Issue`` == ``/issue``). The reserved
-        core tokens ``goal`` / ``lifecycle`` are refused; a collision with a token another
-        enabled plugin already registered keeps the first and warns (resolved in the loader).
+        core tokens ``goal`` / ``lifecycle`` / ``directives`` are refused; a collision with a
+        token another enabled plugin already registered keeps the first and warns (resolved in
+        the loader).
         """
         from graph.slash_commands import slugify_slash  # intra-graph, import-safe
 
@@ -335,7 +336,7 @@ class PluginRegistry:
                 "[plugins] %s: register_chat_command needs a name + callable: %r / %r", self.plugin_id, name, handler
             )
             return
-        if token in ("goal", "lifecycle"):  # reserved core control commands (ADR 0074)
+        if token in ("goal", "lifecycle", "directives"):  # reserved core control commands (ADR 0074, 0127 D6)
             log.warning("[plugins] %s: chat command /%s is reserved — skipped", self.plugin_id, token)
             return
         if token in self.chat_commands:
