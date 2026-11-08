@@ -55,6 +55,33 @@ def test_on_before_bus_is_wired_then_binds_and_delivers_once():
     assert len(got) == 1
 
 
+def test_on_after_bus_is_wired_binds_immediately_and_delivers():
+    """An on() made when the bus is ALREADY wired — the common after-load case: a surface
+    start, a route handler, a lifecycle hook, a delayed callback over a captured registry, a
+    hot-reload register() — binds RIGHT THEN, with no later host bind step, and a published
+    event reaches it once. This is the case the queue must never silently swallow (#4800)."""
+    bus = EventBus()
+    host = PluginHost()
+    host.on = bus.subscribe_handler  # the server is already up
+    reg = _registry(host)
+
+    got: list[dict] = []
+    reg.on("topic.*", lambda payload: got.append(payload))
+
+    # Bound by on() itself — nothing left queued and no host bind step ran.
+    assert bus.handler_count() == 1
+    assert reg._pending_subscriptions == []
+    assert len(reg._subscription_unsubs) == 1
+
+    bus.publish("topic.created", {"n": 1})
+    assert len(got) == 1
+    assert got[0]["event"] == "topic.created"
+
+    # The registry still owns the unsubscribe, so teardown removes the live handler.
+    reg._teardown_event_subscriptions()
+    assert bus.handler_count() == 0
+
+
 def test_reload_twice_leaves_exactly_one_live_handler():
     """A plugin reloaded keeps exactly one live handler: the outgoing load's subscription is
     torn down before the reloaded one binds, instead of stacking a second closed over stale
@@ -140,3 +167,71 @@ def test_non_callable_handler_is_rejected_and_not_queued(caplog):
     with caplog.at_level(logging.WARNING, logger="protoagent.plugins"):
         reg.on("topic.*", "not-callable")
     assert reg._has_event_subscriptions() is False
+
+
+# The server-side wiring the fix depends on (plugin_wiring helpers driven by
+# _populate_plugin_host and the reload commit). A registry-only test passes even if these call
+# sites are removed, so cover them directly: the cold-boot drain, and the reload teardown that
+# keeps exactly one live handler (#4800).
+
+
+def _bundle(*registries):
+    """A minimal stand-in for the plugin bundle the loader hands the server — only the
+    ``event_subscriptions`` list the bind/teardown helpers read (the loader fills it with every
+    registry whose ``_has_event_subscriptions()`` is true)."""
+    from types import SimpleNamespace
+
+    return SimpleNamespace(event_subscriptions=list(registries))
+
+
+def test_server_bind_helper_drains_queued_subscriptions_once_bus_is_wired():
+    """The bind step _populate_plugin_host runs after wiring the bus delivers every subscribing
+    registry's queued on() to the now-wired bus — the desktop cold-boot path. Removing this call
+    site would leave cold-boot subscriptions queued forever."""
+    from server.plugin_wiring import _bind_plugin_event_subscriptions
+
+    bus = EventBus()
+    host = PluginHost()  # on=None — register() ran before the bus came up
+    reg = _registry(host)
+    got: list[dict] = []
+    reg.on("topic.*", lambda p: got.append(p))
+    assert bus.handler_count() == 0  # still queued, nothing wired yet
+
+    host.on = bus.subscribe_handler  # the server wires the bus...
+    _bind_plugin_event_subscriptions(_bundle(reg))  # ...then drains the bundle's queues
+    assert bus.handler_count() == 1
+
+    bus.publish("topic.created", {})
+    assert len(got) == 1
+
+
+def test_server_reload_commit_tears_down_outgoing_then_binds_incoming():
+    """The reload commit tears the OUTGOING bundle's handlers down before binding the incoming
+    one, so a reload leaves exactly one live handler — the newest load, not a stack. Removing the
+    teardown call site would strand the previous load's handler alongside the new one."""
+    from server.plugin_wiring import (
+        _bind_plugin_event_subscriptions,
+        _teardown_plugin_event_subscriptions,
+    )
+
+    bus = EventBus()
+    host = PluginHost()
+    host.on = bus.subscribe_handler  # server is up: a hot reload, bus already wired
+    got: list[str] = []
+
+    def _load(tag: str) -> PluginRegistry:
+        reg = _registry(host)
+        reg.on("topic.*", lambda _p, _t=tag: got.append(_t))  # binds inline — bus is wired
+        return reg
+
+    old = _bundle(_load("load1"))
+    _bind_plugin_event_subscriptions(old)  # idempotent: on() already bound it inline
+    assert bus.handler_count() == 1
+
+    new = _bundle(_load("load2"))  # reload builds the new load; it binds inline too
+    _teardown_plugin_event_subscriptions(old)  # commit: drop the outgoing load...
+    _bind_plugin_event_subscriptions(new)  # ...and bind the incoming (a no-op here)
+    assert bus.handler_count() == 1
+
+    bus.publish("topic.created", {})
+    assert got == ["load2"]

@@ -139,15 +139,16 @@ Subscribe an in-process handler to bus topics ([ADR 0039](/adr/0039-plugin-event
 subscribing is read-only and safe. `handler(payload)` gets `{event, data, seq}`,
 may be sync or async; exceptions are isolated by the bus.
 
-The subscription is QUEUED and bound by a later bind step ([#4800](https://github.com/protoLabsAI/protoAgent/issues/4800)), never wired inline —
-one authoritative signal, so ordering can't regress silently. `register()` often runs
-before the server has set `HOST.on` (desktop cold boot), and even when the bus is
-already up (a hot reload) deferring the bind lets the server tear the OUTGOING load's
-handlers down FIRST, so a reload never stacks a second live handler. A later host-driven
-bind step drains the queue once the bus is wired — right after wiring it and again at
-each (re)load commit, so by the time any event is published the handler is live. Nothing
-publishes in the gap between `on()` and the bind, so the only observable change from
-binding inline is that gap.
+The subscription is QUEUED, then bound to the bus ([#4800](https://github.com/protoLabsAI/protoAgent/issues/4800)). When `HOST.on` is already
+wired — the usual case for a call made after load (a surface start, a route handler, a
+lifecycle hook, a delayed callback over a captured registry, or a hot-reload
+`register()`) — it binds RIGHT NOW, so the handler is live the moment this returns.
+When the bus is not up yet (the desktop cold boot: `register()` runs before the server
+sets `HOST.on`) it stays queued, and a later host-driven bind step delivers it once the
+bus is wired — right after wiring and again at each (re)load commit. Either way the
+registry keeps the unsubscribe the bus hands back, so a reload/disable tears THIS load's
+handlers down (see `_teardown_event_subscriptions`) before the successor
+subscribes, instead of stacking a second live handler closed over stale state.
 
 ### `registry.register_a2a_skill` {#registry-register-a2a-skill}
 

@@ -187,14 +187,15 @@ class PluginRegistry:
         self.component_reads: dict = {}
         self.services: dict = {}  # "<plugin_id>.<name>" -> callable, other plugins' sdk.service (ADR 0116)
         self.service_meta: dict = {}  # name -> {"plugin_id", "description"}; parallel, see goal_verifier_meta
-        # Event-bus subscriptions (ADR 0039, #4800). ``register()`` can run BEFORE the server
-        # wires ``HOST.on`` (the desktop cold boot: ``_build_plugins`` precedes
-        # ``_populate_plugin_host``), so ``on()`` parks each ``(topic, handler)`` here and a
-        # later bind step delivers them once the bus exists. We also keep every unsubscribe
-        # the bus hands back so a reload/disable tears THIS load's handlers down before the
-        # successor subscribes — otherwise each reload stacks another live handler closed over
-        # stale state. Both are per-load state; the loader carries the registry forward in the
-        # bundle (``event_subscriptions``) so the server can drive bind/teardown across reloads.
+        # Event-bus subscriptions (ADR 0039, #4800). ``on()`` parks each ``(topic, handler)``
+        # here and binds it right away when ``HOST.on`` is already wired; it stays queued only
+        # when ``register()`` runs BEFORE the server wires the bus (the desktop cold boot:
+        # ``_build_plugins`` precedes ``_populate_plugin_host``), and a later bind step delivers
+        # it once the bus exists. We also keep every unsubscribe the bus hands back so a
+        # reload/disable tears THIS load's handlers down before the successor subscribes —
+        # otherwise each reload stacks another live handler closed over stale state. Both are
+        # per-load state; the loader carries the registry forward in the bundle
+        # (``event_subscriptions``) so the server can drive bind/teardown across reloads.
         self._pending_subscriptions: list[tuple[str, object]] = []
         self._subscription_unsubs: list = []
 
@@ -536,19 +537,24 @@ class PluginRegistry:
         subscribing is read-only and safe. ``handler(payload)`` gets ``{event, data, seq}``,
         may be sync or async; exceptions are isolated by the bus.
 
-        The subscription is QUEUED and bound by a later bind step (#4800), never wired inline —
-        one authoritative signal, so ordering can't regress silently. ``register()`` often runs
-        before the server has set ``HOST.on`` (desktop cold boot), and even when the bus is
-        already up (a hot reload) deferring the bind lets the server tear the OUTGOING load's
-        handlers down FIRST, so a reload never stacks a second live handler. A later host-driven
-        bind step drains the queue once the bus is wired — right after wiring it and again at
-        each (re)load commit, so by the time any event is published the handler is live. Nothing
-        publishes in the gap between ``on()`` and the bind, so the only observable change from
-        binding inline is that gap."""
+        The subscription is QUEUED, then bound to the bus (#4800). When ``HOST.on`` is already
+        wired — the usual case for a call made after load (a surface start, a route handler, a
+        lifecycle hook, a delayed callback over a captured registry, or a hot-reload
+        ``register()``) — it binds RIGHT NOW, so the handler is live the moment this returns.
+        When the bus is not up yet (the desktop cold boot: ``register()`` runs before the server
+        sets ``HOST.on``) it stays queued, and a later host-driven bind step delivers it once the
+        bus is wired — right after wiring and again at each (re)load commit. Either way the
+        registry keeps the unsubscribe the bus hands back, so a reload/disable tears THIS load's
+        handlers down (see :meth:`_teardown_event_subscriptions`) before the successor
+        subscribes, instead of stacking a second live handler closed over stale state."""
         if not callable(handler):
             log.warning("[plugins] %s: on(%s) needs a callable handler", self.plugin_id, topic)
             return
         self._pending_subscriptions.append((topic, handler))
+        # Bind immediately when the bus is already wired (an on() made after load); otherwise
+        # leave it queued for the host's bind step. _bind_event_subscriptions is a quiet no-op
+        # when ``HOST.on`` isn't set and idempotent when it is, so this never double-subscribes.
+        self._bind_event_subscriptions()
 
     def _bind_event_subscriptions(self, *, warn_if_unbound: bool = False) -> int:
         """Bind queued :meth:`on` subscriptions to the host event bus (ADR 0039, #4800).
