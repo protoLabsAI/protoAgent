@@ -1,23 +1,27 @@
 """Static plugin checks operate on source, including plugins that cannot import."""
 
 import json
+import os
 import textwrap
+from pathlib import Path
 
 import pytest
 
 from graph.plugins.check import check_plugin
 from graph.plugins.cli import run_plugin_cli
 
+pytestmark = pytest.mark.platform_sensitive
+
 
 @pytest.fixture
 def plugin(tmp_path):
     def make(source="", manifest="", files=None):
-        (tmp_path / "protoagent.plugin.yaml").write_text("id: example\nname: Example\n" + manifest)
-        (tmp_path / "plugin.py").write_text(textwrap.dedent(source))
+        (tmp_path / "protoagent.plugin.yaml").write_text("id: example\nname: Example\n" + manifest, encoding="utf-8")
+        (tmp_path / "plugin.py").write_text(textwrap.dedent(source), encoding="utf-8")
         for name, content in (files or {}).items():
             path = tmp_path / name
             path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text(content)
+            path.write_text(content, encoding="utf-8")
         return tmp_path
 
     return make
@@ -207,3 +211,30 @@ def test_source_unreadable(plugin):
     (root / "broken.py").write_bytes(b"def register(registry):\n    x = '\xff\xfe'\n")
     findings = check_plugin(root)
     assert [(f.code, f.severity, f.file) for f in findings] == [("source-unreadable", "error", "broken.py")]
+
+
+def test_excluded_directories_are_not_traversed(plugin, monkeypatch):
+    root = plugin(files={"node_modules/dependency/broken.py": "def broken("})
+    scandir = os.scandir
+
+    def guarded_scandir(path):
+        assert "node_modules" not in Path(path).parts
+        return scandir(path)
+
+    monkeypatch.setattr(os, "scandir", guarded_scandir)
+    assert check_plugin(root) == []
+
+
+def test_invalid_utf8_manifest(plugin, capsys):
+    root = plugin()
+    (root / "protoagent.plugin.yaml").write_bytes(b"id: example\nname: \xff\n")
+    assert run_plugin_cli(["check", str(root), "--json"]) == 1
+    assert json.loads(capsys.readouterr().out)[0]["code"] == "manifest-invalid"
+
+
+def test_unicode_source_paths_and_topics(plugin, capsys):
+    root = plugin(files={"views/café.js": 'parent.postMessage({type: "protoagent:publish", topic: "café"}, "*")'})
+    assert run_plugin_cli(["check", str(root), "--json"]) == 0
+    finding, = json.loads(capsys.readouterr().out)
+    assert finding["file"] == "views/café.js"
+    assert "example.café" in finding["message"]

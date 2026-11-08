@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ast
+import os
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -61,7 +62,10 @@ def check_plugin(directory: str | Path) -> list[Finding]:
     def add(severity, code, file, line, message, fix):
         findings.append(Finding(severity, code, file, line, message, fix))
 
-    manifest = load_manifest(root)
+    try:
+        manifest = load_manifest(root)
+    except UnicodeError:
+        manifest = None
     if manifest is None:
         add(
             "error",
@@ -69,7 +73,7 @@ def check_plugin(directory: str | Path) -> list[Finding]:
             MANIFEST_FILENAME,
             1,
             "Missing or invalid manifest.",
-            "Provide a valid protoagent.plugin.yaml with id and name.",
+            "Provide a valid UTF-8 protoagent.plugin.yaml with id and name.",
         )
         return findings
 
@@ -80,9 +84,13 @@ def check_plugin(directory: str | Path) -> list[Finding]:
     routes = set()
     mounts: dict[str, set[str]] = {}
     tools = []
-    files = sorted(
-        p for p in root.rglob("*") if p.is_file() and not any(part in _SKIP for part in p.relative_to(root).parts)
-    )
+    files = []
+    # Prune before descending: installed dependencies can contain thousands of
+    # files, including paths too long to open on Windows.
+    for directory, directories, filenames in os.walk(root):
+        directories[:] = [name for name in directories if name not in _SKIP]
+        files.extend(path for name in filenames if (path := Path(directory) / name).is_file())
+    files.sort()
     for path in files:
         relative = path.relative_to(root).as_posix()
         if path.suffix not in {".py", ".js", ".html"}:
