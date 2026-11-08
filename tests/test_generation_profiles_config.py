@@ -1,13 +1,14 @@
 """ADR 0128 S1a: optional profiles validate and survive config saves."""
 
 from dataclasses import asdict
+import json
 import logging
 
 import pytest
 
 from graph.config import GenerationProfile, LangGraphConfig
 from graph.config_io import apply_updates_to_yaml, config_to_dict, save_yaml_doc
-from graph.settings_schema import FIELDS
+from graph.settings_schema import FIELDS, build_schema
 
 
 @pytest.fixture(autouse=True)
@@ -114,3 +115,20 @@ def test_settings_schema_exposes_profiles():
     field = next(field for field in FIELDS if field.key == "model.profiles")
     assert (field.attr, field.type, field.section) == ("model_profiles", "dict", "Model & runtime")
     assert "ADR 0128" in field.description
+    # ui_hidden: the generic Settings inputs can't express a dict-of-dicts, so a
+    # visible field would render "[object Object]" and save a string over the profiles.
+    assert field.ui_hidden
+
+
+def test_hidden_field_not_rendered_but_round_trips(tmp_path):
+    config = load(tmp_path, {"model": {"profiles": PROFILES}})
+    # The generic console render (include_hidden=False) skips the ui_hidden field…
+    rendered = {e["key"] for group in build_schema(config) for e in group["fields"]}
+    assert "model.profiles" not in rendered
+    # …but `config explain` asks for hidden fields, and the result must json.dumps
+    # (a dict of GenerationProfile dataclasses used to raise TypeError here).
+    schema = build_schema(config, include_hidden=True)
+    entry = next(e for group in schema for e in group["fields"] if e["key"] == "model.profiles")
+    assert entry["value"] == PROFILES
+    assert entry["default"] == {}
+    json.dumps(schema)

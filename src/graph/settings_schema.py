@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import sys
 
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field, is_dataclass
 from typing import Any
 
 from graph.turn_liveness import MIN_STALL_TIMEOUT_S, PROGRESS_MIN_INTERVAL_S
@@ -173,6 +173,13 @@ FIELDS: list[Field] = [
     ),
     Field("model.temperature", "temperature", "Temperature", "number", "Model & runtime", minimum=0, maximum=2),
     Field("model.max_tokens", "max_tokens", "Max output tokens", "number", "Model & runtime", minimum=1),
+    # Named generation profiles (ADR 0128 S1a) — a dict-of-dicts structured value the
+    # generic Settings inputs can't express: there's no "dict" control, so it would fall
+    # through to a text box rendering "[object Object]" and save a string that
+    # _parse_generation_profiles then drops, wiping every configured profile. So it's
+    # ui_hidden and edited as structured config (YAML / the config CLI), like
+    # chat.starter_prompts above. It stays in FIELDS so it still round-trips through
+    # config_to_dict / the YAML writer and `config explain` can still report its source.
     Field(
         "model.profiles",
         "model_profiles",
@@ -180,6 +187,7 @@ FIELDS: list[Field] = [
         "dict",
         "Model & runtime",
         "Named partial generation settings (ADR 0128). No profiles or budgets are supplied by default.",
+        ui_hidden=True,
     ),
     Field(
         "model.thinking",
@@ -2726,6 +2734,20 @@ def restart_keys(updates: dict[str, Any]) -> list[str]:
 
 
 def _jsonable(val: Any) -> Any:
+    """Plain, JSON-serializable form of a config value for the schema.
+
+    Lists/tuples become lists; a dataclass instance (e.g. a ``GenerationProfile``
+    under ``model.profiles``) becomes a plain dict with its None fields dropped,
+    recursing through dicts and lists. ``config explain --json`` builds the schema
+    with ``include_hidden=True`` and then ``json.dumps`` it, so even a ui_hidden,
+    dataclass-valued field has to come out plain here — otherwise the dump raises
+    ``TypeError: Object of type GenerationProfile is not JSON serializable``.
+    Everything else passes through unchanged.
+    """
+    if is_dataclass(val) and not isinstance(val, type):
+        return {k: _jsonable(v) for k, v in asdict(val).items() if v is not None}
+    if isinstance(val, dict):
+        return {k: _jsonable(v) for k, v in val.items()}
     if isinstance(val, (list, tuple)):
-        return list(val)
+        return [_jsonable(v) for v in val]
     return val
