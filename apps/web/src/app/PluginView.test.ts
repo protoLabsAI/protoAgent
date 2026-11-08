@@ -20,7 +20,7 @@ import { useContextMenuStore } from "../contextMenu/store";
 import { registeredKeybindings } from "../ext/keybindingRegistry";
 import { useUI } from "../state/uiStore";
 import { postToPluginView, resetPluginViewInbox, takePluginViewMessages } from "../lib/pluginViewInbox";
-import { consoleTheme, PL_TOKEN_VARS, PluginView, pluginIdFromView, pluginMenuType } from "./PluginView";
+import { consoleTheme, namespacePublishTopic, PL_TOKEN_VARS, PluginView, pluginIdFromView, pluginMenuType } from "./PluginView";
 import { routePluginCodeOpen } from "../codeviewer/fromPlugin";
 import { registerSlashDispatcher } from "../chat/slashDispatch";
 import { closeRunInspector, useRunInspector } from "../runs/store";
@@ -121,6 +121,31 @@ describe("pluginIdFromView — the namespace source", () => {
 
   it("has no namespace to offer for a path that isn't a plugin route", () => {
     expect(pluginIdFromView({ path: "/app/chat" })).toBe("");
+  });
+});
+
+// A page's `protoagent:publish` topic is forced into its own plugin's namespace (ADR 0039's
+// no-cross-dependency clause) the SAME way Python `registry.emit` does it — prefix only when
+// missing, so a dotted topic keeps every segment. Before #4801 the host stripped the first
+// segment first, so `view.status` from `cadview` wrongly collapsed to `cadview.status`.
+describe("namespacePublishTopic — prefix-if-missing, like registry.emit", () => {
+  it("prefixes a topic that isn't already under the plugin's namespace", () => {
+    // The #4801 regression case: the first dotted segment must survive.
+    expect(namespacePublishTopic("cadview", "view.status")).toBe("cadview.view.status");
+    expect(namespacePublishTopic("cadview", "status")).toBe("cadview.status");
+  });
+
+  it("leaves a topic already equal to, or under, the plugin's namespace alone", () => {
+    expect(namespacePublishTopic("cadview", "cadview.view.status")).toBe("cadview.view.status");
+    expect(namespacePublishTopic("cadview", "cadview")).toBe("cadview");
+  });
+
+  it("still forces a foreign-namespaced topic into the page's own id — never publishes under `other`", () => {
+    expect(namespacePublishTopic("cadview", "other.x")).toBe("cadview.other.x");
+  });
+
+  it("passes the topic through untouched when there's no plugin id to force into", () => {
+    expect(namespacePublishTopic("", "view.status")).toBe("view.status");
   });
 });
 
