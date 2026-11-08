@@ -242,6 +242,47 @@ async def _checkpoint_prune_loop() -> None:
                     log.info("[activity-prune] removed %d entry(ies) older than %dd", removed, activity_keep)
             except Exception:
                 log.exception("[activity-prune] sweep failed")
+        # Session-summary file retention — the memory/*.json files behind the prior-session
+        # digest were never pruned (one agent held 278 files, 24.7 MB). 0 = that bound off.
+        sess_days = getattr(cfg, "memory_session_retention_days", 0) if cfg else 0
+        sess_max = getattr(cfg, "memory_session_max_files", 0) if cfg else 0
+        if sess_days > 0 or sess_max > 0:
+            try:
+                from graph.middleware.memory import prune_session_summaries
+
+                res = await asyncio.to_thread(prune_session_summaries, sess_days, sess_max)
+                if res["removed"]:
+                    log.info(
+                        "[session-prune] removed %d session summary file(s) (older than %dd or past the newest %d)",
+                        res["removed"],
+                        sess_days,
+                        sess_max,
+                    )
+            except Exception:
+                log.exception("[session-prune] sweep failed")
+        # History retention (ADR 0125 history table) — per class; dry-run by default, so the
+        # log says what WOULD go until the operator sets history.retention_dry_run: false.
+        history_store = getattr(STATE, "history_store", None)
+        windows = {
+            name: getattr(cfg, f"history_{name}_retention_days", 0) if cfg else 0
+            for name in ("system", "report", "summary", "archive")
+        }
+        if history_store is not None and any(days > 0 for days in windows.values()):
+            dry_run = bool(getattr(cfg, "history_retention_dry_run", True))
+            try:
+                counts = await asyncio.to_thread(history_store.prune, windows, dry_run=dry_run)
+                if any(counts.values()):
+                    detail = ", ".join(f"{n} {name} (>{windows[name]}d)" for name, n in counts.items() if n)
+                    if dry_run:
+                        log.info(
+                            "[history-prune] dry run: would remove %s; set history.retention_dry_run: false "
+                            "to apply",
+                            detail,
+                        )
+                    else:
+                        log.info("[history-prune] removed %s", detail)
+            except Exception:
+                log.exception("[history-prune] sweep failed")
         # A2A task TTL sweep (24h) — used to run only at boot, so an always-on
         # agent accumulated task rows forever between restarts. The store is
         # async (aiosqlite engine on this same loop), so it's awaited directly

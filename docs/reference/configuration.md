@@ -865,6 +865,40 @@ See [Context and session digest](/reference/knowledge#context-and-session-digest
 for defaults, storage, and invalid values. Use [Manage memory](/guides/manage-memory)
 to inspect, correct, or remove saved context.
 
+The session-summary files behind that digest (`memory/*.json`) are pruned by the
+periodic maintenance sweep. Each file is bounded: the first user message plus the
+newest 40 messages, 500 characters each, with clipped tool calls and no model reasoning.
+
+| Key | Default | Meaning |
+|---|---|---|
+| `session_retention_days` | `90` | Delete a summary last written more than this many days ago. `0` = off. |
+| `session_max_files` | `500` | Keep at most this many summaries; the oldest go first. `0` = off. |
+
+## `history`
+
+Retention for the history store (ADR 0125): compaction archives, retirement summaries
+and background reports. The periodic maintenance sweep applies it, by row age
+(`created_at`). It is a **dry run by default**: the log says what would be removed
+(`[history-prune] dry run: would remove …`) and nothing is deleted until you set
+`retention_dry_run: false`. A row a chat-delete forget is holding is never touched.
+
+```yaml
+history:
+  retention_dry_run: true
+  report_retention_days: 90
+  system_retention_days: 30
+  summary_retention_days: 0
+  archive_retention_days: 0
+```
+
+| Key | Default | Meaning |
+|---|---|---|
+| `retention_dry_run` | `true` | Log what would be removed; delete nothing. |
+| `report_retention_days` | `90` | Background job reports. |
+| `system_retention_days` | `30` | Every row of a `system:*` session (the activity feed's wake sweeps and their archives). |
+| `summary_retention_days` | `0` | Retirement summaries of past threads. `0` = keep forever. |
+| `archive_retention_days` | `0` | Compaction archives of operator chats and every other non-system session. `0` = keep forever. |
+
 ## `skills`
 
 Human-authored skills in the AgentSkills [`SKILL.md`](../guides/skills.md) format — a folder with YAML frontmatter (`name` + `description`) and a markdown body. Loaded from disk into an FTS5 index on boot; `KnowledgeMiddleware` lists the index (name + summary) as an always-on `<available_skills>` block and the agent loads a skill's full body on demand via `load_skill` ([progressive disclosure, ADR 0060](../adr/0060-skill-progressive-disclosure.md)).

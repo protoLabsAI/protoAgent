@@ -201,6 +201,21 @@ knowledge:
 memory:
   max_sessions: 10   # how many past sessions the digest may list
   max_tokens: 2000   # char/4 ceiling for the rendered block; entries shed from the end
+  # Session-summary files (memory/*.json): the maintenance sweep deletes those last
+  # written more than session_retention_days ago, then the oldest past
+  # session_max_files. 0 turns a bound off.
+  session_retention_days: 90
+  session_max_files: 500
+
+# History store retention (ADR 0125), in days per class; 0 keeps a class forever.
+# retention_dry_run: true (the default) only logs what WOULD be removed. Set it to
+# false to apply. Operator chat archives and retirement summaries are kept by default.
+history:
+  retention_dry_run: true
+  report_retention_days: 90    # background job reports
+  system_retention_days: 30    # system:* sessions (activity feed wake sweeps)
+  summary_retention_days: 0    # retirement summaries of past threads
+  archive_retention_days: 0    # compaction archives of operator chats
 
 # Projected context — everything injected per turn on top of the stable prompt
 # (working state, always-on memory, the skill index, the prior-session digest,
