@@ -76,6 +76,40 @@ export function namespacePublishTopic(pluginId: string, topic: string): string {
   return `${pluginId}.${topic}`;
 }
 
+// Pure per-view state: 100 ms last-value-wins windows, burst 20, refill 10/s.
+// Bound pending distinct topics to 256; count coalesced and over-limit events.
+export function createPublishThrottle() {
+  const pending = new Map<string, unknown>();
+  let tokens = 20;
+  let last: number | undefined;
+  let due: number | undefined;
+  let dropped = 0;
+  return {
+    push(topic: string, data: unknown, now: number) {
+      if (pending.has(topic)) dropped++;
+      else if (pending.size >= 256) { dropped++; return; }
+      pending.set(topic, data);
+      due ??= now + 100;
+    },
+    drain(now: number) {
+      tokens = Math.min(20, tokens + Math.max(0, now - (last ?? now)) / 100);
+      last = now;
+      const events: Array<{ topic: string; data: unknown }> = [];
+      if (due !== undefined && now >= due) {
+        for (const [topic, data] of pending) {
+          if (tokens >= 1) { tokens--; events.push({ topic, data }); }
+          else dropped++;
+        }
+        pending.clear();
+        due = undefined;
+      }
+      const drops = dropped;
+      dropped = 0;
+      return { events, drops };
+    },
+  };
+}
+
 // The console theme snapshot + its derived --pl-* var list now live in the shared
 // handshake module (pluginFrameHandshake.ts), where the other iframe hosts reuse them.
 // Re-exported here so existing importers (App, Launcher, the token-set tests) keep their
@@ -170,6 +204,49 @@ export function PluginView({
     pageReadyRef.current = false;
   }, [src]);
   const pluginId = useMemo(() => pluginIdFromView(view), [view.key, view.path]);
+  const publishThrottle = useMemo(() => createPublishThrottle(), [pluginId, src]);
+  useEffect(() => {
+    let stopped = false;
+    let busy = false;
+    let token = "";
+    let renewAt = 0;
+    const headers = () => ({
+      "Content-Type": "application/json",
+      ...(authToken() ? { Authorization: `Bearer ${authToken()}` } : {}),
+    });
+    const timer = window.setInterval(async () => {
+      if (busy) return;
+      const { events, drops } = publishThrottle.drain(performance.now());
+      if (drops) console.debug(`[plugin publish] dropped ${drops} events (${pluginId})`);
+      if (!events.length) return;
+      busy = true;
+      try {
+        if (pluginId && (!token || performance.now() >= renewAt)) {
+          const response = await fetch(apiUrl("/api/events/publish-token"), {
+            method: "POST", headers: headers(), body: JSON.stringify({ plugin_id: pluginId }),
+          });
+          if (!response.ok) throw new Error("publish token unavailable");
+          token = (await response.json()).token;
+          if (!token) throw new Error("publish token missing");
+          renewAt = performance.now() + 12 * 60 * 60 * 1000;
+        }
+        if (stopped) return;
+        await Promise.all(events.map((event) => fetch(apiUrl("/api/events/publish"), {
+          method: "POST",
+          headers: { ...headers(), ...(token ? { "X-Plugin-View-Token": token } : {}) },
+          body: JSON.stringify(event),
+        }).then((response) => {
+          if (response.status === 403) token = ""; // restart/expiry: mint again on the next batch
+          if (!response.ok) console.debug(`[plugin publish] dropped 1 event (HTTP ${response.status})`);
+        })));
+      } catch {
+        console.debug(`[plugin publish] dropped ${events.length} events (transport unavailable)`);
+      } finally {
+        busy = false;
+      }
+    }, 100);
+    return () => { stopped = true; window.clearInterval(timer); };
+  }, [publishThrottle, pluginId]);
   // A rail/background view and its Configure page can be mounted simultaneously.
   // Keep the established plugin-wide ids for rail views, but give embedded pages a
   // stable tab-local namespace so registering `refresh` in Configure cannot replace
@@ -525,14 +602,7 @@ export function PluginView({
         // its segments, so `view.status` from `cadview` lands on the bus as
         // `cadview.view.status`, not `cadview.status`.
         const topic = namespacePublishTopic(pluginId, m.topic);
-        void fetch(apiUrl("/api/events/publish"), {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            ...(authToken() ? { Authorization: `Bearer ${authToken()}` } : {}),
-          },
-          body: JSON.stringify({ topic, data: m.data || {} }),
-        }).catch(() => {});
+        publishThrottle.push(topic, m.data || {}, performance.now());
       } else if (m.type === "protoagent:restart-request") {
         setRestartRequest((value) => value + 1);
       } else if (m.type === "protoagent:settings:restart-pending") {
@@ -575,7 +645,7 @@ export function PluginView({
         useContextMenuStore.getState().close();
       }
     };
-  }, [src, pluginId, bindingPluginId, view.key, view.label, embedded, setPluginBackground]);
+  }, [src, pluginId, bindingPluginId, view.key, view.label, embedded, setPluginBackground, publishThrottle]);
 
   // Live re-theme (ADR 0026/0042): re-post the FRESH theme to the mounted iframe on any
   // theme/accent change so the view repaints WITHOUT a reload. `handleLoad` covers the first

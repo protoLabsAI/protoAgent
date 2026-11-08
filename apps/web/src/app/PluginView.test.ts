@@ -20,7 +20,7 @@ import { useContextMenuStore } from "../contextMenu/store";
 import { registeredKeybindings } from "../ext/keybindingRegistry";
 import { useUI } from "../state/uiStore";
 import { postToPluginView, resetPluginViewInbox, takePluginViewMessages } from "../lib/pluginViewInbox";
-import { consoleTheme, namespacePublishTopic, PL_TOKEN_VARS, PluginView, pluginIdFromView, pluginMenuType } from "./PluginView";
+import { createPublishThrottle, consoleTheme, namespacePublishTopic, PL_TOKEN_VARS, PluginView, pluginIdFromView, pluginMenuType } from "./PluginView";
 import { routePluginCodeOpen } from "../codeviewer/fromPlugin";
 import { registerSlashDispatcher } from "../chat/slashDispatch";
 import { closeRunInspector, useRunInspector } from "../runs/store";
@@ -940,4 +940,78 @@ describe("PluginView — protoagent:run:open", () => {
     await post(frame.contentWindow, window.location.origin, { ...MSG, run_id: 42 });
     expect(useRunInspector.getState().runId).toBeNull();
   });
+});
+
+
+describe("createPublishThrottle", () => {
+  it("coalesces each topic for 100 ms with the last value winning", () => {
+    const throttle = createPublishThrottle();
+    throttle.push("a.x", { value: 1 }, 0);
+    throttle.push("a.x", { value: 2 }, 50);
+    throttle.push("a.y", {}, 60);
+    expect(throttle.drain(99)).toEqual({ events: [], drops: 1 });
+    expect(throttle.drain(100)).toEqual({ events: [
+      { topic: "a.x", data: { value: 2 } }, { topic: "a.y", data: {} },
+    ], drops: 0 });
+    expect(throttle.drain(200).events).toEqual([]);
+  });
+
+  it("allows 20 in a burst, drops excess, and refills 10 per second per view", () => {
+    const throttle = createPublishThrottle();
+    for (let i = 0; i < 25; i++) throttle.push(`a.${i}`, {}, 0);
+    const first = throttle.drain(100);
+    expect(first.events).toHaveLength(20);
+    expect(first.drops).toBe(5);
+    for (let i = 0; i < 12; i++) throttle.push(`a.${i}`, {}, 100);
+    const next = throttle.drain(1100);
+    expect(next.events).toHaveLength(10);
+    expect(next.drops).toBe(2);
+    const other = createPublishThrottle();
+    other.push("a.x", {}, 0);
+    expect(other.drain(100).events).toHaveLength(1);
+  });
+
+  it("bounds pending distinct topics and caps refill at the burst size", () => {
+    const throttle = createPublishThrottle();
+    for (let i = 0; i < 300; i++) throttle.push(`a.${i}`, {}, 0);
+    expect(throttle.drain(100)).toMatchObject({ drops: 280 });
+    for (let i = 0; i < 25; i++) throttle.push(`a.${i}`, {}, 100);
+    expect(throttle.drain(100000).events).toHaveLength(20);
+  });
+});
+
+
+it("relays coalesced iframe publishes with the plugin-bound token and cancels on unmount", async () => {
+  const fetchMock = vi.fn(async () => ({ ok: true, status: 200, json: async () => ({ token: "view-token" }) }));
+  vi.stubGlobal("fetch", fetchMock);
+  const container = document.createElement("div");
+  document.body.appendChild(container);
+  const root = createRoot(container);
+  const view: PluginViewType = { id: "cadview", label: "CAD", path: "/plugins/cadview/view", key: "plugin:cadview:main" };
+  try {
+    await act(async () => { root.render(h(PluginView, { view })); });
+    const frame = container.querySelector("iframe")!;
+    const post = (value: number) => window.dispatchEvent(new MessageEvent("message", {
+      source: frame.contentWindow, origin: window.location.origin,
+      data: { type: "protoagent:publish", topic: "status", data: { value } },
+    }));
+    post(1);
+    post(2);
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 250)); });
+    const calls = fetchMock.mock.calls as unknown as Array<[string, RequestInit]>;
+    const mint = calls.find(([url]) => url.endsWith("/api/events/publish-token"));
+    expect(JSON.parse(mint![1].body as string)).toEqual({ plugin_id: "cadview" });
+    const publishes = calls.filter(([url]) => url.endsWith("/api/events/publish"));
+    expect(publishes).toHaveLength(1);
+    expect(publishes[0][1].headers).toMatchObject({ "X-Plugin-View-Token": "view-token" });
+    expect(JSON.parse(publishes[0][1].body as string)).toEqual({ topic: "cadview.status", data: { value: 2 } });
+    post(3);
+  } finally {
+    act(() => root.unmount());
+    container.remove();
+  }
+  const count = fetchMock.mock.calls.length;
+  await new Promise((resolve) => setTimeout(resolve, 150));
+  expect(fetchMock).toHaveBeenCalledTimes(count);
+  vi.unstubAllGlobals();
 });

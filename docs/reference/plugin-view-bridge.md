@@ -70,6 +70,23 @@ your view stays on the theme it booted with while the console around it changes.
 
 ## Events — `subscribe` / `event` / `publish` {#events-subscribe-event-publish}
 
+Iframe publishes are coalesced per topic over 100 ms (last value wins), then limited
+per view to a burst of 20 events with 10 tokens refilled per second. At most 256
+distinct topics wait in the client queue. Coalesced and over-limit events are
+counted and reported only in the developer console; there is no UI notification.
+The console obtains a plugin-bound token from `POST /api/events/publish-token`
+(`{plugin_id}`) and sends it in `X-Plugin-View-Token` on each publish. The server
+requires the topic to start with `<plugin_id>.` (403 otherwise) and independently
+applies the same 20 / 10-per-second bucket per token (429 when exhausted).
+Tokens expire after 24 hours, are renewed by the console after 12 hours, and are
+held in a bounded, process-local store (4096 active tokens; minting returns 429
+when full). Restart invalidates tokens. Both endpoints retain the operator API
+bearer gate. Without a view token, existing operator/CLI publishing is unchanged,
+including the namespaced-topic, no-wildcards and 64 KB payload checks. These
+capabilities constrain token-bearing requests; they do not isolate a page that
+already holds the operator bearer from minting tokens or publishing without one.
+
+
 The event bus ([ADR 0039](/adr/0039-plugin-event-bus)) relayed across the sandbox boundary.
 
 ```js
