@@ -102,4 +102,4 @@ turn.
 - `edit_file`, `write_file`, `git commit`, `git push`, `delegate_to`, and any GitHub write
   (issue, PR, comment, label, merge): **only on the operator's explicit instruction in their
   latest message.**
-- `memory_ingest` to save a repo card for next time.
+- `memory_save` to save a repo card for next time.

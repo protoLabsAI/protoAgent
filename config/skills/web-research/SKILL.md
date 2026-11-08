@@ -5,7 +5,7 @@ description: >-
   state of something, compare options, or gather background from the web —
   e.g. "what's the latest on X", "find the best approach to Y", "compare
   these three tools". Drives a scope → gather → gap-check → synthesize loop.
-tools: [web_search, fetch_url, memory_recall, memory_ingest, current_time]
+tools: [web_search, fetch_url, memory_search, knowledge_search, memory_save, current_time]
 user_facing: true
 # `web-research`, not `research`: the deep-research workflow already owns
 # /research and wins dispatch, which would shadow this skill (bd-2zh).
@@ -29,7 +29,8 @@ When dimensions are independent, fan them out as parallel `task` calls (or one
 `task_batch`) instead of researching them serially.
 
 ## 2. Gather (per dimension)
-- **Reuse first** — `memory_recall` what's already known; don't re-derive it.
+- **Reuse first** — `memory_search` what you've already learned and `knowledge_search`
+  the ingested documents; don't re-derive it.
 - **Search wide, then deep** — `web_search` the dimension; for technical or
   contested topics run a second angle (parent topic, or community/code sources
   like Reddit/HN/GitHub/SO) so you don't trust one lens. Listicles are leads,
@@ -52,8 +53,8 @@ with `Confidence: high | medium | low`; for deep research add 3-5 "Related
 topics".
 
 ## 5. Persist
-For substantial research, `memory_ingest` one concise durable finding (takeaway
-+ key sources) so the knowledge base compounds — not raw dumps, and not for
+For substantial research, `memory_save` one concise durable finding (takeaway
++ key sources) so what you learn compounds — not raw dumps, and not for
 quick lookups.
 
 Keep it tight: the answer first, the process never. Let the citations carry the
