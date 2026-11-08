@@ -62,6 +62,20 @@ export function pluginMenuType(pluginId: string): string {
   return `plugin-view:${pluginId}`;
 }
 
+// Force a page-published topic into its own plugin's namespace (ADR 0039's
+// no-cross-dependency clause), matching Python `registry.emit` (registry.py): prefix the
+// plugin id ONLY when it's missing. A topic already equal to the id, or already under
+// `<id>.`, is left alone — so `cadview.view.status` stays `cadview.view.status` rather than
+// losing its first segment to become `cadview.status`. Any other topic (including one
+// namespaced to a DIFFERENT plugin, e.g. `other.x`) is prefixed, so a page can still only
+// ever publish under its own id (`other.x` → `cadview.other.x`, never `other.*`). With no
+// pluginId there's no namespace to force into, so the topic is passed through unchanged.
+export function namespacePublishTopic(pluginId: string, topic: string): string {
+  if (!pluginId) return topic;
+  if (topic === pluginId || topic.startsWith(`${pluginId}.`)) return topic;
+  return `${pluginId}.${topic}`;
+}
+
 // The console theme snapshot + its derived --pl-* var list now live in the shared
 // handshake module (pluginFrameHandshake.ts), where the other iframe hosts reuse them.
 // Re-exported here so existing importers (App, Launcher, the token-set tests) keep their
@@ -506,9 +520,11 @@ export function PluginView({
         // text, always the chat on screen, never auto-sent.
         composeToChat(m);
       } else if (m.type === "protoagent:publish" && typeof m.topic === "string") {
-        // Force the plugin's namespace — a page can only publish under its own id.
-        const bare = m.topic.replace(/^.*?\./, "");
-        const topic = pluginId ? `${pluginId}.${bare}` : m.topic;
+        // Force the plugin's namespace — a page can only publish under its own id. Prefix
+        // only when missing (like `registry.emit`): a topic already under `<id>.` keeps all
+        // its segments, so `view.status` from `cadview` lands on the bus as
+        // `cadview.view.status`, not `cadview.status`.
+        const topic = namespacePublishTopic(pluginId, m.topic);
         void fetch(apiUrl("/api/events/publish"), {
           method: "POST",
           headers: {

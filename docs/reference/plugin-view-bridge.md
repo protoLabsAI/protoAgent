@@ -100,8 +100,22 @@ window.addEventListener("message", (e) => {
 - **`background: true` keeps you mounted while hidden.** Normally only the *visible* plugin's iframe
   is mounted, so a hidden view receives nothing. Only an explicit boolean changes the mount policy —
   omitting the field leaves it alone.
-- **`publish` is namespace-forced.** The host rewrites your topic to `<pluginId>.<name>` before it
-  reaches the bus, so a page can only ever publish under its own plugin's id.
+- **`publish` is namespace-forced.** The host forces your topic into your own plugin's namespace
+  before it reaches the bus — a page can only ever publish under its own plugin's id. The rule
+  matches Python `registry.emit`: **prefix `<pluginId>.` only when it's missing.** A topic already
+  equal to `<pluginId>`, or already starting with `<pluginId>.`, is sent unchanged — so a dotted
+  topic keeps every segment. Any other topic (including one namespaced to a *different* plugin) is
+  prefixed, so it still lands under your id, never the other plugin's.
+
+  | Your topic (plugin `cadview`) | Published on the bus |
+  | --- | --- |
+  | `view.status` | `cadview.view.status` |
+  | `cadview.view.status` | `cadview.view.status` (unchanged) |
+  | `cadview` | `cadview` (unchanged) |
+  | `status` | `cadview.status` |
+  | `other.x` | `cadview.other.x` (forced into *your* id, never `other`) |
+
+  ([#4801](https://github.com/protoLabsAI/protoAgent/issues/4801))
 
 ## Keybindings — `keybindings` / `keybinding` / `keydown`
 
