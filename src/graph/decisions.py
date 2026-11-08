@@ -120,6 +120,9 @@ class Decision:
     # Card 2 fills these in (expiry + a default the sweep applies); stored-but-unused here.
     expires_at: str | None = None
     default_option: str | None = None
+    thread_id: str = ""
+    interrupt_id: str = ""
+    context: str = ""
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -149,6 +152,9 @@ class Decision:
             answered_at=row["answered_at"],
             expires_at=row["expires_at"],
             default_option=row["default_option"],
+            thread_id=row["thread_id"],
+            interrupt_id=row["interrupt_id"],
+            context=row["context"],
         )
 
 
@@ -232,8 +238,13 @@ class DecisionStore:
                 )
                 """
             )
+            columns = {r[1] for r in db.execute("PRAGMA table_info(decisions)")}
+            for column in ("thread_id", "interrupt_id", "context"):
+                if column not in columns:
+                    db.execute(f"ALTER TABLE decisions ADD COLUMN {column} TEXT NOT NULL DEFAULT ''")
             db.execute("CREATE INDEX IF NOT EXISTS ix_decisions_state ON decisions(state, created_at)")
             db.execute("CREATE INDEX IF NOT EXISTS ix_decisions_session ON decisions(session_id)")
+            db.execute("CREATE INDEX IF NOT EXISTS ix_decisions_interrupt ON decisions(thread_id, interrupt_id)")
             db.commit()
         finally:
             self._close(db)
@@ -247,6 +258,9 @@ class DecisionStore:
         options,
         *,
         agent: str = "",
+        thread_id: str = "",
+        interrupt_id: str = "",
+        context: str = "",
         default_option: str | None = None,
         expires_at: str | None = None,
     ) -> Decision:
@@ -264,11 +278,21 @@ class DecisionStore:
         with self._lock:
             db = self._connect()
             try:
+                if interrupt_id:
+                    row = db.execute(
+                        "SELECT * FROM decisions WHERE thread_id = ? AND interrupt_id = ?",
+                        (thread_id, interrupt_id),
+                    ).fetchone()
+                    if row is not None:
+                        return Decision.from_row(row)
                 new_id = f"dec-{secrets.token_hex(4)}"
                 while db.execute("SELECT 1 FROM decisions WHERE id = ?", (new_id,)).fetchone() is not None:
                     new_id = f"dec-{secrets.token_hex(4)}"
                 rec = Decision(
                     id=new_id,
+                    thread_id=thread_id,
+                    interrupt_id=interrupt_id,
+                    context=str(context or "")[:MAX_QUESTION_CHARS],
                     session_id=session_id,
                     agent=(agent or "").strip(),
                     question=question,
@@ -295,6 +319,10 @@ class DecisionStore:
                         rec.default_option,
                     ),
                 )
+                db.execute(
+                    "UPDATE decisions SET thread_id = ?, interrupt_id = ?, context = ? WHERE id = ?",
+                    (rec.thread_id, rec.interrupt_id, rec.context, rec.id),
+                )
                 db.commit()
             finally:
                 self._close(db)
@@ -308,6 +336,18 @@ class DecisionStore:
         db = self._connect()
         try:
             row = db.execute("SELECT * FROM decisions WHERE id = ?", (decision_id,)).fetchone()
+        finally:
+            self._close(db)
+        return Decision.from_row(row) if row is not None else None
+
+    def for_interrupt(self, thread_id: str, interrupt_id: str) -> Decision | None:
+        """Find the durable handle for one checkpoint interrupt, regardless of state."""
+        db = self._connect()
+        try:
+            row = db.execute(
+                "SELECT * FROM decisions WHERE thread_id = ? AND interrupt_id = ?",
+                (thread_id, interrupt_id),
+            ).fetchone()
         finally:
             self._close(db)
         return Decision.from_row(row) if row is not None else None

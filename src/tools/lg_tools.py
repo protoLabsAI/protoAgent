@@ -161,7 +161,7 @@ def request_user_input(title: str, steps: list[dict], description: str = "") -> 
 
 
 @tool
-def request_decision(question: str, options: list, context: str = "") -> str:
+def request_decision(question: str, options: list[str | dict], context: str = "") -> str:
     # Maintainer notes (kept out of the model-facing docstring): unlike ask_human /
     # request_user_input, a ``kind: "decision"`` interrupt PARKS even on an autonomous turn
     # (server/turn_control.py) — the agent deliberately chose to stop rather than guess — and

@@ -55,15 +55,14 @@ def _resolve_answer(rec, body: AnswerRequest) -> str:
     raise HTTPException(status_code=400, detail="provide an option_id or free-text answer")
 
 
-async def _resume_parked_turn(session_id: str, answer: str) -> bool:
+async def _resume_parked_turn(session_id: str, answer: str, decision_id: str) -> bool:
     """Resume the turn parked on this decision with the operator's answer, over the loopback
     A2A endpoint — the SAME HITL-resume entry point the console uses.
 
-    The message carries the chat's ``contextId`` and the ``hitl_resume`` marker; the parked-
-    task router (``a2a_impl/hitl_routing.py``) points it at the context's input-required task
-    and the executor resumes the LangGraph interrupt with the answer (``Command(resume=…)``).
-    Best-effort: a missing port or any transport error is logged and returns ``False`` — the
-    record is already marked answered, so the operator can retry the resume."""
+    The decision id is checked against the checkpoint interrupt under the turn lock.
+    Delivery failure leaves an unconsumed decision pending, so the operator can retry.
+    The turn driver closes the record only after the checkpoint consumes the answer.
+    """
     import uuid
 
     import httpx
@@ -90,7 +89,7 @@ async def _resume_parked_turn(session_id: str, answer: str) -> bool:
                 "contextId": session_id,
                 # The operator is answering: a live human, so an empty origin (interactive) —
                 # `hitl_resume` converts this to a graph resume rather than a fresh turn.
-                "metadata": {"hitl_resume": True},
+                "metadata": {"hitl_resume": True, "decision_id": decision_id},
             },
         },
     }
@@ -100,7 +99,7 @@ async def _resume_parked_turn(session_id: str, answer: str) -> bool:
         if r.status_code >= 400:
             log.warning("[decision] resume for %s failed: HTTP %d %s", session_id, r.status_code, r.text[:200])
             return False
-        return True
+        return not bool(r.json().get("error"))
     except Exception:  # noqa: BLE001 — a resume transport error must not 500 the answer route
         log.exception("[decision] resume POST failed for %s", session_id)
         return False
@@ -147,22 +146,19 @@ def register_decision_routes(app) -> None:
         """Answer a pending decision and resume its parked turn.
 
         Validates the answer against the record's options (400 on an unknown option or an
-        empty body), marks the record answered (409 if it is no longer pending — answering
-        twice is refused — 404 for an unknown id), then resumes the parked turn with the
-        chosen option through the A2A HITL-resume path."""
+        empty body). Closed decisions return 409, unknown ids 404. The A2A resume
+        closes the record after consuming the interrupt; failed delivery is retryable."""
         store = decision_store()
         rec = await asyncio.to_thread(store.get, decision_id)
         if rec is None:
             raise HTTPException(status_code=404, detail=f"no decision {decision_id!r}")
         answer = _resolve_answer(rec, body)
-        try:
-            updated = await asyncio.to_thread(store.answer, decision_id, answer)
-        except DecisionNotFound as exc:
-            raise HTTPException(status_code=404, detail=str(exc)) from exc
-        except DecisionClosed as exc:
-            raise HTTPException(status_code=409, detail=str(exc)) from exc
-        resumed = await _resume_parked_turn(updated.session_id, answer)
-        return {"decision": updated.to_dict(), "resumed": resumed}
+        if not rec.pending:
+            raise HTTPException(status_code=409, detail=f"decision {decision_id} is already {rec.state}")
+        await _resume_parked_turn(rec.session_id, answer, decision_id)
+        updated = await asyncio.to_thread(store.get, decision_id)
+        # The checkpoint is authoritative even if the HTTP response was lost or timed out.
+        return {"decision": updated.to_dict(), "resumed": updated.state == "answered"}
 
     @app.post("/api/decisions/{decision_id}/cancel")
     async def _api_cancel_decision(decision_id: str):

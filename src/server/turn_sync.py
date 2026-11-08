@@ -224,7 +224,10 @@ async def _native_turn(
                 **state_extra,
             }
         with goal_turn(goal_active) as goal_pass:
-            result = await STATE.graph.ainvoke(graph_input, config=config)
+            async with _turn_control.decision_resume(
+                config, turn_message if hold is _turn_control._HITL_RESUME else None
+            ):
+                result = await STATE.graph.ainvoke(graph_input, config=config)
             # Headless-first parity (#1911), the shared policy (server/goal_loop.py): a
             # goal-driven turn, or one from an autonomous origin (#3891 F2), has no
             # operator here to answer a HITL park — resume (keyed by interrupt id, #3872)
@@ -235,7 +238,10 @@ async def _native_turn(
         # as the streaming driver does and as the continuation check further down does
         # (#3973). Released first, a queued writer on this thread could resume the ask —
         # or park its own — in between, and this turn would report a state it didn't leave.
-        interrupt_val = None if auto.autonomous else await _chat()._pending_interrupt_value(config)
+        interrupt_val = await _chat()._pending_interrupt_value(config)
+        if auto.autonomous and not _turn_control.is_decision_interrupt(interrupt_val):
+            interrupt_val = None
+        await _turn_control.record_decision_pause(session_id, interrupt_val, config)
     raw = _last_ai(result)
     response = extract_output(raw)
 
@@ -248,9 +254,7 @@ async def _native_turn(
     # question never reached the caller, and a goal set during that turn was then
     # driven (below) into a thread still waiting for its answer. Returning here is the
     # streaming driver's `turn["paused"]` stop: no goal drive past a parked interrupt.
-    # An autonomous turn never parks — ``auto.settle`` above answered or cleared its
-    # asks — so, as for a continuation, only an attended turn is checked. (Read under the
-    # thread lock above.)
+    # Decision interrupts park on every origin. Read and record under the thread lock.
     if interrupt_val is not None:
         _parked()
         return [
@@ -330,7 +334,10 @@ async def _native_turn(
                     )
                     # ...and an attended turn stops the drive and surfaces the ask, as the
                     # streaming driver parks on it.
-                    interrupt_val = None if auto.autonomous else await _chat()._pending_interrupt_value(cont_config)
+                    interrupt_val = await _chat()._pending_interrupt_value(cont_config)
+                    if auto.autonomous and not _turn_control.is_decision_interrupt(interrupt_val):
+                        interrupt_val = None
+                    await _turn_control.record_decision_pause(session_id, interrupt_val, cont_config)
             step.text = extract_output(_last_ai(result))
             if interrupt_val is not None:
                 _parked()

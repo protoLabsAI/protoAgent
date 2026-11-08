@@ -5,8 +5,8 @@ even on an UNATTENDED autonomous turn, the one exception to the auto-answer poli
 server records a durable pending decision. The operator lists + answers it over
 ``/api/decisions``, which resumes the parked turn with the chosen option.
 
-Driven with a fake model (a stand-in ``_run_turn_stream``), a fake clock, and an in-memory
-``DecisionStore`` — no real graph, gateway, or HTTP server.
+Driven with deterministic model nodes, real in-memory graph checkpoints, a fake clock,
+and an in-memory ``DecisionStore``; stream fakes also cover the driver event seam.
 """
 
 from __future__ import annotations
@@ -45,6 +45,10 @@ def _fixed_clock():
 def store(monkeypatch) -> DecisionStore:
     """A fresh in-memory decisions ledger, injected as the live ``STATE.decision_store`` so the
     turn-driver park path and the routes both resolve it."""
+    from graph import steering
+
+    monkeypatch.setattr(steering, "_QUEUES", {})
+    monkeypatch.setattr(steering, "_QUEUE_TOUCHED", {})
     s = DecisionStore(":memory:", clock=_fixed_clock)
     monkeypatch.setattr(STATE, "decision_store", s, raising=False)
     monkeypatch.setattr(STATE, "goal_controller", None, raising=False)
@@ -56,8 +60,9 @@ async def _collect(agen):
     return [frame async for frame in agen]
 
 
-async def _noop_resume(session_id, answer):
+async def _noop_resume(session_id, answer, decision_id):
     """A resume that does nothing (no real A2A self-POST in a unit test)."""
+    STATE.decision_store.answer(decision_id, answer)
     return True
 
 
@@ -221,7 +226,7 @@ def test_answer_route_resumes_parked_turn_with_chosen_option(store, monkeypatch)
 
     # The answer route resumes through the HITL-resume entry point — re-drive the turn with
     # the chosen option so the tool sees it come back (the production path self-POSTs to A2A).
-    async def _fake_resume(session_id, answer):
+    async def _fake_resume(session_id, answer, decision_id):
         await _collect(
             chat_mod._run_native_turn(
                 answer,
@@ -231,6 +236,7 @@ def test_answer_route_resumes_parked_turn_with_chosen_option(store, monkeypatch)
                 resume=True,
             )
         )
+        store.answer(decision_id, answer)
         return True
 
     monkeypatch.setattr(decision_routes, "_resume_parked_turn", _fake_resume)
@@ -275,3 +281,244 @@ def test_list_route_returns_pending_decisions(store):
     ids = [d["id"] for d in body["decisions"]]
     assert ids == [a.id]  # only the pending one
     assert body["pending"] == 1
+
+
+@pytest.fixture
+def decision_graph(store, monkeypatch):
+    """A real checkpoint and tool with deterministic model output, no gateway."""
+    from typing import TypedDict
+    from langgraph.graph import StateGraph, START, END
+    from langgraph.checkpoint.memory import InMemorySaver
+    from langchain_core.messages import AIMessage
+    from tools.lg_tools import request_decision
+
+    class State(TypedDict):
+        messages: list
+        session_id: str
+
+    def model(state):
+        chosen = request_decision.invoke({"question": "Deploy?", "options": ["yes", "no"]})
+        return {"messages": [AIMessage(content=f"Chosen: {chosen}")]}
+
+    builder = StateGraph(State)
+    builder.add_node("model", model)
+    builder.add_edge(START, "model")
+    builder.add_edge("model", END)
+    graph = builder.compile(checkpointer=InMemorySaver())
+    monkeypatch.setattr(STATE, "graph", graph)
+    return graph
+
+
+async def _sync_turn(origin="scheduler", *, resume=False, message="deploy"):
+    from langchain_core.callbacks import UsageMetadataCallbackHandler
+    from server.turn_sync import _native_turn
+
+    return await _native_turn(
+        message, None, session_id="s-real", config={"configurable": {"thread_id": "a2a:s-real"}},
+        usage_cb=UsageMetadataCallbackHandler(), state_extra={}, tool_fence=None,
+        hitl_resume=resume, incognito=False, origin=origin,
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("origin", ["scheduler", "api-chat", "v1", "plugin"])
+async def test_sync_decision_parks_and_console_answer_closes(store, decision_graph, origin):
+    reply = await _sync_turn(origin)
+    assert "Input needed" in reply[0]["content"]
+    rec, = store.list(state="pending")
+    assert rec.interrupt_id
+    assert rec.thread_id == "a2a:s-real"
+    reply = await _sync_turn("api-chat", resume=True, message="yes")
+    assert "Chosen: yes" in reply[0]["content"]
+    assert store.get(rec.id).answer == "yes"
+    assert store.list(state="pending") == []
+
+
+@pytest.mark.asyncio
+async def test_failed_delivery_is_retryable_and_stale_answer_cannot_resume_next_pause(
+    store, decision_graph, monkeypatch
+):
+    import httpx
+    from langgraph.types import Command
+
+    await _sync_turn()
+    rec, = store.list(state="pending")
+    config = {"configurable": {"thread_id": rec.thread_id}}
+    attempts = 0
+
+    async def deliver(session_id, answer, decision_id):
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            return False
+        await turn_control.validate_decision_resume(config, decision_id)
+        async with turn_control.decision_resume(config, answer):
+            await decision_graph.ainvoke(Command(resume=await chat_mod._resume_payload(config, answer)), config)
+        return True
+
+    monkeypatch.setattr(decision_routes, "_resume_parked_turn", deliver)
+    app = FastAPI()
+    decision_routes.register_decision_routes(app)
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+        url = f"/api/decisions/{rec.id}/answer"
+        first = await client.post(url, json={"option_id": "yes"})
+        assert first.json()["resumed"] is False
+        assert store.get(rec.id).pending
+        second = await client.post(url, json={"option_id": "yes"})
+        assert second.json()["resumed"] is True
+        await _sync_turn()
+        next_rec, = store.list(state="pending")
+        assert next_rec.interrupt_id != rec.interrupt_id
+        assert (await client.post(url, json={"option_id": "no"})).status_code == 409
+        with pytest.raises(DecisionClosed):
+            await turn_control.validate_decision_resume(config, rec.id)
+        assert store.get(next_rec.id).pending
+
+
+@pytest.mark.asyncio
+async def test_failed_graph_resume_keeps_decision_pending(store, decision_graph):
+    await _sync_turn()
+    rec, = store.list(state="pending")
+    with pytest.raises(RuntimeError):
+        async with turn_control.decision_resume({"configurable": {"thread_id": rec.thread_id}}, "yes"):
+            raise RuntimeError("transport failed before graph invocation")
+    assert store.get(rec.id).pending
+
+
+@pytest.mark.asyncio
+async def test_scheduler_message_does_not_abandon_decision(store, decision_graph):
+    await _sync_turn()
+    rec, = store.list(state="pending")
+    reply = await _sync_turn(message="scheduled again")
+    assert "Input needed first" in reply[0]["content"]
+    assert store.get(rec.id).pending
+    await turn_control.validate_decision_resume({"configurable": {"thread_id": rec.thread_id}}, rec.id)
+
+
+@pytest.mark.asyncio
+async def test_streaming_task_resume_closes_matching_record(store, decision_graph):
+    await _sync_turn()
+    rec, = store.list(state="pending")
+    frames = await _collect(chat_mod._run_native_turn(
+        "no", "s-real", {"configurable": {"thread_id": rec.thread_id}},
+        request_metadata={}, resume=True,
+    ))
+    assert any(kind == "done" for kind, _ in frames)
+    assert store.get(rec.id).answer == "no"
+    assert store.list(state="pending") == []
+
+
+@pytest.mark.asyncio
+async def test_goal_driven_sync_decision_parks(store, decision_graph, monkeypatch):
+    from types import SimpleNamespace
+    from server import goal_loop
+
+    monkeypatch.setattr(goal_loop, "active_goal", lambda sid: SimpleNamespace(iteration=1))
+    reply = await _sync_turn("api-chat")
+    assert "Input needed" in reply[0]["content"]
+    rec, = store.list(state="pending")
+    assert rec.interrupt_id
+
+
+@pytest.mark.asyncio
+async def test_decision_pause_is_idempotent_and_keeps_context(store, decision_graph):
+    await _sync_turn()
+    rec, = store.list(state="pending")
+    config = {"configurable": {"thread_id": rec.thread_id}}
+    payload = await chat_mod._pending_interrupt_value(config)
+    again = await turn_control.record_decision_pause("s-real", payload, config)
+    assert again.id == rec.id
+    assert len(store.list()) == 1
+    other = store.create("s-other", "Go?", ["yes"], context="Production deploy")
+    assert store.get(other.id).context == "Production deploy"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure", ["no-port", "transport", "timeout", "rpc-error"])
+async def test_resume_transport_failure_does_not_close_record(store, monkeypatch, failure):
+    import httpx
+
+    rec = store.create("s-1", "Go?", ["yes"])
+    monkeypatch.setattr(STATE, "active_port", None if failure == "no-port" else 7871)
+
+    async def post(*args, **kwargs):
+        assert kwargs["json"]["params"]["message"]["metadata"]["decision_id"] == rec.id
+        if failure == "timeout":
+            raise httpx.ReadTimeout("timed out")
+        if failure == "transport":
+            raise httpx.ConnectError("offline")
+        return httpx.Response(200, json={"error": {"code": -32602, "message": "stale"}})
+
+    monkeypatch.setattr(httpx.AsyncClient, "post", post)
+    assert await decision_routes._resume_parked_turn(rec.session_id, "yes", rec.id) is False
+    assert store.get(rec.id).pending
+
+
+@pytest.mark.asyncio
+async def test_sync_goal_continuation_parks_decision(store, decision_graph, monkeypatch):
+    from server import goal_loop
+    from langchain_core.messages import AIMessage
+
+    class InitialReplyGraph:
+        calls = 0
+
+        async def aget_state(self, config):
+            return await decision_graph.aget_state(config)
+
+        async def ainvoke(self, value, config):
+            self.calls += 1
+            if self.calls == 1:
+                return {"messages": [AIMessage(content="Working on it.")]}
+            return await decision_graph.ainvoke(value, config)
+
+    async def steps(self):
+        yield goal_loop.GoalContinuation("Continue", self.config)
+        pytest.fail("goal drive continued past a decision pause")
+
+    monkeypatch.setattr(STATE, "graph", InitialReplyGraph())
+    monkeypatch.setattr(goal_loop.GoalDrive, "steps", steps)
+    reply = await _sync_turn()
+    assert "Input needed" in reply[0]["content"]
+    rec, = store.list(state="pending")
+    assert rec.interrupt_id
+
+
+@pytest.mark.asyncio
+async def test_scoped_goal_decision_resolves_its_checkpoint(store, decision_graph):
+    config = {"configurable": {"thread_id": "a2a:s-real:goal-iter-2"}}
+    await decision_graph.ainvoke({"messages": [], "session_id": "s-real"}, config)
+    payload = await chat_mod._pending_interrupt_value(config)
+    rec = await turn_control.record_decision_pause("s-real", payload, config)
+    resolved = await turn_control.validate_decision_resume(
+        {"configurable": {"thread_id": "a2a:s-real"}}, rec.id, "s-real"
+    )
+    assert resolved == config
+    with pytest.raises(DecisionClosed):
+        await turn_control.validate_decision_resume(config, rec.id, "another-session")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("new_pause", [False, True])
+async def test_delayed_a2a_decision_answer_never_runs_as_fresh_or_later_input(
+    store, decision_graph, monkeypatch, new_pause
+):
+    from graph.config import LangGraphConfig
+
+    await _sync_turn()
+    rec, = store.list(state="pending")
+    await _sync_turn("api-chat", resume=True, message="yes")
+    if new_pause:
+        await _sync_turn()
+    monkeypatch.setattr(STATE, "graph_config", LangGraphConfig())
+
+    async def unexpected_stream(*args, **kwargs):
+        pytest.fail("a stale decision answer reached the graph")
+        yield  # make this a stream with the graph's interface
+
+    monkeypatch.setattr(decision_graph, "astream_events", unexpected_stream)
+    frames = await _collect(chat_mod._chat_langgraph_stream(
+        "no", "s-real", request_metadata={"hitl_resume": True, "decision_id": rec.id}
+    ))
+    assert any(kind == "error" for kind, _ in frames)
+    assert store.get(rec.id).answer == "yes"
+    assert len(store.list(state="pending")) == int(new_pause)

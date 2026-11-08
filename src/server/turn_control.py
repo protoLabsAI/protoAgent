@@ -482,7 +482,7 @@ def _is_autonomous(request_metadata: dict | None) -> bool:
 # make on its own, not one it could guess at: so the turn parks exactly as an attended one
 # does, and the server writes a durable decisions-ledger record (graph/decisions.py) that
 # outlives the input-required TTL sweep. The operator answers it over /api/decisions, which
-# resumes the parked turn. The two turn drivers (server/chat.py) consult these at CALL time.
+# resumes the parked turn. The streaming and non-streaming drivers consult these at call time.
 
 
 def is_decision_interrupt(payload: object) -> bool:
@@ -503,7 +503,7 @@ def _current_agent_name() -> str:
         return ""
 
 
-def record_decision_pause(session_id: str, payload: object) -> object | None:
+async def record_decision_pause(session_id: str, payload: object, config: dict) -> object | None:
     """Write a durable decisions-ledger record for a parked ``request_decision`` pause, so the
     park shows in the operator inbox and survives the checkpoint TTL.
 
@@ -515,11 +515,15 @@ def record_decision_pause(session_id: str, payload: object) -> object | None:
     try:
         from graph.decisions import decision_store
 
+        found = await _chat()._pending_interrupt(config)
         return decision_store().create(
             str(session_id or ""),
             str(payload.get("question") or ""),  # type: ignore[union-attr]
             payload.get("options") or [],  # type: ignore[union-attr]
             agent=_current_agent_name(),
+            thread_id=config["configurable"]["thread_id"],
+            interrupt_id=str(found[0] or "") if found else "",
+            context=str(payload.get("context") or ""),
         )
     except Exception:  # noqa: BLE001 — the ledger is a durable handle, never a turn gate
         log.warning("[decision] could not record a parked decision for session %s", session_id, exc_info=True)
@@ -571,12 +575,12 @@ async def _hold_if_hitl_pending(
     (rather than holding the message back for a narrow-enough pass) keeps it in arrival
     order and never strands it: no such pass may ever come.
 
-    Autonomous turns are exempt (they must never park — unchanged clobber semantics),
+    Autonomous turns are exempt except when a decision is pending,
     and with no pending interrupt this returns ``None`` and the turn is untouched.
     Callers must hold the per-thread lock (the check must not race a parking turn)."""
-    if _is_autonomous(request_metadata):
-        return None
     pending_val = await _chat()._pending_interrupt_value(config)
+    if _is_autonomous(request_metadata) and not is_decision_interrupt(pending_val):
+        return None
     if pending_val is None:
         return None
     if _is_hitl_resume(request_metadata):
@@ -630,3 +634,57 @@ def seconds_since_last_turn() -> float:
     if _LAST_TURN_MONOTONIC <= 0:
         return float("inf")
     return max(0.0, time.monotonic() - _LAST_TURN_MONOTONIC)
+
+
+async def validate_decision_resume(config: dict, decision_id: str, session_id: str = "") -> dict:
+    """Reject stale decision delivery under the thread lock, before any graph input."""
+    from graph.decisions import DecisionClosed, decision_store
+
+    rec = decision_store().get(decision_id)
+    if rec is not None and session_id:
+        if rec.session_id != session_id:
+            raise DecisionClosed("decision belongs to another session")
+        # Fresh-context goal iterations park on a scoped thread. Keep the session lock,
+        # but resume that exact checkpoint rather than the base chat's checkpoint.
+        config = {**config, "configurable": {**config["configurable"], "thread_id": rec.thread_id}}
+    found = await _chat()._pending_interrupt(config)
+    if (
+        rec is None or not rec.pending or not rec.interrupt_id
+        or rec.thread_id != config["configurable"]["thread_id"]
+        or found is None or found[0] != rec.interrupt_id
+    ):
+        raise DecisionClosed("decision no longer owns this interrupt")
+    return config
+
+
+@contextlib.asynccontextmanager
+async def decision_resume(config: dict, answer):
+    """Close the exact ledger entry only once its checkpoint interrupt is consumed.
+
+    Runs on every resume surface, including console and taskId answers. A failed graph
+    invocation that leaves the interrupt in place keeps the decision retryable.
+    """
+    from graph.decisions import DecisionClosed, decision_store
+    from runtime.state import STATE
+
+    found = await _chat()._pending_interrupt(config) if answer is not None else None
+    try:
+        yield
+    finally:
+        if found and found[0] and is_decision_interrupt(found[1]):
+            snapshot = await STATE.graph.aget_state(config)
+            pending_ids = {
+                i.id for t in (getattr(snapshot, "tasks", ()) or ())
+                if getattr(t, "result", None) is None
+                for i in (getattr(t, "interrupts", ()) or ())
+            }
+            if not getattr(snapshot, "tasks", ()):
+                pending_ids.update(i.id for i in (getattr(snapshot, "interrupts", ()) or ()))
+            if found[0] not in pending_ids:
+                store = decision_store()
+                rec = store.for_interrupt(config["configurable"]["thread_id"], found[0])
+                if rec is not None and rec.pending:
+                    try:
+                        store.answer(rec.id, str(answer))
+                    except DecisionClosed:
+                        pass
