@@ -28,6 +28,35 @@ For console UI, see [Build a plugin view](/guides/build-a-plugin-view). For mess
 integrations, see [Build a communication plugin](/guides/communication-plugins).
 [Plugin architecture](/explanation/plugin-architecture) explains loading and trust.
 
+## Check a plugin before you ship it
+
+With protoAgent installed and your plugin directory available, run:
+
+```bash
+protoagent plugin check ./my-plugin
+protoagent plugin check ./my-plugin --json
+```
+
+From a source checkout after `uv sync`, use `uv run protoagent plugin check
+./my-plugin`. Each diagnostic includes a file, line, severity, code, and suggested
+fix. `--json` prints an array of those findings. Errors return exit status 1;
+warnings alone return 0, and a clean plugin has no findings.
+
+The checker parses source without importing or executing the plugin. It checks
+literal event topics, public paths against files and route declarations, page
+publish topics, skills, and common route/tool registration mistakes. Topic drift
+and registration hazards are warnings; invalid manifests, unreadable or invalid
+source, and public paths without a matching file or literal route are errors.
+Dynamic topics, indirect registrations, and dynamically composed route paths
+still need manual review. Dependency directories and `tests/` are excluded.
+
+Add this step to CI after installing protoAgent (set the directory to your plugin):
+
+```yaml
+- name: Check plugin
+  run: protoagent plugin check ./my-plugin
+```
+
 ## Anatomy
 
 A plugin is a directory with a manifest and a module exposing `register(registry)`:
