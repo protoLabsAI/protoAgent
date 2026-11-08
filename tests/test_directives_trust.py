@@ -197,3 +197,27 @@ def test_real_tool_node_injects_origin_and_does_not_keep_previous_authority(ledg
         assert isinstance(reply, ToolMessage)
         assert reply.content.startswith("Recorded directive") is allowed
     assert [d.quote for d in ledger.in_force("s1")] == ["rule 0"]
+
+
+def test_operator_stamp_folds_concurrent_writes_in_one_superstep():
+    """A resume that drains several parallel HITL interrupts feeds the operator stamp
+    into each pending branch, so ``operator_chat_turn`` takes more than one write in a
+    single superstep. A bare LastValue channel raises ``InvalidUpdateError`` there — it
+    broke the parallel-interrupt drive (test_hitl_hold) — so the field carries the
+    ``graph.state._take_last`` reducer. This pins that: two parallel nodes writing the
+    same authenticated value must fold to it, not raise."""
+    from langgraph.graph import END, START, StateGraph
+
+    from graph.state import ProtoAgentState
+
+    builder = StateGraph(ProtoAgentState)
+    builder.add_node("fan", lambda _s: {"session_id": "s1"})
+    builder.add_node("a", lambda _s: {"operator_chat_turn": True})
+    builder.add_node("b", lambda _s: {"operator_chat_turn": True})
+    builder.add_edge(START, "fan")
+    builder.add_edge("fan", "a")  # a and b run together — two writes, one superstep
+    builder.add_edge("fan", "b")
+    builder.add_edge("a", END)
+    builder.add_edge("b", END)
+    graph = builder.compile()
+    assert graph.invoke({"session_id": "s1"})["operator_chat_turn"] is True
