@@ -296,10 +296,12 @@
       "sha512-Tq8tvzbZ581gvQ426FLV3Aq2TnZrQt6TCuvqosm8aB5GJ8NviU6SKrwVkWcXUR7V6WlEtmf7HU8qUDxhQLMbQA=="],
     vegaEmbed: ["vega-embed.min.js",
       "sha512-Z+cCCqLMktM+IFtuAdRPVEwNQiFln47hxAh3zidS/1Aic/Ky0frcJsqn69mhMhIdlou2FgoUoPAm0i0Y5aS44A=="],
-    // pdf.js — pdfjs-dist 6.4.299 legacy build (Apache-2.0), byte-for-byte ES modules (loaded with
-    // cdnModule). The lib sets globalThis.pdfjsLib; the worker module only sets
-    // globalThis.pdfjsWorker, which makes pdf.js run on the frame's main thread — the sandbox CSP
-    // forbids workers. PDF page previews; notices in vendor/pdfjs.LICENSES.txt.
+    // pdf.js — pdfjs-dist 6.4.299 legacy build (Apache-2.0), byte-for-byte ES modules. The lib
+    // (cdnModule) sets globalThis.pdfjsLib. The worker module runs as a real dedicated Worker: the
+    // shell fetches it against this same SRI hash and posts the source in, and the frame starts it
+    // from a blob: URL (see pdfWorkerSource / artPdf). Only if that Worker can't start does the
+    // frame load the module on its own main thread (it then just sets globalThis.pdfjsWorker).
+    // PDF page previews; notices in vendor/pdfjs.LICENSES.txt.
     pdfjs: ["pdfjs.min.mjs",
       "sha512-Z/QvVhTGIViDuuSHyCgvsZVOuYQa8CpYD3lis7cG8c17vDGEO8fkstjdeW/58o1qjWEa8IPH3efCurYfgw3PSQ=="],
     // docx-preview 0.4.1 (Apache-2.0) on JSZip 3.10.2 (MIT): the packages' own UMD builds,
@@ -1962,9 +1964,16 @@
   });
 
   // ── .pdf page previews ────────────────────────────────────────────────────────────────
-  // A PDF renders as REAL pages — the vendored pdf.js (window.pdfjsLib), drawn to canvases on the
-  // frame's main thread (the worker module only registers its message handler; the CSP forbids
-  // workers), in the same no-same-origin sandbox under a nonce CSP with no network. The pages
+  // A PDF renders as REAL pages — the vendored pdf.js (window.pdfjsLib), drawn to canvases, in the
+  // same no-same-origin sandbox under a nonce CSP with no network. pdf.js parses, decodes and
+  // builds operator lists in a dedicated Worker: WebKit (Safari, the desktop app's WKWebView) runs
+  // a sandboxed iframe on the CONSOLE's main thread, so a 30 MB rulebook parsed in the frame froze
+  // the whole console for ~0.5 s per load. The frame can't fetch (connect-src 'none') and a Worker
+  // can't load cross-origin, so the shell fetches the vendored worker module against its SRI hash
+  // and posts the source in with the bytes; the frame starts it from a blob: URL. The CSP allows
+  // exactly that (worker-src blob:), and a blob Worker inherits the frame's CSP (no network,
+  // nonce-only scripts) and its opaque origin. If the Worker can't start, the frame falls back to
+  // the old main-thread path (the worker module loaded as a nonce+SRI script). The pages
   // stack in one scroll, fitted to the panel width; a page is drawn only while it's near the
   // visible area and its canvas is freed when it scrolls away, so a 2000-page PDF costs what the
   // few visible pages cost. Canvas size is capped (maxCanvasPixels) whatever the zoom.
@@ -1976,6 +1985,7 @@
     maxBytes: 41943040,         // 40 MB — _pdfview.MAX_BYTES
     maxPages: 2000,             // _pdfview.MAX_PAGES
     maxCanvasPixels: 16777216,  // one drawn page's canvas (4096 × 4096)
+    workerMs: 5000,             // the pdf.js Worker's "ready", before the main-thread fallback
     parseMs: 20000,
     watchdogMs: 45000
   };
@@ -1985,12 +1995,15 @@
     var f=v.file||{}, name=f.filename||"document.pdf", mime=f.mime||"application/pdf", nonce=cspNonce();
     var st=stripTrunc(v.code||"");
     var csp="default-src 'none'; script-src 'nonce-"+nonce+"'; style-src 'unsafe-inline'; img-src blob: data:; "
-      + "media-src 'none'; font-src blob: data:; connect-src 'none'; worker-src 'none'; frame-src 'none'; "
+      + "media-src 'none'; font-src blob: data:; connect-src 'none'; worker-src blob:; frame-src 'none'; "
       + "object-src 'none'; base-uri 'none'; form-action 'none'";
     var tokens=":root{--pl-color-bg:"+tok("--pl-color-bg","#0a0a0c")+";--pl-color-fg:"+tok("--pl-color-fg","#ededed")
       + ";--pl-color-fg-muted:"+tok("--pl-color-fg-muted","#9aa0aa")+";--pl-color-border:"+tok("--pl-color-border","rgba(255,255,255,.12)")
       + ";--pl-color-accent:"+tok("--pl-color-accent","#9b87f2")+"}";
-    var cfg={caps:PDF_CAPS, pages:+((f.pdf&&f.pdf.pages)||0)};
+    // The main-thread fallback's worker module: the same nonce + SRI + CORS load cdnModule writes,
+    // made by the frame only when the real Worker didn't start.
+    var cfg={caps:PDF_CAPS, pages:+((f.pdf&&f.pdf.pages)||0),
+      fallback:{src:ORIGIN+"/plugins/artifact/vendor/"+LIB.pdfjsWorker[0], integrity:LIB.pdfjsWorker[1], nonce:nonce}};
     if(page>0) cfg.page=page;
     return '<!doctype html><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="'+csp+'">'
       + '<style>'+tokens+PDF_CSS+'</style>'
@@ -2008,7 +2021,7 @@
       + '<div id="pages"></div><div id="status" class="st" role="status">Rendering pages…</div></div>'
       + '<details id="ol"><summary>Extracted text</summary><pre class="pv">'+esc(st.code)
       + (st.truncated?'\n… (preview truncated — download the file for the full content)':'')+'</pre></details></div>'
-      + cdnModule("pdfjsWorker", nonce) + cdnModule("pdfjs", nonce)
+      + cdnModule("pdfjs", nonce)
       + '<script type="module" nonce="'+nonce+'">(' + artPdf.toString() + ')(' + JSON.stringify(cfg).replace(/</g,"\\u003c") + ');<\/script>';
   }
   var PDF_CSS='html,body{margin:0;height:100%;background:var(--pl-color-bg);color:var(--pl-color-fg);'
@@ -2049,13 +2062,15 @@
     function $(id){ return D.getElementById(id); }
     var stage=$("stage"), box=$("pages"), status=$("status"), ol=$("ol"), nav=$("nav"), pos=$("pos"),
         prev=$("prev"), next=$("next"), zin=$("zin"), zout=$("zout"), zfit=$("zfit");
-    var doc=null, task=null, count=0, failed=false, timer=0, slots=[], io=null, zoom=1, cur=1, baseW=612, lastFit=0;
+    var doc=null, task=null, count=0, failed=false, timer=0, slots=[], io=null, zoom=1, cur=1, baseW=612, lastFit=0,
+        worker=null, loading=false;
     var ZMIN=0.5, ZMAX=4;
     function post(m){ try{ W.parent.postMessage(m, "*"); }catch(_){} }
     function mb(n){ return Math.round(n/1048576)+" MB"; }
     function fail(reason){
       if(failed) return; failed=true; clearTimeout(timer);
       if(task){ try{ task.destroy(); }catch(_){} }
+      if(worker){ try{ worker.terminate(); }catch(_){} }
       status.textContent="Couldn't render this PDF: "+reason+". The extracted text is below.";
       status.className="st err"; box.textContent=""; box.hidden=true; nav.hidden=true;
       stage.classList.add("failed"); ol.open=true;
@@ -2118,12 +2133,59 @@
       slots.forEach(function(t){ if(t.visible) draw(t); });
       update();
     }
-    async function load(buf){
-      if(failed || doc) return;
+    // pdf.js's own dedicated Worker, from the source the shell posted (SRI-checked there). It
+    // resolves once the worker's "ready" message arrives — the module loaded and its handler is
+    // listening — or null on any failure (no Worker, CSP refused, the module threw, too slow), and
+    // the caller takes the main-thread path instead.
+    function startWorker(src){
+      return new Promise(function(done){
+        if(typeof src!=="string" || !src || typeof W.Worker!=="function") return done(null);
+        var w=null, url="", settled=false, t=0;
+        function end(ok){
+          if(settled) return; settled=true; clearTimeout(t);
+          if(w){ w.removeEventListener("message", onMsg); w.removeEventListener("error", onErr); }
+          if(url){ try{ URL.revokeObjectURL(url); }catch(_){} }
+          if(!ok && w){ try{ w.terminate(); }catch(_){} }
+          done(ok ? w : null);
+        }
+        function onMsg(e){ var d=e.data; end(!!d && d.action==="ready"); }
+        function onErr(e){ if(e && e.preventDefault) e.preventDefault(); end(false); }
+        try{
+          url=URL.createObjectURL(new Blob([src], {type:"text/javascript"}));
+          w=new W.Worker(url);
+        }catch(_){ return end(false); }
+        w.addEventListener("message", onMsg); w.addEventListener("error", onErr);
+        t=setTimeout(function(){ end(false); }, caps.workerMs||5000);
+      });
+    }
+    // The fallback: the worker module on this thread (the pre-Worker path), loaded the way every
+    // vendored module is — nonce, SRI, CORS.
+    function mainThreadWorker(){
+      return new Promise(function(done){
+        if(W.pdfjsWorker) return done(true);
+        var fb=cfg&&cfg.fallback;
+        if(!fb || !fb.src) return done(false);
+        var s=D.createElement("script");
+        s.type="module"; s.crossOrigin="anonymous"; s.integrity=String(fb.integrity||""); s.nonce=String(fb.nonce||"");
+        s.addEventListener("load", function(){ done(!!W.pdfjsWorker); });
+        s.addEventListener("error", function(){ done(false); });
+        s.src=String(fb.src);
+        D.head.appendChild(s);
+      });
+    }
+    async function load(buf, workerSrc){
+      if(failed || doc || loading) return;
       if(!(buf instanceof ArrayBuffer)) return fail("no file data reached the preview");
       if(buf.byteLength>caps.maxBytes) return fail("the file is over the "+mb(caps.maxBytes)+" preview cap");
+      loading=true;
       timer=setTimeout(function(){ fail("it took longer than "+Math.round(caps.parseMs/1000)+"s to read"); }, caps.parseMs);
       try{
+        worker=await startWorker(workerSrc);
+        if(failed) return;
+        if(worker) L.GlobalWorkerOptions.workerPort=worker;
+        else if(!(await mainThreadWorker())) return fail("the PDF renderer didn't load");
+        if(failed) return;
+        box.setAttribute("data-engine", worker ? "worker" : "main");
         task=L.getDocument({data:new Uint8Array(buf), useWasm:false, useSystemFonts:true, enableXfa:false,
           disableAutoFetch:true, disableStream:true, disableRange:true, isOffscreenCanvasSupported:false, verbosity:0});
         task.onPassword=function(){ fail("the PDF is password-protected"); };
@@ -2148,7 +2210,7 @@
         // The chip's deep-link page (#4748): the slots are laid out, so scroll to it now. go()
         // clamps, so a page past the end lands on the last page; page 1 stays at the top.
         if(cfg.page>1) go(Math.min(cfg.page, count));
-        post({type:"protoArtifact:pdf", state:"rendered", count:count});
+        post({type:"protoArtifact:pdf", state:"rendered", count:count, worker:!!worker});
       }catch(e){
         var msg=String((e&&e.message)||e);
         fail(e && e.name==="PasswordException" ? "the PDF is password-protected" : msg.slice(0,200));
@@ -2182,10 +2244,10 @@
         Object.keys(m.tokens).forEach(function(k){ if(/^--pl-color-[a-z-]+$/.test(k)) D.documentElement.style.setProperty(k, String(m.tokens[k])); });
         return;
       }
-      if(m.type==="protoArtifact:pdf:data"){ load(m.buf); return; }
+      if(m.type==="protoArtifact:pdf:data"){ load(m.buf, m.worker); return; }
       if(m.type==="protoArtifact:pdf:error"){ fail(String(m.reason||"the file couldn't be fetched")); }
     });
-    if(!L || typeof L.getDocument!=="function" || !W.pdfjsWorker){ fail("the PDF renderer didn't load"); return; }
+    if(!L || typeof L.getDocument!=="function" || !L.GlobalWorkerOptions){ fail("the PDF renderer didn't load"); return; }
     post({type:"protoArtifact:pdf", state:"need"});
   }
   // ── .docx page previews ───────────────────────────────────────────────────────────────
@@ -2367,6 +2429,36 @@
     pptxCache={key:ctx.key, buf:buf};
     return buf;
   }
+  // The pdf.js worker module's SOURCE, for the PDF frame's blob: Worker (see pdfDoc). Fetched
+  // same-origin against the SRI hash in LIB — a mismatch rejects, and the frame then renders on its
+  // main thread from the SRI-checked module script instead — and kept for the shell's lifetime.
+  var pdfWorkerSrc=null;
+  function pdfWorkerSource(){
+    if(!pdfWorkerSrc){
+      pdfWorkerSrc=fetch(ORIGIN+"/plugins/artifact/vendor/"+LIB.pdfjsWorker[0], {integrity:LIB.pdfjsWorker[1], credentials:"omit"})
+        .then(function(r){ if(!r.ok) throw new Error(String(r.status)); return r.text(); })
+        .then(pdfClassicWorker)
+        .catch(function(){ pdfWorkerSrc=null; return null; });
+    }
+    return pdfWorkerSrc;
+  }
+  // The verified module, as a CLASSIC worker script. Chromium won't start a module Worker from a
+  // blob: URL minted in an opaque origin (the module fetch is CORS, and blob:null fails it), while a
+  // classic one runs. pdf.worker.mjs is a self-contained bundle whose only module syntax is its
+  // closing `export{WorkerMessageHandler};` and two `import.meta.url` reads (in the wasm decoder
+  // loaders, which useWasm:false never runs); a classic worker's own URL is self.location.href.
+  // "use strict" keeps module semantics. Anything else in the file (a re-vendor that changed its
+  // shape) → null, and the frame takes the main-thread path. tests/test_artifact_pdf.py runs this
+  // against the vendored file.
+  function pdfClassicWorker(src){
+    var EXP="export{WorkerMessageHandler};", META="import.meta.url";
+    src=String(src||"");
+    if(src.split(EXP).length!==2 || src.split(META).length!==3) return null;
+    var out=src.replace(EXP, "").split(META).join("self.location.href");
+    // (\x7b / \x7d are { and }: the tests brace-match this function's source)
+    if(out.indexOf("import.meta")>=0 || /(^|[;\x7d\s])export\s*[\x7b*]/.test(out)) return null;
+    return '"use strict";'+out;
+  }
   async function pptxMessage(m){
     var ctx=pptxCtx; if(!ctx || m.type!=="protoArtifact:"+ctx.kind) return;
     if(m.state==="rendered"||m.state==="failed"){ clearTimeout(pptxWatch); return; }
@@ -2376,10 +2468,12 @@
       pptxFallback(ctx, (ctx.kind==="pptx" ? "Slide" : "Page")+" preview unavailable — rendering took too long");
     }, feedCaps(ctx.kind).watchdogMs);
     try{
-      var buf=await pptxBytes(ctx);
+      var got=await Promise.all([pptxBytes(ctx), ctx.kind==="pdf" ? pdfWorkerSource() : null]), buf=got[0];
       if(pptxCtx!==ctx) return;
       var copy=buf.slice(0);  // transfer a copy; the cache keeps the original
-      $frame.contentWindow.postMessage({type:"protoArtifact:"+ctx.kind+":data", buf:copy}, "*", [copy]);
+      var msg={type:"protoArtifact:"+ctx.kind+":data", buf:copy};
+      if(ctx.kind==="pdf") msg.worker=got[1];  // null → the frame's main-thread fallback
+      $frame.contentWindow.postMessage(msg, "*", [copy]);
     }catch(err){
       if(pptxCtx!==ctx) return;
       // A linked 403/409 → the shell's own card (message + stored extracted text), not an in-frame

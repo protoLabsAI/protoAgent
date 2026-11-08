@@ -1,8 +1,8 @@
 """PDF-preview preflight for ``.pdf`` file artifacts — the server-side safety gate.
 
 The panel renders a PDF as real pages with the vendored pdf.js (``vendor/pdfjs.min.mjs`` +
-``vendor/pdfjs-worker.min.mjs``, run on the frame's main thread inside the no-same-origin
-artifact sandbox — no Worker, no network). Before the panel ever hands it the bytes,
+``vendor/pdfjs-worker.min.mjs``, the latter as a dedicated blob: Worker, inside the no-same-origin
+artifact sandbox, no network). Before the panel ever hands it the bytes,
 ``save_file_artifact`` runs this preflight once and stamps the verdict onto the version's
 ``file`` meta as ``pdf: {render, reason, pages}``. That stamp IS the per-version cache: a view
 never re-parses anything here. The panel renders a PDF ONLY when the stamp says

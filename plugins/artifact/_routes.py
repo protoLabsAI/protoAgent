@@ -251,9 +251,9 @@ _VENDOR_FILES = {
     "vega-embed.min.js",
     "jszip.min.js",  # JSZip + docx-preview UMD builds — .docx page previews
     "docx-preview.min.js",
-    # ESM modules loaded by <script type="module"> (SRI-pinned too): pdf.js, legacy build —
-    # PDF page previews. The worker module only sets globalThis.pdfjsWorker, so pdf.js runs on
-    # the frame's main thread (the sandbox CSP forbids workers).
+    # ESM modules (SRI-pinned too): pdf.js, legacy build — PDF page previews. The lib loads by
+    # <script type="module">; the shell fetches the worker module against its SRI hash and the
+    # frame runs it as a blob: Worker (or, if that fails, as a module script on its main thread).
     "pdfjs.min.mjs",
     "pdfjs-worker.min.mjs",
     # ESM modules (the `react` import map): curated libs …
