@@ -54,12 +54,17 @@ async function frame(page: Page): Promise<Frame> {
   return f;
 }
 
-test("a large PDF renders off the main thread, so the panel never freezes", async ({ page }) => {
-  test.setTimeout(90_000);
+type Measured = { engine: string | null | undefined; err: string; lag: number; errors: string[] };
+
+// Load the heavy PDF in the artifact view and measure the frame's longest main-thread gap while
+// it loads and draws its first page. `noWorker` removes Worker from the artifact frame only, which
+// forces pdf.js onto its main-thread fallback.
+async function loadAndMeasure(page: Page, { noWorker = false } = {}): Promise<Measured> {
   const errors: string[] = [];
   page.on("pageerror", (e) => errors.push(e.message));
   // The lag probe, in every frame: the longest gap between 16 ms ticks, past the 16 ms itself.
-  await page.addInitScript(() => {
+  await page.addInitScript((drop: boolean) => {
+    if (drop && location.href === "about:srcdoc") (window as unknown as { Worker?: unknown }).Worker = undefined;
     const w = window as unknown as { __lag: { max: number; last: number } };
     w.__lag = { max: 0, last: performance.now() };
     setInterval(() => {
@@ -67,11 +72,10 @@ test("a large PDF renders off the main thread, so the panel never freezes", asyn
       w.__lag.max = Math.max(w.__lag.max, now - w.__lag.last - 16);
       w.__lag.last = now;
     }, 16);
-  });
+  }, noWorker);
   // The store is canned here; the blob itself comes from the mock server (pdfFixture.mjs).
   await page.route("**/api/plugins/artifact/history", (route) => route.fulfill({ json: STORE }));
   await page.goto(VIEW);
-
   // The first page is drawn: pdf.js parsed the file, decoded its image and ran its operator list.
   await expect
     .poll(
@@ -82,7 +86,7 @@ test("a large PDF renders off the main thread, so the panel never freezes", asyn
           return 0;
         }
       },
-      { timeout: 60_000, message: "the PDF never drew a page" },
+      { timeout: 60_000, message: `the PDF never drew a page (${noWorker ? "fallback" : "worker"} path)` },
     )
     .toBeGreaterThan(0);
   const got = await (await frame(page)).evaluate(() => ({
@@ -90,41 +94,42 @@ test("a large PDF renders off the main thread, so the panel never freezes", asyn
     err: document.getElementById("status")?.textContent ?? "",
     lag: (window as unknown as { __lag: { max: number } }).__lag.max,
   }));
+  return { ...got, errors };
+}
+
+test("a large PDF renders in a Worker", async ({ page }) => {
+  test.setTimeout(90_000);
+  const got = await loadAndMeasure(page);
   console.log(`pdf frame: engine=${got.engine} longest main-thread gap=${Math.round(got.lag)} ms`);
   expect(got.err).toBe("");
-  // pdf.js got a dedicated Worker, not the main-thread fallback…
-  expect(got.engine).toBe("worker");
-  // …and the frame's main thread kept ticking while the document loaded and drew.
-  expect(got.lag).toBeLessThan(120);
-  expect(errors).toEqual([]);
+  expect(got.engine).toBe("worker"); // pdf.js got a dedicated Worker, not the main-thread fallback
+  expect(got.errors).toEqual([]);
 });
 
 test("with no Worker available, the PDF still renders on the frame's main thread", async ({ page }) => {
   test.setTimeout(90_000);
-  const errors: string[] = [];
-  page.on("pageerror", (e) => errors.push(e.message));
-  // Only the artifact frame loses Worker; the shell keeps it.
-  await page.addInitScript(() => {
-    if (location.href === "about:srcdoc") (window as unknown as { Worker?: unknown }).Worker = undefined;
-  });
-  await page.route("**/api/plugins/artifact/history", (route) => route.fulfill({ json: STORE }));
-  await page.goto(VIEW);
-  await expect
-    .poll(
-      async () => {
-        try {
-          return await (await frame(page)).evaluate(() => document.querySelectorAll("#pages canvas").length);
-        } catch {
-          return 0;
-        }
-      },
-      { timeout: 60_000, message: "the PDF never drew a page on the fallback path" },
-    )
-    .toBeGreaterThan(0);
-  const got = await (await frame(page)).evaluate(() => ({
-    engine: document.getElementById("pages")?.getAttribute("data-engine"),
-    err: document.getElementById("status")?.textContent ?? "",
-  }));
-  expect(got).toEqual({ engine: "main", err: "" });
-  expect(errors).toEqual([]);
+  const got = await loadAndMeasure(page, { noWorker: true });
+  expect({ engine: got.engine, err: got.err }).toEqual({ engine: "main", err: "" });
+  expect(got.errors).toEqual([]);
+});
+
+// The point of the Worker: the frame's main thread keeps ticking while the document loads. An
+// absolute bound can't hold across machines (34 ms locally, 275-432 ms on a CI runner), so this
+// compares the two engines on the SAME machine in the same run: the Worker path must hitch at
+// most half as long as the main-thread fallback does.
+test("the Worker path blocks the main thread far less than the fallback", async ({ browser }) => {
+  test.setTimeout(180_000);
+  const fallbackPage = await browser.newPage();
+  const workerPage = await browser.newPage();
+  try {
+    const main = await loadAndMeasure(fallbackPage, { noWorker: true });
+    const worker = await loadAndMeasure(workerPage);
+    console.log(`pdf main-thread gap: worker=${Math.round(worker.lag)} ms fallback=${Math.round(main.lag)} ms`);
+    expect(worker.engine).toBe("worker");
+    expect(main.engine).toBe("main");
+    expect(worker.lag).toBeLessThanOrEqual(main.lag * 0.5);
+  } finally {
+    await fallbackPage.close();
+    await workerPage.close();
+  }
 });
