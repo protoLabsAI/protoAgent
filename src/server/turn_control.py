@@ -475,6 +475,57 @@ def _is_autonomous(request_metadata: dict | None) -> bool:
     return is_autonomous_origin(origin)
 
 
+# ── request_decision: the one HITL interrupt that parks even on an autonomous turn ──
+# ADR 0070 (this card's amendment): every HITL interrupt on an autonomous turn auto-answers
+# so the turn can't deadlock — EXCEPT a ``kind: "decision"`` one (tools.lg_tools.
+# request_decision). That is the agent deliberately stopping at a choice it is not allowed to
+# make on its own, not one it could guess at: so the turn parks exactly as an attended one
+# does, and the server writes a durable decisions-ledger record (graph/decisions.py) that
+# outlives the input-required TTL sweep. The operator answers it over /api/decisions, which
+# resumes the parked turn. The two turn drivers (server/chat.py) consult these at CALL time.
+
+
+def is_decision_interrupt(payload: object) -> bool:
+    """Whether an interrupt payload is a ``request_decision`` pause (``kind == "decision"``)."""
+    return isinstance(payload, dict) and str(payload.get("kind") or "").strip().lower() == "decision"
+
+
+def _current_agent_name() -> str:
+    """The active agent's display name for a decision record, best-effort (blank when unknown
+    or still the placeholder). Read from the graph config's identity so neither ``graph`` nor
+    the ``server`` package is imported here."""
+    try:
+        from runtime.state import STATE
+
+        name = str(getattr(getattr(STATE, "graph_config", None), "identity_name", "") or "")
+        return "" if name == "protoagent" else name
+    except Exception:  # noqa: BLE001 — a missing name must never break a park
+        return ""
+
+
+def record_decision_pause(session_id: str, payload: object) -> object | None:
+    """Write a durable decisions-ledger record for a parked ``request_decision`` pause, so the
+    park shows in the operator inbox and survives the checkpoint TTL.
+
+    Best-effort by contract: the record is the durable HANDLE, not a gate — a ledger failure
+    is logged and the park still stands (an autonomous turn must never un-park because a write
+    failed). Returns the created record, or ``None`` when nothing was written."""
+    if not is_decision_interrupt(payload):
+        return None
+    try:
+        from graph.decisions import decision_store
+
+        return decision_store().create(
+            str(session_id or ""),
+            str(payload.get("question") or ""),  # type: ignore[union-attr]
+            payload.get("options") or [],  # type: ignore[union-attr]
+            agent=_current_agent_name(),
+        )
+    except Exception:  # noqa: BLE001 — the ledger is a durable handle, never a turn gate
+        log.warning("[decision] could not record a parked decision for session %s", session_id, exc_info=True)
+        return None
+
+
 def _is_hitl_resume(request_metadata: dict | None) -> bool:
     """Whether this message IS the operator's answer to the pending HITL pause.
 

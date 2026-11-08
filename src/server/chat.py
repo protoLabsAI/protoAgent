@@ -1041,6 +1041,15 @@ async def _run_native_turn(
                             payload = _turn_stream._paragraph_break(_carried, payload) + payload
                         _pass_text += payload
                         yield (kind, payload)
+                    elif kind == "input_required" and _turn_control.is_decision_interrupt(payload):
+                        # request_decision (#4725): the agent chose to stop at a choice it may
+                        # not make on its own. This parks even on an AUTONOMOUS turn — the one
+                        # exception to the auto-answer below — and the server records it durably
+                        # (the record outlives the input-required TTL and surfaces in the operator
+                        # inbox; an attended turn parks the same way and writes the same record).
+                        _turn_control.record_decision_pause(session_id, payload)
+                        yield (kind, payload)
+                        out["paused"] = True
                     elif kind == "input_required":
                         _verdict = _auto.on_interrupt()
                         if _verdict == _goal_loop.PARK:

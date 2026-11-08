@@ -1,0 +1,177 @@
+"""Operator "decision needed" routes (#4725, item 3).
+
+The read + answer surface over the durable decisions ledger (``graph/decisions.py``). When
+the agent calls ``request_decision`` it parks the turn — even on an unattended autonomous
+turn — and the server records a pending decision. The console (card 3) lists pending ones
+here, shows the question + options, and answers one; answering resumes the parked turn
+through the same HITL-resume entry point an attended session uses.
+
+Registrar-style (``register_decision_routes(app)``), mounted next to the other operator API
+registrars in ``server/__init__.py``. Full-scope operator auth, like the directive routes —
+nothing here is a credential-plane write, so the global auth middleware gates it.
+
+This file must NOT import ``server`` (the import-layering invariant): the parked-turn resume
+goes over the loopback A2A endpoint (a network call, carrying the console's own
+``hitl_resume`` marker), not through an in-process ``server`` import.
+"""
+
+from __future__ import annotations
+
+import logging
+
+from pydantic import BaseModel
+
+log = logging.getLogger("protoagent.server")
+
+
+class AnswerRequest(BaseModel):
+    """The operator's answer: a defined option by id (validated against the record's options)
+    or a free-text answer. At least one is required."""
+
+    option_id: str | None = None
+    text: str | None = None
+
+
+def _resolve_answer(rec, body: AnswerRequest) -> str:
+    """The answer string to resume the turn with, validated against the record's options.
+
+    An ``option_id`` must name one of the decision's options (matched by id, then by label)
+    and resolves to that option's canonical id; a free-text ``text`` is taken verbatim. Raises
+    :class:`fastapi.HTTPException` 400 on an unknown option or when neither field is given."""
+    from fastapi import HTTPException
+
+    option_id = (body.option_id or "").strip()
+    text = (body.text or "").strip()
+    if option_id:
+        by_id = {str(o.get("id")): str(o.get("id")) for o in rec.options if isinstance(o, dict) and o.get("id")}
+        by_label = {str(o.get("label")): str(o.get("id")) for o in rec.options if isinstance(o, dict) and o.get("id")}
+        resolved = by_id.get(option_id) or by_label.get(option_id)
+        if resolved is None:
+            valid = ", ".join(by_id) or "(none)"
+            raise HTTPException(status_code=400, detail=f"unknown option {option_id!r} — valid options: {valid}")
+        return resolved
+    if text:
+        return text
+    raise HTTPException(status_code=400, detail="provide an option_id or free-text answer")
+
+
+async def _resume_parked_turn(session_id: str, answer: str) -> bool:
+    """Resume the turn parked on this decision with the operator's answer, over the loopback
+    A2A endpoint — the SAME HITL-resume entry point the console uses.
+
+    The message carries the chat's ``contextId`` and the ``hitl_resume`` marker; the parked-
+    task router (``a2a_impl/hitl_routing.py``) points it at the context's input-required task
+    and the executor resumes the LangGraph interrupt with the answer (``Command(resume=…)``).
+    Best-effort: a missing port or any transport error is logged and returns ``False`` — the
+    record is already marked answered, so the operator can retry the resume."""
+    import uuid
+
+    import httpx
+
+    from a2a_impl.auth import self_invocation_headers
+    from runtime.state import STATE
+
+    port = getattr(STATE, "active_port", None)
+    if not port:
+        log.warning("[decision] no active port — cannot resume parked turn for %s", session_id)
+        return False
+    headers = {"Content-Type": "application/json", "A2A-Version": "1.0"}
+    headers.update(self_invocation_headers())
+    message_id = str(uuid.uuid4())
+    body = {
+        "jsonrpc": "2.0",
+        "id": message_id,
+        "method": "SendMessage",
+        "params": {
+            "message": {
+                "role": "ROLE_USER",
+                "parts": [{"text": answer}],
+                "messageId": message_id,
+                "contextId": session_id,
+                # The operator is answering: a live human, so an empty origin (interactive) —
+                # `hitl_resume` converts this to a graph resume rather than a fresh turn.
+                "metadata": {"hitl_resume": True},
+            },
+        },
+    }
+    try:
+        async with httpx.AsyncClient(timeout=120) as client:
+            r = await client.post(f"http://127.0.0.1:{port}/a2a", headers=headers, json=body)
+        if r.status_code >= 400:
+            log.warning("[decision] resume for %s failed: HTTP %d %s", session_id, r.status_code, r.text[:200])
+            return False
+        return True
+    except Exception:  # noqa: BLE001 — a resume transport error must not 500 the answer route
+        log.exception("[decision] resume POST failed for %s", session_id)
+        return False
+
+
+def register_decision_routes(app) -> None:
+    """Register the ``/api/decisions`` routes on ``app`` (#4725)."""
+    import asyncio
+
+    from fastapi import HTTPException
+
+    from graph.decisions import (
+        STATES,
+        DecisionClosed,
+        DecisionNotFound,
+        decision_store,
+    )
+
+    @app.get("/api/decisions")
+    async def _api_decisions(state: str | None = None, session_id: str | None = None, limit: int = 200):
+        """Decisions newest first — ``{"decisions": [...], "pending": N}``.
+
+        ``?state=pending|answered|expired|cancelled`` narrows the list (the console shows the
+        inbox of ``pending`` ones); ``?session_id=`` scopes to one chat."""
+        if state is not None and state not in STATES:
+            raise HTTPException(status_code=400, detail=f"state must be one of {', '.join(STATES)}")
+        store = decision_store()
+        items = await asyncio.to_thread(
+            store.list, state=state, session_id=(session_id or None), limit=min(max(1, int(limit)), 500)
+        )
+        pending = await asyncio.to_thread(store.list, state="pending", limit=500)
+        return {"decisions": [d.to_dict() for d in items], "pending": len(pending)}
+
+    @app.get("/api/decisions/{decision_id}")
+    async def _api_decision(decision_id: str):
+        """One decision by id, or 404."""
+        rec = await asyncio.to_thread(decision_store().get, decision_id)
+        if rec is None:
+            raise HTTPException(status_code=404, detail=f"no decision {decision_id!r}")
+        return rec.to_dict()
+
+    @app.post("/api/decisions/{decision_id}/answer")
+    async def _api_answer_decision(decision_id: str, body: AnswerRequest):
+        """Answer a pending decision and resume its parked turn.
+
+        Validates the answer against the record's options (400 on an unknown option or an
+        empty body), marks the record answered (409 if it is no longer pending — answering
+        twice is refused — 404 for an unknown id), then resumes the parked turn with the
+        chosen option through the A2A HITL-resume path."""
+        store = decision_store()
+        rec = await asyncio.to_thread(store.get, decision_id)
+        if rec is None:
+            raise HTTPException(status_code=404, detail=f"no decision {decision_id!r}")
+        answer = _resolve_answer(rec, body)
+        try:
+            updated = await asyncio.to_thread(store.answer, decision_id, answer)
+        except DecisionNotFound as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except DecisionClosed as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        resumed = await _resume_parked_turn(updated.session_id, answer)
+        return {"decision": updated.to_dict(), "resumed": resumed}
+
+    @app.post("/api/decisions/{decision_id}/cancel")
+    async def _api_cancel_decision(decision_id: str):
+        """Cancel a pending decision (the operator dismissed it). 404 for an unknown id, 409
+        when it is no longer pending. The parked turn is left as-is for the TTL/abandon path."""
+        try:
+            updated = await asyncio.to_thread(decision_store().cancel, decision_id)
+        except DecisionNotFound as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except DecisionClosed as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        return {"decision": updated.to_dict()}

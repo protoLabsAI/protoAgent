@@ -29,11 +29,12 @@ log = logging.getLogger(__name__)
 # (you can still allowlist it by name); just avoids handing it a tool it already has.
 _STAR_EXCLUDE = {"execute_code"}
 
-# NEVER exposed over MCP, even when named explicitly — ask_human / request_user_input are
-# HITL tools that pause the turn via a LangGraph ``interrupt`` only the lead-turn runner
-# resumes. Called over a foreign stdio/HTTP MCP client (Claude Desktop, Cursor) there's no
-# runner to resume them, so they HANG the client (ADR 0075 D3 — a real bug, not a gate).
-_MCP_INCOMPATIBLE = {"ask_human", "request_user_input"}
+# NEVER exposed over MCP, even when named explicitly — ask_human / request_user_input /
+# request_decision are HITL tools that pause the turn via a LangGraph ``interrupt`` only the
+# lead-turn runner resumes. Called over a foreign stdio/HTTP MCP client (Claude Desktop,
+# Cursor) there's no runner to resume them, so they HANG the client (ADR 0075 D3 — a real
+# bug, not a gate). Keep in sync with ``tools.lg_tools.HITL_TOOL_NAMES``.
+_MCP_INCOMPATIBLE = {"ask_human", "request_user_input", "request_decision"}
 
 # Curated profile presets over the allowlist (ADR 0075 D3). A profile is just a preset set
 # of names layered on ``operator_mcp_tools`` — unset keeps deny-by-default (a foreign client

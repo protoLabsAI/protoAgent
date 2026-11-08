@@ -1249,6 +1249,13 @@ def _main():
 
     register_injection_routes(fastapi_app)
 
+    # "Decision needed" ledger (#4725) — the agent's request_decision parks a turn and
+    # records it; the operator lists/answers pending decisions here, which resumes the
+    # parked turn over the HITL-resume path. Full-scope operator auth via the middleware.
+    from operator_api.decision_routes import register_decision_routes
+
+    register_decision_routes(fastapi_app)
+
     # System-prompt snapshots (#2243) — /api/prompts/*: the exact prompt any
     # captured model call received, behind the console's "View prompt".
     from operator_api.prompt_routes import register_prompt_routes
