@@ -42,8 +42,12 @@ def test_growing_notes_replan_without_losing_transcript(asynchronous):
 @pytest.mark.parametrize("asynchronous", [False, True])
 @pytest.mark.parametrize("seeded", [False, True])
 def test_notes_leaving_less_than_minimum_chunk_raise(asynchronous, seeded):
+    # Notes so large that even the whole window — not just the conservative 45% chunk
+    # budget — can't hold them plus a minimum chunk and room for the answer: genuinely no
+    # room, so the engine refuses rather than send a prompt it knows won't fit.
     budget = 16_000
-    notes = "n" * 14_000
+    assert 2 * 20_000 > int(budget / engine._CHUNK_WINDOW_SHARE)
+    notes = "n" * 20_000
     messages = [AIMessage(content="x" * 30_000)]
     if seeded:
         messages.insert(0, engine.summary_message(notes))
@@ -63,7 +67,45 @@ def test_notes_leaving_less_than_minimum_chunk_raise(asynchronous, seeded):
         else:
             engine.summarize_span(messages, summarize, budget_chars=budget)
     assert len(calls) == (0 if seeded else 1)
+    # The one non-seeded call precedes the refusal and stays within the chunk budget.
     assert all(len(prompt) <= budget for prompt in calls)
+
+
+@pytest.mark.parametrize("asynchronous", [False, True])
+def test_large_seed_notes_within_the_window_still_compact(asynchronous):
+    # The review scenario: a small-window summarizer whose running notes are a large
+    # previous summary. The notes crowd out the conservative 45% chunk budget, but the
+    # window still has room — so compaction must NOT refuse. It falls back to a minimum
+    # chunk whose prompt runs past the soft budget yet stays inside the real window, and
+    # it loses no transcript.
+    budget = 16_000
+    window = int(budget / engine._CHUNK_WINDOW_SHARE)  # the summarizer's whole window, in chars
+    notes = "n" * 13_000  # crowds the 45% budget; still leaves window headroom
+    transcript = "".join(f"{i:04d}" for i in range(2_000))  # 8,000 digits of AI text
+    messages = [engine.summary_message(notes), AIMessage(content=transcript)]
+    prompts = []
+
+    def summarize(prompt):
+        prompts.append(prompt)
+        return notes  # a fixed-size answer: running stays large every call
+
+    if asynchronous:
+
+        async def async_summarize(prompt):
+            return summarize(prompt)
+
+        out = asyncio.run(engine.asummarize_span(messages, async_summarize, budget_chars=budget))
+    else:
+        out = engine.summarize_span(messages, summarize, budget_chars=budget)
+
+    assert len(prompts) >= 2, "a crowded budget still splits the transcript into several chunks"
+    # The fallback deliberately overruns the 45% soft budget…
+    assert any(len(prompt) > budget for prompt in prompts)
+    # …but never the real window, with room left for the answer.
+    assert all(len(prompt) + len(notes) <= window for prompt in prompts)
+    chunks = [p.split("<transcript>\n", 1)[1].split("\n</transcript>", 1)[0] for p in prompts]
+    assert "".join(re.sub(r"\D", "", chunk) for chunk in chunks) == transcript
+    assert notes in out  # the carried-forward notes survive
 
 
 def test_budget_uses_compaction_connection_window(monkeypatch):

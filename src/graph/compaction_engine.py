@@ -694,14 +694,35 @@ def _plan(messages: list, budget_chars: int | None) -> tuple[str, list[str], int
     return seed, blocks, budget
 
 
+def _window_ceiling_chars(budget: int) -> int:
+    """The summarizer's whole input window, in characters, recovered from the per-call chunk
+    budget.
+
+    ``budget`` is :data:`_CHUNK_WINDOW_SHARE` of the window (see
+    :func:`summarizer_budget_chars`), so dividing it back out gives the full window — the
+    HARD limit a single prompt must fit within, as distinct from the conservative chunk
+    budget that sizes chunks in the common case."""
+    return max(budget, int(budget / _CHUNK_WINDOW_SHARE))
+
+
 def _chunks_for(blocks: list[str], budget: int, running: str, *, part: int = 1) -> list[list[str]]:
     # The running notes ride every call, so the transcript gets what is left of the budget.
     # Bound the part-count digits before planning; even one character per remaining
     # chunk cannot exceed this count. Include the previous-notes framing as well.
     parts_bound = part + sum(map(len, blocks))
-    room = budget - len(build_prompt("", running, part=part, parts=parts_bound))
+    framing = len(build_prompt("", running, part=part, parts=parts_bound))
+    room = budget - framing
     if room < _MIN_CHUNK_CHARS:
-        raise CompactionSummaryError("the running notes leave less than the minimum transcript chunk budget")
+        # The running notes have outgrown the conservative chunk budget (~45% of the
+        # summarizer's window). Refusing right here would strand EVERY retry — the notes
+        # are a fixed seed (a previous compaction's summary) that never shrinks — while the
+        # window itself still has room. So fall back to a single minimum chunk, letting
+        # this one prompt run past the soft budget, as long as those notes, that chunk and
+        # room for the answer still fit the real window. Only when even that overflows do
+        # the notes genuinely leave less than a minimum chunk: raise.
+        if framing + _MIN_CHUNK_CHARS + len(running) > _window_ceiling_chars(budget):
+            raise CompactionSummaryError("the running notes leave less than the minimum transcript chunk budget")
+        return _chunk_groups(blocks, _MIN_CHUNK_CHARS)
     reserve = max(0, _NOTES_RESERVE_CHARS - len(running))
     return _chunk_groups(blocks, max(_MIN_CHUNK_CHARS, room - reserve))
 
