@@ -106,6 +106,8 @@ describe("timestamp displays", () => {
     ["2026-11-09T22:14:00Z", "today at 17:14"],
     ["2026-11-08T22:14:00Z", "yesterday at 17:14"],
     ["2026-11-07T22:14:00Z", "7 Nov, 17:14"],
+    ["2026-11-07T22:14:00+00:00", "7 Nov, 17:14"],
+    ["2026-11-09T02:14:00+00:00", "yesterday at 21:14"],
     ["2025-11-07T22:14:00Z", "7 Nov 2025, 17:14"],
     ["2026-11-09T17:14:00", "today at 17:14"],
   ])("preserves the task formatter output for %s", (input, expected) => {

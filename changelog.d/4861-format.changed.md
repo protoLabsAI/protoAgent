@@ -1,0 +1,1 @@
+- **Shared console timestamp formatting (#4861).** Move the task timestamp formatter into the shared library and add a locale-aware joined date/time form for the directive ledger, preserving existing task displays.
