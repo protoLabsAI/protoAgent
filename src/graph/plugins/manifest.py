@@ -911,6 +911,53 @@ _RESERVED_PLUGIN_IDS = frozenset(
     {"install", "installed", "sync", "updates", "catalog", "enabled", "bundles", "ack", "install-deps"}
 )
 
+# A plugin id ALSO names a directory under the instance root, because ``sdk.plugin_store(
+# plugin_id=<id>)`` resolves to ``instance_root/<id>`` — the SAME namespace core's own stores
+# use (``instance_paths().store("knowledge")`` → ``instance_root/knowledge``). So an id that
+# matches a core store's top-level stem would hand a plugin core's own data directory. These
+# are every top-level dir/file stem core creates under the instance root, derived from
+# ``infra.paths`` (the ``InstancePaths`` instance-tier properties) and the store constructors
+# (``store("knowledge" | "memory" | "media" | …)`` across ``knowledge``, ``graph.middleware.
+# memory``, ``infra.media``, ``graph.goals``, ``tasks``, ``scheduler``, ``observability``,
+# ``a2a_impl.stores``, ``server.stores``). ``.db``/``.json`` stems are reduced to the stem
+# (a plugin id can't contain ``.`` anyway) and reserved defensively. NOT included: ``friction``
+# — the bundled ``friction`` plugin legitimately OWNS ``instance_root/friction`` (it writes
+# there via ``store("friction")`` by design), so reserving it would reject that plugin.
+_CORE_STORE_NAMES = frozenset(
+    {
+        # instance-tier dirs/files (InstancePaths properties under instance_root)
+        "config",
+        "plugins",
+        "workspace",
+        "workspaces",
+        "skills",
+        # store() directories core populates
+        "knowledge",
+        "memory",
+        "media",
+        "goals",
+        "tasks",
+        "audit",
+        "scheduler",
+        "watches",
+        "trajectory",
+        "fleet-traces",
+        "inbox",
+        "background",
+        "activity",
+        # store() single-file stems (checkpoints.db, telemetry.db, …)
+        "checkpoints",
+        "telemetry",
+        "metrics",
+        "ledger",
+        "prompt-snapshots",
+        "memory-injections",
+        "usage-snapshot",
+        "a2a-tasks",
+        "a2a-push",
+    }
+)
+
 # Core-owned operator routes INSIDE a plugin's own ``/api/plugins/<id>/`` subtree
 # (``…/update``, ``…/enabled``) and the bundle routes. A public / federation path that
 # lands on one is dropped here; a broader prefix such as ``/api/plugins/<id>/`` is kept for
@@ -1487,13 +1534,22 @@ def load_manifest(plugin_dir: Path) -> PluginManifest | None:
     if not pid or not name:
         log.warning("[plugins] %s: manifest missing required id/name — skipping", plugin_dir.name)
         return None
-    if not _VALID_PLUGIN_ID.match(pid) or pid.lower() in _RESERVED_PLUGIN_IDS:
+    pid_lower = pid.lower()
+    if not _VALID_PLUGIN_ID.match(pid) or pid_lower in _RESERVED_PLUGIN_IDS or pid_lower in _CORE_STORE_NAMES:
+        if pid_lower in _RESERVED_PLUGIN_IDS:
+            reason = "it shadows a core /api/plugins/ management route"
+        elif pid_lower in _CORE_STORE_NAMES:
+            reason = (
+                "it names a core data directory under the instance root — its plugin_store() would "
+                "resolve onto core's own data (knowledge, memory, media, …)"
+            )
+        else:
+            reason = f"it must match {_VALID_PLUGIN_ID.pattern}"
         log.warning(
-            "[plugins] %s: invalid or reserved plugin id %r — must match %s and must not shadow a "
-            "core /api/plugins/ route; skipping",
+            "[plugins] %s: invalid or reserved plugin id %r — %s; skipping",
             plugin_dir.name,
             pid,
-            _VALID_PLUGIN_ID.pattern,
+            reason,
         )
         return None
 
