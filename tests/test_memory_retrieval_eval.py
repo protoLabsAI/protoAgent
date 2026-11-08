@@ -72,10 +72,11 @@ def fixture_file(tmp_path):
     with closing(store._connect()) as db:
         rows = [dict(row) for row in db.execute(f"SELECT {', '.join(FIELDS)} FROM memories")]
     path = tmp_path / "user_1.jsonl"
-    path.write_text("".join(json.dumps(row) + "\n" for row in rows))
+    path.write_text("".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8")
     return path
 
 
+@pytest.mark.platform_sensitive
 def test_twenty_cases_consolidate_on_copies(fixture_file):
     from contextlib import closing
 
@@ -107,29 +108,37 @@ def test_paired_majorities():
         ev.paired_table(rows[:-1], ["a", "b"], 3)
 
 
+@pytest.mark.platform_sensitive
 def test_evaluate_mixed_suites(fixture_file, monkeypatch):
     case = dict(id="pv4-test", user_id=1, question="Where?", answer="here", choices=["here", "there"])
     changed = ev.load_cases(ev.FIXTURES / "supersede_cases.jsonl")[:1]
     arm = Mock(return_value=[{"content": changed[0]["memories"][-1]}])
     monkeypatch.setitem(ev.ARMS, "fake", arm)
+    monkeypatch.setitem(ev.ARMS, "other", arm)
     model = Mock()
     model.invoke.return_value = AIMessage(content="here")
-    report = ev.evaluate([case], changed, fixture_file.parent, ["fake"], 3,
+    report = ev.evaluate([case], changed, fixture_file.parent, ["fake", "other"], 3,
                          ProjectionOptions(), model, lambda s: [1, 0] if s == "here" else [0, 1])
-    assert len(report["results"]) == arm.call_count == 6
-    assert model.invoke.call_count == 3
+    assert len(report["results"]) == arm.call_count == 12
+    assert model.invoke.call_count == 6
+    stores = [call.args[1] for call in arm.call_args_list]
+    assert len({id(store) for store in stores}) == 12
+    assert len({store.path for store in stores}) == 12
+    assert report["paired"] == [dict(a="fake", b="other", a_wins=0, b_wins=0, ties=2)]
     assert all(row["passed"] for row in report["results"])
 
 
+@pytest.mark.platform_sensitive
 def test_on_demand_only():
     root = ev.FIXTURES.parent.parent
     for relative in ("evals/tasks.json", "scripts/evals_nightly.py"):
-        assert "memory_retrieval" not in (root / relative).read_text()
-    readme = (root / "evals/README.md").read_text()
+        assert "memory_retrieval" not in (root / relative).read_text(encoding="utf-8")
+    readme = (root / "evals/README.md").read_text(encoding="utf-8")
     assert "## Memory retrieval (on demand)" in readme
     assert "not part of the nightly gate" in readme
 
 
+@pytest.mark.platform_sensitive
 def test_cli_writes_report(fixture_file, monkeypatch, tmp_path):
     from graph.config import LangGraphConfig
     from graph import llm
@@ -137,21 +146,22 @@ def test_cli_writes_report(fixture_file, monkeypatch, tmp_path):
     fixtures = tmp_path / "fixtures"
     (fixtures / "pv4").mkdir(parents=True)
     (fixtures / "pv4/user_1.jsonl").write_bytes(fixture_file.read_bytes())
-    case = dict(id="pv4-cli", user_id=1, question="What do I enjoy?", answer="museums", choices=["museums", ""])
-    (fixtures / "pv4/cases.jsonl").write_text(json.dumps(case) + "\n")
-    (fixtures / "supersede_cases.jsonl").write_text("")
+    case = dict(id="pv4-cli", user_id=1, question="What do I enjoy?", answer="musées", choices=["musées", ""])
+    (fixtures / "pv4/cases.jsonl").write_text(json.dumps(case, ensure_ascii=False) + "\n", encoding="utf-8")
+    (fixtures / "supersede_cases.jsonl").write_text("", encoding="utf-8")
     monkeypatch.setattr(ev, "FIXTURES", fixtures)
     monkeypatch.setattr(ev, "RESULTS_DIR", tmp_path / "results")
     monkeypatch.setattr(LangGraphConfig, "from_yaml", lambda _: LangGraphConfig())
     model = Mock()
-    model.invoke.return_value = AIMessage(content="museums")
+    model.invoke.return_value = AIMessage(content="musées")
     factory = Mock(return_value=model)
     monkeypatch.setattr(llm, "create_llm", factory)
     monkeypatch.setattr(llm, "create_embed_fn", lambda _: lambda text: [1, 0])
     monkeypatch.setitem(ev.ARMS, "fake", lambda query, store, opts: [{"preview": "museum"}])
     assert ev.main(["--arms", "fake", "--model", "test-model", "--json", "out.json"]) == 0
-    report = json.loads((tmp_path / "results/out.json").read_text())
+    report = json.loads((tmp_path / "results/out.json").read_text(encoding="utf-8"))
     assert report["model"] == "test-model"
+    assert report["results"][0]["response"] == "musées"
     assert len(report["results"]) == 3
     assert all(row["passed"] for row in report["results"])
     assert factory.call_args.kwargs["model_name"] == "test-model"
