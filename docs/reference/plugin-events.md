@@ -44,6 +44,7 @@ of what the emitting call sites pass; a key may be absent on a given event.
 | `delegation.finished` | `completion`, `cost_usd`, `duration_ms`, `error`, `from`, `id`, `nudges`, `outcome`, `parent_id`, `run_id`, `to_instance`, `to_kind`, `to_name` | `src/graph/ledger.py` |
 | `delegation.progress` | `id`, `progress`, `to_name` | `src/graph/ledger.py` |
 | `delegation.started` | _(varies)_ | `src/graph/ledger.py` |
+| `directive.changed` | `id`, `session_id` | `src/graph/directives.py` |
 | `fs.changed` | `paths`, `project`, `source` | `src/graph/fs_changes.py` |
 | `goal.achieved / goal.failed` | `condition`, `evidence`, `reason`, `session_id`, `status` | `src/graph/goals/controller.py` |
 | `goal.changed` | `session_id` | `src/graph/goals/store.py` |

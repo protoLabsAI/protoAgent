@@ -3,7 +3,7 @@
 Both turn drivers — the streaming ``_chat_langgraph_stream_impl`` in ``server.chat``
 (A2A / console) and the non-streaming ``_chat_langgraph_impl`` in ``server.turn_sync`` (``chat()``:
 OpenAI-compat /v1, /api/chat, plugin surfaces) — run ONE chain before the turn
-(#3805): @-mention → /goal → /lifecycle → plugin command → workflow → subagent →
+(#3805): @-mention → /goal → /lifecycle → /directives → plugin command → workflow → subagent →
 skill (rewrite, falls through) → unknown /command → ACP switch. A fenced turn
 (#2972) skips every short-circuit (and fails closed on an ACP runtime, #3812). So does
 any turn in a session whose ACTIVE goal a fenced turn set (``GoalState.fence``) — that
@@ -209,6 +209,18 @@ def _lifecycle_command_reply(message: str) -> str | None:
     return describe()
 
 
+def _directives_command_reply(message: str, session_id: str) -> str | None:
+    """If ``message`` is the core ``/directives`` command (ADR 0127 D6), return this chat's
+    directive ledger — or, for ``/directives revoke <id> [reason]``, revoke one as the
+    operator. Else ``None`` (fall through). Reserved like ``/goal``."""
+    name, rest = _chat_commands._parse_slash_command(message)
+    if not name or _slash_kind(name) != "directives":
+        return None
+    from graph.directives import directives_command_reply
+
+    return directives_command_reply(session_id, rest)
+
+
 # The answer to a fenced turn (#2972) on an ACP runtime: the fence can't be enforced there,
 # so the turn is refused rather than run with the external agent's full toolset.
 _FENCED_ACP_REFUSAL = (
@@ -312,8 +324,8 @@ class _PreTurn:
 
 async def _pre_turn_dispatch(pre: _PreTurn, session_id: str, request_metadata: dict | None):
     """The pre-turn dispatch chain, in its one canonical order: @-mention → /goal →
-    /lifecycle → plugin command → workflow → subagent → skill (rewrite, falls
-    through) → unknown /command → ACP switch.
+    /lifecycle → /directives → plugin command → workflow → subagent → skill (rewrite,
+    falls through) → unknown /command → ACP switch.
 
     Yields the same ``(kind, payload)`` frames the streaming driver emits (work
     cards, room replies, then a terminal ``done`` / ``input_required``); the
@@ -555,6 +567,14 @@ async def _pre_turn_dispatch(pre: _PreTurn, session_id: str, request_metadata: d
     if lc_reply is not None:
         pre.handled = True
         yield ("done", lc_reply)
+        return
+
+    # Core /directives command (ADR 0127 D6) — this chat's operator directive ledger
+    # (list, or `/directives revoke <id>` as the operator). Reserved like /goal.
+    dir_reply = _directives_command_reply(message, session_id)
+    if dir_reply is not None:
+        pre.handled = True
+        yield ("done", dir_reply)
         return
 
     # Plugin-registered chat control command (/<name> …) short-circuits the

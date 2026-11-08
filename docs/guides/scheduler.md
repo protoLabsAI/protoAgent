@@ -65,6 +65,35 @@ watch that reacts in this chat shows its full reaction prompt and a reminder tha
 `clear_watch("<id>")` stops it. See
 [ADR 0127](/adr/0127-compaction-fidelity) D5.
 
+## Standing directives {#standing-directives}
+
+When you approve or instruct something that outlasts the current turn, the agent records
+it in the chat's directive ledger with `record_directive`, quoting your words. For example:
+
+> Once #4801 and #4808 have both merged, cut the release. If the review gives the release PR
+> a WARN or FAIL, come back to me instead of merging.
+
+Every turn after that, `<working_state>` shows it under **STANDING DIRECTIVES (from the
+operator — in force until fulfilled or revoked)**, verbatim, with any conditions. The
+ledger is stored outside the transcript, so a compaction can't drop the approval, and the
+agent checks the ledger before it decides it lacks approval. When the work is done the
+agent closes the directive with `fulfil_directive`.
+
+To see or withdraw what the agent holds:
+
+- Run `/directives` in the chat. It lists the directives in force and the closed ones, with
+  who closed each and why.
+- Run `/directives revoke <id> [reason]` to withdraw one. The agent stops seeing it on its
+  next model call.
+- Call `GET /api/chat/sessions/{id}/directives` and
+  `DELETE /api/chat/sessions/{id}/directives/{directive_id}` from a script. See
+  [Operator API](/reference/operator-api#chat-sessions).
+
+Directives belong to one chat; other chats don't see them. Deleting or clearing the chat
+removes its directives. There is no console panel yet. See
+[ADR 0127](/adr/0127-compaction-fidelity) D6 and the
+[directive tools](/reference/starter-tools#record_directive).
+
 ## Enabling / disabling
 
 Scheduling is on by default. Set `middleware.scheduler: false` to disable it,

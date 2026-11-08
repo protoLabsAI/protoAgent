@@ -988,6 +988,16 @@ def register_chat_routes(app, ui: str) -> None:
         from graph import steering
 
         steering.forget(session_id)
+        # The chat's directive ledger (ADR 0127 D6) goes with its history — on a clear
+        # (`retire=false`) too. A compaction must never erase an approval, but an operator
+        # who empties the chat to start over must not find the agent still acting on
+        # approvals from the conversation they threw away.
+        try:
+            from graph.directives import directive_store
+
+            await asyncio.to_thread(directive_store().forget, session_id)
+        except Exception as exc:  # noqa: BLE001 — cleanup is best-effort
+            log.warning("[chat] directive cleanup failed for %s: %s", session_id, exc)
         # Phase 2 of the forget, last: nothing after it can fail and strand a retry that
         # would then hide (and delete) what this attempt's harvest just wrote.
         forgotten = 0
@@ -1450,6 +1460,47 @@ def register_chat_routes(app, ui: str) -> None:
 
         cancelled = delegations.cancel(session_id, delegation_id)
         return {"cancelled": cancelled, "running": delegations.running(session_id)}
+
+    # --- Directive ledger (ADR 0127 D6) ------------------------------------
+    # The operator's view of what the agent holds as standing approval in a chat, and the
+    # way to withdraw one. The agent writes the ledger (record_directive); the operator
+    # reads and revokes it here and with the `/directives` chat command.
+    @app.get("/api/chat/sessions/{session_id}/directives")
+    async def _api_directives(session_id: SessionId, status: str | None = None):
+        """This chat's directives, oldest first — ``{"directives": [...], "in_force": N}``.
+        ``?status=in_force|fulfilled|revoked`` narrows the list. A chat with none answers
+        an empty list, not 404: the ledger is per chat and starts empty."""
+        from graph.directives import STATUSES, directive_store
+
+        if status is not None and status not in STATUSES:
+            raise HTTPException(status_code=400, detail=f"status must be one of {', '.join(STATUSES)}")
+        items = await asyncio.to_thread(directive_store().list, session_id)
+        in_force = sum(1 for d in items if d.in_force)
+        if status is not None:
+            items = [d for d in items if d.status == status]
+        return {"directives": [d.to_dict() for d in items], "in_force": in_force}
+
+    @app.delete("/api/chat/sessions/{session_id}/directives/{directive_id}")
+    async def _api_revoke_directive(session_id: SessionId, directive_id: str, reason: str | None = None):
+        """Revoke one directive as the operator (``closed_by: "operator"``). 404 when this
+        chat holds no directive with that id — another chat's id included; 409 when it is
+        already fulfilled or revoked. Answers the closed directive."""
+        from graph.directives import STATUS_REVOKED, DirectiveClosed, DirectiveNotFound, directive_store
+
+        try:
+            d = await asyncio.to_thread(
+                directive_store().close,
+                session_id,
+                directive_id,
+                status=STATUS_REVOKED,
+                reason=(reason or "").strip() or "revoked by the operator",
+                closed_by="operator",
+            )
+        except DirectiveNotFound as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except DirectiveClosed as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        return {"directive": d.to_dict()}
 
     # Goal-mode read/clear moved to the canonical plural `/api/goals*` in
     # operator_api/routes.py (D4 dedupe, ADR 0075): `GET /api/goals` (list),

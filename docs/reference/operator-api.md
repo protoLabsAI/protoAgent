@@ -90,6 +90,8 @@ tells the two apart this way.
 | DELETE | `/api/chat/sessions/{id}/steer/{msg_id}` | Cancel a queued steer |
 | GET | `/api/chat/sessions/{id}/delegations` | List running subagent delegations |
 | POST | `/api/chat/sessions/{id}/delegations/{del_id}/cancel` | Cancel one delegation (lead continues) |
+| GET | `/api/chat/sessions/{id}/directives` | The chat's [directive ledger](/guides/scheduler#standing-directives): `{directives: [{id, session_id, quote, conditions, scope, status, created_at, closed_at, close_reason, closed_by}], in_force}`, oldest first. `?status=in_force\|fulfilled\|revoked` narrows the list (another value → 400). A chat with none answers an empty list |
+| DELETE | `/api/chat/sessions/{id}/directives/{directive_id}` | Revoke one directive as the operator (`?reason=` optional) → `{directive}` with `closed_by: "operator"`. 404 when this chat holds no such id (another chat's included); 409 when already fulfilled or revoked |
 
 ## Goals (goal mode)
 
