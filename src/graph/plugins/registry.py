@@ -440,17 +440,17 @@ class PluginRegistry:
     def live_config(self) -> dict:
         """The plugin's CURRENT resolved config, re-read from the host on each call.
 
-        ``self.config`` is bound once, when the loader constructs this registry, and is
-        never refreshed on that instance. A hot-reload builds a NEW registry from the
-        saved config and re-runs ``register()`` on every reload — even when the re-exec
-        cache (#3365) reuses the module object — so freshly registered routes/tools close
-        over the new values. But a long-lived handler or surface that captured a
-        particular registry (or its ``self.config`` dict) keeps that register-time
-        snapshot: a surface left running across a reload with no ``reload(cfg)`` hook is
-        never told. The reload DOES rebuild ``STATE.graph_config``, so a handler that
-        reads this on each request reflects config edits with no restart. Falls back to
-        the snapshot when the host state isn't available (unit tests, or a section that
-        resolved empty)."""
+        ``self.config`` is the config snapshot supplied when this registry is created.
+        Reload constructs a new registry and calls ``register()`` again, even when
+        unchanged sources let the loader reuse the module object (#3365). Handlers
+        created by that registration can read the new registry's config, but a
+        long-lived handler or surface retaining an older registry still reads its
+        snapshot. Reload does not refresh that older registry's ``self.config``.
+
+        Read this on each request to use the current ``STATE.graph_config`` plugin
+        section without a restart. Falls back to the snapshot when host state is
+        unavailable or the section is not a dict; an empty live dict is returned
+        as-is."""
         try:
             from runtime.state import STATE
 

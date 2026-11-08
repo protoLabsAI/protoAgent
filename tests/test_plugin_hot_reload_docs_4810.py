@@ -42,7 +42,7 @@ def test_skill_md_cites_mount_plugin_routers_for_live_remount() -> None:
     assert "Enabling, disabling and reloading are all live for routes" in text
     assert "_mount_plugin_routers" in text
     assert "plugin_wiring.py" in text
-    # The one real caveat is kept: a swap can serve the old route once, never a 404.
+    # The one real caveat is kept: a request during a swap can use the old route, never a 404.
     assert "never a 404" in text
 
 
@@ -71,14 +71,14 @@ def test_live_config_docstring_states_the_real_reason() -> None:
     doc = _live_config_docstring()
     # The real reason: self.config is bound once per registry instance; a long-lived
     # handler/surface keeps that snapshot, while live_config re-reads STATE.graph_config.
-    assert "bound once" in doc
-    assert "re-runs" in doc and "register()" in doc
+    assert "config snapshot supplied when this registry is created" in doc
+    assert "calls ``register()`` again" in doc
     assert "STATE.graph_config" in doc
 
 
 def test_generated_registry_reference_reflects_the_corrected_docstring() -> None:
     ref = _read(REGISTRY_REF)
-    assert "bound once, when the loader constructs this registry" in ref
+    assert "config snapshot supplied when this registry is created" in ref
     assert "FastAPI can't re-mount a router" not in ref
 
 

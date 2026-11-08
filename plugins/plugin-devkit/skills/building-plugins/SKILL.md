@@ -347,7 +347,7 @@ Remove cleanly with `plugin uninstall <id>` (`--purge` also drops config + secre
   reloaded key's old `Route` objects are removed from `app.router.routes` and the fresh
   ones served, and a plugin absent from the roster (disabled or uninstalled) has its
   routes removed outright — so a disabled plugin's route goes away now, not at the next
-  restart. During a swap the old route can serve once (stale), never a 404. The rail
+  restart. During a swap a request can still use the old route (stale), never a 404. The rail
   picks up a new view from `runtime-status` without a console rebuild.
 - Don't edit core files to wire a plugin in — if you need to, you're missing a
   seam; file it (see the operator-fork contract) instead of re-porting each sync.
