@@ -136,6 +136,34 @@ test("subscribe with background:true keeps the view mounted + receiving while hi
     .toBeGreaterThanOrEqual(before);
 });
 
+test("a background:true subscribe never reloads the open view's page (#4802)", async ({ page }) => {
+  await page.goto("/app/", { waitUntil: "load" });
+  const rail = page.locator(".pl-rail");
+  await rail.getByRole("button", { name: "Board", exact: true }).click();
+  const frame = page.locator(".plugin-view-frame");
+  await expect(frame).toBeVisible();
+  const body = page.frameLocator(".plugin-view-frame").locator("body");
+
+  // Mark THIS document before subscribing: a reload (the iframe re-created when the view moved
+  // into its background slot) would come back without the mark.
+  await body.evaluate(() => {
+    (window as unknown as { __mark?: number }).__mark = 1;
+    window.parent.postMessage({ type: "protoagent:subscribe", patterns: ["boardy.#"], background: true }, "*");
+  });
+  const marked = () => body.evaluate(() => (window as unknown as { __mark?: number }).__mark ?? 0);
+  // Give a remount every chance to happen before asserting it didn't.
+  await page.waitForTimeout(500);
+  expect(await marked()).toBe(1);
+  await expect(frame).toHaveCount(1);
+
+  // Hiding and reopening it keeps the same document too.
+  await rail.getByRole("button", { name: "Chat", exact: true }).click();
+  await expect(frame).toBeHidden();
+  await rail.getByRole("button", { name: "Board", exact: true }).click();
+  await expect(frame).toBeVisible();
+  expect(await marked()).toBe(1);
+});
+
 test("a plugin bus event lights the rail notification dot, cleared on open", async ({ page }) => {
   // ADR 0039 — the mock pushes a `boardy.created` event on the /api/events stream; the
   // console routes it by topic and lights the boardy surface's rail icon until it's opened.
