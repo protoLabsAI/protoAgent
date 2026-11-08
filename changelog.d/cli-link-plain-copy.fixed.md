@@ -1,0 +1,1 @@
+- **Install Command-Line Tool reads as plain copy.** The tray dialog (and `protoagent cli link`) now says "The protoagent command is installed." with a `protoagent --help` to try, instead of echoing the raw symlink path into the app bundle. When the terminal can't find the command yet, or another protoagent runs first, it says what to do.

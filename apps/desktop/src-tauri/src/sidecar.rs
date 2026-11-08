@@ -328,9 +328,9 @@ pub(crate) fn cli_link_message(ok: bool, stdout: &str, stderr: &str) -> String {
         .join("\n");
     match (ok, body.is_empty()) {
         (true, false) => body,
-        (true, true) => "The `protoagent` command is linked.".to_string(),
-        (false, false) => format!("The `protoagent` command was not linked.\n\n{body}"),
-        (false, true) => "The `protoagent` command was not linked.".to_string(),
+        (true, true) => "The protoagent command is installed.".to_string(),
+        (false, false) => format!("The protoagent command wasn't installed.\n\n{body}"),
+        (false, true) => "The protoagent command wasn't installed.".to_string(),
     }
 }
 
@@ -739,11 +739,11 @@ mod cli_link_tests {
 
     #[test]
     fn link_message_shows_the_cli_output() {
-        let out = "Linked /Users/me/.local/bin/protoagent -> /Applications/x\n";
+        let out = "The protoagent command is installed.\n\nTry it in a terminal:\n  protoagent --help\n";
         assert_eq!(cli_link_message(true, out, ""), out.trim());
-        let refused = cli_link_message(false, "", "protoagent cli link: /Users/me/.local/bin/protoagent is a file\n");
-        assert!(refused.starts_with("The `protoagent` command was not linked."));
-        assert!(refused.ends_with("is a file"));
-        assert_eq!(cli_link_message(true, "", ""), "The `protoagent` command is linked.");
+        let refused = cli_link_message(false, "", "There's already a protoagent command at ~/.local/bin/protoagent: a file\n");
+        assert!(refused.starts_with("The protoagent command wasn't installed."));
+        assert!(refused.ends_with(": a file"));
+        assert_eq!(cli_link_message(true, "", ""), "The protoagent command is installed.");
     }
 }

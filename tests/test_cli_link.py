@@ -153,3 +153,52 @@ def test_cli_is_a_forwarded_verb_in_the_help_tree(capsys):
 def test_link_is_unsupported_on_windows(tmp_path, frozen_bin, capsys):
     code, res = _run(["link", "--dir", str(tmp_path / "bin")], capsys)
     assert code == 2 and res["action"] == "unsupported"
+
+
+# The tray's "Install Command-Line Tool…" dialog shows the human output verbatim, so it has
+# to read as plain copy — not "Linked <link> -> <app bundle internals>".
+
+
+@unix_only
+def test_link_human_output_is_plain_copy(tmp_path, frozen_bin, capsys, monkeypatch):
+    bindir = tmp_path / "bin"
+    monkeypatch.setenv("PATH", str(bindir))
+    assert dispatch(["cli", "link", "--dir", str(bindir)]) == 0
+    out = capsys.readouterr().out
+    assert out.startswith("The protoagent command is installed.")
+    assert "protoagent --help" in out
+    assert "->" not in out and "Contents/Resources" not in out
+    assert dispatch(["cli", "link", "--dir", str(bindir)]) == 0
+    assert capsys.readouterr().out.startswith("The protoagent command is already installed.")
+
+
+@unix_only
+def test_link_human_output_says_how_to_reach_an_off_path_dir(tmp_path, frozen_bin, capsys, monkeypatch):
+    monkeypatch.setenv("PATH", str(tmp_path / "elsewhere"))
+    assert dispatch(["cli", "link", "--dir", str(tmp_path / "bin")]) == 0
+    out = capsys.readouterr().out
+    assert "can't find it yet" in out and "export PATH=" in out
+    assert "protoagent --help" not in out
+
+
+@unix_only
+def test_link_human_output_names_a_shadowing_install(tmp_path, frozen_bin, capsys, monkeypatch):
+    bindir, earlier = tmp_path / "bin", tmp_path / "earlier"
+    earlier.mkdir()
+    (earlier / "protoagent").write_text("#!/bin/sh\n")
+    (earlier / "protoagent").chmod(0o755)
+    monkeypatch.setenv("PATH", os.pathsep.join([str(earlier), str(bindir)]))
+    assert dispatch(["cli", "link", "--dir", str(bindir)]) == 0
+    out = capsys.readouterr().out
+    assert "still runs another protoagent first" in out
+
+
+@unix_only
+def test_refused_link_human_output_says_what_to_do(tmp_path, frozen_bin, capsys):
+    bindir = tmp_path / "bin"
+    bindir.mkdir()
+    (bindir / "protoagent").write_text("#!/bin/sh\n")
+    assert dispatch(["cli", "link", "--dir", str(bindir)]) == 1
+    err = capsys.readouterr().err
+    assert err.startswith("There's already a protoagent command at")
+    assert "--force" in err
