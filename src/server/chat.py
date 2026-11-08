@@ -812,6 +812,10 @@ def _vision_human_message(
     incognito turns (ADR 0069: no persistence)."""
     from langchain_core.messages import HumanMessage
 
+    # When it was sent — the verbatim operator block a compaction carries forward quotes it
+    # with its time (ADR 0127 D3). Providers never see ``additional_kwargs``.
+    from graph.compaction_engine import sent_at_kwargs
+
     note = "" if incognito else _bridge_attachment_ids(images, session_id)
     if images and getattr(STATE.graph_config, "model_vision", False):
         blocks: list[dict] = [{"type": "text", "text": message}] if message else []
@@ -826,8 +830,8 @@ def _vision_human_message(
             blocks.append({"type": "text", "text": "[an attached image was omitted: too large to send to the model]"})
         if note:
             blocks.append({"type": "text", "text": note})
-        return HumanMessage(content=blocks)
-    return HumanMessage(content=f"{message}\n\n{note}".strip() if note else message)
+        return HumanMessage(content=blocks, additional_kwargs=sent_at_kwargs())
+    return HumanMessage(content=f"{message}\n\n{note}".strip() if note else message, additional_kwargs=sent_at_kwargs())
 
 
 # The streaming event loop (``_run_turn_stream``) and its lead-speaker filter moved to

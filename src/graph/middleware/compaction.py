@@ -62,7 +62,8 @@ two additions:
    summarizer, and the previous compaction's summary at the head of the span was
    trimmed away too. ``_create_summary`` / ``_acreate_summary`` now hand the FULL
    to-be-summarized span to :mod:`graph.compaction_engine` (chunked fold, seeded from a
-   previous summary, the continuation prompt with required sections), and
+   previous summary, the continuation prompt with required sections, then the verbatim
+   ``<operator_messages>`` block), and
    ``_build_new_messages`` frames the result as the agent's own notes. A summarizer
    failure raises into the failure policy above (skip + back off), exactly as before.
 
@@ -288,6 +289,18 @@ _TURN_WINDOW: contextvars.ContextVar[int | None] = contextvars.ContextVar("compa
 _TURN_SYSTEM: contextvars.ContextVar[bool] = contextvars.ContextVar("compaction_turn_system_thread", default=False)
 
 
+# ``(session_id, archived)`` for THIS call, for the operator block's pointer line (ADR 0127
+# D3). Same rationale again: ``_create_summary`` gets only the span, not ``state``.
+_TURN_SESSION: contextvars.ContextVar[tuple[str, bool]] = contextvars.ContextVar(
+    "compaction_turn_session", default=("", True)
+)
+
+
+def _turn_session(state) -> tuple[str, bool]:
+    state = state if isinstance(state, dict) else {}
+    return str(state.get("session_id") or ""), not state.get("incognito")
+
+
 class CountingSummarizationMiddleware(SummarizationMiddleware):
     """``SummarizationMiddleware`` + archive-first (#2784) + a compaction counter."""
 
@@ -349,18 +362,28 @@ class CountingSummarizationMiddleware(SummarizationMiddleware):
 
     def _create_summary(self, messages_to_summarize):  # type: ignore[override]
         """Notes for the FULL span (no tail trim), via the engine. Raises on failure."""
+        session_id, archived = _TURN_SESSION.get()
         return compaction_engine.summarize_span(
             list(messages_to_summarize or []),
             lambda prompt: self._summary_model.invoke(prompt, config=_summary_call_config()),
             budget_chars=self._engine_budget(),
+            token_counter=self.token_counter,
+            session_id=session_id,
+            archived=archived,
         )
 
     async def _acreate_summary(self, messages_to_summarize):  # type: ignore[override]
         async def call(prompt):
             return await self._summary_model.ainvoke(prompt, config=_summary_call_config())
 
+        session_id, archived = _TURN_SESSION.get()
         return await compaction_engine.asummarize_span(
-            list(messages_to_summarize or []), call, budget_chars=self._engine_budget()
+            list(messages_to_summarize or []),
+            call,
+            budget_chars=self._engine_budget(),
+            token_counter=self.token_counter,
+            session_id=session_id,
+            archived=archived,
         )
 
     @staticmethod
@@ -590,18 +613,22 @@ class CountingSummarizationMiddleware(SummarizationMiddleware):
     def before_model(self, state, runtime):  # type: ignore[override]
         token = self._bind_turn_window(state)
         sys_token = _TURN_SYSTEM.set(_is_system_thread(state))
+        session_token = _TURN_SESSION.set(_turn_session(state))
         try:
             return self._before_model(state, runtime)
         finally:
+            _TURN_SESSION.reset(session_token)
             _TURN_SYSTEM.reset(sys_token)
             _TURN_WINDOW.reset(token)
 
     async def abefore_model(self, state, runtime):  # type: ignore[override]
         token = self._bind_turn_window(state)
         sys_token = _TURN_SYSTEM.set(_is_system_thread(state))
+        session_token = _TURN_SESSION.set(_turn_session(state))
         try:
             return await self._abefore_model(state, runtime)
         finally:
+            _TURN_SESSION.reset(session_token)
             _TURN_SYSTEM.reset(sys_token)
             _TURN_WINDOW.reset(token)
 
