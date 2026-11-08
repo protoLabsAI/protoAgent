@@ -21,8 +21,6 @@ from pathlib import Path
 
 _INIT_STUB = '''"""{name} — a protoAgent plugin (scaffolded by plugin-devkit)."""
 
-from __future__ import annotations
-
 from langchain_core.tools import tool
 {view_import}
 
@@ -147,8 +145,6 @@ host; monkeypatch a seam to assert its behaviour. To refresh the vendored copy a
 protoAgent upgrade, re-run ``scaffold_plugin`` or recopy ``graph/plugins/testkit.py``.
 """
 
-from __future__ import annotations
-
 import sys
 from pathlib import Path
 
@@ -179,8 +175,6 @@ def registry():
 
 # .format(id=, name=) — no other literal braces.
 _TEST_STUB = '''"""Smoke tests for {name} — host-free (no protoAgent running)."""
-
-from __future__ import annotations
 
 from pathlib import Path
 
@@ -278,8 +272,6 @@ admin-gating, per-conversation threads, agent invoke, reply-chunking, lifecycle,
 and the Test route. Reference: plugins/telegram. Guide:
 docs/guides/communication-plugins.md.
 """
-
-from __future__ import annotations
 
 from graph.plugins.chat_surface import InboundMessage, register_chat_surface
 

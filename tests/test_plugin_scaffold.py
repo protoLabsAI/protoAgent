@@ -67,6 +67,27 @@ def test_scaffold_view_is_served_on_the_public_prefix(tmp_path):
     assert 'prefix="/api/plugins/viewy"' in init
 
 
+@pytest.mark.parametrize("variant", ["default", "view", "comms"])
+def test_scaffold_has_no_future_annotations(tmp_path, variant):
+    """Keep annotations eager in every Python template, including the test harness."""
+    scaffold.scaffold_plugin(
+        "Fresh Plugin",
+        with_view=variant == "view",
+        with_comms=variant == "comms",
+        with_tests=True,
+        target_dir=str(tmp_path),
+    )
+    pdir = tmp_path / "fresh-plugin"
+    files = [pdir / "__init__.py"]
+    if variant != "comms":
+        files += [pdir / "tests/conftest.py", pdir / "tests/test_fresh_plugin.py"]
+    # _plugin_testkit.py is copied verbatim, not generated from a scaffold stub.
+    for path in files:
+        source = path.read_text()
+        assert "from __future__ import annotations" not in source, path
+        compile(source, str(path), "exec", dont_inherit=True)
+
+
 def test_scaffold_with_tests_is_shippable(tmp_path):
     """with_tests writes a host-free suite + CI + dev deps + pyproject, version-coherent."""
     import yaml
@@ -99,14 +120,15 @@ def test_scaffold_with_tests_is_shippable(tmp_path):
 
 
 @pytest.mark.platform_sensitive
-def test_scaffolded_suite_passes_end_to_end(tmp_path):
+@pytest.mark.parametrize("with_view", [False, True], ids=["default", "view"])
+def test_scaffolded_suite_passes_end_to_end(tmp_path, with_view):
     """The generated suite is GREEN out of the box — run pytest on the scaffolded plugin in
     a subprocess (cwd = the plugin, where ``graph`` is absent, so the vendored testkit's
     host stubs are exercised for real, the standalone-plugin path)."""
     import subprocess
     import sys
 
-    scaffold.scaffold_plugin("Green Birth", with_tests=True, target_dir=str(tmp_path))
+    scaffold.scaffold_plugin("Green Birth", with_tests=True, with_view=with_view, target_dir=str(tmp_path))
     pdir = tmp_path / "green-birth"
     proc = subprocess.run([sys.executable, "-m", "pytest", "-q"], cwd=str(pdir), capture_output=True, text=True)
     assert proc.returncode == 0, f"scaffolded suite failed:\n{proc.stdout}\n{proc.stderr}"
