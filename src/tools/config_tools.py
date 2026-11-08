@@ -33,6 +33,8 @@ from typing import Any
 
 from langchain_core.tools import tool
 
+from infra.build_info import build_info
+
 log = logging.getLogger("protoagent.tools.config")
 
 _MAX_CHARS = 12_000
@@ -416,6 +418,12 @@ def build_config_tools(config) -> list:
           is the address this process is actually serving on, ``public`` the configured
           external origin, ``preferred`` the one to hand out. It also appears in the
           whole-config view and the section list.
+        - ``section="version"``: the RUNNING build — answer "what version are you on?"
+          from THIS. ``version`` is the same value ``/healthz`` reports (no auth needed);
+          plus ``git_sha``/``git_dirty`` when running from a source checkout,
+          ``install_kind``/``install_path``, ``started_at`` and ``uptime_s``. A local
+          checkout's ``git describe`` is a tree on disk, NOT the process that is serving,
+          so don't answer from it. Also appears in the whole-config view and section list.
         - ``offset`` / ``limit``: page a selected dict, list, or oversized string.
           Dict keys are sorted deterministically. Large selected values return an
           explicit page envelope instead of being silently cut off; ``next_offset``
@@ -438,6 +446,13 @@ def build_config_tools(config) -> list:
         # whole-config view, the too-large section index (it's a dict → listed there),
         # and `section="self_url"` — the agent finds itself without probing ports.
         doc["self_url"] = _self_url(config)
+
+        # The RUNNING build (#4876) — version/git/install/uptime, computed (not stored),
+        # so it rides on top the same way self_url does: whole-config view, the too-large
+        # section index (a dict → listed), and `section="version"`. This is what to answer
+        # "which version are you on?" with — a checkout's `git describe` isn't the process
+        # that is serving. `version` matches what `/healthz` reports.
+        doc["version"] = build_info()
 
         wanted = (section or "").strip()
         if wanted:

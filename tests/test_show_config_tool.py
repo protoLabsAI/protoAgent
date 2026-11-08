@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 
 import pytest
 
@@ -566,6 +567,225 @@ def test_self_url_documented_as_the_port_probing_alternative():
 
     assert "self_url" in tool.description
     assert "probing ports" in tool.description
+
+
+# ── version / running-build (#4876) ────────────────────────────────────────
+
+
+@pytest.mark.platform_sensitive
+def test_version_snapshot_precedes_first_query():
+    """Boot in a fresh interpreter so test collection cannot initialize the snapshot."""
+    import os
+    import subprocess
+    import sys
+    import textwrap
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[1]
+    script = textwrap.dedent('''
+        import json
+        import subprocess
+        import sys
+        from datetime import datetime, timezone
+        from pathlib import Path
+        from unittest.mock import patch
+
+        import infra.paths
+
+        git_calls = []
+        def startup_git(args, **kwargs):
+            assert args[0] == "git"
+            git_calls.append(args)
+            output = "abcdef123\\n" if "rev-parse" in args else ""
+            return subprocess.CompletedProcess(args, 0, stdout=output)
+
+        before = datetime.now(timezone.utc)
+        with patch("subprocess.run", side_effect=startup_git), patch(
+            "infra.paths.app_root", return_value=Path.cwd()
+        ):
+            import server
+        after = datetime.now(timezone.utc)
+        assert "infra.build_info" in sys.modules, "server startup must capture build identity"
+        from infra import build_info as bi
+        assert len(git_calls) == 2
+
+        from graph.config import LangGraphConfig
+        from tools.config_tools import build_config_tools
+
+        # A checkout changed on disk after boot must not change the running identity.
+        with patch.object(bi, "_git", return_value="changed"), patch.object(
+            bi.time, "monotonic", return_value=bi._STARTED_MONOTONIC + 7200
+        ):
+            info = json.loads(build_config_tools(LangGraphConfig())[0].invoke(
+                {"section": "version"}
+            ))["version"]
+        assert info["uptime_s"] == 7200
+        assert before <= datetime.fromisoformat(info["started_at"]) <= after
+        assert info["git_sha"] == "abcdef123"
+        assert info["git_dirty"] is False
+    ''')
+    env = {**os.environ, "PYTHONPATH": os.pathsep.join([str(root / "src"), str(root)])}
+    result = subprocess.run(
+        [sys.executable, "-c", script], cwd=root, env=env,
+        capture_output=True, text=True, timeout=60,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_version_section_reports_the_running_build():
+    """`section="version"` answers "which version are you on?" — the package version,
+    install kind/path, process start time and a monotonic uptime, in one view."""
+    from infra.paths import package_version
+
+    out = json.loads(build_config_tools(LangGraphConfig())[0].invoke({"section": "version"}))["version"]
+
+    # The version MUST equal the single shared resolver /healthz also reports from.
+    assert out["version"] == package_version()
+    assert out["install_kind"] in {"desktop", "pypi", "source"}
+    assert out["install_path"]
+    # ISO-8601 UTC start time + an int uptime that can't be negative.
+    assert re.match(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}", out["started_at"])
+    assert isinstance(out["uptime_s"], int) and out["uptime_s"] >= 0
+    # git identity is always present as keys — concrete when on a checkout, "unknown" when not.
+    assert "git_sha" in out and "git_dirty" in out
+
+
+@pytest.mark.platform_sensitive
+def test_version_from_source_checkout_exposes_git_sha_and_dirty(monkeypatch, tmp_path):
+    """An isolated checkout reports clean and dirty states through the tool."""
+    import subprocess
+
+    from infra import build_info as bi
+
+    def git(*args):
+        return subprocess.run(
+            ["git", "-C", str(tmp_path), *args],
+            check=True, capture_output=True, text=True, timeout=10,
+        ).stdout.strip()
+
+    git("init")
+    (tmp_path / "pyproject.toml").write_text('[project]\nversion = "1.0.0"\n', encoding="utf-8")
+    git("add", "pyproject.toml")
+    git("-c", "user.name=Test", "-c", "user.email=test@example.com",
+        "-c", "commit.gpgsign=false", "commit", "-m", "test build")
+    sha = git("rev-parse", "--short", "HEAD")
+    monkeypatch.setattr(bi, "app_root", lambda: tmp_path)
+    tool = build_config_tools(LangGraphConfig())[0]
+    for dirty in (False, True):
+        if dirty:
+            (tmp_path / "untracked.txt").write_text("dirty", encoding="utf-8")
+        monkeypatch.setattr(bi, "_STATIC_BUILD_INFO", bi._collect())
+        info = json.loads(tool.invoke({"section": "version"}))["version"]
+        assert info["install_kind"] == "source"
+        assert info["install_path"] == str(tmp_path)
+        assert info["git_sha"] == sha
+        assert info["git_dirty"] is dirty
+
+
+@pytest.mark.parametrize("failure", ["missing", "timeout", "exit"])
+def test_version_reports_unknown_sha_when_git_is_unavailable(monkeypatch, tmp_path, failure):
+    """git absent / failing must degrade to "unknown" without raising — a status field is
+    never worth taking a turn down for."""
+    from infra import build_info as bi
+    import subprocess
+
+    def failed_git(args, **kwargs):
+        assert kwargs["timeout"] == bi._GIT_TIMEOUT_S
+        assert kwargs["encoding"] == "utf-8"
+        assert kwargs["errors"] == "replace"
+        if failure == "missing":
+            raise FileNotFoundError("git unavailable")
+        if failure == "timeout":
+            raise subprocess.TimeoutExpired(args, kwargs["timeout"])
+        return subprocess.CompletedProcess(args, 128, stdout="", stderr="not a repository")
+
+    (tmp_path / "pyproject.toml").touch()
+    monkeypatch.setattr(bi, "app_root", lambda: tmp_path)
+    monkeypatch.setattr(bi.subprocess, "run", failed_git)
+    monkeypatch.setattr(bi, "_STATIC_BUILD_INFO", bi._collect())
+    info = json.loads(build_config_tools(LangGraphConfig())[0].invoke({"section": "version"}))["version"]
+
+    assert info["git_sha"] == "unknown"
+    assert info["git_dirty"] is None
+
+
+@pytest.mark.platform_sensitive
+def test_version_git_output_tolerates_non_utf8_diagnostics(monkeypatch, tmp_path):
+    """A locale-dependent Git diagnostic must not crash build collection."""
+    import subprocess
+    import sys
+
+    from infra import build_info as bi
+
+    run = subprocess.run
+
+    def git_with_diagnostic(args, **kwargs):
+        # Use a real pipe so subprocess's decoder is exercised on every OS.
+        return run(
+            [sys.executable, "-c", "import os; os.write(1, b'abcdef123\\n'); os.write(2, b'\\xff')"],
+            **kwargs,
+        )
+
+    monkeypatch.setattr(bi.subprocess, "run", git_with_diagnostic)
+    assert bi._git(tmp_path, "rev-parse", "--short", "HEAD") == "abcdef123"
+
+
+def test_version_reports_unknown_sha_for_an_installed_package_path(monkeypatch, tmp_path):
+    """A wheel install under site-packages has no repo to describe: kind is "pypi" and git
+    is never shelled out, so the sha is "unknown" rather than an error."""
+    from infra import build_info as bi
+
+    fake = tmp_path / "site-packages" / "protoagent"
+    fake.mkdir(parents=True)
+    monkeypatch.setattr(bi, "app_root", lambda: fake)
+
+    def _no_git(*a, **k):
+        raise AssertionError("an installed-package build must not shell out to git")
+
+    monkeypatch.setattr(bi, "_git", _no_git)
+
+    monkeypatch.setattr(bi, "_STATIC_BUILD_INFO", bi._collect())
+    info = json.loads(build_config_tools(LangGraphConfig())[0].invoke({"section": "version"}))["version"]
+
+    assert info["install_kind"] == "pypi"
+    assert info["git_sha"] == "unknown"
+    assert info["git_dirty"] is None
+    assert info["version"] == bi.package_version()
+
+
+def test_version_appears_in_whole_config_view():
+    """It rides the whole-config view (and the section list), not only an explicit
+    ``section="version"`` selection."""
+    doc = json.loads(build_config_tools(LangGraphConfig())[0].invoke({}))
+
+    assert "version" in doc
+    assert set(doc["version"]) >= {
+        "version",
+        "git_sha",
+        "git_dirty",
+        "install_kind",
+        "install_path",
+        "started_at",
+        "uptime_s",
+    }
+
+
+def test_version_listed_in_section_index_when_config_too_large():
+    """When the whole config is too big to render, the fallback is a section index — and
+    ``version`` must still be listed there as a selectable section."""
+    cfg = LangGraphConfig()
+    cfg.plugin_config = {"bulky": {f"k{i:03d}": "x" * 400 for i in range(100)}}
+    out = build_config_tools(cfg)[0].invoke({})
+
+    assert "too large to show at once" in out
+    assert "version" in out
+
+
+def test_version_documented_as_the_what_version_answer():
+    tool = build_config_tools(LangGraphConfig())[0]
+
+    assert 'section="version"' in tool.description
+    assert "/healthz" in tool.description
 
 
 def test_show_config_binds_with_the_core_toolset():
