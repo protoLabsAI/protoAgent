@@ -1,9 +1,10 @@
-"""ADR 0125 P3-B / D5 — work status is not memory.
+"""ADR 0125 D5 (2026-11-08 refinement) — work status is not memory.
 
-``memory_save`` still SAVES a subject-less work-status line (a PR/issue, board card or
-SHA with a past-tense event) but appends a nudge toward the board/issue/PR, where that
-stays current. The detector is deterministic (regex, no LLM); the tool never refuses.
-The ``memory_save`` description and the operating model carry the matching
+``memory_save`` REFUSES a save that reads as a work-status log (a release cut, a PR
+merged or verified, a CI/QA state, a triage outcome, or a subject-less line with a work
+reference and a past-tense event) and says where that fact already lives. Lessons and
+rules still save, including ones that cite a PR. The detector is deterministic (regex,
+no LLM). The ``memory_save`` description and the operating model carry the matching
 "what's worth saving" rule.
 """
 
@@ -18,10 +19,11 @@ from graph.prompts import _build_operating_model
 from knowledge.memories import MemoryStore
 from knowledge.store import KnowledgeStore
 from tools.memory_tools import (
-    _STATUS_LINE_NUDGE,
     _WORTH_SAVING_RULE,
     _build_memory_tools,
     looks_like_status_line,
+    status_refusal,
+    work_status_kind,
 )
 
 
@@ -52,7 +54,7 @@ _STATUS_CASES = [
     ("", ""),  # degenerate: no subject but also no ref/event handled below
 ]
 
-# Not a work-status line — fails on exactly one of the three conditions.
+# Not a work-status line — fails on exactly one of the three subject-less conditions.
 _NON_STATUS_CASES = [
     ("merged #4553 at b83d744a", "release-process"),  # has a subject
     ("Josh prefers squash merges", None),  # no work reference
@@ -83,36 +85,101 @@ def test_empty_content_is_not_a_status_line():
     assert looks_like_status_line("", None) is False
 
 
-# ── memory_save: saves AND nudges, never refuses (r1) ─────────────────────────
+# ── the audited status logs and lessons (protoEngineer, 2026-11-08) ─────────
+#
+# Shortened from real rows. Every status log here was saved under a fresh subject, so the
+# old subject-less-only nudge never fired and D4 supersession never retired one.
+
+_AUDITED_STATUS = [
+    ("release v0.231.0: I cut protoAgent v0.231.0 on 2026-11-08 (UTC). It was MINOR. Lessons: "
+     "never trust a green branch.", "release v0.231.0", "release"),
+    ("protoAgent v0.218.0 cut end to end by me on 2026-10-26: release PR #4526 merged.",
+     "protoAgent-releases", "release"),
+    ("Notes on the bump to v0.229.0, IN PROGRESS: stopped at the desktop build.", "release v0.229.0", "release"),
+    ("I verified projectBoard-plugin PR558 (bd-t2l0, fixes #554) merged with seven passing checks "
+     "and promoted QA PASS at head a1902d807c62.", "projectBoard-plugin", "ci"),
+    ("2026-10-21 triage sweep: terminal-plugin PR23 (bd-uffl) merged with QA promoted WARN.",
+     "terminal-plugin", "ci"),
+    ("protoAgent triage 2026-08-19: 15 open issues scored and organized.", None, "triage"),
+    ("Task cards initiative (#217) COMPLETE — 2026-08-23.", None, "triage"),
+    ("I merged #4318 at head cac39166 after review.", "chat-tabbar", "pr"),
+]
+
+_AUDITED_KEEP = [
+    ("Lesson from epic #4076: a board project whose base_branch is not main needs a LOCAL "
+     "tracking branch for that base.", "projectBoard-plugin"),
+    ("Correction to my bd-f171 focus lesson (PR #4318, merged 2026-10-17): picking a session "
+     "returns focus to the trigger.", "chat-tabbar-focus"),
+    ("The plugin settings UX standard lives in docs/guides/plugin-settings.md (merged in PR #4491).",
+     "plugin-settings-standard"),
+    ("Rule from Josh (2026-10-29): never record a demo clip in jobCoach.", "careercoach-demo-clips"),
+    ("Correction (2026-11-05): protobanana-plugin DOES tag releases now; Latest is v0.7.10.",
+     "protobanana-plugin-versioning"),
+    ("When boarding features that touch the same repo, ALWAYS map the file-overlap graph first.", None),
+    ("Josh prefers squash merges and a changelog fragment per PR.", "josh-merges"),
+]
 
 
-def test_status_line_saves_and_returns_nudge(tmp_path):
+@pytest.mark.parametrize("content,subject,kind", _AUDITED_STATUS)
+def test_audited_status_logs_are_classified(content, subject, kind):
+    assert work_status_kind(content, subject) == kind
+
+
+@pytest.mark.parametrize("content,subject", _AUDITED_KEEP)
+def test_audited_lessons_and_facts_are_not_status(content, subject):
+    assert work_status_kind(content, subject) is None
+
+
+# ── memory_save: refuses status, saves lessons ────────────────────────────────
+
+
+@pytest.mark.parametrize("content,subject,kind", _AUDITED_STATUS)
+def test_status_log_is_refused_and_nothing_is_written(tmp_path, content, subject, kind):
+    save, memory = _save_tool(tmp_path)
+    args = {"content": content} | ({"subject": subject} if subject else {})
+    out = asyncio.run(save.ainvoke(args))
+    assert out == status_refusal(kind)
+    assert out.startswith("Not saved:")
+    assert memory.list(limit=5) == []
+
+
+def test_refusal_names_where_the_fact_lives():
+    assert "git tag" in status_refusal("release")
+    assert "checks" in status_refusal("ci")
+    assert "board" in status_refusal("triage")
+    assert "PR" in status_refusal("pr")
+    assert "Lesson:" in status_refusal("pr")
+
+
+def test_subjectless_status_line_is_refused(tmp_path):
     save, memory = _save_tool(tmp_path)
     out = asyncio.run(save.ainvoke({"content": "merged #4553 at b83d744a"}))
-    # Saved as normal …
-    assert out.startswith("Saved memory #")
-    assert memory.list(limit=1)[0].content == "merged #4553 at b83d744a"
-    # … and the nudge is appended (never a refusal).
-    assert _STATUS_LINE_NUDGE in out
+    assert out.startswith("Not saved:")
+    assert memory.list(limit=1) == []
 
 
-def test_non_status_save_has_no_nudge(tmp_path):
+def test_shared_profile_proposal_is_refused_too(tmp_path):
+    path = str(tmp_path / "agent.db")
+    cfg = SimpleNamespace(knowledge_hot_write_confirm=False, memory_shared_profile=True)
+    tools = _build_memory_tools(KnowledgeStore(db_path=path), cfg, memory_store=MemoryStore(db_path=path))
+    save = next(t for t in tools if t.name == "memory_save")
+    out = asyncio.run(save.ainvoke({"content": "release v1.2.0 cut today", "kind": "standing", "shared": True}))
+    assert out.startswith("Not saved:")
+
+
+@pytest.mark.parametrize("content,subject", _AUDITED_KEEP)
+def test_lessons_and_facts_still_save(tmp_path, content, subject):
     save, memory = _save_tool(tmp_path)
-    out = asyncio.run(
-        save.ainvoke({"content": "Josh prefers squash merges", "kind": "profile", "subject": "josh-merges"})
-    )
+    args = {"content": content} | ({"subject": subject} if subject else {})
+    out = asyncio.run(save.ainvoke(args))
     assert out.startswith("Saved memory #")
-    assert _STATUS_LINE_NUDGE not in out
-    assert memory.list(limit=1)[0].content == "Josh prefers squash merges"
+    assert memory.list(limit=1)[0].content == content
 
 
-def test_subject_suppresses_nudge_even_for_a_work_line(tmp_path):
+def test_subject_keeps_a_plain_reference_line_saveable(tmp_path):
     save, _memory = _save_tool(tmp_path)
-    out = asyncio.run(
-        save.ainvoke({"content": "merged #4553 at b83d744a", "subject": "release-process"})
-    )
+    out = asyncio.run(save.ainvoke({"content": "merged #4553 at b83d744a", "subject": "release-process"}))
     assert out.startswith("Saved memory #")
-    assert _STATUS_LINE_NUDGE not in out
 
 
 # ── the what's-worth-saving wording lives in both places (r3) ─────────────────

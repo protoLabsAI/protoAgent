@@ -284,3 +284,46 @@ def test_minimal_non_core_store_keeps_add_only_fallback(tmp_path):
     counts = consolidate_and_store(Minimal(), [_REVISED], namespace="p")
     assert counts == {"added": 1, "skipped": 0, "superseded": 0}
     assert len(_facts(store)) == 2
+
+
+# ── provider reasoning never reaches a fact or a summary ─────────────────────
+
+
+def test_text_of_drops_reasoning_and_thinking_blocks():
+    from langchain_core.messages import AIMessage
+
+    from graph.message_blocks import text_of
+
+    msg = AIMessage(
+        content=[
+            {"type": "reasoning", "id": "rs_1", "summary": [], "encrypted_content": "gAAAAABqopaque"},
+            {"type": "thinking", "thinking": "", "signature": "CAQSsig"},
+            {"type": "redacted_thinking", "data": "EqQBsecret"},
+            {"type": "text", "text": "the answer"},
+        ]
+    )
+    assert text_of(msg) == "the answer"
+
+
+def test_default_extractor_parses_the_text_of_a_block_list(monkeypatch):
+    import graph.agent
+    import graph.llm
+    from langchain_core.messages import AIMessage
+
+    from graph.memory_facts import _default_extractor
+
+    reply = AIMessage(
+        content=[
+            {"type": "reasoning", "id": "rs_1", "summary": [], "encrypted_content": "gAAAAAB[opaque]"},
+            {"type": "text", "text": '[{"subject": "deploy-day", "content": "Deploys happen on Fridays"}]'},
+        ]
+    )
+
+    class _LLM:
+        async def ainvoke(self, messages):
+            return reply
+
+    monkeypatch.setattr(graph.agent, "_resolve_aux_model", lambda config, name: "aux")
+    monkeypatch.setattr(graph.llm, "create_llm", lambda config, model_name=None: _LLM())
+    facts = asyncio.run(_default_extractor("User: we deploy on Fridays", object()))
+    assert facts == [{"subject": "deploy-day", "content": "Deploys happen on Fridays"}]

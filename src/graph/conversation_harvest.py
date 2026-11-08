@@ -661,8 +661,30 @@ async def _default_summarizer(transcript: str, config) -> str:
 
     llm = create_llm(config, model_name=_resolve_aux_model(config, ""))
     resp = await llm.ainvoke([HumanMessage(content=_SUMMARY_PROMPT.format(transcript=transcript))])
-    # The aux model may or may not wrap output in tags; extract defensively.
-    return extract_output(str(resp.content)).strip() or str(resp.content).strip()
+    # The aux model may or may not wrap output in tags; extract defensively. A Responses
+    # provider returns a block LIST (a reasoning block carrying `encrypted_content`, then
+    # the text); `str()` of that list stored the opaque blob as the summary. `text_of`
+    # keeps the text parts only.
+    text = text_of(resp)
+    return extract_output(text).strip() or text.strip()
+
+
+def facts_allowed(thread_id: str, channel_values: dict) -> bool:
+    """Whether a retired thread's facts may be extracted into memory.
+
+    Facts are things the operator said about themselves and their world, so only a
+    thread whose last turn was an authenticated operator chat turn qualifies
+    (``operator_chat_turn``, stamped by the server on every console/chat turn). A
+    delegated peer agent, a ``/v1`` client, a scheduled or activity turn, or a thread
+    from before the flag existed does not: the extractor wrote those speakers down as
+    "the user", and a peer's brief is not a fact about the operator. The thread's
+    summary still lands in history either way. ``system:*`` threads are refused by
+    name as well, whatever the flag says.
+    """
+    session_part = thread_id[4:] if thread_id.startswith("a2a:") else thread_id
+    if session_part.startswith("system:") or ":system:" in thread_id:
+        return False
+    return channel_values.get("operator_chat_turn") is True
 
 
 def _as_of(tup) -> str:
@@ -687,8 +709,8 @@ async def harvest_thread(
     """Retire ``thread_id``'s conversation into history (ADR 0021).
 
     The single session-end pass: store an **episodic** summary
-    (``kind="summary"``) and, when ``config.knowledge_facts``, also
-    extract **semantic** facts into the core ``MemoryStore`` (``kind='fact'``,
+    (``kind="summary"``) and, when ``config.knowledge_facts`` and the thread was an
+    operator chat (:func:`facts_allowed`), also extract **semantic** facts into the core ``MemoryStore`` (``kind='fact'``,
     ``provenance='extracted'``, pending) and consolidate them (ADR 0125 P2-D3).
     Both carry ``namespace`` for later per-project scoping.
 
@@ -756,7 +778,9 @@ async def harvest_thread(
         # memory store (tests, plugin hosts) we SKIP extraction and log it — we do not fall
         # back to the knowledge store, so no code path writes memory through chunks (#4630).
         if getattr(config, "knowledge_facts", False):
-            if memory_store is None:
+            if not facts_allowed(thread_id, channel_values):
+                log.info("[harvest] thread %s is not an operator chat — skipping fact extraction", thread_id)
+            elif memory_store is None:
                 log.info("[harvest] no memory store — skipping fact extraction for thread %s", thread_id)
             else:
                 from graph.memory_facts import extract_and_store_facts

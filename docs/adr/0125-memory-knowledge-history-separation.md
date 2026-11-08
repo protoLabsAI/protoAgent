@@ -156,6 +156,21 @@ the board, issues and PRs, where they stay current. If a `memory_save` call look
 status line (a PR, card or SHA reference with a past-tense event and no subject), it
 still saves but returns a nudge. It is not refused.
 
+2026-11-08 refinement (refuse, Josh: "PR the fixes"): the nudge did not stop it. An audit
+of protoEngineer found 48 of its 225 memories were release cuts ("release v0.231.0: I cut
+…") and PR-progress logs ("I verified PR558 merged with seven passing checks …"). The
+recent ones each carry a fresh subject, so the nudge never fired and D4 never retired one. `memory_save`
+now refuses a save whose opening sentence reads as a work-status log (a release cut, a
+PR/card step the agent narrates, a CI or QA state on a work reference, a triage outcome
+or board progress, or the original subject-less reference-plus-event line), and says
+where that fact already lives (the git tag and release PR, the PR's checks, the board).
+An opening that leads with a lesson or rule marker ("Lesson:", "Rule:", "Correction",
+"never", "always", …) is not status and still saves, even when it cites a PR. Against
+that agent's rows the detector refuses 45 of the 48 status logs and none of its other 56
+agent-written memories. The same audit found the retirement extractor had mined 121 facts
+from peer-agent and `/v1` threads (recording the peer as "the user"); facts are now extracted only from
+threads whose last turn was an authenticated operator chat turn (`operator_chat_turn`).
+
 ### D6 — Migration
 
 2026-11-07 refinement: rows are routed by `source_type`, not by domain name, and the Phase 2 backup is `agent.db.pre-0125-p2`.
