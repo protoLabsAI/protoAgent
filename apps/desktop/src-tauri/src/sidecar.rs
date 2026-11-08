@@ -1,11 +1,12 @@
 use std::net::TcpListener;
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::Duration;
 
 use tauri::{AppHandle, Manager, Runtime};
 use tauri_plugin_dialog::{DialogExt, MessageDialogButtons};
 use tauri_plugin_shell::{
-    process::{CommandChild, CommandEvent},
+    process::{Command, CommandChild, CommandEvent},
     ShellExt,
 };
 
@@ -239,6 +240,100 @@ fn augmented_sidecar_path() -> String {
     entries.join(":")
 }
 
+/// Where the macOS server binary lives inside `Contents/Resources` (`tauri.macos.conf.json`
+/// maps `binaries/protoagent-server-onedir/` here).
+///
+/// macOS ships the server as a PyInstaller ONEDIR tree, not the onefile the other
+/// platforms bundle as `externalBin`. A onefile unpacks ~5,000 files to a fresh
+/// `$TMPDIR/_MEI*` dir on every launch, and macOS scans every freshly written Mach-O
+/// the first time it's loaded: measured on v0.231.0, `protoagent-server --help` took
+/// 14-16 s of wall time for 1.3 s of CPU, nearly all of it in dyld's code-signature
+/// registration (`fcntl`) — and the app's own server paid the same on every start.
+/// The onedir tree sits at one stable, signed path, so that scan happens once.
+/// (It goes in Resources, not MacOS: a PyInstaller bootloader in `Contents/MacOS`
+/// looks for its tree in `Contents/Frameworks`, where codesign refuses non-code files.)
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+pub(crate) fn onedir_server_path(resource_dir: &Path) -> PathBuf {
+    resource_dir.join("protoagent-server").join("protoagent-server")
+}
+
+/// A shell-plugin command for the bundled server binary, on every platform.
+fn server_command<R: Runtime>(app: &AppHandle<R>) -> Result<Command, String> {
+    #[cfg(target_os = "macos")]
+    {
+        let dir = app.path().resource_dir().map_err(|e| e.to_string())?;
+        let exe = onedir_server_path(&dir);
+        if !exe.is_file() {
+            return Err(format!("{} is missing", exe.display()));
+        }
+        Ok(app.shell().command(exe))
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        app.shell()
+            .sidecar("protoagent-server")
+            .map_err(|e| e.to_string())
+    }
+}
+
+/// Tray ▸ Install Command-Line Tool…: run `protoagent-server cli link`, which symlinks
+/// `~/.local/bin/protoagent` to this build's binary (never replacing a `protoagent` it
+/// didn't make), and show what it said. Before this the app offered no way to put its
+/// CLI on PATH, so `protoagent` silently ran whatever an old `uv tool install` left.
+#[cfg(unix)]
+pub(crate) fn install_cli<R: Runtime>(app: &AppHandle<R>) {
+    let command = match server_command(app) {
+        Ok(cmd) => cmd,
+        Err(e) => {
+            cli_link_dialog(app, &format!("The bundled protoagent binary is missing ({e})."));
+            return;
+        }
+    };
+    // The PATH the user's terminal sees (not the sidecar's padded one), so the report
+    // of whether `protoagent` resolves to this build is about their shell.
+    let path = login_shell_path()
+        .or_else(|| std::env::var("PATH").ok())
+        .unwrap_or_default();
+    let command = command.args(["cli", "link"]).env("PATH", path);
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        let text = match command.output().await {
+            Ok(out) => cli_link_message(
+                out.status.success(),
+                &String::from_utf8_lossy(&out.stdout),
+                &String::from_utf8_lossy(&out.stderr),
+            ),
+            Err(e) => format!("Couldn't run the command-line installer: {e}"),
+        };
+        cli_link_dialog(&app, &text);
+    });
+}
+
+#[cfg(unix)]
+fn cli_link_dialog<R: Runtime>(app: &AppHandle<R>, text: &str) {
+    app.dialog()
+        .message(text)
+        .title("Command-Line Tool")
+        .buttons(MessageDialogButtons::Ok)
+        .show(|_| {});
+}
+
+/// The dialog text for a `cli link` run: what it printed, with a lead line on failure.
+#[cfg_attr(not(unix), allow(dead_code))]
+pub(crate) fn cli_link_message(ok: bool, stdout: &str, stderr: &str) -> String {
+    let body = [stdout.trim(), stderr.trim()]
+        .into_iter()
+        .filter(|s| !s.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n");
+    match (ok, body.is_empty()) {
+        (true, false) => body,
+        (true, true) => "The `protoagent` command is linked.".to_string(),
+        (false, false) => format!("The `protoagent` command was not linked.\n\n{body}"),
+        (false, true) => "The `protoagent` command was not linked.".to_string(),
+    }
+}
+
 /// Launch the bundled protoAgent server (console UI tier) as a sidecar.
 ///
 /// The frozen binary is read-only, so its writable state (live config,
@@ -268,7 +363,7 @@ pub(crate) fn spawn_sidecar<R: Runtime>(app: &AppHandle<R>, port: u16) {
         return;
     }
 
-    let command = match app.shell().sidecar("protoagent-server") {
+    let command = match server_command(app) {
         Ok(cmd) => cmd,
         Err(e) => {
             log::error!(
@@ -288,8 +383,8 @@ pub(crate) fn spawn_sidecar<R: Runtime>(app: &AppHandle<R>, port: u16) {
         // (Was the now-deprecated --headless / PROTOAGENT_HEADLESS alias.)
         .args(["--ui", "console", "--port", &port_arg])
         .env("PROTOAGENT_UI", "console")
-        // So the sidecar exits if we die without a clean kill (the frozen
-        // onefile's child process otherwise outlives us, holding its port).
+        // So the sidecar exits if we die without a clean kill (on Linux/Windows the
+        // frozen onefile's child process otherwise outlives us, holding its port).
         .env("PROTOAGENT_PARENT_PID", std::process::id().to_string())
         .env("PROTOAGENT_HOME", config_dir.to_string_lossy().to_string())
         .env("PROTOAGENT_BOX_ROOT", config_dir.to_string_lossy().to_string());
@@ -625,5 +720,30 @@ mod port_choice_tests {
         assert!(!port_is_free(port));
         drop(listener);
         assert!(port_is_free(port));
+    }
+}
+
+#[cfg(test)]
+mod cli_link_tests {
+    use super::{cli_link_message, onedir_server_path};
+    use std::path::Path;
+
+    #[test]
+    fn onedir_binary_sits_under_resources() {
+        let res = Path::new("/Applications/protoAgent.app/Contents/Resources");
+        assert_eq!(
+            onedir_server_path(res),
+            Path::new("/Applications/protoAgent.app/Contents/Resources/protoagent-server/protoagent-server")
+        );
+    }
+
+    #[test]
+    fn link_message_shows_the_cli_output() {
+        let out = "Linked /Users/me/.local/bin/protoagent -> /Applications/x\n";
+        assert_eq!(cli_link_message(true, out, ""), out.trim());
+        let refused = cli_link_message(false, "", "protoagent cli link: /Users/me/.local/bin/protoagent is a file\n");
+        assert!(refused.starts_with("The `protoagent` command was not linked."));
+        assert!(refused.ends_with("is a file"));
+        assert_eq!(cli_link_message(true, "", ""), "The `protoagent` command is linked.");
     }
 }

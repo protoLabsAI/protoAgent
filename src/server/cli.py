@@ -59,6 +59,9 @@ _FORWARD: dict[str, tuple[str, str]] = {
     # `checkpoint migrate` — the one-time auto_vacuum migration of a legacy chat-history DB,
     # for a STOPPED agent (boot does it too; this is the on-demand / per-workspace form).
     "checkpoint": ("graph.checkpoint_migrate", "run_checkpoint_cli"),
+    # `cli link` — put the desktop app's own `protoagent` on PATH (a ~/.local/bin symlink to
+    # the frozen binary); the tray's "Install Command-Line Tool…" runs it.
+    "cli": ("infra.cli_link", "run_cli_link_cli"),
     # Internal daemon verb: serve the operator tools over MCP stdio. The ACP runtime
     # launches this in the frozen desktop sidecar, where `-m server.operator_mcp`
     # isn't a valid argv (the frozen entrypoint IS `-m server` — see #1603).
@@ -81,6 +84,7 @@ _FORWARD_HELP = {
     "operations": "List the operations on the ops layer — name, read/write, summary (ADR 0075)",
     "knowledge": "Ingest a URL / file into this instance's knowledge base (ADR 0075)",
     "checkpoint": "Maintain the chat-history DB: `migrate` shrinks a legacy one (server stopped)",
+    "cli": "Put this desktop build's `protoagent` on your PATH: link / unlink / status",
     "operator-mcp": "Serve the operator tools over MCP stdio (internal — mounted into ACP runtimes)",
     "agent": "Export this agent as a portable, secret-free snapshot zip (ADR 0091)",
 }

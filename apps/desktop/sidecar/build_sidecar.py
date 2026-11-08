@@ -1,8 +1,11 @@
 #!/usr/bin/env python3
-"""Freeze the headless protoAgent server into a single-file Tauri sidecar.
+"""Freeze the headless protoAgent server into the Tauri sidecar.
 
-Produces ``apps/desktop/src-tauri/binaries/protoagent-server-<target-triple>``
-— the ``externalBin`` Tauri bundles and launches. The Tauri webview renders its
+On Linux and Windows this produces the single-file
+``apps/desktop/src-tauri/binaries/protoagent-server-<target-triple>`` — the
+``externalBin`` Tauri bundles and launches. On macOS it produces a signed onedir tree
+at ``binaries/protoagent-server-onedir/`` instead, which ``tauri.macos.conf.json``
+bundles into ``Contents/Resources`` (see ``freeze_mode`` for why). The Tauri webview renders its
 own copy of the React console; the binary ALSO bundles the console build
 (``apps/web/dist``) so `/app` serves it — the `--ui console` contract, and what
 a QR-paired phone loads (#2411).
@@ -34,6 +37,16 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[3]
 BINARIES_DIR = REPO / "apps" / "desktop" / "src-tauri" / "binaries"
 NAME = "protoagent-server"
+#: macOS ships a ONEDIR tree instead of the onefile binary (see ``freeze_mode``):
+#: ``binaries/protoagent-server-onedir/`` → ``Contents/Resources/protoagent-server/``
+#: (``src-tauri/tauri.macos.conf.json``), launched by ``sidecar.rs::server_command``.
+ONEDIR_DEST = BINARIES_DIR / f"{NAME}-onedir"
+ENTITLEMENTS = REPO / "apps" / "desktop" / "src-tauri" / "entitlements.plist"
+#: Developer ID identity for the onedir tree's Mach-O files (CI sets it from
+#: APPLE_SIGNING_IDENTITY when it signs a release). Unset → ad-hoc signing (a local or
+#: unsigned test build). Tauri signs only the binaries it bundles itself; it never
+#: re-signs a resource tree, so the tree arrives in the app already signed.
+CODESIGN_IDENTITY_ENV = "PROTOAGENT_CODESIGN_IDENTITY"
 
 # Read-only defaults the frozen server reads via REPO_ROOT/config (which
 # resolves to _MEIPASS/config inside the bundle). Live state (langgraph-config
@@ -239,7 +252,109 @@ CLI_FORWARD_MODULES = [
     "graph.snapshot_cli",
     "deck.pair",
     "graph.checkpoint_migrate",
+    "infra.cli_link",
 ]
+
+
+def freeze_mode(platform: str = sys.platform) -> str:
+    """``onedir`` on macOS, ``onefile`` elsewhere.
+
+    A onefile unpacks itself (~5,000 files, ~200 MB) into a fresh ``$TMPDIR/_MEI*`` dir
+    on every launch, and macOS scans each freshly written Mach-O the first time it is
+    loaded. Measured on v0.231.0 (the stress test of 2026-11-07): ``protoagent-server
+    --help`` took 14-16 s wall for 1.3 s of CPU; ``sample`` put 2,360 of 2,567 main-thread
+    samples in dyld's code-signature registration (``fcntl``), and dlopen()ing a copy of
+    the extracted libraries took 47 s the first time and 0.18 s the second. The desktop's
+    own server paid the same on every app start. A onedir tree lives at one stable path
+    inside the signed app, so that cost is paid once, not on every run.
+
+    Linux and Windows keep the onefile: no per-file first-load scan there (Linux), and
+    the Windows installer's ``_MEI`` sweep and AV notes assume it (follow-up if Defender
+    proves to cost the same)."""
+    return "onedir" if platform == "darwin" else "onefile"
+
+
+_MACHO_MAGICS = {
+    b"\xfe\xed\xfa\xce",
+    b"\xce\xfa\xed\xfe",
+    b"\xfe\xed\xfa\xcf",
+    b"\xcf\xfa\xed\xfe",
+}
+
+
+def is_macho(path: Path) -> bool:
+    """True for a thin or universal Mach-O file (by magic, not by name: Python
+    extensions are ``.so``, the bootloader and ``Python`` have no suffix)."""
+    try:
+        with open(path, "rb") as f:
+            head = f.read(8)
+    except OSError:
+        return False
+    if head[:4] in _MACHO_MAGICS:
+        return True
+    # FAT_MAGIC is shared with Java .class files; a fat header's arch count is tiny,
+    # a class file's version field is not.
+    return head[:4] == b"\xca\xfe\xba\xbe" and len(head) == 8 and int.from_bytes(head[4:], "big") < 32
+
+
+def _walk(root: Path):
+    """Every entry under ``root``, never descending through a directory symlink."""
+    for dirpath, dirnames, filenames in os.walk(root):
+        for name in (*dirnames, *filenames):
+            yield Path(dirpath) / name
+
+
+def materialize_symlinks(root: Path) -> int:
+    """Replace every symlink under ``root`` with a real copy of what it points at.
+
+    Tauri copies a resource directory file by file: it follows a file symlink (a
+    duplicate, which is harmless) and SKIPS a directory symlink outright, so a framework's
+    ``Versions/Current`` would silently vanish from the app. Materializing first makes the
+    tree Tauri copies identical to the tree that was signed. Returns how many it replaced."""
+    links = sorted((p for p in _walk(root) if p.is_symlink()), key=lambda p: len(p.parts))
+    for link in links:
+        if not link.is_symlink():
+            continue  # already replaced as part of a parent directory copy
+        target = link.resolve()
+        link.unlink()
+        if target.is_dir():
+            shutil.copytree(target, link, symlinks=False)
+        elif target.exists():
+            shutil.copy2(target, link)
+    return len(links)
+
+
+def codesign_plan(root: Path, exe: Path, identity: str, entitlements: Path) -> list[list[str]]:
+    """The ``codesign`` calls that sign a onedir tree, inside out.
+
+    Every Mach-O file is signed on its own, deepest first, and the bootloader last with
+    the app's entitlements (it is the process: ``disable-library-validation`` must reach
+    it, as Tauri gives it to the externalBin elsewhere). A real identity adds the hardened
+    runtime and a secure timestamp, which notarization requires of every Mach-O in the
+    app; ad-hoc (``-``) signing gets neither."""
+    base = ["codesign", "--force", "--sign", identity]
+    if identity != "-":
+        base += ["--options", "runtime", "--timestamp"]
+    files = [p for p in _walk(root) if p.is_file() and not p.is_symlink() and p != exe and is_macho(p)]
+    files.sort(key=lambda p: (-len(p.parts), str(p)))
+    plan = [[*base, str(p)] for p in files]
+    plan.append([*base, "--entitlements", str(entitlements), str(exe)])
+    return plan
+
+
+def finish_onedir(built: Path, dest: Path, identity: str) -> None:
+    """Materialize, sign and install a onedir build at ``dest``."""
+    exe = built / NAME
+    n = materialize_symlinks(built)
+    plan = codesign_plan(built, exe, identity, ENTITLEMENTS)
+    print(
+        f"onedir: {n} symlinks materialized; signing {len(plan)} Mach-O files ({'ad-hoc' if identity == '-' else identity})"
+    )
+    for call in plan:
+        subprocess.run(call, check=True, capture_output=True)
+    if dest.exists():
+        shutil.rmtree(dest)
+    shutil.copytree(built, dest, symlinks=True)
 
 
 def target_triple() -> str:
@@ -253,6 +368,7 @@ def target_triple() -> str:
 
 def main() -> None:
     triple = target_triple()
+    mode = freeze_mode()
     work = REPO / "build" / "sidecar"
     sep = ";" if os.name == "nt" else ":"
 
@@ -271,7 +387,6 @@ def main() -> None:
             "(tauri's beforeBuildCommand rebuilds dist with --base / afterwards; that's fine —\n"
             "this freeze's copy is already inside the binary by then. See #2411.)"
         )
-
 
     add_data: list[str] = []
     for src, dest in BUNDLED_DATA:
@@ -322,7 +437,7 @@ def main() -> None:
         sys.executable,
         "-m",
         "PyInstaller",
-        "--onefile",
+        f"--{mode}",
         "--noconfirm",
         "--clean",
         "--name",
@@ -351,6 +466,10 @@ def main() -> None:
     subprocess.run(cmd, check=True, cwd=str(REPO))
 
     BINARIES_DIR.mkdir(parents=True, exist_ok=True)
+    if mode == "onedir":
+        finish_onedir(work / "dist" / NAME, ONEDIR_DEST, os.environ.get(CODESIGN_IDENTITY_ENV) or "-")
+        print(f"\nsidecar (onedir) -> {ONEDIR_DEST}/{NAME}")
+        return
     suffix = ".exe" if os.name == "nt" else ""
     built = work / "dist" / f"{NAME}{suffix}"
     dest = BINARIES_DIR / f"{NAME}-{triple}{suffix}"

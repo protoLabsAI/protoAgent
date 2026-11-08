@@ -38,13 +38,20 @@ MAIN="$APP/Contents/MacOS/$EXEC_NAME"
 file "$MAIN" | grep -q "arm64" || { echo "FAIL: main executable is not arm64"; exit 1; }
 echo "ok: main executable present (arm64)"
 
-# Tauri strips the target-triple suffix from externalBin at bundle time.
-SIDECAR="$APP/Contents/MacOS/protoagent-server"
+# macOS bundles the server as a PyInstaller ONEDIR tree in Resources
+# (tauri.macos.conf.json; build_sidecar.py freeze_mode): a onefile re-unpacked and
+# re-scanned ~5,000 files on every launch (14-16 s per CLI call on v0.231.0).
+SIDECAR_DIR="$APP/Contents/Resources/protoagent-server"
+SIDECAR="$SIDECAR_DIR/protoagent-server"
 [ -x "$SIDECAR" ] || { echo "FAIL: bundled sidecar missing/not executable: $SIDECAR"; exit 1; }
-SIZE="$(stat -f%z "$SIDECAR")"
-[ "$SIZE" -gt 1000000 ] || { echo "FAIL: sidecar suspiciously small (${SIZE} bytes)"; exit 1; }
+[ -d "$SIDECAR_DIR/_internal" ] || { echo "FAIL: sidecar tree has no _internal/: $SIDECAR_DIR"; exit 1; }
 file "$SIDECAR" | grep -q "arm64" || { echo "FAIL: sidecar is not arm64"; exit 1; }
-echo "ok: sidecar bundled (arm64, $((SIZE / 1024 / 1024)) MB)"
+SIZE_MB="$(du -sm "$SIDECAR_DIR" | cut -f1)"
+[ "$SIZE_MB" -gt 50 ] || { echo "FAIL: sidecar tree suspiciously small (${SIZE_MB} MB)"; exit 1; }
+LINKS="$(find "$SIDECAR_DIR" -type l | wc -l | tr -d ' ')"
+[ "$LINKS" = "0" ] || { echo "FAIL: sidecar tree has ${LINKS} symlinks (build_sidecar materializes them; tauri drops directory links)"; exit 1; }
+[ ! -e "$APP/Contents/MacOS/protoagent-server" ] || { echo "FAIL: a onefile sidecar is still bundled in Contents/MacOS"; exit 1; }
+echo "ok: sidecar tree bundled (arm64, ${SIZE_MB} MB, no symlinks)"
 
 # ── Signing mode ─────────────────────────────────────────────────────────────
 # (-dvv, not -dv: the Authority= certificate chain only prints at verbosity 2+.)
@@ -83,6 +90,25 @@ for key in com.apple.security.cs.allow-unsigned-executable-memory \
   fi
 done
 echo "ok: entitlements exactly as declared (network client/server + JIT + library-validation exception for the frozen sidecar; nothing broader)"
+
+# The sidecar tree is signed by build_sidecar.py, not tauri: the bootloader needs the
+# Developer ID, the hardened runtime and the library-validation exception itself (it is
+# the process that dlopen()s the bundled Python), and every Mach-O in the tree must be
+# Developer ID-signed for notarization.
+SIDECAR_SIG="$(codesign -dvv "$SIDECAR" 2>&1 || true)"
+[[ "$SIDECAR_SIG" == *"Authority=Developer ID Application:"* ]] || { echo "FAIL: sidecar is not Developer ID-signed"; exit 1; }
+[[ "$SIDECAR_SIG" == *"runtime"* ]] || { echo "FAIL: sidecar is not signed with the hardened runtime"; exit 1; }
+SIDECAR_ENT="$(codesign -d --entitlements :- "$SIDECAR" 2>/dev/null)"
+echo "$SIDECAR_ENT" | grep -q com.apple.security.cs.disable-library-validation \
+  || { echo "FAIL: sidecar lacks disable-library-validation"; exit 1; }
+UNSIGNED=0
+while IFS= read -r -d '' f; do
+  if file "$f" | grep -q "Mach-O"; then
+    codesign -dvv "$f" 2>&1 | grep -q "Authority=Developer ID Application:" || { echo "FAIL: not Developer ID-signed: $f"; UNSIGNED=1; }
+  fi
+done < <(find "$SIDECAR_DIR" -type f -print0)
+[ "$UNSIGNED" = "0" ] || exit 1
+echo "ok: every Mach-O in the sidecar tree is Developer ID-signed; the bootloader carries the hardened runtime + library-validation exception"
 
 spctl --assess --type execute --verbose=4 "$APP"
 echo "ok: Gatekeeper accepts the app"
