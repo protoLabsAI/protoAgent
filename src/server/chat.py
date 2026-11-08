@@ -1027,6 +1027,7 @@ async def _run_native_turn(
                     # non-streaming driver stamps ``_state_extra`` on its own; ``[]`` on an
                     # unfenced turn, so no pass inherits a fence the thread held before.
                     subagent_fence=_turn_fence["fence"],
+                    operator_chat_turn=_turn_control.operator_chat_turn((request_metadata or {}).get("origin", "")),
                 )
             ) as _turn_frames:
                 async for kind, payload in _turn_frames:

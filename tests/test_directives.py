@@ -144,7 +144,7 @@ def _tools() -> dict:
 
 def _call(name: str, args: dict, session_id: str = "chat-a") -> str:
     tool = _tools()[name]
-    return tool.func(**args, state={"session_id": session_id})
+    return tool.func(**args, state={"session_id": session_id, "operator_chat_turn": True})
 
 
 def test_tools_record_list_fulfil_revoke(store):
@@ -331,13 +331,13 @@ def test_a_recorded_approval_is_visible_after_compaction_replaces_the_messages(b
         checkpointer=InMemorySaver(),
     )
     cfg = {"configurable": {"thread_id": "a2a:chat-a"}}
-    graph.invoke({"messages": [HumanMessage(APPROVAL)], "session_id": "chat-a"}, cfg)
+    graph.invoke({"messages": [HumanMessage(APPROVAL)], "session_id": "chat-a", "operator_chat_turn": True}, cfg)
     assert [d.quote for d in bare_state.in_force("chat-a")] == [APPROVAL]
 
     # The compaction: every message replaced by a summary that lost the approval.
     summary = HumanMessage("[Summary of earlier conversation] The operator said work is wrapped up.")
     graph.update_state(cfg, {"messages": [RemoveMessage(id=REMOVE_ALL_MESSAGES), summary]})
-    graph.invoke({"messages": [HumanMessage("what are you doing?")], "session_id": "chat-a"}, cfg)
+    graph.invoke({"messages": [HumanMessage("what are you doing?")], "session_id": "chat-a", "operator_chat_turn": True}, cfg)
 
     after_frame, after_transcript = frames[-1], transcripts[-1]
     assert APPROVAL not in after_transcript  # the transcript lost it …
@@ -434,7 +434,16 @@ def test_directives_is_a_reserved_slash_command():
     assert _unknown_slash_command_reply("/directives") is None
 
 
-def test_slash_lists_and_revokes(store):
+@pytest.fixture
+def operator_tier():
+    from observability.tracing import reset_trust_tier, set_trust_tier
+
+    token = set_trust_tier("operator")
+    yield
+    reset_trust_tier(token)
+
+
+def test_slash_lists_and_revokes(store, operator_tier):
     assert directives_command_reply("chat-a", "") == "No directives recorded in this chat."
     a = store.record("chat-a", APPROVAL, conditions="stop on WARN")
     b = store.record("chat-a", "old rule")

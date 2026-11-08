@@ -212,7 +212,8 @@ def _lifecycle_command_reply(message: str) -> str | None:
 def _directives_command_reply(message: str, session_id: str) -> str | None:
     """If ``message`` is the core ``/directives`` command (ADR 0127 D6), return this chat's
     directive ledger — or, for ``/directives revoke <id> [reason]``, revoke one as the
-    operator. Else ``None`` (fall through). Reserved like ``/goal``."""
+    operator (the core handler checks the authenticated trust tier). Else ``None``
+    (fall through). Reserved like ``/goal``."""
     name, rest = _chat_commands._parse_slash_command(message)
     if not name or _slash_kind(name) != "directives":
         return None

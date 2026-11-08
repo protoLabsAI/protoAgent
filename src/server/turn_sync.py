@@ -204,7 +204,10 @@ async def _native_turn(
             # not clear it).
             graph_input = Command(
                 resume=await _chat()._resume_payload(config, turn_message),
-                **(await _turn_stream._resume_fence_update(config, tool_fence)),
+                update={
+                    **(await _turn_stream._resume_fence_update(config, tool_fence)).get("update", {}),
+                    "operator_chat_turn": state_extra.get("operator_chat_turn", False),
+                },
             )
         else:
             # Kickoff injection (#1910) — shared with the streaming driver
@@ -395,6 +398,7 @@ async def _chat_langgraph_impl(
     # Whether the client can display an artifact (#4144) — stamped every turn for the same
     # reason: a `/v1` turn must not leave a later console turn on the session text-only.
     _state_extra["renders_ui"] = _turn_control.renders_ui(origin)
+    _state_extra["operator_chat_turn"] = _turn_control.operator_chat_turn(origin)
 
     from graph.config_io import soul_revision
 

@@ -26,6 +26,10 @@ class ProtoAgentState(AgentState):
     # Session tracking (A2A / chat session ID)
     session_id: NotRequired[str]
 
+    # Server-stamped on every chat turn, including resumes; absent in subagents.
+    # Carries authenticated operator origin into tool execution (ADR 0127 D6).
+    operator_chat_turn: NotRequired[bool]
+
     # Incognito thread (ADR 0069 D3b): no session-memory persistence, no memory
     # injection for this thread. Set per turn by the chat entry paths (A2A
     # message metadata / POST /api/chat); read by SessionSummaryMiddleware and

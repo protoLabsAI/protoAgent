@@ -172,7 +172,8 @@ async def test_stream_unfenced_resume_stamps_no_fence(env):
 
     ((graph_input, _),) = g.stream_calls
     assert isinstance(graph_input, Command)
-    assert graph_input.update is None
+    assert "subagent_fence" not in graph_input.update
+    assert graph_input.update["operator_chat_turn"] is False
 
 
 # ── non-streaming driver ──────────────────────────────────────────────────────
