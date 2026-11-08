@@ -120,6 +120,19 @@ only. This is a hard rename with no aliases: the old names are removed in the sa
 release, and bundled skills and SOULs that name them are updated in that PR. This follows
 the no-legacy rule for fleet floors.
 
+2026-11-07 refinement (upgrading): configs, plugins and stored rows written before the
+rename still carry the old names, and a list naming a tool that doesn't exist matches
+nothing without saying so. Until #4555 closes, `graph/tool_renames.py` translates the old
+names wherever a tool-name list is read, with one WARNING per source and name:
+`tools.disabled`, `tools.hidden`, `tools.subagent_only`, `tools.deferred.keep`,
+`operator_mcp.tools` (and the sidecar's `OPERATOR_MCP_TOOLS`),
+`enforcement.disallowed_tools`, `enforcement.rate_limits` keys, the execute_code
+`tools`/`extra_tools` bridge lists, subagent tool lists, and the stored tool fences on
+scheduled and background jobs. Boot (and each reload, for new sources) also logs one
+WARNING per SKILL.md file, subagent prompt or tool list, and SOUL.md that still names an
+old tool, so the operator can see which plugins need an update before the translation is
+removed. The old names are still never registered as tools.
+
 ### D4 — Saving a memory checks for the same subject
 
 - `memory_save` with a `subject` returns the live memories already on that subject.

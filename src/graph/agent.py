@@ -25,6 +25,7 @@ from graph.middleware.knowledge import KnowledgeMiddleware
 from graph.middleware.memory import SessionSummaryMiddleware
 from graph.middleware.message_capture import MessageCaptureMiddleware
 from graph.state import ProtoAgentState
+from graph.tool_renames import LEGACY_TOOL_RENAMES
 from graph.subagents.config import SUBAGENT_REGISTRY, BackgroundSpawnRefused
 from tools.lg_tools import SUBAGENT_DENIED_TOOLS, drop_disabled_tools, get_all_tools
 from tools.session import _session_id_from
@@ -33,12 +34,8 @@ logger = logging.getLogger(__name__)
 
 # Subagent tool-list compatibility only; remove once fleet plugins and configs
 # have moved over (tracked on #4555). Never register these as tool aliases.
-_SUBAGENT_TOOL_NAME_MIGRATIONS = {
-    "memory_ingest": "memory_save",
-    "memory_recall": "memory_search",
-    "forget_memory": "memory_forget",
-    "memory_stats": "memory_list",
-}
+# The map itself lives in graph.tool_renames, shared with every other tool-list reader.
+_SUBAGENT_TOOL_NAME_MIGRATIONS = LEGACY_TOOL_RENAMES
 _SUBAGENT_TOOL_WARNINGS: set[tuple[str, str, str]] = set()
 
 

@@ -1276,7 +1276,10 @@ def _load_fence(raw) -> list[str]:
     if not isinstance(value, list):
         log.warning("[scheduler] unreadable job fence %r — the fire runs with no tools", raw)
         return [_DENY_ALL]
-    return [str(t) for t in value]
+    from graph.tool_renames import migrate_tool_names
+
+    # A row written before ADR 0125 may fence on the removed memory tool names.
+    return migrate_tool_names([str(t) for t in value], source="stored job fence")
 
 
 # ``graph.middleware.subagent_fence.FENCE_DENY_ALL`` — spelled here so reading a row

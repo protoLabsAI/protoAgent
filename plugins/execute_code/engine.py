@@ -568,7 +568,10 @@ def build_execute_code_tool(
     """
     from langchain_core.tools import tool
 
-    allow = set(tools or []) or set(_DEFAULT_BRIDGE_TOOLS)
+    from graph.tool_renames import migrate_tool_names
+
+    # ADR 0125: a caller-supplied list may still name the removed memory tools.
+    allow = set(migrate_tool_names(tools, source="execute_code.tools")) or set(_DEFAULT_BRIDGE_TOOLS)
     allow -= _NEVER_BRIDGED
     tool_map = {t.name: t for t in all_tools if t.name in allow}
     enforcement_gate = _build_enforcement_gate(graph_config)
