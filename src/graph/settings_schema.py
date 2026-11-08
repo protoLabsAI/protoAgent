@@ -174,6 +174,14 @@ FIELDS: list[Field] = [
     Field("model.temperature", "temperature", "Temperature", "number", "Model & runtime", minimum=0, maximum=2),
     Field("model.max_tokens", "max_tokens", "Max output tokens", "number", "Model & runtime", minimum=1),
     Field(
+        "model.profiles",
+        "model_profiles",
+        "Generation profiles",
+        "dict",
+        "Model & runtime",
+        "Named partial generation settings (ADR 0128). No profiles or budgets are supplied by default.",
+    ),
+    Field(
         "model.thinking",
         "thinking",
         "Thinking mode",
