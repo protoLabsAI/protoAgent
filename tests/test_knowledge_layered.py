@@ -444,6 +444,7 @@ def test_layered_search_passes_all_filters_to_both_tiers():
         memory_kind="standing",
         review_state="confirmed",
         delivery_policy="retrieval",
+        collection="reference-docs",
         deliverable=True,
         prefix=True,
     )

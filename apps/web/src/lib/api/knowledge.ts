@@ -12,6 +12,7 @@ import type {
   HistorySearchHit,
   HistorySessionRow,
   KnowledgeChunk,
+  KnowledgeCollection,
   MemoryDigestPolicy,
   MemoryHotChunk,
   MemoryInjectionDetail,
@@ -52,12 +53,17 @@ export const knowledgeApi = {
   // typing — an empty shortlist mid-word that reads exactly like "no matches". Off by
   // default, and NOT sent by the Knowledge surface: its box searches a query the operator
   // has finished, where a prefix term would only broaden the result silently.
+  //
+  // `collection` (ADR 0125 P2 slice 6) scopes the browse/search to one collection
+  // bucket (the `listCollections` rail); an unknown one yields an empty result, not
+  // an error. Omitted = every collection.
   knowledgeSearch(
     q: string,
-    opts: { reviewState?: ReviewState; k?: number; prefix?: boolean; signal?: AbortSignal } = {},
+    opts: { reviewState?: ReviewState; collection?: string; k?: number; prefix?: boolean; signal?: AbortSignal } = {},
   ) {
     const params = new URLSearchParams({ q });
     if (opts.reviewState) params.set("review_state", opts.reviewState);
+    if (opts.collection) params.set("collection", opts.collection);
     if (opts.k != null) params.set("k", String(opts.k));
     if (opts.prefix) params.set("prefix", "1");
     return request<{
@@ -66,6 +72,17 @@ export const knowledgeApi = {
       results: KnowledgeChunk[];
       stats: Record<string, number>;
     }>(`/api/knowledge/search?${params.toString()}`, { signal: opts.signal });
+  },
+
+  // The collection buckets behind the Knowledge browser (GET /api/knowledge/collections,
+  // ADR 0125 P2 slice 6): one row per collection with its chunk/source counts and newest
+  // ingest time. Chunks with no collection group under the knowledge_ingest default
+  // ("general"); agent memory never appears (it lives in the memories table).
+  // `enabled:false` = the knowledge store is off.
+  listCollections() {
+    return request<{ enabled: boolean; collections: KnowledgeCollection[] }>(
+      "/api/knowledge/collections",
+    );
   },
 
   // Knowledge chunk CRUD — operator curation of the store (add a fact, fix a

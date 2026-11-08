@@ -423,6 +423,31 @@ def _delivery_policy_clause(policy: str | None, col: str = "delivery_policy") ->
     return f"{col} = ?", [policy]
 
 
+# The ``collection`` a chunk with a NULL or empty ``collection`` groups under — the
+# ``knowledge_ingest`` default (``tools/memory_tools.py`` folds an omitted/blank
+# collection to ``"general"``). One source of truth for :meth:`KnowledgeStore.list_collections`'
+# grouping AND the ``collection`` search/list filter, so the two can't drift.
+DEFAULT_COLLECTION = "general"
+
+
+def _collection_clause(collection: str | None, col: str = "collection") -> tuple[str, list[str]]:
+    """SQL predicate + params for a ``collection`` filter (ADR 0125 P2 slice 6).
+
+    A chunk's effective collection is its ``collection`` column, with NULL/empty
+    folded to :data:`DEFAULT_COLLECTION` (``knowledge_ingest``'s default) — so a
+    request for that default also matches the un-tagged rows, mirroring
+    :meth:`KnowledgeStore.list_collections`' grouping. An unknown collection
+    simply matches no rows (an empty result, never an error). Falsy / blank →
+    no predicate (unfiltered).
+    """
+    if not collection or not str(collection).strip():
+        return "", []
+    name = str(collection).strip()
+    if name == DEFAULT_COLLECTION:
+        return f"({col} = ? OR {col} IS NULL OR {col} = '')", [name]
+    return f"{col} = ?", [name]
+
+
 def _fts_quote(token: str) -> str:
     """Quote a token for FTS5 MATCH so it's treated as a literal phrase.
 
@@ -807,7 +832,8 @@ CREATE TABLE IF NOT EXISTS chunks (
     subject       TEXT,
     review_state  TEXT,
     expires_at    TEXT,
-    delivery_policy TEXT
+    delivery_policy TEXT,
+    collection    TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_chunks_domain     ON chunks(domain);
@@ -1016,6 +1042,20 @@ class KnowledgeStore:
                         log.info("[knowledge] review-state backfill stamped %d rows (ADR 0108 D7)", touched)
             except sqlite3.DatabaseError as exc:
                 log.debug("[knowledge] review_state backfill skipped: %s", exc)
+            # Migration: the ``collection`` column (ADR 0125 P2-B / #4793). Same
+            # additive+nullable pattern as namespace/epoch; it tags a retained
+            # knowledge chunk with its collection bucket (the old ``domain``). The
+            # P2-B boot migration (``memories_migration``) also ALTERs + backfills it,
+            # but the store owns its own schema, so a plain store that never ran that
+            # migration (a fresh instance, a test) still has the column to group on.
+            # NO default: a NULL/empty collection groups under ``DEFAULT_COLLECTION``.
+            try:
+                cols = {r[1] for r in db.execute("PRAGMA table_info(chunks)")}
+                if "collection" not in cols:
+                    db.execute("ALTER TABLE chunks ADD COLUMN collection TEXT")
+                db.execute("CREATE INDEX IF NOT EXISTS idx_chunks_collection ON chunks(collection)")
+            except sqlite3.DatabaseError as exc:
+                log.debug("[knowledge] collection migration skipped: %s", exc)
             self._fts_available = _has_fts5(db)
             if self._fts_available:
                 db.executescript(_FTS_SCHEMA)
@@ -1373,6 +1413,7 @@ class KnowledgeStore:
         memory_kind: str | None = None,
         review_state: str | None = None,
         delivery_policy: str | None = None,
+        collection: str | None = None,
         deliverable: bool = False,
         prefix: bool = False,
     ) -> list[dict[str, Any]]:
@@ -1405,6 +1446,11 @@ class KnowledgeStore:
         ``delivery_policy`` (ADR 0108 D4) likewise; ``"retrieved"`` also matches
         NULL rows, since NULL *means* retrieved (``_delivery_policy_clause``).
 
+        ``collection`` (ADR 0125 P2 slice 6) restricts hits to one collection
+        bucket; a request for :data:`DEFAULT_COLLECTION` also matches the
+        NULL/empty-collection rows (``_collection_clause``), and an unknown
+        collection matches nothing. ``None`` = unfiltered.
+
         ``prefix`` (#3293) makes the LAST token a prefix term, for TYPE-AHEAD
         callers only — the command palette, which re-searches on every
         keystroke. FTS5
@@ -1436,6 +1482,7 @@ class KnowledgeStore:
                     memory_kind=memory_kind,
                     review_state=review_state,
                     delivery_policy=delivery_policy,
+                    collection=collection,
                     deliverable=deliverable,
                     prefix=prefix,
                 )
@@ -1451,6 +1498,7 @@ class KnowledgeStore:
                     memory_kind=memory_kind,
                     review_state=review_state,
                     delivery_policy=delivery_policy,
+                    collection=collection,
                     deliverable=deliverable,
                 )
             )
@@ -1485,6 +1533,7 @@ class KnowledgeStore:
         memory_kind: str | None = None,
         review_state: str | None = None,
         delivery_policy: str | None = None,
+        collection: str | None = None,
         deliverable: bool = False,
         prefix: bool = False,
     ) -> list[sqlite3.Row]:
@@ -1525,6 +1574,10 @@ class KnowledgeStore:
         if dp_sql:
             where.append(dp_sql)
             params.extend(dp_params)
+        col_sql, col_params = _collection_clause(collection, col="c.collection")
+        if col_sql:
+            where.append(col_sql)
+            params.extend(col_params)
         if deliverable:
             d_sql, d_params = _deliverable_clauses("c.")
             where.extend(d_sql)
@@ -1555,6 +1608,7 @@ class KnowledgeStore:
         memory_kind: str | None = None,
         review_state: str | None = None,
         delivery_policy: str | None = None,
+        collection: str | None = None,
         deliverable: bool = False,
     ) -> list[sqlite3.Row]:
         tokens = [t for t in re.findall(r"[\w']+", query) if t]
@@ -1590,6 +1644,10 @@ class KnowledgeStore:
         if dp_sql:
             sql += f" AND {dp_sql}"
             params.extend(dp_params)
+        col_sql, col_params = _collection_clause(collection)
+        if col_sql:
+            sql += f" AND {col_sql}"
+            params.extend(col_params)
         if deliverable:
             d_sql, d_params = _deliverable_clauses()
             sql += " AND " + " AND ".join(d_sql)
@@ -1612,6 +1670,7 @@ class KnowledgeStore:
         memory_kind: str | None = None,
         review_state: str | None = None,
         delivery_policy: str | None = None,
+        collection: str | None = None,
         deliverable: bool = False,
     ) -> list[Chunk]:
         """Most-recent-first chunk listing. Used by ``memory_list`` and the
@@ -1624,7 +1683,9 @@ class KnowledgeStore:
 
         ``memory_kind`` / ``review_state`` (#3072) and ``delivery_policy``
         (ADR 0108 D4) optionally restrict the listing to chunks with that
-        typed-memory classification. ``deliverable=True`` (ADR 0108 D6) applies
+        typed-memory classification. ``collection`` (ADR 0125 P2 slice 6) scopes
+        to one collection bucket, folding NULL/empty to :data:`DEFAULT_COLLECTION`
+        (``_collection_clause``). ``deliverable=True`` (ADR 0108 D6) applies
         the delivery layer's eligibility predicate — rejected and expired rows
         are excluded (the always-on reader passes it; ``memory_list`` does not)."""
         db = self._get_db()
@@ -1650,6 +1711,10 @@ class KnowledgeStore:
         if dp_sql:
             clauses.append(dp_sql)
             params.extend(dp_params)
+        col_sql, col_params = _collection_clause(collection)
+        if col_sql:
+            clauses.append(col_sql)
+            params.extend(col_params)
         if deliverable:
             d_sql, d_params = _deliverable_clauses()
             clauses.extend(d_sql)
@@ -1798,6 +1863,52 @@ class KnowledgeStore:
         out = {r["domain"]: r["n"] for r in rows}
         out["total"] = int(total)
         return out
+
+    def list_collections(self) -> list[dict[str, Any]]:
+        """The knowledge collections, one row per bucket (ADR 0125 P2 slice 6).
+
+        Each entry is ``{collection, chunks, sources, last_ingested_at}`` — the
+        bucket name, its valid chunk count, its distinct non-null ``source``
+        count, and the newest ``created_at`` among them. Chunks with a NULL or
+        empty ``collection`` group under :data:`DEFAULT_COLLECTION` (the
+        ``knowledge_ingest`` default), so a new ingest that only set ``domain``
+        still lands somewhere sensible.
+
+        Invalidated (soft-deleted / superseded) rows are excluded — they've left
+        recall — as is conversation ``history`` (``domain='conversation'``): it is
+        not a knowledge collection and the P2-B backfill leaves its ``collection``
+        NULL on purpose. Agent **memory** never appears here at all: it lives in the
+        separate ``memories`` table, which this query doesn't touch. Ordered
+        biggest-first, then by name. Returns ``[]`` on DB failure (never raises).
+        """
+        db = self._get_db()
+        if db is None:
+            return []
+        bucket = f"COALESCE(NULLIF(TRIM(collection), ''), '{DEFAULT_COLLECTION}')"
+        try:
+            rows = db.execute(
+                f"SELECT {bucket} AS collection, COUNT(*) AS chunks, "
+                "COUNT(DISTINCT source) AS sources, MAX(created_at) AS last_ingested_at "
+                "FROM chunks "
+                "WHERE invalidated_at IS NULL AND (domain IS NULL OR domain != ?) "
+                f"GROUP BY {bucket} "
+                "ORDER BY chunks DESC, collection ASC",
+                (HISTORY_DOMAIN,),
+            ).fetchall()
+        except sqlite3.DatabaseError as exc:
+            log.warning("[knowledge] list_collections failed: %s", exc)
+            return []
+        finally:
+            db.close()
+        return [
+            {
+                "collection": r["collection"],
+                "chunks": int(r["chunks"]),
+                "sources": int(r["sources"]),
+                "last_ingested_at": r["last_ingested_at"],
+            }
+            for r in rows
+        ]
 
     # ── verification helpers (used by evals/verify.py) ──────────────────────
 

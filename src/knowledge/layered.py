@@ -116,6 +116,7 @@ class LayeredKnowledgeStore:
         memory_kind: str | None = None,
         review_state: str | None = None,
         delivery_policy: str | None = None,
+        collection: str | None = None,
         deliverable: bool = False,
         prefix: bool = False,
     ) -> list[dict]:
@@ -127,7 +128,8 @@ class LayeredKnowledgeStore:
         superseded rows are excluded by default), ``epoch`` (#1634 — era scoping),
         ``memory_kind`` / ``review_state`` (#3072 — typed-memory classification),
         ``delivery_policy`` (ADR 0108 D4) and ``deliverable`` (ADR 0108 D6 — the
-        delivery layer's rejected/expired exclusion) and ``prefix`` (#3293 — the type-ahead's
+        delivery layer's rejected/expired exclusion), ``collection`` (ADR 0125 P2
+        slice 6 — the collection bucket) and ``prefix`` (#3293 — the type-ahead's
         trailing partial word) are passed through to both tiers."""
         priv = self._private.search(
             query,
@@ -139,6 +141,7 @@ class LayeredKnowledgeStore:
             memory_kind=memory_kind,
             review_state=review_state,
             delivery_policy=delivery_policy,
+            collection=collection,
             deliverable=deliverable,
             prefix=prefix,
         )
@@ -152,6 +155,7 @@ class LayeredKnowledgeStore:
             memory_kind=memory_kind,
             review_state=review_state,
             delivery_policy=delivery_policy,
+            collection=collection,
             deliverable=deliverable,
             prefix=prefix,
         )
@@ -215,6 +219,29 @@ class LayeredKnowledgeStore:
             "private": int(priv.get("total", 0)),
             "commons": int(comm.get("total", 0)),
         }
+
+    def list_collections(self) -> list[dict]:
+        """The knowledge collections merged across BOTH tiers (ADR 0125 P2 slice 6).
+
+        Same ``{collection, chunks, sources, last_ingested_at}`` shape a single
+        ``KnowledgeStore.list_collections()`` returns — a bucket present in both
+        tiers has its chunk/source counts summed and the later ``last_ingested_at``
+        kept. Ordered biggest-first, then by name, to match the single-store form.
+        ``source`` counts are summed per tier, so a source shared across tiers is
+        counted once per tier (the union isn't deduped — ids are per-backend)."""
+        merged: dict[str, dict] = {}
+        for tier in (self._private, self._commons):
+            for row in tier.list_collections() or ():
+                name = row.get("collection")
+                agg = merged.setdefault(
+                    name, {"collection": name, "chunks": 0, "sources": 0, "last_ingested_at": None}
+                )
+                agg["chunks"] += int(row.get("chunks") or 0)
+                agg["sources"] += int(row.get("sources") or 0)
+                ts = row.get("last_ingested_at")
+                if ts and (agg["last_ingested_at"] is None or ts > agg["last_ingested_at"]):
+                    agg["last_ingested_at"] = ts
+        return sorted(merged.values(), key=lambda r: (-r["chunks"], r["collection"]))
 
     # ── commons curation: promote (private→commons) + forget ──────────────────
     def promote(self, chunk_id: int) -> dict | None:

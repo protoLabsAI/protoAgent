@@ -35,6 +35,7 @@ from collections.abc import Callable
 from knowledge.store import (
     _BULK_DELETE_REASON,
     KnowledgeStore,
+    _collection_clause,
     _deliverable_clauses,
     _delivery_policy_clause,
     _namespace_clause,
@@ -622,6 +623,7 @@ class HybridKnowledgeStore(KnowledgeStore):
         memory_kind: str | None = None,
         review_state: str | None = None,
         delivery_policy: str | None = None,
+        collection: str | None = None,
         deliverable: bool = False,
     ) -> list[int]:
         """Return chunk ids ranked by cosine similarity (brute force)."""
@@ -648,6 +650,10 @@ class HybridKnowledgeStore(KnowledgeStore):
         if dp_sql:
             where.append(dp_sql)
             params.extend(dp_params)
+        col_sql, col_params = _collection_clause(collection, col="c.collection")
+        if col_sql:
+            where.append(col_sql)
+            params.extend(col_params)
         if deliverable:
             d_sql, d_params = _deliverable_clauses("c.")
             where.extend(d_sql)
@@ -685,6 +691,7 @@ class HybridKnowledgeStore(KnowledgeStore):
         memory_kind: str | None = None,
         review_state: str | None = None,
         delivery_policy: str | None = None,
+        collection: str | None = None,
         deliverable: bool = False,
         prefix: bool = False,
     ) -> list[dict]:
@@ -700,7 +707,9 @@ class HybridKnowledgeStore(KnowledgeStore):
         out-of-era chunk can't surface as a vector-only hit.
         ``memory_kind`` / ``review_state`` (#3072) and ``delivery_policy``
         (ADR 0108 D4) likewise filter BOTH rankings, as does ``deliverable``
-        (ADR 0108 D6 — rejected/expired rows never surface as a vector-only hit).
+        (ADR 0108 D6 — rejected/expired rows never surface as a vector-only hit)
+        and ``collection`` (ADR 0125 P2 slice 6 — a chunk from another collection
+        can't leak in as a vector-only hit).
 
         ``prefix`` (#3293) reaches the KEYWORD half only — a type-ahead's trailing
         partial word is exactly what FTS5 cannot match and embeddings can, so the
@@ -721,6 +730,7 @@ class HybridKnowledgeStore(KnowledgeStore):
                 memory_kind=memory_kind,
                 review_state=review_state,
                 delivery_policy=delivery_policy,
+                collection=collection,
                 deliverable=deliverable,
                 prefix=prefix,
             )
@@ -738,6 +748,7 @@ class HybridKnowledgeStore(KnowledgeStore):
                 memory_kind=memory_kind,
                 review_state=review_state,
                 delivery_policy=delivery_policy,
+                collection=collection,
                 deliverable=deliverable,
             )
             if not vec_ids:
