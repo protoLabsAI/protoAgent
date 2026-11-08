@@ -4,9 +4,16 @@ import { expect, test } from "@playwright/test";
 // one-time curation of the migrated core memories (keep / edit / forget / reject / revert)
 // plus explicit shared-profile promotion. Nothing promotes automatically.
 //
-// These tests MUTATE the shared mock (verdicts, edits, deletes, a revert, a promote) and one
-// flips the mock's shared-profile switch, so run serially and reset the memory fixtures +
-// mode before each test — the same hermeticity guard the other memory specs use.
+// These tests MUTATE the mock (verdicts, edits, deletes, a revert, a promote) and one flips
+// the mock's shared-profile switch, so run serially and reset the memory fixtures + mode
+// before each test. CRUCIALLY they run on their OWN memory scope (the mock keys state on
+// `x-e2e-memory`): the memory-inspector spec mutates the header-less "default" scope in
+// parallel, and without this header the two files' resets/mode-flips would clobber each
+// other's global state. `test.use` makes the APP's fetches carry the header; the
+// `page.request.*` calls below pass it explicitly (per-request headers don't inherit it).
+const SCOPE = "review-pass";
+const HDR = { "x-e2e-memory": SCOPE };
+test.use({ extraHTTPHeaders: HDR });
 test.describe.configure({ mode: "serial" });
 
 async function openMemory(page: import("@playwright/test").Page) {
@@ -26,7 +33,7 @@ async function openReview(page: import("@playwright/test").Page) {
 }
 
 test.beforeEach(async ({ page }) => {
-  await page.request.post("/api/__test__/memory/reset");
+  await page.request.post("/api/__test__/memory/reset", { headers: HDR });
 });
 
 test("lists pending migrated rows by default, and the filters change the request", async ({ page }) => {
@@ -163,7 +170,7 @@ test("promotes a candidate once; an already-shared candidate is disabled", async
 });
 
 test("the candidates section is hidden when the shared profile is off", async ({ page }) => {
-  await page.request.post("/api/__test__/memory/mode", { data: { sharedProfile: false } });
+  await page.request.post("/api/__test__/memory/mode", { data: { sharedProfile: false }, headers: HDR });
   const surface = await openReview(page);
 
   // The review list still works; only the candidates section disappears.
@@ -185,12 +192,12 @@ test("Forget uses the core route for retrieved memories", async ({ page }) => {
 for (const count of [51, 101]) {
   for (const action of ["keep", "reject", "forget"]) {
     test(`${action} on the last of ${count} rows returns to the remaining queue`, async ({ page }) => {
-      const initial = await page.request.get("/api/memory/memories");
+      const initial = await page.request.get("/api/memory/memories", { headers: HDR });
       const template = (await initial.json()).memories[0];
       const rows = Array.from({ length: count }, (_, i) => ({
         ...template, id: 1000 + i, content: `Review item ${i}`,
       }));
-      await page.request.post("/api/__test__/memory/review", { data: { rows } });
+      await page.request.post("/api/__test__/memory/review", { data: { rows }, headers: HDR });
       const surface = await openReview(page);
       for (let i = 0; i < Math.floor(count / 50); i++) {
         await surface.getByRole("button", { name: "Next", exact: true }).click();
@@ -217,7 +224,7 @@ for (const count of [51, 101]) {
 test("a promotion conflict refreshes the candidate", async ({ page }) => {
   const surface = await openReview(page);
   await expect(surface.getByLabel("promote 301")).toBeVisible();
-  await page.request.post("/api/memory/memories/301/promote");
+  await page.request.post("/api/memory/memories/301/promote", { headers: HDR });
   const response = page.waitForResponse(
     (r) => r.request().method() === "POST" && r.url().endsWith("/301/promote"),
   );
@@ -232,7 +239,7 @@ for (const [mode, message] of [
   [{ enabled: false }, "The memory store is off"],
 ] as const) {
   test(`review state: ${message}`, async ({ page }) => {
-    await page.request.post("/api/__test__/memory/mode", { data: mode });
+    await page.request.post("/api/__test__/memory/mode", { data: mode, headers: HDR });
     const surface = await openReview(page);
     await expect(surface.getByText(message, { exact: false })).toBeVisible();
   });

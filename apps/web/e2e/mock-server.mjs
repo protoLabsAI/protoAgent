@@ -360,7 +360,6 @@ const cloneMemory = () => ({
   review: JSON.parse(JSON.stringify(MEMORY_REVIEW)),
   candidates: JSON.parse(JSON.stringify(MEMORY_PROFILE_CANDIDATES)),
 });
-let memory = cloneMemory();
 
 // Degradation switches the memory spec flips via POST /api/__test__/memory/mode
 // (merged; /api/__test__/memory/reset restores the defaults):
@@ -386,7 +385,17 @@ const defaultMemoryMode = () => ({
   // profile-candidates GET answers {enabled:false} and the whole section hides.
   sharedProfile: true,
 });
-let memoryMode = defaultMemoryMode();
+// The memory state (fixtures + mode) is MUTATED by the memory specs, so isolate it
+// PER SCOPE like fleet/mcp above: each `x-e2e-memory` request header gets its own lazy
+// deep-clone of the fixtures and a fresh default mode. Requests with no header share
+// the "default" scope — the memory-inspector spec mutates serially and sends no header,
+// so the parallel review spec (its own `x-e2e-memory` scope) can't clobber its mode.
+const memoryScopes = new Map();
+function memoryFor(req) {
+  const key = req.headers["x-e2e-memory"] || "default";
+  if (!memoryScopes.has(key)) memoryScopes.set(key, { data: cloneMemory(), mode: defaultMemoryMode() });
+  return memoryScopes.get(key);
+}
 const stripFields = (rows, keys) =>
   rows.map((r) => {
     const copy = { ...r };
@@ -1154,6 +1163,13 @@ const server = createServer(async (req, res) => {
   // Fleet slug proxy (ADR 0042): /agents/<slug>/<path> is the hub re-proxying the console to a
   // specific agent. The mock strips the /agents/<slug> prefix and serves the same handlers.
   const pathname = url.pathname.replace(/^\/agents\/[^/]+/, "") || url.pathname;
+
+  // This request's memory scope (keyed by the `x-e2e-memory` header; "default" otherwise).
+  // The handlers below use these aliases exactly as before — only the /reset and /mode
+  // routes rebind the scope object (and these locals) wholesale.
+  const memScope = memoryFor(req);
+  let memory = memScope.data;
+  let memoryMode = memScope.mode;
 
   // Bearer-gate mode (see the GATE_* block above): a context that booted with
   // ?gated=1 gets real 401 semantics on everything non-public. No Playwright
@@ -2187,8 +2203,8 @@ const server = createServer(async (req, res) => {
       return sendJson(res, { ok: true });
     }
     if (pathname === "/api/__test__/memory/reset" && req.method === "POST") {
-      memory = cloneMemory();
-      memoryMode = defaultMemoryMode();
+      memScope.data = memory = cloneMemory();
+      memScope.mode = memoryMode = defaultMemoryMode();
       return sendJson(res, { ok: true });
     }
     if (pathname === "/api/__test__/memory/review" && req.method === "POST") {
@@ -2196,7 +2212,7 @@ const server = createServer(async (req, res) => {
       return sendJson(res, { ok: true });
     }
     if (pathname === "/api/__test__/memory/mode" && req.method === "POST") {
-      memoryMode = { ...memoryMode, ...body };
+      memScope.mode = memoryMode = { ...memoryMode, ...body };
       return sendJson(res, { ok: true });
     }
     // Memory inspector writes (ADR 0069 D7): delete a session summary / edit + delete
