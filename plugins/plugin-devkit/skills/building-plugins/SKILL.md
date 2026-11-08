@@ -340,11 +340,15 @@ Remove cleanly with `plugin uninstall <id>` (`--purge` also drops config + secre
   literal, not an f-string (`__doc__` is None for f-string "docstrings").
 - Discovery reads the manifest as **data**; code runs only on **enable**. Keep the
   manifest importable-free.
-- **Enabling** a plugin is fully live: tools/subagents/middleware/MCP rebuild with
-  the graph and its router (which serves any view) **hot-mounts** (#822) — no restart.
-  Only **disabling** leaves a stale route behind (FastAPI can't unmount), so that path
-  alone wants a restart. The rail picks up a new view from `runtime-status` without a
-  console rebuild.
+- **Enabling, disabling and reloading are all live for routes** — none needs a
+  restart. Enabling rebuilds tools/subagents/middleware/MCP with the graph and
+  hot-mounts the plugin's router, which serves any view (#822). `_mount_plugin_routers`
+  (`src/server/plugin_wiring.py`) runs at boot AND on every reload and **remounts**: a
+  reloaded key's old `Route` objects are removed from `app.router.routes` and the fresh
+  ones served, and a plugin absent from the roster (disabled or uninstalled) has its
+  routes removed outright — so a disabled plugin's route goes away now, not at the next
+  restart. During a swap a request can still use the old route (stale), never a 404. The rail
+  picks up a new view from `runtime-status` without a console rebuild.
 - Don't edit core files to wire a plugin in — if you need to, you're missing a
   seam; file it (see the operator-fork contract) instead of re-porting each sync.
 - **`from __future__ import annotations` + a FastAPI import inside `register()` → 422.**
