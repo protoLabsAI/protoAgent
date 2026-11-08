@@ -15,6 +15,52 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.233.0] - 2026-11-08
+
+### Added
+- **`show_config` now reports the running build, so "which version are you on?" is answered correctly (#4876).** A new `section="version"` returns the package version (the same value `/healthz` reports, no auth needed), the git sha and dirty flag when running from a source checkout, the install kind and path, the process start time and uptime — and the tool now steers version questions there instead of at a local checkout's `git describe`, which describes a tree on disk rather than the process that is actually serving.
+
+### Changed
+- **A changelog fragment can be written correctly in a PR's first commit (#4881).** Name it
+  `changelog.d/<slug>.<kind>.md`, using your branch name or the issue number, and leave
+  the PR number out of the bold lead. At release, `changelog.py collate` adds the number
+  to any lead that doesn't cite one, reading it from the squash-merge commit that added
+  the fragment. Before this, a PR with no issue had to push a second commit just to add
+  its own number, and each push ran another full review: 26 PRs and 17 cancelled review
+  panels in two weeks (#4874). The `Changelog entry` check now rejects a placeholder such
+  as `(#NNNN)`, a bullet with no bold lead and no `#N`, and a name that isn't a slug.
+
+### Fixed
+- **Plugin event subscriptions work across startup and reload (#4800).** Handlers registered during plugin loading wait until startup wiring or a successful reload, preventing missed events and duplicate delivery. Subscriptions created after loading return an unsubscribe to their caller and survive plugin reloads.
+
+- **Quieter, guarded plugin events (#4803).** Plugin views combine repeated updates and limit publish bursts; view tokens keep events within the owning plugin’s namespace while operator publishing keeps working.
+
+- **Scaffolded plugins no longer 422 on their own routes (#4804).** The plugin scaffold stopped emitting `from __future__ import annotations` in the generated `__init__.py`, which — combined with a FastAPI import inside `register()` — had turned a route's `request: Request` into a required query parameter that 422'd on load. The building-plugins skill now documents this footgun and the injected-parameter one (a `@tool` argument named `config`, `callbacks`, or `run_manager`) alongside their fixes.
+
+- **Plugin registration catches invalid route and tool parameters (#4804).** Routes with unresolved Request, WebSocket, Response, or BackgroundTasks parameters and tools with incorrectly typed config, callbacks, or run_manager parameters now produce actionable warnings. The plugin test harness rejects them before shipping, including tools that declare their arguments only through a schema.
+
+- **An agent's memory no longer fills with other agents' chatter and its own release logs (#4882).**
+  The fact extractor that runs when a chat retires now reads only your own chats with the
+  agent. It used to also read conversations from other agents and API clients, and saved
+  what they said as facts about "the user". `memory_save` now turns down work-status notes
+  such as "I cut release v0.231.0" or "PR 558 merged with green checks". It tells the agent
+  that the git tag, the PR or the board already records that. Lessons and rules still save.
+  Conversation summaries no longer come out as a scrambled block of the model's hidden
+  reasoning.
+
+- **Old session summaries and history now age out instead of piling up (#4883).**
+  Each chat's session summary file used to keep the whole conversation, including tool
+  output and the model's hidden reasoning. One agent had 278 of them taking 24.7 MB. A
+  summary now keeps the opening request and the most recent messages, trimmed. Files
+  older than 90 days, or past the newest 500, are removed. The history store gets
+  per-kind retention: background reports after 90 days and activity-feed sweeps after
+  30. It starts as a dry run, so the log shows what would be removed and nothing is
+  deleted until you set `history.retention_dry_run: false`. Archives of your own chats
+  are kept unless you choose otherwise.
+
+### Docs
+- **The building-plugins skill documents plugin storage (#4808).** It gives the exact `<instance root>/<plugin_id>[/<subdir>]` path, explains why core-store ids such as `memory` are reserved, and shows how the host-free testkit provides temporary storage without a fallback path. Tests get separate temporary roots when they install fresh stubs.
+
 ## [0.232.0] - 2026-11-08
 
 ### Added

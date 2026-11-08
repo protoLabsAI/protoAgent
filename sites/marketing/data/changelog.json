@@ -1,5 +1,20 @@
 [
   {
+    "version": "v0.233.0",
+    "date": "2026-11-08",
+    "changes": [
+      "show_config now reports the running build, so \"which version are you on?\" is answered correctly (#4876).",
+      "A changelog fragment can be written correctly in a PR's first commit (#4881).",
+      "Plugin event subscriptions work across startup and reload (#4800).",
+      "Quieter, guarded plugin events (#4803).",
+      "Scaffolded plugins no longer 422 on their own routes (#4804).",
+      "Plugin registration catches invalid route and tool parameters (#4804).",
+      "An agent's memory no longer fills with other agents' chatter and its own release logs (#4882).",
+      "Old session summaries and history now age out instead of piling up (#4883).",
+      "The building-plugins skill documents plugin storage (#4808)."
+    ]
+  },
+  {
     "version": "v0.232.0",
     "date": "2026-11-08",
     "changes": [
