@@ -50,8 +50,11 @@ SIZE_MB="$(du -sm "$SIDECAR_DIR" | cut -f1)"
 [ "$SIZE_MB" -gt 50 ] || { echo "FAIL: sidecar tree suspiciously small (${SIZE_MB} MB)"; exit 1; }
 LINKS="$(find "$SIDECAR_DIR" -type l | wc -l | tr -d ' ')"
 [ "$LINKS" = "0" ] || { echo "FAIL: sidecar tree has ${LINKS} symlinks (build_sidecar materializes them; tauri drops directory links)"; exit 1; }
+FWS="$(find "$SIDECAR_DIR" -type d -name '*.framework' | wc -l | tr -d ' ')"
+[ "$FWS" = "0" ] || { echo "FAIL: sidecar tree has ${FWS} .framework bundles (build_sidecar dissolves them; codesign can't sign a flattened one)"; exit 1; }
+[ -f "$SIDECAR_DIR/_internal/Python" ] || ls "$SIDECAR_DIR/_internal"/libpython3*.dylib >/dev/null 2>&1 || { echo "FAIL: no Python library in _internal/"; exit 1; }
 [ ! -e "$APP/Contents/MacOS/protoagent-server" ] || { echo "FAIL: a onefile sidecar is still bundled in Contents/MacOS"; exit 1; }
-echo "ok: sidecar tree bundled (arm64, ${SIZE_MB} MB, no symlinks)"
+echo "ok: sidecar tree bundled (arm64, ${SIZE_MB} MB, no symlinks or frameworks)"
 
 # ── Signing mode ─────────────────────────────────────────────────────────────
 # (-dvv, not -dv: the Authority= certificate chain only prints at verbosity 2+.)

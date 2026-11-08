@@ -304,13 +304,122 @@ def _walk(root: Path):
             yield Path(dirpath) / name
 
 
+def dissolve_frameworks(root: Path) -> list[str]:
+    """Replace every ``<Name>.framework`` bundle under ``root`` with its bare binary.
+
+    A python.org (framework) build makes PyInstaller collect ``_internal/Python.framework``
+    with the versioned layout (``Versions/Current`` and the top-level ``Python`` and
+    ``Resources`` symlinks) plus ``_internal/Python``, a symlink to the binary that the
+    bootloader loads. That bundle can't survive the trip to ``Contents/Resources``:
+    Tauri skips directory symlinks, and once they are materialized the framework root
+    holds a real ``Python``, which codesign refuses to sign ("bundle format is
+    ambiguous (could be app or framework)", desktop-build run 42455809696). A framework
+    can't be signed as a bundle and then copied flat either: the copy breaks its seal.
+
+    Nothing needs the bundle: dyld and the bootloader load a Mach-O by path. So the
+    one ``Versions/<v>/<Name>`` binary becomes a real file at ``<parent>/<Name>`` (where
+    PyInstaller's own ``_internal/Python`` link already points), and :func:`relink_dissolved`
+    rewrites any load command that named it through the framework. A framework carrying
+    anything beyond its binary and ``Info.plist`` (several versions, other resources,
+    helpers) is refused, never dropped silently. Returns the dissolved names."""
+    names: list[str] = []
+    fws = sorted(
+        (p for p in _walk(root) if p.suffix == ".framework" and p.is_dir() and not p.is_symlink()),
+        key=lambda p: -len(p.parts),
+    )
+    for fw in fws:
+        name = fw.stem
+        vdir = fw / "Versions"
+        versions = sorted(v for v in vdir.iterdir() if v.is_dir() and not v.is_symlink()) if vdir.is_dir() else []
+        if len(versions) != 1:
+            raise SystemExit(f"{fw}: expected exactly one Versions/<v> directory, found {[v.name for v in versions]}")
+        binary = versions[0] / name
+        if not is_macho(binary):
+            raise SystemExit(f"{fw}: {binary} is not a Mach-O file")
+        extra = sorted(
+            str(p.relative_to(versions[0]))
+            for p in _walk(versions[0])
+            if (p.is_file() or p.is_symlink())
+            and p != binary
+            and p.name != "Info.plist"
+            and p.relative_to(versions[0]).parts[0] != "_CodeSignature"
+        )
+        if extra:
+            raise SystemExit(f"{fw}: refusing to dissolve a framework that ships more than its binary: {extra}")
+        dest = fw.parent / name
+        if dest.is_symlink() or dest.exists():
+            if not dest.is_symlink() or dest.resolve() != binary.resolve():
+                raise SystemExit(f"{dest} already exists and is not a link to {binary}")
+            dest.unlink()
+        shutil.copy2(binary, dest)
+        shutil.rmtree(fw)
+        names.append(name)
+    return names
+
+
+def dissolved_ref(ref: str, names: list[str]) -> str | None:
+    """The new install name for a load command that pointed into a dissolved framework,
+    or None to leave it alone. ``@rpath/Python.framework/Versions/3.12/Python`` becomes
+    ``@rpath/Python``: same directory, since :func:`dissolve_frameworks` put the binary
+    beside where the framework was. Absolute paths name system frameworks; untouched."""
+    if not ref.startswith("@"):
+        return None
+    for name in names:
+        marker = f"/{name}.framework/"
+        if ref.endswith(f"/{name}") and marker in ref:
+            return f"{ref.split(marker, 1)[0]}/{name}"
+    return None
+
+
+def relink_dissolved(root: Path, names: list[str]) -> list[str]:
+    """Rewrite every Mach-O load command (and dylib id) under ``root`` that names a
+    dissolved framework. Runs before signing, since ``install_name_tool`` voids a
+    signature. Returns ``"<file>: <old> -> <new>"`` lines for the build log."""
+    changed: list[str] = []
+    if not names:
+        return changed
+    for path in (p for p in _walk(root) if p.is_file() and not p.is_symlink() and is_macho(p)):
+        own = {
+            line.strip()
+            for line in _run_or_explain(["otool", "-D", str(path)]).stdout.splitlines()[1:]
+            if line.strip() and not line.startswith("(")
+        }
+        out = _run_or_explain(["otool", "-L", str(path)]).stdout
+        refs = {line.strip().split(" (", 1)[0] for line in out.splitlines() if line.startswith("\t")} - own
+        for ref in sorted(refs):
+            new = dissolved_ref(ref, names)
+            if new and new != ref:
+                _run_or_explain(["install_name_tool", "-change", ref, new, str(path)])
+                changed.append(f"{path.relative_to(root)}: {ref} -> {new}")
+        for ref in sorted(own):
+            new = dissolved_ref(ref, names)
+            if new and new != ref:
+                _run_or_explain(["install_name_tool", "-id", new, str(path)])
+                changed.append(f"{path.relative_to(root)}: id {ref} -> {new}")
+    return changed
+
+
+def _run_or_explain(call: list[str]) -> subprocess.CompletedProcess:
+    """Run a build tool; on failure print its full stderr/stdout (the CI log is all we
+    get) and raise."""
+    proc = subprocess.run(call, capture_output=True, text=True)
+    if proc.returncode != 0:
+        print(f"FAILED ({proc.returncode}): {' '.join(call)}", file=sys.stderr)
+        for stream in (proc.stdout, proc.stderr):
+            if stream.strip():
+                print(stream.rstrip(), file=sys.stderr)
+        raise subprocess.CalledProcessError(proc.returncode, call, proc.stdout, proc.stderr)
+    return proc
+
+
 def materialize_symlinks(root: Path) -> int:
     """Replace every symlink under ``root`` with a real copy of what it points at.
 
     Tauri copies a resource directory file by file: it follows a file symlink (a
-    duplicate, which is harmless) and SKIPS a directory symlink outright, so a framework's
-    ``Versions/Current`` would silently vanish from the app. Materializing first makes the
-    tree Tauri copies identical to the tree that was signed. Returns how many it replaced."""
+    duplicate, which is harmless) and SKIPS a directory symlink outright, so a linked
+    directory would silently vanish from the app. Materializing first makes the tree
+    Tauri copies identical to the tree that was signed. Frameworks are dissolved before
+    this runs (:func:`dissolve_frameworks`). Returns how many it replaced."""
     links = sorted((p for p in _walk(root) if p.is_symlink()), key=lambda p: len(p.parts))
     for link in links:
         if not link.is_symlink():
@@ -343,15 +452,20 @@ def codesign_plan(root: Path, exe: Path, identity: str, entitlements: Path) -> l
 
 
 def finish_onedir(built: Path, dest: Path, identity: str) -> None:
-    """Materialize, sign and install a onedir build at ``dest``."""
+    """Dissolve frameworks, materialize, sign and install a onedir build at ``dest``."""
     exe = built / NAME
+    names = dissolve_frameworks(built)
+    relinked = relink_dissolved(built, names)
+    print(f"onedir: dissolved frameworks {names or 'none'}; {len(relinked)} load commands rewritten")
+    for line in relinked:
+        print(f"  {line}")
     n = materialize_symlinks(built)
     plan = codesign_plan(built, exe, identity, ENTITLEMENTS)
     print(
         f"onedir: {n} symlinks materialized; signing {len(plan)} Mach-O files ({'ad-hoc' if identity == '-' else identity})"
     )
     for call in plan:
-        subprocess.run(call, check=True, capture_output=True)
+        _run_or_explain(call)
     if dest.exists():
         shutil.rmtree(dest)
     shutil.copytree(built, dest, symlinks=True)
