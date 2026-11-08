@@ -1,1 +1,0 @@
-- **README explains why to use protoAgent alongside Claude Code and Codex, and leads with the feature tour (#4771).** A new "Why protoAgent?" section answers "why not just use Claude Code directly?", the "What you can do" feature tour now comes before "Repository layout", and Contributing links the roadmap.
