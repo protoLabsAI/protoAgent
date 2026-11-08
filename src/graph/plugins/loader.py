@@ -71,11 +71,14 @@ class PluginLoadResult:
     component_frames: dict = field(default_factory=dict)
     services: dict = field(default_factory=dict)  # "<plugin_id>.<name>" -> callable (ADR 0116)
     service_meta: dict = field(default_factory=dict)  # name -> {plugin_id, description}
-    # Registries that registered an ``on()`` event-bus subscription (ADR 0039, #4800). Carried
-    # forward (the registry objects, not just data) so the server can bind their queued
-    # subscriptions once the bus is wired and tear THIS load's handlers down on the next reload
-    # — otherwise each reload stacks another live handler closed over stale state.
-    event_subscriptions: list = field(default_factory=list)
+    # Every registry this load produced (ADR 0039, #4800). Carried forward (the registry
+    # objects, not just data) so the server can bind their queued ``on()`` subscriptions once
+    # the bus is wired and tear THIS load's handlers down on the next reload — otherwise each
+    # reload stacks another live handler closed over stale state. EVERY registry is kept, not
+    # just the ones subscribed when register() finished: a plugin's first ``on()`` can come
+    # after load (a surface start, a route handler, a lifecycle hook, a delayed callback over a
+    # captured registry), and that handler still has to be torn down on the next reload.
+    plugin_registries: list = field(default_factory=list)
     meta: list[dict] = field(default_factory=list)
 
 
@@ -1057,6 +1060,7 @@ def load_plugins(config, *, core_tool_names: set[str] | None = None) -> PluginLo
         # config (resolved-config binding), registration (register(registry)). The
         # helper records in `finally`, so a stage that raises into the except below
         # still gets timed — that's the plugin worth diagnosing.
+        registry = None  # so the except below can tell whether register() ran (#4800)
         try:
             with timed_lifecycle_phase(manifest.id, "load"):
                 register = _import_register(manifest)
@@ -1098,6 +1102,12 @@ def load_plugins(config, *, core_tool_names: set[str] | None = None) -> PluginLo
             from graph.plugins import setup_gaps as _setup_gaps
 
             _setup_gaps.clear_plugin(manifest.id)
+            # If register() called registry.on() before it raised and the bus was already wired
+            # (a hot reload), that handler bound inline — and this plugin never loads, so it is
+            # not carried into result.plugin_registries and no later reload can reach it. Tear it
+            # down now, or it stays live on the bus for the life of the process (ADR 0039, #4800).
+            if registry is not None and getattr(registry, "_teardown_event_subscriptions", None):
+                registry._teardown_event_subscriptions()
             result.meta.append(entry)
             continue
 
@@ -1266,11 +1276,13 @@ def load_plugins(config, *, core_tool_names: set[str] | None = None) -> PluginLo
             smeta = getattr(registry, "service_meta", {}).get(name)
             if smeta:
                 result.service_meta[name] = smeta
-        # Carry the registry forward if it subscribed to the bus (ADR 0039, #4800): the server
-        # binds its queued on() subscriptions once the bus is wired and tears this load's live
-        # handlers down on the next reload. getattr so an older/duck-typed registry still loads.
-        if getattr(registry, "_has_event_subscriptions", None) and registry._has_event_subscriptions():
-            result.event_subscriptions.append(registry)
+        # Carry EVERY registry forward (ADR 0039, #4800): the server binds its queued on()
+        # subscriptions once the bus is wired and tears this load's live handlers down on the
+        # next reload. We keep it even when it hasn't subscribed yet — a plugin's first on()
+        # often comes after load (a surface start, a route handler, a lifecycle hook), and that
+        # handler must still be torn down on the next reload; filtering on a load-time snapshot
+        # of its subscriptions would strand it and stack a live handler per reload.
+        result.plugin_registries.append(registry)
         entry["loaded"] = True
         entry["tools"] = [t.name for t in kept]
         # Count the conventional skills/ dir too (auto-discovered above) — counting only

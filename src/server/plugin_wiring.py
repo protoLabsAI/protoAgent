@@ -376,10 +376,12 @@ def _populate_plugin_host() -> None:
 
 
 def _bind_plugin_event_subscriptions(bundle, *, warn_if_unbound: bool = False) -> None:
-    """Bind every subscribing plugin registry's queued ``on()`` handlers to the now-wired bus
-    (ADR 0039, #4800). Best-effort per registry so one bad plugin can't block the rest; a
-    ``None`` bundle (nothing built yet) is a no-op."""
-    for registry in getattr(bundle, "event_subscriptions", None) or []:
+    """Bind every plugin registry's queued ``on()`` handlers to the now-wired bus (ADR 0039,
+    #4800). Iterates EVERY registry the bundle carries (not just the ones subscribed at load),
+    so a subscription queued at any point reaches the bus; a registry with nothing queued is a
+    cheap no-op. Best-effort per registry so one bad plugin can't block the rest; a ``None``
+    bundle (nothing built yet) is a no-op."""
+    for registry in getattr(bundle, "plugin_registries", None) or []:
         try:
             registry._bind_event_subscriptions(warn_if_unbound=warn_if_unbound)
         except Exception:  # noqa: BLE001 — a bad plugin can't break event binding
@@ -389,9 +391,11 @@ def _bind_plugin_event_subscriptions(bundle, *, warn_if_unbound: bool = False) -
 def _teardown_plugin_event_subscriptions(bundle) -> None:
     """Unsubscribe every ``on()`` handler the given bundle's registries bound (ADR 0039,
     #4800). The reload commit calls this on the OUTGOING bundle before the reloaded one binds,
-    so a plugin reloaded N times leaves exactly one live handler. A ``None`` bundle is a
-    no-op; failures are isolated per registry."""
-    for registry in getattr(bundle, "event_subscriptions", None) or []:
+    so a plugin reloaded N times leaves exactly one live handler. Iterates EVERY registry the
+    bundle carries, so a handler bound by an ``on()`` that ran after load (a surface start, a
+    route handler, a lifecycle hook) is torn down too — not just the load-time subscribers. A
+    ``None`` bundle is a no-op; failures are isolated per registry."""
+    for registry in getattr(bundle, "plugin_registries", None) or []:
         try:
             registry._teardown_event_subscriptions()
         except Exception:  # noqa: BLE001 — a bad teardown can't block the reload

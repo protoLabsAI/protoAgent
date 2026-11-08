@@ -194,8 +194,9 @@ class PluginRegistry:
         # it once the bus exists. We also keep every unsubscribe the bus hands back so a
         # reload/disable tears THIS load's handlers down before the successor subscribes —
         # otherwise each reload stacks another live handler closed over stale state. Both are
-        # per-load state; the loader carries the registry forward in the bundle
-        # (``event_subscriptions``) so the server can drive bind/teardown across reloads.
+        # per-load state; the loader carries EVERY registry forward in the bundle
+        # (``plugin_registries``) so the server can drive bind/teardown across reloads no matter
+        # when ``on()`` was called — a first subscription made after load is covered too.
         self._pending_subscriptions: list[tuple[str, object]] = []
         self._subscription_unsubs: list = []
 
@@ -612,9 +613,10 @@ class PluginRegistry:
         self._pending_subscriptions = []
 
     def _has_event_subscriptions(self) -> bool:
-        """True when this load registered any :meth:`on` subscription (queued or bound) — the
-        loader uses it to carry only subscribing registries forward in the bundle (#4800).
-        Server-internal, not plugin-author SDK."""
+        """True when this load currently holds any :meth:`on` subscription — queued (not yet
+        bound) or bound (an unsubscribe is held). The loader carries EVERY registry forward
+        regardless, so this is a diagnostic/predicate (used by tests and teardown checks), not
+        the carry-forward filter it once was (#4800). Server-internal, not plugin-author SDK."""
         return bool(self._pending_subscriptions or self._subscription_unsubs)
 
     def register_skill_dir(self, path: str | Path) -> None:

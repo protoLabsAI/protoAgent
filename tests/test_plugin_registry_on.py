@@ -12,6 +12,8 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
+import pytest
+
 from events.bus import EventBus
 from graph.plugins.host import PluginHost
 from graph.plugins.registry import PluginRegistry
@@ -177,11 +179,12 @@ def test_non_callable_handler_is_rejected_and_not_queued(caplog):
 
 def _bundle(*registries):
     """A minimal stand-in for the plugin bundle the loader hands the server — only the
-    ``event_subscriptions`` list the bind/teardown helpers read (the loader fills it with every
-    registry whose ``_has_event_subscriptions()`` is true)."""
+    ``plugin_registries`` list the bind/teardown helpers read (the loader fills it with EVERY
+    registry it produced, subscribing or not, so a first ``on()`` made after load is still
+    reachable). The loader-backed tests below prove the real bundle is filled the same way."""
     from types import SimpleNamespace
 
-    return SimpleNamespace(event_subscriptions=list(registries))
+    return SimpleNamespace(plugin_registries=list(registries))
 
 
 def test_server_bind_helper_drains_queued_subscriptions_once_bus_is_wired():
@@ -235,3 +238,110 @@ def test_server_reload_commit_tears_down_outgoing_then_binds_incoming():
 
     bus.publish("topic.created", {})
     assert got == ["load2"]
+
+
+# The loader-backed coverage the fix actually depends on: the real ``load_plugins`` carrying
+# EVERY registry into ``bundle.plugin_registries`` (not just load-time subscribers), so the real
+# ``_teardown_plugin_event_subscriptions`` reaches a plugin whose first ``on()`` comes after load
+# — and the loader tearing down a handler bound inline by a ``register()`` that then raised. A
+# registry-only test passes even if the loader carry-forward is reverted, so drive load_plugins.
+
+_QUIET_PLUGIN = '''
+def register(registry):
+    """Loads cleanly and subscribes to nothing at register() time — its first on() comes later,
+    from a surface start / route handler / lifecycle hook."""
+'''
+
+_RAISE_AFTER_ON_PLUGIN = '''
+def register(registry):
+    registry.on("boomplug.topic", lambda _p: None)  # binds inline when the bus is already wired
+    raise RuntimeError("register() blew up right after subscribing")
+'''
+
+
+def _write_plugin(root: Path, pid: str, body: str) -> Path:
+    """A minimal on-disk plugin (manifest + register()) under ``root`` — the same shape
+    ``tests/test_plugin_reload_leak.py`` uses to drive the real loader."""
+    d = root / pid
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "protoagent.plugin.yaml").write_text(
+        f"id: {pid}\nname: {pid} plugin\nversion: 0.1.0\nenabled: true\n", encoding="utf-8"
+    )
+    (d / "__init__.py").write_text(body, encoding="utf-8")
+    return d
+
+
+@pytest.fixture
+def plugin_root(tmp_path, monkeypatch):
+    """A plugins dir the real ``load_plugins`` discovers — and nothing else, so handler counts
+    on a test bus reflect only the plugins written here."""
+    from graph.plugins import loader as plugin_loader
+
+    root = tmp_path / "plugins"
+    root.mkdir()
+    monkeypatch.setattr(plugin_loader, "_plugin_roots", lambda config: [root])
+    yield root
+    # The re-exec cache is process state — don't leak these ids into the next test.
+    for pid in ("quietplug", "latebird", "boomplug"):
+        plugin_loader.purge_plugin_modules(pid)
+
+
+def test_loader_carries_a_non_subscribing_registry_forward(plugin_root):
+    """The loader carries EVERY registry into ``plugin_registries``, even one that subscribed to
+    nothing at load. Reverting to the old ``_has_event_subscriptions()`` carry filter drops this
+    registry — and then a reload can never tear down a handler it binds later (#4800)."""
+    from graph.config import LangGraphConfig
+    from graph.plugins.loader import load_plugins
+
+    _write_plugin(plugin_root, "quietplug", _QUIET_PLUGIN)
+    result = load_plugins(LangGraphConfig())
+
+    assert "quietplug" in [r.plugin_id for r in result.plugin_registries]
+
+
+def test_reload_teardown_reaches_a_registry_that_subscribed_after_load(plugin_root, monkeypatch):
+    """The round-4 blocker, end to end on the REAL bundle + server teardown helper: a plugin
+    whose first ``on()`` comes AFTER load (a surface start / route handler / lifecycle hook) must
+    still be torn down on reload. The loader carries its registry forward; once the bus is up the
+    late ``on()`` binds inline; ``_teardown_plugin_event_subscriptions`` reaches it (#4800)."""
+    from graph.config import LangGraphConfig
+    from graph.plugins import host as host_module
+    from graph.plugins.loader import load_plugins
+    from server.plugin_wiring import _teardown_plugin_event_subscriptions
+
+    _write_plugin(plugin_root, "latebird", _QUIET_PLUGIN)
+    result = load_plugins(LangGraphConfig())
+    reg = next(r for r in result.plugin_registries if r.plugin_id == "latebird")
+
+    # The bus comes up after load; the plugin's surface start subscribes now (binds inline,
+    # because ``reg.host`` is the same HOST singleton we wire here).
+    bus = EventBus()
+    monkeypatch.setattr(host_module.HOST, "on", bus.subscribe_handler)
+    reg.on("topic.*", lambda _p: None)
+    assert bus.handler_count() == 1
+
+    # A reload tears the OUTGOING bundle down — and it reaches this late subscriber.
+    _teardown_plugin_event_subscriptions(result)
+    assert bus.handler_count() == 0
+
+
+def test_register_raising_after_on_does_not_leak_a_handler(plugin_root, monkeypatch):
+    """A plugin whose ``register()`` calls ``on()`` (bus already wired, a hot reload) and then
+    raises binds a handler inline but never finishes loading, so it is not carried forward and no
+    later reload can reach it. The loader must unsubscribe it in its except branch, or it stays
+    live on the bus for the life of the process (#4800)."""
+    from graph.config import LangGraphConfig
+    from graph.plugins import host as host_module
+    from graph.plugins.loader import load_plugins
+
+    _write_plugin(plugin_root, "boomplug", _RAISE_AFTER_ON_PLUGIN)
+
+    bus = EventBus()
+    monkeypatch.setattr(host_module.HOST, "on", bus.subscribe_handler)  # hot reload: bus is up
+    result = load_plugins(LangGraphConfig())
+
+    # It failed to load (register() raised) — not carried forward, flagged in meta...
+    assert "boomplug" not in [r.plugin_id for r in result.plugin_registries]
+    assert any(m.get("id") == "boomplug" and m.get("error") for m in result.meta)
+    # ...and the handler it bound inline before raising was torn down, not left live.
+    assert bus.handler_count() == 0

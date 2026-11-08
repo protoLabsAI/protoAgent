@@ -1523,6 +1523,14 @@ def _reload_langgraph_agent(*, reload_plugins: bool = True) -> tuple[bool, str]:
             # prompt rebuild failed (#3365).
             if new_mcp_clients is not STATE.mcp_clients:
                 _close_mcp_clients(new_mcp_clients)
+            # A freshly-built bundle's on() handlers may already be live: on a hot reload the bus
+            # is wired, so each new registry.on() in register() bound inline during _build_plugins
+            # above. This build failed and the bundle will never commit — tear those handlers
+            # down or they leak beside the live bundle's (every event delivered twice) with
+            # nothing able to reach them, and each failed reload stacks another copy (ADR 0039,
+            # #4800). Skip a REUSED bundle (prompt-only rebuild, #3365) — it IS the live one.
+            if new_plugin_bundle is not None and new_plugin_bundle is not STATE.plugin_bundle:
+                _teardown_plugin_event_subscriptions(new_plugin_bundle)
             # The prior graph keeps serving, so it keeps the runner it was built with.
             STATE.workflow_registry, STATE.workflow_run = prior_workflow
             # Scheduler state hasn't been committed yet — caller's
@@ -1591,12 +1599,14 @@ def _reload_langgraph_agent(*, reload_plugins: bool = True) -> tuple[bool, str]:
         new_plugin_meta,
     )
     STATE.plugin_tool_owner = new_plugin_tool_owner
-    # Event-bus subscriptions (ADR 0039, #4800): swap the live handlers atomically here, at the
-    # single commit point reached only after a successful build. When the bundle is freshly
-    # built (not a reused one), tear the OUTGOING bundle's handlers down FIRST, then bind the
-    # incoming bundle's queued on() subscriptions — so a plugin reloaded leaves exactly one live
-    # handler, never a second closed over stale state. A REUSED bundle (prompt-only rebuild,
-    # #3365) is the same object: its handlers stay live and untouched.
+    # Event-bus subscriptions (ADR 0039, #4800). On a hot reload the bus is already wired, so an
+    # incoming registry.on() in register() bound inline during the build above — this is not a
+    # clean atomic swap, and for the brief rebuild window both loads' handlers can fire. At this
+    # commit point, reached only after a successful build, we tear the OUTGOING bundle's handlers
+    # down so STEADY STATE leaves exactly one live handler per plugin (never a second closed over
+    # stale state), and bind anything the incoming bundle left queued (the cold-boot path, where
+    # register() ran before the bus was wired). A REUSED bundle (prompt-only rebuild, #3365) is
+    # the same object: its handlers stay live and untouched.
     old_plugin_bundle = STATE.plugin_bundle
     STATE.plugin_bundle = new_plugin_bundle  # what a prompt-only rebuild reuses (#3365)
     if new_plugin_bundle is not old_plugin_bundle:
