@@ -1,6 +1,7 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { bytes, localStamp, localStampFull, localStampTitle } from "./format";
+import { formatTimestamp as taskTimestamp } from "../app/tasks";
+import { bytes, formatGivenAt, formatTimestamp, localStamp, localStampFull, localStampTitle } from "./format";
 
 // #2468 — telemetry stamps must render as local wall-clock instants, not a
 // sliced copy of the source UTC string. Assertions compare against the same
@@ -80,5 +81,54 @@ describe("bytes", () => {
   it("renders GB and saturates there", () => {
     expect(bytes(2_147_483_648)).toBe("2.0 GB");
     expect(bytes(1_099_511_627_776)).toBe("1024 GB");
+  });
+});
+
+describe("timestamp displays", () => {
+  const DateTimeFormat = Intl.DateTimeFormat;
+
+  beforeEach(() => {
+    vi.stubEnv("TZ", "America/New_York");
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-11-09T18:00:00Z"));
+    vi.spyOn(Intl, "DateTimeFormat").mockImplementation(function (_locale, options) {
+      return new DateTimeFormat("en-GB", { ...options, timeZone: "America/New_York" });
+    });
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.useRealTimers();
+    vi.unstubAllEnvs();
+  });
+
+  it.each([
+    ["2026-11-09T22:14:00Z", "today at 17:14"],
+    ["2026-11-08T22:14:00Z", "yesterday at 17:14"],
+    ["2026-11-07T22:14:00Z", "7 Nov, 17:14"],
+    ["2026-11-07T22:14:00+00:00", "7 Nov, 17:14"],
+    ["2026-11-09T02:14:00+00:00", "yesterday at 21:14"],
+    ["2025-11-07T22:14:00Z", "7 Nov 2025, 17:14"],
+    ["2026-11-09T17:14:00", "today at 17:14"],
+  ])("preserves the task formatter output for %s", (input, expected) => {
+    expect(taskTimestamp).toBe(formatTimestamp);
+    expect(taskTimestamp(input)).toBe(expected);
+  });
+
+  it.each([
+    ["2026-11-09T22:14:00Z", "today at 17:14"],
+    ["2026-11-08T22:14:00Z", "yesterday at 17:14"],
+    ["2026-11-07T22:14:00Z", "7 Nov at 17:14"],
+    ["2025-11-07T22:14:00Z", "7 Nov 2025 at 17:14"],
+    ["2026-11-07T22:14:00+00:00", "7 Nov at 17:14"],
+    ["2026-11-07T22:14:00", "7 Nov at 17:14"],
+    ["2026-11-09T02:14:00+00:00", "yesterday at 21:14"],
+  ])("joins the date and time for %s", (input, expected) => {
+    expect(formatGivenAt(input)).toBe(expected);
+  });
+
+  it.each([undefined, null, "", "not-a-date"])("keeps empty/invalid input blank: %s", (input) => {
+    expect(formatTimestamp(input)).toBe("");
+    expect(formatGivenAt(input)).toBe("");
   });
 });
