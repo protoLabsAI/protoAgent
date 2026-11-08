@@ -1,0 +1,2 @@
+- **The hub audits a device token minted on a fleet member through its proxy (#4683).**
+  A member sees only the fleet token, so its own `device.minted` entry says `minted_by: "shared"`. The hub now also writes a `device.mint_proxied` entry with the member, whether it is remote, the hub-side caller (the paired device's id, or `shared`) and the member's response status. Match it to the member's entry by member and time. The token is never read or logged.

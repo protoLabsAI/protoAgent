@@ -364,8 +364,8 @@ def mint_device(name: object, *, minted_by: str | None = None) -> tuple[dict, st
 
     ``minted_by`` is the caller's own device id, or None for a shared credential (the
     operator bearer, ``X-API-Key`` or the fleet service token); the audit entry records it
-    as ``"shared"`` then. Invalid names raise ``ValueError``; the token is returned once
-    and never audited.
+    as ``"shared"`` then. Invalid names raise ``ValueError``. The token is returned once;
+    the audit entry never contains it.
     """
     device, token = _register(validate_device_name(name), KIND_DEVICE)
     _audit(

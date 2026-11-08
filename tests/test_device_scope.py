@@ -1194,12 +1194,16 @@ async def test_proxy_mints_on_member_registry_only(auth, devices, monkeypatch, t
     from contextvars import ContextVar
 
     import httpx
+    import observability.audit as audit_mod
     from fastapi import FastAPI
     from graph.fleet import proxy
     from operator_api.fleet_routes import register_fleet_routes
     from operator_api.pairing_routes import register_pairing_routes
 
     hub_path, member_path = tmp_path / "hub.json", tmp_path / "member.json"
+    # One audit file for both apps (they share a process here); each row says which side wrote it.
+    audit_path = tmp_path / "proxied-mint-audit.jsonl"
+    monkeypatch.setattr(audit_mod, "audit_logger", audit_mod.AuditLogger(audit_path))
     fleet_token = "test-fleet-mint-secret"
     monkeypatch.setattr(auth, "_FLEET", [fleet_token])
     registry = ContextVar("mint_registry", default=hub_path)
@@ -1251,5 +1255,25 @@ async def test_proxy_mints_on_member_registry_only(auth, devices, monkeypatch, t
                 assert (await http.get("/api/devices", headers=_hdr(_SECRET))).json()["devices"] == []
                 listed = await http.get("/agents/peer/api/devices", headers=_hdr(_SECRET))
                 assert listed.json()["devices"] == [device]
-    assert not hub_path.exists()
+                # A full-access device paired to the HUB mints on the member: the hub's row names it.
+                hub_device, hub_device_token = _hub(devices)
+                by_device = await http.post(
+                    "/agents/peer/api/devices", headers=_hdr(hub_device_token), json={"name": "second recorder"}
+                )
+                assert by_device.status_code == 200, by_device.text
+                second_token = by_device.json()["token"]
+    assert [d["id"] for d in json.loads(hub_path.read_text())] == [hub_device["id"]]
     assert json.loads(member_path.read_text())[0]["token_sha256"] == hashlib.sha256(token.encode()).hexdigest()
+    # The member sees only the fleet token; the HUB records who asked (#4683).
+    audit = audit_path.read_text("utf-8")
+    rows = [json.loads(line) for line in audit.splitlines()]
+    member_rows = [e for e in rows if e["tool"] == "device.minted"]
+    hub_rows = [e for e in rows if e["tool"] == "device.mint_proxied"]
+    assert [e["args"]["minted_by"] for e in member_rows] == ["shared", "shared"]
+    assert [e["args"] for e in hub_rows] == [
+        {"agent": "peer", "remote": False, "minted_by": "shared", "status": 200},
+        {"agent": "peer", "remote": False, "minted_by": hub_device["id"], "status": 200},
+    ]
+    assert all(e["success"] is True for e in hub_rows)
+    for secret in (token, second_token, hub_device_token, fleet_token):
+        assert secret not in audit
