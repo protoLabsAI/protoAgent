@@ -26,7 +26,7 @@ import re
 from datetime import UTC, datetime, timedelta
 from typing import Annotated, Any
 
-from langchain_core.tools import tool
+from langchain_core.tools import ToolException, tool
 from langgraph.prebuilt import InjectedState
 
 from knowledge.store import DELIVERY_ALWAYS, DELIVERY_POLICIES, REVIEW_STATES
@@ -585,7 +585,7 @@ def _build_memory_tools(
 
         src = (source or "").strip()
         if not src:
-            return "Error: provide a URL or a local file path to ingest."
+            raise ToolException("Error: provide a URL or a local file path to ingest.")
         col = (collection or "general").strip() or "general"
         # Same always-on confirm gate as memory_save (ADR 0069 D8 / ADR 0108 D4): a local file
         # filed under collection="hot" is an agent path to an always-on row too, so it must
@@ -601,7 +601,10 @@ def _build_memory_tools(
             try:
                 return await _do_ingest(src, col, title, is_url)
             except _KnowledgeIngestError as exc:
-                return str(exc)
+                # A failed ingest ("No such file: ...", an unsupported type, nothing extracted)
+                # is a failed call: raised as ToolException, it comes back to the model with the
+                # same words but status="error", which per-tool telemetry counts.
+                raise ToolException(str(exc)) from exc
 
         label = (title or "").strip() or (src if is_url else Path(src).expanduser().name)
         job_id = await background_mgr.spawn_work(
@@ -616,6 +619,9 @@ def _build_memory_tools(
             "It runs on its own and I'll report the result back to this conversation when it's "
             "indexed; no need to wait or poll."
         )
+
+    # The raised ToolException's words become the tool result, with status="error".
+    knowledge_ingest.handle_tool_error = True
 
     @tool
     async def knowledge_search(query: str, k: int = 5, collection: str | None = None) -> str:
