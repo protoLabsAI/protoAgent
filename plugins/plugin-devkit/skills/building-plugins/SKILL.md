@@ -319,12 +319,12 @@ Remove cleanly with `plugin uninstall <id>` (`--purge` also drops config + secre
 - **`from __future__ import annotations` + a FastAPI import inside `register()` → 422.**
   If the top of your `__init__.py` has `from __future__ import annotations` and you
   import `Request` / `WebSocket` / `Response` / `BackgroundTasks` *inside* `register()`
-  (not at module top), every annotation becomes a string FastAPI can't resolve — so a
+  (not at module top), those annotations become strings FastAPI can't resolve — so a
   route's `request: Request` is read as a required *query* param and the route 422s on a
   normal page load. Fix: import those FastAPI types at **module level**, or drop the
   `from __future__ import annotations` line (the scaffold no longer emits it). The
-  host-free testkit now **raises** when it sees this combination, so a typo'd plugin
-  fails its own suite instead of shipping green.
+  host-free testkit now **raises** when it sees this combination, so the plugin
+  catches the mistake in its own suite.
 - **A `@tool` parameter named `config`, `callbacks`, or `run_manager` is swallowed.**
   LangChain treats those names as injected runtime args (the `RunnableConfig`, callback
   manager, run manager), so they never reach the model as real tool parameters and the
