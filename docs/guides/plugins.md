@@ -132,6 +132,7 @@ at it, not hand back a markdown link the model can't open. Return
 `multimodal_tool_result(text, images=[…])` from `graph.sdk` instead of a path or URL string:
 
 ```python
+from langchain_core.tools import tool
 from graph.sdk import multimodal_tool_result
 
 @tool
@@ -158,9 +159,10 @@ is configured), so the tool is safe to return either way.
 | `mime` | optional content type; defaults to `image/png`, and must start with `image/` |
 
 Limits are enforced at the call: at most **3** images per result (`MAX_IMAGES_PER_RESULT`) and
-**2 MiB** decoded bytes per image (`MAX_IMAGE_BYTES`), each auto-downscaled to the model's
-long-side cap first. An image that still can't be sent safely is dropped with an inline note and the
-text always survives, so a bad image never fails the tool call.
+**2 MiB** decoded bytes per image (`MAX_IMAGE_BYTES`), after fitting/downscaling.
+Unsafe images that cannot be fitted are omitted with a note,
+but invalid input (including malformed base64 or too many images) raises `ValueError`;
+unreadable paths can raise file errors. Handle these in your tool as appropriate.
 
 The [`building-plugins` skill](https://github.com/protoLabsAI/protoAgent/blob/main/plugins/plugin-devkit/skills/building-plugins/SKILL.md)
 carries the worked `render_chart` example (and its `save_media` sibling, for handing the **user** a

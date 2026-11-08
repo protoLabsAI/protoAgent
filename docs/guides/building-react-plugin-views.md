@@ -333,25 +333,31 @@ parent.postMessage({
   notification dot still lights either way. Use it only when you genuinely keep state — a hidden
   iframe still costs memory and timers.
 
-  **Re-open is only free within the same console tab.** Switching *between* surfaces in one tab is
-  **not** a remount: the iframe stays put and the page is **not** reloaded (the active view and the
-  background ones share one display-swapped slot list — the fix in #4802, which otherwise tore the
-  iframe down the moment a page subscribed with `background`). But "kept mounted" is bounded, and
-  in these cases the view **does** remount — its page reloads and starts empty:
+  **Re-open preserves the page only while its mounted slot survives.** On desktop,
+  switching surfaces within the same dock uses a keyed, display-swapped slot list;
+  subscribing with `background: true` does not itself remount the view (#4802).
+  The exceptions are:
 
-  - **A full console reload** — a browser refresh, reopening the desktop app, a new tab. The
-    opt-in is **session-scoped and never persisted**: the console drops it from its saved UI state
-    on purpose (persisting it would resurrect iframes from boot that the operator never opened). So
-    after a reload nothing is kept warm, the iframe reloads with the page, and **your page must
-    re-send `background: true` on every load** — that re-subscribe is the only thing that re-arms
-    hidden delivery.
-  - **No dock, or a second dock.** A view is kept mounted only while it sits in a dock the console
-    is rendering (left / right / bottom); one parked in the hidden bucket isn't. And only **one**
-    copy is mounted across docks — a second dock asking for the same view shows an "open in another
-    panel" pointer, not a live second iframe.
+  - **A full console reload, a reopened app, or a new console tab** creates fresh pages.
+    The opt-in is session-scoped and never persisted. Your page must
+    **re-send `background: true` on every load**; inactive views are not restored warm.
+  - **Moving between docks or removing a view from the rails** can remove its slot.
+    Background slots are limited to views assigned to a rendered left, right, or bottom
+    dock; the hidden bucket is excluded. Reopening after unmount creates a fresh page.
+    Only one dock owns a mounted copy: another dock requesting it shows an
+    “open in another panel” pointer, which is not itself a second mount.
+  - **Mobile navigation and layout changes** have a different mount policy. A docked
+    mobile view first opens in the pushed layer; opting into background delivery moves
+    it into the root layer and remounts it. A view outside the docked set stays in the
+    pushed layer and unmounts when navigating away. Switching between desktop and
+    mobile shells also replaces the view tree. The mobile subscribe-time remount is a
+    known issue tracked in [#4810](https://github.com/protoLabsAI/protoAgent/issues/4810).
+  - **Opting out with `background: false`** restores unmount-on-switch behavior.
+    Embedded Configure pages do not participate in the background opt-in.
 
-  So treat a fresh page load as "re-subscribe and catch up from my stored `seq`," never as "my
-  state is still there" — which is exactly the `sessionStorage` recovery pattern below.
+  Treat a fresh page load as “re-subscribe and recover state,” not as evidence that the
+  previous in-memory model survived. The `sessionStorage` pattern below retains a replay
+  cursor within a tab; rebuild your model from a snapshot when replay alone is insufficient.
 
 **The recommended pattern** for a dashboard that used to poll:
 
@@ -573,59 +579,61 @@ git URL.
 
 ## Heavy views (WebGL/WASM) {#heavy-views}
 
-A WebGL/WebGPU scene or a WASM engine is the one kind of view where the iframe's cost is real — a
-GPU context, decoded buffers, and timers don't come free. Five rules keep one from initializing
-wrong or leaking across the console's hide/show and multi-tab lifecycle:
+Create a GL context or WASM instance only when the frame is visible and has a non-zero
+size. A `display: none` background frame measures 0×0; wait for visibility and size before
+allocating buffers. **Don't use `background: true` for a heavy view**: the hidden iframe
+retains memory and timers. Rebuild when it is opened again.
 
-1. **Build the context only when the frame is visible and has a non-zero size.** A view the console
-   keeps mounted for background delivery is `display: none`, so **its frame measures 0×0** — and a
-   GL/WebGPU context created at 0×0 (or a canvas sized from a hidden rect) initializes wrong and has
-   to be rebuilt anyway. Gate init on a real size; a `ResizeObserver` is the clean trigger.
-2. **One engine per agent — guard it with the Web Locks API.** The same view can be open in two
-   console tabs at once, and two live engines for one agent double the GPU/WASM memory and fight
-   over the same resources. Hold a `navigator.locks.request(...)` for the life of the engine so only
-   the tab holding the lock runs it; another tab waits or shows a "running in another tab"
-   placeholder. Scope the lock name to the agent (the slug-aware `base`) so each fleet member gets
-   its own.
-3. **Don't use `background: true` for a heavy view.** The [hidden-delivery opt-in](#replay-and-hidden-delivery-1640)
-   is for a lightweight live model; a hidden heavy view keeps its whole GPU context, buffers, and
-   timers resident for nothing. Let a heavy view unmount when it's hidden and rebuild on the next
-   visible mount — the opposite of the background opt-in.
-4. **Throttle status publishes.** The bridge already coalesces your `publish`es per topic over a
-   **100 ms last-value-wins** window and then rate-limits them **per view** to a **burst of 20 with
-   10 tokens refilled per second** (and at most **256** distinct pending topics); anything past that
-   is **dropped and counted, not queued**. A render loop that posts status every frame just feeds
-   the dropper — publish at human cadence (a few per second), never per `requestAnimationFrame`.
-5. **Dispose on `pagehide`, rebuild on `pageshow`.** `pagehide` is your last chance to run before
-   the frame goes away (bfcache suspend included): lose the GL context
-   (`WEBGL_lose_context`) and free the WASM instance there. Rebuild on `pageshow`, or on the next
-   visible, sized mount — never assume the context you built last time is still alive.
+Use the [Web Locks API](https://developer.mozilla.org/en-US/docs/Web/API/Web_Locks_API)
+(`navigator.locks.request`, requiring a secure context) to keep one engine per agent across
+same-origin console tabs. Include the plugin and agent identity in the lock name; locks
+cannot coordinate different origins or browser profiles. The example uses the guide's
+slug-aware `base`; supply a stable agent ID if several URLs address the same agent.
+
+Throttle status publishes to a few per second. The
+[bridge limits](/reference/plugin-view-bridge#events-subscribe-event-publish) are
+**100 ms last-value-wins** coalescing per topic, then a per-view **burst of 20 with
+10 tokens refilled per second**, with at most **256** distinct pending topics.
+Over-limit events are dropped and counted, not deferred indefinitely.
+
+Dispose on `pagehide`: lose the GL context, release WASM allocations using your engine's
+cleanup API, and drop references to the instance/memory. Rebuild on `pageshow` or the next
+visible mount. [`pagehide`](https://developer.mozilla.org/en-US/docs/Web/API/Window/pagehide_event)
+is best-effort (it may not fire on process termination), and
+WASM has no universal `dispose()` method; implement cleanup in your engine wrapper.
 
 ```js
-let engine = null;
 const canvas = document.querySelector("#scene");
-
-async function start() {
-  const rect = canvas.getBoundingClientRect();
-  if (!rect.width || !rect.height) return;               // (1) hidden / 0×0 — don't build yet
-  await navigator.locks.request(                         // (2) one engine per agent, across tabs
-    `myplugin-engine${window.__base}`,                   //     base = "" or "/agents/<slug>"
-    { ifAvailable: true },
-    async (lock) => {
-      if (!lock) { showRunningElsewhere(); return; }     //     another tab owns the engine
-      engine = buildEngine(canvas);                      //     GL / WebGPU / WASM — only now
-      await new Promise(() => {});                       //     hold the lock while the engine lives
-    },
-  );
+const base = location.pathname.split("/plugins/")[0];
+let visible = false, pending = false, suspended = false, release;
+function sized() {
+  const { width, height } = canvas.getBoundingClientRect();
+  return visible && !suspended && width > 0 && height > 0;
 }
-
-new ResizeObserver(() => { if (!engine) start(); }).observe(canvas);  // (1) build once sized
-addEventListener("pagehide", () => {                     // (5) dispose: free GPU + WASM
-  engine?.gl.getExtension("WEBGL_lose_context")?.loseContext();
-  engine?.dispose();
-  engine = null;
-});
-addEventListener("pageshow", () => { if (!engine) start(); });        // (5) rebuild on return
+async function start() {
+  if (pending || !sized()) return;
+  pending = true;
+  try {
+    await navigator.locks.request(`myplugin-engine:${base}`, { ifAvailable: true }, async (lock) => {
+      if (!lock || !sized()) return; // Retry via a user “Start” action if another tab owns it.
+      const engine = buildEngine(canvas); // Your GL/WASM wrapper.
+      try {
+        await new Promise((resolve) => { release = resolve; });
+      } finally {
+        engine.gl?.getExtension("WEBGL_lose_context")?.loseContext();
+        engine.dispose(); // Free WASM allocations and stop timers in your wrapper.
+        release = undefined; // Resolving the callback releases the Web Lock too.
+      }
+    });
+  } finally { pending = false; }
+}
+new IntersectionObserver(([entry]) => {
+  visible = entry.isIntersecting;
+  if (visible) void start();
+}).observe(canvas);
+new ResizeObserver(() => { void start(); }).observe(canvas);
+addEventListener("pagehide", () => { suspended = true; release?.(); });
+addEventListener("pageshow", () => { suspended = false; void start(); });
 ```
 
 If a heavy view (or a companion tool) produces a frame you want the **model** to look at — a
