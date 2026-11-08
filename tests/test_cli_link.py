@@ -15,6 +15,10 @@ import pytest
 from infra import cli_link
 from server.cli import dispatch
 
+# Symlinks in ~/.local/bin are the Unix story; on Windows the verb only says so (last test).
+pytestmark = pytest.mark.platform_sensitive
+unix_only = pytest.mark.skipif(os.name == "nt", reason="cli link is a Unix symlink; Windows reports unsupported")
+
 
 @pytest.fixture
 def frozen_bin(tmp_path, monkeypatch) -> Path:
@@ -35,6 +39,7 @@ def _run(argv: list[str], capsys) -> tuple[int, dict]:
     return code, json.loads(capsys.readouterr().out)
 
 
+@unix_only
 def test_link_creates_symlink_to_the_running_binary(tmp_path, frozen_bin, capsys, monkeypatch):
     bindir = tmp_path / "bin"
     monkeypatch.setenv("PATH", str(bindir))
@@ -50,6 +55,7 @@ def test_link_creates_symlink_to_the_running_binary(tmp_path, frozen_bin, capsys
     assert code == 0 and res["action"] == "none" and res["state"] == "linked"
 
 
+@unix_only
 def test_link_replaces_an_earlier_builds_dangling_link(tmp_path, frozen_bin, capsys):
     bindir = tmp_path / "bin"
     bindir.mkdir()
@@ -60,6 +66,7 @@ def test_link_replaces_an_earlier_builds_dangling_link(tmp_path, frozen_bin, cap
     assert (bindir / "protoagent").resolve() == frozen_bin
 
 
+@unix_only
 def test_link_refuses_a_uv_tool_install_without_force(tmp_path, frozen_bin, capsys):
     bindir = tmp_path / "bin"
     bindir.mkdir()
@@ -79,6 +86,7 @@ def test_link_refuses_a_uv_tool_install_without_force(tmp_path, frozen_bin, caps
     assert uv.exists()  # the uv tool's own files are left alone
 
 
+@unix_only
 def test_link_refuses_a_plain_file(tmp_path, frozen_bin, capsys):
     bindir = tmp_path / "bin"
     bindir.mkdir()
@@ -88,6 +96,7 @@ def test_link_refuses_a_plain_file(tmp_path, frozen_bin, capsys):
     assert not (bindir / "protoagent").is_symlink()
 
 
+@unix_only
 def test_unlink_removes_only_our_link(tmp_path, frozen_bin, capsys):
     bindir = tmp_path / "bin"
     _run(["link", "--dir", str(bindir)], capsys)
@@ -101,6 +110,7 @@ def test_unlink_removes_only_our_link(tmp_path, frozen_bin, capsys):
     assert (bindir / "protoagent").read_text() == "mine"
 
 
+@unix_only
 def test_status_reports_a_shadowing_protoagent_earlier_on_path(tmp_path, frozen_bin, capsys, monkeypatch):
     bindir = tmp_path / "bin"
     earlier = tmp_path / "earlier"
@@ -116,6 +126,7 @@ def test_status_reports_a_shadowing_protoagent_earlier_on_path(tmp_path, frozen_
     assert res["path"]["which_resolves_to"] == str(stale.resolve())
 
 
+@unix_only
 def test_a_source_install_is_not_linked(tmp_path, monkeypatch, capsys):
     monkeypatch.setattr(sys, "frozen", False, raising=False)
     code, res = _run(["link", "--dir", str(tmp_path / "bin")], capsys)
@@ -123,6 +134,7 @@ def test_a_source_install_is_not_linked(tmp_path, monkeypatch, capsys):
     assert not (tmp_path / "bin").exists()
 
 
+@unix_only
 def test_an_appimage_is_not_linked(tmp_path, frozen_bin, monkeypatch, capsys):
     monkeypatch.setenv("APPIMAGE", "/home/me/protoAgent.AppImage")
     code, res = _run(["link", "--dir", str(tmp_path / "bin")], capsys)
@@ -135,3 +147,9 @@ def test_cli_is_a_forwarded_verb_in_the_help_tree(capsys):
     assert cli._FORWARD["cli"] == ("infra.cli_link", "run_cli_link_cli")
     assert "cli" in cli._FORWARD_HELP
     assert cli_link.default_link_dir() == Path.home() / ".local" / "bin"
+
+
+@pytest.mark.skipif(os.name != "nt", reason="the Windows branch")
+def test_link_is_unsupported_on_windows(tmp_path, frozen_bin, capsys):
+    code, res = _run(["link", "--dir", str(tmp_path / "bin")], capsys)
+    assert code == 2 and res["action"] == "unsupported"

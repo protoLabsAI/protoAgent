@@ -71,6 +71,8 @@ def test_is_macho_reads_magic_not_suffix(bs, tmp_path):
     assert not bs.is_macho(tmp_path / "data.json")
 
 
+@pytest.mark.platform_sensitive
+@pytest.mark.skipif(os.name == "nt", reason="the onedir freeze is macOS-only; symlinks need privileges on Windows")
 def test_materialize_symlinks_leaves_no_links_and_keeps_content(bs, tmp_path):
     """Tauri skips directory symlinks when it copies a resource tree, so a framework's
     Versions/Current would vanish; the tree must hold real files before it's signed."""
