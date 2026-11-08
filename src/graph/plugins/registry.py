@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import logging
 import re
+from collections.abc import Callable
 from pathlib import Path, PurePosixPath
 
 log = logging.getLogger("protoagent.plugins")
@@ -187,6 +188,11 @@ class PluginRegistry:
         self.component_reads: dict = {}
         self.services: dict = {}  # "<plugin_id>.<name>" -> callable, other plugins' sdk.service (ADR 0116)
         self.service_meta: dict = {}  # name -> {"plugin_id", "description"}; parallel, see goal_verifier_meta
+        # Only queued subscriptions belong to this bundle. Immediate post-load
+        # subscriptions belong to callers and never enter the owned unsubscribe list.
+        self._in_register = False
+        self._pending_subscriptions: list[tuple[str, object]] = []
+        self._subscription_unsubs: list = []
 
     def report_setup_gap(self, key: str, message: str | None, *, label: str | None = None, action=None) -> None:
         """Tell the operator this plugin can't do its job until something is fixed
@@ -520,18 +526,95 @@ class PluginRegistry:
         else:  # non-server context (tests, headless) — no bus wired
             log.debug("[plugins] %s: navigate(%s) dropped — no bus", self.plugin_id, view)
 
-    def on(self, topic: str, handler) -> None:
+    def on(self, topic: str, handler) -> Callable[[], None] | None:
         """Subscribe an in-process handler to bus topics (ADR 0039). ``topic`` may use
         ``*`` (one segment) / ``#`` (tail) wildcards and match ANY plugin's namespace —
         subscribing is read-only and safe. ``handler(payload)`` gets ``{event, data, seq}``,
-        may be sync or async; exceptions are isolated by the bus."""
+        may be sync or async; exceptions are isolated by the bus.
+
+        Ownership is decided when this is called. During ``register()``, subscriptions
+        ALWAYS queue, even if the bus is wired. The bundle owns them: the server binds
+        them after cold-boot wiring or at reload commit, immediately after tearing down
+        the outgoing bundle's load-phase handlers. A failed build binds nothing.
+
+        After load, a wired bus binds immediately and returns an unsubscribe callable.
+        The CALLER owns that unsubscribe (for example, a surface calls it in ``stop()``);
+        plugin reload/disable does not remove it. If the bus is not wired, the subscription
+        queues and becomes bundle-owned like a load-phase subscription, binding at the
+        next server bind point. Returns None when queued or the handler is invalid."""
         if not callable(handler):
             log.warning("[plugins] %s: on(%s) needs a callable handler", self.plugin_id, topic)
-            return
-        if self.host and self.host.on:
-            self.host.on(topic, handler)
-        else:
-            log.debug("[plugins] %s: on(%s) dropped — no bus", self.plugin_id, topic)
+            return None
+        on = getattr(self.host, "on", None) if self.host else None
+        if not self._in_register and callable(on):
+            try:
+                return on(topic, handler)
+            except Exception:  # noqa: BLE001 — preserve best-effort binding and retry
+                log.exception("[plugins] %s: on(%s) failed to bind", self.plugin_id, topic)
+        self._pending_subscriptions.append((topic, handler))
+        return None
+
+    def _bind_event_subscriptions(self, *, warn_if_unbound: bool = False) -> int:
+        """Bind queued :meth:`on` subscriptions to the host event bus (ADR 0039, #4800).
+
+        Server-internal, not plugin-author SDK: the host (not a plugin's ``register()``)
+        drives it. ``register()`` can run before the bus is wired, so :meth:`on` queues each
+        ``(topic, handler)``; this delivers them to ``HOST.on`` once it exists, keeping every
+        unsubscribe the bus returns (for :meth:`_teardown_event_subscriptions`). Idempotent:
+        a pair that binds leaves the queue, so re-running it never double-subscribes.
+
+        ``warn_if_unbound`` (the server passes it on the post-load / post-wire bind) logs a
+        WARNING per subscription still queued — in a live server that means the bus never came
+        up for this load, a real misordering worth naming (plugin id + topic). A non-server or
+        test context with no bus leaves it quiet (the default): there is nothing to bind to by
+        design. Returns the number still unbound."""
+        on = getattr(self.host, "on", None) if self.host else None
+        if callable(on):
+            still_pending: list[tuple[str, object]] = []
+            for topic, handler in self._pending_subscriptions:
+                try:
+                    unsub = on(topic, handler)
+                except Exception:  # noqa: BLE001 — a bad bus call must not break plugin load
+                    log.exception("[plugins] %s: on(%s) failed to bind", self.plugin_id, topic)
+                    still_pending.append((topic, handler))
+                    continue
+                if callable(unsub):
+                    self._subscription_unsubs.append(unsub)
+                else:  # an older/duck-typed bus with no unsubscribe — bound, but we can't tear it down
+                    log.debug("[plugins] %s: on(%s) bound without an unsubscribe", self.plugin_id, topic)
+            self._pending_subscriptions = still_pending
+        if warn_if_unbound:
+            for topic, _handler in self._pending_subscriptions:
+                log.warning(
+                    "[plugins] %s: on(%s) never bound — no event bus was wired; "
+                    "this subscription will receive nothing",
+                    self.plugin_id,
+                    topic,
+                )
+        return len(self._pending_subscriptions)
+
+    def _teardown_event_subscriptions(self) -> None:
+        """Unsubscribe only bundle-owned queued :meth:`on` handlers this load bound (ADR 0039, #4800).
+
+        Server-internal, not plugin-author SDK. The server calls this on the OUTGOING registry
+        before the reloaded one subscribes, so a plugin reloaded N times leaves exactly ONE
+        live handler on the bus — not N, each
+        closed over a prior load's now-stale state. Also drops anything still queued (it never
+        reached the bus). Best-effort per unsubscribe: one that raises can't block the rest."""
+        for unsub in self._subscription_unsubs:
+            try:
+                unsub()
+            except Exception:  # noqa: BLE001 — a bad unsubscribe can't block teardown
+                log.exception("[plugins] %s: an event unsubscribe failed", self.plugin_id)
+        self._subscription_unsubs = []
+        self._pending_subscriptions = []
+
+    def _has_event_subscriptions(self) -> bool:
+        """True when this load currently holds any :meth:`on` subscription — queued (not yet
+        bound) or bound (an unsubscribe is held). The loader carries EVERY registry forward
+        regardless, so this is a diagnostic/predicate (used by tests and teardown checks), not
+        the carry-forward filter it once was (#4800). Server-internal, not plugin-author SDK."""
+        return bool(self._pending_subscriptions or self._subscription_unsubs)
 
     def register_skill_dir(self, path: str | Path) -> None:
         """Add a directory of ``SKILL.md`` skills bundled with the plugin.

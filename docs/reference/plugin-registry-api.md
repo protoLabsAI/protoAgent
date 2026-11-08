@@ -131,13 +131,24 @@ handler, no per-plugin code), so any plugin gets agent-driven navigation for fre
 ### `registry.on` {#registry-on}
 
 ```python
-registry.on(topic: str, handler) -> None
+registry.on(topic: str, handler) -> Callable[[], None] | None
 ```
 
 Subscribe an in-process handler to bus topics ([ADR 0039](/adr/0039-plugin-event-bus)). `topic` may use
 `*` (one segment) / `#` (tail) wildcards and match ANY plugin's namespace —
 subscribing is read-only and safe. `handler(payload)` gets `{event, data, seq}`,
 may be sync or async; exceptions are isolated by the bus.
+
+Ownership is decided when this is called. During `register()`, subscriptions
+ALWAYS queue, even if the bus is wired. The bundle owns them: the server binds
+them after cold-boot wiring or at reload commit, immediately after tearing down
+the outgoing bundle's load-phase handlers. A failed build binds nothing.
+
+After load, a wired bus binds immediately and returns an unsubscribe callable.
+The CALLER owns that unsubscribe (for example, a surface calls it in `stop()`);
+plugin reload/disable does not remove it. If the bus is not wired, the subscription
+queues and becomes bundle-owned like a load-phase subscription, binding at the
+next server bind point. Returns None when queued or the handler is invalid.
 
 ### `registry.register_a2a_skill` {#registry-register-a2a-skill}
 

@@ -70,6 +70,7 @@ from server.plugin_wiring import (  # noqa: E402,F401 — re-export (#3821); pat
     _SURFACE_RECONCILE_LOCKS,
     _SURFACE_RESTART_GRACE_S,
     _apply_plugin_registries,
+    _bind_plugin_event_subscriptions,
     _exclude_unschemable_routes,
     _install_error_envelope,
     _mount_plugin_routers,
@@ -80,6 +81,7 @@ from server.plugin_wiring import (  # noqa: E402,F401 — re-export (#3821); pat
     _reload_plugin_surfaces,
     _surface_key,
     _surface_reconcile_lock,
+    _teardown_plugin_event_subscriptions,
     _wrap_plugin_endpoint,
 )
 from server.stores import (  # noqa: E402,F401 — re-export (#3829); patch collaborators THERE
@@ -387,6 +389,10 @@ def _init_langgraph_agent(headless_setup: bool = False):
         _plugins.skill_dirs,
         _plugins.meta,
     )
+    # Hold the live bundle from cold boot on (not only from the first reload, #4800/#3365):
+    # _populate_plugin_host binds this bundle's queued event subscriptions once the bus is
+    # wired, and the reload commit tears its handlers down before the successor subscribes.
+    STATE.plugin_bundle = _plugins
     STATE.plugin_tool_owner = _plugins.tool_plugins
     STATE.plugin_workflow_dirs = _plugins.workflow_dirs
     STATE.plugin_a2a_skills = _plugins.a2a_skills  # A2A card skills (#570)
@@ -1585,7 +1591,14 @@ def _reload_langgraph_agent(*, reload_plugins: bool = True) -> tuple[bool, str]:
         new_plugin_meta,
     )
     STATE.plugin_tool_owner = new_plugin_tool_owner
+    # Incoming load-phase handlers remain queued throughout the build. Only a successful
+    # commit replaces outgoing handlers; caller-owned post-load handlers survive.
+    # A reused bundle (prompt-only rebuild, #3365) keeps its handlers untouched.
+    old_plugin_bundle = STATE.plugin_bundle
     STATE.plugin_bundle = new_plugin_bundle  # what a prompt-only rebuild reuses (#3365)
+    if new_plugin_bundle is not old_plugin_bundle:
+        _teardown_plugin_event_subscriptions(old_plugin_bundle)
+        _bind_plugin_event_subscriptions(new_plugin_bundle, warn_if_unbound=True)
     try:
         from security import policy
 

@@ -71,6 +71,9 @@ class PluginLoadResult:
     component_frames: dict = field(default_factory=dict)
     services: dict = field(default_factory=dict)  # "<plugin_id>.<name>" -> callable (ADR 0116)
     service_meta: dict = field(default_factory=dict)  # name -> {plugin_id, description}
+    # Retain registries for binding and teardown of bundle-owned queued subscriptions.
+    # Immediate post-load subscriptions belong to callers.
+    plugin_registries: list = field(default_factory=list)
     meta: list[dict] = field(default_factory=list)
 
 
@@ -1072,7 +1075,14 @@ def load_plugins(config, *, core_tool_names: set[str] | None = None) -> PluginLo
                 )
                 registry.display_name = str(manifest.name or manifest.id)
             with timed_lifecycle_phase(manifest.id, "registration"):
-                register(registry)
+                registry._in_register = True
+                try:
+                    register(registry)
+                except Exception:
+                    registry._pending_subscriptions.clear()
+                    raise
+                finally:
+                    registry._in_register = False
         except Exception as exc:  # noqa: BLE001 — a bad plugin must not break boot
             # Clear diagnostic when an enabled plugin's declared deps aren't
             # installed (ADR 0027 D4: install fetches code; deps are explicit).
@@ -1261,6 +1271,9 @@ def load_plugins(config, *, core_tool_names: set[str] | None = None) -> PluginLo
             smeta = getattr(registry, "service_meta", {}).get(name)
             if smeta:
                 result.service_meta[name] = smeta
+        # Keep every registry so subscriptions queued before bus wiring can bind later.
+        # Immediate post-load subscriptions belong to callers, not this bundle.
+        result.plugin_registries.append(registry)
         entry["loaded"] = True
         entry["tools"] = [t.name for t in kept]
         # Count the conventional skills/ dir too (auto-discovered above) — counting only

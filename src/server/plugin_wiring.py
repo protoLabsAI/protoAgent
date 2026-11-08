@@ -368,6 +368,35 @@ def _populate_plugin_host() -> None:
         HOST.apply_settings = lambda patch: _agent_init()._apply_settings_changes(config=patch)
     except Exception:  # noqa: BLE001
         log.exception("[plugins] failed to populate plugin host")
+        return
+    # Now the bus is wired, deliver any registry.on() subscription that queued because
+    # register() ran before this point (the desktop cold-boot ordering, #4800). warn: we are
+    # in a live server with the bus up, so anything still unbound is a real misordering.
+    _bind_plugin_event_subscriptions(STATE.plugin_bundle, warn_if_unbound=True)
+
+
+def _bind_plugin_event_subscriptions(bundle, *, warn_if_unbound: bool = False) -> None:
+    """Bind every plugin registry's queued ``on()`` handlers to the now-wired bus (ADR 0039,
+    #4800). Iterates EVERY registry the bundle carries (not just the ones subscribed at load),
+    so a subscription queued at any point reaches the bus; a registry with nothing queued is a
+    cheap no-op. Best-effort per registry so one bad plugin can't block the rest; a ``None``
+    bundle (nothing built yet) is a no-op."""
+    for registry in getattr(bundle, "plugin_registries", None) or []:
+        try:
+            registry._bind_event_subscriptions(warn_if_unbound=warn_if_unbound)
+        except Exception:  # noqa: BLE001 — a bad plugin can't break event binding
+            log.exception("[plugins] %s: binding event subscriptions failed", getattr(registry, "plugin_id", "?"))
+
+
+def _teardown_plugin_event_subscriptions(bundle) -> None:
+    """Remove only the outgoing bundle's load-phase/queued subscriptions (ADR 0039,
+    #4800). Immediate post-load subscriptions belong to callers and survive reload.
+    A ``None`` bundle is a no-op; failures are isolated per registry."""
+    for registry in getattr(bundle, "plugin_registries", None) or []:
+        try:
+            registry._teardown_event_subscriptions()
+        except Exception:  # noqa: BLE001 — a bad teardown can't block the reload
+            log.exception("[plugins] %s: tearing down event subscriptions failed", getattr(registry, "plugin_id", "?"))
 
 
 def _surface_key(spec_or_handle) -> tuple:
