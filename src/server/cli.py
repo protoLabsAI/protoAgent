@@ -305,8 +305,11 @@ def _cmd_up(rest: list[str]) -> int:
 def _cmd_down(rest: list[str]) -> int:
     args = _lifecycle_parser("down").parse_args(rest)
     rec = _read_pidfile()
-    pid = (rec or {}).get("pid")
-    if not pid or not pid_alive(int(pid)):
+    try:
+        pid = int((rec or {}).get("pid") or 0)
+    except (TypeError, ValueError):  # a corrupt pid in the record reads as "no pid", as in _our_server
+        pid = 0
+    if not pid or not pid_alive(pid):
         # No pidfile / dead pid — but something may still hold the port (started by
         # hand). Be honest rather than kill a process we didn't launch.
         port = int((rec or {}).get("port") or args.port)

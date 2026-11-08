@@ -35,7 +35,7 @@ echo "ok: app inside DMG: $(basename "$APP")"
 EXEC_NAME="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$APP/Contents/Info.plist")"
 MAIN="$APP/Contents/MacOS/$EXEC_NAME"
 [ -x "$MAIN" ] || { echo "FAIL: main executable missing/not executable: $MAIN"; exit 1; }
-file "$MAIN" | grep -q "arm64" || { echo "FAIL: main executable is not arm64"; exit 1; }
+[[ "$(file "$MAIN")" == *arm64* ]] || { echo "FAIL: main executable is not arm64"; exit 1; }
 echo "ok: main executable present (arm64)"
 
 # macOS bundles the server as a PyInstaller ONEDIR tree in Resources
@@ -45,7 +45,7 @@ SIDECAR_DIR="$APP/Contents/Resources/protoagent-server"
 SIDECAR="$SIDECAR_DIR/protoagent-server"
 [ -x "$SIDECAR" ] || { echo "FAIL: bundled sidecar missing/not executable: $SIDECAR"; exit 1; }
 [ -d "$SIDECAR_DIR/_internal" ] || { echo "FAIL: sidecar tree has no _internal/: $SIDECAR_DIR"; exit 1; }
-file "$SIDECAR" | grep -q "arm64" || { echo "FAIL: sidecar is not arm64"; exit 1; }
+[[ "$(file "$SIDECAR")" == *arm64* ]] || { echo "FAIL: sidecar is not arm64"; exit 1; }
 SIZE_MB="$(du -sm "$SIDECAR_DIR" | cut -f1)"
 [ "$SIZE_MB" -gt 50 ] || { echo "FAIL: sidecar tree suspiciously small (${SIZE_MB} MB)"; exit 1; }
 LINKS="$(find "$SIDECAR_DIR" -type l | wc -l | tr -d ' ')"
@@ -82,12 +82,12 @@ ENTITLEMENTS="$(codesign -d --entitlements :- "$APP" 2>/dev/null)"
 # without it (the sidecar — hence the whole backend — was DOA in v0.35.0).
 for key in com.apple.security.network.client com.apple.security.network.server \
            com.apple.security.cs.allow-jit com.apple.security.cs.disable-library-validation; do
-  echo "$ENTITLEMENTS" | grep -q "$key" || { echo "FAIL: missing entitlement: $key"; exit 1; }
+  [[ "$ENTITLEMENTS" == *"$key"* ]] || { echo "FAIL: missing entitlement: $key"; exit 1; }
 done
 # Still keep the blast radius tight — nothing broader than the declared set.
 for key in com.apple.security.cs.allow-unsigned-executable-memory \
            com.apple.security.cs.allow-dyld-environment-variables; do
-  if echo "$ENTITLEMENTS" | grep -q "$key"; then
+  if [[ "$ENTITLEMENTS" == *"$key"* ]]; then
     echo "FAIL: forbidden entitlement present: $key"
     exit 1
   fi
@@ -102,12 +102,16 @@ SIDECAR_SIG="$(codesign -dvv "$SIDECAR" 2>&1 || true)"
 [[ "$SIDECAR_SIG" == *"Authority=Developer ID Application:"* ]] || { echo "FAIL: sidecar is not Developer ID-signed"; exit 1; }
 [[ "$SIDECAR_SIG" == *"runtime"* ]] || { echo "FAIL: sidecar is not signed with the hardened runtime"; exit 1; }
 SIDECAR_ENT="$(codesign -d --entitlements :- "$SIDECAR" 2>/dev/null)"
-echo "$SIDECAR_ENT" | grep -q com.apple.security.cs.disable-library-validation \
+[[ "$SIDECAR_ENT" == *com.apple.security.cs.disable-library-validation* ]] \
   || { echo "FAIL: sidecar lacks disable-library-validation"; exit 1; }
 UNSIGNED=0
 while IFS= read -r -d '' f; do
-  if file "$f" | grep -q "Mach-O"; then
-    codesign -dvv "$f" 2>&1 | grep -q "Authority=Developer ID Application:" || { echo "FAIL: not Developer ID-signed: $f"; UNSIGNED=1; }
+  # Capture, then match in-shell: `cmd | grep -q` under pipefail fails spuriously when
+  # grep exits early and the writer gets SIGPIPE (see the note above).
+  KIND="$(file "$f")"
+  if [[ "$KIND" == *Mach-O* ]]; then
+    SIG="$(codesign -dvv "$f" 2>&1 || true)"
+    [[ "$SIG" == *"Authority=Developer ID Application:"* ]] || { echo "FAIL: not Developer ID-signed: $f"; UNSIGNED=1; }
   fi
 done < <(find "$SIDECAR_DIR" -type f -print0)
 [ "$UNSIGNED" = "0" ] || exit 1
