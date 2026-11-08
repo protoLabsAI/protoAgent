@@ -3,8 +3,9 @@
 # PR gate: require a changelog entry in every PR, so release notes stop depending on
 # someone reconstructing a cycle's worth of merges.
 #
-# The entry belongs in changelog.d/<issue>.<kind>.md (#2322) — a NEW FILE per PR, which
-# cannot conflict. A direct CHANGELOG.md edit does NOT satisfy this gate: every such PR
+# The entry belongs in changelog.d/<slug>.<kind>.md (#2322) — a NEW FILE per PR, which
+# cannot conflict. The slug is free (branch name or issue number), and the PR number is
+# stamped in at release from git history (#4874), so the first commit can pass this gate. A direct CHANGELOG.md edit does NOT satisfy this gate: every such PR
 # writes to the same three lines under [Unreleased], so two in flight conflict by
 # construction (a 13-PR stack cost ~10 extra CI cycles to that one anchor). CHANGELOG.md
 # is written by the release process — `changelog.py collate` — not by feature PRs. Invoked twice in CI:
@@ -104,5 +105,5 @@ fi
 # CHANGELOG.md isn't forbidden (an old section may need a typo fix) — it just doesn't
 # satisfy the gate, because an entry written there reintroduces the shared-anchor
 # conflict this whole change exists to remove.
-echo "::error::Missing changelog entry — add changelog.d/<issue>.<kind>.md (see changelog.d/README.md), or apply the skip-changelog label. Editing CHANGELOG.md directly no longer satisfies this gate: entries there conflict between PRs (#2322)."
+echo "::error::Missing changelog entry — add changelog.d/<slug>.<kind>.md, e.g. changelog.d/<your-branch-name>.fixed.md (see changelog.d/README.md), or apply the skip-changelog label. Editing CHANGELOG.md directly no longer satisfies this gate: entries there conflict between PRs (#2322)."
 exit 1

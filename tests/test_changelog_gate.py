@@ -324,19 +324,49 @@ def test_fragment_without_a_top_level_bullet_fails_the_gate(pr_template: Path, t
     assert "2555.added.md" in result.stdout + result.stderr  # names the offending file
 
 
-def test_fragment_whose_ref_sits_outside_the_bold_lead_fails_the_gate(pr_template: Path, tmp_path: Path) -> None:
-    """#3291, the same loss a size smaller: `scaffold` keeps only the **bold** lead, so a
-    ref trailing the paragraph is dropped and the marketing bullet ships naming nothing.
-    The fragment parses, collates and rolls perfectly, so nothing downstream complains —
-    and by then the filename that held the number is gone."""
+def test_a_first_commit_fragment_named_by_branch_with_no_pr_number_passes(pr_template: Path, tmp_path: Path) -> None:
+    """#4874: the shape a PR can write before the PR exists — a branch-slug name and a bold
+    lead with no number (the release stamps it). It used to fail here, so every PR without
+    an issue pushed a second commit just to add the number, and each push re-ran review."""
     repo = _pr_repo(pr_template, tmp_path)
-    _add_fragment(repo, "3291.added.md", "- **Every Settings section is a deep-link.** Why. (#3291)\n")
+    _add_fragment(repo, "fix-settings-links.added.md", "- **Every Settings section is a deep-link.** Why.\n")
+
+    result = _run_gate(repo)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "ok: changelog.d/ fragment added" in result.stdout
+
+
+def test_a_placeholder_pr_number_fails_the_gate(pr_template: Path, tmp_path: Path) -> None:
+    repo = _pr_repo(pr_template, tmp_path)
+    _add_fragment(repo, "fix-x.fixed.md", "- **A fix (#NNNN).** Why.\n")
 
     result = _run_gate(repo)
 
     assert result.returncode == 1
     out = result.stdout + result.stderr
-    assert "3291.added.md" in out and "#N" in out
+    assert "fix-x.fixed.md" in out and "placeholder" in out
+
+
+def test_a_bullet_with_no_bold_lead_and_no_ref_fails_the_gate(pr_template: Path, tmp_path: Path) -> None:
+    """#3291's loss in the new world: no lead to stamp into, so /changelog would name nothing."""
+    repo = _pr_repo(pr_template, tmp_path)
+    _add_fragment(repo, "fix-x.fixed.md", "- every settings section is a deep-link. Why.\n")
+
+    result = _run_gate(repo)
+
+    assert result.returncode == 1
+    assert "bold lead-in" in result.stdout + result.stderr
+
+
+def test_a_fragment_name_with_a_space_fails_the_gate(pr_template: Path, tmp_path: Path) -> None:
+    repo = _pr_repo(pr_template, tmp_path)
+    _add_fragment(repo, "my fix.fixed.md", "- **A fix.** Why.\n")
+
+    result = _run_gate(repo)
+
+    assert result.returncode == 1
+    assert "<slug>.<kind>.md" in result.stdout + result.stderr
 
 
 def test_well_formed_fragment_still_passes(pr_template: Path, tmp_path: Path) -> None:
