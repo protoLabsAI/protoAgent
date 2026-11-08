@@ -304,6 +304,7 @@ FROM_YAML_EXAMPLE_FIELDS = {
     "reasoning_effort": None,
     "repetition_penalty": None,
     "request_timeout": 120,
+    "subagent_overrides": {},
     "researcher": SubagentDef(
         enabled=True,
         tools=["current_time", "web_search", "fetch_url", "memory_search", "memory_list"],
@@ -1342,3 +1343,31 @@ def test_migrated_null_endpoint_round_trip(tmp_path, monkeypatch):
     reloaded = LangGraphConfig.from_yaml(path)
     assert reloaded.providers_declared is False
     assert reloaded.provider_by_id("gateway").base_url is None
+
+
+def test_any_subagent_overlay_roundtrip(tmp_path):
+    import copy
+
+    import yaml
+
+    overlays = {
+        "review-finder": {"profile": "lane", "final_profile": "final"},
+        "plugin-worker": {"enabled": False, "tools": [], "max_turns": 7, "model": "custom"},
+    }
+    researcher = {"profile": "lane", "final_profile": "final"}
+    path = _write_yaml(tmp_path, yaml.safe_dump({"subagents": {**overlays, "researcher": researcher}}))
+    cfg = LangGraphConfig.from_yaml(str(path))
+    assert cfg.subagent_overrides == overlays
+    before = copy.deepcopy(cfg.subagent_overrides)
+    serialized = config_to_dict(cfg)
+    assert cfg.subagent_overrides == before  # serialization must not add researcher to the map
+    for name, values in overlays.items():
+        assert serialized["subagents"][name] == values
+    doc = apply_updates_to_yaml({}, serialized)
+    out = tmp_path / "roundtrip.yaml"
+    save_yaml_doc(doc, out)
+    reloaded = LangGraphConfig.from_yaml(str(out))
+    assert reloaded.subagent_overrides == overlays
+    assert reloaded.researcher == cfg.researcher
+    assert reloaded.researcher.profile == "lane"
+    assert reloaded.researcher.final_profile == "final"

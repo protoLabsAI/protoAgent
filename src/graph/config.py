@@ -151,6 +151,9 @@ def _detect_incoherent_slots(config) -> list[str]:
         sub = getattr(config, name, None)
         if isinstance(sub, SubagentDef) and _is_gateway_alias(sub.model, config):
             flagged.append(f"subagents.{name}.model={sub.model!r}")
+    for name, sub in getattr(config, "subagent_overrides", {}).items():
+        if _is_gateway_alias(sub.get("model", ""), config):
+            flagged.append(f"subagents.{name}.model={sub['model']!r}")
     for m in getattr(config, "routing_fallback_models", None) or []:
         if _is_gateway_alias(m, config):
             flagged.append(f"routing.fallback_models[{m!r}]")
@@ -180,6 +183,9 @@ def _reconcile_slot_providers(config) -> list[str]:
         sub = getattr(config, name, None)
         if isinstance(sub, SubagentDef) and _is_gateway_alias(sub.model, config):
             sub.model = ""
+    for sub in getattr(config, "subagent_overrides", {}).values():
+        if _is_gateway_alias(sub.get("model", ""), config):
+            sub["model"] = ""
     kept = [m for m in (config.routing_fallback_models or []) if not _is_gateway_alias(m, config)]
     if len(kept) != len(config.routing_fallback_models or []):
         config.routing_fallback_models = kept
@@ -206,6 +212,8 @@ class SubagentDef:
     # Per-subagent model override (ADR 0001) — blank = routing.aux_model → main model.
     # Applied onto the registry's SubagentConfig at build (see _apply_config_subagents).
     model: str = ""
+    profile: str = ""
+    final_profile: str = ""
 
 
 # ── Provider registry (ADR 0106) ──────────────────────────────────────────────
@@ -1020,12 +1028,9 @@ class LangGraphConfig:
     reasoning_effort: str | None = None
     model_profiles: dict[str, GenerationProfile] = field(default_factory=dict)
 
-    # Subagents — template ships one example, `researcher` (see
-    # graph/subagents/config.py). Add fields here as you add entries to
-    # SUBAGENT_REGISTRY. Tool/max_turns here mirror the registry default and
-    # are the YAML-overridable layer.
-    # Defaults derived from the registry entry (SSOT) so the YAML-overridable layer
-    # always matches the runtime default — an un-overridden config is a true no-op.
+    # Keep the historical researcher field; other names are sparse overlays so
+    # omitted values inherit the registered spec, including plugin defaults.
+    subagent_overrides: dict[str, dict] = field(default_factory=dict)
     researcher: SubagentDef = field(
         default_factory=lambda: SubagentDef(
             tools=list(RESEARCHER_CONFIG.tools),
@@ -2776,8 +2781,21 @@ class LangGraphConfig:
                         tools=sub.get("tools", getattr(config, name).tools),
                         max_turns=sub.get("max_turns", getattr(config, name).max_turns),
                         model=sub.get("model", getattr(config, name).model),
+                        profile=sub.get("profile", ""),
+                        final_profile=sub.get("final_profile", ""),
                     ),
                 )
+
+        for name, sub in subagents.items():
+            if name in ("researcher", "max_concurrency", "output_truncate"):
+                continue
+            if not isinstance(sub, dict):
+                log.warning("subagents.%s must be a mapping; skipping overlay", name)
+                continue
+            config.subagent_overrides[name] = {
+                key: copy.deepcopy(value) for key, value in sub.items()
+                if key in SubagentDef.__dataclass_fields__
+            }
 
         # Provider/model coherence across ALL slots (bd-66cw): a native-OAuth provider
         # with a stale gateway alias in a non-lead slot used to build fine and raise only

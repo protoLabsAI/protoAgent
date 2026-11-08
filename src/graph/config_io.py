@@ -741,6 +741,8 @@ def config_to_dict(config: LangGraphConfig) -> dict[str, Any]:
                 name: {key: value for key, value in asdict(profile).items() if value is not None}
                 for name, profile in val.items()
             }
+        if f.attr == "subagent_overrides":
+            val = {name: dict(overlay) for name, overlay in val.items()}
         if isinstance(val, (list, tuple)):
             val = list(val)
         cursor = d
@@ -837,6 +839,8 @@ def config_to_dict(config: LangGraphConfig) -> dict[str, Any]:
                     "tools": list(r.tools),
                     "max_turns": r.max_turns,
                     "model": r.model,
+                    "profile": r.profile,
+                    "final_profile": r.final_profile,
                 },
             },
         },
