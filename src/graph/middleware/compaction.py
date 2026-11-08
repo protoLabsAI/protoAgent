@@ -55,6 +55,17 @@ two additions:
    preserved-thinking check rejects them after the rewrite (see
    :func:`_strip_retained_thinking`).
 
+6. **The summary is the compaction engine's, not langchain's** (ADR 0127 D1/D2/D4).
+   The parent summarized only the last 4,000 tokens of the span
+   (``trim_tokens_to_summarize``, ``strategy="last"``) with its stock prompt — an
+   operator's conditional approval behind one long tool result never reached the
+   summarizer, and the previous compaction's summary at the head of the span was
+   trimmed away too. ``_create_summary`` / ``_acreate_summary`` now hand the FULL
+   to-be-summarized span to :mod:`graph.compaction_engine` (chunked fold, seeded from a
+   previous summary, the continuation prompt with required sections), and
+   ``_build_new_messages`` frames the result as the agent's own notes. A summarizer
+   failure raises into the failure policy above (skip + back off), exactly as before.
+
 Telemetry and archiving are both best-effort: neither ever affects the model call.
 """
 
@@ -65,6 +76,7 @@ import logging
 
 from langchain.agents.middleware import SummarizationMiddleware
 
+from graph import compaction_engine
 from graph.conversation_harvest import _DEFAULT_HISTORY_STORE, resolve_history_store
 
 log = logging.getLogger(__name__)
@@ -235,6 +247,17 @@ class _TransientRetry:
                 await asyncio.sleep(self._delay_s)
 
 
+def _summary_call_config() -> dict:
+    """langchain's config for its summary calls — tags them internal so the turn stream
+    never shows the summarizer's tokens as the agent's reply."""
+    try:
+        from langchain.agents.middleware.summarization import _summary_config
+
+        return _summary_config()
+    except Exception:  # noqa: BLE001 — private helper moved; keep the purpose marker
+        return {"metadata": {"lc_source": "summarization"}}
+
+
 def _backoff_key(state) -> str:
     return _thread_id() or str((state or {}).get("session_id") or "unknown")
 
@@ -316,6 +339,33 @@ class CountingSummarizationMiddleware(SummarizationMiddleware):
             except Exception:  # noqa: BLE001 — sizing never breaks a turn; fall back
                 log.debug("[compaction] per-turn window resolution failed", exc_info=True)
         return _TURN_WINDOW.set(win if isinstance(win, int) and win > 0 else None)
+
+    # ── the summary: the compaction engine over the whole span (ADR 0127) ─────
+
+    def _engine_budget(self) -> int:
+        """Characters one summary call may carry, from the SUMMARIZER's own window (not
+        this turn's model's — the summary call runs on the summarizer)."""
+        return compaction_engine.summarizer_budget_chars(compaction_engine.window_of_model(self.model))
+
+    def _create_summary(self, messages_to_summarize):  # type: ignore[override]
+        """Notes for the FULL span (no tail trim), via the engine. Raises on failure."""
+        return compaction_engine.summarize_span(
+            list(messages_to_summarize or []),
+            lambda prompt: self._summary_model.invoke(prompt, config=_summary_call_config()),
+            budget_chars=self._engine_budget(),
+        )
+
+    async def _acreate_summary(self, messages_to_summarize):  # type: ignore[override]
+        async def call(prompt):
+            return await self._summary_model.ainvoke(prompt, config=_summary_call_config())
+
+        return await compaction_engine.asummarize_span(
+            list(messages_to_summarize or []), call, budget_chars=self._engine_budget()
+        )
+
+    @staticmethod
+    def _build_new_messages(summary: str):  # type: ignore[override]
+        return [compaction_engine.summary_message(summary, source="summarization")]
 
     # ── system-thread early compaction (#4625) ────────────────────────────────
 

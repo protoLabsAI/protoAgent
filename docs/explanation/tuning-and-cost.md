@@ -23,6 +23,13 @@ are config flags in `config/langgraph-config.yaml`. This page is the map.
 fires, keeping the last `keep_messages` turns intact. On by default — a long
 session would otherwise hit the context window and error.
 
+The summarizer reads the whole span it replaces, not just its tail: long tool
+results are clipped, but every operator and agent message goes in, folded chunk by
+chunk on long spans, with the previous compaction's notes carried forward. The notes
+keep the operator's standing instructions and approvals quoted verbatim, plus the
+agent's commitments and pending scheduled actions (ADR 0127). `/compact` and the
+overflow safety valve use the same engine.
+
 ```yaml
 compaction:
   enabled: true
