@@ -427,6 +427,9 @@ def _init_langgraph_agent(headless_setup: bool = False):
     # Skills — human-authored SKILL.md folders (bundle + live + plugin-bundled)
     # seeded into the FTS index; KnowledgeMiddleware retrieves + injects them.
     STATE.skills_index = _build_skills_index(STATE.graph_config, extra_skill_dirs=STATE.plugin_skill_dirs)
+    # ADR 0125: name every skill, subagent and persona still telling the model to call a
+    # removed memory tool, now that plugin subagents and skill dirs are both registered.
+    _audit_legacy_tool_references(STATE.graph_config, extra_skill_dirs=STATE.plugin_skill_dirs)
 
     # STATE.workflow_registry is set by the workflows plugin (plugins/workflows) when
     # enabled — core no longer builds it (lean core, opt-in).
@@ -852,6 +855,48 @@ def _apply_plugin_embedder(config, store, plugins, name):
         return store
 
 
+def _skill_roots(config, extra_skill_dirs=None) -> list:
+    """The SKILL.md roots, lowest precedence first: bundle, live, plugin-bundled, then the
+    operator-authored skills under the data home (an explicit edit always wins)."""
+    from pathlib import Path
+
+    from infra.paths import instance_paths, user_skills_dir
+
+    _ip = instance_paths()
+    live_root = Path(config.skills_dir).expanduser() if config.skills_dir else (_ip.config_dir / "skills")
+    roots = [_ip.bundle_dir / "skills", live_root]  # bundle first, live overrides
+    roots.extend(Path(d) for d in (extra_skill_dirs or []))  # plugin-bundled skills
+    roots.append(user_skills_dir())
+    return roots
+
+
+def _audit_legacy_tool_references(config, extra_skill_dirs=None) -> int:
+    """Warn about every skill, subagent and persona that still names a removed memory
+    tool (ADR 0125 renamed them with no aliases, so the model is told to call a tool that
+    doesn't exist). One WARNING per source per process: boot logs them all, a reload logs
+    only sources that are new. Reads the SKILL.md files and SOUL once; never raises."""
+    try:
+        from graph.config_io import read_soul
+        from graph.skills.loader import discover_skill_files
+        from graph.subagents.config import SUBAGENT_REGISTRY
+        from graph.tool_renames import audit_legacy_tool_references, log_legacy_tool_references
+
+        skill_files = (
+            discover_skill_files(_skill_roots(config, extra_skill_dirs))
+            if getattr(config, "skills_enabled", True)
+            else []
+        )
+        findings = audit_legacy_tool_references(
+            skill_files=skill_files,
+            subagents=list(SUBAGENT_REGISTRY.values()),
+            soul=read_soul(),
+        )
+        return log_legacy_tool_references(findings)
+    except Exception:  # noqa: BLE001 — an audit must never cost a boot or a reload
+        log.exception("[tool-rename] legacy tool-name audit failed")
+        return 0
+
+
 def _build_skills_index(config, extra_skill_dirs=None):
     """Return a ``SkillsIndex`` seeded from on-disk ``SKILL.md`` folders, or None.
 
@@ -868,10 +913,6 @@ def _build_skills_index(config, extra_skill_dirs=None):
     if not getattr(config, "skills_enabled", True):
         return None
     try:
-        from pathlib import Path
-
-        from infra.paths import instance_paths
-
         from graph.skills.index import SkillsIndex
         from graph.skills.loader import seed_skills_index
 
@@ -893,15 +934,7 @@ def _build_skills_index(config, extra_skill_dirs=None):
             db_path = _resolve_skills_db(config.skills_db_path, shared=(scope == "shared"), commons=commons)
             index = SkillsIndex(db_path=db_path)
 
-        _ip = instance_paths()
-        live_root = Path(config.skills_dir).expanduser() if config.skills_dir else (_ip.config_dir / "skills")
-        roots = [_ip.bundle_dir / "skills", live_root]  # bundle first, live overrides
-        roots.extend(Path(d) for d in (extra_skill_dirs or []))  # plugin-bundled skills
-        # Operator-authored skills (UI/console CRUD) live under the data home and
-        # win last — an explicit edit always overrides a bundled/plugin example.
-        from infra.paths import user_skills_dir
-
-        roots.append(user_skills_dir())
+        roots = _skill_roots(config, extra_skill_dirs)
         count = seed_skills_index(index, roots)
         # Name the tier explicitly: a `shared`/`layered` commons is host-level and
         # un-scoped (every agent on the box reads it), so making that visible at boot
@@ -1427,6 +1460,7 @@ def _reload_langgraph_agent(*, reload_plugins: bool = True) -> tuple[bool, str]:
             new_middleware = _resolve_plugin_middleware(new_config, new_plugins.middleware)  # ADR 0032
             new_late_tool_factories = new_plugins.late_tool_factories  # late-tools seam
             new_skills = _build_skills_index(new_config, extra_skill_dirs=new_plugin_skill_dirs)
+            _audit_legacy_tool_references(new_config, extra_skill_dirs=new_plugin_skill_dirs)
             new_inbox_store = _build_inbox_store(new_config)
             # Compile the graph only when a model is configured. In explore mode (#4566)
             # `new_graph` stays None — the stores/plugins/MCP/skills/inbox built above are

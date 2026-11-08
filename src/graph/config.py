@@ -743,6 +743,27 @@ def _string_list(value) -> list[str]:
     return [s for s in (str(v).strip() for v in value if v is not None) if s]
 
 
+def _migrate_tools(value, source: str) -> list:
+    """A config tool-name list with the ADR 0125 removed names translated (warned once).
+
+    Done at the parse seam so every reader of the field (graph build, console toggles,
+    operator MCP, the execute_code enforcement parity gate) sees the current names."""
+    from graph.tool_renames import migrate_tool_names
+
+    if not isinstance(value, (list, tuple)):
+        return list(value or [])
+    return migrate_tool_names(value, source=source)
+
+
+def _migrate_tool_keys(value, source: str):
+    """A config dict keyed by tool name (``enforcement.rate_limits``), renamed the same way."""
+    from graph.tool_renames import migrate_tool_keys
+
+    if not isinstance(value, dict):
+        return value if value is not None else {}
+    return migrate_tool_keys(value, source=source)
+
+
 #: Most chat starter chips (#4570) one agent may advertise — the empty-chat "Try one of
 #: these" list stays a glanceable handful, not a menu. An over-long configured list is
 #: capped rather than rejected (a malformed value must never break config load).
@@ -2300,8 +2321,12 @@ class LangGraphConfig:
             memory_middleware=middleware.get("memory", cls.memory_middleware),
             scheduler_enabled=middleware.get("scheduler", cls.scheduler_enabled),
             enforcement_enabled=middleware.get("enforcement", cls.enforcement_enabled),
-            enforcement_disallowed_tools=(data.get("enforcement", {}).get("disallowed_tools", [])),
-            enforcement_rate_limits=(data.get("enforcement", {}).get("rate_limits", {})),
+            enforcement_disallowed_tools=_migrate_tools(
+                data.get("enforcement", {}).get("disallowed_tools", []), "enforcement.disallowed_tools"
+            ),
+            enforcement_rate_limits=_migrate_tool_keys(
+                data.get("enforcement", {}).get("rate_limits", {}), "enforcement.rate_limits"
+            ),
             prompt_cache_enabled=data.get("prompt_cache", {}).get("enabled", cls.prompt_cache_enabled),
             # Absent (or blank) resolves through the profile-aware default —
             # 1h for fleet/desktop, 5m interactive (#2780). Explicit always wins.
@@ -2326,7 +2351,9 @@ class LangGraphConfig:
             pruning_min_chars=data.get("pruning", {}).get("min_chars", cls.pruning_min_chars),
             compaction_model=data.get("compaction", {}).get("model", cls.compaction_model),
             tools_deferred_enabled=data.get("tools", {}).get("deferred", {}).get("enabled", cls.tools_deferred_enabled),
-            tools_deferred_keep=list(data.get("tools", {}).get("deferred", {}).get("keep", []) or []),
+            tools_deferred_keep=_migrate_tools(
+                data.get("tools", {}).get("deferred", {}).get("keep", []), "tools.deferred.keep"
+            ),
             tools_memoize_reads_enabled=data.get("tools", {})
             .get("memoize_reads", {})
             .get("enabled", cls.tools_memoize_reads_enabled),
@@ -2345,10 +2372,10 @@ class LangGraphConfig:
             model_passthrough_allow_remote=data.get("model_passthrough", {}).get(
                 "allow_remote", cls.model_passthrough_allow_remote
             ),
-            tools_disabled=list(data.get("tools", {}).get("disabled", []) or []),
+            tools_disabled=_migrate_tools(data.get("tools", {}).get("disabled", []), "tools.disabled"),
             tools_self_config_enabled=bool(data.get("tools", {}).get("self_config_enabled", False)),
-            tools_hidden=list(data.get("tools", {}).get("hidden", []) or []),
-            tools_subagent_only=list(data.get("tools", {}).get("subagent_only", []) or []),
+            tools_hidden=_migrate_tools(data.get("tools", {}).get("hidden", []), "tools.hidden"),
+            tools_subagent_only=_migrate_tools(data.get("tools", {}).get("subagent_only", []), "tools.subagent_only"),
             settings_hidden=list(data.get("settings", {}).get("hidden", []) or []),
             routing_fallback_models=data.get("routing", {}).get("fallback_models", []),
             aux_model=data.get("routing", {}).get("aux_model", cls.aux_model),
@@ -2493,7 +2520,7 @@ class LangGraphConfig:
             mcp_persistent_sessions=bool(mcp.get("persistent_sessions", cls.mcp_persistent_sessions)),
             mcp_scope=mcp.get("scope", cls.mcp_scope),
             operator_mcp_enabled=operator_mcp.get("enabled", cls.operator_mcp_enabled),
-            operator_mcp_tools=list(operator_mcp.get("tools", []) or []),
+            operator_mcp_tools=_migrate_tools(operator_mcp.get("tools", []), "operator_mcp.tools"),
             operator_mcp_profile=str(operator_mcp.get("profile", "") or "").strip(),
             agent_runtime=str(data.get("agent_runtime", cls.agent_runtime) or "native"),
             developer_channel=str((data.get("developer", {}) or {}).get("channel", cls.developer_channel) or "prod"),

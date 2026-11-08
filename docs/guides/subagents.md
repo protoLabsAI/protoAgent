@@ -69,8 +69,10 @@ subagents:
 
 Subagent tool lists that name `memory_ingest`, `memory_recall`, `forget_memory`, or `memory_stats` are translated to `memory_save`, `memory_search`, `memory_forget`, or `memory_list`, respectively, with a warning; update the source configuration or plugin tool list to the new names.
 An unknown tool name now logs a warning and is omitted from the subagent's tools.
-This compatibility translation applies only to subagent tool lists; the old names
-are not registered tool aliases.
+The same translation applies to every other tool-name list read from config or a
+plugin (`tools.disabled`, `operator_mcp.tools`, the execute_code bridge list, and the
+rest listed in ADR 0125 D3), and boot logs a warning for each skill, subagent prompt and
+SOUL.md that still names an old tool. The old names are not registered tool aliases.
 
 Other plugin roles use their plugin's declared configuration; an arbitrary
 `subagents.<name>` block does not automatically create a role.

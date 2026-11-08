@@ -98,8 +98,12 @@ def resolve_allow(config, *, tools: list[str] | None = None) -> set[str]:
     """
     if os.environ.get("PROTOAGENT_MCP_TRUST", "").strip().lower() == "full":
         return {"*"}
+    from graph.tool_renames import migrate_tool_names
+
     source = tools if tools is not None else (getattr(config, "operator_mcp_tools", []) or [])
-    allow = set(source)
+    # The config parse already translates the removed memory tool names (ADR 0125); the
+    # sidecar's OPERATOR_MCP_TOOLS env list doesn't go through it, so translate here too.
+    allow = set(migrate_tool_names(source, source="operator_mcp.tools"))
     prof = _profile_allow(getattr(config, "operator_mcp_profile", ""))
     if prof is not None:
         allow |= prof
@@ -115,8 +119,10 @@ def acp_operator_allowlist(config) -> list[str]:
     (:func:`sidecar_exposed_names`) so the two can never drift (#3248)."""
     # Strip each name: the sidecar strips when parsing OPERATOR_MCP_TOOLS, so a padded
     # YAML entry (" calculator ") must not make the host match a literal the child never sees.
+    from graph.tool_renames import migrate_tool_names
+
     configured = [str(t).strip() for t in (getattr(config, "operator_mcp_tools", None) or []) if str(t).strip()]
-    return configured or ["*"]
+    return migrate_tool_names(configured, source="operator_mcp.tools") or ["*"]
 
 
 class _SidecarTasksStorePresent:
