@@ -1146,7 +1146,8 @@ def test_mint_accepts_explicit_device_scope_and_full_device_caller(client, devic
     minted = [json.loads(line) for line in audit_path.read_text("utf-8").splitlines()]
     minted = [e for e in minted if e["tool"] == "device.minted"]
     assert [e["args"]["minted_by"] for e in minted] == [hub["id"]]
-    assert full_token not in audit_path.read_text("utf-8")
+    audit = audit_path.read_text("utf-8")
+    assert full_token not in audit and response.json()["token"] not in audit
 
 
 @pytest.mark.parametrize("scope", [None, "device", "bogus"])
