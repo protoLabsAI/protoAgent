@@ -28,6 +28,7 @@ import json
 import logging
 import math
 import sqlite3
+import threading
 import time
 from collections.abc import Callable
 
@@ -151,6 +152,10 @@ class HybridKnowledgeStore(KnowledgeStore):
         self._breaker_cooldown_s = breaker_cooldown_s
         self._embed_failures = 0
         self._breaker_open_until = 0.0
+        # Searches, warm_probe and operator reset share this state across threads.
+        # Serialize the paired writes; embedding callbacks stay outside the lock.
+        # Forced interleavings: tests/test_concurrency_4201.py.
+        self._breaker_lock = threading.Lock()
         if embed_fn is not None:
             self._ensure_vectors_table()
 
@@ -160,18 +165,20 @@ class HybridKnowledgeStore(KnowledgeStore):
         return time.monotonic() < self._breaker_open_until
 
     def _record_embed_failure(self) -> None:
-        self._embed_failures += 1
-        if self._embed_failures >= self._breaker_threshold:
-            self._breaker_open_until = time.monotonic() + self._breaker_cooldown_s
-            log.warning(
-                "[knowledge] embedding circuit opened for %.0fs after %d failures",
-                self._breaker_cooldown_s,
-                self._embed_failures,
-            )
+        with self._breaker_lock:
+            self._embed_failures += 1
+            if self._embed_failures >= self._breaker_threshold:
+                self._breaker_open_until = time.monotonic() + self._breaker_cooldown_s
+                log.warning(
+                    "[knowledge] embedding circuit opened for %.0fs after %d failures",
+                    self._breaker_cooldown_s,
+                    self._embed_failures,
+                )
 
     def _record_embed_success(self) -> None:
-        self._embed_failures = 0
-        self._breaker_open_until = 0.0
+        with self._breaker_lock:
+            self._embed_failures = 0
+            self._breaker_open_until = 0.0
 
     def reset_embed_breaker(self) -> bool:
         """Force the embedding circuit closed immediately.
@@ -181,8 +188,13 @@ class HybridKnowledgeStore(KnowledgeStore):
         instead of waiting out ``breaker_cooldown_s``. Returns True if the
         breaker was actually open (something changed) — lets callers log only
         when it mattered. A no-op when already closed."""
-        was_open = self._breaker_open() or self._embed_failures > 0
-        self._record_embed_success()
+        with self._breaker_lock:
+            was_open = self._breaker_open() or self._embed_failures > 0
+            # Reset inline (not via _record_embed_success) — the lock is a plain,
+            # non-reentrant Lock, and the was_open read must see the same state
+            # the reset clears (#4201).
+            self._embed_failures = 0
+            self._breaker_open_until = 0.0
         return was_open
 
     def _probe_once(self) -> bool:
@@ -201,8 +213,10 @@ class HybridKnowledgeStore(KnowledgeStore):
                 self._breaker_cooldown_s,
                 exc,
             )
-            self._embed_failures = self._breaker_threshold
-            self._breaker_open_until = time.monotonic() + self._breaker_cooldown_s
+            # embed_fn ran above, OUTSIDE the lock; only the state write is serialized.
+            with self._breaker_lock:
+                self._embed_failures = self._breaker_threshold
+                self._breaker_open_until = time.monotonic() + self._breaker_cooldown_s
             return False
 
     def warm_probe(self) -> None:
