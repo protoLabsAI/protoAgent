@@ -15,6 +15,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.233.1] - 2026-11-08
+
+### Fixed
+- **Reliable concurrent knowledge and audit updates (#4201).** Concurrent embedding failures and resets now keep the circuit breaker consistent. Audit session counts, eviction, and snapshots remain consistent when worker threads log at the same time. Deterministic regression tests cover these interleavings.
+
+### Docs
+- **Plugin hot-reload documentation corrected (#4810).** Enabling, disabling and reloading update routes without a restart. The config reference explains why retained registries can hold stale snapshots, and the plugins guide explains who owns event unsubscription during registration and after load.
+
+- **Clarify plugin view lifecycle and image results (#4810).** Document when background views reload, how to manage heavy WebGL/WASM views and publish limits, and how tools return images a vision model can read.
+
 ## [0.233.0] - 2026-11-08
 
 ### Added

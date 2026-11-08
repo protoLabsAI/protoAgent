@@ -1,1 +1,0 @@
-- **Plugin hot-reload documentation corrected (#4810).** Enabling, disabling and reloading update routes without a restart. The config reference explains why retained registries can hold stale snapshots, and the plugins guide explains who owns event unsubscription during registration and after load.
