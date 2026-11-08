@@ -50,7 +50,9 @@ and the per-agent `ok`/`error` first: **an agent you could not read is not an ag
 with no friction.** Say so in the report.
 
 Each item carries an `id` (8 hex chars, stable across agents for the same
-kind+summary), `severity`, `count`, `first_seen`/`last_seen`, `tool` and `detail`.
+kind+summary), `severity`, `count`, `first_seen`/`last_seen`, `tool`, `plugin`,
+`tool_unbound` and `detail`. `tool` and `plugin` are `null` when unset. `tool_unbound:
+true` means the agent named a tool it doesn't have: read it as a missing-tool report.
 
 ## 2. Cluster before you rank
 

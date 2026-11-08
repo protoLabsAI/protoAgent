@@ -43,13 +43,31 @@ def _effective_tools(explicit, extra, all_tools):
 
     Names that aren't registered tools — and ``execute_code`` itself, which is
     never self-bridgeable — are dropped with a single log line, never raised: a
-    typo in Settings must not wedge tool assembly. Returns ``explicit`` verbatim
-    (so ``None`` still lets the engine apply its curated default) when
-    ``extra_tools`` widens nothing — existing behavior is untouched.
+    typo in Settings must not wedge tool assembly. Removed tool names (ADR 0125:
+    ``memory_recall`` and friends) are translated to their new names in both
+    lists, with a one-time warning, and an explicit ``tools`` name that isn't
+    registered is warned about once. Returns ``explicit`` (``None`` still lets the
+    engine apply its curated default) when ``extra_tools`` widens nothing.
     """
+    from graph.tool_renames import migrate_tool_names, warn_once
+
+    registered = {t.name for t in all_tools}
+    if explicit:
+        # ADR 0125: an allowlist written before the memory tool rename still names the
+        # old tools; translate it (warned once) rather than silently bridging nothing.
+        explicit = migrate_tool_names(explicit, source="execute_code.tools")
+        for name in explicit:
+            if name not in registered and name != "execute_code":
+                warn_once(
+                    "execute_code.tools",
+                    name,
+                    "[execute_code] tools: '%s' is not a registered tool on this agent; scripts can't call it.",
+                    name,
+                )
+    extra = migrate_tool_names(extra, source="execute_code.extra_tools")
     if not extra:
         return explicit
-    registered = {t.name for t in all_tools}
+
     additions, dropped = set(), []
     for name in extra:
         if name == "execute_code" or name not in registered:

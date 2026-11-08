@@ -23,7 +23,7 @@ npm run desktop:dev
 
 The app **bundles and launches the protoAgent server itself** as a Tauri sidecar — no separately-running server required.
 
-- `apps/desktop/sidecar/build_sidecar.py` freezes the server into a single binary via PyInstaller, named `binaries/protoagent-server-<target-triple>` (the `externalBin` Tauri bundles). The React console is the UI, so the binary stays lean (~60 MB) rather than carrying a heavier server-rendered UI stack.
+- `apps/desktop/sidecar/build_sidecar.py` freezes the server via PyInstaller. On Linux and Windows that is a single binary, `binaries/protoagent-server-<target-triple>` (the `externalBin` Tauri bundles). On macOS it is a signed **onedir** tree, `binaries/protoagent-server-onedir/`, which `src-tauri/tauri.macos.conf.json` bundles as `Contents/Resources/protoagent-server/` and `sidecar.rs` launches from there. A onefile unpacks ~5,000 files into a new temp dir on every launch, and macOS scans each freshly written library on first load: `--help` took 14-16 s on v0.231.0, and the app's own server paid the same on every start. The onedir tree is scanned once. (Resources, not `Contents/MacOS`: a PyInstaller bootloader there looks for its files in `Contents/Frameworks`, where codesign refuses data files.) Tauri signs only what it bundles as a binary, so the freeze signs every Mach-O in the tree itself (`PROTOAGENT_CODESIGN_IDENTITY`; ad-hoc when unset).
 - On launch, the Rust shell (`src-tauri/src/sidecar.rs`) prefers port 7870. If it
   stays occupied after the retry window, the shell selects a free port and injects
   that address into the window. It sets `PROTOAGENT_HOME` and `PROTOAGENT_BOX_ROOT`
@@ -37,7 +37,11 @@ To point the desktop UI at a *different* server instead of the bundled one, set 
 
 ## Desktop Behavior
 
-- Tray menu: show, hide, check for updates, quit.
+- Tray menu: show, hide, check for updates, **Install Command-Line Tool…** (macOS/Linux), quit.
+  The installer runs `protoagent-server cli link`: a `~/.local/bin/protoagent` symlink to the
+  bundled binary, so the terminal's `protoagent` is always this app's version. It never
+  replaces a `protoagent` it didn't make (a `uv tool install`, a pip script); the dialog says
+  what is there. `protoagent cli status` / `cli unlink` / `cli link --force` from a terminal.
 - Close button hides the window instead of quitting.
 - `Cmd+Shift+P` on macOS or `Super+Shift+P` on Linux/Windows toggles the window.
 

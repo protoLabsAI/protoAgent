@@ -174,10 +174,54 @@ jobs:
           npm run build --workspace @protoagent/web
           ls -la apps/web/dist/ apps/web/dist/_ds/
 
+      - name: Import the sidecar signing identity (macOS)
+        if: runner.os == 'macOS'
+        shell: bash
+        # macOS ships the server as a ONEDIR tree in Contents/Resources (build_sidecar.py
+        # freeze_mode: a onefile unpacked ~5,000 files per launch and macOS scanned each one,
+        # so every CLI call and server start took 14-16 s). Tauri signs only what it bundles
+        # as a binary, never a resource tree, so build_sidecar signs every Mach-O in the tree
+        # itself — with the Developer ID, hardened runtime and a timestamp, which notarization
+        # requires of each one. Same condition as the bundle step below: the full secret set
+        # means a signed build. The keychain is deleted right after the freeze, so tauri's own
+        # import never sees a second copy of the identity.
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+          APPLE_API_KEY_BASE64: ${{ secrets.APPLE_API_KEY_BASE64 }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          set -euo pipefail
+          if [ -z "${APPLE_CERTIFICATE}" ] || [ -z "${APPLE_CERTIFICATE_PASSWORD}" ] \
+             || [ -z "${APPLE_SIGNING_IDENTITY}" ] || [ -z "${APPLE_API_ISSUER}" ] \
+             || [ -z "${APPLE_API_KEY}" ] || [ -z "${APPLE_API_KEY_BASE64}" ] \
+             || [ -z "${APPLE_TEAM_ID}" ]; then
+            echo "No full Apple secret set: the onedir sidecar is signed ad-hoc (unsigned build)."
+            exit 0
+          fi
+          KC="${RUNNER_TEMP}/sidecar-signing.keychain-db"
+          KC_PASS="$(uuidgen)"
+          P12="${RUNNER_TEMP}/sidecar-signing.p12"
+          python3 -c 'import base64,os,sys; open(sys.argv[1],"wb").write(base64.b64decode(os.environ["APPLE_CERTIFICATE"]))' "$P12"
+          security create-keychain -p "$KC_PASS" "$KC"
+          security set-keychain-settings -lut 3600 "$KC"
+          security unlock-keychain -p "$KC_PASS" "$KC"
+          security import "$P12" -k "$KC" -P "$APPLE_CERTIFICATE_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$KC_PASS" "$KC" >/dev/null
+          security list-keychains -d user -s "$KC" $(security list-keychains -d user | tr -d '"')
+          rm -f "$P12"
+          echo "SIDECAR_KEYCHAIN=${KC}" >> "$GITHUB_ENV"
+          echo "PROTOAGENT_CODESIGN_IDENTITY=${APPLE_SIGNING_IDENTITY}" >> "$GITHUB_ENV"
+          echo "Sidecar tree will be signed with the Developer ID."
+
       - name: Build server sidecar (PyInstaller)
         shell: bash
         # Freezes `server` into binaries/protoagent-server-<triple> — the
-        # externalBin Tauri bundles. Bundles the console build from the step
+        # externalBin Tauri bundles (on macOS: the signed onedir tree
+        # binaries/protoagent-server-onedir/, bundled as a resource). Bundles the console build from the step
         # above (served at /app — the #2411 contract); hard-fails if it's absent.
         # mcp[cli] is a build-env requirement, not a runtime dep: --collect-all
         # mcp imports every mcp submodule, and mcp.cli hard-errors at import
@@ -198,6 +242,15 @@ jobs:
           python apps/desktop/sidecar/build_sidecar.py
           ls -la apps/desktop/src-tauri/binaries/
 
+      - name: Remove the sidecar signing keychain (macOS)
+        if: always() && runner.os == 'macOS'
+        shell: bash
+        run: |
+          if [ -n "${SIDECAR_KEYCHAIN:-}" ]; then
+            security delete-keychain "${SIDECAR_KEYCHAIN}" || true
+          fi
+          echo "PROTOAGENT_CODESIGN_IDENTITY=" >> "$GITHUB_ENV"
+
       - name: Smoke-test the frozen sidecar
         shell: bash
         # Boot the actual frozen binary (not the venv server) against the fake
@@ -208,7 +261,26 @@ jobs:
         run: |
           BIN="apps/desktop/src-tauri/binaries/protoagent-server-${{ matrix.target }}"
           if [ "${RUNNER_OS}" = "Windows" ]; then BIN="${BIN}.exe"; fi
+          if [ "${RUNNER_OS}" = "macOS" ]; then BIN="apps/desktop/src-tauri/binaries/protoagent-server-onedir/protoagent-server"; fi
           python scripts/live_smoke.py --bin "${BIN}" --timeout 180 --expect-console
+
+      - name: Check the CLI starts fast (macOS)
+        if: runner.os == 'macOS'
+        shell: bash
+        # The onedir freeze exists so the CLI stops paying a per-launch unpack + scan
+        # (14-16 s for `--help` on v0.231.0). The first run at a new path still pays the
+        # one-time scan; the second must be quick. A regression to onefile fails here.
+        run: |
+          BIN="apps/desktop/src-tauri/binaries/protoagent-server-onedir/protoagent-server"
+          "${BIN}" --help >/dev/null
+          python3 - "${BIN}" <<'PY'
+          import subprocess, sys, time
+          t = time.monotonic()
+          subprocess.run([sys.argv[1], "--help"], check=True, stdout=subprocess.DEVNULL)
+          took = time.monotonic() - t
+          print(f"second --help: {took:.2f} s")
+          sys.exit(0 if took < 6 else f"--help took {took:.1f} s (want < 6 s): did the macOS sidecar go back to onefile?")
+          PY
 
       - name: Smoke-test the frozen fleet deck
         shell: bash
@@ -224,6 +296,7 @@ jobs:
         run: |
           BIN="apps/desktop/src-tauri/binaries/protoagent-server-${{ matrix.target }}"
           if [ "${RUNNER_OS}" = "Windows" ]; then BIN="${BIN}.exe"; fi
+          if [ "${RUNNER_OS}" = "macOS" ]; then BIN="apps/desktop/src-tauri/binaries/protoagent-server-onedir/protoagent-server"; fi
           python scripts/fleet_deck_smoke.py --bin "${BIN}"
 
       - name: Run Windows-native path, process, and wheel regressions
@@ -323,7 +396,8 @@ jobs:
         run: |
           set -euo pipefail
           APP="$(ls -d apps/desktop/src-tauri/target/release/bundle/macos/*.app | head -1)"
-          BIN="${APP}/Contents/MacOS/protoagent-server"
+          # The onedir server tree lives in Resources (tauri.macos.conf.json).
+          BIN="${APP}/Contents/Resources/protoagent-server/protoagent-server"
           echo "Smoking signed sidecar: ${BIN}"
           python scripts/live_smoke.py --bin "${BIN}" --timeout 180
 

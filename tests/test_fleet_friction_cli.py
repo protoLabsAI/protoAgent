@@ -110,6 +110,31 @@ def test_reads_every_running_member_and_names_the_ones_it_skipped(monkeypatch, c
     assert {call[1] for call in c.calls} == {"host", "alpha-1", "beta-2"}  # the hub rides as `host`
 
 
+@pytest.mark.parametrize("raw", [False, True])
+def test_json_rows_always_carry_tool_plugin_and_tool_unbound(monkeypatch, capsys, raw):
+    """Stress test 0.231.0: `--json --raw` rows from members lacked `tool`/`plugin` and no
+    row carried `tool_unbound`. Whatever a member sends — keys missing, "" or set — every
+    row in `--json` carries all three, None/False when unset."""
+    ledgers = {
+        "host": [{"kind": "model", "summary": "bare row", "severity": "minor", "ts": NOW}],
+        "alpha-1": [dict(_item("harness", "old core row"), tool="", plugin="")],
+        "beta-2": [
+            dict(_item("harness", "unbound row", tool="frobnicate"), plugin=None, tool_unbound=True),
+            dict(_item("harness", "plugin row", tool="github_run_failure"), plugin="github"),
+        ],
+    }
+    _live(monkeypatch, FakeClient(ledgers=ledgers))
+    _run(["friction", "--json"] + (["--raw"] if raw else []))
+    rows = {i["summary"]: i for r in json.loads(capsys.readouterr().out)["results"] for i in r["items"]}
+    shape = {s: (i["tool"], i["plugin"], i["tool_unbound"]) for s, i in rows.items()}
+    assert shape == {
+        "bare row": (None, None, False),
+        "old core row": (None, None, False),
+        "unbound row": ("frobnicate", None, True),
+        "plugin row": ("github_run_failure", "github", False),
+    }
+
+
 def test_a_signal_hit_by_several_agents_is_surfaced_as_shared(monkeypatch, capsys):
     _live(monkeypatch, FakeClient())
     _run(["friction", "--json"])

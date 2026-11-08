@@ -394,8 +394,9 @@ async def web_search(query: str, max_results: int = 5) -> str:
     if results is None:
         # Both attempts RAISED — the search never completed, so this must read as a failure,
         # never an empty result (#4578). The "Error:" prefix is load-bearing: AuditMiddleware
-        # and wait_yield both record a tool reply as a *failed* call iff it startswith("Error")
-        # (see src/graph/middleware/audit.py), so EVERY both-attempts failure — including
+        # and wait_yield record a returned (not raised) tool reply as a *failed* call only when
+        # it startswith("Error") (see src/graph/middleware/audit.py — the other signal is a
+        # status="error" ToolMessage from a raised ToolException), so EVERY both-attempts failure — including
         # ddgs's ambiguous 'No results found.' — keeps the prefix or a failed search is logged
         # as a success and callers read it as an empty result all over again.
         reason = str(last_error).strip() or type(last_error).__name__

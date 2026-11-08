@@ -168,14 +168,24 @@ def _write_disconnected(paths: InstancePaths, providers: set[str]) -> None:
     atomic_write(path, json.dumps(sorted(providers)), mode=0o600)
 
 
+def _forget_cached_models(provider: str) -> None:
+    # A sign-in or disconnect may change which account answers `/models`, so the cached
+    # list (graph.providers.model_cache) must not outlive it.
+    from graph.providers import model_cache
+
+    model_cache.invalidate(provider)
+
+
 def _mark_disconnected(paths: InstancePaths, provider: str) -> None:
     _write_disconnected(paths, _disconnected_providers(paths) | {provider})
+    _forget_cached_models(provider)
 
 
 def clear_disconnected(provider: str, paths: InstancePaths | None = None) -> None:
     """An explicit in-console sign-in clears the disconnect intent for ``provider``."""
     paths = paths or instance_paths()
     _write_disconnected(paths, _disconnected_providers(paths) - {provider})
+    _forget_cached_models(provider)
 
 
 class OAuthCredentialError(RuntimeError):

@@ -132,10 +132,22 @@ roster beneath it drives nothing from disk beside that hub — attach to it from
 ## From the desktop app
 
 From 0.166.0, the desktop app's bundled binary opens the deck too, which matters on a machine
-with no other `protoagent` installed. On macOS:
+with no other `protoagent` installed. Put it on your PATH once, from the menu-bar icon:
+**Install Command-Line Tool…** (or run `protoagent-server cli link` yourself). That links
+`~/.local/bin/protoagent` to the app's binary, so `protoagent` always matches the app you have
+installed, through every update:
 
 ```bash
-/Applications/protoAgent.app/Contents/MacOS/protoagent-server fleet
+protoagent fleet
+```
+
+The link is never forced over a `protoagent` you installed another way (a `uv tool install`, say);
+the installer says what is there instead and leaves it. `protoagent cli status` shows what
+`protoagent` on your PATH runs, and `protoagent cli link --force` replaces it. Without the link,
+the binary is at (macOS):
+
+```bash
+/Applications/protoAgent.app/Contents/Resources/protoagent-server/protoagent-server fleet
 ```
 
 ## Screens and keys

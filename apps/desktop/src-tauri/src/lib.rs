@@ -314,8 +314,24 @@ fn build_tray(app: &tauri::App) -> tauri::Result<()> {
     // instead of hiding it behind a context-menu gesture nobody finds.
     let new_win = MenuItem::with_id(app, "new_window", "New Window", true, None::<&str>)?;
     let updates = MenuItem::with_id(app, "updates", "Check for Updates…", true, None::<&str>)?;
+    // Puts this build's `protoagent` on PATH (`protoagent-server cli link`). Unix only:
+    // a symlink in ~/.local/bin; Windows has no equivalent here yet.
+    #[cfg(unix)]
+    let install_cli = MenuItem::with_id(
+        app,
+        "install_cli",
+        "Install Command-Line Tool…",
+        true,
+        None::<&str>,
+    )?;
     let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
     let separator = PredefinedMenuItem::separator(app)?;
+    #[cfg(unix)]
+    let menu = Menu::with_items(
+        app,
+        &[&show, &new_win, &hide, &separator, &updates, &install_cli, &quit],
+    )?;
+    #[cfg(not(unix))]
     let menu = Menu::with_items(app, &[&show, &new_win, &hide, &separator, &updates, &quit])?;
 
     // The protoLabs robot mark, at the menu-bar size + template treatment Orbis
@@ -337,6 +353,8 @@ fn build_tray(app: &tauri::App) -> tauri::Result<()> {
             }
             "hide" => hide_main_window(app),
             "updates" => request_update_from_tray(app),
+            #[cfg(unix)]
+            "install_cli" => crate::sidecar::install_cli(app),
             "quit" => app.exit(0),
             _ => {}
         })

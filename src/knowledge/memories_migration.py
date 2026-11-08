@@ -30,6 +30,12 @@ them. The rule, per ``source_type``:
   KB documents, and the NULL-``source_type`` ``claude-import`` rows — stays in ``chunks``,
   now tagged with a ``collection`` (= its old ``domain``).
 
+``kind`` follows ``memory_kind`` when it is already one of the four typed kinds; an
+untyped row in an operator-profile domain — ``preferences`` and the freeform ``profile``/
+``abilities``/``voice`` the Career Coach plugin writes — becomes ``profile``. v0.231.0
+missed the freeform three and filed them as ``fact``; :func:`repair_profile_memory_kinds`
+re-kinds those rows on the next boot, keyed on the ``.pre-0125-p2`` snapshot.
+
 The ``domain='conversation'`` rows are left untouched whatever their source_type: the H1e
 history migration owns those.
 
@@ -80,9 +86,23 @@ _AGENT_SOURCE_TYPES = ("conversation", "extracted")
 _OPERATOR_MEMORY_DOMAINS = ("hot", "preferences", "decisions")
 
 # The ``memories`` ``kind`` CHECK set — a ``memory_kind`` already in it is carried
-# verbatim; otherwise ``domain`` decides (preferences→profile, decisions→decision,
-# else the generic ``fact``).
+# verbatim; otherwise ``domain`` decides (preferences→profile, decisions→decision, an
+# untyped row in an operator-profile domain→profile, else the generic ``fact``).
 _MEMORY_KINDS = ("profile", "standing", "fact", "decision")
+
+# Freeform domains live agents used as an operator-profile index (fleet audit, 2026-11-07):
+# the Career Coach plugin's SOUL keeps "a compact recall index under the ``profile``,
+# ``abilities`` and ``voice`` domains, distilled from the profile", and jobCoach's
+# operator profile, abilities and voice rows sit there. ``infer_memory_kind`` had no
+# branch for them, so they were stamped ``legacy`` (untyped). An untyped row there is
+# about the operator → ``kind=profile``. A row the agent typed explicitly (``fact``,
+# ``decision``, ``reference``, ...) keeps its own call: in jobCoach's ``profile`` domain
+# those are research findings and positioning decisions, not the operator's profile.
+_OPERATOR_PROFILE_DOMAINS = ("profile", "abilities", "voice")
+
+# ``memory_kind`` values that mean "nobody typed this row": NULL (pre-#3205) and the
+# ``legacy`` stamp ``infer_memory_kind`` gives an unmapped domain.
+_UNTYPED_KINDS = (None, "legacy")
 
 # Rows that are memories, NOT in the history domain (H1e owns ``domain='conversation'``):
 # an agent/extraction write in any domain, OR an ``operator`` write that carries a memory
@@ -108,13 +128,17 @@ def _zero() -> dict[str, int]:
 
 def _memory_kind(memory_kind: str | None, domain: str | None) -> str:
     """The ``memories.kind`` for a chunk: its ``memory_kind`` if already one of the
-    four typed kinds; else ``preferences``→profile / ``decisions``→decision; else ``fact``."""
+    four typed kinds; else ``preferences``→profile / ``decisions``→decision; else an
+    untyped row in an operator-profile domain (``profile``/``abilities``/``voice``)→profile;
+    else ``fact``."""
     if memory_kind in _MEMORY_KINDS:
         return memory_kind
     if domain == "preferences":
         return "profile"
     if domain == "decisions":
         return "decision"
+    if domain in _OPERATOR_PROFILE_DOMAINS and memory_kind in _UNTYPED_KINDS:
+        return "profile"
     return "fact"
 
 
@@ -192,11 +216,17 @@ def _backup_pre_0125_p2(db: sqlite3.Connection, path: Path) -> None:
     first so the copy reflects all committed writes. Taken ONCE: a later pass (rows an
     older core wrote after the stamp) keeps the ORIGINAL snapshot, and the Phase-1
     ``.pre-0125`` backup is a different file and never touched."""
+    _backup_once(db, path, _PRE_0125_P2_BACKUP_SUFFIX)
+
+
+def _backup_once(db: sqlite3.Connection, path: Path, suffix: str) -> None:
+    """Copy agent.db to ``agent.db<suffix>`` unless that file already exists, after a
+    WAL checkpoint so the copy reflects every committed write."""
     try:
         db.execute("PRAGMA wal_checkpoint(FULL)")
     except sqlite3.DatabaseError:
         pass  # non-WAL / read-only mount: the main file is already current
-    backup = path.with_name(path.name + _PRE_0125_P2_BACKUP_SUFFIX)
+    backup = path.with_name(path.name + suffix)
     if backup.exists():
         return
     shutil.copy2(path, backup)
@@ -342,3 +372,133 @@ def migrate_memory_chunks_to_memories(db_path: str | Path | None) -> dict[str, i
         return _zero()
     finally:
         db.close()
+
+
+# ── repair: profile-domain rows an earlier core migrated as ``fact`` ─────────────────────
+
+# ``_kb_meta`` key stamped once the repair has run. Unlike the move above, this stamp DOES
+# skip: the repair is a one-shot correction of rows v0.231.0 migrated, and an operator who
+# re-kinds a row after it ran must not have that undone on the next boot.
+_PROFILE_KIND_REPAIR_KEY = "memory_profile_kind_repair_0125"
+
+# File backup taken before the repair writes anything (never overwrites an earlier one).
+_PROFILE_KIND_REPAIR_BACKUP_SUFFIX = ".pre-0125-kind-repair"
+
+
+def repair_profile_memory_kinds(db_path: str | Path | None) -> int:
+    """Re-kind memories that v0.231.0's migration filed as ``fact`` although they were
+    untyped operator-profile rows (``legacy``/NULL ``memory_kind`` in a ``profile``/
+    ``abilities``/``voice`` domain — what :func:`_memory_kind` now maps to ``profile``).
+    Returns the number of rows re-kinded.
+
+    Conservative by construction. A migrated row no longer records its original
+    ``memory_kind`` (a ``legacy`` row and an explicitly typed ``reference`` both landed
+    as ``fact``), so the record of truth is the migration's own pre-move snapshot,
+    ``agent.db.pre-0125-p2``: a row is re-kinded only when that snapshot holds a chunk
+    the migration would move, in one of those domains, untyped, AND a ``memories`` row
+    still matches it exactly — same ``legacy_domain``, provenance, content, heading and
+    both timestamps, still ``kind='fact'``. A row edited since the move (its
+    ``updated_at`` changed), an explicitly typed row, or one with no snapshot is left
+    alone. No content is interpreted.
+
+    Idempotent: a ``_kb_meta`` stamp makes it one-shot, and the ``kind='fact'`` guard
+    means a re-run would change nothing anyway. Before the first write the file is copied
+    to ``agent.db.pre-0125-kind-repair``. A DB with no ``memories`` table, no migration
+    stamp or no snapshot is a no-op."""
+    if db_path is None:
+        return 0
+    path = Path(db_path)
+    snapshot = path.with_name(path.name + _PRE_0125_P2_BACKUP_SUFFIX)
+    if not path.exists():
+        return 0
+    try:
+        db = sqlite3.connect(str(path))
+    except sqlite3.DatabaseError:
+        log.exception("[knowledge] 0125 profile-kind repair: cannot open %s", path)
+        return 0
+    db.row_factory = sqlite3.Row
+    try:
+        db.execute("PRAGMA busy_timeout=5000")
+        if not _table_present(db, "_kb_meta") or not _table_present(db, "memories"):
+            return 0
+        meta = dict(db.execute("SELECT key, value FROM _kb_meta").fetchall())
+        if _PROFILE_KIND_REPAIR_KEY in meta or _MEMORY_MIGRATION_KEY not in meta:
+            # Already repaired, or not migrated yet (the move itself will type it right).
+            return 0
+        candidates = _snapshot_profile_candidates(snapshot) if snapshot.exists() else []
+        # Each candidate is the exact identity of one moved chunk; ``kind='fact'`` keeps
+        # the update to rows still as the migration left them.
+        match_sql = (
+            "kind = 'fact' AND legacy_domain = ? AND provenance = ? AND content = ? "
+            "AND heading IS ? AND created_at = ? AND updated_at = ?"
+        )
+        params = [
+            (
+                c["domain"],
+                _memory_provenance(c["source_type"]),
+                c["content"],
+                c["heading"],
+                c["created_at"],
+                c["updated_at"],
+            )
+            for c in candidates
+        ]
+        if any(db.execute(f"SELECT 1 FROM memories WHERE {match_sql}", p).fetchone() for p in params):
+            _backup_once(db, path, _PROFILE_KIND_REPAIR_BACKUP_SUFFIX)
+        _begin_immediate(db)
+        repaired = 0
+        for p in params:
+            repaired += db.execute(f"UPDATE memories SET kind = 'profile' WHERE {match_sql}", p).rowcount
+        db.execute(
+            "INSERT INTO _kb_meta(key, value) VALUES(?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            (_PROFILE_KIND_REPAIR_KEY, _now_iso()),
+        )
+        db.commit()
+        if repaired:
+            log.info(
+                "[knowledge] 0125 profile-kind repair: re-kinded %d operator-profile memor%s fact → profile "
+                "(backup: %s)",
+                repaired,
+                "y" if repaired == 1 else "ies",
+                path.name + _PROFILE_KIND_REPAIR_BACKUP_SUFFIX,
+            )
+        return repaired
+    except sqlite3.DatabaseError:
+        try:
+            db.rollback()
+        except sqlite3.DatabaseError:
+            pass
+        log.exception("[knowledge] 0125 profile-kind repair failed at %s", path)
+        return 0
+    finally:
+        db.close()
+
+
+def _snapshot_profile_candidates(snapshot: Path) -> list[sqlite3.Row]:
+    """The chunks in the pre-move snapshot that :func:`_memory_kind` now maps to
+    ``profile`` but v0.231.0 mapped to ``fact``: rows the migration moves
+    (``_MEMORY_PREDICATE``), in an operator-profile domain, with no typed kind.
+    Opened read-only AND immutable: the snapshot is a frozen, checkpointed copy, and a
+    plain ``mode=ro`` open of a WAL-mode file would still create ``-wal``/``-shm`` files
+    beside it."""
+    try:
+        snap = sqlite3.connect(f"{snapshot.resolve().as_uri()}?mode=ro&immutable=1", uri=True)
+    except sqlite3.DatabaseError:
+        log.warning("[knowledge] 0125 profile-kind repair: cannot open snapshot %s", snapshot)
+        return []
+    snap.row_factory = sqlite3.Row
+    try:
+        if not _table_present(snap, "chunks"):
+            return []
+        doms = ", ".join("?" * len(_OPERATOR_PROFILE_DOMAINS))
+        return snap.execute(
+            "SELECT domain, source_type, content, heading, created_at, updated_at FROM chunks "
+            f"WHERE {_MEMORY_PREDICATE} AND domain IN ({doms}) "
+            "AND (memory_kind IS NULL OR memory_kind = 'legacy')",
+            (*_MEMORY_PARAMS, *_OPERATOR_PROFILE_DOMAINS),
+        ).fetchall()
+    except sqlite3.DatabaseError:
+        log.warning("[knowledge] 0125 profile-kind repair: unreadable snapshot %s", snapshot, exc_info=True)
+        return []
+    finally:
+        snap.close()

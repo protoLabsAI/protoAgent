@@ -271,7 +271,7 @@ def test_shell_honours_a_refused_pdf_preflight(monkeypatch, tmp_path):
 # ── the frame ──────────────────────────────────────────────────────────────────
 
 
-def test_pdf_frame_runs_under_a_nonce_csp_with_no_network_and_no_workers(monkeypatch, tmp_path):
+def test_pdf_frame_runs_under_a_nonce_csp_with_no_network_and_only_blob_workers(monkeypatch, tmp_path):
     art = _load(monkeypatch, tmp_path)
     src = _js_function(_js(art), "pdfDoc")
     assert "Content-Security-Policy" in src
@@ -279,14 +279,16 @@ def test_pdf_frame_runs_under_a_nonce_csp_with_no_network_and_no_workers(monkeyp
         "default-src 'none'",
         "script-src 'nonce-",
         "connect-src 'none'",
-        "worker-src 'none'",
+        "worker-src blob:;",  # the pdf.js Worker the frame builds, and nothing it could fetch
         "frame-src 'none'",
         "object-src 'none'",
     ):
         assert directive in src, directive
     assert "unsafe-eval" not in src and "script-src 'unsafe-inline'" not in src
-    # both modules carry the nonce AND their SRI; the worker module loads first
-    assert 'cdnModule("pdfjsWorker", nonce) + cdnModule("pdfjs", nonce)' in src
+    # the lib module carries the nonce AND its SRI; the worker module is NOT parsed on the main
+    # thread up front any more — the fallback loads it only when the Worker can't start
+    assert 'cdnModule("pdfjs", nonce)' in src and 'cdnModule("pdfjsWorker"' not in src
+    assert "integrity:LIB.pdfjsWorker[1]" in src and "nonce:nonce" in src
     mod = _js_function(_js(art), "cdnModule")
     assert 'type="module"' in mod and "integrity=" in mod and 'crossorigin="anonymous"' in mod
     assert "allow-same-origin" not in art._SHELL_HTML
@@ -295,7 +297,74 @@ def test_pdf_frame_runs_under_a_nonce_csp_with_no_network_and_no_workers(monkeyp
     # no fetches from inside the frame: no wasm decoders, no streaming/range loads
     for opt in ("useWasm:false", "disableAutoFetch:true", "disableStream:true", "disableRange:true", "enableXfa:false"):
         assert opt in ctl, opt
-    assert "W.pdfjsWorker" in ctl  # refuses to start if pdf.js would need a real Worker
+    # pdf.js gets a real Worker (a classic one, from a blob: URL) and waits for its "ready"…
+    assert "L.GlobalWorkerOptions.workerPort=worker" in ctl
+    assert 'd.action==="ready"' in ctl and "caps.workerMs" in ctl
+    assert "new Blob([src]" in ctl and "new W.Worker(url)" in ctl
+    # …and the fallback loads the worker module the way every vendored module loads: nonce + SRI + CORS
+    for attr in ('s.type="module"', 's.crossOrigin="anonymous"', "s.integrity=", "s.nonce="):
+        assert attr in ctl, attr
+    assert "W.pdfjsWorker" in ctl
+    # the other in-frame renderers keep no workers at all
+    for fn in ("docxDoc", "slidesDoc"):
+        assert "worker-src 'none'" in _js_function(_js(art), fn), fn
+
+
+def test_shell_posts_the_sri_checked_worker_source_with_the_bytes(monkeypatch, tmp_path):
+    art = _load(monkeypatch, tmp_path)
+    js = _js(art)
+    getter = _js_function(js, "pdfWorkerSource")
+    assert "integrity:LIB.pdfjsWorker[1]" in getter  # the same hash the module script is pinned to
+    assert "pdfClassicWorker" in getter
+    msg = _js_function(js, "pptxMessage")
+    assert 'ctx.kind==="pdf" ? pdfWorkerSource() : null' in msg
+    assert "msg.worker=got[1]" in msg
+    assert "load(m.buf, m.worker)" in _js_function(js, "artPdf")
+
+
+def _classic_worker(art, src_expr: str) -> dict:
+    """Run the shell's pdfClassicWorker on ``src_expr`` under node: does it return a script, and
+    does that script compile as a CLASSIC script (vm.Script — what a non-module Worker runs)?"""
+    return _node(
+        'var fs=require("fs"),vm=require("vm");'
+        + _js_function(_js(art), "pdfClassicWorker")
+        + "var out=pdfClassicWorker("
+        + src_expr
+        + ");var ok=false,err='';"
+        + "if(out!==null){try{new vm.Script(out);ok=true;}catch(e){err=String(e);}}"
+        + "console.log(JSON.stringify({isNull:out===null,compiles:ok,err:err,"
+        + "strict:out!==null&&out.indexOf('\"use strict\";')===0,"
+        + "meta:out!==null&&out.indexOf('import.meta')>=0,"
+        + "handler:out!==null&&out.indexOf('globalThis.pdfjsWorker={WorkerMessageHandler}')>=0}));"
+    )
+
+
+def test_vendored_worker_becomes_a_classic_worker_script(monkeypatch, tmp_path):
+    """Chromium won't start a MODULE Worker from a blob: URL minted in an opaque origin, so the
+    shell turns the verified pdf.worker module into a classic script. Against the real vendored
+    file: it compiles as a classic script, in strict mode, with no module syntax left."""
+    art = _load(monkeypatch, tmp_path)
+    path = json.dumps(str(ROOT / "vendor" / "pdfjs-worker.min.mjs"))
+    got = _classic_worker(art, f"fs.readFileSync({path},'utf8')")
+    assert got == {"isNull": False, "compiles": True, "err": "", "strict": True, "meta": False, "handler": True}
+
+
+@pytest.mark.parametrize(
+    "src",
+    [
+        '"export{WorkerMessageHandler};"',  # no import.meta reads: not the file we vendored
+        '"a=import.meta.url;b=import.meta.url;c=import.meta.url;export{WorkerMessageHandler};"',
+        '"a=import.meta.url;b=import.meta.url;export{WorkerMessageHandler};export{WorkerMessageHandler};"',
+        '"a=import.meta.url;b=import.meta.url;import.meta.resolve(1);export{WorkerMessageHandler};"',
+        '"a=import.meta.url;b=import.meta.url;export{WorkerMessageHandler};export * from 1"',
+        '""',
+    ],
+)
+def test_a_reshaped_worker_module_is_refused(monkeypatch, tmp_path, src):
+    """A re-vendored worker with any other module syntax gets null — the frame then takes the
+    main-thread path — never a half-rewritten script."""
+    art = _load(monkeypatch, tmp_path)
+    assert _classic_worker(art, src)["isNull"] is True
 
 
 def test_in_frame_failure_shows_the_extracted_text(monkeypatch, tmp_path):

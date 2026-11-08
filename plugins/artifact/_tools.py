@@ -12,7 +12,7 @@ import secrets
 from pathlib import Path
 from typing import Annotated, Any
 
-from langchain_core.tools import tool
+from langchain_core.tools import ToolException, tool
 from langgraph.prebuilt import InjectedState
 
 from . import _config, _docx, _links, _media, _pdfview, _preview, _ref, _render_status, _slides, _store
@@ -1229,7 +1229,7 @@ def get_artifact(artifact_id: str = "") -> str:
     store = _store._read_store()
     art = _store._find(store, artifact_id or store["current"])
     if art is None:
-        return "No artifact to read. Use list_artifacts to see the ids, or show_artifact to create one."
+        raise ToolException("No artifact to read. Use list_artifacts to see the ids, or show_artifact to create one.")
     code = art["versions"][-1]["code"]
     title = art["title"] or "(untitled)"
     v = len(art["versions"])
@@ -1251,7 +1251,7 @@ def cite_artifact(artifact_id: str, page: int, version: int = 0) -> str:
     store = _store._read_store()
     art = _store._find(store, artifact_id)
     if art is None:
-        return f"No artifact {artifact_id!r}. Use list_artifacts to see the ids."
+        raise ToolException(f"No artifact {artifact_id!r}. Use list_artifacts to see the ids.")
     versions = art.get("versions") or []
     total = len(versions)
     if version == 0:
@@ -1259,7 +1259,7 @@ def cite_artifact(artifact_id: str, page: int, version: int = 0) -> str:
     elif 1 <= version <= total:
         pos = version
     else:
-        return (
+        raise ToolException(
             f"Artifact {art['id']} has {total} version(s) — version must be between 1 and {total}, "
             f"or 0 for the latest."
         )
@@ -1269,7 +1269,7 @@ def cite_artifact(artifact_id: str, page: int, version: int = 0) -> str:
     # as it would be on a save; a page past the end clamps to the last page.
     accepted_page, refusal, note = _ref.page_hint(versions[pos - 1].get("file"), art.get("kind", ""), page)
     if refusal is not None:
-        return refusal
+        raise ToolException(refusal)
     title = art.get("title") or "(untitled)"
     return (
         f"Cited artifact {art['id']} v{pos}: {title}{note}."
@@ -1288,7 +1288,7 @@ def check_artifact(artifact_id: str = "", state: Annotated[Any, InjectedState] =
     store = _store._read_store()
     art = _store._find(store, artifact_id or store["current"])
     if art is None:
-        return "No artifact to check. Use list_artifacts to see the ids, or show_artifact to create one."
+        raise ToolException("No artifact to check. Use list_artifacts to see the ids, or show_artifact to create one.")
     v = len(art["versions"])
     # An already-recorded verdict reads instantly; otherwise wait briefly IFF a renderer is live
     # (so an immediate post-render check returns the real result, not a premature "no result yet").
@@ -1340,7 +1340,7 @@ def pin_artifact(artifact_id: str, pinned: bool = True) -> str:
     store = _store._read_store()
     art = _store._find(store, artifact_id)
     if art is None:
-        return f"No artifact {artifact_id!r}. Use list_artifacts to see the ids."
+        raise ToolException(f"No artifact {artifact_id!r}. Use list_artifacts to see the ids.")
     label = f"{art['id']} ({art['title'] or 'untitled'})"
     if not pinned:
         if not _store._is_pinned(art):
@@ -1392,10 +1392,18 @@ def delete_artifact(artifact_id: str) -> str:
     """Delete an artifact and all its versions from the panel."""
     store = _store._read_store()
     if _store._find(store, artifact_id) is None:
-        return f"No artifact {artifact_id!r}. Use list_artifacts to see the ids."
+        raise ToolException(f"No artifact {artifact_id!r}. Use list_artifacts to see the ids.")
     store["artifacts"] = [a for a in store["artifacts"] if a["id"] != artifact_id]
     if store["current"] == artifact_id:
         store["current"] = store["artifacts"][0]["id"] if store["artifacts"] else None
     _store._write_store(store)
     _store._emit("deleted", {"id": artifact_id})
     return f"Deleted artifact {artifact_id}."
+
+
+# A refusal (no such artifact, a bad version or page) is a failed call, not a result: these tools
+# raise ToolException with the exact words the model should read, and handle_tool_error hands
+# those words back as the tool result with status="error". That status is what per-tool telemetry
+# counts and what closes the chat card as a failure; the text the model sees is unchanged.
+for _refusing_tool in (get_artifact, cite_artifact, check_artifact, pin_artifact, delete_artifact):
+    _refusing_tool.handle_tool_error = True

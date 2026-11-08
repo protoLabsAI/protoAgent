@@ -349,3 +349,123 @@ def test_missing_and_tableless_dbs_are_noops(tmp_path):
     MemoryStore(only_mem)
     assert migrate_memory_chunks_to_memories(only_mem) == {"memories": 0, "chunks": 0}
     assert not only_mem.with_name("mem-only.db.pre-0125-p2").exists()
+
+
+# ── operator-profile domains (stress test 2026-11-07: jobCoach's profile → kind=fact) ──
+
+
+def _seed_profile_domains(store):
+    """jobCoach's shape: untyped (``legacy``) operator profile / abilities / voice rows next
+    to rows the agent typed explicitly in the same ``profile`` domain."""
+    store.add_chunk("operator profile", domain="profile", heading="josh-profile", source_type="conversation")
+    store.add_chunk("abilities", domain="abilities", heading="josh-abilities", source_type="conversation")
+    store.add_chunk("voice rules", domain="voice", heading="josh-voice", source_type="conversation")
+    store.add_chunk("profile fact typed", domain="profile", source_type="conversation", memory_kind="fact")
+    store.add_chunk("profile research", domain="profile", source_type="conversation", memory_kind="reference")
+    store.add_chunk("profile decision", domain="profile", source_type="conversation", memory_kind="decision")
+    store.add_chunk("voice standing", domain="voice", source_type="conversation", memory_kind="standing")
+    store.add_chunk("app legacy", domain="applications", source_type="conversation")
+
+
+def _kinds(path):
+    return {c: r["kind"] for c, r in _rows_by_content(path, "memories").items()}
+
+
+def test_untyped_operator_profile_domains_migrate_as_profile(tmp_path):
+    """An untyped row in profile/abilities/voice is about the operator → kind=profile; a row
+    the agent typed explicitly keeps its kind; other freeform domains still get ``fact``."""
+    store = KnowledgeStore(tmp_path / "agent.db")
+    MemoryStore(store.path)
+    _seed_profile_domains(store)
+
+    assert migrate_memory_chunks_to_memories(store.path)["memories"] == 8
+    assert _kinds(store.path) == {
+        "operator profile": "profile",
+        "abilities": "profile",
+        "voice rules": "profile",
+        "profile fact typed": "fact",
+        "profile research": "fact",
+        "profile decision": "decision",
+        "voice standing": "standing",
+        "app legacy": "fact",
+    }
+
+
+def _v0231_memory_kind(memory_kind, domain):
+    """The v0.231.0 mapping, to reproduce DBs it already migrated."""
+    if memory_kind in mem_mig._MEMORY_KINDS:
+        return memory_kind
+    return {"preferences": "profile", "decisions": "decision"}.get(domain, "fact")
+
+
+def _migrate_like_v0231(store, monkeypatch):
+    with monkeypatch.context() as m:
+        m.setattr(mem_mig, "_memory_kind", _v0231_memory_kind)
+        assert migrate_memory_chunks_to_memories(store.path)["memories"] == 8
+    assert _kinds(store.path)["operator profile"] == "fact"  # the bug, reproduced
+
+
+def test_repair_rekinds_only_untyped_profile_rows_from_the_snapshot(tmp_path, monkeypatch):
+    """Rows v0.231.0 migrated: the repair reads the pre-move snapshot and re-kinds exactly the
+    untyped profile/abilities/voice rows still as migrated. Explicitly typed rows, other
+    domains and a row edited since the move stay; the DB is backed up first."""
+    store = KnowledgeStore(tmp_path / "agent.db")
+    mem = MemoryStore(store.path)
+    _seed_profile_domains(store)
+    _migrate_like_v0231(store, monkeypatch)
+    # The operator edited the abilities row after the move (updated_at bumps) → hands off.
+    abilities_id = _rows_by_content(store.path, "memories")["abilities"]["id"]
+    assert mem.update(abilities_id, subject="Josh abilities")
+
+    assert mem_mig.repair_profile_memory_kinds(store.path) == 2
+    assert _kinds(store.path) == {
+        "operator profile": "profile",
+        "abilities": "fact",  # edited since the migration — left for the operator
+        "voice rules": "profile",
+        "profile fact typed": "fact",
+        "profile research": "fact",
+        "profile decision": "decision",
+        "voice standing": "standing",
+        "app legacy": "fact",
+    }
+    backup = tmp_path / "agent.db.pre-0125-kind-repair"
+    assert backup.exists()
+    snap = sqlite3.connect(str(backup))
+    try:  # the backup is the pre-repair state
+        assert snap.execute("SELECT kind FROM memories WHERE content = 'operator profile'").fetchone()[0] == "fact"
+    finally:
+        snap.close()
+
+    # One-shot: an operator re-kinding a repaired row is not undone on the next boot.
+    db = sqlite3.connect(str(store.path))
+    db.execute("UPDATE memories SET kind = 'fact' WHERE content = 'voice rules'")
+    db.commit()
+    db.close()
+    assert mem_mig.repair_profile_memory_kinds(store.path) == 0
+    assert _kinds(store.path)["voice rules"] == "fact"
+
+
+def test_repair_is_a_noop_without_snapshot_or_migration(tmp_path, monkeypatch):
+    """No snapshot (nothing to key on) or no migration stamp yet → nothing changes, no backup."""
+    store = KnowledgeStore(tmp_path / "agent.db")
+    MemoryStore(store.path)
+    _seed_profile_domains(store)
+    # Not migrated yet: the move itself will type the rows right.
+    assert mem_mig.repair_profile_memory_kinds(store.path) == 0
+    _migrate_like_v0231(store, monkeypatch)
+    (tmp_path / "agent.db.pre-0125-p2").unlink()
+
+    assert mem_mig.repair_profile_memory_kinds(store.path) == 0
+    assert _kinds(store.path)["operator profile"] == "fact"
+    assert not (tmp_path / "agent.db.pre-0125-kind-repair").exists()
+
+
+def test_repair_after_a_fixed_migration_changes_nothing(tmp_path):
+    """A DB first migrated by this core already has the right kinds: no writes, no backup."""
+    store = KnowledgeStore(tmp_path / "agent.db")
+    MemoryStore(store.path)
+    _seed_profile_domains(store)
+    migrate_memory_chunks_to_memories(store.path)
+
+    assert mem_mig.repair_profile_memory_kinds(store.path) == 0
+    assert not (tmp_path / "agent.db.pre-0125-kind-repair").exists()

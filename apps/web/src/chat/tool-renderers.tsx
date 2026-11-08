@@ -5,7 +5,7 @@ import { Badge } from "@protolabsai/ui/primitives";
 
 import { FS_LINK_TOOLS, FsToolOutput } from "./fsToolRenderers";
 import { parseMultimodalEnvelope, type MultimodalEnvelope } from "./multimodalEnvelope";
-import { humanizeSeconds, parseWaitInput, summarizeThen, type WaitInfo } from "./waitInfo";
+import { humanizeSeconds, resolveWaitInfo, summarizeThen, type WaitInfo } from "./waitInfo";
 
 // Renders a tool's input/output as real components instead of a raw JSON blob.
 //
@@ -67,12 +67,10 @@ export function ToolValue({
     return <ErrorBlock text={text} />;
   }
   // `wait` (#1914): the agent yielded ON PURPOSE and scheduled its own resume — say so,
-  // instead of a generic success string the user can't act on. Derived from the INPUT args
-  // (`{seconds, then}`), the structured side of the call; the output string stays untouched
-  // server-side. An unparseable args preview (800-char truncation, mid-stream) falls through
-  // to the plain render.
+  // instead of a generic success string. Recover truncated args from the confirmation;
+  // fall through to plain rendering if neither supplies a duration.
   if (role === "output" && tool === "wait") {
-    const info = parseWaitInput(input);
+    const info = resolveWaitInfo(input, raw);
     if (info) return <WaitBlock info={info} />;
   }
   // Tool-specific output renderers (known starter-tool formats).

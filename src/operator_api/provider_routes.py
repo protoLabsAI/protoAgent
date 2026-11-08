@@ -494,7 +494,7 @@ def register_provider_routes(app) -> None:
         if entry is None:
             raise HTTPException(status_code=404, detail=f"no provider named {pid!r}")
         if entry.type == "openai-compat":
-            from graph.config_io import list_gateway_models
+            from graph.providers.discovery import cached_gateway_models
 
             # ONLY this connection's endpoint and key. Falling back to `model.api_key` /
             # `model.api_base` would send one connection's credential to another's
@@ -508,14 +508,16 @@ def register_provider_routes(app) -> None:
                     status_code=400,
                     detail=f"{entry.id!r} has no base URL configured — set one before probing it.",
                 )
-            models, error = await asyncio.to_thread(
-                partial(list_gateway_models, base, (entry.api_key or "").strip(), allow_env_key=False)
+            # Live (`refresh=True`): the operator asked. A success also refreshes the
+            # cached list the Settings pickers read, so a just-added model shows up there.
+            listed = await asyncio.to_thread(
+                partial(cached_gateway_models, base, (entry.api_key or "").strip(), allow_env_key=False, refresh=True)
             )
-            return {"models": models, "error": error}
-        from graph.providers.discovery import list_provider_models
+            return {"models": listed.models, "error": listed.error}
+        from graph.providers.discovery import cached_provider_models
 
-        models, error = await asyncio.to_thread(list_provider_models, entry.type, cfg)
-        return {"models": models, "error": error}
+        listed = await asyncio.to_thread(partial(cached_provider_models, entry.type, cfg, refresh=True))
+        return {"models": listed.models, "error": listed.error}
 
     # Raw model passthrough (#4608) — POST /api/models/{connection}/v1/chat/completions. A sibling
     # of the registry surface: it is keyed by the SAME connection ids this module owns, so it

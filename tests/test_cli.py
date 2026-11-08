@@ -271,3 +271,12 @@ def test_ready_line_formats_the_url_a_user_opens():
     assert server._ready_line("0.0.0.0", 7870, "none") == "API ready → http://127.0.0.1:7870"
     # A concrete non-loopback host is shown verbatim.
     assert server._ready_line("192.168.1.5", 7870, "console") == "Console ready → http://192.168.1.5:7870/app"
+
+
+def test_down_with_a_corrupt_pid_in_the_pidfile_does_not_crash(monkeypatch, tmp_path, capsys):
+    """A non-numeric pid reads as "no pid", as `_our_server` already does (QA panel, #4865)."""
+    monkeypatch.setattr(cli, "_read_pidfile", lambda: {"pid": "not-a-pid", "port": 65531})
+    monkeypatch.setattr(cli, "_port_open", lambda port, *a, **k: False)
+    monkeypatch.setattr(cli, "_pid_path", lambda: tmp_path / "corrupt.pid")
+    assert cli._cmd_down([]) == 0
+    assert "not running" in capsys.readouterr().out

@@ -49,6 +49,19 @@ def _write_tool_telemetry(store, row):
         _TELEMETRY_SLOTS.release()
 
 
+def _result_failed(result, text: str) -> bool:
+    """Did this tool result report a failure?
+
+    The standard signal is the result's ``status``: a tool that refuses raises
+    ``ToolException`` and its ``handle_tool_error`` turns that into a ToolMessage with
+    ``status="error"`` (the chat card also closes as an X on it). The text is
+    unchanged by that, so it can't be read off the words. Tools that still return a
+    plain ``"Error..."`` string are counted too, as before; that prefix is the older
+    convention many core tools keep.
+    """
+    return getattr(result, "status", None) == "error" or text.startswith("Error")
+
+
 def _record_tool_telemetry(request, result, error_class, started):
     """Capture caller context and enqueue one content-free row, best-effort."""
     try:
@@ -74,7 +87,7 @@ def _record_tool_telemetry(request, result, error_class, started):
         ) if edge_id else None
         content = getattr(result, "content", None)
         text = "" if content is None else str(content)
-        ok = not error_class and not text.startswith("Error")
+        ok = not error_class and not _result_failed(result, text)
         row = {
             "ts": datetime.now(UTC).isoformat(),
             "session_id": tracing.current_session_id() or ledger.current_session_id(),
@@ -216,7 +229,7 @@ class AuditMiddleware(AgentMiddleware):
             result_content = getattr(result, "content", None)
             if result_content is not None:
                 content = str(result_content)[:200]
-            success = not content.startswith("Error")
+            success = not _result_failed(result, content)
 
             safe_args = redact(args)
             safe_content = redact(content)
@@ -303,7 +316,7 @@ class AuditMiddleware(AgentMiddleware):
             result_content = getattr(result, "content", None)
             if result_content is not None:
                 content = str(result_content)[:200]
-            success = not content.startswith("Error")
+            success = not _result_failed(result, content)
 
             safe_args = redact(args)
             safe_content = redact(content)

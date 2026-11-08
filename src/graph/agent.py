@@ -25,7 +25,9 @@ from graph.middleware.knowledge import KnowledgeMiddleware
 from graph.middleware.memory import SessionSummaryMiddleware
 from graph.middleware.message_capture import MessageCaptureMiddleware
 from graph.state import ProtoAgentState
+from graph.tool_renames import LEGACY_TOOL_RENAMES
 from graph.subagents.config import SUBAGENT_REGISTRY, BackgroundSpawnRefused
+from graph.tool_errors import return_tool_exceptions
 from tools.lg_tools import SUBAGENT_DENIED_TOOLS, drop_disabled_tools, get_all_tools
 from tools.session import _session_id_from
 
@@ -33,12 +35,8 @@ logger = logging.getLogger(__name__)
 
 # Subagent tool-list compatibility only; remove once fleet plugins and configs
 # have moved over (tracked on #4555). Never register these as tool aliases.
-_SUBAGENT_TOOL_NAME_MIGRATIONS = {
-    "memory_ingest": "memory_save",
-    "memory_recall": "memory_search",
-    "forget_memory": "memory_forget",
-    "memory_stats": "memory_list",
-}
+# The map itself lives in graph.tool_renames, shared with every other tool-list reader.
+_SUBAGENT_TOOL_NAME_MIGRATIONS = LEGACY_TOOL_RENAMES
 _SUBAGENT_TOOL_WARNINGS: set[tuple[str, str, str]] = set()
 
 
@@ -1490,7 +1488,7 @@ async def run_manual_subagent(
         from tools.fs_tools import build_fs_tools
 
         all_tools.extend(build_fs_tools(config))
-    all_tools = drop_disabled_tools(all_tools)
+    all_tools = return_tool_exceptions(drop_disabled_tools(all_tools))
     held = set(getattr(config, "tools_subagent_only", None) or [])
     for factory in STATE.plugin_late_tool_factories:
         try:
@@ -1505,7 +1503,7 @@ async def run_manual_subagent(
     # Operator denylist over the extras (get_all_tools filtered the core set) — the
     # out-of-graph runner must not see tools the lead graph dropped (parity, see
     # create_agent_graph).
-    all_tools = drop_disabled_tools(all_tools)
+    all_tools = return_tool_exceptions(drop_disabled_tools(all_tools))
     tool_map = {t.name: t for t in all_tools}
     gap = _dispatch_tool_gap(config, subagent_type, prompt, tool_map, tool_map) if check_prompt_tools else None
     if gap:
@@ -2082,7 +2080,7 @@ def create_agent_graph(
     # get_all_tools already filtered the core set, but extra_tools bypassed it. Applied
     # BEFORE the subagent tool_map snapshot below so a disabled tool can't ride into a
     # subagent via an allowlist either.
-    all_tools = drop_disabled_tools(all_tools, disabled_tools)
+    all_tools = return_tool_exceptions(drop_disabled_tools(all_tools, disabled_tools))
 
     # Held tools remain explicitly resolvable from the task snapshot; final lead
     # tools are published separately below.
@@ -2126,7 +2124,7 @@ def create_agent_graph(
     # still bridgeable from a script. This is also what makes ``tools.disabled:
     # [run_command]`` actually work (#1527-era gap: the filter used to live only
     # inside get_all_tools, which fs tools bypass).
-    all_tools = drop_disabled_tools(all_tools, disabled_tools)
+    all_tools = return_tool_exceptions(drop_disabled_tools(all_tools, disabled_tools))
 
     # Subagent-only tools (config ``tools.subagent_only``, ADR 0117). ``_build_task_tools``
     # above already snapshotted its tool map, so an in-graph subagent allowlisting one
@@ -2160,7 +2158,7 @@ def create_agent_graph(
     # above (so their inputs were final), which means their outputs haven't met the
     # filter yet: without this pass ``tools.disabled: [execute_code]`` would silently
     # re-bind. Everything else is already filtered, so only late-seam names can drop.
-    all_tools = drop_disabled_tools(all_tools, disabled_tools)
+    all_tools = return_tool_exceptions(drop_disabled_tools(all_tools, disabled_tools))
 
     # Deferred tools (ADR 0005 #3) — opt-in progressive disclosure. The
     # search_tools meta-tool is built over the full set (so it can surface any
@@ -2176,7 +2174,7 @@ def create_agent_graph(
         # the final filter above), which a Tools-tab row toggle would surface as a
         # switch that snaps back on. Everything else was already filtered, so only
         # search_tools can drop here.
-        all_tools = drop_disabled_tools(all_tools, disabled_tools)
+        all_tools = return_tool_exceptions(drop_disabled_tools(all_tools, disabled_tools))
 
     # Record the FINAL bound toolset so a runtime change is observable to the agent and
     # not only to the process (#2640). Here, after every filter and append, is the only

@@ -34,7 +34,7 @@ import { useUI } from "../state/uiStore";
 import { SHOW_ELAPSED_AFTER_MS, formatElapsed, useElapsed } from "./elapsed";
 import { ToolValue } from "./tool-renderers";
 import { CHARS_PER_TOKEN, toolCostTokens } from "./toolCost";
-import { humanizeSeconds, parseWaitInput } from "./waitInfo";
+import { humanizeSeconds, resolveWaitInfo, summarizeThen } from "./waitInfo";
 
 /** Map a tool name to a recognizable icon; falls back to a generic wrench. */
 /** A delegate's call, by ACP's own classification of it — its name is free text
@@ -81,7 +81,7 @@ function cardLabel(call: ToolCall): ReactNode {
     // A failed schedule ("Error: …" output) keeps the bare label — its card already
     // reads as an error; an ETA would claim a wait that never got scheduled.
     const failed = call.status === "error" || /^error\b/i.test((call.output ?? "").trim());
-    const info = failed ? null : parseWaitInput(call.input);
+    const info = failed ? null : resolveWaitInfo(call.input, call.output);
     if (info) {
       return (
         <>
@@ -124,6 +124,12 @@ function isBackgroundDispatch(call: ToolCall): boolean {
   } catch {
     return false;
   }
+}
+
+/** Successful waits stay visible when the rest of the turn folds (#4852). */
+function isSettledWait(call: ToolCall): boolean {
+  return call.name === "wait" && call.status === "done" && !call.stopped
+    && resolveWaitInfo(call.input, call.output) !== null;
 }
 
 /**
@@ -309,9 +315,12 @@ export function ToolCalls({
   // SETTLED (turn done for this block): a lone finished tool renders inline (no pointless
   // "1 tool" chip); a real fan-out (≥2) stays folded. The bg chip rides along either way.
   if (settled.length >= 2) {
+    const waits = settled.filter(isSettledWait);
+    const folded = settled.filter((call) => !isSettledWait(call));
     return (
       <ToolCardList className="tool-calls">
-        {chip(settled.length, settled)}
+        {folded.length > 0 && chip(folded.length, folded)}
+        <Fragment key="waits">{waits.map(group)}</Fragment>
         {bgChip}
       </ToolCardList>
     );
@@ -550,6 +559,21 @@ function ToolGroup({
       {body}
     </ToolCard>
   );
+  const waitInfo = isSettledWait(call) ? resolveWaitInfo(call.input, call.output) : null;
+  if (waitInfo) {
+    return (
+      <>
+        {card}
+        <div className="tool-wait-summary">
+          <Hourglass size={12} />
+          <span>
+            Waiting ~{humanizeSeconds(waitInfo.seconds)}
+            {waitInfo.then ? ` · resumes with: ${summarizeThen(waitInfo.then)}` : ""}
+          </span>
+        </div>
+      </>
+    );
+  }
   if (!liveProgress) return card;
   return (
     <>

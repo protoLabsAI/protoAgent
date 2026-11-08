@@ -591,3 +591,23 @@
   flex: none;
   opacity: 0.7;
 }
+
+/* The settled wait stays readable outside the collapsed card and tool fold (#4852). */
+.tool-wait-summary {
+  display: flex;
+  align-items: center;
+  gap: var(--pl-space-1_5);
+  padding-left: var(--pl-space-2_5);
+  min-width: 0;
+  color: var(--pl-color-fg-muted);
+  font-size: var(--pl-font-size-xs);
+  white-space: nowrap;
+}
+.tool-wait-summary svg {
+  flex: none;
+}
+.tool-wait-summary span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
