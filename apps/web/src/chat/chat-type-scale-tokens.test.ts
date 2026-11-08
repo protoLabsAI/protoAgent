@@ -96,7 +96,8 @@ describe("Chat type scale → DS tokens (#3688 part 4)", () => {
     // base, mirroring the report chip → 38.
     // Then two more when plain notes became NoteCards: the `.note-card__title` and
     // `.note-card__body` (sm), while the note wrapper keeps its one reset (base) → 40.
-    expect(tokenCount(chatCss)).toBe(40);
+    // + the standing-instruction ledger strip (xs), Part of #4861.
+    expect(tokenCount(chatCss)).toBe(41);
     expect(tokenCount(promptviewerCss)).toBe(12);
     expect(tokenCount(chatComponentCss)).toBe(11);
     expect(tokenCount(hitlCss)).toBe(7);
