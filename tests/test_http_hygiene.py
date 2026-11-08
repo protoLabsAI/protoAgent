@@ -25,6 +25,9 @@ import warnings
 
 import pytest
 
+# Imports security.devices (platform-branching file locking) for the /api/devices tests.
+pytestmark = pytest.mark.platform_sensitive
+
 _SECRET = "hygiene-secret"
 
 
