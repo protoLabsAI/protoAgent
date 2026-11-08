@@ -262,6 +262,11 @@ _TOOL_CATEGORY = {
     "task_list": "Tasks",
     "task_update": "Tasks",
     "task_close": "Tasks",
+    # Directives (ADR 0127 D6)
+    "record_directive": "Directives",
+    "list_directives": "Directives",
+    "fulfil_directive": "Directives",
+    "revoke_directive": "Directives",
     # Goals
     "set_goal": "Goals",
     # Delegation (subagents)
@@ -942,6 +947,16 @@ def _operator_chat_commands() -> dict:
             "kind": "control",
             "description": "List the system lifecycle events and their configured reactions + plugin hooks.",
             "usage": "/lifecycle",
+        }
+    )
+    # /directives (ADR 0127 D6) — this chat's ledger of operator directives and approvals;
+    # `/directives revoke <id>` withdraws one as the operator. Reserved like /goal.
+    commands.append(
+        {
+            "name": "directives",
+            "kind": "control",
+            "description": "List the standing directives and approvals the agent recorded in this chat.",
+            "usage": "/directives   ·   /directives revoke <id> [reason]",
         }
     )
     commands.extend(resolve_slash_commands())

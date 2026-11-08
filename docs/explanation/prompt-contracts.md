@@ -31,7 +31,7 @@ the equivalence, so the labels annotate the real prompt). Section order:
 | 3 | `Managed projects` | `_build_projects_section(projects)` | `projects` non-empty and at least one listed filesystem operation reachable |
 | 4 | `Collaboration` | `_build_collaboration_section()` | a delegate registry has names and `delegate_to` is reachable (#3042) |
 | 5 | `Context` | the `context` argument under a `# Context` heading | legacy callers only — no runtime caller passes it since ADR 0108 D2 (context is a projected message) |
-| 6 | `Operating model` | `_build_operating_model(bound_tool_names)` | at least one autonomous primitive is bound (goal / tasks / schedule / watch / wait) |
+| 6 | `Operating model` | `_build_operating_model(bound_tool_names)` | at least one autonomous primitive is bound (goal / tasks / schedule / watch / wait / memory / directives) |
 | 7 | `Guidelines` | inline, fork-override point | always; the async-work rule only when an async capability is bound |
 
 **Deliberately excluded:** retrieved memory, the prior-session digest, the
@@ -166,9 +166,9 @@ billing).
 | Contract / section | Chars | ≈ tokens |
 |--------------------|------:|---------:|
 | Lead · `Subagents` (3 lead-visible entries) | 1,612 | 403 |
-| Lead · `Operating model` (all capabilities) | 1,099 | 274 |
+| Lead · `Operating model` (all capabilities) | 1,605 | 401 |
 | Lead · `Guidelines` (all capabilities) | 718 | 179 |
-| **Lead · doctrine total (ex-SOUL)** | **3,429** | **857** |
+| **Lead · doctrine total (ex-SOUL)** | **3,935** | **983** |
 | Lead · minimal (no subagents, no autonomous tools) | 340 | 85 |
 | Subagent · smallest (`self-improve`) | 1,091 | 272 |
 | Subagent · largest lead-visible (`researcher`) | 3,317 | 829 |
@@ -186,6 +186,13 @@ they introduce no per-call formatting or ordering changes.
 
 The SOUL is excluded on purpose: it is operator content with no engineering ceiling.
 
+The `Operating model` ceiling rose from 1,350 to 1,900 for the directive-ledger line
+([ADR 0127](/adr/0127-compaction-fidelity) D6): "record the operator's approval with
+`record_directive`, and check STANDING DIRECTIVES before deciding you lack approval". The
+section had already grown to 1,325 characters with the memory line, so the new line
+could not fit under the old ceiling. The line is one sentence and is bound only when the
+directive tools are.
+
 ## Budget ceilings
 
 `tests/test_prompt_budgets.py` asserts each figure below. Ceilings are the measured
@@ -197,7 +204,7 @@ duplicate section fails CI with the actual and allowed sizes printed.
 |--------|----------------:|
 | Lead doctrine total (ex-SOUL, all capabilities) | 4,200 |
 | Lead `Subagents` section | 2,000 |
-| Lead `Operating model` section | 1,350 |
+| Lead `Operating model` section | 1,900 |
 | Lead `Guidelines` section | 900 |
 | Lead minimal (no subagents, no autonomous tools) | 410 |
 | Any subagent prompt | 8,500 |

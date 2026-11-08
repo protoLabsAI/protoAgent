@@ -401,6 +401,17 @@ def is_interactive_origin(origin: object) -> bool:
     return str(origin or "").strip().lower() in _INTERACTIVE_ORIGINS
 
 
+def operator_chat_turn(origin: object) -> bool:
+    """Authenticate and classify a turn before carrying its provenance into tool state.
+
+    Empty origin is the console streaming protocol; None is unclassified. Never infer
+    authority from a session id or caller-supplied metadata's trust label.
+    """
+    from observability.tracing import current_trust_tier
+
+    return isinstance(origin, str) and is_interactive_origin(origin) and current_trust_tier() == "operator"
+
+
 @contextlib.contextmanager
 def _interactive_turn_priority(origin: object):
     """Run an operator-watched turn under the ADR 0115 D6 ``interactive`` model-limiter class,

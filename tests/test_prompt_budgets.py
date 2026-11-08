@@ -30,7 +30,7 @@ from graph.subagents.config import SUBAGENT_REGISTRY
 
 LEAD_DOCTRINE_MAX = 4_200  # Subagents + Operating model + Guidelines, all capabilities bound
 LEAD_SUBAGENTS_MAX = 2_000
-LEAD_OPERATING_MODEL_MAX = 1_350
+LEAD_OPERATING_MODEL_MAX = 1_900  # +directives (ADR 0127 D6)
 LEAD_GUIDELINES_MAX = 900
 LEAD_MINIMAL_MAX = 410  # no subagents, no autonomous primitives
 SUBAGENT_PROMPT_MAX = 8_500

@@ -1090,6 +1090,7 @@ async def _run_turn_stream(
     reasoning_effort=None,
     incognito=False,
     subagent_fence=None,
+    operator_chat_turn=False,
 ):
     """Run one graph turn over ``astream_events``.
 
@@ -1124,7 +1125,10 @@ async def _run_turn_stream(
     graph_input = (
         Command(
             resume=await _chat()._resume_payload(config, resume_value),
-            **(await _resume_fence_update(config, subagent_fence)),
+            update={
+                **(await _resume_fence_update(config, subagent_fence)).get("update", {}),
+                "operator_chat_turn": bool(operator_chat_turn),
+            },
         )
         if resume_value is not None
         # Prepend any completed background-job notifications (ADR 0050) so the model
@@ -1154,6 +1158,7 @@ async def _run_turn_stream(
             # (#4144). Always stamped: a `/v1` or `/api/chat` turn on this session stamped False,
             # and the checkpointed channel would otherwise carry that into this one.
             "renders_ui": True,
+            "operator_chat_turn": bool(operator_chat_turn),
         }
     )
     from observability import metrics

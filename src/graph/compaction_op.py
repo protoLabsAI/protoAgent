@@ -12,7 +12,10 @@ The pass, for one thread:
 2. Render the **full** transcript and archive it into the searchable history
    store (``kind="archive"``, ``namespace="chat-archive:<session_id>"``)
    so nothing is lost — the raw history stays recallable via ``recall_session``.
-3. Summarize the conversation with the cheap aux model.
+3. Summarize the messages being removed with the compaction engine
+   (``graph/compaction_engine.py``, ADR 0127): the WHOLE span, chunked and folded
+   oldest to newest, seeded from a previous compaction's notes, with the
+   continuation prompt's required sections — on the cheap aux model.
 4. Rewrite the checkpoint to ``[RemoveMessage(REMOVE_ALL_MESSAGES), summary,
    *recent_tail]`` via ``aupdate_state`` — so the next turn carries the whole
    thread's context at a fraction of the token cost.
@@ -50,17 +53,43 @@ import logging
 
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
+from graph import compaction_engine
 from graph.conversation_harvest import (
     _DEFAULT_HISTORY_STORE,
-    _default_summarizer,
     archive_payload,
-    render_transcript,
     resolve_history_store,
 )
 
 log = logging.getLogger(__name__)
 
 _DEFAULT_KEEP_MESSAGES = 20
+
+
+def _aux_model_name(config) -> str:
+    from graph.agent import _resolve_aux_model
+
+    return _resolve_aux_model(config, getattr(config, "compaction_model", "") or "")
+
+
+async def continuation_summarizer(prompt: str, config) -> str:
+    """The default summarizer: one engine prompt in, the aux model's notes out."""
+    from graph.llm import create_llm
+
+    llm = create_llm(config, model_name=_aux_model_name(config))
+    resp = await llm.ainvoke([HumanMessage(content=prompt)])
+    return compaction_engine.message_text(resp)
+
+
+def _default_budget_chars(config) -> int:
+    """The engine's per-call budget from the aux model's window; the conservative
+    fallback when it is unknown."""
+    try:
+        from graph.model_window import context_window_for_slot
+
+        window = context_window_for_slot(config, _aux_model_name(config) or getattr(config, "model_name", None))
+    except Exception:  # noqa: BLE001 — unknown window → the engine's fallback
+        window = None
+    return compaction_engine.summarizer_budget_chars(window)
 
 
 def _safe_cut_index(messages: list, keep_last: int) -> int:
@@ -127,8 +156,9 @@ async def compact_thread(
     thread_id: str,
     session_id: str,
     *,
-    summarizer=_default_summarizer,
+    summarizer=continuation_summarizer,
     keep_recent: int | None = None,
+    budget_chars: int | None = None,
     force: bool = False,
     history_store=_DEFAULT_HISTORY_STORE,
 ) -> dict:
@@ -145,6 +175,10 @@ async def compact_thread(
     with a loud log instead of refusing, and a summarizer failure falls back to
     a stub summary line. The manual ``/compact`` path never sets this; its
     strict never-lossy refusal stands.
+
+    ``summarizer(prompt, config) -> str`` is called once per chunk of the span with the
+    compaction engine's continuation prompt (ADR 0127). ``budget_chars`` sizes those
+    chunks; by default it comes from the aux model's window.
     """
     if graph is None or checkpointer is None:
         return _refused("no_checkpointer", kept=0)
@@ -227,10 +261,24 @@ async def compact_thread(
             thread_id,
         )
 
-    # Summarize the capped tail (cost-bounded classification-grade work); the head
-    # beyond the cap is already archived + searchable, not lost.
+    # The span the rewrite removes — the engine reads ALL of it (no tail trim, tool
+    # results clipped head+tail); a previous compaction's notes at its head seed the fold.
+    cut = _safe_cut_index(messages, keep)
+    if budget_chars is None and summarizer is continuation_summarizer:
+        budget_chars = await asyncio.to_thread(_default_budget_chars, config)
+
+    async def _call(prompt: str):
+        return await summarizer(prompt, config)
+
+    archived = bool(entry_ids)
     try:
-        summary = (await summarizer(render_transcript(messages), config)).strip()
+        summary = (
+            await compaction_engine.asummarize_span(
+                messages[:cut], _call, budget_chars=budget_chars, session_id=session_id, archived=archived
+            )
+        ).strip()
+    except compaction_engine.EmptySummaryError:
+        summary = ""
     except Exception:
         if not force:
             # The archive already succeeded; a summarizer failure must not 500 or leave
@@ -256,8 +304,13 @@ async def compact_thread(
                 else ")"
             )
         )
+        # The operator's own words never depend on the summarizer (ADR 0127 D3): the
+        # verbatim block is built from the removed messages, so the stub carries it too.
+        summary = compaction_engine.with_operator_block(
+            summary,
+            compaction_engine.operator_messages_block(messages[:cut], session_id=session_id, archived=archived),
+        )
 
-    cut = _safe_cut_index(messages, keep)
     # Thinking blocks in the kept tail were produced with the now-summarized history in
     # front of them; Anthropic rejects them once that prefix changes (preserved thinking).
     from graph.message_blocks import without_thinking
@@ -268,14 +321,11 @@ async def compact_thread(
     from langgraph.graph.message import REMOVE_ALL_MESSAGES
 
     archived_note = (
-        f"the full transcript is archived; use recall_session(session_id={session_id!r})"
+        f"The full transcript is archived; use recall_session(session_id={session_id!r})."
         if entry_ids
-        else "the removed history was NOT archived"  # force-mode honesty — never claim an archive that didn't happen
+        else "The removed history was NOT archived."  # force-mode honesty — never claim an archive that didn't happen
     )
-    summary_msg = HumanMessage(
-        content=(f"Here is a summary of the earlier conversation ({archived_note}):\n\n{summary}"),
-        additional_kwargs={"lc_source": "compaction"},
-    )
+    summary_msg = compaction_engine.summary_message(summary, source="compaction", note=archived_note)
     await graph.aupdate_state(
         lg_config,
         {"messages": [RemoveMessage(id=REMOVE_ALL_MESSAGES), summary_msg, *recent_tail]},
@@ -300,7 +350,9 @@ async def compact_thread(
         len(recent_tail),
     )
     return {
-        "summary": summary,
+        # The notes alone: the verbatim operator block is the operator's own words, already
+        # in front of them — it rides the rewritten thread, not the result shown to them.
+        "summary": compaction_engine.split_operator_block(summary)[0],
         "archived_chunks": len(entry_ids),
         "kept": len(recent_tail),
         "removed": cut,

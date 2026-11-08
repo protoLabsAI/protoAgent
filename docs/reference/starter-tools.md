@@ -124,6 +124,19 @@ Defined in `tools/scheduler_tools.py` (`_build_task_tools`).
 | [`task_update(issue_id, status="", title="", description="", priority=-1, issue_type="")`](#task_update) | Change fields; `status` is `open\|in_progress\|blocked\|deferred\|closed`. |
 | [`task_close(issue_id, reason="")`](#task_close) | Close as done or won't-do. |
 
+### Directives — always bound, **lead agent only**
+
+The chat's ledger of the operator's standing instructions and approvals
+([ADR 0127](/adr/0127-compaction-fidelity) D6). Not on any subagent allowlist, and never
+deferred. Defined in `tools/directive_tools.py`; the store is `graph/directives.py`.
+
+| Tool | What it does |
+|---|---|
+| [`record_directive(quote, conditions="", scope="")`](#record_directive) | Record the operator's exact words as a standing directive for this chat. |
+| [`list_directives(include_closed=False)`](#list_directives) | This chat's directives. |
+| [`fulfil_directive(directive_id, reason)`](#fulfil_directive) | Close one as done. |
+| [`revoke_directive(directive_id, reason)`](#revoke_directive) | Close one the operator withdrew. |
+
 ### Inbox — bound when an `InboxStore` exists
 
 Built by default (absent only if the store fails to open).
@@ -727,6 +740,56 @@ def task_close(issue_id: str, reason: str = "") -> str
 ```
 
 Close an issue as done or won't-do, with an optional `reason`.
+
+## Directives
+
+A directive is an instruction or approval from the operator that outlives the turn it was
+given in: "cut the release once #A and #B merge; on a WARN or FAIL come back to me instead of
+merging". The ledger keeps it outside the transcript, so a compaction can't drop it. Every
+in-force directive of the current chat renders each turn in `<working_state>` under
+`STANDING DIRECTIVES (from the operator — in force until fulfilled or revoked)`, quoted
+verbatim. Each tool works only during a chat turn; without one it says so. The operator
+reads and revokes directives with `/directives` and the
+[chat-session API](/reference/operator-api#chat-sessions). See
+[Standing directives](/guides/scheduler#standing-directives).
+
+### `record_directive` {#record_directive}
+
+```python
+def record_directive(quote: str, conditions: str = "", scope: str = "") -> str
+```
+
+Record a new in-force directive for this chat. `quote` is the operator's words, copied, not
+paraphrased (up to 4,000 characters). `conditions` holds a trigger or stop rule and `scope`
+says what it covers (each up to 2,000 characters). Returns
+`"Recorded directive dir-<id>. …"`, or `"Error: …"` for an empty or oversized quote.
+
+### `list_directives` {#list_directives}
+
+```python
+def list_directives(include_closed: bool = False) -> str
+```
+
+This chat's in-force directives with their ids, quotes, conditions and scope.
+`include_closed=True` adds fulfilled and revoked ones, with who closed each and why.
+
+### `fulfil_directive` {#fulfil_directive}
+
+```python
+def fulfil_directive(directive_id: str, reason: str) -> str
+```
+
+Close a directive as done, so it stops riding every turn. `reason` is required. An id from
+another chat is not found.
+
+### `revoke_directive` {#revoke_directive}
+
+```python
+def revoke_directive(directive_id: str, reason: str) -> str
+```
+
+Close a directive the operator has withdrawn or replaced. `reason` is required; the agent is
+told never to revoke one on its own judgment.
 
 ## Inbox
 

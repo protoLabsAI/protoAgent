@@ -113,7 +113,10 @@ class SteeringMiddleware(AgentMiddleware):
                                 "text": "[an attached image was omitted: too large to send to the model]",
                             }
                         )
-        update: dict = {"messages": [HumanMessage(content=content)]}
+        from graph.compaction_engine import sent_at_kwargs
+
+        # Stamped like a chat message, so a compaction's verbatim operator block can date it.
+        update: dict = {"messages": [HumanMessage(content=content, additional_kwargs=sent_at_kwargs())]}
         # A message that arrived FENCED (#2972 — e.g. held behind a parked interrupt by
         # the HITL hold) carries its fence: the rest of the pass that reads it runs under
         # the intersection of every folded fence and the pass's own (narrowest wins), so

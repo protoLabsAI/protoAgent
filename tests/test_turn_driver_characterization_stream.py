@@ -195,6 +195,7 @@ async def test_golden_answer_with_a_tool_round_trip(env):
         "incognito": False,
         "subagent_fence": [],
         "renders_ui": True,  # the console / A2A stream renders artifacts (#4144)
+        "operator_chat_turn": False,  # no authenticated operator in these driver fixtures
     }
     assert config == {
         "configurable": {"thread_id": "a2a:s-golden"},
@@ -539,6 +540,7 @@ async def test_request_metadata_threads_into_the_graph_input(env):
         "reasoning_effort": "high",
         "subagent_fence": ["read_file", "3"],
         "renders_ui": True,
+        "operator_chat_turn": False,  # no authenticated operator in these driver fixtures
     }
     # Incognito: the trace keeps its structure but no content preview.
     assert "message_preview" not in env.trace.sessions[0]["metadata"]

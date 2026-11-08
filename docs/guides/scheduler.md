@@ -44,6 +44,56 @@ jobs, not one-shots. The local backend checks expiry after a successful fire,
 not at the exact TTL timestamp. They are not fields on the console's scheduler REST API,
 and its jobs do not acquire the tool's default TTL.
 
+## What the agent sees each turn
+
+The agent doesn't have to call `list_schedules()` to remember what it queued. Every
+turn, the `<working_state>` block shows its pending schedules, sorted by chat:
+
+- **This chat.** Each `wait` resume or schedule that fires into this chat, or that
+  this chat created, is shown with its next fire time, a note that it runs
+  automatically unless the agent cancels it with `cancel_schedule("<id>")`, and its
+  full instruction (up to 1,500 characters, with a marker if it's cut). At most five
+  are shown this way.
+- **Agent-wide.** Jobs not tied to any chat, such as an Activity-thread cron, and
+  recurring schedules made in other chats (they fire into Activity whichever chat is
+  open). One short line each.
+- **Other chats.** One-shot jobs that belong to another chat appear only as a count.
+
+The job whose fire started the current turn is marked `[FIRING NOW]`, so the agent
+doesn't take it for another queued wake. Active watches follow the same rules: a
+watch that reacts in this chat shows its full reaction prompt and a reminder that
+`clear_watch("<id>")` stops it. See
+[ADR 0127](/adr/0127-compaction-fidelity) D5.
+
+## Standing directives {#standing-directives}
+
+When you approve or instruct something that outlasts the current turn, the agent records
+it in the chat's directive ledger with `record_directive`, quoting your words. For example:
+
+> Once #4801 and #4808 have both merged, cut the release. If the review gives the release PR
+> a WARN or FAIL, come back to me instead of merging.
+
+Every turn after that, `<working_state>` shows it under **STANDING DIRECTIVES (from the
+operator — in force until fulfilled or revoked)**, verbatim, with any conditions. The
+ledger is stored outside the transcript, so a compaction can't drop the approval, and the
+agent checks the ledger before it decides it lacks approval. When the work is done the
+agent closes the directive with `fulfil_directive`.
+
+To see or withdraw what the agent holds:
+
+- Run `/directives` in the chat. It lists the directives in force and the closed ones, with
+  who closed each and why.
+- Run `/directives revoke <id> [reason]` to withdraw one. The agent stops seeing it on its
+  next model call.
+- Call `GET /api/chat/sessions/{id}/directives` and
+  `DELETE /api/chat/sessions/{id}/directives/{directive_id}` from a script. See
+  [Operator API](/reference/operator-api#chat-sessions).
+
+Directives belong to one chat; other chats don't see them. Deleting or clearing the chat
+removes its directives. There is no console panel yet. See
+[ADR 0127](/adr/0127-compaction-fidelity) D6 and the
+[directive tools](/reference/starter-tools#record_directive).
+
 ## Enabling / disabling
 
 Scheduling is on by default. Set `middleware.scheduler: false` to disable it,

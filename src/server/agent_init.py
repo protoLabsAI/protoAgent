@@ -448,6 +448,10 @@ def _init_langgraph_agent(headless_setup: bool = False):
 
     if STATE.tasks_store is None:  # may have been created early (pre-setup) for the routes
         STATE.tasks_store = TaskStore()  # in-process issue tracker (Sprint B), instance-scoped
+    if STATE.directive_store is None:
+        from graph.directives import DirectiveStore
+
+        STATE.directive_store = DirectiveStore()  # ADR 0127 D6 — per-chat directive ledger
     if STATE.storm_guard is None:
         from inbox import StormGuard
 

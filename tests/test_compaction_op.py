@@ -236,9 +236,15 @@ def test_compact_archive_is_searchable_in_a_real_store(tmp_path):
     assert res["archived_chunks"] >= 1 and res["removed"] == 4 and res["kept"] == 2
     assert res["summary"]
 
-    # (2) Live context collapsed to [summary, capital-of-France, Paris] — head GONE.
+    # (2) Live context collapsed to [summary, capital-of-France, Paris] — head GONE,
+    # except the operator's own words, which the summary carries verbatim (ADR 0127 D3).
     assert len(final) == 3
-    assert all("pumpernickel" not in (m.content or "") for m in final)
+    assert all("noted, pumpernickel" not in (m.content or "") for m in final)
+    from graph.compaction_engine import split_operator_block, summary_text_of
+
+    notes, _earlier, carried = split_operator_block(summary_text_of(final[0]))
+    assert "pumpernickel" not in notes
+    assert [e.text for e in carried] == ["my favorite bread is pumpernickel", "old filler two"]
 
     # (3) …but the removed head is preserved AND SEARCHABLE in the real store.
     hits = store.search("pumpernickel")

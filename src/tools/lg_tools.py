@@ -1051,6 +1051,11 @@ def get_all_tools(
         tools.extend(_build_inbox_tools(inbox_store))
     if tasks_store is not None:
         tools.extend(_build_task_tools(tasks_store))
+    # ADR 0127 D6 — the per-chat operator directive ledger. Always bound: an approval the
+    # operator gave must survive compaction whatever else is configured on.
+    from tools.directive_tools import build_directive_tools
+
+    tools.extend(build_directive_tools())
     from graph.goals.verifiers import plugin_verifier_names
 
     _has_verifiers = bool(plugin_verifier_names())
@@ -1128,6 +1133,12 @@ DEFERRED_BASE_TOOL_NAMES = frozenset(
         "task_batch",
         "run_workflow",
         "save_workflow",
+        # ADR 0127 D6 — never deferred: the agent must be able to record an approval the
+        # moment it is given and see/close the ledger without first searching for it.
+        "record_directive",
+        "list_directives",
+        "fulfil_directive",
+        "revoke_directive",
         SEARCH_TOOLS_NAME,
     }
 )
@@ -1135,10 +1146,16 @@ DEFERRED_BASE_TOOL_NAMES = frozenset(
 
 def resolve_deferred_keep(configured_keep) -> set[str]:
     """Resolve the always-on tool set for deferral: the configured override (if
-    any) else the built-in base. ``search_tools`` is always kept — without it the
-    agent could never load anything back."""
+    any) else the built-in base. ``search_tools`` and the four directive tools
+    (``DIRECTIVE_TOOL_NAMES``) are always kept, even against a configured override —
+    without ``search_tools`` the agent could never load anything back, and a deferred
+    directive tool would stop it recording or consulting an operator approval (ADR 0127 D6)
+    until it first searched for the tool."""
+    from tools.directive_tools import DIRECTIVE_TOOL_NAMES
+
     keep = {str(n) for n in (configured_keep or [])} or set(DEFERRED_BASE_TOOL_NAMES)
     keep.add(SEARCH_TOOLS_NAME)
+    keep.update(DIRECTIVE_TOOL_NAMES)
     return keep
 
 
