@@ -44,7 +44,7 @@ To cite an **issue** (or several PRs) instead, put it inside the bold lead yours
 `(#NNNN)`; the gate rejects it, because the stamp would land next to it. A ref at the end
 of the paragraph, outside the bold, doesn't count: the marketing `/changelog` bullet is
 derived from the `**…**` lead ALONE (`changelog.py scaffold` → `_titles`, #3291). That is
-why every bullet needs a bold lead (or a `#N` in its first clause); the PR gate checks it.
+why every bullet needs a bold lead; the PR gate checks it.
 
 ## What happens at release
 

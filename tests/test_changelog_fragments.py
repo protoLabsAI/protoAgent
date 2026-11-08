@@ -182,10 +182,13 @@ def test_lint_rejects_a_bullet_with_neither_a_bold_lead_nor_a_ref(tmp_path):
     assert "no **bold lead-in**" in problem and "plain.fixed.md" in problem
 
 
-def test_lint_accepts_a_plain_bullet_that_cites_a_ref(tmp_path):
+def test_lint_rejects_a_plain_bullet_even_with_a_ref(tmp_path):
+    """A `#N` doesn't excuse a missing bold lead: the CHANGELOG placement gate counts
+    entries by `- **`, so a plain bullet would be invisible to it (review on #4881)."""
     p = _frag(tmp_path, "2286.fixed.md", "- fleet stop no longer lies (#2286). Details\n")
 
-    assert cl.lint_fragments([p]) == []
+    (problem,) = cl.lint_fragments([p])
+    assert "no **bold lead-in**" in problem
 
 
 @pytest.mark.parametrize("ref", ["#NNNN", "#TBD", "#XXX", "#PR", "#?"])
@@ -274,7 +277,9 @@ def test_read_fragments_without_a_resolver_is_unchanged(tmp_path):
 
 # The resolver reads real git history, so these drive a throwaway repo.
 def _needs_git(fn):
-    return pytest.mark.platform_sensitive(pytest.mark.skipif(shutil.which("git") is None, reason="needs git")(fn))
+    # Skip only. The `platform_sensitive` mark goes on each test as a decorator, because
+    # tests/test_platform_sensitive_marks.py checks for it statically (review on #4881).
+    return pytest.mark.skipif(shutil.which("git") is None, reason="needs git")(fn)
 
 
 def _git(repo: Path, *args: str) -> None:

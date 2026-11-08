@@ -482,11 +482,14 @@ def lint_fragments(paths: list[Path]) -> list[str]:
         # One title per top-level bullet, in order (see `_titles`), so the two zip up.
         firsts = re.findall(r"^- +(.*)$", body, re.MULTILINE)
         for first, title in zip(firsts, titles):
-            if not first.startswith("**") and not _REF_RE.search(title):
+            # A bold lead is required even when the bullet cites '#N': only the lead survives
+            # into /changelog, and the CHANGELOG placement gate counts entries by `- **`, so a
+            # plain bullet would be invisible to it (review on #4881).
+            if not first.startswith("**"):
                 problems.append(
-                    f"{path.name}: the bullet '{title[:60]}' has no **bold lead-in** and no '#N', "
-                    f"so its /changelog line would name nothing — only the lead survives into the "
-                    f"release notes. Start it '- **Short summary.** Details…'; the release stamps "
+                    f"{path.name}: the bullet '{title[:60]}' has no **bold lead-in**. Only the lead "
+                    f"survives into the release notes, and the CHANGELOG placement check counts "
+                    f"entries by it. Start it '- **Short summary.** Details…'; the release stamps "
                     f"the PR number into the lead (see changelog.d/README.md)."
                 )
                 break
