@@ -9,6 +9,7 @@ reads only a bounded tail so a large log can't OOM a read.
 
 import json
 import os
+import threading
 from collections import OrderedDict
 from datetime import datetime, timezone
 from pathlib import Path
@@ -30,6 +31,12 @@ class AuditLogger:
         self._base = Path(path) if path else None
         self._resolved: Path | None = None
         self._session_stats: "OrderedDict[str, dict]" = OrderedDict()
+        # log() runs on the event loop (async AuditMiddleware) AND on worker threads
+        # (plugin install audits via asyncio.to_thread, the sync ToolNode executor path)
+        # against this one module singleton, so the get/insert/evict/move_to_end and the
+        # counter + tools_used updates are serialized, as is get_session_stats' snapshot
+        # (#4201). NEVER held across the audit file write.
+        self._stats_lock = threading.Lock()
 
     def _ensure_path(self) -> Path | None:
         """Resolve + create the audit path. Memoized. ``None`` if the dir isn't
@@ -106,20 +113,24 @@ class AuditLogger:
             except OSError:
                 pass
 
-        stats = self._session_stats.get(session_id)
-        if stats is None:
-            stats = {"tool_calls": 0, "successes": 0, "failures": 0, "total_ms": 0, "tools_used": set()}
-            self._session_stats[session_id] = stats
-            # Cap the dict — evict the oldest sessions so a long-lived process
-            # serving many sessions doesn't leak memory.
-            while len(self._session_stats) > _MAX_SESSIONS:
-                self._session_stats.popitem(last=False)
-        else:
-            self._session_stats.move_to_end(session_id)
-        stats["tool_calls"] += 1
-        stats["successes" if success else "failures"] += 1
-        stats["total_ms"] += duration_ms
-        stats["tools_used"].add(tool)
+        # The file write above is outside the lock; only the shared in-memory
+        # stats are serialized — the get/insert/evict (or move_to_end) and the
+        # counter + tools_used updates must not interleave across threads (#4201).
+        with self._stats_lock:
+            stats = self._session_stats.get(session_id)
+            if stats is None:
+                stats = {"tool_calls": 0, "successes": 0, "failures": 0, "total_ms": 0, "tools_used": set()}
+                self._session_stats[session_id] = stats
+                # Cap the dict — evict the oldest sessions so a long-lived process
+                # serving many sessions doesn't leak memory.
+                while len(self._session_stats) > _MAX_SESSIONS:
+                    self._session_stats.popitem(last=False)
+            else:
+                self._session_stats.move_to_end(session_id)
+            stats["tool_calls"] += 1
+            stats["successes" if success else "failures"] += 1
+            stats["total_ms"] += duration_ms
+            stats["tools_used"].add(tool)
 
     def get_recent(self, n: int = 20, session_id: str | None = None) -> list[dict[str, Any]]:
         path = self._ensure_path()
@@ -155,17 +166,21 @@ class AuditLogger:
         return entries
 
     def get_session_stats(self, session_id: str) -> dict[str, Any]:
-        stats = self._session_stats.get(session_id, {})
-        if not stats:
-            return {"tool_calls": 0}
-        return {
-            "tool_calls": stats["tool_calls"],
-            "successes": stats["successes"],
-            "failures": stats["failures"],
-            "total_ms": stats["total_ms"],
-            "avg_ms": stats["total_ms"] // max(stats["tool_calls"], 1),
-            "tools_used": sorted(stats.get("tools_used", set())),
-        }
+        # Snapshot under the lock so sorted(tools_used) can't trip "set changed
+        # size during iteration" against a concurrent log(), and the returned
+        # counters are mutually consistent (#4201).
+        with self._stats_lock:
+            stats = self._session_stats.get(session_id, {})
+            if not stats:
+                return {"tool_calls": 0}
+            return {
+                "tool_calls": stats["tool_calls"],
+                "successes": stats["successes"],
+                "failures": stats["failures"],
+                "total_ms": stats["total_ms"],
+                "avg_ms": stats["total_ms"] // max(stats["tool_calls"], 1),
+                "tools_used": sorted(stats.get("tools_used", set())),
+            }
 
 
 def _sanitize_args(args: dict[str, Any]) -> dict[str, Any]:
