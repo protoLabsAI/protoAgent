@@ -215,6 +215,37 @@ functions/tools) so your plugin still loads + tests host-free. The surface:
 These generalize the patterns the SpaceTraders two-loop fleet proved (its `manage-the-fleet`
 skill is the worked example: a deterministic engine steered by an agentic OODA loop).
 
+### Where your plugin's own files go (`sdk.plugin_store`)
+For a SQLite database, cache, or exports, ask the SDK for your writable directory:
+
+```python
+from graph import sdk
+
+db = sdk.plugin_store(plugin_id=registry.plugin_id) / "state.db"   # your dir, created for you
+exports = sdk.plugin_store("exports", plugin_id=registry.plugin_id)  # an optional subdir under it
+```
+
+`plugin_store` creates the directory and returns a `Path` at exactly
+**`<instance root>/<plugin_id>[/<subdir>]`**. In `graph.sdk`, it calls
+`instance_paths().store(plugin_id)`, which returns `instance_root / plugin_id`.
+The dev sandbox and each fleet member therefore have separate stores.
+
+- **Never hand-roll a path** such as `<instance>/plugin-data/<id>` or an absolute sandbox
+  directory; use the SDK so the path follows the running instance.
+- **Your `plugin_id` can't collide with core's data.** An id that names a core store
+  (`memory`, `knowledge`, `media`, `goals`, `tasks`, …) is **rejected at plugin load**, because
+  `plugin_store(plugin_id="memory")` would hand you core's own `memory` directory.
+- `subdir` must stay inside your store — an absolute or `..`-escaping value raises `ValueError`
+  rather than writing somewhere unexpected.
+- **Under the host-free testkit** (`install_host_stubs`), the call returns a created directory
+  under a temporary root, so tools run unchanged and need no fallback path. Install fresh
+  stubs per test for a per-test temp dir: the root is allocated once per stub installation,
+  and calls sharing that installation share the root. Calling `install_host_stubs` again
+  leaves existing stubs in place; it also leaves an importable real host in place.
+
+Keep runtime state out of the plugin installation directory, where updates or reinstalls
+can replace it; write to the store instead.
+
 ## 6. Test it — live, no restart
 You don't need to restart to try a plugin you built. With **plugin-devkit** enabled,
 the whole loop is tool-driven (ADR 0096): scaffold → edit → test → hot-swap.

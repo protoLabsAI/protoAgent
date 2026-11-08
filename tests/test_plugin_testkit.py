@@ -475,3 +475,59 @@ def test_plugin_store_stub_uses_one_root_per_install():
     root_a = store_a(plugin_id="demo").parent
     root_b = store_b(plugin_id="demo").parent
     assert root_a != root_b
+
+
+def test_loaded_plugin_tool_writes_through_plugin_store_host_free(tmp_path, monkeypatch):
+    # #4808 acceptance item 2: a plugin whose TOOL calls sdk.plugin_store runs unchanged under
+    # load_plugin + install_host_stubs. The tests above exercise the stub seam directly; this one
+    # drives it the way a real plugin does — load the package, register(), invoke the @tool — and
+    # proves the write lands under the stub's temp root, not a real instance dir. We mask graph.sdk
+    # with the stub because in-repo install_host_stubs no-ops the real sdk (which would resolve to
+    # the live instance root); masking exercises exactly the standalone code path a vendored plugin
+    # runs, and keeps the test off the operator's real ~/.protoagent.
+    pid = "store-writer"
+    pkg_dir = tmp_path / pid
+    pkg_dir.mkdir()
+    (pkg_dir / "__init__.py").write_text(
+        "def register(registry):\n"
+        "    from . import tools\n"
+        "    registry.register_tool(tools.save)\n",
+        encoding="utf-8",
+    )
+    (pkg_dir / "tools.py").write_text(
+        "from langchain_core.tools import tool\n"
+        "\n"
+        "@tool\n"
+        "def save(text: str) -> str:\n"
+        '    """Persist text in the plugin\'s own store and return the file path."""\n'
+        "    from graph.sdk import plugin_store\n"
+        '    path = plugin_store(plugin_id="store-writer") / "state.txt"\n'
+        '    path.write_text(text, encoding="utf-8")\n'
+        "    return str(path)\n",
+        encoding="utf-8",
+    )
+
+    specs = testkit._default_stubs()
+    monkeypatch.setitem(sys.modules, "graph.sdk", testkit._StubModule("graph.sdk", specs["graph.sdk"]))
+    testkit.install_host_stubs()  # no-op for the real in-repo host; stubs an absent one standalone
+
+    try:
+        pkg = testkit.load_plugin(pkg_dir, pid)
+        reg = testkit.FakeRegistry(plugin_id=pid)
+        pkg.register(reg)
+        assert len(reg.tools) == 1
+
+        out = reg.tools[0].invoke({"text": "hello"})
+        written = Path(out)
+        assert written.is_file()
+        assert written.read_text(encoding="utf-8") == "hello"
+        # It landed under the stub's per-install temp root as <root>/<plugin_id>/state.txt — no
+        # real instance dir touched.
+        from graph.sdk import plugin_store
+
+        assert written.parent.samefile(plugin_store(plugin_id=pid))
+        assert plugin_store.root is not None and written.parent.name == pid
+    finally:
+        name = testkit.plugin_module_name(pid)
+        for m in [n for n in list(sys.modules) if n == name or n.startswith(name + ".")]:
+            sys.modules.pop(m, None)
