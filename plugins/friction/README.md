@@ -53,6 +53,23 @@ mise. Only 4 (`ls`, `cat`, `grep`) duplicated a tool it had. Because the group r
 the agent was also told *"minor x131: reached for escape hatch 'run_command'"* in its
 working state every turn, which nudged it away from its main tool.
 
+## Reading the ledger
+
+`GET /api/plugins/friction/` (and the legacy `/api/friction`) returns grouped rows by
+default and one row per entry with `grouped=false`. Every row, in both shapes and in the
+hub's fleet rollup, carries the same three tool fields:
+
+| Field | Meaning |
+|---|---|
+| `tool` | The tool the friction is about, or `null` |
+| `plugin` | The id of the plugin that owns `tool`, or `null` (core tools have none) |
+| `tool_unbound` | `true` when the agent named a tool it doesn't have, otherwise `false` |
+
+A grouped row is `tool_unbound` if any entry in it was, so one missing-tool report is
+never hidden by the repeats around it. Its `tool` and `plugin` come from the first entry
+that names a tool. The ledger file itself stays compact and writes these keys only when
+they are set. `protoagent fleet friction --json` returns the same shape.
+
 ## Config
 
 `friction:` in the agent config, editable in **Settings ▸ Plugins ▸ Friction Log** (read

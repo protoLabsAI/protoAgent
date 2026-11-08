@@ -482,6 +482,22 @@ def read_entries(kind: str = "", include_resolved: bool = False) -> list[dict]:
     return out
 
 
+def row_shape(rec: dict) -> dict:
+    """One ledger record as every read path returns it: ``tool``, ``plugin`` and
+    ``tool_unbound`` are ALWAYS present.
+
+    ``_log`` writes those keys only when they are set, so a record read back verbatim had
+    no ``tool`` key at all when no tool was named and no ``plugin`` key for a core tool —
+    and a triager reading ``protoagent fleet friction --json --raw`` could not tell "this
+    field is unset" from "this member's core predates the field". Unset reads as ``None``
+    (``tool``/``plugin``) or ``False`` (``tool_unbound``); the ledger itself is untouched."""
+    out = dict(rec)
+    out["tool"] = rec.get("tool") or None
+    out["plugin"] = rec.get("plugin") or None
+    out["tool_unbound"] = bool(rec.get("tool_unbound"))
+    return out
+
+
 def entry_id(kind: str, summary: str) -> str:
     """A short, stable handle for one grouped row — what ``resolve_friction(id=…)`` takes.
 
@@ -542,10 +558,14 @@ def grouped_entries(kind: str = "", include_resolved: bool = False) -> list[dict
                 "summary": key[1],
                 "severity": rec.get("severity", "minor"),
                 "source": rec.get("source", ""),
-                "tool": rec.get("tool", ""),
-                # The owning plugin id (core tools: ""), so the read API — and
-                # `protoagent fleet friction --json` reading it — can route a row to a repo.
-                "plugin": rec.get("plugin", ""),
+                # Always present — None when unset (see ``row_shape``). The owning plugin
+                # id (core tools: None) lets the read API — and `protoagent fleet friction
+                # --json` reading it — route a row to a repo.
+                "tool": rec.get("tool") or None,
+                "plugin": rec.get("plugin") or None,
+                # True when ANY record in the group named a tool that wasn't bound: one
+                # missing-tool report is never lost to the repeats around it.
+                "tool_unbound": bool(rec.get("tool_unbound")),
                 "suggest": rec.get("suggest", ""),
                 "detail": rec.get("detail", ""),
                 "count": 1,
@@ -571,6 +591,10 @@ def grouped_entries(kind: str = "", include_resolved: bool = False) -> list[dict
         g["count"] += 1
         g["last_seen"] = max(g["last_seen"], ts)
         g["_last_idx"] = idx
+        if not g["tool"] and rec.get("tool"):
+            # The first record that names a tool supplies the group's tool and its owner.
+            g["tool"], g["plugin"] = rec.get("tool"), rec.get("plugin") or None
+        g["tool_unbound"] = g["tool_unbound"] or bool(rec.get("tool_unbound"))
         g["first_seen"] = min(g["first_seen"], ts) if g["first_seen"] else ts
         rec_resolved = str(rec.get("resolved_at", ""))
         g["resolved_at"] = max(g["resolved_at"], rec_resolved) if (g["resolved_at"] and rec_resolved) else ""
@@ -1443,7 +1467,7 @@ def _build_router(*, legacy: bool = False):
         if kind and kind not in _KINDS:
             return {"error": f"kind must be one of {_KINDS}", "items": [], "total": 0}
         items = (grouped_entries(kind, include_resolved=resolved) if grouped
-                 else list(reversed(read_entries(kind, include_resolved=resolved))))
+                 else [row_shape(r) for r in reversed(read_entries(kind, include_resolved=resolved))])
         capped = items[: max(1, min(int(limit or 100), 500))]
         return {
             "items": capped,
@@ -1614,14 +1638,22 @@ async def fleet_rollup(*, timeout_s: float = 4.0) -> dict:
                 row = merged[key] = {
                     "kind": key[0], "summary": key[1],
                     "severity": item.get("severity", "minor"),
-                    "source": item.get("source", ""), "tool": item.get("tool", ""),
-                    "plugin": item.get("plugin", ""),
+                    "source": item.get("source", ""),
+                    # Same shape as a member's own rows (``row_shape``); a member on an older
+                    # core may send "" or omit them, which reads as unset.
+                    "tool": item.get("tool") or None,
+                    "plugin": item.get("plugin") or None,
+                    "tool_unbound": False,
                     "detail": item.get("detail", ""), "count": 0,
                     "first_seen": str(item.get("first_seen") or ""),
                     "last_seen": str(item.get("last_seen") or ""),
                     "resolved_at": "", "agents": [],
                 }
             row["count"] += int(item.get("count") or 1)
+            if not row["tool"] and item.get("tool"):
+                row["tool"], row["plugin"] = item.get("tool"), item.get("plugin") or None
+            # Any member's row flagged unbound flags the merged row, as within one ledger.
+            row["tool_unbound"] = row["tool_unbound"] or bool(item.get("tool_unbound"))
             row["agents"].append({"name": result["name"], "count": int(item.get("count") or 1)})
             # One member calling it major makes the whole row major — the fleet's worst
             # experience of a rough edge is the one worth acting on.

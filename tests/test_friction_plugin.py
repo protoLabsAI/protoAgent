@@ -156,12 +156,100 @@ def test_read_api_rows_carry_tool_and_plugin(ledger, monkeypatch):
     assert grouped["run-failure tool is clumsy"]["plugin"] == "github"
     # Every grouped row carries both keys, even the core-tool row with no owner.
     assert grouped["read_file keeps truncating"]["tool"] == "read_file"
-    assert grouped["read_file keeps truncating"]["plugin"] == ""
+    assert grouped["read_file keeps truncating"]["plugin"] is None
 
     raw = {r["summary"]: r for r in
            client.get("/api/friction", params={"grouped": False}).json()["items"]}
     assert raw["run-failure tool is clumsy"]["tool"] == "github_run_failure"
     assert raw["run-failure tool is clumsy"]["plugin"] == "github"
+
+
+_ROW_FIELDS = ("tool", "plugin", "tool_unbound")
+
+
+def _friction_client():
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from plugins import friction
+
+    app = FastAPI()
+    app.include_router(friction._build_router(), prefix="/api/plugins/friction")
+    app.include_router(friction._build_router(legacy=True))
+    return TestClient(app)
+
+
+def test_every_read_path_carries_tool_plugin_and_tool_unbound(ledger):
+    """Stress test 0.231.0: raw rows had no `tool` key when unset and never `plugin` for a
+    core tool, and no read path returned `tool_unbound`. Every row, on both routes and in
+    both shapes, now carries all three — None/False when unset."""
+    from plugins import friction
+
+    friction._log("harness", "plugin tool row", "d", "minor", "agent", tool_name="github_run_failure", plugin="github")
+    friction._log("harness", "core tool row", "d", "minor", "agent", tool_name="read_file")
+    friction._log("harness", "missing tool row", "d", "minor", "agent", tool_name="frobnicate", tool_unbound=True)
+    friction._log("model", "no tool row", "d", "minor", "agent")
+    client = _friction_client()
+
+    expected = {
+        "plugin tool row": ("github_run_failure", "github", False),
+        "core tool row": ("read_file", None, False),
+        "missing tool row": ("frobnicate", None, True),
+        "no tool row": (None, None, False),
+    }
+    for path in ("/api/friction", "/api/plugins/friction/"):
+        for grouped in (True, False):
+            items = client.get(path, params={"grouped": grouped}).json()["items"]
+            assert len(items) == 4
+            for item in items:
+                assert all(k in item for k in _ROW_FIELDS), (path, grouped, sorted(item))
+                assert tuple(item[k] for k in _ROW_FIELDS) == expected[item["summary"]], (path, grouped)
+    # The ledger on disk keeps its compact shape — normalising is a read-side concern.
+    assert "plugin" not in _recs(ledger)[1] and "tool" not in _recs(ledger)[3]
+
+
+def test_a_group_is_tool_unbound_when_any_of_its_records_is(ledger):
+    """Grouping collapses repeats; one missing-tool report among them must survive it. The
+    group's tool comes from the first record that names one."""
+    from plugins import friction
+
+    friction._log("harness", "no frobnicate", "d", "minor", "agent")
+    friction._log("harness", "no frobnicate", "d", "minor", "agent", tool_name="frobnicate", tool_unbound=True)
+    friction._log("harness", "no frobnicate", "d", "minor", "agent", tool_name="frobnicate")
+
+    (g,) = friction.grouped_entries()
+    assert g["count"] == 3
+    assert g["tool"] == "frobnicate" and g["plugin"] is None
+    assert g["tool_unbound"] is True
+
+
+def test_fleet_rollup_rows_carry_tool_plugin_and_tool_unbound(monkeypatch, tmp_path):
+    """The fleet rollup merges member rows; it keeps the same three fields, and a member on
+    an older core that sends "" or omits them reads as unset."""
+    from plugins import friction
+
+    monkeypatch.setenv("FRICTION_LOG", str(tmp_path / "friction.jsonl"))
+    monkeypatch.setattr(
+        "graph.fleet.supervisor.list_remotes",
+        lambda: [{"name": "old", "url": "http://a", "token": "t"}, {"name": "new", "url": "http://b", "token": "t"}],
+    )
+    payloads = {
+        "http://a": [
+            {"kind": "harness", "summary": "s", "tool": "", "count": 1},
+            {"kind": "model", "summary": "bare", "count": 1},
+        ],
+        "http://b": [
+            {"kind": "harness", "summary": "s", "tool": "frobnicate", "plugin": None, "tool_unbound": True, "count": 2}
+        ],
+    }
+
+    async def _fake(client, member):
+        return {"name": member["name"], "items": payloads[member["url"]]}
+
+    monkeypatch.setattr(friction, "_member_friction", _fake)
+    rows = {r["summary"]: r for r in asyncio.run(friction.fleet_rollup())["items"]}
+    assert (rows["s"]["tool"], rows["s"]["plugin"], rows["s"]["tool_unbound"]) == ("frobnicate", None, True)
+    assert (rows["bare"]["tool"], rows["bare"]["plugin"], rows["bare"]["tool_unbound"]) == (None, None, False)
 
 
 def test_observe_tools_feeds_the_bound_name_validation(monkeypatch):
