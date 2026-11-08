@@ -216,31 +216,35 @@ These generalize the patterns the SpaceTraders two-loop fleet proved (its `manag
 skill is the worked example: a deterministic engine steered by an agentic OODA loop).
 
 ### Where your plugin's own files go (`sdk.plugin_store`)
-Need a file of your own — a SQLite db, a cache, exports? Ask the SDK for your directory;
-never hand-roll a path:
+For a SQLite database, cache, or exports, ask the SDK for your writable directory:
+
 ```python
 from graph import sdk
 
 db = sdk.plugin_store(plugin_id=registry.plugin_id) / "state.db"   # your dir, created for you
 exports = sdk.plugin_store("exports", plugin_id=registry.plugin_id)  # an optional subdir under it
 ```
-`plugin_store` resolves to **`<instance root>/<plugin_id>[/<subdir>]`** (it's
-`instance_paths().store(plugin_id)` — `instance_root / plugin_id` — in `graph.sdk`), creates
-the directory, and returns it as a `Path`. Because it lives under the *running* instance root
-(ADR 0004 / ADR 0065), the dev sandbox and every fleet member get their own copy for free —
-that isolation is exactly what you'd otherwise have to remember by hand. So:
-- **Never hard-code a path** like `~/.protoagent/plugin-data/<id>` or an absolute sandbox dir —
-  that re-implements instance scoping by hand and breaks the moment the instance moves.
+
+`plugin_store` creates the directory and returns a `Path` at exactly
+**`<instance root>/<plugin_id>[/<subdir>]`**. In `graph.sdk`, it calls
+`instance_paths().store(plugin_id)`, which returns `instance_root / plugin_id`.
+The dev sandbox and each fleet member therefore have separate stores.
+
+- **Never hand-roll a path** such as `<instance>/plugin-data/<id>` or an absolute sandbox
+  directory; use the SDK so the path follows the running instance.
 - **Your `plugin_id` can't collide with core's data.** An id that names a core store
   (`memory`, `knowledge`, `media`, `goals`, `tasks`, …) is **rejected at plugin load**, because
   `plugin_store(plugin_id="memory")` would hand you core's own `memory` directory.
 - `subdir` must stay inside your store — an absolute or `..`-escaping value raises `ValueError`
   rather than writing somewhere unexpected.
-- **Under the host-free testkit** (`install_host_stubs`), `plugin_store` returns a per-test
-  **temp dir** instead of a real instance root, so a tool that writes under its store runs in
-  your suite unchanged — no fallback path to code around the missing host. (Still keep runtime
-  state *out of the plugin dir itself* — an update or reinstall wipes it; this is the dir to
-  write to instead.)
+- **Under the host-free testkit** (`install_host_stubs`), the call returns a created directory
+  under a temporary root, so tools run unchanged and need no fallback path. Install fresh
+  stubs per test for a per-test temp dir: the root is allocated once per stub installation,
+  and calls sharing that installation share the root. Calling `install_host_stubs` again
+  leaves existing stubs in place; it also leaves an importable real host in place.
+
+Keep runtime state out of the plugin installation directory, where updates or reinstalls
+can replace it; write to the store instead.
 
 ## 6. Test it — live, no restart
 You don't need to restart to try a plugin you built. With **plugin-devkit** enabled,
