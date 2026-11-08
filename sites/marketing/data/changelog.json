@@ -1,5 +1,14 @@
 [
   {
+    "version": "v0.233.1",
+    "date": "2026-11-08",
+    "changes": [
+      "Reliable concurrent knowledge and audit updates (#4201).",
+      "Plugin hot-reload documentation corrected (#4810).",
+      "Clarify plugin view lifecycle and image results (#4810)."
+    ]
+  },
+  {
     "version": "v0.233.0",
     "date": "2026-11-08",
     "changes": [
