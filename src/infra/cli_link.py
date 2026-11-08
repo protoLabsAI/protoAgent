@@ -143,30 +143,66 @@ def unlink(link_dir: Path, target: Path | None) -> dict:
     return out
 
 
-def _print_human(cmd: str, res: dict) -> None:
-    if not res.get("ok", True):
-        print(f"protoagent cli {cmd}: {res.get('reason')}", file=sys.stderr)
-        if res.get("action") == "refused" and cmd == "link":
-            print("Remove it first, or re-run with --force to replace it.", file=sys.stderr)
-        return
-    action = res.get("action")
-    if action in ("created", "replaced"):
-        print(f"Linked {res['link']} -> {res['target']}")
-    elif action == "removed":
-        print(f"Removed {res['link']}")
-    elif cmd == "link":
-        print(f"Already linked: {res['link']} -> {res['points_to']}")
-    elif cmd == "unlink":
-        print(f"Nothing to remove at {res['link']}")
-    else:
-        print(f"{res['link']}: {res['state']}" + (f" -> {res['points_to']}" if res.get("points_to") else ""))
+def _tilde(path: str) -> str:
+    """``/Users/me/.local/bin`` -> ``~/.local/bin`` — shorter, and what the operator types."""
+    home = str(Path.home())
+    return "~" + path[len(home) :] if path == home or path.startswith(home + os.sep) else path
+
+
+def _path_advice(res: dict) -> list[str]:
+    """What still stands between the operator and typing ``protoagent`` (empty when nothing)."""
     p = res.get("path") or {}
     if not p.get("dir_on_path"):
-        d = str(Path(res["link"]).parent)
-        print(f"{d} is not on your PATH. Add it, e.g.:\n  echo 'export PATH=\"{d}:$PATH\"' >> ~/.zshrc")
-    elif cmd != "unlink" and not p.get("is_this_build"):
-        if p.get("which"):
-            print(f"Note: `protoagent` on your PATH still runs {p['which']} (it comes first); remove that one.")
+        d = _tilde(str(Path(res["link"]).parent)).replace("~", "$HOME", 1)
+        return [
+            "Your terminal can't find it yet. Run this once, then open a new terminal window:",
+            f"  echo 'export PATH=\"{d}:$PATH\"' >> ~/.zshrc",
+        ]
+    if not p.get("is_this_build") and p.get("which"):
+        return [
+            f"Your terminal still runs another protoagent first: {_describe(Path(p['which']))}.",
+            "Remove that one, then open a new terminal window.",
+        ]
+    return []
+
+
+def _print_human(cmd: str, res: dict) -> None:
+    """Plain-language output — the desktop tray shows this verbatim in its dialog."""
+    link = _tilde(res["link"]) if res.get("link") else ""
+    if not res.get("ok", True):
+        if res.get("action") == "refused" and cmd == "link":
+            print(f"There's already a protoagent command at {link}: {_describe(Path(res['link']))}.", file=sys.stderr)
+            print("Remove it and try again, or run `protoagent cli link --force` to replace it.", file=sys.stderr)
+        else:
+            print(f"protoagent cli {cmd}: {res.get('reason')}", file=sys.stderr)
+        return
+    action = res.get("action")
+    lines: list[str]
+    if cmd == "link":
+        lead = (
+            "The protoagent command is already installed."
+            if action == "none"
+            else "The protoagent command is installed."
+        )
+        advice = _path_advice(res)
+        lines = [lead, ""]
+        lines += advice or ["Try it in a terminal:", "  protoagent --help"]
+        lines += ["", f"It lives at {link} and stays current when the app updates."]
+    elif cmd == "unlink":
+        lines = [
+            f"Removed the protoagent command ({link})." if action == "removed" else f"Nothing to remove at {link}."
+        ]
+    else:
+        state = {
+            "linked": "installed, linked to this app",
+            "stale": "left by an earlier app build; run `protoagent cli link` to refresh it",
+            "foreign": f"not from this app ({_describe(Path(res['link']))})",
+            "absent": "not installed; run `protoagent cli link`",
+        }.get(res["state"], res["state"])
+        lines = [f"{link}: {state}"]
+        if res["state"] == "linked":
+            lines += _path_advice(res)
+    print("\n".join(lines))
 
 
 def run_cli_link_cli(argv: list[str]) -> int:
