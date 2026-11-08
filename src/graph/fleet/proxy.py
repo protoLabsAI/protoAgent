@@ -442,9 +442,10 @@ async def _forward_to_base(
 class _UpstreamStreamingResponse(StreamingResponse):
     """A StreamingResponse that releases its upstream however the response ends.
 
-    ``_pipe``'s own ``finally`` only runs once the body generator has STARTED. Behind a
-    ``BaseHTTPMiddleware`` (the hub's auth middleware is one), a client that leaves before the
-    response starts gets this response cancelled before the first ``__anext__`` — the generator
+    ``_pipe``'s own ``finally`` only runs once the body generator has STARTED. A client that
+    leaves before the response starts gets this response cancelled before the first
+    ``__anext__`` (Starlette's disconnect listener wins the race, or a ``BaseHTTPMiddleware``
+    in front cancels it — the hub's auth middleware was one until it went pure ASGI) — the generator
     never starts, its ``finally`` never runs, and the upstream stays checked out of the shared
     pool forever. Closing here as well covers that path; ``aclose`` is idempotent, and the close
     is shielded for the same level-triggered-cancellation reason as in ``_pipe``."""
@@ -1125,7 +1126,7 @@ async def forward_ws(slug: str, ws, path: str) -> None:
     a client WS to it (carrying the credential + subprotocols), and pumps frames both ways.
 
     **Auth.** The hub's default-deny auth is an HTTP middleware (``A2AAuthMiddleware`` is a
-    Starlette ``BaseHTTPMiddleware``, which skips non-HTTP scopes), so this ``@app.websocket``
+    pure-ASGI middleware that passes non-HTTP scopes straight through), so this ``@app.websocket``
     route runs with NO hub auth, and every credential decision is made here:
 
     - **host / local member (ADR 0089)** — ``_member_ws_query``: a presented ``?token=`` is

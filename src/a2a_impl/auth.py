@@ -39,7 +39,6 @@ import re
 import time
 from dataclasses import dataclass
 
-from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 
@@ -782,10 +781,54 @@ def _clear_trust_tier_telemetry(token) -> None:
         pass
 
 
-class A2AAuthMiddleware(BaseHTTPMiddleware):
-    """Default-deny auth: everything except the public allowlist requires auth."""
+class A2AAuthMiddleware:
+    """Default-deny auth: everything except the public allowlist requires auth.
+
+    Pure ASGI, not ``BaseHTTPMiddleware``. ``dispatch`` decides; a refusal is a response it
+    returns, and an admitted request runs the app with the server's own ``receive``/``send``.
+    Starlette's ``call_next`` buffers the app's messages through a stream and raises
+    ``RuntimeError("No response returned.")`` whenever the app ends without starting one. A
+    client that leaves before the headers does exactly that: a ``StreamingResponse`` sees the
+    disconnect and stops before ``http.response.start``. The hub logged each one as an ERROR
+    traceback (114 in one stress run, mostly ``/agents/<slug>/api/events``). Here the server
+    sees the app return, knows the client is gone, and says nothing. An app that returns no
+    response while the client is still connected is still an error: uvicorn logs
+    "ASGI callable returned without starting response." and answers 500.
+
+    Non-HTTP scopes (WebSocket, lifespan) pass straight through, as they did under
+    ``BaseHTTPMiddleware``: WebSocket routes authenticate themselves."""
+
+    def __init__(self, app) -> None:
+        self.app = app
+
+    async def __call__(self, scope, receive, send) -> None:
+        if scope.get("type") != "http":
+            await self.app(scope, receive, send)
+            return
+
+        started = False
+
+        async def tracking_send(message) -> None:
+            nonlocal started
+            if message.get("type") == "http.response.start":
+                started = True
+            await send(message)
+
+        async def call_next(_request: Request) -> None:
+            await self.app(scope, receive, tracking_send)
+
+        request = Request(scope, receive)
+        refusal = await self.dispatch(request, call_next)
+        if refusal is not None:
+            await refusal(scope, receive, send)
+        elif not started:
+            # Usually a client that left before the response began (the server stays quiet then).
+            # If it is still connected, the server logs and answers 500 itself.
+            logger.debug("[auth] %s %s ended without a response", scope.get("method"), scope.get("path"))
 
     async def dispatch(self, request: Request, call_next):
+        """The auth decision. Returns a refusal response, or ``None`` once ``call_next`` has
+        run the app for an admitted request (it answered on the real ``send``)."""
         path = request.url.path
         # The router dispatches ``scope["path"]``, not ``url.path`` — and the two differ: both
         # Starlettes drop a decoded tab/CR/LF from ``url.path`` (``urlsplit`` strips them), 1.7

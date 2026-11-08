@@ -504,6 +504,26 @@ async def _json_body(request: Request) -> dict:
     return body if isinstance(body, dict) else {}
 
 
+BODY_NOT_OBJECT = "body must be a JSON object"
+
+
+async def _json_object(request: Request) -> dict | None:
+    """The request's JSON object, or None when the body is empty, isn't JSON, or isn't an
+    object. For routes that need fields from the body: they answer 400 ``BODY_NOT_OBJECT``
+    instead of a field error about a field the caller never got to send."""
+    try:
+        body = await request.json()
+    except ValueError:  # empty, malformed JSON, or undecodable bytes
+        return None
+    return body if isinstance(body, dict) else None
+
+
+def _bad_body():  # noqa: ANN202
+    from fastapi.responses import JSONResponse
+
+    return JSONResponse({"ok": False, "error": BODY_NOT_OBJECT, "detail": BODY_NOT_OBJECT}, status_code=400)
+
+
 def _requested_kind(body: dict) -> str | None:
     """``"agent"`` / ``"device"`` from an operator-authed body, else None (unknown → caller's
     default). Never consulted on the UNAUTHENTICATED claim route: a code's kind is fixed at
@@ -849,7 +869,9 @@ def register_pairing_routes(app, agent_name=None) -> None:
                 refusal_body(message="Only a full-access device can mint an access token."),
                 status_code=403,
             )
-        body = await _json_body(request)
+        body = await _json_object(request)
+        if body is None:
+            return _bad_body()
         try:
             if body.get("scope", SCOPE_DEVICE) != SCOPE_DEVICE:
                 raise ValueError('scope must be "device"; use PATCH to promote a device')
@@ -971,7 +993,9 @@ def register_pairing_routes(app, agent_name=None) -> None:
         from a2a_impl.credential_scope import SCOPE_FULL, refusal_body
         from security.devices import rename_device, set_device_scope, validate_device_name
 
-        body = await _json_body(request)
+        body = await _json_object(request)
+        if body is None:
+            return _bad_body()
         has_name, has_scope = "name" in body, "scope" in body
         if not has_name and not has_scope:
             msg = "nothing to change: send name and/or scope"

@@ -264,7 +264,15 @@ def register_fleet_routes(app) -> None:
             raise HTTPException(400, str(exc))
 
     # HEAD rides the same auth + proxy as GET (#4258: a peer probing a member's media link).
-    @app.api_route("/agents/{slug}/{path:path}", methods=["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"])
+    # Left out of /openapi.json: FastAPI gives one route ONE operation id for all its methods,
+    # so seven methods here were seven operations sharing ``_agent_proxy_agents__slug___path__*``
+    # (a "Duplicate Operation ID" warning at every schema build). An opaque reverse proxy has
+    # no schema of its own to publish; each member's /openapi.json documents its real routes.
+    @app.api_route(
+        "/agents/{slug}/{path:path}",
+        methods=["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+        include_in_schema=False,
+    )
     async def _agent_proxy(slug: str, path: str, request: Request):
         """Reverse-proxy the console to a specific agent BY SLUG (ADR 0042 slug routing).
 
