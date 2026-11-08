@@ -7,8 +7,10 @@ import contextlib
 import json
 import logging
 import re
+import secrets
 import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable
+from time import monotonic
 from typing import Any
 
 from fastapi import Body, HTTPException, Request
@@ -1019,9 +1021,28 @@ def register_operator_routes(
             return StreamingResponse(_sse_event_stream(events_subscribe, since=since), media_type="text/event-stream")
 
     if events_publish is not None:
+        # App-local, bounded capabilities; restart invalidates them. Both routes inherit
+        # the API bearer gate. Bearer holders can still mint or publish without tokens.
+        view_tokens: dict[str, dict[str, Any]] = {}
+
+        @app.post("/api/events/publish-token")
+        async def _events_publish_token(body: dict = Body(...)):
+            plugin_id = body.get("plugin_id")
+            if not isinstance(plugin_id, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]{0,127}", plugin_id):
+                raise HTTPException(status_code=400, detail="invalid plugin id")
+            now = monotonic()
+            for key in list(view_tokens):
+                if view_tokens[key]["expires"] <= now:
+                    del view_tokens[key]
+            if len(view_tokens) >= 4096:
+                raise HTTPException(status_code=429, detail="too many active view publish tokens")
+            token = secrets.token_urlsafe(32)
+            view_tokens[token] = {"plugin_id": plugin_id, "expires": now + 86400,
+                                  "tokens": 20.0, "updated": now}
+            return {"token": token}
 
         @app.post("/api/events/publish")
-        async def _events_publish(body: dict = Body(...)):
+        async def _events_publish(request: Request, body: dict = Body(...)):
             """Publish an event to the bus from a client / plugin iframe (ADR 0039).
 
             The console relays sandboxed-iframe ``protoagent:publish`` messages here. Light
@@ -1038,5 +1059,18 @@ def register_operator_routes(
                 raise HTTPException(status_code=400, detail="data must be an object")
             if len(json.dumps(data)) > 64 * 1024:
                 raise HTTPException(status_code=413, detail="event payload too large (64KB cap)")
+            view_token = request.headers.get("X-Plugin-View-Token")
+            if view_token is not None:
+                now = monotonic()
+                guard = view_tokens.get(view_token)
+                if guard is None or guard["expires"] <= now:
+                    raise HTTPException(status_code=403, detail="invalid or expired view publish token")
+                if not topic.startswith(guard["plugin_id"] + "."):
+                    raise HTTPException(status_code=403, detail="topic outside view plugin namespace")
+                guard["tokens"] = min(20.0, guard["tokens"] + (now - guard["updated"]) * 10)
+                guard["updated"] = now
+                if guard["tokens"] < 1:
+                    raise HTTPException(status_code=429, detail="view publish rate limit exceeded")
+                guard["tokens"] -= 1
             events_publish(topic, data)
             return {"ok": True}

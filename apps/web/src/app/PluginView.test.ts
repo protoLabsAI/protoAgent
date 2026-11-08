@@ -20,7 +20,7 @@ import { useContextMenuStore } from "../contextMenu/store";
 import { registeredKeybindings } from "../ext/keybindingRegistry";
 import { useUI } from "../state/uiStore";
 import { postToPluginView, resetPluginViewInbox, takePluginViewMessages } from "../lib/pluginViewInbox";
-import { consoleTheme, namespacePublishTopic, PL_TOKEN_VARS, PluginView, pluginIdFromView, pluginMenuType } from "./PluginView";
+import { createPublishThrottle, consoleTheme, namespacePublishTopic, PL_TOKEN_VARS, PluginView, pluginIdFromView, pluginMenuType } from "./PluginView";
 import { routePluginCodeOpen } from "../codeviewer/fromPlugin";
 import { registerSlashDispatcher } from "../chat/slashDispatch";
 import { closeRunInspector, useRunInspector } from "../runs/store";
@@ -939,5 +939,150 @@ describe("PluginView — protoagent:run:open", () => {
     await post(frame.contentWindow, window.location.origin, { ...MSG, run_id: "has space" });
     await post(frame.contentWindow, window.location.origin, { ...MSG, run_id: 42 });
     expect(useRunInspector.getState().runId).toBeNull();
+  });
+});
+
+
+describe("createPublishThrottle", () => {
+  it("coalesces each topic for 100 ms with the last value winning", () => {
+    const throttle = createPublishThrottle();
+    throttle.push("a.x", { value: 1 }, 0);
+    throttle.push("a.x", { value: 2 }, 50);
+    throttle.push("a.y", {}, 60);
+    expect(throttle.drain(99)).toEqual({ events: [], drops: 1 });
+    expect(throttle.drain(100)).toEqual({ events: [
+      { topic: "a.x", data: { value: 2 } }, { topic: "a.y", data: {} },
+    ], drops: 0 });
+    expect(throttle.drain(200).events).toEqual([]);
+  });
+
+  it("allows 20 in a burst, drops excess, and refills 10 per second per view", () => {
+    const throttle = createPublishThrottle();
+    for (let i = 0; i < 25; i++) throttle.push(`a.${i}`, {}, 0);
+    const first = throttle.drain(100);
+    expect(first.events).toHaveLength(20);
+    expect(first.drops).toBe(5);
+    for (let i = 0; i < 12; i++) throttle.push(`a.${i}`, {}, 100);
+    const next = throttle.drain(1100);
+    expect(next.events).toHaveLength(10);
+    expect(next.drops).toBe(2);
+    const other = createPublishThrottle();
+    other.push("a.x", {}, 0);
+    expect(other.drain(100).events).toHaveLength(1);
+  });
+
+  it("bounds pending distinct topics and caps refill at the burst size", () => {
+    const throttle = createPublishThrottle();
+    for (let i = 0; i < 300; i++) throttle.push(`a.${i}`, {}, 0);
+    expect(throttle.drain(100)).toMatchObject({ drops: 280 });
+    for (let i = 0; i < 25; i++) throttle.push(`a.${i}`, {}, 100);
+    expect(throttle.drain(100000).events).toHaveLength(20);
+  });
+});
+
+
+describe("PluginView publish relay", () => {
+  let container: HTMLDivElement;
+  let root: Root;
+  const response = { ok: true, status: 200, json: async () => ({ token: "view-token" }) };
+  const view: PluginViewType = { id: "cadview", label: "CAD", path: "/plugins/cadview/view", key: "plugin:cadview:main" };
+
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval", "setTimeout", "clearTimeout", "performance"] });
+    container = document.createElement("div");
+    document.body.appendChild(container);
+    root = createRoot(container);
+  });
+
+  afterEach(() => {
+    act(() => root.unmount());
+    container.remove();
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  });
+
+  const advance = async () => {
+    await act(async () => { await vi.advanceTimersByTimeAsync(200); });
+  };
+  const post = (value: number, topic = "status") => {
+    const frame = container.querySelector("iframe")!;
+    window.dispatchEvent(new MessageEvent("message", {
+      source: frame.contentWindow, origin: window.location.origin,
+      data: { type: "protoagent:publish", topic, data: { value } },
+    }));
+  };
+
+  it("coalesces publishes with the plugin-bound token and cancels on unmount", async () => {
+    const fetchMock = vi.fn(async () => response);
+    const debug = vi.spyOn(console, "debug").mockImplementation(() => {});
+    vi.stubGlobal("fetch", fetchMock);
+    await act(async () => { root.render(h(PluginView, { view })); });
+    post(1);
+    post(2);
+    await advance();
+    const calls = fetchMock.mock.calls as unknown as Array<[string, RequestInit]>;
+    const mint = calls.find(([url]) => url.endsWith("/api/events/publish-token"));
+    expect(JSON.parse(mint![1].body as string)).toEqual({ plugin_id: "cadview" });
+    const publishes = calls.filter(([url]) => url.endsWith("/api/events/publish"));
+    expect(publishes).toHaveLength(1);
+    expect(publishes[0][1].headers).toMatchObject({ "X-Plugin-View-Token": "view-token" });
+    expect(JSON.parse(publishes[0][1].body as string)).toEqual({ topic: "cadview.status", data: { value: 2 } });
+    expect(debug).toHaveBeenCalledWith("[plugin publish] dropped 1 events (cadview)");
+    post(3);
+    act(() => root.unmount());
+    const count = fetchMock.mock.calls.length;
+    await advance();
+    expect(fetchMock).toHaveBeenCalledTimes(count);
+  });
+
+  it("does not publish after unmount while token minting is pending", async () => {
+    let finishMint!: (value: typeof response) => void;
+    const fetchMock = vi.fn((url: string) => url.endsWith("/api/events/publish-token")
+      ? new Promise<typeof response>((resolve) => { finishMint = resolve; })
+      : Promise.resolve(response));
+    vi.stubGlobal("fetch", fetchMock);
+    await act(async () => { root.render(h(PluginView, { view })); });
+    post(1);
+    await advance();
+    act(() => root.unmount());
+    await act(async () => { finishMint(response); });
+    expect(fetchMock.mock.calls.filter(([url]) => url.endsWith("/api/events/publish"))).toHaveLength(0);
+  });
+
+  it("never falls back to bearer-only publishing when minting fails", async () => {
+    const fetchMock = vi.fn(async (url: string) => url.endsWith("/api/events/publish-token")
+      ? { ...response, ok: false, status: 429 } : response);
+    vi.stubGlobal("fetch", fetchMock);
+    vi.spyOn(console, "debug").mockImplementation(() => {});
+    await act(async () => { root.render(h(PluginView, { view })); });
+    post(1);
+    await advance();
+    expect(fetchMock.mock.calls.some(([url]) => url.endsWith("/api/events/publish-token"))).toBe(true);
+    expect(fetchMock.mock.calls.some(([url]) => url.endsWith("/api/events/publish"))).toBe(false);
+  });
+
+  it("waits for every POST when one fails and counts only the failed event", async () => {
+    let finishPublish!: (value: typeof response) => void;
+    const fetchMock = vi.fn((url: string, init?: RequestInit) => {
+      if (!url.endsWith("/api/events/publish")) return Promise.resolve(response);
+      const { topic } = JSON.parse(init!.body as string);
+      if (topic === "cadview.failed") return Promise.reject(new Error("offline"));
+      if (topic === "cadview.pending") return new Promise<typeof response>((resolve) => { finishPublish = resolve; });
+      return Promise.resolve(response);
+    });
+    const debug = vi.spyOn(console, "debug").mockImplementation(() => {});
+    vi.stubGlobal("fetch", fetchMock);
+    await act(async () => { root.render(h(PluginView, { view })); });
+    post(1, "failed");
+    post(2, "pending");
+    await advance();
+    post(3, "next");
+    await advance();
+    const publishes = () => fetchMock.mock.calls.filter(([url]) => url.endsWith("/api/events/publish"));
+    expect(publishes()).toHaveLength(2);
+    expect(debug).toHaveBeenCalledWith("[plugin publish] dropped 1 event (transport unavailable)");
+    await act(async () => { finishPublish(response); });
+    await advance();
+    expect(publishes()).toHaveLength(3);
   });
 });
