@@ -344,6 +344,7 @@ def test_pr_for_fragment_uses_the_newest_add_of_a_reused_name(tmp_path):
 
 
 @_needs_git
+@pytest.mark.platform_sensitive  # shells out to git; the Windows lane must run it
 def test_pr_for_fragment_is_none_for_a_direct_push_or_uncommitted_file(tmp_path):
     repo = _repo(tmp_path)
     pushed = _commit_fragment(repo, "fix-a.fixed.md", "- **A.** b\n", "fix: pushed straight to main")
@@ -355,6 +356,7 @@ def test_pr_for_fragment_is_none_for_a_direct_push_or_uncommitted_file(tmp_path)
 
 
 @_needs_git
+@pytest.mark.platform_sensitive  # shells out to git; the Windows lane must run it
 def test_collate_cli_stamps_from_git_history(tmp_path, monkeypatch):
     """End to end through `changelog.py collate`, the step prepare-release.yml runs."""
     repo = _repo(tmp_path)
