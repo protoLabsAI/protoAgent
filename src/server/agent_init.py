@@ -610,6 +610,15 @@ def _migrate_memory_chunks(memory_store) -> None:
             )
     except Exception:  # noqa: BLE001 — a migration hiccup must never fail boot
         log.exception("[server] 0125 memory migration skipped")
+    # One-shot repair for rows v0.231.0 already migrated: untyped operator-profile rows
+    # (profile/abilities/voice domains) landed as kind=fact. Keyed on the migration's own
+    # pre-move snapshot, backed up, stamped; a no-op once done or on a fresh DB.
+    try:
+        from knowledge.memories_migration import repair_profile_memory_kinds
+
+        repair_profile_memory_kinds(path)
+    except Exception:  # noqa: BLE001 — a repair hiccup must never fail boot
+        log.exception("[server] 0125 profile-kind repair skipped")
 
 
 def _build_memory_store(config):
