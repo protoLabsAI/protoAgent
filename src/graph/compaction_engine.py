@@ -64,8 +64,9 @@ SUMMARY_PREFIX = (
 _SUMMARY_PREFIX_END = "]"
 
 #: Openings of summary messages written before ADR 0127: langchain's own
-#: ``_build_new_messages`` and the old manual ``/compact`` framing. A span that starts
-#: with one of these is seeded from it just the same.
+#: ``_build_new_messages`` and the old manual ``/compact`` framing. Used by
+#: :func:`summary_text_of` to strip the framing off a tagged legacy summary — detection
+#: itself keys on ``lc_source`` (see :func:`is_summary_message`), never on the prefix.
 LEGACY_SUMMARY_PREFIXES = (
     "Here is a summary of the conversation to date:",
     "Here is a summary of the earlier conversation",
@@ -101,12 +102,14 @@ def message_text(message) -> str:
 
 
 def is_summary_message(message) -> bool:
-    """Whether ``message`` is a previous compaction's summary (any framing, old or new)."""
+    """Whether ``message`` is a previous compaction's summary.
+
+    Only the ``additional_kwargs["lc_source"]`` tag decides this — the framing text is not
+    enough on its own. An untagged operator message that merely opens with a summary prefix
+    ("Here is a summary of the earlier conversation…") is the operator's own words and
+    renders whole as ``OPERATOR:``; it must not be mistaken for the fold's seed."""
     if not isinstance(message, HumanMessage):
         return False
-    text = message_text(message).lstrip()
-    if text.startswith(SUMMARY_PREFIX) or text.startswith(LEGACY_SUMMARY_PREFIXES):
-        return True
     return (getattr(message, "additional_kwargs", None) or {}).get("lc_source") in SUMMARY_SOURCES
 
 
@@ -442,6 +445,17 @@ def clip_middle(text: str, max_chars: int, *, what: str = "tool output") -> str:
     return f"{text[:head]}\n… [{omitted} chars of {what} omitted] …\n{tail_text}"
 
 
+#: Non-operator block bodies (tool results, system text, other) are indented by this so a
+#: line inside them that opens "OPERATOR:" or "YOU" can't be read as a role line by the
+#: summarizer — only a real operator / assistant block starts a line with its label.
+_BLOCK_INDENT = "    "
+
+
+def _indent_body(text: str) -> str:
+    """Indent every line of a block body so no inner line can forge a role label."""
+    return "\n".join(f"{_BLOCK_INDENT}{line}" for line in text.split("\n"))
+
+
 def _brief_args(args) -> str:
     try:
         rendered = json.dumps(args, ensure_ascii=False, default=str, sort_keys=True)
@@ -457,7 +471,7 @@ def render_message(message) -> str:
     if isinstance(message, ToolMessage):
         name = getattr(message, "name", None) or "tool"
         body = message_text(message).strip() or "(empty)"
-        return f"TOOL RESULT ({name}):\n{clip_middle(body, TOOL_RESULT_MAX_CHARS)}"
+        return f"TOOL RESULT ({name}):\n{_indent_body(clip_middle(body, TOOL_RESULT_MAX_CHARS))}"
     if isinstance(message, AIMessage):
         from graph.output_format import extract_output
 
@@ -482,9 +496,9 @@ def render_message(message) -> str:
         return f"OPERATOR: {_operator_words(message)}"
     if isinstance(message, SystemMessage):
         text = message_text(message).strip()
-        return f"SYSTEM: {clip_middle(text, TOOL_RESULT_MAX_CHARS, what='system text')}" if text else ""
+        return f"SYSTEM:\n{_indent_body(clip_middle(text, TOOL_RESULT_MAX_CHARS, what='system text'))}" if text else ""
     text = message_text(message).strip()
-    return f"{type(message).__name__}: {clip_middle(text, TOOL_RESULT_MAX_CHARS)}" if text else ""
+    return f"{type(message).__name__}:\n{_indent_body(clip_middle(text, TOOL_RESULT_MAX_CHARS))}" if text else ""
 
 
 # ── budget + chunking ────────────────────────────────────────────────────────
@@ -518,11 +532,44 @@ def window_of_model(model) -> int | None:
     return value if isinstance(value, int) and value > 0 else None
 
 
+#: The role labels a rendered block can open with. A block that is split across chunks
+#: repeats its label as ``<label> (continued): `` on every later slice, so a continuation
+#: never loses its speaker (a split operator message stays operator text). Declaration order
+#: here is not significant — :func:`_continuation_prefix` matches longest-label-first — but a
+#: shorter label that is a prefix of a longer one ("YOU" ⊂ "YOUR EARLIER COMPACTION NOTES")
+#: must never be allowed to mask it, so the match cannot rely on this tuple's order.
+_ROLE_LABELS = (
+    "OPERATOR",
+    "YOU (assistant)",
+    "YOU called",
+    "YOU",
+    "TOOL RESULT",
+    "SYSTEM",
+    "YOUR EARLIER COMPACTION NOTES",
+)
+
+
+def _continuation_prefix(block: str) -> str:
+    """``"<role> (continued): "`` for a block, so its later slices keep their role label.
+
+    Labels are matched longest-first so a shorter label that is a prefix of another
+    ("YOU" ⊂ "YOUR EARLIER COMPACTION NOTES") can never mask the longer one — a split
+    compaction-notes block stays ``YOUR EARLIER COMPACTION NOTES (continued): ``, not
+    ``YOU (continued): ``."""
+    first_line = block.split("\n", 1)[0]
+    for label in sorted(_ROLE_LABELS, key=len, reverse=True):
+        if first_line.startswith(label):
+            return f"{label} (continued): "
+    return "(continued): "
+
+
 def chunk_blocks(blocks: list[str], budget_chars: int) -> list[str]:
     """Group rendered blocks, in order, into chunks of at most ``budget_chars``.
 
     A single block longer than the budget (a very long operator message) is split across
-    chunks rather than trimmed — the engine never drops part of the span."""
+    chunks rather than trimmed — the engine never drops part of the span. Every slice after
+    the first carries the block's role label (``OPERATOR (continued): `` …), with room
+    reserved for that prefix so no slice — and so no chunk — goes over budget."""
     budget = max(_MIN_CHUNK_CHARS, int(budget_chars))
     chunks: list[str] = []
     current: list[str] = []
@@ -530,8 +577,11 @@ def chunk_blocks(blocks: list[str], budget_chars: int) -> list[str]:
     for block in blocks:
         pieces = [block]
         if len(block) > budget:
-            pieces = [block[i : i + budget] for i in range(0, len(block), budget)]
-            pieces = [pieces[0]] + [f"(continued) {p}" for p in pieces[1:]]
+            prefix = _continuation_prefix(block)
+            # Each later slice carries the prefix, so its content may only fill what is left.
+            slice_chars = max(1, budget - len(prefix))
+            raw = [block[i : i + slice_chars] for i in range(0, len(block), slice_chars)]
+            pieces = [raw[0]] + [f"{prefix}{p}" for p in raw[1:]]
         for piece in pieces:
             if current and size + len(piece) + 2 > budget:
                 chunks.append("\n\n".join(current))
