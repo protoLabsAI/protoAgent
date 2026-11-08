@@ -1353,8 +1353,8 @@ def search_scoped(knowledge_store, query: str, opts: ProjectionOptions) -> list[
     D3a) and deliverable-only (ADR 0108 D6 — rejected and expired rows never
     enter the prompt unasked; ``knowledge_search`` still reaches these knowledge
     rows, while ``memory_search`` searches the separate memories store and excludes
-    rejected and expired memories). A backend
-    whose ``search`` predates the ``deliverable`` and/or ``namespace`` kwargs
+    rejected and expired memories). A backend whose ``search`` predates the
+    ``deliverable`` and/or ``namespace`` kwargs
     gets the call it understands and a post-filter on each hit — the configured
     scope and the eligibility rule hold either way.
 
