@@ -90,6 +90,17 @@ def _reset_instance_paths(_isolate_instance_roots):
 
 
 @pytest.fixture(autouse=True)
+def _reset_model_list_cache():
+    """Provider model lists are cached process-wide (graph.providers.model_cache), so
+    one test's stubbed `/models` answer would otherwise be served to the next test."""
+    from graph.providers import model_cache
+
+    model_cache.clear()
+    yield
+    model_cache.clear()
+
+
+@pytest.fixture(autouse=True)
 def _isolate_injection_log(tmp_path, monkeypatch):
     """Point the per-turn injection log (ADR 0069 D6) at a per-test temp DB.
 

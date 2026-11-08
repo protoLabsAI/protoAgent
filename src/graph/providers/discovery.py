@@ -325,6 +325,45 @@ def list_provider_models(provider: str, config: "LangGraphConfig") -> tuple[list
     raise ValueError(f"not a native OAuth provider: {provider!r}")
 
 
+def cached_provider_models(provider: str, config: "LangGraphConfig", *, refresh: bool = False):
+    """:func:`list_provider_models` through the shared model-list cache.
+
+    Returns a :class:`graph.providers.model_cache.ModelList`. Settings and the pickers
+    read through this so a page load doesn't re-probe each subscription, concurrent
+    loads share one probe, and a transient probe failure serves the last good list
+    (``stale``) instead of dropping the lane's models. ``refresh=True`` is the explicit
+    "get models" probe: always live, and it refreshes the cache on success."""
+    from graph.providers import model_cache
+
+    provider = (provider or "").strip().lower()
+    # Looked up at call time (module global), so a patched lister is honoured.
+    return model_cache.get(
+        model_cache.native_key(provider),
+        lambda: list_provider_models(provider, config),
+        refresh=refresh,
+    )
+
+
+def cached_gateway_models(api_base: str, api_key: str = "", *, allow_env_key: bool = True, refresh: bool = False):
+    """``graph.config_io.list_gateway_models`` through the shared model-list cache."""
+    from graph.providers import model_cache
+
+    def _fetch() -> tuple[list[str], str]:
+        from graph.config_io import list_gateway_models
+
+        return list_gateway_models(api_base, api_key, allow_env_key=allow_env_key)
+
+    return model_cache.get(model_cache.gateway_key(api_base, api_key, allow_env_key), _fetch, refresh=refresh)
+
+
+def _fill_lane(lane: dict, result) -> None:
+    lane["models"], lane["error"] = result.models, result.error
+    if result.stale:
+        # The last good list, kept because the latest probe failed: still selectable,
+        # and `error` says why it may be out of date.
+        lane["stale"] = True
+
+
 def _is_auth_rejection(exc: Exception) -> bool:
     """Does this provider error mean "your token is no longer good"?
 
@@ -409,9 +448,12 @@ def available_model_lanes(config: "LangGraphConfig") -> list[dict]:
     A lane the operator can't use is still returned with ``configured: False`` and a
     reason: "sign in to use Claude" beats silently omitting it. Every probe is network
     I/O and every one is contained — one expired credential must not blank the picker.
-    """
-    from graph.config_io import list_gateway_models
 
+    Model lists come through :mod:`graph.providers.model_cache`: a recent list is served
+    without a probe, concurrent callers share one probe, and a lane whose probe fails
+    keeps its last good list with ``stale: True`` (and the probe's ``error``) rather than
+    vanishing from the options.
+    """
     lanes: list[dict] = []
     env_key = os.environ.get("OPENAI_API_KEY", "").strip()
     entries = list(getattr(config, "providers", []) or [])
@@ -461,7 +503,7 @@ def available_model_lanes(config: "LangGraphConfig") -> list[dict]:
                 try:
                     # No env fallback for a registered connection — a blank key means
                     # this endpoint needs none, not "borrow the global one".
-                    lane["models"], lane["error"] = list_gateway_models(base, key, allow_env_key=legacy)
+                    _fill_lane(lane, cached_gateway_models(base, key, allow_env_key=legacy))
                 except Exception as exc:  # noqa: BLE001 — one lane's outage is not the picker's
                     lane["error"] = str(exc)
             else:
@@ -476,7 +518,7 @@ def available_model_lanes(config: "LangGraphConfig") -> list[dict]:
             lane["error"] = "" if status.signed_in else (status.hint or "Not signed in.")
             if status.signed_in:
                 try:
-                    lane["models"], lane["error"] = list_provider_models(entry.type, config)
+                    _fill_lane(lane, cached_provider_models(entry.type, config))
                 except Exception as exc:  # noqa: BLE001
                     lane["error"] = str(exc)
         lanes.append(lane)
@@ -507,7 +549,7 @@ def available_model_lanes(config: "LangGraphConfig") -> list[dict]:
         }
         if status.signed_in:
             try:
-                lane["models"], lane["error"] = list_provider_models(native, config)
+                _fill_lane(lane, cached_provider_models(native, config))
             except Exception as exc:  # noqa: BLE001 — one lane's outage is not the picker's
                 lane["error"] = str(exc)
         lanes.append(lane)
