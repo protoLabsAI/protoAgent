@@ -1269,7 +1269,7 @@ def load_plugins(config, *, core_tool_names: set[str] | None = None) -> PluginLo
         # Carry the registry forward if it subscribed to the bus (ADR 0039, #4800): the server
         # binds its queued on() subscriptions once the bus is wired and tears this load's live
         # handlers down on the next reload. getattr so an older/duck-typed registry still loads.
-        if getattr(registry, "has_event_subscriptions", None) and registry.has_event_subscriptions():
+        if getattr(registry, "_has_event_subscriptions", None) and registry._has_event_subscriptions():
             result.event_subscriptions.append(registry)
         entry["loaded"] = True
         entry["tools"] = [t.name for t in kept]

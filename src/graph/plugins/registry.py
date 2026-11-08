@@ -540,22 +540,23 @@ class PluginRegistry:
         one authoritative signal, so ordering can't regress silently. ``register()`` often runs
         before the server has set ``HOST.on`` (desktop cold boot), and even when the bus is
         already up (a hot reload) deferring the bind lets the server tear the OUTGOING load's
-        handlers down FIRST, so a reload never stacks a second live handler.
-        ``bind_event_subscriptions()`` drains the queue once the bus is wired — the host drives
-        it right after wiring the bus and again at each (re)load commit, so by the time any
-        event is published the handler is live. Nothing publishes in the gap between ``on()``
-        and the bind, so the only observable change from binding inline is that gap."""
+        handlers down FIRST, so a reload never stacks a second live handler. A later host-driven
+        bind step drains the queue once the bus is wired — right after wiring it and again at
+        each (re)load commit, so by the time any event is published the handler is live. Nothing
+        publishes in the gap between ``on()`` and the bind, so the only observable change from
+        binding inline is that gap."""
         if not callable(handler):
             log.warning("[plugins] %s: on(%s) needs a callable handler", self.plugin_id, topic)
             return
         self._pending_subscriptions.append((topic, handler))
 
-    def bind_event_subscriptions(self, *, warn_if_unbound: bool = False) -> int:
+    def _bind_event_subscriptions(self, *, warn_if_unbound: bool = False) -> int:
         """Bind queued :meth:`on` subscriptions to the host event bus (ADR 0039, #4800).
 
-        ``register()`` can run before the bus is wired, so :meth:`on` queues each
+        Server-internal, not plugin-author SDK: the host (not a plugin's ``register()``)
+        drives it. ``register()`` can run before the bus is wired, so :meth:`on` queues each
         ``(topic, handler)``; this delivers them to ``HOST.on`` once it exists, keeping every
-        unsubscribe the bus returns (for :meth:`teardown_event_subscriptions`). Idempotent:
+        unsubscribe the bus returns (for :meth:`_teardown_event_subscriptions`). Idempotent:
         a pair that binds leaves the queue, so re-running it never double-subscribes.
 
         ``warn_if_unbound`` (the server passes it on the post-load / post-wire bind) logs a
@@ -588,11 +589,12 @@ class PluginRegistry:
                 )
         return len(self._pending_subscriptions)
 
-    def teardown_event_subscriptions(self) -> None:
+    def _teardown_event_subscriptions(self) -> None:
         """Unsubscribe every :meth:`on` handler this load bound (ADR 0039, #4800).
 
-        The server calls this on the OUTGOING registry before the reloaded one subscribes, so
-        a plugin reloaded N times leaves exactly ONE live handler on the bus — not N, each
+        Server-internal, not plugin-author SDK. The server calls this on the OUTGOING registry
+        before the reloaded one subscribes, so a plugin reloaded N times leaves exactly ONE
+        live handler on the bus — not N, each
         closed over a prior load's now-stale state. Also drops anything still queued (it never
         reached the bus). Best-effort per unsubscribe: one that raises can't block the rest."""
         for unsub in self._subscription_unsubs:
@@ -603,9 +605,10 @@ class PluginRegistry:
         self._subscription_unsubs = []
         self._pending_subscriptions = []
 
-    def has_event_subscriptions(self) -> bool:
+    def _has_event_subscriptions(self) -> bool:
         """True when this load registered any :meth:`on` subscription (queued or bound) — the
-        loader uses it to carry only subscribing registries forward in the bundle (#4800)."""
+        loader uses it to carry only subscribing registries forward in the bundle (#4800).
+        Server-internal, not plugin-author SDK."""
         return bool(self._pending_subscriptions or self._subscription_unsubs)
 
     def register_skill_dir(self, path: str | Path) -> None:

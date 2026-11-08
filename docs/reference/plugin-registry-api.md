@@ -139,6 +139,16 @@ Subscribe an in-process handler to bus topics ([ADR 0039](/adr/0039-plugin-event
 subscribing is read-only and safe. `handler(payload)` gets `{event, data, seq}`,
 may be sync or async; exceptions are isolated by the bus.
 
+The subscription is QUEUED and bound by a later bind step ([#4800](https://github.com/protoLabsAI/protoAgent/issues/4800)), never wired inline —
+one authoritative signal, so ordering can't regress silently. `register()` often runs
+before the server has set `HOST.on` (desktop cold boot), and even when the bus is
+already up (a hot reload) deferring the bind lets the server tear the OUTGOING load's
+handlers down FIRST, so a reload never stacks a second live handler. A later host-driven
+bind step drains the queue once the bus is wired — right after wiring it and again at
+each (re)load commit, so by the time any event is published the handler is live. Nothing
+publishes in the gap between `on()` and the bind, so the only observable change from
+binding inline is that gap.
+
 ### `registry.register_a2a_skill` {#registry-register-a2a-skill}
 
 ```python

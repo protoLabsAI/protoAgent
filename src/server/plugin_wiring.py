@@ -381,7 +381,7 @@ def _bind_plugin_event_subscriptions(bundle, *, warn_if_unbound: bool = False) -
     ``None`` bundle (nothing built yet) is a no-op."""
     for registry in getattr(bundle, "event_subscriptions", None) or []:
         try:
-            registry.bind_event_subscriptions(warn_if_unbound=warn_if_unbound)
+            registry._bind_event_subscriptions(warn_if_unbound=warn_if_unbound)
         except Exception:  # noqa: BLE001 — a bad plugin can't break event binding
             log.exception("[plugins] %s: binding event subscriptions failed", getattr(registry, "plugin_id", "?"))
 
@@ -393,7 +393,7 @@ def _teardown_plugin_event_subscriptions(bundle) -> None:
     no-op; failures are isolated per registry."""
     for registry in getattr(bundle, "event_subscriptions", None) or []:
         try:
-            registry.teardown_event_subscriptions()
+            registry._teardown_event_subscriptions()
         except Exception:  # noqa: BLE001 — a bad teardown can't block the reload
             log.exception("[plugins] %s: tearing down event subscriptions failed", getattr(registry, "plugin_id", "?"))
 

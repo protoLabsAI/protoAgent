@@ -38,11 +38,11 @@ def test_on_before_bus_is_wired_then_binds_and_delivers_once():
 
     # Queued, not yet delivered to any bus.
     assert bus.handler_count() == 0
-    assert reg.bind_event_subscriptions() == 1  # still pending — no bus to bind to
+    assert reg._bind_event_subscriptions() == 1  # still pending — no bus to bind to
 
     # The server wires the bus, then drains the queue.
     host.on = bus.subscribe_handler
-    assert reg.bind_event_subscriptions() == 0  # bound, nothing left pending
+    assert reg._bind_event_subscriptions() == 0  # bound, nothing left pending
     assert bus.handler_count() == 1
 
     bus.publish("topic.created", {"n": 1})
@@ -68,19 +68,19 @@ def test_reload_twice_leaves_exactly_one_live_handler():
     def _load(tag: str) -> PluginRegistry:
         reg = _registry(host)
         reg.on("topic.*", lambda _payload, _tag=tag: got.append(_tag))
-        reg.bind_event_subscriptions()
+        reg._bind_event_subscriptions()
         return reg
 
     reg1 = _load("load1")
     assert bus.handler_count() == 1
 
     # Reload #1: the server tears the previous load down, then binds the new one.
-    reg1.teardown_event_subscriptions()
+    reg1._teardown_event_subscriptions()
     reg2 = _load("load2")
     assert bus.handler_count() == 1
 
     # Reload #2: same again.
-    reg2.teardown_event_subscriptions()
+    reg2._teardown_event_subscriptions()
     _load("load3")
     assert bus.handler_count() == 1
 
@@ -95,12 +95,12 @@ def test_teardown_also_drops_a_still_queued_subscription():
     host = PluginHost()  # on=None — never wired
     reg = _registry(host)
     reg.on("topic.*", lambda _p: None)
-    assert reg.has_event_subscriptions() is True
+    assert reg._has_event_subscriptions() is True
 
-    reg.teardown_event_subscriptions()
-    assert reg.has_event_subscriptions() is False
+    reg._teardown_event_subscriptions()
+    assert reg._has_event_subscriptions() is False
     # Wiring a bus and binding now has nothing to deliver.
-    assert reg.bind_event_subscriptions() == 0
+    assert reg._bind_event_subscriptions() == 0
 
 
 def test_unbound_subscription_after_load_warns_naming_plugin_and_topic(caplog):
@@ -111,7 +111,7 @@ def test_unbound_subscription_after_load_warns_naming_plugin_and_topic(caplog):
     reg.on("acmeplugin.ticket.*", lambda _p: None)
 
     with caplog.at_level(logging.WARNING, logger="protoagent.plugins"):
-        still_pending = reg.bind_event_subscriptions(warn_if_unbound=True)
+        still_pending = reg._bind_event_subscriptions(warn_if_unbound=True)
 
     assert still_pending == 1
     warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
@@ -128,7 +128,7 @@ def test_no_bus_context_stays_quiet_without_warn_flag(caplog):
     reg.on("topic.*", lambda _p: None)
 
     with caplog.at_level(logging.WARNING, logger="protoagent.plugins"):
-        assert reg.bind_event_subscriptions() == 1  # warn_if_unbound defaults False
+        assert reg._bind_event_subscriptions() == 1  # warn_if_unbound defaults False
 
     assert [r for r in caplog.records if r.levelno == logging.WARNING] == []
 
@@ -139,4 +139,4 @@ def test_non_callable_handler_is_rejected_and_not_queued(caplog):
     reg = _registry(host)
     with caplog.at_level(logging.WARNING, logger="protoagent.plugins"):
         reg.on("topic.*", "not-callable")
-    assert reg.has_event_subscriptions() is False
+    assert reg._has_event_subscriptions() is False
