@@ -182,6 +182,9 @@ type UIState = {
   // and owns its own open/closed state after that. EPHEMERAL — partialized out.
   backgroundJobsRequest: number;
   openBackgroundJobs: () => void;
+  // Ephemeral drawer request; the counter also reopens the same session.
+  directivesRequest: { sessionId: string; n: number } | null;
+  openDirectives: (sessionId: string) => void;
   // Chat display: show the per-turn token/cost + context-window footer under each answer
   // (#1372). Off by default; operators who want per-turn cost visibility turn it on (this device).
   showChatUsage: boolean;
@@ -589,6 +592,10 @@ export const useUI = create<UIState>()(
           else delete next[key];
           return { pluginBackground: next };
         }),
+      directivesRequest: null,
+      openDirectives: (sessionId) => set((s) => ({
+        directivesRequest: { sessionId, n: (s.directivesRequest?.n ?? 0) + 1 },
+      })),
       backgroundJobsRequest: 0,
       openBackgroundJobs: () => set((s) => ({ backgroundJobsRequest: s.backgroundJobsRequest + 1 })),
       showChatUsage: false,
@@ -603,7 +610,7 @@ export const useUI = create<UIState>()(
       // (the Global settings overlay, the per-plugin Configure dialog, the pending
       // rail-menu Update/Uninstall action, and the per-session background-delivery set
       // (#1640) — a view's page re-requests it on every load).
-      partialize: ({ globalSettingsOpen: _o, globalSettingsSection: _s, toolsTarget: _tt, configurePlugin: _c, setupStepWatch: _ssw, pluginUpdate: _pu, pluginUninstall: _pun, pluginBackground: _pb, backgroundJobsRequest: _bjr, ...rest }) => rest,
+      partialize: ({ globalSettingsOpen: _o, globalSettingsSection: _s, toolsTarget: _tt, configurePlugin: _c, setupStepWatch: _ssw, pluginUpdate: _pu, pluginUninstall: _pun, pluginBackground: _pb, backgroundJobsRequest: _bjr, directivesRequest: _dr, ...rest }) => rest,
     },
   ),
 );

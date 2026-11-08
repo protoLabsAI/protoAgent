@@ -54,7 +54,36 @@ export function taskFromGetTask(result: A2AFrame["result"] | undefined): GetTask
   return result.kind === undefined || result.kind === "task" ? result : undefined;
 }
 
+/** Wire row from graph.directives.Directive.to_dict(); timestamps carry +00:00. */
+export type DirectiveRow = {
+  id: string;
+  session_id: string;
+  quote: string;
+  conditions: string;
+  scope: string;
+  status: "in_force" | "fulfilled" | "revoked";
+  created_at: string;
+  closed_by: "agent" | "operator" | null;
+  closed_at: string | null;
+  close_reason: string | null;
+};
+
+export type DirectiveList = { directives: DirectiveRow[]; in_force: number };
+
 export const chatApi = {
+  listDirectives(sessionId: string) {
+    return request<DirectiveList>(`/api/chat/sessions/${encodeURIComponent(sessionId)}/directives`);
+  },
+
+  revokeDirective(sessionId: string, id: string, reason?: string) {
+    // The server trims the reason and stores its first 2,000 characters.
+    const query = reason?.trim() ? `?reason=${encodeURIComponent(reason)}` : "";
+    return request<{ directive: DirectiveRow }>(
+      `/api/chat/sessions/${encodeURIComponent(sessionId)}/directives/${encodeURIComponent(id)}${query}`,
+      { method: "DELETE" },
+    );
+  },
+
   // #1701 Slice 2: redeem a plugin composer-form — POST the field values back to the
   // plugin's on_submit. Returns a reply note, or the next form for a multi-step wizard.
   submitChatCommandForm(body: { callback_id: string; session_id: string; answers: Record<string, unknown> }) {
