@@ -21,6 +21,8 @@ import importlib.util
 import logging
 import sys
 import uuid
+from types import SimpleNamespace
+from typing import ForwardRef
 
 import pytest
 from langchain_core.callbacks import Callbacks
@@ -108,9 +110,9 @@ def _module_from_source(source: str):
     return mod
 
 
-@pytest.fixture
-def footgun_router():
-    mod = _module_from_source(_FOOTGUN_SOURCE)
+@pytest.fixture(params=["Request", "WebSocket", "Response", "BackgroundTasks"])
+def footgun_router(request):
+    mod = _module_from_source(_FOOTGUN_SOURCE.replace("Request", request.param))
     try:
         yield mod.build()
     finally:
@@ -147,8 +149,9 @@ def test_router_footgun_fake_registry_raises_with_the_fix(footgun_router):
     with pytest.raises(ValueError) as exc:
         fake.register_router(footgun_router)
     msg = str(exc.value)
-    assert "request" in msg and "Request" in msg
-    assert "import Request at module level" in msg.lower() or "Import Request at module level" in msg
+    assert "request" in msg
+    assert "demo-plugin" in msg and "GET /ping" in msg
+    assert "at module level" in msg
     assert "from __future__ import annotations" in msg
     assert fake.routers == []  # refused: nothing captured
 
@@ -159,7 +162,7 @@ def test_router_footgun_live_registry_warns_and_still_mounts(footgun_router, cap
         reg.register_router(footgun_router)
     hits = [r for r in caplog.records if "request" in r.getMessage() and "422" in r.getMessage()]
     assert hits, "live registry must warn about the footgun"
-    assert "Import Request at module level" in hits[0].getMessage()
+    assert "at module level" in hits[0].getMessage()
     assert len(reg.routers) == 1  # degrade-safe: the route still mounts
 
 
@@ -242,13 +245,14 @@ def test_tool_footgun_also_fires_through_register_tools():
         fake.register_tools([clean_tool, bad_config])
 
 
-def test_tool_footgun_live_registry_warns_and_still_registers(caplog):
+@pytest.mark.parametrize("bad_tool", [bad_config, bad_callbacks, bad_run_manager])
+def test_tool_footgun_live_registry_warns_and_still_registers(caplog, bad_tool):
     reg = _live_registry()
     with caplog.at_level(logging.WARNING, logger="protoagent.plugins"):
-        reg.register_tool(bad_config)
-    hits = [r for r in caplog.records if "config" in r.getMessage() and "Rename" in r.getMessage()]
+        reg.register_tools([bad_tool])
+    hits = [r for r in caplog.records if bad_tool.name in r.getMessage() and "Rename" in r.getMessage()]
     assert hits, "live registry must warn about the reserved tool param"
-    assert reg.tools == [bad_config]  # degrade-safe: still registered
+    assert reg.tools == [bad_tool]  # degrade-safe: still registered
 
 
 @pytest.mark.parametrize("good_tool", [good_config, good_callbacks, clean_tool])
@@ -280,3 +284,56 @@ def test_message_builder_parity():
         "p", "GET", "/x", "request", "Request"
     )
     assert R._tool_footgun_message("p", "t", "config") == testkit._tool_footgun_message("p", "t", "config")
+
+
+@pytest.mark.parametrize("param", ["config", "callbacks", "run_manager"])
+@pytest.mark.parametrize("schema_kind", ["pydantic", "json"])
+def test_schema_only_tool_is_checked(param, schema_kind, caplog):
+    from pydantic import create_model
+
+    schema = (
+        create_model("ToolArgs", **{param: (str, ...)})
+        if schema_kind == "pydantic"
+        else {"type": "object", "properties": {param: {"type": "string"}}}
+    )
+    candidate = SimpleNamespace(name="schema_tool", args_schema=schema, invoke=lambda args: args)
+    fake = testkit.FakeRegistry(plugin_id="demo-plugin")
+    with pytest.raises(ValueError, match="Rename the parameter"):
+        fake.register_tools([candidate])
+    live = _live_registry()
+    with caplog.at_level(logging.WARNING, logger="protoagent.plugins"):
+        live.register_tools([candidate])
+    assert live.tools == [candidate]
+    assert "schema_tool" in caplog.text and repr(param) in caplog.text
+    assert "Rename the parameter" in caplog.text
+
+
+@pytest.mark.parametrize("annotation", ["Request", ForwardRef("Request")])
+def test_query_parameter_annotation_shapes(annotation):
+    route = SimpleNamespace(
+        path="/ping", methods={"GET"},
+        dependant=SimpleNamespace(query_params=[
+            SimpleNamespace(name="request", field_info=SimpleNamespace(annotation=annotation))
+        ]),
+    )
+    router = SimpleNamespace(routes=[route])
+    expected = [("GET", "/ping", "request", "Request")]
+    assert list(R._router_param_footguns(router)) == expected
+    assert list(testkit._router_param_footguns(router)) == expected
+
+
+@pytest.mark.parametrize("param", ["config", "callbacks", "run_manager"])
+def test_unannotated_tool_parameter_is_rejected(param, caplog):
+    namespace = {}
+    exec(
+        f'def unannotated({param}):\n    """A tool with an untyped reserved argument."""\n    return "ok"',
+        namespace,
+    )
+    candidate = tool(namespace["unannotated"])
+    with pytest.raises(ValueError, match="Rename the parameter"):
+        testkit.FakeRegistry(plugin_id="demo-plugin").register_tool(candidate)
+    live = _live_registry()
+    with caplog.at_level(logging.WARNING, logger="protoagent.plugins"):
+        live.register_tool(candidate)
+    assert live.tools == [candidate]
+    assert repr(param) in caplog.text and "Rename the parameter" in caplog.text

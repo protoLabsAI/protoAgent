@@ -202,8 +202,20 @@ def _tool_reserved_param_footgun(tool) -> str | None:
     """The name of a ``tool`` parameter LangChain reserves for an injected arg
     (``config`` / ``callbacks`` / ``run_manager``) but that the author did NOT annotate as that
     injected type — so the model never supplies it and its value arrives as ``None`` (footgun B).
-    ``None`` when the tool is clean or has no introspectable callable (a stub, a non-``@tool``)."""
+    ``None`` when the tool is clean or has no introspectable schema or callable (a stub, a non-``@tool``)."""
     func = getattr(tool, "func", None) or getattr(tool, "coroutine", None)
+    # Explicit schemas also occur on tools with no func/coroutine to inspect.
+    schema = getattr(tool, "args_schema", None)
+    fields = getattr(schema, "model_fields", None)
+    if fields is None:
+        fields = getattr(schema, "__fields__", None)
+    if isinstance(schema, dict):
+        fields = schema.get("properties", {})
+    for name in _TOOL_RESERVED_PARAMS:
+        if fields and name in fields:
+            annotation = getattr(fields[name], "annotation", None)
+            if not _tool_param_annotation_is_injected(name, annotation):
+                return name
     if func is None:
         return None
     try:
