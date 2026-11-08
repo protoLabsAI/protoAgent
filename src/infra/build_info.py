@@ -5,7 +5,7 @@ checkout's ``git describe``, which describes a working tree on disk — not the
 process that is serving. ``/healthz`` already reports the right ``version`` (and a
 monotonic uptime), but nothing pointed the agent at it.
 
-This captures the running build ONCE, at import (≈ process start) — the same
+This captures the running build ONCE, at import during server startup — the same
 posture as ``operator_api.chat_routes._PROCESS_STARTED_AT``, which this cannot
 import (``infra`` must never reach up into ``operator_api``), so it keeps its own
 monotonic anchor with the same semantics. ``version`` comes from the one resolver
@@ -25,7 +25,8 @@ from pathlib import Path
 
 from infra.paths import app_root, package_version
 
-# Captured once, at import — the closest this module gets to process start, and the
+# Imported eagerly by server before runtime initialization, and by config_tools
+# for standalone tool consumers. Captured once with the
 # same monotonic-anchor semantics /healthz uses. uptime is derived from the monotonic
 # clock (immune to wall-clock steps); started_at is the wall time, for a human-readable
 # "since when".

@@ -33,6 +33,8 @@ from typing import Any
 
 from langchain_core.tools import tool
 
+from infra.build_info import build_info
+
 log = logging.getLogger("protoagent.tools.config")
 
 _MAX_CHARS = 12_000
@@ -450,8 +452,6 @@ def build_config_tools(config) -> list:
         # section index (a dict → listed), and `section="version"`. This is what to answer
         # "which version are you on?" with — a checkout's `git describe` isn't the process
         # that is serving. `version` matches what `/healthz` reports.
-        from infra.build_info import build_info
-
         doc["version"] = build_info()
 
         wanted = (section or "").strip()

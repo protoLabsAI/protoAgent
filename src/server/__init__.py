@@ -25,6 +25,10 @@ This is the main entry point. It:
   auth naming convention.
 """
 
+# Both CLI entrypoints (including the frozen sidecar) load this package first.
+# Snapshot the running build before runtime imports or any tool requests.
+from infra import build_info as _build_info  # noqa: F401
+
 import argparse
 import asyncio
 import json

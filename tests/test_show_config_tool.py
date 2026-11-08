@@ -572,6 +572,66 @@ def test_self_url_documented_as_the_port_probing_alternative():
 # ── version / running-build (#4876) ────────────────────────────────────────
 
 
+@pytest.mark.platform_sensitive
+def test_version_snapshot_precedes_first_query():
+    """Boot in a fresh interpreter so test collection cannot initialize the snapshot."""
+    import os
+    import subprocess
+    import sys
+    import textwrap
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[1]
+    script = textwrap.dedent('''
+        import json
+        import subprocess
+        import sys
+        from datetime import datetime, timezone
+        from pathlib import Path
+        from unittest.mock import patch
+
+        import infra.paths
+
+        git_calls = []
+        def startup_git(args, **kwargs):
+            assert args[0] == "git"
+            git_calls.append(args)
+            output = "abcdef123\\n" if "rev-parse" in args else ""
+            return subprocess.CompletedProcess(args, 0, stdout=output)
+
+        before = datetime.now(timezone.utc)
+        with patch("subprocess.run", side_effect=startup_git), patch(
+            "infra.paths.app_root", return_value=Path.cwd()
+        ):
+            import server
+        after = datetime.now(timezone.utc)
+        assert "infra.build_info" in sys.modules, "server startup must capture build identity"
+        from infra import build_info as bi
+        assert len(git_calls) == 2
+
+        from graph.config import LangGraphConfig
+        from tools.config_tools import build_config_tools
+
+        # A checkout changed on disk after boot must not change the running identity.
+        with patch.object(bi, "_git", return_value="changed"), patch.object(
+            bi.time, "monotonic", return_value=bi._STARTED_MONOTONIC + 7200
+        ):
+            info = json.loads(build_config_tools(LangGraphConfig())[0].invoke(
+                {"section": "version"}
+            ))["version"]
+        assert info["uptime_s"] == 7200
+        assert before <= datetime.fromisoformat(info["started_at"]) <= after
+        assert info["git_sha"] == "abcdef123"
+        assert info["git_dirty"] is False
+    ''')
+    env = {**os.environ, "PYTHONPATH": os.pathsep.join([str(root / "src"), str(root)])}
+    result = subprocess.run(
+        [sys.executable, "-c", script], cwd=root, env=env,
+        capture_output=True, text=True, timeout=60,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
 def test_version_section_reports_the_running_build():
     """`section="version"` answers "which version are you on?" — the package version,
     install kind/path, process start time and a monotonic uptime, in one view."""
@@ -597,6 +657,8 @@ def test_version_from_source_checkout_exposes_git_sha_and_dirty():
 
     sha, dirty = bi._git_sha_dirty(bi.app_root())
 
+    if sha == "unknown" or dirty is None:
+        pytest.skip("git cannot describe this test tree")
     assert sha != "unknown"
     assert re.fullmatch(r"[0-9a-f]{7,40}", sha)
     assert isinstance(dirty, bool)
