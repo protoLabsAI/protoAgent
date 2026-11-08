@@ -15,6 +15,92 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.232.0] - 2026-11-08
+
+### Added
+- **The hub audits a device token minted on a fleet member through its proxy (#4683).**
+  A member sees only the fleet token, so its own `device.minted` entry says `minted_by: "shared"`. The hub now also writes a `device.mint_proxied` entry with the member, whether it is remote, the hub-side caller (the paired device's id, or `shared`) and the member's response status. Match it to the member's entry by member and time. The token is never read or logged.
+
+- **The agent keeps a per-chat ledger of your standing instructions and approvals (#4848).** When you approve or instruct something that outlasts the turn ("cut the release once both PRs merge; on a WARN or FAIL, come back to me"), the agent records your words with `record_directive`, and every turn it sees them verbatim under STANDING DIRECTIVES until it marks them fulfilled or you revoke them. The ledger sits outside the transcript, so a compaction can no longer erase an approval and leave the agent thinking it never had one. Run `/directives` in a chat to see what it holds and `/directives revoke <id>` to withdraw one, or use `GET`/`DELETE /api/chat/sessions/{id}/directives`. Clearing or deleting the chat removes its directives. A console panel comes later.
+
+### Changed
+- **The agent now sees its own queued actions for this chat in full (#4848).** Each turn's working-state block lists the `wait` resumes, schedules and watch reactions that belong to the current chat with their whole instruction, when they fire, and a note that they run on their own unless cancelled. Before, it listed every chat's jobs cut to 60 characters, so after a compaction the agent could miss what its own pending wait was about to do (in one case, merge a release) and tell you nothing would happen. Other chats' jobs now show only as a count, and jobs not tied to any chat stay as short one-line entries.
+
+- **Visible console wait summaries (#4852).** Successful waits show their duration and resume plan beneath the collapsed card, stay outside the tool-count fold, and retain their header ETA when argument previews are cut.
+
+### Fixed
+- **Compaction budgets follow growing notes and the summarizer’s connection (#4848).** Re-plan remaining transcript chunks before each summary call from the current notes’ length; when notes crowd the conservative chunk budget but the summarizer’s window still has room, fall back to a minimum chunk rather than refuse — so a large previous summary no longer strands every retry — and refuse only when even that overruns the window. Size chunks from the configured compaction model’s context window.
+
+- **Compaction no longer forgets an approval you gave earlier in the chat (#4848).**
+  When a long chat was compacted, the summarizer only saw its most recent part, so an
+  instruction like "once A and B merge, cut the release; stop on a WARN or FAIL" could vanish
+  behind one long tool result, and the previous compaction's summary was dropped too.
+  Automatic compaction, `/compact` and the overflow safety valve now share one engine that reads
+  the whole span being replaced (long tool output is clipped, your messages and the agent's are
+  not), carries the previous summary forward, and writes notes with fixed sections for your
+  standing instructions and approvals (quoted word for word), the agent's commitments and its
+  pending scheduled actions. The notes are labelled as the agent's own, not as a message from you.
+  A long compaction now makes one summarizer call per chunk.
+
+- **Your messages now survive compaction word for word (#4848).**
+  When a chat is compacted, the agent used to keep only its own summary of what you said, so a
+  weak summary could still lose or blur an instruction like "merge on PASS, stop on a WARN or
+  FAIL". Automatic compaction, `/compact` and the overflow safety valve now end the compacted
+  context with every message you typed, exactly as written and with the time you sent it, and
+  carry that list forward through later compactions. It is capped at about 20K tokens: the newest
+  messages are kept and older ones are replaced by a note saying how many there were and where to
+  read them in the chat archive. Scheduler wakes, goal-loop prompts and other automated messages
+  are marked as system-generated and are never presented as yours.
+
+- **A compaction can no longer be fooled by forged speaker lines (#4848).** When the
+  conversation was summarized, a tool result (or system text) that happened to contain a line
+  beginning "OPERATOR:" could be read by the summarizer as something you had said. Those blocks
+  are now indented so only your real messages and the agent's start a line with a speaker label.
+  When one very long message is split across chunks, every later slice now keeps its speaker
+  label ("OPERATOR (continued):"), with room reserved so no chunk overruns the summarizer's
+  budget. And a message only counts as a previous compaction's notes when it carries the internal
+  tag that marks it as one — an ordinary message that merely opens with "Here is a summary of the
+  earlier conversation" is kept verbatim as your words, not mistaken for the agent's own notes.
+
+- **Standing directives can't crowd out the rest of the working state, and the agent never has to search for a directive tool (#4848).** The `STANDING DIRECTIVES` section of `<working_state>` now has a total character budget (6000) on top of its 20-entry cap: whole directives render oldest first until the next would exceed the budget, then a `…+N more (/directives to list them)` pointer stands in for the rest — the first directive always renders, clipped with a marker if it alone is over budget. Before, 20 maximum-size directives could put ~160K characters into every turn that never shed. And the four directive tools (`record_directive`, `list_directives`, `fulfil_directive`, `revoke_directive`) are now kept out of deferral unconditionally — like `search_tools` — so a configured keep override can't make the agent search for them before it can record or consult an approval.
+
+- **A plugin can no longer shadow the core `/directives` chat command (#4848).** `/directives`
+  is handled by the core chat dispatcher before plugin commands, so a plugin that registered its
+  own `/directives` got a dead command that never ran yet still showed up — a second, broken entry
+  in the command palette. `register_chat_command` now reserves `directives` alongside `goal` and
+  `lifecycle`: the runtime warns and skips it, and the plugin testkit raises so a drifting plugin's
+  own CI catches it.
+
+- **Standing directives require an operator-originated chat turn (#4848).**
+  Peer, automated, subagent and unclassified turns cannot record operator approvals; the chat revoke command now rejects non-operator senders.
+
+- **Console wait cards recover truncated arguments (#4852).** Expanded results show the waiting duration and resume plan even when a long plan exceeds the 800-character arguments preview.
+
+- **Every friction row carries `tool`, `plugin` and `tool_unbound` (#4857).** Raw and grouped rows from the friction read API, the hub's fleet rollup and `protoagent fleet friction --json` now always include all three. An unset `tool` or `plugin` reads as `null` and `tool_unbound` as `false`, so a triager can tell a missing-tool report apart from the rest. A grouped row is `tool_unbound` if any entry in it was.
+
+- **Settings no longer loses a provider's models when a probe is slow (#4858).** Model lists are cached for five minutes and shared across Settings loads that happen at the same time. If a provider doesn't answer, Settings keeps showing its last known models instead of dropping them, and opening Settings no longer calls every provider each time.
+
+- **Old memory tool names keep working in every tool list, and boot names what still uses them (#4859).** A config or plugin list that still says `memory_recall`, `memory_ingest`, `forget_memory` or `memory_stats` now gets the new tool, with a one-time warning. This covers the execute_code bridge, `tools.disabled`, `operator_mcp.tools` and the deferred keep list. Before, the old name matched nothing and no one was told. Boot also logs a warning for each skill, subagent and SOUL.md that still tells the model to call an old name.
+
+- **A client that leaves before the response starts no longer logs an error (#4860).** The hub logged a full "No response returned" traceback each time a browser or proxied stream hung up early; now it stays quiet, and real errors are still logged. The fleet proxy no longer warns about duplicate operation ids, and creating or updating a device with a body that isn't a JSON object now says "body must be a JSON object".
+
+- **A refused tool call now counts as an error in per-tool telemetry (#4862).** Telemetry used to decide success from an "Error" at the start of the result, so `cite_artifact`'s refusals and `knowledge_ingest`'s "No such file" counted as successes. These tools now flag the failure the standard way (`status="error"`), and the telemetry reads that flag. The model still sees the same words.
+
+- **Boot stops warning about a stray data-version stamp (#4864).** A test run left the desktop data folder marked as data version 5, so every boot warned about a downgrade that never happened. protoAgent now spots a stamp no release could have written, resets it once, and says so. A stamp from a real newer release still warns, and the warning now names the file, the release that wrote it, and how to recover.
+
+- **The desktop CLI answers in about a second, and the app can put it on your PATH (#4865).** On macOS every `protoagent-server` command, `--help` included, took 14-16 seconds, because the server binary unpacked about 5,000 files into a new temp folder on every launch and macOS scanned each one before running it. The app's own server paid the same wait on every start. macOS now ships the server as a signed folder inside the app, so that scan happens once. A new menu-bar item, **Install Command-Line Tool…** (or `protoagent-server cli link`), links `~/.local/bin/protoagent` to the app's binary, so `protoagent` in a terminal always matches the installed app. It never replaces a `protoagent` you installed another way unless you pass `--force`.
+
+- **Operator-profile memories keep their kind, and deleted chunks no longer leave vectors behind (#4867).** Untyped memories in the profile, abilities and voice domains now migrate as profile memories, so they can be promoted to the shared profile, and rows the earlier migration filed as facts are corrected on the next boot, with a backup taken first. Deleting a knowledge chunk now removes its embedding too, and orphaned embeddings left by older deletes are cleaned up at startup.
+
+- **A large PDF in the Artifact panel no longer freezes the console (#4869).** pdf.js now reads and decodes the file in a background worker, so switching agents stays smooth in Safari and the desktop app even with a 30 MB rulebook open.
+
+- **A tool that fails no longer ends your turn (#4871).** When a command the agent ran timed out or couldn't start, the whole turn crashed instead of telling the agent what went wrong. A failing tool now hands the agent an error result it can read and react to, such as retrying, trying something else, or telling you, and the turn carries on. Other kinds of errors still surface as before.
+
+### Docs
+- **ADR 0127 records completed compaction fidelity implementation (#4848).** Lists S0–S5 and the completed follow-up PRs, with the console UI follow-up tracked separately in #4861.
+
+- **ADR 0127: compaction fidelity (#4848).** It records why a compacted chat lost an operator's standing release approval: the summarizer saw only the last 4,000 tokens. It sets the design that replaces it. All three compaction paths share one engine that reads the whole span and carries the previous summary forward. Operator messages are carried verbatim. `<working_state>` shows the agent's own pending actions in full. A per-chat ledger holds operator directives outside the transcript.
+
 ## [0.231.0] - 2026-11-08
 
 ### Added

@@ -1,1 +1,0 @@
-- **ADR 0127 records completed compaction fidelity implementation (#4848).** Lists S0–S5 and the completed follow-up PRs, with the console UI follow-up tracked separately in #4861.
