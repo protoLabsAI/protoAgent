@@ -59,7 +59,11 @@ def test_build_deterministic_resume_force_and_reload(tmp_path, capsys):
 
     options = dict(users=(126, 127, 128), count=40, fetch=fake_fetch(dataset()), extract=extract, yes=True)
     asyncio.run(build(tmp_path / "one", **options))
-    assert "Extraction calls: 600" in capsys.readouterr().out
+    out = capsys.readouterr().out
+    assert "Extraction calls: 600" in out
+    # Each user keeps 2 rows (chat 0 superseded by chat 1); the count is reported.
+    assert "user 126: 2 stored rows" in out
+    assert "no durable facts" not in out
     assert len(calls) == 600
     for pos, uid in enumerate(options["users"]):
         group = calls[pos * 200:(pos + 1) * 200]
@@ -114,6 +118,17 @@ def test_decline_and_interrupted_user_are_not_published(tmp_path, monkeypatch):
     with pytest.raises(RuntimeError, match="interrupted"):
         asyncio.run(build(tmp_path, yes=True, **options))
     assert not list(tmp_path.iterdir())
+
+
+def test_zero_fact_user_is_flagged(tmp_path, capsys):
+    async def extract(chat, **kwargs):
+        pass  # Extraction stores nothing — the gateway could also be broken.
+
+    asyncio.run(build(tmp_path, users=(126,), count=1, fetch=fake_fetch(dataset()),
+                      extract=extract, yes=True))
+    out = capsys.readouterr().out
+    assert "user 126: 0 stored rows (no durable facts" in out
+    assert (tmp_path / "user_126.jsonl").read_text(encoding="utf-8") == ""
 
 
 def test_bad_chat_count_fails_before_extraction(tmp_path):

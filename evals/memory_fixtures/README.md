@@ -29,9 +29,10 @@ Results go to `pv4/cases.jsonl` and `pv4/user_{id}.jsonl`. `--output` changes th
 directory. Existing user files are skipped; `--force` rebuilds them. Each user
 file is published atomically after all chats finish, so interrupted users can be
 retried. Cases are deterministically regenerated after extraction completes.
-The runtime extractor is best-effort and logs failures; review those logs and
-fixture contents before accepting a regeneration, since a failed extraction can
-otherwise look like a chat with no durable facts.
+The runtime extractor is best-effort and logs failures; the builder prints each
+user's stored-row count and flags any user that produced no durable facts. Review
+those counts, the logs and the fixture contents before accepting a regeneration,
+since a failed extraction can otherwise look like a chat with no durable facts.
 
 User JSONL contains every stored row, including superseded audit history, with
 IDs, kind, subject, content, delivery, review state, provenance, source session,

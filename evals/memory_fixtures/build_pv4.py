@@ -142,6 +142,10 @@ async def build(output=DEFAULT_OUTPUT, *, users=DEFAULT_USERS, count=40, seed=SE
                     f"SELECT {', '.join(FIELDS)} FROM memories ORDER BY id"
                 )]
             write_jsonl(output / f"user_{uid}.jsonl", exported)
+            # Extraction never raises; a zero-row user is indistinguishable from a
+            # broken gateway, so surface the count for the mandatory fixture review.
+            flag = " (no durable facts — check the extraction model)" if not exported else ""
+            print(f"user {uid}: {len(exported)} stored rows{flag}")
     write_jsonl(output / "cases.jsonl", cases)
 
 
