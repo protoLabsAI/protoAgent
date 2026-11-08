@@ -1,6 +1,6 @@
 // Render-level proof for #1914: mount the REAL ToolValue and assert what reaches the DOM —
 // the waiting block for a successful `wait`, the plain fallback when the args preview is
-// unreadable, the error renderer for a failed schedule, and untouched non-wait tools.
+// unrecoverable, the error renderer for a failed schedule, and untouched non-wait tools.
 // (Same jsdom mount pattern as markdownMediaRender.test.ts.)
 import { afterEach, describe, expect, it } from "vitest";
 import { act, createElement } from "react";
@@ -55,16 +55,27 @@ describe("ToolValue waiting state for `wait` (#1914)", () => {
     expect(el.textContent).not.toContain("Wait scheduled:");
   });
 
-  it("falls back to the plain success render when the args preview is unreadable", async () => {
-    // e.g. the 800-char preview cut the JSON — never crash, never guess.
+  it("recovers the waiting block when the 800-char args preview is cut", async () => {
+    const then = "x".repeat(900);
     const el = await render({
-      raw: WAIT_OUTPUT,
+      raw: `Wait scheduled: 10 minutes. Will resume to: ${then}`,
       role: "output",
       tool: "wait",
-      input: '{"seconds": 300, "then": "cut mid-strin',
+      input: JSON.stringify({ seconds: 600, then }).slice(0, 800),
+    });
+    expect(el.querySelector(".tool-wait")?.textContent).toContain("Waiting ~10 minutes");
+    expect(el.textContent).not.toContain("Wait scheduled:");
+  });
+
+  it("falls back to plain when neither args nor output supplies a duration", async () => {
+    const el = await render({
+      raw: "Wait scheduled: unknown duration.",
+      role: "output",
+      tool: "wait",
+      input: "garbage",
     });
     expect(el.querySelector(".tool-wait")).toBeNull();
-    expect(el.textContent).toContain("Wait scheduled: 5 minutes");
+    expect(el.textContent).toContain("Wait scheduled: unknown duration.");
   });
 
   it("keeps a FAILED wait on the error renderer (Error: … wins over the waiting block)", async () => {
