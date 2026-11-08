@@ -1777,6 +1777,94 @@ async def record_failed_turn(session_id: str, text: str, *, thread_id: str | Non
         return False
 
 
+async def record_directive_withdrawal(session_id: str, directive, reason: str = "") -> bool:
+    """Append the operator's withdrawal of a directive to its chat thread (ADR 0127 D3,
+    #4861). Returns True when the note was appended or queued.
+
+    When an operator withdraws a directive from the console or the API, nothing lands in the
+    transcript today, so after a compaction the agent still reads the original approval
+    verbatim — with nothing after it showing the withdrawal (ADR 0127 D3 carries every
+    OPERATOR message word for word, ``graph.compaction_engine``). This writes one
+    operator-originated note — ``You withdrew: "<first line>"`` plus the reason, when the
+    operator gave one — so compaction keeps it next to the approval. (A ``/directives revoke``
+    typed in chat already leaves the operator's own message, so that path gets no note; this
+    is only for the console / API ``DELETE`` that leaves nothing behind.)
+
+    The note is stamped :func:`sent_at_kwargs` and marked
+    :data:`~graph.compaction_engine.DIRECTIVE_WITHDRAWN_KWARG` (never the injected-context,
+    guard-note or ``lc_source`` tags, nor a system-prompt opening), so ``human_kind``
+    classifies it OPERATOR and compaction never drops it as system text. The marker lets the
+    console ledger view (#4861 part 2) render it as a quiet event row, not a chat bubble.
+
+    Best-effort by construction: it runs AFTER the revoke already succeeded, so a failure
+    here is logged and never turns a good revoke into a request error. With no graph it skips
+    quietly.
+
+    Concurrency: if a turn is live on the session we must not block the ``DELETE`` on its
+    thread lock, so the note text is queued on the steering queue instead — folded in at the
+    next model call. The steering frame classifies OPERATOR (``STEERING_PREFIX``) but the
+    marker CANNOT ride the steering path, so a note queued this way reaches the agent yet
+    carries no tag for the console to style. When idle, it is written straight to the
+    checkpoint under the thread lock so it can't race a turn that is just starting — EXCEPT
+    when that idle thread is parked at a HITL form/approval ``interrupt()`` (no live turn, so
+    :func:`runtime.turn_activity.is_active` is False yet the checkpoint still holds an
+    unanswered interrupt). Writing a fresh ``HumanMessage`` there is the "fresh input on an
+    interrupted thread" LangGraph treats as *abandon the interrupt*
+    (:func:`server.turn_control._hold_if_hitl_pending`): the un-answered tool_call would
+    dangle, the model would see the note before the form answer, and the paused form could
+    never resolve. So a pending interrupt diverts the note to the steering queue too (the
+    same hold the HITL path uses for any other operator message — it folds in at the first
+    model call after the form resolves, in arrival order, likewise losing the marker). The
+    interrupt check is made UNDER the thread lock so it can't race a turn that is parking.
+    """
+    graph = STATE.graph
+    if graph is None:
+        return False
+    try:
+        from graph.compaction_engine import DIRECTIVE_WITHDRAWN_KWARG, sent_at_kwargs
+        from graph.directives import withdrawal_note
+
+        text = withdrawal_note(getattr(directive, "quote", "") or "", reason)
+        if not text:
+            return False
+        if _turn_activity.is_active(session_id):
+            # A turn is live — don't block the DELETE on its thread lock. The marker can't
+            # ride the steering path; the note still reaches the agent at the next model call.
+            from graph import steering
+
+            return steering.enqueue(session_id, text) is not None
+        from langchain_core.messages import HumanMessage  # lazy, like record_failed_turn
+
+        tid = _turn_control._resolve_thread_id(None, session_id)
+        config = {"configurable": {"thread_id": tid}}
+        # The lock serializes with a turn that is just starting on this thread, so the
+        # out-of-band append can't lost-update the turn's own history write, and the
+        # pending-interrupt check below can't race a turn that is parking on a form.
+        async with _turn_control._thread_lock(tid):
+            if await _pending_interrupt_value(config) is not None:
+                # No live turn (is_active was False), yet the thread is parked at a HITL
+                # form/approval interrupt. Writing a fresh HumanMessage straight to the
+                # checkpoint is the "fresh input on an interrupted thread" LangGraph treats
+                # as abandoning the interrupt (_turn_control._hold_if_hitl_pending): it
+                # strands the unanswered tool_call, the model sees the note before the form
+                # answer, and the paused form can never resolve. Hold the note on the
+                # steering queue instead — it folds in at the first model call after the
+                # form resolves, in arrival order (losing the marker, as the live-turn path
+                # above does). enqueue is a cheap in-memory op, safe under the lock.
+                from graph import steering
+
+                return steering.enqueue(session_id, text) is not None
+            msg = HumanMessage(
+                content=text,
+                additional_kwargs={**sent_at_kwargs(), DIRECTIVE_WITHDRAWN_KWARG: {"id": directive.id}},
+            )
+            await graph.aupdate_state(config, {"messages": [msg]})
+        return True
+    except Exception:  # noqa: BLE001 — a bookkeeping append must never fail the revoke
+        log.warning("[chat] could not record the directive withdrawal for session=%s", session_id, exc_info=True)
+        return False
+
+
 def turn_error(exc: BaseException | None, message: str | None = None) -> dict[str, Any]:
     """Machine-readable companion to the ``**Error:** …`` bubble a failed turn returns.
 

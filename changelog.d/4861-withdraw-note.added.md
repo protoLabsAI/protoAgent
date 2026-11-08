@@ -1,0 +1,1 @@
+- **Withdrawing a standing instruction now leaves a note in the chat (#4861).** When you revoke a directive from the console or the API, the agent's transcript gains an operator note — `You withdrew: "…"` — so a later compaction keeps the withdrawal right next to the original approval instead of leaving the approval standing with nothing to show it was taken back.
