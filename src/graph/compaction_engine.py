@@ -218,9 +218,12 @@ def window_of_model(model) -> int | None:
     return value if isinstance(value, int) and value > 0 else None
 
 
-#: The role labels a rendered block can open with, longest-prefix first. A block that is
-#: split across chunks repeats its label as ``<label> (continued): `` on every later slice,
-#: so a continuation never loses its speaker (a split operator message stays operator text).
+#: The role labels a rendered block can open with. A block that is split across chunks
+#: repeats its label as ``<label> (continued): `` on every later slice, so a continuation
+#: never loses its speaker (a split operator message stays operator text). Declaration order
+#: here is not significant — :func:`_continuation_prefix` matches longest-label-first — but a
+#: shorter label that is a prefix of a longer one ("YOU" ⊂ "YOUR EARLIER COMPACTION NOTES")
+#: must never be allowed to mask it, so the match cannot rely on this tuple's order.
 _ROLE_LABELS = (
     "OPERATOR",
     "YOU (assistant)",
@@ -233,9 +236,14 @@ _ROLE_LABELS = (
 
 
 def _continuation_prefix(block: str) -> str:
-    """``"<role> (continued): "`` for a block, so its later slices keep their role label."""
+    """``"<role> (continued): "`` for a block, so its later slices keep their role label.
+
+    Labels are matched longest-first so a shorter label that is a prefix of another
+    ("YOU" ⊂ "YOUR EARLIER COMPACTION NOTES") can never mask the longer one — a split
+    compaction-notes block stays ``YOUR EARLIER COMPACTION NOTES (continued): ``, not
+    ``YOU (continued): ``."""
     first_line = block.split("\n", 1)[0]
-    for label in _ROLE_LABELS:
+    for label in sorted(_ROLE_LABELS, key=len, reverse=True):
         if first_line.startswith(label):
             return f"{label} (continued): "
     return "(continued): "

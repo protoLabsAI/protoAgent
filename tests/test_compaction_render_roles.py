@@ -80,6 +80,37 @@ def test_no_chunk_exceeds_the_budget_even_with_the_continuation_prefix():
     assert sum(c.count("Z") for c in chunks) == 50_000
 
 
+def test_continuation_prefix_matches_the_longest_role_label():
+    # "YOU" is a prefix of "YOUR EARLIER COMPACTION NOTES", so an in-order match would
+    # mislabel a notes continuation as agent speech. The longest matching label must win.
+    assert (
+        engine._continuation_prefix("YOUR EARLIER COMPACTION NOTES:\nsome notes")
+        == "YOUR EARLIER COMPACTION NOTES (continued): "
+    )
+    assert engine._continuation_prefix("YOU (assistant): hi") == "YOU (assistant) (continued): "
+    assert engine._continuation_prefix("YOU called read({})") == "YOU called (continued): "
+    assert engine._continuation_prefix("OPERATOR: do it") == "OPERATOR (continued): "
+
+
+def test_split_compaction_notes_block_keeps_its_full_role_label():
+    # A previous compaction's notes render as a "YOUR EARLIER COMPACTION NOTES:" block; the
+    # label starts with "YOU", so a naive first-match split would relabel the continuation
+    # "YOU (continued): " and the summarizer would read the fold's own notes as new agent
+    # speech. The continuation must keep the full compaction-notes label.
+    seed = engine.summary_message("Q" * 30_000, source="compaction")
+    block = engine.render_message(seed)
+    assert block.startswith("YOUR EARLIER COMPACTION NOTES:")
+    chunks = engine.chunk_blocks([block], 10_000)
+    assert len(chunks) > 1, "the notes block is far over budget and must split"
+    first, *rest = chunks
+    assert first.startswith("YOUR EARLIER COMPACTION NOTES:")
+    for slice_ in rest:
+        assert slice_.startswith("YOUR EARLIER COMPACTION NOTES (continued): "), slice_
+        assert not slice_.startswith("YOU (continued): "), slice_
+    # Nothing of the notes is dropped by the split.
+    assert sum(c.count("Q") for c in chunks) == 30_000
+
+
 # ── r3: a summary is identified by its lc_source tag, not its prefix text ──────
 
 
