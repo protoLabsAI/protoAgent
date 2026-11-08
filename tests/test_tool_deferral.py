@@ -49,9 +49,12 @@ def test_resolve_keep_defaults_to_builtin_base() -> None:
 
 
 def test_resolve_keep_override_always_includes_search() -> None:
-    # A custom keep list that forgets search_tools still gets it (bootstrap).
+    # A custom keep list that forgets search_tools still gets it (bootstrap), and the four
+    # directive tools are kept too (ADR 0127 D6) — a configured override can't defer them.
+    from tools.directive_tools import DIRECTIVE_TOOL_NAMES
+
     keep = resolve_deferred_keep(["web_search"])
-    assert keep == {"web_search", SEARCH_TOOLS_NAME}
+    assert keep == {"web_search", SEARCH_TOOLS_NAME, *DIRECTIVE_TOOL_NAMES}
 
 
 # ── search_tools meta-tool ────────────────────────────────────────────────────
