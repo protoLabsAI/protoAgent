@@ -18,6 +18,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+from functools import partial
 from typing import Any
 
 from fastapi import HTTPException, Request  # Request at MODULE level: under `from __future__
@@ -263,11 +264,15 @@ def register_config_routes(app) -> None:
         drawer's initial render where there's nothing to POST yet.
         """
         from graph.config import resolve_model_route
-        from graph.config_io import list_gateway_models
 
         body = req or ModelsProbeRequest()
         from graph.providers import is_native_oauth_provider
-        from graph.providers.discovery import list_provider_models
+        from graph.providers.discovery import cached_gateway_models, cached_provider_models
+
+        # Every branch is an explicit, live probe (`refresh=True`) — the operator asked —
+        # and a success refreshes the cached list Settings and the pickers read from.
+        def _live(listed) -> dict:
+            return {"models": listed.models, "error": listed.error}
 
         # A blank form lists what the LIVE model's connection offers. A provider-qualified
         # lead (`gateway:protolabs/smart`) names its own connection, and that wins over the
@@ -276,26 +281,30 @@ def register_config_routes(app) -> None:
         if not body.provider and not body.api_base and STATE.graph_config is not None:
             target = _qualified_live_target(STATE.graph_config.model_name)
         if target is not None and target[0] == "oauth":
-            models, error = await asyncio.to_thread(list_provider_models, target[1], STATE.graph_config)
-            return {"models": models, "error": error}
+            return _live(
+                await asyncio.to_thread(partial(cached_provider_models, target[1], STATE.graph_config, refresh=True))
+            )
         if target is not None:
             _, base, key, allow_env, _model = target
             key = body.api_key or key
-            models, error = await asyncio.to_thread(list_gateway_models, base, key, allow_env_key=allow_env)
-            return {"models": models, "error": error}
+            return _live(
+                await asyncio.to_thread(
+                    partial(cached_gateway_models, base, key, allow_env_key=allow_env, refresh=True)
+                )
+            )
         # Native OAuth providers list the subscription account's models, not the gateway's.
         provider = (body.provider or getattr(STATE.graph_config, "model_provider", "") or "").strip().lower()
         if is_native_oauth_provider(provider):
-            models, error = await asyncio.to_thread(list_provider_models, provider, STATE.graph_config)
-            return {"models": models, "error": error}
+            return _live(
+                await asyncio.to_thread(partial(cached_provider_models, provider, STATE.graph_config, refresh=True))
+            )
         live = resolve_model_route(STATE.graph_config) if STATE.graph_config else None
         base = body.api_base or (live.base_url if live else "")
         key = body.api_key or (live.api_key if live else "")
         # Offloaded (#2486): the gateway probe is a blocking network call — running it
         # inline stalled the event loop for the probe duration (the native-OAuth branch
         # above already offloads).
-        models, error = await asyncio.to_thread(list_gateway_models, base, key)
-        return {"models": models, "error": error}
+        return _live(await asyncio.to_thread(partial(cached_gateway_models, base, key, refresh=True)))
 
     @app.post("/api/config/local-models")
     async def _api_local_models():
@@ -854,7 +863,7 @@ def register_config_routes(app) -> None:
         (type, default, restart-vs-hot-reload, description). Drives the
         operator console's Settings surface."""
         from graph.config import _load_host_layer, resolve_model_route
-        from graph.config_io import config_yaml_path, list_gateway_models, load_yaml_doc
+        from graph.config_io import config_yaml_path, load_yaml_doc
         from graph.settings_schema import build_schema
 
         models: list[str] = []
@@ -867,13 +876,16 @@ def register_config_routes(app) -> None:
             provider = (getattr(STATE.graph_config, "model_provider", "") or "").strip().lower()
             from graph.providers import is_native_oauth_provider
 
-            if is_native_oauth_provider(provider):
-                from graph.providers.discovery import list_provider_models
+            # Both read through the model-list cache: opening Settings must not re-probe
+            # every provider, and a transient probe failure serves the last good list.
+            from graph.providers.discovery import cached_gateway_models, cached_provider_models
 
-                models, _ = await asyncio.to_thread(list_provider_models, provider, STATE.graph_config)
+            if is_native_oauth_provider(provider):
+                listed = await asyncio.to_thread(cached_provider_models, provider, STATE.graph_config)
             else:
                 live = resolve_model_route(STATE.graph_config)
-                models, _ = await asyncio.to_thread(list_gateway_models, live.base_url, live.api_key)
+                listed = await asyncio.to_thread(cached_gateway_models, live.base_url, live.api_key)
+            models = listed.models
         # The SLOT fields (aux/fallbacks/favorites/compaction/goal-eval) offer every lane
         # the operator can reach, qualified — `model.name` keeps the bare single-provider
         # list above, since the main model belongs to `model.provider`. Best-effort: a
