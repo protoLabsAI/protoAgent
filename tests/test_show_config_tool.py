@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 
 import pytest
 
@@ -566,6 +567,109 @@ def test_self_url_documented_as_the_port_probing_alternative():
 
     assert "self_url" in tool.description
     assert "probing ports" in tool.description
+
+
+# ── version / running-build (#4876) ────────────────────────────────────────
+
+
+def test_version_section_reports_the_running_build():
+    """`section="version"` answers "which version are you on?" — the package version,
+    install kind/path, process start time and a monotonic uptime, in one view."""
+    from infra.paths import package_version
+
+    out = json.loads(build_config_tools(LangGraphConfig())[0].invoke({"section": "version"}))["version"]
+
+    # The version MUST equal the single shared resolver /healthz also reports from.
+    assert out["version"] == package_version()
+    assert out["install_kind"] in {"desktop", "pypi", "source"}
+    assert out["install_path"]
+    # ISO-8601 UTC start time + an int uptime that can't be negative.
+    assert re.match(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}", out["started_at"])
+    assert isinstance(out["uptime_s"], int) and out["uptime_s"] >= 0
+    # git identity is always present as keys — concrete when on a checkout, "unknown" when not.
+    assert "git_sha" in out and "git_dirty" in out
+
+
+def test_version_from_source_checkout_exposes_git_sha_and_dirty():
+    """From a source checkout git identity is real: a short sha and a concrete dirty flag
+    (the test tree is itself a git checkout)."""
+    from infra import build_info as bi
+
+    sha, dirty = bi._git_sha_dirty(bi.app_root())
+
+    assert sha != "unknown"
+    assert re.fullmatch(r"[0-9a-f]{7,40}", sha)
+    assert isinstance(dirty, bool)
+
+
+def test_version_reports_unknown_sha_when_git_is_unavailable(monkeypatch):
+    """git absent / failing must degrade to "unknown" without raising — a status field is
+    never worth taking a turn down for."""
+    from infra import build_info as bi
+
+    monkeypatch.setattr(bi, "_git", lambda *a, **k: None)
+
+    sha, dirty = bi._git_sha_dirty(bi.app_root())
+
+    assert sha == "unknown"
+    assert dirty is None
+
+
+def test_version_reports_unknown_sha_for_an_installed_package_path(monkeypatch, tmp_path):
+    """A wheel install under site-packages has no repo to describe: kind is "pypi" and git
+    is never shelled out, so the sha is "unknown" rather than an error."""
+    from infra import build_info as bi
+
+    fake = tmp_path / "site-packages" / "protoagent"
+    fake.mkdir(parents=True)
+    monkeypatch.setattr(bi, "app_root", lambda: fake)
+
+    def _no_git(*a, **k):
+        raise AssertionError("an installed-package build must not shell out to git")
+
+    monkeypatch.setattr(bi, "_git", _no_git)
+
+    info = bi._collect()
+
+    assert info["install_kind"] == "pypi"
+    assert info["git_sha"] == "unknown"
+    assert info["git_dirty"] is None
+    assert info["version"] == bi.package_version()
+
+
+def test_version_appears_in_whole_config_view():
+    """It rides the whole-config view (and the section list), not only an explicit
+    ``section="version"`` selection."""
+    doc = json.loads(build_config_tools(LangGraphConfig())[0].invoke({}))
+
+    assert "version" in doc
+    assert set(doc["version"]) >= {
+        "version",
+        "git_sha",
+        "git_dirty",
+        "install_kind",
+        "install_path",
+        "started_at",
+        "uptime_s",
+    }
+
+
+def test_version_listed_in_section_index_when_config_too_large():
+    """When the whole config is too big to render, the fallback is a section index — and
+    ``version`` must still be listed there as a selectable section."""
+    cfg = LangGraphConfig()
+    cfg.plugin_config = {"bulky": {f"k{i:03d}": "x" * 400 for i in range(100)}}
+    out = build_config_tools(cfg)[0].invoke({})
+
+    assert "too large to show at once" in out
+    assert "version" in out
+
+
+def test_version_documented_as_the_what_version_answer():
+    tool = build_config_tools(LangGraphConfig())[0]
+
+    assert 'section="version"' in tool.description
+    assert "/healthz" in tool.description
 
 
 def test_show_config_binds_with_the_core_toolset():
