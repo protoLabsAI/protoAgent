@@ -440,12 +440,17 @@ class PluginRegistry:
     def live_config(self) -> dict:
         """The plugin's CURRENT resolved config, re-read from the host on each call.
 
-        ``self.config`` is a register-time snapshot, so a hot-reload after a config save
-        can't refresh it for an already-mounted router or running surface (FastAPI can't
-        re-mount a router). But the reload DOES rebuild ``STATE.graph_config`` — so a
-        handler that reads this on each request reflects config edits with no restart.
-        Falls back to the snapshot when the host state isn't available (unit tests, or a
-        section that resolved empty)."""
+        ``self.config`` is bound once, when the loader constructs this registry, and is
+        never refreshed on that instance. A hot-reload builds a NEW registry from the
+        saved config and re-runs ``register()`` on every reload — even when the re-exec
+        cache (#3365) reuses the module object — so freshly registered routes/tools close
+        over the new values. But a long-lived handler or surface that captured a
+        particular registry (or its ``self.config`` dict) keeps that register-time
+        snapshot: a surface left running across a reload with no ``reload(cfg)`` hook is
+        never told. The reload DOES rebuild ``STATE.graph_config``, so a handler that
+        reads this on each request reflects config edits with no restart. Falls back to
+        the snapshot when the host state isn't available (unit tests, or a section that
+        resolved empty)."""
         try:
             from runtime.state import STATE
 

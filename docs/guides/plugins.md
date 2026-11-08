@@ -465,7 +465,11 @@ go quiet when nobody's looking. This matters doubly for the desktop build.
   ```
 - **Clean up on unmount.** Ordinary views unmount when hidden; chat-slot and
   background-subscribed views can stay mounted, so pause their work explicitly.
-  For host-side handlers and surfaces, register teardown so nothing lingers.
+  For host-side event subscriptions, ownership follows where you call `registry.on`
+  (#4885): an `on()` made inside `register()` is bundle-owned — the registry unsubscribes
+  it on reload — while an `on()` made *after* load returns an unsubscribe callable that
+  the caller owns, so call it in your surface's `stop()` so nothing lingers. (A bus old
+  enough to return no unsubscribe can't be torn down.)
   See [view lifecycle](/guides/building-react-plugin-views#lifecycle).
 
 ## Persisting state {#persist-state}
