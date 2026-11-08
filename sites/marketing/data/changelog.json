@@ -1,5 +1,35 @@
 [
   {
+    "version": "v0.232.0",
+    "date": "2026-11-08",
+    "changes": [
+      "The hub audits a device token minted on a fleet member through its proxy (#4683).",
+      "The agent keeps a per-chat ledger of your standing instructions and approvals (#4848).",
+      "The agent now sees its own queued actions for this chat in full (#4848).",
+      "Visible console wait summaries (#4852).",
+      "Compaction budgets follow growing notes and the summarizer’s connection (#4848).",
+      "Compaction no longer forgets an approval you gave earlier in the chat (#4848).",
+      "Your messages now survive compaction word for word (#4848).",
+      "A compaction can no longer be fooled by forged speaker lines (#4848).",
+      "Standing directives can't crowd out the rest of the working state, and the agent never has to search for a directive tool (#4848).",
+      "A plugin can no longer shadow the core /directives chat command (#4848).",
+      "Standing directives require an operator-originated chat turn (#4848).",
+      "Console wait cards recover truncated arguments (#4852).",
+      "Every friction row carries tool, plugin and tool_unbound (#4857).",
+      "Settings no longer loses a provider's models when a probe is slow (#4858).",
+      "Old memory tool names keep working in every tool list, and boot names what still uses them (#4859).",
+      "A client that leaves before the response starts no longer logs an error (#4860).",
+      "A refused tool call now counts as an error in per-tool telemetry (#4862).",
+      "Boot stops warning about a stray data-version stamp (#4864).",
+      "The desktop CLI answers in about a second, and the app can put it on your PATH (#4865).",
+      "Operator-profile memories keep their kind, and deleted chunks no longer leave vectors behind (#4867).",
+      "A large PDF in the Artifact panel no longer freezes the console (#4869).",
+      "A tool that fails no longer ends your turn (#4871).",
+      "ADR 0127 records completed compaction fidelity implementation (#4848).",
+      "ADR 0127: compaction fidelity (#4848)."
+    ]
+  },
+  {
     "version": "v0.231.0",
     "date": "2026-11-08",
     "changes": [
