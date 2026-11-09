@@ -452,7 +452,7 @@ async def test_agent_browsers_ticket_socket_closes_when_its_minting_phone_is_rev
     auth, devices, clock, ttl, monkeypatch
 ):
     bp = _agent_browser()
-    monkeypatch.setattr(bp.browser_stream, "resolve_page_target", lambda binary, timeout: ("ws://page", ""))
+    monkeypatch.setattr(bp.browser_stream, "resolve_page_target", lambda binary, timeout, **k: ("ws://page", ""))
     monkeypatch.setattr(bp.browser_stream, "CDPStream", _FakeCDP)
     app = FastAPI()
     app.include_router(bp.build_panel_data_router({}), prefix="/api/plugins/agent_browser")

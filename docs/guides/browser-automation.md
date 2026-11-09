@@ -20,6 +20,11 @@ interact with the same browser in the **Browser** panel. It starts disabled.
 The browser runs on the agent’s machine. Your laptop’s browser login is not
 shared automatically with it.
 
+Each agent has its own browser. Two agents on the same machine never see each
+other’s pages or share each other’s logins. To give every chat its own browser
+too, set **Session scope** to `per_session`. A chat browser shuts down after 30
+idle minutes. The panel always shows the agent’s main browser.
+
 ## Interact with a page
 
 Use the Browser panel to click, type, scroll, or complete a login. You and the
@@ -48,6 +53,9 @@ The [settings reference](/reference/browser-automation#settings) lists every fie
 - **Download or installation failed:** read the banner’s error, correct the cause,
   then use **Retry**. An unsupported platform needs a compatible manual install.
 - **Wrong CLI found:** set an absolute path in **agent-browser binary** and retry.
+- **“The browser profile is already in use”:** another browser has that profile
+  directory open. With `per_session`, only one chat at a time can use a profile.
+  Close the other chat’s browser, or clear **Browser profile dir**.
 - **Site refuses automation:** complete a login manually or use a headed session
   with a profile. Some sites still refuse automated access; repeated retries may
   not help.

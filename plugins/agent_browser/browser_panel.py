@@ -45,7 +45,7 @@ import subprocess
 from fastapi import APIRouter, Body, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse, JSONResponse
 
-from . import browser_stream, preflight
+from . import browser_stream, preflight, runtime
 from .runtime import bad_operand, flag, launch_flags, number
 
 log = logging.getLogger("protoagent.plugins.agent_browser")
@@ -108,14 +108,27 @@ def build_panel_data_router(cfg: dict | None):
     router = APIRouter()
 
     autofetch = flag(cfg, "cli_autofetch", True)
+    main_idle_ms = runtime.idle_timeout_ms(cfg, chat=False)
+
+    def _env() -> dict[str, str]:
+        """The panel drives — and streams — the instance's MAIN session, the same one the
+        tools' `shared` scope uses: the one helper, passed explicitly to every subprocess
+        rather than left to env inheritance (which put every instance on the CLI's
+        "default" Chrome). Resolved per request, so an operator AGENT_BROWSER_SESSION set
+        after mount is still honoured."""
+        return runtime.cli_env(runtime.shared_session_name(), main_idle_ms)
 
     def _run(*args: str) -> tuple[int, str]:
         # The same resolution as the tools: PATH > pinned path > the fetched CLI, and the
         # pinned download on first use (the panel's Start button is a use).
         exe = preflight.cli_for_run(binary, autofetch=autofetch)
         try:
-            p = subprocess.run([exe, *args], capture_output=True, text=True, timeout=timeout)
-            return p.returncode, (p.stderr or p.stdout or "").strip()
+            env = _env()
+            p = subprocess.run([exe, *args], capture_output=True, text=True, timeout=timeout, env=env)
+            out = (p.stderr or p.stdout or "").strip()
+            if p.returncode != 0 and (locked := runtime.profile_in_use_error(out, cfg, env["AGENT_BROWSER_SESSION"])):
+                return p.returncode, locked.removeprefix("Error: ")
+            return p.returncode, out
         except OSError:
             # Missing OR unstartable (FileNotFoundError covers both, PermissionError the
             # latter). Say what to DO about it — the same sentence the operator's setup
@@ -145,7 +158,7 @@ def build_panel_data_router(cfg: dict | None):
         _bind_device(ws, device_id)  # ADR 0121 D5: a revoked phone's viewport closes too
         await ws.accept()
         page_ws, note = await asyncio.to_thread(
-            lambda: browser_stream.resolve_page_target(preflight.effective_binary(binary), timeout))
+            lambda: browser_stream.resolve_page_target(preflight.effective_binary(binary), timeout, env=_env()))
         if not page_ws:
             # A setup problem gets the setup sentence (install the CLI / install Chrome);
             # "no session" / "no page open" pass through as the normal states they are.
