@@ -1836,6 +1836,18 @@ export type KnowledgeChunk = {
   review_state?: ReviewState | string | null;
 };
 
+// One collection bucket from GET /api/knowledge/collections (ADR 0125 P2 slice 6) —
+// the Knowledge browser's left rail. Chunks with no collection group under the
+// knowledge_ingest default ("general"); `sources` counts distinct non-null sources
+// and `last_ingested_at` is the newest chunk's created_at (null when none carry one).
+// Agent memory never appears here — it lives in the separate memories table.
+export type KnowledgeCollection = {
+  collection: string;
+  chunks: number;
+  sources: number;
+  last_ingested_at: string | null;
+};
+
 // Operator review verdict on a memory row (ADR 0108 D7). Agent-derived writes
 // start `pending`; the operator confirms or rejects them from the console
 // (POST /api/memory/chunks/{id}/review). `rejected` rows are kept for audit but

@@ -460,6 +460,7 @@ def register_knowledge_routes(app) -> None:
         k: int = 30,
         domain: str | None = None,
         review_state: str | None = None,
+        collection: str | None = None,
         prefix: bool = False,
     ):
         if STATE.knowledge_store is None:
@@ -468,6 +469,13 @@ def register_knowledge_routes(app) -> None:
         # inspector's "pending" queue. Forwarded only when set, so a plugin backend
         # that predates the kwarg keeps serving the unfiltered listing.
         filters: dict = {}
+        # ``collection`` (ADR 0125 P2 slice 6) scopes the browse/search to one
+        # collection bucket. A NULL/empty collection folds to the knowledge_ingest
+        # default on the store side (``_collection_clause``), and an UNKNOWN
+        # collection simply matches nothing — a 200 with an empty list, never a 404.
+        # Forwarded only when asked, so a backend predating the kwarg is unaffected.
+        if collection is not None and collection != "":
+            filters["collection"] = collection
         if review_state is not None and review_state != "":
             from knowledge.store import REVIEW_STATES
 
@@ -514,6 +522,29 @@ def register_knowledge_routes(app) -> None:
         except Exception:  # noqa: BLE001
             stats = {}
         return {"enabled": True, "query": q, "results": results, "stats": stats}
+
+    # --- Knowledge collections (ADR 0125 P2 slice 6) ------------------------
+    # The collection buckets behind the Knowledge browser: one row per collection
+    # with its chunk count, distinct-source count and newest ingest time. Chunks
+    # with no collection group under the knowledge_ingest default ("general") on
+    # the store side. Agent MEMORY (the ``memories`` table) never appears here —
+    # the store method reads ``chunks`` only. ``list_collections`` is a default-store
+    # capability (getattr-guarded): a plugin backend without it degrades to an empty
+    # list, never a 500. Read-only, like the rest of this surface.
+    @app.get("/api/knowledge/collections")
+    async def _api_knowledge_collections():
+        store = STATE.knowledge_store
+        if store is None:
+            return {"enabled": False, "collections": []}
+        list_collections = getattr(store, "list_collections", None)
+        if not callable(list_collections):
+            return {"enabled": True, "collections": []}
+        try:
+            collections = await asyncio.to_thread(list_collections)
+        except Exception:  # noqa: BLE001 — never 500 the console
+            log.exception("[knowledge] list_collections failed")
+            collections = []
+        return {"enabled": True, "collections": list(collections)}
 
     # --- Knowledge commons promote/forget (ADR 0041 / bd-2wu) ----------------
     # The curated lift into the shared commons + its inverse. Only meaningful when
@@ -578,14 +609,22 @@ def register_knowledge_routes(app) -> None:
         # plugin backend that only implements the ADR 0031 surface.
         from knowledge import add_document
 
+        dom = str(body.get("domain", "") or "general").strip() or "general"
         ids = await asyncio.to_thread(
             lambda: add_document(
                 STATE.knowledge_store,
                 content,
-                domain=str(body.get("domain", "") or "general"),
+                domain=dom,
                 heading=(str(body.get("heading", "")).strip() or None),
                 source="console",
                 source_type="operator",
+                # Stamp the ``collection`` column with the domain (ADR 0125 P2 slice 6),
+                # mirroring ops.knowledge.ingest and the P2-B boot backfill
+                # (``collection = domain``). Without it the column stays NULL until the
+                # next reboot, so an operator-added chunk lists under "general", is
+                # missing from ``?collection=<dom>``, yet comes back from
+                # ``?collection=general``.
+                collection=dom,
             )
         )
         if not ids:
@@ -760,6 +799,13 @@ def register_knowledge_routes(app) -> None:
                 namespace=f"attach:{sid}",
                 source=name,
                 source_type=result.source_type,
+                # Stamp the ``collection`` column with the domain (ADR 0125 P2 slice 6),
+                # matching ingest, the console add/edit routes and the P2-B boot backfill
+                # (``collection = domain``). Without it the column stays NULL, so an indexed
+                # attachment is counted under "general" and returned by ``?collection=general``
+                # until the next reboot moves it into an "attachment" bucket — shifting the
+                # rail's counts out from under the operator.
+                collection="attachment",
             )
         )
         context = _attachment_context(name, text, budget=budget)
@@ -800,6 +846,13 @@ def register_knowledge_routes(app) -> None:
         if cur.get("review_state") == "rejected":
             carry["review_state"] = "rejected"
         domain = str(body.get("domain", "") or cur.get("domain") or "general")
+        # ``collection`` (ADR 0125 P2 slice 6) follows the (possibly edited) domain,
+        # exactly as the add and ingest routes stamp it (collection = domain) and the
+        # P2-B boot backfill fills it. Carrying the OLD collection instead would strand
+        # a domain edit in its former bucket for good — listed under the old name,
+        # missing from ``?collection=<new domain>``, out of step with the agent's
+        # domain-scoped search — because the backfill only ever fills NULLs.
+        carry["collection"] = domain
         heading = str(body.get("heading", "")).strip() or None
         source = body.get("source") or "console"
 

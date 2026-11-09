@@ -198,6 +198,13 @@ async def ingest(
             heading=heading,
             source=origin,
             source_type=result.source_type,
+            # knowledge_ingest maps its ``collection`` onto ``domain`` (ADR 0125 P2-B),
+            # so ``dom`` IS the collection bucket — stamp the ``collection`` column with
+            # it too. Without this the column stays NULL until the next boot backfill
+            # (``collection = domain``), and until then the chunk is listed under
+            # "general", missing from ``?collection=<dom>``, yet returned by
+            # ``?collection=general`` — disagreeing with the agent's domain-scoped search.
+            collection=dom,
         )
         return created, _count_embedded(ctx.knowledge_store, created)
 

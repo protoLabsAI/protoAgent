@@ -444,6 +444,7 @@ def test_layered_search_passes_all_filters_to_both_tiers():
         memory_kind="standing",
         review_state="confirmed",
         delivery_policy="retrieval",
+        collection="reference-docs",
         deliverable=True,
         prefix=True,
     )
@@ -468,3 +469,56 @@ def test_promoted_search_returns_one_editable_record(tmp_path):
     assert (hits[0]["id"], hits[0]["tier"], hits[0]["source"]) == (cid, "private", "runbook")
     assert len(store.list_chunks()) == 2
     assert store.search("kestrel", namespace="other") == []
+
+
+def test_promote_carries_the_collection_into_the_commons(tmp_path):
+    """Promoting a private chunk copies its collection bucket onto the commons copy
+    (ADR 0125 P2 slice 6), so it lists and filters under the same collection in the
+    commons tier as it did privately."""
+    private, commons = _stores(tmp_path)
+    store = LayeredKnowledgeStore(private, commons)
+    cid = private.add_chunk(
+        "kestrel launch checklist",
+        domain="reference",
+        source="runbook",
+        source_type="file",
+        collection="flight-ops",
+    )
+    assert store.promote(cid) is not None
+
+    comm_rows = {r["collection"]: r for r in commons.list_collections()}
+    assert "flight-ops" in comm_rows and comm_rows["flight-ops"]["chunks"] == 1
+    promoted = commons.search("kestrel", collection="flight-ops")
+    assert [h["content"] for h in promoted] == ["kestrel launch checklist"]
+    # A different collection never returns the promoted chunk.
+    assert commons.search("kestrel", collection="other") == []
+
+
+def test_list_collections_merges_both_tiers(tmp_path):
+    """list_collections sums chunk/source counts across tiers, keeps the later
+    last_ingested_at for a shared bucket, and re-sorts biggest-first then by name
+    (ADR 0125 P2 slice 6). add_chunk writes the collection column directly."""
+    private, commons = _stores(tmp_path)
+    # "docs" straddles both tiers; "private-only" / "commons-only" sit on one each.
+    private.add_chunk("priv a", domain="docs", source="p1.pdf", collection="docs")
+    private.add_chunk("priv b", domain="docs", source="p2.pdf", collection="docs")
+    private.add_chunk("priv c", domain="notes", source="n.md", collection="private-only")
+    commons.add_chunk("comm a", domain="docs", source="c1.pdf", collection="docs")
+    commons.add_chunk("comm b", domain="ref", source="r.pdf", collection="commons-only")
+    layered = LayeredKnowledgeStore(private, commons)
+
+    priv = {r["collection"]: r for r in private.list_collections()}
+    comm = {r["collection"]: r for r in commons.list_collections()}
+    merged = layered.list_collections()
+    by = {r["collection"]: r for r in merged}
+
+    assert set(by) == {"docs", "private-only", "commons-only"}
+    # Shared "docs": counts summed across tiers (2 + 1 chunks, 2 + 1 sources).
+    assert by["docs"]["chunks"] == priv["docs"]["chunks"] + comm["docs"]["chunks"] == 3
+    assert by["docs"]["sources"] == priv["docs"]["sources"] + comm["docs"]["sources"] == 3
+    # The later ingest time wins for the shared bucket.
+    assert by["docs"]["last_ingested_at"] == max(
+        priv["docs"]["last_ingested_at"], comm["docs"]["last_ingested_at"]
+    )
+    # Re-sorted over the merged set: biggest first, ties broken by name.
+    assert [r["collection"] for r in merged] == sorted(by, key=lambda n: (-by[n]["chunks"], n))
