@@ -13,6 +13,7 @@ import { create } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
 
 import { persistStorage } from "../lib/storage";
+import type { SurfaceState } from "../shell/surfaceState";
 
 // Per-agent layout (ADR 0042). Each fleet agent keeps its OWN layout — rail order, widths,
 // active surface, plugins out. In the single-agent product that fell out for free (each agent
@@ -59,6 +60,13 @@ export type PluginsTab = "local" | "market";
 export const SETUP_STEP_WATCH_MS = 25 * 60 * 1000;
 
 type UIState = {
+  // Ephemeral: retain each view's place without reopening a modal on reload.
+  surfaceModal: { viewId: string; state: SurfaceState } | null;
+  surfaceStates: Record<string, SurfaceState>;
+  setSurfaceState: (viewId: string, state: SurfaceState) => void;
+  openSurfaceModal: (viewId: string, state?: SurfaceState) => void;
+  closeSurfaceModal: () => void;
+  dockSurface: (viewId: string) => void;
   surface: Surface;
   rightPanel: RightPanel;
   pluginsTab: PluginsTab;
@@ -350,6 +358,30 @@ export function migrateUiState(persisted: unknown): unknown {
 export const useUI = create<UIState>()(
   persist(
     (set) => ({
+      surfaceModal: null,
+      surfaceStates: {},
+      setSurfaceState: (viewId, state) => set((s) => ({
+        surfaceStates: { ...s.surfaceStates, [viewId]: state },
+        ...(s.surfaceModal?.viewId === viewId ? { surfaceModal: { viewId, state } } : {}),
+      })),
+      openSurfaceModal: (viewId, state) => set((s) => {
+        const next = state ?? s.surfaceStates[viewId] ?? {};
+        return {
+          surfaceModal: { viewId, state: next },
+          surfaceStates: { ...s.surfaceStates, [viewId]: next },
+        };
+      }),
+      closeSurfaceModal: () => set({ surfaceModal: null }),
+      dockSurface: (viewId) => set((s) => ({
+        rightPanel: viewId,
+        rightCollapsed: false,
+        surfaceModal: null,
+        surfaceStates: {
+          ...s.surfaceStates,
+          [viewId]: s.surfaceModal?.viewId === viewId
+            ? s.surfaceModal.state : s.surfaceStates[viewId] ?? {},
+        },
+      })),
       surface: "chat",
       rightPanel: "work",
       pluginsTab: "local",
@@ -610,7 +642,7 @@ export const useUI = create<UIState>()(
       // (the Global settings overlay, the per-plugin Configure dialog, the pending
       // rail-menu Update/Uninstall action, and the per-session background-delivery set
       // (#1640) — a view's page re-requests it on every load).
-      partialize: ({ globalSettingsOpen: _o, globalSettingsSection: _s, toolsTarget: _tt, configurePlugin: _c, setupStepWatch: _ssw, pluginUpdate: _pu, pluginUninstall: _pun, pluginBackground: _pb, backgroundJobsRequest: _bjr, directivesRequest: _dr, ...rest }) => rest,
+      partialize: ({ surfaceModal: _sm, surfaceStates: _sst, globalSettingsOpen: _o, globalSettingsSection: _s, toolsTarget: _tt, configurePlugin: _c, setupStepWatch: _ssw, pluginUpdate: _pu, pluginUninstall: _pun, pluginBackground: _pb, backgroundJobsRequest: _bjr, directivesRequest: _dr, ...rest }) => rest,
     },
   ),
 );
