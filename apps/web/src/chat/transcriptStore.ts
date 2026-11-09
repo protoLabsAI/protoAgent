@@ -144,6 +144,9 @@ export class TranscriptStore {
         tx.objectStore("chunks").getAll(IDBKeyRange.bound([slug, id], [slug, id, []])),
       )) as ChunkRecord[];
       out.push(assemble(record, new Map(chunks.map((c) => [c.hash, c.messages]))));
+      // Known to exist now: this tab's next save of the session skips re-putting them.
+      const known = this.knownFor(slug, id);
+      for (const chunk of chunks) known.add(chunk.hash);
     }
     return out;
   }

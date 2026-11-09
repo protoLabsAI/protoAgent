@@ -679,7 +679,7 @@ let lastAgentWritten = "";
 /** Deletes whose write failed: retried with the next save. */
 const pendingRemovals = new Set<string>();
 
-type TranscriptMessage = { agent: string; ids: string[]; deleted: string[] };
+type TranscriptMessage = { agent: string; ids: string[]; deleted: string[]; evicted?: string[] };
 
 /** The session as it is saved: ephemeral overlays dropped, only bounded image previews kept. */
 function storable(session: ChatSession): ChatSession {
@@ -736,22 +736,40 @@ export async function withQuotaEviction(write: () => Promise<void>): Promise<voi
     if (!isQuotaError(err) || !transcripts) throw err;
   }
   const protect = new Set([...state.activeSessions, ...streamingIds(state), ...(state.currentSessionId ? [state.currentSessionId] : [])]);
-  for (let step = 0; step < 50; step++) {
-    const removed = await transcripts.evictStep({ keepSlug: AGENT, fleet: fleetSlugsSnapshot(), protect, threadPrefix: PALETTE_KEY });
-    if (!removed.length) break;
-    reportEviction({
-      reason: "quota",
-      freedBytes: 0,
-      evicted: removed.map((r) => ({ key: `idb:${r.slug}/${r.id}`, slug: r.slug, bytes: 0 })),
-    });
-    try {
-      await write();
-      return;
-    } catch (err) {
-      if (!isQuotaError(err)) throw err;
+  const all: { slug: string; id: string }[] = [];
+  // One toast for the whole squeeze, and other tabs told what went (they may hold it open).
+  const announce = () => {
+    if (!all.length) return;
+    reportEviction({ reason: "quota", freedBytes: 0, evicted: all.map((r) => ({ key: `idb:${r.slug}/${r.id}`, slug: r.slug, bytes: 0 })) });
+    const bySlug = new Map<string, string[]>();
+    for (const r of all) if (r.slug !== "palette") bySlug.set(r.slug, [...(bySlug.get(r.slug) ?? []), r.id]);
+    for (const [agent, ids] of bySlug) {
+      transcriptChannel?.postMessage({ agent, ids: [], deleted: [], evicted: ids } satisfies TranscriptMessage);
     }
+  };
+  try {
+    for (let step = 0; step < 50; step++) {
+      const removed = await transcripts.evictStep({ keepSlug: AGENT, fleet: fleetSlugsSnapshot(), protect, threadPrefix: PALETTE_KEY });
+      if (!removed.length) break;
+      all.push(...removed);
+      try {
+        await write();
+        return;
+      } catch (err) {
+        if (!isQuotaError(err)) throw err;
+      }
+    }
+    await write(); // nothing left to free: let the quota error surface to the caller's catch
+  } finally {
+    // This agent's evicted chats aren't open here (they were never `protect`ed): drop them from
+    // this tab too, or its next save would write them straight back. A local drop, not a delete.
+    for (const r of all) {
+      if (r.slug !== AGENT) continue;
+      persistedRefs.delete(r.id);
+      if (state.sessions.some((s) => s.id === r.id) && state.sessions.length > 1) removeLocalSession(r.id);
+    }
+    announce();
   }
-  await write(); // nothing left to free: let the quota error surface to the caller's catch
 }
 
 /** The open transcript store, or `null` on the localStorage path (palette threads, S3). */
@@ -804,7 +822,18 @@ async function onTranscriptMessage(message: TranscriptMessage) {
       /* a listener never breaks sync */
     }
   }
-  if (message.agent !== AGENT || !transcripts || !Array.isArray(message.ids) || !message.ids.length) return;
+  if (message.agent !== AGENT || !transcripts) return;
+  // Another tab evicted some of this agent's chats under quota pressure. One this tab has open
+  // (or streaming) stays, and is saved again on its next change; any other copy goes quietly:
+  // a local drop, not a retirement, so the server's history can still bring it back.
+  if (Array.isArray(message.evicted) && message.evicted.length) {
+    const inUse = new Set([...state.activeSessions, ...streamingIds(state), ...(state.currentSessionId ? [state.currentSessionId] : [])]);
+    for (const id of message.evicted) {
+      persistedRefs.delete(id);
+      if (!inUse.has(id) && state.sessions.some((s) => s.id === id) && state.sessions.length > 1) removeLocalSession(id);
+    }
+  }
+  if (!Array.isArray(message.ids) || !message.ids.length) return;
   const loaded = await transcripts.loadSessions(AGENT, message.ids);
   const incoming = sanitizePersisted({ version: 1, sessions: loaded, currentSessionId: null });
   if (!incoming) return;
