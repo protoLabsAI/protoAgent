@@ -18,14 +18,16 @@ ordinary model pass, so it spends the subagent's ``max_turns`` budget like any o
 
 A subagent that declares neither never gets this middleware; its stack is unchanged.
 
-A REASONING-ONLY turn gets a different retry (#3584, then Vera on protoAgent#4108): the
-model spent the whole turn thinking and produced no text. On the Qwen3.8 thinking lane
-that is a degenerate loop inside ``<think>`` (one paragraph repeated dozens of times)
-closed by an EOS sampled mid-thought; the gateway's ``blank_recovery`` continuation never
-sees it because every protoAgent call streams. A plain nudge cannot recover it: it
-round-trips the whole loop back as the turn's ``reasoning_content``, with thinking still
-on, and the model resumes the same paragraph. So the retry drops the failed turn's
-reasoning from the history and makes ONE model call with thinking off.
+An EMPTY-AT-CAP turn — a reasoning-only turn (#3584, then Vera on protoAgent#4108), or one
+the provider CUT at the output cap with no tool call and almost no text — gets a different
+retry: drop the failed turn's reasoning and make ONE call with thinking off. That retry
+moved to ``EmptyAtCapMiddleware`` (ADR 0128 S3, #4875) so it covers EVERY subagent, not
+only those that declare a deliverable. EmptyAtCap is registered BEFORE this guard, so its
+``after_model`` runs AFTER this one (LangChain runs after_model in reverse registration
+order); this guard DEFERS empty-at-cap turns to it (``empty_at_cap_reason``), so the two
+never both retry one turn. The shared helpers the retry needs — ``reasoning_only``,
+``without_reasoning``, ``thinking_off_settings`` and the #4108 / #2642 lessons — stay
+here and EmptyAtCap imports them.
 """
 
 from __future__ import annotations
@@ -113,6 +115,36 @@ def reasoning_only(message) -> bool:
     extra = getattr(message, "additional_kwargs", None) or {}
     reasoning = str(extra.get("reasoning_content") or extra.get("reasoning") or "")
     return len(reasoning) >= REASONING_ONLY_MIN_CHARS and len(_text(message).strip()) <= REASONING_ONLY_MAX_TEXT
+
+
+# finish_reasons that mean the provider CUT the reply at the output cap, not that the model
+# chose to stop — a closed provider set (`max_tokens` is Anthropic's spelling of `length`).
+CAP_FINISH_REASONS = frozenset({"length", "max_tokens"})
+
+
+def finish_reason(message) -> str:
+    meta = getattr(message, "response_metadata", None) or {}
+    return str(meta.get("finish_reason") or meta.get("stop_reason") or "")
+
+
+def empty_at_cap_reason(message) -> str | None:
+    """Why this turn ended the loop with nothing usable, or None if it did not (ADR 0128 S3).
+
+    A turn is "empty at the cap" when it makes no tool call and carries ≤200 chars of
+    visible text, AND either the provider cut it at the output cap (``finish_reason``
+    length/max_tokens) or it was reasoning-only. Returns the label the retry counts
+    under — ``"length"`` or ``"reasoning_only"`` — shared by ``EmptyAtCapMiddleware``
+    (which retries such a turn) and this guard (which defers it).
+    """
+    if not isinstance(message, AIMessage) or getattr(message, "tool_calls", None):
+        return None
+    if len(_text(message).strip()) > REASONING_ONLY_MAX_TEXT:
+        return None
+    if finish_reason(message) in CAP_FINISH_REASONS:
+        return "length"
+    if reasoning_only(message):
+        return "reasoning_only"
+    return None
 
 
 def without_reasoning(message: AIMessage) -> AIMessage:
@@ -265,8 +297,14 @@ class CompletionGuardMiddleware(AgentMiddleware):
         if has_deliverable and not owed:
             return None
         sent = nudges_sent(messages)
-        if not has_deliverable and reasoning_only(last):
-            return self._reasoning_retry(messages, last, sent)
+        if not has_deliverable and empty_at_cap_reason(last) is not None:
+            # A capped / reasoning-only turn is EmptyAtCapMiddleware's to retry (ADR 0128
+            # S3): it owns the one thinking-off retry, for EVERY subagent, not only those
+            # that declare a deliverable. It is registered before this guard, so its
+            # after_model runs AFTER ours — deferring here is what keeps the two from both
+            # retrying one turn. The guard still nudges a plain stall (a narration, or an
+            # empty turn the provider did NOT cap) exactly as before.
+            return None
         if sent >= self._max_nudges:
             # What the record cannot say otherwise (#3582): a lane that ends on "Let me verify
             # X" twice looks the same whether its output was cut (finish_reason=length), its
@@ -312,56 +350,6 @@ class CompletionGuardMiddleware(AgentMiddleware):
                 describe_turn(last),
             )
         return {"jump_to": "model", "messages": [guard_note(GUARD, note)]}
-
-    def _reasoning_retry(self, messages, last: AIMessage, sent: int) -> dict | None:
-        """A reasoning-only turn (#3584): ONE retry with thinking off, its loop not replayed.
-
-        Before, a nudge with thinking still on got another ~8k tokens of the same loop (0 of
-        5 recovered; on protoAgent#4108 the retry's reasoning repeated the failed turn's last
-        paragraph word for word). Thinking off, the model answers from what it has read.
-        A retry that is itself reasoning-only — or a run out of nudges — ends the lane.
-        """
-        previous = messages[-2] if len(messages) >= 2 else None
-        if is_guard_note(previous, REASONING_GUARD) or sent >= self._max_nudges:
-            log.warning(
-                "[completion-guard] reasoning-only turn %s; letting the run end (%s)",
-                "after a thinking-off retry" if is_guard_note(previous, REASONING_GUARD) else f"after {sent} nudge(s)",
-                describe_turn(last),
-            )
-            return None
-        note = (
-            f"{NUDGE_MARK} Your last turn spent itself deliberating and ended without any output — "
-            f"no tool call and not {self._contract}. Do not re-analyse. Write the deliverable now "
-            "from what you have already read; state anything you did not get to as a `Gap:` line."
-        )
-        reasoning = (last.additional_kwargs or {}).get("reasoning_content") or (last.additional_kwargs or {}).get(
-            "reasoning"
-        )
-        log.warning(
-            "[completion-guard] reasoning-only turn; retrying once with thinking off, %d chars of its "
-            "reasoning dropped (nudge %d/%d, %s)",
-            len(str(reasoning or "")),
-            sent + 1,
-            self._max_nudges,
-            describe_turn(last),
-        )
-        update: list = [without_reasoning(last)] if last.id else []
-        return {"jump_to": "model", "messages": [*update, guard_note(REASONING_GUARD, note)]}
-
-    @staticmethod
-    def _thinking_off(request):
-        """The model call right after a reasoning-only retry note runs with thinking off."""
-        messages = getattr(request, "messages", None) or []
-        if not messages or not is_guard_note(messages[-1], REASONING_GUARD):
-            return request
-        settings = thinking_off_settings(request.model, request.model_settings)
-        return request if settings is None else request.override(model_settings=settings)
-
-    def wrap_model_call(self, request, handler):  # type: ignore[override]
-        return handler(self._thinking_off(request))
-
-    async def awrap_model_call(self, request, handler):  # type: ignore[override]
-        return await handler(self._thinking_off(request))
 
     def before_model(self, state, runtime):  # type: ignore[override]
         return self._wrap_up(state) or self._context_wrap_up(state)
