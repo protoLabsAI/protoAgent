@@ -1,12 +1,15 @@
 """ADR 0128 S2b: real subagent stacks with a fake gateway client."""
 from dataclasses import replace
+import json
 
+import httpx
 import pytest
 from langchain_core.language_models.fake_chat_models import GenericFakeChatModel
 from langchain_core.messages import AIMessage
 
 from graph import agent, delegation_usage, llm, sdk
 from graph.config import GenerationProfile, LangGraphConfig
+from graph.llm import _ReasoningChatOpenAI
 from graph.middleware.completion_guard import CompletionGuardMiddleware
 from graph.middleware.profile_phase import ProfilePhaseMiddleware
 from graph.middleware.tool_result_pruner import ToolResultPrunerMiddleware
@@ -197,3 +200,54 @@ async def test_fallback_clients_keep_generation_profile(harness):
     assert len(builds) == 2
     assert all(b["max_tokens"] == 4096 for b in builds)
     assert all(b["extra_body"]["thinking"] == {"type": "disabled"} for b in builds)
+
+
+@pytest.mark.parametrize("path", ["direct", "sdk", "workflow"])
+@pytest.mark.parametrize("profile", [None, "routing", "call", "missing"])
+async def test_serialized_gateway_request(harness, monkeypatch, path, profile):
+    """Exercise the real client serializer, not just constructor kwargs.
+
+    Mock HTTP at the transport boundary so these checks also run offline and on
+    Windows. The response follows the streaming path used by subagent runs.
+    """
+    config, _, stacks, run = harness
+    sent = []
+
+    def gateway(request):
+        sent.append(json.loads(request.content))
+        base = {"id": "probe", "object": "chat.completion.chunk", "created": 1, "model": "probe"}
+        frames = [
+            {**base, "choices": [{"index": 0, "delta": {"role": "assistant", "content": "done"}, "finish_reason": None}]},
+            {**base, "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}]},
+            {**base, "choices": [], "usage": {"prompt_tokens": 10, "completion_tokens": 2, "total_tokens": 12}},
+        ]
+        content = "".join(f"data: {json.dumps(frame)}\n\n" for frame in frames) + "data: [DONE]\n\n"
+        return httpx.Response(200, headers={"content-type": "text/event-stream"}, content=content)
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(gateway)) as client:
+        monkeypatch.setattr(llm, "_ReasoningChatOpenAI", _ReasoningChatOpenAI)
+        build_kwargs = llm._build_llm_kwargs
+
+        def with_transport(*args, **kwargs):
+            return {**build_kwargs(*args, **kwargs), "http_async_client": client}
+
+        monkeypatch.setattr(llm, "_build_llm_kwargs", with_transport)
+        # The same dispatch path without any profile is the compatibility baseline.
+        await run(path)
+        baseline = sent.pop()
+        if profile in {"routing", "call"}:
+            config.model_profiles = {
+                "routing": GenerationProfile(max_tokens=4096, thinking="disabled"),
+                "call": GenerationProfile(max_tokens=1024),
+            }
+            monkeypatch.setitem(SUBAGENT_REGISTRY, PROBE, replace(SUBAGENT_REGISTRY[PROBE], profile="routing"))
+        rows = await run(path, None if profile == "routing" else profile)
+
+    assert len(sent) == 1
+    expected = dict(baseline)
+    if profile in {"routing", "call"}:
+        expected.update(max_completion_tokens=1024 if profile == "call" else 4096, thinking={"type": "disabled"},
+                        chat_template_kwargs={"enable_thinking": False})
+    assert sent[0] == expected
+    assert rows[0]["profile"] == (profile if profile in {"routing", "call"} else None)
+    assert any(isinstance(m, ProfilePhaseMiddleware) for m in stacks[-1]) == (profile in {"routing", "call"})

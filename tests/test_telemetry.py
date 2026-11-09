@@ -131,7 +131,8 @@ def test_decisions_render_newest_first():
 # thread's context-window fill.
 
 
-def test_extract_subagent_usage_rows_shape_tagging_and_model_fallback():
+@pytest.mark.parametrize("profile", [None, "routing"])
+def test_extract_subagent_usage_rows_shape_tagging_and_model_fallback(profile):
     from graph.agent import _extract_subagent_usage
     from observability import pricing
 
@@ -154,7 +155,9 @@ def test_extract_subagent_usage_rows_shape_tagging_and_model_fallback():
         ),
         AIMessage(content="no usage_metadata -> skipped"),
     ]
-    rows = _extract_subagent_usage(messages, subagent_type="creative", fallback_model="protolabs/creative")
+    rows = _extract_subagent_usage(
+        messages, subagent_type="creative", fallback_model="protolabs/creative", profile=profile,
+    )
     assert len(rows) == 2
     first, second = rows
     # The expected cost is computed from the SAME row the extractor built, cache
@@ -179,6 +182,7 @@ def test_extract_subagent_usage_rows_shape_tagging_and_model_fallback():
         ),
         "model": "protolabs/creative",  # the pinned/aux fallback — a model-pinned subagent bills to ITS model
         "subagent_type": "creative",
+        "profile": profile,
         # Additive descriptive fields (#4875 S0): no response_metadata, tool calls or
         # reasoning details on this reply, so three are None/False and text_chars counts
         # the visible "draft".
@@ -193,6 +197,7 @@ def test_extract_subagent_usage_rows_shape_tagging_and_model_fallback():
     assert second["model"] == "claude-haiku-4-5"
     assert second["input_tokens"] == 10 and second["output_tokens"] == 5
     assert second["subagent_type"] == "creative"
+    assert second["profile"] == profile
 
 
 def test_extract_subagent_usage_handles_empty_and_usage_less_lists():
