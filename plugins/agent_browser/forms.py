@@ -1065,6 +1065,26 @@ function abComboShadowRequired(control){
   }
   return false;
 }
+function abBareField(el, idx){
+  // Last-resort descriptor when building a field's full row threw (#4963): a helper hit an
+  // element the page has since removed (e.g. an `aria-labelledby` target). Keep the field
+  // ADDRESSABLE with its id + whatever value we can still read, and no label — one broken
+  // field must never empty the read for all the others.
+  var id = '', name = '', value = '';
+  try { id = (el.getAttribute && el.getAttribute('id')) || ''; } catch(e){}
+  try { name = (el.getAttribute && el.getAttribute('name')) || ''; } catch(e){}
+  var isFile = false;
+  try { isFile = el.tagName === 'INPUT' && (el.getAttribute('type') || '').toLowerCase() === 'file'; } catch(e){}
+  if(isFile){
+    try { value = el.files ? Array.prototype.map.call(el.files, function(f){ return f.name; }).join(', ') : ''; } catch(e){ value = ''; }
+    if(!value){ try { value = abFileChipName(el) || ''; } catch(e){ value = ''; } }
+  } else {
+    try { value = (el.value != null) ? String(el.value) : ''; } catch(e){ value = ''; }
+  }
+  try { el.setAttribute('data-ab-field', String(idx)); } catch(e){}
+  return {idx: idx, label: '', labels: [], kind: isFile ? 'file' : 'field', name: name, id: id,
+          required: false, selector: '[data-ab-field="' + idx + '"]', value: value};
+}
 function abEnumerate(root){
   root = root || document;
   AB_GROUP_CACHE = null;                      // group membership is recomputed every read
@@ -1078,6 +1098,10 @@ function abEnumerate(root){
     if(el.tagName.toLowerCase()==='input' && skip[(el.getAttribute('type')||'').toLowerCase()]) continue;
     if(abIsComboShadowInput(el)) continue;    // react-select's hidden required sibling — folded below
     if(abIsHiddenHelper(el)) continue;        // a widget's own aria-hidden helper input
+    // Building ONE field's descriptor must never empty the whole read (#4963): if a helper
+    // throws — most often a label lookup reaching an element the page has since removed — fall
+    // back to a minimal row that keeps the field's id and best-effort value, and carry on.
+    try {
     var kind = abKindOf(el);
     var name = (el.getAttribute && el.getAttribute('name')) || '';
     var grp = (kind === 'radio-group' || kind === 'checkbox') ? abGroupInfo(el) : null;
@@ -1156,6 +1180,7 @@ function abEnumerate(root){
       desc.value = (el.value!=null) ? String(el.value) : '';
     }
     out.push(desc);
+    } catch(e){ out.push(abBareField(el, idx)); }
     idx++;
   }
   // ── orphaned file fields (#4032 input-removed) ──────────────────────────────────
