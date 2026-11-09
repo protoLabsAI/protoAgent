@@ -336,8 +336,11 @@ function abLabelLead(lab, el){
   return abClean(parts.join(' ')) || abLabelText(lab);
 }
 // Placeholder-style text that names no question ("Start typing...", "Type your response",
-// "Select..."). Still addressable, but never the primary label while a real one exists.
-var AB_JUNK = /^(svgs? not supported.*|start typing.*|type (your|here|to).*|write here.*|select( an?( option| value| one)?)?\W*|choose( an?)? (option|one)\W*|please (select|choose).*|search\W*|loading\W*|enter (your )?(answer|response|text)\W*|your (answer|response)\W*)$/i;
+// "Select...", "Please select one"). Still addressable, but never the primary label while a real
+// one exists. BARE placeholders only (any case, optional trailing punctuation): text that names
+// a real object — "Please select your state", "Type your full legal name" — is a question and
+// must survive. Mirrored by tests/test_agent_browser_form_labels.py (the regex is read from here).
+var AB_JUNK = /^(svgs? not supported by this browser|start typing|type (your )?(response|answer)( here)?|type here|type to search|write (your (response|answer) )?here|(please )?(select|choose)( (an?|one))?( (option|value|one|item))?|search|loading|enter (your )?(answer|response|text)( here)?|your (answer|response)( here)?)[\s.…:!?*-]*$/i;
 function abIsJunk(s){ return AB_JUNK.test(abClean(s)); }
 var AB_FIELD_SEL = 'input:not([type="hidden"]):not([type="submit"]):not([type="button"]):not([type="reset"]):not([type="image"]), ' +
   'select, textarea, [role="combobox"], .select__control, [class*="select__control"]';

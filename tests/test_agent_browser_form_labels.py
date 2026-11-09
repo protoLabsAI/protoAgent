@@ -9,6 +9,7 @@ from __future__ import annotations
 import importlib
 import io
 import json
+import re
 
 import pytest
 
@@ -19,7 +20,6 @@ ROOT = Path(__file__).resolve().parent.parent / "plugins" / "agent_browser"
 _PKG = load_plugin(ROOT, "agent_browser")
 forms = importlib.import_module(f"{_PKG.__name__}.forms")
 tools = importlib.import_module(f"{_PKG.__name__}.tools")
-boundaries = importlib.import_module(f"{_PKG.__name__}.boundaries")
 
 
 # ── item 4: a CSS selector with brackets inside a quoted value is CSS ───────────
@@ -303,3 +303,36 @@ def test_select_docstring_stays_short_and_names_the_new_modes():
     assert len(desc) < 900
     low = desc.lower()
     assert "group" in low and "autocomplete" in low and "a|b|c" in low
+
+
+# ── AB_JUNK: only BARE placeholders are junk (review MAJOR on #4951) ──────────────
+
+
+def _junk_re(lib: str = ""):
+    """The in-page AB_JUNK regex, read from the JS lib and compiled for Python (it is written
+    in the shared JS/Python regex subset)."""
+    src = (lib or forms._JS_LIB).split("var AB_JUNK = /", 1)[1]
+    body, flags = src.split("/", 1)[0], src.split("/", 1)[1][:1]
+    return re.compile(body, re.I if flags == "i" else 0)
+
+
+@pytest.mark.parametrize("text", [
+    "Select...", "Select…", "Select", "select an option", "Select an option…", "Select one",
+    "Please select", "Please select…", "Please select one", "Please select an option",
+    "PLEASE CHOOSE ONE", "Choose…", "Choose an option", "Start typing...", "Type your response",
+    "Type here", "Write here...", "Search", "Loading", "Enter your answer", "Your answer",
+    "SVGs not supported by this browser.",
+])
+def test_bare_placeholders_are_junk(text):
+    assert _junk_re().match(text), text
+
+
+@pytest.mark.parametrize("text", [
+    "Please select your state", "Please choose your preferred start date",
+    "Please select the office you want to work from", "Select your country of residence",
+    "Choose a username", "Type your full legal name", "Start typing your city name",
+    "Write here why you applied", "Search radius (miles)", "Your answer to question 3",
+    "Please select all that apply", "Selected projects", "Choose one of the following roles",
+])
+def test_real_questions_are_not_junk(text):
+    assert not _junk_re().match(text), text
