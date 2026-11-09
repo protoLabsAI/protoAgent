@@ -524,6 +524,109 @@ describe("DecisionCard", () => {
     await renderNode(<DecisionCard decision={decision("a")} onAnswer={vi.fn()} />);
     expect(document.body.textContent).not.toContain("If nobody answers");
   });
+
+  // ── transcript presentation (#4725, §5.5–5.6) ─────────────────────────────────────────────
+  it("transcript: a newly answered card freezes on Sent and never calls onResolved", async () => {
+    vi.useFakeTimers();
+    try {
+      const onAnswer = vi.fn().mockResolvedValue({ answered_elsewhere: false, decision: decision("a"), resumed: true });
+      const onResolved = vi.fn();
+      await renderNode(
+        <DecisionCard decision={decision("a")} presentation="transcript" onAnswer={onAnswer} onResolved={onResolved} />,
+      );
+      await click("Merge with the WARN");
+      expect(document.body.textContent).toContain('Sent: "Merge with the WARN"');
+      // Past the panel's 4s hold: the transcript card stays put and never resolves itself.
+      await act(async () => {
+        vi.advanceTimersByTime(8000);
+      });
+      expect(onResolved).not.toHaveBeenCalled();
+      expect(document.body.textContent).toContain('Sent: "Merge with the WARN"');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("transcript: once the answered record lands, the card freezes as the 'You chose' line", async () => {
+    const onResolved = vi.fn();
+    const answered = decision("a", {
+      state: "answered",
+      answer_label: "Merge with the WARN",
+      answered_at: "2026-11-08T14:52:00+00:00",
+    });
+    await renderNode(
+      <DecisionCard decision={answered} presentation="transcript" onAnswer={vi.fn()} onResolved={onResolved} />,
+    );
+    expect(document.body.textContent).toContain('You chose "Merge with the WARN" ·');
+    // No options and no "Already answered" callout — just the frozen line.
+    expect(buttons().some((b) => b.textContent?.includes("Merge with the WARN"))).toBe(false);
+    expect(buttons().some((b) => b.textContent?.trim() === "Hold the release")).toBe(false);
+    expect(document.body.textContent).not.toContain("Already answered");
+    expect(document.querySelector(".pl-callout")).toBeFalsy();
+    expect(onResolved).not.toHaveBeenCalled();
+  });
+
+  it("transcript: an expired record freezes on its closed line, not a callout", async () => {
+    await renderNode(
+      <DecisionCard
+        decision={decision("a", {
+          state: "expired",
+          expires_at: "2026-11-08T15:45:00+00:00",
+          default_action_text: "keep holding the release",
+        })}
+        presentation="transcript"
+        onAnswer={vi.fn()}
+      />,
+    );
+    expect(document.body.textContent).toContain("went ahead and keep holding the release");
+    expect(document.querySelector(".pl-callout")).toBeFalsy();
+    expect(buttons().some((b) => b.textContent?.includes("Merge with the WARN"))).toBe(false);
+  });
+
+  it("transcript: a withdrawn record freezes on the no-longer-needed line with the reason", async () => {
+    await renderNode(
+      <DecisionCard
+        decision={decision("a", { state: "withdrawn", withdraw_reason: "I merged it myself." })}
+        presentation="transcript"
+        onAnswer={vi.fn()}
+      />,
+    );
+    expect(document.body.textContent).toContain("protoEngineer doesn't need this any more.");
+    expect(document.body.textContent).toContain("I merged it myself.");
+    expect(document.querySelector(".pl-callout")).toBeFalsy();
+  });
+
+  it("transcript: a 409 freezes on the returned record's line, not the Already-answered callout", async () => {
+    const onAnswer = vi.fn().mockResolvedValue({
+      answered_elsewhere: true,
+      decision: decision("a", { state: "answered", answer_label: "Hold the release", answered_at: "2026-11-08T14:52:00+00:00" }),
+    });
+    await renderNode(<DecisionCard decision={decision("a")} presentation="transcript" onAnswer={onAnswer} />);
+    await click("Merge with the WARN");
+    expect(document.body.textContent).toContain('You chose "Hold the release" ·');
+    expect(document.body.textContent).not.toContain("Already answered");
+    expect(document.querySelector(".pl-callout--info")).toBeFalsy();
+  });
+
+  it("transcript: a pending decision still renders its options (unchanged from the panel)", async () => {
+    const onAnswer = vi.fn().mockResolvedValue({ answered_elsewhere: false, decision: decision("a"), resumed: true });
+    await renderNode(<DecisionCard decision={decision("a")} presentation="transcript" onAnswer={onAnswer} />);
+    expect(buttons().some((b) => b.textContent?.includes("Merge with the WARN"))).toBe(true);
+    expect(document.body.textContent).toContain("Reply in chat instead");
+    expect(document.body.textContent).not.toContain("You chose");
+  });
+
+  it("panel (default): an answered record still shows the Already-answered callout, not the frozen line", async () => {
+    await renderNode(
+      <DecisionCard
+        decision={decision("a", { state: "answered", answer_label: "Merge with the WARN", answered_at: "2026-11-08T14:52:00+00:00" })}
+        onAnswer={vi.fn()}
+      />,
+    );
+    expect(document.body.textContent).toContain("Already answered");
+    expect(document.body.textContent).not.toContain("You chose");
+    expect(document.querySelector(".pl-callout--info")).toBeTruthy();
+  });
 });
 
 // ── DecisionsPanel / DecisionsSheet ─────────────────────────────────────────────────────────
