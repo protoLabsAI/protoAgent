@@ -134,7 +134,16 @@ default), takes the same per-session guard as the tools, sends the launch flags 
 `open <url>` and never a URL-less `open`, gives every wait an explicit timeout below the
 CLI's 30 s IPC re-send, cuts a hung navigation off and recovers once, can own a labelled tab
 (the Gemini-panel guard proven in ebay-plugin), and runs the `walls.py` check after a
-navigation. Sync and thread-safe; every method returns a typed `Result`. The full contract:
+navigation. Sync and thread-safe; every method returns a typed `Result`.
+
+`browser.form_read(scope="")` runs `browser_form_read`'s in-page reader (`forms.read_form_js`,
+combobox option probe included) and returns the field list as data in `Result.value`: label,
+kind, name, id, required, value, options, options_more, with no content-boundary markers.
+`make.for_agent_session(state)`, called inside a tool with its injected graph state, gives a
+client on the session the agent's `browser_*` tools use for that chat (`shared`: the instance's
+main session; `per_session`: derived from `state["session_id"]`). It takes the tools' guard,
+sends the plugin's launch flags, and refuses `close()`. careercoach uses the pair to check a
+filled form against the real page. The full contract:
 [docs/reference/browser-automation.md › For plugin authors](../../docs/reference/browser-automation.md#for-plugin-authors-the-browser-client).
 Tests: [`tests/test_agent_browser_client.py`](../../tests/test_agent_browser_client.py) (scripted
 CLI) and [`tests/test_agent_browser_client_live.py`](../../tests/test_agent_browser_client_live.py)

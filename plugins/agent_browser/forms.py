@@ -1537,6 +1537,25 @@ def collapse_radio_groups(fields: list) -> list:
     return out
 
 
+def read_fields(data, scope: str = "") -> tuple[list | None, str]:
+    """``read_form_js``'s decoded result → ``(fields, "")``: the public field dicts (label, kind,
+    name, id, required, value, and options / options_more where present), radio and checkbox
+    options folded into their group — possibly empty. Or ``(None, "Error: …")`` when the scope
+    matched nothing or the page answered something else. The ONE parse behind both
+    ``browser_form_read`` (rendered for the model) and the plugin client's ``form_read`` (data)."""
+    if isinstance(data, dict) and data.get("ok") is False:
+        if data.get("error") == "scope-not-found":
+            return None, (f"Error: no element matched the scope {scope!r}. Pass a CSS selector or "
+                          "a visible container label, or leave scope blank to read the whole page.")
+        return None, f"Error: {data.get('error') or 'could not read the form'}."
+    fields = data.get("fields") if isinstance(data, dict) else data
+    if fields is None:
+        fields = []
+    if not isinstance(fields, list) or not all(isinstance(f, dict) for f in fields):
+        return None, "Error: could not read the form (the page returned unreadable data)."
+    return collapse_radio_groups(fields), ""
+
+
 def render_form_read(output: str, scope: str = "") -> str:
     """Turn ``read_form_js``'s JSON into the model-facing result: a JSON array, one object
     per field in document order (radio options folded into their group), or a readable
@@ -1545,16 +1564,13 @@ def render_form_read(output: str, scope: str = "") -> str:
         data = _loads(output)
     except (ValueError, TypeError):
         return "Error: could not read the form (the page returned unreadable data)."
-    if isinstance(data, dict) and data.get("ok") is False:
-        if data.get("error") == "scope-not-found":
-            return (f"Error: no element matched the scope {scope!r}. Pass a CSS selector or a "
-                    "visible container label, or leave scope blank to read the whole page.")
-        return f"Error: {data.get('error') or 'could not read the form'}."
-    fields = data.get("fields") if isinstance(data, dict) else data
+    fields, error = read_fields(data, scope)
+    if error:
+        return error
     if not fields:
         where = f" within {scope!r}" if scope else ""
         return f"No form fields found{where}."
-    return json.dumps(collapse_radio_groups(fields), ensure_ascii=False, indent=2)
+    return json.dumps(fields, ensure_ascii=False, indent=2)
 
 
 # ── browser_fill read-back (#4954 eval) ─────────────────────────────────────────────

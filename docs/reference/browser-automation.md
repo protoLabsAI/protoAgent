@@ -496,11 +496,11 @@ without importing anything:
 
 | `kind` | Meaning |
 |---|---|
-| `ok` | It worked. `text` holds the CLI output; `value` holds the parsed payload (`open`: `{url, title}`, `eval_json`: the script's result, `tabs`: the tab list). |
+| `ok` | It worked. `text` holds the CLI output; `value` holds the parsed payload (`open`: `{url, title}`, `eval_json`: the script's result, `tabs`: the tab list, `form_read`: the field list). |
 | `timeout` | No answer in time. The browser or its tab is stuck, or the site is not answering. Not a wall. |
 | `wall` | A bot check, block page or sign-in wall answered instead of the page. `wall.kind`, `wall.label`, `wall.url`, `wall.transient`. |
-| `cli_error` | The CLI ran and failed: no such element, a profile already in use, Chrome refused. |
-| `script_error` | `eval_json`: the page script threw an error. |
+| `cli_error` | The CLI ran and failed: no such element, a profile already in use, Chrome refused, a `form_read` scope that matched nothing. |
+| `script_error` | `eval_json` / `form_read`: the page script threw an error, or answered something unreadable. |
 | `unavailable` | There is no CLI to run: not installed, still downloading, or it can't start. |
 | `bad_argument` | Refused before anything ran: an option-shaped operand, a malformed wait. |
 | `too_large` | The output passed the byte cap. (`get_text` and `snapshot` return a cut first part with `truncated=True` instead.) |
@@ -510,10 +510,63 @@ don't raise for an expected failure. If you'd rather use exceptions,
 `r.raise_for_error()` raises `browser.Error` with the same `kind`.
 
 **Methods:** `open(url, check_walls=True, recover=True)`; `wait(selector= | text= | url= | load= | js=, timeout_s=10)`;
-`eval_json(script)`; `get_text(selector="body", content_boundaries=False)`;
+`eval_json(script)`; `form_read(scope="")`; `get_text(selector="body", content_boundaries=False)`;
 `snapshot(interactive=True, compact=True, scope="", depth=0)`; `check_wall(requested_url="")`;
 `get_url()`; `tabs()`; `focus_tab(label="")`; `close_panels()`; `close()`; and `hold()`, a
 context manager that keeps a multi-step sequence together.
+
+**Reading a form as data.** `form_read(scope="")` runs the same in-page reader as
+`browser_form_read`, on this client's session, and returns the fields as data instead of a
+string for the model. That includes opening each unanswered select-like combobox to list its
+options and closing it again without committing anything. `scope` is a CSS selector or a
+visible container label (not a `@eN` ref); blank reads the whole page. `value` is a list of
+dicts in document order, the shape the tool renders:
+
+| Key | |
+|---|---|
+| `label` · `kind` · `name` · `id` · `required` | What the field is. `kind` is `text`, `textarea`, `email`, `tel`, `number`, `native-select`, `combobox`, `checkbox`, `radio-group`, `checkbox-group`, `file` or `other`. |
+| `value` | The committed value: a combobox's rendered selection (not half-typed search text), a radio group's checked label, a checkbox group's checked labels (a list), a file input's attached file name. |
+| `options` · `options_more` | Where the field has options. The list stops at 60; `options_more` counts the rest. |
+
+There are no content-boundary markers in it. It's for your code, not the model, so a plugin
+can check a form against the real page instead of trusting a read-back the model passed in.
+(An eval caught the model shortening one: 7.3 KB from the browser arrived as 3.8 KB in the
+tool call.) An empty form is `ok` with `[]`. Past the byte cap it's `too_large`, never half a
+list.
+
+**Acting on the agent's own browser.** `make(session=...)` is always a browser of your own.
+To read the page the agent's `browser_*` tools are driving in the current chat (say, to check
+what it just filled in), build the client from inside your tool call with
+`make.for_agent_session(state)`, passing the tool's injected graph state:
+
+```python
+from typing import Annotated, Any
+from langchain_core.tools import tool
+from langgraph.prebuilt import InjectedState
+
+@tool
+def verify_application(state: Annotated[Any, InjectedState] = None) -> str:
+    """Check the filled form against the page."""
+    browser = make.for_agent_session(state)   # the session browser_fill just used
+    r = browser.form_read()
+    if not r.ok:
+        return f"Error: {r.error}"
+    fields = r.value                           # list of dicts, see above
+    ...
+```
+
+It picks the session the same way the tools do. Under `session_scope: shared` (the default)
+that's the instance's main session (`AGENT_BROWSER_SESSION`, else `pa-<instance>-<hash>`).
+Under `per_session` it's the name derived from `state["session_id"]`. Pass `state`:
+`current_session_id()` is empty inside a tool body, so under `per_session` a call with no
+`state` and no `session_id=` raises `ValueError` rather than reading some other chat's page.
+The client takes the same per-session guard as the tools, so a read never lands in the middle
+of a `browser_fill`. It sends the browser plugin's own launch flags (profile, headed, …) so it
+can't relaunch the agent's Chrome with different ones, and its `close()` is refused. Keep the
+tool **sync** (or use `asyncio.to_thread`): a client call blocking the event loop would wait
+forever behind a browser tool that needs that loop to finish. `for_agent_session` takes
+`session_id=`, `timeout_s` and `nav_timeout_s`. The other `make` options belong to a browser
+of your own and don't apply.
 
 **Options**, all keyword arguments to `make(...)`:
 
