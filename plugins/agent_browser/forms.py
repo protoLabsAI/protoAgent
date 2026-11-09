@@ -284,6 +284,10 @@ def _loads(output: str):
     return data
 
 
+# Public name for other modules (client.py); _loads stays for in-module callers.
+loads = _loads
+
+
 # ── the in-page JavaScript (ONE copy, shared by every form tool) ─────────────────
 # Defines, in the page: clean/norm (text tidy), candidateLabels (the six label sources in
 # precedence order), kindOf / requiredOf / comboValue (field shape), enumerateFields(root)

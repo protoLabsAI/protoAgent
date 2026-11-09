@@ -424,8 +424,10 @@ class BrowserClient:
             return Result(OK, text=out, value=data, command=cmd, seconds=res.seconds)
         reason = (str(env.get("error") or "") if env else "") or _last_line(err) or _last_line(out) \
             or f"exit code {res.returncode}"
-        if (locked := runtime.profile_in_use_error(err + "\n" + reason, {"profile": self.profile},
-                                                   self.session)):
+        # On the agent's own session the launch flags (so the profile and session_scope) are the
+        # agent_browser plugin's config, not this client's (QA, #4957): diagnose with those.
+        lock_cfg = self._host._live() if self.agent_session else {"profile": self.profile}
+        if (locked := runtime.profile_in_use_error(err + "\n" + reason, lock_cfg, self.session)):
             return Result(CLI_ERROR, error=locked.removeprefix("Error: "), command=cmd, seconds=res.seconds)
         # A page script's own error text can say "timeout" — that is the script's, not the browser's.
         kind = TIMEOUT if _TIMEOUT_TEXT.search(reason) and "Evaluation error" not in reason else CLI_ERROR
@@ -736,7 +738,7 @@ class BrowserClient:
         if isinstance(raw, str):
             raw = boundaries.strip(raw)  # never on here, but a stray env flag must not break the parse
         try:
-            data = forms._loads(raw) if isinstance(raw, str) else raw
+            data = forms.loads(raw) if isinstance(raw, str) else raw
         except (ValueError, TypeError):
             data = None
         fields, error = forms.read_fields(data, scope) if data is not None else (
