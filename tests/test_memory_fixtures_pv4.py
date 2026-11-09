@@ -283,7 +283,7 @@ def test_bad_chat_count_fails_before_extraction(tmp_path):
         asyncio.run(build(tmp_path, users=(126,), count=1, fetch=fake_fetch(rows), yes=True))
 
 
-def test_cli_model_override(monkeypatch, tmp_path):
+def test_cli_model_override(monkeypatch, tmp_path, capsys):
     from types import SimpleNamespace
 
     from evals.memory_fixtures import build_pv4
@@ -300,6 +300,50 @@ def test_cli_model_override(monkeypatch, tmp_path):
     build_pv4.main(["--yes", "--output", str(tmp_path)])
     build_pv4.main(["--yes", "--model", "chosen", "--output", str(tmp_path)])
     assert seen == ["configured", "chosen"]
+    assert capsys.readouterr().out.splitlines() == [
+        "Extraction model: configured", "Extraction model: chosen",
+    ]
+
+
+@pytest.mark.parametrize("status, attempts", [(429, 3), (502, 3), (503, 3), (504, 3), (404, 1)])
+def test_fetch_page_bounds_http_retries(monkeypatch, status, attempts):
+    from urllib.error import HTTPError
+    from evals.memory_fixtures import build_pv4
+
+    calls = []
+    delays = []
+
+    def fail(url, timeout):
+        calls.append(url)
+        raise HTTPError(url, status, "unavailable", {}, None)
+
+    monkeypatch.setattr(build_pv4, "urlopen", fail)
+    monkeypatch.setattr(build_pv4.time, "sleep", delays.append)
+    with pytest.raises(HTTPError) as error:
+        build_pv4.fetch_page(100, 100)
+    assert error.value.code == status
+    assert len(calls) == attempts
+    assert len(set(calls)) == 1
+    assert delays == [10, 20][:attempts - 1]
+
+
+def test_fetch_page_recovers_after_transient_error(monkeypatch):
+    from io import BytesIO
+    from urllib.error import HTTPError
+    from evals.memory_fixtures import build_pv4
+
+    calls = []
+
+    def fetch(url, timeout):
+        calls.append(url)
+        if len(calls) == 1:
+            raise HTTPError(url, 502, "unavailable", {}, None)
+        return BytesIO(b'{"rows": [], "num_rows_total": 100}')
+
+    monkeypatch.setattr(build_pv4, "urlopen", fetch)
+    monkeypatch.setattr(build_pv4.time, "sleep", lambda delay: None)
+    assert build_pv4.fetch_page(100, 100) == {"rows": [], "num_rows_total": 100}
+    assert len(calls) == 2
 
 
 def test_fetch_page_uses_test_split(monkeypatch):

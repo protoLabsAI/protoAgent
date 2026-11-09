@@ -10,6 +10,7 @@ import importlib.util
 import json
 import os
 import random
+import time
 from collections import defaultdict
 from contextlib import closing
 from datetime import date, timedelta
@@ -18,6 +19,7 @@ from re import sub
 from sqlite3 import Error as SQLiteError
 from sqlite3 import connect as sqlite_connect
 from tempfile import TemporaryDirectory
+from urllib.error import HTTPError
 from urllib.parse import urlencode
 from urllib.request import urlopen
 
@@ -37,8 +39,16 @@ DEFAULT_WORK_ROOT = Path.home() / ".cache" / "protoagent" / "pv4-extract"
 def fetch_page(offset: int, length: int) -> dict:
     query = urlencode(dict(dataset="memorilla/PersonalizationV4", config="default",
                            split="test", offset=offset, length=length))
-    with urlopen("https://datasets-server.huggingface.co/rows?" + query, timeout=60) as response:
-        return json.load(response)
+    for attempt in range(3):
+        try:
+            with urlopen("https://datasets-server.huggingface.co/rows?" + query, timeout=60) as response:
+                return json.load(response)
+        except HTTPError as exc:
+            if exc.code not in {429, 502, 503, 504} or attempt == 2:
+                raise
+            print(f"PV4 offset {offset}: HTTP {exc.code}; retrying", flush=True)
+            exc.close()
+            time.sleep(10 * (attempt + 1))
 
 
 def fetch_users(users, fetch=fetch_page):
@@ -297,12 +307,14 @@ def main(argv=None):
     parser.add_argument("--yes", action="store_true")
     parser.add_argument("--force", action="store_true")
     args = parser.parse_args(argv)
+    from graph.agent import _resolve_aux_model
     from graph.config import LangGraphConfig
     from infra.paths import instance_paths
 
     config = LangGraphConfig.from_yaml(instance_paths().config_yaml)
     if args.model:
         config.aux_model = args.model
+    print(f"Extraction model: {_resolve_aux_model(config, '') or config.model_name}", flush=True)
     asyncio.run(build(args.output, users=args.users, count=args.count, seed=args.seed,
                       config=config, yes=args.yes, force=args.force))
 
