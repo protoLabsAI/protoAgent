@@ -116,6 +116,19 @@ describe("transcriptStore", () => {
     expect(got.map((s) => [s.id, s.messages.length])).toEqual([["s2", 4]]);
   });
 
+  it("a save re-puts chunks another tab deleted, so no message goes missing", async () => {
+    const history = longChat(12);
+    const other = (await openTranscriptStore({ factory }))!;
+    await store.putSessions("a", [session("s", history)]);
+    expect((await store.loadAgent("a")).sessions[0].messages).toEqual(history); // this tab has seen them
+    await other.deleteSessions("a", ["s"]); // another tab's eviction takes the chunks
+    await store.putSessions("a", [session("s", history)]); // this tab still has it open: re-save
+    const reloaded = (await other.loadAgent("a")).sessions[0].messages;
+    expect(reloaded).toEqual(history);
+    expect(reloaded.some((m) => m.id?.startsWith("chunk-missing"))).toBe(false);
+    other.close();
+  });
+
   it("finds turns still streaming in other agents' chats", async () => {
     await store.putSessions("here", [session("s", longChat(1, { live: true }))]);
     await store.putSessions("other", [session("s", longChat(13, { live: true }), { title: "Long one" }), session("quiet", longChat(1))]);

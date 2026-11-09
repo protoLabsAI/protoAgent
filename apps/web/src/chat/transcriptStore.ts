@@ -86,9 +86,6 @@ function assemble(record: SessionRecord, chunks: Map<string, Message[]>): Sessio
 }
 
 export class TranscriptStore {
-  /** Chunk keys known to exist, per `${slug}\u0000${sessionId}`: a save skips re-putting them. */
-  private known = new Map<string, Set<string>>();
-
   constructor(private readonly db: IDBDatabase) {}
 
   close(): void {
@@ -110,7 +107,6 @@ export class TranscriptStore {
       const map = bySession.get(chunk.sessionId) ?? new Map<string, Message[]>();
       map.set(chunk.hash, chunk.messages);
       bySession.set(chunk.sessionId, map);
-      this.knownFor(slug, chunk.sessionId).add(chunk.hash);
     }
     const position = new Map((agent?.order ?? []).map((id, i) => [id, i]));
     const sessions = records
@@ -144,25 +140,15 @@ export class TranscriptStore {
         tx.objectStore("chunks").getAll(IDBKeyRange.bound([slug, id], [slug, id, []])),
       )) as ChunkRecord[];
       out.push(assemble(record, new Map(chunks.map((c) => [c.hash, c.messages]))));
-      // Known to exist now: this tab's next save of the session skips re-putting them.
-      const known = this.knownFor(slug, id);
-      for (const chunk of chunks) known.add(chunk.hash);
     }
     return out;
   }
 
-  private knownFor(slug: string, sessionId: string): Set<string> {
-    const key = `${slug}\u0000${sessionId}`;
-    let set = this.known.get(key);
-    if (!set) {
-      set = new Set();
-      this.known.set(key, set);
-    }
-    return set;
-  }
-
-  /** Save sessions of one agent: new chunks, the session records, then the chunks no record
-   *  names any more. One transaction, so a reader never sees a record naming a missing chunk. */
+  /** Save sessions of one agent: the chunks the store doesn't hold yet, the session records, and
+   *  removal of chunks no record names any more. One transaction, so a reader never sees a record
+   *  naming a missing chunk. Which chunks exist is read INSIDE that transaction, never from a
+   *  cache: another tab may have deleted some (its eviction, or its own orphan collection), and a
+   *  record naming a chunk this save didn't re-put would lose those messages. */
   async putSessions(slug: string, sessions: SessionLike[]): Promise<void> {
     if (!sessions.length) return;
     const tx = this.db.transaction(["sessions", "chunks"], "readwrite");
@@ -172,35 +158,23 @@ export class TranscriptStore {
     for (const session of sessions) {
       const { messages, ...rest } = session;
       const { chunks, tail } = cutChunks(messages);
-      const known = this.knownFor(slug, session.id);
-      const names: string[] = [];
-      for (const chunk of chunks) {
-        const hash = chunkHash(JSON.stringify(chunk));
-        names.push(hash);
-        if (!known.has(hash)) {
-          pending.push(promised(chunkStore.put({ slug, sessionId: session.id, hash, messages: chunk } satisfies ChunkRecord)));
-        }
-      }
-      const record: SessionRecord = { slug, id: session.id, updatedAt: session.updatedAt, session: rest, chunks: names, tail };
-      pending.push(promised(sessionStore.put(record)));
-      // Collect this session's chunks no longer named (an edited earlier turn, a settled tail).
-      const keep = new Set(names);
+      const named = chunks.map((chunk) => ({ chunk, hash: chunkHash(JSON.stringify(chunk)) }));
+      const record: SessionRecord = { slug, id: session.id, updatedAt: session.updatedAt, session: rest, chunks: named.map((n) => n.hash), tail };
+      const keep = new Set(record.chunks);
       const range = IDBKeyRange.bound([slug, session.id], [slug, session.id, []]);
       pending.push(
         promised(chunkStore.getAllKeys(range)).then((keys) => {
-          for (const key of keys as [string, string, string][]) {
-            if (!keep.has(key[2])) chunkStore.delete(key);
+          const present = new Set((keys as [string, string, string][]).map((key) => key[2]));
+          for (const { chunk, hash } of named) {
+            if (!present.has(hash)) chunkStore.put({ slug, sessionId: session.id, hash, messages: chunk } satisfies ChunkRecord);
           }
+          // This session's chunks no longer named (an edited earlier turn, a settled tail).
+          for (const key of keys as [string, string, string][]) if (!keep.has(key[2])) chunkStore.delete(key);
+          sessionStore.put(record);
         }),
       );
     }
     await Promise.all([...pending, done(tx)]);
-    for (const session of sessions) {
-      const { chunks } = cutChunks(session.messages);
-      const known = this.knownFor(slug, session.id);
-      known.clear();
-      for (const chunk of chunks) known.add(chunkHash(JSON.stringify(chunk)));
-    }
   }
 
   /** Remove sessions of one agent and all their chunks. */
@@ -210,7 +184,6 @@ export class TranscriptStore {
     for (const id of ids) {
       tx.objectStore("sessions").delete([slug, id]);
       tx.objectStore("chunks").delete(IDBKeyRange.bound([slug, id], [slug, id, []]));
-      this.known.delete(`${slug}\u0000${id}`);
     }
     await done(tx);
   }
@@ -309,7 +282,6 @@ export class TranscriptStore {
     tx.objectStore("chunks").clear();
     tx.objectStore("agents").clear();
     tx.objectStore("threads").clear();
-    this.known.clear();
     await done(tx);
   }
 }
