@@ -282,15 +282,19 @@ export function ChatSessionSlot({
   // Forwarded into the DS PromptInput (inputRef) — for slash-completion focus and
   // the Ctrl/⌘+Enter caret insert. The DS component owns the auto-grow.
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
-  // Terminal-style ↑/↓ history nav (#1496): position in the shared submitted-message ring
+  // Terminal-style ↑/↓ history nav (#1496): position in the per-chat-session submitted-message ring
   // (null = not navigating), and the live draft stashed when nav began (restored on ↓ past
   // the newest). Refs, not state — they change alongside a setDraft, no separate re-render.
   const histIndexRef = useRef<number | null>(null);
   const histStashRef = useRef<string>("");
+  useEffect(() => {
+    histIndexRef.current = null;
+    histStashRef.current = "";
+  }, [sessionId]);
   // Every submission — a send, a queued steer/interjection — joins the recall ring and
   // detaches from history nav (useSteerQueue calls this at the point the inline code did).
   function recordSubmitted(text: string) {
-    pushInputHistory(text);
+    pushInputHistory(sessionId, text);
     histIndexRef.current = null;
     histStashRef.current = "";
   }
@@ -509,7 +513,7 @@ export function ChatSessionSlot({
       !event.metaKey && !event.ctrlKey && !event.altKey && !event.shiftKey
     ) {
       const ta = textareaRef.current;
-      const hist = inputHistory();
+      const hist = inputHistory(sessionId);
       if (ta && hist.length) {
         const caret = ta.selectionStart ?? 0;
         const onFirstLine = draft.slice(0, caret).indexOf("\n") === -1;
