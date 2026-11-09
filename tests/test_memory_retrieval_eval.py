@@ -166,19 +166,33 @@ def test_evaluate_memoizes_embeds_across_runs(fixture_file, monkeypatch):
     pv4, changed, arm, model = _mixed_suite_args(fixture_file)
     monkeypatch.setitem(ev.ARMS, "fake", arm)
     monkeypatch.setitem(ev.ARMS, "other", arm)
-    calls = []
 
-    def embed(text):
-        calls.append(text)
-        return _hash_embed(text)
+    def record(sink):
+        def embed(text):
+            sink.append(text)
+            return _hash_embed(text)
 
+        return embed
+
+    memoized = []
     report = ev.evaluate(pv4, changed, fixture_file.parent, ["fake", "other"], 3,
-                         ProjectionOptions(), model, embed)
+                         ProjectionOptions(), model, record(memoized))
     # runs=3 x 2 arms would re-embed every fixture row and choice many times;
     # memoization collapses each distinct text to exactly one underlying call.
-    assert calls, "expected the fake embedder to be exercised"
-    assert all(count == 1 for count in Counter(calls).values())
+    assert memoized, "expected the fake embedder to be exercised"
+    assert all(count == 1 for count in Counter(memoized).values())
     assert len(report["results"]) == 12
+
+    # Defeat the cache (identity wrapper): the identical rows and choices are
+    # now embedded over and over — the same distinct texts, strictly more
+    # underlying calls. That gap is exactly the waste the cache removes, and
+    # proves the one-call-each assertion above would fail if memoization broke.
+    monkeypatch.setattr(ev, "_memo_embed", lambda fn: fn)
+    unmemoized = []
+    ev.evaluate(pv4, changed, fixture_file.parent, ["fake", "other"], 3,
+                ProjectionOptions(), model, record(unmemoized))
+    assert set(unmemoized) == set(memoized)
+    assert len(unmemoized) > len(memoized)
 
 
 @pytest.mark.platform_sensitive
