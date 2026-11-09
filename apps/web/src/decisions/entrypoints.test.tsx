@@ -6,8 +6,10 @@ import type { DecisionRow } from "../lib/api/decisions";
 
 // The two entry points read the fleet-wide useDecisions() singleton; drive it by hand so the
 // tests exercise the composites' rendering (labels, badge, controlled open, focus return) without
-// the store's network/bus. createRoot + act, like the other console UI suites — no RTL dep.
+// the store's network/bus. Integration cases use the real store with API/event boundaries mocked.
+// createRoot + act, like the other console UI suites — no RTL dep.
 const store = vi.hoisted(() => ({
+  real: false,
   openPanel: vi.fn(),
   closePanel: vi.fn(),
   answer: vi.fn(),
@@ -21,16 +23,28 @@ const store = vi.hoisted(() => ({
     panelOpen: false,
   },
 }));
-vi.mock("./useDecisions", () => ({
-  useDecisions: () => ({
-    ...store.snap,
-    openPanel: store.openPanel,
-    closePanel: store.closePanel,
-    answer: store.answer,
-    refresh: () => {},
-    cancel: () => {},
-  }),
+vi.mock("../lib/events", () => ({
+  onTopic: () => () => {},
+  onConnectionChange: () => () => {},
 }));
+vi.mock("../lib/notify", () => ({ notifyIfHidden: vi.fn() }));
+vi.mock("./useDecisions", async (importOriginal) => {
+  const original = await importOriginal<typeof import("./useDecisions")>();
+  return {
+    ...original,
+    useDecisions: () => store.real ? original.useDecisions() : ({
+      ...store.snap,
+      openPanel: store.openPanel,
+      closePanel: store.closePanel,
+      answer: store.answer,
+      refresh: () => {},
+      cancel: () => {},
+    }),
+  };
+});
+
+import { decisionsApi } from "../lib/api/decisions";
+import { decisionsStoreForTest } from "./useDecisions";
 
 import { UtilityWidget } from "../app/UtilityWidget";
 import { DecisionsHeaderButton } from "./DecisionsHeaderButton";
@@ -79,6 +93,7 @@ let host: HTMLDivElement;
 let root: Root;
 
 beforeEach(() => {
+  store.real = false;
   store.snap = { ...DEFAULT_SNAP };
   store.openPanel.mockReset();
   store.closePanel.mockReset();
@@ -97,6 +112,8 @@ beforeEach(() => {
 });
 afterEach(() => {
   act(() => root.unmount());
+  decisionsStoreForTest.closePanel();
+  vi.restoreAllMocks();
   host.remove();
   document.body.replaceChildren();
   vi.unstubAllGlobals();
@@ -124,6 +141,9 @@ describe("UtilityWidget controlled/uncontrolled open", () => {
     await act(async () => util()!.click());
     expect(document.querySelector('[data-testid="body"]')).not.toBeNull();
     expect(util()!.getAttribute("aria-expanded")).toBe("true");
+    await act(async () => document.querySelector<HTMLButtonElement>(".pl-dialog__close")!.click());
+    expect(document.querySelector('[data-testid="body"]')).toBeNull();
+    expect(util()!.getAttribute("aria-expanded")).toBe("false");
   });
 
   it("obeys the controlled open prop and reports every change via onOpenChange", async () => {
@@ -145,6 +165,39 @@ describe("UtilityWidget controlled/uncontrolled open", () => {
     const close = document.querySelector<HTMLButtonElement>(".pl-dialog__close");
     await act(async () => close!.click());
     expect(onOpenChange).toHaveBeenLastCalledWith(false);
+  });
+});
+
+describe("entry points with the shared Decisions store", () => {
+  beforeEach(() => {
+    store.real = true;
+    vi.spyOn(decisionsApi, "listDecisions").mockResolvedValue({
+      decisions: [decision("shared")],
+      pending: 1,
+    });
+  });
+
+  it("opens the desktop dialog via openPanel without clicking the pill", async () => {
+    await render(h(DecisionsWidget));
+    expect(pill()!.getAttribute("aria-expanded")).toBe("false");
+    await act(async () => decisionsStoreForTest.openPanel());
+    expect(pill()!.getAttribute("aria-expanded")).toBe("true");
+    expect(document.querySelector('[role="dialog"]')!.textContent).toContain("Merge the release?");
+    await act(async () => document.querySelector<HTMLButtonElement>(".pl-dialog__close")!.click());
+    expect(decisionsStoreForTest.getSnapshot().panelOpen).toBe(false);
+    expect(document.querySelector('[role="dialog"]')).toBeNull();
+  });
+
+  it("opens and dismisses the phone sheet through the store and restores focus", async () => {
+    await render(h(DecisionsHeaderButton));
+    const button = headBtn()!;
+    await act(async () => button.click());
+    expect(decisionsStoreForTest.getSnapshot().panelOpen).toBe(true);
+    expect(button.getAttribute("aria-expanded")).toBe("true");
+    await act(async () => document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
+    expect(decisionsStoreForTest.getSnapshot().panelOpen).toBe(false);
+    expect(document.querySelector('[role="dialog"]')).toBeNull();
+    expect(document.activeElement).toBe(button);
   });
 });
 
@@ -184,6 +237,10 @@ describe("DecisionsWidget", () => {
     // Before the first load.
     await render(h(DecisionsWidget));
     expect(pill()).not.toBeNull();
+    expect(pill()!.querySelector(".pl-count")).toBeNull();
+    expect(pill()!.getAttribute("aria-label")).toBe("Decisions, nothing waiting");
+    setSnap({ pendingCount: 2, top: decision("a") });
+    await render(h(DecisionsWidget));
     expect(pill()!.querySelector(".pl-count")).toBeNull();
     expect(pill()!.getAttribute("aria-label")).toBe("Decisions, nothing waiting");
     // Loaded, still nothing pending — still quiet, never "0".
@@ -243,6 +300,10 @@ describe("DecisionsHeaderButton", () => {
     setSnap({ loaded: true, state: "ready" });
     await render(h(DecisionsHeaderButton));
     expect(headBtn()).not.toBeNull();
+    setSnap({ pendingCount: 0 });
+    await render(h(DecisionsHeaderButton));
+    expect(headBtn()).toBeNull();
+    expect(document.querySelector('[role="dialog"]')).toBeNull();
   });
 
   it("shows the icon + a Count beside it, both aria-hidden, with the §4.1 name and aria-haspopup", async () => {
@@ -269,7 +330,7 @@ describe("DecisionsHeaderButton", () => {
     expect(headBtn()!.classList.contains("decisions-head-btn")).toBe(true);
     const css = [...document.querySelectorAll("style")].map((s) => s.textContent ?? "").join("\n");
     expect(css).toContain(".decisions-head-btn:focus-visible");
-    expect(css).toContain("var(--pl-color-focus)");
+    expect(css).toContain("outline: var(--pl-border-width) solid var(--pl-color-fg)");
   });
 
   it("opens the bottom sheet and reflects it in aria-expanded", async () => {
@@ -308,6 +369,7 @@ describe("DecisionsHeaderButton", () => {
     setSnap({ pendingCount: 0, decisions: [] });
     await render(h(DecisionsHeaderButton, { fallbackFocus }));
     expect(headBtn()).toBeNull();
+    expect(document.querySelector(".pl-drawer--bottom")).not.toBeNull();
     // Closing the sheet now returns focus to New chat.
     setSnap({ panelOpen: false });
     await render(h(DecisionsHeaderButton, { fallbackFocus }));

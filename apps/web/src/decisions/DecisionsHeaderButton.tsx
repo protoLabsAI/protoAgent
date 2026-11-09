@@ -43,7 +43,7 @@ const HEAD_BTN_CSS = `
   touch-action: manipulation;
 }
 .decisions-head-btn:focus-visible {
-  outline: 2px solid var(--pl-color-focus);
+  outline: var(--pl-border-width) solid var(--pl-color-fg);
   outline-offset: 2px;
 }
 `;

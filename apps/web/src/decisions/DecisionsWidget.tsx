@@ -54,14 +54,15 @@ export function decisionsInfo(top: DecisionRow | null, pendingCount: number): Re
 export function DecisionsWidget() {
   const { decisions, pendingCount, top, loaded, panelOpen, openPanel, closePanel, answer } =
     useDecisions();
+  const visibleCount = loaded ? pendingCount : 0;
   return (
     <UtilityWidget
       testId="decisions-widget"
       icon={<MessageCircleQuestion size={14} />}
       // A badge only while something waits — never "0", never a warning tint (§2.1).
-      badge={pendingCount > 0 ? <Count>{pendingCount > 9 ? "9+" : pendingCount}</Count> : undefined}
-      label={decisionsLabel(pendingCount)}
-      info={decisionsInfo(top, pendingCount)}
+      badge={visibleCount > 0 ? <Count>{visibleCount > 9 ? "9+" : visibleCount}</Count> : undefined}
+      label={decisionsLabel(visibleCount)}
+      info={decisionsInfo(top, visibleCount)}
       dialogTitle="Decisions waiting on you"
       dialogWidth={DECISIONS_DIALOG_WIDTH}
       open={panelOpen}
