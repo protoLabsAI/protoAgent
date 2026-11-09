@@ -45,7 +45,10 @@ matching; the paired patterns above cover both matchers, including nested topics
 - **Topic qualification.** `publish` qualifies your topic with your plugin's id unless it is already
   prefixed — the same rule as the host's `registry.emit`
   ([#4801](https://github.com/protoLabsAI/protoAgent/issues/4801)). You name `status`; the bus sees
-  `<pluginId>.status`. A topic already under your id keeps all its segments.
+  `<pluginId>.status`. Kit 0.71 sends that qualification as `<pluginId>:status` in
+  the wire frame's `name` field; the host converts its own plugin's colon prefix to
+  the bus's dot prefix. Legacy `topic` frames keep their existing interpretation.
+  A topic already under your id keeps all its segments.
 - **`since` resume — automatic.** The kit records the `seq` of every frame it delivers (per view, in
   `sessionStorage`) and, when a view remounts, resubscribes with that mark as `since` so the host
   replays only what you missed — you don't track a high-water mark yourself. Pass an explicit
@@ -76,7 +79,7 @@ The handshake, theming, and authed-fetch helpers (`initPluginView`, `apiFetch`, 
 | `protoagent:theme` | host → page | `{ theme: object }` |
 | `protoagent:subscribe` | page → host | `{ patterns: string[], since?: number, background?: boolean }` |
 | `protoagent:event` | host → page | `{ topic: string, name: string, data: object, seq?: number }` |
-| `protoagent:publish` | page → host | `{ topic: string, data?: object }` |
+| `protoagent:publish` | page → host | `{ topic: string, data?: object }` or `{ name: string, data?: object }` (kit); `topic` takes precedence when both are present |
 | `protoagent:keybindings` | page → host | `{ bindings: [{ id, keys, label?, group? }] }` |
 | `protoagent:keybinding` | host → page | `{ id: string }` |
 | `protoagent:keydown` | page → host | `{ combo: string, editable?: boolean }` |

@@ -599,12 +599,19 @@ export function PluginView({
         // operator sends. Same trust as above (this iframe, its own origin); bounded, plain
         // text, always the chat on screen, never auto-sent.
         composeToChat(m);
-      } else if (m.type === "protoagent:publish" && typeof m.topic === "string") {
+      } else if (m.type === "protoagent:publish") {
+        // The no-build kit sends `name`; retain `topic` for existing wire clients.
+        let publishTopic = typeof m.topic === "string" ? m.topic : m.name;
+        if (typeof publishTopic !== "string") return;
+        // Kit 0.71 qualifies names with `<id>:`; the host bus uses `<id>.`.
+        if (typeof m.topic !== "string" && publishTopic.startsWith(`${pluginId}:`)) {
+          publishTopic = `${pluginId}.${publishTopic.slice(pluginId.length + 1)}`;
+        }
         // Force the plugin's namespace — a page can only publish under its own id. Prefix
         // only when missing (like `registry.emit`): a topic already under `<id>.` keeps all
         // its segments, so `view.status` from `cadview` lands on the bus as
         // `cadview.view.status`, not `cadview.status`.
-        const topic = namespacePublishTopic(pluginId, m.topic);
+        const topic = namespacePublishTopic(pluginId, publishTopic);
         publishThrottle.push(topic, m.data || {}, performance.now());
       } else if (m.type === "protoagent:restart-request") {
         setRestartRequest((value) => value + 1);

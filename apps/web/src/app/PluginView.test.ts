@@ -14,6 +14,7 @@
 import { act, createElement as h } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import kitSource from "@protolabsai/ui/plugin-kit.js?raw";
 
 import { resolveMenu } from "../contextMenu/registry";
 import { useContextMenuStore } from "../contextMenu/store";
@@ -1011,6 +1012,62 @@ describe("PluginView publish relay", () => {
       data: { type: "protoagent:publish", topic, data: { value } },
     }));
   };
+
+  it("relays the published kit's publish frames with the plugin-bound token", async () => {
+    const fetchMock = vi.fn(async () => response);
+    vi.stubGlobal("fetch", fetchMock);
+    await act(async () => { root.render(h(PluginView, { view })); });
+    const frame = container.querySelector("iframe")!;
+    const kitWindow = new EventTarget() as EventTarget & { parent: { postMessage: (data: unknown) => void } };
+    kitWindow.parent = { postMessage: (data) => {
+      window.dispatchEvent(new MessageEvent("message", {
+        source: frame.contentWindow, origin: window.location.origin, data,
+      }));
+    } };
+    const kit = new Function("window", "location", "sessionStorage",
+      `${kitSource.replace(/^export /gm, "")}\nreturn window.protoPluginView;`)(
+      kitWindow, { pathname: view.path }, { getItem: () => null, setItem: vi.fn() },
+    );
+    kit.publish("view.status", { value: 1 });
+    kit.publish("view.status", { value: 2 });
+    kit.publish("other.status", { value: 3 });
+    await advance();
+    const calls = fetchMock.mock.calls as unknown as Array<[string, RequestInit]>;
+    const publishes = calls.filter(([url]) => url.endsWith("/api/events/publish"));
+    expect(publishes.map(([, init]) => JSON.parse(init.body as string))).toEqual([
+      { topic: "cadview.view.status", data: { value: 2 } },
+      { topic: "cadview.other.status", data: { value: 3 } },
+    ]);
+    for (const [, init] of publishes) {
+      expect(init.headers).toMatchObject({ "X-Plugin-View-Token": "view-token" });
+    }
+  });
+
+  it.each([
+    [{ topic: "status", name: "ignored" }, "cadview.status"],
+    [{ topic: 123, name: "status" }, "cadview.status"],
+    [{ name: "other.status" }, "cadview.other.status"],
+    [{ name: "cadview:status" }, "cadview.status"],
+    [{ name: "other:status" }, "cadview.other:status"],
+    [{ topic: "cadview:status" }, "cadview.cadview:status"],
+    [{ topic: 123, name: null }, null],
+    [{}, null],
+  ])("validates publish topic aliases: %j", async (fields, expected) => {
+    const fetchMock = vi.fn(async () => response);
+    vi.stubGlobal("fetch", fetchMock);
+    await act(async () => { root.render(h(PluginView, { view })); });
+    const frame = container.querySelector("iframe")!;
+    window.dispatchEvent(new MessageEvent("message", {
+      source: frame.contentWindow, origin: window.location.origin,
+      data: { type: "protoagent:publish", ...fields, data: { value: 1 } },
+    }));
+    await advance();
+    const calls = fetchMock.mock.calls as unknown as Array<[string, RequestInit]>;
+    const publishes = calls.filter(([url]) => url.endsWith("/api/events/publish"));
+    expect(publishes.map(([, init]) => JSON.parse(init.body as string))).toEqual(
+      expected ? [{ topic: expected, data: { value: 1 } }] : [],
+    );
+  });
 
   it("coalesces publishes with the plugin-bound token and cancels on unmount", async () => {
     const fetchMock = vi.fn(async () => response);
