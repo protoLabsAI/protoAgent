@@ -194,13 +194,15 @@ def is_top_frame_nav(method: str, params: dict, main_frame_id: str | None) -> bo
 
 # ── the CDP client (IO) ────────────────────────────────────────────────────────
 
-def resolve_page_target(binary: str, timeout: float = 10.0) -> tuple[str | None, str]:
+def resolve_page_target(binary: str, timeout: float = 10.0, *,
+                        env: dict | None = None) -> tuple[str | None, str]:
     """Ask agent-browser for its Chrome CDP endpoint, then find the active page's
     per-target WebSocket. Returns ``(page_ws_url | None, note)`` — note carries a
-    human-readable reason when there's nothing to stream (no session / no page)."""
+    human-readable reason when there's nothing to stream (no session / no page).
+    ``env`` pins WHICH session (``runtime.cli_env``); the panel always passes it."""
     try:
         cdp = subprocess.run([binary, "get", "cdp-url"], capture_output=True,
-                             text=True, timeout=timeout)
+                             text=True, timeout=timeout, env=env)
     except FileNotFoundError:
         return None, f"{binary!r} not on PATH"
     except subprocess.TimeoutExpired:
@@ -215,7 +217,7 @@ def resolve_page_target(binary: str, timeout: float = 10.0) -> tuple[str | None,
     base = _http_base_from_ws(browser_ws)
     cur = ""
     try:
-        u = subprocess.run([binary, "get", "url"], capture_output=True, text=True, timeout=timeout)
+        u = subprocess.run([binary, "get", "url"], capture_output=True, text=True, timeout=timeout, env=env)
         url_lines = (u.stdout or "").strip().splitlines() if u.returncode == 0 else []
         cur = url_lines[0].strip() if url_lines else ""
     except Exception:  # noqa: BLE001 — current url is a nicety for tab selection

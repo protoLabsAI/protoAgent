@@ -21,7 +21,7 @@ description: >-
   **Download agent-browser** button), and the banner's **Install Chrome** button fetches
   the browser it drives. An `npm i -g agent-browser` install on PATH still wins. Ships
   DISABLED; enable with `plugins: { enabled: [agent_browser] }`.
-# Bundled but OPT-IN: the pack contributes 18 tools and drives a real browser at
+# Bundled but OPT-IN: the pack contributes 20 tools and drives a real browser at
 # `network: ["*"]`, so it turns on deliberately — never by shipping.
 enabled: false
 # The standalone repo this bundled copy retires (#3445). An installed copy that
@@ -50,6 +50,17 @@ config:
                             # chat session drives its own page, so two chats at once don't land
                             # on each other's tab. Opt-in: the panel still follows the shared
                             # session, so per_session leaves the operator's live view on it.
+                            # Either way the browser is THIS instance's own: the plugin names the
+                            # CLI session from the instance (`pa-<instance>-<hash>`), so two
+                            # agents on one machine never share a Chrome or its cookies. An
+                            # AGENT_BROWSER_SESSION env var set by the operator overrides it.
+  idle_timeout_min: 30      # per_session chat browsers shut down (Chrome and all) after this many
+                            # minutes with no browser command; 0 = never. The CLI's own reaper
+                            # (AGENT_BROWSER_IDLE_TIMEOUT_MS), applied when a browser starts.
+  main_idle_timeout_min: 0  # the same for the instance's MAIN browser (shared scope + the panel).
+                            # Default never: the operator's signed-in tabs live there, and the
+                            # panel's live view doesn't count as activity, so a timeout would
+                            # close the browser under someone watching it.
   home_url: ""              # homepage the panel opens to. When set, the panel auto-opens it if
                             # no browser page is open; the empty state also shows a Start button.
                             # Blank → the Start button opens about:blank (no auto-open).
@@ -89,7 +100,9 @@ settings:
   - { key: max_response_bytes, label: "Max response bytes", type: number, description: "Aggregate stdout+stderr byte cap per browser command. Output beyond this is dropped and the tool returns a bounded error — protects process memory and the model's context from unbounded page content. Default 200000." }
   - { key: binary, label: "agent-browser binary", type: string, description: "The agent-browser CLI on PATH (override with a pinned absolute path if needed)." }
   - { key: cli_autofetch, label: "Download the CLI on first use", type: bool, description: "When no agent-browser CLI is on PATH, download the pinned, checksum-verified release the first time the browser is used. Off = install it yourself (npm i -g agent-browser) or use the setup banner's Download button. Chrome is never downloaded automatically." }
-  - { key: session_scope, label: "Session scope", type: string, description: "How the browser session is scoped across concurrent chats. 'shared' (default) = one browser session for everyone, which the console Browser panel and screencast follow. 'per_session' = each chat session drives its own page so two chats at once don't share one browser — the panel still follows the shared session." }
+  - { key: session_scope, label: "Session scope", type: string, description: "How the browser session is scoped across concurrent chats. 'shared' (default) = one browser for this agent, which the console Browser panel and screencast follow. 'per_session' = each chat session drives its own browser so two chats at once don't share one page — the panel still follows the shared one. Either way, other agents on this machine have their own browsers. A Browser profile dir can back only one browser at a time, so with per_session only one chat can use it at once." }
+  - { key: idle_timeout_min, label: "Close idle chat browsers after (min)", type: number, description: "With session scope 'per_session', each chat's browser shuts down after this many minutes without a browser command, so finished chats don't keep a Chrome running. 0 = never. Takes effect for browsers started after the change." }
+  - { key: main_idle_timeout_min, label: "Close the main browser when idle after (min)", type: number, description: "The same for this agent's main browser (the one the Browser panel shows). 0 (default) = never — your signed-in tabs live there, and watching the panel doesn't count as activity. Takes effect the next time the browser starts." }
 
 # Console view (ADR 0026) — an interactive, drivable browser viewport (CDP screencast + input).
 views:

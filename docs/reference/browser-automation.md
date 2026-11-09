@@ -128,10 +128,9 @@ The plugin ships a console view ([ADR 0026](/adr/0026-plugin-contributed-console
 JPEG frames) painted onto a `<canvas>`, with your mouse, keyboard and scroll forwarded
 back into the page as `Input.dispatch*`. With the default `session_scope: shared`, you and the agent are in the same browser —
 take over a login wall by hand, then let it continue. With `session_scope: per_session`,
-each chat drives its own `pa-<hash>` session. The panel still follows the shared session,
-so it may remain empty while the agent browses; it cannot display or control those
-per-chat pages. Following a non-default session and reaping idle per-chat daemons
-are future work.
+each chat drives its own browser (see [Which browser](#which-browser-an-agent-drives)). The panel still follows the
+agent's main browser, so it may remain empty while the agent browses; it cannot display or
+control those per-chat pages. Following a per-chat session is future work.
 
 It resizes Chrome's layout viewport to your dock (× device-pixel-ratio) so pages reflow to
 fill rather than sitting letterboxed, re-arms the screencast on every navigation so you see
@@ -150,6 +149,46 @@ operator bearer, and the `WS /stream` bridge self-gates with a **single-use, 30-
 ticket** minted only by that gated route — because the host's auth middleware is HTTP-only
 and does not cover WebSocket handshakes.
 
+## Which browser an agent drives
+
+**One browser per agent.** The CLI keeps a browser per *session name* — its own daemon,
+its own Chrome, its own cookie jar — and calls it `default` when nobody names one. Every
+protoAgent instance on a machine (each fleet member, the dev sandbox, the desktop hub) is
+its own server process, so before the plugin named the session itself, every agent on the
+machine drove that one `default` Chrome: one agent saw another's page mid-task, parallel
+form fills crossed between agents, and every agent shared every other agent's signed-in
+cookies.
+
+The plugin now names the session from the instance: `pa-<instance>-<hash>`, where
+`<instance>` is the readable instance id (`jobcoach-2e97`, `dev`, or `main` for an unscoped
+default/desktop hub) and `<hash>` comes from the instance's data root. The same root always
+gets the same browser, and two instances never share one. The tools, the panel's toolbar and
+its live view all pass that one name to every CLI call they make, so they always agree.
+
+- **`session_scope: per_session`** goes one step further: **one browser per chat**, named
+  `pa-<instance>-<hash>-<chat hash>` — namespaced by the instance, so two agents' chats can't
+  meet either. A call with no chat behind it uses the agent's main browser.
+- **`AGENT_BROWSER_SESSION`**, set in the server's environment, still wins: it names the
+  agent's main browser outright (two instances given the same value share it again).
+- `agent-browser session list` shows which browsers are running.
+
+**Idle browsers shut down.** Each per-chat browser exits — Chrome and all — after
+`idle_timeout_min` (default 30) minutes with no browser command, so chats that finished
+don't each keep a Chrome running until the next reboot. The agent's main browser has its
+own `main_idle_timeout_min`, **off by default**: your signed-in tabs live there, and the
+panel's live view talks to Chrome directly, so watching it doesn't count as activity — a
+timeout would close the browser under you. This is the CLI's own reaper
+(`AGENT_BROWSER_IDLE_TIMEOUT_MS`), which a browser reads when it **starts**: a change
+applies to browsers started afterwards. A chat that comes back after its browser was reaped
+gets a fresh, empty one.
+
+**A `profile` directory backs one browser at a time.** Chrome locks a profile directory
+while it uses it; a second Chrome on the same directory refuses to start. So with
+`per_session`, only one chat at a time can use a configured `profile` (the next chat's
+`browser_open` returns an error that says so). The same applies when two agents are pointed
+at the same directory. A Chrome profile *name* (`Default`, `Profile 1`) is copied per launch
+by the CLI and never collides.
+
 ## Settings
 
 Editable in **Settings ▸ Plugins ▸ Agent Browser**, or under `agent_browser:` in
@@ -158,13 +197,15 @@ Editable in **Settings ▸ Plugins ▸ Agent Browser**, or under `agent_browser:
 | Setting | What it does |
 |---|---|
 | `binary` | The `agent-browser` CLI. Override with an absolute path when PATH isn't enough. |
-| `session_scope` | `shared` (default) uses one browser across chats; `per_session` isolates each chat. The Browser panel and screencast still follow the shared session. |
+| `session_scope` | `shared` (default) uses one browser for the agent across chats; `per_session` gives each chat its own. The Browser panel and screencast follow the agent's main browser. Either way, other agents on the machine have their own. |
+| `idle_timeout_min` | Minutes before an idle per-chat browser shuts down (default 30; `0` = never). |
+| `main_idle_timeout_min` | The same for the agent's main browser (default `0` = never). |
 | `cli_autofetch` | With no CLI on PATH, download the pinned, checksum-verified release on first use (default on). The banner's Download button works either way. |
 | `timeout_s` · `max_response_bytes` | Per-command subprocess timeout; the aggregate stdout+stderr byte cap. |
 | `home_url` | The page the panel opens to. Set it and the panel auto-opens it when nothing is open; blank gives a Start button. |
 | `stream_quality` | Panel JPEG quality (1–100). |
 | `headed` | Show a real browser window instead of running headless. |
-| `profile` | A browser profile directory — isolation plus persisted auth/cookies across sessions. |
+| `profile` | A browser profile directory — persisted auth/cookies across sessions. One browser can use it at a time. |
 | `device` | Device emulation, e.g. `iPhone 16 Pro`. |
 | `allowed_domains` | A navigable-domain allowlist. The tightest lever you have on where the agent can go. |
 | `confirm_actions` | Action categories that require confirmation first. |
@@ -197,7 +238,7 @@ responsible for what the agent does on a site.
 
 | File | What |
 |---|---|
-| `tools.py` | the 17 tools — subprocess wrappers, the byte cap, the fenced captures |
+| `tools.py` | the 20 tools — subprocess wrappers, the byte cap, the fenced captures |
 | `storage.py` | the capture write fence |
 | `preflight.py` | the setup-gap probe (which CLI resolves, does it have a Chrome) and the banners' buttons |
 | `cli_fetch.py` | the pinned, SHA-256-verified CLI download: the pins, the atomic install, the cache |
@@ -205,7 +246,7 @@ responsible for what the agent does on a site.
 | `setup_steps.py` | what the Download agent-browser / Install Chrome buttons do |
 | `browser_panel.py` | the panel page + its gated nav / ticket / stream routes |
 | `browser_stream.py` | the CDP bridge — frames out, input in, resize + nav re-arm, the WS ticket |
-| `runtime.py` | the launch-flag builder shared by the tools and the panel |
+| `runtime.py` | what the tools and the panel share: the launch flags, the session name and its env, the idle reaper |
 | `skills/` · `workflows/` | the `web-browse` skill and the two recipes |
 
 See also: [Plugins](/guides/plugins) · [Building a plugin view](/guides/building-react-plugin-views)

@@ -62,7 +62,7 @@ Homebrew, Cargo), or a path pinned in the `binary` setting, always wins over the
 | `setup_steps.py` | the setup steps behind the Download agent-browser / Install Chrome buttons |
 | `browser_panel.py` | the Browser panel page + routes — the interactive canvas, the gated nav / stream-ticket / WS-stream routes |
 | `browser_stream.py` | the CDP bridge — screencast frames out, input in, viewport resize + nav re-arm; the WS ticket auth |
-| `runtime.py` | shared launch-flag builder (headed / profile / device / stealth), used by the tools and the panel |
+| `runtime.py` | what the tools and the panel share: the launch-flag builder (headed / profile / device / stealth), the session name + child env (`cli_env`), the idle reaper, the profile-in-use error |
 | `skills/web-browse/` | the discovery skill (defers to `agent-browser skills get core`) |
 | `workflows/` | declarative browser recipes (browse-and-extract, fill-form) |
 | `__init__.py` | `register()` — preflight, tools, the interactive panel; skills/workflows auto-discovered |
@@ -72,6 +72,30 @@ Tests live with the host, in [`tests/test_agent_browser_plugin.py`](../../tests/
 (real browser — see below). The operator knobs (headed, allowed domains, profile, device,
 stealth, …) are editable in **Settings ▸ Plugins ▸ Agent Browser**, or under `agent_browser:`
 in `langgraph-config.yaml`.
+
+## Which browser: one per agent (and optionally one per chat)
+
+The CLI keeps a browser per session name and calls it `default` when none is given, so every
+protoAgent instance on a machine used to drive ONE Chrome with ONE cookie jar. The plugin now
+names the session itself — `runtime.instance_session_name()`, `pa-<instance-id>-<sha of the
+instance root>` — and passes it, with `runtime.cli_env`, to **every** CLI subprocess: the
+tools, the panel's `/nav` route and the screencast's `get cdp-url`. An explicit env copy per
+child, not `os.environ`: it is process-global, and per_session resolves a different name per
+concurrent chat, so a process-wide value would race. `session_scope: per_session` names each
+chat's browser `<instance name>-<sha of the chat id>`. An operator `AGENT_BROWSER_SESSION`
+still names the main browser outright.
+
+Idle reaping is the CLI's `AGENT_BROWSER_IDLE_TIMEOUT_MS` (read once when a daemon is
+spawned; every command resets it): `idle_timeout_min` (30) for per-chat browsers,
+`main_idle_timeout_min` (0 = never) for the main one, because the panel's screencast talks
+CDP directly and never resets the daemon's timer. A `profile` DIR can back one Chrome at a
+time; a second launch on it fails with Chrome's `ProcessSingleton` error, which the tools
+and the panel turn into a readable `Error:` naming the cause and the fix.
+
+**Upgrading:** an agent's page in the old shared `default` session isn't carried over — the
+first browser call after the upgrade starts the agent's own (empty) browser. The `default`
+daemon keeps running until it's closed (`agent-browser --session default close`) or the
+machine reboots.
 
 ## Live form tests (real browser)
 
@@ -89,6 +113,10 @@ filename back; a wrong option is a hard `Error:`; a label still resolves after a
 ```bash
 pytest tests/test_agent_browser_forms_live.py
 ```
+
+Live tests use their own session names and close them in teardown; each also sets
+`main_idle_timeout_min`, so a run that's killed before teardown leaves a daemon that exits on
+its own a few minutes later instead of living until reboot.
 
 The whole module **skips** unless the `agent-browser` CLI resolves AND Chrome is available
 (the plugin's own `preflight` probe decides), so the default gate stays host-free and green.
