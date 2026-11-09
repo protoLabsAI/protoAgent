@@ -2,7 +2,7 @@ import "./chat.css";
 import { Switch } from "@protolabsai/ui/forms";
 import { TabBar } from "@protolabsai/ui/navigation";
 import { EyeOff } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { KeyboardEvent as ReactKeyboardEvent, MouseEvent as ReactMouseEvent } from "react";
 import { useQuery } from "@tanstack/react-query";
 
@@ -31,6 +31,8 @@ import { ADD_SELECTOR, isIncognitoAddClick, trackShiftHeld } from "./shiftCue";
 import { isEmptyChatSession, resolveGoalCloseDisposition, sessionsToClose } from "./bulkClose";
 import { NO_MEMORY_CHANGE, canClearSession, defaultMemoryChoice, retireChatSession, type ChatMemoryChoice } from "./sessionRetirement";
 import { ChatSessionSlot } from "./ChatSessionSlot";
+import { DirectiveDrawer } from "./DirectiveDrawer";
+import { useUI } from "../state/uiStore";
 
 // The composer predicates moved with ChatSessionSlot (#3841); re-exported so existing
 // importers (ChatSurface.test.tsx) keep importing them from here.
@@ -63,6 +65,16 @@ export function ChatSurface({
   // detached work the chat is waiting on, which the tab must not read as idle either.
   const backgroundSessions = useSessionsWithBackgroundWork();
   const currentSession = chat.sessions.find((session) => session.id === chat.currentSessionId) || null;
+  // Tabs outside the active-session pool have no slot. Host one drawer here so their
+  // context menus can open a ledger without selecting or mounting that chat.
+  const directivesRequest = useUI((state) => state.directivesRequest);
+  const [directivesSession, setDirectivesSession] = useState<string | null>(null);
+  const lastDirectivesN = useRef(directivesRequest?.n ?? 0);
+  useEffect(() => {
+    if (!directivesRequest || directivesRequest.n === lastDirectivesN.current) return;
+    lastDirectivesN.current = directivesRequest.n;
+    setDirectivesSession(directivesRequest.sessionId);
+  }, [directivesRequest]);
   const [pendingClose, setPendingClose] = useState<string | null>(null);
   // Bulk close (others/left/right): GOAL tabs still waiting for their Stop/Detach confirm AFTER
   // the one in `pendingClose`. Only goal tabs are queued — plain tabs close inline in
@@ -444,6 +456,12 @@ export function ChatSurface({
           />
         ))}
       </div>
+
+      {directivesSession && <DirectiveDrawer
+        sessionId={directivesSession}
+        open
+        onClose={() => setDirectivesSession(null)}
+      />}
 
       <ConfirmDialog
         open={pendingClose !== null}

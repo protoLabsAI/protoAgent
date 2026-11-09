@@ -45,7 +45,6 @@ import {
 import { BackgroundWorkStrip } from "./BackgroundWorkStrip";
 import { GoalRunStrip } from "./GoalRunStrip";
 import { DirectiveStrip } from "./DirectiveStrip";
-import { DirectiveDrawer } from "./DirectiveDrawer";
 import { messageId } from "./messageId";
 import { sentAttachments } from "./imageThumbnails";
 import { readyNativeAttachments, readyNativeImages, useAttachments } from "./useAttachments";
@@ -352,27 +351,6 @@ export function ChatSessionSlot({
   // protoAgent…" in the composer.
   const chatAgentName = brandName(runtime?.identity?.name);
   const openGlobalSettings = useUI((st) => st.openGlobalSettings);
-  // Standing-instructions drawer (#4861): a counter in the ui store is bumped by this
-  // session's ledger strip "View" button, by a bare `/directives`, and by the chat-tab
-  // context menu — each via `openDirectives(sessionId)`. The request NAMES a session, so
-  // only the slot it names opens its own drawer (the DS Drawer portals to <body>, so it
-  // shows even when that slot is a cached, hidden tab — e.g. a right-click on an inactive
-  // tab). `n` rising re-opens it after a close; the ref guards the initial mount so a
-  // stale request from a previous open doesn't pop the drawer on first render. It is
-  // SEEDED from the request already standing for this session (the store outlives a slot
-  // remount, and `n` only ever climbs from 1), so a remount treats that request as already
-  // consumed and only a FRESH bump opens the drawer.
-  const directivesRequest = useUI((st) => st.directivesRequest);
-  const [directivesOpen, setDirectivesOpen] = useState(false);
-  const lastDirectivesN = useRef(
-    directivesRequest?.sessionId === sessionId ? directivesRequest.n : 0,
-  );
-  useEffect(() => {
-    if (!directivesRequest || directivesRequest.sessionId !== sessionId) return;
-    if (directivesRequest.n === lastDirectivesN.current) return;
-    lastDirectivesN.current = directivesRequest.n;
-    setDirectivesOpen(true);
-  }, [directivesRequest, sessionId]);
   const visionModel = Boolean(runtime?.model?.vision);
   // A configured vision model can DESCRIBE images for a text-only chat model (#1381), so an
   // image attaches via the pipeline instead of erroring.
@@ -1945,7 +1923,6 @@ export function ChatSessionSlot({
             work). The ledger strip is idle-collapsed to zero height when nothing is active
             (#4861, sibling of the background-work strip). */}
         <DirectiveStrip sessionId={sessionId} />
-        <DirectiveDrawer sessionId={sessionId} open={directivesOpen} onClose={() => setDirectivesOpen(false)} />
         <GoalRunStrip sessionId={sessionId} />
         <BackgroundWorkStrip sessionId={sessionId} />
         {cast.length ? (

@@ -101,6 +101,7 @@ async function mockDirectives(page: Page, state: State) {
  *  "connecting" with no error banner and no refetch loop, and an empty server session index +
  *  turns so the seeded localStorage transcript is authoritative. */
 async function routeBoot(page: Page) {
+  await page.route("**/api/feedback?**", (route) => route.fulfill({ json: { enabled: false, tracing_enabled: false, turns: [] } }));
   await page.route("**/api/background", (route) => route.fulfill({ json: { enabled: true, jobs: [] } }));
   await page.route("**/api/events**", () => {
     /* hold the SSE connection open: no frames, no close, no reconnect churn */
@@ -302,7 +303,7 @@ test("the withdraw flow: Withdraw… → reason → Withdraw moves the entry to 
   await expect(page.locator(".chat-user-text", { hasText: "You withdrew" })).toHaveCount(0);
 });
 
-test("a bare /directives with no argument opens the drawer (its palette entry point)", async ({ page }) => {
+test("a bare /directives with no argument opens the drawer", async ({ page }) => {
   await seed(page, { theme: "light" });
   await routeBoot(page);
   await mockDirectives(page, { rows: active1(), fail: false });
@@ -312,4 +313,67 @@ test("a bare /directives with no argument opens the drawer (its palette entry po
   await expect(drawer(page)).toBeHidden();
   await openViaCommand(page);
   await expect(drawer(page).getByText(/What this agent believes you've allowed it to do/)).toBeVisible();
+});
+
+test("the palette opens standing instructions even after the chat panel was collapsed", async ({ page }) => {
+  await seed(page, { theme: "light" });
+  await routeBoot(page);
+  await mockDirectives(page, { rows: active1(), fail: false });
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto("/app/", { waitUntil: "load" });
+
+  await page.getByTestId("toggle-left").click();
+  await expect(page.locator(".pl-appshell__col--left")).toHaveCount(0);
+  await page.keyboard.press("ControlOrMeta+Shift+k");
+  const palette = page.locator(".pl-cmdk__panel");
+  await palette.locator(".pl-cmdk-commands__input").fill("/directives");
+  const command = page.getByRole("option", { name: /\/directives ·/ });
+  await expect(command).toHaveCount(1);
+  await command.click();
+  await expect(palette).toBeHidden();
+  await expect(drawer(page)).toBeVisible();
+  await expect(drawer(page)).toContainText(RELEASE_QUOTE);
+});
+
+test("the tab menu opens standing instructions and can reopen it after dismissal", async ({ page }) => {
+  await seed(page, { theme: "light" });
+  await routeBoot(page);
+  await mockDirectives(page, { rows: active1(), fail: false });
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto("/app/", { waitUntil: "load" });
+
+  for (let attempt = 0; attempt < 2; attempt++) {
+    await page.locator(".pl-tabbar__tab").first().click({ button: "right" });
+    await page.locator(".pl-menu").getByText("Standing instructions", { exact: true }).click();
+    await expect(drawer(page)).toBeVisible();
+    await expect(drawer(page)).toContainText(RELEASE_QUOTE);
+    await page.keyboard.press("Escape");
+    await expect(drawer(page)).toBeHidden();
+  }
+});
+
+test("the tab menu opens the ledger of an unmounted, inactive session", async ({ page }) => {
+  await seed(page, { theme: "light" });
+  await page.addInitScript(() => {
+    const key = "protoagent.chat.sessions";
+    const saved = JSON.parse(localStorage.getItem(key)!);
+    saved.sessions.push({ id: "other-ledger", title: "Other ledger", createdAt: 3, updatedAt: 3, messages: [] });
+    localStorage.setItem(key, JSON.stringify(saved));
+  });
+  await routeBoot(page);
+  await mockDirectives(page, { rows: active1(), fail: false });
+  await page.route("**/api/chat/sessions/other-ledger/directives", (route) => route.fulfill({ json: {
+    directives: [row({ id: "dir-b10001", session_id: "other-ledger", quote: "Keep this other chat private" })],
+    in_force: 1,
+  } }));
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto("/app/", { waitUntil: "load" });
+
+  await expect(page.locator(".chat-session-slot")).toHaveCount(1);
+  await page.locator(".pl-tabbar__tab").filter({ hasText: "Other ledger" }).click({ button: "right" });
+  await page.locator(".pl-menu").getByText("Standing instructions", { exact: true }).click();
+  await expect(drawer(page)).toBeVisible();
+  await expect(drawer(page)).toContainText("Keep this other chat private");
+  await expect(drawer(page)).not.toContainText(RELEASE_QUOTE);
+  await expect(page.locator(".chat-session-slot")).toHaveCount(1);
 });
