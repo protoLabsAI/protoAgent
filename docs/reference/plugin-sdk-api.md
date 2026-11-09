@@ -162,7 +162,7 @@ Ids of the configured subagents — for validating/listing recipe steps.
 ### `sdk.run_subagent` {#sdk-run-subagent}
 
 ```python
-await sdk.run_subagent(subagent_type: str, prompt: str, *, description: str, extra_tools: Any = None, truncate: int | None = None, turn_model: str | None = None, check_prompt_tools: bool = True, session_id: str = '') -> str
+await sdk.run_subagent(subagent_type: str, prompt: str, *, description: str, extra_tools: Any = None, truncate: int | None = None, turn_model: str | None = None, profile: str | None = None, check_prompt_tools: bool = True, session_id: str = '') -> str
 ```
 
 Run a subagent to completion and return its text output.
@@ -183,6 +183,8 @@ chat drivers), so a workflow step follows the model the operator picked for the
 turn — under the one precedence: the subagent's pin > the override >
 `routing.aux_model` > the main model ([#3944](https://github.com/protoLabsAI/protoAgent/issues/3944), [#3955](https://github.com/protoLabsAI/protoAgent/issues/3955)). Outside a turn there is
 none and the step resolves pin > aux > main, as before.
+
+`profile` names a generation profile, overriding the subagent's profile field by field.
 
 `check_prompt_tools` (default `True`) refuses to start the subagent when the prompt
 names a tool it was never given, instead of letting it run to a "blocked" finish ([#4327](https://github.com/protoLabsAI/protoAgent/issues/4327)).

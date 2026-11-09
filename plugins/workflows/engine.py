@@ -249,7 +249,7 @@ async def execute_workflow(
     recipe: dict,
     inputs: dict,
     *,
-    run_step: Callable[[str, str, str], Awaitable[str]],
+    run_step: Callable[..., Awaitable[str]],
     max_concurrency: int = 4,
     gate_check: Callable[[dict], str | None] | None = None,
     pause_fn: Callable[[str, dict], str | None] | None = None,
@@ -259,6 +259,9 @@ async def execute_workflow(
     skip_gate: set[str] | None = None,
 ) -> dict:
     """Run the recipe's step DAG. ``run_step(subagent, prompt, step_id) -> output``.
+
+    A step's optional ``profile`` is forwarded as a keyword to ``run_step``;
+    steps without it retain the three-argument callback contract.
 
     Returns ``{"output": str, "steps": {id: output}, "failed": [ids],
     "degraded": [ids], "timings": {id: seconds}, "output_steps": [ids],
@@ -338,7 +341,8 @@ async def execute_workflow(
                 # limiter should queue behind interactive chat. `run_one` is its own task (via
                 # gather), so this class is isolated to it and inherited by the subagent.
                 with _bulk_priority_scope():
-                    call = run_step(step["subagent"], prompt, sid)
+                    profile_kwargs = {"profile": step["profile"]} if step.get("profile") else {}
+                    call = run_step(step["subagent"], prompt, sid, **profile_kwargs)
                     if timeout is not None:
                         out = await asyncio.wait_for(call, timeout)
                     else:

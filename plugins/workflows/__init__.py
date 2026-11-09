@@ -152,11 +152,11 @@ async def _run_prepared(
     ``steps`` can re-run one late step (a flaky verifier) without repaying the rest."""
     run_store.seed(seed_outputs or {})
 
-    async def _run_step(subagent_type: str, prompt: str, step_id: str) -> str:
+    async def _run_step(subagent_type: str, prompt: str, step_id: str, *, profile: str | None = None) -> str:
         run_store.step_started(step_id, prompt=prompt)
         if on_step:
             await _safe(on_step, {"phase": "start", "step_id": step_id, "subagent": subagent_type})
-        out = await _traced_step(name, subagent_type, prompt, step_id, run_id)
+        out = await _traced_step(name, subagent_type, prompt, step_id, run_id, **({"profile": profile} if profile else {}))
         run_store.step_done(step_id, out)
         if on_step:
             await _safe(on_step, {"phase": "end", "step_id": step_id, "subagent": subagent_type, "output": out})
@@ -286,7 +286,9 @@ def _finish_stopped(run_store: WorkflowRunStore) -> None:
         run_store.finish(STATUS_CANCELLED)
 
 
-async def _traced_step(name: str, subagent_type: str, prompt: str, step_id: str, run_id: str) -> str:
+async def _traced_step(
+    name: str, subagent_type: str, prompt: str, step_id: str, run_id: str, *, profile: str | None = None
+) -> str:
     """One step's subagent, with the step's identity on its ``subagent:`` span (#3565).
 
     The run's own keys (``run_id``, ``workflow``, ``parent_session_id``, the redacted
@@ -304,7 +306,8 @@ async def _traced_step(name: str, subagent_type: str, prompt: str, step_id: str,
         # an enclosing chat's session and keeps this synthetic identity out of tool state.
         # The run_id is the same key the workflow edge and trace use (`task_id = run_id`).
         out = await sdk.run_subagent(
-            subagent_type, prompt, description=description, check_prompt_tools=False, session_id=f"workflow:{run_id}"
+            subagent_type, prompt, description=description, check_prompt_tools=False, session_id=f"workflow:{run_id}",
+            **({"profile": profile} if profile else {}),
         )
     return _strip_completed_header(out, subagent_type, description)
 
@@ -436,9 +439,9 @@ async def _resume(
     # Re-attach the store to this run and flip it back to `running` before dispatching.
     run_store.resume(run_id)
 
-    async def _run_step(subagent_type: str, prompt: str, step_id: str) -> str:
+    async def _run_step(subagent_type: str, prompt: str, step_id: str, *, profile: str | None = None) -> str:
         run_store.step_started(step_id, prompt=prompt)
-        out = await _traced_step(name, subagent_type, prompt, step_id, run_id)
+        out = await _traced_step(name, subagent_type, prompt, step_id, run_id, **({"profile": profile} if profile else {}))
         run_store.step_done(step_id, out)
         return out
 

@@ -855,7 +855,9 @@ def _visible_text_chars(msg) -> int:
     return 0
 
 
-def _extract_subagent_usage(messages, *, subagent_type: str, fallback_model: str = "") -> list[dict]:
+def _extract_subagent_usage(
+    messages, *, subagent_type: str, fallback_model: str = "", profile: str | None = None
+) -> list[dict]:
     """Per-model-call usage rows from a finished sub-graph's message list (#2872).
 
     One row per ``AIMessage`` carrying ``usage_metadata`` (LangChain stamps it on
@@ -869,12 +871,13 @@ def _extract_subagent_usage(messages, *, subagent_type: str, fallback_model: str
     (the pinned/aux resolution) — so a model-pinned subagent attributes to ITS
     model, not the lead's. Never raises: telemetry must never break a delegation.
 
-    Each row also carries four descriptive fields for the ADR 0128 output-budget
+    Each row also carries descriptive fields for the ADR 0128 output-budget
     measurement (#4875 S0); they are ADDITIVE telemetry, summed by nothing — every
     downstream reader (``observability.turn_telemetry.fold_usage_rows`` /
     ``telemetry_usage``, the A2A executor's usage accumulator) reads named keys via
     ``.get`` and ignores the rest:
 
+    - ``profile`` — the highest-priority resolved profile name, else ``None``.
     - ``finish_reason`` — ``response_metadata['finish_reason']``, or the Anthropic
       ``stop_reason`` alias; ``None`` when neither is present.
     - ``text_chars`` — visible text length, reasoning blocks excluded (see
@@ -907,6 +910,7 @@ def _extract_subagent_usage(messages, *, subagent_type: str, fallback_model: str
             row["cost_usd"] = pricing.cost_usd(model, row)
             row["model"] = model
             row["subagent_type"] = subagent_type
+            row["profile"] = profile
             # Descriptive-only fields (#4875 S0). A missing value is None, never a crash.
             rmeta = getattr(msg, "response_metadata", None) or {}
             row["finish_reason"] = rmeta.get("finish_reason") or rmeta.get("stop_reason") or None
@@ -1011,6 +1015,7 @@ async def _run_subagent(
     session_id: str = "",
     ledger_session_id: str | None = None,
     turn_model: str = "",
+    profile: str | None = None,
 ) -> str:
     """Run a subagent delegation, recording the edge in the delegation ledger.
 
@@ -1059,6 +1064,7 @@ async def _run_subagent(
                 usage_sink=rows,
                 session_id=session_id,
                 turn_model=turn_model,
+                profile=profile,
             )
         finally:
             if usage_sink is not None:
@@ -1124,6 +1130,7 @@ async def _run_subagent_inner(
     usage_sink: list[dict] | None = None,
     session_id: str = "",
     turn_model: str = "",
+    profile: str | None = None,
 ) -> str:
     """Run a single subagent delegation and return its output text.
 
@@ -1164,10 +1171,21 @@ async def _run_subagent_inner(
 
     # Subagent model (#3944, graph/subagent_model.py): the subagent's own pinned
     # model → the delegating turn's model override → routing.aux_model → main model.
+    from graph.generation_profile import resolve_profile
     from graph.subagent_model import resolve_subagent_model
 
     sub_model = resolve_subagent_model(config, subagent_type, turn_model, pinned=getattr(sub_config, "model", "") or "")
-    sub_llm = create_llm(config, model_name=sub_model)
+
+    sub_profile = getattr(sub_config, "profile", "") or ""
+    resolved_profile = resolve_profile(config, call=profile, subagent=sub_profile)
+    # The highest defined layer names this merged profile for usage attribution.
+    profiles = getattr(config, "model_profiles", None) or {}
+    profile_name = next(
+        (name.strip() for name in (profile, sub_profile) if isinstance(name, str) and name.strip() in profiles),
+        None,
+    )
+    profile_kwargs = {"profile": resolved_profile} if not resolved_profile.empty else {}
+    sub_llm = create_llm(config, model_name=sub_model, **profile_kwargs)
 
     # Subagents do real work (tool calls), so the enforcement rail (ADR 0003) should
     # cover them too — not just the lead agent. Mirror the lead's gate so a disallowed/
@@ -1205,6 +1223,16 @@ async def _run_subagent_inner(
         AuditMiddleware(),
         build_multimodal_middleware(config, vision=(sub_model is None and getattr(config, "model_vision", False))),
     ]
+    if not resolved_profile.empty:
+        from graph.middleware.profile_phase import ProfilePhaseMiddleware
+
+        final_name = getattr(sub_config, "final_profile", "") or ""
+        final_profile = resolve_profile(config, call=final_name, subagent=sub_profile) if final_name else None
+        sub_middleware.insert(0, ProfilePhaseMiddleware(
+            config, model_name=sub_model, explore_profile=resolved_profile,
+            explore_name=profile_name, explore_client=sub_llm,
+            final_profile=final_profile if final_profile and not final_profile.empty else None,
+        ))
     # The delegating turn's tool fence (#1639/#2972): a fenced turn that may call
     # `task` must not reach a wider toolset through the delegation. The subagent runs
     # under (its allowlist ∩ the parent's fence) — deny-all when they don't overlap —
@@ -1229,6 +1257,8 @@ async def _run_subagent_inner(
         sub_window: int | None = context_window_for_slot(config, sub_model)
     except Exception:  # noqa: BLE001 — no window → the pruner's fixed fallback, no context note
         sub_window = None
+    if resolved_profile.context_budget is not None:
+        sub_window = min(sub_window, resolved_profile.context_budget) if sub_window is not None else resolved_profile.context_budget
     if getattr(config, "pruning_enabled", True):
         from graph.middleware.tool_result_pruner import ToolResultPrunerMiddleware
 
@@ -1279,7 +1309,7 @@ async def _run_subagent_inner(
     # fallback retry still runs through the native-OAuth wire shaping. No-op when
     # routing.fallback_models is empty — the subagent stack is then unchanged.
     if config.routing_fallback_models:
-        sub_fallbacks = [create_llm(config, model_name=m) for m in config.routing_fallback_models]
+        sub_fallbacks = [create_llm(config, model_name=m, **profile_kwargs) for m in config.routing_fallback_models]
         sub_middleware.append(ObservableModelFallbackMiddleware(*sub_fallbacks, config=config))
     # Same history self-heal as the lead stack, in the same slot: a delegation
     # replays the subagent's own thread, so a rejected reasoning blob bricks it the
@@ -1386,6 +1416,7 @@ async def _run_subagent_inner(
                     messages,
                     subagent_type=subagent_type,
                     fallback_model=sub_model or getattr(config, "model_name", ""),
+                    profile=profile_name,
                 )
             )
 
@@ -1473,6 +1504,7 @@ async def run_manual_subagent(
     session_id: str = "",
     ledger_session_id: str | None = None,
     turn_model: str = "",
+    profile: str | None = None,
     check_prompt_tools: bool = True,
 ) -> str:
     """Run a subagent outside the lead agent's ``task`` tool.
@@ -1571,6 +1603,7 @@ async def run_manual_subagent(
         session_id=session_id,
         ledger_session_id=ledger_session_id,
         turn_model=turn_model,
+        profile=profile,
     )
 
 
