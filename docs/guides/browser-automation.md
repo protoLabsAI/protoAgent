@@ -32,6 +32,13 @@ agent control the same browser; steer the agent to wait while you enter informat
 A configured browser profile can preserve cookies and login state across sessions.
 Treat that profile as access to the accounts signed in there.
 
+On an application form, the agent reads each field by the question it asks, even the
+custom questions on Lever, Workable and Ashby forms. It answers dropdowns, yes/no questions,
+"select all that apply" checkbox lists and location boxes that suggest as you type, and
+checks that each answer stuck. A field it can't match or confirm comes back as an error that
+lists the choices, so it doesn't guess. The details are in
+[forms: questions, choice groups and autocomplete](/reference/browser-automation#forms-questions-choice-groups-and-autocomplete).
+
 For a document, ask the agent to save a screenshot or PDF and offer it as a file
 artifact. Open the resulting card and download the copy you want to keep. Browser
 captures are temporary: the capture directory is pruned past its file/size limits.

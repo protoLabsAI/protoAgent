@@ -82,18 +82,28 @@ synthetic clicks, and comboboxes commit the highlighted row instead of the one y
 Fill a form like this:
 
 1. **Read it first with `browser_form_read`.** One call lists every field in document
-   order with its `label`, `kind`, `required` flag, current `value` and (for selects and
-   radio groups) its `options`. This is how you learn what to fill and what to address each
-   field by.
+   order with its `label` (the question it asks), `kind`, `required` flag, current `value`
+   and, for selects, comboboxes, radio groups and checkbox groups, its `options`. A
+   "select all that apply" list is ONE `checkbox-group` field whose `value` is the list of
+   ticked options. This is how you learn what to fill and what to address each field by.
 2. **Address fields by their LABEL, never by an `@eN` ref.** A snapshot ref is resolved
    once and goes stale the instant the form re-renders (a validation error, a React state
    change); a label is re-resolved in the page on every call, so it survives. `browser_fill`,
    `browser_type`, `browser_click` and the tools below all take a label (or a CSS selector).
-3. **Use `browser_select` for every dropdown, combobox or country picker — never
-   type-and-Enter.** It drives a native `<select>`, a react-select-style combobox and an
-   intl-tel-input country picker, commits the option by CLICKING it (pressing Enter commits
-   whatever row happens to be highlighted — the wrong answer), and reads the value back so a
-   mismatch is a hard error rather than a silent wrong submission.
+3. **Use `browser_select` for every choice — never type-and-Enter.** It drives a native
+   `<select>`, a react-select-style combobox, a phone country picker, a radio or checkbox
+   GROUP and an autocomplete box (a location field that suggests as you type). It commits the
+   option by CLICKING it (pressing Enter commits whatever row happens to be highlighted — the
+   wrong answer), and reads the value back so a mismatch is a hard error rather than a silent
+   wrong submission.
+   - Radio / checkbox group: the field is the QUESTION, the option text the option —
+     `browser_select("How did you hear about us?", "LinkedIn")`. Call it once per box to tick
+     several; it never unticks (click the option's own label to untick).
+   - Autocomplete: `browser_select("Current location", "Portland, OR")` types it and picks the
+     matching suggestion. If several match, it lists them and restores the field — retry with
+     the exact suggestion text.
+   - Unsure of the wording? Give alternatives: `"Decline to self-identify|I don't wish to
+     answer|Prefer not to say"` — the first that matches wins.
 4. **For a phone field, select the COUNTRY before you fill the number.** Use
    `browser_select` on the country picker first, then `browser_fill` the national number —
    changing the country afterwards reformats or clears what you typed.

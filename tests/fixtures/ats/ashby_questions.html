@@ -1,0 +1,96 @@
+<!doctype html>
+<!--
+  MODELED ATS FORM FIXTURE — Ashby custom questions (#4954 eval).
+
+  Models the DOM contract of the custom-question part of an Ashby application form:
+      https://jobs.ashbyhq.com/<company>/<job-id>/application
+  Modeled 2026-11-09 from the live Notion posting (structure only; wording invented).
+  Self-contained: no network, no external JS/CSS. (ashby.html covers the basic fields.)
+
+  What it pins (plugins/agent_browser/forms.py):
+    * a "select all that apply" checkbox group: a <fieldset> with NO legend whose first child is a
+      heading <label for="<question-uuid>"> pointing at nothing, and one checkbox per option, each
+      NAMED after its option — collapsed to ONE checkbox-group field labelled by the heading;
+    * a radio group in the same shape (uuid name, heading label, a description block between the
+      heading and the options that must not glue onto the label);
+    * a yes/no question drawn as two buttons over a hidden checkbox named by the question uuid —
+      the checkbox is labelled by the field-entry heading;
+    * the location box: an ARIA combobox (`placeholder="Start typing..."`) whose suggestions arrive
+      asynchronously after input — named by its field-entry heading, never "Start typing...".
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Ashby questions (fixture)</title>
+<style>
+  body { font-family: sans-serif; margin: 2rem; }
+  .yesno input { opacity: 0; width: 1px; }
+  [role=listbox] { border: 1px solid #ccc; }
+</style>
+</head>
+<body>
+<form id="ashby">
+  <div class="_fieldEntry_1 ashby-application-form-field-entry" data-field-path="_systemfield_location">
+    <label class="_heading_1 _required_1 ashby-application-form-question-title" for="_systemfield_location">Location</label>
+    <div class="_inputContainer_1">
+      <input class="ashby-application-form-input-autocomplete" placeholder="Start typing..." aria-autocomplete="list"
+             aria-expanded="false" aria-haspopup="listbox" role="combobox" aria-controls="loc_listbox" value="">
+      <button type="button" class="_toggleButton_1" aria-label="Toggle">▾</button>
+      <div role="listbox" id="loc_listbox"></div>
+    </div>
+  </div>
+
+  <fieldset class="_container_2 _fieldEntry_1 ashby-application-form-field-entry">
+    <label class="_heading_1 ashby-application-form-question-title" for="0b3b7773-f6d9-4032">How did you hear about this opportunity? (select all that apply)</label>
+    <div class="_option_2"><span><input type="checkbox" id="opt-li" name="LinkedIn"></span><label for="opt-li">LinkedIn</label></div>
+    <div class="_option_2"><span><input type="checkbox" id="opt-gd" name="Glassdoor"></span><label for="opt-gd">Glassdoor</label></div>
+    <div class="_option_2"><span><input type="checkbox" id="opt-bl" name="Company Blog"></span><label for="opt-bl">Company Blog</label></div>
+    <div class="_option_2"><span><input type="checkbox" id="opt-mt" name="Conference or Meetup"></span><label for="opt-mt">Conference or Meetup</label></div>
+  </fieldset>
+
+  <fieldset class="_container_2 _fieldEntry_1 ashby-application-form-field-entry">
+    <label class="_heading_1 ashby-application-form-question-title" for="_systemfield_eeoc_gender">Gender</label>
+    <div class="_description_1 ashby-application-form-question-description"><p>Input gender</p></div>
+    <div class="_option_2"><span><input type="radio" id="g-m" name="09c04cf4__systemfield_eeoc_gender"></span><label for="g-m">Male</label></div>
+    <div class="_option_2"><span><input type="radio" id="g-f" name="09c04cf4__systemfield_eeoc_gender"></span><label for="g-f">Female</label></div>
+    <div class="_option_2"><span><input type="radio" id="g-d" name="09c04cf4__systemfield_eeoc_gender"></span><label for="g-d">Decline to self-identify</label></div>
+  </fieldset>
+
+  <div class="_fieldEntry_1 ashby-application-form-field-entry" data-field-path="e01a85db-feaa-42b3">
+    <label class="_heading_1 _required_1 ashby-application-form-question-title" for="e01a85db-feaa-42b3">Can you work from our office three days a week?</label>
+    <div class="_container_3 yesno">
+      <button type="button" aria-pressed="false" data-option="yes">Yes</button>
+      <button type="button" aria-pressed="false" data-option="no">No</button>
+      <input type="checkbox" tabindex="-1" name="e01a85db-feaa-42b3">
+    </div>
+  </div>
+</form>
+<script>
+(function () {
+  var input = document.querySelector('input[role=combobox]');
+  var lb = document.getElementById("loc_listbox");
+  var PLACES = ["Portland, Oregon, United States", "Portland, Maine, United States", "Paris, France"];
+  var t = null;
+  input.addEventListener("input", function () {
+    var q = (input.value || "").trim().toLowerCase();
+    clearTimeout(t); lb.innerHTML = "";
+    t = setTimeout(function () {
+      PLACES.filter(function (p) { return q && p.toLowerCase().indexOf(q) === 0; }).forEach(function (p) {
+        var o = document.createElement("div");
+        o.setAttribute("role", "option"); o.textContent = p;
+        o.addEventListener("click", function () { input.value = p; lb.innerHTML = ""; input.setAttribute("aria-expanded", "false"); });
+        lb.appendChild(o);
+      });
+      input.setAttribute("aria-expanded", lb.children.length ? "true" : "false");
+    }, 300);
+  });
+  document.querySelectorAll(".yesno").forEach(function (box) {
+    var cb = box.querySelector("input");
+    box.querySelectorAll("button").forEach(function (b) {
+      b.addEventListener("click", function () { cb.checked = b.getAttribute("data-option") === "yes"; });
+    });
+  });
+})();
+</script>
+</body>
+</html>

@@ -100,6 +100,66 @@ that matches nothing and an element has that exact id, the tool uses `[id="…"]
 or unknown `@eN` ref returns an error that says to run `browser_snapshot` again, or to
 address a form field by its label.
 
+### Forms: questions, choice groups and autocomplete
+
+`browser_form_read` names each field by the question it answers. Its label sources, in
+order: `<label for>`, a wrapping `<label>` (only the text before the control, so a widget's
+status text such as "No location found…Loading" is dropped), `aria-label`,
+`aria-labelledby`, then the **question container** when the field has no label of its
+own. The question container is the label, heading or `…label…`-class element that comes
+before the field inside its own question block. Lever's `.application-question`, Ashby's
+field-entry heading and Workable's `aria-labelledby` radiogroup are all found this way, with
+no per-ATS code. Placeholders and machine names (`Type your response`, `cards[<uuid>][field0]`,
+`QA_12487827`) rank last. Inline-SVG fallback text ("SVGs not supported by this browser.") and
+hint, description and status nodes never reach a label. `✱` and the other asterisk look-alikes
+count as required markers and are stripped like `*`.
+
+A **checkbox group** is read as one field, like a radio group. The members are checkboxes
+that share a name (Lever), or the checkboxes of one `<fieldset>`/`role=group` that holds no
+other field (Ashby). It reads as
+`{"kind": "checkbox-group", "label": "<question>", "options": [...], "value": [<checked>], "required": …}`.
+A lone checkbox stays `kind: "checkbox"` with a boolean value. Option lists over 60 entries
+are cut, and `options_more` counts the rest. `browser_select` still matches any option.
+
+For an unanswered react-select, or a read-only select-like ARIA combobox, the read lists
+`options` too. It opens the menu, reads it and closes it with Escape and blur. It never
+types and never clicks an option, and the whole pass is capped at about 5 s. A
+type-to-search box is skipped, because its options depend on the query. An unanswered
+react-select reads `""`, never its "Select..." placeholder.
+
+`browser_select(field, option_text)` covers every choice widget:
+
+| Widget | `field` | What happens |
+|---|---|---|
+| native `<select>`, react-select, phone country picker | the field label | the option is clicked (never Enter) and the value is read back |
+| radio group / checkbox group | the **question** (`"How did you hear about us?"`) | that option is ticked and `checked` is read back; an option that is already ticked is left alone (select never unticks; `browser_click` the option's own label to toggle it) |
+| autocomplete text box (Lever location, Google Places, an async ARIA combobox) | the field label | see below |
+
+Autocomplete: the CLI types the text (`fill`, then a real `End` keypress, because Lever
+only searches on keyup and `fill` sends no key events). The tool then waits up to 5 s for
+that field's own suggestions: an `aria-controls` listbox, a rendered `.pac-container`, or a
+suggestion list in the field's container. It matches the text exactly, then by unique
+prefix, then ignoring punctuation and spaces. If no suggestion appears and the text has a comma, it
+retries once with the first part ("Portland, OR" → "Portland"). It still matches the full
+text first and the city alone second. A unique match gets a real click (never Enter), and the
+input's value is read back. The widget's own spelling of the place ("Portland, OR, USA") is
+the committed value. When nothing matches, or several suggestions do, the result
+lists the suggestions and the field is restored to its previous value.
+
+`option_text` can list **alternatives** separated by `|`, for example
+`"Decline to self-identify|I don't wish to answer|Prefer not to say"`. The first one that
+matches wins. Matching is case-insensitive: an exact match first, then a unique prefix. No
+match, or an ambiguous one, is an `Error:` that lists the options and changes nothing.
+Addressing a group's question with `browser_click`, `browser_fill` or similar returns an
+error that names the options and points to `browser_select`.
+
+A CSS selector with brackets inside a quoted value
+(`input[name="cards[x][field0]"][value="Yes"]`) is routed to the CLI as CSS, not treated as
+a label. `browser_fill` reads the value back after filling. A value the page reformats still
+passes: the same digits (phone masks, thousands separators), or the same text ignoring case
+and punctuation. A blank or different value returns
+`Error: <field> reads '<actual>' after filling '<text>'`.
+
 `browser_screenshot` takes `full_page=true` (the whole scrollable page) and `annotate=true`
 (numbered labels drawn on the image; label `[N]` is `@eN`, and those refs work right away).
 

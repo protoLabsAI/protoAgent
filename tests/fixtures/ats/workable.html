@@ -1,0 +1,103 @@
+<!doctype html>
+<!--
+  MODELED ATS FORM FIXTURE — Workable application form (#4954 eval).
+
+  Models the DOM contract of a Workable-hosted application form:
+      https://apply.workable.com/<company>/j/<shortcode>/apply/
+  Modeled 2026-11-09 from the live Hugging Face / Blueground / Skroutz postings (structure only;
+  the question wording below is invented). Self-contained: no network, no external JS/CSS.
+
+  What it pins (plugins/agent_browser/forms.py):
+    * WRAPPING <label>s that hold an inline <svg> whose <title> fallback text ("SVGs not
+      supported by this browser.") must never become a label;
+    * yes/no questions as `<fieldset role="radiogroup" aria-labelledby="…_label">` whose radios
+      are named `QA_<n>` — the question lives only in the aria-labelledby span;
+    * a read-only select-like ARIA combobox ("Select an option…") whose listbox renders only
+      while open — browser_form_read lists its options without committing one;
+    * the address picker's hidden helper inputs (`city`, aria-hidden + tabindex=-1) — not fields;
+    * a résumé file input with an svg-only <label for> and a role=button "Choose file" label,
+      named by aria-labelledby "Resume" + the button.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Workable application (fixture)</title>
+<style>
+  body { font-family: sans-serif; margin: 2rem; }
+  [role=listbox] { border: 1px solid #ccc; }
+  [role=listbox][hidden] { display: none; }
+  input[type=file] { opacity: 0; width: 1px; }
+  input[aria-hidden=true][type=radio] { opacity: 0; }
+</style>
+</head>
+<body>
+<form id="wk">
+  <div><label><span><span><strong>*</strong></span><span id="firstname_label"><strong>First name</strong></span></span>
+    <div data-role="illustrated-input"><input id="firstname" name="firstname" aria-labelledby="firstname_label" required type="text"></div></label></div>
+
+  <div><label><span><span id="address_label"><strong>Address</strong></span><span> (Optional)</span>
+      <span><svg width="10" height="10"><title>SVGs not supported by this browser.</title><circle cx="5" cy="5" r="4"/></svg></span></span>
+    <div><input id="address" name="address" aria-labelledby="address_label" type="text"></div></label>
+    <input id="city" aria-hidden="true" tabindex="-1" name="city" type="text" value="">
+  </div>
+
+  <div data-role="dropzone">
+    <label for="input_files_resume"><svg width="10" height="10"><title>SVGs not supported by this browser.</title></svg></label>
+    <span id="resume_label">Resume</span>
+    <label tabindex="0" role="button" for="input_files_resume" id="description_resume">Choose file</label>
+    <input data-ui="resume" tabindex="-1" id="input_files_resume" type="file" aria-labelledby="resume_label description_resume" required>
+  </div>
+
+  <div data-ui="CA_10627" data-input-type="select">
+    <span id="CA_10627_label">Notice period / availability</span>
+    <label><div data-role="illustrated-input"><div>
+      <input id="input_CA_10627_input" role="combobox" aria-haspopup="listbox" aria-expanded="false"
+             aria-controls="input_CA_10627_listbox" aria-autocomplete="list" autocomplete="off"
+             aria-labelledby="CA_10627_label" placeholder="Select an option…" type="text" readonly value="">
+      <svg width="10" height="10"><title>SVGs not supported by this browser.</title></svg></div></div></label>
+    <input name="CA_10627" tabindex="-1" aria-hidden="true" value="">
+    <ul role="listbox" id="input_CA_10627_listbox" hidden></ul>
+  </div>
+
+  <div>
+    <span id="q1_label">Are you eligible to work in the country you are applying?</span>
+    <fieldset role="radiogroup" data-ui="QA_12726747" aria-labelledby="q1_label">
+      <div role="radio" aria-checked="false" aria-labelledby="q1_label radio_label_y"><label>
+        <input aria-required="true" required id="q1y" tabindex="-1" aria-hidden="true" type="radio" name="QA_12726747" value="true">
+        <div><span id="radio_label_y">YES</span></div></label></div>
+      <div role="radio" aria-checked="false" aria-labelledby="q1_label radio_label_n"><label>
+        <input aria-required="true" required id="q1n" tabindex="-1" aria-hidden="true" type="radio" name="QA_12726747" value="false">
+        <div><span id="radio_label_n">NO</span></div></label></div>
+    </fieldset>
+  </div>
+
+  <label data-ui="gdpr"><div role="checkbox" aria-checked="false" aria-labelledby="gdpr_label">
+      <input tabindex="-1" aria-hidden="true" type="checkbox" name="gdpr">
+      <svg width="10" height="10"><title>SVGs not supported by this browser.</title></svg></div>
+    <span id="gdpr_label"><span>I have read the Privacy Notice and consent to the processing of my data.</span></span></label>
+</form>
+<script>
+(function () {
+  var input = document.getElementById("input_CA_10627_input");
+  var lb = document.getElementById("input_CA_10627_listbox");
+  var hidden = document.querySelector('input[name="CA_10627"]');
+  var OPTS = ["Immediately", "2 weeks", "1 month", "More than a month"];
+  function open() {
+    if (!lb.hidden) return;
+    lb.innerHTML = "";
+    OPTS.forEach(function (t) {
+      var li = document.createElement("li");
+      li.setAttribute("role", "option"); li.textContent = t;
+      li.addEventListener("mousedown", function (e) { e.preventDefault(); input.value = t; hidden.value = t; close(); });
+      lb.appendChild(li);
+    });
+    lb.hidden = false; input.setAttribute("aria-expanded", "true");
+  }
+  function close() { lb.hidden = true; lb.innerHTML = ""; input.setAttribute("aria-expanded", "false"); }
+  input.addEventListener("mousedown", function () { if (lb.hidden) open(); else close(); });
+  input.addEventListener("keydown", function (e) { if (e.key === "ArrowDown") open(); if (e.key === "Escape") close(); });
+  input.addEventListener("blur", close);
+})();
+</script>
+</body>
+</html>

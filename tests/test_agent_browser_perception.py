@@ -255,10 +255,12 @@ def _probe_answer(mode):
 
 
 async def test_fill_rewrites_a_dotted_id_that_only_matches_as_an_exact_id(monkeypatch):
-    t, cli = _tools(monkeypatch, _probe_answer("id"))
+    probe = _probe_answer("id")
+    t, cli = _tools(monkeypatch, lambda argv: ("Ada", "", 0) if argv[:2] == ["get", "value"] else probe(argv))
     out = await t["browser_fill"].ainvoke({"selector": "#input-candidate.name-3", "text": "Ada"})
     assert out == "ok"
-    assert cli.argvs[-1] == ["fill", '[id="input-candidate.name-3"]', "Ada"]
+    assert cli.argvs[-2] == ["fill", '[id="input-candidate.name-3"]', "Ada"]
+    assert cli.argvs[-1] == ["get", "value", '[id="input-candidate.name-3"]']   # the read-back
     probe_js = cli.calls[0][2].stdin.getvalue().decode()
     assert "getElementById(\"input-candidate.name-3\")" in probe_js
 
@@ -272,7 +274,7 @@ async def test_a_dotted_selector_that_matches_as_css_is_left_alone(monkeypatch):
 async def test_a_plain_id_costs_no_probe(monkeypatch):
     t, cli = _tools(monkeypatch)
     await t["browser_fill"].ainvoke({"selector": "#email", "text": "a@b.c"})
-    assert cli.argvs == [["fill", "#email", "a@b.c"]]
+    assert cli.argvs == [["fill", "#email", "a@b.c"], ["get", "value", "#email"]]  # no probe; read-back
 
 
 @pytest.mark.parametrize("tool,args,argv", [

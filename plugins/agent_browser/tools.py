@@ -484,7 +484,7 @@ def get_browser_tools(cfg: dict | None, refresh_gaps=None, *, start_gap: bool = 
         out = await _ab("eval", "--stdin", stdin=forms.id_probe_js(sel, raw_id))
         return forms.id_attr_selector(raw_id) if forms.parse_id_probe(out) == "id" else sel
 
-    async def _resolve_field(selector: str) -> tuple[str, str]:
+    async def _resolve_field(selector: str, *, group_ok: bool = False) -> tuple[str, str]:
         """Resolve a model-supplied locator to a selector the CLI can act on THIS call.
 
         A ``@eN`` ref or a CSS selector passes straight through to the CLI unchanged (so a
@@ -508,7 +508,7 @@ def get_browser_tools(cfg: dict | None, refresh_gaps=None, *, start_gap: bool = 
         out = await _ab("eval", "--stdin", stdin=forms.resolve_js(selector))
         if out.startswith("Error:"):
             return "", out
-        match = forms.resolve_target(selector, forms.parse_resolve(out))
+        match = forms.resolve_target(selector, forms.parse_resolve(out), group_ok=group_ok)
         return ("", match.error) if not match.ok else (match.selector, "")
 
     # ── the action gate (gate.py) ────────────────────────────────────────────────────────
@@ -903,7 +903,21 @@ def get_browser_tools(cfg: dict | None, refresh_gaps=None, *, start_gap: bool = 
         if (bad := _bad_operand(text=text)):
             return bad
         sel, err = await _resolve_field(selector)
-        return err or await _ab("fill", sel, text)
+        if err:
+            return err
+        filled = await _ab("fill", sel, text)
+        if filled.startswith("Error:"):
+            return filled
+        # Read the value back (#4954 eval: a GitLab email went blank and only the final verify saw
+        # it). A widget that reformats (phone masks, thousands separators) still passes — see
+        # forms.fill_matches; an element with no readable value (contenteditable) keeps the CLI result.
+        actual = await _ab("get", "value", sel)
+        if actual == "(ok)" and text != "(ok)":
+            actual = ""          # _run's stand-in for empty output: the field reads blank
+        if actual.startswith("Error:") or forms.fill_matches(text, actual):
+            return filled
+        return (f"Error: {selector} reads {actual[:200]!r} after filling {text[:200]!r} — the page "
+                "rejected or rewrote the value. Check it with browser_form_read.")
 
     @tool
     @_serialized
@@ -926,12 +940,14 @@ def get_browser_tools(cfg: dict | None, refresh_gaps=None, *, start_gap: bool = 
     @tool
     @_serialized
     async def browser_select(field: str, option_text: str, *, state: Annotated[Any, InjectedState] = None) -> str:
-        """Set a choice field (native `<select>`, react-select combobox, intl-tel-input country
-        picker) to the option whose visible text is `option_text`, and verify the committed value
-        — use it for every dropdown instead of `browser_fill`/type+Enter. `field`: visible LABEL
-        or CSS selector, NOT a `@eN` ref. Match is case-insensitive: exact, else a UNIQUE prefix;
-        no/ambiguous match lists the options and changes nothing. A read-back mismatch is an
-        `Error:`. PHONE fields: select the country BEFORE you `browser_fill` the number."""
+        """Set a choice field to the option whose visible text is `option_text`, and verify it:
+        native `<select>`, react-select combobox, phone country picker, a radio or checkbox GROUP
+        (field = the question; ticks that option, never unticks), or an AUTOCOMPLETE text box
+        (types it, picks the matching suggestion). Use it for every dropdown instead of
+        `browser_fill`/type+Enter. `field`: visible LABEL or CSS, NOT a `@eN` ref. Match is
+        case-insensitive: exact, else a UNIQUE prefix; `A|B|C` tries alternatives in order.
+        No/ambiguous match lists the options and changes nothing. PHONE: select the country
+        BEFORE you `browser_fill` the number."""
         # Matching is whitespace-collapsed. The combobox is cleared before typing (never appended to) and
         # committed by CLICKING the option, never Enter (Enter commits whatever row is highlighted).
         # Success reads `Selected "<text>" in <label>`. Changing the phone country after the number is
@@ -947,24 +963,74 @@ def get_browser_tools(cfg: dict | None, refresh_gaps=None, *, start_gap: bool = 
             return ("Error: browser_select can't address a field by a @ref — a ref is resolved "
                     "by the CLI, not in the page, and this tool sets the widget in-page. Pass "
                     "the field's visible LABEL or a CSS selector; browser_form_read lists them.")
-        sel, err = await _resolve_field(field)
+        sel, err = await _resolve_field(field, group_ok=True)
         if err:
             return err
         out = await _ab("eval", "--stdin", stdin=forms.select_js(sel, option_text))
         if out.startswith("Error:"):
             return out
+        # A plain text input, or a type-to-search combobox that showed nothing to in-page typing:
+        # its suggestions need REAL typing — the autocomplete path.
+        if (ac := forms.autocomplete_target(out)):
+            return await _autocomplete(ac, field, option_text)
         # A react-select that refused EVERY in-page open strategy (the pointer sequence AND
         # ArrowDown) reports reason:'not-open'. A REAL, trusted CLI click opens a widget that
         # gates on isTrusted where a synthetic event cannot — do ONE on the control, then re-run
         # the in-page select once. If it STILL won't open, render_select returns the explicit
         # "could not open the dropdown" error (never the misleading "no options were found").
+        fresh = False
         if (control_sel := forms.select_reopen_target(out)):
             clicked = await _ab("click", control_sel)
             if not clicked.startswith("Error:"):
+                fresh = True   # a re-run that finds the option ticked is OUR tick, not a prior one
                 out = await _ab("eval", "--stdin", stdin=forms.select_js(sel, option_text))
                 if out.startswith("Error:"):
                     return out
-        return forms.render_select(out, field, option_text)
+        return forms.render_select(out, field, option_text, fresh=fresh)
+
+    async def _autocomplete(ac: dict, field: str, option_text: str) -> str:
+        """browser_select on a field whose suggestions appear only after typing (Lever location,
+        Google Places). The CLI types — `fill` (insertText), then a real `End` keypress, because
+        key-driven widgets search on keyup — and the in-page scripts wait for THIS field's
+        suggestions, match by visible text, and read the commit back. A miss restores the field."""
+        inp, label = ac["input"], ac.get("label") or field
+        typed, last = [], {}
+        for want in forms.alternatives(option_text):
+            if (bad := _bad_operand(option_text=want)):
+                return bad
+            nonce = secrets.token_hex(6)
+            # Type the text; if NO suggestion appears and it has a comma, retry once with just the
+            # first part (the city: "Portland, OR" → "Portland") and match the full text first,
+            # then the city alone. Commit is a CLICK, never Enter.
+            city = want.split(",")[0].strip()
+            for typed_text in ([want, city] if city and city != want else [want]):
+                typed.append(typed_text)
+                filled = await _ab("fill", inp, typed_text)
+                if filled.startswith("Error:"):
+                    return filled
+                await _ab("press", "End")
+                last = forms.parse_json(await _ab("eval", "--stdin", stdin=forms.autocomplete_pick_js(inp, want, nonce)))
+                if typed_text != want and last.get("reason") == "no-option":
+                    last = forms.parse_json(await _ab("eval", "--stdin", stdin=forms.autocomplete_pick_js(
+                        inp, typed_text, nonce, timeout_ms=500)))
+                if last.get("reason") != "no-suggestions":
+                    break
+            if not last.get("ok"):
+                continue
+            chosen, opt = last.get("chosen") or want, last.get("option") or ""
+            clicked = await _ab("click", opt)
+            if clicked.startswith("Error:"):  # covered / off-screen: an in-page click instead
+                await _ab("eval", "--stdin", stdin=forms.js_click_js(opt))
+            check = forms.parse_json(await _ab("eval", "--stdin", stdin=forms.autocomplete_verify_js(inp, chosen)))
+            if check.get("ok"):
+                return f'Selected "{chosen}" in {label} (autocomplete; the field reads "{check.get("value", "")}")'
+            return (f'Error: {label} reads "{check.get("value", "")}" after picking the suggestion '
+                    f'"{chosen}" — the pick did not commit.')
+        # Nothing picked: put the field back the way it was.
+        orig = ac.get("value") or ""
+        await _ab("fill", inp, orig)
+        await _ab("eval", "--stdin", stdin="(function(){var a=document.activeElement; if(a&&a.blur)a.blur(); return 'ok';})()")
+        return forms.render_autocomplete_miss(last or {"label": label}, field, typed, orig)
 
     @tool
     @_serialized
