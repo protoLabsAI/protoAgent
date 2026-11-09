@@ -1,0 +1,162 @@
+<!doctype html>
+<!--
+  MODELED ATS FORM FIXTURE — Lever application form (#4954 eval).
+
+  Models the DOM contract of a Lever-hosted application form:
+      https://jobs.lever.co/<company>/<posting-id>/apply
+  Modeled 2026-11-09 from the live Palantir / Spotify / Zoox postings (structure only; the
+  question wording below is invented). Self-contained: no network, no external JS/CSS.
+
+  What it pins (plugins/agent_browser/forms.py):
+    * top fields inside a WRAPPING <label> whose `.application-label` carries a `✱` (U+2731)
+      required marker — and whose `.application-field` also holds the widget's status text
+      ("No location found…", "Loading", "Analyzing resume...") that must NOT leak into the label;
+    * the "Current location" box: a plain text input whose suggestions are fetched on KEYUP
+      (an insertText `fill` alone never fires one), rendered as `.dropdown-results >
+      div.dropdown-location`, committed on click into the input + a hidden `selectedLocation`;
+    * custom "cards" questions named `cards[<uuid>][fieldN]`, labelled ONLY by the sibling
+      `.application-label .text` of their `li.application-question` — a checkbox group (every box
+      the SAME name), radio Yes/No groups, a "Type your response" text input, a native select
+      and a textarea;
+    * an EEO native select whose options use decline wording ("I don't wish to answer").
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Lever application (fixture)</title>
+<style>
+  body { font-family: sans-serif; margin: 2rem; }
+  li { list-style: none; margin: .4rem 0; }
+  .dropdown-container { display: none; border: 1px solid #ccc; }
+  .dropdown-location { padding: 4px; cursor: pointer; }
+  .dropdown-no-results, .dropdown-loading-results { display: none; }
+  .resume-upload-working, .resume-upload-success, .resume-upload-failure { display: none; }
+  input[type=file] { opacity: 0; width: 1px; }
+</style>
+</head>
+<body>
+<form id="application-form">
+  <ul>
+    <li class="application-question resume"><label>
+      <div class="application-label">Resume/CV<span class="required">✱</span></div>
+      <div class="application-field">
+        <a href="#" class="postings-btn"><span class="filename"></span><span class="default-label">ATTACH RESUME/CV</span>
+          <input class="application-file-input" id="resume-upload-input" name="resume" tabindex="-1" type="file"></a>
+        <span class="resume-upload-failure"><div class="resume-upload-label">Couldn't auto-read resume.</div></span>
+        <span class="resume-upload-working"><div class="resume-upload-label">Analyzing resume...</div></span>
+      </div></label></li>
+    <li class="application-question"><label>
+      <div class="application-label">Full name<span class="required">✱</span></div>
+      <div class="application-field"><input type="text" name="name" required></div></label></li>
+    <li class="application-question"><label>
+      <div class="application-label">Email<span class="required">✱</span></div>
+      <div class="application-field"><input type="email" name="email" required></div></label></li>
+    <li class="application-question"><label>
+      <div class="application-label">Current location <span class="required">✱</span></div>
+      <div class="application-field">
+        <input class="location-input" id="location-input" type="text" name="location" required autocomplete="off">
+        <input id="selected-location" type="hidden" name="selectedLocation">
+        <div class="dropdown-container">
+          <div class="dropdown-results"></div>
+          <div class="dropdown-no-results">No location found. Try entering a different location</div>
+          <div class="dropdown-loading-results"><span>Loading</span></div>
+        </div>
+      </div></label></li>
+  </ul>
+
+  <div class="section application-form" data-qa="additional-cards">
+    <h4>Supplementary Questions</h4>
+    <input type="hidden" name="cards[a69a985a][baseTemplate]" value="{}">
+    <ul>
+      <li class="application-question custom-question"><div>
+        <div class="application-label full-width multiple-select"><div class="text">Language Skill(s) (Check all that apply)<span class="required">✱</span></div></div>
+        <div class="application-field full-width required-field"><ul data-qa="checkboxes">
+          <li><label><input type="checkbox" name="cards[a69a985a][field0]" value="English (ENG)" required><span class="application-answer-alternative">English (ENG)</span></label></li>
+          <li><label><input type="checkbox" name="cards[a69a985a][field0]" value="Spanish (SPA)" required><span class="application-answer-alternative">Spanish (SPA)</span></label></li>
+          <li><label><input type="checkbox" name="cards[a69a985a][field0]" value="French (FRA)" required><span class="application-answer-alternative">French (FRA)</span></label></li>
+          <li><label><input type="checkbox" name="cards[a69a985a][field0]" value="German (DEU)" required><span class="application-answer-alternative">German (DEU)</span></label></li>
+          <li><label><input type="checkbox" name="cards[a69a985a][field0]" value="Choose not to disclose" required><span class="application-answer-alternative">Choose not to disclose</span></label></li>
+        </ul></div></div></li>
+      <li class="application-question custom-question"><div>
+        <div class="application-label full-width text"><div class="text">Preferred Name | What would you like us to call you?</div></div>
+        <div class="application-field full-width"><input class="card-field-input" type="text" placeholder="Type your response" name="cards[a69a985a][field1]"></div></div></li>
+    </ul>
+  </div>
+
+  <div class="section application-form" data-qa="additional-cards">
+    <h4>Work Authorization</h4>
+    <ul>
+      <li class="application-question custom-question"><div>
+        <div class="application-label full-width multiple-choice"><div class="text">Are you legally authorized to work in the country for which you are applying?<span class="required">✱</span></div></div>
+        <div class="application-field full-width required-field"><ul data-qa="multiple-choice">
+          <li><label><input type="radio" name="cards[1c719ca9][field0]" value="Yes" required><span class="application-answer-alternative">Yes</span></label></li>
+          <li><label><input type="radio" name="cards[1c719ca9][field0]" value="No" required><span class="application-answer-alternative">No</span></label></li>
+        </ul></div></div></li>
+      <li class="application-question custom-question"><div>
+        <div class="application-label full-width multiple-choice"><div class="text">Will you now or in the future require sponsorship?<span class="required">✱</span></div></div>
+        <div class="application-field full-width required-field"><ul data-qa="multiple-choice">
+          <li><label><input type="radio" name="cards[1c719ca9][field1]" value="Yes" required><span class="application-answer-alternative">Yes</span></label></li>
+          <li><label><input type="radio" name="cards[1c719ca9][field1]" value="No" required><span class="application-answer-alternative">No</span></label></li>
+        </ul></div></div></li>
+      <li class="application-question custom-question"><div>
+        <div class="application-label full-width dropdown"><div class="text">Please tell us how you heard about this opportunity.<span class="required">✱</span></div></div>
+        <div class="application-field full-width required-field"><div class="application-dropdown">
+          <select name="cards[a6197d84][field0]" required>
+            <option value="">Select...</option><option>LinkedIn</option><option>Company website</option><option>Referral</option>
+          </select></div></div></div></li>
+      <li class="application-question custom-question"><div>
+        <div class="application-label full-width textarea"><div class="text">Why do you want to work here?<span class="required">✱</span></div></div>
+        <div class="application-field full-width required-field"><textarea class="card-field-input" name="cards[1dd0c1f9][field0]" required></textarea></div></div></li>
+    </ul>
+  </div>
+
+  <div class="section application-form">
+    <h4>U.S. Equal Employment Opportunity information</h4>
+    <ul>
+      <li class="application-question"><label for="eeo-veteran">Veteran status</label>
+        <div class="application-field"><select id="eeo-veteran" name="eeo[veteran]">
+          <option value="">Select ...</option><option>I am a protected veteran</option>
+          <option>I am not a protected veteran</option><option>I don't wish to answer</option>
+        </select></div></li>
+    </ul>
+  </div>
+</form>
+
+<script>
+// The location box: Lever searches on KEYUP (debounced), not on `input` — so the CLI's
+// insertText-based fill alone never shows a suggestion; browser_select follows it with a real
+// End keypress. Suggestions arrive "asynchronously" (a timer stands in for the network).
+var LOCATIONS = ["Portland, OR, USA", "Portland, ME, USA", "Portsmouth, NH, USA", "London, United Kingdom"];
+(function () {
+  var input = document.getElementById("location-input");
+  var hidden = document.getElementById("selected-location");
+  var box = document.querySelector(".dropdown-container");
+  var results = box.querySelector(".dropdown-results");
+  var none = box.querySelector(".dropdown-no-results");
+  var loading = box.querySelector(".dropdown-loading-results");
+  var timer = null;
+  input.addEventListener("keyup", function () {
+    var q = (input.value || "").trim().toLowerCase();
+    box.style.display = "flex"; box.style.flexDirection = "column";
+    results.innerHTML = ""; none.style.display = "none"; loading.style.display = "block";
+    clearTimeout(timer);
+    timer = setTimeout(function () {
+      loading.style.display = "none";
+      var hits = LOCATIONS.filter(function (l) { return q && l.toLowerCase().indexOf(q) === 0; });
+      if (!hits.length) { none.style.display = "block"; return; }
+      hits.forEach(function (l, i) {
+        var d = document.createElement("div");
+        d.className = "dropdown-location"; d.id = "location-" + i; d.textContent = l;
+        d.addEventListener("click", function () {
+          input.value = l;
+          hidden.value = JSON.stringify({ name: l });
+          box.style.display = "none";
+        });
+        results.appendChild(d);
+      });
+    }, 350);
+  });
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,61 @@
+<!doctype html>
+<!--
+  MODELED WIDGET FIXTURE — a Google-Places-style address autocomplete (#4954 eval).
+
+  Models the DOM contract of the Places Autocomplete widget many ATS forms attach to a plain
+  text input: a body-level `.pac-container` per input, rendered only while suggestions show,
+  holding `.pac-item` rows whose text is split across spans with NO separator between the
+  query part and the rest ("Portland" + "OR, USA" reads "PortlandOR, USA" as textContent), and a
+  pick committed on MOUSEDOWN. Modeled 2026-11-09; self-contained, no network.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Places autocomplete (fixture)</title>
+<style>
+  body { font-family: sans-serif; margin: 2rem; }
+  .pac-container { position: absolute; border: 1px solid #ccc; background: #fff; }
+  .pac-item { padding: 3px; cursor: pointer; }
+  .pac-item-query { font-weight: bold; }
+</style>
+</head>
+<body>
+<form>
+  <label for="home">Home address</label>
+  <input id="home" name="home" type="text" autocomplete="off">
+  <label for="note">Note</label>
+  <input id="note" name="note" type="text">
+</form>
+<script>
+(function () {
+  var input = document.getElementById("home");
+  var PLACES = [["Portland", "OR, USA"], ["Portland", "ME, USA"], ["Portsmouth", "NH, USA"]];
+  var pac = document.createElement("div");
+  pac.className = "pac-container"; pac.style.display = "none";
+  document.body.appendChild(pac);
+  var t = null;
+  input.addEventListener("input", function () {
+    var q = (input.value || "").trim().toLowerCase().replace(/[^a-z0-9]/g, "");
+    clearTimeout(t);
+    t = setTimeout(function () {
+      pac.innerHTML = "";
+      PLACES.forEach(function (p) {
+        var full = (p[0] + p[1]).toLowerCase().replace(/[^a-z0-9]/g, "");
+        if (!q || full.indexOf(q) !== 0) return;
+        var item = document.createElement("div");
+        item.className = "pac-item";
+        var a = document.createElement("span"); a.className = "pac-item-query"; a.textContent = p[0];
+        var b = document.createElement("span"); b.textContent = p[1];
+        item.appendChild(a); item.appendChild(b);
+        item.addEventListener("mousedown", function (e) {
+          e.preventDefault(); input.value = p[0] + ", " + p[1]; pac.style.display = "none";
+        });
+        pac.appendChild(item);
+      });
+      pac.style.display = pac.children.length ? "block" : "none";
+    }, 250);
+  });
+})();
+</script>
+</body>
+</html>

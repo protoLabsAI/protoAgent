@@ -193,15 +193,29 @@ def fake_popen(out=b"", err=b"", rc=0, timeout=False, record=None, procs=None):
     if isinstance(err, str):
         err = err.encode()
 
+    filled: dict = {}
+
     def _popen(argv, **kw):
         if record is not None:
             record.append(list(argv))
-        p = _FakeProc(argv, out=out, err=err, rc=rc, timeout=timeout)
+        o = out
+        # browser_fill reads the value back (`get value <sel>`): answer it like a page would,
+        # with what the last `fill <sel> <text>` wrote, so a fill test sees no false mismatch.
+        if argv[1:2] == ["fill"] and len(argv) >= 4:
+            filled[argv[2]] = argv[3]
+        elif argv[1:3] == ["get", "value"] and argv[3:4] and argv[3] in filled:
+            o = filled[argv[3]].encode()
+        p = _FakeProc(argv, out=o, err=err, rc=rc, timeout=timeout)
         if procs is not None:
             procs.append(p)
         return p
 
     return _popen
+
+
+def _acts(rec):
+    """The recorded CLI calls minus browser_fill's `get value` read-back."""
+    return [r for r in rec if r[1:3] != ["get", "value"]]
 
 
 def fake_run(rc=0, stdout="ok", stderr="", record=None):
@@ -260,7 +274,7 @@ async def test_action_tools_pass_refs(monkeypatch):
     await t["browser_click"].ainvoke({"selector": "@e2"})
     assert rec[-1] == ["ab", "click", "@e2"]
     await t["browser_fill"].ainvoke({"selector": "#q", "text": "hi there"})
-    assert rec[-1] == ["ab", "fill", "#q", "hi there"]
+    assert rec[-2:] == [["ab", "fill", "#q", "hi there"], ["ab", "get", "value", "#q"]]  # + read-back
     await t["browser_snapshot"].ainvoke({})
     assert rec[-1] == ["ab", "--content-boundaries", "snapshot", "-i", "-c"]  # page data → marked
 
@@ -1141,7 +1155,7 @@ async def test_dash_values_the_cli_does_not_swallow_pass_through(monkeypatch, na
     monkeypatch.setattr(tools.subprocess, "Popen", fake_popen(out="ok", record=rec))
     out = await _toolmap({"binary": "ab"})[name].ainvoke(args)
     assert not out.startswith("Error:"), out
-    assert rec[-1] == ["ab", *argv_tail]
+    assert _acts(rec)[-1] == ["ab", *argv_tail]
 
 
 @pytest.mark.parametrize(
@@ -1527,7 +1541,11 @@ def test_match_by_the_radio_group_legend_is_ambiguous_not_a_silent_first_pick():
     first radio."""
     m = forms.match_fields("Seniority", _RADIO_OPTIONS)
     assert not m.ok and m.selector == ""
-    assert "2 fields" in m.error and "Junior" in m.error and "Senior" in m.error
+    assert "radio group" in m.error and "'Junior'" in m.error and "'Senior'" in m.error
+    assert "browser_select(field='Seniority'" in m.error   # the pointer to the group API
+    # browser_select's resolve (group_ok) takes the group as ONE field: its first member.
+    g = forms.match_fields("Seniority", _RADIO_OPTIONS, group_ok=True)
+    assert g.ok and g.selector == _RADIO_OPTIONS[0]["selector"] and g.kind == "radio-group"
 
 
 # ── forms.resolve_js / parse_resolve / resolve_target — the reusable locator ───────
@@ -1585,11 +1603,17 @@ def _resolving_popen(fields, record=None, procs=None, action_out=b"(ok)"):
     of `fields`; every other verb returns `action_out`. So a label action makes TWO calls —
     the in-page resolve, then the act — and the test can read both."""
     payload = json.dumps({"mode": "enumerate", "fields": fields}).encode()
+    filled: dict = {}
 
     def _popen(argv, **kw):
         if record is not None:
             record.append(list(argv))
-        p = _FakeProc(argv, out=payload if argv[1:2] == ["eval"] else action_out)
+        o = payload if argv[1:2] == ["eval"] else action_out
+        if argv[1:2] == ["fill"] and len(argv) >= 4:
+            filled[argv[2]] = argv[3]
+        elif argv[1:3] == ["get", "value"] and argv[3:4] and argv[3] in filled:
+            o = filled[argv[3]].encode()   # browser_fill's read-back sees what was filled
+        p = _FakeProc(argv, out=o)
         if procs is not None:
             procs.append(p)
         return p
@@ -1635,12 +1659,19 @@ async def test_parallel_fills_on_one_session_do_not_interleave(monkeypatch):
                 state["active"] -= 1
             return super().wait(timeout)
 
+    filled: dict = {}
+
     def _popen(argv, **kw):
         with gate:
             state["active"] += 1
             state["max"] = max(state["max"], state["active"])
             rec.append(list(argv))
-        return _SlowProc(argv, out=payload if argv[1:2] == ["eval"] else b"(ok)")
+        o = payload if argv[1:2] == ["eval"] else b"(ok)"
+        if argv[1:2] == ["fill"]:
+            filled[argv[2]] = argv[3]
+        elif argv[1:3] == ["get", "value"]:
+            o = filled.get(argv[3], "").encode()
+        return _SlowProc(argv, out=o)
 
     monkeypatch.setattr(tools.subprocess, "Popen", _popen)
     t = _toolmap({"binary": "ab"})
@@ -1649,9 +1680,9 @@ async def test_parallel_fills_on_one_session_do_not_interleave(monkeypatch):
     assert all(not o.startswith("Error:") for o in outs), outs
     assert state["max"] == 1, f"{state['max']} CLI calls overlapped"
     # each fill's own resolve is IMMEDIATELY followed by its fill, in arrival order
-    acts = [r for r in rec if r[1] != "eval"]
+    acts = [r for r in _acts(rec) if r[1] != "eval"]
     assert [r[1:] for r in acts] == [["fill", f'[data-ab-field="{i}"]', v] for i, (_, v) in enumerate(calls)]
-    assert [r[1] for r in rec] == ["eval", "fill"] * len(calls)
+    assert [r[1] for r in rec] == ["eval", "fill", "get"] * len(calls)  # resolve, fill, read-back
 
 
 async def test_different_sessions_are_not_serialised_against_each_other(monkeypatch):
@@ -2175,7 +2206,8 @@ async def test_tag_led_css_selectors_reach_the_cli_unchanged(monkeypatch, name, 
         args["text"] = "hi"
     out = await _toolmap({"binary": "ab"})[name].ainvoke(args)
     assert not out.startswith("Error:"), out
-    assert rec[-1][1] != "eval" and sel in rec[-1]  # no in-page resolve; the selector reaches the CLI
+    last = rec[-1] if name == "browser_get_value" else _acts(rec)[-1]
+    assert last[1] != "eval" and sel in last  # no in-page resolve; the selector reaches the CLI
 
 
 async def test_a_label_matching_no_field_is_an_error_and_never_acts(monkeypatch):
@@ -3063,7 +3095,7 @@ async def test_select_phone_country_is_the_iti_branch_and_fill_follows_it(monkey
     # then the number is filled into the SAME tel input, verbatim
     filled = await t["browser_fill"].ainvoke({"selector": "#phone", "text": "2015550123"})
     assert not filled.startswith("Error:")
-    assert rec[-1] == ["ab", "fill", "#phone", "2015550123"]
+    assert _acts(rec)[-1] == ["ab", "fill", "#phone", "2015550123"]
 
     desc = t["browser_select"].description.lower()
     assert "phone" in desc and "country" in desc and "before" in desc and "fill" in desc

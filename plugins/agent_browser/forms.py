@@ -60,7 +60,37 @@ _HTML_TAGS = frozenset({
 })
 
 # One simple-selector qualifier: `#id`, `.class`, `[attr]`/`[attr=val]`, `:pseudo`/`::pseudo`.
-_CSS_QUALIFIER = re.compile(r"\#[\w-]+|\.[\w-]+|\[[^\]]*\]|::?[\w-]+(?:\([^)]*\))?")
+# The attribute form is QUOTE-AWARE: a quoted value may hold brackets — Lever names its custom
+# questions `cards[<uuid>][field0]`, so `input[name="cards[x][field0]"][value="Yes"]` is one
+# compound, not a label (the old `\[[^\]]*\]` stopped at the first `]` inside the quotes).
+_CSS_QUALIFIER = re.compile(
+    r"""\#[\w-]+|\.[\w-]+|\[(?:"[^"]*"|'[^']*'|[^\]"'])*\]|::?[\w-]+(?:\([^)]*\))?""")
+
+
+def _scan(s: str):
+    """Yield ``(ch, depth)`` for each character of ``s``, where ``depth`` counts the ``[...]`` /
+    ``(...)`` nesting OUTSIDE quoted strings — a bracket, space or combinator inside a quoted
+    attribute value (``[name="a [b] > c"]``) never changes the depth. Quote characters are
+    reported at depth >= 1 when they sit inside brackets (they always do in valid CSS)."""
+    depth, quote = 0, ""
+    for ch in s:
+        if quote:
+            if ch == quote:
+                quote = ""
+            yield ch, max(depth, 1)
+            continue
+        if ch in "\"'" and depth > 0:
+            quote = ch
+            yield ch, depth
+            continue
+        if ch in "[(":
+            depth += 1
+            yield ch, depth
+        elif ch in "])":
+            yield ch, depth
+            depth = max(0, depth - 1)
+        else:
+            yield ch, depth
 
 
 def _compound_ok(tok: str) -> bool:
@@ -91,17 +121,11 @@ def _compound_ok(tok: str) -> bool:
 
 
 def _split_selector(s: str) -> list:
-    """Split on descendant whitespace, but NOT whitespace inside ``[...]`` / ``(...)`` — so an
-    attribute value with a space (``input[aria-label="First name"]``) stays one token."""
-    tokens, depth, cur = [], 0, []
-    for ch in s:
-        if ch in "[(":
-            depth += 1
-            cur.append(ch)
-        elif ch in "])":
-            depth = max(0, depth - 1)
-            cur.append(ch)
-        elif ch.isspace() and depth == 0:
+    """Split on descendant whitespace, but NOT whitespace inside ``[...]`` / ``(...)`` or a quoted
+    value — so an attribute value with a space (``input[aria-label="First name"]``) stays one token."""
+    tokens, cur = [], []
+    for ch, depth in _scan(s):
+        if ch.isspace() and depth == 0:
             if cur:
                 tokens.append("".join(cur))
                 cur = []
@@ -113,7 +137,8 @@ def _split_selector(s: str) -> list:
 
 
 def _split_combinators(s: str):
-    """Split ``s`` on the CSS combinators (``> + ~``) that sit OUTSIDE ``[...]`` / ``(...)``.
+    """Split ``s`` on the CSS combinators (``> + ~``) that sit OUTSIDE ``[...]`` / ``(...)`` and
+    quotes.
 
     Returns ``(parts, had_combinator)`` where ``parts`` are the combinator-separated pieces
     (each already whitespace-stripped, kept even when empty) and ``had_combinator`` says a
@@ -121,15 +146,9 @@ def _split_combinators(s: str):
     had no compound on one side (``C++``, a leading/trailing/doubled combinator) — the caller
     treats that as NOT a clean selector, so a label like ``"C++ experience"`` is never routed
     to CSS off a bare ``+`` substring (#4032 review)."""
-    parts, depth, cur, had = [], 0, [], False
-    for ch in s:
-        if ch in "[(":
-            depth += 1
-            cur.append(ch)
-        elif ch in "])":
-            depth = max(0, depth - 1)
-            cur.append(ch)
-        elif depth == 0 and ch in _CSS_COMBINATORS:
+    parts, cur, had = [], [], False
+    for ch, depth in _scan(s):
+        if depth == 0 and ch in _CSS_COMBINATORS:
             had = True
             parts.append("".join(cur).strip())
             cur = []
@@ -230,10 +249,14 @@ def parse_id_probe(output: str) -> str:
     return v if v in ("css", "id") else "none"
 
 
+# Required markers: `*` plus the look-alikes ATS forms render (Lever's `✱` U+2731, `∗` `＊` `⁎` `✳`).
+_REQ_MARKS = re.compile("[*\u2731\u2217\uff0a\u204e\u2733]+")
+
+
 def normalize(s: str) -> str:
     """Collapse whitespace, strip required-marker asterisks, lower-case — the comparison
-    key for label matching. Mirrors ``norm()`` in the in-page JS."""
-    return re.sub(r"\s+", " ", re.sub(r"\*+", " ", s or "")).strip().lower()
+    key for label matching. Mirrors ``abNorm()`` in the in-page JS."""
+    return re.sub(r"\s+", " ", _REQ_MARKS.sub(" ", s or "")).strip().lower()
 
 
 def _js(value) -> str:
@@ -267,13 +290,141 @@ def _loads(output: str):
 # (every field in document order, each tagged `data-ab-field="<i>"` so a resolved field has
 # a selector the CLI can act on THIS call), and scopeRoot (restrict a read to a container).
 _JS_LIB = r"""
-function abClean(s){ return String(s==null?'':s).replace(/\*+/g,' ').replace(/\s+/g,' ').trim(); }
+// Required markers: `*` and the look-alikes ATS forms draw (Lever's `✱` U+2731, `∗` `＊` `⁎` `✳`).
+// Mirrors forms._REQ_MARKS on the Python side.
+var AB_REQ_MARKS = /[\*✱∗＊⁎✳]+/g;
+function abClean(s){ return String(s==null?'':s).replace(AB_REQ_MARKS,' ').replace(/\s+/g,' ').trim(); }
 function abNorm(s){ return abClean(s).toLowerCase(); }
+// Never label text: form controls, and the non-text nodes whose fallback text leaks into
+// textContent — Workable's inline <svg><title>SVGs not supported by this browser.</title>.
+var AB_NONTEXT = 'input,select,textarea,button,svg,script,style,noscript,template';
 function abTextNoControls(el){
   var c = el.cloneNode(true);
-  var kids = c.querySelectorAll('input,select,textarea,button');
+  var kids = c.querySelectorAll(AB_NONTEXT);
   for(var i=0;i<kids.length;i++){ kids[i].remove(); }
   return abClean(c.textContent);
+}
+// ── question text: hints, junk, and the question container (#4954 eval) ──────────────
+// Hint / status text that sits INSIDE or BESIDE a label but is not the question: descriptions,
+// helper lines, validation, live-region status ("Analyzing resume...", "Loading").
+var AB_HINT_SEL = '[class*="descr"], [class*="hint"], [class*="help"], [class*="instruction"], ' +
+  '[class*="sublabel"], [class*="error"], [class*="status"], [role="tooltip"], [role="alert"], ' +
+  '[role="status"], [role="progressbar"], [aria-live]';
+function abIsHint(n){ try { return !!(n && n.matches && n.matches(AB_HINT_SEL)); } catch(e){ return false; } }
+function abHintFreeText(n){
+  // `n`'s text without controls, svg fallbacks or hint/status descendants.
+  if(!n) return '';
+  if(n.nodeType === 3) return abClean(n.textContent);
+  if(n.nodeType !== 1 || abIsHint(n)) return '';
+  var c = n.cloneNode(true);
+  var kids = c.querySelectorAll(AB_NONTEXT + ',' + AB_HINT_SEL);
+  for(var i=0;i<kids.length;i++){ kids[i].remove(); }
+  return abClean(c.textContent);
+}
+function abLabelText(lab){ return abHintFreeText(lab) || abTextNoControls(lab); }
+function abLabelLead(lab, el){
+  // A WRAPPING <label> often holds the field's whole widget — Lever's location label wraps its
+  // "No location found…Loading" dropdown, its résumé label the "Analyzing resume…" status. The
+  // question is the text BEFORE the branch that holds the control; a label whose text comes
+  // only AFTER the control (`<label><input> English</label>`) keeps its whole text.
+  var branch = el;
+  while(branch && branch.parentElement && branch.parentElement !== lab) branch = branch.parentElement;
+  var parts = [];
+  if(branch && branch.parentElement === lab){
+    for(var n = branch.previousSibling; n; n = n.previousSibling) parts.unshift(abHintFreeText(n));
+  }
+  return abClean(parts.join(' ')) || abLabelText(lab);
+}
+// Placeholder-style text that names no question ("Start typing...", "Type your response",
+// "Select..."). Still addressable, but never the primary label while a real one exists.
+var AB_JUNK = /^(svgs? not supported.*|start typing.*|type (your|here|to).*|write here.*|select( an?( option| value| one)?)?\W*|choose( an?)? (option|one)\W*|please (select|choose).*|search\W*|loading\W*|enter (your )?(answer|response|text)\W*|your (answer|response)\W*)$/i;
+function abIsJunk(s){ return AB_JUNK.test(abClean(s)); }
+var AB_FIELD_SEL = 'input:not([type="hidden"]):not([type="submit"]):not([type="button"]):not([type="reset"]):not([type="image"]), ' +
+  'select, textarea, [role="combobox"], .select__control, [class*="select__control"]';
+function abHasForeignField(node, members){
+  // Does `node` hold a form field that is NOT one of `members` (or part of one's widget)?
+  if(!node || node.nodeType !== 1) return false;
+  var fs = [];
+  try { if(node.matches(AB_FIELD_SEL)) fs.push(node); } catch(e){}
+  try { fs = fs.concat(Array.prototype.slice.call(node.querySelectorAll(AB_FIELD_SEL))); } catch(e){}
+  for(var i=0;i<fs.length;i++){
+    var f = fs[i], mine = false;
+    for(var j=0;j<members.length && !mine;j++){
+      var m = members[j];
+      if(f === m || (m.contains && m.contains(f)) || (f.contains && f.contains(m))) mine = true;
+    }
+    if(!mine && !abIsComboShadowInput(f)) return true;
+  }
+  return false;
+}
+function abSkipLead(n){
+  if(!n || n.nodeType !== 1) return false;
+  // controls and page chrome (a tab bar / nav before the form is never the question)
+  if(n.matches && n.matches('button, [role="button"], script, style, svg, template, noscript, ' +
+                            'nav, a, [role="tablist"], [role="tab"], [role="navigation"], [role="link"], [role="menu"]')) return true;
+  if(n.querySelector && n.querySelector('nav, [role="tablist"], [role="navigation"]')) return true;
+  return !!(n.getClientRects && !n.getClientRects().length);    // not rendered
+}
+function abIsLabelish(n){
+  if(!n || n.nodeType !== 1 || abIsHint(n)) return false;
+  if(/^(LABEL|LEGEND|H[1-6])$/.test(n.tagName)) return true;
+  return /label|question|title|heading|legend|prompt/i.test(String(n.className || ''));
+}
+function abMarked(n){
+  // a required marker on a question label: an asterisk look-alike, or a `required` class.
+  if(!n) return false;
+  if(n.nodeType === 3) return /[\*✱∗＊⁎✳]/.test(n.textContent || '');
+  if(/[\*✱∗＊⁎✳]/.test(n.textContent || '')) return true;
+  if(/required/i.test(String(n.className || ''))) return true;
+  return !!(n.querySelector && n.querySelector('[class*="required"]'));
+}
+function abWidgetTitle(el){
+  // The first heading / label / …title… element inside the field's own widget (the widest
+  // ancestor, ≤4 up, that holds no other field), never one that contains the input itself.
+  var node = el.parentElement, best = '';
+  for(var up = 0; node && up < 4; up++){
+    if(node === document.body || node.tagName === 'FORM' || abHasForeignField(node, [el])) break;
+    var hs = node.querySelectorAll('h1,h2,h3,h4,h5,h6,label,legend,[class*="title"],[class*="heading"]');
+    for(var i = 0; i < hs.length; i++){
+      if(hs[i].contains(el) || abIsHint(hs[i])) continue;
+      var t = abHintFreeText(hs[i]);
+      if(t){ best = t; break; }
+    }
+    if(best) return best;
+    node = node.parentElement;
+  }
+  return '';
+}
+function abQuestionText(first, members){
+  // The question a field (or a radio/checkbox GROUP) answers when it carries no label of its
+  // own — Lever `.application-question`, Ashby's fieldset heading, a bare heading-then-input.
+  // Climb from the field (a group's FIRST member); at each level take the siblings BEFORE the
+  // branch, stopping at one that holds another field (a neighbour question). A label-like
+  // sibling (label/legend/heading/…label… class) wins over hint text; else the joined text.
+  members = members || [first];
+  var cur = first;
+  for(var up = 0; cur && up < 7; up++){
+    var parent = cur.parentElement;
+    if(!parent || parent === document.body || parent.tagName === 'FORM' || parent.tagName === 'HTML') break;
+    var picked = [], blocked = false;
+    for(var n = cur.previousSibling; n; n = n.previousSibling){
+      if(n.nodeType === 1 && abHasForeignField(n, members)){ blocked = true; break; }
+      if(n.nodeType === 1 && abSkipLead(n)) continue;
+      if(n.nodeType === 1 || n.nodeType === 3) picked.unshift(n);
+    }
+    var lab = null;
+    for(var i = 0; i < picked.length && !lab; i++){ if(abIsLabelish(picked[i]) && abHintFreeText(picked[i])) lab = picked[i]; }
+    var txt = lab ? abHintFreeText(lab)
+                  : abClean(picked.map(function(p){ return abHintFreeText(p); }).join(' '));
+    if(txt){
+      if(txt.length > 400) txt = abClean(txt.slice(0, 400));
+      var req = lab ? abMarked(lab) : picked.some(function(p){ return abMarked(p); });
+      return {text: txt, required: req};
+    }
+    if(blocked) break;
+    cur = parent;
+  }
+  return {text: '', required: false};
 }
 function abFileExt(s){ return /\.\w{2,5}$/.test(String(s==null?'':s)); }
 function abRemoveControl(el){
@@ -378,9 +529,17 @@ function abOrphanBox(label){
   return null;
 }
 function abByIds(ids){
-  return String(ids||'').split(/\s+/).map(function(id){
-    var n = id && document.getElementById(id); return n ? abClean(n.textContent) : '';
-  }).filter(Boolean).join(' ');
+  // aria-labelledby text. A referenced BUTTON ("Choose file" beside Workable's "Resume") is only
+  // used when nothing else names the field — Greenhouse's résumé is named ONLY by its "Attach".
+  var strong = [], weak = [];
+  String(ids||'').split(/\s+/).forEach(function(id){
+    var n = null; try { n = id && document.getElementById(id); } catch(e){ n = null; }
+    if(!n) return;
+    var t = abClean(abTextNoControls(n)) || abClean(n.textContent);
+    if(!t) return;
+    if(n.matches && n.matches('button, [role="button"]')) weak.push(t); else strong.push(t);
+  });
+  return (strong.length ? strong : weak).join(' ');
 }
 // The react-select container (`.select__control`) is the canonical combobox root — it holds
 // the committed `.select__single-value`. Its inner search INPUT ALSO carries
@@ -461,24 +620,35 @@ function abWrapperName(el){
   if(box){ var ba = abClean(box.getAttribute && box.getAttribute('aria-label')); if(ba) out.push(ba); }
   return out;
 }
-function abCandidateLabels(el){
+function abCandidateLabels(el, noQuestion){
   var out = [];
   var hasOwnLabel = false;
   var id = el.getAttribute && el.getAttribute('id');
+  var forLabels = [], weakFor = [];
   if(id){
     var sel = 'label[for="' + (window.CSS && CSS.escape ? CSS.escape(id) : id) + '"]';
-    var lf = null;
-    try { lf = document.querySelector(sel); } catch(e){ lf = null; }
-    if(lf){ out.push(abTextNoControls(lf)); hasOwnLabel = true; }
+    try { forLabels = Array.prototype.slice.call(document.querySelectorAll(sel)); } catch(e){ forLabels = []; }
+    // every <label for>: an svg-only one (Workable's dropzone icon) reads empty and is skipped,
+    // and a role=button one ("Choose file") ranks after a real one.
+    for(var fi = 0; fi < forLabels.length; fi++){
+      var ft = abLabelText(forLabels[fi]);
+      if(!ft) continue;
+      if(forLabels[fi].matches && forLabels[fi].matches('[role="button"]')) weakFor.push(ft); else out.push(ft);
+      hasOwnLabel = true;
+    }
   }
   var wrap = el.closest && el.closest('label');
-  if(wrap){ out.push(abTextNoControls(wrap)); hasOwnLabel = true; }
+  if(wrap && forLabels.indexOf(wrap) < 0){
+    var wt = abLabelLead(wrap, el);
+    if(wt){ out.push(wt); hasOwnLabel = true; }
+  }
   // The element's OWN aria-label / aria-labelledby is a label of its own — so it both ranks as a
   // candidate AND stops the widget from borrowing a container/listbox name below (#4032 bug 2b).
   var al = el.getAttribute && el.getAttribute('aria-label');
   if(al){ var alc = abClean(al); if(alc){ out.push(alc); hasOwnLabel = true; } }
   var lb = el.getAttribute && el.getAttribute('aria-labelledby');
   if(lb){ var lbt = abClean(abByIds(lb)); if(lbt){ out.push(lbt); hasOwnLabel = true; } }
+  if(forLabels.length) out = out.concat(weakFor || []);   // a role=button <label for> ranks after aria names
   // A combobox / intl-tel-input PICKER with no label of its own (no `<label for>`, wrapping
   // `<label>`, aria-label or aria-labelledby) is named by the aria-label/aria-labelledby on its
   // container or the aria-label on the listbox it controls — a phone-country picker's only
@@ -487,13 +657,98 @@ function abCandidateLabels(el){
   // picker is NOT a picker (abComboOrIti), so it never borrows its country-list's name.
   if(!hasOwnLabel && abComboOrIti(el)){
     var acc = abWrapperName(el);
-    for(var a=0;a<acc.length;a++){ if(acc[a]) out.push(acc[a]); }
+    for(var a=0;a<acc.length;a++){ if(acc[a]){ out.push(acc[a]); hasOwnLabel = true; } }
+  }
+  // No label of its own: the question container names it (Lever custom questions, which carry
+  // only `cards[<uuid>][field0]` and a "Type your response" placeholder) — ranked above the
+  // placeholder and the machine name.
+  if(!hasOwnLabel && !noQuestion){
+    // An unlabelled FILE drop zone names itself inside its own widget ("Autofill from resume",
+    // after the input) — take that title before climbing out to the page around it.
+    var own = ((el.getAttribute('type') || '').toLowerCase() === 'file') ? abWidgetTitle(el) : '';
+    var q = own ? {text: own} : abQuestionText(el, [el]);
+    if(q.text) out.push(q.text);
   }
   var ph = el.getAttribute && el.getAttribute('placeholder'); if(ph) out.push(abClean(ph));
   var nm = el.getAttribute && el.getAttribute('name'); if(nm) out.push(abClean(nm));
-  var seen = {}, res = [];
-  for(var i=0;i<out.length;i++){ var s=out[i]; var k=s.toLowerCase(); if(s && !seen[k]){ seen[k]=1; res.push(s); } }
+  var seen = {}, res = [], junk = [];
+  for(var i=0;i<out.length;i++){
+    var s=out[i]; var k=s.toLowerCase();
+    if(s && !seen[k]){ seen[k]=1; (abIsJunk(s) ? junk : res).push(s); }
+  }
+  res = res.concat(junk);       // junk stays addressable, never the primary label
+  res.own = hasOwnLabel;
   return res;
+}
+// ── radio / checkbox GROUPS (#4954 eval) ─────────────────────────────────────────────
+// A radio group is its same-name radios; a checkbox group is its same-name checkboxes (Lever:
+// 31 language boxes all named `cards[…][field0]`), else the checkboxes of one fieldset /
+// role=group holding no other field (Ashby names each box after its option). The group label
+// is the legend, else the group container's aria-labelledby / aria-label, else the question
+// container's text (abQuestionText from the first member).
+var AB_GROUP_CACHE = null;
+function abGroupInfo(el){
+  var t = ((el.getAttribute && el.getAttribute('type')) || '').toLowerCase();
+  if(t !== 'radio' && t !== 'checkbox') return null;
+  var cache = AB_GROUP_CACHE || {byEl: [], groups: []};
+  for(var ci = 0; ci < cache.byEl.length; ci++){ if(cache.byEl[ci][0] === el) return cache.byEl[ci][1]; }
+  var scope = el.form || document;
+  var name = (el.getAttribute && el.getAttribute('name')) || '';
+  var members = null, key = '';
+  if(name){
+    var all = scope.querySelectorAll('input[type="' + t + '"]');
+    members = Array.prototype.filter.call(all, function(x){ return x.getAttribute('name') === name; });
+    key = t + ':n:' + name;
+    if(t === 'checkbox' && members.length < 2) members = null;
+  }
+  if(!members && t === 'checkbox'){
+    var box = el.closest && el.closest('fieldset, [role="group"]');
+    if(box){
+      var cbs = Array.prototype.slice.call(box.querySelectorAll('input[type="checkbox"]'));
+      if(cbs.length >= 2 && !abHasForeignField(box, cbs)){
+        members = cbs;
+        var gid = box.getAttribute('data-ab-group');
+        if(!gid){ gid = 'g' + (cache.groups.length + 1) + '-' + Date.now(); try { box.setAttribute('data-ab-group', gid); } catch(e){} }
+        key = 'checkbox:g:' + gid;
+      }
+    }
+  }
+  if(!members){
+    if(t === 'checkbox') return null;           // a lone checkbox stays kind 'checkbox'
+    members = [el]; key = '';                   // a name-less radio is its own group
+  }
+  var label = '', req = false;
+  var fs = el.closest && el.closest('fieldset');
+  var leg = fs && fs.querySelector('legend');
+  if(leg) label = abClean(abTextNoControls(leg));
+  if(!label){
+    var gc = el.closest && el.closest('[role="radiogroup"], [role="group"], fieldset');
+    if(gc){
+      label = abClean(abByIds(gc.getAttribute('aria-labelledby'))) || abClean(gc.getAttribute('aria-label') || '');
+      if(gc.getAttribute('aria-required') === 'true') req = true;
+    }
+  }
+  if(!label){ var q = abQuestionText(members[0], members); label = q.text; req = req || q.required; }
+  for(var mi = 0; mi < members.length; mi++){ if(abRequired(members[mi])) req = true; }
+  var info = {kind: t === 'radio' ? 'radio-group' : 'checkbox-group', key: key, members: members,
+              label: label, required: req};
+  for(var mj = 0; mj < members.length; mj++) cache.byEl.push([members[mj], info]);
+  cache.groups.push(info);
+  AB_GROUP_CACHE = cache;
+  return info;
+}
+function abOptionLabel(el){
+  var labs = abCandidateLabels(el, true);
+  return (labs.own && labs[0]) || abClean(el.value) || labs[0] || '';
+}
+function abIsHiddenHelper(el){
+  // A text input the widget keeps for itself: aria-hidden AND tabindex=-1, with no label of its own
+  // (Workable's address picker fills hidden `city` / `postcode` / `country` inputs). Not a field.
+  if(!el || el.tagName !== 'INPUT') return false;
+  var t = (el.getAttribute('type') || 'text').toLowerCase();
+  if(['text','search','email','tel','number','url',''].indexOf(t) < 0) return false;
+  if(el.getAttribute('aria-hidden') !== 'true' || el.getAttribute('tabindex') !== '-1') return false;
+  return !abCandidateLabels(el, true).own;
 }
 function abKindOf(el){
   if(abComboRoot(el)) return 'combobox';
@@ -706,9 +961,21 @@ function abComboValue(root){
     var iname = abBestName(abSelectedIdentity(root));
     if(iname) return iname;
   }
+  // A READ-ONLY select-like combobox input (Workable's "Select an option…") holds the committed
+  // choice as its own value — it can't carry typed-but-uncommitted search text.
+  if(root.tagName === 'INPUT' && root.readOnly) return abClean(root.value);
+  // A bare ARIA combobox INPUT (no react-select container — Ashby's location box): its committed
+  // value is the input's own value once its listbox is closed.
+  if(root.tagName === 'INPUT' && root.getAttribute('aria-expanded') !== 'true' &&
+     !(root.closest && root.closest('.select__control, [class*="select__control"]'))) return abClean(root.value);
   // last resort: the rendered text with the search input removed, so typed-but-uncommitted
-  // text is never reported as the value.
-  return abTextNoControls(root);
+  // text is never reported as the value — and with the PLACEHOLDER removed: an unanswered
+  // react-select reads "", never "Select..." (live Greenhouse renders it as plain text).
+  var c = root.cloneNode(true);
+  var ph = c.querySelectorAll('[class*="placeholder"]');
+  for(var pi = 0; pi < ph.length; pi++) ph[pi].remove();
+  var rest = abTextNoControls(c);
+  return abIsJunk(rest) ? '' : rest;
 }
 // ── react-select's hidden required "shadow" input (#4032 bug 4) ──────────────────
 // When a react-select field is `required`, react-select renders a sibling
@@ -740,6 +1007,7 @@ function abIsComboShadowInput(el){
   if(abComboRoot(el)) return false;                    // the combobox root itself is a real field
   var t = (el.getAttribute && (el.getAttribute('type') || '').toLowerCase()) || '';
   if(t === 'file') return false;                       // a file input is a real field (#resume)
+  if(t === 'checkbox' || t === 'radio') return false;  // a custom-drawn box (Ashby yes/no) is a real field
   // It must have NO label candidates of its own — no `<label for>`, wrapping `<label>`,
   // aria-label / aria-labelledby or placeholder. A REAL unlabelled input keeps whatever it has
   // and stays a field; only a truly nameless input can be a shadow.
@@ -792,6 +1060,7 @@ function abComboShadowRequired(control){
 }
 function abEnumerate(root){
   root = root || document;
+  AB_GROUP_CACHE = null;                      // group membership is recomputed every read
   var nodes = Array.prototype.slice.call(root.querySelectorAll(
     'input, textarea, select, [role="combobox"], .select__control, [class*="select__control"]'));
   var out = [], idx = 0;
@@ -801,9 +1070,12 @@ function abEnumerate(root){
     if(abInCombo(el)) continue;               // the combobox root represents its inner input
     if(el.tagName.toLowerCase()==='input' && skip[(el.getAttribute('type')||'').toLowerCase()]) continue;
     if(abIsComboShadowInput(el)) continue;    // react-select's hidden required sibling — folded below
+    if(abIsHiddenHelper(el)) continue;        // a widget's own aria-hidden helper input
     var kind = abKindOf(el);
     var name = (el.getAttribute && el.getAttribute('name')) || '';
-    var labels = abCandidateLabels(el);
+    var grp = (kind === 'radio-group' || kind === 'checkbox') ? abGroupInfo(el) : null;
+    if(grp && grp.kind === 'checkbox-group') kind = 'checkbox-group';
+    var labels = abCandidateLabels(el, kind === 'combobox' || !!grp);
     var comboInner = null;
     // EVERY radio is enumerated and tagged as its own addressable field — not collapsed to the
     // group's first member — so clicking a later option by its own text works (#4032 review).
@@ -812,20 +1084,29 @@ function abEnumerate(root){
     // group by its legend hits every option (an AMBIGUOUS error that lists them) rather than
     // silently acting on the first.
     var radioLegend = '';
-    if(kind==='radio-group'){
-      var fs = el.closest && el.closest('fieldset');
-      var leg = fs && fs.querySelector('legend');
-      if(leg) radioLegend = abClean(abTextNoControls(leg));
+    if(grp){
+      // A group member's own label is its OPTION; the group label (legend / aria / question
+      // container) is appended so addressing the question hits every member of the group.
+      radioLegend = grp.label || '';
       if(radioLegend && labels.indexOf(radioLegend) < 0) labels.push(radioLegend);
     }
     if(kind==='combobox'){
       // The react-select container has no label of its own; the labelled node is its inner
       // search input (its id drives `<label for>`, and it carries aria-label/labelledby).
       // Merge those so the ONE combobox entry is both labelled AND carries the value.
+      var ownCombo = !!labels.own;
       comboInner = el.querySelector && el.querySelector('input, select, textarea, [role="combobox"]');
       if(comboInner && comboInner !== el){
-        var il = abCandidateLabels(comboInner);
-        for(var li=0; li<il.length; li++){ if(labels.indexOf(il[li])<0) labels.push(il[li]); }
+        var il = abCandidateLabels(comboInner, true);
+        ownCombo = ownCombo || !!il.own;
+        var merged = [], jk = [];
+        labels.concat(il).forEach(function(x){ if(merged.indexOf(x) < 0 && jk.indexOf(x) < 0) (abIsJunk(x) ? jk : merged).push(x); });
+        labels = merged.concat(jk);
+      }
+      // still nameless (Ashby's "Start typing..." location box): the question container names it.
+      if(!ownCombo){
+        var cq = abQuestionText(el, comboInner && comboInner !== el ? [el, comboInner] : [el]);
+        if(cq.text && labels.indexOf(cq.text) < 0) labels.unshift(cq.text);
       }
     }
     try { el.setAttribute('data-ab-field', String(idx)); } catch(e){}
@@ -838,15 +1119,16 @@ function abEnumerate(root){
       desc.options = Array.prototype.map.call(el.options, function(o){ return abClean(o.textContent); });
       var so = el.options[el.selectedIndex];
       desc.value = so ? abClean(so.textContent) : '';
-    } else if(kind==='radio-group'){
-      // Per-OPTION descriptor: its own label addresses this one radio; the group metadata lets
-      // the read renderer fold the members back into one radio-group entry (options + checked).
-      var optionLabel = labels[0] || abClean(el.value) || '';
-      desc.group = name || ('@@' + idx);     // no name → each radio is its own group
+    } else if(kind==='radio-group' || kind==='checkbox-group'){
+      // Per-OPTION descriptor: its own label addresses this one option; the group metadata lets
+      // the read renderer fold the members back into one group entry (options + checked).
+      var optionLabel = abOptionLabel(el);
+      desc.group = (grp && grp.key) || name || ('@@' + idx);     // no name → each radio is its own group
       desc.groupLabel = radioLegend;
       desc.optionLabel = optionLabel;
       desc.checked = !!el.checked;
       desc.value = optionLabel;
+      if(grp && grp.required) desc.required = true;
     } else if(kind==='combobox'){
       desc.value = abComboValue(el);          // committed selection, NOT the typed search text
       if(comboInner && comboInner !== el){    // adopt the inner input's identity when the
@@ -970,16 +1252,63 @@ def resolve_js(field: str) -> str:
     return _JS_LIB + "\n" + _RESOLVE_RETURN
 
 
-def read_form_js(scope: str = "") -> str:
+# Combobox OPTIONS for the read (#4954 eval): a react-select (or a read-only select-like ARIA
+# combobox — Workable's "Select an option…") renders its options only while OPEN. For each such
+# field that is still UNANSWERED, open it (pointer sequence, then ArrowDown), read the option
+# texts, and close it again with Escape + blur — never typing, never clicking an option, so
+# nothing is committed. A type-to-search box (options depend on the query) is skipped, and the
+# whole pass is bounded so a long form can't stall the read.
+_READ_OPTIONS = r"""
+async function abReadComboOptions(fields, budgetMs){
+  var start = Date.now();
+  for(var i=0;i<fields.length;i++){
+    var f = fields[i];
+    if(f.kind !== 'combobox' || f.value) continue;
+    if(Date.now() - start > budgetMs) break;
+    var el = null; try { el = document.querySelector(f.selector); } catch(e){ el = null; }
+    if(!el) continue;
+    var input = (el.matches && el.matches('[role="combobox"]')) ? el
+              : (el.querySelector && el.querySelector('[role="combobox"], input'));
+    var control = (el.matches && el.matches('.select__control, [class*="select__control"]')) ? el
+                : ((input && input.closest && input.closest('.select__control, [class*="select__control"]')) || el);
+    var selectLike = abComboContainer(control) || !!(input && input.readOnly);
+    if(!selectLike || !input) continue;
+    var wasOpen = abComboOpen(input, control);
+    if(!wasOpen){
+      if(document.activeElement === input && input.blur){ try { input.blur(); } catch(e){} }
+      abTrustedishSeq(control);
+      if(!(await abWaitOpen(input, control, 500))){
+        if(input.focus){ try { input.focus(); } catch(e){} }
+        abArrowDown(input);
+        await abWaitOpen(input, control, 400);
+      }
+    }
+    var texts = abComboOptions(input, control).map(function(o){ return abClean(o.textContent); })
+                  .filter(function(t){ return t; });
+    if(texts.length) f.options = texts;
+    if(!wasOpen){
+      try { input.dispatchEvent(new KeyboardEvent('keydown', {key:'Escape', code:'Escape', keyCode:27, bubbles:true, cancelable:true})); } catch(e){}
+      if(input.blur){ try { input.blur(); } catch(e){} }
+      await abSleep(60);
+    }
+  }
+}
+"""
+
+
+def read_form_js(scope: str = "", option_budget_ms: int = 5000) -> str:
     """The script to eval for ``browser_form_read``: enumerate every field (optionally
-    within ``scope``) and return ``{ok, fields}`` (or ``{ok:false, error}`` when the scope
+    within ``scope``), read the options of unanswered select-like comboboxes (bounded by
+    ``option_budget_ms``), and return ``{ok, fields}`` (or ``{ok:false, error}`` when the scope
     matches nothing)."""
     kind = classify(scope) if scope else "none"
     is_css = "true" if kind == "css" else "false"
-    return (_JS_LIB + "\n(function(){\n"
+    return (_JS_LIB + _SELECT_LIB + _READ_OPTIONS + "\n(async function(){\n"
             "var root = abScopeRoot(" + _js(scope or "") + ", " + is_css + ");\n"
             "if(root === null) return JSON.stringify({ok:false, error:'scope-not-found'});\n"
-            "return JSON.stringify({ok:true, fields: abEnumerate(root)});\n"
+            "var fields = abEnumerate(root);\n"
+            "try { await abReadComboOptions(fields, " + str(int(option_budget_ms)) + "); } catch(e){}\n"
+            "return JSON.stringify({ok:true, fields: fields});\n"
             "})()")
 
 
@@ -1047,12 +1376,22 @@ def _describe(f: dict) -> str:
     return f"{label} ({tail})"
 
 
-def match_fields(field: str, fields: list) -> Match:
+_GROUP_KINDS = ("radio-group", "checkbox-group")
+
+
+def _one_group(winners: list) -> bool:
+    """True when every winner is an option of the SAME radio/checkbox group."""
+    keys = {(w.get("kind"), w.get("group")) for w in winners}
+    return len(keys) == 1 and winners[0].get("kind") in _GROUP_KINDS and bool(winners[0].get("group"))
+
+
+def match_fields(field: str, fields: list, *, group_ok: bool = False) -> Match:
     """Resolve a LABEL ``field`` against enumerated ``fields`` (document order).
 
     Exact beats prefix beats substring. Exactly one field at the best tier resolves; more
     than one is AMBIGUOUS (an error listing them — never a guess); none is an error naming
-    the closest labels.
+    the closest labels. With ``group_ok`` (browser_select), several winners that are all
+    options of ONE radio/checkbox group resolve to that group (its first member's selector).
     """
     query = normalize(field)
     scored = [(_best_tier(f, query), f) for f in fields]
@@ -1068,6 +1407,17 @@ def match_fields(field: str, fields: list) -> Match:
                    "fields. Call browser_form_read to inspect it, or pass a CSS selector or @ref.")
         return Match(ok=False, error=msg, candidates=cands)
     winners = [f for t, f in scored if t == best]
+    if len(winners) > 1 and _one_group(winners):
+        w = winners[0]
+        if group_ok:
+            return Match(ok=True, selector=w.get("selector", ""), label=w.get("groupLabel") or w.get("label", ""),
+                         kind=w.get("kind", ""))
+        opts = ", ".join(repr(x.get("optionLabel") or x.get("label") or "") for x in winners[:12])
+        what = "checkbox group" if w.get("kind") == "checkbox-group" else "radio group"
+        q = w.get("groupLabel") or field
+        msg = (f"Error: {field!r} is a {what} (options: {opts}). Pick one with "
+               f"browser_select(field={q!r}, option_text=\"<option>\"), or address the option by its own label.")
+        return Match(ok=False, error=msg, candidates=[x.get("label", "") for x in winners])
     if len(winners) > 1:
         listing = "; ".join(_describe(w) for w in winners)
         tier_name = {0: "exactly", 1: "as a prefix", 2: "as a substring"}[best]
@@ -1091,13 +1441,13 @@ def parse_resolve(output: str) -> dict:
     return data
 
 
-def resolve_target(field: str, parsed: dict) -> Match:
+def resolve_target(field: str, parsed: dict, *, group_ok: bool = False) -> Match:
     """Turn a parsed ``resolve_js`` result into a :class:`Match` the caller acts on."""
     mode = parsed.get("mode")
     if mode == "pass":
         return Match(ok=True, selector=parsed.get("target") or field.strip())
     if mode == "enumerate":
-        return match_fields(field, parsed.get("fields") or [])
+        return match_fields(field, parsed.get("fields") or [], group_ok=group_ok)
     return Match(ok=False, error="Error: could not resolve the field (the page returned unreadable data).")
 
 
@@ -1106,6 +1456,19 @@ def resolve_target(field: str, parsed: dict) -> Match:
 # The columns browser_form_read reports, in order. `labels`/`idx`/`selector` are internal
 # addressing bookkeeping and never surface.
 _PUBLIC_KEYS = ("label", "kind", "name", "id", "required", "value")
+
+
+# A long option list (Palantir's university dropdown has 3,302) is cut to this many in the read
+# view, with `options_more` counting the rest — browser_select still matches ANY option by text.
+OPTIONS_SHOWN = 60
+
+
+def _cap_options(out: dict) -> dict:
+    opts = out.get("options")
+    if isinstance(opts, list) and len(opts) > OPTIONS_SHOWN:
+        out["options"] = opts[:OPTIONS_SHOWN]
+        out["options_more"] = len(opts) - OPTIONS_SHOWN
+    return out
 
 
 def _public_field(f: dict) -> dict:
@@ -1128,37 +1491,46 @@ def _group_key(f: dict) -> str:
 
 
 def collapse_radio_groups(fields: list) -> list:
-    """Fold the per-option radio descriptors ``abEnumerate`` emits back into one ``radio-group``
-    object per group — ``options`` is the member labels in document order, ``value`` the checked
-    one — at the position of the group's first member. Every other field passes through
-    unchanged. (Enumeration is per-option so each radio is independently addressable; the read
-    view is per-group.)"""
+    """Fold the per-option radio / checkbox descriptors ``abEnumerate`` emits back into one
+    ``radio-group`` / ``checkbox-group`` object per group — ``options`` is the member labels in
+    document order, ``value`` the checked one (a radio group) or the LIST of checked ones (a
+    checkbox group) — at the position of the group's first member. Every other field passes
+    through unchanged. (Enumeration is per-option so each option is independently addressable;
+    the read view is per-group.)"""
     out: list = []
     at: dict = {}
     for f in fields:
-        if f.get("kind") != "radio-group":
-            out.append(_public_field(f))
+        kind = f.get("kind")
+        if kind not in _GROUP_KINDS:
+            out.append(_cap_options(_public_field(f)))
             continue
-        key = _group_key(f)
+        key = (kind, _group_key(f))
         option = f.get("optionLabel") or f.get("label") or ""
+        multi = kind == "checkbox-group"
         if key in at:
             g = out[at[key]]
             g["options"].append(option)
             if f.get("checked"):
-                g["value"] = option
+                if multi:
+                    g["value"].append(option)
+                else:
+                    g["value"] = option
             if f.get("required"):
                 g["required"] = True
             continue
         at[key] = len(out)
+        checked = bool(f.get("checked"))
         out.append({
             "label": f.get("groupLabel") or f.get("name") or option,
-            "kind": "radio-group",
+            "kind": kind,
             "name": f.get("name", ""),
             "id": "",
             "required": bool(f.get("required", False)),
-            "value": option if f.get("checked") else "",
+            "value": ([option] if checked else []) if multi else (option if checked else ""),
             "options": [option],
         })
+    for i in at.values():
+        _cap_options(out[i])
     return out
 
 
@@ -1180,6 +1552,27 @@ def render_form_read(output: str, scope: str = "") -> str:
         where = f" within {scope!r}" if scope else ""
         return f"No form fields found{where}."
     return json.dumps(collapse_radio_groups(fields), ensure_ascii=False, indent=2)
+
+
+# ── browser_fill read-back (#4954 eval) ─────────────────────────────────────────────
+
+
+def fill_matches(wanted: str, actual: str) -> bool:
+    """Does the value read back after ``browser_fill`` agree with what was filled? Exact (after
+    trimming / whitespace-collapse) agrees, and so does a widget that only REFORMATS: the same
+    digits ("5550100199" → "(555) 010-0199", "150000" → "150,000") or the same text ignoring
+    case and punctuation. A blank, truncated or different value is a mismatch."""
+    w = re.sub(r"\s+", " ", wanted or "").strip()
+    a = re.sub(r"\s+", " ", actual or "").strip()
+    if w == a:
+        return True
+    if not a:
+        return False
+    wd, ad = re.sub(r"\D", "", w), re.sub(r"\D", "", a)
+    if wd and wd == ad and not re.sub(r"[\d\W_]", "", w):
+        return True                       # digits-only input, reformatted (phone / amount)
+    loose = lambda x: re.sub(r"[\W_]+", "", x.lower())  # noqa: E731
+    return bool(loose(w)) and loose(w) == loose(a)
 
 
 # ── browser_select: set a choice field correctly, then PROVE it (#4032) ───────────
@@ -1267,9 +1660,63 @@ function abMatchOption(options, want){
   if(prefix.length === 1) return {index: prefix[0]};
   return {error: prefix.length > 1 ? 'ambiguous' : 'no-option'};
 }
+function abWants(want){ return Array.isArray(want) ? want : [want]; }
+function abMatchAny(options, wants){
+  // ALTERNATIVES ("Decline to self-identify|Prefer not to say"): the FIRST alternative that
+  // resolves to one option wins; none resolving is 'ambiguous' if any was, else 'no-option'.
+  var amb = false;
+  wants = abWants(wants);
+  for(var i=0;i<wants.length;i++){
+    var m = abMatchOption(options, wants[i]);
+    if(!m.error){ m.want = wants[i]; return m; }
+    if(m.error === 'ambiguous') amb = true;
+  }
+  return {error: amb ? 'ambiguous' : 'no-option'};
+}
+function abTextInput(el){
+  // A plain typable text box — browser_select's AUTOCOMPLETE target (suggestions appear only
+  // after typing; Lever's location, Google Places).
+  if(!el || el.tagName !== 'INPUT') return false;
+  var t = (el.getAttribute('type') || 'text').toLowerCase();
+  return ['text', 'search', ''].indexOf(t) >= 0 && !el.readOnly && !el.disabled;
+}
+function abChoiceControl(box){
+  // What a real click should land on for a custom-drawn radio/checkbox: its role=radio /
+  // role=checkbox wrapper or its <label>, else the input itself.
+  var w = box.closest && box.closest('[role="radio"], [role="checkbox"]');
+  if(w) return w;
+  var lab = box.closest && box.closest('label');
+  if(!lab && box.id){
+    try { lab = document.querySelector('label[for="' + (window.CSS && CSS.escape ? CSS.escape(box.id) : box.id) + '"]'); } catch(e){ lab = null; }
+  }
+  return lab || box;
+}
+async function abChoice(g, wants){
+  // Tick ONE option of a radio / checkbox GROUP by its visible label, then read `checked` back.
+  // A checkbox option that is already ticked is left alone (never toggled off).
+  var opts = g.members.map(abOptionLabel);
+  var m = abMatchAny(opts, wants);
+  if(m.error) return {ok:false, reason:m.error, kind:g.kind, label:g.label, options:opts.slice(0, 40)};
+  var box = g.members[m.index], chosen = opts[m.index];
+  if(box.checked) return {ok:true, kind:g.kind, label:g.label, chosen:chosen, committed:chosen, already:true};
+  try { box.click(); } catch(e){}
+  await abWaitFor(function(){ return box.checked ? [1] : []; }, 800);
+  if(!box.checked){
+    var ctl = abChoiceControl(box);
+    if(ctl !== box){ abClickOption(ctl); await abWaitFor(function(){ return box.checked ? [1] : []; }, 800); }
+  }
+  if(!box.checked)
+    return {ok:false, reason:'click-needed', kind:g.kind, label:g.label, wanted:chosen,
+            control: abControlSelector(abChoiceControl(box))};
+  return {ok:true, kind:g.kind, label:g.label, chosen:chosen, committed:chosen};
+}
 function abSelectKind(el){
   var tag = el.tagName ? el.tagName.toLowerCase() : '';
   if(tag === 'select') return 'native';
+  if(tag === 'input' && /^(radio|checkbox)$/i.test(el.getAttribute('type') || '')) return 'group';
+  if(el.matches && el.matches('fieldset, [role="radiogroup"], [role="group"]') &&
+     el.querySelector('input[type="radio"], input[type="checkbox"]') &&
+     !el.querySelector('select, textarea, [role="combobox"], .select__control')) return 'group';
   if(el.closest && el.closest('.iti, [class*="iti--"]')) return 'iti';
   if(el.matches && el.matches('.select__control, [class*="select__control"]')) return 'combobox';
   var combo = (el.matches && el.matches('[role="combobox"]')) ? el
@@ -1284,11 +1731,12 @@ function abSelectKind(el){
     if(container || aa === 'list') return 'combobox';
     return 'combobox';
   }
+  if(abTextInput(el)) return 'autocomplete';
   return 'other';
 }
 function abNative(el, want){
   var opts = Array.prototype.map.call(el.options, function(o){ return abClean(o.textContent); });
-  var m = abMatchOption(opts, want);
+  var m = abMatchAny(opts, want);
   var label = abFieldLabel(el);
   if(m.error) return {ok:false, reason:m.error, kind:'native-select', label:label, options:opts.slice(0,10)};
   var chosen = opts[m.index];
@@ -1434,7 +1882,10 @@ function abTypeFilter(input, want){
   abSetNativeValue(input, ''); abFire(input, 'input');
   abSetNativeValue(input, want); abFire(input, 'input');
 }
-async function abCombo(el, want){
+async function abCombo(el, wantArg){
+  var wants = abWants(wantArg);
+  if(wants.length > 1) return abComboMulti(el, wants);
+  var want = wants[0];
   var input = (el.matches && el.matches('[role="combobox"]')) ? el
             : (el.querySelector && el.querySelector('[role="combobox"], input'));
   var control = (el.matches && el.matches('.select__control, [class*="select__control"]')) ? el
@@ -1487,8 +1938,71 @@ async function abCombo(el, want){
     texts = (opts || []).map(function(o){ return abClean(o.textContent); });
     m = texts.length ? abMatchOption(texts, want) : {error:'no-option'};   // … and rescan unfiltered
   }
-  if(!texts.length) return {ok:false, reason:'no-option', kind:'combobox', label:label, options:[]};
+  // No options at all, even after typing: an ASYNC type-to-search box whose results need REAL
+  // key events — hand browser_select the input so it can retry as an autocomplete.
+  if(!texts.length) return {ok:false, reason:'no-option', kind:'combobox', label:label, options:[],
+                            input: typable ? abControlSelector(input) : ''};
   if(m.error) return {ok:false, reason:m.error, kind:'combobox', label:label, options:texts.slice(0,10)};
+  return abComboCommit(input, control, label, opts, texts, m, abPreHad, typable);
+}
+async function abComboMulti(el, wants){
+  // ALTERNATIVES on a combobox: scan the UNFILTERED menu for the first alternative that matches;
+  // only if none does (or the menu needs typing to render) type each alternative in turn.
+  var input = (el.matches && el.matches('[role="combobox"]')) ? el
+            : (el.querySelector && el.querySelector('[role="combobox"], input'));
+  var control = (el.matches && el.matches('.select__control, [class*="select__control"]')) ? el
+              : ((input && input.closest && input.closest('.select__control, [class*="select__control"]')) || el);
+  var label = abFieldLabel(input || el);
+  var typable = input && /^(input|textarea)$/i.test(input.tagName || '');
+  var preChips = (control && control.querySelector) ? abMultiValues(control) : [];
+  function abPreHad(text){
+    for(var pi=0; pi<preChips.length; pi++){ if(abNorm(preChips[pi]) === abNorm(text)) return true; }
+    return false;
+  }
+  for(var w=0; w<wants.length; w++){
+    if(abPreHad(wants[w]))
+      return {ok:true, kind:'combobox', label:label, chosen:abClean(wants[w]), committed:abClean(wants[w]), already:true};
+  }
+  var opened = abComboOpen(input, control) || await abOpenCombo(input, control);
+  var opts = [], texts = [], m = {error:'no-option'};
+  if(opened){
+    if(typable){ abSetNativeValue(input, ''); abFire(input, 'input'); }
+    opts = await abWaitFor(function(){ return abComboOptions(input, control); }, 1500);
+    texts = (opts || []).map(function(o){ return abClean(o.textContent); });
+    if(texts.length) m = abMatchAny(texts, wants);
+  }
+  if(m.error && typable){
+    var amb = m.error === 'ambiguous', seen = texts.slice();
+    for(var i=0; i<wants.length; i++){
+      if(input.focus){ try { input.focus(); } catch(e){} }
+      abTypeFilter(input, wants[i]);
+      opts = await abWaitFor(function(){ return abComboOptions(input, control); }, 2000);
+      texts = (opts || []).map(function(o){ return abClean(o.textContent); });
+      texts.forEach(function(t){ if(seen.indexOf(t) < 0) seen.push(t); });
+      var mm = texts.length ? abMatchOption(texts, wants[i]) : {error:'no-option'};
+      if(!mm.error){ m = mm; break; }
+      if(mm.error === 'ambiguous') amb = true;
+    }
+    if(m.error){
+      abSetNativeValue(input, ''); abFire(input, 'input');
+      if(!seen.length && !opened) {
+        var exp = (input && input.getAttribute) ? (input.getAttribute('aria-expanded') || '') : '';
+        return {ok:false, reason:'not-open', kind:'combobox', label:label, expanded:exp, control:abControlSelector(control)};
+      }
+      return {ok:false, reason: amb ? 'ambiguous' : 'no-option', kind:'combobox', label:label,
+              options: seen.slice(0,10), input: (!seen.length && typable) ? abControlSelector(input) : ''};
+    }
+  }
+  if(m.error){
+    if(!opened){
+      var ex2 = (input && input.getAttribute) ? (input.getAttribute('aria-expanded') || '') : '';
+      return {ok:false, reason:'not-open', kind:'combobox', label:label, expanded:ex2, control:abControlSelector(control)};
+    }
+    return {ok:false, reason:m.error, kind:'combobox', label:label, options:texts.slice(0,10)};
+  }
+  return abComboCommit(input, control, label, opts, texts, m, abPreHad, typable);
+}
+async function abComboCommit(input, control, label, opts, texts, m, abPreHad, typable){
   var chosen = texts[m.index];
   if(abPreHad(chosen)){
     // already a chip — leave it selected: drop our filter text and close the menu we opened.
@@ -1631,7 +2145,7 @@ async function abIti(el, want){
     var nm = li.querySelector('.iti__country-name, [class*="country-name"]');
     return abClean(nm ? nm.textContent : li.textContent);
   });
-  var m = abMatchOption(names, want);
+  var m = abMatchAny(names, want);
   if(m.error) return {ok:false, reason:m.error, kind:'iti', label:label, options:names.slice(0,10)};
   var chosen = names[m.index];
   abClickOption(items[m.index]);
@@ -1659,6 +2173,14 @@ _SELECT_DRIVER = r"""
     if(kind === 'native') return JSON.stringify(abNative(el, WANT));
     if(kind === 'combobox') return JSON.stringify(await abCombo(el, WANT));
     if(kind === 'iti') return JSON.stringify(await abIti(el, WANT));
+    if(kind === 'group'){
+      var first = /^input$/i.test(el.tagName) ? el : el.querySelector('input[type="radio"], input[type="checkbox"]');
+      var g = abGroupInfo(first) || {kind:'checkbox-group', key:'', members:[first], label:abFieldLabel(first), required:false};
+      return JSON.stringify(await abChoice(g, WANT));
+    }
+    if(kind === 'autocomplete')
+      return JSON.stringify({ok:false, reason:'autocomplete', input:abControlSelector(el),
+                             value:String(el.value || ''), label:abFieldLabel(el)});
     return JSON.stringify({ok:false, reason:'unsupported', kind:kind, label:abFieldLabel(el)});
   } catch(e){
     return JSON.stringify({ok:false, reason:'exception', message:String(e && e.message || e)});
@@ -1667,33 +2189,58 @@ _SELECT_DRIVER = r"""
 """
 
 
+def alternatives(option_text: str) -> list:
+    """``"A|B|C"`` → ``["A", "B", "C"]`` (tried in order, first match wins); a text without
+    ``|`` is the single alternative. Blank pieces are dropped."""
+    parts = [p.strip() for p in (option_text or "").split("|")]
+    parts = [p for p in parts if p]
+    return parts or [option_text or ""]
+
+
 def select_js(selector: str, option_text: str) -> str:
     """The script ``browser_select`` evals: detect the widget at ``selector`` and set it to
     ``option_text`` in the page, reading back the committed value. ``selector`` is the
     locator the bd-12mo.1 resolver already turned into something ``querySelector`` can act on
-    (a ``[data-ab-field="N"]`` tag for a label, or a raw CSS selector). Rides ``eval --stdin``
-    like every other form script (#3689)."""
+    (a ``[data-ab-field="N"]`` tag for a label, or a raw CSS selector). ``option_text`` may list
+    ALTERNATIVES separated by ``|``. Rides ``eval --stdin`` like every other form script (#3689)."""
+    wants = alternatives(option_text)
     return (_JS_LIB + _SELECT_LIB + "\n(function(){\n"
             "var SEL = " + _js(selector) + ";\n"
-            "var WANT = " + _js(option_text) + ";\n"
+            "var WANT = " + _js(wants if len(wants) > 1 else wants[0]) + ";\n"
             "return " + _SELECT_DRIVER.strip() + ";\n})()")
 
 
 def select_reopen_target(output: str) -> str:
     """If ``select_js`` reported the dropdown would not open in-page (``reason:'not-open'`` — every
-    synthetic open strategy failed), return the CONTROL selector ``browser_select`` should do a
+    synthetic open strategy failed), or a radio/checkbox option would not tick from a synthetic
+    click (``reason:'click-needed'``), return the CONTROL selector ``browser_select`` should do a
     REAL, trusted CLI click on before retrying; otherwise "". A trusted click opens a react-select
     that gates on ``isTrusted`` where a synthetic mousedown cannot. Never raises."""
     try:
         data = _loads(output)
     except (ValueError, TypeError):
         return ""
-    if isinstance(data, dict) and data.get("reason") == "not-open":
+    if isinstance(data, dict) and data.get("reason") in ("not-open", "click-needed"):
         return data.get("control") or ""
     return ""
 
 
-def render_select(output: str, field: str, option_text: str) -> str:
+def autocomplete_target(output: str) -> dict | None:
+    """``{input, value, label}`` when ``select_js`` handed the field back for AUTOCOMPLETE — a
+    plain text input (``reason:'autocomplete'``), or a type-to-search combobox that showed no
+    options at all after in-page typing (``no-option`` with an ``input``). Else ``None``."""
+    try:
+        data = _loads(output)
+    except (ValueError, TypeError):
+        return None
+    if not isinstance(data, dict) or not data.get("input"):
+        return None
+    if data.get("reason") == "autocomplete" or (data.get("reason") == "no-option" and not data.get("options")):
+        return {"input": data["input"], "value": str(data.get("value") or ""), "label": data.get("label") or ""}
+    return None
+
+
+def render_select(output: str, field: str, option_text: str, *, fresh: bool = False) -> str:
     """Turn ``select_js``'s JSON into the model-facing result. Success is ``Selected "…" in
     <label>``; every failure is an ``Error: …`` — an ambiguous/absent option lists the choices,
     a dropdown that never opened says so (never the misleading "no options were found"), and a
@@ -1708,7 +2255,7 @@ def render_select(output: str, field: str, option_text: str) -> str:
     label = data.get("label") or field
     if data.get("ok"):
         chosen = data.get("chosen") or option_text
-        if data.get("already"):
+        if data.get("already") and not fresh:
             return f'Selected "{chosen}" in {label} (it was already selected; left as is)'
         return f'Selected "{chosen}" in {label}'
     reason = data.get("reason")
@@ -1734,13 +2281,179 @@ def render_select(output: str, field: str, option_text: str) -> str:
         return (f"Error: could not find a field matching {field!r} to select in. Call "
                 "browser_form_read to list the fields, or pass a CSS selector. (browser_select "
                 "addresses by LABEL or CSS, not a @ref — a ref can't be resolved in the page.)")
+    if reason == "click-needed":
+        return (f'Error: "{data.get("wanted", option_text)}" in {label} did not tick from a click — '
+                "call browser_snapshot to inspect the control.")
     if reason == "unsupported":
         return (f"Error: {field!r} is a {data.get('kind', 'plain')!r} field, not a choice "
-                "field browser_select can set. Use browser_fill for text, or browser_click for "
-                "a checkbox/radio.")
+                "field browser_select can set. Use browser_fill for text.")
     if reason == "exception":
         return f"Error: selecting in {label} failed in the page: {str(data.get('message', ''))[:200]}"
     return f"Error: could not select {option_text!r} in {label}."
+
+
+# ── browser_select AUTOCOMPLETE: suggestions that appear only after typing (#4954 eval) ─
+# Lever's "Current location" and Google-Places-style boxes are plain text inputs whose listbox
+# renders only after REAL typing — Lever searches on keyup, which the CLI's insertText-based
+# `fill` never fires, so browser_select used to report "unsupported" and in-page typing found
+# nothing. The tool (tools.browser_select) does the typing with the CLI — `fill`, then a
+# harmless real `End` keypress — and these scripts do the rest: wait (bounded) for THIS field's
+# suggestions, match the wanted text against their visible text, tag the unique match for a
+# trusted CLI click, and read the committed value back. No/ambiguous match lists the
+# suggestions and the tool restores the field's previous value.
+_AC_LIB = r"""
+function abAcKey(s){ return abNorm(s).replace(/[^\p{L}\p{N}]+/gu, ''); }
+function abAcText(n){ return abClean((n && (n.innerText || n.textContent)) || ''); }
+var AB_AC_STATUS = /no[-_ ]?results?|loading|empty|status|spinner|header|footer|hint|powered/i;
+function abAcStatusText(t){ return /^(loading|searching|no (results|matches|options|location)|type to search)/i.test(t); }
+function abAcItemsIn(box, input){
+  var out = [];
+  var kids = box.children || [];
+  for(var i=0;i<kids.length;i++){
+    var k = kids[i];
+    if(!abShown(k) || k.contains(input)) continue;
+    if(k.querySelector && k.querySelector('input, select, textarea')) continue;
+    if(AB_AC_STATUS.test(String(k.className || '')) || abIsHint(k)) continue;
+    var t = abAcText(k);
+    if(!t || abAcStatusText(t)) continue;
+    out.push(k);
+  }
+  return out;
+}
+function abAcItems(input){
+  // 1) aria wiring — the input (or its combobox) names its listbox.
+  var owner = (input.closest && input.closest('[role="combobox"]')) || input;
+  var ids = ((input.getAttribute('aria-controls') || input.getAttribute('aria-owns') || '') + ' ' +
+             (owner.getAttribute('aria-controls') || owner.getAttribute('aria-owns') || '')).trim();
+  var out = [];
+  ids.split(/\s+/).forEach(function(id){
+    var lb = null; try { lb = id && document.getElementById(id); } catch(e){ lb = null; }
+    if(!lb) return;
+    var os = lb.querySelectorAll('[role="option"]');
+    for(var i=0;i<os.length;i++){ if(abShown(os[i]) && out.indexOf(os[i]) < 0) out.push(os[i]); }
+  });
+  if(out.length) return out;
+  // 2) Google Places: a body-level .pac-container per input; only the open one is rendered.
+  var pac = document.querySelectorAll('.pac-container .pac-item');
+  for(var p=0;p<pac.length;p++){ if(abShown(pac[p])) out.push(pac[p]); }
+  if(out.length) return out;
+  // 3) THIS field's own container (never crossing into a neighbour field): a rendered
+  //    role=option list, else the suggestion box with the most items (deepest on a tie).
+  var node = input.parentElement, best = [], scope = null;
+  for(var up=0; node && up<5; up++){
+    if(node === document.body || node.tagName === 'FORM') break;
+    if(abHasForeignField(node, [input])) break;
+    scope = node; node = node.parentElement;
+  }
+  if(!scope) return out;
+  var opts = scope.querySelectorAll('[role="option"]');
+  for(var o=0;o<opts.length;o++){ if(abShown(opts[o]) && abAcText(opts[o])) out.push(opts[o]); }
+  if(out.length) return out;
+  var boxes = scope.querySelectorAll('[role="listbox"], [class*="result"], [class*="suggest"], ' +
+    '[class*="autocomplete"], [class*="dropdown"], [class*="menu"], [class*="option"], ul');
+  for(var b=0;b<boxes.length;b++){
+    var bx = boxes[b];
+    if(bx.contains(input) || !abShown(bx) || AB_AC_STATUS.test(String(bx.className || ''))) continue;
+    var items = abAcItemsIn(bx, input);
+    if(items.length && items.length >= best.length) best = items;
+  }
+  return best;
+}
+function abAcMatch(texts, want){
+  var m = abMatchOption(texts, want);
+  if(m.index !== undefined || m.error === 'ambiguous') return m;
+  // Loose: punctuation/space-blind ("PortlandOR, USA" — a pac-item's spans — vs "Portland, OR").
+  var kw = abAcKey(want), exact = [], prefix = [];
+  if(!kw) return {error:'no-option'};
+  for(var i=0;i<texts.length;i++){
+    var k = abAcKey(texts[i]);
+    if(k === kw) exact.push(i); else if(k.indexOf(kw) === 0) prefix.push(i);
+  }
+  if(exact.length === 1) return {index: exact[0]};
+  if(exact.length > 1 || prefix.length > 1) return {error:'ambiguous'};
+  if(prefix.length === 1) return {index: prefix[0]};
+  return {error:'no-option'};
+}
+"""
+
+_AC_PICK = r"""
+(async function(){
+  var input = null; try { input = document.querySelector(SEL); } catch(e){ input = null; }
+  if(!input) return JSON.stringify({ok:false, reason:'not-found'});
+  var label = abFieldLabel(input);
+  var end = Date.now() + TIMEOUT, items = [];
+  for(;;){
+    items = abAcItems(input);
+    if(items.length) break;
+    if(Date.now() >= end) break;
+    await abSleep(120);
+  }
+  if(items.length){ await abSleep(300); var again = abAcItems(input); if(again.length) items = again; }
+  if(!items.length) return JSON.stringify({ok:false, reason:'no-suggestions', label:label});
+  var texts = items.map(abAcText);
+  var m = abAcMatch(texts, WANT);
+  if(m.error) return JSON.stringify({ok:false, reason:m.error, label:label, options:texts.slice(0,10)});
+  try { items[m.index].setAttribute('data-ab-opt', NONCE); } catch(e){}
+  return JSON.stringify({ok:true, option:'[data-ab-opt="' + NONCE + '"]', chosen:texts[m.index], label:label});
+})()
+"""
+
+_AC_VERIFY = r"""
+(async function(){
+  var input = null; try { input = document.querySelector(SEL); } catch(e){ input = null; }
+  if(!input) return JSON.stringify({ok:false, reason:'not-found'});
+  var want = abAcKey(CHOSEN);
+  function ok(){ var v = abAcKey(input.value); return !!v && (v === want || v.indexOf(want) === 0); }
+  await abWaitFor(function(){ return ok() ? [1] : []; }, 2000);
+  return JSON.stringify({ok:ok(), value:String(input.value || '')});
+})()
+"""
+
+
+def _ac_script(body: str, **values) -> str:
+    head = "".join(f"var {k} = {_js(v)};\n" for k, v in values.items())
+    return (_JS_LIB + _SELECT_LIB + _AC_LIB + "\n(function(){\n" + head
+            + "return " + body.strip() + ";\n})()")
+
+
+def autocomplete_pick_js(selector: str, want: str, nonce: str, timeout_ms: int = 5000) -> str:
+    """After the tool typed ``want`` into ``selector``: wait ≤ ``timeout_ms`` for THIS field's
+    suggestions, match ``want`` by visible text (exact, unique prefix, then punctuation-blind) and
+    tag the match ``data-ab-opt=<nonce>`` for a trusted CLI click. Changes nothing itself."""
+    return _ac_script(_AC_PICK, SEL=selector, WANT=want, NONCE=nonce, TIMEOUT=int(timeout_ms))
+
+
+def autocomplete_verify_js(selector: str, chosen: str) -> str:
+    """After the click: wait ≤2s for the input's value to read ``chosen`` (or a fuller form of it)."""
+    return _ac_script(_AC_VERIFY, SEL=selector, CHOSEN=chosen)
+
+
+def parse_json(output: str) -> dict:
+    """A form script's JSON result as a dict; ``{}`` on anything unreadable. Never raises."""
+    try:
+        data = _loads(output)
+    except (ValueError, TypeError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def render_autocomplete_miss(data: dict, field: str, typed: list, restored: str) -> str:
+    """The ``Error:`` for an autocomplete that found nothing to pick (the field was restored)."""
+    label = data.get("label") or field
+    tried = " / ".join(repr(t) for t in typed)
+    back = f"restored to {restored!r}" if restored else "cleared again"
+    reason = data.get("reason")
+    if reason in ("no-option", "ambiguous"):
+        opts = ", ".join(repr(o) for o in (data.get("options") or [])[:10])
+        head = ("matches more than one suggestion" if reason == "ambiguous" else "matches no suggestion")
+        return (f"Error: {tried} {head} in {label}. Suggestions: {opts}. Nothing was picked; the "
+                f"field was {back}. Retry with the exact suggestion text.")
+    if reason == "no-suggestions":
+        return (f"Error: no suggestions appeared in {label} after typing {tried}; the field was {back}. "
+                "If it is a plain text field, use browser_fill.")
+    if reason == "not-found":
+        return f"Error: the input for {label} vanished while picking a suggestion."
+    return f"Error: could not pick a suggestion in {label}; the field was {back}."
 
 
 # ── browser_upload: attach a fenced local file to a file input, then PROVE it (#4032) ─

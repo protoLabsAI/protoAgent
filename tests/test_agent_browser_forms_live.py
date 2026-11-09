@@ -1255,10 +1255,11 @@ async def test_ashby_required_resume_upload_and_radio_group(browser):
 
     clicked = await browser["browser_click"].ainvoke({"selector": "Yes"})
     assert not clicked.startswith("Error:"), clicked
-    # addressing the group by its legend hits BOTH radios — an ambiguous error, never a guess
+    # addressing the group by its legend hits BOTH radios — an error naming the options and
+    # pointing at browser_select (which takes the group), never a guess
     legend = "Are you legally authorized to work in the United States?"
     amb = await browser["browser_click"].ainvoke({"selector": legend})
-    assert amb.startswith("Error:") and "matches 2 fields" in amb
+    assert amb.startswith("Error:") and "radio group" in amb and "browser_select" in amb
 
     fields = await _form(browser)
     assert fields["Full name"]["value"] == "Ada Lovelace"
@@ -1420,6 +1421,10 @@ def test_fixtures_are_self_contained_with_no_network_resources():
         "greenhouse_resume_chip.html",
         "greenhouse_phone_country_flag.html",
         "greenhouse_multiselect.html",
+        "lever.html",
+        "workable.html",
+        "ashby_questions.html",
+        "places_autocomplete.html",
     ):
         body = comment.sub("", (FIXTURES / name).read_text(encoding="utf-8")).lower()
         for marker in ("http://", "https://", "<script src", "<link ", "<img ", "url("):

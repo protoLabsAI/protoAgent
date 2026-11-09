@@ -154,8 +154,16 @@ highlighted "Yes, Ireland…"; a phone country then number both read back; an up
 filename back; a wrong option is a hard `Error:`; a label still resolves after a reload).
 
 ```bash
-pytest tests/test_agent_browser_forms_live.py
+pytest tests/test_agent_browser_forms_live.py tests/test_agent_browser_form_labels_live.py
 ```
+
+`test_agent_browser_form_labels_live.py` covers what the Career Coach auto-apply eval
+found on real Lever, Workable and Ashby postings. Those fixtures (`lever.html`,
+`workable.html`, `ashby_questions.html`, `places_autocomplete.html`) are modeled from the
+live forms, so a custom question reads by its question text and not by
+`cards[<uuid>][field0]`. They also cover checkbox groups as one field, `browser_select` on
+group questions and autocomplete boxes, `|` alternatives, combobox options in the read, and
+the `browser_fill` read-back.
 
 Live tests use their own session names and close them in teardown; each also sets
 `main_idle_timeout_min`, so a run that's killed before teardown leaves a daemon that exits on
