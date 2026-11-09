@@ -45,7 +45,7 @@ See [Plugins](/guides/plugins) for how to use these fields, and
 | [`requires_pip`](#field-requires-pip) | `list[str]` | `[]` | declared pip deps |
 | [`optional_pip`](#field-optional-pip) | `list[str]` | `[]` | the optional tier ([#1953](https://github.com/protoLabsAI/protoAgent/issues/1953)) — specs from `optional: true` entries |
 | [`pip_scopes`](#field-pip-scopes) | `dict[str, str]` | `{}` | pkg name -> "host" \| "runtime" ([#2246](https://github.com/protoLabsAI/protoAgent/issues/2246)) |
-| [`requires_runtimes`](#field-requires-runtimes) | `dict[str, str]` | `{}` | non-Python runtimes the plugin needs, as `{runtime: ">=N"}` — today only `node` ([ADR 0085](/adr/0085-managed-node-runtime), amended 2026-10-15), e.g. `{node: ">=20"}` for a plugin that runs a… |
+| [`requires_runtimes`](#field-requires-runtimes) | `dict[str, object]` | `{}` | runtimes the plugin needs, keyed by runtime name ([ADR 0085](/adr/0085-managed-node-runtime), amended 2026-10-15 for `node` and 2026-11-08 for `python`) |
 | [`repository`](#field-repository) | `str` | `''` | provenance, shown in the install review |
 | [`homepage`](#field-homepage) | `str` | `''` | provenance, shown in the install review |
 | [`min_protoagent_version`](#field-min-protoagent-version) | `str` | `''` | compat guard — the loader refuses to load the plugin when the host is older than declared (malformed strings only warn and load) |
@@ -212,9 +212,9 @@ pkg name -> "host" | "runtime" ([#2246](https://github.com/protoLabsAI/protoAgen
 
 ### `requires_runtimes` {#field-requires-runtimes}
 
-- **Type** `dict[str, str]` · **Default** `{}`
+- **Type** `dict[str, object]` · **Default** `{}`
 
-non-Python runtimes the plugin needs, as `{runtime: ">=N"}` — today only `node` ([ADR 0085](/adr/0085-managed-node-runtime), amended 2026-10-15), e.g. `{node: ">=20"}` for a plugin that runs a vendored JS bundle. The spec is a floor: `>=N`, `>=N.N` or `>=N.N.N` (a bare `20` / `"v20"` means `>=20`); a malformed spec or an unknown runtime warns and is ignored. The deps gate checks it with the shared resolver (PATH → version managers → the managed runtime) and, when nothing satisfies it, raises the setup banner with an **Install Node runtime** button. At call time, spawn the node `sdk.node_executable(min_version)` returns.
+runtimes the plugin needs, keyed by runtime name ([ADR 0085](/adr/0085-managed-node-runtime), amended 2026-10-15 for `node` and 2026-11-08 for `python`). Two shapes, by key: • `node` — a normalized version FLOOR string `">=N[.N[.N]]"` (a bare `20` / `"v20"` / YAML int `20` means `>=20`), e.g. `{node: ">=20"}` for a plugin that runs a vendored JS bundle. The deps gate checks it with the shared resolver (PATH → version managers → the managed runtime) and, when nothing satisfies it, raises the setup banner with an **Install Node runtime** button. At call time, spawn the node `sdk.node_executable(min_version)` returns. • `python` — a normalized mapping `{"version": "3.12", "requirements": [PEP 508 specs]}` (`version` a `N.N` string, `requirements` possibly empty). Unlike node's scalar floor, it declares a whole per-plugin venv: the host provisions it at `<plugin_store>/.venv` with `uv` on the operator's Install click (never on load — install ≠ code exec, [ADR 0027](/adr/0027-install-plugins-from-git-url)), and an unmet venv (missing, wrong version or a requirements hash that drifted from the manifest) raises the same `runtime-missing` banner. See `infra.python_runtime`. A malformed spec or an unknown runtime warns and is ignored; it never fails the load. `.get("node")` yields the str; `.get("python")` the dict.
 
 ### `repository` {#field-repository}
 

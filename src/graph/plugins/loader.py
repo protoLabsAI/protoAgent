@@ -738,17 +738,37 @@ def refresh_plugin_deps(plugin_id: str) -> list[str] | None:
 
 
 # The setup-gap key the loader reports an unmet ``requires_runtimes`` under (ADR 0085,
-# amended 2026-10-15). Separate from DEPS_GAP_KEY: that gap's fix is pip, this one's is the
-# managed Node install, and ``deps_missing`` (what Install deps hands to pip) must never
-# carry a runtime name.
+# amended 2026-10-15 for node, 2026-11-08 for python). Separate from DEPS_GAP_KEY: that gap's
+# fix is pip into the host/managed runtime, this one's is the managed Node install or a
+# per-plugin uv venv, and ``deps_missing`` (what Install deps hands to pip) must never carry a
+# runtime name.
 RUNTIME_GAP_KEY = "runtime-missing"
 
 
 def _runtime_gap(manifest: PluginManifest) -> tuple[str | None, list[dict], list[str]]:
     """``(message, actions, missing)`` for a plugin's ``requires_runtimes`` — ``message`` is
     None when every declared runtime is satisfied here. ``missing`` is the unmet specs
-    (``["node>=20"]``), for the loader meta."""
-    spec = (getattr(manifest, "requires_runtimes", None) or {}).get("node")
+    (``["node>=20", "python3.12"]``), for the loader meta. Node and python share this one gap
+    (``RUNTIME_GAP_KEY``); when both are unmet their messages/actions are concatenated."""
+    runtimes = getattr(manifest, "requires_runtimes", None) or {}
+    messages: list[str] = []
+    actions: list[dict] = []
+    missing: list[str] = []
+    for message, acts, miss in (
+        _node_runtime_gap(runtimes.get("node")),
+        _python_runtime_gap(manifest.id, runtimes.get("python")),
+    ):
+        if message:
+            messages.append(message)
+            actions.extend(acts)
+            missing.extend(miss)
+    return ("; ".join(messages) or None), actions, missing
+
+
+def _node_runtime_gap(spec) -> tuple[str | None, list[dict], list[str]]:
+    """The node half of ``_runtime_gap`` — ``spec`` is the normalized ``">=N"`` floor or
+    None. Unchanged behaviour: resolve with the shared resolver and, when nothing satisfies
+    it, offer ``install_node`` if the managed build can meet the floor."""
     if not spec:
         return None, [], []
     from infra.node_runtime import (
@@ -786,6 +806,45 @@ def _runtime_gap(manifest: PluginManifest) -> tuple[str | None, list[dict], list
         fix = f"Install Node.js {spec} yourself and restart protoAgent."
     message = f"needs Node.js {spec} ({have}). {fix}"
     return message, actions, [f"node{spec}"]
+
+
+#: Why a python venv is unmet, as human text keyed by ``python_runtime.plugin_venv_state``.
+_PY_STATE_REASON = {
+    "missing": "no venv provisioned",
+    "version": "provisioned for a different Python version",
+    "stale": "declared dependencies changed",
+}
+
+
+def _python_runtime_gap(plugin_id: str, spec) -> tuple[str | None, list[dict], list[str]]:
+    """The python half of ``_runtime_gap`` — ``spec`` is the normalized
+    ``{"version": "3.12", "requirements": [...]}`` mapping or None.
+
+    Met (a ``<plugin_store>/.venv`` matching the declared version + requirements hash) clears
+    silently. Unmet (missing / wrong version / stale) raises the banner with an
+    ``install_python`` button that provisions the venv — offered only when ``uv`` is present,
+    exactly as ``install_node`` is offered only when a managed build can help. This NEVER
+    provisions; it only reports (ADR 0027: install ≠ code exec)."""
+    if not isinstance(spec, dict):
+        return None, [], []
+    version = str(spec.get("version") or "")
+    requirements = spec.get("requirements") or []
+    if not version:
+        return None, [], []
+    from infra.python_runtime import plugin_venv_state, uv_available
+
+    state = plugin_venv_state(plugin_id, version, requirements)
+    if state == "ok":
+        return None, [], []
+    have = _PY_STATE_REASON.get(state, "not provisioned")
+    if uv_available():
+        fix = "Provision its venv here, or run uv yourself and reload the plugin."
+        actions = [{"kind": "install_python", "label": "Provision Python runtime"}]
+    else:
+        fix = "Install uv (https://docs.astral.sh/uv/), then provision the venv and reload the plugin."
+        actions = []
+    message = f"needs a Python {version} venv ({have}). {fix}"
+    return message, actions, [f"python{version}"]
 
 
 def _report_runtime_gap(manifest: PluginManifest, *, generation: int | None = None) -> list[str]:
@@ -850,6 +909,31 @@ def refresh_runtime_gaps() -> list[str]:
         if not _report_runtime_gap(manifest, generation=gen) and setup_gaps.generation(pid) == gen:
             cleared.append(manifest.id)
     return cleared
+
+
+def install_plugin_python(plugin_id: str):
+    """Provision ONE plugin's ``requires_runtimes.python`` venv — what the ``install_python``
+    banner action runs (ADR 0085 amendment 2026-11-08). Reads the plugin's declared version +
+    requirements, provisions ``<plugin_store>/.venv`` with uv, and on success re-reports the
+    plugin's runtime gap so the banner clears without a reload.
+
+    Returns the ``infra.python_runtime.VenvProvisionResult`` (``ok`` / ``error`` / ``python``);
+    a plugin that can't be resolved or doesn't declare a python runtime comes back
+    ``ok=False`` with a reason rather than raising. This is the ONLY path that provisions —
+    loading never does (install ≠ code exec)."""
+    from graph.plugins import installer
+    from infra.python_runtime import VenvProvisionResult, provision_plugin_venv
+
+    manifest = installer.effective_copies().get(plugin_id)
+    if manifest is None:
+        return VenvProvisionResult(ok=False, error=f"plugin {plugin_id!r} isn't installed")
+    spec = (getattr(manifest, "requires_runtimes", None) or {}).get("python")
+    if not isinstance(spec, dict) or not spec.get("version"):
+        return VenvProvisionResult(ok=False, error=f"plugin {plugin_id!r} declares no python runtime")
+    result = provision_plugin_venv(plugin_id, str(spec["version"]), spec.get("requirements") or [])
+    if result.ok:
+        _report_runtime_gap(manifest)  # re-check this plugin → the banner clears if now met
+    return result
 
 
 def _missing_required_config(manifest: PluginManifest, resolved: dict) -> list[dict]:
@@ -1125,9 +1209,11 @@ def load_plugins(config, *, core_tool_names: set[str] | None = None) -> PluginLo
         # setup gap (and cleared the same way) on every (re)load, so `install-deps` +
         # reload self-heals the banner. See `_report_deps_gap` for why nothing else sees it.
         entry["deps_missing"] = _report_deps_gap(manifest)
-        # Declared-runtime gate (ADR 0085 amendment) — `requires_runtimes: {node: ">=20"}`
-        # checked with the shared resolver; unmet → a banner whose button installs the
-        # managed Node (cleared live by `refresh_runtime_gaps` after the install lands).
+        # Declared-runtime gate (ADR 0085 amendments) — `requires_runtimes` for node
+        # (`{node: ">=20"}`, shared resolver) and python (`{python: {version, requirements}}`,
+        # a `<plugin_store>/.venv`); unmet → a banner whose button installs the managed Node /
+        # provisions the venv. Checks only (never provisions); cleared live by
+        # `refresh_runtime_gaps` / `install_plugin_python` once the runtime lands.
         _report_runtime_gap(manifest)
 
         kept = []

@@ -368,6 +368,25 @@ def register_plugin_routes(app) -> None:
         # button as waiting, including for an install started in another tab.
         return {"plugins": out, "bundles": bundle_rows, "deps_installing": installer.deps_install_running()}
 
+    @app.post("/api/plugins/install-python")
+    async def _install_python(body: dict | None = None):
+        """Provision the reporting plugin's declared venv on an operator click only."""
+        from graph.plugins.loader import install_plugin_python
+
+        plugin_id = (body or {}).get("id")
+        if not isinstance(plugin_id, str) or not plugin_id.strip() or plugin_id.strip() in (".", "..") or any(c in plugin_id for c in ("/", "\\", ":")):
+            raise HTTPException(status_code=400, detail="a valid plugin id is required")
+        plugin_id = plugin_id.strip()
+        source_url = await asyncio.to_thread(installer.effective_source_url, plugin_id)
+        if source_url:
+            needs_ack = _consent_needs_ack(source_url)
+            if needs_ack is not None:
+                return needs_ack
+        result = await asyncio.to_thread(install_plugin_python, plugin_id)
+        if not result.ok:
+            raise HTTPException(status_code=400, detail=result.error)
+        return {"ok": True}
+
     @app.post("/api/plugins/install-deps")
     async def _install_deps(body: dict | None = None):
         """Pip-install a plugin's declared ``requires_pip`` — the explicit code-exec

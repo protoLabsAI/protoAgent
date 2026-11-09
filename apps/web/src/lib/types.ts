@@ -159,7 +159,8 @@ export type SetupGapAction = {
   // gap: its button POSTs /api/plugins/install-deps for THIS gap's plugin — the same route
   // as the Plugins row's Install deps. `install_node` is the loader's unmet
   // `requires_runtimes` gap: its button POSTs /api/runtime/node/install (ADR 0085).
-  kind: "plugin_config" | "global_settings" | "plugin_setup" | "install_deps" | "install_node";
+  // `install_python` POSTs /api/plugins/install-python for the reporting plugin's venv.
+  kind: "plugin_config" | "global_settings" | "plugin_setup" | "install_deps" | "install_node" | "install_python";
   target?: string;
   step?: string;
   label?: string;
