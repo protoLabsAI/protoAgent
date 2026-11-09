@@ -1,51 +1,65 @@
-// Terminal-style chat input history (#1496) — the last N submitted messages, so the
-// composer can recall/edit/resend them with ↑/↓ like a shell (readline). Persisted in
-// localStorage and shared across chat slots (one ring, like a terminal's history file);
-// nav state (where you are in the ring) is per-composer and lives in ChatSessionSlot.
+// Terminal-style chat input history (#1496, #4928) — the last N submitted messages
+// per chat session, so the composer can recall/edit/resend them with ↑/↓ like a shell
+// (readline). Persisted in localStorage as bounded per-session rings; nav state (where
+// you are in the ring) is per-composer and lives in ChatSessionSlot.
 //
-// Read `inputHistory()` for the current ring (oldest → newest); call `pushInputHistory()`
-// when a message is submitted. The in-memory cache avoids re-parsing localStorage on every
-// arrow press; it stays in sync because pushes go through here.
+// Read `inputHistory(sessionId)` for the current ring (oldest → newest); call
+// `pushInputHistory(sessionId, entry)` when a message is submitted. The in-memory cache
+// avoids re-parsing localStorage on every arrow press; pushes go through here.
 
 import { readKey, writeKey } from "../lib/storage";
 
 const KEY = "protoagent.chat.inputHistory";
-const MAX = 100; // cap the ring — plenty for recall, bounded localStorage footprint
+const MAX = 100; // cap each ring — plenty for recall, bounded localStorage footprint
+const MAX_SESSIONS = 50;
 
-let _cache: string[] | null = null;
+type History = Record<string, string[]>;
+let _cache: History | null = null;
 
-function read(): string[] {
+function read(): History {
+  const empty = (): History => Object.create(null) as History;
   try {
     const raw = readKey("local", KEY);
-    if (!raw) return [];
-    const arr = JSON.parse(raw) as unknown;
-    return Array.isArray(arr) ? arr.filter((x): x is string => typeof x === "string") : [];
+    if (!raw) return empty();
+    const value = JSON.parse(raw) as unknown;
+    // Discard the old global ring: it cannot be attributed to any one session.
+    if (value === null || typeof value !== "object" || Array.isArray(value)
+      || Object.getPrototypeOf(value) !== Object.prototype
+      || !Object.values(value).every(Array.isArray)) return empty();
+    const history = empty();
+    for (const [id, ring] of Object.entries(value)) {
+      history[id] = (ring as unknown[]).filter((x): x is string => typeof x === "string");
+    }
+    return history;
   } catch {
-    return []; // corrupt/absent/blocked storage → empty history, never throw
+    return empty(); // corrupt/absent/blocked storage → empty history, never throw
   }
 }
 
-/** The history ring, oldest → newest. Cached in memory after the first read. */
-export function inputHistory(): string[] {
+/** The session's history ring, oldest → newest. Cached after the first read. */
+export function inputHistory(sessionId: string): string[] {
   if (_cache === null) _cache = read();
-  return _cache;
+  return _cache[sessionId] ?? [];
 }
 
 /**
- * Record a submitted message as the newest history entry. No-ops on blank input and on a
- * repeat of the most-recent entry (consecutive dedupe, like a shell), so hammering the same
- * message doesn't flood the ring. Trims to the last MAX entries. Best-effort persistence —
- * a storage failure (quota / private mode) leaves the in-memory ring intact.
+ * Record a submitted message, trimming blanks and consecutive repeats like a shell.
+ * Each nonblank push refreshes the session's recency, keeping at most MAX_SESSIONS
+ * rings of MAX entries. Best-effort persistence — a storage failure leaves memory intact.
  */
-export function pushInputHistory(entry: string): void {
+export function pushInputHistory(sessionId: string, entry: string): void {
   const e = entry.trim();
   if (!e) return;
-  const hist = inputHistory();
-  if (hist[hist.length - 1] === e) return; // consecutive dedupe
-  hist.push(e);
+  const hist = inputHistory(sessionId);
+  if (hist[hist.length - 1] !== e) hist.push(e); // consecutive dedupe
   while (hist.length > MAX) hist.shift();
+  const history = _cache!; // initialized by inputHistory
+  delete history[sessionId];
+  history[sessionId] = hist; // pushed session becomes most recently used
+  const ids = Object.keys(history);
+  for (const id of ids.slice(0, Math.max(0, ids.length - MAX_SESSIONS))) delete history[id];
   try {
-    writeKey("local", KEY, JSON.stringify(hist));
+    writeKey("local", KEY, JSON.stringify(history));
   } catch {
     /* quota / disabled storage — keep the in-memory ring, don't throw */
   }

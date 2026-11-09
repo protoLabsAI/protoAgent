@@ -61,3 +61,33 @@ test("a recalled message is editable and resends the edited text", async ({ page
   await composer.press("ArrowUp");
   await expect(composer).toHaveValue("draft one edited");
 });
+
+test("↑ recalls only messages submitted in the current chat tab", async ({ page }) => {
+  await page.goto("/app/", { waitUntil: "load" });
+  const composer = page.getByPlaceholder(/Message protoAgent/i).filter({ visible: true });
+  await composer.fill("alpha");
+  await composer.press("Enter");
+  await expect(page.locator(".pl-message--user").filter({ hasText: "alpha" })).toBeVisible();
+
+  await page.locator(".pl-tabbar > .pl-tabbar__add").click();
+  await expect(page.locator(".pl-tabbar__tab")).toHaveCount(2);
+  await composer.press("ArrowUp");
+  await expect(composer).toHaveValue("");
+  await composer.fill("bravo");
+  await composer.press("Enter");
+  await expect(page.locator(".pl-message--user").filter({ hasText: "bravo" })).toBeVisible();
+  await expect(composer).toHaveValue("");
+
+  await page.locator(".pl-tabbar__tab").first().click();
+  await expect(composer).toHaveValue("");
+  await composer.press("ArrowUp");
+  await expect(composer).toHaveValue("alpha");
+  await composer.press("ArrowUp");
+  await expect(composer).toHaveValue("alpha");
+  await composer.press("ArrowDown");
+  await expect(composer).toHaveValue("");
+
+  await page.locator(".pl-tabbar__tab").last().click();
+  await composer.press("ArrowUp");
+  await expect(composer).toHaveValue("bravo");
+});
