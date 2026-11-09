@@ -71,8 +71,16 @@ export function SurfaceHost({
       {title}
     </span>
   );
+  // A flex COLUMN, not a plain block: the dock surfaces this frames (the code pane, a
+  // plugin-view iframe) fill their host with `.stage-panel { flex: 1 1 0 }`, exactly as they
+  // did when they were a direct child of the DS dock column. A block parent leaves that
+  // `flex` inert, so the surface collapsed to content height (a 150px-tall artifact iframe)
+  // and swallowed clicks. `overflow: auto` still lets a natural-height view scroll.
   const body = (
-    <div ref={contentRef} style={{ flex: 1, minHeight: 0, overflow: "auto" }}>
+    <div
+      ref={contentRef}
+      style={{ flex: 1, minHeight: 0, overflow: "auto", display: "flex", flexDirection: "column" }}
+    >
       {children}
     </div>
   );
