@@ -211,13 +211,19 @@ export function createDecisionsStore() {
         if (connected) void refresh();
       });
       // Fleet-wide: any member's decision.changed refreshes the one store. The pending refresh
-      // covers every id that is (or stays) pending; but a cached settled record the event names
-      // won't appear in that list, so re-read it by id to pick up its latest state (§7).
+      // re-reads every id that is (or stays) pending, but it only MERGES pending rows and never
+      // removes an id — so a cached id the event names that has just LEFT the pending list
+      // (answered, expired or withdrawn elsewhere) would keep its stale record, INCLUDING one
+      // still cached as pending. Once the refreshed list is in, re-read any such departed cached
+      // id by GET; ids still pending were just refreshed in bulk, so they need no extra read (§7).
       const offTopic = onTopic("decision.changed", (payload) => {
-        void refresh();
         const id = typeof payload?.id === "string" ? payload.id : null;
-        const cached = id ? snapshot.records[id] : null;
-        if (id && cached && cached.state !== "pending") void fetchDecision(id);
+        const wasCached = id != null && snapshot.records[id] != null;
+        void refresh().then(() => {
+          if (id == null || !wasCached) return;
+          if (snapshot.decisions.some((d) => d.id === id)) return;
+          void fetchDecision(id);
+        });
       });
       stop = () => {
         offConn();

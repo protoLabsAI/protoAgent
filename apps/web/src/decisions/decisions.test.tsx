@@ -218,6 +218,50 @@ describe("useDecisions store", () => {
     expect(store.getSnapshot().records["a"].answer_label).toBe("Merge with the WARN");
   });
 
+  it("re-reads a cached id that left the pending list on decision.changed, even one still cached as pending", async () => {
+    // "a" starts pending and is cached by the first list. Another member then answers it: it
+    // leaves the pending list (so the refresh can't update it) and the event names it. The stale
+    // pending record must be replaced by a by-id GET — the round-1 blocker was the cached.state
+    // !== "pending" guard skipping exactly this case.
+    const list = vi.spyOn(decisionsApi, "listDecisions").mockResolvedValue(listOf([decision("a")]));
+    const get = vi
+      .spyOn(decisionsApi, "getDecision")
+      .mockResolvedValue(decision("a", { state: "answered", answer_label: "Merge with the WARN" }));
+    const store = mountStore();
+    await settle();
+    expect(store.getSnapshot().records["a"].state).toBe("pending");
+
+    list.mockResolvedValue(listOf([]));
+    bus.listeners.forEach((fn) => fn({ id: "a", session_id: "s1", state: "answered" }));
+    await settle();
+    await settle();
+
+    expect(get).toHaveBeenCalledWith("a");
+    expect(store.getSnapshot().records["a"].state).toBe("answered");
+    expect(store.getSnapshot().records["a"].answer_label).toBe("Merge with the WARN");
+    expect(store.getSnapshot().pendingCount).toBe(0);
+    expect(store.getSnapshot().decisions).toEqual([]);
+  });
+
+  it("does not re-read on decision.changed when the id is still pending (the refresh covers it)", async () => {
+    // The event names an id still in the refreshed pending list — the bulk refresh already carries
+    // its latest row, so no extra by-id GET is issued.
+    const list = vi.spyOn(decisionsApi, "listDecisions").mockResolvedValue(listOf([decision("a")]));
+    const get = vi.spyOn(decisionsApi, "getDecision");
+    const store = mountStore();
+    await settle();
+    expect(store.getSnapshot().records["a"].state).toBe("pending");
+
+    list.mockResolvedValue(listOf([decision("a", { question: "Merge the release now?" })]));
+    bus.listeners.forEach((fn) => fn({ id: "a", session_id: "s1", state: "pending" }));
+    await settle();
+    await settle();
+
+    expect(get).not.toHaveBeenCalled();
+    expect(store.getSnapshot().records["a"].question).toBe("Merge the release now?");
+    expect(store.getSnapshot().pendingCount).toBe(1);
+  });
+
   it("loadDecision fetches a historical id once by GET, then serves it from cache", async () => {
     vi.spyOn(decisionsApi, "listDecisions").mockResolvedValue(listOf([]));
     const get = vi
