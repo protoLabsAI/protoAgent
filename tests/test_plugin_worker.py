@@ -20,6 +20,12 @@ import pytest
 from graph import sdk
 from graph.plugins import testkit
 
+# This module spawns real subprocesses, signals them (os.kill), and imports
+# graph.plugins.testkit, which branches on os.name — so the Windows-native CI lane
+# (which runs only `-m platform_sensitive`) must include it. tests/test_platform_sensitive_marks.py
+# enforces this mark from the code.
+pytestmark = pytest.mark.platform_sensitive
+
 PLUGIN_ID = "worker-test-plugin"
 
 # Reads one JSON line from stdin, echoes it back as the result object's `echo` field.
