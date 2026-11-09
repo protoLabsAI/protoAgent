@@ -103,6 +103,23 @@ async def test_snapshot_refuses_a_flag_shaped_scope_and_a_negative_depth(monkeyp
     assert cli.calls == []
 
 
+@pytest.mark.parametrize("tool,args", [
+    ("browser_get_text", {"selector": " --headed"}),
+    ("browser_get_html", {"selector": "\t--allow-file-access"}),
+    ("browser_snapshot", {"scope": "  --headed"}),
+    ("browser_wait", {"selector": " --headed"}),
+    ("browser_wait", {"url": "*--allow-file-access"}),
+    ("browser_wait", {"url": " **--headed* "}),
+])
+async def test_a_flag_hidden_behind_whitespace_or_a_glob_is_still_refused(monkeypatch, tool, args):
+    # QA panel (#4922): operands were stripped AFTER the option guard ran, so " --headed" or
+    # "*--allow-file-access" passed the guard and reached argv as a bare flag (CWE-88).
+    t, cli = _tools(monkeypatch)
+    out = await t[tool].ainvoke(args)
+    assert out.startswith("Error:") and "command-line option" in out, out
+    assert not any(a and a[0] in ("get", "snapshot", "wait") for a in cli.argvs)
+
+
 def test_snapshot_docstring_says_to_read_text_with_get_text():
     t = {x.name: x for x in tools.get_browser_tools({})}
     assert "browser_get_text" in t["browser_snapshot"].description

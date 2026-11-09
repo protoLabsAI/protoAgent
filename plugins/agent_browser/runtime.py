@@ -176,7 +176,10 @@ def bad_operand(**values) -> str | None:
     """
     for what, value in values.items():
         text = str(value)
-        if OPTION_LIKE.match(text):
+        # Judge the value the way a caller may hand it to the CLI: tools strip whitespace
+        # (and browser_wait strips edge globs) BEFORE building argv, so " --headed" and
+        # "*--headed" must be refused too, not only a value whose first char is the dash.
+        if OPTION_LIKE.match(text) or OPTION_LIKE.match(text.strip().strip("*").strip()):
             return (f"Error: {what} {text[:80]!r} looks like a command-line option (a dash and "
                     f"then a letter), and the agent-browser CLI reads options anywhere in a "
                     f"command, so it would be taken as a flag rather than as your {what}. "

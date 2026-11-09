@@ -530,6 +530,8 @@ def get_browser_tools(cfg: dict | None, refresh_gaps=None, *, start_gap: bool = 
         id — decided in the page (see ``forms.id_probe_target``). Plain selectors cost nothing;
         a probe that fails leaves the selector as given, so the CLI's own error still speaks."""
         sel = selector.strip()
+        if bad_operand(selector=sel):  # belt and braces: never hand a flag-shaped value to argv
+            return selector
         raw_id = forms.id_probe_target(sel)
         if not raw_id:
             return sel
@@ -865,6 +867,8 @@ def get_browser_tools(cfg: dict | None, refresh_gaps=None, *, start_gap: bool = 
             if "*" in pat or not pat:
                 return ("Error: url is a plain substring of the page URL (no wildcards) — e.g. "
                         "url=\"/dashboard\".")
+            if (bad := _bad_operand(url=pat)):
+                return bad
             argv = ["wait", "--url", pat]
         elif load:
             if load.strip() not in _LOAD_STATES:
