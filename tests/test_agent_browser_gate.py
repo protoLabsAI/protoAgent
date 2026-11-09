@@ -44,16 +44,31 @@ def _clean_policies():
 # ── config ───────────────────────────────────────────────────────────────────────────────────
 
 
-def test_parse_categories_default_off_all_and_legacy_words():
+def test_parse_categories_default_off_all_and_mixed_words():
     assert gate.parse_categories(None) == {"submit"}  # key absent → the default
     assert gate.parse_categories("") == frozenset()  # explicitly emptied → off
-    assert gate.parse_categories("none") == frozenset()
-    assert gate.parse_categories("off") == frozenset()
     assert gate.parse_categories("all") == set(gate.CATEGORIES)
     assert gate.parse_categories("eval, upload") == {"eval", "upload"}
     assert gate.parse_categories("Submit,EVAL") == {"submit", "eval"}
-    # the old CLI verb names were never answerable — ignored, not fatal
-    assert gate.parse_categories("click,navigate,eval") == {"eval"}
+    # only explicit off-words turn the gate off — nothing else
+    for off in ("none", "off", "false", "no", "0", "disabled", "None, OFF"):
+        assert gate.parse_categories(off) == frozenset(), off
+
+
+def test_parse_categories_fails_closed_on_unknown_or_legacy_words():
+    # A value made only of unrecognised words must NOT parse to "off" — that silently drops the
+    # gate (including on real Submit buttons) for an operator who opted in. It fails closed to
+    # the default instead.
+    assert gate.parse_categories("click") == {"submit"}        # a legacy CLI verb → submit
+    assert gate.parse_categories("nav") == {"submit"}          # a legacy verb with no category
+    assert gate.parse_categories("navigate") == {"submit"}
+    assert gate.parse_categories("sbumit") == {"submit"}       # a typo
+    assert gate.parse_categories("navigate, fill") == {"submit"}
+    # a mix of valid and invalid keeps the valid categories and still gates submit for the legacy verb
+    assert gate.parse_categories("eval, click") == {"eval", "submit"}
+    assert gate.parse_categories("click,navigate,eval") == {"submit", "eval"}
+    # an unknown word next to a real category is dropped, not fatal, and never empties the gate
+    assert gate.parse_categories("upload, bogus") == {"upload"}
 
 
 def test_confirm_actions_is_no_longer_a_cli_flag():
@@ -147,6 +162,26 @@ def test_enter_or_space_on_a_focused_submit_button():
     assert gate.classify_press("Enter", btn).categories == {"submit"}
     assert gate.classify_press("Space", btn).categories == {"submit"}
     assert gate.classify_press("Enter", T(tag="a", name="Apply now")).categories == frozenset()
+
+
+def test_enter_or_space_in_an_unreadable_frame_is_gated():
+    # Focus is inside an iframe/frame: the probe returns found=true, note='frame', with no tag or
+    # form data. An Enter/Space there could submit an embedded form, so the gate fails closed.
+    frame = gate.Target(found=True, resolved=False, note="frame", page_url=PAGE)
+    assert gate.classify_press("Enter", frame).categories == {"submit"}
+    assert gate.classify_press("Space", frame).categories == {"submit"}
+    assert "frame" in gate.classify_press("Enter", frame).description.lower()
+    # a non-activation key in a frame is still nothing to gate
+    assert gate.classify_press("Tab", frame).categories == frozenset()
+    # and typing a newline into a focused frame is an Enter, so it's gated too
+    assert gate.classify_type("hi\n", frame).categories == {"submit"}
+
+
+def test_parse_probe_keeps_the_frame_note_so_an_enter_there_is_gated():
+    raw = json.dumps({"ok": True, "found": True, "resolved": False, "note": "frame", "page": PAGE})
+    t = gate.parse_probe(raw, "focus")
+    assert t.found and t.note == "frame" and not t.tag
+    assert gate.classify_press("Enter", t).categories == {"submit"}
 
 
 def test_activation_keys():

@@ -52,6 +52,13 @@ SUBMIT, EVAL, UPLOAD, DOWNLOAD = "submit", "eval", "upload", "download"
 CATEGORIES = (SUBMIT, EVAL, UPLOAD, DOWNLOAD)
 DEFAULT_CATEGORIES = frozenset({SUBMIT})
 _OFF_WORDS = frozenset({"none", "off", "false", "no", "0", "disabled"})
+# Legacy ``--confirm-actions`` verb names that TRIGGER a submit (a click, or an Enter/Space
+# keypress). The old flag gated by verb and, in this orchestrator, was never answerable — so no
+# config relied on them working. Map these to ``submit`` so an operator who kept an old value
+# still gets the submit gate; every other legacy verb (``nav``/``navigate``/``fill``) is unknown
+# and falls back to the safe default (see :func:`parse_categories`).
+_LEGACY_CATEGORIES = {"click": SUBMIT, "press": SUBMIT, "type": SUBMIT, "key": SUBMIT,
+                      "enter": SUBMIT, "return": SUBMIT}
 
 # Which categories can apply to which tool verb — the gate resolves a target only when one of
 # these is configured (or a plugin policy asks for it), so an ungated verb pays nothing.
@@ -67,10 +74,14 @@ VERB_CATEGORIES = {
 def parse_categories(raw) -> frozenset[str]:
     """``confirm_actions`` → the set of gated categories.
 
-    ``None`` (key absent) is the default (``submit``); ``""``/``none``/``off`` is off; ``all`` is
-    every category. Unknown words are ignored with a warning — the old CLI verb names (``click``,
-    ``fill``, ``navigate``, ``nav``) included: they were never answerable, so nothing relied on
-    them doing anything but fail."""
+    ``None`` (key absent) is the default (``submit``). Only an EXPLICIT off-word —
+    ``""``/``none``/``off``/``false``/``no``/``0``/``disabled`` — turns the gate off; ``all`` is
+    every category. A value that names no known category — a legacy CLI verb (``click``, ``nav``,
+    ``navigate``), a typo, or a mix that resolves to nothing — FAILS CLOSED to the safe default
+    (``submit``) with a warning, so an operator who opted into confirmation never silently loses
+    all protection (including on real Submit buttons). Legacy submit-triggering verbs
+    (``click``/``press``/``type``…) map to ``submit``; an unknown word inside an otherwise-valid
+    list is warned about and dropped, but never empties the gate."""
     if raw is None:
         return DEFAULT_CATEGORIES
     if isinstance(raw, (list, tuple, set, frozenset)):
@@ -79,8 +90,10 @@ def parse_categories(raw) -> frozenset[str]:
         words = re.split(r"[,\s]+", str(raw))
     words = [w.strip().lower() for w in words if w and w.strip()]
     if not words or all(w in _OFF_WORDS for w in words):
-        return frozenset()
+        return frozenset()  # cleared / all off-words → the only way to disable the gate
     out: set[str] = set()
+    legacy: list[str] = []
+    unknown: list[str] = []
     for w in words:
         if w == "all":
             out.update(CATEGORIES)
@@ -88,9 +101,23 @@ def parse_categories(raw) -> frozenset[str]:
             out.add(w)
         elif w == "default":
             out.update(DEFAULT_CATEGORIES)
+        elif w in _LEGACY_CATEGORIES:
+            out.add(_LEGACY_CATEGORIES[w])
+            legacy.append(w)
         elif w not in _OFF_WORDS:
-            log.warning("[agent_browser] confirm_actions: ignoring unknown category %r (known: %s, all, none)",
-                        w, ", ".join(CATEGORIES))
+            unknown.append(w)
+    if legacy:
+        log.warning("[agent_browser] confirm_actions: legacy verb(s) %s now map to the 'submit' category",
+                    ", ".join(repr(w) for w in legacy))
+    if unknown:
+        log.warning("[agent_browser] confirm_actions: ignoring unrecognised word(s) %s (known: %s, all, none)",
+                    ", ".join(repr(w) for w in unknown), ", ".join(CATEGORIES))
+    if not out:
+        # The value named only unrecognised words (a legacy verb with no category, or a typo).
+        # Fail closed to the default rather than silently leaving the gate off.
+        log.warning("[agent_browser] confirm_actions=%r named no known category; failing closed to the "
+                    "default (%s) so the gate stays on", raw, ", ".join(sorted(DEFAULT_CATEGORIES)))
+        return DEFAULT_CATEGORIES
     return frozenset(out)
 
 
@@ -393,6 +420,13 @@ def classify_press(key: str, t: Target | None) -> Verdict:
     enter, space = k in _ENTER_KEYS, k in _SPACE_KEYS
     if not (enter or space):
         return Verdict()
+    # Focus is inside an IFRAME/FRAME the probe can't see into (``found`` but nothing read back —
+    # no tag, no form). An Enter/Space there could submit an embedded form and we can't tell, so
+    # fail closed: ask for approval rather than let it through unseen.
+    if t.note == "frame" and not t.tag:
+        return Verdict(frozenset({SUBMIT}), "focus is inside a frame the gate can't read into",
+                       f"Press {'Enter' if enter else 'Space'} inside an embedded frame{_where(t)}, "
+                       f"which could submit a form")
     clicky = t.tag in ("button", "summary") or (t.tag == "input" and t.type in ("submit", "image", "button", "reset")) \
         or t.role in _CLICKY_ROLES or (enter and t.tag == "a")
     if clicky:
