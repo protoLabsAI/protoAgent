@@ -25,11 +25,15 @@ import { queryClient } from "./lib/queryClient";
 import { watchThemeChanges } from "./lib/agentTheme";
 import { migrateLegacyDeviceToken, redeemPairingFromUrl } from "./lib/pairing";
 import { startDeviceTokenRotation } from "./lib/deviceRotation";
+import { installStorageEviction } from "./lib/storageEviction";
 
 // A phone paired before #4336 S3 holds its device token in the OPERATOR key. Move it to its
 // own key before anything sends a request. Copy-then-remove, so a failed write leaves the
 // old key authenticating exactly as before — nobody is signed out by the upgrade.
 migrateLegacyDeviceToken();
+
+// A full localStorage quota frees old agents' saved chats before giving up on a write (ADR 0114 D5).
+installStorageEviction();
 
 watchThemeChanges(); // fire `protoagent:theme` on any theme change → plugin iframes repaint live
 
