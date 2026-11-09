@@ -93,26 +93,11 @@ export function useCollections() {
     },
     onSuccess: invalidate,
   });
-  // Document-level (per-source) bulk delete (#1770) — remove a whole ingested document
-  // (all chunks sharing one `source`) at once. A reversible SOFT delete: the chunks leave
-  // recall immediately but survive a grace window, so restoreSource (the Undo toast) can
-  // bring them back. Scoped to one document, between the per-chunk and whole-collection paths.
-  const removeSource = useMutation({
-    mutationFn: async (source: string) => {
-      const result = await api.deleteKnowledgeBySource(source);
-      if (!result.enabled || result.error) throw new Error(result.error || "Knowledge is off");
-      return result;
-    },
-    onSuccess: invalidate,
-  });
-  const restoreSource = useMutation({
-    mutationFn: async (source: string) => {
-      const result = await api.restoreKnowledgeBySource(source);
-      if (!result.enabled || result.error) throw new Error(result.error || "No chunks could be restored");
-      return result;
-    },
-    onSuccess: invalidate,
-  });
+  // No document-level (per-source) delete here: the server's delete-by-source route carries
+  // no collection predicate and operator-added chunks all share source="console", so deleting
+  // a document from this collection-scoped view would soft-delete same-source chunks in EVERY
+  // collection. Whole-document removal is served by Delete collection or the per-chunk delete;
+  // a correctly scoped per-document route is a future server card (bd-ihctg owns these routes).
   return { list, collections, selected, details, search, collection, open, query, setQuery, term, all, setAll,
-    seedSearch, sort, setSort, ascending, setAscending, remove, restore, removeSource, restoreSource, invalidate };
+    seedSearch, sort, setSort, ascending, setAscending, remove, restore, invalidate };
 }

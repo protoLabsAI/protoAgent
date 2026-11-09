@@ -40,7 +40,7 @@ beforeEach(() => {
 afterEach(() => { act(() => root.unmount()); host.remove(); qc.clear(); vi.restoreAllMocks(); });
 
 describe("collection browser", () => {
-  it("renders many collections with a caption, default size order, and no invented retrieval figures", async () => {
+  it("renders the collections table with a caption, default size order, and no invented retrieval figures", async () => {
     await render();
     expect(host.querySelector("caption")?.textContent).toContain("Knowledge collections");
     expect(host.textContent).toContain("2 collections · 53 chunks");
@@ -147,29 +147,16 @@ describe("collection browser", () => {
     expect(remove).not.toHaveBeenCalled();
     expect(model.remove.error?.message).toContain("Couldn't read");
   });
-  it("bulk-deletes a whole document with a counted confirm, and Undo restores it (#1770)", async () => {
-    const timers = vi.spyOn(globalThis, "setTimeout");
-    const delDoc = vi.spyOn(api, "deleteKnowledgeBySource").mockResolvedValue({ enabled: true, deleted: 51 });
-    const restoreDoc = vi.spyOn(api, "restoreKnowledgeBySource").mockResolvedValue({ enabled: true, restored: 51 });
+  it("groups a detail's chunks by document but offers no cross-collection document delete", async () => {
+    // delete-by-source has no collection predicate (and operator chunks all share source
+    // "console"), so a per-document delete offered from a collection-scoped view would reach
+    // every collection. The detail view must group by source WITHOUT any such delete control.
+    const bySource = vi.spyOn(api, "deleteKnowledgeBySource");
     await render(); await act(async () => model.open("alpha")); await settle();
-    const trigger = document.querySelector<HTMLButtonElement>('[aria-label="delete all chunks from Manual"]');
-    expect(trigger).not.toBeNull();
-    await act(async () => trigger!.click()); await settle();
-    expect(document.querySelector('[role="dialog"]')?.textContent).toContain("Delete all 51 chunks from");
-    await click("Delete chunks"); expect(delDoc).toHaveBeenCalledWith("Manual");
-    expect(document.body.textContent).toContain("Deleted 51 chunks from");
-    expect(timers).toHaveBeenCalledWith(expect.any(Function), 10000);
-    await click("Undo"); expect(restoreDoc).toHaveBeenCalledWith("Manual");
-    expect(document.body.textContent).toContain("Restored");
-  });
-  it("Shift+clicking a document delete skips the confirm (#1770)", async () => {
-    const delDoc = vi.spyOn(api, "deleteKnowledgeBySource").mockResolvedValue({ enabled: true, deleted: 51 });
-    await render(); await act(async () => model.open("alpha")); await settle();
-    const trigger = document.querySelector<HTMLButtonElement>('[aria-label="delete all chunks from Manual"]')!;
-    await act(async () => trigger.dispatchEvent(new MouseEvent("click", { bubbles: true, shiftKey: true })));
-    await settle();
-    expect(delDoc).toHaveBeenCalledWith("Manual");
-    expect(document.body.textContent).not.toContain("Delete all 51 chunks from");
+    expect(host.textContent).toContain("Manual · 51 chunks");
+    expect(document.querySelector('[aria-label^="delete all chunks from"]')).toBeNull();
+    expect(Array.from(document.querySelectorAll("button")).some(b => b.textContent === "Delete document")).toBe(false);
+    expect(bySource).not.toHaveBeenCalled();
   });
   it("never sends a private bulk delete for a shared collection", async () => {
     const remove = vi.spyOn(api, "deleteKnowledgeByCollection");
