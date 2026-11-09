@@ -120,7 +120,7 @@ def test_scaffold_with_tests_is_shippable(tmp_path):
 
 
 @pytest.mark.platform_sensitive
-@pytest.mark.parametrize("with_view", [False, True], ids=["default", "view"])
+@pytest.mark.parametrize("with_view", [False, True, "basic", "bus"], ids=["default", "view", "basic", "bus"])
 def test_scaffolded_suite_passes_end_to_end(tmp_path, with_view):
     """The generated suite is GREEN out of the box — run pytest on the scaffolded plugin in
     a subprocess (cwd = the plugin, where ``graph`` is absent, so the vendored testkit's
@@ -199,3 +199,156 @@ def test_cli_new_rejects_bad_member(tmp_path, capsys):
     rc = run_plugin_cli(["new-bundle", "Bad", "--dir", str(tmp_path), "--member", "noequals"])
     assert rc == 1
     assert "bad --member" in capsys.readouterr().err
+
+
+def test_scaffold_defaults_include_tests_and_usage_skill(tmp_path):
+    result = scaffold.scaffold_plugin("Defaults", target_dir=str(tmp_path))
+    assert (result.path / "tests/test_defaults.py").is_file()
+    skill = (result.path / "skills/defaults-skill/SKILL.md").read_text()
+    for heading in ("# Using Defaults", "## When to use it", "## Tool order", "## Failure modes"):
+        assert heading in skill
+
+
+@pytest.mark.parametrize("view", [False, True, "basic"])
+def test_explicit_legacy_shapes(tmp_path, view):
+    result = scaffold.scaffold_plugin(
+        "Legacy", with_view=view, with_tests=False, with_skill=False, target_dir=str(tmp_path)
+    )
+    assert {p.name for p in result.path.iterdir()} == {"__init__.py", "protoagent.plugin.yaml"}
+    source = (result.path / "__init__.py").read_text()
+    expected = scaffold._TOOL_STUB.format(id="legacy", id_us="legacy")
+    if view:
+        expected += scaffold._VIEW_STUB.format(id="legacy", name="Legacy")
+    assert source == scaffold._INIT_STUB.format(name="Legacy", view_import="", registrations=expected, id_us="legacy")
+
+
+def test_bus_scaffold_files_and_topics(tmp_path):
+    import yaml
+
+    result = scaffold.scaffold_plugin("Bus Demo", with_view="bus", target_dir=str(tmp_path))
+    for rel in (
+        "__init__.py",
+        "protoagent.plugin.yaml",
+        "views/main.html",
+        "tests/test_bus_view.py",
+        "tests/test_bus_demo.py",
+        "skills/bus-demo-skill/SKILL.md",
+    ):
+        assert (result.path / rel).is_file()
+    manifest = yaml.safe_load((result.path / "protoagent.plugin.yaml").read_text())
+    source = (result.path / "__init__.py").read_text()
+    page = (result.path / "views/main.html").read_text()
+    assert manifest["emits"] == ["bus-demo.show", "bus-demo.reply"]
+    assert manifest["subscribes"] == ["bus-demo.show", "bus-demo.reply"]
+    for topic in manifest["emits"]:
+        assert f'registry.emit("{topic}"' in source
+    assert 'registry.on("bus-demo.reply"' in source
+    assert "kit.subscribe('bus-demo.show'" in page
+    assert "kit.publish('bus-demo.reply'" in page
+    assert "postMessage" not in page
+    assert "background: true" not in page
+
+
+def test_bus_binary_route_uses_host_operator_gate(tmp_path, monkeypatch):
+    from a2a_impl import auth
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from graph.plugins.testkit import FakeRegistry, load_plugin
+
+    result = scaffold.scaffold_plugin("Gated", with_view="bus", target_dir=str(tmp_path))
+    registry = FakeRegistry(plugin_id="gated")
+    load_plugin(result.path, "gated").register(registry)
+    app = FastAPI()
+    for prefix, router in registry.routers:
+        app.include_router(router, prefix=prefix)
+    # The host adds enabled plugins' public page namespaces when mounting them.
+    monkeypatch.setattr(auth, "_PLUGIN_PUBLIC", ["/plugins/gated/"])
+    monkeypatch.setattr(auth, "_BEARER", ["operator-secret"])
+    monkeypatch.setattr(auth, "_FEDERATION", ["peer-secret"])
+    app.add_middleware(auth.A2AAuthMiddleware)
+    with TestClient(app) as client:
+        assert client.get("/plugins/gated/view").status_code == 200
+        for token, status in (("", 401), ("peer-secret", 403), ("operator-secret", 200)):
+            response = client.post(
+                "/api/plugins/gated/reply",
+                content=b"png",
+                headers={"Authorization": f"Bearer {token}", "Content-Type": "image/png"},
+            )
+            assert response.status_code == status
+    assert len(registry.saved_media) == 1
+    assert registry.emitted[-1][0] == "gated.reply"
+
+
+def test_bus_scaffold_can_omit_tests_and_skill(tmp_path):
+    result = scaffold.scaffold_plugin(
+        "Minimal Bus",
+        with_view="bus",
+        with_tool=False,
+        with_tests=False,
+        with_skill=False,
+        target_dir=str(tmp_path),
+    )
+    assert (result.path / "views/main.html").is_file()
+    assert not (result.path / "tests").exists()
+    assert not (result.path / "skills").exists()
+    source = (result.path / "__init__.py").read_text()
+    assert "def minimal_bus_show" in source
+    assert "def minimal_bus_hello" not in source
+
+
+@pytest.mark.platform_sensitive
+def test_bus_page_renders_and_publishes_reply(tmp_path):
+    import json
+    import re
+    import shutil
+    import subprocess
+
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("Node is needed to execute the generated view script")
+    result = scaffold.scaffold_plugin("Round Trip", with_view="bus", target_dir=str(tmp_path))
+    page = (result.path / "views/main.html").read_text()
+    script = re.search(r'<script type="module">(.*?)</script>', page, re.S).group(1)
+    # Inject the kit boundary; execute the generated callback and upload helper.
+    script = script.replace("await import(window.__base + '/_ds/plugin-kit.js')", "kitStub")
+    harness = """
+const assert = require('node:assert/strict');
+const out = {};
+let handler, topic, published, upload, initialized = false;
+const kitStub = {
+    initPluginView() { initialized = true; },
+    subscribe(name, fn) { topic = name; handler = fn; return () => {}; },
+    publish(name, data) { published = { name, data }; },
+    async apiFetch(path, options) {
+        upload = { path, options };
+        return { ok: true, json: async () => ({ url: '/media/reply.png' }) };
+    }
+};
+const document = { getElementById(id) { assert.equal(id, 'out'); return out; } };
+const window = { addEventListener() {} };
+const AsyncFunction = Object.getPrototypeOf(async function() {}).constructor;
+(async () => {
+    const uploadScreenshot = await new AsyncFunction('kitStub', 'document', 'window',
+        SOURCE + '\\nreturn uploadScreenshot;')(kitStub, document, window);
+    assert.ok(initialized);
+    assert.equal(topic, 'round-trip.show');
+    handler({ data: { message: '<b>hello</b>' } });
+    assert.equal(out.textContent, '<b>hello</b>');
+    assert.deepEqual(published, {
+        name: 'round-trip.reply', data: { message: '<b>hello</b>', rendered: true }
+    });
+    const blob = new Uint8Array([1, 2, 3]);
+    assert.deepEqual(await uploadScreenshot(blob), { url: '/media/reply.png' });
+    assert.equal(upload.path, '/api/plugins/round-trip/reply');
+    assert.equal(upload.options.method, 'POST');
+    assert.equal(upload.options.body, blob);
+    assert.equal(upload.options.headers['Content-Type'], 'image/png');
+})().catch(error => { console.error(error); process.exitCode = 1; });
+"""
+    proc = subprocess.run(
+        [node, "-e", harness.replace("SOURCE", json.dumps(script))],
+        capture_output=True,
+        text=True,
+        timeout=15,
+    )
+    assert proc.returncode == 0, proc.stderr

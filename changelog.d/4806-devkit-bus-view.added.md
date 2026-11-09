@@ -1,0 +1,1 @@
+- **Agent-driven plugin scaffolds (#4806).** Add a bus view template with emit-then-navigate tools, kit subscriptions and replies, a gated size-capped binary upload route, and generated tests. Enable tests and usage skills by default and document view round trips in the devkit. Part of #4806.

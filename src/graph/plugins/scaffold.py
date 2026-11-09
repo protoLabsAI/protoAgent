@@ -82,6 +82,162 @@ _VIEW_STUB = """
     registry.register_router(data, prefix="/api/plugins/{id}")
 """
 
+_BUS_VIEW_STUB = '''
+    from pathlib import Path
+    from fastapi import APIRouter, HTTPException, Request
+    from fastapi.responses import HTMLResponse
+
+    latest_reply = {{}}
+
+    def on_reply(event):
+        latest_reply.clear()
+        latest_reply.update(event.get("data", {{}}))
+
+    registry.on("{id}.reply", on_reply)
+
+    @tool
+    def {id_us}_show(message: str) -> str:
+        """Display a message in the console view; then use the reply tool."""
+        latest_reply.clear()
+        registry.emit("{id}.show", {{"message": message}})
+        registry.navigate("main")
+        return "View requested. Read the reply after the view renders."
+
+    @tool
+    def {id_us}_reply() -> dict:
+        """Read the latest view acknowledgement or uploaded screenshot reference."""
+        return dict(latest_reply)
+
+    registry.register_tool({id_us}_show)
+    registry.register_tool({id_us}_reply)
+    page = APIRouter()
+
+    @page.get("/view")
+    async def view():
+        return HTMLResponse((Path(__file__).parent / "views" / "main.html").read_text())
+
+    registry.register_router(page, prefix="/plugins/{id}")
+    data = APIRouter()
+
+    @data.post("/reply")
+    async def binary_reply(request: Request):
+        # The host operator gate protects /api/plugins/*; never exempt this prefix.
+        # Stream the body so missing or dishonest Content-Length cannot bypass the cap.
+        limit = 2 * 1024 * 1024
+        body = bytearray()
+        async for chunk in request.stream():
+            if len(body) + len(chunk) > limit:
+                raise HTTPException(413, "Reply exceeds 2 MiB")
+            body.extend(chunk)
+        if not body:
+            raise HTTPException(400, "Empty reply")
+        if request.headers.get("content-type", "").split(";")[0] != "image/png":
+            raise HTTPException(415, "Expected image/png")
+        ref = registry.save_media(bytes(body), "image/png")
+        reply = {{"url": ref.url, "mime": ref.mime}}
+        on_reply({{"data": reply}})
+        registry.emit("{id}.reply", reply)
+        return reply
+
+    registry.register_router(data, prefix="/api/plugins/{id}")
+'''
+
+_BUS_PAGE_STUB = '''<!doctype html>
+<html><head><meta charset="utf-8"><title>{name}</title>
+<script>
+window.__base = location.pathname.split('/plugins/')[0];
+const css = document.createElement('link');
+css.rel = 'stylesheet';
+css.href = window.__base + '/_ds/plugin-kit.css';
+document.head.appendChild(css);
+</script>
+<style>
+body {{ margin: 0; padding: 32px; background: var(--pl-color-bg);
+       color: var(--pl-color-fg); font-family: var(--pl-font-sans, system-ui); }}
+</style></head>
+<body><h1>{name}</h1><p id="out">Waiting for the agent…</p>
+<script type="module">
+const kit = await import(window.__base + '/_ds/plugin-kit.js');
+kit.initPluginView();
+const stop = kit.subscribe('{id}.show', (event) => {{
+    document.getElementById('out').textContent = event.data.message;
+    kit.publish('{id}.reply', {{ message: event.data.message, rendered: true }});
+}});
+window.addEventListener('pagehide', stop, {{ once: true }});
+
+// For a canvas screenshot, call uploadScreenshot(await canvasBlob) after rendering.
+// Binary data travels through the gated route, never through the event bus.
+async function uploadScreenshot(blob) {{
+    const response = await kit.apiFetch('/api/plugins/{id}/reply', {{
+        method: 'POST', headers: {{ 'Content-Type': 'image/png' }}, body: blob
+    }});
+    if (!response.ok) throw new Error('Screenshot upload failed: ' + response.status);
+    return response.json();
+}}
+</script></body></html>
+'''
+
+_BUS_TEST_STUB = '''"""Agent-driven view contract — runs with the vendored testkit."""
+
+from pathlib import Path
+from unittest.mock import patch
+
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
+
+
+def test_emit_before_navigate_and_reply(plugin, registry):
+    plugin.register(registry)
+    tools = {{tool.name: tool for tool in registry.tools}}
+    with patch.object(registry, "emit") as emit, patch.object(registry, "navigate") as navigate:
+        calls = []
+        emit.side_effect = lambda *args: calls.append(("emit", args))
+        navigate.side_effect = lambda *args: calls.append(("navigate", args))
+        tools["{id_us}_show"].invoke({{"message": "hello"}})
+    assert calls == [
+        ("emit", ("{id}.show", {{"message": "hello"}})),
+        ("navigate", ("main",)),
+    ]
+    registry.handlers["{id}.reply"][0]({{"data": {{"rendered": True}}}})
+    assert tools["{id_us}_reply"].invoke({{}}) == {{"rendered": True}}
+    tools["{id_us}_show"].invoke({{"message": "next"}})
+    assert tools["{id_us}_reply"].invoke({{}}) == {{}}
+
+
+def test_page_and_binary_reply(plugin, registry):
+    registry.plugin_id = "{id}"
+    plugin.register(registry)
+    app = FastAPI()
+    for prefix, router in registry.routers:
+        app.include_router(router, prefix=prefix)
+    # Production supplies operator auth for /api/plugins/*; testkit mounts routes only.
+    with TestClient(app) as client:
+        page = client.get("/plugins/{id}/view")
+        assert page.status_code == 200
+        assert "kit.subscribe('{id}.show'" in page.text
+        assert "kit.publish('{id}.reply'" in page.text
+        assert "postMessage" not in page.text
+        url = "/api/plugins/{id}/reply"
+        headers = {{"Content-Type": "image/png"}}
+        assert client.post(url, content=b"", headers=headers).status_code == 400
+        assert client.post(url, content=b"x", headers={{"Content-Type": "text/plain"}}).status_code == 415
+        assert client.post(url, content=b"x" * (2 * 1024 * 1024 + 1), headers=headers).status_code == 413
+        assert not registry.saved_media
+        response = client.post(url, content=b"png", headers=headers)
+        assert response.status_code == 200
+        assert registry.saved_media[0][:2] == (b"png", "image/png")
+        assert registry.emitted[-1] == ("{id}.reply", response.json())
+
+
+def test_manifest_topics():
+    import yaml
+
+    root = Path(__file__).resolve().parent.parent
+    manifest = yaml.safe_load((root / "protoagent.plugin.yaml").read_text())
+    assert manifest["emits"] == ["{id}.show", "{id}.reply"]
+    assert manifest["subscribes"] == ["{id}.show", "{id}.reply"]
+'''
+
 _MANIFEST_STUB = """id: {id}
 name: {name}
 version: 0.1.0
@@ -100,14 +256,28 @@ config_section: {id_us}
 
 _SKILL_STUB = """---
 name: {id}-skill
-description: >-
-  Describe WHEN to use this skill (the trigger). Replace this with the cases that
-  should invoke {name}.
+description: Use {name} when the request needs this plugin's tools or view.
 ---
 
-# {name}
+# Using {name}
 
-Replace this body with the procedure the agent should follow.
+## When to use it
+Use this plugin for its declared capabilities. Check its tool descriptions before
+acting; replace this paragraph with domain-specific triggers as you build it.
+
+## Tool order
+1. Check that the plugin is enabled and its required settings are configured.
+2. Call the task tool with the user's inputs. For a bus view, call
+   `{id_us}_show` to emit the request and open the view, then `{id_us}_reply`
+   after rendering to read the acknowledgement or screenshot reference.
+3. Report the result; an empty reply means no acknowledgement has arrived yet.
+
+## Failure modes
+- Missing tools: enable the plugin and reload it before retrying.
+- Missing configuration or credentials: configure Settings before invoking tools.
+- View unavailable or no reply: open the console view and check its load error;
+  do not poll or start a side server.
+- Binary reply rejected: use PNG and keep the upload at or below 2 MiB.
 """
 
 _WORKFLOW_STUB = """name: {id}-workflow
@@ -369,16 +539,20 @@ def scaffold_plugin(
     *,
     summary: str = "A protoAgent plugin.",
     with_tool: bool = True,
-    with_view: bool = False,
-    with_skill: bool = False,
+    with_view: bool | str = False,
+    with_skill: bool = True,
     with_workflow: bool = False,
     with_comms: bool = False,
-    with_tests: bool = False,
+    with_tests: bool = True,
     git_init: bool = False,
     target_dir: str | None = None,
 ) -> Scaffolded:
     """Write a new plugin SKELETON (manifest + ``register()`` + optional
     view/skill/workflow stubs) under ``target_dir`` (or the live plugins dir).
+
+    ``with_view="bus"`` adds an emit-then-navigate tool, kit bus page and gated
+    binary reply route. True and "basic" retain the basic view. Tests and a usage
+    skill are included by default; pass False explicitly to omit either.
 
     ``with_comms=True`` writes a **communication plugin** (ADR 0029) — a
     ``ChatAdapter`` skeleton on the shared wirer instead of the default tool
@@ -407,15 +581,21 @@ def scaffold_plugin(
         if with_skill:
             sk = target / "skills" / f"{pid}-skill"
             sk.mkdir(parents=True)
-            (sk / "SKILL.md").write_text(_SKILL_STUB.format(id=pid, name=name))
+            (sk / "SKILL.md").write_text(_SKILL_STUB.format(id=pid, name=name, id_us=id_us))
             made.append("skills/")
         if git_init:
             _maybe_git_init(target, made)
         return Scaffolded(id=pid, path=target, made=made, kind="comms")
 
+    bus_view = with_view == "bus"
     views_block = (
         f'views:\n  - {{ id: main, label: "{name}", icon: Boxes, path: /plugins/{pid}/view }}\n' if with_view else ""
     )
+    if bus_view:
+        views_block += (
+            f'emits: ["{pid}.show", "{pid}.reply"]\n'
+            f'subscribes: ["{pid}.show", "{pid}.reply"]\n'
+        )
     (target / "protoagent.plugin.yaml").write_text(
         _MANIFEST_STUB.format(id=pid, name=name, summary=summary, id_us=id_us, views_block=views_block)
     )
@@ -423,7 +603,11 @@ def scaffold_plugin(
     registrations = ""
     if with_tool:
         registrations += _TOOL_STUB.format(id=pid, id_us=id_us)
-    if with_view:
+    if bus_view:
+        registrations += _BUS_VIEW_STUB.format(id=pid, id_us=id_us)
+        (target / "views").mkdir()
+        (target / "views" / "main.html").write_text(_BUS_PAGE_STUB.format(id=pid, name=name))
+    elif with_view:
         registrations += _VIEW_STUB.format(id=pid, name=name)
     if not registrations.strip():
         registrations = "    pass  # add registry.register_* calls here\n"
@@ -432,10 +616,12 @@ def scaffold_plugin(
     )
 
     made = ["protoagent.plugin.yaml", "__init__.py"]
+    if bus_view:
+        made.append("views/main.html")
     if with_skill:
         sk = target / "skills" / f"{pid}-skill"
         sk.mkdir(parents=True)
-        (sk / "SKILL.md").write_text(_SKILL_STUB.format(id=pid, name=name))
+        (sk / "SKILL.md").write_text(_SKILL_STUB.format(id=pid, name=name, id_us=id_us))
         made.append("skills/")
     if with_workflow:
         (target / "workflows").mkdir()
@@ -443,6 +629,8 @@ def scaffold_plugin(
         made.append("workflows/")
     if with_tests:
         _write_test_harness(target, pid=pid, id_us=id_us, name=name)
+        if bus_view:
+            (target / "tests" / "test_bus_view.py").write_text(_BUS_TEST_STUB.format(id=pid, id_us=id_us))
         made += ["tests/", ".github/workflows/ci.yml", "requirements-dev.txt", "pyproject.toml"]
     if git_init:
         _maybe_git_init(target, made)
