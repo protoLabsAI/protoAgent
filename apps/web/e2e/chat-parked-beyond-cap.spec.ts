@@ -1,5 +1,7 @@
 import { expect, test, type Page, type Request } from "@playwright/test";
 
+import { persistedChat } from "./persistedChat";
+
 // #3957: a fresh profile hydrates only the newest SESSION_INDEX_LIMIT sessions. A session
 // PARKED on an `ask_human` question that has since sunk below that cut — newer chats piled
 // on top of it — was never fetched, so its tab, and the question still waiting for an
@@ -57,18 +59,9 @@ test("a parked session older than the newest-50 index still comes back in a fres
 
     // The parked session is among the hydrated tabs, and the set stays within the cap.
     await expect
-      .poll(async () =>
-        fresh.evaluate(() => {
-          const stored = JSON.parse(localStorage.getItem("protoagent.chat.sessions") || "{}");
-          return (stored.sessions ?? []).map((session: { id: string }) => session.id);
-        }),
-      )
+      .poll(async () => ((await persistedChat(fresh))?.sessions ?? []).map((session) => session.id))
       .toContain(sessionId);
-    const ids: string[] = await fresh.evaluate(() =>
-      (JSON.parse(localStorage.getItem("protoagent.chat.sessions") || "{}").sessions ?? []).map(
-        (session: { id: string }) => session.id,
-      ),
-    );
+    const ids: string[] = ((await persistedChat(fresh))?.sessions ?? []).map((session) => session.id);
     expect(ids.length).toBeLessThanOrEqual(50);
     expect(ids.filter((id) => id.startsWith("chat-buried-newer-")).length).toBeGreaterThan(0);
 

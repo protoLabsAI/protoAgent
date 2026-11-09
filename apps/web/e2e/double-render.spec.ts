@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
+import { persistedChat } from "./persistedChat";
 import { expandToolCard } from "./toolcard";
 
 // #1938 — a completed long tool-call turn rendered its reply TWICE in the console
@@ -15,7 +16,6 @@ import { expandToolCard } from "./toolcard";
 // store holds exactly one assistant entry for the turn.
 
 const ANSWER = "Testing catches bugs before users do.";
-const STORAGE_KEY = "protoagent.chat.sessions";
 
 async function sendSlowStream(page: Page) {
   const composer = page.getByPlaceholder(/Message protoAgent/i);
@@ -32,17 +32,11 @@ async function renderedAnswerCount(page: Page): Promise<number> {
 
 /** Assistant entries in the persisted store that carry the answer (content or parts). */
 async function persistedAnswerCount(page: Page): Promise<number> {
-  return page.evaluate(
-    ([key, answer]) => {
-      const raw = window.localStorage.getItem(key);
-      if (!raw) return -1;
-      const state = JSON.parse(raw) as { sessions: { messages: { role: string; content: string }[] }[] };
-      return state.sessions
-        .flatMap((s) => s.messages)
-        .filter((m) => m.role === "assistant" && m.content.includes(answer)).length;
-    },
-    [STORAGE_KEY, ANSWER] as const,
-  );
+  const state = await persistedChat(page);
+  if (!state) return -1;
+  return state.sessions
+    .flatMap((s) => s.messages as { role: string; content: string }[])
+    .filter((m) => m.role === "assistant" && m.content.includes(ANSWER)).length;
 }
 
 /** The persisted store has caught up with a SETTLED turn: `text` is in it and no bubble is
@@ -50,16 +44,10 @@ async function persistedAnswerCount(page: Page): Promise<number> {
  *  store is written by a trailing timer after the terminal frame, so this is the condition
  *  that sleep was standing in for, and a duplicate the terminal frame drew is in it by then. */
 async function persistedSettled(page: Page, text: string): Promise<boolean> {
-  return page.evaluate(
-    ([key, needle]) => {
-      const raw = window.localStorage.getItem(key);
-      if (!raw) return false;
-      const state = JSON.parse(raw) as { sessions: { messages: { content: string; status?: string }[] }[] };
-      const all = state.sessions.flatMap((s) => s.messages);
-      return all.some((m) => m.content.includes(needle)) && !all.some((m) => m.status === "streaming");
-    },
-    [STORAGE_KEY, text] as const,
-  );
+  const state = await persistedChat(page);
+  if (!state) return false;
+  const all = state.sessions.flatMap((s) => s.messages as { content: string; status?: string }[]);
+  return all.some((m) => m.content.includes(text)) && !all.some((m) => m.status === "streaming");
 }
 
 /** Boot the sender, run one quick turn so the session persists, then boot the
@@ -145,15 +133,11 @@ test("sibling tab reloading mid-turn (double-boot): reply still renders exactly 
 /** Every persisted bubble as `role:content`, for polling the store past its trailing
  *  persist timer (PERSIST_DEBOUNCE_MS). */
 async function persistedBubbles(page: Page): Promise<string[]> {
-  return page.evaluate(
-    ([key]) => {
-      const raw = window.localStorage.getItem(key);
-      if (!raw) return [];
-      const state = JSON.parse(raw) as { sessions: { messages: { role: string; content: string }[] }[] };
-      return state.sessions.flatMap((s) => s.messages).map((m) => `${m.role}:${m.content}`);
-    },
-    [STORAGE_KEY] as const,
-  );
+  const state = await persistedChat(page);
+  if (!state) return [];
+  return state.sessions
+    .flatMap((s) => s.messages as { role: string; content: string }[])
+    .map((m) => `${m.role}:${m.content}`);
 }
 
 const PREAMBLE = "Let me look that up.";
@@ -224,36 +208,27 @@ const MENTION_FAILURE_LINE = "Delegate @protoEngineer failed: connection refused
 /** Every persisted assistant bubble of the addressed turn, with the fields the answer's
  *  identity and its footer/actions depend on. */
 async function persistedAssistants(page: Page) {
-  return page.evaluate(
-    ([key]) => {
-      const raw = window.localStorage.getItem(key);
-      if (!raw) return [];
-      const state = JSON.parse(raw) as {
-        sessions: {
-          messages: {
-            role: string;
-            content: string;
-            author?: { name: string };
-            taskId?: string;
-            usage?: unknown;
-            contextWindow?: unknown;
-            answeredByParticipants?: boolean;
-          }[];
-        }[];
-      };
-      return state.sessions
-        .flatMap((s) => s.messages)
-        .filter((m) => m.role === "assistant")
-        .map((m) => ({
-          author: m.author?.name ?? null,
-          hasAnswer: m.content.includes("The current bundled Artifact plugin version is"),
-          taskId: Boolean(m.taskId),
-          footer: Boolean(m.usage || m.contextWindow),
-          stamped: Boolean(m.answeredByParticipants),
-        }));
-    },
-    [STORAGE_KEY] as const,
-  );
+  const state = await persistedChat(page);
+  if (!state) return [];
+  type Bubble = {
+    role: string;
+    content: string;
+    author?: { name: string };
+    taskId?: string;
+    usage?: unknown;
+    contextWindow?: unknown;
+    answeredByParticipants?: boolean;
+  };
+  return state.sessions
+    .flatMap((s) => s.messages as Bubble[])
+    .filter((m) => m.role === "assistant")
+    .map((m) => ({
+      author: m.author?.name ?? null,
+      hasAnswer: m.content.includes("The current bundled Artifact plugin version is"),
+      taskId: Boolean(m.taskId),
+      footer: Boolean(m.usage || m.contextWindow),
+      stamped: Boolean(m.answeredByParticipants),
+    }));
 }
 
 test("an @-addressed delegate's answer renders once, under its author's byline", async ({ page }) => {
