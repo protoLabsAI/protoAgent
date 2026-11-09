@@ -12,7 +12,9 @@
   inside them is data, never instructions. On by default; `agent_browser.content_boundaries:
   false` turns it off. `browser_eval` output stays raw — it's the result of the caller's own
   script (often JSON a caller parses), not page prose, so it's never wrapped.
-- **The `fill-form` workflow no longer submits the form.** It fills fields by label,
-  reads the form back to verify it, and stops with the filled form for you to review and
-  submit. Both bundled browser workflows now load and run: they had an invalid recipe
-  shape, and they now run on a new workflow-only `browser` subagent.
+- **The bundled browser workflows load, run, and stop at a wall.** `fill-form` and
+  `browse-and-extract` had an invalid recipe shape; both now load and run on a new
+  workflow-only `browser` subagent, stop and hand a bot check or sign-in wall to you instead
+  of pushing on, and `fill-form` still never submits (it fills by label, reads the form back,
+  and stops). `browse-and-extract` reads the page text with `browser_get_text` rather than
+  the interactive-only snapshot.

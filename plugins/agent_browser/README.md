@@ -32,7 +32,7 @@ Cloudflare / CAPTCHA / DataDome / PerimeterX / Akamai / Google-sorry interstitia
 403/429, `ERR_BLOCKED_BY_CLIENT` or a sign-in wall comes back as `Error: blocked by <wall> at
 <url> — … ask the user to clear it in the console Browser panel, then continue` instead of a
 `✓` (a self-clearing JS challenge is re-checked for ~5 s first; `detect_walls: false` turns it
-off). **Boundaries:** page-derived output (snapshot, get_text, get_html, eval, form_read)
+off). **Boundaries:** page-derived output (snapshot, get_text, get_html, form_read; `browser_eval` stays raw)
 arrives inside the CLI's `AGENT_BROWSER_PAGE_CONTENT nonce=… origin=…` markers
 (`content_boundaries`, default on), so the model can tell page data from instructions. A
 consumer that parses a result takes the text between the markers (`boundaries.strip()`).

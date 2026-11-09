@@ -641,9 +641,16 @@ _WHY = {
 
 
 def refusal(desc: str, why: str, category: str) -> str:
+    # A subagent (a task() delegation or a workflow step on the `browser` worker) answers to the
+    # lead or the workflow, not to the user: it should end its step and say so, and the lead —
+    # on an operator chat turn — can take the action itself and get the approval card.
+    handoff = ("End this step here and report that the page is ready and this action is waiting for the "
+               "operator, who can do or approve it from chat."
+               if why == "subagent" else
+               "Leave the page as it is and tell the user it's ready for them to do or approve from chat.")
     return (f"Error: blocked by the browser action gate ({category}) — {desc}. This needs the operator's "
             f"approval and {_WHY.get(why, why)}. Don't retry it or work around it (no JS submit, no Enter key). "
-            f"Leave the page as it is and tell the user it's ready for them to do or approve from chat.")
+            f"{handoff}")
 
 
 def declined(desc: str) -> str:

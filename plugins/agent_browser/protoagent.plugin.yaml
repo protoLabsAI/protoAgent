@@ -79,8 +79,8 @@ config:
                             # all; "" or none = off. Unset = submit. Enforced by the plugin
                             # (it resolves the real target, @eN refs included), not the CLI.
   max_output: 0             # cap page-text output chars (LLM-safety); 0 = CLI default
-  content_boundaries: true  # wrap page-derived output (snapshot / get_text / get_html / eval /
-                            # form_read) in the CLI's AGENT_BROWSER_PAGE_CONTENT markers so the
+  content_boundaries: true  # wrap page-derived output (snapshot / get_text / get_html /
+                            # form_read; eval stays raw) in the CLI's AGENT_BROWSER_PAGE_CONTENT markers so the
                             # model can tell page data from instructions (boundaries.py). Passed
                             # per call, never globally: a wrapped internal eval breaks the form tools.
   detect_walls: true        # after browser_open, report a bot check / block page / sign-in wall
@@ -106,7 +106,7 @@ settings:
   - { key: profile, label: "Browser profile dir", type: string, description: "Path to a browser profile directory — isolation + persisted auth/cookies across sessions. Reusing a logged-in Chrome profile is the most reliable way past login walls." }
   - { key: device, label: "Device emulation", type: string, description: "Emulate a device, e.g. \"iPhone 16 Pro\". Blank = desktop." }
   - { key: stream_quality, label: "Panel stream quality", type: number, description: "Interactive panel JPEG quality (1–100). Higher = crisper, more bandwidth. The panel also renders at your dock's size × device-pixel-ratio." }
-  - { key: content_boundaries, label: "Mark page content as untrusted", type: bool, description: "Wrap the page text, HTML, snapshots, script results and form reads the agent gets in boundary markers, so text from a web page is treated as data, never as instructions. Recommended on." }
+  - { key: content_boundaries, label: "Mark page content as untrusted", type: bool, description: "Wrap the page text, HTML, snapshots and form reads the agent gets in boundary markers, so text from a web page is treated as data, never as instructions. Recommended on." }
   - { key: detect_walls, label: "Detect bot checks and sign-in walls", type: bool, description: "After opening a page, notice when a bot check (Cloudflare, CAPTCHA…), a block page or a sign-in page showed up instead, and ask you to clear it in the Browser panel rather than carrying on." }
   - { key: max_output, label: "Max page-text output (chars)", type: number, description: "Cap characters of page text returned to the model (LLM-safety). 0 = the CLI default." }
   - { key: timeout_s, label: "Command timeout (s)", type: number, description: "Per-command subprocess timeout for the browser tools." }

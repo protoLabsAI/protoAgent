@@ -247,7 +247,8 @@ nothing happens and the agent has to ask again.
 A card can only be answered in an operator chat turn. A delegated subagent (including a
 workflow step), or a scheduled, inbox, background or remote (A2A) turn, gets an immediate
 refusal instead of parking on a card nobody will see. The agent is told to leave the page as it
-is and hand it to you. A `/bypass` turn doesn't skip the gate either.
+is and hand it to you; a subagent is told to end its step and report that the action is waiting
+for you, so the lead (on your chat turn) can take it and show you the card. A `/bypass` turn doesn't skip the gate either.
 
 `confirm_actions` picks the categories:
 

@@ -345,6 +345,10 @@ def test_ask_refuses_where_nobody_can_answer(monkeypatch):
     monkeypatch.setattr(gate, "interrupt_context", lambda state: (False, "subagent", ""))
     out = gate.ask(_decision(), {}, tool="browser_click")
     assert out.startswith("Error: blocked by the browser action gate (submit)") and "subagent" in out
+    # a subagent / workflow step reports back to its caller rather than addressing "the user"
+    assert "End this step here" in out and "tell the user" not in out
+    monkeypatch.setattr(gate, "interrupt_context", lambda state: (False, "unattended", ""))
+    assert "tell the user it's ready" in gate.ask(_decision(), {}, tool="browser_click")
 
 
 # ── the tools ────────────────────────────────────────────────────────────────────────────────
