@@ -40,6 +40,51 @@ beforeEach(() => {
 afterEach(() => { act(() => root.unmount()); host.remove(); qc.clear(); vi.restoreAllMocks(); });
 
 describe("collection browser", () => {
+  it("filters both root layouts by pending membership and preserves the filter through navigation", async () => {
+    vi.mocked(api.knowledgeSearch).mockImplementation(async (query, options) => ({
+      enabled: true, query, stats: {},
+      results: options?.collection === "alpha" ? [{ ...chunk(1), review_state: "pending" }] : [],
+    }));
+    await render();
+    await act(async () => model.setPendingOnly(true)); await settle();
+    expect(host.querySelectorAll("tbody tr")).toHaveLength(1);
+    expect(host.querySelector("tbody tr a")?.textContent).toBe("alpha");
+    expect(host.querySelectorAll(".kc-phone-row")).toHaveLength(1);
+    expect(host.textContent).toContain("1 collections · 51 chunks");
+    expect(api.knowledgeSearch).toHaveBeenCalledWith("", expect.objectContaining({ collection: "beta", reviewState: "pending" }));
+    await act(async () => model.open("alpha")); await settle();
+    expect(model.pendingOnly).toBe(true);
+    expect(host.textContent).toContain("Safety note 1");
+    expect(api.knowledgeSearch).toHaveBeenCalledWith("", expect.objectContaining({ collection: "alpha", reviewState: "pending" }));
+    window.history.replaceState({}, "", "/app/");
+    await act(async () => window.dispatchEvent(new PopStateEvent("popstate"))); await settle();
+    expect(model.pendingOnly).toBe(true);
+    expect(host.querySelectorAll("tbody tr")).toHaveLength(1);
+    vi.mocked(api.knowledgeSearch).mockResolvedValue({ enabled: true, query: "", results: [], stats: {} });
+    await act(async () => { await model.invalidate(); }); await settle();
+    expect(host.textContent).toContain("Nothing awaiting review here.");
+    await act(async () => model.setPendingOnly(false)); await settle();
+    expect(host.querySelectorAll("tbody tr")).toHaveLength(2);
+  });
+  it("shows pending-list loading, failure with retry, and review-specific empty state", async () => {
+    await render();
+    vi.mocked(api.knowledgeSearch).mockReturnValue(new Promise(() => {}));
+    await act(async () => model.setPendingOnly(true)); await settle();
+    expect(host.querySelector('[aria-label="Loading collections"]')).not.toBeNull();
+    expect(host.querySelector("tbody tr a")).toBeNull();
+    expect(host.textContent).not.toContain("Nothing awaiting review");
+    vi.mocked(api.knowledgeSearch).mockRejectedValue(new Error("Offline"));
+    await act(async () => { await qc.cancelQueries(); await model.pendingCollections.refetch(); }); await settle();
+    expect(host.textContent).toContain("Couldn't load collections");
+    vi.mocked(api.knowledgeSearch).mockResolvedValue({ enabled: true, query: "", results: [], stats: {} });
+    await click("Retry");
+    expect(host.textContent).toContain("Nothing awaiting review here.");
+    expect(host.textContent).not.toContain("No knowledge yet");
+    expect(host.querySelector("table")).toBeNull();
+    vi.mocked(api.listCollections).mockResolvedValue({ enabled: false, collections: [] });
+    await act(async () => { await model.invalidate(); }); await settle();
+    expect(host.textContent).toContain("Knowledge is off for this agent");
+  });
   it("renders the collections table with a caption, default size order, and no invented retrieval figures", async () => {
     await render();
     expect(host.querySelector("caption")?.textContent).toContain("Knowledge collections");

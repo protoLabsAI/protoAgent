@@ -160,7 +160,7 @@ export function CollectionsBrowser({ model, renderCard, onAdd, onSettings }: {
   const { list, selected: listed, collection, details, search, term } = model;
   const selected = listed && details.data?.results.some(c => c.tier === "commons")
     ? { ...listed, tier: "commons" as const } : listed;
-  const sorted = sortedCollections(model.collections, model.sort, model.ascending);
+  const sorted = sortedCollections(model.visibleCollections, model.sort, model.ascending);
   const previousCollection = useRef(collection);
   useEffect(() => {
     const body = contentRef.current?.closest(".stage-body");
@@ -241,18 +241,19 @@ export function CollectionsBrowser({ model, renderCard, onAdd, onSettings }: {
           : <Empty title="No knowledge yet" description="Add a folder, a file or a web page and it becomes a collection this agent can read." action={<Button onClick={onAdd}>Add a source</Button>} />}
       </>}
   </div>;
-  const loading = list.isPending || (!!collection && !!selected && details.isPending);
-  const failed = list.error || (selected && details.error);
+  const filteringList = model.pendingOnly && !collection && !term && list.data?.enabled === true;
+  const loading = (filteringList && model.pendingCollections.isPending) || list.isPending || (!!collection && !!selected && details.isPending);
+  const failed = (filteringList && model.pendingCollections.error) || list.error || (selected && details.error);
   return <div className="kc-browser" ref={contentRef}>
     {collection && <TextLink href={collectionHref()} aria-label="Back to all collections" onClick={e => { e.preventDefault(); open(""); }}>← All collections</TextLink>}
-    <PanelHeader title={collection || "Collections"} kicker={list.isPending ? undefined : collection
+    <PanelHeader title={collection || "Collections"} kicker={loading ? undefined : collection
       ? <><Metadata row={selected ?? { collection, chunks: 0, sources: 0, last_ingested_at: null }} />{selected?.tier === "commons" && " Shared with every agent on this box."}</>
-      : `${model.collections.length} collections · ${model.collections.reduce((n, c) => n + c.chunks, 0)} chunks`}
+      : `${model.visibleCollections.length} collections · ${model.visibleCollections.reduce((n, c) => n + c.chunks, 0)} chunks`}
       actions={selected && (selected.plugin ? <span className="kc-muted">Managed by {selected.plugin}. Turn the plugin's docs off in its settings to remove it. <Button variant="ghost" onClick={() => useUI.getState().openPluginConfig(selected.plugin!, selected.plugin!)}>Open plugin settings</Button></span>
         : <Button variant="danger" size="sm" disabled={!!selected.ingesting} title={selected.ingesting ? "Wait until it finishes adding." : undefined} onClick={() => requestDelete(selected)}>{selected.tier === "commons" ? "Stop sharing…" : "Delete collection…"}</Button>)} />
     <KnowledgeSearch model={model} />
     {loading ? <CollectionLoading detail={!!collection} />
-      : failed ? <Alert status="warning">Couldn't load {collection || "collections"}. The agent still has its knowledge; only this view failed to load. <Button onClick={() => { void list.refetch(); if (collection) void details.refetch(); }}>Retry</Button></Alert>
+      : failed ? <Alert status="warning">Couldn't load {collection || "collections"}. The agent still has its knowledge; only this view failed to load. <Button onClick={() => { void list.refetch(); if (filteringList) void model.pendingCollections.refetch(); if (collection) void details.refetch(); }}>Retry</Button></Alert>
       : list.data?.enabled === false ? <Empty title="Knowledge is off for this agent" description="Turn it on to let the agent read collections you add." action={<Button onClick={onSettings}>Open settings</Button>} />
       : <>{term && (search.isPending ? <Skeleton lines={3} /> : search.error ? <Alert status="warning">Couldn't search knowledge. <Button onClick={() => void search.refetch()}>Retry</Button></Alert>
       : <><p role="status" aria-live="polite">{search.data?.results.length ?? 0} matches{model.all ? ` in ${new Set(search.data?.results.map(c => c.collection)).size} collections` : ` in ${collection}`}</p>
@@ -261,8 +262,9 @@ export function CollectionsBrowser({ model, renderCard, onAdd, onSettings }: {
           : <ul className="playbook-list">{search.data.results.map(renderCard)}</ul>}</>)}
       <div hidden={!!term}>{collection ? !selected ? <Callout tone="info">This collection isn't here any more. It may have been deleted. <Button onClick={() => open("")}>Back to all collections</Button></Callout>
         : <CollectionDetail key={collection} row={selected} chunks={details.data?.results ?? []} renderCard={renderCard} onDelete={requestDelete} onDeleteDocument={requestDeleteDoc} pendingReview={model.pendingOnly} />
+      : model.pendingOnly && !model.visibleCollections.length ? <Empty title="Nothing awaiting review here." />
       : !model.collections.length ? <Empty title="No knowledge yet" description="Add a folder, a file or a web page and it becomes a collection this agent can read." action={<Button onClick={onAdd}>Add a source</Button>} />
-      : <CollectionList rows={model.collections} sort={model.sort} ascending={model.ascending} onSort={key => {
+      : <CollectionList rows={model.visibleCollections} sort={model.sort} ascending={model.ascending} onSort={key => {
         model.setAscending(key === model.sort ? !model.ascending : key === "name"); model.setSort(key);
       }} {...actions} />}</div></>}
     <ConfirmDialog open={pending !== null} destructive title={pending?.tier === "commons" ? `Stop sharing ${pending.collection}?` : `Delete ${pending?.collection}?`}

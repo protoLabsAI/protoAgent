@@ -37,7 +37,7 @@ export function useCollections() {
       // belong to this browser instead; consume them before that shell listener.
       if (event.state?.knowledgeCollections) event.stopImmediatePropagation();
       const name = new URLSearchParams(window.location.search).get("collection") ?? "";
-      setCollection(name); setAll(!name); setQuery(""); setTerm(""); setPendingOnly(false);
+      setCollection(name); setAll(!name); setQuery(""); setTerm("");
     };
     window.addEventListener("popstate", onPop, true);
     return () => window.removeEventListener("popstate", onPop, true);
@@ -57,6 +57,14 @@ export function useCollections() {
     placeholderData: keepPreviousData,
     enabled: flat,
   });
+  // The aggregate endpoint has no verdict filter. Use scoped reads for membership,
+  // keeping full collection counts for facts and destructive confirmations.
+  const pendingCollections = useQuery({
+    ...collectionsSearchQuery(collections, "", "pending"),
+    enabled: pendingOnly && !flat && list.isSuccess && list.data.enabled,
+  });
+  const pendingNames = new Set(pendingCollections.data?.results.map(c => c.collection));
+  const visibleCollections = pendingOnly ? collections.filter(c => pendingNames.has(c.collection)) : collections;
   const selected = collections.find(c => c.collection === collection);
   const details = useQuery({
     ...collectionChunksQuery(collection || undefined, "", selected?.chunks ?? 50, reviewState),
@@ -73,7 +81,7 @@ export function useCollections() {
     const state = { ...window.history.state, knowledgeCollections: true };
     window.history.replaceState(state, "");
     window.history.pushState(state, "", collectionHref(name));
-    setCollection(name); setAll(!name); setQuery(""); setTerm(""); setPendingOnly(false);
+    setCollection(name); setAll(!name); setQuery(""); setTerm("");
   }
   function seedSearch(value: string) { setQuery(value); setTerm(value.trim()); setAll(true); setPendingOnly(false); }
   const invalidate = () => qc.invalidateQueries({ queryKey: queryKeys.knowledge });
@@ -132,7 +140,7 @@ export function useCollections() {
     },
     onSuccess: invalidate,
   });
-  return { list, flat, fallback, collections, selected, details, search, collection, open, query, setQuery, term, all, setAll,
+  return { list, flat, fallback, collections, visibleCollections, pendingCollections, selected, details, search, collection, open, query, setQuery, term, all, setAll,
     seedSearch, sort, setSort, ascending, setAscending, pendingOnly, setPendingOnly, remove, restore,
     removeSource, restoreSource, invalidate };
 }
