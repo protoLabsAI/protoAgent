@@ -80,7 +80,7 @@ Below 768 px the console runs its own chat-first `MobileShell` (`apps/web/src/ap
 [Menu]  [ Chat title ⌄ ]  [Search]  [New chat]
 ```
 
-Every button is a `.mshell-head-btn`: at least 44 × 44 px, no border, no fill, `--pl-color-fg` icon at 20 px. The title is `flex: 1; min-width: 0` and ellipsizes (`.mshell-title-text`).
+Every header action button is a DS `<Button variant="ghost" size="md" icon>`: at least 44 × 44 px, no border, no fill, `--pl-color-fg` icon at 20 px. The title is `flex: 1; min-width: 0` and ellipsizes (`.mshell-title-text`).
 
 **With a decision pending:**
 
@@ -91,11 +91,11 @@ Every button is a `.mshell-head-btn`: at least 44 × 44 px, no border, no fill, 
 - **Slot:** directly before New chat, so it sits beside New chat and New chat keeps its far-right position, which thumbs reach for by position.
 - **What it is:** the `MessageCircleQuestion` icon at 20 px and a default `Count` **beside** it (not overlapping the icon), inside one button. "9+" above 9.
 - **Size:** at least 44 px tall. At least 44 px wide, growing with the count to about 56 px for "9+". It never shrinks: `flex: 0 0 auto`.
-- **Quiet styling:** the same as its neighbours (`.mshell-head-btn` sizing, no fill, no border, `--pl-color-fg` icon). The `Count` is the DS default pill. No accent, no warning colour, no pulse or dot.
+- **Quiet styling:** `<Button variant="ghost" size="md" icon>`, matching its neighbours exactly. The `Count` is the DS default pill. No accent, no warning colour, no pulse or dot.
 - **When it shows:** only while at least one decision is pending (Josh's rule), so the header never carries an empty slot. During the first load it stays hidden (§5.2).
 - **Tapping it** opens the Decisions panel as the existing bottom sheet (`Drawer side="bottom"`, up to 85dvh). Closing the sheet returns focus to the button, or to New chat if the button has gone because nothing is left.
 
-**Pushed views** (Knowledge, Memory, plugin surfaces). The header there is `[Back]  Title  [spacer]`, where the right-hand spacer (`<span className="mshell-head-btn" aria-hidden />`) only centres the title against the back chevron. **While a decision is pending, the Decisions button takes the spacer's place.** It is the same width (44 px, a little more with "9+"), so the title stays centred and a decision is reachable from every screen. With nothing pending the spacer comes back. (Q19 asks Josh to confirm.)
+**Pushed views** (Knowledge, Memory, plugin surfaces). The header there is `[Back]  Title  [spacer]`, where the right-hand spacer (`<span className="mshell-head-spacer" aria-hidden />`, `min-width: 44px` per `mobile-shell.css:32`) balances the leading back-chevron button. **While a decision is pending, the Decisions button takes the spacer's place.** It is 44 px wide with no count and grows to ~56 px at "9+", so the title shifts slightly off-centre when a count shows. A decision is reachable from every screen. With nothing pending the spacer comes back. (Q19 asks Josh to confirm.)
 
 **Fit at 320 px.** The header has 4 px padding each side and a 4 px gap. At 320 px with a decision pending:
 
@@ -306,7 +306,7 @@ Every state below is in the preview.
 ## 6. Accessibility
 
 - **Desktop pill.** A DS `Button` (through `UtilityWidget`) with the accessible name from §4.1. Its `Tooltip` opens on focus as well as hover. It should expose `aria-haspopup="dialog"`; `UtilityWidget` doesn't set it today (Q12).
-- **Phone header button.** A real `<button type="button">` with the accessible name from §4.1 (the visible count is inside the name, so a screen reader hears "Decisions, 2 waiting on you", not "2"), `aria-haspopup="dialog"` and `aria-expanded` while the sheet is open, like the title button beside it. Icon and `Count` are `aria-hidden`. DOM order matches screen order: Menu, title, Search, Decisions, New chat. It needs a visible keyboard focus ring; `.mshell-head-btn` defines none today (Q24).
+- **Phone header button.** A DS `<Button variant="ghost" size="md" icon>` with the accessible name from §4.1 (the visible count is inside the name, so a screen reader hears "Decisions, 2 waiting on you", not "2"), `aria-haspopup="dialog"` and `aria-expanded` while the sheet is open. Icon and `Count` are `aria-hidden`. DOM order matches screen order: Menu, title, Search, Decisions, New chat. The DS Button provides the visible keyboard focus ring (Q24 resolved).
 - **Live announcement.** One app-level `role="status"` region announces each new decision once, politely: "protoEngineer needs a decision." It is never `role="alert"`; a request does not interrupt (WCAG 4.1.3). The pill and the header button are not live regions themselves, so a count change is never announced twice.
 - **Panel.** `Dialog` (desktop) and `Drawer` (phone) provide the focus trap, Escape to close and focus return to the pill or the header button. The dialog name is the title.
 - **Card.** Each card is an `article` labelled by "{Agent}: {first words of the question}". The options are a `role="group"` labelled "Answer". Option explanations are linked through `aria-describedby`.
@@ -356,7 +356,7 @@ Every state below is in the preview.
 |---|---|
 | `UtilityWidget` (exists) | The desktop pill and its dialog. Needs a small addition: controlled `open` / `onOpenChange`, so a notification click or a link can open it (Q11), and `aria-haspopup="dialog"` on the pill (Q12). |
 | `DecisionsWidget` (new) | Wraps `UtilityWidget` with the icon, `Count` badge, label and info from §2.1. Mounted in `App.tsx` between `<PaletteButton />` and `<BackgroundJobs />`. |
-| `DecisionsHeaderButton` (new) | The phone entry point: a `.mshell-head-btn` with the icon and a `Count`, wired to `useDecisions()`. `MobileShell` renders it before New chat on the chat root, and in place of the right-hand spacer on pushed views (§2.2). Renders nothing when the count is 0 or during the first load. Opens `DecisionsPanel` in `Drawer side="bottom"`. |
+| `DecisionsHeaderButton` (new) | The phone entry point: a DS `<Button variant="ghost" size="md" icon>` with an `aria-label` ("Decisions, N waiting") and a `Count` badge beside the icon, wired to `useDecisions()`. `MobileShell` renders it before New chat on the chat root, and in place of the right-hand spacer on pushed views (§2.2). Renders nothing when the count is 0 or during the first load. Opens `DecisionsPanel` in `Drawer side="bottom"`. |
 | `DecisionsPanel` | The panel body: intro, ordering, the "nothing" lines. Rendered inside the `UtilityWidget` dialog on desktop and inside `Drawer side="bottom"` on the phone. |
 | `DecisionCard` | One decision and every state in §5. Used in the panel and in the source chat transcript. |
 | `useDecisions()` | Fleet-wide store: load, `decision.changed` push updates, answer, 409 handling, `notifyIfHidden(title, body?)` once per id. Drives the count for both entry points. |
@@ -365,9 +365,9 @@ The composites use tokens only and pass `ds_check`. The header button's only new
 
 ### 8.3 The phone header button needs no DS contribution
 
-- It joins an existing app-owned control family: the `MobileShell` header buttons (`.mshell-head-btn`, `MobileShell.tsx`). It copies their sizing and quiet look, so it ships in the same PR as the desktop pill. Nothing waits on an npm publish.
+- It joins an existing app-owned control family: the `MobileShell` header buttons (DS `<Button variant="ghost" size="md" icon>`, `MobileShell.tsx`). It copies their variant and quiet look, so it ships in the same PR as the desktop pill. Nothing waits on an npm publish.
 - The floating action button considered earlier is dropped. The DS still has no FAB, and none is needed now.
-- One DS-adjacent gap: the mobile header buttons are raw `<button>`s with no visible focus ring of their own (Q23, Q24). That predates this feature and affects all four header buttons.
+- Using `<Button variant="ghost" size="md" icon>` gives `DecisionsHeaderButton` the DS focus ring and tap-highlight, matching every existing header button.
 
 ### 8.4 Possible later contribution (unchanged, not blocking)
 
@@ -407,8 +407,8 @@ The composites use tokens only and pass `ds_check`. The header button's only new
 13. **Pushed-view spacer.** On pushed views the header's right slot is an `aria-hidden` spacer that centres the title. Is it safe for `MobileShell` to render `DecisionsHeaderButton` there instead while a decision is pending, or do any mobile e2e specs pin that spacer?
 14. **Feed badge.** The feed raises its badge on `inbox.item`. If a parked decision also arrives as an inbox item, the cluster would show two counts for one decision. Can the feed skip decision events for its unread count?
 15. **Two sheets.** The session sheet is already a bottom `Drawer` opened from the header. Opening the Decisions sheet while the session sheet is open (for example from a notification) must close the session sheet first, so two bottom sheets never stack. Is there one UI-store owner for "which mobile sheet is open"?
-23. **Raw button or DS `Button`.** The existing header buttons are raw `<button className="mshell-head-btn">`. Josh's protoContent#551 rule allows raw buttons only for composite triggers with multi-element children, type="button", the DS focus ring and tokens; action buttons use DS `Button`. The Decisions button has two children (icon and `Count`) and opens a sheet, so it qualifies as a composite trigger **if** it gets the DS focus ring. Match its neighbours (raw, recommended for consistency), or use `Button variant="ghost"` sized to 44 px?
-24. **Header focus ring.** `.mshell-head-btn` has no `:focus-visible` style, so keyboard focus on the phone header (an external keyboard, or switch access) may show only the browser default. Add the DS focus ring to every header button, in the same PR or a separate a11y card?
+23. **Raw button or DS `Button` — resolved.** The existing header buttons are DS `<Button variant="ghost" size="md" icon>` since #551, not raw `<button className="mshell-head-btn">`. `DecisionsHeaderButton` uses the same variant to match them. No choice remains.
+24. **Header focus ring — resolved.** The #551 DS Button swap gave every existing header button the DS focus ring. `DecisionsHeaderButton` inherits it by using `<Button variant="ghost" size="md" icon>`. No separate a11y card is needed for the button this spec adds.
 
 ### For Josh
 
