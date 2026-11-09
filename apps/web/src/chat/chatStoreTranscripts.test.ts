@@ -169,6 +169,44 @@ describe("a save that fails", () => {
   });
 });
 
+describe("a save that hits the IndexedDB quota", () => {
+  it("frees space, says so, and retries the save", async () => {
+    const { openTranscriptStore } = await import("./transcriptStore");
+    const seed = (await openTranscriptStore())!;
+    await seed.putSessions("gone-agent", [{ id: "g", title: "old", createdAt: 1, updatedAt: 1, messages: chat(1, "g") }]);
+    seed.close();
+    const { chatStore, initTranscriptBackend, flushChatPersist, transcriptWritesSettled } = await freshStore();
+    const { setFleetSlugs, subscribeEvictions } = await import("../lib/storageEviction");
+    // The chat store's own copy of the module (freshStore reset the registry).
+    const { TranscriptStore } = await import("./transcriptStore");
+    await initTranscriptBackend();
+    setFleetSlugs(["host"]);
+    const heard = vi.fn();
+    const off = subscribeEvictions(heard);
+
+    const real = TranscriptStore.prototype.putSessions;
+    let failures = 0;
+    const put = vi.spyOn(TranscriptStore.prototype, "putSessions").mockImplementation(async function (this: InstanceType<typeof TranscriptStore>, ...args) {
+      if (failures++ === 0) throw new DOMException("full", "QuotaExceededError");
+      return real.apply(this, args);
+    });
+    const id = chatStore.getSnapshot().currentSessionId!;
+    chatStore.updateMessages(id, chat(1));
+    flushChatPersist();
+    await transcriptWritesSettled();
+    put.mockRestore();
+    off();
+    setFleetSlugs(null);
+
+    expect(heard).toHaveBeenCalledTimes(1);
+    expect(heard.mock.calls[0][0].evicted).toEqual([{ key: "idb:gone-agent/g", slug: "gone-agent", bytes: 0 }]);
+    const store = await reopen();
+    expect((await store.loadAgent("host")).sessions.map((s) => s.id)).toContain(id); // the retry saved it
+    expect((await store.loadAgent("gone-agent")).sessions).toEqual([]);
+    store.close();
+  });
+});
+
 describe("staying on localStorage", () => {
   it("when IndexedDB isn't available", async () => {
     localStorage.setItem(MAIN, v1([{ id: "h1", messages: chat(1) }]));

@@ -45,6 +45,11 @@ export function setFleetSlugs(slugs: Iterable<string> | null): void {
   fleetSlugs = slugs ? new Set(slugs) : null;
 }
 
+/** The fleet as last set, or `null` when unknown (IndexedDB eviction, chat-store). */
+export function fleetSlugsSnapshot(): ReadonlySet<string> | null {
+  return fleetSlugs;
+}
+
 /** When the transcript key was last written, from its own content; `null` = unknown. A chat
  *  blob carries `sessions[].updatedAt`; palette/DM threads carry no time at all. */
 export function lastWrittenAt(value: string | null): number | null {
@@ -113,6 +118,19 @@ const listeners = new Set<(report: EvictionReport) => void>();
 export function subscribeEvictions(fn: (report: EvictionReport) => void): () => void {
   listeners.add(fn);
   return () => listeners.delete(fn);
+}
+
+/** Tell listeners about an eviction made elsewhere (the IndexedDB store). */
+export function reportEviction(report: EvictionReport): void {
+  if (!report.evicted.length) return;
+  console.info("[storage] evicted old transcripts", { reason: report.reason, keys: report.evicted.map((e) => e.key) });
+  for (const fn of listeners) {
+    try {
+      fn(report);
+    } catch {
+      // never break the write that triggered it
+    }
+  }
 }
 
 /** Remove candidates in order until `needBytes` are freed (or none are left). */

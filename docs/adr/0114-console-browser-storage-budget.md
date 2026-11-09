@@ -29,6 +29,58 @@
 > orphans, and cleared by the crash reset. The IDB epic (#4981) should keep these chunks as
 > records; a record per chat would bring back the whole-chat rewrite D2 assumed.
 
+> **November 9, 2026 — what epic #4981 builds (supersedes parts of D2/D3/D5 below).**
+> Status moves to Accepted when the epic merges.
+>
+> *Why IndexedDB, measured (#4974).* WebKit's localStorage (`SQLiteStorageArea`) leaves a SQLite
+> read transaction open the first time a value over its 1K-character in-memory limit is
+> **overwritten or removed**. From then on its WAL never checkpoints, not on idle, navigation
+> or process exit (307 MB in a day in the desktop app; Safari shares the engine). A bare
+> WKWebView reproduces it. Values under 1K characters and plain reads of large values don't.
+> WebKit's IndexedDB checkpoints normally under the same load. This, not quota alone, is the
+> reason transcripts leave localStorage.
+>
+> *What changes from D2:*
+> - **One database**, `protoagent-transcripts`, not one per backend. A backend switch already
+>   wipes and reloads (`lib/tenant.ts`); it now also clears this database, after any queued
+>   save, on the store's own connection. That keeps today's isolation without the
+>   "no uid at first boot" problem.
+> - **A boot gate instead of the per-session load barrier.** `initTranscriptBackend()` is awaited
+>   before React mounts (bounded at 5 s; past it, the page stays on localStorage, and a late
+>   load never swaps state under it). Nothing can read or mutate a chat that hasn't loaded, so
+>   `loadState`, updater-only mutators and the composer gating are not needed.
+> - **No derived index in localStorage.** Tab order and the focused chat are an `agents`
+>   record in IndexedDB. A list of 50 ids is itself a >1K value overwritten, which is the bug.
+>   FleetTurnWatch queries other agents' live turns from the store.
+> - **Records keep #4984's chunks.** `sessions` [slug, id] holds metadata, chunk names and the
+>   tail; `chunks` [slug, sessionId, hash] holds settled messages. A streaming save writes one
+>   small record. Only sessions whose object changed are written.
+> - **Cross-tab:** a BroadcastChannel names the saved sessions; receivers re-read those.
+> - **Migration:** every `protoagent.chat.sessions[:<slug>]` key (inline or chunked) is imported
+>   at boot, with a newer stored copy winning, then removed. Dismissal sets stay.
+> - **Palette / DM threads** (`threads` store, keyed by their localStorage key): the
+>   localStorage key keeps only `{contextId}`.
+>
+> *D3:* message caps and the trim marker are not built. Settled history is chunked, so a long
+> chat no longer costs its whole length per save.
+>
+> *D5 (IndexedDB):* on `QuotaExceededError`, `withQuotaEviction` frees one step at a time and
+> retries the write. The steps, in order:
+> 1. chats of agents no longer in the fleet;
+> 2. other windows' palette / DM threads;
+> 3. other agents' chats quiet for 24 h, oldest first;
+> 4. this agent's oldest chats, one at a time.
+>
+> It never removes open tabs, the focused chat, or a chat with a live turn, and the storage
+> toast says what was cleared.
+>
+> *D6:* Settings → Storage is not built. It is UI and needs a design-system spec first.
+>
+> *What still writes large values to localStorage:* the layout (`protoagent.ui:*`), input
+> history and the background-jobs set are >1K values overwritten occasionally, so the WebKit
+> pin still happens. The WAL then grows a few MB a day, not hundreds, and the desktop app
+> reclaims it at launch (#4980).
+
 Status: **Proposed**
 
 Amends: ADR 0104 (the primary transcript store moves from `localStorage` to IndexedDB)

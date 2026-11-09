@@ -9,7 +9,8 @@ import {
   shownRuns,
   turnBubbleIndexes,
 } from "./turnText";
-import { listKeys, matchKey, readKey, removeKey, writeKey } from "../lib/storage";
+import { isQuotaError, listKeys, matchKey, readKey, removeKey, writeKey } from "../lib/storage";
+import { fleetSlugsSnapshot, reportEviction } from "../lib/storageEviction";
 import { agentChunkPrefix, expandSessions, orphanChunks, packSessions } from "./transcriptChunks";
 import { openTranscriptStore, type SessionLike, type TranscriptStore } from "./transcriptStore";
 import { attachmentDisplay, validThumbnails } from "./imageThumbnails";
@@ -705,7 +706,7 @@ function persistToTranscripts(current: ChatState) {
   const payload = changed.map((session) => storable(session) as unknown as SessionLike);
   writeChain = writeChain
     .then(async () => {
-      await store.putSessions(AGENT, payload);
+      await withQuotaEviction(() => store.putSessions(AGENT, payload));
       await store.deleteSessions(AGENT, removed);
       if (agentChanged) await store.putAgent(agentRecord);
       transcriptChannel?.postMessage({ agent: AGENT, ids: changed.map((s) => s.id), deleted: removed } satisfies TranscriptMessage);
@@ -719,6 +720,38 @@ function persistToTranscripts(current: ChatState) {
       for (const id of removed) pendingRemovals.add(id);
       console.error("[chat] saving to IndexedDB failed", err);
     });
+}
+
+/** The palette thread key prefix of this window (mirrors app/paletteChatStore.ts). */
+const PALETTE_KEY = AGENT === "host" ? "protoagent.palette.chat" : `protoagent.palette.chat:${AGENT}`;
+
+/** Run an IndexedDB write; on a quota error free space (ADR 0114 D5) one step at a time and
+ *  retry, until it fits or nothing is left to remove. Never removes this agent's open tabs or
+ *  a chat with a live turn. Says what it cleared (the storage toast). */
+export async function withQuotaEviction(write: () => Promise<void>): Promise<void> {
+  try {
+    await write();
+    return;
+  } catch (err) {
+    if (!isQuotaError(err) || !transcripts) throw err;
+  }
+  const protect = new Set([...state.activeSessions, ...streamingIds(state), ...(state.currentSessionId ? [state.currentSessionId] : [])]);
+  for (let step = 0; step < 50; step++) {
+    const removed = await transcripts.evictStep({ keepSlug: AGENT, fleet: fleetSlugsSnapshot(), protect, threadPrefix: PALETTE_KEY });
+    if (!removed.length) break;
+    reportEviction({
+      reason: "quota",
+      freedBytes: 0,
+      evicted: removed.map((r) => ({ key: `idb:${r.slug}/${r.id}`, slug: r.slug, bytes: 0 })),
+    });
+    try {
+      await write();
+      return;
+    } catch (err) {
+      if (!isQuotaError(err)) throw err;
+    }
+  }
+  await write(); // nothing left to free: let the quota error surface to the caller's catch
 }
 
 /** The open transcript store, or `null` on the localStorage path (palette threads, S3). */

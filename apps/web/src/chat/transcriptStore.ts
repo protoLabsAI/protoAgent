@@ -252,6 +252,53 @@ export class TranscriptStore {
     await done(tx);
   }
 
+  /** Free space under IndexedDB quota pressure (ADR 0114 D5), one step per call, so the
+   *  caller can retry its write after each. Order:
+   *   1. every saved chat of agents no longer in the fleet;
+   *   2. palette / DM threads of other windows;
+   *   3. chats of other agents not written for `quietMs`, oldest first;
+   *   4. this agent's oldest chats, one at a time, never one in `protect` (open tabs, live turns).
+   *  Returns what it removed (empty when nothing is left to remove). */
+  async evictStep(opts: {
+    keepSlug: string;
+    fleet: ReadonlySet<string> | null;
+    protect: ReadonlySet<string>;
+    threadPrefix: string;
+    now?: number;
+    quietMs?: number;
+  }): Promise<{ slug: string; id: string }[]> {
+    const now = opts.now ?? Date.now();
+    const quiet = opts.quietMs ?? 24 * 60 * 60 * 1000;
+    const tx = this.db.transaction(["sessions", "threads"], "readonly");
+    const records = (await promised(tx.objectStore("sessions").getAll())) as SessionRecord[];
+    const threadKeys = (await promised(tx.objectStore("threads").getAllKeys())) as string[];
+    const others = records.filter((r) => r.slug !== opts.keepSlug && r.slug !== "host");
+    const gone = opts.fleet ? others.filter((r) => !opts.fleet!.has(r.slug)) : [];
+    if (gone.length) return this.drop(gone);
+    // This window's threads: its own key, or that key + ":dm:<member>". Everything else is foreign.
+    const ownThread = (key: string) => key === opts.threadPrefix || key.startsWith(`${opts.threadPrefix}:dm:`);
+    const foreignThreads = threadKeys.filter((key) => !ownThread(key));
+    if (foreignThreads.length) {
+      const del = this.db.transaction("threads", "readwrite");
+      for (const key of foreignThreads) del.objectStore("threads").delete(key);
+      await done(del);
+      return foreignThreads.map((key) => ({ slug: "palette", id: key }));
+    }
+    const stale = others.filter((r) => now - r.updatedAt >= quiet).sort((a, b) => a.updatedAt - b.updatedAt);
+    if (stale.length) return this.drop(stale);
+    const mine = records
+      .filter((r) => r.slug === opts.keepSlug && !opts.protect.has(r.id))
+      .sort((a, b) => a.updatedAt - b.updatedAt);
+    return mine.length ? this.drop(mine.slice(0, 1)) : [];
+  }
+
+  private async drop(records: SessionRecord[]): Promise<{ slug: string; id: string }[]> {
+    const bySlug = new Map<string, string[]>();
+    for (const r of records) bySlug.set(r.slug, [...(bySlug.get(r.slug) ?? []), r.id]);
+    for (const [slug, ids] of bySlug) await this.deleteSessions(slug, ids);
+    return records.map((r) => ({ slug: r.slug, id: r.id }));
+  }
+
   /** Remove everything (a backend switch, the crash reset). */
   async clear(): Promise<void> {
     const tx = this.db.transaction(["sessions", "chunks", "agents", "threads"], "readwrite");

@@ -136,6 +136,33 @@ describe("transcriptStore", () => {
   });
 });
 
+describe("eviction under quota pressure (ADR 0114 D5)", () => {
+  const DAY = 24 * 60 * 60 * 1000;
+  const NOW = 100 * DAY;
+  it("frees space one step at a time, in order, never touching what's protected", async () => {
+    await store.putSessions("here", [session("old", longChat(1), { updatedAt: NOW - 9 * DAY }), session("open", longChat(1), { updatedAt: NOW - 20 * DAY })]);
+    await store.putSessions("gone", [session("g1", longChat(1), { updatedAt: NOW })]);
+    await store.putSessions("quiet", [session("q1", longChat(1), { updatedAt: NOW - 3 * DAY })]);
+    await store.putSessions("busy", [session("b1", longChat(1), { updatedAt: NOW - 60_000 })]);
+    await store.putThread("protoagent.palette.chat:here", longChat(1));
+    await store.putThread("protoagent.palette.chat:here:dm:x", longChat(1));
+    await store.putThread("protoagent.palette.chat:quiet", longChat(1));
+    const opts = { keepSlug: "here", fleet: new Set(["here", "quiet", "busy"]), protect: new Set(["open"]), threadPrefix: "protoagent.palette.chat:here", now: NOW };
+
+    expect(await store.evictStep(opts)).toEqual([{ slug: "gone", id: "g1" }]); // 1. left the fleet
+    expect(await store.evictStep(opts)).toEqual([{ slug: "palette", id: "protoagent.palette.chat:quiet" }]); // 2. other windows' threads
+    expect(await store.evictStep(opts)).toEqual([{ slug: "quiet", id: "q1" }]); // 3. quiet for a day
+    expect(await store.evictStep(opts)).toEqual([{ slug: "here", id: "old" }]); // 4. own oldest, not the open tab
+    expect(await store.evictStep(opts)).toEqual([]); // nothing else may go
+    expect((await store.loadAgent("busy")).sessions).toHaveLength(1);
+    expect((await store.loadAgent("here")).sessions.map((s) => s.id)).toEqual(["open"]);
+    expect([...(await store.loadThreads("protoagent.palette.chat:here")).keys()].sort()).toEqual([
+      "protoagent.palette.chat:here",
+      "protoagent.palette.chat:here:dm:x",
+    ]);
+  });
+});
+
 describe("opening the database", () => {
   it("is null when IndexedDB is missing or doesn't answer in time", async () => {
     const silent = { open: () => ({}) as IDBOpenDBRequest } as unknown as IDBFactory;
