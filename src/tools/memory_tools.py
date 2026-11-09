@@ -912,8 +912,8 @@ def _build_memory_tools(
     ) -> str:
         """List the most recent durable memories, optionally filtered, with a per-kind count line.
 
-        Use for what was recently stored or to inspect memory; use ``memory_search`` to search
-        by topic. The last line always reports the stored count per kind (what the old
+        Use for what was recently stored or logged (e.g. today's entries) or to inspect memory;
+        use ``memory_search`` to search by topic. The last line always reports the stored count per kind (what the old
         ``memory_stats`` returned).
 
         Args:
