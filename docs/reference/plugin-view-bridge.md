@@ -5,9 +5,10 @@ so `postMessage` is the only channel between your page and the console. This pag
 contract: every message, its direction, its payload, and the guarantees around it.
 
 Most views should use the **plugin kit** (`/_ds/plugin-kit.js`) rather than these messages directly —
-see [Building a plugin view](/guides/building-react-plugin-views). Read this when you need to know
-what the kit is doing, implement a capability it doesn't wrap, or debug a view that isn't receiving
-what you expect.
+start with [Use the kit helpers](#use-the-kit-helpers) below, and see
+[Building a plugin view](/guides/building-react-plugin-views). Read the wire protocol when you need to
+know what the kit is doing, implement a capability it doesn't wrap, or debug a view that isn't
+receiving what you expect.
 
 ::: tip Origin
 The console posts to the iframe's **resolved origin**, and ignores any message whose `source` isn't
@@ -15,6 +16,51 @@ this iframe's `contentWindow` **or whose origin no longer matches**. A view serv
 URL escapes that origin and the handshake silently never completes — which is why `views[].path` must be a same-origin relative path
 (the manifest parser warns about this; see [`views`](/reference/plugin-manifest#field-views)).
 :::
+
+## Use the kit helpers {#use-the-kit-helpers}
+
+Reach for `/_ds/plugin-kit.js` before the raw messages below: the kit owns the parts a view used
+to get wrong by hand — topic naming, the high-water mark on remount, and filtering out the echo of
+its own publishes ([#4805](https://github.com/protoLabsAI/protoAgent/issues/4805)). Load it with the
+dynamic-import pattern (the slug-aware base is only known at runtime), then call the bus helpers:
+
+```js
+const kit = await import(BASE + "/_ds/plugin-kit.js");
+
+// Listen. `patterns` is a string or string[] (`*` is the wildcard); the handler runs for each
+// matching frame as { name, data, seq }. Returns an unsubscribe function.
+const stop = kit.subscribe(["delegation.#"], (ev) => render(ev.name, ev.data), { background: true });
+
+// Talk back. The topic is forced into your plugin's namespace (see below).
+kit.publish("status", { phase: "done" });
+
+// Every frame, raw — including your own echoes. A low-level escape hatch under subscribe.
+const off = kit.onEvent((frame) => console.debug(frame));
+```
+
+- **Topic qualification.** `publish` qualifies your topic with your plugin's id unless it is already
+  prefixed — the same rule as the host's `registry.emit`
+  ([#4801](https://github.com/protoLabsAI/protoAgent/issues/4801)). You name `status`; the bus sees
+  `<pluginId>.status`. A topic already under your id keeps all its segments.
+- **`since` resume — automatic.** The kit records the `seq` of every frame it delivers (per view, in
+  `sessionStorage`) and, when a view remounts, resubscribes with that mark as `since` so the host
+  replays only what you missed — you don't track a high-water mark yourself. Pass an explicit
+  `{ since }` to override it; `background: true` keeps the view mounted (and receiving) while another
+  surface is on screen.
+- **Echo filtering.** Each `publish` is stamped with this view's identity, and `subscribe` drops the
+  host's echo of your own publishes — so a view that both publishes and subscribes to a topic doesn't
+  react to itself. `onEvent` is the exception: it taps *every* frame, echoes included.
+- **Coalescing.** `publish(topic, data, { coalesceMs })` sends only the last value for a topic within
+  that window (trailing edge) — for high-rate state where only the latest matters. (The host also
+  coalesces per topic over 100 ms and rate-limits publishes; see
+  [the wire protocol](#events-subscribe-event-publish).)
+
+`getState` / `setState` persist a small blob of per-view state on the host (`kit.getState()` /
+`kit.setState(obj)`). They need **host support that a follow-up adds**; until then they resolve to
+`undefined` without throwing, so a view can call them speculatively.
+
+The handshake, theming, and authed-fetch helpers (`initPluginView`, `apiFetch`, …) are covered under
+[The kit](#the-kit).
 
 ## Messages at a glance
 
@@ -351,6 +397,10 @@ evaluation, so a separate classic `<script>` can't rely on it.
 | `getToken()` | The captured bearer — `null` until the handshake delivers one. |
 | `apiUrl(path)` | Resolves a root-relative path to its **slug-aware** URL (prepends `/agents/<slug>` under the fleet proxy). Idempotent. |
 | `apiFetch(input, init?)` | Same-origin `fetch` through `apiUrl`, with `Authorization: Bearer <token>` attached when present. Use it for every gated `/api/…` call. |
+| `subscribe(patterns, handler, { since?, background? })` | Subscribe to one or more topic patterns (`*` wildcard); `handler({ name, data, seq })` runs per matching frame, own publishes filtered. Resumes from the stored `seq` on remount. Returns an unsubscribe function. See [Use the kit helpers](#use-the-kit-helpers). |
+| `publish(name, data, { coalesceMs? })` | Publish on the bus; the topic is qualified with your plugin id unless already prefixed. `coalesceMs` sends only the last value per topic in the window. |
+| `onEvent(handler)` | Raw tap on every forwarded frame (`{ type, seq, name, data, source }`), echoes included — the escape hatch beneath `subscribe`. Returns a remover. |
+| `getState()` / `setState(state)` | Read/persist a small blob of per-view state kept on the host. **Needs host support a follow-up adds**; resolves to `undefined` (no throw) until then. |
 
 Related: [Building a plugin view](/guides/building-react-plugin-views) ·
 [Plugin manifest ▸ `views`](/reference/plugin-manifest#field-views) ·
