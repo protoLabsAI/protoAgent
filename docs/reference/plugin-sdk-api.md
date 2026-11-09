@@ -59,6 +59,8 @@ the module's own.
 
 **Node.js runtime (ADR 0085, amended 2026-10-15 — one resolver for every Node consumer)** — [`node_executable()`](#sdk-node-executable)
 
+**Per-plugin Python venv + worker (ADR 0085 amendment 2026-11-08, #4807 part 2)** — [`aworker()`](#sdk-aworker), [`plugin_python()`](#sdk-plugin-python), [`worker()`](#sdk-worker)
+
 ## Plugin services (the plugin↔plugin call seam, ADR 0116)
 
 ### `sdk.service` {#sdk-service}
@@ -1173,3 +1175,89 @@ if node is None:
     return "Needs Node.js 20+: install it from the setup banner, or run `protoagent runtime install-node`."
 subprocess.run([str(node), str(BUNDLE), "--json"], check=True)
 ```
+
+## Per-plugin Python venv + worker (ADR 0085 amendment 2026-11-08, #4807 part 2)
+
+### `sdk.plugin_python` {#sdk-plugin-python}
+
+```python
+sdk.plugin_python(plugin_id: str) -> Path | None
+```
+
+The interpreter of this plugin's provisioned Python venv, or None.
+
+A plugin that declares `requires_runtimes: {python: {version, requirements}}` gets its
+OWN `<plugin_store>/.venv` (provisioned with `uv` on the operator's Install click,
+[ADR 0085](/adr/0085-managed-node-runtime) amendment) — separate from the box-shared managed runtime
+(`managed_python_exe`), so its heavy deps never load into the host process. This
+returns that venv's `python` only when it is actually on disk; None means it is not
+provisioned (never installed, half-built, or wiped), so the caller degrades with an
+actionable message rather than spawning a path that fails. Honours the
+`PROTOAGENT_PLUGIN_PYTHON_<ID>` override (tests / CI point it at a fixture venv via
+`graph.plugins.testkit.use_fixture_python` so contract tests run without uv).
+
+Cheap (one `stat`), never spawns, never raises — a bad id or a lookup failure reads as
+None. Most callers want `worker` / `aworker` instead of spawning by hand.
+
+```python
+from graph import sdk
+
+exe = sdk.plugin_python(registry.plugin_id)
+if exe is None:
+    return "This plugin's Python runtime isn't provisioned — hit Provision Python runtime in Settings."
+```
+
+### `sdk.worker` {#sdk-worker}
+
+```python
+sdk.worker(plugin_id: str, argv_or_script, payload, *, timeout: float = 60) -> dict
+```
+
+Run a short JSON-line worker in this plugin's venv and return its one-line result.
+
+The protocol is deliberately tiny: the child is spawned under `plugin_python`,
+`payload` is written to its stdin as ONE `json` line, and its result is read as the
+LAST non-empty line of stdout (so the child may log to stderr freely, and its result is
+simply the final line it prints). The child must emit a JSON **object**; that parsed dict
+is returned verbatim on success. This is the seam a heavy-dependency plugin uses instead
+of loading its deps into the host — the compute lives in the venv, the host just hands it
+a payload and takes back a dict.
+
+Structured, never-raising errors (`{"ok": False, "error": …}`) on:
+  * no runtime — the venv isn't provisioned (carries the setup-banner remedy);
+  * timeout — the child is killed and reaped, then an error is returned (`returncode`
+    omitted);
+  * non-zero exit — `error` carries the stderr tail, with `returncode` and `stderr`;
+  * non-JSON output — the child printed nothing parseable as a final JSON object.
+A success dict carrying the child's own `ok` field is passed through untouched, so a
+worker that reports its own failure is distinguishable from these host-level ones.
+
+**Args:**
+
+- `plugin_id` — the owning plugin's id (`registry.plugin_id`).
+- `argv_or_script` — a single script path, or a full argv (`["-m", "pkg.worker"]`), appended after the interpreter.
+- `payload` — a JSON-serializable value, written to the child's stdin as one line.
+- `timeout` — seconds before the child is killed (default 60).
+
+Blocking — call it from a thread / background surface, or use `aworker` on the event
+loop.
+
+```python
+from graph import sdk
+
+out = sdk.worker(registry.plugin_id, "cad_worker.py", {"op": "mesh", "stl": path}, timeout=120)
+if not out.get("ok", True):
+    return f"CAD worker failed: {out['error']}"
+return out["summary"]
+```
+
+### `sdk.aworker` {#sdk-aworker}
+
+```python
+await sdk.aworker(plugin_id: str, argv_or_script, payload, *, timeout: float = 60) -> dict
+```
+
+Awaitable `worker` — runs the blocking spawn in a thread so it never blocks the
+event loop (same shape as `knowledge_search`'s `asyncio.to_thread`). Use this from
+async plugin code (a tool coroutine, a surface tick); the return value and error contract
+are identical to `worker`.
