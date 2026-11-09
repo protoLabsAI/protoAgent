@@ -1,35 +1,36 @@
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { SurfaceHost, type SurfaceView } from "./SurfaceHost";
-import { formatSurfaceLink, parseSurfaceLink, type SurfaceState } from "./surfaceState";
+import { SurfaceHost, type SurfaceMeta } from "./SurfaceHost";
+import { formatSurfaceLink, parseSurfaceLink } from "./surfaceState";
 import { useUI } from "../state/uiStore";
 
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 let container: HTMLDivElement;
 let root: Root;
-const place: SurfaceState = {
-  section: "goals", itemId: "abc", scrollTop: 240, filters: { status: ["open"], mine: true },
-};
-const updated: SurfaceState = { ...place, itemId: "def", scrollTop: 480 };
-const view: SurfaceView = {
-  id: "work", title: "Work",
-  render: (state, setState) => (
-    <>
-      <input aria-label="Surface focus" data-surface-focus defaultValue={state.itemId} />
-      <output>{JSON.stringify(state)}</output>
-      <button onClick={() => setState(updated)}>Update place</button>
-    </>
-  ),
-};
+const work: SurfaceMeta = { id: "work", title: "Work" };
 
-function click(label: string) {
-  const button = [...document.querySelectorAll("button")].find(
+// The content the shell would supply as children (a core render / the plugin-view path);
+// the host never looks inside it beyond moving focus to its `[data-surface-focus]`.
+function content(id: string) {
+  return (
+    <>
+      <input aria-label="Focus" data-surface-focus />
+      <span data-testid={`content-${id}`}>{id}</span>
+    </>
+  );
+}
+
+function button(label: string) {
+  return [...document.querySelectorAll("button")].find(
     (el) => el.getAttribute("aria-label") === label || el.textContent === label,
   );
-  expect(button).toBeDefined();
-  act(() => button!.click());
+}
+function click(label: string) {
+  const el = button(label);
+  expect(el).toBeDefined();
+  act(() => el!.click());
 }
 
 beforeEach(() => {
@@ -43,50 +44,55 @@ afterEach(() => {
   container.remove();
 });
 
-describe("SurfaceHost with real DS frames", () => {
-  it("retains opaque state in both directions, including edits in the modal", () => {
-    useUI.getState().setSurfaceState("work", place);
-    act(() => root.render(<SurfaceHost views={[view]} />));
-    click("Expand");
-    expect(document.querySelector('[role="dialog"] output')?.textContent).toBe(JSON.stringify(place));
-    expect(document.activeElement).toBe(document.querySelector("[data-surface-focus]"));
-    expect(container.querySelector('[role="status"]')?.textContent).toBe("Work opened in a large window.");
-    expect(document.querySelector(".pl-dialog--fill .pl-dialog__body--flush")).not.toBeNull();
-    click("Update place");
-    click("Dock to rail");
+describe("SurfaceHost rail frame", () => {
+  it("heads the view and opens the modal from Expand", () => {
+    act(() => root.render(<SurfaceHost frame="rail" view={work}>{content("work")}</SurfaceHost>));
+    expect(container.querySelector("h2")?.textContent).toBe("Work");
     expect(document.querySelector('[role="dialog"]')).toBeNull();
-    expect(useUI.getState().rightPanel).toBe("work");
-    expect(container.querySelector("output")?.textContent).toBe(JSON.stringify(updated));
-    expect(document.activeElement).toBe(container.querySelector("[data-surface-focus]"));
-    expect(container.querySelector('[role="status"]')?.textContent).toBe("Work docked to the side rail.");
-  });
-
-  it("offers both moves for a stateless view and focuses its heading", () => {
-    act(() => root.render(<SurfaceHost views={[{ id: "work", title: "Work", render: () => null }]} />));
     click("Expand");
-    expect(document.activeElement?.textContent).toBe("Work");
-    expect(document.activeElement?.getAttribute("tabindex")).toBe("-1");
-    click("Dock to rail");
-    expect(container.querySelector("h2")?.contains(document.activeElement)).toBe(true);
+    expect(useUI.getState().surfaceModal?.viewId).toBe("work");
   });
 
-  it("keeps independent places across view switches and closes without changing the rail selection", () => {
-    useUI.getState().setSurfaceState("work", place);
-    useUI.getState().setSurfaceState("other", { section: "overview" });
-    act(() => root.render(<SurfaceHost views={[view, { ...view, id: "other", title: "Other" }]} />));
+  it("renders its content but no Expand control when it has no view", () => {
+    act(() => root.render(<SurfaceHost frame="rail" view={undefined}>{content("work")}</SurfaceHost>));
+    expect(container.querySelector('[data-testid="content-work"]')).not.toBeNull();
+    expect(button("Expand")).toBeUndefined();
+  });
+});
+
+describe("SurfaceHost modal frame", () => {
+  it("frames the content in a dialog, focuses it, and announces the move", () => {
+    act(() => useUI.getState().openSurfaceModal("work"));
+    act(() => root.render(<SurfaceHost frame="modal" view={work}>{content("work")}</SurfaceHost>));
+    const dialog = document.querySelector('[role="dialog"]');
+    expect(dialog).not.toBeNull();
+    expect(dialog!.querySelector('[data-testid="content-work"]')).not.toBeNull();
+    expect(document.querySelector(".pl-dialog--fill .pl-dialog__body--flush")).not.toBeNull();
+    expect(document.activeElement).toBe(dialog!.querySelector("[data-surface-focus]"));
+    expect(container.querySelector('[role="status"]')?.textContent).toBe("Work opened in a large window.");
+  });
+
+  it("Dock to rail re-selects the view in the right dock and clears the modal", () => {
+    act(() => useUI.getState().openSurfaceModal("work"));
+    act(() => root.render(<SurfaceHost frame="modal" view={work}>{content("work")}</SurfaceHost>));
+    click("Dock to rail");
+    expect(useUI.getState().surfaceModal).toBeNull();
+    expect(useUI.getState().rightPanel).toBe("work");
+  });
+
+  it("Close clears the modal without changing the rail selection", () => {
+    useUI.setState({ rightPanel: "work" });
     act(() => useUI.getState().openSurfaceModal("other"));
+    act(() => root.render(<SurfaceHost frame="modal" view={{ id: "other", title: "Other" }}>{content("other")}</SurfaceHost>));
     click("Close");
     expect(useUI.getState().surfaceModal).toBeNull();
     expect(useUI.getState().rightPanel).toBe("work");
-    expect(container.querySelector("output")?.textContent).toBe(JSON.stringify(place));
-    act(() => useUI.getState().openSurfaceModal("other"));
-    click("Dock to rail");
-    expect(useUI.getState().rightPanel).toBe("other");
-    expect(useUI.getState().surfaceStates.other).toEqual({ section: "overview" });
   });
+});
 
-  it("does not persist modal or per-view state; fresh hydration keeps the modal closed", async () => {
-    useUI.getState().openSurfaceModal("work", place);
+describe("surface modal state is never persisted", () => {
+  it("omits surfaceModal / surfaceStates from storage and hydrates the modal closed", async () => {
+    act(() => useUI.getState().openSurfaceModal("work", { section: "goals" }));
     const options = useUI.persist.getOptions();
     const saved = await options.storage!.getItem(options.name!);
     expect(saved?.state).not.toHaveProperty("surfaceModal");
