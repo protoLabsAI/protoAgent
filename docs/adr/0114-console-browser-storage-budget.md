@@ -8,6 +8,15 @@
 > The original design below remains a proposal for those deferred capabilities;
 > it is not a description of features delivered by this closeout.
 
+> **November 9, 2026 (#4972):** D4/D5's `localStorage` eviction ships ahead of the IDB move,
+> in `lib/storageEviction.ts`. It removes whole transcript keys: first agents no longer in the
+> fleet, then fleet agents not written in 24 h, least recently written first. It runs from the
+> quota hook and from a once-a-session check against the 4 MB budget, and toasts what it
+> cleared (D6 `evicted`). It never touches this window's agent, the host, anything written in
+> the last 24 h, or a thread with no write time whose agent is still in the fleet. Simplified
+> from D4: there is no BroadcastChannel presence ping. The 24 h recent-write rule stands in for
+> it, and a window that does lose its key writes it back on its next save.
+
 Status: **Proposed**
 
 Amends: ADR 0104 (the primary transcript store moves from `localStorage` to IndexedDB)

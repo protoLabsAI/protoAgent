@@ -43,6 +43,7 @@ import { Button } from "@protolabsai/ui/primitives";
 
 import { ActivityWidget } from "../activity/ActivityWidget";
 import { ConfirmDialog, Tooltip } from "@protolabsai/ui/overlays";
+import { StorageUpkeep } from "./StorageUpkeep";
 import { StorageWarning } from "./StorageWarning";
 import { AgentDownBanner } from "./AgentDownBanner";
 import { HomeOriginNotice } from "./HomeOriginNotice";
@@ -1048,6 +1049,9 @@ function WorkspaceApp({ runtime }: { runtime: RuntimeStatus | null }) {
           chat that created the schedule as a ScheduledReportCard (or a compact chip on
           recurring re-fires) if that chat is open — instead of it hiding in Activity. */}
       <ScheduledWatch />
+      {/* Browser storage upkeep (ADR 0114 D5/D6): keep localStorage under budget by
+          clearing old agents' saved chats, and say so when it does. */}
+      <StorageUpkeep />
       {/* wait/scheduled resumes (ADR 0053, bd-k02): a server-fired resume turn lands in
           the chat thread; surface it live in the open tab instead of on next interaction. */}
       <ChatResumeWatch />
