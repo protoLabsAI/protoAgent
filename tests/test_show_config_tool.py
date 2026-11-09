@@ -592,12 +592,24 @@ def test_version_snapshot_precedes_first_query():
 
         import infra.paths
 
+        # Hold the REAL runner from before the patch. Some import-time code shells
+        # out during ``import server`` on Windows (a non-git subprocess.run), so the
+        # fake must pass any non-git call straight through — only build_info's own
+        # git rev-parse / status are faked, and only those are recorded, so an
+        # unrelated subprocess call can neither fail nor inflate the count.
+        real_run = subprocess.run
         git_calls = []
+
         def startup_git(args, **kwargs):
-            assert args[0] == "git"
-            git_calls.append(args)
-            output = "abcdef123\\n" if "rev-parse" in args else ""
-            return subprocess.CompletedProcess(args, 0, stdout=output)
+            argv = list(args) if isinstance(args, (list, tuple)) else [args]
+            is_git = bool(argv) and argv[0] == "git"
+            if is_git and "rev-parse" in argv:
+                git_calls.append(argv)
+                return subprocess.CompletedProcess(args, 0, stdout="abcdef123\\n")
+            if is_git and "status" in argv:
+                git_calls.append(argv)
+                return subprocess.CompletedProcess(args, 0, stdout="")
+            return real_run(args, **kwargs)
 
         before = datetime.now(timezone.utc)
         with patch("subprocess.run", side_effect=startup_git), patch(
@@ -605,9 +617,19 @@ def test_version_snapshot_precedes_first_query():
         ):
             import server
         after = datetime.now(timezone.utc)
-        assert "infra.build_info" in sys.modules, "server startup must capture build identity"
+        assert "infra.build_info" in sys.modules, (
+            "server startup must capture build identity (infra.build_info not imported)"
+        )
         from infra import build_info as bi
-        assert len(git_calls) == 2
+
+        rev_parse = [c for c in git_calls if "rev-parse" in c]
+        status = [c for c in git_calls if "status" in c]
+        assert len(rev_parse) == 1, (
+            f"build_info must run exactly one git rev-parse at import; recorded git calls: {git_calls!r}"
+        )
+        assert len(status) == 1, (
+            f"build_info must run exactly one git status at import; recorded git calls: {git_calls!r}"
+        )
 
         from graph.config import LangGraphConfig
         from tools.config_tools import build_config_tools
@@ -619,10 +641,20 @@ def test_version_snapshot_precedes_first_query():
             info = json.loads(build_config_tools(LangGraphConfig())[0].invoke(
                 {"section": "version"}
             ))["version"]
-        assert info["uptime_s"] == 7200
-        assert before <= datetime.fromisoformat(info["started_at"]) <= after
-        assert info["git_sha"] == "abcdef123"
-        assert info["git_dirty"] is False
+        assert info["uptime_s"] == 7200, (
+            f"uptime_s must derive from the import-time monotonic anchor; got {info['uptime_s']!r}"
+        )
+        assert before <= datetime.fromisoformat(info["started_at"]) <= after, (
+            f"started_at {info['started_at']!r} must fall within the server import "
+            f"window {before.isoformat()}..{after.isoformat()}"
+        )
+        assert info["git_sha"] == "abcdef123", (
+            f"git_sha must be the sha captured at import, not a later on-disk change; "
+            f"got {info['git_sha']!r}"
+        )
+        assert info["git_dirty"] is False, (
+            f"git_dirty must reflect the clean status captured at import; got {info['git_dirty']!r}"
+        )
     ''')
     env = {**os.environ, "PYTHONPATH": os.pathsep.join([str(root / "src"), str(root)])}
     result = subprocess.run(
