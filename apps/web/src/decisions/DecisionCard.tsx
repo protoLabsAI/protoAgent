@@ -127,6 +127,12 @@ export function DecisionCard({
       const outcome = await onAnswer(optionId);
       if (outcome.answered_elsewhere) {
         setPhase({ kind: "answeredElsewhere", record: outcome.decision });
+      } else if (!outcome.resumed) {
+        // 200 but the parked turn was NOT resumed: delivery to the agent failed and the
+        // decision is still pending (operator_api/decision_routes.py returns resumed=false
+        // when updated.state != "answered"). Nothing durable happened, so surface it as a
+        // failed send — never claim success — and keep the options enabled to retry (§4.4).
+        setPhase({ kind: "error", optionId });
       } else {
         setPhase({ kind: "sent", label: optionLabel(optionId) });
       }

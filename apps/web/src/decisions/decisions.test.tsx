@@ -245,6 +245,20 @@ describe("DecisionCard", () => {
     expect(buttons().find((b) => b.textContent?.trim() === "Hold the release")?.disabled).toBe(false);
   });
 
+  it("treats a 200 with resumed=false as a failed send, not a Sent success", async () => {
+    // Delivery to the parked turn failed; the decision is still pending server-side. The card
+    // must NOT show "Sent" — it keeps the options enabled and offers Try again (§4.4).
+    const onAnswer = vi.fn().mockResolvedValue({ answered_elsewhere: false, decision: decision("a"), resumed: false });
+    await renderNode(<DecisionCard decision={decision("a")} onAnswer={onAnswer} />);
+    await click("Merge with the WARN");
+    expect(document.body.textContent).not.toContain("Sent:");
+    expect(document.body.textContent).toContain("Couldn't send your answer");
+    expect(document.querySelector(".pl-alert--warning")).toBeTruthy();
+    expect(buttons().some((b) => b.textContent?.trim() === "Try again")).toBe(true);
+    expect(buttons().find((b) => b.textContent?.includes("Merge with the WARN"))?.disabled).toBe(false);
+    expect(buttons().find((b) => b.textContent?.trim() === "Hold the release")?.disabled).toBe(false);
+  });
+
   it("renders the expired state as a neutral callout with the default action", async () => {
     await renderNode(
       <DecisionCard
