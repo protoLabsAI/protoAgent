@@ -43,6 +43,32 @@ def cosine(a, b) -> float:
     return sum(x * y for x, y in zip(a, b)) / norm if norm else 0.0
 
 
+def _memo_embed(embed_fn):
+    """Cache embeddings by exact input string for one evaluate() call.
+
+    The frozen fixture rows and the PV4 choices are embedded over and over —
+    once per case, run and arm — so a single evaluate() otherwise fires tens of
+    thousands of identical, serial gateway calls. Memoizing collapses each
+    distinct text to one real embed. The cache lives only for the returned
+    callable; nothing is written to disk. A ``None`` result (embeddings
+    disabled or a gateway failure) passes straight through and is never cached,
+    so later calls can still recover. Each hit returns a fresh ``list(vec)`` so
+    a caller mutating the vector can't corrupt the cache.
+    """
+    cache: dict[str, list] = {}
+
+    def embed(text):
+        if text in cache:
+            return list(cache[text])
+        vec = embed_fn(text)
+        if vec is None:
+            return None
+        cache[text] = list(vec)
+        return list(vec)
+
+    return embed
+
+
 def score_pv4(case, rows, model, embed_fn) -> dict:
     """One answer call, then nearest non-empty candidate by cosine similarity."""
     from langchain_core.messages import HumanMessage, SystemMessage
@@ -112,6 +138,9 @@ def evaluate(pv4, changed, fixture_dir, arms, runs, opts, model, embed_fn) -> di
     results = []
     if not pv4:
         raise ValueError("PV4 cases are required, including a distractor store")
+    # One in-memory cache for the whole run: the same fixture rows and choices
+    # are embedded on every case/run/arm, so memoize to one gateway call each.
+    embed_fn = _memo_embed(embed_fn)
     distractor = fixture_dir / f"user_{pv4[0]['user_id']}.jsonl"
     for suite, cases in (("pv4", pv4), ("changed-fact", changed)):
         for case in cases:

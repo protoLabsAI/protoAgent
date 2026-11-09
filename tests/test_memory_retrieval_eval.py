@@ -1,6 +1,8 @@
 """Offline tests for the on-demand memory measurement runner."""
 
+import hashlib
 import json
+from collections import Counter
 from unittest.mock import Mock
 
 import pytest
@@ -126,6 +128,78 @@ def test_evaluate_mixed_suites(fixture_file, monkeypatch):
     assert len({store.path for store in stores}) == 12
     assert report["paired"] == [dict(a="fake", b="other", a_wins=0, b_wins=0, ties=2)]
     assert all(row["passed"] for row in report["results"])
+
+
+def _hash_embed(text):
+    """Deterministic, content-addressed vector so repeats are identical."""
+    digest = hashlib.sha256(text.encode("utf-8")).digest()
+    return [float(b) for b in digest[:8]]
+
+
+def _mixed_suite_args(fixture_file):
+    """Shared setup: one PV4 case plus one changed-fact case over the tiny fixture."""
+    pv4 = [dict(id="pv4-memo", user_id=1, question="Where?", answer="here", choices=["here", "there"])]
+    changed = ev.load_cases(ev.FIXTURES / "supersede_cases.jsonl")[:1]
+    arm = Mock(return_value=[{"content": changed[0]["memories"][-1]}])
+    model = Mock()
+    model.invoke.return_value = AIMessage(content="here")
+    return pv4, changed, arm, model
+
+
+def test_memo_embed_copies_out_and_passes_none_through():
+    calls = []
+
+    def embed(text):
+        calls.append(text)
+        return None if text == "skip" else [1.0, float(len(calls))]
+
+    memo = ev._memo_embed(embed)
+    first = memo("fact")
+    first.append(99)  # mutating a returned vector must not corrupt the cache
+    assert memo("fact") == [1.0, 1.0]
+    assert memo("skip") is None and memo("skip") is None  # None is never cached
+    assert calls == ["fact", "skip", "skip"]  # "fact" embedded once, "skip" every time
+
+
+@pytest.mark.platform_sensitive
+def test_evaluate_memoizes_embeds_across_runs(fixture_file, monkeypatch):
+    pv4, changed, arm, model = _mixed_suite_args(fixture_file)
+    monkeypatch.setitem(ev.ARMS, "fake", arm)
+    monkeypatch.setitem(ev.ARMS, "other", arm)
+    calls = []
+
+    def embed(text):
+        calls.append(text)
+        return _hash_embed(text)
+
+    report = ev.evaluate(pv4, changed, fixture_file.parent, ["fake", "other"], 3,
+                         ProjectionOptions(), model, embed)
+    # runs=3 x 2 arms would re-embed every fixture row and choice many times;
+    # memoization collapses each distinct text to exactly one underlying call.
+    assert calls, "expected the fake embedder to be exercised"
+    assert all(count == 1 for count in Counter(calls).values())
+    assert len(report["results"]) == 12
+
+
+@pytest.mark.platform_sensitive
+def test_evaluate_pass_counts_match_unmemoized(fixture_file, monkeypatch):
+    pv4, changed, arm, model = _mixed_suite_args(fixture_file)
+    monkeypatch.setitem(ev.ARMS, "fake", arm)
+    monkeypatch.setitem(ev.ARMS, "other", arm)
+
+    def run():
+        return ev.evaluate(pv4, changed, fixture_file.parent, ["fake", "other"], 3,
+                           ProjectionOptions(), model, _hash_embed)
+
+    def passes(report):
+        return Counter((row["case_id"], row["arm"]) for row in report["results"] if row["passed"])
+
+    memoized = run()
+    # Identity wrapper reproduces the pre-change (unmemoized) embed path.
+    monkeypatch.setattr(ev, "_memo_embed", lambda fn: fn)
+    unmemoized = run()
+    assert passes(memoized) == passes(unmemoized)
+    assert memoized["paired"] == unmemoized["paired"]
 
 
 @pytest.mark.platform_sensitive
