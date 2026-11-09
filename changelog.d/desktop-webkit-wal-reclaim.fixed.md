@@ -1,0 +1,1 @@
+- **The desktop app gives back the disk space its browser storage log took.** On macOS, the log WebKit keeps beside the console's saved chats could grow to hundreds of MB during a day and never shrink. At launch, before any window opens, the app now folds an oversized log back into the database and empties it (250 MB → 0 in a quarter of a second, with every saved chat kept).

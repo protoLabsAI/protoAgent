@@ -14,6 +14,8 @@ mod hotkeys;
 mod navigation;
 mod sidecar;
 mod updater;
+#[cfg(target_os = "macos")]
+mod webstorage;
 
 use hotkeys::{
     default_hotkeys, hotkey_id_for, load_hotkey_overrides, sync_hotkeys, HotkeyStatus, Hotkeys,
@@ -491,6 +493,10 @@ pub fn run() {
                     ))
                     .build(),
             )?;
+            // Before any webview exists: give back the disk WebKit's localStorage WAL
+            // took last run (it can stop checkpointing while the app runs, #4974).
+            #[cfg(target_os = "macos")]
+            webstorage::reclaim_at_launch(&app.config().identifier);
             app.manage(SidecarProcess::default());
             app.manage(UpdateCheckCoordinator::default());
             app.manage(UpdateRequestState::default());
