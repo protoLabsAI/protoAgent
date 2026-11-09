@@ -150,3 +150,15 @@ Cursor:
 - **Keep worker summaries but filter the digest only.** Rejected: the summary
   file still duplicates the full report on disk with no consumer; the jobs DB is
   the system of record.
+
+
+## Amendment 2026-11-08: blocking decisions on autonomous turns (#4725)
+
+A `kind: decision` interrupt parks even on an autonomous origin. The decisions
+ledger record is the durable handle outside the task TTL sweep. Without an expiry
+it waits indefinitely; an optional expiry applies a stated default option and
+resumes the exact parked checkpoint. The existing A2A reaper host loop sweeps for
+expired decisions, retrying failed delivery; the record becomes `expired` only
+when the checkpoint consumes the default. An agent may withdraw its own decision
+with a reason when the choice is no longer needed. Answers retain the operator,
+surface, timestamp, and option id; the resumed turn also receives the option label.

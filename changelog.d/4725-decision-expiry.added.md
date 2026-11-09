@@ -1,0 +1,1 @@
+- **Decision expiry and attribution (#4725).** Decisions can specify an expiry and default, recommend one option, and be withdrawn with a reason. The API orders pending decisions by urgency, records who answered and where, and resumes turns with option labels. Part of #4725.

@@ -1626,6 +1626,8 @@ async def _chat_langgraph_stream_impl(
                 # empty. Run it as the fresh message it now is instead.
                 if decision_id := (request_metadata or {}).get("decision_id"):
                     config = await _turn_control.validate_decision_resume(config, decision_id, session_id)
+                    resolution = {**((request_metadata or {}).get("decision_resolution") or {}), "id": decision_id}
+                    config = {**config, "configurable": {**config["configurable"], "decision_resolution": resolution}}
                 if resume and await _pending_interrupt_value(config) is None:
                     log.info(
                         "[a2a-stream] session=%s: resume on a task with no pending interrupt — running it as a fresh message",

@@ -557,6 +557,9 @@ async def record_decision_pause(session_id: str, payload: object, config: dict) 
             thread_id=config["configurable"]["thread_id"],
             interrupt_id=str(found[0] or "") if found else "",
             context=str(payload.get("context") or ""),
+            expires_in_minutes=payload.get("expires_in_minutes"),
+            default_option=payload.get("default_option"),
+            default_action=payload.get("default_action"),
         )
     except Exception:  # noqa: BLE001 — the ledger is a durable handle, never a turn gate
         log.warning("[decision] could not record a parked decision for session %s", session_id, exc_info=True)
@@ -724,6 +727,16 @@ async def decision_resume(config: dict, answer):
                 rec = store.for_interrupt(config["configurable"]["thread_id"], found[0])
                 if rec is not None and rec.pending:
                     try:
-                        store.answer(rec.id, str(answer))
+                        resolution = config.get("configurable", {}).get("decision_resolution") or {}
+                        # A resumed turn can reach another pause; attribution belongs only
+                        # to the decision addressed by this request.
+                        if resolution.get("id", rec.id) != rec.id:
+                            resolution = {}
+                        if resolution.get("state") == "expired":
+                            store.expire(rec.id)
+                        else:
+                            store.answer(rec.id, resolution.get("answer", str(answer)),
+                                         answered_by=resolution.get("answered_by", "operator"),
+                                         answered_surface=resolution.get("answered_surface", "chat"))
                     except DecisionClosed:
                         pass

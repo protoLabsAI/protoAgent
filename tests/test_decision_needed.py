@@ -60,11 +60,11 @@ async def _collect(agen):
     return [frame async for frame in agen]
 
 
-async def _noop_resume(session_id, answer, decision_id=None):
+async def _noop_resume(session_id, answer, decision_id=None, *, resolution=None):
     """A resume that does nothing (no real A2A self-POST in a unit test). Answers the record
     for the answer path; a cancel-path call (no decision_id) only has to not blow up."""
     if decision_id:
-        STATE.decision_store.answer(decision_id, answer)
+        STATE.decision_store.answer(decision_id, (resolution or {}).get("answer", answer))
     return True
 
 
@@ -300,7 +300,7 @@ def test_answer_route_resumes_parked_turn_with_chosen_option(store, monkeypatch)
 
     # The answer route resumes through the HITL-resume entry point — re-drive the turn with
     # the chosen option so the tool sees it come back (the production path self-POSTs to A2A).
-    async def _fake_resume(session_id, answer, decision_id):
+    async def _fake_resume(session_id, answer, decision_id, *, resolution=None):
         await _collect(
             chat_mod._run_native_turn(
                 answer,
@@ -310,7 +310,7 @@ def test_answer_route_resumes_parked_turn_with_chosen_option(store, monkeypatch)
                 resume=True,
             )
         )
-        store.answer(decision_id, answer)
+        store.answer(decision_id, (resolution or {}).get("answer", answer))
         return True
 
     monkeypatch.setattr(decision_routes, "_resume_parked_turn", _fake_resume)
@@ -322,7 +322,7 @@ def test_answer_route_resumes_parked_turn_with_chosen_option(store, monkeypatch)
     assert body["decision"]["answer"] == "staging"
     assert body["resumed"] is True
     # The turn resumed and the tool received the chosen option as its return value.
-    assert "staging" in fake.resume_values
+    assert "Operator chose: staging (staging)" in fake.resume_values
     assert store.get(rec.id).state == STATE_ANSWERED
 
 
@@ -420,7 +420,7 @@ async def test_failed_delivery_is_retryable_and_stale_answer_cannot_resume_next_
     config = {"configurable": {"thread_id": rec.thread_id}}
     attempts = 0
 
-    async def deliver(session_id, answer, decision_id):
+    async def deliver(session_id, answer, decision_id, *, resolution=None):
         nonlocal attempts
         attempts += 1
         if attempts == 1:
@@ -523,8 +523,8 @@ async def test_cancel_route_closes_record_and_clears_parked_turn(store, monkeypa
 
     r = _client().post(f"/api/decisions/{rec.id}/cancel")
     assert r.status_code == 200
-    assert r.json()["decision"]["state"] == "cancelled"
-    assert store.get(rec.id).state == "cancelled"
+    assert r.json()["decision"]["state"] == "withdrawn"
+    assert store.get(rec.id).state == "withdrawn"
     # It resumed the parked turn to clear the interrupt, with NO decision_id (skips the
     # validate_decision_resume gate, which would reject the now-cancelled record).
     assert cleared["session_id"] == "s-cancel"
