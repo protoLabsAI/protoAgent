@@ -675,6 +675,8 @@ let transcriptChannel: BroadcastChannel | null = null;
 const transcriptListeners = new Set<(agent: string) => void>();
 /** The tab order + focused chat last saved to the store's `agents` record. */
 let lastAgentWritten = "";
+/** Deletes whose write failed: retried with the next save. */
+const pendingRemovals = new Set<string>();
 
 type TranscriptMessage = { agent: string; ids: string[]; deleted: string[] };
 
@@ -691,7 +693,8 @@ function persistToTranscripts(current: ChatState) {
   const sessions = current.sessions.slice(0, MAX_SESSIONS);
   const changed = sessions.filter((session) => persistedRefs.get(session.id) !== session);
   const live = new Set(sessions.map((session) => session.id));
-  const removed = [...persistedRefs.keys()].filter((id) => !live.has(id));
+  const removed = [...new Set([...persistedRefs.keys(), ...pendingRemovals])].filter((id) => !live.has(id));
+  pendingRemovals.clear();
   for (const session of changed) persistedRefs.set(session.id, session);
   for (const id of removed) persistedRefs.delete(id);
   const agentRecord = { slug: AGENT, order: sessions.map((s) => s.id), currentSessionId: current.currentSessionId };
@@ -711,8 +714,16 @@ function persistToTranscripts(current: ChatState) {
       // A failed save (quota: S4) must not stop later ones. The next change re-saves the
       // session, so forget the reference that never made it.
       for (const session of changed) if (persistedRefs.get(session.id) === session) persistedRefs.delete(session.id);
+      // …and redo the tab order and the deletes too: none of them is known to have landed.
+      if (agentChanged) lastAgentWritten = "";
+      for (const id of removed) pendingRemovals.add(id);
       console.error("[chat] saving to IndexedDB failed", err);
     });
+}
+
+/** The open transcript store, or `null` on the localStorage path (palette threads, S3). */
+export function transcriptStoreIfOpen(): TranscriptStore | null {
+  return transcripts;
 }
 
 /** Resolves when every save queued so far has committed (tests; a crash reset before reload). */
@@ -731,7 +742,8 @@ export async function liveTurnsElsewhere(exceptAgent: string) {
   return transcripts ? transcripts.liveTurns(exceptAgent) : null;
 }
 
-/** Clear every saved transcript (AppCrash's reset, a backend switch). Waits for the clear. */
+/** Clear every saved transcript (AppCrash's reset, a backend switch). Waits for any queued save,
+ *  then clears on the store's own connection, so nothing queued can land after the clear. */
 export async function clearSavedTranscripts(): Promise<void> {
   await writeChain;
   const store = transcripts ?? (await openTranscriptStore());
@@ -739,6 +751,15 @@ export async function clearSavedTranscripts(): Promise<void> {
   await store.clear();
   persistedRefs.clear();
   if (!transcripts) store.close();
+}
+
+// AppCrash (the root boundary's fallback) must not import this module, which may be what threw:
+// it reaches the queue-aware clear through this global, or clears directly when it's absent.
+try {
+  (globalThis as { __protoagentClearSavedTranscripts?: () => Promise<void> }).__protoagentClearSavedTranscripts =
+    clearSavedTranscripts;
+} catch {
+  /* non-browser context */
 }
 
 async function onTranscriptMessage(message: TranscriptMessage) {
@@ -1000,9 +1021,14 @@ function schedulePersist() {
   }, PERSIST_DEBOUNCE_MS);
 }
 
-/** Write any pending (debounced) state to localStorage NOW. No-op when clean —
- * so a tenant-clear + reload (lib/tenant.ts) is never undone by an unload
- * flush that had nothing pending. Exported for tests + the unload hooks. */
+/** Write any pending (debounced) state NOW. No-op when clean, so a tenant-clear + reload
+ * (lib/tenant.ts) is never undone by an unload flush that had nothing pending. Exported for
+ * tests + the unload hooks.
+ *
+ * On localStorage this write completes before it returns. On IndexedDB (epic #4981) it only
+ * STARTS the save: a transaction begun in pagehide usually commits, but nothing guarantees it
+ * before teardown. What's at risk is the last ≤2s of a streaming reply (the server's copy of
+ * the turn redraws it on reattach, ADR 0104) or a change made in the instant before closing. */
 export function flushChatPersist() {
   if (persistTimer !== null) {
     clearTimeout(persistTimer);

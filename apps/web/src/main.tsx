@@ -26,7 +26,8 @@ import { watchThemeChanges } from "./lib/agentTheme";
 import { migrateLegacyDeviceToken, redeemPairingFromUrl } from "./lib/pairing";
 import { startDeviceTokenRotation } from "./lib/deviceRotation";
 import { installStorageEviction } from "./lib/storageEviction";
-import { initTranscriptBackend } from "./chat/chat-store";
+import { initTranscriptBackend, transcriptStoreIfOpen } from "./chat/chat-store";
+import { initPaletteThreads } from "./app/paletteChatStore";
 
 // A phone paired before #4336 S3 holds its device token in the OPERATOR key. Move it to its
 // own key before anything sends a request. Copy-then-remove, so a failed write leaves the
@@ -58,7 +59,14 @@ let pairingError: string | null = null;
 // Chat transcripts load from IndexedDB before anything mounts (epic #4981 S2): no surface may
 // read or change a chat that hasn't loaded. Bounded (TRANSCRIPT_BOOT_DEADLINE_MS); on any
 // failure the console keeps localStorage. Never rejects.
-const transcriptsReady = initTranscriptBackend().catch(() => "local" as const);
+const transcriptsReady = initTranscriptBackend()
+  .then(async (backend) => {
+    // Palette / DM threads too (S3), bounded on their own: a stall here must not hold the mount.
+    if (backend === "idb") {
+      await Promise.race([initPaletteThreads(transcriptStoreIfOpen()), new Promise((r) => setTimeout(r, 3_000))]);
+    }
+  })
+  .catch(() => {});
 void Promise.all([
   redeemPairingFromUrl().then((res) => {
     if (res && !res.ok) pairingError = res.error;

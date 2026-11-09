@@ -13,6 +13,8 @@
 //                                            chunks: [hash…], tail: ChatMessage[] }
 //   chunks    key [slug, sessionId, hash]  { slug, sessionId, hash, messages: ChatMessage[] }
 //   agents    key slug                     { slug, order: [sessionId…], currentSessionId }
+//   threads   key storageKey               { key, messages } — a palette / DM thread, named by
+//                                            its localStorage key (which keeps only its contextId)
 //
 // The tab order and the focused chat live in `agents`: written only when they change, and never
 // in localStorage, where a 50-id list would be another >1K value overwritten.
@@ -26,7 +28,9 @@ import type { ChatMessage } from "../lib/types";
 import { chunkHash, cutChunks } from "./transcriptChunks";
 
 export const TRANSCRIPT_DB = "protoagent-transcripts";
-const VERSION = 1;
+// v2: + `agents` (tab order, focus) and `threads` (palette / DM threads). The upgrade only
+// creates the stores a database lacks, so an older one gains them without losing anything.
+const VERSION = 2;
 /** Opening IndexedDB can stall (a blocked upgrade, a wedged WebKit storage process). Past this,
  *  the caller falls back to localStorage for the page's lifetime. */
 export const OPEN_TIMEOUT_MS = 3_000;
@@ -233,12 +237,28 @@ export class TranscriptStore {
     return out;
   }
 
+  /** Every palette / DM thread whose key starts with `prefix`, by key. */
+  async loadThreads(prefix: string): Promise<Map<string, Message[]>> {
+    const tx = this.db.transaction("threads", "readonly");
+    const records = (await promised(
+      tx.objectStore("threads").getAll(IDBKeyRange.bound(prefix, `${prefix}\uffff`)),
+    )) as { key: string; messages: Message[] }[];
+    return new Map(records.map((r) => [r.key, r.messages]));
+  }
+
+  async putThread(key: string, messages: Message[]): Promise<void> {
+    const tx = this.db.transaction("threads", "readwrite");
+    tx.objectStore("threads").put({ key, messages });
+    await done(tx);
+  }
+
   /** Remove everything (a backend switch, the crash reset). */
   async clear(): Promise<void> {
-    const tx = this.db.transaction(["sessions", "chunks", "agents"], "readwrite");
+    const tx = this.db.transaction(["sessions", "chunks", "agents", "threads"], "readwrite");
     tx.objectStore("sessions").clear();
     tx.objectStore("chunks").clear();
     tx.objectStore("agents").clear();
+    tx.objectStore("threads").clear();
     this.known.clear();
     await done(tx);
   }
@@ -278,6 +298,7 @@ export function openTranscriptStore(opts: { name?: string; timeoutMs?: number; f
       if (!db.objectStoreNames.contains("sessions")) db.createObjectStore("sessions", { keyPath: ["slug", "id"] });
       if (!db.objectStoreNames.contains("chunks")) db.createObjectStore("chunks", { keyPath: ["slug", "sessionId", "hash"] });
       if (!db.objectStoreNames.contains("agents")) db.createObjectStore("agents", { keyPath: "slug" });
+      if (!db.objectStoreNames.contains("threads")) db.createObjectStore("threads", { keyPath: "key" });
     };
     request.onsuccess = () => {
       const db = request.result;

@@ -144,7 +144,9 @@ export function FleetTurnWatch() {
           candidates = [...fromStore, ...candidates.filter((c) => !fromStore.some((f) => f.taskId === c.taskId))];
         }
       } catch {
-        /* store unreadable this round: localStorage's view only */
+        // Store unreadable this round: keep watching what we already watched. Dropping those
+        // would read as "vanished" below and announce still-running turns as finished.
+        candidates = [...candidates, ...prev.filter((p) => !candidates.some((c) => c.taskId === p.taskId))];
       }
       if (stopped) return;
       // A watched turn that VANISHED from storage was finalized by its (open) owner window.

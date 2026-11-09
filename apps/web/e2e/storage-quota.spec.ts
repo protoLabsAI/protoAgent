@@ -91,16 +91,17 @@ test("a render-time quota crash recovers through Free up space & reload", async 
   // reproduces on every load until the recovery actually clears it (a Reload loop). The hook
   // is gated like the Developer panel; the mock's dev channel turns it on.
   //
-  // The hog is a palette thread, not the chat-sessions key: chat transcripts move to
-  // IndexedDB at boot (epic #4981 S2), so that key is gone before anything renders. Palette
-  // and DM threads still live in localStorage, and the quota this recovers is localStorage's.
+  // The hog is a CORRUPT palette value, not a well-formed transcript: chat transcripts and
+  // palette/DM threads move to IndexedDB at boot (epic #4981 S2/S3), so a valid one is gone
+  // from localStorage before anything renders. A malformed leftover the migration can't read
+  // stays, is still a transcript-category key, and is exactly what Free up space must clear.
   await page.addInitScript(() => {
     if (!sessionStorage.getItem("e2e.seeded")) {
       sessionStorage.setItem("e2e.seeded", "1");
       const big = "lorem ipsum ".repeat(8000); // ~96 KB of characters
       localStorage.setItem(
         "protoagent.palette.chat",
-        JSON.stringify({ contextId: "c1", messages: [{ id: "a1", role: "assistant", content: big, status: "done" }] }),
+        JSON.stringify({ contextId: "c1", messages: big }), // `messages` isn't a list: unreadable
       );
       localStorage.setItem("protoagent.chat.sessions.dismissed", JSON.stringify(["kept"]));
       localStorage.setItem("protoagent.keybindings", JSON.stringify({ state: { overrides: {} }, version: 0 }));
