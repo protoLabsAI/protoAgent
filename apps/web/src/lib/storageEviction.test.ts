@@ -100,6 +100,27 @@ describe("which saved chats eviction may clear", () => {
   });
 });
 
+describe("a chat's chunks (#4973) go with their agent", () => {
+  it("are removed with the main key and counted into its size; an orphan stands alone", () => {
+    seed({
+      "protoagent.chat.sessions:gone-4": chats(NOW - 2 * DAY),
+      "protoagent.chat.sessions:gone-4.chunk.chat-1.aa-1-1": "[" + JSON.stringify({ role: "user", content: "x".repeat(500) }) + "]",
+      "protoagent.chat.sessions:here-1": chats(NOW),
+      "protoagent.chat.sessions:here-1.chunk.chat-1.bb-2-2": "[]", // this window's live chunk: never
+      "protoagent.chat.sessions:quiet-2.chunk.chat-9.cc-3-3": "[]", // its main key is gone: an orphan
+    });
+    const candidates = evictionCandidates({ now: NOW });
+    expect(candidates.map((c) => c.key)).toEqual([
+      "protoagent.chat.sessions:quiet-2.chunk.chat-9.cc-3-3",
+      "protoagent.chat.sessions:gone-4",
+    ]);
+    expect(candidates[1].bytes).toBeGreaterThan(1000); // the chunk's 500 chars count
+    evict(Number.MAX_SAFE_INTEGER, { reason: "budget", now: NOW });
+    expect(readKey("local", "protoagent.chat.sessions:gone-4.chunk.chat-1.aa-1-1")).toBeNull();
+    expect(readKey("local", "protoagent.chat.sessions:here-1.chunk.chat-1.bb-2-2")).toBe("[]");
+  });
+});
+
 describe("when eviction runs", () => {
   it("the budget check does nothing under budget, and clears down to the target over it", () => {
     seed({ "protoagent.chat.sessions:gone-4": chats(NOW - 2 * DAY, 1000) });
