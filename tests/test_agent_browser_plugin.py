@@ -73,6 +73,7 @@ EXPECTED_TOOLS = {
     "browser_get_html",
     "browser_get_value",
     "browser_form_read",
+    "browser_wait",
     "browser_click",
     "browser_fill",
     "browser_type",
@@ -257,15 +258,15 @@ async def test_action_tools_pass_refs(monkeypatch):
     await t["browser_fill"].ainvoke({"selector": "#q", "text": "hi there"})
     assert rec[-1] == ["ab", "fill", "#q", "hi there"]
     await t["browser_snapshot"].ainvoke({})
-    assert rec[-1] == ["ab", "snapshot"]
+    assert rec[-1] == ["ab", "snapshot", "-i", "-c"]
 
 
-def test_all_20_tools_present():
+def test_all_21_tools_present():
     names = set(_toolmap())
     assert names == EXPECTED_TOOLS
     # 16 standalone + browser_pdf (#3451) + browser_form_read (#4032 A1) + browser_select (#4032 A2)
-    #   + browser_upload (#4032 A3)
-    assert len(names) == 20
+    #   + browser_upload (#4032 A3) + browser_wait
+    assert len(names) == 21
     assert "browser_dashboard" not in names  # the dashboard tool is gone (full switchover)
 
 
@@ -311,18 +312,85 @@ async def test_output_within_cap_is_unchanged(monkeypatch):
 
 
 async def test_output_over_cap_is_truncated_with_diagnostic(monkeypatch):
+    # a NON-reading tool (eval: a cut JSON result is unparseable) keeps the bounded error.
     procs = []
     monkeypatch.setattr(tools.subprocess, "Popen", fake_popen(out=b"x" * 5000, procs=procs))
     t = _toolmap({"binary": "ab", "max_response_bytes": 100})
-    out = await t["browser_get_text"].ainvoke({"selector": "body"})
+    out = await t["browser_eval"].ainvoke({"expression": "1"})
     assert out == "Error: output exceeded 100 bytes (truncated)"
     assert procs[0].killed  # overflow kills the child cleanly
+
+
+_MARK = "…[truncated: output passed the"
+
+
+async def test_a_reading_tool_over_the_cap_returns_the_first_part_on_a_line_boundary(monkeypatch):
+    procs = []
+    lines = b"".join(b"- link \"row %d\" [ref=e%d]\n" % (i, i) for i in range(500))
+    monkeypatch.setattr(tools.subprocess, "Popen", fake_popen(out=lines, procs=procs))
+    t = _toolmap({"binary": "ab", "max_response_bytes": 1000})
+    out = await t["browser_snapshot"].ainvoke({})
+    body, _, marker = out.rpartition("\n")
+    assert marker.startswith(_MARK) and "1000-byte cap" in marker and "scope=" in marker
+    assert body.startswith('- link "row 0" [ref=e0]')
+    assert body.endswith("]")                       # never a half line
+    assert len(body.encode()) <= 1000               # never past the cap
+    assert all(ln.startswith("- link ") for ln in body.splitlines())
+    assert procs[0].killed                          # reading still stops + the child is killed
+
+
+@pytest.mark.parametrize("tool,args,hint", [
+    ("browser_get_text", {"selector": "body"}, "browser_get_text(selector="),
+    ("browser_get_html", {}, "browser_get_html(selector="),
+])
+async def test_get_text_and_html_truncate_too(monkeypatch, tool, args, hint):
+    monkeypatch.setattr(tools.subprocess, "Popen", fake_popen(out=b"para\n" * 1000))
+    out = await _toolmap({"binary": "ab", "max_response_bytes": 100})[tool].ainvoke(args)
+    assert out.startswith("para\npara") and _MARK in out and hint in out
+
+
+async def test_a_truncation_with_no_line_break_cuts_cleanly_and_stays_bounded(monkeypatch):
+    # one huge line of multi-byte text: cut at the cap, never a broken UTF-8 sequence.
+    monkeypatch.setattr(tools.subprocess, "Popen", fake_popen(out="é".encode() * 5000))
+    out = await _toolmap({"binary": "ab", "max_response_bytes": 101})["browser_get_text"].ainvoke({"selector": "body"})
+    body = out.split("\n")[0]
+    assert set(body) == {"é"} and len(body.encode()) <= 101 and "\ufffd" not in out
+
+
+async def test_untrusted_output_cannot_grow_memory_past_the_cap(monkeypatch):
+    # a child that would emit 50 MB: _run stops reading at the cap — the buffer it returns
+    # from is bounded by max_response_bytes, not by what the page produced.
+    class _Endless(io.RawIOBase):
+        produced = 0
+
+        def readable(self):
+            return True
+
+        def readinto(self, b):
+            if _Endless.produced > 50_000_000:  # the test fails if we ever got this far
+                return 0
+            b[:len(b)] = b"y" * len(b)
+            _Endless.produced += len(b)
+            return len(b)
+
+    procs = []
+
+    def _popen(argv, **kw):
+        p = _FakeProc(argv)
+        p.stdout = io.BufferedReader(_Endless())
+        procs.append(p)
+        return p
+
+    monkeypatch.setattr(tools.subprocess, "Popen", _popen)
+    out = await _toolmap({"binary": "ab", "max_response_bytes": 200_000})["browser_get_text"].ainvoke({"selector": "body"})
+    assert len(out.encode()) < 200_000 + 300 and _MARK in out
+    assert _Endless.produced < 1_000_000 and procs[0].killed
 
 
 async def test_aggregate_stdout_plus_stderr_is_bounded(monkeypatch):
     # neither stream alone exceeds the cap, but together they do → still bounded.
     monkeypatch.setattr(tools.subprocess, "Popen", fake_popen(out=b"a" * 60, err=b"b" * 60))
-    out = await _toolmap({"binary": "ab", "max_response_bytes": 100})["browser_snapshot"].ainvoke({})
+    out = await _toolmap({"binary": "ab", "max_response_bytes": 100})["browser_eval"].ainvoke({"expression": "1"})
     assert out == "Error: output exceeded 100 bytes (truncated)"
 
 
@@ -330,15 +398,17 @@ async def test_configured_cap_overrides_default(monkeypatch):
     # a small configured cap trips where the 200KB default would not.
     monkeypatch.setattr(tools.subprocess, "Popen", fake_popen(out=b"y" * 1000))
     out = await _toolmap({"binary": "ab", "max_response_bytes": 10})["browser_get_html"].ainvoke({})
-    assert out == "Error: output exceeded 10 bytes (truncated)"
+    assert out.startswith("y" * 10 + "\n") and "10-byte cap" in out
 
 
 async def test_default_cap_is_200kb_when_unconfigured(monkeypatch):
     # no max_response_bytes key → 200000 default applies; 250KB overflows, and the
     # diagnostic names the default limit.
     monkeypatch.setattr(tools.subprocess, "Popen", fake_popen(out=b"z" * 250_000))
-    out = await _toolmap({"binary": "ab"})["browser_get_text"].ainvoke({"selector": "body"})
+    out = await _toolmap({"binary": "ab"})["browser_eval"].ainvoke({"expression": "1"})
     assert out == "Error: output exceeded 200000 bytes (truncated)"
+    out = await _toolmap({"binary": "ab"})["browser_get_text"].ainvoke({"selector": "body"})
+    assert "200000-byte cap" in out and len(out) < 200_400
 
 
 async def test_output_at_the_cap_is_not_truncated(monkeypatch):
@@ -1625,7 +1695,7 @@ async def test_shared_scope_pins_the_instance_session_through_an_env_copy(monkey
     monkeypatch.setattr(tools.subprocess, "Popen", _popen_capturing(records))
     await _toolmap(cfg)["browser_snapshot"].ainvoke({})
     argv, env = records[-1]
-    assert argv == ["ab", "snapshot"]  # argv unchanged
+    assert argv == ["ab", "snapshot", "-i", "-c"]  # argv unchanged
     assert env["AGENT_BROWSER_SESSION"] == rt.instance_session_name() != "default"
     assert env.get("PATH") == os.environ.get("PATH")  # a copy, not a replacement
     assert "AGENT_BROWSER_IDLE_TIMEOUT_MS" not in env  # the main session never reaps by default
@@ -1651,7 +1721,7 @@ async def test_per_session_passes_a_distinct_derived_env_per_chat(monkeypatch):
         await t["browser_snapshot"].ainvoke({})
     argv_b, env_b = records[-1]
 
-    assert argv_a == argv_b == ["ab", "snapshot"]  # argv identical
+    assert argv_a == argv_b == ["ab", "snapshot", "-i", "-c"]  # argv identical
     assert env_a["AGENT_BROWSER_SESSION"] == tools._session_name_for("chat-A")
     assert env_b["AGENT_BROWSER_SESSION"] == tools._session_name_for("chat-B")
     assert env_a["AGENT_BROWSER_SESSION"] != env_b["AGENT_BROWSER_SESSION"]
@@ -1828,7 +1898,7 @@ async def test_graph_turn_uses_injected_browser_session(monkeypatch, scope, trac
         assert {env["AGENT_BROWSER_SESSION"] for _, env in records} == {expected}
     else:
         assert all(env["AGENT_BROWSER_SESSION"] == expected for _, env in records)
-    assert {tuple(argv) for argv, _ in records} == {("ab", "snapshot"), ("ab", "close")}
+    assert {tuple(argv) for argv, _ in records} == {("ab", "snapshot", "-i", "-c"), ("ab", "close")}
     assert expected in tools._SESSION_LOCKS[asyncio.get_running_loop()]
     assert tools._SESSION_NAME.get() is None
 
@@ -4638,6 +4708,7 @@ def test_the_real_cli_still_has_every_subcommand_and_flag_the_plugin_sends():
         "screenshot",
         "pdf",
         "upload",
+        "wait",
         "close",
     ):
         assert re.search(rf"^\s+{re.escape(verb)}\b", help_text, re.M), f"CLI lost `{verb}`"
@@ -4652,6 +4723,7 @@ def test_the_real_cli_still_has_every_subcommand_and_flag_the_plugin_sends():
         "--max-output",
         "--user-agent",
         "--args",
+        "--annotate",  # browser_screenshot(annotate=true)
     ):
         assert flag in help_text, f"CLI lost {flag} (runtime.launch_flags would fail)"
 

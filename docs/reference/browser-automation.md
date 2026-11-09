@@ -57,17 +57,51 @@ agent-browser doctor       # sanity check, whichever CLI you use: environment, C
 ## How the agent uses it
 
 The loop is **open → snapshot → act on a ref → verify**. `browser_snapshot` returns the
-page's accessibility tree with compact `@eN` refs, and the action tools take a ref or a
-CSS selector:
+page's interactive elements (fields, buttons, links, headings) with compact `@eN` refs, and
+the action tools take a ref or a CSS selector:
 
 ```
 browser_open("example.com")
 browser_snapshot()               # … button "Sign in" @e7 …
 browser_click("@e7")
+browser_wait(text="Welcome")     # wait for what the click should bring — not a sleep
 browser_fill("@e9", "hello")
 browser_get_text("body")         # read / extract
 browser_close()
 ```
+
+### Perception: snapshot to act, get_text to read
+
+`browser_snapshot()` runs the CLI's interactive, compact snapshot (`snapshot -i -c`). It
+keeps every element the action tools can target, and headings for orientation, but drops
+body text — read content with `browser_get_text` instead. Measured on live pages:
+
+| Page | Default (`-i -c`) | `full=true` |
+|---|---|---|
+| Wikipedia, *Python (programming language)* | 71 KB (~18K tokens) | 381 KB (over the 200 KB cap) |
+| Greenhouse job application | 2.8 KB (~0.7K tokens) | 23.8 KB |
+| Hacker News front page | 13 KB | 27 KB |
+
+Options: `full=true` for the whole tree with text, `scope="<css>"` to snapshot one region
+(`-s`), and `depth=N` to limit tree depth (`-d`). Link URLs (`--urls`) are not included
+because they more than double a link-heavy page (71 KB → 184 KB on the Wikipedia page).
+
+`browser_wait` waits for **one** of these conditions: `selector` (CSS, visible), `text`
+(appears on the page), `url` (a substring of the URL; CLI 0.27.1 matches a substring, not
+a glob), `load` (`load` / `domcontentloaded` / `networkidle`), or `js` (a truthy
+expression). The timeout is `timeout_s`, at most 25 s, and always below the plugin's
+`timeout_s`. Each wait passes its timeout to the CLI explicitly. The daemon's default (30 s)
+is the same as the CLI's IPC read timeout, so a wait that never matched made the CLI resend
+it five times, and the session sat queued for about 2.5 minutes.
+
+Two errors are made easier to act on. A `#id` whose id contains CSS-special characters
+(`#input-candidate.name-3`, as `browser_form_read` reports it) is tried as CSS first. If
+that matches nothing and an element has that exact id, the tool uses `[id="…"]`. A stale
+or unknown `@eN` ref returns an error that says to run `browser_snapshot` again, or to
+address a form field by its label.
+
+`browser_screenshot` takes `full_page=true` (the whole scrollable page) and `annotate=true`
+(numbered labels drawn on the image; label `[N]` is `@eN`, and those refs work right away).
 
 The bundled **`web-browse` skill** teaches that loop and then defers to the CLI's own,
 always-version-matched guidance (`agent-browser skills get core`), so the instructions
@@ -76,9 +110,11 @@ can't go stale against a newer binary. Two **workflows** ship as recipes —
 
 Every tool degrades to a readable `Error: …` string instead of raising: a failed browser
 action should inform the agent's loop, not crash the turn. Output is capped
-(`max_response_bytes`, 200 KB by default) because page text is untrusted and unbounded —
-over the cap the child is killed and the tool returns a bounded diagnostic rather than
-flooding the model's context.
+(`max_response_bytes`, 200 KB by default) because page text is untrusted and unbounded.
+Reading stops at the cap and the child is killed, so memory stays bounded. The reading
+tools (`browser_snapshot`, `browser_get_text`, `browser_get_html`) then return the first
+part, cut at a line break and marked `…[truncated: …]` with how to narrow the read. Every
+other tool returns a short error.
 
 ### Screenshots and PDFs are fenced
 
@@ -302,7 +338,7 @@ responsible for what the agent does on a site.
 
 | File | What |
 |---|---|
-| `tools.py` | the 20 tools — subprocess wrappers, the byte cap, the fenced captures, the gate's hooks |
+| `tools.py` | the 21 tools — subprocess wrappers, the byte cap, the fenced captures, the gate's hooks |
 | `storage.py` | the capture write fence |
 | `preflight.py` | the setup-gap probe (which CLI resolves, does it have a Chrome) and the banners' buttons |
 | `cli_fetch.py` | the pinned, SHA-256-verified CLI download: the pins, the atomic install, the cache |

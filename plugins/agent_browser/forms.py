@@ -188,6 +188,48 @@ def is_css(field: str) -> bool:
     return classify(field) == "css"
 
 
+# ── `#id` selectors whose id holds CSS-special characters ────────────────────────
+# Real forms mint ids like `input-candidate.name-3` or `a:b`. As CSS, `#input-candidate.name-3`
+# means id `input-candidate` AND class `name-3`, so it matches nothing and the CLI says
+# "Element not found" — the jobCoach failure, with the id taken straight from browser_form_read.
+# But `#foo.bar` can ALSO be a real id+class compound, so the rewrite is decided IN THE PAGE:
+# keep the selector when it matches as CSS, else use `[id="…"]` when an element with that exact
+# id exists. Only a `#…` selector that isn't a plain `#[\w-]+` id pays for the probe.
+_PLAIN_ID = re.compile(r"#[A-Za-z_][\w-]*")
+
+
+def id_probe_target(selector: str) -> str:
+    """The raw id to probe for when ``selector`` is a single ``#…`` token whose id part holds
+    characters outside ``[\\w-]`` (``.`` ``:`` ``[`` ``/`` …) or starts with a digit; ``""``
+    when it is a plain id or anything else (no probe needed)."""
+    s = (selector or "").strip()
+    if len(s) < 2 or not s.startswith("#") or _PLAIN_ID.fullmatch(s):
+        return ""
+    if any(ch.isspace() for ch in s) or any(c in s for c in ",>+~\"'"):
+        return ""  # a list / combinator chain / quoted attribute — a real selector, leave it
+    return s[1:]
+
+
+def id_attr_selector(raw_id: str) -> str:
+    """``[id="…"]`` for an exact id — valid CSS for ANY id string."""
+    return '[id="' + raw_id.replace("\\", "\\\\").replace('"', '\\"') + '"]'
+
+
+def id_probe_js(selector: str, raw_id: str) -> str:
+    """In-page check for ``id_probe_target``: ``"css"`` if ``selector`` matches as CSS,
+    ``"id"`` if it doesn't but an element with id ``raw_id`` exists, else ``"none"``."""
+    return ("(function(){var ok=false;try{ok=!!document.querySelector(" + _js(selector) + ");}"
+            "catch(e){ok=false;}if(ok)return 'css';"
+            "return document.getElementById(" + _js(raw_id) + ")?'id':'none';})()")
+
+
+def parse_id_probe(output: str) -> str:
+    """``"css"`` / ``"id"`` / ``"none"`` from the probe's eval output (the CLI may print the
+    returned string JSON-encoded); anything unreadable is ``"none"``."""
+    v = (output or "").strip().strip('"').strip()
+    return v if v in ("css", "id") else "none"
+
+
 def normalize(s: str) -> str:
     """Collapse whitespace, strip required-marker asterisks, lower-case — the comparison
     key for label matching. Mirrors ``norm()`` in the in-page JS."""
