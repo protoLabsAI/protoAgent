@@ -178,6 +178,64 @@ def test_interrupted_run_resumes_from_checkpoint_without_repeating_calls(tmp_pat
     assert len(calls) == 400
 
 
+def test_failed_extraction_is_retried_and_never_checkpointed_as_done(tmp_path, capsys):
+    """The runtime extractor swallows model errors; a chat whose call failed must not be
+    frozen into the checkpoint as a chat with no facts."""
+    from evals.memory_fixtures.build_pv4 import ExtractionFailed
+
+    work = tmp_path / "cache"
+    seen = []
+    down = {"chat 5"}
+
+    async def model(transcript, config):
+        seen.append(transcript)
+        if transcript in down:
+            raise RuntimeError("429 rate limited")
+        index = int(transcript.split()[1])
+        return [{"subject": f"topic {index % 7}", "content": f"fact number {index} about item {index * 13}"}]
+
+    options = dict(users=(126,), count=1, fetch=fake_fetch(dataset()), yes=True,
+                   work_dir=work, extractor=model, retry_delay_s=0)
+    with pytest.raises(ExtractionFailed, match="chat 5"):
+        asyncio.run(build(tmp_path / "a", **options))
+    assert seen.count("chat 5") == 3
+    assert not (tmp_path / "a" / "user_126.jsonl").exists()
+
+    # Back up: the rerun resumes AT the failed chat, not after it.
+    down.clear()
+    seen.clear()
+    asyncio.run(build(tmp_path / "b", **options))
+    assert seen == [f"chat {i}" for i in range(5, 200)]
+    assert "pv4-u126-c5" in (tmp_path / "b" / "user_126.jsonl").read_text(encoding="utf-8")
+
+    # A transient failure that clears within the retries finishes the user.
+    flaky = {"chat 7"}
+
+    async def flaky_model(transcript, config):
+        if transcript in flaky:
+            flaky.discard(transcript)
+            raise RuntimeError("timeout")
+        return await model(transcript, config)
+
+    asyncio.run(build(tmp_path / "c", users=(126,), count=1, fetch=fake_fetch(dataset()), yes=True,
+                      work_dir=tmp_path / "cache2", extractor=flaky_model, retry_delay_s=0))
+    assert "chat 7: extraction failed (RuntimeError('timeout')); attempt 1/3" in capsys.readouterr().out
+    assert (tmp_path / "c" / "user_126.jsonl").exists()
+
+
+def test_checkpoint_from_other_extraction_code_is_not_resumed(tmp_path, monkeypatch):
+    from evals.memory_fixtures import build_pv4
+
+    work = tmp_path / "cache"
+    calls = []
+    options = dict(users=(126,), count=1, fetch=fake_fetch(dataset()), yes=True, work_dir=work)
+    asyncio.run(build(tmp_path / "a", extract=_facts_extract(calls), **options))
+    monkeypatch.setattr(build_pv4, "extraction_code_key", lambda: "changed extractor")
+    calls.clear()
+    asyncio.run(build(tmp_path / "b", extract=_facts_extract(calls), **options))
+    assert len(calls) == 200
+
+
 def test_checkpoint_for_different_chats_is_not_resumed(tmp_path):
     work = tmp_path / "cache"
     calls = []

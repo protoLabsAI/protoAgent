@@ -36,8 +36,11 @@ purpose: a board coder round deletes and recreates its worktree, so progress kep
 the repo was lost each round and the next round paid for all 2,400 calls again. A rerun
 prints the calls left and the chats it resumed, extracts only those, and re-exports a
 finished user with no model calls at all. A checkpoint is ignored when the user's chats
-differ, and each extraction model has its own directory. `--force` deletes the
-checkpoints too. Cases are deterministically regenerated after extraction completes.
+differ or the extraction code (`graph/memory_facts.py`, `knowledge/memories.py`) has
+changed, and each extraction model has its own directory. `--force` deletes the
+checkpoints too. A chat whose model call fails is retried up to three times; if it
+still fails the run stops before checkpointing it, so a rerun retries that chat rather
+than freezing it as a chat with no facts. Cases are deterministically regenerated after extraction completes.
 The runtime extractor is best-effort and logs failures; the builder prints each
 user's stored-row count and flags any user that produced no durable facts. Review
 those counts, the logs and the fixture contents before accepting a regeneration,
