@@ -134,7 +134,10 @@ def _manifest() -> dict:
 
 
 def _toolmap(cfg=None, **kw):
-    return {t.name: t for t in tools.get_browser_tools(cfg or {}, **kw)}
+    # These tests pin the CLI plumbing (argv, call order), so the action gate — on by default for
+    # `submit`, where it resolves a click's target first — is off unless a test sets it.
+    # tests/test_agent_browser_gate.py owns the gate, its extra calls, and the default.
+    return {t.name: t for t in tools.get_browser_tools({"confirm_actions": "", **(cfg or {})}, **kw)}
 
 
 # ── a subprocess.Popen stand-in for the tool wrappers ────────────────────────────
@@ -4356,8 +4359,7 @@ def test_curated_flags_stable_order():
         "iPhone 16 Pro",
         "--allowed-domains",
         "x.com",
-        "--confirm-actions",
-        "nav",
+        # confirm_actions is the plugin's own gate now (gate.py), never a CLI flag
         "--max-output",
         "500",
         "--args",
@@ -4647,7 +4649,6 @@ def test_the_real_cli_still_has_every_subcommand_and_flag_the_plugin_sends():
         "--profile",
         "--device",
         "--allowed-domains",
-        "--confirm-actions",
         "--max-output",
         "--user-agent",
         "--args",

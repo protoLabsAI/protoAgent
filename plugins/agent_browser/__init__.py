@@ -29,7 +29,7 @@ import threading
 # Module-level, not inside register(): a call-time `from . import x` resolves through
 # sys.modules, which a later load of this package (a reload, a second test loader) has
 # replaced — register() would then report through ANOTHER copy's preflight and state.
-from . import preflight, setup_steps
+from . import gate, preflight, setup_steps
 
 log = logging.getLogger("protoagent.plugins.agent_browser")
 
@@ -76,6 +76,17 @@ def register(registry) -> None:
                  probe.chrome_version)
     except Exception:  # noqa: BLE001 — a preflight must never break loading
         log.exception("[agent_browser] preflight failed")
+
+    # The action gate's plugin seam (gate.py, ADR 0116 services): another plugin layers its own
+    # rule over core's target-aware verdict (careercoach's submit grant), and names a resolved
+    # target in the same words the approval card uses.
+    add_service = getattr(registry, "register_service", None)
+    if callable(add_service):
+        try:
+            add_service("add_gate_policy", gate.add_policy, "Layer a policy over the browser action gate.")
+            add_service("describe_target", gate.describe_target, "Plain-words name of a resolved browser target.")
+        except Exception:  # noqa: BLE001 — the seam is optional; the gate itself still works
+            log.exception("[agent_browser] registering the gate services failed")
 
     # Browser tools (subprocess wrappers over the agent-browser CLI).
     try:

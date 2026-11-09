@@ -121,6 +121,70 @@ That's how an agent delivers a real PDF resume, report or invoice.
 `protoagent config explain` prints the instance root if you want to find the files on
 disk.
 
+### Consequential actions ask you first
+
+The agent can't submit a form, place an order, send a message or delete something in the
+browser without your approval. Before a click, an Enter/Space key press, or typing a newline,
+the plugin works out what the action will **actually hit** — and only then decides — so it
+doesn't matter whether the agent named the button by a `@eN` ref, a CSS selector or a label:
+
+- a CSS selector or label is looked up in the page;
+- a `@eN` ref is the CLI's, so the plugin asks the CLI for its box and names the element at
+  the box's centre, which is where the CLI's click lands. When that doesn't line up (a ref
+  inside an iframe, an overlay, off-screen), it falls back to the CLI's text and `type` for
+  the ref.
+
+An action falls in the **`submit`** category when it submits a form (a button in a form, an
+`input[type=submit]`, Enter in a form field) or when the control's name commits something —
+*Submit*, *Send*, *Place order*, *Pay*, *Confirm*, *Delete*, *Publish*, *Sign up*, and so on —
+even with no form behind it. It is **not** `submit` when the name or the form says it's
+navigation or a query: a job board's *Apply* / *Apply now* (which opens the application),
+*Apply filters*, *Search*, *Sign in*, *Next*, a search form, or any GET form.
+
+When a gated action comes up, the chat shows an approval card in plain words — *Submit the form
+on boards.greenhouse.io — button “Submit application”* — with **Allow** / **Don't allow**.
+Allow runs the action once. Don't allow returns an error that tells the agent not to retry.
+If the page changes while the card is open, so the target is no longer what you approved,
+nothing happens and the agent has to ask again.
+
+A card can only be answered in an operator chat turn. A delegated subagent (including a
+workflow step), or a scheduled, inbox, background or remote (A2A) turn, gets an immediate
+refusal instead of parking on a card nobody will see. The agent is told to leave the page as it
+is and hand it to you. A `/bypass` turn doesn't skip the gate either.
+
+`confirm_actions` picks the categories:
+
+| Value | Gated |
+|---|---|
+| *(not set)* | `submit` — the default |
+| `submit` | form submissions and committing controls |
+| `eval` | every `browser_eval` |
+| `upload` | every `browser_upload` (the file is already fenced to the capture directory) |
+| `download` | a click on a link with a `download` attribute |
+| `all` | all of the above |
+| `""` / `none` | nothing — the gate is off and costs no extra CLI calls |
+
+Combine them with commas (`submit,eval`). The value used to be passed to the CLI as
+`--confirm-actions`, which gated whole verbs and waited for a confirmation nothing ever sent,
+so a gated action could only fail. The plugin handles it now and passes nothing to the CLI.
+Unknown words are ignored with a warning.
+
+Resolving a target costs one extra CLI call for a CSS selector or label, and two for a ref
+(four when the ref falls back). It happens only for a verb that a configured category can apply
+to. A `press` of any key but Enter or Space, a `type` with no newline, and an `eval` that isn't
+gated cost nothing.
+
+**For plugin authors.** The gate offers two [plugin services](/adr/0116-local-first-data-analyst-duckdb-and-vega-lite-charts):
+
+- `agent_browser.add_gate_policy(fn, categories=("submit",), name="")` layers your own rule
+  on top of the gate. `fn(action)` gets plain data: `tool`, `verb`, `selector`, `key`,
+  `page_url`, the resolved `target` (tag, type, role, name, `submits`, form method/action,
+  href, …), core's `verdict` (`categories`, `reason`, `description`), and `gated`. It returns
+  `None` or `{"decision": "allow" | "ask" | "deny", "reason": …}`. Deny beats ask, and ask beats
+  allow. A registered policy also makes targets resolve when the operator has the gate off. It
+  returns a function that removes the policy.
+- `agent_browser.describe_target(target)` names a resolved target in the card's words.
+
 ## The Browser panel
 
 The plugin ships a console view ([ADR 0026](/adr/0026-plugin-contributed-console-surfaces)) that is a
@@ -208,7 +272,7 @@ Editable in **Settings ▸ Plugins ▸ Agent Browser**, or under `agent_browser:
 | `profile` | A browser profile directory — persisted auth/cookies across sessions. One browser can use it at a time. |
 | `device` | Device emulation, e.g. `iPhone 16 Pro`. |
 | `allowed_domains` | A navigable-domain allowlist. The tightest lever you have on where the agent can go. |
-| `confirm_actions` | Action categories that require confirmation first. |
+| `confirm_actions` | Which consequential actions need your approval first: `submit` (the default when unset), `eval`, `upload`, `download`, `all`, or blank/`none` for off. See [Consequential actions ask you first](#consequential-actions-ask-you-first). |
 | `max_output` | Cap the page text returned to the model (the CLI's own LLM-safety knob). |
 | `stealth` · `user_agent` · `browser_args` | Anti-detection and raw Chrome launch args — see below. |
 
@@ -238,7 +302,7 @@ responsible for what the agent does on a site.
 
 | File | What |
 |---|---|
-| `tools.py` | the 20 tools — subprocess wrappers, the byte cap, the fenced captures |
+| `tools.py` | the 20 tools — subprocess wrappers, the byte cap, the fenced captures, the gate's hooks |
 | `storage.py` | the capture write fence |
 | `preflight.py` | the setup-gap probe (which CLI resolves, does it have a Chrome) and the banners' buttons |
 | `cli_fetch.py` | the pinned, SHA-256-verified CLI download: the pins, the atomic install, the cache |
@@ -247,6 +311,7 @@ responsible for what the agent does on a site.
 | `browser_panel.py` | the panel page + its gated nav / ticket / stream routes |
 | `browser_stream.py` | the CDP bridge — frames out, input in, resize + nav re-arm, the WS ticket |
 | `runtime.py` | what the tools and the panel share: the launch flags, the session name and its env, the idle reaper |
+| `gate.py` | the action gate: target probe, `submit`/`eval`/`upload`/`download` policy, approval card, plugin policies |
 | `skills/` · `workflows/` | the `web-browse` skill and the two recipes |
 
 See also: [Plugins](/guides/plugins) · [Building a plugin view](/guides/building-react-plugin-views)

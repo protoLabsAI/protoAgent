@@ -54,7 +54,8 @@ Homebrew, Cargo), or a path pinned in the `binary` setting, always wins over the
 
 | File | What |
 |---|---|
-| `tools.py` | the 17 browser tools — subprocess wrappers over the CLI, the byte cap, and the fenced captures |
+| `tools.py` | the 20 browser tools — subprocess wrappers over the CLI, the byte cap, the fenced captures, and the action gate's hooks |
+| `gate.py` | the action gate — resolves what a click / Enter / eval / upload will really hit (`@eN` refs included), decides by `confirm_actions` (default `submit`), asks the operator with an approval card, refuses where no one can answer; plus the `agent_browser.add_gate_policy` / `describe_target` services for other plugins |
 | `storage.py` | the capture write fence — `browser_screenshot` / `browser_pdf` resolve inside this plugin's instance store, an escape is refused; also the collision-free default filename and oldest-first retention (200 files / 512 MB) |
 | `preflight.py` | the setup-gap probe — which CLI resolves (PATH > pinned path > the download), does it have a Chrome to drive — and the banners' buttons |
 | `cli_fetch.py` | the pinned, SHA-256-verified CLI download: per-platform pins, atomic install, the box-tier cache |
@@ -68,8 +69,10 @@ Homebrew, Cargo), or a path pinned in the `binary` setting, always wins over the
 | `__init__.py` | `register()` — preflight, tools, the interactive panel; skills/workflows auto-discovered |
 
 Tests live with the host, in [`tests/test_agent_browser_plugin.py`](../../tests/test_agent_browser_plugin.py)
-(host-free: the CLI is mocked) and [`tests/test_agent_browser_forms_live.py`](../../tests/test_agent_browser_forms_live.py)
-(real browser — see below). The operator knobs (headed, allowed domains, profile, device,
+and [`tests/test_agent_browser_gate.py`](../../tests/test_agent_browser_gate.py) (host-free: the CLI
+is mocked), and [`tests/test_agent_browser_forms_live.py`](../../tests/test_agent_browser_forms_live.py)
+/ [`tests/test_agent_browser_gate_live.py`](../../tests/test_agent_browser_gate_live.py) (real browser —
+see below). The operator knobs (headed, allowed domains, profile, device,
 stealth, …) are editable in **Settings ▸ Plugins ▸ Agent Browser**, or under `agent_browser:`
 in `langgraph-config.yaml`.
 

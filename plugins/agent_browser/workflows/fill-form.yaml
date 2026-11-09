@@ -1,7 +1,8 @@
 id: fill-form
 name: Fill Form
-description: Open a URL containing a form, fill in each field with the supplied values,
-  submit the form, and confirm the result.
+description: Open a URL containing a form, fill each field with the supplied values, read
+  the form back to verify it, and report the filled form. It never submits — the operator
+  submits (or tells you to) after reviewing it.
 inputs:
 - name: url
   type: string
@@ -11,37 +12,35 @@ inputs:
   description: 'A description of the form fields and their values (e.g. "name: Alice,
     email: alice@example.com, message: Hello").'
 steps:
-- id: open-and-snapshot
-  prompt: 'Open the URL {{inputs.url}} with `browser_open`, then take a snapshot
+- id: open_and_read
+  prompt: |
+    Open the URL {{inputs.url}} with `browser_open`, then read the form with
+    `browser_form_read` and return its field list (label, kind, required, value,
+    options) so the next step can fill it.
+- id: fill_and_verify
+  depends_on: [open_and_read]
+  prompt: |
+    The previous step's field list:
 
-    with `browser_snapshot`. Return the snapshot so the next step can
+    {{steps.open_and_read.output}}
 
-    identify the form fields.
+    Fill in every form field described below:
 
-    '
-- id: fill-fields
-  depends_on: open-and-snapshot
-  prompt: "Using the snapshot from the previous step, fill in every form field\ndescribed\
-    \ below:\n\n{{inputs.fields}}\n\nFor each field:\n1. Locate the field in the snapshot\
-    \ (match by label, placeholder, or\n   `@eN` ref).\n2. Call `browser_fill` with\
-    \ the field's selector and the value.\n\nAfter filling all fields, take another\
-    \ snapshot with `browser_snapshot`\nand return it so the next step can verify\
-    \ and submit.\n"
-- id: submit
-  depends_on: fill-fields
-  prompt: 'Using the snapshot from the previous step, locate the submit button
+    {{inputs.fields}}
 
-    (e.g. a button with text "Submit", "Send", or type="submit") and click
+    Address each field by its visible LABEL — never by an `@eN` ref, which goes stale when
+    the form re-renders. Use `browser_fill` for text fields and `browser_select` for every
+    dropdown, combobox or country picker (for a phone field, select the country before
+    filling the number).
 
-    it with `browser_click`. Then wait a moment and take a final snapshot
+    Do NOT submit the form: do not click any submit, send or apply button, and do not press
+    Enter in a field. A submission needs the operator's approval, and a workflow step runs as
+    a delegated subagent that can't show an approval card — it would only be refused. This
+    recipe stops at a filled, verified form.
 
-    with `browser_snapshot` to confirm the submission result.
-
-
-    Return a short confirmation describing what happened (e.g. success
-
-    message, redirect, or error).
-
-    '
-output:
-  step: submit
+    Then read the form back with `browser_form_read`, compare each value with the one intended,
+    and fix any mismatch. Return a table of every field (label → the value now in the form),
+    note any value you could not set or any required field left empty, and end with this line:
+    "The form is filled but NOT submitted — review it in the console Browser panel and submit
+    it yourself, or tell me to submit it."
+output: "{{steps.fill_and_verify.output}}"

@@ -72,7 +72,11 @@ config:
   profile: ""               # path to a browser profile dir (isolation + persisted auth/cookies)
   device: ""                # device emulation, e.g. "iPhone 16 Pro"
   allowed_domains: ""       # comma-separated navigable-domain whitelist (e.g. "example.com,*.foo.com")
-  confirm_actions: ""       # comma-separated action categories that require confirmation
+  confirm_actions: submit   # the action gate (gate.py): which consequential actions need the
+                            # operator's approval card first — submit (form submissions and
+                            # controls named Submit/Send/Pay/Delete/…), eval, upload, download,
+                            # all; "" or none = off. Unset = submit. Enforced by the plugin
+                            # (it resolves the real target, @eN refs included), not the CLI.
   max_output: 0             # cap page-text output chars (LLM-safety); 0 = CLI default
   # Anti-detection — help pages that block automated/headless browsers (Google, Reddit,
   # Cloudflare, …). No setting defeats detection entirely; headed + a logged-in `profile`
@@ -91,7 +95,7 @@ settings:
   - { key: user_agent, label: "User-Agent override", type: string, description: "Override the browser User-Agent. Blank = CLI default (stealth may set a realistic one when headless)." }
   - { key: browser_args, label: "Extra Chrome args", type: string, description: "Extra Chrome launch args, comma/newline separated (e.g. --disable-blink-features=AutomationControlled)." }
   - { key: allowed_domains, label: "Allowed domains", type: string, description: "Comma-separated navigable-domain allowlist (e.g. example.com,*.foo.com). Blank = unrestricted." }
-  - { key: confirm_actions, label: "Confirm actions", type: string, description: "Comma-separated action categories that require confirmation before the agent runs them." }
+  - { key: confirm_actions, label: "Confirm actions", type: string, description: "Which browser actions need your approval first, comma-separated: submit (submitting a form, or a button like Send, Place order, Pay or Delete), eval (running JavaScript), upload, download, or all. Leave empty or type none to turn approvals off. Default: submit." }
   - { key: profile, label: "Browser profile dir", type: string, description: "Path to a browser profile directory — isolation + persisted auth/cookies across sessions. Reusing a logged-in Chrome profile is the most reliable way past login walls." }
   - { key: device, label: "Device emulation", type: string, description: "Emulate a device, e.g. \"iPhone 16 Pro\". Blank = desktop." }
   - { key: stream_quality, label: "Panel stream quality", type: number, description: "Interactive panel JPEG quality (1–100). Higher = crisper, more bandwidth. The panel also renders at your dock's size × device-pixel-ratio." }

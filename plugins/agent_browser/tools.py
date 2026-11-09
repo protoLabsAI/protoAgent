@@ -55,7 +55,7 @@ from langgraph.prebuilt import InjectedState
 
 from graph.sdk import multimodal_tool_result
 
-from . import cli_fetch, forms, preflight, runtime, storage
+from . import cli_fetch, forms, gate, preflight, runtime, storage
 from .runtime import bad_operand, flag, launch_flags, number
 
 log = logging.getLogger("protoagent.plugins.agent_browser")
@@ -118,6 +118,9 @@ _SESSION_LOCKS: weakref.WeakKeyDictionary = weakref.WeakKeyDictionary()
 # as before (and the direct `_session_lock()` callers in the tests keep working).
 _SESSION_NAME: contextvars.ContextVar[str | None] = contextvars.ContextVar(
     "agent_browser_session_name", default=None)
+# The in-flight call's injected graph state, for the action gate (gate.interrupt_context reads
+# its operator_chat_turn / subagent_fence stamps). Set beside _SESSION_NAME by `_serialized`.
+_CALL_STATE: contextvars.ContextVar[Any] = contextvars.ContextVar("agent_browser_call_state", default=None)
 
 
 def _shared_session_name() -> str:
@@ -226,6 +229,9 @@ def get_browser_tools(cfg: dict | None, refresh_gaps=None, *, start_gap: bool = 
     # opt-in. `per_session` derives a session from the calling chat so two chats driving the
     # browser at once don't share one page. Anything unrecognised falls back to `shared`.
     scope = str(cfg.get("session_scope") or "shared").strip().lower()
+    # The action gate's categories (gate.py). `confirm_actions` is core's list now, never passed
+    # to the CLI: a key that's ABSENT means the default (`submit`); an empty value means off.
+    gated = gate.parse_categories(cfg.get("confirm_actions"))
     # The CLI daemon's idle reaper (runtime.idle_timeout_ms): per-chat browsers reap after
     # `idle_timeout_min`, the main session after `main_idle_timeout_min` (default never).
     chat_idle_ms = runtime.idle_timeout_ms(cfg, chat=True)
@@ -238,11 +244,14 @@ def get_browser_tools(cfg: dict | None, refresh_gaps=None, *, start_gap: bool = 
         so per_session reads the injected ProtoAgentState before entering a worker thread."""
         @functools.wraps(fn)
         async def wrapper(*args, **kwargs):
-            token = _SESSION_NAME.set(_resolve_session_name(scope, kwargs.pop("state", None)))
+            state = kwargs.pop("state", None)
+            token = _SESSION_NAME.set(_resolve_session_name(scope, state))
+            state_token = _CALL_STATE.set(state)
             try:
                 async with _session_lock():
                     return await fn(*args, **kwargs)
             finally:
+                _CALL_STATE.reset(state_token)
                 _SESSION_NAME.reset(token)
         return wrapper
 
@@ -483,6 +492,59 @@ def get_browser_tools(cfg: dict | None, refresh_gaps=None, *, start_gap: bool = 
         match = forms.resolve_target(selector, forms.parse_resolve(out))
         return ("", match.error) if not match.ok else (match.selector, "")
 
+    # ── the action gate (gate.py) ────────────────────────────────────────────────────────
+    # Each hook below costs NOTHING unless a category that can apply to its verb is gated by the
+    # operator or wanted by a plugin policy; then it resolves the real target (1-2 CLI calls; a
+    # ref the probe can't line up costs 2 more) and asks the operator through an approval card.
+    def _wants(verb: str) -> frozenset:
+        return gate.VERB_CATEGORIES.get(verb, frozenset()) & (gated | gate.policy_categories())
+
+    async def _page_url() -> str:
+        out = await _ab("get", "url")
+        return "" if out.startswith("Error:") else (out.splitlines() or [""])[0].strip()
+
+    async def _target_of(sel: str) -> gate.Target | None:
+        """What a click on ``sel`` (a ref or CSS, already label-resolved) will hit."""
+        if not forms.is_ref(sel):
+            return gate.parse_probe(await _ab("eval", "--stdin", stdin=gate.probe_js("css", selector=sel)), "css")
+        # A ref is the CLI's: ask it for the box, then name what sits at the box centre — where
+        # the CLI's click lands.
+        box_out = await _ab("--json", "get", "box", sel)
+        if box_out.startswith("Error:"):
+            return None  # an unknown ref / no browser / no CLI: the action fails the same way
+        box = gate.parse_box(box_out)
+        probe = None
+        if box is not None:
+            probe = gate.parse_probe(await _ab("eval", "--stdin", stdin=gate.probe_js("point", box=box)), "point")
+            if probe is not None and probe.found:
+                return probe
+        # Frame / overlay / off-screen: decide by what the CLI says the ref is.
+        text = await _ab("get", "text", sel)
+        type_attr = await _ab("get", "attr", sel, "type")
+        if text.startswith("Error:") and type_attr.startswith("Error:"):
+            return None  # the ref doesn't resolve — the action itself will fail the same way
+        return gate.fallback_target(text, type_attr, page_url=probe.page_url if probe else "",
+                                    note=(probe.note if probe else "no-box"))
+
+    async def _enforce(verb: str, verdict: gate.Verdict, *, tool: str, selector: str = "", key: str = "",
+                       target: gate.Target | None = None, page_url: str = "") -> str | None:
+        """Core verdict → plugin policies → approval. ``None`` = go ahead; else the Error to return."""
+        page_url = page_url or (target.page_url if target else "")
+        action = {"tool": tool, "verb": verb, "selector": selector, "key": key, "page_url": page_url,
+                  "target": target.to_dict() if target else None}
+        decision = gate.decide(gated, action, verdict)
+        if decision.kind == gate.ALLOW:
+            return None
+        if decision.kind == gate.DENY:
+            return gate.denied_by_policy(decision.description, decision.reason)
+        return gate.ask(decision, _CALL_STATE.get(), tool=tool, selector=selector, page_url=page_url)
+
+    async def _gate_click(sel: str, shown: str) -> str | None:
+        if not _wants("click"):
+            return None
+        target = await _target_of(sel)
+        return await _enforce("click", gate.classify_click(target), tool="browser_click", selector=shown, target=target)
+
     async def _capture(verb: str, path: str, default_name: str, *, view: bool = False) -> str:
         """Run a file-producing command (``screenshot`` / ``pdf``) inside the fence.
 
@@ -696,6 +758,8 @@ def get_browser_tools(cfg: dict | None, refresh_gaps=None, *, start_gap: bool = 
         sel, err = await _resolve_field(selector)
         if err:
             return err
+        if (blocked := await _gate_click(sel, selector)):
+            return blocked
         if not js_fallback:
             return await _ab("click", sel)
         # Fingerprint → CLI click → re-fingerprint. Only a click that moved NOTHING (and whose
@@ -729,7 +793,15 @@ def get_browser_tools(cfg: dict | None, refresh_gaps=None, *, start_gap: bool = 
         if (bad := _bad_operand(text=text)):
             return bad
         sel, err = await _resolve_field(selector)
-        return err or await _ab("type", sel, text)
+        if err:
+            return err
+        # A newline types an Enter, which can submit the form (gate: submit).
+        if ("\n" in text or "\r" in text) and _wants("type"):
+            target = await _target_of(sel)
+            if (blocked := await _enforce("type", gate.classify_type(text, target), tool="browser_type",
+                                          selector=selector, target=target)):
+                return blocked
+        return await _ab("type", sel, text)
 
     @tool
     @_serialized
@@ -824,6 +896,10 @@ def get_browser_tools(cfg: dict | None, refresh_gaps=None, *, start_gap: bool = 
         if locate_err:
             return locate_err
         target, label = info["selector"], info["label"]
+        if _wants("upload"):  # gate: upload
+            if (blocked := await _enforce("upload", gate.classify_upload(label or field, source.name, await _page_url()),
+                                          tool="browser_upload", selector=field)):
+                return blocked
         # A file being uploaded must not be pruned mid-call (a concurrent capture's prune, or
         # one over budget) — mark it in flight for the duration of the CLI call.
         with storage.in_flight(source):
@@ -855,7 +931,15 @@ def get_browser_tools(cfg: dict | None, refresh_gaps=None, *, start_gap: bool = 
     @_serialized
     async def browser_press(key: str, *, state: Annotated[Any, InjectedState] = None) -> str:
         """Press a key or chord on the focused element (e.g. `Enter`, `Control+a`)."""
-        return _bad_operand(key=key) or await _ab("press", key)
+        if (bad := _bad_operand(key=key)):
+            return bad
+        # Enter/Space on the focused element can submit a form (gate: submit): probe what has focus.
+        if _wants("press") and gate.is_activation_key(key):
+            target = gate.parse_probe(await _ab("eval", "--stdin", stdin=gate.probe_js("focus")), "focus")
+            if (blocked := await _enforce("press", gate.classify_press(key, target), tool="browser_press",
+                                          key=key, target=target)):
+                return blocked
+        return await _ab("press", key)
 
     @tool
     @_serialized
@@ -874,7 +958,15 @@ def get_browser_tools(cfg: dict | None, refresh_gaps=None, *, start_gap: bool = 
         # The script goes to `agent-browser eval --stdin` on stdin, never into argv: a large
         # script (design-system-plugin's ~32K SITE_PROBE_JS) would otherwise overrun
         # Windows' 32,767-char command-line limit and fail before running (#3689).
-        return _bad_operand(expression=expression) or await _ab("eval", "--stdin", stdin=expression)
+        if (bad := _bad_operand(expression=expression)):
+            return bad
+        verdict = gate.classify_eval(expression)
+        if verdict.categories & _wants("eval"):  # gate: eval, or a JS form submit (gate: submit)
+            page = await _page_url()
+            if (blocked := await _enforce("eval", gate.classify_eval(expression, page), tool="browser_eval",
+                                          page_url=page)):
+                return blocked
+        return await _ab("eval", "--stdin", stdin=expression)
 
     # ── capture + session ─────────────────────────────────────────────────────
     @tool
