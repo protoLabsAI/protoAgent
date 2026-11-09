@@ -138,6 +138,37 @@ describe("booting onto IndexedDB", () => {
   });
 });
 
+describe("a save that fails", () => {
+  it("retries its delete and tab order with the next save", async () => {
+    const { chatStore, initTranscriptBackend, flushChatPersist, transcriptWritesSettled } = await freshStore();
+    const { TranscriptStore } = await import("./transcriptStore");
+    await initTranscriptBackend();
+    const a = chatStore.getSnapshot().currentSessionId!;
+    chatStore.updateMessages(a, chat(1, "a"));
+    const b = chatStore.createSession().id;
+    chatStore.updateMessages(b, chat(1, "b"));
+    flushChatPersist();
+    await transcriptWritesSettled();
+
+    const del = vi.spyOn(TranscriptStore.prototype, "deleteSessions").mockRejectedValueOnce(new Error("disk"));
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    chatStore.deleteSession(a);
+    flushChatPersist();
+    await transcriptWritesSettled();
+    del.mockRestore();
+
+    // Any later save carries the delete that failed.
+    chatStore.updateMessages(b, [...chat(1, "b"), { id: "more", role: "user", content: "x", status: "done" }]);
+    flushChatPersist();
+    await transcriptWritesSettled();
+    const store = await reopen();
+    const saved = await store.loadAgent("host");
+    expect(saved.sessions.map((s) => s.id)).toEqual([b]);
+    expect(saved.currentSessionId).toBe(b);
+    store.close();
+  });
+});
+
 describe("staying on localStorage", () => {
   it("when IndexedDB isn't available", async () => {
     localStorage.setItem(MAIN, v1([{ id: "h1", messages: chat(1) }]));

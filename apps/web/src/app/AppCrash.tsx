@@ -161,7 +161,13 @@ export function AppCrash({
           onClick={() => {
             resetChatData();
             // Saved transcripts live in IndexedDB now: clear them too, then reload either way.
-            void clearTranscriptDatabase().finally(reload);
+            // Through the chat store when it's alive (it waits for queued saves first, so none
+            // lands after the clear); directly when it isn't.
+            const queued = (globalThis as { __protoagentClearSavedTranscripts?: () => Promise<void> })
+              .__protoagentClearSavedTranscripts;
+            void (queued ? queued() : clearTranscriptDatabase())
+              .catch(() => clearTranscriptDatabase())
+              .finally(reload);
           }}
         >
           <Trash2 size={14} /> Reset chat data &amp; reload
