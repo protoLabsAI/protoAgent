@@ -169,6 +169,87 @@ describe("a save that fails", () => {
   });
 });
 
+describe("a save that hits the IndexedDB quota", () => {
+  it("frees space, says so, and retries the save", async () => {
+    const { openTranscriptStore } = await import("./transcriptStore");
+    const seed = (await openTranscriptStore())!;
+    await seed.putSessions("gone-agent", [{ id: "g", title: "old", createdAt: 1, updatedAt: 1, messages: chat(1, "g") }]);
+    seed.close();
+    const { chatStore, initTranscriptBackend, flushChatPersist, transcriptWritesSettled } = await freshStore();
+    const { setFleetSlugs, subscribeEvictions } = await import("../lib/storageEviction");
+    // The chat store's own copy of the module (freshStore reset the registry).
+    const { TranscriptStore } = await import("./transcriptStore");
+    await initTranscriptBackend();
+    setFleetSlugs(["host"]);
+    const heard = vi.fn();
+    const off = subscribeEvictions(heard);
+
+    const real = TranscriptStore.prototype.putSessions;
+    let failures = 0;
+    const put = vi.spyOn(TranscriptStore.prototype, "putSessions").mockImplementation(async function (this: InstanceType<typeof TranscriptStore>, ...args) {
+      if (failures++ === 0) throw new DOMException("full", "QuotaExceededError");
+      return real.apply(this, args);
+    });
+    const id = chatStore.getSnapshot().currentSessionId!;
+    chatStore.updateMessages(id, chat(1));
+    flushChatPersist();
+    await transcriptWritesSettled();
+    put.mockRestore();
+    off();
+    setFleetSlugs(null);
+
+    expect(heard).toHaveBeenCalledTimes(1);
+    expect(heard.mock.calls[0][0].evicted).toEqual([{ key: "idb:gone-agent/g", slug: "gone-agent", bytes: 0 }]);
+    const store = await reopen();
+    expect((await store.loadAgent("host")).sessions.map((s) => s.id)).toContain(id); // the retry saved it
+    expect((await store.loadAgent("gone-agent")).sessions).toEqual([]);
+    store.close();
+  });
+});
+
+describe("eviction across a squeeze and across tabs", () => {
+  // Saved chats that load closed: only the focused one mounts (bootLiveTurns).
+  async function seedHost(ids: string[], current: string) {
+    const { openTranscriptStore } = await import("./transcriptStore");
+    const store = (await openTranscriptStore())!;
+    await store.putSessions("host", ids.map((id, i) => ({ id, title: id, createdAt: 1, updatedAt: 10 + i, messages: chat(1, id) })));
+    await store.putAgent({ slug: "host", order: ids, currentSessionId: current });
+    store.close();
+  }
+
+  it("one toast for a multi-step squeeze; this tab drops its own evicted chats", async () => {
+    await seedHost(["keep", "old1", "old2"], "keep");
+    const first = await freshStore();
+    await first.initTranscriptBackend();
+    expect(first.chatStore.getSnapshot().activeSessions).toEqual(["keep"]);
+
+    const { subscribeEvictions } = await import("../lib/storageEviction");
+    const heard = vi.fn();
+    const off = subscribeEvictions(heard);
+    let failures = 0;
+    // Two failed writes: eviction takes two steps (one old chat each) before the third fits.
+    await first.withQuotaEviction(async () => {
+      if (failures++ < 2) throw new DOMException("full", "QuotaExceededError");
+    });
+    off();
+    expect(heard).toHaveBeenCalledTimes(1);
+    expect(heard.mock.calls[0][0].evicted.map((e: { key: string }) => e.key)).toEqual(["idb:host/old1", "idb:host/old2"]);
+    expect(first.chatStore.getSnapshot().sessions.map((s) => s.id)).toEqual(["keep"]);
+  });
+
+  it("another tab keeps an evicted chat it has open, and drops the others", async () => {
+    await seedHost(["open", "closed"], "open");
+    const owner = await freshStore();
+    await owner.initTranscriptBackend();
+    const other = new BroadcastChannel(owner.TRANSCRIPT_CHANNEL);
+    other.postMessage({ agent: "host", ids: [], deleted: [], evicted: ["open", "closed"] });
+    await vi.waitFor(() => {
+      expect(owner.chatStore.getSnapshot().sessions.map((s) => s.id)).toEqual(["open"]);
+    });
+    other.close();
+  });
+});
+
 describe("staying on localStorage", () => {
   it("when IndexedDB isn't available", async () => {
     localStorage.setItem(MAIN, v1([{ id: "h1", messages: chat(1) }]));

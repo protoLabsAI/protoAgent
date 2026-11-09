@@ -7,6 +7,7 @@ import type { ChatMessage } from "../lib/types";
 import { listKeys, matchKey, readKey, writeKey } from "../lib/storage";
 import { persistBlocked } from "../lib/storageReset";
 import type { TranscriptStore } from "../chat/transcriptStore";
+import { withQuotaEviction } from "../chat/chat-store";
 
 // Per-agent key (ADR 0042 slug routing) — a window on /agent/<slug>/ keeps its own
 // palette thread; host (no slug) uses the bare key. Fixed per page load.
@@ -117,7 +118,7 @@ function write(thread: PaletteThread, scope?: string) {
       if (hasMessages(readKey("local", key))) writeKey("local", key, JSON.stringify(thread));
       else if (readKey("local", key) !== link) writeKey("local", key, link);
       threadWrites = threadWrites
-        .then(() => store.putThread(key, thread.messages))
+        .then(() => withQuotaEviction(() => store.putThread(key, thread.messages)))
         .then(() => {
           if (readKey("local", key) !== link) writeKey("local", key, link);
         })

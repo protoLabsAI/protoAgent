@@ -9,7 +9,8 @@ import {
   shownRuns,
   turnBubbleIndexes,
 } from "./turnText";
-import { listKeys, matchKey, readKey, removeKey, writeKey } from "../lib/storage";
+import { isQuotaError, listKeys, matchKey, readKey, removeKey, writeKey } from "../lib/storage";
+import { fleetSlugsSnapshot, reportEviction } from "../lib/storageEviction";
 import { agentChunkPrefix, expandSessions, orphanChunks, packSessions } from "./transcriptChunks";
 import { openTranscriptStore, type SessionLike, type TranscriptStore } from "./transcriptStore";
 import { attachmentDisplay, validThumbnails } from "./imageThumbnails";
@@ -678,7 +679,7 @@ let lastAgentWritten = "";
 /** Deletes whose write failed: retried with the next save. */
 const pendingRemovals = new Set<string>();
 
-type TranscriptMessage = { agent: string; ids: string[]; deleted: string[] };
+type TranscriptMessage = { agent: string; ids: string[]; deleted: string[]; evicted?: string[] };
 
 /** The session as it is saved: ephemeral overlays dropped, only bounded image previews kept. */
 function storable(session: ChatSession): ChatSession {
@@ -705,7 +706,7 @@ function persistToTranscripts(current: ChatState) {
   const payload = changed.map((session) => storable(session) as unknown as SessionLike);
   writeChain = writeChain
     .then(async () => {
-      await store.putSessions(AGENT, payload);
+      await withQuotaEviction(() => store.putSessions(AGENT, payload));
       await store.deleteSessions(AGENT, removed);
       if (agentChanged) await store.putAgent(agentRecord);
       transcriptChannel?.postMessage({ agent: AGENT, ids: changed.map((s) => s.id), deleted: removed } satisfies TranscriptMessage);
@@ -719,6 +720,56 @@ function persistToTranscripts(current: ChatState) {
       for (const id of removed) pendingRemovals.add(id);
       console.error("[chat] saving to IndexedDB failed", err);
     });
+}
+
+/** The palette thread key prefix of this window (mirrors app/paletteChatStore.ts). */
+const PALETTE_KEY = AGENT === "host" ? "protoagent.palette.chat" : `protoagent.palette.chat:${AGENT}`;
+
+/** Run an IndexedDB write; on a quota error free space (ADR 0114 D5) one step at a time and
+ *  retry, until it fits or nothing is left to remove. Never removes this agent's open tabs or
+ *  a chat with a live turn. Says what it cleared (the storage toast). */
+export async function withQuotaEviction(write: () => Promise<void>): Promise<void> {
+  try {
+    await write();
+    return;
+  } catch (err) {
+    if (!isQuotaError(err) || !transcripts) throw err;
+  }
+  const protect = new Set([...state.activeSessions, ...streamingIds(state), ...(state.currentSessionId ? [state.currentSessionId] : [])]);
+  const all: { slug: string; id: string }[] = [];
+  // One toast for the whole squeeze, and other tabs told what went (they may hold it open).
+  const announce = () => {
+    if (!all.length) return;
+    reportEviction({ reason: "quota", freedBytes: 0, evicted: all.map((r) => ({ key: `idb:${r.slug}/${r.id}`, slug: r.slug, bytes: 0 })) });
+    const bySlug = new Map<string, string[]>();
+    for (const r of all) if (r.slug !== "palette") bySlug.set(r.slug, [...(bySlug.get(r.slug) ?? []), r.id]);
+    for (const [agent, ids] of bySlug) {
+      transcriptChannel?.postMessage({ agent, ids: [], deleted: [], evicted: ids } satisfies TranscriptMessage);
+    }
+  };
+  try {
+    for (let step = 0; step < 50; step++) {
+      const removed = await transcripts.evictStep({ keepSlug: AGENT, fleet: fleetSlugsSnapshot(), protect, threadPrefix: PALETTE_KEY });
+      if (!removed.length) break;
+      all.push(...removed);
+      try {
+        await write();
+        return;
+      } catch (err) {
+        if (!isQuotaError(err)) throw err;
+      }
+    }
+    await write(); // nothing left to free: let the quota error surface to the caller's catch
+  } finally {
+    // This agent's evicted chats aren't open here (they were never `protect`ed): drop them from
+    // this tab too, or its next save would write them straight back. A local drop, not a delete.
+    for (const r of all) {
+      if (r.slug !== AGENT) continue;
+      persistedRefs.delete(r.id);
+      if (state.sessions.some((s) => s.id === r.id) && state.sessions.length > 1) removeLocalSession(r.id);
+    }
+    announce();
+  }
 }
 
 /** The open transcript store, or `null` on the localStorage path (palette threads, S3). */
@@ -771,7 +822,18 @@ async function onTranscriptMessage(message: TranscriptMessage) {
       /* a listener never breaks sync */
     }
   }
-  if (message.agent !== AGENT || !transcripts || !Array.isArray(message.ids) || !message.ids.length) return;
+  if (message.agent !== AGENT || !transcripts) return;
+  // Another tab evicted some of this agent's chats under quota pressure. One this tab has open
+  // (or streaming) stays, and is saved again on its next change; any other copy goes quietly:
+  // a local drop, not a retirement, so the server's history can still bring it back.
+  if (Array.isArray(message.evicted) && message.evicted.length) {
+    const inUse = new Set([...state.activeSessions, ...streamingIds(state), ...(state.currentSessionId ? [state.currentSessionId] : [])]);
+    for (const id of message.evicted) {
+      persistedRefs.delete(id);
+      if (!inUse.has(id) && state.sessions.some((s) => s.id === id) && state.sessions.length > 1) removeLocalSession(id);
+    }
+  }
+  if (!Array.isArray(message.ids) || !message.ids.length) return;
   const loaded = await transcripts.loadSessions(AGENT, message.ids);
   const incoming = sanitizePersisted({ version: 1, sessions: loaded, currentSessionId: null });
   if (!incoming) return;

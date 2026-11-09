@@ -19,4 +19,16 @@ describe("the freed-storage toast says what happened, per agent", () => {
     );
     expect(evictionToast(report(["a"])).title).toBe("Freed up browser storage");
   });
+
+  it("names this agent's own chats and palette threads plainly (IndexedDB eviction)", () => {
+    expect(evictionToast(report(["here", "here"]), "here").message).toBe(
+      "Cleared your 2 oldest saved chats in this browser so new chats keep saving.",
+    );
+    expect(evictionToast(report(["palette"]), "here").message).toBe(
+      "Cleared older quick-chat and direct-message history so new chats keep saving.",
+    );
+    expect(evictionToast(report(["gone", "palette"]), "here").message).toBe(
+      "Cleared the saved chat history of an agent you haven't opened lately, so new chats keep saving.",
+    );
+  });
 });
