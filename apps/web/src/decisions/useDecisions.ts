@@ -173,10 +173,13 @@ export function createDecisionsStore() {
         storeRecord(row);
         return row;
       } catch (err) {
-        // A 404 means the row is gone for good — record it as missing so callers render
-        // "no longer available" instead of retrying in a loop. Any other error is transient.
+        // A 404 means the row is gone for good — record it as missing (and drop any stale cached
+        // row, e.g. a pending one being re-read) so callers render "no longer available" instead
+        // of retrying in a loop. Any other error is transient and leaves the cache untouched.
         if (err instanceof ApiError && err.status === 404) {
-          snapshot = { ...snapshot, missing: { ...snapshot.missing, [id]: true } };
+          const records = { ...snapshot.records };
+          delete records[id];
+          snapshot = { ...snapshot, records, missing: { ...snapshot.missing, [id]: true } };
           emit();
         }
         return null;
@@ -189,12 +192,16 @@ export function createDecisionsStore() {
   }
 
   /** Load a decision by id on demand — a chat showing a decision that already left the pending
-   *  list. A cached record (or a known 404) resolves without a request; otherwise one GET is
-   *  issued, shared by any concurrent callers (§7, #4725 Gap 2). */
+   *  list. A SETTLED cached record (answered/expired/cancelled/withdrawn) is terminal, so it
+   *  resolves from the cache with no request; a known 404 resolves null the same way. A record
+   *  still cached as PENDING is NOT trusted: it can be answered, expired or withdrawn elsewhere,
+   *  and while no consumer is subscribed the store receives no `decision.changed` events — so it
+   *  is re-read by GET (coalesced with any concurrent load) rather than served stale (§7,
+   *  #4725 Gap 2). */
   function loadDecision(id: string): Promise<DecisionRow | null> {
     const cached = snapshot.records[id];
-    if (cached) return Promise.resolve(cached);
-    if (snapshot.missing[id]) return Promise.resolve(null);
+    if (cached && cached.state !== "pending") return Promise.resolve(cached);
+    if (!cached && snapshot.missing[id]) return Promise.resolve(null);
     return fetchDecision(id);
   }
 

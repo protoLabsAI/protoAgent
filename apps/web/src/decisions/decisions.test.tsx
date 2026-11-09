@@ -220,9 +220,9 @@ describe("useDecisions store", () => {
 
   it("re-reads a cached id that left the pending list on decision.changed, even one still cached as pending", async () => {
     // "a" starts pending and is cached by the first list. Another member then answers it: it
-    // leaves the pending list (so the refresh can't update it) and the event names it. The stale
-    // pending record must be replaced by a by-id GET — the round-1 blocker was the cached.state
-    // !== "pending" guard skipping exactly this case.
+    // leaves the pending list (so the refresh can't update it) and the event names it. A cached
+    // id that has left the pending list is re-read by a by-id GET even when it is still cached as
+    // pending, so the stale pending record is replaced rather than kept.
     const list = vi.spyOn(decisionsApi, "listDecisions").mockResolvedValue(listOf([decision("a")]));
     const get = vi
       .spyOn(decisionsApi, "getDecision")
@@ -279,6 +279,30 @@ describe("useDecisions store", () => {
     // A second load is served from the cache — no second request.
     const again = await store.loadDecision("h");
     expect(again?.id).toBe("h");
+    expect(get).toHaveBeenCalledTimes(1);
+  });
+
+  it("loadDecision re-reads a cached id still in state 'pending', then serves the settled row from cache", async () => {
+    // A record cached as pending is not terminal: while no consumer is subscribed the store gets
+    // no decision.changed events, so a re-mounted caller must re-read it rather than trust the
+    // cached pending row. Once it comes back settled it is served from the cache with no request.
+    vi.spyOn(decisionsApi, "listDecisions").mockResolvedValue(listOf([decision("a")]));
+    const get = vi
+      .spyOn(decisionsApi, "getDecision")
+      .mockResolvedValue(decision("a", { state: "answered", answer_label: "Merge with the WARN" }));
+    const store = mountStore();
+    await settle();
+    expect(store.getSnapshot().records["a"].state).toBe("pending");
+
+    const row = await store.loadDecision("a");
+    expect(get).toHaveBeenCalledTimes(1);
+    expect(get).toHaveBeenCalledWith("a");
+    expect(row?.state).toBe("answered");
+    expect(store.getSnapshot().records["a"].state).toBe("answered");
+    expect(store.getSnapshot().records["a"].answer_label).toBe("Merge with the WARN");
+    // The settled record is terminal: a second load is served from the cache, no further request.
+    const again = await store.loadDecision("a");
+    expect(again?.state).toBe("answered");
     expect(get).toHaveBeenCalledTimes(1);
   });
 
