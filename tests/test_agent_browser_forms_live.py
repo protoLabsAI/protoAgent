@@ -70,7 +70,10 @@ def browser():
     launch covers them all."""
     prev = os.environ.get("AGENT_BROWSER_SESSION")
     os.environ["AGENT_BROWSER_SESSION"] = f"protoagent-forms-{os.getpid()}"
-    toolset = {t.name: t for t in tools.get_browser_tools({"binary": "agent-browser", "timeout_s": 120})}
+    # main_idle_timeout_min: a backstop for a KILLED run, which never reaches the close below —
+    # the CLI's own reaper ends the daemon (and its Chrome) after a few quiet minutes.
+    toolset = {t.name: t for t in tools.get_browser_tools(
+        {"binary": "agent-browser", "timeout_s": 120, "main_idle_timeout_min": 3})}
     try:
         yield toolset
     finally:

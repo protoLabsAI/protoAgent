@@ -27,8 +27,20 @@ topic order, **not real conversation timestamps**.
 
 Results go to `pv4/cases.jsonl` and `pv4/user_{id}.jsonl`. `--output` changes that
 directory. Existing user files are skipped; `--force` rebuilds them. Each user
-file is published atomically after all chats finish, so interrupted users can be
-retried. Cases are deterministically regenerated after extraction completes.
+file is published atomically after all chats finish.
+
+**Interrupted runs resume, they do not restart.** After every chat the builder
+checkpoints the user's store to `~/.cache/protoagent/pv4-extract/<extraction model>/`
+(override the root with `PV4_WORK_DIR`). The checkpoint sits outside the checkout on
+purpose: a board coder round deletes and recreates its worktree, so progress kept under
+the repo was lost each round and the next round paid for all 2,400 calls again. A rerun
+prints the calls left and the chats it resumed, extracts only those, and re-exports a
+finished user with no model calls at all. A checkpoint is ignored when the user's chats
+differ or the extraction code (`graph/memory_facts.py`, `knowledge/memories.py`) has
+changed, and each extraction model has its own directory. `--force` deletes the
+checkpoints too. A chat whose model call fails is retried up to three times; if it
+still fails the run stops before checkpointing it, so a rerun retries that chat rather
+than freezing it as a chat with no facts. Cases are deterministically regenerated after extraction completes.
 The runtime extractor is best-effort and logs failures; the builder prints each
 user's stored-row count and flags any user that produced no durable facts. Review
 those counts, the logs and the fixture contents before accepting a regeneration,

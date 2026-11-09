@@ -4,7 +4,7 @@
 # (see [project.scripts]); only the install identifier is namespaced under protolabs-,
 # matching the sibling `protolabs-a2a`.
 name = "protolabs-agent"
-version = "0.233.1"
+version = "0.234.0"
 description = "protoAgent — LangGraph + A2A template for spawning protoLabs agents"
 license = "MIT"
 license-files = ["LICENSE"]
@@ -217,6 +217,30 @@ forbidden_modules = ["server", "operator_api"]
 # Burndown: skills CLI reaches into server bootstrap for seed paths (lazy import).
 ignore_imports = [
   "graph.skills.cli -> server.agent_init",
+]
+
+[[tool.importlinter.contracts]]
+# ADR 0128 S2a: the generation-profile resolver is host-free — it imports ONLY
+# graph.config (for the GenerationProfile/LangGraphConfig shapes) and stdlib. `graph`
+# itself can't be the forbidden module here (the source is its descendant — import-linter
+# rejects the overlap), so we forbid every sibling root package AND the graph runtime
+# modules a resolver must never pull in (graph.llm in particular would be a cycle, since
+# llm imports this). Ignoring the single `-> graph.config` edge removes this module's only
+# outgoing edge into the graph tree, so no indirect chain through config false-positives;
+# a new DIRECT import of any forbidden module below breaks the contract. The strict
+# "only graph.config" whitelist is additionally asserted by an AST guard in
+# tests/test_generation_profile_resolve.py. It lives next to resolve_subagent_model.
+name = "graph.generation_profile imports only graph.config (host-free)"
+type = "forbidden"
+source_modules = ["graph.generation_profile"]
+forbidden_modules = [
+  "a2a_impl", "deck", "events", "infra", "ingestion", "knowledge", "observability",
+  "operator_api", "ops", "runtime", "scheduler", "security", "server", "tools",
+  "graph.agent", "graph.llm", "graph.middleware", "graph.providers", "graph.sdk",
+  "graph.subagents",
+]
+ignore_imports = [
+  "graph.generation_profile -> graph.config",
 ]
 
 [[tool.importlinter.contracts]]

@@ -182,3 +182,127 @@ def bad_operand(**values) -> str | None:
                     f"command, so it would be taken as a flag rather than as your {what}. "
                     f"{WORKAROUND.get(what, WORKAROUND['*'])}")
     return None
+
+
+# ── which browser this instance drives (per-instance isolation) ──────────────────
+# The CLI keys everything — its daemon, its Chrome, its cookie jar — off a SESSION name
+# (`AGENT_BROWSER_SESSION`, or `--session`), and with none set it uses "default". Every
+# protoAgent instance on a machine is its own server process (each fleet member, the dev
+# sandbox, the desktop hub), so leaving the name to the CLI put every agent on ONE Chrome:
+# one agent saw another's page mid-task, parallel fills crossed between agents, and every
+# agent shared every other agent's signed-in cookies. So the plugin names the session
+# itself, from the instance's identity, and hands that name to EVERY subprocess it runs —
+# the tools, the panel's /nav route and the screencast's `get cdp-url` — through
+# ``cli_env``. One helper, so the three can't disagree about which browser is "ours".
+#
+# The name is `pa-<slug>-<h6>`: the slug is the readable instance id (`jobcoach-2e97`,
+# `dev`, or `main` for the unscoped default/desktop hub) and h6 a sha1 prefix of the
+# instance ROOT path. The root, not the id: two unscoped instances (a source checkout and
+# the desktop hub) both have id "" but different roots. The root, not ``instance_uid()``:
+# the uid is a file written on first read and is "" on an unwritable root, while the path
+# is known without IO and is just as stable. Same root → same data → same browser, by
+# design. An operator-set AGENT_BROWSER_SESSION still wins (that IS the operator naming it).
+
+_SLUG_MAX = 20
+
+
+def _slug(text: str) -> str:
+    s = re.sub(r"[^a-z0-9]+", "-", str(text or "").lower()).strip("-")
+    return s[:_SLUG_MAX].strip("-")
+
+
+def instance_session_name() -> str:
+    """The agent-browser session name for THIS protoAgent instance — stable across restarts,
+    distinct per instance root, and made only of ``[a-z0-9-]`` (the CLI allows letters,
+    digits, ``-`` and ``_``). Short: the CLI's daemon socket is ``<dir>/<name>.sock``, and a
+    unix socket path is capped near 104 bytes."""
+    import hashlib
+
+    try:
+        from infra.paths import instance_id, instance_paths
+
+        iid = instance_id()
+        root = str(instance_paths().instance_root)
+    except Exception:  # noqa: BLE001 — outside a host (a bare import): still isolate by cwd
+        import os
+
+        iid, root = "", os.getcwd()
+    digest = hashlib.sha1(root.encode("utf-8")).hexdigest()[:6]
+    return f"pa-{_slug(iid) or 'main'}-{digest}"
+
+
+def shared_session_name() -> str:
+    """The instance's MAIN session — what ``session_scope: shared`` uses, what the console
+    Browser panel and screencast follow, and per_session's fallback for a call with no chat
+    id: the operator's ``AGENT_BROWSER_SESSION`` when set, else ``instance_session_name()``."""
+    import os
+
+    return os.environ.get("AGENT_BROWSER_SESSION", "").strip() or instance_session_name()
+
+
+def chat_session_name(session_id: str) -> str:
+    """The per-chat session name under ``session_scope: per_session``: the instance name plus
+    a stable sha1 prefix of the chat id, so two chats get two browsers AND two instances'
+    chats can never land on one (a bare ``pa-<sha>`` of the chat id could collide across
+    instances that reuse an id)."""
+    import hashlib
+
+    return f"{instance_session_name()}-{hashlib.sha1(str(session_id).encode('utf-8')).hexdigest()[:10]}"
+
+
+def idle_timeout_ms(cfg: dict | None, *, chat: bool) -> int:
+    """The CLI daemon's idle reaper for a session, in ms (0 = never reap).
+
+    ``idle_timeout_min`` (default 30) governs the per-chat browsers ``per_session`` spawns —
+    one per chat that ever browsed, which would otherwise live until the machine reboots.
+    ``main_idle_timeout_min`` (default 0 = off) governs the instance's main session: the
+    operator's signed-in tabs live there, and the panel's screencast talks to Chrome over CDP
+    directly — it never sends the daemon a command, so watching the panel would NOT keep a
+    reaped-on-idle main session alive."""
+    key, default = ("idle_timeout_min", 30) if chat else ("main_idle_timeout_min", 0)
+    minutes = number(cfg, key, default)
+    return int(minutes * 60_000) if minutes > 0 else 0
+
+
+def cli_env(session: str, idle_ms: int = 0) -> dict[str, str]:
+    """The environment for one `agent-browser` subprocess: a COPY of this process's env with
+    the session pinned (never a mutation of ``os.environ``, which is process-global and would
+    race between concurrent chats), plus ``AGENT_BROWSER_IDLE_TIMEOUT_MS`` when a reaper is
+    configured. Verified in the 0.27.1 source: the daemon reads that var ONCE, when it is
+    spawned, and exits — closing its Chrome — after that many ms with no command; every
+    command resets the timer. So it applies to the next daemon this session starts, not to
+    one already running. 0 leaves the var as the process env has it (unset = never)."""
+    import os
+
+    env = {**os.environ, "AGENT_BROWSER_SESSION": session}
+    if idle_ms > 0:
+        env["AGENT_BROWSER_IDLE_TIMEOUT_MS"] = str(int(idle_ms))
+    return env
+
+
+# ── a `profile` dir can back ONE browser ─────────────────────────────────────────
+# Chrome holds a `SingletonLock` in a user-data-dir; a second Chrome on the same dir exits
+# 21 ("Failed to create a ProcessSingleton for your profile directory. … Aborting now to
+# avoid profile corruption"). Verified live on 0.27.1: with `profile: /some/dir`, the
+# second session's `open` fails with that in a long stderr whose cause sits past the
+# tools' 500-char error cut. That's every second chat under per_session, or a second
+# instance pointed at the same dir. (A Chrome profile NAME like "Default" is copied to a
+# temp dir per launch by the CLI, so it never collides.)
+_PROFILE_LOCK_MARKERS = ("ProcessSingleton", "SingletonLock")
+
+
+def profile_in_use_error(err: str, cfg: dict | None, session: str) -> str | None:
+    """A readable error when a launch failed because the configured ``profile`` dir is
+    already open in another browser, else None."""
+    if not any(m in (err or "") for m in _PROFILE_LOCK_MARKERS):
+        return None
+    profile = str((cfg or {}).get("profile") or "").strip() or "the configured profile directory"
+    per_session = str((cfg or {}).get("session_scope") or "").strip().lower() == "per_session"
+    fix = ("session_scope is per_session, so every chat starts its own browser and only one of "
+           "them can hold that profile at a time. Finish (browser_close) the chat that has it, "
+           "or clear the plugin's `profile` setting, or switch session_scope back to shared."
+           if per_session else
+           "Another browser — another protoAgent instance or another agent-browser session — "
+           "already has it open. Close that browser, or give this agent its own `profile` dir.")
+    return (f"Error: the browser profile {profile!r} is already in use (Chrome allows one browser "
+            f"per profile directory), so agent-browser session {session!r} could not launch. {fix}")

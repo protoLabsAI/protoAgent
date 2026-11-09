@@ -77,6 +77,9 @@
   html.embed #bar, html.embed #editor, html.embed #linkpanel, html.embed #empty{display:none !important}
   html.embed #stage{position:static}
   html.embed #frame{position:static;height:auto}
+  /* Standalone page (open_artifact's browser link for a rendered artifact): the route stamps
+     .standalone on <html> and embeds ONE version; the frame fills the whole tab, no chrome. */
+  html.standalone #bar, html.standalone #editor, html.standalone #linkpanel, html.standalone #empty{display:none !important}
   /* Inert "unavailable" state for an unknown id/version — never an error page. */
   #unavail{display:none;align-items:center;justify-content:center;height:100%;
     text-align:center;padding:24px;font-size:14px;color:var(--pl-color-fg-muted,#9aa0aa)}

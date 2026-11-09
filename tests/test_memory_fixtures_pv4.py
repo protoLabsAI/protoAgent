@@ -3,6 +3,7 @@
 import asyncio
 import json
 from collections import Counter
+from pathlib import Path
 
 import pytest
 
@@ -118,6 +119,150 @@ def test_decline_and_interrupted_user_are_not_published(tmp_path, monkeypatch):
     with pytest.raises(RuntimeError, match="interrupted"):
         asyncio.run(build(tmp_path, yes=True, **options))
     assert not list(tmp_path.iterdir())
+
+
+def _facts_extract(calls, fail_at=None):
+    """Real consolidation over a fake extractor; optionally dies at one source."""
+
+    async def extract(chat, **kwargs):
+        if kwargs["source"] == fail_at:
+            raise RuntimeError("session ended")
+        calls.append(kwargs["source"])
+
+        async def facts(transcript, config):
+            index = int(transcript.split()[1])
+            return [{"subject": f"topic {index % 7}", "content": f"fact number {index} about item {index * 13}"}]
+
+        return await extract_and_store_facts(chat, extractor=facts, **kwargs)
+
+    return extract
+
+
+def test_interrupted_run_resumes_from_checkpoint_without_repeating_calls(tmp_path, capsys):
+    """bd-9w23j: a board round deletes its worktree, so progress must live outside it and
+    a rerun must pay only for the chats it has not extracted yet."""
+    work = tmp_path / "cache"
+    base = dict(users=(126, 127), count=2, fetch=fake_fetch(dataset()), yes=True)
+
+    reference_calls = []
+    asyncio.run(build(tmp_path / "reference", extract=_facts_extract(reference_calls), **base))
+    assert len(reference_calls) == 400
+
+    calls = []
+    with pytest.raises(RuntimeError, match="session ended"):
+        asyncio.run(build(tmp_path / "wt1", work_dir=work,
+                          extract=_facts_extract(calls, fail_at="pv4-u127-c120"), **base))
+    assert len(calls) == 320  # user 126 complete, user 127 through chat 119
+    assert not (tmp_path / "wt1" / "user_127.jsonl").exists()
+    capsys.readouterr()
+
+    # A fresh worktree: nothing under the old output survives, the checkpoints do.
+    calls.clear()
+    asyncio.run(build(tmp_path / "wt2", work_dir=work, extract=_facts_extract(calls), **base))
+    out = capsys.readouterr().out
+    assert "Extraction calls: 80;" in out
+    assert "resumed from checkpoint: 320 chats" in out
+    assert calls == [f"pv4-u127-c{i}" for i in range(120, 200)]
+    for name in ("user_126.jsonl", "user_127.jsonl", "cases.jsonl"):
+        assert (tmp_path / "wt2" / name).read_bytes() == (tmp_path / "reference" / name).read_bytes()
+
+    # A third fresh tree re-exports from the finished checkpoints with no model calls.
+    calls.clear()
+    asyncio.run(build(tmp_path / "wt3", work_dir=work, extract=_facts_extract(calls), **base))
+    assert not calls
+    assert (tmp_path / "wt3" / "user_127.jsonl").read_bytes() == (tmp_path / "reference" / "user_127.jsonl").read_bytes()
+
+    # --force discards checkpoints and re-extracts everything.
+    calls.clear()
+    asyncio.run(build(tmp_path / "wt4", work_dir=work, force=True, extract=_facts_extract(calls), **base))
+    assert len(calls) == 400
+
+
+def test_failed_extraction_is_retried_and_never_checkpointed_as_done(tmp_path, capsys):
+    """The runtime extractor swallows model errors; a chat whose call failed must not be
+    frozen into the checkpoint as a chat with no facts."""
+    from evals.memory_fixtures.build_pv4 import ExtractionFailed
+
+    work = tmp_path / "cache"
+    seen = []
+    down = {"chat 5"}
+
+    async def model(transcript, config):
+        seen.append(transcript)
+        if transcript in down:
+            raise RuntimeError("429 rate limited")
+        index = int(transcript.split()[1])
+        return [{"subject": f"topic {index % 7}", "content": f"fact number {index} about item {index * 13}"}]
+
+    options = dict(users=(126,), count=1, fetch=fake_fetch(dataset()), yes=True,
+                   work_dir=work, extractor=model, retry_delay_s=0)
+    with pytest.raises(ExtractionFailed, match="chat 5"):
+        asyncio.run(build(tmp_path / "a", **options))
+    assert seen.count("chat 5") == 3
+    assert not (tmp_path / "a" / "user_126.jsonl").exists()
+
+    # Back up: the rerun resumes AT the failed chat, not after it.
+    down.clear()
+    seen.clear()
+    asyncio.run(build(tmp_path / "b", **options))
+    assert seen == [f"chat {i}" for i in range(5, 200)]
+    assert "pv4-u126-c5" in (tmp_path / "b" / "user_126.jsonl").read_text(encoding="utf-8")
+
+    # A transient failure that clears within the retries finishes the user.
+    flaky = {"chat 7"}
+
+    async def flaky_model(transcript, config):
+        if transcript in flaky:
+            flaky.discard(transcript)
+            raise RuntimeError("timeout")
+        return await model(transcript, config)
+
+    asyncio.run(build(tmp_path / "c", users=(126,), count=1, fetch=fake_fetch(dataset()), yes=True,
+                      work_dir=tmp_path / "cache2", extractor=flaky_model, retry_delay_s=0))
+    assert "chat 7: extraction failed (RuntimeError('timeout')); attempt 1/3" in capsys.readouterr().out
+    assert (tmp_path / "c" / "user_126.jsonl").exists()
+
+
+def test_checkpoint_from_other_extraction_code_is_not_resumed(tmp_path, monkeypatch):
+    from evals.memory_fixtures import build_pv4
+
+    work = tmp_path / "cache"
+    calls = []
+    options = dict(users=(126,), count=1, fetch=fake_fetch(dataset()), yes=True, work_dir=work)
+    asyncio.run(build(tmp_path / "a", extract=_facts_extract(calls), **options))
+    monkeypatch.setattr(build_pv4, "extraction_code_key", lambda: "changed extractor")
+    calls.clear()
+    asyncio.run(build(tmp_path / "b", extract=_facts_extract(calls), **options))
+    assert len(calls) == 200
+
+
+def test_checkpoint_for_different_chats_is_not_resumed(tmp_path):
+    work = tmp_path / "cache"
+    calls = []
+    asyncio.run(build(tmp_path / "a", users=(126,), count=1, fetch=fake_fetch(dataset()), yes=True,
+                      work_dir=work, extract=_facts_extract(calls)))
+    changed = dataset()
+    for row in changed:
+        row["documents"] = [f"chat {i} v2" for i in range(200)]
+    calls.clear()
+    asyncio.run(build(tmp_path / "b", users=(126,), count=1, fetch=fake_fetch(changed), yes=True,
+                      work_dir=work, extract=_facts_extract(calls)))
+    assert len(calls) == 200
+
+
+def test_default_work_dir_is_outside_the_checkout_and_keyed_by_model(monkeypatch, tmp_path):
+    from types import SimpleNamespace
+
+    from evals.memory_fixtures import build_pv4
+
+    monkeypatch.delenv(build_pv4.WORK_ROOT_ENV, raising=False)
+    haiku = build_pv4.default_work_dir(SimpleNamespace(aux_model="anthropic-oauth:claude-haiku-5-5", model_name="m"))
+    main = build_pv4.default_work_dir(SimpleNamespace(aux_model="", model_name="protolabs/smart"))
+    repo = Path(build_pv4.__file__).resolve().parents[2]
+    assert repo not in haiku.parents
+    assert haiku.name == "anthropic-oauth_claude-haiku-5-5" and main.name == "protolabs_smart"
+    monkeypatch.setenv(build_pv4.WORK_ROOT_ENV, str(tmp_path))
+    assert build_pv4.default_work_dir(SimpleNamespace(aux_model="x", model_name="")) == tmp_path / "x"
 
 
 def test_zero_fact_user_is_flagged(tmp_path, capsys):

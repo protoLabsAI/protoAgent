@@ -337,6 +337,115 @@ def _open_artifact_path(art_id: str, version: int) -> str:
     return f"/plugins/artifact/media/artifact/{quote(art_id, safe='')}/blob?version={n}&exp={exp}&t={ticket}"
 
 
+# ── standalone page for a RENDERED artifact (html/react/markdown/mermaid/svg/vega-lite) ──────────
+# The file-artifact open link above serves stored BYTES; a rendered kind has none to serve — it
+# only exists once the shell builds its sandboxed frame. So its open link is a PAGE: the shell
+# itself, in a `standalone` mode that renders the one version embedded in the page (no console
+# handshake, no bearer, no store poll), through the SAME srcdoc() builder the panel uses — so the
+# nested sandbox, its per-kind CSP, the vendored SRI libs and the DS kit injection are unchanged.
+# The grant is the same expiring core media signature as the blob link, domain-separated.
+_PAGE_THEMES = frozenset({"light", "dark"})
+# The page itself is the shell's chrome: same-origin, never sniffed, never cached (it embeds the
+# version's source), never framed (a hostile page can't wrap a leaked link), and it never sends
+# the ticket URL on as a Referer. No document CSP on purpose: a srcdoc frame INHERITS its
+# parent's policy, so one here would also constrain every artifact frame the shell builds — the
+# frames carry their own per-kind CSP and sandbox instead, exactly as in the panel (/view).
+PAGE_HEADERS = {
+    "X-Content-Type-Options": "nosniff",
+    "Cache-Control": "private, no-store",
+    "Referrer-Policy": "no-referrer",
+    "X-Frame-Options": "DENY",
+}
+
+
+def _page_version(art_id: str, version: int) -> tuple[int, dict, dict]:
+    """``(n, art, version record)`` for a RENDERED artifact version; 404 for unknown/out-of-range,
+    and for a ``file`` artifact (it opens through the blob link, never as a page)."""
+    from fastapi import HTTPException
+
+    from ._ref import _KINDS
+
+    art = _store._find(_store._read_store(), art_id)
+    if art is None:
+        raise HTTPException(404, f"unknown artifact {art_id}")
+    versions = art.get("versions") or []
+    n = version or len(versions)
+    if not 1 <= n <= len(versions):
+        raise HTTPException(404, f"no version {version}")
+    if _store._is_file(art) or art.get("kind") not in _KINDS - {"file"}:
+        raise HTTPException(404, "not a rendered artifact")
+    return n, art, versions[n - 1]
+
+
+def _page_ticket_subject(art_id: str, version: int, kind: str, value: dict) -> str:
+    # Its own domain ("artifact-page:"), so a page grant never verifies as a blob grant or a core
+    # media link, or the reverse. Bound to what the page RENDERS — kind + the version's source
+    # (sha256) + its commit ts — never the whole record: the mutable `render` verdict the console
+    # stamps after a preview must not 404 a still-valid link. A version-cap trim that shifts a
+    # different version onto this position changes the source/ts, so the old grant stops verifying.
+    digest = hashlib.sha256(str(value.get("code") or "").encode("utf-8")).hexdigest()
+    return "artifact-page:" + json.dumps([art_id, version, kind, value.get("ts"), digest], separators=(",", ":"))
+
+
+def _open_page_path(art_id: str, version: int) -> str:
+    """The signed standalone-page path for a rendered artifact version (0 = latest, resolved NOW
+    so a later edit doesn't swap what the link shows). Expires after ``_media.TTL_S`` like the
+    file open link."""
+    from infra.media import sign_name
+
+    n, art, value = _page_version(art_id, version)
+    exp = int(time.time()) + _media.TTL_S
+    ticket = sign_name(_page_ticket_subject(art_id, n, art["kind"], value), exp)
+    return f"/plugins/artifact/media/artifact/{quote(art_id, safe='')}/page?version={n}&exp={exp}&t={ticket}"
+
+
+def _script_json(payload: dict) -> str:
+    """``payload`` as JSON that is inert inside an HTML ``<script type="application/json">``: every
+    ``<``, ``>`` and ``&`` is a JSON escape, so artifact source containing ``</script>`` or
+    ``<!--`` can never close the element or start markup in the SHELL page (same-origin — that
+    would be script on the agent's origin). JSON.parse turns the escapes back into the source."""
+    out = json.dumps(payload, ensure_ascii=False)
+    for ch, rep in (("<", "\\u003c"), (">", "\\u003e"), ("&", "\\u0026"), (" ", "\\u2028"), (" ", "\\u2029")):
+        out = out.replace(ch, rep)
+    return out
+
+
+def _page_html(art: dict, n: int, value: dict, theme: str) -> str:
+    """The shell page in standalone mode with one version embedded. ``theme`` (``light``/``dark``)
+    forces the DS kit's palette via ``data-theme``; anything else leaves it off, so the kit follows
+    ``prefers-color-scheme``."""
+    from html import escape
+
+    total = int(_store._version_key(art)[0])
+    vers = art.get("versions") or []
+    payload = {
+        "id": art["id"],
+        "kind": art["kind"],
+        "title": art.get("title") or "",
+        "code": str(value.get("code") or ""),
+        "version": n,
+        "n": total - len(vers) + n,  # the LIFETIME number the agent reported (#3617)
+        "ts": value.get("ts"),
+    }
+    title = escape(payload["title"] or f"{art['kind']} artifact")
+    attrs = ' class="standalone"' + (f' data-theme="{theme}"' if theme in _PAGE_THEMES else "")
+    # tests/test_artifact_page.py pins the three anchors these replace, so a shell.html edit
+    # that moves one fails there instead of silently serving the panel.
+    page = _shell._SHELL_HTML.replace("<html>", f"<html{attrs}>", 1)
+    page = page.replace(
+        '<meta charset="utf-8">',
+        f'<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">'
+        f"<title>{title}</title>"
+        f'<script type="application/json" id="__artpage">{_script_json(payload)}</script>',
+        1,
+    )
+    # The module loads beside the page in the panel (/plugins/artifact/view → shell.js); this page
+    # sits three segments deeper (/plugins/artifact/media/artifact/<id>/page). Relative, so it
+    # stays slug-aware under the fleet proxy.
+    page = page.replace('<script type="module" src="shell.js">', '<script type="module" src="../../../shell.js">', 1)
+    return page
+
+
 def _build_view_router():
     """The shell PAGE — served under the PUBLIC ``/plugins/artifact`` prefix
     (plugin-view rule 2): a browser iframe page-load can't carry an Authorization
@@ -408,6 +517,28 @@ def _build_view_router():
             fh, meta.get("mime") or "application/octet-stream", meta.get("filename") or name,
             range_header=req_range, disposition="inline", headers=_media.SAFE_HEADERS,
         )
+
+    # Standalone page for a RENDERED artifact version — the browser link open_artifact hands out
+    # for html/react/markdown/mermaid/svg/vega-lite. PUBLIC prefix (a new tab carries no bearer)
+    # under /media/ so core's access-log redactor scrubs the `t=` ticket; it SELF-GATES exactly
+    # like the blob link above: a malformed, expired, forged or other-version ticket, a missing
+    # one, an unknown id, or a file artifact are all the same bare 404. `theme` is presentation
+    # only (not signed). The generated code runs in the shell's nested sandbox, unchanged.
+    @router.get("/media/artifact/{art_id}/page", include_in_schema=False)
+    def _open_page(art_id: str, version: int = 0, exp: str = "", t: str = "", theme: str = ""):
+        from infra.media import verify_name
+
+        if len(t) != 64 or any(c not in "0123456789abcdef" for c in t):
+            return Response(status_code=404)
+        if version < 1 or not exp.isascii() or not exp.isdigit() or len(exp) > 12 or int(exp) <= time.time():
+            return Response(status_code=404)
+        try:
+            n, art, value = _page_version(art_id, version)
+        except HTTPException:
+            return Response(status_code=404)
+        if not verify_name(_page_ticket_subject(art_id, n, art["kind"], value), t, exp):
+            return Response(status_code=404)
+        return HTMLResponse(_page_html(art, n, value, theme), headers=PAGE_HEADERS)
 
     # The shell's module script, same-origin beside the page (its relative ``src``
     # resolves against /plugins/artifact/view). NOT immutable-cached like vendor

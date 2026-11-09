@@ -214,6 +214,7 @@ FROM_DICT_UNCONSUMED_KEYS: set[str] = set()
 _VALIDATED_SENTINELS: dict[str, object] = {
     # ADR 0128: named profiles must be mappings of supported generation settings.
     "model.profiles": {"__drift__": {"max_tokens": 1234}},
+    "subagents": {"__drift__": {"profile": "lane"}},
     # ADR 0121 D2: https origin only.
     "network.public_console_url": "https://drift.example.com",
     "network.public_url": "https://drift.example.com",

@@ -171,6 +171,13 @@ FIELDS: list[Field] = [
         "Superseded by Connections (ADR 0106) — set a connection's key there.",
         ui_hidden=True,
     ),
+    # Like model.profiles, this structured map uses YAML/config API until Settings
+    # has a dict editor; exposing a text input would corrupt the mapping on save.
+    Field(
+        "subagents", "subagent_overrides", "Subagent overrides", "dict", "Model & runtime",
+        "Partial overrides for registered subagents, including profile and final_profile (ADR 0128).",
+        ui_hidden=True,
+    ),
     Field("model.temperature", "temperature", "Temperature", "number", "Model & runtime", minimum=0, maximum=2),
     Field("model.max_tokens", "max_tokens", "Max output tokens", "number", "Model & runtime", minimum=1),
     # Named generation profiles (ADR 0128 S1a) — a dict-of-dicts structured value the

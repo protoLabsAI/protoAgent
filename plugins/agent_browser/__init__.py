@@ -113,4 +113,18 @@ def register(registry) -> None:
         log.exception("[agent_browser] mounting browser panel failed")
 
     # skills/ and workflows/ are auto-discovered (ADR 0027) — no register call.
-    log.info("[agent_browser] registered browser tools (binary=%s)", cfg.get("binary", "agent-browser"))
+    try:
+        from .runtime import shared_session_name
+        session = shared_session_name()
+    except Exception:  # noqa: BLE001 — a log line must never break loading
+        session = "?"
+    log.info("[agent_browser] registered browser tools (binary=%s, session=%s, scope=%s)",
+             cfg.get("binary", "agent-browser"), session, cfg.get("session_scope") or "shared")
+    # per_session + a profile DIR: Chrome lets one browser hold a profile dir, so the second
+    # chat to open a page fails (runtime.profile_in_use_error says so then). A profile NAME
+    # ("Default") is copied per launch by the CLI and never collides.
+    profile = str(cfg.get("profile") or "").strip()
+    if (str(cfg.get("session_scope") or "").strip().lower() == "per_session"
+            and any(c in profile for c in "/\\~")):
+        log.warning("[agent_browser] session_scope=per_session with profile=%r: only one chat at "
+                    "a time can hold that profile dir; the others' browser_open will fail", profile)

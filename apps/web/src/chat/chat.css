@@ -235,9 +235,10 @@
 .chat-scheduled-summary {
   font-size: var(--pl-font-size-base);
   color: var(--pl-color-fg);
-  white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
+.chat-scheduled-summary .markdown > * > :first-child { margin-top: 0; }
+.chat-scheduled-summary .markdown > * > :last-child { margin-bottom: 0; }
 .chat-scheduled-actions {
   display: flex;
   align-items: center;

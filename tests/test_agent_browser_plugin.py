@@ -1601,7 +1601,9 @@ def test_derived_session_name_is_deterministic_and_cli_safe():
     for sid in ["", "A", "chat-123", "sess/with spaces", "🙂", "sid:colon", "s" * 500]:
         name = tools._session_name_for(sid)
         assert re.fullmatch(r"[a-z0-9-]+", name), name  # CLI-safe charset
-        assert name.startswith("pa-") and len(name) == len("pa-") + 12
+        # namespaced by THIS instance, so two instances' chats can never share a browser
+        inst = rt.instance_session_name()
+        assert name.startswith(inst + "-") and len(name) == len(inst) + 1 + 10
 
 
 def test_session_scope_defaults_to_shared():
@@ -1613,20 +1615,25 @@ def test_session_scope_defaults_to_shared():
 
 
 @pytest.mark.parametrize("cfg", [{"binary": "ab"}, {"binary": "ab", "session_scope": "shared"}])
-async def test_shared_scope_leaves_argv_and_env_exactly_as_today(monkeypatch, cfg):
-    """r1: `shared` (default, or explicit) passes the same argv and NO env override — the
-    child inherits os.environ unchanged — and the lock still keys off AGENT_BROWSER_SESSION."""
+async def test_shared_scope_pins_the_instance_session_through_an_env_copy(monkeypatch, cfg):
+    """`shared` (default, or explicit) keeps the argv unchanged but no longer leaves the
+    session to env inheritance — that put every instance on the CLI's one "default" Chrome.
+    The child gets a COPY of os.environ with this instance's session pinned; the lock keys
+    off the same name; an operator AGENT_BROWSER_SESSION still wins."""
     monkeypatch.delenv("AGENT_BROWSER_SESSION", raising=False)
     records = []
     monkeypatch.setattr(tools.subprocess, "Popen", _popen_capturing(records))
     await _toolmap(cfg)["browser_snapshot"].ainvoke({})
     argv, env = records[-1]
     assert argv == ["ab", "snapshot"]  # argv unchanged
-    assert env is None  # env inherited verbatim — no override kwarg
-    # the lock key is the shared env name, exactly as before (no in-flight call sets it)
-    assert tools._session_key() == "default"
+    assert env["AGENT_BROWSER_SESSION"] == rt.instance_session_name() != "default"
+    assert env.get("PATH") == os.environ.get("PATH")  # a copy, not a replacement
+    assert "AGENT_BROWSER_IDLE_TIMEOUT_MS" not in env  # the main session never reaps by default
+    assert tools._session_key() == rt.instance_session_name()
     monkeypatch.setenv("AGENT_BROWSER_SESSION", "opname")
     assert tools._session_key() == "opname"
+    await _toolmap(cfg)["browser_snapshot"].ainvoke({})
+    assert records[-1][1]["AGENT_BROWSER_SESSION"] == "opname"
 
 
 async def test_per_session_passes_a_distinct_derived_env_per_chat(monkeypatch):
@@ -1742,7 +1749,7 @@ async def test_per_session_with_an_empty_id_falls_back_to_the_shared_name(monkey
     monkeypatch.delenv("AGENT_BROWSER_SESSION", raising=False)
     records.clear()
     await t["browser_snapshot"].ainvoke({})
-    assert records[-1][1]["AGENT_BROWSER_SESSION"] == "default"  # …and "default" with none set
+    assert records[-1][1]["AGENT_BROWSER_SESSION"] == rt.instance_session_name()  # …and the instance's own with none set
 
 
 async def test_a_tool_call_never_mutates_os_environ(monkeypatch):
@@ -1820,10 +1827,197 @@ async def test_graph_turn_uses_injected_browser_session(monkeypatch, scope, trac
     if scope == "per_session":
         assert {env["AGENT_BROWSER_SESSION"] for _, env in records} == {expected}
     else:
-        assert all(env is None for _, env in records)
+        assert all(env["AGENT_BROWSER_SESSION"] == expected for _, env in records)
     assert {tuple(argv) for argv, _ in records} == {("ab", "snapshot"), ("ab", "close")}
     assert expected in tools._SESSION_LOCKS[asyncio.get_running_loop()]
     assert tools._SESSION_NAME.get() is None
+
+
+# ── per-instance isolation: every agent on the machine drives its OWN browser ──────
+# The CLI defaults its session to "default", and every protoAgent instance on a machine is
+# its own process — so before this, every fleet agent drove ONE Chrome with ONE cookie jar
+# (an agent saw another's page mid-review; parallel fills crossed between agents). The
+# plugin now names the session from the instance and pins it into every subprocess's env.
+
+
+def _as_instance(monkeypatch, root, iid=""):
+    """Become the instance whose root is ``root`` (and whose id is ``iid``)."""
+    from infra.paths import reset_instance_paths
+
+    monkeypatch.setenv("PROTOAGENT_HOME", str(root))
+    if iid:
+        monkeypatch.setenv("PROTOAGENT_INSTANCE", iid)
+    else:
+        monkeypatch.delenv("PROTOAGENT_INSTANCE", raising=False)
+    reset_instance_paths()
+
+
+def test_instance_session_name_is_stable_readable_cli_safe_and_short(monkeypatch, tmp_path):
+    monkeypatch.delenv("AGENT_BROWSER_SESSION", raising=False)
+    _as_instance(monkeypatch, tmp_path / "jobCoach-2e97", "jobCoach-2e97")
+    name = rt.instance_session_name()
+    assert name == rt.instance_session_name()  # stable: a pure function of the instance
+    assert re.fullmatch(r"pa-jobcoach-2e97-[0-9a-f]{6}", name), name
+    _as_instance(monkeypatch, tmp_path / "hub")  # unscoped (the default / desktop hub)
+    assert re.fullmatch(r"pa-main-[0-9a-f]{6}", rt.instance_session_name())
+    _as_instance(monkeypatch, tmp_path / "x", "A Very Long Instance Name With Spaces/And•Junk")
+    long = rt.instance_session_name()
+    # the CLI allows [A-Za-z0-9_-]; its socket is <dir>/<name>.sock, capped near 104 bytes
+    assert re.fullmatch(r"[a-z0-9-]+", long) and len(long) <= 30, long
+    assert re.fullmatch(r"[a-z0-9-]+", rt.chat_session_name("chat/•1")) and len(rt.chat_session_name("c")) <= 41
+
+
+def test_two_instances_get_two_sessions_even_when_both_are_unscoped(monkeypatch, tmp_path):
+    """Two unscoped instances (a source checkout + the desktop hub) both have instance id "",
+    so the name hashes the instance ROOT — and per-chat names are namespaced by it too, so
+    the same chat id in two instances can't land on one browser."""
+    monkeypatch.delenv("AGENT_BROWSER_SESSION", raising=False)
+    _as_instance(monkeypatch, tmp_path / "a")
+    a_main, a_chat = rt.instance_session_name(), rt.chat_session_name("chat-1")
+    _as_instance(monkeypatch, tmp_path / "b")
+    b_main, b_chat = rt.instance_session_name(), rt.chat_session_name("chat-1")
+    assert a_main != b_main and a_chat != b_chat
+    assert a_chat.startswith(a_main + "-") and b_chat.startswith(b_main + "-")
+    _as_instance(monkeypatch, tmp_path / "a")  # same root again → the same browser, by design
+    assert rt.instance_session_name() == a_main
+
+
+def test_an_operator_agent_browser_session_still_wins(monkeypatch):
+    monkeypatch.setenv("AGENT_BROWSER_SESSION", "ebay")
+    assert rt.shared_session_name() == tools._shared_session_name() == "ebay"
+    monkeypatch.setenv("AGENT_BROWSER_SESSION", "  ")  # blank is unset, not a session named "  "
+    assert rt.shared_session_name() == rt.instance_session_name()
+
+
+async def test_tools_panel_nav_and_screencast_all_drive_the_same_session(monkeypatch):
+    """One helper, three callers: the browser the tools act on, the one the panel's toolbar
+    navigates and the one its screencast streams must be the same — each passes the session
+    explicitly rather than trusting env inheritance."""
+    from fastapi.testclient import TestClient
+
+    monkeypatch.delenv("AGENT_BROWSER_SESSION", raising=False)
+    records = []
+    monkeypatch.setattr(tools.subprocess, "Popen", _popen_capturing(records))
+    await _toolmap({"binary": "ab"})["browser_snapshot"].ainvoke({})
+    tool_session = records[-1][1]["AGENT_BROWSER_SESSION"]
+
+    nav_envs, stream_envs = [], []
+
+    def _run(argv, **kw):
+        nav_envs.append(kw.get("env"))
+        return types.SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(bp.subprocess, "run", _run)
+    monkeypatch.setattr(bp.browser_stream, "resolve_page_target",
+                        lambda binary, timeout, **k: stream_envs.append(k.get("env")) or (None, "no page open"))
+    c = TestClient(_app({"binary": "ab", "cli_autofetch": False}))
+    assert c.post("/api/plugins/agent_browser/nav", json={"action": "open", "url": "https://x.com"}).json()["ok"]
+    ticket = c.post("/api/plugins/agent_browser/stream-ticket").json()["ticket"]
+    with c.websocket_connect(f"/api/plugins/agent_browser/stream?ticket={ticket}") as ws:
+        ws.receive_json()
+    assert tool_session == rt.instance_session_name()
+    assert nav_envs[-1]["AGENT_BROWSER_SESSION"] == tool_session
+    assert stream_envs[-1]["AGENT_BROWSER_SESSION"] == tool_session
+    assert "AGENT_BROWSER_SESSION" not in os.environ  # pinned per child, never process-wide
+
+
+def test_resolve_page_target_passes_the_pinned_env_to_both_cli_calls(monkeypatch):
+    envs = []
+
+    def _run(args, **kw):
+        envs.append(kw.get("env"))
+        return types.SimpleNamespace(returncode=1, stdout="", stderr="no session")
+
+    monkeypatch.setattr(bs.subprocess, "run", _run)
+    bs.resolve_page_target("ab", env={"AGENT_BROWSER_SESSION": "pa-x-123456"})
+    assert envs == [{"AGENT_BROWSER_SESSION": "pa-x-123456"}]
+
+
+@pytest.mark.parametrize(
+    ("cfg", "chat_ms", "main_ms"),
+    [
+        ({}, 30 * 60_000, None),  # defaults: chats reap after 30 min, the main session never
+        ({"idle_timeout_min": 0}, None, None),
+        ({"idle_timeout_min": 5, "main_idle_timeout_min": 120}, 5 * 60_000, 120 * 60_000),
+        ({"idle_timeout_min": "soon", "main_idle_timeout_min": -1}, 30 * 60_000, None),  # garbage → default
+        ({"idle_timeout_min": 0.5}, 30_000, None),
+    ],
+)
+async def test_the_idle_reaper_rides_the_child_env(monkeypatch, cfg, chat_ms, main_ms):
+    """per_session chats get AGENT_BROWSER_IDLE_TIMEOUT_MS (the CLI daemon exits, Chrome and
+    all, after that long without a command); the main session doesn't by default."""
+    monkeypatch.delenv("AGENT_BROWSER_SESSION", raising=False)
+    monkeypatch.delenv("AGENT_BROWSER_IDLE_TIMEOUT_MS", raising=False)
+    records = []
+    monkeypatch.setattr(tools.subprocess, "Popen", _popen_capturing(records))
+    t = _toolmap({"binary": "ab", "session_scope": "per_session", **cfg})
+    async with tracing.trace_session("chat-A"):
+        await t["browser_snapshot"].ainvoke({})
+    chat_env = records[-1][1]
+    await t["browser_snapshot"].ainvoke({})  # no chat id → the main session
+    main_env = records[-1][1]
+    assert chat_env["AGENT_BROWSER_SESSION"] == rt.chat_session_name("chat-A")
+    assert main_env["AGENT_BROWSER_SESSION"] == rt.instance_session_name()
+    assert chat_env.get("AGENT_BROWSER_IDLE_TIMEOUT_MS") == (str(chat_ms) if chat_ms else None)
+    assert main_env.get("AGENT_BROWSER_IDLE_TIMEOUT_MS") == (str(main_ms) if main_ms else None)
+
+
+def test_the_panel_uses_the_main_sessions_reaper(monkeypatch):
+    from fastapi.testclient import TestClient
+
+    monkeypatch.delenv("AGENT_BROWSER_IDLE_TIMEOUT_MS", raising=False)
+    envs = []
+    monkeypatch.setattr(bp.subprocess, "run",
+                        lambda argv, **kw: envs.append(kw["env"]) or types.SimpleNamespace(returncode=0, stdout="", stderr=""))
+    TestClient(_app({"main_idle_timeout_min": 10, "idle_timeout_min": 1})).post(
+        "/api/plugins/agent_browser/nav", json={"action": "reload"})
+    assert envs[-1]["AGENT_BROWSER_IDLE_TIMEOUT_MS"] == str(10 * 60_000)
+
+
+# Chrome's own words (captured live on 0.27.1, two sessions on one --profile dir). The cause
+# sits past the tools' 500-char error cut once the path is long, which is why it's named.
+_SINGLETON_STDERR = (
+    "✗ Auto-launch failed: Chrome exited early (exit code: 21) without writing DevToolsActivePort\n"
+    "(also tried parsing stderr) Chrome exited before providing DevTools URL\nChrome stderr:\n"
+    f"  [41999:681590959:1108/163540.910937:ERROR:chrome/browser/process_singleton_posix.cc:347] Failed to "
+    f"create /tmp/{'very-long-dir/' * 30}prof/SingletonLock: File exists (17)\n"
+    "  [41999:681590959:1108/163540.913702:ERROR:chrome/app/chrome_main_delegate.cc:519] Failed to create a "
+    "ProcessSingleton for your profile directory. Aborting now to avoid profile corruption.\n"
+)
+
+
+@pytest.mark.parametrize("scope", ["shared", "per_session"])
+async def test_a_profile_held_by_another_browser_is_a_readable_error(monkeypatch, scope):
+    monkeypatch.setattr(tools.subprocess, "Popen", fake_popen(err=_SINGLETON_STDERR, rc=1))
+    out = await _toolmap({"binary": "ab", "profile": "/tmp/prof", "session_scope": scope})["browser_open"].ainvoke(
+        {"url": "https://example.com"})
+    assert out.startswith("Error: the browser profile '/tmp/prof' is already in use"), out
+    assert "one browser per profile directory" in out
+    if scope == "per_session":
+        assert "per_session" in out and "browser_close" in out
+    else:
+        assert "another protoAgent instance" in out
+
+
+def test_an_ordinary_launch_failure_is_not_blamed_on_the_profile():
+    assert rt.profile_in_use_error("Chrome not found", {"profile": "/p"}, "s") is None
+
+
+def test_the_panel_names_a_held_profile_too(monkeypatch):
+    from fastapi.testclient import TestClient
+
+    monkeypatch.setattr(bp.subprocess, "run",
+                        lambda argv, **kw: types.SimpleNamespace(returncode=1, stdout="", stderr=_SINGLETON_STDERR))
+    body = TestClient(_app({"profile": "/tmp/prof"})).post(
+        "/api/plugins/agent_browser/nav", json={"action": "open", "url": "https://x.com"}).json()
+    assert body["ok"] is False and "'/tmp/prof' is already in use" in body["error"]
+
+
+def test_the_reaper_knobs_are_manifest_config_and_settings():
+    m = _manifest()
+    assert m["config"]["idle_timeout_min"] == 30 and m["config"]["main_idle_timeout_min"] == 0
+    by_key = {f["key"]: f for f in m["settings"]}
+    assert by_key["idle_timeout_min"]["type"] == by_key["main_idle_timeout_min"]["type"] == "number"
 
 
 async def test_click_and_get_value_resolve_labels_too(monkeypatch):
@@ -3834,7 +4028,7 @@ def test_stream_ws_accepts_valid_ticket_then_reports_no_page(monkeypatch):
 
     # resolve returns no page → the handler accepts, sends an error frame, and closes
     # (exercises the ticket gate + accept path without a real browser/CDP).
-    monkeypatch.setattr(bp.browser_stream, "resolve_page_target", lambda binary, timeout: (None, "no page open"))
+    monkeypatch.setattr(bp.browser_stream, "resolve_page_target", lambda binary, timeout, **k: (None, "no page open"))
     c = TestClient(_app())
     ticket = c.post("/api/plugins/agent_browser/stream-ticket").json()["ticket"]
     with c.websocket_connect(f"/api/plugins/agent_browser/stream?ticket={ticket}") as ws:
@@ -3847,7 +4041,7 @@ def test_stream_ws_turns_a_missing_binary_into_the_setup_sentence(monkeypatch):
     from fastapi.testclient import TestClient
 
     monkeypatch.setattr(
-        bp.browser_stream, "resolve_page_target", lambda binary, timeout: (None, "'agent-browser' not on PATH")
+        bp.browser_stream, "resolve_page_target", lambda binary, timeout, **k: (None, "'agent-browser' not on PATH")
     )
     _probe_env(monkeypatch, which=None)
     c = TestClient(_app())
@@ -4416,6 +4610,13 @@ def test_the_readme_and_tool_reference_list_the_bundled_plugin():
 CLI = shutil.which("agent-browser")
 needs_cli = pytest.mark.skipif(CLI is None, reason="the agent-browser CLI is not on PATH")
 
+# Every live test closes its session in `finally`, but a run that is killed (a timeout, a
+# Ctrl-C, an xdist worker torn down) never reaches it — and its daemon + Chrome then live
+# until reboot (~20 protoagent-* daemons had piled up in ~/.agent-browser). So each live
+# session also carries the CLI's own idle reaper as a backstop: after a few quiet minutes
+# it exits by itself, whether or not the test got to close it.
+_LIVE_CFG = {"binary": "agent-browser", "timeout_s": 120, "main_idle_timeout_min": 3}
+
 
 @needs_cli
 def test_the_real_cli_still_has_every_subcommand_and_flag_the_plugin_sends():
@@ -4481,7 +4682,7 @@ async def test_the_real_cli_prints_us_letter_and_ignores_css_page_size(monkeypat
     monkeypatch.setenv("AGENT_BROWSER_SESSION", f"protoagent-pagesize-{os.getpid()}")
     page = tmp_path / "a4.html"
     page.write_text("<!doctype html><style>@page { size: A4; margin: 0 }</style><h1>A4 probe</h1>", encoding="utf-8")
-    t = _toolmap({"binary": "agent-browser", "timeout_s": 120})
+    t = _toolmap(_LIVE_CFG)
     try:
         opened = await t["browser_open"].ainvoke({"url": page.as_uri()})
         if opened.startswith("Error:"):
@@ -4499,7 +4700,7 @@ async def test_the_real_cli_takes_dash_values_the_guard_lets_through(monkeypatch
     """The other half of the guard's premise, through the TOOLS against the binary: what
     the guard allows really is entered verbatim (the first guard refused all of these)."""
     monkeypatch.setenv("AGENT_BROWSER_SESSION", f"protoagent-dash-{os.getpid()}")
-    t = _toolmap({"binary": "agent-browser", "timeout_s": 120})
+    t = _toolmap(_LIVE_CFG)
     try:
         opened = await t["browser_open"].ainvoke({"url": "data:text/html,<input id=q>"})
         if opened.startswith("Error:"):
@@ -4518,13 +4719,51 @@ async def test_the_real_cli_reports_about_blank_when_no_page_is_open(monkeypatch
     """The premise of the no-page check: with nothing open, `get url` answers about:blank
     (it doesn't fail), and printing that would "succeed" with a blank PDF."""
     monkeypatch.setenv("AGENT_BROWSER_SESSION", f"protoagent-nopage-{os.getpid()}")
-    t = _toolmap({"binary": "agent-browser", "timeout_s": 120})
+    t = _toolmap(_LIVE_CFG)
     try:
         out = await t["browser_pdf"].ainvoke({"path": "nopage.pdf"})
         assert out.startswith("Error:") and "the page is blank" in out, out
         assert not (storage.capture_root().resolve() / "nopage.pdf").exists()
     finally:
         await t["browser_close"].ainvoke({})
+
+
+@needs_cli
+async def test_the_real_cli_gives_two_instances_two_browsers(monkeypatch, tmp_path):
+    """The isolation, against the binary: two protoAgent instances (two instance ids, two
+    roots) open two different pages, and each still sees ITS page — before, both drove the
+    CLI's one "default" Chrome and the second open replaced the first's page. Two different
+    CDP endpoints prove they are two browsers, not two tabs of one. (One process plays both
+    instances, so it re-becomes each before using its tools — a real instance is a process.)"""
+    monkeypatch.delenv("AGENT_BROWSER_SESSION", raising=False)
+    pid = os.getpid()
+    t = _toolmap(_LIVE_CFG)
+    names = {}
+
+    def become(who):
+        _as_instance(monkeypatch, tmp_path / who, f"ptest-iso{who}-{pid}")
+        names[who] = rt.instance_session_name()
+
+    try:
+        for who in ("a", "b"):
+            become(who)
+            opened = await t["browser_open"].ainvoke({"url": f"data:text/html,<title>agent-{who}</title><h1>{who}</h1>"})
+            if opened.startswith("Error:"):
+                pytest.skip(f"no browser available here: {opened[:120]}")
+        assert names["a"] != names["b"]
+        for who in ("a", "b"):
+            become(who)  # b opened last: on one shared browser, a would now read agent-b
+            assert await t["browser_eval"].ainvoke({"expression": "document.title"}) == f'"agent-{who}"'
+        cdp = {
+            subprocess.run([CLI, "--session", name, "get", "cdp-url"], capture_output=True, text=True,
+                           timeout=60).stdout.strip()
+            for name in names.values()
+        }
+        assert len(cdp) == 2 and all(u.startswith("ws") for u in cdp), cdp
+    finally:
+        for who in names:
+            become(who)
+            await t["browser_close"].ainvoke({})
 
 
 @needs_cli
@@ -4543,7 +4782,7 @@ async def test_the_real_cli_prints_a_real_pdf_into_the_fence(monkeypatch):
     (never the default one a live agent may be driving), print a small data: page, and
     check the bytes are a PDF in the fenced directory."""
     monkeypatch.setenv("AGENT_BROWSER_SESSION", f"protoagent-tests-{os.getpid()}")
-    t = _toolmap({"binary": "agent-browser", "timeout_s": 120})
+    t = _toolmap(_LIVE_CFG)
     try:
         opened = await t["browser_open"].ainvoke({"url": "data:text/html,<h1>protoAgent pdf probe</h1>"})
         if opened.startswith("Error:"):
@@ -4890,7 +5129,7 @@ async def test_the_real_cli_prints_html_written_into_a_blank_page(monkeypatch):
     into it with browser_eval, print it. The URL is still about:blank; the page isn't empty."""
     pypdf = pytest.importorskip("pypdf")
     monkeypatch.setenv("AGENT_BROWSER_SESSION", f"protoagent-blankhtml-{os.getpid()}")
-    t = _toolmap({"binary": "agent-browser", "timeout_s": 120})
+    t = _toolmap(_LIVE_CFG)
     try:
         opened = await t["browser_open"].ainvoke({})
         if opened.startswith("Error:"):

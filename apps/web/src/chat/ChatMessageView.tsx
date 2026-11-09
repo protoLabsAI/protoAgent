@@ -37,7 +37,7 @@ import { useRevealedText } from "./revealText";
 import { ToolCalls } from "./ToolCalls";
 import { WorkBlock, findInlineArtifactRef, inlineArtifactPreview, spotlightToolId } from "./WorkBlock";
 import { foldPlan, toolsForGroup } from "./parts";
-import { rendersAsResultCard, serverResultLabel, serverResultPreview } from "./server-turn-store";
+import { plainPreviewText, rendersAsResultCard, serverResultLabel, serverResultPreview } from "./server-turn-store";
 import { useBackgroundJob } from "./backgroundJobStore";
 import { STATE_LABEL, briefSummary, delegationState } from "./delegation";
 import type { SessionFeedbackActions } from "./useSessionFeedback";
@@ -780,7 +780,9 @@ function ScheduledResultBody({ scheduled }: { scheduled: NonNullable<ChatMessage
     });
   return (
     <>
-      <div className="chat-scheduled-summary">{summary}</div>
+      <div className="chat-scheduled-summary">
+        <Markdown>{summary}</Markdown>
+      </div>
       <div className="chat-scheduled-actions">
         <span className="chat-scheduled-time">{fmtFiredAt(scheduled.firedAt)}</span>
         <Button size="sm" variant="ghost" onClick={open}>
@@ -854,7 +856,7 @@ function ScheduledChip({
   if (dismissed.has(key)) return null;
   const failed = scheduled.status === "failed";
   const verb = failed ? "failed" : "ran";
-  const line = `Scheduled task ${scheduled.jobId} ${verb} — ${oneLine(scheduled.summary || "(no output)")}`;
+  const line = `Scheduled task ${scheduled.jobId} ${verb} — ${oneLine(plainPreviewText(scheduled.summary || "(no output)"))}`;
   const toggle = () => setExpanded((v) => !v);
   return (
     <Message role={message.role} className="chat-report chat-scheduled-chip-msg">

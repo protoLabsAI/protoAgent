@@ -113,13 +113,26 @@
     "id": "memory_note_intent",
     "category": "tool",
     "kind": "ask",
-    "name": "Asks to log an event → memory_save writes the memory",
-    "prompt": "Note this for me: my standup just ended, team is unblocked on the auth migration.",
+    "name": "Asks to note a durable fact → memory_save writes the memory",
+    "prompt": "Note this for me: I'm allergic to penicillin.",
     "expected_tools": ["memory_save"],
     "expected_patterns": [],
     "verify_kb": {
-      "find_memory_containing": "auth migration"
+      "find_memory_containing": "penicillin"
     },
+    "teardown": [
+      {"memory_delete_by_content": {"contains": "penicillin"}}
+    ]
+  },
+  {
+    "id": "memory_status_note_not_saved",
+    "category": "tool",
+    "kind": "ask",
+    "name": "A status note is not a durable memory → memory_save is not called (ADR 0125 P3, #4882)",
+    "prompt": "Note this for me: my standup just ended, team is unblocked on the auth migration.",
+    "expected_tools": [],
+    "forbidden_tools": ["memory_save"],
+    "expected_patterns": [],
     "teardown": [
       {"memory_delete_by_content": {"contains": "auth migration"}}
     ]

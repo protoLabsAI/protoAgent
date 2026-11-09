@@ -1,0 +1,61 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>Preview Fixture</title>
+    <style>
+      body { margin: 0; padding: 24px; font-family: system-ui, sans-serif; }
+    </style>
+  </head>
+  <!--
+    The host-free view-harness fixture page (#4809). Deliberately raw postMessage (no DS
+    plugin-kit) so the e2e is robust: it speaks the same bridge protocol PluginView does.
+      • subscribes with `background: true` — the cadview freeze trigger; App keeps the view
+        mounted even off-screen, so a double-mount/remount would reload this page.
+      • records every delivered `protoagent:event` into body[data-frames] (comma-joined ids)
+        and bumps [data-count] — the spec asserts BOTH mounts receive a tapped publish.
+      • #pub publishes `preview-fixture.ping` back through the bridge (page → tap).
+      • #tick flips [data-tick] on click — a liveness probe: a frozen/reloading page can't.
+  -->
+  <body data-bridge="pending" data-ready="" data-frames="" data-count="0" data-tick="">
+    <h1>Preview Fixture</h1>
+    <p id="status">starting…</p>
+    <button id="pub" type="button">publish ping</button>
+    <button id="tick" type="button">tick</button>
+    <script>
+      (function () {
+        function post(o) {
+          try { if (parent && parent !== window) parent.postMessage(o, "*"); } catch (_) {}
+        }
+        window.addEventListener("message", function (e) {
+          var m = e.data || {};
+          if (m.type === "protoagent:init") {
+            document.body.setAttribute("data-bridge", m.token ? "authed" : "anon");
+          } else if (m.type === "protoagent:event") {
+            // Record every delivered frame by its data.id (topic as a fallback), so the spec
+            // can assert the tapped publish reached THIS mount.
+            var id = (m.data && m.data.id) != null ? String(m.data.id) : String(m.topic);
+            var seen = document.body.getAttribute("data-frames") || "";
+            document.body.setAttribute("data-frames", seen ? seen + "," + id : id);
+            document.body.setAttribute(
+              "data-count",
+              String((parseInt(document.body.getAttribute("data-count"), 10) || 0) + 1),
+            );
+          }
+        });
+        // Announce readiness (so the console re-sends the bearer + theme), then subscribe with
+        // background delivery — the shape that regressed into the cadview freeze.
+        post({ type: "protoagent:ready" });
+        post({ type: "protoagent:subscribe", patterns: ["preview-fixture.#"], background: true });
+        document.getElementById("pub").addEventListener("click", function () {
+          post({ type: "protoagent:publish", topic: "ping", data: { id: "page-pub" } });
+        });
+        document.getElementById("tick").addEventListener("click", function () {
+          document.body.setAttribute("data-tick", "ok");
+        });
+        document.getElementById("status").textContent = "ready";
+        document.body.setAttribute("data-ready", "1");
+      })();
+    </script>
+  </body>
+</html>

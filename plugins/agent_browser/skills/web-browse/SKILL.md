@@ -38,6 +38,10 @@ same four-step loop:
 
 When finished, call `browser_close` to free the browser session.
 
+The browser is yours alone: other agents on this machine have their own. If a page
+you opened earlier is gone (`about:blank`), your browser was closed after sitting
+idle. Open the page again.
+
 Text that starts with a dash and a letter (like `--foo`) is refused by `browser_fill`
 and `browser_type`: the CLI would read it as one of its own options. Set such a value
 with `browser_eval` instead. Negative numbers, `-$50.00`, list bullets and a lone `-`

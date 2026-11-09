@@ -1,5 +1,29 @@
 [
   {
+    "version": "v0.234.0",
+    "date": "2026-11-09",
+    "changes": [
+      "Delete knowledge collections (#4630).",
+      "Knowledge collections API (#4630).",
+      "Static plugin checks (#4809).",
+      "Withdrawing a standing instruction now leaves a note in the chat (#4861).",
+      "Output-budget measurement (#4875).",
+      "Named generation profiles (#4875).",
+      "Subagent profile configuration (#4875).",
+      "Frozen PV4 memory fixture tooling (#4897).",
+      "On-demand memory retrieval evaluation (#4897).",
+      "Design mockups with a browser link (#4926).",
+      "Standing instruction ledger components prepared (#4861).",
+      "Console data layer for the directive ledger (#4861).",
+      "Shared console timestamp formatting (#4861).",
+      "The nightly memory evals follow the memory policy (#4919).",
+      "Install Command-Line Tool reads as plain copy (#4903).",
+      "Asking \"what did I do today from the log\" reaches your memories again (#4918).",
+      "Clarify scoped search documentation (#4630).",
+      "ADR 0128 records the plan for per-role generation profiles (#4899)."
+    ]
+  },
+  {
     "version": "v0.233.1",
     "date": "2026-11-08",
     "changes": [

@@ -70,7 +70,19 @@ def test_unknown_and_non_file(artifact):
     assert "unknown artifact" in artifact.open_artifact.invoke({"artifact_id": "missing"})
     artifact.show_artifact.invoke({"kind": "html", "code": "hello"})
     aid = artifact._read_store()["artifacts"][0]["id"]
-    assert "not a file artifact" in artifact.open_artifact.invoke({"artifact_id": aid})
+    # A rendered artifact opens as the standalone page now (tests/test_artifact_page.py), never
+    # through the file blob route.
+    url = _url(artifact.open_artifact.invoke({"artifact_id": aid}))
+    assert urlsplit(url).path == f"/plugins/artifact/media/artifact/{aid}/page"
+
+
+def test_file_open_link_is_still_the_blob(artifact, tmp_path):
+    # Extending open_artifact to rendered kinds must leave a FILE artifact's link exactly as it
+    # was: the blob download route, no page.
+    aid = _save(artifact, tmp_path, "report.txt", b"first")
+    url = _url(artifact.open_artifact.invoke({"artifact_id": aid}))
+    assert urlsplit(url).path == f"/plugins/artifact/media/artifact/{aid}/blob"
+    assert "/page" not in url
 
 
 def test_linked_file_rechecks_live_fence(artifact, tmp_path, monkeypatch):

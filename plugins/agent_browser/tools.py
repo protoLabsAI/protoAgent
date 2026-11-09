@@ -40,7 +40,6 @@ from __future__ import annotations
 import asyncio
 import contextvars
 import functools
-import hashlib
 import logging
 import os
 import secrets
@@ -56,7 +55,7 @@ from langgraph.prebuilt import InjectedState
 
 from graph.sdk import multimodal_tool_result
 
-from . import cli_fetch, forms, gate, preflight, storage
+from . import cli_fetch, forms, gate, preflight, runtime, storage
 from .runtime import bad_operand, flag, launch_flags, number
 
 log = logging.getLogger("protoagent.plugins.agent_browser")
@@ -100,7 +99,8 @@ def _kill_tree(proc) -> None:
 # body: parallel calls run one at a time, in arrival order (asyncio.Lock is FIFO).
 #
 # Keyed by the agent-browser session name RESOLVED for the call (see _resolve_session_name):
-# normally AGENT_BROWSER_SESSION, but under `session_scope: per_session` a name derived from
+# normally the instance's main session (the operator's AGENT_BROWSER_SESSION, else a name
+# derived from this instance), but under `session_scope: per_session` a name derived from
 # the calling chat session — the CLI is pointed at the SAME name via its env, so the lock and
 # the daemon session always agree. DIFFERENT sessions still run concurrently. Read-only tools
 # take the lock too: a snapshot taken mid-fill is a torn read, and simplicity beats the
@@ -124,15 +124,16 @@ _CALL_STATE: contextvars.ContextVar[Any] = contextvars.ContextVar("agent_browser
 
 
 def _shared_session_name() -> str:
-    """Today's session name: the ``AGENT_BROWSER_SESSION`` env, or ``"default"`` (what the CLI
-    itself falls back to). This is the whole of ``session_scope: shared``."""
-    return os.environ.get("AGENT_BROWSER_SESSION") or "default"
+    """The instance's main session: the operator's ``AGENT_BROWSER_SESSION``, else a name
+    derived from this instance (``runtime.shared_session_name`` — the one helper the panel
+    and the screencast use too). This is the whole of ``session_scope: shared``."""
+    return runtime.shared_session_name()
 
 
 def _session_name_for(session_id: str) -> str:
-    """A CLI-safe agent-browser session name for a chat session id: ``pa-`` + a short, stable
-    sha1 prefix. Deterministic for a given id, and made only of ``[a-z0-9-]`` (hex is lower)."""
-    return "pa-" + hashlib.sha1(session_id.encode("utf-8")).hexdigest()[:12]
+    """A CLI-safe agent-browser session name for a chat session id, namespaced by instance
+    (``runtime.chat_session_name``). Deterministic, and made only of ``[a-z0-9-]``."""
+    return runtime.chat_session_name(session_id)
 
 
 def _current_session_id() -> str:
@@ -147,7 +148,7 @@ def _current_session_id() -> str:
 def _resolve_session_name(scope: str, state: dict | None = None) -> str:
     """The agent-browser session name for THIS tool call, per the plugin's ``session_scope``:
 
-    * ``shared`` (default) — today's behaviour: ``AGENT_BROWSER_SESSION`` env, or ``"default"``.
+    * ``shared`` (default) — the instance's main session (``_shared_session_name``).
     * ``per_session`` — a name derived from the calling chat session id, so two chats driving
       the browser at once land on two different pages (#4509). Falls back to the shared name
       when that id is empty (a call outside a graph turn).
@@ -231,6 +232,10 @@ def get_browser_tools(cfg: dict | None, refresh_gaps=None, *, start_gap: bool = 
     # The action gate's categories (gate.py). `confirm_actions` is core's list now, never passed
     # to the CLI: a key that's ABSENT means the default (`submit`); an empty value means off.
     gated = gate.parse_categories(cfg.get("confirm_actions"))
+    # The CLI daemon's idle reaper (runtime.idle_timeout_ms): per-chat browsers reap after
+    # `idle_timeout_min`, the main session after `main_idle_timeout_min` (default never).
+    chat_idle_ms = runtime.idle_timeout_ms(cfg, chat=True)
+    main_idle_ms = runtime.idle_timeout_ms(cfg, chat=False)
 
     def _serialized(fn):
         """Run the async tool ``fn`` while holding its session's lock (see above). The session
@@ -334,11 +339,13 @@ def get_browser_tools(cfg: dict | None, refresh_gaps=None, *, start_gap: bool = 
         # PATH > pinned path > the fetched CLI; on first use with none, the pinned download.
         exe = preflight.cli_for_run(binary, autofetch=autofetch,
                                     on_done=refresh_gaps if callable(refresh_gaps) else None)
-        # per_session pins the CLI's daemon session to THIS call's resolved name through a COPY
-        # of the env — never a mutation of os.environ, which is process-global and would race
-        # across concurrent sessions. `shared` leaves the child's env exactly as today (env=None
-        # inherits it unchanged; the CLI itself defaults AGENT_BROWSER_SESSION to "default").
-        child_env = {**os.environ, "AGENT_BROWSER_SESSION": _session_key()} if scope == "per_session" else None
+        # Every call pins the CLI's daemon session to THIS call's resolved name through a COPY
+        # of the env (runtime.cli_env) — never a mutation of os.environ, which is
+        # process-global and would race across concurrent sessions. Both scopes: leaving it
+        # to inheritance put every instance on the machine on the CLI's one "default" Chrome.
+        session = _session_key()
+        is_chat = scope == "per_session" and session != _shared_session_name()
+        child_env = runtime.cli_env(session, chat_idle_ms if is_chat else main_idle_ms)
         try:
             # Its own session: its pid becomes a process-group id, so a timeout can kill
             # everything it started (see _kill_tree). Ignored on Windows.
@@ -448,6 +455,10 @@ def get_browser_tools(cfg: dict | None, refresh_gaps=None, *, start_gap: bool = 
             # FileNotFoundError. Re-probe so that banner appears (and clears) mid-session
             # too, instead of only on the CLI-missing path.
             _recheck(failed=True)
+            # A `profile` dir another browser holds: the cause sits past the 500-char cut in
+            # Chrome's long stderr, so name it and the fix (runtime.profile_in_use_error).
+            if (locked := runtime.profile_in_use_error(err, cfg, session)):
+                return locked
             return f"Error: `agent-browser {' '.join(args)}` failed: {err[:500]}"
         _recheck(failed=False)  # a clean run is evidence the setup works — clear any banner
         return out or "(ok)"

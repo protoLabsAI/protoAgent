@@ -299,16 +299,20 @@ def open_artifact(
     version: int = 0,
     state: Annotated[Any, InjectedState] = None,
 ) -> str:
-    """Ask the attached console to open a saved file artifact in a new browser tab.
-    version=0 opens the latest version; positive versions are 1-based. Only file artifacts
-    are supported, never arbitrary URLs. Returns a short-lived clickable link as a fallback.
+    """Open a saved artifact in a new browser tab of the attached console, and return a
+    short-lived link to it you can hand the operator. A rendered artifact (html, react,
+    markdown, mermaid, svg, vega-lite) opens as a full page; a file artifact opens its file.
+    version=0 opens the latest version; positive versions are 1-based. Only artifacts in the
+    store, never arbitrary URLs.
     """
     from fastapi import HTTPException
     from infra.media import public_base_url
-    from ._routes import _open_artifact_path
+    from ._routes import _open_artifact_path, _open_page_path
 
+    art = _store._find(_store._read_store(), artifact_id)
+    opener = _open_artifact_path if art is None or _store._is_file(art) else _open_page_path
     try:
-        path = _open_artifact_path(artifact_id, version)
+        path = opener(artifact_id, version)
     except HTTPException as exc:
         return f"Cannot open artifact: {exc.detail}."
     url = public_base_url() + path
