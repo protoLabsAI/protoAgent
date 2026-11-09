@@ -4,8 +4,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { DecisionCard } from "./DecisionCard";
 import { DecisionsPanel, DecisionsSheet } from "./DecisionsPanel";
-import { createDecisionsStore } from "./useDecisions";
+import { createDecisionsStore, useDecision, type DecisionLookup } from "./useDecisions";
 import { decisionsApi, type DecisionRow } from "../lib/api/decisions";
+import { ApiError } from "../lib/api/http";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -194,6 +195,132 @@ describe("useDecisions store", () => {
     answer.mockResolvedValue({ answered_elsewhere: true, decision: decision("a", { state: "answered" }) });
     const conflict = await store.answer("a", "merge");
     expect(conflict.answered_elsewhere).toBe(true);
+  });
+
+  // ── by-id record cache (#4725, Gap 2) ─────────────────────────────────────────────────────
+  it("keeps an answered row in records after it leaves the pending list", async () => {
+    const list = vi.spyOn(decisionsApi, "listDecisions").mockResolvedValue(listOf([decision("a")]));
+    const answer = vi.spyOn(decisionsApi, "answerDecision");
+    const store = mountStore();
+    await settle();
+    expect(store.getSnapshot().pendingCount).toBe(1);
+
+    // The answer closes it, and the next pending list no longer carries it.
+    const answered = decision("a", { state: "answered", answer_label: "Merge with the WARN" });
+    answer.mockResolvedValue({ answered_elsewhere: false, decision: answered, resumed: true });
+    list.mockResolvedValue(listOf([]));
+    await store.answer("a", "merge");
+
+    expect(store.getSnapshot().pendingCount).toBe(0);
+    expect(store.getSnapshot().decisions).toEqual([]);
+    // The settled record survives under its id for the source chat to read.
+    expect(store.getSnapshot().records["a"].state).toBe("answered");
+    expect(store.getSnapshot().records["a"].answer_label).toBe("Merge with the WARN");
+  });
+
+  it("loadDecision fetches a historical id once by GET, then serves it from cache", async () => {
+    vi.spyOn(decisionsApi, "listDecisions").mockResolvedValue(listOf([]));
+    const get = vi
+      .spyOn(decisionsApi, "getDecision")
+      .mockResolvedValue(decision("h", { state: "withdrawn", withdraw_reason: "I merged it myself." }));
+    const store = mountStore();
+    await settle();
+
+    const row = await store.loadDecision("h");
+    expect(get).toHaveBeenCalledTimes(1);
+    expect(get).toHaveBeenCalledWith("h");
+    expect(row?.state).toBe("withdrawn");
+    expect(store.getSnapshot().records["h"].withdraw_reason).toBe("I merged it myself.");
+
+    // A second load is served from the cache — no second request.
+    const again = await store.loadDecision("h");
+    expect(again?.id).toBe("h");
+    expect(get).toHaveBeenCalledTimes(1);
+  });
+
+  it("coalesces two concurrent loads of the same id into one request", async () => {
+    vi.spyOn(decisionsApi, "listDecisions").mockResolvedValue(listOf([]));
+    let resolve!: (row: DecisionRow) => void;
+    const get = vi
+      .spyOn(decisionsApi, "getDecision")
+      .mockImplementation(() => new Promise<DecisionRow>((r) => (resolve = r)));
+    const store = mountStore();
+    await settle();
+
+    const p1 = store.loadDecision("h");
+    const p2 = store.loadDecision("h");
+    expect(get).toHaveBeenCalledTimes(1);
+    resolve(decision("h", { state: "answered" }));
+    const [r1, r2] = await Promise.all([p1, p2]);
+    expect(r1?.id).toBe("h");
+    expect(r2?.id).toBe("h");
+    expect(get).toHaveBeenCalledTimes(1);
+  });
+
+  it("records a 404 as missing and does not re-fetch it", async () => {
+    vi.spyOn(decisionsApi, "listDecisions").mockResolvedValue(listOf([]));
+    const get = vi.spyOn(decisionsApi, "getDecision").mockRejectedValue(new ApiError(404, "not found"));
+    const store = mountStore();
+    await settle();
+
+    const row = await store.loadDecision("gone");
+    expect(row).toBeNull();
+    expect(store.getSnapshot().missing["gone"]).toBe(true);
+    expect(get).toHaveBeenCalledTimes(1);
+
+    // Known-missing: a repeat load short-circuits without another request.
+    const again = await store.loadDecision("gone");
+    expect(again).toBeNull();
+    expect(get).toHaveBeenCalledTimes(1);
+  });
+
+  it("pendingCount counts only pending rows, never cached settled ones", async () => {
+    vi.spyOn(decisionsApi, "listDecisions").mockResolvedValue(listOf([decision("p")]));
+    vi.spyOn(decisionsApi, "getDecision").mockResolvedValue(decision("s", { state: "answered" }));
+    const store = mountStore();
+    await settle();
+    expect(store.getSnapshot().pendingCount).toBe(1);
+
+    await store.loadDecision("s"); // a settled record enters the cache
+    expect(store.getSnapshot().records["s"].state).toBe("answered");
+    // The settled record is cached but is neither counted nor listed, and never notified.
+    expect(store.getSnapshot().pendingCount).toBe(1);
+    expect(store.getSnapshot().decisions.map((d) => d.id)).toEqual(["p"]);
+    expect(mocks.notify).toHaveBeenCalledTimes(1);
+  });
+
+  it("useDecision loads a settled id on mount and resolves ready", async () => {
+    vi.spyOn(decisionsApi, "listDecisions").mockResolvedValue(listOf([]));
+    vi.spyOn(decisionsApi, "getDecision").mockResolvedValue(
+      decision("hook-ready", { state: "answered", answer_label: "Merge with the WARN" }),
+    );
+    let seen: DecisionLookup | null = null;
+    function Probe() {
+      seen = useDecision("hook-ready");
+      return null;
+    }
+    await renderNode(<Probe />);
+    await act(async () => {
+      await settle();
+    });
+    expect(seen!.state).toBe("ready");
+    expect(seen!.record?.answer_label).toBe("Merge with the WARN");
+  });
+
+  it("useDecision surfaces a 404 as state 'missing'", async () => {
+    vi.spyOn(decisionsApi, "listDecisions").mockResolvedValue(listOf([]));
+    vi.spyOn(decisionsApi, "getDecision").mockRejectedValue(new ApiError(404, "not found"));
+    let seen: DecisionLookup | null = null;
+    function Probe() {
+      seen = useDecision("hook-gone");
+      return null;
+    }
+    await renderNode(<Probe />);
+    await act(async () => {
+      await settle();
+    });
+    expect(seen!.state).toBe("missing");
+    expect(seen!.record).toBeNull();
   });
 });
 

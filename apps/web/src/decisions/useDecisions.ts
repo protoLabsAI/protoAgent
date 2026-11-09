@@ -1,7 +1,8 @@
-import { useSyncExternalStore } from "react";
+import { useEffect, useSyncExternalStore } from "react";
 
 import { decisionsApi } from "../lib/api/decisions";
 import type { AnswerResult, DecisionList, DecisionRow } from "../lib/api/decisions";
+import { ApiError } from "../lib/api/http";
 import { onConnectionChange, onTopic } from "../lib/events";
 import { notifyIfHidden } from "../lib/notify";
 
@@ -15,6 +16,12 @@ import { notifyIfHidden } from "../lib/notify";
  * It also owns the panel's open state (so a notification click or an Activity link can open it
  * from outside, §2.3/Q11) and the one-shot notification latch (notify once per new pending id,
  * never again on a reload, §4.5).
+ *
+ * Beyond the pending list it keeps a by-id record cache ({@link DecisionsSnapshot.records}) so a
+ * chat transcript can read a decision that has since been answered, expired or withdrawn — the
+ * row that left the pending list keeps its last known record until a fresh read replaces it
+ * (#4725, Gap 2). Settled records live only in the cache: they never count as pending, never
+ * notify and never show in the panel.
  */
 export type DecisionsSnapshot = {
   state: "loading" | "ready" | "failed" | "stale";
@@ -28,6 +35,12 @@ export type DecisionsSnapshot = {
   loadedAt: number | null;
   /** Whether the Decisions panel is open — a notification click or a link flips it on. */
   panelOpen: boolean;
+  /** Every decision we've seen, by id. Pending refreshes merge their rows in; answer/cancel and
+   *  {@link loadDecision} store settled rows. A settled row stays here (and nowhere else) until a
+   *  fresh read replaces it — the shared record a source chat reads. */
+  records: Record<string, DecisionRow>;
+  /** Ids a GET resolved as 404 — a caller renders "no longer available" without re-fetching. */
+  missing: Record<string, true>;
 };
 
 /** Build a fresh store. Production uses one shared instance ({@link useDecisions}); tests build
@@ -41,6 +54,8 @@ export function createDecisionsStore() {
     loaded: false,
     loadedAt: null,
     panelOpen: false,
+    records: {},
+    missing: {},
   };
   const listeners = new Set<() => void>();
   let stop: (() => void) | null = null;
@@ -49,9 +64,25 @@ export function createDecisionsStore() {
   // One-shot notification latch: an id enters here the first time it appears pending and never
   // notifies again — not on a reconnect refetch, not on a decision.changed refresh (§4.5).
   const notified = new Set<string>();
+  // In-flight GETs by id, so concurrent loadDecision callers share one request (and a
+  // decision.changed re-read coalesces with a pending load).
+  const inflight = new Map<string, Promise<DecisionRow | null>>();
 
   function emit() {
     for (const listener of listeners) listener();
+  }
+
+  // Store one record by id and drop any stale "missing" flag. Settled rows land here via
+  // answer/cancel/loadDecision; pending rows are merged in bulk by refresh().
+  function storeRecord(row: DecisionRow) {
+    const records = { ...snapshot.records, [row.id]: row };
+    let missing = snapshot.missing;
+    if (missing[row.id]) {
+      missing = { ...missing };
+      delete missing[row.id];
+    }
+    snapshot = { ...snapshot, records, missing };
+    emit();
   }
 
   // Stable identity so the notification's onclick and an Activity link both call the same
@@ -81,6 +112,10 @@ export function createDecisionsStore() {
         try {
           result = await decisionsApi.listDecisions("pending");
           const decisions = result.decisions;
+          // Merge the fresh pending rows into the by-id cache. A row that has LEFT the pending
+          // list is not here to overwrite, so its last known record survives (#4725, Gap 2).
+          const records = { ...snapshot.records };
+          for (const d of decisions) records[d.id] = d;
           snapshot = {
             ...snapshot,
             state: "ready",
@@ -89,6 +124,7 @@ export function createDecisionsStore() {
             top: decisions[0] ?? null,
             loaded: true,
             loadedAt: Date.now(),
+            records,
           };
           // Notify once per newly-seen pending id. notifyIfHidden itself no-ops when the window
           // is focused, so a reload while looking at the console stays quiet.
@@ -111,6 +147,9 @@ export function createDecisionsStore() {
 
   async function answer(id: string, optionId: string): Promise<AnswerResult> {
     const result = await decisionsApi.answerDecision(id, { option_id: optionId, surface: "console" });
+    // Keep the now-closed record so the source chat can read it after it leaves the pending list.
+    // Both result shapes carry `decision` (a 409 may carry null when the record is unavailable).
+    if (result.decision) storeRecord(result.decision);
     // The server also publishes decision.changed, but refresh now so the count drops promptly.
     await refresh();
     return result;
@@ -118,8 +157,45 @@ export function createDecisionsStore() {
 
   async function cancel(id: string, reason?: string): Promise<DecisionRow> {
     const { decision } = await decisionsApi.cancelDecision(id, reason);
+    storeRecord(decision);
     await refresh();
     return decision;
+  }
+
+  // GET one decision and store it (or latch a 404 as missing). Coalesces concurrent calls for
+  // the same id; used both by loadDecision and the decision.changed re-read.
+  function fetchDecision(id: string): Promise<DecisionRow | null> {
+    const existing = inflight.get(id);
+    if (existing) return existing;
+    const p = (async () => {
+      try {
+        const row = await decisionsApi.getDecision(id);
+        storeRecord(row);
+        return row;
+      } catch (err) {
+        // A 404 means the row is gone for good — record it as missing so callers render
+        // "no longer available" instead of retrying in a loop. Any other error is transient.
+        if (err instanceof ApiError && err.status === 404) {
+          snapshot = { ...snapshot, missing: { ...snapshot.missing, [id]: true } };
+          emit();
+        }
+        return null;
+      } finally {
+        inflight.delete(id);
+      }
+    })();
+    inflight.set(id, p);
+    return p;
+  }
+
+  /** Load a decision by id on demand — a chat showing a decision that already left the pending
+   *  list. A cached record (or a known 404) resolves without a request; otherwise one GET is
+   *  issued, shared by any concurrent callers (§7, #4725 Gap 2). */
+  function loadDecision(id: string): Promise<DecisionRow | null> {
+    const cached = snapshot.records[id];
+    if (cached) return Promise.resolve(cached);
+    if (snapshot.missing[id]) return Promise.resolve(null);
+    return fetchDecision(id);
   }
 
   function subscribe(listener: () => void) {
@@ -134,8 +210,15 @@ export function createDecisionsStore() {
         }
         if (connected) void refresh();
       });
-      // Fleet-wide: any member's decision.changed refreshes the one store.
-      const offTopic = onTopic("decision.changed", () => void refresh());
+      // Fleet-wide: any member's decision.changed refreshes the one store. The pending refresh
+      // covers every id that is (or stays) pending; but a cached settled record the event names
+      // won't appear in that list, so re-read it by id to pick up its latest state (§7).
+      const offTopic = onTopic("decision.changed", (payload) => {
+        void refresh();
+        const id = typeof payload?.id === "string" ? payload.id : null;
+        const cached = id ? snapshot.records[id] : null;
+        if (id && cached && cached.state !== "pending") void fetchDecision(id);
+      });
       stop = () => {
         offConn();
         offTopic();
@@ -150,7 +233,7 @@ export function createDecisionsStore() {
     };
   }
 
-  return { subscribe, getSnapshot: () => snapshot, refresh, answer, cancel, openPanel, closePanel };
+  return { subscribe, getSnapshot: () => snapshot, refresh, answer, cancel, loadDecision, openPanel, closePanel };
 }
 
 // One store for the whole app: snapshots survive a consumer unmount/remount, and only while a
@@ -164,9 +247,30 @@ export function useDecisions() {
     refresh: store.refresh,
     answer: store.answer,
     cancel: store.cancel,
+    loadDecision: store.loadDecision,
     openPanel: store.openPanel,
     closePanel: store.closePanel,
   };
+}
+
+/** The resolution of one decision looked up by id: "loading" until the record arrives, "ready"
+ *  once it is cached (pending or settled), "missing" once a GET returned 404. */
+export type DecisionLookup = {
+  record: DecisionRow | null;
+  state: "loading" | "ready" | "missing";
+};
+
+/** Read one decision by id from the shared store — a source chat showing a decision that may
+ *  already be answered, expired or withdrawn (#4725, Gap 2). Loads it once on mount; a cached
+ *  record (or a prior 404) resolves with no request. */
+export function useDecision(id: string): DecisionLookup {
+  const snapshot = useSyncExternalStore(store.subscribe, store.getSnapshot, store.getSnapshot);
+  useEffect(() => {
+    void store.loadDecision(id);
+  }, [id]);
+  const record = snapshot.records[id] ?? null;
+  const state: DecisionLookup["state"] = record ? "ready" : snapshot.missing[id] ? "missing" : "loading";
+  return { record, state };
 }
 
 /** Test seam: exercise the shared store + its bus subscriptions without React. */
