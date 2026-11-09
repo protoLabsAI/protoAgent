@@ -1307,6 +1307,7 @@ def test_session_index_is_bounded_recent_and_grouped(monkeypatch, tmp_path):
                 "session_id": "chat-a",
                 "last_updated": "2026-08-19T12:03:00+00:00",
                 "turn_count": 2,
+                "last_task_id": "a-2",
             }
         ]
     }
@@ -1340,6 +1341,48 @@ def test_session_index_breaks_equal_timestamps_by_context_id(monkeypatch, tmp_pa
     monkeypatch.setattr(rs.STATE, "a2a_task_engine", engine, raising=False)
     rows = _client(monkeypatch).get("/api/chat/sessions?limit=2").json()["sessions"]
     assert [row["session_id"] for row in rows] == ["chat-b", "chat-a"]
+
+
+def test_session_index_names_the_newest_created_turn_and_skips_tombstones(monkeypatch, tmp_path):
+    """``last_task_id`` is the session's newest-CREATED turn, not its last-changed one.
+
+    A client holding turns the store already swept compares it against its own turns to
+    tell it is behind; a count cannot (ADR 0104). A pause a plain message moved to a new
+    task leaves the old task to settle AFTER the new one parks, so last-change order
+    would name the wrong turn. A retired session stays out of the index."""
+    import asyncio
+    from datetime import datetime, timezone
+
+    from a2a.server.tasks.database_task_store import Base, TaskModel
+    from sqlalchemy.ext.asyncio import create_async_engine
+
+    from operator_api.chat_routes import _ensure_chat_tombstones, _record_chat_tombstone
+
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path}/session-index-newest.db")
+
+    async def _seed():
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+            await _ensure_chat_tombstones(conn)
+            row = {"kind": "task", "status": {"state": "TASK_STATE_COMPLETED"}, "artifacts": [], "history": []}
+            await conn.execute(
+                TaskModel.__table__.insert(),
+                [  # inserted (= created) in this order; the older task settles last
+                    {**row, "id": "old", "context_id": "chat-a", "last_updated": datetime(2026, 8, 19, 12, 5, tzinfo=timezone.utc)},
+                    {**row, "id": "new", "context_id": "chat-a", "last_updated": datetime(2026, 8, 19, 12, 4, tzinfo=timezone.utc)},
+                    {**row, "id": "gone", "context_id": "chat-gone", "last_updated": datetime(2026, 8, 19, 12, 6, tzinfo=timezone.utc)},
+                ],
+            )
+            await _record_chat_tombstone(conn, "chat-gone")
+
+    asyncio.run(_seed())
+    import runtime.state as rs
+
+    monkeypatch.setattr(rs.STATE, "a2a_task_engine", engine, raising=False)
+    rows = _client(monkeypatch).get("/api/chat/sessions").json()["sessions"]
+    assert rows == [
+        {"session_id": "chat-a", "last_updated": "2026-08-19T12:05:00+00:00", "turn_count": 2, "last_task_id": "new"}
+    ]
 
 
 def test_session_index_parked_lists_sessions_whose_newest_turn_waits(monkeypatch, tmp_path):

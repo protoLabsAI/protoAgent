@@ -113,7 +113,14 @@ so for an ordinary turn the live stream and the stored text are the same string;
 goal-driven or autonomous auto-answer turn runs several passes and stores only its
 final pass's text, as it always has.
 
-The console consumes the index opportunistically at boot. `localStorage` stays
+The console consumes the index opportunistically at boot, and again while it stays
+open: when the window comes back (visibility, focus) and every 60 s while visible,
+single-flight and at least 10 s apart. Boot alone left a window
+that stayed open blind to turns another device ran until a reload. Each index row also
+carries `last_task_id`, the session's newest-CREATED turn: a copy that holds no turn by
+that id (and has not already reconciled against it, `serverLastTaskId`) is behind even
+when its own turn count is higher — it remembers turns the store has swept — which the
+count alone reads as in step. `localStorage` stays
 the primary store (it holds client-side niceties the task store doesn't —
 ordered parts, per-message usage pins): a non-empty local session wins for the
 turns it holds, while a missing or empty one is rebuilt from durable turns through
