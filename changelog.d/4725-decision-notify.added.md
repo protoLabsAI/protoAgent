@@ -1,0 +1,1 @@
+- **Decision notifications (#4725).** New decisions can notify configured chat surfaces with the agent, question, suggested option, expiry action, and console session link; a failed delivery never blocks the decision.

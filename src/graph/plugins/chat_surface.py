@@ -21,11 +21,32 @@ The manifest convention (ADR 0029): ``config_section: <id>``, ``secrets: [<token
 from __future__ import annotations
 
 import asyncio
+import inspect
 import logging
+import threading
 from dataclasses import dataclass
 from typing import Awaitable, Callable, Protocol, runtime_checkable
 
 log = logging.getLogger("protoagent.plugins.chat_surface")
+
+# Only live, configured surfaces participate; stop/reload removes their dispatcher.
+_notifiers: dict[object, Callable[[str, str], None]] = {}
+_notify_lock = threading.Lock()
+
+
+def notify_chat_surfaces(text: str, link: str) -> None:
+    """Queue optional adapter notifications without waiting for network delivery.
+
+    Safe from a store's worker thread as well as the server loop. An adapter with
+    no ``notify(text, link)`` hook does nothing by default.
+    """
+    with _notify_lock:
+        dispatchers = list(_notifiers.values())
+    for dispatch in dispatchers:
+        try:
+            dispatch(text, link)
+        except Exception:  # noqa: BLE001 — one stopped loop cannot block another surface
+            log.exception("Could not queue chat surface notification")
 
 
 @dataclass
@@ -59,6 +80,9 @@ class ChatAdapter(Protocol):
         cancelled. ``host`` exposes ``publish``/``subscribe`` for extras."""
 
     # Optional: ``outbound_tools(self) -> list`` to also give the agent send tools.
+    # Optional: ``async notify(self, text: str, link: str) -> None`` sends an
+    # unsolicited message to the adapter's configured destination(s). Omission
+    # is a no-op; synchronous hooks are also supported, in a worker thread.
 
 
 def _chunk(text: str, limit: int) -> list[str]:
@@ -90,6 +114,30 @@ def register_chat_surface(registry, adapter: ChatAdapter) -> None:
     (``enabled``, credentials, ``admin_ids``)."""
     host = registry.host
     state: dict = {"task": None}
+    notify_key = object()
+    notifications: set[asyncio.Task] = set()
+
+    async def _notify(text: str, link: str) -> None:
+        try:
+            hook = getattr(adapter, "notify", None)
+            if not callable(hook):
+                return
+            if inspect.iscoroutinefunction(hook):
+                await hook(text, link)
+            else:
+                result = await asyncio.to_thread(hook, text, link)
+                if inspect.isawaitable(result):
+                    await result
+        except Exception:  # noqa: BLE001 — notification failure never affects a decision
+            log.exception("[%s] decision notification failed", adapter.id)
+
+    def _queue_notify(text: str, link: str) -> None:
+        with _notify_lock:
+            if notify_key not in _notifiers:
+                return
+        task = asyncio.create_task(_notify(text, link))
+        notifications.add(task)
+        task.add_done_callback(notifications.discard)
 
     async def handle(msg: InboundMessage) -> None:
         admin_ids = {str(a).strip() for a in (registry.config.get("admin_ids") or []) if str(a).strip()}
@@ -120,9 +168,19 @@ def register_chat_surface(registry, adapter: ChatAdapter) -> None:
             log.warning("[%s] no agent invoke available — not started", adapter.id)
             return None
         state["task"] = asyncio.ensure_future(adapter.run(handle, cfg=dict(cfg), host=host))
+        if callable(getattr(adapter, "notify", None)):
+            loop = asyncio.get_running_loop()
+            with _notify_lock:
+                _notifiers[notify_key] = lambda text, link: loop.call_soon_threadsafe(_queue_notify, text, link)
         return state["task"]
 
     async def _stop():
+        with _notify_lock:
+            _notifiers.pop(notify_key, None)
+        for notification in tuple(notifications):
+            notification.cancel()
+        if notifications:
+            await asyncio.gather(*notifications, return_exceptions=True)
         task = state.get("task")
         if task is not None:
             task.cancel()

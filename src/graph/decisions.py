@@ -20,7 +20,7 @@ other durable stores (``inbox/store.py``). Every state change publishes
 ``directive.changed``) so a console view refreshes without polling.
 
 Expiry is delivered through the same guarded checkpoint resume as operator answers.
-Chat-surface notifications are a separate integration.
+New decisions queue best-effort chat-surface notifications outside the request path.
 """
 
 from __future__ import annotations
@@ -34,6 +34,7 @@ from collections.abc import Callable
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from urllib.parse import urlencode
 
 log = logging.getLogger("protoagent.decisions")
 
@@ -196,6 +197,29 @@ def _resolve_db_path() -> Path:
     from infra.paths import instance_paths
 
     return instance_paths().store("decisions") / "decisions.db"
+
+
+def _notify_created(rec: Decision) -> None:
+    """Notify only on insert, never on replay, answer, or expiry."""
+    try:
+        from graph.plugins.chat_surface import notify_chat_surfaces
+        from graph.sdk import console_url
+        from security.public_console import public_origin
+
+        agent = rec.agent or "Agent"
+        lines = [f"{agent} needs a decision: {rec.question}"]
+        lines.extend(
+            f"- {option['label']}" + (" (suggested)" if option.get("recommended") else "")
+            for option in rec.options
+        )
+        if rec.expires_at:
+            action = rec.default_action or "carry on without this step"
+            lines.append(f"If nobody answers by {rec.expires_at}, {agent} will {action}")
+        base = public_origin() or console_url() or ""
+        link = f"{base.rstrip('/')}/app/?{urlencode({'session': rec.session_id})}"
+        notify_chat_surfaces("\n".join(lines), link)
+    except Exception:  # noqa: BLE001 — delivery must never fail a committed insert
+        log.exception("Could not queue notification for decision %s", rec.id)
 
 
 class DecisionStore:
@@ -367,6 +391,7 @@ class DecisionStore:
             finally:
                 self._close(db)
         _publish("decision.changed", {"id": rec.id, "session_id": rec.session_id, "state": rec.state})
+        _notify_created(rec)
         return rec
 
     def get(self, decision_id: str) -> Decision | None:
