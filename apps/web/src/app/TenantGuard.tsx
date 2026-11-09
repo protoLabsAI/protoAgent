@@ -2,6 +2,8 @@ import { useToast } from "@protolabsai/ui/overlays";
 import { useEffect } from "react";
 
 import { SWITCHED_FLAG, tenantCheck } from "../lib/tenant";
+import { clearTranscriptDatabase } from "../chat/transcriptStore";
+import { blockPersistInThisPage } from "../lib/storageReset";
 import { readKey, removeKey } from "../lib/storage";
 
 // Tenant guard: localStorage is keyed by ORIGIN, but the backend behind an origin can
@@ -38,8 +40,11 @@ export function TenantGuard({ uid }: { uid: string | undefined }) {
   useEffect(() => {
     if (tenantCheck(uid) === "switched") {
       // The chat store hydrated from the stale keys at module init — reload to restart
-      // clean (a one-time event, only on an actual tenant switch).
-      window.location.reload();
+      // clean (a one-time event, only on an actual tenant switch). The previous backend's
+      // transcripts in IndexedDB go too (epic #4981), then the reload, whatever happens.
+      // Block saves first, so the unload flush can't write the old backend's chats back.
+      blockPersistInThisPage();
+      void clearTranscriptDatabase().finally(() => window.location.reload());
     }
   }, [uid]);
 

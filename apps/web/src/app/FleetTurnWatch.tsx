@@ -2,6 +2,7 @@ import { useToast } from "@protolabsai/ui/overlays";
 import { useEffect } from "react";
 
 import { isTaskFailed, isTaskStateUnknown, isTaskTerminal } from "../chat/taskState";
+import { liveTurnsElsewhere, subscribeTranscriptChanges } from "../chat/chat-store";
 import { api, authToken, currentSlug } from "../lib/api";
 import { taskFromGetTask } from "../lib/api/chat";
 import { notifyIfHidden } from "../lib/notify";
@@ -130,7 +131,22 @@ export function FleetTurnWatch() {
     let prev: Watch[] = [];
     async function round() {
       if (stopped) return;
-      const candidates = scanOtherSlugs(current);
+      // Saved transcripts live in IndexedDB once the store opened (epic #4981); localStorage
+      // otherwise (and for a window still on an older console).
+      let candidates = scanOtherSlugs(current);
+      try {
+        const stored = await liveTurnsElsewhere(current);
+        if (stored) {
+          const seen = notifiedSet();
+          const fromStore = stored
+            .filter((t) => !seen.has(t.taskId))
+            .map((t) => ({ slug: t.slug, taskId: t.taskId, title: t.title }));
+          candidates = [...fromStore, ...candidates.filter((c) => !fromStore.some((f) => f.taskId === c.taskId))];
+        }
+      } catch {
+        /* store unreadable this round: localStorage's view only */
+      }
+      if (stopped) return;
       // A watched turn that VANISHED from storage was finalized by its (open) owner window.
       for (const old of prev) {
         if (!candidates.some((c) => c.taskId === old.taskId)) void announce(old, "completed");
@@ -156,10 +172,14 @@ export function FleetTurnWatch() {
       if (e.key?.startsWith("protoagent.chat.sessions")) void round();
     };
     window.addEventListener("storage", onStorage);
+    const offTranscripts = subscribeTranscriptChanges((agent) => {
+      if (agent !== current) void round();
+    });
     void round();
     return () => {
       stopped = true;
       clearInterval(timer);
+      offTranscripts();
       window.removeEventListener("storage", onStorage);
     };
   }, [toast]);

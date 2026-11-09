@@ -15,6 +15,8 @@ import {
   subscribeDevHooks,
 } from "../lib/storage";
 import { blockPersistInThisPage, broadcastStorageReset } from "../lib/storageReset";
+// Import-light too: only the chunk helpers (epic #4981 S2: transcripts live in IndexedDB).
+import { clearTranscriptDatabase } from "../chat/transcriptStore";
 import "./app-crash.css";
 
 // Full-page fallback for the ROOT error boundary (#872) — a render throw that
@@ -158,7 +160,8 @@ export function AppCrash({
           variant="ghost"
           onClick={() => {
             resetChatData();
-            reload();
+            // Saved transcripts live in IndexedDB now: clear them too, then reload either way.
+            void clearTranscriptDatabase().finally(reload);
           }}
         >
           <Trash2 size={14} /> Reset chat data &amp; reload
