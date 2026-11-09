@@ -1,1 +1,0 @@
-- **Standing instruction ledger components prepared (#4861).** Add the console strip, drawer, and entries with loading, empty, stale, and failure states, accessible inline withdrawal confirmation, and component tests. These components are not yet mounted in the console.

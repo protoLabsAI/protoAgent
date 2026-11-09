@@ -15,6 +15,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.234.0] - 2026-11-09
+
+### Added
+- **Delete knowledge collections (#4630).** Remove a whole collection from recall and restore it before the existing 24-hour grace sweep permanently removes its chunks.
+
+- **Knowledge collections API (#4630).** Serve the knowledge base by collection (ADR 0125 P2 slice 6): a new `GET /api/knowledge/collections` lists each collection with its chunk count, distinct-source count and newest ingest time, and `GET /api/knowledge/search` gains a `?collection=` filter. Chunks with a null or empty `collection` group under the `knowledge_ingest` default (`general`), an unknown collection returns an empty list rather than a 404, conversation history is excluded, and agent memory never appears (it lives in the `memories` table). `KnowledgeStore` gains `list_collections()` plus an optional `collection` filter on `search`/`list_chunks` (threaded through the hybrid and layered stores), and `knowledge_ingest(collection=…)` now stamps the chunk's `collection` column on write, so a freshly ingested chunk is listed under — and searchable within — its collection immediately, instead of waiting for the next-boot backfill. The console gains typed `listCollections()` + a `collection` search option. Server + typed client only — the browser view is a separate card.
+
+- **Static plugin checks (#4809).** Add `protoagent plugin check <dir> [--json]` to report event-contract drift, missing public paths, undeclared page publishes, tools without skills, and registration footguns without importing plugin code. Part of #4809.
+
+- **Withdrawing a standing instruction now leaves a note in the chat (#4861).** When you revoke a directive from the console or the API, the agent's transcript gains an operator note — `You withdrew: "…"` — so a later compaction keeps the withdrawal right next to the original approval instead of leaving the approval standing with nothing to show it was taken back.
+
+- **Output-budget measurement (#4875).** Every subagent model call now records its finish reason, visible-text length, whether it called a tool, and its reasoning-token count; a new `llm_empty_completions_total` metric and a host-free `scripts/measure_output_budget.py` reproduce the ADR 0128 audit (share of calls over 8k output tokens, cap hits, empty replies, and finder-stage wall time) from a telemetry export. This slice only measures — nothing reads the new fields yet.
+
+- **Named generation profiles (#4875).** Add optional, validated model profiles that preserve operator settings across config saves, without supplying default profiles or changing existing model behavior.
+
+- **Subagent profile configuration (#4875).** Configure model and profile names, tools, turn limits, and availability for any built-in or plugin subagent, with consistent behavior across reloads.
+
+- **Frozen PV4 memory fixture tooling (#4897).** Add an on-demand, resumable PersonalizationV4 extractor and temporary fixture loader that preserves supersession history, with deterministic case selection and offline tests.
+- **On-demand memory retrieval evaluation (#4897).** Add a runtime top-k retrieval arm, PV4 answer-similarity scoring, twenty changed-fact probes, and paired majority comparisons without joining the nightly gate.
+
+- **Design mockups with a browser link (#4926).** The artifact plugin gains a `design-mockups` skill that teaches the agent to build a reviewable screen preview: real data, design-system components only, a toggle bar for theme, width and every UI state, and a built-in check that fails the render when anything spills past the frame at 1440 px or 390 px. `open_artifact` now opens any rendered artifact (html, React, markdown, mermaid, SVG, charts) as a full page in a new browser tab, not only saved files. The link is signed for that one version, expires after 30 minutes like the file link, and follows the browser's light or dark setting unless `?theme=light` or `?theme=dark` forces one.
+
+### Changed
+- **Standing instruction ledger components prepared (#4861).** Add the console strip, drawer, and entries with loading, empty, stale, and failure states, accessible inline withdrawal confirmation, and component tests. These components are not yet mounted in the console.
+
+- **Console data layer for the directive ledger (#4861).** Added the `useDirectives(session)` hook, typed `listDirectives`/`revokeDirective` API helpers, and a UI-store drawer-open request that back the upcoming directive-ledger view. It refreshes on `directive.changed` and on reconnect without polling; nothing renders yet.
+
+- **Shared console timestamp formatting (#4861).** Move the task timestamp formatter into the shared library and add a locale-aware joined date/time form for the directive ledger, preserving existing task displays.
+
+- **The nightly memory evals follow the memory policy (#4919).** `memory_note_intent` now asks the agent to note a durable fact ("I'm allergic to penicillin"), which must still be saved to memory. A new case, `memory_status_note_not_saved`, checks that a status note ("my standup just ended…") is NOT saved to memory: since ADR 0125 Phase 3 and v0.233.0, status lines belong in notes, the board or the PR, not in durable memory. The old case expected the opposite, and it began failing on the v0.232.0 nightly run.
+
+### Fixed
+- **Install Command-Line Tool reads as plain copy (#4903).** The tray dialog (and `protoagent cli link`) now says "The protoagent command is installed." with a `protoagent --help` to try, instead of echoing the raw symlink path into the app bundle. When the terminal can't find the command yet, or another protoagent runs first, it says what to do.
+
+- **Asking "what did I do today from the log" reaches your memories again (#4918).** The memory tool rename in v0.232.0 dropped "logged" and "today's entries" from `memory_list`'s description, so the agent answered from its activity totals instead of what it had stored. The cue is back. The nightly eval `memory_list_intent`, which had passed every night until v0.232.0, caught it.
+
+### Docs
+- **Clarify scoped search documentation (#4630).** Identify `knowledge_search` as the explicit search for rejected and expired knowledge rows, and distinguish `memory_search` and its separate memories store.
+
+- **ADR 0128 records the plan for per-role generation profiles (#4899).** Today every model call in an agent may emit up to 32k tokens with thinking on. A fleet audit found that 1.5% of calls produce 25% of output tokens, and 94 of the largest returned nothing. The ADR gives each subagent role a named profile (`routing`, `judgement`, `default`) with its own output, reasoning and context budget. A blank reply that hits the cap counts as a failed turn and is retried with a smaller budget. Core ships the names; operators set the numbers, and nothing changes until they do.
+
 ## [0.233.1] - 2026-11-08
 
 ### Fixed

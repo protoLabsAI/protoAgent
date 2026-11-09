@@ -1,1 +1,0 @@
-- **Static plugin checks (#4809).** Add `protoagent plugin check <dir> [--json]` to report event-contract drift, missing public paths, undeclared page publishes, tools without skills, and registration footguns without importing plugin code. Part of #4809.
