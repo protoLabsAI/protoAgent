@@ -7,7 +7,10 @@
 
 let permissionAsked = false;
 
-export function notifyIfHidden(title: string, body?: string): void {
+// `onClick` (optional): when the operator clicks the notification, bring the window to the
+// front and run it — the "Decisions" notification uses it to open the panel (#4725, §4.5).
+// Existing two-arg callers are unchanged.
+export function notifyIfHidden(title: string, body?: string, onClick?: () => void): void {
   if (typeof window === "undefined" || typeof Notification === "undefined") return;
   // Only alert when the user isn't already looking at the window.
   const visible = document.visibilityState === "visible" && document.hasFocus();
@@ -15,7 +18,17 @@ export function notifyIfHidden(title: string, body?: string): void {
 
   const fire = () => {
     try {
-      new Notification(title, { body: body?.slice(0, 240) });
+      const notification = new Notification(title, { body: body?.slice(0, 240) });
+      if (onClick) {
+        notification.onclick = () => {
+          try {
+            window.focus();
+          } catch {
+            // focus() can throw in some webviews — the onClick still runs.
+          }
+          onClick();
+        };
+      }
     } catch {
       // Some webview/permission states throw on construction — ignore.
     }
