@@ -21,7 +21,7 @@ export function DirectiveStrip({ sessionId }: { sessionId: string }) {
           {` · "${active[0].quote}"${!mobile && active.length > 1 ? ` and ${active.length - 1} more` : ""}`}
         </>}
       </span>
-      <Button variant="ghost" size="sm" onClick={() => failed ? void refresh() : openDirectives(sessionId)}>
+      <Button variant="ghost" size="sm" className="chat-ledger-action" onClick={() => failed ? void refresh() : openDirectives(sessionId)}>
         {failed ? "Retry" : "View"}
       </Button>
     </>}

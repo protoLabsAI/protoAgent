@@ -9,7 +9,8 @@ import {
   shownRuns,
   turnBubbleIndexes,
 } from "./turnText";
-import { readKey, writeKey } from "../lib/storage";
+import { listKeys, readKey, removeKey, writeKey } from "../lib/storage";
+import { agentChunkPrefix, expandSessions, orphanChunks, packSessions } from "./transcriptChunks";
 import { attachmentDisplay, validThumbnails } from "./imageThumbnails";
 import { persistBlocked } from "../lib/storageReset";
 
@@ -51,6 +52,11 @@ export type ChatSession = {
   // even when that read added nothing, so a count this copy can never match (a turn
   // regenerated away, a tail past the read window) is not re-fetched on every boot.
   serverTurnCount?: number;
+  // The server's newest turn (`/api/chat/sessions` `last_task_id`) this copy was last
+  // reconciled against. A newest turn this copy doesn't hold — and hasn't already
+  // reconciled against — means another client ran a turn here; unlike the count, it
+  // still says so once this copy remembers turns the store has swept (24h retention).
+  serverLastTaskId?: string;
 };
 
 // Reasoning is ON by default in the console (auto-enable) — a fresh tab thinks at
@@ -162,6 +168,7 @@ export type SessionReconcile = {
   token: HydrationEligibility;
   messages: ChatMessage[] | null;
   serverTurnCount: number;
+  serverLastTaskId?: string | null;
 };
 
 function hydrationCanRepairMessage(message: ChatMessage | undefined): message is ChatMessage {
@@ -592,10 +599,59 @@ function streamingIds(state: ChatState): Set<string> {
   return new Set(Object.keys(state.sessionStatusMap).filter((id) => state.sessionStatusMap[id] === "streaming"));
 }
 
+// ── chunked transcripts (#4973, chat/transcriptChunks.ts) ─────────────────────
+// A chunk key is named by its content, so a parsed chunk never goes stale: cache it, and
+// a save that re-reads the main key doesn't re-parse a chat's whole settled history.
+const chunkCache = new Map<string, ChatMessage[]>();
+
+function readChunk(key: string): ChatMessage[] | null {
+  const cached = chunkCache.get(key);
+  if (cached) return cached;
+  try {
+    const raw = readKey("local", key);
+    const parsed: unknown = raw ? JSON.parse(raw) : null;
+    if (!Array.isArray(parsed)) return null;
+    chunkCache.set(key, parsed as ChatMessage[]);
+    return parsed as ChatMessage[];
+  } catch {
+    return null;
+  }
+}
+
+/** A main-key value as the in-memory state: every chat's chunks put back before its tail. */
+export function parsePersisted(raw: string | null): PersistedChatState | null {
+  if (!raw) return null;
+  return sanitizePersisted(expandSessions(STORAGE_KEY, JSON.parse(raw), readChunk));
+}
+
+/** Write `payload` chunked: new chunks first, then the main key that names them, then drop
+ *  this agent's chunks nothing names any more. A chunk that can't be written makes this
+ *  save fall back to the old inline form (the caller's quota path). Returns the main write. */
+function writeChunked(payload: PersistedChatState): ReturnType<typeof writeKey> | null {
+  const { sessions, chunkValues } = packSessions(STORAGE_KEY, payload.sessions);
+  const prefix = agentChunkPrefix(STORAGE_KEY);
+  const present = new Set(listKeys("local").filter((key) => key.startsWith(prefix)));
+  for (const [key, json] of chunkValues) {
+    if (present.has(key)) continue;
+    if (!writeKey("local", key, json).ok) return null;
+    present.add(key);
+    chunkCache.set(key, JSON.parse(json) as ChatMessage[]);
+  }
+  const result = writeKey("local", STORAGE_KEY, JSON.stringify({ ...payload, sessions }));
+  if (result.ok) collectChunks(present, new Set(chunkValues.keys()));
+  return result;
+}
+
+function collectChunks(present: Iterable<string>, referenced: ReadonlySet<string>) {
+  for (const key of orphanChunks(STORAGE_KEY, present, referenced)) {
+    removeKey("local", key);
+    chunkCache.delete(key);
+  }
+}
+
 function loadPersisted(): PersistedChatState {
   try {
-    const raw = readKey("local", STORAGE_KEY);
-    const state = raw ? sanitizePersisted(JSON.parse(raw)) : null;
+    const state = parsePersisted(readKey("local", STORAGE_KEY));
     if (state) {
       const sessions = state.sessions.filter((session) => !locallyDismissedIds.has(session.id));
       if (sessions.length) {
@@ -630,8 +686,7 @@ function persist(state: ChatState) {
     // streaming sessions stay authoritative; locally-deleted ones are not resurrected.
     let sessions = state.sessions;
     try {
-      const raw = readKey("local", STORAGE_KEY);
-      const onDisk = raw ? sanitizePersisted(JSON.parse(raw)) : null;
+      const onDisk = parsePersisted(readKey("local", STORAGE_KEY));
       if (onDisk) {
         sessions = mergeSessions(state.sessions, onDisk.sessions, {
           streamingIds: streamingIds(state),
@@ -656,8 +711,13 @@ function persist(state: ChatState) {
     // Only bounded preview fields enter the durable cache.
     payload.sessions = payload.sessions.map((s) => ({ ...s, messages: s.messages.map((m) =>
       m.attachments ? { ...m, attachments: validThumbnails(m.attachments) } : m) }));
+    const chunked = writeChunked(payload);
+    if (chunked?.ok) return;
+    // Inline fallback: a chunk or the main key didn't fit. Write the old one-value form (it
+    // names no chunks, so the next good save collects them), then, under quota pressure,
+    // discard the oldest previews while keeping transcript text.
     let result = writeKey("local", STORAGE_KEY, JSON.stringify(payload));
-    // Under quota pressure, discard oldest previews while retaining transcript text.
+    if (result.ok) collectChunks(listKeys("local"), new Set());
     const oldest = [...payload.sessions].sort((a, b) => a.updatedAt - b.updatedAt);
     for (const session of oldest) {
       for (const message of session.messages) {
@@ -680,12 +740,21 @@ function persist(state: ChatState) {
 // Serializing EVERY session to localStorage per update
 // is the dominant main-thread cost of a streaming turn (and each write fires a
 // cross-window `storage` event that FleetTurnWatch re-parses). So streaming
-// updates persist on a trailing ~300ms timer; structural changes (session
+// updates persist on a trailing ~2s timer; structural changes (session
 // add/remove/rename/switch, stream start/done) and page unload flush
 // immediately. Only the localStorage WRITE is deferred — the in-memory state
 // and listener notify stay synchronous, so the UI streams live.
+//
+// Why 2s and not shorter: every write re-stringifies the agent's WHOLE transcript
+// key (hundreds of KB), and WebKit (the desktop app, Safari) stores it as one SQLite
+// value — any edit shifts every overflow page after it, so each save rewrites the
+// whole blob into the write-ahead log. At 300ms a 60s streamed turn wrote ~120 such
+// blobs (~50 MB of WAL on a 450 KB key); in the desktop app a WebKit reader pinned
+// since launch keeps that WAL from ever checkpointing until the app quits (204 MB
+// after 9.5h, 2026-11-09). A crash mid-stream loses at most ~2s of text, and the
+// server's durable copy of the in-flight turn redraws it (ADR 0104 reattach/hydration).
 
-export const PERSIST_DEBOUNCE_MS = 300;
+export const PERSIST_DEBOUNCE_MS = 2_000;
 
 let persistTimer: ReturnType<typeof setTimeout> | null = null;
 let persistDirty = false;
@@ -897,7 +966,7 @@ try {
   window.addEventListener("storage", (e: StorageEvent) => {
     if (e.key !== STORAGE_KEY || e.newValue == null) return; // other key, or a tenant-clear
     try {
-      const incoming = sanitizePersisted(JSON.parse(e.newValue));
+      const incoming = parsePersisted(e.newValue);
       if (incoming) mergeFromStorage(incoming);
     } catch {
       // Ignore a malformed cross-tab write — our own state is unaffected.
@@ -977,7 +1046,11 @@ export const chatStore = {
         if (!update || session !== update.token.localSession) return session;
         if (locallyDeletedIds.has(session.id) || locallyDismissedIds.has(session.id)) return session;
         changed = true;
-        if (!update.messages) return { ...session, serverTurnCount: update.serverTurnCount };
+        const marks = {
+          serverTurnCount: update.serverTurnCount,
+          ...(update.serverLastTaskId ? { serverLastTaskId: update.serverLastTaskId } : {}),
+        };
+        if (!update.messages) return { ...session, ...marks };
         const last = [...update.messages].reverse().find((message) => message.role === "assistant");
         // The adopted tail can end on a turn still running elsewhere: mark it like a
         // hydrated session's live turn (mergeHydratedSessions), so the slot reattaches.
@@ -986,7 +1059,7 @@ export const chatStore = {
         return {
           ...session,
           messages: update.messages,
-          serverTurnCount: update.serverTurnCount,
+          ...marks,
           updatedAt: Math.max(session.updatedAt, Date.now()),
         };
       });

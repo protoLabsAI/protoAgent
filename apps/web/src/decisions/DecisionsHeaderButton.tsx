@@ -1,6 +1,6 @@
 import { useLayoutEffect, useRef, type RefObject } from "react";
 import { MessageCircleQuestion } from "lucide-react";
-import { Count } from "@protolabsai/ui/primitives";
+import { Button, Count } from "@protolabsai/ui/primitives";
 
 import { DecisionsSheet } from "./DecisionsPanel";
 import { decisionsLabel } from "./DecisionsWidget";
@@ -13,40 +13,14 @@ import { useDecisions } from "./useDecisions";
  * {@link DecisionsSheet} (a bottom `Drawer`). Not mounted here — the mount card places it in
  * `MobileShell` before New chat (chat root) and in the spacer slot (pushed views).
  *
- * It is a COMPOSITE trigger — the `MessageCircleQuestion` glyph and a `Count` beside it, both
- * `aria-hidden`, with the whole name spoken from `aria-label` (§6). Josh's rule allows a raw
- * `<button>` for a composite trigger provided it carries the DS focus ring and tokens, so the ring
- * is a token-only `:focus-visible` rule (below) rather than relying on a DS `Button`'s chrome. The
- * mount card adds the header LAYOUT (`flex: 0 0 auto`, the icon↔count gap) to `mobile-shell.css`;
- * this ships the ring so the unmounted button is still keyboard-accessible on its own.
+ * It is an ACTION button — a label (the `MessageCircleQuestion` glyph plus a `Count`, both
+ * `aria-hidden`, with the whole name spoken from `aria-label`) that does one thing. Josh's rule
+ * and revision 1 §2.2 (Q23, Q24) require the DS `Button` for that, so it ships as a ghost icon
+ * `Button`: the DS owns its border/background, the `:focus-visible` ring and the touch-target
+ * floor (the `pl-btn--icon` ::after overlay reaches 44px under `@media (hover: none)`). No
+ * chrome or ring is hand-rolled here. The icon↔count gap and the `flex: 0 0 auto` header LAYOUT
+ * belong to the mount card's `mobile-shell.css`, not this component.
  */
-
-// Token-only ring + the composite layout, so the button is self-contained before it is mounted.
-// `:focus-visible` can't be an inline style, so it rides a tiny scoped rule on a dedicated class
-// (never a `.pl-*` class). No accent, no pulse — a pending decision is a request, not an alarm.
-const HEAD_BTN_CSS = `
-.decisions-head-btn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: var(--pl-space-1);
-  flex: 0 0 auto;
-  min-width: 44px;
-  min-height: 44px;
-  padding: 0 var(--pl-space-2);
-  border: none;
-  border-radius: var(--pl-radius);
-  background: none;
-  color: var(--pl-color-fg);
-  cursor: pointer;
-  -webkit-tap-highlight-color: transparent;
-  touch-action: manipulation;
-}
-.decisions-head-btn:focus-visible {
-  outline: var(--pl-border-width) solid var(--pl-color-fg);
-  outline-offset: 2px;
-}
-`;
 
 export function DecisionsHeaderButton({
   fallbackFocus,
@@ -57,7 +31,10 @@ export function DecisionsHeaderButton({
 }) {
   const { decisions, pendingCount, loaded, panelOpen, openPanel, closePanel, answer } =
     useDecisions();
-  const btnRef = useRef<HTMLButtonElement>(null);
+  // The DS `Button` is a plain function component and does not forward a ref (React 19 drops ref
+  // only through props, which `ButtonProps` does not declare), so hold the ref on a transparent
+  // wrapper and reach the `<button>` through it — the same idiom as DirectiveEntry.
+  const slotRef = useRef<HTMLSpanElement>(null);
   const wasOpen = useRef(false);
 
   // The DS Drawer traps focus but never returns it to the opener on close, so do it here: to the
@@ -65,7 +42,7 @@ export function DecisionsHeaderButton({
   // clears while the sheet is open (§5.1).
   useLayoutEffect(() => {
     if (wasOpen.current && !panelOpen) {
-      const btn = btnRef.current;
+      const btn = slotRef.current?.querySelector("button");
       if (btn && document.contains(btn)) btn.focus();
       else fallbackFocus?.current?.focus();
     }
@@ -76,12 +53,12 @@ export function DecisionsHeaderButton({
   return (
     <>
       {shown ? (
-        <>
-          <style>{HEAD_BTN_CSS}</style>
-          <button
-            ref={btnRef}
+        <span ref={slotRef}>
+          <Button
+            variant="ghost"
+            size="md"
+            icon
             type="button"
-            className="mshell-head-btn decisions-head-btn"
             aria-label={decisionsLabel(pendingCount)}
             title="Decisions waiting on you"
             aria-haspopup="dialog"
@@ -90,8 +67,8 @@ export function DecisionsHeaderButton({
           >
             <MessageCircleQuestion size={20} aria-hidden />
             <Count aria-hidden>{pendingCount > 9 ? "9+" : pendingCount}</Count>
-          </button>
-        </>
+          </Button>
+        </span>
       ) : null}
       {/* Rendered whenever the panel is open — even after the button has gone — so it can show
           "That's everything" and return focus to New chat on close (§5.1). */}

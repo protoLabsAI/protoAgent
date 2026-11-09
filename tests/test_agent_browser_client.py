@@ -300,6 +300,19 @@ def test_a_profile_held_by_another_browser_is_named(make):
     assert r.kind == "cli_error" and "already in use" in r.error
 
 
+@pytest.mark.parametrize("scope,fix", [("per_session", "session_scope is per_session"),
+                                       ("shared", "Another browser")])
+def test_an_agent_session_names_the_agents_profile_in_the_lock_error(monkeypatch, scope, fix):
+    # QA (#4957): a for_agent_session client launches with the agent_browser plugin's profile, so
+    # the "profile in use" diagnosis must name THAT profile and scope, not the client's empty one.
+    monkeypatch.setattr(runner.subprocess, "Popen", CLI(
+        lambda argv: (b"", b"Failed to create a ProcessSingleton for your profile directory", 1)))
+    host = _agent_host(profile="/agents/prof", session_scope=scope)
+    b = client.BrowserClient.for_agent_session({"session_id": "chat-A"}, host=host)
+    r = b.open("https://shop.example/", check_walls=False, recover=False)
+    assert r.kind == "cli_error" and "/agents/prof" in r.error and fix in r.error, r.error
+
+
 def test_navigations_are_paced(make, monkeypatch):
     slept = []
     monkeypatch.setattr(client.time, "sleep", lambda s: slept.append(s))
@@ -416,3 +429,176 @@ async def test_a_browser_tool_waits_for_a_client_on_the_same_session(monkeypatch
     assert not task.done()
     g.release(owner)
     assert await asyncio.wait_for(task, 5)
+
+
+# ── form_read ────────────────────────────────────────────────────────────────────────────────
+
+forms = importlib.import_module(f"{_PKG.__name__}.forms")
+
+_RAW_FIELDS = [
+    {"label": "First Name", "kind": "text", "name": "first_name", "id": "first_name", "required": True,
+     "value": "Ada", "selector": "[data-ab-field=\"0\"]", "idx": 0, "labels": ["First Name"]},
+    {"label": "Visa?", "kind": "combobox", "name": "", "id": "visa", "required": False, "value": "",
+     "options": [f"opt {i}" for i in range(75)], "selector": "[data-ab-field=\"1\"]"},
+    {"label": "Yes", "kind": "radio-group", "name": "relocate", "group": "relocate",
+     "groupLabel": "Relocate?", "optionLabel": "Yes", "checked": False, "required": True},
+    {"label": "No", "kind": "radio-group", "name": "relocate", "group": "relocate",
+     "groupLabel": "Relocate?", "optionLabel": "No", "checked": True},
+]
+
+
+def _form_page(payload, *, stringify=True):
+    result = json.dumps(payload) if stringify else payload
+    return lambda argv: (_ok({"origin": "x", "result": result}), "", 0)
+
+
+def test_form_read_returns_the_tools_field_shape_as_data(make):
+    b, cli = make(_form_page({"ok": True, "fields": _RAW_FIELDS}))
+    r = b.form_read()
+    assert r.ok and r.kind == "ok" and r.text == ""
+    # The exact list browser_form_read renders (one parse, two consumers) …
+    assert r.value == json.loads(forms.render_form_read(json.dumps({"ok": True, "fields": _RAW_FIELDS})))
+    first, visa, relocate = r.value
+    assert first == {"label": "First Name", "kind": "text", "name": "first_name", "id": "first_name",
+                     "required": True, "value": "Ada"}  # no internal selector/idx/labels
+    assert len(visa["options"]) == forms.OPTIONS_SHOWN and visa["options_more"] == 75 - forms.OPTIONS_SHOWN
+    assert relocate["label"] == "Relocate?" and relocate["value"] == "No" and relocate["required"]
+    # … read by the same in-page script (with the combobox option probe), over stdin, without markers.
+    assert cli.calls[-1] == ["--json", "eval", "--stdin"]
+    assert cli.stdins[-1] == forms.read_form_js("") and "abReadComboOptions" in cli.stdins[-1]
+    assert "--content-boundaries" not in cli.calls[-1]
+
+
+def test_form_read_scopes_inside_the_script_never_argv(make):
+    b, cli = make(_form_page({"ok": True, "fields": []}))
+    r = b.form_read("#application")
+    assert r.ok and r.value == []
+    assert cli.calls[-1] == ["--json", "eval", "--stdin"]
+    assert cli.stdins[-1] == forms.read_form_js("#application")
+
+
+def test_form_read_accepts_an_already_decoded_result(make):
+    b, _ = make(_form_page({"ok": True, "fields": _RAW_FIELDS[:1]}, stringify=False))
+    assert b.form_read().value[0]["label"] == "First Name"
+
+
+def test_form_read_strips_stray_content_boundaries(make):
+    wrapped = (f"--- AGENT_BROWSER_PAGE_CONTENT nonce={'a' * 32} origin=https://x ---\n"
+               + json.dumps(json.dumps({"ok": True, "fields": _RAW_FIELDS[:1]}))
+               + f"\n--- END_AGENT_BROWSER_PAGE_CONTENT nonce={'a' * 32} ---")
+    b, _ = make(lambda argv: (_ok({"result": wrapped}), "", 0))
+    assert b.form_read().value[0]["value"] == "Ada"
+
+
+def test_form_read_refuses_a_ref_scope_before_running(make):
+    b, cli = make()
+    r = b.form_read("@e12")
+    assert r.kind == "bad_argument" and cli.calls == []
+
+
+def test_form_read_failures_are_typed(make, monkeypatch):
+    b, _ = make(_form_page({"ok": False, "error": "scope-not-found"}))
+    r = b.form_read("#nope")
+    assert r.kind == "cli_error" and "#nope" in r.error and not r.error.startswith("Error:")
+    b, _ = make(lambda argv: (_ok({"result": "not json {"}), "", 0))
+    assert b.form_read().kind == "script_error"
+    b, _ = make(lambda argv: (_fail("Evaluation error: TypeError: x"), "", 1))
+    assert b.form_read().kind == "script_error"
+    b, _ = make(_form_page({"ok": True, "fields": ["junk"]}))
+    assert b.form_read().kind == "script_error"
+    # Past the byte cap: too_large, never a cut-off half list.
+    b, _ = make(_form_page({"ok": True, "fields": _RAW_FIELDS * 200}))
+    monkeypatch.setattr(type(b._host), "max_bytes", property(lambda self: 1000))
+    r = b.form_read()
+    assert r.kind == "too_large" and r.value is None
+
+
+def test_form_read_holds_the_session_guard(make):
+    b, cli = make(_form_page({"ok": True, "fields": []}), session="form-x", instance_scoped=False)
+    g, tool_owner = runner.guard("form-x"), object()
+    assert g.try_acquire(tool_owner)
+    done = threading.Event()
+    t = threading.Thread(target=lambda: (b.form_read(), done.set()))
+    t.start()
+    time.sleep(0.1)
+    assert not done.is_set()
+    g.release(tool_owner)
+    t.join(5)
+    assert done.is_set() and cli.calls[-1] == ["--json", "eval", "--stdin"]
+
+
+# ── for_agent_session: the agent's own browser ──────────────────────────────────────────────
+
+
+def _agent_host(**cfg):
+    return client._Host({"binary": "ab", "cli_autofetch": False, **cfg})
+
+
+@pytest.mark.parametrize("scope,sid", [("shared", "chat-A"), ("shared", ""), ("per_session", "chat-A"),
+                                       ("per_session", "")])
+def test_for_agent_session_names_the_session_the_tools_resolve(monkeypatch, scope, sid):
+    monkeypatch.setenv("AGENT_BROWSER_SESSION", "operator-browser")
+    state = {"session_id": sid}
+    b = client.BrowserClient.for_agent_session(state, host=_agent_host(session_scope=scope))
+    assert b.session == tools._resolve_session_name(scope, state)
+    assert b.agent_session and b.agent_chat == (scope == "per_session" and bool(sid))
+
+
+def test_for_agent_session_takes_a_bare_session_id_and_refuses_a_guess(monkeypatch):
+    host = _agent_host(session_scope="per_session")
+    b = client.BrowserClient.for_agent_session(session_id="chat-B", host=host)
+    assert b.session == tools._session_name_for("chat-B")
+    with pytest.raises(ValueError, match="state"):
+        client.BrowserClient.for_agent_session(host=host)  # no state, no id, tracing empty
+    # Under `shared` there is only one session to mean, so nothing is needed.
+    monkeypatch.setenv("AGENT_BROWSER_SESSION", "operator-browser")
+    assert client.BrowserClient.for_agent_session(host=_agent_host()).session == "operator-browser"
+
+
+def test_for_agent_session_sends_the_tools_launch_flags_and_idle(monkeypatch):
+    cfg = {"binary": "ab", "cli_autofetch": False, "session_scope": "per_session", "headed": True,
+           "profile": "/p/agent", "idle_timeout_min": 7}
+    cli = CLI(_plain_page)
+    monkeypatch.setattr(runner.subprocess, "Popen", cli)
+    b = client.make_factory(lambda: cfg).for_agent_session({"session_id": "chat-C"})
+    assert b.launch_flags() == tools.launch_flags(cfg)  # what browser_open sends, nothing of its own
+    assert b.open("https://x.example/").ok
+    assert cli.calls[0][:3] == ["--json", "open", "https://x.example/"]
+    assert cli.calls[0][3:] == tools.launch_flags(cfg)
+    assert cli.envs[0]["AGENT_BROWSER_SESSION"] == tools._session_name_for("chat-C")
+    assert cli.envs[0]["AGENT_BROWSER_IDLE_TIMEOUT_MS"] == str(7 * 60_000)
+
+
+def test_for_agent_session_refuses_close(make, monkeypatch):
+    cli = CLI(_plain_page)
+    monkeypatch.setattr(runner.subprocess, "Popen", cli)
+    monkeypatch.setenv("AGENT_BROWSER_SESSION", "operator-browser")
+    b = client.BrowserClient.for_agent_session({"session_id": "x"}, host=_agent_host())
+    assert b.close().kind == "bad_argument" and cli.calls == []
+
+
+async def test_a_form_read_on_the_agent_session_waits_for_a_browser_tool(monkeypatch):
+    """The point of for_agent_session: a verify read can't land mid-fill. A browser tool holding
+    the session (here: blocked inside its CLI call) makes the client's form_read wait."""
+    monkeypatch.setenv("AGENT_BROWSER_SESSION", "agent-sess-z")
+    release = threading.Event()
+
+    def answer(argv):
+        if "eval" in argv and "--json" not in argv:   # the tool's browser_eval
+            release.wait(5)
+            return b"1", b"", 0
+        return _ok({"result": json.dumps({"ok": True, "fields": _RAW_FIELDS[:1]})}), b"", 0
+    cli = CLI(answer)
+    monkeypatch.setattr(tools.subprocess, "Popen", cli)
+    t = {x.name: x for x in tools.get_browser_tools({"binary": "ab", "cli_autofetch": False,
+                                                     "content_boundaries": False})}
+    tool_task = asyncio.ensure_future(t["browser_eval"].ainvoke({"expression": "1"}))
+    await asyncio.sleep(0.2)
+    b = client.make_factory(lambda: {"binary": "ab", "cli_autofetch": False}).for_agent_session({"session_id": "q"})
+    read = asyncio.ensure_future(asyncio.to_thread(b.form_read))
+    await asyncio.sleep(0.3)
+    assert not read.done()  # behind the tool
+    release.set()
+    await asyncio.wait_for(tool_task, 5)
+    r = await asyncio.wait_for(read, 5)
+    assert r.ok and r.value[0]["label"] == "First Name"

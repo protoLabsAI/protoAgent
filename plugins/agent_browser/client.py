@@ -64,6 +64,18 @@ What the client guarantees, each learned the hard way:
   for a bot check / block page / sign-in wall, re-probing a transient JS challenge first.
   Nothing tries to get past one.
 * **The argv option guard** (``runtime.bad_operand``) on every caller-supplied operand.
+* **``form_read(scope)``** runs the same in-page form reader as ``browser_form_read`` and hands
+  back the field list as DATA (``Result.value``), so a plugin can verify a form against the real
+  page instead of trusting a read-back the model passed in (it can trim one).
+
+**The agent's own browser.** ``make(session=...)`` is always a session of the plugin's own. To
+act on the page the agent's ``browser_*`` tools are driving in THIS chat (verify what it
+filled), use ``make.for_agent_session(state)`` from inside a tool call, passing the tool's
+injected graph state (``state: Annotated[Any, InjectedState]``): it resolves the session name
+exactly as the tools do (``session_scope: shared`` → the instance's main session;
+``per_session`` → the name derived from ``state["session_id"]``), takes the same per-session
+guard, and sends the agent_browser plugin's own launch flags, so it can't relaunch the agent's
+Chrome with different options. ``close()`` is refused on it — that browser isn't the plugin's.
 
 No stealth or anti-detection: the client sends exactly the launch options the plugin asks for
 (``headed``, ``profile``, ``user_agent``, Chrome ``browser_args``) and adds none of its own.
@@ -80,7 +92,7 @@ import time
 from dataclasses import dataclass
 from typing import Any
 
-from . import boundaries, preflight, runner, runtime, walls
+from . import boundaries, forms, preflight, runner, runtime, walls
 
 log = logging.getLogger("protoagent.plugins.agent_browser")
 
@@ -286,9 +298,38 @@ class BrowserClient:
         self._host = host or _Host()
         self._last_nav = 0.0
         self._pace_lock = threading.Lock()
+        # Set by for_agent_session(): this client drives the agent's tools' session, not one of
+        # the plugin's own — launch flags and the idle reaper then come from agent_browser's
+        # config (what the tools send), and close() is refused. ``agent_chat`` marks a per-chat
+        # (per_session) browser rather than the instance's main one.
+        self.agent_session = False
+        self.agent_chat = False
+
+    @classmethod
+    def for_agent_session(cls, state: Any = None, *, session_id: str | None = None,
+                          timeout_s: float = 30.0, nav_timeout_s: float = 45.0,
+                          host: _Host | None = None) -> BrowserClient:
+        """A client on the SAME agent-browser session the ``browser_*`` tools use for the
+        calling chat — see the module doc. ``state``: the calling tool's injected graph state
+        (authoritative, like the tools: its ``session_id``, even an empty one). Without it,
+        ``session_id`` or the tracing context is used — but note the tracing id is EMPTY inside
+        a tool body, so under ``session_scope: per_session`` pass ``state`` (or ``session_id``);
+        with neither this raises ``ValueError`` rather than silently reading another page."""
+        host = host or _Host()
+        cfg = host._live()
+        scope = str(cfg.get("session_scope") or "shared").strip().lower()
+        name, chat = _agent_session_name(scope, state, session_id)
+        # Built with a placeholder name, then pointed at the tools' name verbatim: that name is
+        # the tools' (or the operator's AGENT_BROWSER_SESSION), not bound by the 24-char rule
+        # for a plugin's own session.
+        c = cls(session="agent", instance_scoped=False, timeout_s=timeout_s,
+                nav_timeout_s=nav_timeout_s, host=host)
+        c.session, c.agent_session, c.agent_chat = name, True, chat
+        return c
 
     def __repr__(self) -> str:
-        return f"BrowserClient(session={self.session!r}, own_tab={self.own_tab!r})"
+        tag = ", agent_session=True" if self.agent_session else ""
+        return f"BrowserClient(session={self.session!r}, own_tab={self.own_tab!r}{tag})"
 
     # ── plumbing ─────────────────────────────────────────────────────────────────────────
     @contextlib.contextmanager
@@ -304,7 +345,11 @@ class BrowserClient:
             g.release(owner)
 
     def launch_flags(self) -> list[str]:
-        """The daemon-level options sent with every ``open <url>`` and every tab command."""
+        """The daemon-level options sent with every ``open <url>`` and every tab command. On the
+        agent's session they are the agent_browser plugin's own (``runtime.launch_flags``), the
+        same the tools send, so this client never relaunches the agent's Chrome differently."""
+        if self.agent_session:
+            return runtime.launch_flags(self._host._live())
         f: list[str] = []
         if self.headed:
             f.append("--headed")
@@ -324,7 +369,9 @@ class BrowserClient:
         cmd = " ".join(a for a in args[:2] if not a.startswith("--")) or (args[0] if args else "")
         exe = preflight.cli_for_run(host.binary, autofetch=host.autofetch,
                                     on_done=host.refresh_gaps if callable(host.refresh_gaps) else None)
-        env = runtime.cli_env(self.session, self.idle_ms)
+        idle = (runtime.idle_timeout_ms(host._live(), chat=self.agent_chat) if self.agent_session
+                else self.idle_ms)
+        env = runtime.cli_env(self.session, idle)
         if env_extra:
             env = {**env, **env_extra}
         res = runner.run([exe, *args], env=env, timeout=timeout or self.timeout_s,
@@ -377,8 +424,10 @@ class BrowserClient:
             return Result(OK, text=out, value=data, command=cmd, seconds=res.seconds)
         reason = (str(env.get("error") or "") if env else "") or _last_line(err) or _last_line(out) \
             or f"exit code {res.returncode}"
-        if (locked := runtime.profile_in_use_error(err + "\n" + reason, {"profile": self.profile},
-                                                   self.session)):
+        # On the agent's own session the launch flags (so the profile and session_scope) are the
+        # agent_browser plugin's config, not this client's (QA, #4957): diagnose with those.
+        lock_cfg = self._host._live() if self.agent_session else {"profile": self.profile}
+        if (locked := runtime.profile_in_use_error(err + "\n" + reason, lock_cfg, self.session)):
             return Result(CLI_ERROR, error=locked.removeprefix("Error: "), command=cmd, seconds=res.seconds)
         # A page script's own error text can say "timeout" — that is the script's, not the browser's.
         kind = TIMEOUT if _TIMEOUT_TEXT.search(reason) and "Evaluation error" not in reason else CLI_ERROR
@@ -661,10 +710,85 @@ class BrowserClient:
         with self.hold():
             return self._command(*pre, *argv, truncatable=True)
 
+    def form_read(self, scope: str = "") -> Result:
+        """Read every form field on the current page (or within ``scope``: a CSS selector or a
+        visible container label, not a ``@ref``) with the SAME in-page reader as
+        ``browser_form_read`` — including opening each unanswered select-like combobox to list
+        its options, and closing it again without committing anything. ``value`` = the list of
+        field dicts in document order, the shape the tool renders: ``label``, ``kind``, ``name``,
+        ``id``, ``required``, ``value`` (the COMMITTED value; a list for a checkbox group), plus
+        ``options`` / ``options_more`` where the field has them. ``[]`` when the page has no
+        fields. Structured data for code — no content-boundary markers.
+
+        ``kind="cli_error"`` when ``scope`` matched nothing; ``"script_error"`` when the page
+        script threw or answered something unreadable; ``"too_large"`` past the byte cap."""
+        scope = str(scope or "").strip()
+        if scope and forms.is_ref(scope):
+            return Result(BAD_ARGUMENT, command="form_read", error=(
+                "form_read() can't scope by a @ref (the CLI resolves those, not the page) — pass a "
+                "CSS selector or a visible container label, or leave scope blank."))
+        # The scope rides inside the script (stdin), never argv, so it needs no option guard.
+        with self.hold():
+            r = self._command("eval", "--stdin", stdin=forms.read_form_js(scope), json_out=True)
+        if not r.ok:
+            if r.kind == CLI_ERROR and "Evaluation error" in r.error:
+                return Result(SCRIPT_ERROR, error=r.error, seconds=r.seconds, command="form_read")
+            return Result(r.kind, text=r.text, error=r.error, seconds=r.seconds, command="form_read")
+        raw = (r.value or {}).get("result") if isinstance(r.value, dict) else None
+        if isinstance(raw, str):
+            raw = boundaries.strip(raw)  # never on here, but a stray env flag must not break the parse
+        try:
+            data = forms.loads(raw) if isinstance(raw, str) else raw
+        except (ValueError, TypeError):
+            data = None
+        fields, error = forms.read_fields(data, scope) if data is not None else (
+            None, "Error: could not read the form (the page returned unreadable data).")
+        if error:
+            kind = CLI_ERROR if "matched the scope" in error else SCRIPT_ERROR
+            return Result(kind, error=error.removeprefix("Error: "), seconds=r.seconds, command="form_read")
+        return Result(OK, value=fields, seconds=r.seconds, command="form_read")
+
     def close(self) -> Result:
-        """Close this client's browser session (its daemon and Chrome). Only ever this session."""
+        """Close this client's browser session (its daemon and Chrome). Only ever this session —
+        and refused on the agent's session (:meth:`for_agent_session`): that browser isn't the
+        plugin's to close."""
+        if self.agent_session:
+            return Result(BAD_ARGUMENT, command="close", error=(
+                "close() is refused on the agent's own browser session — it belongs to the agent's "
+                "browser tools (and maybe the operator's signed-in tabs), not to this plugin."))
         with self.hold():
             return self._command("close")
+
+
+def _agent_session_name(scope: str, state: Any, session_id: str | None) -> tuple[str, bool]:
+    """``(name, is_chat)`` — the session the ``browser_*`` tools resolve for this call. Mirrors
+    ``tools._resolve_session_name`` (a test pins the two together): graph state is authoritative,
+    an empty id there falls back to the shared session just as the tools do."""
+    if scope == "per_session":
+        if state is not None:
+            sid = state.get("session_id", "") if hasattr(state, "get") else getattr(state, "session_id", "")
+            sid = str(sid or "")
+        else:
+            sid = str(session_id or "") or _tracing_session_id()
+            if not sid:
+                raise ValueError(
+                    "for_agent_session(): agent_browser runs session_scope=per_session, so the "
+                    "agent's browser is per chat — pass the calling tool's injected `state` (or "
+                    "`session_id=`); the tracing id is empty inside a tool body.")
+        if sid:
+            return runtime.chat_session_name(sid), True
+    name = runtime.shared_session_name()
+    if runtime.OPTION_LIKE.match(name):
+        raise ValueError(f"AGENT_BROWSER_SESSION {name!r} looks like a command-line option")
+    return name, False
+
+
+def _tracing_session_id() -> str:
+    try:
+        from observability import tracing
+        return tracing.current_session_id() or ""
+    except Exception:  # noqa: BLE001 — a telemetry read must never break a browser call
+        return ""
 
 
 def make_factory(live_cfg, refresh_gaps=None):
@@ -684,6 +808,14 @@ def make_factory(live_cfg, refresh_gaps=None):
         options.pop("host", None)
         return BrowserClient(host=host, **options)
 
+    def for_agent_session(state: Any = None, *, session_id: str | None = None,
+                          timeout_s: float = 30.0, nav_timeout_s: float = 45.0) -> BrowserClient:
+        """A client on the agent's own browser session for the calling chat (pass the calling
+        tool's injected ``state``) — see ``BrowserClient.for_agent_session``."""
+        return BrowserClient.for_agent_session(state, session_id=session_id, timeout_s=timeout_s,
+                                               nav_timeout_s=nav_timeout_s, host=host)
+
+    make.for_agent_session = for_agent_session
     make.BrowserClient = BrowserClient  # introspection: help(make.BrowserClient)
     make.KINDS = KINDS
     return make

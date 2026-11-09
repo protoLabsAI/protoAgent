@@ -190,6 +190,7 @@ def _newest_turn_ranked(task_model, dialect_name: str, where):
     return (
         select(
             task_model.context_id.label("context_id"),
+            task_model.id.label("task_id"),
             task_model.status.label("status"),
             func.count(task_model.id).over(partition_by=by_context).label("turn_count"),
             func.max(task_model.last_updated).over(partition_by=by_context).label("last_updated"),
@@ -1070,29 +1071,30 @@ def register_chat_routes(app, ui: str) -> None:
                 log.warning("[chat] parked session index read failed: %s", exc)
                 return {"sessions": [], "reason": f"read failed: {type(exc).__name__}"}
         try:
-            from sqlalchemy import exists, func, select
+            from sqlalchemy import exists, select
 
             from a2a.server.tasks.database_task_store import TaskModel
 
             async with engine.begin() as conn:
                 tombstones = await _ensure_chat_tombstones(conn)
+                # One windowed pass (#3972) that also names each session's newest-created
+                # turn: a client compares ``last_task_id`` against the turns it holds to
+                # tell it is behind even when it still remembers turns the store has
+                # already swept, which a bare count cannot (ADR 0104).
+                newest = _newest_turn_ranked(
+                    TaskModel,
+                    conn.dialect.name,
+                    # The task store also contains delegation, Activity,
+                    # fleet-room, and API contexts. Only console-created
+                    # chat tabs use the stable ``chat-`` id prefix.
+                    TaskModel.context_id.like("chat-%")
+                    & ~exists(select(1).where(tombstones.c.context_id == TaskModel.context_id)),
+                )
                 rows = (
                     await conn.execute(
-                        select(
-                            TaskModel.context_id,
-                            func.max(TaskModel.last_updated).label("last_updated"),
-                            func.count(TaskModel.id).label("turn_count"),
-                        )
-                        # The task store also contains delegation, Activity,
-                        # fleet-room, and API contexts. Only console-created
-                        # chat tabs use the stable ``chat-`` id prefix.
-                        .where(TaskModel.context_id.like("chat-%"))
-                        .where(~exists(select(1).where(tombstones.c.context_id == TaskModel.context_id)))
-                        .group_by(TaskModel.context_id)
-                        .order_by(
-                            func.max(TaskModel.last_updated).desc().nulls_last(),
-                            TaskModel.context_id.desc(),
-                        )
+                        select(newest.c.context_id, newest.c.task_id, newest.c.last_updated, newest.c.turn_count)
+                        .where(newest.c.rn == 1)
+                        .order_by(newest.c.last_updated.desc().nulls_last(), newest.c.context_id.desc())
                         .limit(limit)
                     )
                 ).fetchall()
@@ -1105,6 +1107,7 @@ def register_chat_routes(app, ui: str) -> None:
                     "session_id": r.context_id,
                     "last_updated": _utc_iso(r.last_updated),
                     "turn_count": r.turn_count,
+                    "last_task_id": r.task_id,
                 }
                 for r in rows
             ]

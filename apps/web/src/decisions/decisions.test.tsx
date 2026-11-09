@@ -4,8 +4,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { DecisionCard } from "./DecisionCard";
 import { DecisionsPanel, DecisionsSheet } from "./DecisionsPanel";
-import { createDecisionsStore } from "./useDecisions";
+import { createDecisionsStore, useDecision, type DecisionLookup } from "./useDecisions";
 import { decisionsApi, type DecisionRow } from "../lib/api/decisions";
+import { ApiError } from "../lib/api/http";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -195,6 +196,200 @@ describe("useDecisions store", () => {
     const conflict = await store.answer("a", "merge");
     expect(conflict.answered_elsewhere).toBe(true);
   });
+
+  // ── by-id record cache (#4725, Gap 2) ─────────────────────────────────────────────────────
+  it("keeps an answered row in records after it leaves the pending list", async () => {
+    const list = vi.spyOn(decisionsApi, "listDecisions").mockResolvedValue(listOf([decision("a")]));
+    const answer = vi.spyOn(decisionsApi, "answerDecision");
+    const store = mountStore();
+    await settle();
+    expect(store.getSnapshot().pendingCount).toBe(1);
+
+    // The answer closes it, and the next pending list no longer carries it.
+    const answered = decision("a", { state: "answered", answer_label: "Merge with the WARN" });
+    answer.mockResolvedValue({ answered_elsewhere: false, decision: answered, resumed: true });
+    list.mockResolvedValue(listOf([]));
+    await store.answer("a", "merge");
+
+    expect(store.getSnapshot().pendingCount).toBe(0);
+    expect(store.getSnapshot().decisions).toEqual([]);
+    // The settled record survives under its id for the source chat to read.
+    expect(store.getSnapshot().records["a"].state).toBe("answered");
+    expect(store.getSnapshot().records["a"].answer_label).toBe("Merge with the WARN");
+  });
+
+  it("re-reads a cached id that left the pending list on decision.changed, even one still cached as pending", async () => {
+    // "a" starts pending and is cached by the first list. Another member then answers it: it
+    // leaves the pending list (so the refresh can't update it) and the event names it. A cached
+    // id that has left the pending list is re-read by a by-id GET even when it is still cached as
+    // pending, so the stale pending record is replaced rather than kept.
+    const list = vi.spyOn(decisionsApi, "listDecisions").mockResolvedValue(listOf([decision("a")]));
+    const get = vi
+      .spyOn(decisionsApi, "getDecision")
+      .mockResolvedValue(decision("a", { state: "answered", answer_label: "Merge with the WARN" }));
+    const store = mountStore();
+    await settle();
+    expect(store.getSnapshot().records["a"].state).toBe("pending");
+
+    list.mockResolvedValue(listOf([]));
+    bus.listeners.forEach((fn) => fn({ id: "a", session_id: "s1", state: "answered" }));
+    await settle();
+    await settle();
+
+    expect(get).toHaveBeenCalledWith("a");
+    expect(store.getSnapshot().records["a"].state).toBe("answered");
+    expect(store.getSnapshot().records["a"].answer_label).toBe("Merge with the WARN");
+    expect(store.getSnapshot().pendingCount).toBe(0);
+    expect(store.getSnapshot().decisions).toEqual([]);
+  });
+
+  it("does not re-read on decision.changed when the id is still pending (the refresh covers it)", async () => {
+    // The event names an id still in the refreshed pending list — the bulk refresh already carries
+    // its latest row, so no extra by-id GET is issued.
+    const list = vi.spyOn(decisionsApi, "listDecisions").mockResolvedValue(listOf([decision("a")]));
+    const get = vi.spyOn(decisionsApi, "getDecision");
+    const store = mountStore();
+    await settle();
+    expect(store.getSnapshot().records["a"].state).toBe("pending");
+
+    list.mockResolvedValue(listOf([decision("a", { question: "Merge the release now?" })]));
+    bus.listeners.forEach((fn) => fn({ id: "a", session_id: "s1", state: "pending" }));
+    await settle();
+    await settle();
+
+    expect(get).not.toHaveBeenCalled();
+    expect(store.getSnapshot().records["a"].question).toBe("Merge the release now?");
+    expect(store.getSnapshot().pendingCount).toBe(1);
+  });
+
+  it("loadDecision fetches a historical id once by GET, then serves it from cache", async () => {
+    vi.spyOn(decisionsApi, "listDecisions").mockResolvedValue(listOf([]));
+    const get = vi
+      .spyOn(decisionsApi, "getDecision")
+      .mockResolvedValue(decision("h", { state: "withdrawn", withdraw_reason: "I merged it myself." }));
+    const store = mountStore();
+    await settle();
+
+    const row = await store.loadDecision("h");
+    expect(get).toHaveBeenCalledTimes(1);
+    expect(get).toHaveBeenCalledWith("h");
+    expect(row?.state).toBe("withdrawn");
+    expect(store.getSnapshot().records["h"].withdraw_reason).toBe("I merged it myself.");
+
+    // A second load is served from the cache — no second request.
+    const again = await store.loadDecision("h");
+    expect(again?.id).toBe("h");
+    expect(get).toHaveBeenCalledTimes(1);
+  });
+
+  it("loadDecision re-reads a cached id still in state 'pending', then serves the settled row from cache", async () => {
+    // A record cached as pending is not terminal: while no consumer is subscribed the store gets
+    // no decision.changed events, so a re-mounted caller must re-read it rather than trust the
+    // cached pending row. Once it comes back settled it is served from the cache with no request.
+    vi.spyOn(decisionsApi, "listDecisions").mockResolvedValue(listOf([decision("a")]));
+    const get = vi
+      .spyOn(decisionsApi, "getDecision")
+      .mockResolvedValue(decision("a", { state: "answered", answer_label: "Merge with the WARN" }));
+    const store = mountStore();
+    await settle();
+    expect(store.getSnapshot().records["a"].state).toBe("pending");
+
+    const row = await store.loadDecision("a");
+    expect(get).toHaveBeenCalledTimes(1);
+    expect(get).toHaveBeenCalledWith("a");
+    expect(row?.state).toBe("answered");
+    expect(store.getSnapshot().records["a"].state).toBe("answered");
+    expect(store.getSnapshot().records["a"].answer_label).toBe("Merge with the WARN");
+    // The settled record is terminal: a second load is served from the cache, no further request.
+    const again = await store.loadDecision("a");
+    expect(again?.state).toBe("answered");
+    expect(get).toHaveBeenCalledTimes(1);
+  });
+
+  it("coalesces two concurrent loads of the same id into one request", async () => {
+    vi.spyOn(decisionsApi, "listDecisions").mockResolvedValue(listOf([]));
+    let resolve!: (row: DecisionRow) => void;
+    const get = vi
+      .spyOn(decisionsApi, "getDecision")
+      .mockImplementation(() => new Promise<DecisionRow>((r) => (resolve = r)));
+    const store = mountStore();
+    await settle();
+
+    const p1 = store.loadDecision("h");
+    const p2 = store.loadDecision("h");
+    expect(get).toHaveBeenCalledTimes(1);
+    resolve(decision("h", { state: "answered" }));
+    const [r1, r2] = await Promise.all([p1, p2]);
+    expect(r1?.id).toBe("h");
+    expect(r2?.id).toBe("h");
+    expect(get).toHaveBeenCalledTimes(1);
+  });
+
+  it("records a 404 as missing and does not re-fetch it", async () => {
+    vi.spyOn(decisionsApi, "listDecisions").mockResolvedValue(listOf([]));
+    const get = vi.spyOn(decisionsApi, "getDecision").mockRejectedValue(new ApiError(404, "not found"));
+    const store = mountStore();
+    await settle();
+
+    const row = await store.loadDecision("gone");
+    expect(row).toBeNull();
+    expect(store.getSnapshot().missing["gone"]).toBe(true);
+    expect(get).toHaveBeenCalledTimes(1);
+
+    // Known-missing: a repeat load short-circuits without another request.
+    const again = await store.loadDecision("gone");
+    expect(again).toBeNull();
+    expect(get).toHaveBeenCalledTimes(1);
+  });
+
+  it("pendingCount counts only pending rows, never cached settled ones", async () => {
+    vi.spyOn(decisionsApi, "listDecisions").mockResolvedValue(listOf([decision("p")]));
+    vi.spyOn(decisionsApi, "getDecision").mockResolvedValue(decision("s", { state: "answered" }));
+    const store = mountStore();
+    await settle();
+    expect(store.getSnapshot().pendingCount).toBe(1);
+
+    await store.loadDecision("s"); // a settled record enters the cache
+    expect(store.getSnapshot().records["s"].state).toBe("answered");
+    // The settled record is cached but is neither counted nor listed, and never notified.
+    expect(store.getSnapshot().pendingCount).toBe(1);
+    expect(store.getSnapshot().decisions.map((d) => d.id)).toEqual(["p"]);
+    expect(mocks.notify).toHaveBeenCalledTimes(1);
+  });
+
+  it("useDecision loads a settled id on mount and resolves ready", async () => {
+    vi.spyOn(decisionsApi, "listDecisions").mockResolvedValue(listOf([]));
+    vi.spyOn(decisionsApi, "getDecision").mockResolvedValue(
+      decision("hook-ready", { state: "answered", answer_label: "Merge with the WARN" }),
+    );
+    let seen: DecisionLookup | null = null;
+    function Probe() {
+      seen = useDecision("hook-ready");
+      return null;
+    }
+    await renderNode(<Probe />);
+    await act(async () => {
+      await settle();
+    });
+    expect(seen!.state).toBe("ready");
+    expect(seen!.record?.answer_label).toBe("Merge with the WARN");
+  });
+
+  it("useDecision surfaces a 404 as state 'missing'", async () => {
+    vi.spyOn(decisionsApi, "listDecisions").mockResolvedValue(listOf([]));
+    vi.spyOn(decisionsApi, "getDecision").mockRejectedValue(new ApiError(404, "not found"));
+    let seen: DecisionLookup | null = null;
+    function Probe() {
+      seen = useDecision("hook-gone");
+      return null;
+    }
+    await renderNode(<Probe />);
+    await act(async () => {
+      await settle();
+    });
+    expect(seen!.state).toBe("missing");
+    expect(seen!.record).toBeNull();
+  });
 });
 
 // ── DecisionCard ──────────────────────────────────────────────────────────────────────────
@@ -328,6 +523,109 @@ describe("DecisionCard", () => {
   it("hides the fallback-action line when there is no expiry", async () => {
     await renderNode(<DecisionCard decision={decision("a")} onAnswer={vi.fn()} />);
     expect(document.body.textContent).not.toContain("If nobody answers");
+  });
+
+  // ── transcript presentation (#4725, §5.5–5.6) ─────────────────────────────────────────────
+  it("transcript: a newly answered card freezes on Sent and never calls onResolved", async () => {
+    vi.useFakeTimers();
+    try {
+      const onAnswer = vi.fn().mockResolvedValue({ answered_elsewhere: false, decision: decision("a"), resumed: true });
+      const onResolved = vi.fn();
+      await renderNode(
+        <DecisionCard decision={decision("a")} presentation="transcript" onAnswer={onAnswer} onResolved={onResolved} />,
+      );
+      await click("Merge with the WARN");
+      expect(document.body.textContent).toContain('Sent: "Merge with the WARN"');
+      // Past the panel's 4s hold: the transcript card stays put and never resolves itself.
+      await act(async () => {
+        vi.advanceTimersByTime(8000);
+      });
+      expect(onResolved).not.toHaveBeenCalled();
+      expect(document.body.textContent).toContain('Sent: "Merge with the WARN"');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("transcript: once the answered record lands, the card freezes as the 'You chose' line", async () => {
+    const onResolved = vi.fn();
+    const answered = decision("a", {
+      state: "answered",
+      answer_label: "Merge with the WARN",
+      answered_at: "2026-11-08T14:52:00+00:00",
+    });
+    await renderNode(
+      <DecisionCard decision={answered} presentation="transcript" onAnswer={vi.fn()} onResolved={onResolved} />,
+    );
+    expect(document.body.textContent).toContain('You chose "Merge with the WARN" ·');
+    // No options and no "Already answered" callout — just the frozen line.
+    expect(buttons().some((b) => b.textContent?.includes("Merge with the WARN"))).toBe(false);
+    expect(buttons().some((b) => b.textContent?.trim() === "Hold the release")).toBe(false);
+    expect(document.body.textContent).not.toContain("Already answered");
+    expect(document.querySelector(".pl-callout")).toBeFalsy();
+    expect(onResolved).not.toHaveBeenCalled();
+  });
+
+  it("transcript: an expired record freezes on its closed line, not a callout", async () => {
+    await renderNode(
+      <DecisionCard
+        decision={decision("a", {
+          state: "expired",
+          expires_at: "2026-11-08T15:45:00+00:00",
+          default_action_text: "keep holding the release",
+        })}
+        presentation="transcript"
+        onAnswer={vi.fn()}
+      />,
+    );
+    expect(document.body.textContent).toContain("went ahead and keep holding the release");
+    expect(document.querySelector(".pl-callout")).toBeFalsy();
+    expect(buttons().some((b) => b.textContent?.includes("Merge with the WARN"))).toBe(false);
+  });
+
+  it("transcript: a withdrawn record freezes on the no-longer-needed line with the reason", async () => {
+    await renderNode(
+      <DecisionCard
+        decision={decision("a", { state: "withdrawn", withdraw_reason: "I merged it myself." })}
+        presentation="transcript"
+        onAnswer={vi.fn()}
+      />,
+    );
+    expect(document.body.textContent).toContain("protoEngineer doesn't need this any more.");
+    expect(document.body.textContent).toContain("I merged it myself.");
+    expect(document.querySelector(".pl-callout")).toBeFalsy();
+  });
+
+  it("transcript: a 409 freezes on the returned record's line, not the Already-answered callout", async () => {
+    const onAnswer = vi.fn().mockResolvedValue({
+      answered_elsewhere: true,
+      decision: decision("a", { state: "answered", answer_label: "Hold the release", answered_at: "2026-11-08T14:52:00+00:00" }),
+    });
+    await renderNode(<DecisionCard decision={decision("a")} presentation="transcript" onAnswer={onAnswer} />);
+    await click("Merge with the WARN");
+    expect(document.body.textContent).toContain('You chose "Hold the release" ·');
+    expect(document.body.textContent).not.toContain("Already answered");
+    expect(document.querySelector(".pl-callout--info")).toBeFalsy();
+  });
+
+  it("transcript: a pending decision still renders its options (unchanged from the panel)", async () => {
+    const onAnswer = vi.fn().mockResolvedValue({ answered_elsewhere: false, decision: decision("a"), resumed: true });
+    await renderNode(<DecisionCard decision={decision("a")} presentation="transcript" onAnswer={onAnswer} />);
+    expect(buttons().some((b) => b.textContent?.includes("Merge with the WARN"))).toBe(true);
+    expect(document.body.textContent).toContain("Reply in chat instead");
+    expect(document.body.textContent).not.toContain("You chose");
+  });
+
+  it("panel (default): an answered record still shows the Already-answered callout, not the frozen line", async () => {
+    await renderNode(
+      <DecisionCard
+        decision={decision("a", { state: "answered", answer_label: "Merge with the WARN", answered_at: "2026-11-08T14:52:00+00:00" })}
+        onAnswer={vi.fn()}
+      />,
+    );
+    expect(document.body.textContent).toContain("Already answered");
+    expect(document.body.textContent).not.toContain("You chose");
+    expect(document.querySelector(".pl-callout--info")).toBeTruthy();
   });
 });
 

@@ -1756,6 +1756,36 @@ describe("a cached chat behind the server reconciles on reload (another client's
     expect(isBehindServer(cached([{ id: "u", role: "user", content: "x", status: "done" }]), indexed(2))).toBe(false);
   });
 
+  it("is behind when the server's newest turn is one the copy never held, whatever the count", () => {
+    // The copy remembers turns the store has swept (24h retention): 3 local turns against
+    // 2 durable ones reads "not behind" by count while the newest durable turn is missing.
+    const three: ChatMessage[] = [
+      ...liveFirst,
+      { id: "a-old-1", role: "assistant", content: "x", status: "done", taskId: "task-swept-1" },
+      { id: "a-old-2", role: "assistant", content: "y", status: "done", taskId: "task-swept-2" },
+    ];
+    const newest = (id: string): DurableChatSession => ({ ...indexed(2), last_task_id: id });
+    expect(isBehindServer(cached(three), indexed(2))).toBe(false);
+    expect(isBehindServer(cached(three), newest("task-b"))).toBe(true);
+    // Holding the newest turn: in step.
+    expect(isBehindServer(cached(three), newest("task-a"))).toBe(false);
+    // Already reconciled against that newest turn (it drew nothing new): not re-read.
+    expect(isBehindServer(cached(three, { serverLastTaskId: "task-b" }), newest("task-b"))).toBe(false);
+    // Still nothing to anchor on without a durable turn of its own.
+    expect(isBehindServer(cached([{ id: "u", role: "user", content: "x", status: "done" }]), newest("task-b"))).toBe(false);
+  });
+
+  it("a reconcile records the newest turn it was read against, even when it drew nothing", () => {
+    const session = chatStore.createSession();
+    chatStore.updateMessages(session.id, liveFirst);
+    const read = chatStore.captureHydrationEligibility(session.id, { behind: true });
+    chatStore.reconcileSessions([{ token: read!, messages: null, serverTurnCount: 1, serverLastTaskId: "task-b" }]);
+    const after = chatStore.getSnapshot().sessions.find((s) => s.id === session.id);
+    expect(after?.serverLastTaskId).toBe("task-b");
+    expect(after?.messages).toHaveLength(2);
+    chatStore.deleteSession(session.id);
+  });
+
   it("adds the server turns after the newest local one, keeping the local render as it is", () => {
     const next = reconcileServerTurns(liveFirst, [first, second, stopped], null);
     if (!next || next === "retry") throw new Error("expected a reconciled transcript");
@@ -1823,6 +1853,7 @@ describe("a cached chat behind the server reconciles on reload (another client's
     expect(reconcile).toHaveBeenCalledTimes(1);
     const [update] = reconcile.mock.calls[0][0];
     expect(update.serverTurnCount).toBe(2);
+    expect(update.serverLastTaskId).toBeUndefined();
     expect(update.messages?.map((message) => message.content)).toEqual(["first", "one", "second", "two"]);
   });
 

@@ -1,0 +1,1 @@
+- **Emoji, accents and non-Latin text no longer turn into "�" in the desktop app.** A character that arrived split across two network chunks while a reply streamed was decoded half at a time. The desktop app now waits for the rest of the character.

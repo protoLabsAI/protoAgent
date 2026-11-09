@@ -14,6 +14,8 @@ mod hotkeys;
 mod navigation;
 mod sidecar;
 mod updater;
+#[cfg(target_os = "macos")]
+mod webstorage;
 
 use hotkeys::{
     default_hotkeys, hotkey_id_for, load_hotkey_overrides, sync_hotkeys, HotkeyStatus, Hotkeys,
@@ -375,6 +377,67 @@ fn build_tray(app: &tauri::App) -> tauri::Result<()> {
     Ok(())
 }
 
+/// Message ids `chat_stream` has already POSTed (#4975). Tauri's IPC script reads ANY failed
+/// custom-protocol request as "the protocol is blocked" and replays the same command over
+/// `postMessage`. A page that navigates mid-turn (an agent switch) has WebKit cancel the
+/// in-flight `chat_stream` request, so the dying page replayed it and the shell POSTed the
+/// identical `SendStreamingMessage` body again: the agent answered one message twice. The
+/// console mints a fresh `messageId` for every send, so a second run of the same id is
+/// always such a replay, never a real send. Bounded by age and count.
+static SENT_MESSAGES: Mutex<Option<SentMessages>> = Mutex::new(None);
+const SENT_MESSAGE_TTL: Duration = Duration::from_secs(60 * 60);
+const SENT_MESSAGE_CAP: usize = 4096;
+
+#[derive(Default)]
+struct SentMessages {
+    order: std::collections::VecDeque<(String, Instant)>,
+    ids: std::collections::HashSet<String>,
+}
+
+impl SentMessages {
+    /// Record `id` as sent; false when it already was (within the TTL).
+    fn claim(&mut self, id: &str, now: Instant) -> bool {
+        loop {
+            let expired = match self.order.front() {
+                Some((_, at)) => {
+                    self.order.len() >= SENT_MESSAGE_CAP
+                        || now.saturating_duration_since(*at) > SENT_MESSAGE_TTL
+                }
+                None => false,
+            };
+            if !expired {
+                break;
+            }
+            if let Some((old, _)) = self.order.pop_front() {
+                self.ids.remove(&old);
+            }
+        }
+        if !self.ids.insert(id.to_string()) {
+            return false;
+        }
+        self.order.push_back((id.to_string(), now));
+        true
+    }
+}
+
+/// The client `messageId` of a message-sending A2A body (None for a `SubscribeToTask`,
+/// which is a read and safe to repeat).
+/// The error prefix of a refused replay. Shared with the console (chat.ts), which must not
+/// fall back to re-sending a message the shell refused because it was already sent.
+const DUPLICATE_SEND_REFUSAL: &str = "chat_stream: already sent";
+
+fn sent_message_id(body: &serde_json::Value) -> Option<&str> {
+    let method = body.get("method")?.as_str()?;
+    if method != "SendStreamingMessage" && method != "SendMessage" {
+        return None;
+    }
+    body.get("params")?
+        .get("message")?
+        .get("messageId")?
+        .as_str()
+        .filter(|id| !id.is_empty())
+}
+
 /// Stream a chat turn for the desktop shell. WKWebView won't deliver a streaming
 /// SSE `fetch` body chunk-by-chunk, so the webview hands us the A2A request body and
 /// we run the `/a2a` `SendStreamingMessage` POST here (reqwest streams fine), relaying
@@ -392,6 +455,19 @@ async fn chat_stream(
 ) -> Result<(), String> {
     use futures_util::StreamExt;
 
+    if let Some(id) = sent_message_id(&body) {
+        let mut sent = SENT_MESSAGES.lock().unwrap_or_else(|e| e.into_inner());
+        if !sent
+            .get_or_insert_with(SentMessages::default)
+            .claim(id, Instant::now())
+        {
+            log::warn!("desktop: chat_stream replay of message {id} refused (already sent)");
+            // The page matches this prefix (chat.ts DUPLICATE_SEND_REFUSAL) so it doesn't
+            // treat the refusal as "never reached the server" and re-send over /api/chat.
+            return Err(format!("{DUPLICATE_SEND_REFUSAL}: message {id}"));
+        }
+    }
+
     let client = reqwest::Client::new();
     let mut req = client
         .post(&url)
@@ -406,19 +482,97 @@ async fn chat_stream(
         return Err(format!("HTTP {}", resp.status().as_u16()));
     }
     let mut stream = resp.bytes_stream();
+    let mut pending: Vec<u8> = Vec::new();
     while let Some(chunk) = stream.next().await {
         let bytes = chunk.map_err(|e| e.to_string())?;
-        // Relay raw bytes; the webview accumulates + parses SSE (handles frames split
-        // across chunks). Stop if the frontend dropped the channel (window closed /
+        // Relay the text; the webview accumulates + parses SSE (handles frames split
+        // across chunks). A multi-byte character split across two chunks is held back
+        // until it completes, never decoded half at a time (that drew U+FFFD in place of
+        // emoji/accents/CJK). Stop if the frontend dropped the channel (window closed /
         // turn cancelled via the server-side CancelTask, which ends the stream).
-        if on_event
-            .send(String::from_utf8_lossy(&bytes).into_owned())
-            .is_err()
-        {
-            break;
+        pending.extend_from_slice(&bytes);
+        let text = take_utf8(&mut pending);
+        if !text.is_empty() && on_event.send(text).is_err() {
+            return Ok(());
         }
     }
+    if !pending.is_empty() {
+        let _ = on_event.send(String::from_utf8_lossy(&pending).into_owned());
+    }
     Ok(())
+}
+
+/// Decode as much of `pending` as is complete UTF-8, leaving an incomplete trailing
+/// character (at most 3 bytes) in `pending` for the next chunk. Bytes that are invalid
+/// outright become U+FFFD, as `from_utf8_lossy` would.
+fn take_utf8(pending: &mut Vec<u8>) -> String {
+    let mut out = String::new();
+    let mut start = 0;
+    loop {
+        match std::str::from_utf8(&pending[start..]) {
+            Ok(valid) => {
+                out.push_str(valid);
+                start = pending.len();
+                break;
+            }
+            Err(err) => {
+                let good = start + err.valid_up_to();
+                // The first `valid_up_to` bytes are valid UTF-8 by contract.
+                out.push_str(std::str::from_utf8(&pending[start..good]).unwrap_or_default());
+                match err.error_len() {
+                    // Invalid bytes in the middle: replace them and keep going.
+                    Some(bad) => {
+                        out.push('\u{FFFD}');
+                        start = good + bad;
+                    }
+                    // A character cut off at the end: wait for the rest of it.
+                    None => {
+                        start = good;
+                        break;
+                    }
+                }
+            }
+        }
+    }
+    pending.drain(..start);
+    out
+}
+
+#[cfg(test)]
+mod take_utf8_tests {
+    use super::take_utf8;
+
+    /// Feed `chunks` through the relay the way chat_stream does; return what reached the webview.
+    fn relay(chunks: &[&[u8]]) -> String {
+        let mut pending = Vec::new();
+        let mut out = String::new();
+        for chunk in chunks {
+            pending.extend_from_slice(chunk);
+            out.push_str(&take_utf8(&mut pending));
+        }
+        out.push_str(&String::from_utf8_lossy(&pending));
+        out
+    }
+
+    #[test]
+    fn a_character_split_across_chunks_arrives_whole() {
+        let text = "data: caf\u{e9} \u{1F600} \u{6F22}\u{5B57}\n\n";
+        let bytes = text.as_bytes();
+        // Every possible split point, including inside each multi-byte character.
+        for cut in 0..=bytes.len() {
+            assert_eq!(relay(&[&bytes[..cut], &bytes[cut..]]), text, "split at {cut}");
+        }
+        // One byte at a time.
+        let singles: Vec<&[u8]> = bytes.chunks(1).collect();
+        assert_eq!(relay(&singles), text);
+    }
+
+    #[test]
+    fn invalid_bytes_still_become_replacement_characters() {
+        assert_eq!(relay(&[b"a\xffb"]), "a\u{FFFD}b");
+        // A stream that ends mid-character flushes what it has, lossily.
+        assert_eq!(relay(&[b"ok \xf0\x9f"]), "ok \u{FFFD}");
+    }
 }
 
 
@@ -491,6 +645,10 @@ pub fn run() {
                     ))
                     .build(),
             )?;
+            // Before any webview exists: give back the disk WebKit's localStorage WAL
+            // took last run (it can stop checkpointing while the app runs, #4974).
+            #[cfg(target_os = "macos")]
+            webstorage::reclaim_at_launch(&app.config().identifier);
             app.manage(SidecarProcess::default());
             app.manage(UpdateCheckCoordinator::default());
             app.manage(UpdateRequestState::default());
@@ -687,6 +845,52 @@ pub fn run() {
         });
 }
 
+
+#[cfg(test)]
+mod sent_message_tests {
+    use super::{sent_message_id, SentMessages, SENT_MESSAGE_TTL};
+    use std::time::{Duration, Instant};
+
+    fn send_body(id: &str) -> serde_json::Value {
+        serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "method": "SendStreamingMessage",
+            "params": {"message": {"messageId": id, "role": "ROLE_USER", "parts": [{"text": "hi"}]}},
+        })
+    }
+
+    #[test]
+    fn a_replayed_send_is_refused() {
+        // #4975: the same body arriving twice is Tauri's IPC replay, not a second message.
+        let mut sent = SentMessages::default();
+        let now = Instant::now();
+        let body = send_body("web-1794215494862-wdhq0i");
+        let id = sent_message_id(&body).unwrap();
+        assert!(sent.claim(id, now));
+        assert!(!sent.claim(id, now + Duration::from_secs(16)));
+        assert!(sent.claim("web-other", now));
+    }
+
+    #[test]
+    fn an_old_send_is_forgotten() {
+        let mut sent = SentMessages::default();
+        let now = Instant::now();
+        assert!(sent.claim("web-1", now));
+        assert!(sent.claim("web-1", now + SENT_MESSAGE_TTL + Duration::from_secs(1)));
+    }
+
+    #[test]
+    fn a_subscribe_is_not_a_send() {
+        let body = serde_json::json!({
+            "jsonrpc": "2.0", "id": "resub-1", "method": "SubscribeToTask", "params": {"id": "t1"}
+        });
+        assert_eq!(sent_message_id(&body), None);
+        let mut blank = send_body("x");
+        blank["params"]["message"]["messageId"] = serde_json::json!("");
+        assert_eq!(sent_message_id(&blank), None);
+    }
+}
 
 #[cfg(test)]
 mod auth_token_tests {

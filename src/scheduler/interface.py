@@ -133,6 +133,22 @@ class SchedulerBackend(Protocol):
         the schedule/timezone is malformed."""
         ...
 
+    def set_enabled(self, job_id: str, enabled: bool) -> Job:
+        """Pause (``enabled=False``) or resume (``enabled=True``) a job, returning the
+        updated ``Job``.
+
+        OPTIONAL — like ``get_job``, this isn't part of the minimal surface every
+        backend must provide; callers check for it with ``getattr`` and fall back
+        gracefully when a backend omits it. The Work view's Pause/Resume controls
+        (#4955 §4.3) call it on the local backend.
+
+        A paused job stays in the store but no due tick fires it. Resuming a cron
+        job recomputes ``next_fire`` from now, so a job paused across many missed
+        slots fires once at its next slot rather than replaying every skipped run;
+        resuming a one-shot whose time has already passed keeps it for the next tick.
+        Raises ``ValueError`` if no such job exists (matching ``update_job``)."""
+        ...
+
     def list_jobs(self) -> list[Job]:
         """All jobs visible to the calling agent. Implementations are
         responsible for filtering by ``agent_name`` so multi-agent

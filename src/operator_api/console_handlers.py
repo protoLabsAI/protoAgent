@@ -23,7 +23,9 @@ import os
 from events import ACTIVITY_CONTEXT
 from graph.config import model_is_configured as _operator_model_is_configured
 from graph.config_io import is_setup_complete as _operator_setup_complete
+from graph.goals.types import GoalState
 from graph.output_format import extract_output
+from graph.watches.types import Watch
 from operator_api.runtime import build_runtime_status as _build_operator_status
 from operator_api.subagents import (
     list_subagents as _operator_list_subagents,
@@ -540,13 +542,58 @@ async def _operator_goals_clear(session_id: str, close_tasks: bool = False) -> d
 
     if STATE.goal_controller is None:
         return {"cleared": False, "enabled": False, "tasks_closed": 0}
-    cleared = await asyncio.to_thread(STATE.goal_controller.store.clear, session_id)
+    store = STATE.goal_controller.store
+    # Snapshot the goal BEFORE clearing so the delete can be undone (#4955 Q10). A session
+    # with no goal reads None — then there's nothing to clear or stash, and the response is
+    # the unchanged `{cleared: False}` not-found shape.
+    state = await asyncio.to_thread(store.get, session_id)
+    cleared = await asyncio.to_thread(store.clear, session_id)
     # Stopping a goal can also close the tasks it filed — they're the goal's backlog,
     # session-scoped (ADR 0079), so a stopped goal needn't leave orphaned open tasks behind.
     tasks_closed = 0
     if close_tasks and session_id and STATE.tasks_store is not None:
         tasks_closed = await asyncio.to_thread(_close_session_tasks, session_id)
-    return {"cleared": bool(cleared), "tasks_closed": tasks_closed}
+    out = {"cleared": bool(cleared), "tasks_closed": tasks_closed}
+    if cleared and state is not None:
+        out["undo_token"] = _stash_undo("goal", session_id, state, store, GoalState.from_dict)
+    return out
+
+
+def _stash_undo(kind: str, key: str, record, store, rebuild) -> str:
+    """Stash an undo for a just-cleared goal/watch and return its token (#4955 Q10).
+
+    The restore writes the snapshot back through the store's own ``set`` (rebuilt with
+    ``rebuild`` = ``GoalState.from_dict`` / ``Watch.from_dict``), which re-fires the store's
+    ``goal.changed`` / ``watch.changed`` event so every open console refreshes. A restored
+    watch keeps its id, settings, and status.
+
+    REFUSES to clobber: ``key`` is the store key the delete used (goal ``session_id`` / watch
+    ``id``). If a NEW record was created under that key between the delete and the undo, the
+    restore raises ``ConflictError`` (a 409) rather than overwriting the newer live record and
+    its progress with the stashed snapshot. An occupied key means "put it back" no longer
+    applies — the slot the deleted record held is taken.
+
+    LIMIT: a goal cleared with ``close_tasks=true`` restores ONLY the goal — the tasks its
+    backlog closed stay closed. Undo brings the goal back; reopening its tasks is a separate
+    operator action.
+    """
+    from operator_api.undo import LEDGER
+
+    snapshot = record.to_dict()
+
+    def _restore(data: dict, _store=store, _rebuild=rebuild, _key=key, _kind=kind) -> None:
+        if _store.get(_key) is not None:
+            # Imported lazily (like the NotFoundError raises above) to avoid a routes ↔
+            # console_handlers import cycle; the restore runs at redeem time, off the loop.
+            from operator_api.routes import ConflictError
+
+            raise ConflictError(
+                f"Cannot undo: a {_kind} already exists under this id — it was recreated "
+                f"after the delete, so restoring would overwrite it."
+            )
+        _store.set(_rebuild(data))
+
+    return LEDGER.stash(kind, snapshot, _restore)
 
 
 def _close_session_tasks(session_id: str) -> int:
@@ -684,8 +731,15 @@ async def _operator_watches_clear(watch_id: str) -> dict:
 
     if STATE.watch_controller is None:
         return {"cleared": False, "enabled": False}
+    store = STATE.watch_controller.store
+    # Snapshot the watch BEFORE clearing so the delete can be undone (#4955 Q10). An unknown
+    # id reads None — nothing to clear or stash, and the response stays `{cleared: False}`.
+    watch = await asyncio.to_thread(store.get, watch_id)
     cleared = await asyncio.to_thread(STATE.watch_controller.clear, watch_id)
-    return {"cleared": bool(cleared)}
+    out = {"cleared": bool(cleared)}
+    if cleared and watch is not None:
+        out["undo_token"] = _stash_undo("watch", watch_id, watch, store, Watch.from_dict)
+    return out
 
 
 async def _operator_watches_set(body: dict) -> dict:

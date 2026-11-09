@@ -224,11 +224,11 @@ def _build_scaffold_tool(config: dict | None):
         name: str,
         summary: str = "A protoAgent plugin.",
         with_tool: bool = True,
-        with_view: bool = False,
-        with_skill: bool = False,
+        with_view: bool | str = False,
+        with_skill: bool = True,
         with_workflow: bool = False,
         with_comms: bool = False,
-        with_tests: bool = False,
+        with_tests: bool = True,
         git_init: bool = False,
         enable: bool = True,
     ) -> str:
@@ -245,7 +245,10 @@ def _build_scaffold_tool(config: dict | None):
         connect/receive/send, then enable it from Settings (it needs a token), so
         comms plugins are NOT auto-enabled here.
 
-        Set ``with_tests=True`` to also write a host-free test suite + CI +
+        Use ``with_view="bus"`` for an agent-driven view round trip; True or
+        "basic" keeps the basic view. Tests and a usage skill default to on.
+
+        ``with_tests=True`` writes a host-free test suite + CI +
         requirements-dev + pyproject — use it when scaffolding a STANDALONE-repo
         plugin (its own git repo) so it's shippable + green from birth; skip it for a
         plugin bundled inside protoAgent (which rides the host's tests/CI). Pair it
@@ -1333,7 +1336,11 @@ def _plugin_architect() -> SubagentConfig:
             "gated /api/plugins/<id> (ADR 0026/0038); plugins coordinate via the event bus "
             "(registry.emit/on), never "
             "by importing each other (ADR 0039). Keep it to the smallest plugin that "
-            "satisfies the request."
+            "satisfies the request. For view↔agent round trips, scaffold with_view='bus': "
+            "registry.emit the request, then registry.navigate to the view; the page "
+            "dynamically loads the kit, kit.subscribe receives requests and kit.publish "
+            "sends replies. Use gated size-capped POST routes for binary replies. "
+            "No side servers, headless browsers, polling, or background: true for heavy views."
         ),
         tools=[],  # pure reasoning — it produces a spec, it doesn't act
     )

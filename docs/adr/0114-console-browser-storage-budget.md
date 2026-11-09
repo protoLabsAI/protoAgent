@@ -8,6 +8,27 @@
 > The original design below remains a proposal for those deferred capabilities;
 > it is not a description of features delivered by this closeout.
 
+> **November 9, 2026 (#4972):** D4/D5's `localStorage` eviction ships ahead of the IDB move,
+> in `lib/storageEviction.ts`. It removes whole transcript keys: first agents no longer in the
+> fleet, then fleet agents not written in 24 h, least recently written first. It runs from the
+> quota hook and from a once-a-session check against the 4 MB budget, and toasts what it
+> cleared (D6 `evicted`). It never touches this window's agent, the host, anything written in
+> the last 24 h, or a thread with no write time whose agent is still in the fleet. Simplified
+> from D4: there is no BroadcastChannel presence ping. The 24 h recent-write rule stands in for
+> it, and a window that does lose its key writes it back on its next save.
+
+> **November 9, 2026 (#4973):** transcripts save in content-named chunks ahead of the IDB move
+> (`chat/transcriptChunks.ts`). A chat over 16K characters keeps its settled history in
+> `protoagent.chat.sessions[:<slug>].chunk.<sessionId>.<hash>` keys, each written once. The main
+> key keeps the chat's metadata, its chunk list and only the unsettled tail, which always holds
+> the live turn. A streaming save therefore rewrites the tail, not the agent's whole history:
+> 85×/10×/14× fewer characters per save on the three largest real transcripts. Chunk boundaries
+> are deterministic (a chunk closes at ≥ 32K characters before a user message), so appending
+> never renames an earlier chunk. A missing chunk becomes one visible note. Chunks are
+> registered as `chat.chunk` transcripts: evicted with their agent's main key, collected as
+> orphans, and cleared by the crash reset. The IDB epic (#4981) should keep these chunks as
+> records; a record per chat would bring back the whole-chat rewrite D2 assumed.
+
 Status: **Proposed**
 
 Amends: ADR 0104 (the primary transcript store moves from `localStorage` to IndexedDB)
@@ -221,7 +242,9 @@ destructive overwrites.
 
 **Write path.**
 
-- Streaming deltas stay debounced at 300 ms. Other changes write immediately.
+- Streaming deltas are debounced at 2 s (300 ms until #4971: each save rewrites the whole
+  key, and in WebKit that piled up in a WAL that never checkpointed while the app ran,
+  #4974). Other changes write immediately.
 - `persist` diffs sessions by reference against the last-persisted snapshot, so
   non-transcript state changes write nothing to IDB.
 - Each write is one `readwrite` transaction: `get`, check `rev`, then `put` with
@@ -236,7 +259,7 @@ destructive overwrites.
   as well.
 
 **What `pagehide` can lose.** `pagehide` flushes, but an IDB transaction started
-there isn't guaranteed to commit. At risk is anything written in the last ≤300 ms
+there isn't guaranteed to commit. At risk is anything written in the last ≤2 s
 that hasn't committed. For streamed text, the server holds it and S2's reattach
 restores it. For client-only rows the loss is real but tiny: a system note, a
 scheduled card, the local cut after a rewind, or a settings change.

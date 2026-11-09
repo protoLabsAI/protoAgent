@@ -941,6 +941,25 @@ def test_closing_the_drawer_never_focuses_a_node_that_is_leaving():
     assert 'h.g.setAttribute("tabindex", "-1");' in leave and 'h.g.setAttribute("tabindex", "0");' in leave
 
 
+def test_live_bus_rides_the_ds_kit_subscribe_helper_not_raw_postmessage():
+    """#4805: the view follows the delegation bus through the DS plugin-kit's `kit.subscribe`
+    helper — which owns topic qualification, the `since` high-water mark and own-publish echo
+    filtering — instead of a hand-rolled `protoagent:subscribe` postMessage plus a
+    `protoagent:event` message listener. The only postMessage left is the run-open request,
+    which is NOT bus traffic (and a sibling test pins it)."""
+    js, _css, _html = _view_files()
+    # Subscribes via the kit, to the delegation topic, kept alive in the background.
+    assert 'kit.subscribe(["delegation.#", "delegation.*"], (ev) => onEvent(ev.name, ev.data), { background: true });' in js
+    # No hand-rolled bus frame remains — neither the subscribe post nor the event listener —
+    # and the discarded manual seq high-water mark is gone (the kit tracks it now).
+    assert "protoagent:subscribe" not in js
+    assert "protoagent:event" not in js
+    assert "lastSeq" not in js
+    # The sole surviving postMessage is the run-open request (not bus traffic).
+    assert js.count("parent.postMessage(") == 1
+    assert 'parent.postMessage({ type: "protoagent:run:open", run_id: String(id) }, "*")' in js
+
+
 def test_view_run_asks_the_console_for_our_own_runs_only():
     """#4726: the drawer's history rows and live cards offer "View run", which asks the console
     to open its run inspector over the plugin bridge. A peer's run lives in the peer's ledger

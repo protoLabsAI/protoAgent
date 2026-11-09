@@ -284,6 +284,10 @@ def _loads(output: str):
     return data
 
 
+# Public name for other modules (client.py); _loads stays for in-module callers.
+loads = _loads
+
+
 # ── the in-page JavaScript (ONE copy, shared by every form tool) ─────────────────
 # Defines, in the page: clean/norm (text tidy), candidateLabels (the six label sources in
 # precedence order), kindOf / requiredOf / comboValue (field shape), enumerateFields(root)
@@ -1061,6 +1065,26 @@ function abComboShadowRequired(control){
   }
   return false;
 }
+function abBareField(el, idx){
+  // Last-resort descriptor when building a field's full row threw (#4963): a helper hit an
+  // element the page has since removed (e.g. an `aria-labelledby` target). Keep the field
+  // ADDRESSABLE with its id + whatever value we can still read, and no label — one broken
+  // field must never empty the read for all the others.
+  var id = '', name = '', value = '';
+  try { id = (el.getAttribute && el.getAttribute('id')) || ''; } catch(e){}
+  try { name = (el.getAttribute && el.getAttribute('name')) || ''; } catch(e){}
+  var isFile = false;
+  try { isFile = el.tagName === 'INPUT' && (el.getAttribute('type') || '').toLowerCase() === 'file'; } catch(e){}
+  if(isFile){
+    try { value = el.files ? Array.prototype.map.call(el.files, function(f){ return f.name; }).join(', ') : ''; } catch(e){ value = ''; }
+    if(!value){ try { value = abFileChipName(el) || ''; } catch(e){ value = ''; } }
+  } else {
+    try { value = (el.value != null) ? String(el.value) : ''; } catch(e){ value = ''; }
+  }
+  try { el.setAttribute('data-ab-field', String(idx)); } catch(e){}
+  return {idx: idx, label: '', labels: [], kind: isFile ? 'file' : 'field', name: name, id: id,
+          required: false, selector: '[data-ab-field="' + idx + '"]', value: value};
+}
 function abEnumerate(root){
   root = root || document;
   AB_GROUP_CACHE = null;                      // group membership is recomputed every read
@@ -1074,6 +1098,10 @@ function abEnumerate(root){
     if(el.tagName.toLowerCase()==='input' && skip[(el.getAttribute('type')||'').toLowerCase()]) continue;
     if(abIsComboShadowInput(el)) continue;    // react-select's hidden required sibling — folded below
     if(abIsHiddenHelper(el)) continue;        // a widget's own aria-hidden helper input
+    // Building ONE field's descriptor must never empty the whole read (#4963): if a helper
+    // throws — most often a label lookup reaching an element the page has since removed — fall
+    // back to a minimal row that keeps the field's id and best-effort value, and carry on.
+    try {
     var kind = abKindOf(el);
     var name = (el.getAttribute && el.getAttribute('name')) || '';
     var grp = (kind === 'radio-group' || kind === 'checkbox') ? abGroupInfo(el) : null;
@@ -1152,6 +1180,7 @@ function abEnumerate(root){
       desc.value = (el.value!=null) ? String(el.value) : '';
     }
     out.push(desc);
+    } catch(e){ out.push(abBareField(el, idx)); }
     idx++;
   }
   // ── orphaned file fields (#4032 input-removed) ──────────────────────────────────
@@ -1537,6 +1566,25 @@ def collapse_radio_groups(fields: list) -> list:
     return out
 
 
+def read_fields(data, scope: str = "") -> tuple[list | None, str]:
+    """``read_form_js``'s decoded result → ``(fields, "")``: the public field dicts (label, kind,
+    name, id, required, value, and options / options_more where present), radio and checkbox
+    options folded into their group — possibly empty. Or ``(None, "Error: …")`` when the scope
+    matched nothing or the page answered something else. The ONE parse behind both
+    ``browser_form_read`` (rendered for the model) and the plugin client's ``form_read`` (data)."""
+    if isinstance(data, dict) and data.get("ok") is False:
+        if data.get("error") == "scope-not-found":
+            return None, (f"Error: no element matched the scope {scope!r}. Pass a CSS selector or "
+                          "a visible container label, or leave scope blank to read the whole page.")
+        return None, f"Error: {data.get('error') or 'could not read the form'}."
+    fields = data.get("fields") if isinstance(data, dict) else data
+    if fields is None:
+        fields = []
+    if not isinstance(fields, list) or not all(isinstance(f, dict) for f in fields):
+        return None, "Error: could not read the form (the page returned unreadable data)."
+    return collapse_radio_groups(fields), ""
+
+
 def render_form_read(output: str, scope: str = "") -> str:
     """Turn ``read_form_js``'s JSON into the model-facing result: a JSON array, one object
     per field in document order (radio options folded into their group), or a readable
@@ -1545,16 +1593,13 @@ def render_form_read(output: str, scope: str = "") -> str:
         data = _loads(output)
     except (ValueError, TypeError):
         return "Error: could not read the form (the page returned unreadable data)."
-    if isinstance(data, dict) and data.get("ok") is False:
-        if data.get("error") == "scope-not-found":
-            return (f"Error: no element matched the scope {scope!r}. Pass a CSS selector or a "
-                    "visible container label, or leave scope blank to read the whole page.")
-        return f"Error: {data.get('error') or 'could not read the form'}."
-    fields = data.get("fields") if isinstance(data, dict) else data
+    fields, error = read_fields(data, scope)
+    if error:
+        return error
     if not fields:
         where = f" within {scope!r}" if scope else ""
         return f"No form fields found{where}."
-    return json.dumps(collapse_radio_groups(fields), ensure_ascii=False, indent=2)
+    return json.dumps(fields, ensure_ascii=False, indent=2)
 
 
 # ── browser_fill read-back (#4954 eval) ─────────────────────────────────────────────

@@ -58,6 +58,13 @@ export type DecisionCardProps = {
    *  options are disabled and a Start action shows instead. Default true. */
   agentHoldsOffline?: boolean;
   onStartAgent?: (decision: DecisionRow) => void;
+  /** How the card presents (§5.5–5.6). "panel" (default) keeps the Decisions panel's behaviour:
+   *  a successful answer holds "Sent" for 4s then calls onResolved, and a settled or 409 record
+   *  shows a Callout. "transcript" is the source-chat copy: a successful answer freezes on "Sent"
+   *  (onResolved is never called, the card never leaves the transcript), and a settled or 409
+   *  record freezes as a single plain line instead of a callout. A pending decision renders
+   *  identically in both. */
+  presentation?: "panel" | "transcript";
 };
 
 type Phase =
@@ -80,6 +87,7 @@ export function DecisionCard({
   agentOnline = true,
   agentHoldsOffline = true,
   onStartAgent,
+  presentation = "panel",
 }: DecisionCardProps) {
   const [phase, setPhase] = useState<Phase>({ kind: "idle" });
   const [expanded, setExpanded] = useState(false);
@@ -90,6 +98,7 @@ export function DecisionCard({
   const groupId = useId();
 
   const agent = decision.agent || "An agent";
+  const isTranscript = presentation === "transcript";
   const offlineBlocks = !agentOnline && !agentHoldsOffline;
   const optionsDisabled = phase.kind === "sending" || offlineBlocks;
 
@@ -113,12 +122,13 @@ export function DecisionCard({
     }
   }, [phase.kind]);
 
-  // The 4-second "Sent" hold, then the card leaves (§5.5).
+  // The 4-second "Sent" hold, then the card leaves (§5.5). Only in the panel — in a chat
+  // transcript the answered card freezes on "Sent" and never leaves (§5.5.4), so no hold.
   useEffect(() => {
-    if (phase.kind !== "sent") return;
+    if (isTranscript || phase.kind !== "sent") return;
     const timer = setTimeout(() => onResolved?.(decision.id), 4000);
     return () => clearTimeout(timer);
-  }, [phase, decision.id, onResolved]);
+  }, [isTranscript, phase, decision.id, onResolved]);
 
   async function choose(optionId: string) {
     onHold?.(decision);
@@ -174,9 +184,38 @@ export function DecisionCard({
     );
   }
 
+  // The frozen transcript sentence for a settled record (§5.5–5.6): one plain muted line, never
+  // a callout. Answered reads "You chose …"; expired and withdrawn keep the panel's closed text.
+  function transcriptLine(record: DecisionRow) {
+    if (record.state === "answered") {
+      const chosen = record.answer_label ?? record.answer ?? "an option";
+      return `You chose "${chosen}" · ${formatGivenAt(record.answered_at)}`;
+    }
+    if (record.state === "expired") {
+      const when = record.expires_at ? formatGivenAt(record.expires_at) : "the deadline";
+      return `No answer by ${when}, so ${agent} went ahead and ${record.default_action_text}.`;
+    }
+    // withdrawn / cancelled — "no longer needed"
+    const reason = record.withdraw_reason?.trim();
+    return `${agent} doesn't need this any more.${reason ? ` ${reason}` : ""}`;
+  }
+
   let body: ReactNode;
-  if (phase.kind === "answeredElsewhere") {
+  if (isTranscript && TERMINAL.has(decision.state)) {
+    // Settled record in a chat transcript: one frozen line, no options, no callout (§5.5.4, §5.6).
+    // This also catches the local answer once the resumed record lands as the decision prop.
     body = (
+      <p style={muted} aria-live="polite">
+        {transcriptLine(decision)}
+      </p>
+    );
+  } else if (phase.kind === "answeredElsewhere") {
+    body = isTranscript ? (
+      // A 409 under us in a transcript freezes on the returned record's frozen line, not the callout.
+      <p ref={result} tabIndex={-1} style={muted} aria-live="polite">
+        {transcriptLine(phase.record ?? decision)}
+      </p>
+    ) : (
       <div ref={result} tabIndex={-1} aria-live="polite">
         {phase.record ? answeredElsewhereCallout(phase.record) : answeredElsewhereCallout(decision)}
       </div>

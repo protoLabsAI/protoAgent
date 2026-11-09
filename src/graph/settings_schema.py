@@ -311,6 +311,16 @@ FIELDS: list[Field] = [
         "their own cap (Goal mode ▸ Max rounds per goal turn) — the smaller wins.",
         minimum=0,
     ),
+    Field(
+        "model.empty_retry_lead",
+        "empty_retry_lead",
+        "Retry empty lead turns",
+        "bool",
+        "Model & runtime",
+        "Give the chat lead one extra try (thinking off) when a turn ends with no tool call "
+        "and almost no text because it was cut at the output cap or spent itself thinking. "
+        "Every subagent already does this; the lead does it only when this is on. Off by default.",
+    ),
     # ── In-flight limiter (ADR 0115 D2, #3760) ────────────────────────────────
     # Per-lane caps on concurrent model calls made IN THIS PROCESS. Off by default,
     # hot-reloadable, agent-scoped — a box-wide (host) default would silently hand

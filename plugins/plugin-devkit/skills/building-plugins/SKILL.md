@@ -122,6 +122,31 @@ public chrome — its data calls are the gated part). The console iframes the pa
 `building-react-plugin-views`. An event under `<id>.*` lights your plugin's rail icon (a notification
 dot) until the user opens it.
 
+## Agent-driven views
+
+Start with `scaffold_plugin(..., with_view="bus")`. Tests and a usage skill are
+included by default; keep both and fill in the domain procedure. The console
+must supply the plugin kit bus helpers.
+
+1. The tool calls `registry.emit("<plugin-id>.show", payload)` **before**
+   `registry.navigate("main")`, so the request is retained before the view mounts.
+2. Serve the page from `views/` on the public `/plugins/<id>` prefix. Derive the
+   fleet-aware base from the page URL and dynamically import `/_ds/plugin-kit.js`.
+3. Call `kit.initPluginView()`, then `kit.subscribe("<plugin-id>.show", handler)`.
+   The kit handles replay on remount. Render the request and `kit.publish` a
+   namespaced reply. Receive replies with `registry.on`; expose results to the
+   agent through a tool. Declare the matching `emits` and `subscribes`.
+4. Send binary results (such as a canvas screenshot) with `kit.apiFetch` to a
+   POST route under `/api/plugins/<id>`, which inherits operator authentication.
+   Cap bytes while streaming, save via `registry.save_media`, and return a small
+   media reference. Test the event order, page, replies, auth and upload limit.
+
+No side web servers, no headless browsers, no polling, and no `background: true`
+for heavy views. Use the kit helpers rather than raw bus `postMessage` traffic.
+
+See the [plugin view bridge reference](../../../../docs/reference/plugin-view-bridge.md)
+for replay, topic qualification and delivery limits.
+
 ## 5. Consume core capabilities (`graph.sdk`)
 A plugin doesn't only *contribute* — it can call **back into the host** through the stable
 `graph.sdk` surface (so core can refactor underneath you). Keep these imports **lazy** (inside
@@ -256,7 +281,7 @@ the whole loop is tool-driven (ADR 0096): scaffold → edit → test → hot-swa
   then call **`reload_plugins`** — the loader re-execs every file, so your change is
   live next turn (no restart).
 - **`test_plugin("<id>")`** runs the plugin's own pytest suite in a subprocess
-  (scaffold with `with_tests=True` to get one) and reports pass/fail + the output
+  (included by default by `scaffold_plugin`) and reports pass/fail + the output
   tail — go green before you hand it to the user. It runs against a **disposable
   copy** of the plugin dir, so a destructive test can't touch live files. Still:
   keep runtime STATE (data files, logs) **out of the plugin dir** — an update or

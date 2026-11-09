@@ -42,6 +42,14 @@ class NotFoundError(LookupError):
     400 or an AttributeError/KeyError 500 (#3973)."""
 
 
+class ConflictError(Exception):
+    """The operation would clobber a live record — ``_http_error`` answers 409.
+
+    Raised by the undo restore (#4955 Q10) when a goal/watch was (re)created under the same
+    id between the delete and the undo: writing the stashed snapshot back would silently
+    overwrite the newer record and its progress, so the restore refuses instead."""
+
+
 class SubagentRunRequest(BaseModel):
     session_id: str = "manual-subagent"
     type: str = "researcher"
@@ -269,7 +277,8 @@ def _http_error(exc: Exception) -> HTTPException:
     """Map a handler's exception to an HTTP error.
 
     ``ValueError`` (the caller's input) is a 400 and ``NotFoundError`` a 404, both with the
-    handler's own message; a "not loaded" ``RuntimeError`` is a 409. Anything else is a
+    handler's own message; a ``ConflictError`` (an undo that would clobber a live record)
+    and a "not loaded" ``RuntimeError`` are each a 409. Anything else is a
     fault in our code: it is logged here with its traceback under a short error id, and the
     client gets a generic message carrying that id (#3973) — never ``str(exc)``, which
     leaked file paths and library internals to whoever made the request."""
@@ -277,6 +286,8 @@ def _http_error(exc: Exception) -> HTTPException:
         return HTTPException(status_code=400, detail=str(exc))
     if isinstance(exc, NotFoundError):
         return HTTPException(status_code=404, detail=str(exc))
+    if isinstance(exc, ConflictError):
+        return HTTPException(status_code=409, detail=str(exc))
     if isinstance(exc, RuntimeError) and "not loaded" in str(exc).lower():
         return HTTPException(status_code=409, detail=str(exc))
     error_id = uuid.uuid4().hex[:8]
@@ -882,6 +893,28 @@ def register_operator_routes(
             if not res.get("ok"):
                 raise HTTPException(status_code=400, detail=res.get("error") or res.get("message"))
             return res
+
+    # --- Undo (#4955 Q10) ----------------------------------------------------
+    # Server-side undo for a console delete: DELETE /api/goals/{session_id} and
+    # DELETE /api/watches/{watch_id} stash a snapshot and hand back an ``undo_token``;
+    # this redeems it within ``UNDO_WINDOW_S``, writing the record back through the
+    # store's own ``set`` (which re-fires its ``goal.changed`` / ``watch.changed``
+    # event). Done on the server so the Work view's Undo toast still works after the
+    # originating tab is closed (#4955 §4.5). Registered unconditionally and needs no
+    # injected accessor — the ledger is a process-local singleton, and a token can only
+    # exist if a clear minted one; an unknown, expired, or already-used token is a 404
+    # (``NotFoundError`` → ``_http_error``), and changes nothing.
+    @app.post("/api/undo/{token}")
+    async def _undo(token: str):
+        from operator_api.undo import LEDGER
+
+        try:
+            # The restore writes through the store (file IO + a bus publish), so run it off
+            # the event loop like the clear handlers that stashed it.
+            kind = await asyncio.to_thread(LEDGER.restore, token)
+        except Exception as exc:
+            raise _http_error(exc) from exc
+        return {"restored": True, "kind": kind}
 
     # Verifier catalog (ADR 0028/0067) — what a goal or watch can be checked WITH, from
     # every source. Read-only; the console's creators build their pickers from it instead of

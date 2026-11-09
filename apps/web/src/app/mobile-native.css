@@ -61,13 +61,20 @@
   /* Console-owned controls under the 44px HIG minimum. Hit area grows via an ::after
      overlay rather than the box, so the topbar and composer bar keep their density.
      (`.fleet-switcher-trigger` was 57x19; `.composer-model-select` ~125x23 — and the
-     latter reads as plain text until :hover, so on touch it had no affordance at all.) */
+     latter reads as plain text until :hover, so on touch it had no affordance at all.)
+     The empty chat's "Edit suggestions" and the instruction ledger's View/Retry are small
+     ghost buttons (~112x29, ~51x29) that render only once their data arrives, which is why
+     the mobile touch-target check caught them only some of the time. */
   .fleet-switcher-trigger,
-  .composer-model-select {
+  .composer-model-select,
+  .chat-starter-edit,
+  .chat-ledger-action {
     position: relative;
   }
   .fleet-switcher-trigger::after,
-  .composer-model-select::after {
+  .composer-model-select::after,
+  .chat-starter-edit::after,
+  .chat-ledger-action::after {
     content: "";
     position: absolute;
     top: 50%;

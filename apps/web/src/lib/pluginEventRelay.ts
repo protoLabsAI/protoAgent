@@ -13,7 +13,8 @@ import { topicMatches } from "./events";
 // - `background` requests hidden delivery — handled by the HOST (PluginView reports it to
 //   the ui store; the App keeps the view mounted), not here.
 //
-// Host → page: every relayed frame is `{ type: "protoagent:event", topic, data, seq }` —
+// Host → page: every relayed frame is `{ type: "protoagent:event", topic, name, data, seq }` —
+// `name` aliases `topic` for the 0.71 plugin kit; keep `topic` for existing views.
 // `seq` is the page's high-water mark for its next `since`.
 
 export type RelayFrame = { topic: string; data: Record<string, unknown>; seq?: number };
@@ -51,7 +52,7 @@ export type PluginEventRelay = {
 
 export function createPluginEventRelay(opts: {
   /** Post one `protoagent:event` frame to the page. */
-  post: (frame: RelayFrame) => void;
+  post: (frame: RelayFrame & { name: string }) => void;
   /** Retained frames with seq > since, oldest→newest (lib/events.ts `replaySince`). */
   replaySince: (since: number) => RelayFrame[];
 }): PluginEventRelay {
@@ -72,7 +73,7 @@ export function createPluginEventRelay(opts: {
       for (const f of opts.replaySince(req.since)) {
         if (typeof f.seq !== "number" || f.seq <= hw) continue;
         if (!matches(f.topic)) continue;
-        opts.post({ topic: f.topic, data: f.data, seq: f.seq });
+        opts.post({ name: f.topic, topic: f.topic, data: f.data, seq: f.seq });
         hw = f.seq;
       }
       highWater = hw;
@@ -85,12 +86,12 @@ export function createPluginEventRelay(opts: {
         // (already replayed) or new. Drop the former, advance on the latter.
         if (highWater !== null && seq <= highWater) return;
         highWater = seq;
-        opts.post({ topic, data, seq });
+        opts.post({ name: topic, topic, data, seq });
         return;
       }
       // A frame without a seq (not produced by the server bus) can't be deduped or
       // tracked — relay as-is so nothing is silently dropped.
-      opts.post({ topic, data });
+      opts.post({ name: topic, topic, data });
     },
   };
 }

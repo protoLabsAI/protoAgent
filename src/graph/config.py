@@ -942,6 +942,11 @@ class LangGraphConfig:
     # this many rounds; 0 (default) = off — max_iterations remains the backstop.
     round_nudge_after: int = 25
     round_hard_cap: int = 0
+    # Empty-at-cap retry on the LEAD chat stack (ADR 0128 S3, #4875). Every subagent
+    # already gets the one thinking-off retry for a turn cut at the output cap or lost to a
+    # reasoning loop; the chat lead gets it only when this is on. Off by default — Josh's
+    # call that the lead stays unchanged unless the operator opts in.
+    empty_retry_lead: bool = False
     # Native vision (ADR 0021): set true when `model_name` is image-capable (e.g.
     # protolabs/fast, protolabs/smart). The chat composer then sends attached
     # images as native multimodal parts straight to the model instead of routing
@@ -2376,6 +2381,7 @@ class LangGraphConfig:
             turn_stall_timeout_seconds=model.get("turn_stall_timeout_seconds", cls.turn_stall_timeout_seconds),
             round_nudge_after=model.get("round_nudge_after", cls.round_nudge_after),
             round_hard_cap=model.get("round_hard_cap", cls.round_hard_cap),
+            empty_retry_lead=bool(model.get("empty_retry_lead", cls.empty_retry_lead)),
             request_timeout=model.get("request_timeout", cls.request_timeout),
             llm_max_retries=model.get("max_retries", cls.llm_max_retries),
             llm_max_inflight=model.get("max_inflight", cls.llm_max_inflight),

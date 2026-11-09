@@ -1,0 +1,84 @@
+/* The DS base :where(button):focus-visible rule supplies the focus ring. */
+.work-detail {
+  display: flex;
+  flex-direction: column;
+  gap: var(--pl-space-4);
+}
+.work-detail__header {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--pl-space-2);
+}
+.work-detail__title {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  font-size: var(--pl-font-size-lg);
+  font-weight: var(--pl-font-weight-semibold);
+  overflow-wrap: anywhere;
+}
+.work-detail__fields,
+.work-detail__tech {
+  display: flex;
+  flex-direction: column;
+  gap: var(--pl-space-3);
+  margin: 0;
+}
+.work-detail__field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--pl-space-1);
+}
+.work-detail__field dt {
+  margin: 0;
+  color: var(--pl-color-fg-muted);
+  font-size: var(--pl-font-size-sm);
+}
+.work-detail__field dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.work-detail__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--pl-space-2);
+}
+/* The inline confirm reads as a quiet raised card, never a stacked overlay. */
+.work-detail__confirm {
+  display: flex;
+  flex-direction: column;
+  gap: var(--pl-space-2);
+  padding: var(--pl-space-3);
+  border-radius: var(--pl-radius);
+  background: var(--pl-color-bg-raised);
+}
+.work-detail__confirm p {
+  margin: 0;
+}
+.work-detail__confirm-prompt {
+  font-weight: var(--pl-font-weight-medium);
+}
+.work-detail__confirm-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--pl-space-2);
+}
+.work-detail__tech-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--pl-space-2);
+}
+.work-detail__tech-row dt {
+  margin: 0;
+  color: var(--pl-color-fg-muted);
+  font-size: var(--pl-font-size-sm);
+}
+.work-detail__tech-value {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  /* Long ids, cron strings and ISO stamps must wrap, not scroll sideways (§6 reflow). */
+  overflow-wrap: anywhere;
+}
