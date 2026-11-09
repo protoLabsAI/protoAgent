@@ -33,7 +33,7 @@ import time
 from collections.abc import Callable
 
 from knowledge.store import (
-    _REAPABLE_BULK_REASONS,
+    _BULK_DELETE_REASON,
     KnowledgeStore,
     _collection_clause,
     _deliverable_clauses,
@@ -592,19 +592,17 @@ class HybridKnowledgeStore(KnowledgeStore):
         on the side table, so the vectors go first under the SAME cutoff (shared
         via ``_cutoff`` so a swept chunk can't linger as a vector-only hit).
 
-        Mirrors the base's ``invalidation_reason`` filter so only bulk-delete vectors
-        (by source OR by collection — ``_REAPABLE_BULK_REASONS``) are dropped;
-        auto-supersession audit rows (ADR 0069 D9) keep theirs."""
+        Mirrors the base's ``invalidation_reason`` filter so only bulk delete-by-source
+        vectors are dropped — auto-supersession audit rows (ADR 0069 D9) keep theirs."""
         cutoff = _cutoff if _cutoff is not None else self._invalidated_cutoff(older_than_seconds)
         db = self._get_db()
         if db is not None:
             try:
-                placeholders = ", ".join("?" * len(_REAPABLE_BULK_REASONS))
                 db.execute(
                     "DELETE FROM chunk_vectors WHERE chunk_id IN "
                     "(SELECT id FROM chunks WHERE invalidated_at IS NOT NULL "
-                    f"AND invalidated_at <= ? AND invalidation_reason IN ({placeholders}))",
-                    (cutoff, *_REAPABLE_BULK_REASONS),
+                    "AND invalidated_at <= ? AND invalidation_reason = ?)",
+                    (cutoff, _BULK_DELETE_REASON),
                 )
                 db.commit()
             except sqlite3.DatabaseError as exc:

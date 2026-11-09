@@ -73,24 +73,25 @@ def test_general_includes_legacy_null_and_empty_but_not_history(tmp_path):
         assert store.restore_by_collection(name) == 0
 
 
-def test_restore_by_collection_leaves_source_deleted_rows(tmp_path):
-    """An Undo of a collection delete must resurrect ONLY what that delete hid — never a
-    chunk the operator separately soft-deleted by source that still sits in the same
-    collection within its own grace window (the two bulk paths use distinct markers)."""
+def test_restore_by_collection_revives_only_bulk_soft_deletes(tmp_path):
+    """restore_by_collection reverses any bulk soft-delete in the collection — both bulk
+    paths stamp the same ``_BULK_DELETE_REASON`` and share the one grace window — but it
+    must NEVER resurrect an auto-supersession audit row (NULL reason, ADR 0069 D9) that
+    happens to sit in the collection."""
     store = KnowledgeStore(tmp_path / "knowledge.db")
-    by_collection = _add(store, "stays-back")  # collection "books"
-    by_source = _add(store, "source-deleted")  # collection "books", its own source
-    assert store.invalidate_by_source("source-deleted") == 1
-    # Only the still-valid row is collection-deleted (the source one is already hidden).
+    by_collection = _add(store, "by-collection")  # collection "books"
+    by_source = _add(store, "by-source")  # collection "books", its own source
+    superseded = _add(store, "superseded")  # collection "books", an audit row
+    assert store.invalidate_chunk(superseded)  # NULL reason — kept as history
+    assert store.invalidate_by_source("by-source") == 1
+    # Only the still-valid row is collection-deleted (the other two are already hidden).
     assert store.invalidate_by_collection("books") == 1
-    # Restore brings back only the collection-deleted row.
-    assert store.restore_by_collection("books") == 1
+    # The Undo revives both bulk soft-deletes (shared marker), never the audit row.
+    assert store.restore_by_collection("books") == 2
     assert store.get_chunk(by_collection)["invalidated_at"] is None
-    assert store.get_chunk(by_source)["invalidated_at"] is not None
-    assert {r["id"] for r in store.search("orchard", k=20)} == {by_collection}
-    # The source delete keeps its own reversible Undo — the markers never collided.
-    assert store.restore_by_source("source-deleted") == 1
     assert store.get_chunk(by_source)["invalidated_at"] is None
+    assert store.get_chunk(superseded)["invalidated_at"] is not None
+    assert {r["id"] for r in store.search("orchard", k=20)} == {by_collection, by_source}
 
 
 def test_delete_sweeps_past_grace_rows(monkeypatch, tmp_path):
