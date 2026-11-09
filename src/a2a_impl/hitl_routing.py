@@ -71,6 +71,7 @@ from a2a.types import Message, Part, Role, SendMessageRequest, Task, TaskState
 from a2a.types.a2a_pb2 import ListTasksRequest
 from a2a.utils.errors import InvalidParamsError, UnsupportedOperationError
 
+from a2a_impl import message_dedupe
 from runtime.session_ids import session_id_problem
 
 log = logging.getLogger(__name__)
@@ -475,10 +476,13 @@ def check_context_id(params: SendMessageRequest) -> None:
 
 def install_parked_task_routing(handler: Any) -> ParkedTaskRouter | None:
     """Wrap ``handler``'s message-send entry points with :meth:`ParkedTaskRouter.route`
-    and register the router the executor settles through. Returns the router, or
-    ``None`` (logged; stock behaviour kept) if the handler lacks the expected surface."""
+    and register the router the executor settles through. The same wrappers send a message
+    the handler already accepted to its first task instead of running it again (#4975,
+    :mod:`a2a_impl.message_dedupe`). Returns the router, or ``None`` (logged; stock
+    behaviour kept) if the handler lacks the expected surface."""
     try:
         router = ParkedTaskRouter(handler)
+        ledger = message_dedupe.MessageLedger()
         send = handler.on_message_send
         send_stream = handler.on_message_send_stream
         _ = handler.task_store
@@ -488,6 +492,22 @@ def install_parked_task_routing(handler: Any) -> ParkedTaskRouter | None:
 
     async def on_message_send(params: SendMessageRequest, context: Any):
         check_context_id(params)  # before the SDK creates a task for it
+        # A message this handler already accepted is not run again (#4975, message_dedupe).
+        fresh, accepted = ledger.accept(params.message)  # before any await
+        while not fresh:
+            first_task = await ledger.task_of(accepted)
+            if first_task:
+                return await message_dedupe.answer_duplicate(handler, params.message, first_task, context)
+            fresh, accepted = ledger.accept(params.message)  # the first send failed: a retry
+        result = None
+        try:
+            result = await _send(params, context)
+            return result
+        finally:
+            ledger.bind(accepted, message_dedupe.event_task_id(result))
+            ledger.drop(accepted)
+
+    async def _send(params: SendMessageRequest, context: Any):
         ctx = router.begin_answer(params.message)  # before any await
         try:
             await router.wait_for_settles(ctx)
@@ -511,6 +531,23 @@ def install_parked_task_routing(handler: Any) -> ParkedTaskRouter | None:
 
     async def on_message_send_stream(params: SendMessageRequest, context: Any):
         check_context_id(params)  # before the SDK creates a task for it
+        # A message this handler already accepted is not run again (#4975, message_dedupe).
+        fresh, accepted = ledger.accept(params.message)  # before any await
+        while not fresh:
+            first_task = await ledger.task_of(accepted)
+            if first_task:
+                async for event in message_dedupe.stream_duplicate(handler, params.message, first_task, context):
+                    yield event
+                return
+            fresh, accepted = ledger.accept(params.message)  # the first send failed: a retry
+        try:
+            async for event in _send_stream(params, context):
+                ledger.bind(accepted, message_dedupe.event_task_id(event))
+                yield event
+        finally:
+            ledger.drop(accepted)
+
+    async def _send_stream(params: SendMessageRequest, context: Any):
         ctx = router.begin_answer(params.message)  # before any await
         try:
             await router.wait_for_settles(ctx)

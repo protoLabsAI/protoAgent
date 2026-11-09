@@ -377,6 +377,63 @@ fn build_tray(app: &tauri::App) -> tauri::Result<()> {
     Ok(())
 }
 
+/// Message ids `chat_stream` has already POSTed (#4975). Tauri's IPC script reads ANY failed
+/// custom-protocol request as "the protocol is blocked" and replays the same command over
+/// `postMessage`. A page that navigates mid-turn (an agent switch) has WebKit cancel the
+/// in-flight `chat_stream` request, so the dying page replayed it and the shell POSTed the
+/// identical `SendStreamingMessage` body again: the agent answered one message twice. The
+/// console mints a fresh `messageId` for every send, so a second run of the same id is
+/// always such a replay, never a real send. Bounded by age and count.
+static SENT_MESSAGES: Mutex<Option<SentMessages>> = Mutex::new(None);
+const SENT_MESSAGE_TTL: Duration = Duration::from_secs(60 * 60);
+const SENT_MESSAGE_CAP: usize = 4096;
+
+#[derive(Default)]
+struct SentMessages {
+    order: std::collections::VecDeque<(String, Instant)>,
+    ids: std::collections::HashSet<String>,
+}
+
+impl SentMessages {
+    /// Record `id` as sent; false when it already was (within the TTL).
+    fn claim(&mut self, id: &str, now: Instant) -> bool {
+        loop {
+            let expired = match self.order.front() {
+                Some((_, at)) => {
+                    self.order.len() >= SENT_MESSAGE_CAP
+                        || now.saturating_duration_since(*at) > SENT_MESSAGE_TTL
+                }
+                None => false,
+            };
+            if !expired {
+                break;
+            }
+            if let Some((old, _)) = self.order.pop_front() {
+                self.ids.remove(&old);
+            }
+        }
+        if !self.ids.insert(id.to_string()) {
+            return false;
+        }
+        self.order.push_back((id.to_string(), now));
+        true
+    }
+}
+
+/// The client `messageId` of a message-sending A2A body (None for a `SubscribeToTask`,
+/// which is a read and safe to repeat).
+fn sent_message_id(body: &serde_json::Value) -> Option<&str> {
+    let method = body.get("method")?.as_str()?;
+    if method != "SendStreamingMessage" && method != "SendMessage" {
+        return None;
+    }
+    body.get("params")?
+        .get("message")?
+        .get("messageId")?
+        .as_str()
+        .filter(|id| !id.is_empty())
+}
+
 /// Stream a chat turn for the desktop shell. WKWebView won't deliver a streaming
 /// SSE `fetch` body chunk-by-chunk, so the webview hands us the A2A request body and
 /// we run the `/a2a` `SendStreamingMessage` POST here (reqwest streams fine), relaying
@@ -393,6 +450,17 @@ async fn chat_stream(
     on_event: tauri::ipc::Channel<String>,
 ) -> Result<(), String> {
     use futures_util::StreamExt;
+
+    if let Some(id) = sent_message_id(&body) {
+        let mut sent = SENT_MESSAGES.lock().unwrap_or_else(|e| e.into_inner());
+        if !sent
+            .get_or_insert_with(SentMessages::default)
+            .claim(id, Instant::now())
+        {
+            log::warn!("desktop: chat_stream replay of message {id} refused (already sent)");
+            return Err(format!("message {id} was already sent"));
+        }
+    }
 
     let client = reqwest::Client::new();
     let mut req = client
@@ -771,6 +839,52 @@ pub fn run() {
         });
 }
 
+
+#[cfg(test)]
+mod sent_message_tests {
+    use super::{sent_message_id, SentMessages, SENT_MESSAGE_TTL};
+    use std::time::{Duration, Instant};
+
+    fn send_body(id: &str) -> serde_json::Value {
+        serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "method": "SendStreamingMessage",
+            "params": {"message": {"messageId": id, "role": "ROLE_USER", "parts": [{"text": "hi"}]}},
+        })
+    }
+
+    #[test]
+    fn a_replayed_send_is_refused() {
+        // #4975: the same body arriving twice is Tauri's IPC replay, not a second message.
+        let mut sent = SentMessages::default();
+        let now = Instant::now();
+        let body = send_body("web-1794215494862-wdhq0i");
+        let id = sent_message_id(&body).unwrap();
+        assert!(sent.claim(id, now));
+        assert!(!sent.claim(id, now + Duration::from_secs(16)));
+        assert!(sent.claim("web-other", now));
+    }
+
+    #[test]
+    fn an_old_send_is_forgotten() {
+        let mut sent = SentMessages::default();
+        let now = Instant::now();
+        assert!(sent.claim("web-1", now));
+        assert!(sent.claim("web-1", now + SENT_MESSAGE_TTL + Duration::from_secs(1)));
+    }
+
+    #[test]
+    fn a_subscribe_is_not_a_send() {
+        let body = serde_json::json!({
+            "jsonrpc": "2.0", "id": "resub-1", "method": "SubscribeToTask", "params": {"id": "t1"}
+        });
+        assert_eq!(sent_message_id(&body), None);
+        let mut blank = send_body("x");
+        blank["params"]["message"]["messageId"] = serde_json::json!("");
+        assert_eq!(sent_message_id(&blank), None);
+    }
+}
 
 #[cfg(test)]
 mod auth_token_tests {

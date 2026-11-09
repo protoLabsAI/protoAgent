@@ -361,12 +361,18 @@ export const chatApi = {
     // streaming. Falls back to the non-streaming `/api/chat` path if the native command
     // is unavailable or fails, so it never regresses below the old render-once behavior.
     if (isDesktopWebview()) {
+      // Whether the native stream delivered anything. Once it has, the server accepted this
+      // message and its turn is running: a failure after that point must not re-send the
+      // message over /api/chat, which would run the same turn a second time (#4975). It
+      // fails the stream instead, like the browser path, and the turn reconciles from its task.
+      let streamed = false;
       try {
         const core = tauriCore();
         if (!core) throw new Error("Tauri core API unavailable (withGlobalTauri off?)");
         const channel = new core.Channel<string>();
         let buf = "";
         channel.onmessage = (chunk) => {
+          streamed = true;
           buf += chunk;
           buf = drainSseBuffer(buf, dispatchFrame);
         };
@@ -380,6 +386,7 @@ export const chatApi = {
         handlers.onDone?.();
         return;
       } catch (err) {
+        if (streamed) throw err;
         console.warn("[desktop] native chat stream failed; falling back to /api/chat:", err);
       }
       try {
