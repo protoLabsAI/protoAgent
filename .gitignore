@@ -52,6 +52,10 @@ build/
 *.db
 *.jsonl
 !evals/memory_fixtures/supersede_cases.jsonl
+# Frozen PV4 fixtures (#4897): the committed case set and per-user stores are
+# reviewed evaluation inputs, not transient runs — keep them out of the *.jsonl sweep.
+!evals/memory_fixtures/pv4/cases.jsonl
+!evals/memory_fixtures/pv4/user_*.jsonl
 # Most .beads/ rules live in .beads/.gitignore (self-contained allowlist) so they
 # travel with the dir and cover every runtime file br adds. This one stays at the
 # root because the workspace-config gate (release-tools) only reads the root
