@@ -296,6 +296,115 @@ class TestUpdateJob:
         assert gw.list_jobs()[0].prompt == "w1"  # gw's job unchanged
 
 
+class TestSetEnabled:
+    """Pause/Resume for the Work view (#4955 §4.3 Q8). Pausing flips ``enabled`` so a
+    due tick skips the job; resuming a cron job recomputes ``next_fire`` from now so a
+    job paused across missed slots fires once at its next slot, not every missed run."""
+
+    @pytest.mark.asyncio
+    async def test_pause_stops_a_due_job_from_firing(self, tmp_path, monkeypatch):
+        """r1: ``set_enabled(id, False)`` stores enabled=0 and a due tick never POSTs it."""
+        import httpx
+
+        _fast_poll(monkeypatch)
+        s = _make_scheduler(tmp_path)
+        past = (datetime.now(UTC) - timedelta(seconds=1)).isoformat()
+        s.add_job("PAUSED-ME", past, job_id="paused")  # one-shot already due
+
+        out = s.set_enabled("paused", False)
+        assert out.enabled is False
+        assert s.get_job("paused").enabled is False  # stored enabled=0
+        # The claim query (``WHERE enabled = 1``) no longer sees it.
+        assert s._claim_due_jobs(datetime.now(UTC)) == []
+
+        fired: list[int] = []
+
+        class _FireCounting(_FakeClient):
+            async def post(self, url, headers=None, json=None):
+                fired.append(1)
+                return await super().post(url, headers=headers, json=json)
+
+        monkeypatch.setattr(httpx, "AsyncClient", lambda **kw: _FireCounting(_FakeResponse(200)))
+        await s.start()
+        await asyncio.sleep(0.3)  # several 50ms ticks elapse — a paused job must stay put
+        await s.stop()
+
+        assert fired == []  # the disabled job never fired
+        assert s.get_job("paused") is not None  # still present, just paused
+
+    def test_resume_cron_recomputes_next_fire(self, tmp_path):
+        """r2: resuming a cron job stores enabled=1 and sets next_fire to the next run
+        after now, discarding the stale slot it was paused on."""
+        s = _make_scheduler(tmp_path)
+        s.add_job("daily digest", "0 9 * * *", job_id="cron")
+        s.set_enabled("cron", False)
+        # Simulate a week paused: next_fire is long in the past.
+        db = sqlite3.connect(str(s.path))
+        stale = (datetime.now(UTC) - timedelta(days=7)).isoformat()
+        db.execute("UPDATE jobs SET next_fire = ? WHERE id = ?", (stale, "cron"))
+        db.commit()
+        db.close()
+
+        out = s.set_enabled("cron", True)
+        assert out.enabled is True
+        nf = datetime.fromisoformat(out.next_fire)
+        assert nf > datetime.now(UTC)  # the next run after now, not the stale slot
+        assert out.next_fire != stale
+        assert nf.hour == 9  # still the 09:00 (UTC) cron slot
+        assert s.get_job("cron").next_fire == out.next_fire  # persisted
+
+    def test_resume_cron_honours_the_jobs_timezone(self, tmp_path):
+        """The recompute carries the job's own timezone, like update_job's."""
+        from zoneinfo import ZoneInfo
+
+        s = _make_scheduler(tmp_path)
+        s.add_job("noon in chicago", "0 12 * * *", job_id="tz", timezone="America/Chicago")
+        s.set_enabled("tz", False)
+        out = s.set_enabled("tz", True)
+        nf_local = datetime.fromisoformat(out.next_fire).astimezone(ZoneInfo("America/Chicago"))
+        assert nf_local.hour == 12 and nf_local.minute == 0
+
+    def test_resume_past_due_one_shot_keeps_its_next_fire(self, tmp_path):
+        """A one-shot whose time already passed is kept as-is on resume — the next tick
+        fires it, same as any past-due one-shot (no recompute, nothing to recompute to)."""
+        s = _make_scheduler(tmp_path)
+        past = (datetime.now(UTC) - timedelta(seconds=5)).isoformat()
+        s.add_job("one and done", past, job_id="os")
+        before = s.get_job("os").next_fire
+        s.set_enabled("os", False)
+
+        out = s.set_enabled("os", True)
+        assert out.enabled is True
+        assert out.next_fire == before  # unchanged
+        # Enabled again ⇒ a due tick claims it.
+        assert [j.id for j in s._claim_due_jobs(datetime.now(UTC))] == ["os"]
+
+    def test_unknown_id_raises_and_changes_nothing(self, tmp_path):
+        """r3: an unknown id raises ValueError (like update_job) and touches no row."""
+        s = _make_scheduler(tmp_path)
+        s.add_job("keep", "0 9 * * *", job_id="real")
+        with pytest.raises(ValueError, match="no job"):
+            s.set_enabled("nope", False)
+        assert s.get_job("real").enabled is True  # untouched
+        assert len(s.list_jobs()) == 1
+
+    def test_cross_agent_set_enabled_blocked(self, tmp_path):
+        s_gp = _make_scheduler(tmp_path, agent="gina-personal")
+        s_gw = _make_scheduler(tmp_path, agent="gina-work")
+        gw_job = s_gw.add_job("w1", "0 9 * * *")
+        with pytest.raises(ValueError, match="no job"):
+            s_gp.set_enabled(gw_job.id, False)
+        assert s_gw.get_job(gw_job.id).enabled is True  # gw's job untouched
+
+    def test_enabled_round_trips_through_as_dict(self, tmp_path):
+        """r4: the toggled flag survives the DB round-trip and Job.as_dict() reports it."""
+        s = _make_scheduler(tmp_path)
+        s.add_job("hi", "0 9 * * *", job_id="j")
+        assert s.set_enabled("j", False).as_dict()["enabled"] is False
+        assert s.get_job("j").as_dict()["enabled"] is False
+        assert s.set_enabled("j", True).as_dict()["enabled"] is True
+
+
 # ── reschedule / delete behaviour ───────────────────────────────────────────
 
 
