@@ -360,18 +360,17 @@ export function ChatSessionSlot({
   // The empty chat's "Edit suggestions" link lands the operator on Settings ▸ Chat, where the
   // Starter prompts editor lives. `openGlobalSettings("chat")` writes both the global section
   // and the active sidenav section, so it opens on Chat even if Settings last showed another
-  // section. Best-effort: once the panel mounts, bring the editor into view — the panel mounts
-  // asynchronously, so retry across a few frames then give up (landing on Chat is the contract).
+  // section — that navigation is the contract. The scroll below is best-effort: the Settings
+  // panel mounts a frame or two later, so query it on the next frames and scroll if it is there;
+  // if it never shows (or rAF is unavailable), landing on Chat is still the requirement.
   const editStarterPrompts = useCallback(() => {
     openGlobalSettings("chat");
+    if (typeof requestAnimationFrame !== "function") return;
     let frames = 0;
     const reveal = () => {
       const el = document.querySelector('[data-testid="starter-prompts-editor"]');
-      if (el) {
-        el.scrollIntoView({ block: "start" });
-      } else if (frames++ < 10) {
-        requestAnimationFrame(reveal);
-      }
+      if (el) el.scrollIntoView({ block: "start" });
+      else if (frames++ < 5) requestAnimationFrame(reveal);
     };
     requestAnimationFrame(reveal);
   }, [openGlobalSettings]);
