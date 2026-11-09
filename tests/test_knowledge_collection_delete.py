@@ -73,25 +73,52 @@ def test_general_includes_legacy_null_and_empty_but_not_history(tmp_path):
         assert store.restore_by_collection(name) == 0
 
 
-def test_restore_by_collection_revives_only_bulk_soft_deletes(tmp_path):
-    """restore_by_collection reverses any bulk soft-delete in the collection — both bulk
-    paths stamp the same ``_BULK_DELETE_REASON`` and share the one grace window — but it
-    must NEVER resurrect an auto-supersession audit row (NULL reason, ADR 0069 D9) that
-    happens to sit in the collection."""
+def test_restore_by_collection_revives_only_the_collection_delete(tmp_path):
+    """Undoing a collection delete reverses ONLY what that delete hid. A document
+    (by-source) delete the operator made earlier carries its own ``_BULK_DELETE_REASON``
+    and must stay deleted through the collection Undo (regression for the Undo that
+    resurrected an already-deleted document still inside the grace window). An
+    auto-supersession audit row (NULL reason, ADR 0069 D9) is never touched either."""
     store = KnowledgeStore(tmp_path / "knowledge.db")
     by_collection = _add(store, "by-collection")  # collection "books"
     by_source = _add(store, "by-source")  # collection "books", its own source
     superseded = _add(store, "superseded")  # collection "books", an audit row
     assert store.invalidate_chunk(superseded)  # NULL reason — kept as history
+    # Operator first deletes one document; it is soft-deleted and inside the grace window.
     assert store.invalidate_by_source("by-source") == 1
-    # Only the still-valid row is collection-deleted (the other two are already hidden).
+    # Then deletes the whole collection — only the still-valid row is newly hidden.
     assert store.invalidate_by_collection("books") == 1
-    # The Undo revives both bulk soft-deletes (shared marker), never the audit row.
-    assert store.restore_by_collection("books") == 2
+    # The Undo revives ONLY the collection delete's row, not the earlier document delete
+    # and not the audit row.
+    assert store.restore_by_collection("books") == 1
     assert store.get_chunk(by_collection)["invalidated_at"] is None
-    assert store.get_chunk(by_source)["invalidated_at"] is None
+    assert store.get_chunk(by_source)["invalidated_at"] is not None
     assert store.get_chunk(superseded)["invalidated_at"] is not None
+    assert {r["id"] for r in store.search("orchard", k=20)} == {by_collection}
+    # The earlier document delete keeps its own Undo, scoped to the document.
+    assert store.restore_by_source("by-source") == 1
+    assert store.get_chunk(by_source)["invalidated_at"] is None
     assert {r["id"] for r in store.search("orchard", k=20)} == {by_collection, by_source}
+
+
+def test_collection_undo_leaves_an_earlier_document_delete_deleted(monkeypatch, tmp_path):
+    """The console flow: delete one document (delete-by-source), then delete the whole
+    collection (delete-by-collection), then Undo the collection delete. The document the
+    operator removed first must stay removed — the collection Undo restores only its own
+    rows, not the earlier document still inside the grace window."""
+    store = KnowledgeStore(tmp_path / "knowledge.db")
+    doc = _add(store, "report.pdf")  # the document the operator deletes first
+    kept = _add(store, "guide.md")  # another document in the same collection
+    client = _client(monkeypatch, store)
+    assert client.post(
+        "/api/knowledge/delete-by-source",
+        json={"source": "report.pdf", "collection": "books"},
+    ).json() == {"enabled": True, "deleted": 1}
+    assert _post(client, "delete")["deleted"] == 1  # the collection delete hides `kept`
+    assert _post(client, "restore")["restored"] == 1  # Undo restores only `kept`
+    assert store.get_chunk(kept)["invalidated_at"] is None
+    assert store.get_chunk(doc)["invalidated_at"] is not None
+    assert {r["id"] for r in store.search("orchard", k=20)} == {kept}
 
 
 def test_delete_sweeps_past_grace_rows(monkeypatch, tmp_path):
@@ -160,3 +187,59 @@ def test_failed_sweep_does_not_block_delete(monkeypatch, tmp_path):
 
     monkeypatch.setattr(store, "purge_invalidated", fail)
     assert _post(_client(monkeypatch, store), "delete")["deleted"] == 1
+
+
+@pytest.mark.parametrize("collection", ["books", "general"])
+def test_document_delete_and_undo_stay_in_collection(monkeypatch, tmp_path, collection):
+    private = KnowledgeStore(tmp_path / "private.db")
+    commons = KnowledgeStore(tmp_path / "commons.db")
+    target = _add(private, "same.pdf", collection)
+    other = _add(private, "same.pdf", "other")
+    previously_deleted = _add(private, "same.pdf", "archived")
+    unrelated = _add(private, "different.pdf", collection)
+    shared = _add(commons, "same.pdf", collection)
+    superseded = private.add_chunk("old revision", source="same.pdf", collection=collection)
+    assert private.invalidate_chunk(superseded)
+    assert private.invalidate_by_collection("archived") == 1
+    # The general bucket includes legacy NULL/empty collections, just like browse.
+    if collection == "general":
+        with sqlite3.connect(private.path) as db:
+            db.execute("UPDATE chunks SET collection = NULL WHERE id = ?", (target,))
+    client = _client(monkeypatch, LayeredKnowledgeStore(private, commons))
+    body = {"source": "same.pdf", "collection": collection}
+    assert client.post("/api/knowledge/delete-by-source", json=body).json() == {
+        "enabled": True, "deleted": 1,
+    }
+    assert private.get_chunk(target)["invalidated_at"] is not None
+    assert private.get_chunk(other)["invalidated_at"] is None
+    assert private.get_chunk(unrelated)["invalidated_at"] is None
+    assert commons.get_chunk(shared)["invalidated_at"] is None
+    assert client.post("/api/knowledge/restore-by-source", json=body).json() == {
+        "enabled": True, "restored": 1,
+    }
+    assert private.get_chunk(target)["invalidated_at"] is None
+    assert private.get_chunk(previously_deleted)["invalidated_at"] is not None
+    assert private.get_chunk(superseded)["invalidated_at"] is not None
+
+
+@pytest.mark.parametrize("action,count", [("delete", "deleted"), ("restore", "restored")])
+def test_source_scope_never_falls_back_to_global(monkeypatch, action, count):
+    class LegacyBackend:
+        def invalidate_by_source(self, source):
+            pytest.fail("Scoped requests must never call a global-only backend")
+
+        restore_by_source = invalidate_by_source
+
+    client = _client(monkeypatch, LegacyBackend())
+    for collection in ("", "   ", None, 42):
+        response = client.post(
+            f"/api/knowledge/{action}-by-source",
+            json={"source": "same.pdf", "collection": collection},
+        )
+        assert response.status_code == 400
+    result = client.post(
+        f"/api/knowledge/{action}-by-source",
+        json={"source": "same.pdf", "collection": "books"},
+    ).json()
+    assert result[count] == 0
+    assert result["error"]

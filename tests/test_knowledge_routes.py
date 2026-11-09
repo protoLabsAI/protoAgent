@@ -156,6 +156,49 @@ def test_chunk_update_keeps_old_row_when_add_fails(monkeypatch):
     assert ks.deleted == []  # the original survives
 
 
+class _CrudKSWithRows(_CrudKS):
+    """A CRUD backend that can also return the current row (``get_chunk``), so the
+    update route can decide whether an edit keeps the chunk's existing collection."""
+
+    def __init__(self, rows, **kw):
+        super().__init__(**kw)
+        self.rows = rows  # chunk_id -> stored row dict
+
+    def get_chunk(self, chunk_id):
+        return self.rows.get(chunk_id)
+
+
+def test_chunk_edit_keeps_existing_collection_on_content_only_edit(monkeypatch):
+    # A legacy row whose collection ("A") differs from its domain ("B"): a content-only
+    # edit must NOT relabel it to the domain — the chunk stays in collection "A".
+    ks = _CrudKSWithRows({3: {"domain": "B", "collection": "A"}}, next_id=9)
+    c = _client(monkeypatch, knowledge=ks)
+    assert c.put("/api/knowledge/chunks/3", json={"content": "fixed fact"}).json()["id"] == 9
+    _content, domain, kwargs = ks.added[-1]
+    assert domain == "B"  # the domain rides along unchanged
+    assert kwargs["collection"] == "A"  # collection kept, not overwritten with the domain
+
+
+def test_chunk_edit_moves_collection_on_explicit_domain_change(monkeypatch):
+    # An explicit domain change re-points the collection to the new domain, so the edit
+    # doesn't strand the chunk in its former bucket.
+    ks = _CrudKSWithRows({3: {"domain": "B", "collection": "A"}}, next_id=9)
+    c = _client(monkeypatch, knowledge=ks)
+    c.put("/api/knowledge/chunks/3", json={"content": "x", "domain": "C"})
+    _content, domain, kwargs = ks.added[-1]
+    assert domain == "C" and kwargs["collection"] == "C"
+
+
+def test_chunk_edit_backfills_null_collection_from_domain(monkeypatch):
+    # A pre-backfill row with a NULL collection falls back to the domain, exactly as the
+    # add/ingest routes stamp it (collection = domain).
+    ks = _CrudKSWithRows({3: {"domain": "D", "collection": None}}, next_id=9)
+    c = _client(monkeypatch, knowledge=ks)
+    c.put("/api/knowledge/chunks/3", json={"content": "x"})
+    _content, domain, kwargs = ks.added[-1]
+    assert domain == "D" and kwargs["collection"] == "D"
+
+
 def test_chunk_delete(monkeypatch):
     ks = _CrudKS()
     c = _client(monkeypatch, knowledge=ks)

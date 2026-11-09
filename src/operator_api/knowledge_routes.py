@@ -846,13 +846,19 @@ def register_knowledge_routes(app) -> None:
         if cur.get("review_state") == "rejected":
             carry["review_state"] = "rejected"
         domain = str(body.get("domain", "") or cur.get("domain") or "general")
-        # ``collection`` (ADR 0125 P2 slice 6) follows the (possibly edited) domain,
-        # exactly as the add and ingest routes stamp it (collection = domain) and the
-        # P2-B boot backfill fills it. Carrying the OLD collection instead would strand
-        # a domain edit in its former bucket for good — listed under the old name,
-        # missing from ``?collection=<new domain>``, out of step with the agent's
-        # domain-scoped search — because the backfill only ever fills NULLs.
-        carry["collection"] = domain
+        # ``collection`` (ADR 0125 P2 slice 6) normally RIDES ALONG untouched: an edit is
+        # usually a content fix, and a legacy row whose collection differs from its domain
+        # (pre-backfill, or stamped by hand) must keep that bucket — overwriting it with the
+        # domain on every save would silently move the chunk out from under the operator.
+        # Only an EXPLICIT domain change (``domain`` present in the body and different from
+        # the row's current domain) re-points the collection to the new domain, so the edit
+        # doesn't strand the chunk in its former bucket — listed under the old name, missing
+        # from ``?collection=<new domain>``, out of step with the agent's domain-scoped
+        # search. A NULL collection (pre-backfill) falls back to the domain, exactly as the
+        # add/ingest routes stamp it (collection = domain) and the P2-B boot backfill fills it.
+        requested_domain = str(body.get("domain") or "").strip()
+        domain_changed = bool(requested_domain) and requested_domain != str(cur.get("domain") or "")
+        carry["collection"] = domain if domain_changed else (cur.get("collection") or domain)
         heading = str(body.get("heading", "")).strip() or None
         source = body.get("source") or "console"
 
@@ -897,6 +903,12 @@ def register_knowledge_routes(app) -> None:
         store = STATE.knowledge_store
         if store is None:
             return {"enabled": False, "deleted": 0}
+        scope = {}
+        if "collection" in (body or {}):
+            collection = body["collection"]
+            if not isinstance(collection, str) or not collection.strip():
+                return JSONResponse({"detail": "collection must be a non-empty string"}, status_code=400)
+            scope["collection"] = collection
         source = str((body or {}).get("source", "")).strip()
         if not source:
             return JSONResponse({"detail": "source is required"}, status_code=400)
@@ -916,7 +928,7 @@ def register_knowledge_routes(app) -> None:
             except Exception:  # noqa: BLE001 — the sweep is opportunistic, never fatal
                 log.exception("[knowledge] purge_invalidated sweep failed")
         try:
-            deleted = await asyncio.to_thread(invalidate, source)
+            deleted = await asyncio.to_thread(invalidate, source, **scope)
         except Exception as exc:  # noqa: BLE001 — never 500 the console
             log.exception("[knowledge] delete-by-source failed")
             return {"enabled": True, "deleted": 0, "error": str(exc)}
@@ -927,6 +939,12 @@ def register_knowledge_routes(app) -> None:
         store = STATE.knowledge_store
         if store is None:
             return {"enabled": False, "restored": 0}
+        scope = {}
+        if "collection" in (body or {}):
+            collection = body["collection"]
+            if not isinstance(collection, str) or not collection.strip():
+                return JSONResponse({"detail": "collection must be a non-empty string"}, status_code=400)
+            scope["collection"] = collection
         source = str((body or {}).get("source", "")).strip()
         if not source:
             return JSONResponse({"detail": "source is required"}, status_code=400)
@@ -934,7 +952,7 @@ def register_knowledge_routes(app) -> None:
         if restore is None:
             return {"enabled": True, "restored": 0, "error": "this knowledge backend can't restore by source"}
         try:
-            restored = await asyncio.to_thread(restore, source)
+            restored = await asyncio.to_thread(restore, source, **scope)
         except Exception as exc:  # noqa: BLE001 — never 500 the console
             log.exception("[knowledge] restore-by-source failed")
             return {"enabled": True, "restored": 0, "error": str(exc)}

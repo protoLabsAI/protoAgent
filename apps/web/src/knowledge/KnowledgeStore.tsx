@@ -1,9 +1,8 @@
-import { Input, Textarea } from "@protolabsai/ui/forms";
-import { Alert } from "@protolabsai/ui/data";
+import { Combobox, Input, Textarea } from "@protolabsai/ui/forms";
 import { ConfirmDialog, Dialog, useToast } from "@protolabsai/ui/overlays";
-import { Badge, Button, Empty } from "@protolabsai/ui/primitives";
-import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowDownFromLine, ArrowUpToLine, ChevronRight, ChevronsDownUp, ChevronsUpDown, ClipboardCheck, Database, FileUp, Library, Pencil, Plus, Trash2 } from "lucide-react";
+import { Badge, Button, TextLink } from "@protolabsai/ui/primitives";
+import { useMutation } from "@tanstack/react-query";
+import { ArrowDownFromLine, ArrowUpToLine, ClipboardCheck, FileUp, Library, Pencil, Plus, Trash2 } from "lucide-react";
 
 import { useEffect, useState } from "react";
 
@@ -12,32 +11,14 @@ import { api } from "../lib/api";
 import { KNOWLEDGE_INGEST_ACCEPT } from "../lib/attachTypes";
 import { ago, errMsg } from "../lib/format";
 import { PanelHeader } from "@protolabsai/ui/navigation";
-import { knowledgeQuery, queryKeys } from "../lib/queries";
+import { CollectionsBrowser, highlight } from "./collections";
+import { useCollections } from "./useCollections";
+import { useUI } from "../state/uiStore";
 import { QuickSetting } from "../settings/QuickSetting";
 import type { KnowledgeChunk } from "../lib/types";
 
 import { ReviewActions, ReviewChip } from "./ReviewVerdict";
 import { takeKnowledgeSearchSeed, useKnowledgeSearchSeedVersion } from "./searchSeed";
-import { readKey, writeKey } from "../lib/storage";
-
-// The shape every knowledge list/search query caches — reused for optimistic
-// bulk-delete cache surgery (#1770) without re-declaring the response fields.
-type KnowledgeSearchData = Awaited<ReturnType<typeof api.knowledgeSearch>>;
-
-// Knowledge → Store (ADR 0020) — a searchable window onto the agent's knowledge
-// base (knowledge/store.py, FTS5): findings, daily-log entries, harvested
-// sessions, operator notes. The same store KnowledgeMiddleware queries before
-// every turn, so this is also where you debug "why did it recall that?". Empty
-// query → most-recent chunks; typing runs server-side FTS5 search (debounced).
-// The operator can also CURATE the store here: add a fact, fix a stale chunk,
-// delete a wrong one. Edit replaces the chunk server-side (new id — the new
-// revision is added before the old row is dropped, and a hybrid store re-embeds).
-//
-// Search is read with `useQuery` (not `useSuspenseQuery`) + keepPreviousData
-// (ADR 0013): it's a search-as-you-type surface, so suspending on each new term
-// would blank the list every keystroke. A read failure is a contained <Alert>;
-// each write is a `useMutation` that toasts on failure and invalidates the list.
-
 type Draft = { heading: string; domain: string; content: string };
 const EMPTY_DRAFT: Draft = { heading: "", domain: "general", content: "" };
 
@@ -48,6 +29,7 @@ function ChunkForm({
   onCancel,
   saving,
   saveLabel,
+  collections,
 }: {
   draft: Draft;
   setDraft: (d: Draft) => void;
@@ -55,6 +37,7 @@ function ChunkForm({
   onCancel: () => void;
   saving: boolean;
   saveLabel: string;
+  collections: string[];
 }) {
   return (
     <div className="knowledge-chunk-form">
@@ -66,14 +49,8 @@ function ChunkForm({
           onChange={(e) => setDraft({ ...draft, heading: e.target.value })}
           aria-label="heading"
         />
-        <Input
-          type="text"
-          placeholder="domain"
-          value={draft.domain}
-          onChange={(e) => setDraft({ ...draft, domain: e.target.value })}
-          aria-label="domain"
-          style={{ maxWidth: 160 }}
-        />
+        <Combobox aria-label="Collection" placeholder="Collection" options={collections}
+          value={draft.domain} onValueChange={domain => setDraft({ ...draft, domain })} />
       </div>
       <Textarea
         rows={4}
@@ -107,13 +84,17 @@ function IngestForm({
   onDone,
   onError,
   onClose,
+  collections,
+  collection,
 }: {
   onDone: () => void;
   onError: (message: string) => void;
   onClose: () => void;
+  collections: string[];
+  collection: string;
 }) {
   const [url, setUrl] = useState("");
-  const [domain, setDomain] = useState("general");
+  const [domain, setDomain] = useState(collection || "general");
   const [drag, setDrag] = useState(false);
   const [note, setNote] = useState("");
   // Preview gate (#1801): picking a source runs a no-persist dry-run; the result
@@ -207,15 +188,8 @@ function IngestForm({
               aria-label="ingest title"
               disabled={busy}
             />
-            <Input
-              type="text"
-              placeholder="domain"
-              value={domain}
-              onChange={(e) => setDomain(e.target.value)}
-              aria-label="ingest domain"
-              style={{ maxWidth: 160 }}
-              disabled={busy}
-            />
+            <Combobox aria-label="Collection" placeholder="Collection" options={collections}
+              value={domain} onValueChange={setDomain} disabled={busy} />
           </div>
           <div className="knowledge-chunk-form-row">
             <Button
@@ -298,53 +272,23 @@ function IngestForm({
 }
 
 export function KnowledgeStore() {
-  // Action failures (curate / share / ingest) self-report via toast; a read/search
-  // failure is the contained <Alert> below. A blank message is a clear-no-op.
-  const qc = useQueryClient();
+  // Action failures (curate / share / ingest / review) self-report via toast; a read or
+  // search failure renders as the contained <Alert> inside CollectionsBrowser. A blank
+  // message is a clear-no-op.
+  const model = useCollections();
+  const names = model.collections.map(c => c.collection);
   const toast = useToast();
   const onError = (message: string) => {
     if (message) toast({ tone: "error", title: "Knowledge", message });
   };
 
-  const [query, setQuery] = useState("");
-  const [debouncedQuery, setDebouncedQuery] = useState("");
-  // Debounce the search term — TanStack owns the fetch; this only delays the key
-  // change so a fast typist doesn't fire an FTS request per keystroke.
-  useEffect(() => {
-    const t = window.setTimeout(() => setDebouncedQuery(query), 250);
-    return () => window.clearTimeout(t);
-  }, [query]);
-
-  // "Pending review" queue (ADR 0108 D7): narrow the list to rows awaiting an operator
-  // verdict. Its own cache entry (the query key carries the filter), so toggling never
-  // relabels the unfiltered list.
-  const [pendingOnly, setPendingOnly] = useState(false);
-
-  // A term handed over from elsewhere (a ⌘K knowledge row routing here, ADR 0057) — adopt
-  // it as the search. `debouncedQuery` is set alongside `query` so the results are already
-  // the seeded search on the first paint instead of 250ms of the recent-chunks listing.
-  // Keyed on the seed VERSION, not the value: re-seeding the same term has to re-apply, and
-  // the seed is consumed on read so a later remount doesn't replay it over live typing.
-  // The review filter is cleared with it: the handoff's whole promise is that the row the
-  // operator picked in the palette is in the list they land on, and an already-open surface
-  // left on "pending review" would honour the term and still not show it.
   const seedVersion = useKnowledgeSearchSeedVersion();
   useEffect(() => {
     const seeded = takeKnowledgeSearchSeed();
-    if (seeded === null) return;
-    setQuery(seeded);
-    setDebouncedQuery(seeded);
-    setPendingOnly(false);
+    if (seeded !== null) { model.seedSearch(seeded); }
   }, [seedVersion]);
-
-  const { data, isFetching, error, refetch } = useQuery({
-    ...knowledgeQuery(debouncedQuery, pendingOnly ? "pending" : undefined),
-    placeholderData: keepPreviousData,
-  });
-  const enabled = data?.enabled ?? true;
-  const results = data?.results ?? [];
-  const stats = data?.stats ?? {};
-  const invalidate = () => void qc.invalidateQueries({ queryKey: queryKeys.knowledge });
+  const enabled = model.list.data?.enabled ?? true;
+  const invalidate = () => void model.invalidate();
 
   const [adding, setAdding] = useState(false);
   const [ingesting, setIngesting] = useState(false);
@@ -352,9 +296,6 @@ export function KnowledgeStore() {
   const [draft, setDraft] = useState<Draft>(EMPTY_DRAFT);
   const [pendingDelete, setPendingDelete] = useState<KnowledgeChunk | null>(null);
   const [forgetPending, setForgetPending] = useState<KnowledgeChunk | null>(null);
-  // Bulk delete-by-source (#1770): the group awaiting a confirm (source + count).
-  const [pendingSourceDelete, setPendingSourceDelete] = useState<{ source: string; count: number } | null>(null);
-
   const save = useMutation({
     mutationFn: () => (editingId !== null ? api.updateKnowledgeChunk(editingId, draft) : api.addKnowledgeChunk(draft)),
     onSuccess: () => {
@@ -370,58 +311,6 @@ export function KnowledgeStore() {
     mutationFn: (id: number) => api.deleteKnowledgeChunk(id),
     onSuccess: () => invalidate(),
     onError: (e) => onError(errMsg(e)),
-  });
-
-  // Bulk delete-by-source (#1770) — remove a whole ingest at once. It's a reversible
-  // SOFT delete, so restore just re-validates the same rows. The restore mutation is
-  // declared first because the delete's success toast embeds an Undo that calls it.
-  const restoreBySource = useMutation({
-    mutationFn: (source: string) => api.restoreKnowledgeBySource(source),
-    onSuccess: (r) => {
-      if (r.error) { onError(r.error); return; }
-      invalidate();
-    },
-    onError: (e) => onError(errMsg(e)),
-  });
-
-  const delBySource = useMutation({
-    mutationFn: ({ source }: { source: string; count: number }) => api.deleteKnowledgeBySource(source),
-    // Optimistically drop the group from every knowledge list cache so it vanishes
-    // instantly; snapshot for rollback if the server rejects it.
-    onMutate: async ({ source }) => {
-      await qc.cancelQueries({ queryKey: queryKeys.knowledge });
-      const prev = qc.getQueriesData<KnowledgeSearchData>({ queryKey: queryKeys.knowledge });
-      qc.setQueriesData<KnowledgeSearchData>({ queryKey: queryKeys.knowledge }, (old) =>
-        old ? { ...old, results: old.results.filter((c) => c.source !== source) } : old,
-      );
-      return { prev };
-    },
-    onSuccess: (r, { source, count }, ctx) => {
-      if (r.error) {
-        for (const [key, data] of ctx?.prev ?? []) qc.setQueryData(key, data); // rollback
-        onError(r.error);
-        return;
-      }
-      invalidate();
-      const n = r.deleted || count;
-      toast({
-        tone: "success",
-        title: "Knowledge",
-        duration: 10000, // long enough to catch the Undo
-        message: (
-          <span>
-            Deleted {n} chunk{n === 1 ? "" : "s"} from “{source}”.{" "}
-            <Button variant="ghost" size="sm" onClick={() => restoreBySource.mutate(source)}>
-              Undo
-            </Button>
-          </span>
-        ),
-      });
-    },
-    onError: (e, _vars, ctx) => {
-      for (const [key, data] of ctx?.prev ?? []) qc.setQueryData(key, data); // rollback
-      onError(errMsg(e));
-    },
   });
 
   // Share a private chunk into the shared commons (ADR 0041 / bd-2wu).
@@ -472,43 +361,18 @@ export function KnowledgeStore() {
   function startEdit(c: KnowledgeChunk) {
     setAdding(false);
     setEditingId(c.id);
-    setDraft({ heading: c.heading || "", domain: c.domain || "general", content: c.content || "" });
+    // The chunk's OWN domain is the save value — the server writes this field back as the
+    // row's domain. Use the row's own domain (never the browsed collection) so a content-only
+    // edit of a legacy row (domain ≠ collection) can't silently relabel it to the open collection.
+    setDraft({ heading: c.heading || "", domain: c.domain || c.collection || "general", content: c.content || "" });
   }
 
-  const total = stats.chunks ?? stats.total ?? 0;
-
-  // Collapsible source grouping (#1575): chunks from the same ingested source
-  // collapse under one section header. Only a source with ≥2 loaded chunks becomes
-  // a section — sourceless + single-chunk sources stay flat (no regression). Open
-  // state persists per source; an active search force-expands so matches stay visible.
-  const GROUPS_LS_KEY = "protoagent.kb.openGroups";
-  const [openGroups, setOpenGroups] = useState<Record<string, boolean>>(() => {
-    try { return JSON.parse(readKey("local", GROUPS_LS_KEY) || "{}") as Record<string, boolean>; }
-    catch { return {}; }
-  });
-  const persistGroups = (next: Record<string, boolean>) => {
-    setOpenGroups(next);
-    try { writeKey("local", GROUPS_LS_KEY, JSON.stringify(next)); } catch { /* private mode — ignore */ }
-  };
-  const searching = debouncedQuery.trim().length > 0;
-  const isGroupOpen = (src: string) => searching || (openGroups[src] ?? false);
-  const toggleGroup = (src: string) => persistGroups({ ...openGroups, [src]: !(openGroups[src] ?? false) });
-
-  const sourceCounts = new Map<string, number>();
-  for (const c of results) if (c.source) sourceCounts.set(c.source, (sourceCounts.get(c.source) ?? 0) + 1);
-  const groupSources = [...sourceCounts.entries()].filter(([, n]) => n >= 2).map(([s]) => s);
-  const isGrouped = (c: KnowledgeChunk) => !!c.source && (sourceCounts.get(c.source) ?? 0) >= 2;
-  const allGroupsOpen = groupSources.length > 0 && groupSources.every((s) => openGroups[s]);
-  const toggleAllGroups = () => {
-    const next = { ...openGroups };
-    for (const s of groupSources) next[s] = !allGroupsOpen;
-    persistGroups(next);
-  };
-
+  const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const renderCard = (c: KnowledgeChunk) => (
-    <li key={c.id} className="playbook-card">
+    <li key={`${c.tier}:${c.id}`} className="playbook-card">
       {editingId === c.id ? (
         <ChunkForm
+          collections={names}
           draft={draft}
           setDraft={setDraft}
           onSave={() => save.mutate()}
@@ -519,12 +383,8 @@ export function KnowledgeStore() {
       ) : (
         <>
           <div className="playbook-main">
+            {model.term && model.all && c.collection && <TextLink href={`?collection=${encodeURIComponent(c.collection)}`} onClick={e => { e.preventDefault(); model.open(c.collection); }}>{c.collection}</TextLink>}
             <div className="playbook-title">
-              <span title={`domain: ${c.domain}`}>
-                <Badge status="success">
-                  <Database size={12} /> {c.domain}
-                </Badge>
-              </span>
               {c.finding_type ? (
                 <span title="finding type">
                   <Badge status="neutral">{c.finding_type}</Badge>
@@ -544,7 +404,11 @@ export function KnowledgeStore() {
               <ReviewChip chunk={c} />
               {c.heading ? <strong>{c.heading}</strong> : null}
             </div>
-            <p className="playbook-desc">{c.content || c.preview}</p>
+            <p className="playbook-desc" style={expanded.has(`${c.tier}:${c.id}`) ? { WebkitLineClamp: "unset" } : { WebkitLineClamp: 6 }}>{highlight(c.content || c.preview, model.term)}</p>
+            <Button variant="ghost" size="sm" onClick={() => setExpanded(prev => {
+              const next = new Set(prev); const key = `${c.tier}:${c.id}`;
+              if (next.has(key)) next.delete(key); else next.add(key); return next;
+            })}>{expanded.has(`${c.tier}:${c.id}`) ? "Show less" : "Show full text"}</Button>
             {c.source ? (
               <div className="playbook-tools">
                 <code>{c.source}</code>
@@ -554,7 +418,9 @@ export function KnowledgeStore() {
           <div className="playbook-meta">
             <span title="added">{ago(c.created_at)}</span>
             <span className="knowledge-chunk-actions">
-              {/* Review verdict (ADR 0108 D7) — nothing for commons rows (read-only here). */}
+              {/* Review verdict (ADR 0108 D7) — nothing for commons rows (read-only here).
+                  Agent-written rows arrive pending and still deliver, so confirm/reject
+                  stays reachable on this surface until the Memory inspector owns it. */}
               <ReviewActions chunk={c} />
               {c.tier === "private" ? (
                 <Button
@@ -611,36 +477,27 @@ export function KnowledgeStore() {
     <section className="panel stage-panel" data-testid="knowledge-store">
       <PanelHeader
         title="Knowledge"
-        kicker={`searchable knowledge base${total ? ` · ${total} entr${total === 1 ? "y" : "ies"}` : ""}${stats.commons ? ` · ${stats.commons} shared` : ""}${pendingOnly ? " · pending review" : ""}`}
+        kicker={`Collections this agent can read${model.pendingOnly ? " · pending review" : ""}`}
         actions={
           <>
             {/* Quick-set recall behaviour right where you inspect what the agent knows (ADR 0048). */}
             <QuickSetting keys={["knowledge.top_k", "knowledge.embeddings"]} title="Recall" label="Knowledge recall settings" />
             {enabled ? (
               <>
+                {/* "Pending review" queue (ADR 0108 D7): narrow the browsed chunks + search to
+                    rows awaiting an operator verdict. Agent-written rows keep delivering until
+                    reviewed, so this stays on the Knowledge surface. */}
                 <Button
                   icon
-                  variant={pendingOnly ? "primary" : "ghost"}
+                  variant={model.pendingOnly ? "primary" : "ghost"}
                   type="button"
-                  onClick={() => setPendingOnly((v) => !v)}
-                  title={pendingOnly ? "Show every entry" : "Show only entries awaiting review"}
+                  onClick={() => model.setPendingOnly((v) => !v)}
+                  title={model.pendingOnly ? "Show every entry" : "Show only entries awaiting review"}
                   aria-label="pending review filter"
-                  aria-pressed={pendingOnly}
+                  aria-pressed={model.pendingOnly}
                 >
                   <ClipboardCheck size={16} />
                 </Button>
-                {groupSources.length > 0 ? (
-                  <Button
-                    icon
-                    variant="ghost"
-                    type="button"
-                    onClick={toggleAllGroups}
-                    title={allGroupsOpen ? "Collapse all sources" : "Expand all sources"}
-                    aria-label={allGroupsOpen ? "collapse all sources" : "expand all sources"}
-                  >
-                    {allGroupsOpen ? <ChevronsDownUp size={16} /> : <ChevronsUpDown size={16} />}
-                  </Button>
-                ) : null}
                 <Button
                   icon
                   variant="ghost"
@@ -654,31 +511,19 @@ export function KnowledgeStore() {
                   icon
                   variant="ghost"
                   type="button"
-                  onClick={() => { setEditingId(null); setDraft(EMPTY_DRAFT); setIngesting(false); setAdding((v) => !v); }}
+                  onClick={() => { setEditingId(null); setDraft({ ...EMPTY_DRAFT, domain: model.collection || "general" }); setIngesting(false); setAdding((v) => !v); }}
                   title="Add a knowledge entry"
                 >
                   <Plus size={16} />
                 </Button>
               </>
             ) : null}
-            <RefreshButton onClick={() => void refetch()} busy={isFetching} />
+            <RefreshButton onClick={invalidate} busy={model.list.isFetching || model.details.isFetching} />
           </>
         }
       />
 
       <div className="stage-body">
-        <Input
-          className="playbook-search"
-          type="search"
-          placeholder="Search the knowledge base (findings, notes, daily log)…"
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
-        />
-
-        {error ? (
-          <Alert status="error">Couldn't search the knowledge base — {errMsg(error)}</Alert>
-        ) : null}
-
         {/* Upload + Add open in a centered dialog (not inline) so the source/entry form has
             room and the knowledge list underneath stays in view (#1502). Per-row EDIT below
             stays inline — it belongs next to the chunk it edits. */}
@@ -691,6 +536,8 @@ export function KnowledgeStore() {
             padding="roomy"
           >
             <IngestForm
+              collections={names}
+              collection={model.collection}
               onDone={invalidate}
               onError={onError}
               onClose={() => setIngesting(false)}
@@ -707,6 +554,7 @@ export function KnowledgeStore() {
             padding="roomy"
           >
             <ChunkForm
+              collections={names}
               draft={draft}
               setDraft={setDraft}
               onSave={() => save.mutate()}
@@ -717,87 +565,7 @@ export function KnowledgeStore() {
           </Dialog>
         ) : null}
 
-        {!enabled ? (
-          <Empty>
-            The knowledge store is off (enable <code>middleware.knowledge</code>).
-          </Empty>
-        ) : results.length === 0 ? (
-          pendingOnly ? (
-            <Empty
-              title="Nothing awaiting review"
-              description="agent-written memories start pending; confirm or reject them here as they arrive."
-            />
-          ) : query.trim() ? (
-            <Empty>No entries match your search.</Empty>
-          ) : (
-            <Empty
-              title="The knowledge base is empty"
-              description="findings, daily-log entries, and harvested sessions will appear here as the agent works — or add one with +."
-            />
-          )
-        ) : (
-          <ul className="playbook-list">
-            {(() => {
-              // Emit a source's section once (at its first chunk) so grouped sources
-              // appear in first-seen order, interleaved with loose (flat) chunks.
-              const emitted = new Set<string>();
-              return results.map((c) => {
-                if (!isGrouped(c)) return renderCard(c);
-                const src = c.source as string;
-                if (emitted.has(src)) return null;
-                emitted.add(src);
-                const members = results.filter((x) => x.source === src);
-                const open = isGroupOpen(src);
-                const st = members.find((m) => m.source_type)?.source_type;
-                return (
-                  <li key={`grp:${src}`} className="kb-group">
-                    {/* Toggle + a bulk-delete button are SIBLINGS (a button can't nest
-                        inside the header button). Bulk delete a whole ingest at once
-                        (#1770): Shift+click skips the confirm, like the per-chunk path. */}
-                    <div className="kb-group-header-row">
-                      <button
-                        type="button"
-                        className="kb-group-header"
-                        aria-expanded={open}
-                        onClick={() => toggleGroup(src)}
-                      >
-                        <ChevronRight
-                          size={14}
-                          className="kb-group-caret"
-                          style={{ transform: open ? "rotate(90deg)" : undefined }}
-                        />
-                        <span className="kb-group-title" title={src}>{src}</span>
-                        {st ? <Badge status="neutral">{st}</Badge> : null}
-                        <Badge status="neutral">{members.length} chunks</Badge>
-                      </button>
-                      <Button
-                        icon
-                        variant="ghost"
-                        type="button"
-                        className={`kb-group-delete${shiftDel ? " knowledge-del-armed" : ""}`}
-                        title={
-                          shiftDel
-                            ? `Delete all ${members.length} chunks now — Shift skips the confirmation`
-                            : `Delete all ${members.length} chunks from this source`
-                        }
-                        aria-label={`delete all chunks from ${src}`}
-                        onClick={(e) => {
-                          if (e.shiftKey) delBySource.mutate({ source: src, count: members.length });
-                          else setPendingSourceDelete({ source: src, count: members.length });
-                        }}
-                      >
-                        <Trash2 size={14} />
-                      </Button>
-                    </div>
-                    {open ? (
-                      <ul className="playbook-list kb-group-body">{members.map(renderCard)}</ul>
-                    ) : null}
-                  </li>
-                );
-              });
-            })()}
-          </ul>
-        )}
+        <CollectionsBrowser model={model} renderCard={renderCard} onAdd={() => setIngesting(true)} onSettings={() => useUI.getState().openGlobalSettings("knowledge")} />
       </div>
 
       <ConfirmDialog
@@ -813,22 +581,6 @@ export function KnowledgeStore() {
       >
         {pendingDelete
           ? `"${pendingDelete.heading || pendingDelete.preview.slice(0, 80)}" will be removed from the knowledge base — the agent will no longer recall it. This can't be undone.`
-          : undefined}
-      </ConfirmDialog>
-
-      <ConfirmDialog
-        open={pendingSourceDelete !== null}
-        title="Delete all chunks from this source?"
-        confirmLabel="Delete chunks"
-        destructive
-        onConfirm={() => {
-          if (pendingSourceDelete) delBySource.mutate(pendingSourceDelete);
-          setPendingSourceDelete(null);
-        }}
-        onClose={() => setPendingSourceDelete(null)}
-      >
-        {pendingSourceDelete
-          ? `Delete all ${pendingSourceDelete.count} chunk${pendingSourceDelete.count === 1 ? "" : "s"} from “${pendingSourceDelete.source}”? The agent will stop recalling them. You can undo this from the toast.`
           : undefined}
       </ConfirmDialog>
 

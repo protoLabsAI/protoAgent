@@ -88,6 +88,9 @@ describe("the Knowledge surface adopts a seeded term", () => {
 
   /** Mount the real surface the way the palette does. */
   async function mount() {
+    vi.spyOn(api, "listCollections").mockResolvedValue({ enabled: true, collections: [
+      { collection: "general", chunks: 2, sources: 1, last_ingested_at: null },
+    ] });
     search = vi.spyOn(api, "knowledgeSearch").mockResolvedValue({
       enabled: true,
       query: "postgres",
@@ -112,11 +115,6 @@ describe("the Knowledge surface adopts a seeded term", () => {
     });
   }
 
-  const click = async (label: string) =>
-    act(async () => {
-      container.querySelector<HTMLButtonElement>(`[aria-label="${label}"]`)!.click();
-    });
-
   afterEach(() => {
     act(() => root.unmount());
     container.remove();
@@ -133,20 +131,20 @@ describe("the Knowledge surface adopts a seeded term", () => {
     expect(input?.value).toBe("postgres");
     // `debouncedQuery` is seeded alongside `query`, so the FIRST fetch is already the seeded
     // search — no 250ms window in which the surface shows an unrelated list.
-    await vi.waitFor(() => expect(search).toHaveBeenCalledWith("postgres", { reviewState: undefined }));
+    await vi.waitFor(() => expect(search).toHaveBeenCalledWith("postgres", expect.objectContaining({ collection: "general" })));
   });
 
-  it("clears the review filter, so an already-open surface can still show the picked row", async () => {
+  it("clears the review filter on a seed, so an already-open surface still shows the picked row", async () => {
     await mount();
-    await click("pending review filter");
-    await vi.waitFor(() => expect(search).toHaveBeenCalledWith("", { reviewState: "pending" }));
-
-    // The surface was already open and narrowed to the review queue. Honouring the term
-    // while keeping that filter is the one way this handoff can land the operator on a list
-    // that does NOT contain the row they just picked.
     await act(async () => seedKnowledgeSearch("postgres"));
-    await vi.waitFor(() => expect(search).toHaveBeenCalledWith("postgres", { reviewState: undefined }));
-    expect(container.querySelector<HTMLButtonElement>('[aria-label="pending review filter"]')
-      ?.getAttribute("aria-pressed")).toBe("false");
+    await vi.waitFor(() => expect(search).toHaveBeenCalledWith("postgres", expect.objectContaining({ collection: "general" })));
+    // Narrow the already-open surface to the pending-review queue.
+    await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="pending review filter"]')!.click());
+    await vi.waitFor(() => expect(search).toHaveBeenCalledWith("postgres", expect.objectContaining({ reviewState: "pending" })));
+    // A fresh ⌘K handoff must clear that filter, or the list it lands on would not contain
+    // the row the operator just picked.
+    await act(async () => seedKnowledgeSearch("redis"));
+    await vi.waitFor(() => expect(search).toHaveBeenCalledWith("redis", expect.objectContaining({ reviewState: undefined })));
+    expect(container.querySelector<HTMLButtonElement>('[aria-label="pending review filter"]')?.getAttribute("aria-pressed")).toBe("false");
   });
 });

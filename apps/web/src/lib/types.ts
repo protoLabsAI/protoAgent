@@ -1814,6 +1814,8 @@ export type Playbook = {
 // One row from the knowledge store (knowledge/store.py chunks table), as the
 // searchable Knowledge → Store view consumes it (ADR 0020).
 export type KnowledgeChunk = {
+  collection?: string;
+  position?: number;
   id: number;
   heading: string;
   content: string;

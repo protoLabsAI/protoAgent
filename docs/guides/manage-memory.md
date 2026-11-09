@@ -43,10 +43,11 @@ trash button and confirm **Delete entry**. A single-entry delete cannot be
 undone. Changes affect future delivery; text already in a chat remains in that
 chat's history. Start a new chat to check the correction without that old context.
 
-A document can have several stored chunks. Use the source group's trash
-button to delete the whole ingest, then confirm **Delete chunks**. The toast
-offers **Undo** for this bulk deletion; use it immediately if you chose the
-wrong source.
+A document can have several stored chunks. Open its collection, expand the
+document under **Documents**, and choose **Delete document**, then confirm.
+The toast offers **Undo** for this bulk deletion; use it immediately if you
+chose the wrong document. To remove a whole collection at once, use **Delete
+collection…**, which offers the same **Undo**.
 
 ## Review what the agent saved {#review-memories}
 
