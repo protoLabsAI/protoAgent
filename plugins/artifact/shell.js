@@ -1622,6 +1622,18 @@
     return {id:id, ver:(isFinite(ver)&&ver>0)?ver:0};
   }
   var EMBED = embedParams(location.search);
+  // Standalone page (open_artifact on a rendered kind): the signed /media/artifact/<id>/page route
+  // embeds ONE version as inert JSON (#__artpage) and stamps html.standalone. PAGE is that
+  // {id, kind, title, code, version, n, ts}, or null for the panel/embed. No console, no bearer,
+  // no store poll: the page renders through the same srcdoc() builder and nothing it does reaches
+  // a gated route — the bridge (ask/send/openLink), render-status and code links are all off.
+  function pageParams(){
+    var el=document.getElementById("__artpage"); if(!el || EMBED) return null;
+    try{ var p=JSON.parse(el.textContent||"null");
+      return (p && typeof p==="object" && typeof p.kind==="string" && typeof p.code==="string" && p.kind!=="file") ? p : null;
+    }catch(_){ return null; }
+  }
+  var PAGE = pageParams();
 
   // Persist the user's selection (artifact + version + whether to auto-follow the newest) so it
   // STICKS across a tab-away/back — the plugin-view iframe unmounts on tab switch, so the shell
@@ -2548,6 +2560,7 @@
     // intentionally silent on error (#2885 exempts it): a fire-and-forget status report,
     // not user-facing data, so there's no lying empty state to correct.
     if(m.type==="protoArtifact:render"){
+      if(PAGE) return;  // standalone page: no bearer, no gated render-status — the panel/inline frame owns verdicts
       if(renderingId && relayRenderOnce(arts, relayedRenders, renderingId, renderingN, renderingTs, !!m.ok, String(m.error||"").slice(0,2000))){ try{ kit.apiFetch("/api/plugins/artifact/render-status",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({id:renderingId,version:renderingVer,n:renderingN,ts:renderingTs,ok:!!m.ok,error:String(m.error||"").slice(0,2000)})}); }catch(_){} if(!EMBED) kickPoll(); /* the verdict rewrites the store — pick it up from idle promptly (#2256); embed has no standing poll */ }
       return;
     }
@@ -2555,6 +2568,7 @@
     // frame — the target comes from the rendered version's stored links; an unknown key, or a
     // post without a user gesture behind it (a script firing on its own), opens nothing.
     if(m.type==="protoArtifact:openCode"){
+      if(PAGE) return;  // no console to open code in
       var ua=navigator.userActivation;
       if(ua && !ua.isActive) return;
       openTarget(linkTarget(m.key));
@@ -2565,6 +2579,12 @@
       var mm=m.matched, keep={};
       if(mm && typeof mm==="object") Object.keys(mm).forEach(function(k){ if(linkTarget(k)) keep[k]=String(mm[k]||"").slice(0,160); });
       linkLabels=keep; renderLinks();
+      return;
+    }
+    // A standalone page has no console to gate a send/openLink and no bearer for ask — refuse all
+    // three HERE, before any relay or gated fetch, so the frame's Promise settles at once.
+    if(PAGE && (m.type==="protoArtifact:send" || m.type==="protoArtifact:openLink" || m.type==="protoArtifact:ask")){
+      try{ $frame.contentWindow.postMessage({type:"protoArtifact:result", id:m.id, error:(m.type.split(":")[1])+" is unavailable on a standalone page"}, "*"); }catch(_){}
       return;
     }
     // send-to-chat / openLink (ADR 0118 D4) — relayed UP to the console host, which gates them.
@@ -2687,7 +2707,7 @@
   function applyPendingSel(seq){ if(takePendingSel(seq)){ rebuildArtSelect(); render(); } }
   window.addEventListener("message", function(e){
     var m=e.data;
-    if(!m || m.type!=="protoArtifact:select" || !fromEmbedder(e) || EMBED) return;  // embed shows a fixed version
+    if(!m || m.type!=="protoArtifact:select" || !fromEmbedder(e) || EMBED || PAGE) return;  // embed shows a fixed version
     var id=typeof m.id==="string" ? m.id.slice(0,64) : "";
     var ver=(typeof m.ver==="number" && isFinite(m.ver)) ? Math.floor(m.ver) : 0;
     if(!id || ver<1) return;
@@ -2712,7 +2732,7 @@
   // it re-runs the follow rules at once.
   window.addEventListener("message", function(e){
     var m=e.data;
-    if(!m || m.type!=="protoArtifact:context" || !fromEmbedder(e) || EMBED) return;
+    if(!m || m.type!=="protoArtifact:context" || !fromEmbedder(e) || EMBED || PAGE) return;
     var s=typeof m.session==="string" ? m.session.slice(0,200) : "";
     if(s===chatSession) return;
     chatSession=s;
@@ -2888,6 +2908,21 @@
     })();
   }
 
+  // ── standalone page ───────────────────────────────────────────────────────────────────
+  // The ONE embedded version, full-page, through the SAME srcdoc() builder render() uses (no
+  // second frame builder — the nested sandbox, its per-kind CSP and SRI libs are the panel's).
+  // Code links are dropped: there is no console to open them in. The theme is the kit CSS's own:
+  // the route's ?theme= sets data-theme on <html>, else prefers-color-scheme decides, and an OS
+  // switch re-pushes the tokens into the frame (the observer above covers data-theme changes).
+  function renderPage(){
+    renderingId=PAGE.id; renderingVer=+PAGE.version||0; renderingN=+PAGE.n||0; renderingTs=+PAGE.ts||0;
+    renderingLinks=null; linkLabels=null; lastRendered="page:"+PAGE.id+"@"+renderingVer;
+    if(PAGE.title) document.title=String(PAGE.title);
+    frameNav.set(srcdoc(PAGE.kind, PAGE.code, null), false); $frame.style.display="block";
+    try{ var mq=window.matchMedia("(prefers-color-scheme: light)");
+      (mq.addEventListener ? mq.addEventListener.bind(mq,"change") : mq.addListener.bind(mq))(pushTheme); }catch(_){}
+  }
+
   // Boot ONCE, on whichever fires first: the handshake (the bearer arrives with
   // protoagent:init, so the gated history poll authenticates) or a short timer
   // for the no-handshake case (standalone page / older host).
@@ -2895,8 +2930,10 @@
   // loadSel() restores the operator's last selection — a pending deep-link (#3617) that arrived
   // before boot still wins, applied by the first poll right after.
   function boot(){ if (booted) return; booted = true;
+    if (PAGE) { renderPage(); return; }   // the embedded version — no handshake, no fetch at all
     if (EMBED) { embedBoot(); return; }   // one version, no chrome, no standing poll
     loadSel(); loadHead(); poll(); schedulePoll(); }
+  if (PAGE) boot();  // nothing to wait for: the version is in the page, the theme in its CSS
   kit.initPluginView(boot);
   setTimeout(boot, 800);
-  document.addEventListener("visibilitychange", function(){ if(!document.hidden && booted && !EMBED) kickPoll(); }); // refresh on return (panel only)
+  document.addEventListener("visibilitychange", function(){ if(!document.hidden && booted && !EMBED && !PAGE) kickPoll(); }); // refresh on return (panel only)

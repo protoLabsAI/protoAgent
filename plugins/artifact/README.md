@@ -43,11 +43,18 @@ and downloads, see [Work with documents and files](../../docs/guides/documents-a
     captured error / no result yet), so a render failure feeds back into a fix instead of a silent blank.
   - `cite_artifact(artifact_id, page, version=0)` — a read-only PDF citation; see
     [Opening a PDF at a page](#opening-a-pdf-at-a-page).
-  - `open_artifact(artifact_id, version=0)` — **open a saved file artifact in a new browser tab**
-    of the attached console (file artifacts only, never arbitrary URLs). It asks the console (via
-    the `artifact.open_url` event) to open the `/blob` download through a short-lived, version-bound
-    media grant — **no bearer in the URL** — and returns that same expiring link in text as a
-    fallback when no console is attached (an A2A/scheduled turn).
+  - `open_artifact(artifact_id, version=0)` — **open a saved artifact in a new browser tab**
+    of the attached console (stored artifacts only, never arbitrary URLs). A **file** artifact
+    opens its `/blob` download; a **rendered** one (html, react, markdown, mermaid, svg, vega-lite)
+    opens as a **standalone page** (`/plugins/artifact/media/artifact/<id>/page`): the shell in a
+    chrome-free mode with that one version embedded, rendered full-tab in the same nested sandbox
+    as the panel, themed by `?theme=light|dark` or else the browser's `prefers-color-scheme`. Both
+    go through a short-lived, version-bound media grant — **no bearer in the URL**; the page
+    grant is also bound to the version's source, so a different or trimmed version 404s. The tool
+    asks the console (via the `artifact.open_url` event) to open the tab and returns the same
+    expiring link in text as a fallback when no console is attached (an A2A/scheduled turn). The
+    page makes no gated call: the `ask`/`send`/`openLink` bridge is refused there, and it reports
+    no render verdict (the panel owns those).
   - `pin_artifact(artifact_id, pinned?)` — **pin** a long-lived artifact (a master resume, a
     reference doc) so history eviction skips it; `pinned=False` unpins. Pins are capped by
     **Pinned artifacts** below (refused at the cap), don't count toward **Artifacts kept**, and
@@ -90,10 +97,12 @@ and downloads, see [Work with documents and files](../../docs/guides/documents-a
 - **Events** `artifact.created` / `artifact.updated` / `artifact.deleted` (ADR 0039) — broadcast on
   the bus so the console lights the Artifact rail icon even when the panel is closed; plus
   `artifact.open_url`, the chat-scoped request `open_artifact` emits so the attended console opens a
-  file artifact's download in a new browser tab.
+  file artifact's download, or a rendered artifact's standalone page, in a new browser tab.
 - **Skills** `rendering-artifacts` — teaches render-don't-write-files and the edit-don't-recreate
   workflow; `diagramming-code` — grounded, code-linked mermaid diagrams (read first, cite real
-  lines, pick the right diagram, keep it small, revise the same artifact).
+  lines, pick the right diagram, keep it small, revise the same artifact); `design-mockups` — a
+  reviewable screen preview from real data with DS classes only, a theme/width/state toggle bar, a
+  built-in overflow check at 1440 and 390 px, then `open_artifact` for the browser link.
 
 ## Navigable diagrams
 

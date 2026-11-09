@@ -255,11 +255,14 @@ guess; read the error and make the targeted edit.
 - **`check_artifact(artifact_id?)`** — the latest render verdict (see above).
 - **`cite_artifact(artifact_id, page, version=0)`** — a read-only PDF citation (see “Citing a page
   in a PDF” below).
-- **`open_artifact(artifact_id, version=0)`** — open a saved **file** artifact in a new browser tab
-  of the operator's console (`version=0` = latest). Use it when the user wants to *see/download* a
-  file you saved, rather than pasting a `file://` path. File artifacts only, never arbitrary URLs.
-  With a console attached it opens the tab; with none (an A2A or scheduled turn) it returns a
-  short-lived, bearer-free link to share instead. The link expires — open it promptly.
+- **`open_artifact(artifact_id, version=0)`** — open a saved artifact in a new browser tab of the
+  operator's console (`version=0` = latest). A **file** artifact opens its file (use it when the
+  user wants to *see/download* a file you saved, rather than pasting a `file://` path); a
+  **rendered** artifact (html, react, markdown, mermaid, svg, vega-lite) opens as a full page —
+  the way to hand over a mockup or a page the user wants in a browser (see the `design-mockups`
+  skill). Stored artifacts only, never arbitrary URLs. With a console attached it opens the tab;
+  either way it returns a short-lived, bearer-free link to share. The link expires — open it
+  promptly, or call `open_artifact` again for a fresh one.
 - **`pin_artifact(artifact_id, pinned=True)`** — keep a **long-lived** artifact (a master resume, a
   reference doc, a plan you'll revisit) from being evicted. Only the most recent ~200 unpinned
   artifacts are kept, counting everything rendered on this agent; an unpinned one survives while a
