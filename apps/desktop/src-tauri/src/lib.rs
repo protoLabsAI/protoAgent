@@ -408,19 +408,97 @@ async fn chat_stream(
         return Err(format!("HTTP {}", resp.status().as_u16()));
     }
     let mut stream = resp.bytes_stream();
+    let mut pending: Vec<u8> = Vec::new();
     while let Some(chunk) = stream.next().await {
         let bytes = chunk.map_err(|e| e.to_string())?;
-        // Relay raw bytes; the webview accumulates + parses SSE (handles frames split
-        // across chunks). Stop if the frontend dropped the channel (window closed /
+        // Relay the text; the webview accumulates + parses SSE (handles frames split
+        // across chunks). A multi-byte character split across two chunks is held back
+        // until it completes, never decoded half at a time (that drew U+FFFD in place of
+        // emoji/accents/CJK). Stop if the frontend dropped the channel (window closed /
         // turn cancelled via the server-side CancelTask, which ends the stream).
-        if on_event
-            .send(String::from_utf8_lossy(&bytes).into_owned())
-            .is_err()
-        {
-            break;
+        pending.extend_from_slice(&bytes);
+        let text = take_utf8(&mut pending);
+        if !text.is_empty() && on_event.send(text).is_err() {
+            return Ok(());
         }
     }
+    if !pending.is_empty() {
+        let _ = on_event.send(String::from_utf8_lossy(&pending).into_owned());
+    }
     Ok(())
+}
+
+/// Decode as much of `pending` as is complete UTF-8, leaving an incomplete trailing
+/// character (at most 3 bytes) in `pending` for the next chunk. Bytes that are invalid
+/// outright become U+FFFD, as `from_utf8_lossy` would.
+fn take_utf8(pending: &mut Vec<u8>) -> String {
+    let mut out = String::new();
+    let mut start = 0;
+    loop {
+        match std::str::from_utf8(&pending[start..]) {
+            Ok(valid) => {
+                out.push_str(valid);
+                start = pending.len();
+                break;
+            }
+            Err(err) => {
+                let good = start + err.valid_up_to();
+                // The first `valid_up_to` bytes are valid UTF-8 by contract.
+                out.push_str(std::str::from_utf8(&pending[start..good]).unwrap_or_default());
+                match err.error_len() {
+                    // Invalid bytes in the middle: replace them and keep going.
+                    Some(bad) => {
+                        out.push('\u{FFFD}');
+                        start = good + bad;
+                    }
+                    // A character cut off at the end: wait for the rest of it.
+                    None => {
+                        start = good;
+                        break;
+                    }
+                }
+            }
+        }
+    }
+    pending.drain(..start);
+    out
+}
+
+#[cfg(test)]
+mod take_utf8_tests {
+    use super::take_utf8;
+
+    /// Feed `chunks` through the relay the way chat_stream does; return what reached the webview.
+    fn relay(chunks: &[&[u8]]) -> String {
+        let mut pending = Vec::new();
+        let mut out = String::new();
+        for chunk in chunks {
+            pending.extend_from_slice(chunk);
+            out.push_str(&take_utf8(&mut pending));
+        }
+        out.push_str(&String::from_utf8_lossy(&pending));
+        out
+    }
+
+    #[test]
+    fn a_character_split_across_chunks_arrives_whole() {
+        let text = "data: caf\u{e9} \u{1F600} \u{6F22}\u{5B57}\n\n";
+        let bytes = text.as_bytes();
+        // Every possible split point, including inside each multi-byte character.
+        for cut in 0..=bytes.len() {
+            assert_eq!(relay(&[&bytes[..cut], &bytes[cut..]]), text, "split at {cut}");
+        }
+        // One byte at a time.
+        let singles: Vec<&[u8]> = bytes.chunks(1).collect();
+        assert_eq!(relay(&singles), text);
+    }
+
+    #[test]
+    fn invalid_bytes_still_become_replacement_characters() {
+        assert_eq!(relay(&[b"a\xffb"]), "a\u{FFFD}b");
+        // A stream that ends mid-character flushes what it has, lossily.
+        assert_eq!(relay(&[b"ok \xf0\x9f"]), "ok \u{FFFD}");
+    }
 }
 
 
