@@ -59,3 +59,24 @@ def test_no_stray_user_files_beyond_the_case_set():
     referenced = {f"user_{case['user_id']}.jsonl" for case in cases}
     on_disk = {path.name for path in PV4.glob("user_*.jsonl")}
     assert on_disk == referenced, f"orphan/missing user files: {on_disk ^ referenced}"
+
+
+def test_frozen_stores_load_with_fake_embeddings():
+    """All twelve stores can rebuild vectors without a gateway or model call."""
+    paths = sorted(PV4.glob("user_*.jsonl"))
+    assert len(paths) == 12
+    for path in paths:
+        embedded = []
+
+        def fake_embed(text):
+            embedded.append(text)
+            return [1.0, 0.0]
+
+        store = load_fixture_store(path, fake_embed)
+        rows = _load_jsonl(path)
+        assert embedded == [row["content"] for row in rows]
+        with store._connect() as db:
+            vectors = db.execute("SELECT memory_id, vec FROM memory_vectors").fetchall()
+        assert len(vectors) == len(rows)
+        assert {row[0] for row in vectors} == {row["id"] for row in rows}
+        assert all(json.loads(row[1]) == [1.0, 0.0] for row in vectors)
