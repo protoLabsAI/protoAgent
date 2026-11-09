@@ -431,6 +431,20 @@ async def _operator_subagent_batch(req: dict):
     )
 
 
+def _publish_scheduler_changed(job_id: str, action: str) -> None:
+    """Best-effort ``scheduler.changed`` so the Work view's Schedules section refreshes live
+    on a console-driven add / edit / cancel / pause / resume / undo-restore instead of
+    polling (#4955 §4.3, §5.4). The scheduler itself only publishes ``scheduler.fired`` (ADR
+    0051); these mutations don't go through its poll loop, so they announce themselves here on
+    the same bus (``_event_bus`` — what the scheduler gets as ``event_publish``). ``action`` is
+    one of "added", "updated", "canceled", "enabled", "disabled" or "restored". A bus hiccup is
+    logged and never fails the request that already succeeded."""
+    try:
+        _event_bus.publish("scheduler.changed", {"job_id": job_id, "action": action})
+    except Exception:  # noqa: BLE001 — the event is best-effort
+        log.exception("[scheduler] changed-event publish failed for %s (%s)", job_id, action)
+
+
 async def _operator_scheduler_list() -> dict:
     import asyncio
 
@@ -461,6 +475,7 @@ async def _operator_scheduler_add(req: dict) -> dict:
         job_id=req.get("job_id") or None,
         timezone=req.get("timezone") or None,
     )
+    _publish_scheduler_changed(job.id, "added")
     return job.as_dict()
 
 
@@ -483,6 +498,7 @@ async def _operator_scheduler_cancel(job_id: str) -> dict:
         if await asyncio.to_thread(_scheduler_job, STATE.scheduler, job_id) is None:
             raise NotFoundError(f"No scheduled job {job_id!r}.")
         raise RuntimeError(f"scheduler could not cancel job {job_id!r}")
+    _publish_scheduler_changed(job_id, "canceled")
     out = {"canceled": True}
     if job is not None:
         out["undo_token"] = _stash_schedule_undo(job.as_dict(), STATE.scheduler)
@@ -520,6 +536,7 @@ def _stash_schedule_undo(job: dict, scheduler) -> str:
             max_fires=data.get("max_fires"),
             restore_state=Job(**data),
         )
+        _publish_scheduler_changed(data.get("id"), "restored")
 
     return LEDGER.stash("schedule", job, _restore)
 
@@ -558,7 +575,36 @@ async def _operator_scheduler_update(job_id: str, req: dict) -> dict:
         schedule,
         timezone=timezone,
     )
+    _publish_scheduler_changed(job_id, "updated")
     return job.as_dict()
+
+
+async def _operator_scheduler_set_enabled(job_id: str, enabled: bool) -> dict:
+    """Pause (``enabled=False``) or resume (``enabled=True``) a job in place — the Work view's
+    Schedules toggle (#4955 §4.3).
+
+    Calls the backend's OPTIONAL ``set_enabled`` (bd-0ia51.6) through ``getattr``; a backend
+    that doesn't implement it raises ``NotImplementedError`` (a 501 at the route). An unknown
+    id is a 404 (``NotFoundError``) — checked before the call so the ``ValueError`` the backend
+    raises for a missing id doesn't come back as a 400, while a genuine bad-schedule
+    ``ValueError`` on resume still does. Publishes ``scheduler.changed`` ("enabled" on resume,
+    "disabled" on pause) and returns ``{"job": job.as_dict()}``."""
+    import asyncio
+
+    if STATE.scheduler is None:
+        raise RuntimeError("scheduler is not loaded (disabled or setup incomplete)")
+    set_enabled = getattr(STATE.scheduler, "set_enabled", None)
+    if not callable(set_enabled):
+        raise NotImplementedError("This scheduler backend does not support pause/resume.")
+    # Mirror update's 404-before-mutate: an unknown id is a 404, not the ValueError
+    # set_enabled raises for it (which _http_error would answer 400).
+    if await asyncio.to_thread(_scheduler_job, STATE.scheduler, job_id) is None:
+        from operator_api.routes import NotFoundError
+
+        raise NotFoundError(f"No scheduled job {job_id!r}.")
+    job = await asyncio.to_thread(set_enabled, job_id, enabled)
+    _publish_scheduler_changed(job_id, "enabled" if enabled else "disabled")
+    return {"job": job.as_dict()}
 
 
 def _scheduler_job(scheduler, job_id: str):

@@ -160,6 +160,14 @@ class ScheduleUpdateRequest(BaseModel):
     timezone: str | None = None  # IANA tz for cron eval (None = UTC)
 
 
+class ScheduleSetEnabledRequest(BaseModel):
+    """``POST /api/scheduler/jobs/{id}/enabled`` — the Work view's Pause/Resume control
+    (#4955 §4.3). ``enabled: false`` pauses the job (it stays in the store but no tick
+    fires it); ``enabled: true`` resumes it."""
+
+    enabled: bool
+
+
 class InboxAddRequest(BaseModel):
     text: str
     priority: str = "next"  # now | next | later
@@ -495,6 +503,7 @@ def register_operator_routes(
     scheduler_add: Callable[[dict[str, Any]], Awaitable[dict[str, Any]]] | None = None,
     scheduler_cancel: Callable[[str], Awaitable[dict[str, Any]]] | None = None,
     scheduler_update: Callable[[str, dict[str, Any]], Awaitable[dict[str, Any]]] | None = None,
+    scheduler_set_enabled: Callable[[str, bool], Awaitable[dict[str, Any]]] | None = None,
     goal_list: Callable[[], Awaitable[dict[str, Any]]] | None = None,
     goal_clear: Callable[[str, bool], Awaitable[dict[str, Any]]] | None = None,
     goal_set: Callable[[dict[str, Any]], Awaitable[dict[str, Any]]] | None = None,
@@ -805,6 +814,24 @@ def register_operator_routes(
             if isinstance(res, dict) and res.get("canceled") is False:
                 raise HTTPException(status_code=404, detail=f"No scheduled job {job_id!r}.")
             return res
+
+    if scheduler_set_enabled is not None:
+
+        @app.post("/api/scheduler/jobs/{job_id}/enabled")
+        async def _scheduler_set_enabled(job_id: str, req: ScheduleSetEnabledRequest):
+            # Pause (``enabled=false``) / resume (``enabled=true``) a job in place — the Work
+            # view's Schedules toggle (#4955 §4.3). An unknown id is a 404 (NotFoundError); a
+            # backend without ``set_enabled`` is a 501 (NotImplementedError). Returns the job
+            # with its new ``enabled`` value.
+            try:
+                return await scheduler_set_enabled(job_id, req.enabled)
+            except NotImplementedError as exc:
+                raise HTTPException(
+                    status_code=501,
+                    detail="This scheduler backend does not support pause/resume.",
+                ) from exc
+            except Exception as exc:
+                raise _http_error(exc) from exc
 
     # --- Goals ---------------------------------------------------------------
     # List goals across sessions + clear one. Goals are *set* in chat (`/goal`);

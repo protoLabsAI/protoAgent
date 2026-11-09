@@ -59,6 +59,7 @@ of what the emitting call sites pass; a key may be absent on a given event.
 | `plugin.changed` | `scope` | `src/server/settings_apply.py` |
 | `plugin.updated` | `by`, `id`, `reloaded`, `resolved_sha`, `version` | `src/server/maintenance_loops.py` |
 | `provider.usage` | _(varies)_ | `src/observability/usage_store.py` |
+| `scheduler.changed` | `action`, `job_id` | `src/operator_api/console_handlers.py` |
 | `scheduler.completed` | _(varies)_ | `src/server/a2a.py` |
 | `scheduler.fired` | `job_id`, `prompt`, `schedule` | `src/scheduler/local.py` |
 | `turn.finished` | `ok`, `origin`, `session_id`, `state`, `task_id`, `trigger` | `src/background/manager.py`, `src/scheduler/local.py` +1 |
