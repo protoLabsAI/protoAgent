@@ -35,12 +35,17 @@ class _Entry:
 
 
 class UndoLedger:
-    """A bounded, process-local map of undo token → stashed delete.
+    """A process-local map of undo token → stashed delete, pruned by AGE (not size).
 
     ``stash`` snapshots a record and returns an opaque token; ``restore`` replays the
     stashed restore callable exactly once and drops the entry. An expired, unknown, or
     already-used token raises :class:`operator_api.routes.NotFoundError` (a 404 at the
     route), so a stale undo changes nothing.
+
+    Entries are dropped once they pass ``UNDO_WINDOW_S`` (on the next ``stash``/``restore``),
+    so the map's size is bounded only by how many deletes happen inside one short window —
+    not by a fixed cap. Each entry is a small snapshot and the window is seconds, so an
+    operator clicking through deletes can't grow it unboundedly.
     """
 
     def __init__(self, window_s: float = UNDO_WINDOW_S, clock: Callable[[], float] = monotonic):

@@ -42,6 +42,14 @@ class NotFoundError(LookupError):
     400 or an AttributeError/KeyError 500 (#3973)."""
 
 
+class ConflictError(Exception):
+    """The operation would clobber a live record — ``_http_error`` answers 409.
+
+    Raised by the undo restore (#4955 Q10) when a goal/watch was (re)created under the same
+    id between the delete and the undo: writing the stashed snapshot back would silently
+    overwrite the newer record and its progress, so the restore refuses instead."""
+
+
 class SubagentRunRequest(BaseModel):
     session_id: str = "manual-subagent"
     type: str = "researcher"
@@ -269,7 +277,8 @@ def _http_error(exc: Exception) -> HTTPException:
     """Map a handler's exception to an HTTP error.
 
     ``ValueError`` (the caller's input) is a 400 and ``NotFoundError`` a 404, both with the
-    handler's own message; a "not loaded" ``RuntimeError`` is a 409. Anything else is a
+    handler's own message; a ``ConflictError`` (an undo that would clobber a live record)
+    and a "not loaded" ``RuntimeError`` are each a 409. Anything else is a
     fault in our code: it is logged here with its traceback under a short error id, and the
     client gets a generic message carrying that id (#3973) — never ``str(exc)``, which
     leaked file paths and library internals to whoever made the request."""
@@ -277,6 +286,8 @@ def _http_error(exc: Exception) -> HTTPException:
         return HTTPException(status_code=400, detail=str(exc))
     if isinstance(exc, NotFoundError):
         return HTTPException(status_code=404, detail=str(exc))
+    if isinstance(exc, ConflictError):
+        return HTTPException(status_code=409, detail=str(exc))
     if isinstance(exc, RuntimeError) and "not loaded" in str(exc).lower():
         return HTTPException(status_code=409, detail=str(exc))
     error_id = uuid.uuid4().hex[:8]

@@ -131,6 +131,46 @@ def test_watch_clear_returns_token_and_undo_restores(monkeypatch, tmp_path, even
     assert client.post(f"/api/undo/{token}").status_code == 404
 
 
+def test_undo_refuses_to_clobber_a_recreated_goal(monkeypatch, tmp_path, events):
+    """If a NEW goal is created under the same session between the delete and the undo, the
+    restore refuses (409) instead of silently overwriting the live record and its progress."""
+    client, goal_store, _ = _client(monkeypatch, tmp_path)
+    goal_store.set(GoalState(session_id="s1", condition="old goal", iteration=1, max_iterations=9))
+
+    token = client.delete("/api/goals/s1").json()["undo_token"]
+    # A fresh goal takes the session before the operator clicks Undo — it has its own progress.
+    goal_store.set(GoalState(session_id="s1", condition="new goal", iteration=7, max_iterations=9))
+
+    before = len(events)
+    refused = client.post(f"/api/undo/{token}")
+    assert refused.status_code == 409
+
+    # The live goal is untouched — the stashed snapshot did NOT overwrite it.
+    live = goal_store.get("s1")
+    assert live is not None and live.condition == "new goal" and live.iteration == 7
+    # No restore event fired for the refused clobber attempt.
+    assert ("goal.changed", {"session_id": "s1"}) not in events[before:]
+    # The token is spent — a retry is a plain 404, not another 409.
+    assert client.post(f"/api/undo/{token}").status_code == 404
+
+
+def test_undo_refuses_to_clobber_a_recreated_watch(monkeypatch, tmp_path, events):
+    """Same guard for watches: a watch recreated under the same id (ADR 0067 ids can repeat
+    when a condition is re-derived) is not overwritten by an undo of the deleted one."""
+    client, _, watch_store = _client(monkeypatch, tmp_path)
+    watch_store.set(Watch(id="w1", condition="old", status="met", repeat=True))
+
+    token = client.delete("/api/watches/w1").json()["undo_token"]
+    watch_store.set(Watch(id="w1", condition="new", status="active"))
+
+    before = len(events)
+    assert client.post(f"/api/undo/{token}").status_code == 409
+
+    live = watch_store.get("w1")
+    assert live is not None and live.condition == "new" and live.status == "active"
+    assert ("watch.changed", {"id": "w1"}) not in events[before:]
+
+
 def test_clearing_a_missing_record_mints_no_token(monkeypatch, tmp_path):
     """A record that doesn't exist keeps the existing not-found behaviour: the clear still
     returns ``{cleared: False}`` with no ``undo_token`` (r1)."""
