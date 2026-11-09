@@ -9,8 +9,9 @@ import {
   shownRuns,
   turnBubbleIndexes,
 } from "./turnText";
-import { listKeys, readKey, removeKey, writeKey } from "../lib/storage";
+import { listKeys, matchKey, readKey, removeKey, writeKey } from "../lib/storage";
 import { agentChunkPrefix, expandSessions, orphanChunks, packSessions } from "./transcriptChunks";
+import { openTranscriptStore, type SessionLike, type TranscriptStore } from "./transcriptStore";
 import { attachmentDisplay, validThumbnails } from "./imageThumbnails";
 import { persistBlocked } from "../lib/storageReset";
 
@@ -649,6 +650,230 @@ function collectChunks(present: Iterable<string>, referenced: ReadonlySet<string
   }
 }
 
+// ── IndexedDB backend (epic #4981 S2, chat/transcriptStore.ts) ───────────────
+// WebKit's localStorage stops checkpointing its write-ahead log after the first overwrite of a
+// value over 1K characters (#4974), and every transcript save was one. So transcripts live in
+// IndexedDB once `initTranscriptBackend` has opened it — awaited in main.tsx BEFORE React
+// mounts, so no surface can read or mutate a session that hasn't loaded yet (the boot gate that
+// replaces ADR 0114 D2's per-session load barrier). If IndexedDB is missing, refuses, or stalls,
+// the console keeps the localStorage path above for the page's lifetime.
+//
+// Writes are per session: only sessions whose object changed since the last save are written
+// (state updates are immutable, so a reference compare is exact), so one tab's save can't
+// clobber another tab's other chats. Saves are chained so they commit in order. Other tabs hear
+// about them on a BroadcastChannel and re-read just those sessions.
+
+/** This window's agent in the transcript store ("host" for the bare key). */
+const AGENT = STORAGE_KEY.includes(":") ? STORAGE_KEY.slice(STORAGE_KEY.indexOf(":") + 1) : "host";
+export const TRANSCRIPT_CHANNEL = "protoagent:transcripts";
+
+let transcripts: TranscriptStore | null = null;
+/** What the store holds for this agent, by the session OBJECT last written. */
+const persistedRefs = new Map<string, ChatSession>();
+let writeChain: Promise<void> = Promise.resolve();
+let transcriptChannel: BroadcastChannel | null = null;
+const transcriptListeners = new Set<(agent: string) => void>();
+/** The tab order + focused chat last saved to the store's `agents` record. */
+let lastAgentWritten = "";
+
+type TranscriptMessage = { agent: string; ids: string[]; deleted: string[] };
+
+/** The session as it is saved: ephemeral overlays dropped, only bounded image previews kept. */
+function storable(session: ChatSession): ChatSession {
+  const messages = session.messages
+    .filter((m) => !m.ephemeral)
+    .map((m) => (m.attachments ? { ...m, attachments: validThumbnails(m.attachments) } : m));
+  return { ...session, messages };
+}
+
+function persistToTranscripts(current: ChatState) {
+  const store = transcripts!;
+  const sessions = current.sessions.slice(0, MAX_SESSIONS);
+  const changed = sessions.filter((session) => persistedRefs.get(session.id) !== session);
+  const live = new Set(sessions.map((session) => session.id));
+  const removed = [...persistedRefs.keys()].filter((id) => !live.has(id));
+  for (const session of changed) persistedRefs.set(session.id, session);
+  for (const id of removed) persistedRefs.delete(id);
+  const agentRecord = { slug: AGENT, order: sessions.map((s) => s.id), currentSessionId: current.currentSessionId };
+  const agentKey = JSON.stringify(agentRecord);
+  const agentChanged = agentKey !== lastAgentWritten;
+  lastAgentWritten = agentKey;
+  if (!changed.length && !removed.length && !agentChanged) return;
+  const payload = changed.map((session) => storable(session) as unknown as SessionLike);
+  writeChain = writeChain
+    .then(async () => {
+      await store.putSessions(AGENT, payload);
+      await store.deleteSessions(AGENT, removed);
+      if (agentChanged) await store.putAgent(agentRecord);
+      transcriptChannel?.postMessage({ agent: AGENT, ids: changed.map((s) => s.id), deleted: removed } satisfies TranscriptMessage);
+    })
+    .catch((err) => {
+      // A failed save (quota: S4) must not stop later ones. The next change re-saves the
+      // session, so forget the reference that never made it.
+      for (const session of changed) if (persistedRefs.get(session.id) === session) persistedRefs.delete(session.id);
+      console.error("[chat] saving to IndexedDB failed", err);
+    });
+}
+
+/** Resolves when every save queued so far has committed (tests; a crash reset before reload). */
+export function transcriptWritesSettled(): Promise<void> {
+  return writeChain;
+}
+
+/** Hear that some agent's saved transcripts changed in another tab or window (FleetTurnWatch). */
+export function subscribeTranscriptChanges(fn: (agent: string) => void): () => void {
+  transcriptListeners.add(fn);
+  return () => transcriptListeners.delete(fn);
+}
+
+/** Turns still streaming in OTHER agents' saved chats, or `null` on the localStorage path. */
+export async function liveTurnsElsewhere(exceptAgent: string) {
+  return transcripts ? transcripts.liveTurns(exceptAgent) : null;
+}
+
+/** Clear every saved transcript (AppCrash's reset, a backend switch). Waits for the clear. */
+export async function clearSavedTranscripts(): Promise<void> {
+  await writeChain;
+  const store = transcripts ?? (await openTranscriptStore());
+  if (!store) return;
+  await store.clear();
+  persistedRefs.clear();
+  if (!transcripts) store.close();
+}
+
+async function onTranscriptMessage(message: TranscriptMessage) {
+  if (!message || typeof message.agent !== "string") return;
+  for (const fn of transcriptListeners) {
+    try {
+      fn(message.agent);
+    } catch {
+      /* a listener never breaks sync */
+    }
+  }
+  if (message.agent !== AGENT || !transcripts || !Array.isArray(message.ids) || !message.ids.length) return;
+  const loaded = await transcripts.loadSessions(AGENT, message.ids);
+  const incoming = sanitizePersisted({ version: 1, sessions: loaded, currentSessionId: null });
+  if (!incoming) return;
+  mergeFromStorage(incoming);
+  // What we adopted is exactly what the store holds: never echo it back as a change.
+  for (const session of state.sessions) {
+    if (incoming.sessions.some((s) => s.id === session.id) && session === incoming.sessions.find((s) => s.id === session.id)) {
+      persistedRefs.set(session.id, session);
+    }
+  }
+}
+
+/** Every agent's transcript keys in localStorage, imported into the store, newer copy winning,
+ *  then removed (with their chunk keys). Dismissal sets stay where they are. */
+async function migrateLocalTranscripts(store: TranscriptStore): Promise<void> {
+  for (const key of listKeys("local")) {
+    const match = matchKey("local", key);
+    if (match?.spec.id !== "chat.sessions") continue;
+    const agent = match.slug ?? "host";
+    let parsed: PersistedChatState | null = null;
+    try {
+      const raw = readKey("local", key);
+      parsed = raw ? sanitizePersisted(expandSessions(key, JSON.parse(raw), readChunkOf)) : null;
+    } catch {
+      parsed = null; // corrupt: nothing to keep
+    }
+    if (parsed?.sessions.length) {
+      const existing = new Map((await store.loadSessions(agent, parsed.sessions.map((s) => s.id))).map((s) => [s.id, s]));
+      const newer = parsed.sessions.filter((s) => !existing.has(s.id) || existing.get(s.id)!.updatedAt < s.updatedAt);
+      await store.putSessions(agent, newer.map((s) => storable(s) as unknown as SessionLike));
+      // Keep the tab order and focus a localStorage copy had, unless the store already has its own.
+      const known = await store.loadAgent(agent);
+      if (!known.currentSessionId) {
+        await store.putAgent({ slug: agent, order: parsed.sessions.map((s) => s.id), currentSessionId: parsed.currentSessionId });
+      }
+    }
+    removeKey("local", key);
+    for (const chunk of listKeys("local")) if (chunk.startsWith(agentChunkPrefix(key))) removeKey("local", chunk);
+  }
+}
+
+function readChunkOf(key: string): ChatMessage[] | null {
+  return readChunk(key);
+}
+
+/** Open the transcript store, migrate localStorage into it, and load this agent's chats.
+ *  Awaited before React mounts. Returns which backend the page uses. Never throws. */
+export const TRANSCRIPT_BOOT_DEADLINE_MS = 5_000;
+
+export async function initTranscriptBackend(
+  opts: { open?: typeof openTranscriptStore; deadlineMs?: number } = {},
+): Promise<"idb" | "local"> {
+  if (persistBlocked()) return "local";
+  // Past the deadline the app mounts on localStorage, and a late load must NOT then swap the
+  // state under it: every step below checks `late` before it changes anything.
+  let late = false;
+  const deadline = new Promise<"local">((resolve) =>
+    setTimeout(() => {
+      late = true;
+      resolve("local");
+    }, opts.deadlineMs ?? TRANSCRIPT_BOOT_DEADLINE_MS),
+  );
+  return Promise.race([deadline, bootTranscripts(opts.open ?? openTranscriptStore, () => late)]);
+}
+
+async function bootTranscripts(open: typeof openTranscriptStore, isLate: () => boolean): Promise<"idb" | "local"> {
+  const store = await open();
+  if (!store) return "local";
+  if (isLate()) {
+    store.close();
+    return "local";
+  }
+  try {
+    // Anything this page saved to localStorage before the store opened goes in first.
+    flushChatPersist();
+    await migrateLocalTranscripts(store);
+    const { sessions: loaded, currentSessionId: savedCurrent } = await store.loadAgent(AGENT);
+    if (isLate()) {
+      // The migration may have committed: that's fine, localStorage still holds nothing it
+      // removed that the store doesn't. This page stays on localStorage; the next boot loads.
+      store.close();
+      return "local";
+    }
+    const saved = sanitizePersisted({ version: 1, sessions: loaded, currentSessionId: savedCurrent });
+    transcripts = store;
+    if (saved) {
+      const sessions = saved.sessions.filter((session) => !locallyDismissedIds.has(session.id));
+      if (sessions.length) {
+        const currentSessionId = sessions.some((s) => s.id === saved.currentSessionId) ? saved.currentSessionId : sessions[0].id;
+        const adopted = { ...saved, sessions, currentSessionId };
+        state = { ...state, ...adopted, ...bootLiveTurns(adopted) };
+      }
+    }
+    persistedRefs.clear();
+    for (const session of state.sessions) if (loaded.some((l) => l.id === session.id)) persistedRefs.set(session.id, session);
+    lastAgentWritten = JSON.stringify({ slug: AGENT, order: state.sessions.slice(0, MAX_SESSIONS).map((s) => s.id), currentSessionId: state.currentSessionId });
+    try {
+      transcriptChannel = new BroadcastChannel(TRANSCRIPT_CHANNEL);
+      transcriptChannel.onmessage = (e) => void onTranscriptMessage(e.data as TranscriptMessage);
+    } catch {
+      transcriptChannel = null; // no BroadcastChannel: other tabs catch up on reload
+    }
+    listeners.forEach((listener) => listener());
+    return "idb";
+  } catch (err) {
+    console.error("[chat] IndexedDB transcripts unavailable; staying on localStorage", err);
+    transcripts = null;
+    store.close();
+    return "local";
+  }
+}
+
+/** Test seam: drop the IndexedDB backend (and its sync) without touching saved data. */
+export function __resetTranscriptBackendForTests(): void {
+  transcripts?.close();
+  transcripts = null;
+  persistedRefs.clear();
+  transcriptChannel?.close();
+  transcriptChannel = null;
+  writeChain = Promise.resolve();
+  lastAgentWritten = "";
+}
+
 function loadPersisted(): PersistedChatState {
   try {
     const state = parsePersisted(readKey("local", STORAGE_KEY));
@@ -679,6 +904,10 @@ function loadPersisted(): PersistedChatState {
 // `storage-reset` broadcast (another tab), this store stops writing — see lib/storageReset.ts.
 function persist(state: ChatState) {
   if (persistBlocked()) return;
+  if (transcripts) {
+    persistToTranscripts(state);
+    return;
+  }
   try {
     // Read-merge-write: a concurrent tab sharing this key may have written sessions we
     // don't have (or newer copies) since our last read. Fold them in so our write never

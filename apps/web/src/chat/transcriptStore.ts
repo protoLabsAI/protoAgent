@@ -12,6 +12,10 @@
 //   sessions  key [slug, id]               { slug, id, updatedAt, session: <ChatSession minus messages>,
 //                                            chunks: [hash…], tail: ChatMessage[] }
 //   chunks    key [slug, sessionId, hash]  { slug, sessionId, hash, messages: ChatMessage[] }
+//   agents    key slug                     { slug, order: [sessionId…], currentSessionId }
+//
+// The tab order and the focused chat live in `agents`: written only when they change, and never
+// in localStorage, where a 50-id list would be another >1K value overwritten.
 //
 // One database for the origin. A backend (tenant) switch clears it, as it clears localStorage
 // today (lib/tenant.ts).
@@ -39,6 +43,7 @@ type SessionRecord = {
   tail: Message[];
 };
 type ChunkRecord = { slug: string; sessionId: string; hash: string; messages: Message[] };
+export type AgentRecord = { slug: string; order: string[]; currentSessionId: string | null };
 
 function promised<T>(request: IDBRequest<T>): Promise<T> {
   return new Promise((resolve, reject) => {
@@ -86,13 +91,15 @@ export class TranscriptStore {
     this.db.close();
   }
 
-  /** Every saved session of one agent, whole, newest first. */
-  async loadAgent(slug: string): Promise<SessionLike[]> {
-    const tx = this.db.transaction(["sessions", "chunks"], "readonly");
+  /** Every saved session of one agent, whole, in its saved tab order (sessions the order
+   *  doesn't name follow, newest first), and its focused chat. */
+  async loadAgent(slug: string): Promise<{ sessions: SessionLike[]; currentSessionId: string | null }> {
+    const tx = this.db.transaction(["sessions", "chunks", "agents"], "readonly");
     const range = IDBKeyRange.bound([slug], [slug, []]);
-    const [records, chunkRecords] = await Promise.all([
+    const [records, chunkRecords, agent] = await Promise.all([
       promised(tx.objectStore("sessions").getAll(range)) as Promise<SessionRecord[]>,
       promised(tx.objectStore("chunks").getAll(IDBKeyRange.bound([slug], [slug, []]))) as Promise<ChunkRecord[]>,
+      promised(tx.objectStore("agents").get(slug)) as Promise<AgentRecord | undefined>,
     ]);
     const bySession = new Map<string, Map<string, Message[]>>();
     for (const chunk of chunkRecords) {
@@ -101,9 +108,25 @@ export class TranscriptStore {
       bySession.set(chunk.sessionId, map);
       this.knownFor(slug, chunk.sessionId).add(chunk.hash);
     }
-    return records
+    const position = new Map((agent?.order ?? []).map((id, i) => [id, i]));
+    const sessions = records
       .map((record) => assemble(record, bySession.get(record.id) ?? new Map()))
-      .sort((a, b) => b.updatedAt - a.updatedAt);
+      .sort((a, b) => {
+        const pa = position.get(a.id);
+        const pb = position.get(b.id);
+        if (pa !== undefined && pb !== undefined) return pa - pb;
+        if (pa !== undefined) return -1;
+        if (pb !== undefined) return 1;
+        return b.updatedAt - a.updatedAt;
+      });
+    return { sessions, currentSessionId: agent?.currentSessionId ?? null };
+  }
+
+  /** Save one agent's tab order and focused chat. */
+  async putAgent(record: AgentRecord): Promise<void> {
+    const tx = this.db.transaction("agents", "readwrite");
+    tx.objectStore("agents").put(record);
+    await done(tx);
   }
 
   /** Re-read some of one agent's sessions (another tab saved them). Missing ids are left out. */
@@ -212,9 +235,10 @@ export class TranscriptStore {
 
   /** Remove everything (a backend switch, the crash reset). */
   async clear(): Promise<void> {
-    const tx = this.db.transaction(["sessions", "chunks"], "readwrite");
+    const tx = this.db.transaction(["sessions", "chunks", "agents"], "readwrite");
     tx.objectStore("sessions").clear();
     tx.objectStore("chunks").clear();
+    tx.objectStore("agents").clear();
     this.known.clear();
     await done(tx);
   }
@@ -253,6 +277,7 @@ export function openTranscriptStore(opts: { name?: string; timeoutMs?: number; f
       const db = request.result;
       if (!db.objectStoreNames.contains("sessions")) db.createObjectStore("sessions", { keyPath: ["slug", "id"] });
       if (!db.objectStoreNames.contains("chunks")) db.createObjectStore("chunks", { keyPath: ["slug", "sessionId", "hash"] });
+      if (!db.objectStoreNames.contains("agents")) db.createObjectStore("agents", { keyPath: "slug" });
     };
     request.onsuccess = () => {
       const db = request.result;
@@ -265,4 +290,18 @@ export function openTranscriptStore(opts: { name?: string; timeoutMs?: number; f
       /* wait: the timeout decides */
     };
   });
+}
+
+/** Clear every saved transcript, from a page that may not have the store open (AppCrash's
+ *  reset, a backend switch before reload). Best-effort and bounded: resolves either way. */
+export async function clearTranscriptDatabase(opts: { factory?: IDBFactory; timeoutMs?: number } = {}): Promise<void> {
+  const store = await openTranscriptStore(opts);
+  if (!store) return;
+  try {
+    await store.clear();
+  } catch {
+    /* best-effort */
+  } finally {
+    store.close();
+  }
 }

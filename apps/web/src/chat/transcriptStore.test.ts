@@ -58,12 +58,12 @@ describe("transcriptStore", () => {
     await store.putSessions("agent-a", [session("s1", big, { incognito: true }), session("s2", longChat(1), { updatedAt: 20 })]);
     await store.putSessions("agent-b", [session("s1", longChat(2))]);
 
-    const a = await store.loadAgent("agent-a");
+    const a = (await store.loadAgent("agent-a")).sessions;
     expect(a.map((s) => s.id)).toEqual(["s2", "s1"]); // newest first
     expect(a[1].messages).toEqual(big);
     expect(a[1]).toMatchObject({ title: "chat s1", incognito: true, createdAt: 1 });
-    expect((await store.loadAgent("agent-b"))[0].messages).toHaveLength(4); // same id, other agent
-    expect(await store.loadAgent("nobody")).toEqual([]);
+    expect((await store.loadAgent("agent-b")).sessions[0].messages).toHaveLength(4); // same id, other agent
+    expect((await store.loadAgent("nobody")).sessions).toEqual([]);
     expect(await store.slugs()).toEqual(new Map([["agent-a", 2], ["agent-b", 1]]));
   });
 
@@ -84,7 +84,7 @@ describe("transcriptStore", () => {
     expect(chunkPuts).toEqual([]);
     expect(put.mock.calls.length).toBe(3); // one small session record per save
     put.mockRestore();
-    const loaded = (await store.loadAgent("a"))[0].messages;
+    const loaded = (await store.loadAgent("a")).sessions[0].messages;
     expect(loaded.map((m) => m.id)).toEqual([...history.map((m) => m.id), "u-new", "a-new"]);
     expect(loaded[loaded.length - 1].content).toBe(pad(300));
   });
@@ -95,10 +95,19 @@ describe("transcriptStore", () => {
     const before = (await rawCounts()).chunks;
     await store.putSessions("a", [session("s", history.map((m) => (m.id === "a0" ? { ...m, content: "edited" } : m)))]);
     expect((await rawCounts()).chunks).toBe(before); // one chunk replaced, none piling up
-    expect((await store.loadAgent("a"))[0].messages[1].content).toBe("edited");
+    expect((await store.loadAgent("a")).sessions[0].messages[1].content).toBe("edited");
 
     await store.deleteSessions("a", ["s"]);
     expect(await rawCounts()).toEqual({ sessions: 0, chunks: 0 });
+  });
+
+  it("keeps the saved tab order and focused chat", async () => {
+    await store.putSessions("a", [session("s1", longChat(1), { updatedAt: 30 }), session("s2", longChat(1), { updatedAt: 10 }), session("s3", longChat(1), { updatedAt: 20 })]);
+    await store.putAgent({ slug: "a", order: ["s2", "s1"], currentSessionId: "s1" });
+    const { sessions, currentSessionId } = await store.loadAgent("a");
+    // Named ids in saved order; one the order doesn't name follows.
+    expect(sessions.map((s) => s.id)).toEqual(["s2", "s1", "s3"]);
+    expect(currentSessionId).toBe("s1");
   });
 
   it("reloads chosen sessions for a cross-tab update", async () => {
@@ -122,7 +131,7 @@ describe("transcriptStore", () => {
   it("a second tab's store sees what the first saved", async () => {
     const other = (await openTranscriptStore({ factory }))!;
     await store.putSessions("a", [session("s", longChat(12))]);
-    expect((await other.loadAgent("a"))[0].messages).toHaveLength(24);
+    expect((await other.loadAgent("a")).sessions[0].messages).toHaveLength(24);
     other.close();
   });
 });

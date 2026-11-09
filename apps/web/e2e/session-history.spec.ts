@@ -1,4 +1,5 @@
 import { expect, test } from "@playwright/test";
+import { persistedChat } from "./persistedChat";
 
 test("a fresh browser recovers a server-known chat through durable turn replay", async ({ page }) => {
   await page.setExtraHTTPHeaders({ "x-e2e-session-history": "1" });
@@ -19,6 +20,8 @@ test("a fresh browser recovers a server-known chat through durable turn replay",
   await expect(page.locator(".pl-tabbar__tab")).toHaveCount(1);
   await expect(page.locator(".pl-tabbar__tab")).toContainText("Recover this conversation");
 
-  const persisted = await page.evaluate(() => JSON.parse(localStorage.getItem("protoagent.chat.sessions") || "{}"));
-  expect(persisted.sessions.map((session: { id: string }) => session.id)).toEqual(["chat-recovered"]);
+  // Saves to IndexedDB are async (#4981): poll until the hydrated chat has landed.
+  await expect
+    .poll(async () => ((await persistedChat(page))?.sessions ?? []).map((session) => session.id))
+    .toEqual(["chat-recovered"]);
 });
