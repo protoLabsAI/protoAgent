@@ -497,10 +497,26 @@ def _has_fts5(db: sqlite3.Connection) -> bool:
 # this marker they'd be indistinguishable and the sweep would wipe supersession history.
 _BULK_DELETE_REASON = "source_delete"
 
+# A collection delete (ADR 0125 P2 slice 6, #4630) is a SEPARATE reversible unit from a
+# document (by-source) delete, so it gets its OWN marker rather than sharing
+# ``_BULK_DELETE_REASON``. Both rode one marker before, which let an Undo of a collection
+# delete resurrect a document the operator had deleted earlier and was still inside the
+# grace window: :meth:`restore_by_collection` matched every bulk row in the collection,
+# document-delete rows included. Distinct markers keep each Undo scoped to the one
+# operation it reverses. Both still share the one grace window and the one
+# :meth:`purge_invalidated` sweep (which reaps BOTH markers).
+_COLLECTION_DELETE_REASON = "collection_delete"
+
+# Every bulk soft-delete marker — the set :meth:`purge_invalidated` reaps once a row ages
+# past the grace window. Auto-supersession audit rows (ADR 0069 D9, NULL reason) and the
+# ``superseded_by:<id>`` chain are deliberately NOT in here and are kept forever.
+_BULK_DELETE_REASONS = (_BULK_DELETE_REASON, _COLLECTION_DELETE_REASON)
+
 # ``invalidation_reason`` prefix stamped by :meth:`KnowledgeStore.invalidate_chunk` when a
 # supersede names its replacement (ADR 0108 D7): ``superseded_by:<new row id>``. Audit
 # history exactly like the NULL-reason supersession rows — never reaped by the grace
-# sweep (which matches ``_BULK_DELETE_REASON`` only) — but queryable as a chain.
+# sweep (which matches only the bulk markers in ``_BULK_DELETE_REASONS``) — but queryable
+# as a chain.
 SUPERSEDED_BY_PREFIX = "superseded_by:"
 
 
@@ -2428,11 +2444,15 @@ class KnowledgeStore:
         :meth:`list_collections`' grouping); conversation ``history`` is excluded. Empty
         names are a no-op (0) — never an ``invalidated_at = everything`` sweep.
         Already-invalidated rows keep their timestamp and reason (count is newly-hidden).
+        In particular, a document (by-source) delete the operator made earlier is already
+        hidden, so it keeps its ``_BULK_DELETE_REASON`` and is NOT re-stamped here.
 
-        Stamps the same ``invalidation_reason = _BULK_DELETE_REASON`` as a by-source
-        delete, so a collection delete rides the SAME grace window and the SAME
-        :meth:`purge_invalidated` sweep; :meth:`restore_by_collection` reverses it. An
-        auto-supersession audit row (ADR 0069 D9, NULL reason) is left untouched."""
+        Stamps ``invalidation_reason = _COLLECTION_DELETE_REASON`` — its OWN marker, not the
+        by-source one — so :meth:`restore_by_collection` reverses ONLY this collection
+        delete and never resurrects that earlier document delete. It still rides the SAME
+        grace window and the SAME :meth:`purge_invalidated` sweep (which reaps both bulk
+        markers). An auto-supersession audit row (ADR 0069 D9, NULL reason) is left
+        untouched."""
         if not collection or not collection.strip():
             return 0
         clause, params = _collection_clause(collection, history_col="domain")
@@ -2444,7 +2464,7 @@ class KnowledgeStore:
             cur = db.execute(
                 "UPDATE chunks SET invalidated_at = ?, invalidation_reason = ?, updated_at = ? "
                 f"WHERE {clause} AND invalidated_at IS NULL",
-                [now, _BULK_DELETE_REASON, now, *params],
+                [now, _COLLECTION_DELETE_REASON, now, *params],
             )
             db.commit()
             return int(cur.rowcount)
@@ -2455,15 +2475,17 @@ class KnowledgeStore:
             db.close()
 
     def restore_by_collection(self, collection: str) -> int:
-        """Clear ``invalidated_at`` on every BULK-SOFT-DELETED chunk in ``collection`` —
-        the inverse of :meth:`invalidate_by_collection`. Uses the same default bucket and
-        history exclusion as the delete. Only rows still present (not yet swept by
+        """Clear ``invalidated_at`` on every chunk THIS collection delete hid — the inverse
+        of :meth:`invalidate_by_collection`. Uses the same default bucket and history
+        exclusion as the delete. Only rows still present (not yet swept by
         :meth:`purge_invalidated`) can be restored. Empty names are a no-op.
 
-        Scoped to ``invalidation_reason = _BULK_DELETE_REASON`` so an Undo only resurrects
-        what a bulk soft-delete hid — never an auto-supersession audit row (ADR 0069 D9,
-        NULL reason) that happens to live in this collection. Clears the reason marker on
-        the way back out."""
+        Scoped to ``invalidation_reason = _COLLECTION_DELETE_REASON`` — the collection
+        delete's OWN marker — so an Undo resurrects only what THIS collection delete hid. It
+        deliberately leaves a document (by-source) delete the operator made earlier, which
+        carries ``_BULK_DELETE_REASON`` and is still inside its own grace window, deleted;
+        and it never touches an auto-supersession audit row (ADR 0069 D9, NULL reason) that
+        happens to live in this collection. Clears the reason marker on the way back out."""
         if not collection or not collection.strip():
             return 0
         clause, params = _collection_clause(collection, history_col="domain")
@@ -2474,7 +2496,7 @@ class KnowledgeStore:
             cur = db.execute(
                 "UPDATE chunks SET invalidated_at = NULL, invalidation_reason = NULL, updated_at = ? "
                 f"WHERE {clause} AND invalidation_reason = ?",
-                [_now_iso(), *params, _BULK_DELETE_REASON],
+                [_now_iso(), *params, _COLLECTION_DELETE_REASON],
             )
             db.commit()
             return int(cur.rowcount)
@@ -2496,14 +2518,16 @@ class KnowledgeStore:
         older than ``older_than_seconds`` ago — the grace sweep that makes a bulk
         delete-by-source (#1770) eventually permanent.
 
-        Reaps ONLY rows stamped ``invalidation_reason = _BULK_DELETE_REASON`` by
-        :meth:`invalidate_by_source` or :meth:`invalidate_by_collection` — both bulk
-        soft-deletes share the one marker and this one grace window. Auto-supersession
-        rows (ADR 0069 D9, which set ``invalidated_at`` with a NULL reason — or, since
-        ADR 0108 D7, a ``superseded_by:<id>`` chain marker) are deliberately excluded and
-        kept forever as audit history — the ``include_invalidated`` escape hatch stays
-        populated. Without this reason filter the sweep would silently wipe that
-        supersession history on the first bulk delete.
+        Reaps ONLY rows stamped with a bulk marker in ``_BULK_DELETE_REASONS`` by
+        :meth:`invalidate_by_source` (``_BULK_DELETE_REASON``) or
+        :meth:`invalidate_by_collection` (``_COLLECTION_DELETE_REASON``) — distinct markers
+        so each Undo is scoped to its own operation, but both bulk soft-deletes share this
+        one grace window and this one sweep. Auto-supersession rows (ADR 0069 D9, which set
+        ``invalidated_at`` with a NULL reason — or, since ADR 0108 D7, a
+        ``superseded_by:<id>`` chain marker) are deliberately excluded and kept forever as
+        audit history — the ``include_invalidated`` escape hatch stays populated. Without
+        this reason filter the sweep would silently wipe that supersession history on the
+        first bulk delete.
 
         ``older_than_seconds<=0`` purges every bulk-soft-deleted row now. Returns the
         count removed.
@@ -2516,10 +2540,11 @@ class KnowledgeStore:
             return 0
         try:
             cutoff = _cutoff if _cutoff is not None else self._invalidated_cutoff(older_than_seconds)
+            placeholders = ", ".join("?" for _ in _BULK_DELETE_REASONS)
             cur = db.execute(
                 "DELETE FROM chunks "
-                "WHERE invalidated_at IS NOT NULL AND invalidated_at <= ? AND invalidation_reason = ?",
-                (cutoff, _BULK_DELETE_REASON),
+                f"WHERE invalidated_at IS NOT NULL AND invalidated_at <= ? AND invalidation_reason IN ({placeholders})",
+                (cutoff, *_BULK_DELETE_REASONS),
             )
             db.commit()
             return int(cur.rowcount)
