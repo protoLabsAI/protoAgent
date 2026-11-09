@@ -883,6 +883,28 @@ def register_operator_routes(
                 raise HTTPException(status_code=400, detail=res.get("error") or res.get("message"))
             return res
 
+    # --- Undo (#4955 Q10) ----------------------------------------------------
+    # Server-side undo for a console delete: DELETE /api/goals/{session_id} and
+    # DELETE /api/watches/{watch_id} stash a snapshot and hand back an ``undo_token``;
+    # this redeems it within ``UNDO_WINDOW_S``, writing the record back through the
+    # store's own ``set`` (which re-fires its ``goal.changed`` / ``watch.changed``
+    # event). Done on the server so the Work view's Undo toast still works after the
+    # originating tab is closed (#4955 §4.5). Registered unconditionally and needs no
+    # injected accessor — the ledger is a process-local singleton, and a token can only
+    # exist if a clear minted one; an unknown, expired, or already-used token is a 404
+    # (``NotFoundError`` → ``_http_error``), and changes nothing.
+    @app.post("/api/undo/{token}")
+    async def _undo(token: str):
+        from operator_api.undo import LEDGER
+
+        try:
+            # The restore writes through the store (file IO + a bus publish), so run it off
+            # the event loop like the clear handlers that stashed it.
+            kind = await asyncio.to_thread(LEDGER.restore, token)
+        except Exception as exc:
+            raise _http_error(exc) from exc
+        return {"restored": True, "kind": kind}
+
     # Verifier catalog (ADR 0028/0067) — what a goal or watch can be checked WITH, from
     # every source. Read-only; the console's creators build their pickers from it instead of
     # hardcoding a list that drifts from the registry.

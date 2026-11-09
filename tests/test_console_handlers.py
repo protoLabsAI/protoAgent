@@ -214,7 +214,10 @@ async def test_goals_clear_close_tasks(monkeypatch, tmp_path):
     monkeypatch.setattr(rs.STATE, "tasks_store", tasks, raising=False)
 
     res = await ch._operator_goals_clear("s1", close_tasks=True)
-    assert res == {"cleared": True, "tasks_closed": 2} and tasks.closed == ["t1", "t2"]
+    # A cleared goal also hands back an undo token (#4955 Q10); it restores only the goal,
+    # not the tasks that were closed here.
+    assert res["cleared"] is True and res["tasks_closed"] == 2 and tasks.closed == ["t1", "t2"]
+    assert isinstance(res.get("undo_token"), str) and res["undo_token"]
 
     # Plain clear leaves tasks alone.
     ctrl.set_goal_operator("s1", "cond", {"type": "llm"})
