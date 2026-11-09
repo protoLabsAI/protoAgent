@@ -1795,8 +1795,11 @@ async def record_directive_withdrawal(session_id: str, directive, reason: str = 
     guard-note or ``lc_source`` tags, nor a system-prompt opening), so ``human_kind``
     classifies it OPERATOR and compaction never drops it as system text. The marker lets the
     console ledger view (#4861 part 2) render it as a quiet event row, not a chat bubble.
-    The idle path also saves that marker in A2A message metadata on a completed task,
-    because the console reads durable history through /turns rather than the checkpoint.
+    The idle path also mirrors that marker in A2A message metadata on a completed task,
+    because the console reads durable history through /turns rather than the checkpoint —
+    UNLESS the session's newest turn is a plugin composer-form parked at input_required
+    (not a graph interrupt): a newer task there would displace the form as the newest turn
+    and strand it, so that rare case keeps only the checkpoint note (see below).
 
     Best-effort by construction: it runs AFTER the revoke already succeeded, so a failure
     here is logged and never turns a good revoke into a request error. With no graph it skips
@@ -1861,26 +1864,39 @@ async def record_directive_withdrawal(session_id: str, directive, reason: str = 
                 additional_kwargs={**sent_at_kwargs(), DIRECTIVE_WITHDRAWN_KWARG: {"id": directive.id}},
             )
             await graph.aupdate_state(config, {"messages": [msg]})
-            # /turns reads the A2A store, never the checkpoint. Store this operator
-            # event as a completed, reply-less task without mutating an earlier turn.
+            # /turns reads the A2A store, never the checkpoint. Mirror this operator event
+            # into a completed, reply-less task so the console's quiet transcript row has
+            # durable history to read — without mutating an earlier turn.
             engine = getattr(STATE, "a2a_task_engine", None)
             if engine is not None:
-                from a2a.server.context import ServerCallContext
-                from a2a.server.tasks import DatabaseTaskStore
-                from a2a.types import Message, Part, Role, Task, TaskState, TaskStatus
+                from server.a2a import session_parked_on_plugin_form
 
-                note_id = f"directive-withdrawn-{directive.id}"
-                await DatabaseTaskStore(engine).save(Task(
-                    id=note_id,
-                    context_id=session_id,
-                    status=TaskStatus(state=TaskState.TASK_STATE_COMPLETED),
-                    history=[Message(
-                        message_id=note_id,
-                        role=Role.ROLE_USER,
-                        parts=[Part(text=text)],
-                        metadata={DIRECTIVE_WITHDRAWN_KWARG: {"id": directive.id}},
-                    )],
-                ), ServerCallContext())
+                # ...but NOT when the session's newest turn is a plugin composer-form parked
+                # at input_required (#1701 Slice 2). That form is not a graph interrupt (the
+                # _pending_interrupt_value check above passed, so it rode this idle path), yet
+                # a newer completed task would displace it as the newest turn and
+                # settle_plugin_form_task could never redeem it — the form would stay
+                # input_required forever. The checkpoint append above still carries the note
+                # to the agent for compaction fidelity (ADR 0127 D3); only the console's
+                # transcript row is dropped for this rare case, exactly as the steering-fold
+                # paths above drop the marker.
+                if not await session_parked_on_plugin_form(session_id):
+                    from a2a.server.context import ServerCallContext
+                    from a2a.server.tasks import DatabaseTaskStore
+                    from a2a.types import Message, Part, Role, Task, TaskState, TaskStatus
+
+                    note_id = f"directive-withdrawn-{directive.id}"
+                    await DatabaseTaskStore(engine).save(Task(
+                        id=note_id,
+                        context_id=session_id,
+                        status=TaskStatus(state=TaskState.TASK_STATE_COMPLETED),
+                        history=[Message(
+                            message_id=note_id,
+                            role=Role.ROLE_USER,
+                            parts=[Part(text=text)],
+                            metadata={DIRECTIVE_WITHDRAWN_KWARG: {"id": directive.id}},
+                        )],
+                    ), ServerCallContext())
         return True
     except Exception:  # noqa: BLE001 — a bookkeeping append must never fail the revoke
         log.warning("[chat] could not record the directive withdrawal for session=%s", session_id, exc_info=True)

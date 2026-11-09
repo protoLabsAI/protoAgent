@@ -358,10 +358,15 @@ export function ChatSessionSlot({
   // only the slot it names opens its own drawer (the DS Drawer portals to <body>, so it
   // shows even when that slot is a cached, hidden tab — e.g. a right-click on an inactive
   // tab). `n` rising re-opens it after a close; the ref guards the initial mount so a
-  // stale request from a previous open doesn't pop the drawer on first render.
+  // stale request from a previous open doesn't pop the drawer on first render. It is
+  // SEEDED from the request already standing for this session (the store outlives a slot
+  // remount, and `n` only ever climbs from 1), so a remount treats that request as already
+  // consumed and only a FRESH bump opens the drawer.
   const directivesRequest = useUI((st) => st.directivesRequest);
   const [directivesOpen, setDirectivesOpen] = useState(false);
-  const lastDirectivesN = useRef(0);
+  const lastDirectivesN = useRef(
+    directivesRequest?.sessionId === sessionId ? directivesRequest.n : 0,
+  );
   useEffect(() => {
     if (!directivesRequest || directivesRequest.sessionId !== sessionId) return;
     if (directivesRequest.n === lastDirectivesN.current) return;

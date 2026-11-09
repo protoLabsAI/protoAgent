@@ -215,6 +215,68 @@ async def test_delete_note_survives_task_store_reload_and_reaches_turns(store, m
         await engine.dispose()
 
 
+@pytest.mark.asyncio
+async def test_delete_does_not_strand_a_parked_plugin_form_as_newest_turn(store, monkeypatch, sid, tmp_path):
+    # A plugin composer-form parked at input_required is the session's newest turn but NOT a
+    # graph interrupt (FakeGraph surfaces none), so the withdrawal note rides the idle path.
+    # The note must still reach the checkpoint for compaction fidelity, but it must NOT be
+    # mirrored into a newer completed A2A task: that would displace the parked form as the
+    # newest turn, and settle_plugin_form_task — which reads the newest turn — could never
+    # redeem it, leaving the form input_required forever (the console's quiet transcript row
+    # is the one thing dropped for this rare case, as the steering-fold paths drop the marker).
+    import httpx
+    from a2a.server.context import ServerCallContext
+    from a2a.server.tasks.database_task_store import TaskModel
+    from a2a.types import a2a_pb2
+    from sqlalchemy import func, select
+
+    from a2a_impl.executor import HITL_MIME, _data_part_proto, _text_part
+    from a2a_impl.stores import DatabaseTaskStore, make_sqlite_engine
+    from server import a2a as server_a2a
+
+    graph = FakeGraph()
+    app = _client(monkeypatch, graph).app
+    engine = make_sqlite_engine(str(tmp_path / "tasks.db"))
+    await DatabaseTaskStore(engine).initialize()
+    form = a2a_pb2.Task(
+        id=f"form-{sid}",
+        context_id=sid,
+        status=a2a_pb2.TaskStatus(
+            state=a2a_pb2.TASK_STATE_INPUT_REQUIRED,
+            message=a2a_pb2.Message(
+                role=a2a_pb2.ROLE_AGENT,
+                message_id=f"m-form-{sid}",
+                parts=[
+                    _text_part("Input required."),
+                    _data_part_proto({"kind": "form", "title": "Post?", "steps": [], "plugin_callback_id": "cb1"}, HITL_MIME),
+                ],
+            ),
+        ),
+    )
+    await DatabaseTaskStore(engine).save(form, ServerCallContext())
+    monkeypatch.setattr(rs.STATE, "a2a_task_engine", engine, raising=False)
+    d = store.record(sid, APPROVAL)
+    try:
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+            r = await client.delete(
+                f"/api/chat/sessions/{sid}/directives/{d.id}", params={"reason": "plan changed"},
+            )
+            assert r.status_code == 200 and r.json()["directive"]["status"] == STATUS_REVOKED
+        # The note still reached the checkpoint (compaction fidelity, ADR 0127 D3)...
+        assert len(graph.updates) == 1
+        # ...but it was NOT mirrored into a newer task: the parked form is the only task...
+        async with engine.connect() as conn:
+            count = (
+                await conn.execute(select(func.count()).select_from(TaskModel).where(TaskModel.context_id == sid))
+            ).scalar()
+        assert count == 1
+        # ...so it is still the session's newest turn and remains redeemable.
+        assert await server_a2a.session_parked_on_plugin_form(sid) is True
+        assert await server_a2a.settle_plugin_form_task(sid) is True
+    finally:
+        await engine.dispose()
+
+
 def test_delete_without_reason_appends_a_note_without_the_default(store, monkeypatch, sid):
     graph = FakeGraph()
     c = _client(monkeypatch, graph)

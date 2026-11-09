@@ -1371,6 +1371,48 @@ async def settle_plugin_form_task(session_id: str) -> bool:
         return False
 
 
+async def session_parked_on_plugin_form(session_id: str) -> bool:
+    """Whether the session's newest-created task is a plugin composer-form parked at
+    ``input_required`` — the exact row :func:`settle_plugin_form_task` would redeem (#4861).
+
+    Read-only guard for an out-of-band task write (the directive-withdrawal note, #4861).
+    Such a form is not a graph interrupt, so a note written while it is parked would be saved
+    as a *newer* completed task, displace the form as the session's newest turn, and leave
+    ``settle_plugin_form_task`` unable to find it — the form would read ``input_required``
+    forever. Callers skip the task write when this is True. Best-effort: returns False on any
+    uncertainty (no engine / read error / no rows), matching the other task-store probes,
+    since the guard only suppresses a known-unsafe insert, never the write that matters."""
+    engine = getattr(STATE, "a2a_task_engine", None)
+    sid = str(session_id or "").strip()
+    if engine is None or not sid:
+        return False
+    try:
+        from a2a.server.tasks.database_task_store import TaskModel
+        from sqlalchemy import select
+
+        from a2a_impl.stores import task_newest_first
+
+        async with engine.connect() as conn:
+            row = (
+                await conn.execute(
+                    select(TaskModel.status)
+                    .where(TaskModel.context_id == sid)
+                    # The newest-CREATED turn, exactly as settle_plugin_form_task reads it.
+                    .order_by(*task_newest_first(TaskModel, engine.dialect.name))
+                    .limit(1)
+                )
+            ).first()
+    except Exception:  # noqa: BLE001 — a guard read must never fail the caller
+        log.exception("[a2a] could not check the parked-form state for %s", sid)
+        return False
+    if row is None:
+        return False
+    status_json = row[0]
+    if not isinstance(status_json, dict) or str(status_json.get("state") or "") != "TASK_STATE_INPUT_REQUIRED":
+        return False
+    return bool(_plugin_form_callback_in(status_json))
+
+
 async def _session_recently_active(session_id: str, *, window_s: int = _SCHEDULED_STALE_WINDOW_S) -> bool:
     """Has ``session_id`` had a turn within ``window_s`` seconds? (#2990 r3)
 
