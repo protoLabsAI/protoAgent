@@ -389,6 +389,9 @@ class DecisionStore:
         with self._lock:
             db = self._connect()
             try:
+                # Reserve the write before reading: the Python lock only protects this
+                # process, while other processes may answer or cancel the same record.
+                db.execute("BEGIN IMMEDIATE")
                 row = db.execute("SELECT * FROM decisions WHERE id = ?", (decision_id,)).fetchone()
                 if row is None:
                     raise DecisionNotFound(f"no decision {decision_id!r}")
@@ -399,11 +402,16 @@ class DecisionStore:
                 if answer is not None:
                     rec.answer = str(answer)[:MAX_ANSWER_CHARS]
                     rec.answered_at = self._now()
-                db.execute(
+                updated = db.execute(
                     "UPDATE decisions SET state = ?, answer = ?, answered_at = ? WHERE id = ? AND state = ?",
                     (rec.state, rec.answer, rec.answered_at, rec.id, STATE_PENDING),
                 )
+                if updated.rowcount != 1:
+                    raise DecisionClosed(f"decision {decision_id} is no longer pending")
                 db.commit()
+            except BaseException:
+                db.rollback()
+                raise
             finally:
                 self._close(db)
         _publish("decision.changed", {"id": rec.id, "session_id": rec.session_id, "state": rec.state})

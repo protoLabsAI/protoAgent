@@ -175,6 +175,78 @@ def test_decision_changed_published_on_create_and_answer(store, monkeypatch):
     assert events[1][1] == {"id": rec.id, "session_id": "s-1", "state": STATE_ANSWERED}
 
 
+@pytest.mark.platform_sensitive
+def test_disk_store_survives_reopen_and_cancel_publishes_once(tmp_path, monkeypatch):
+    events = []
+    monkeypatch.setattr(host.HOST, "publish", lambda topic, data: events.append((topic, data)))
+    path = tmp_path / "decisions.db"
+    first = DecisionStore(path, clock=_fixed_clock)
+    rec = first.create(
+        "s-durable", "Deploy?", ["yes", "no"], agent="engineer",
+        thread_id="a2a:s-durable", interrupt_id="interrupt-1", context="Production",
+    )
+    reopened = DecisionStore(path, clock=_fixed_clock)
+    assert reopened.get(rec.id) == rec
+    assert reopened.for_interrupt(rec.thread_id, rec.interrupt_id) == rec
+    reopened.cancel(rec.id)
+    with pytest.raises(DecisionClosed):
+        first.answer(rec.id, "yes")
+    assert first.get(rec.id).state == "cancelled"
+    assert [data["state"] for _, data in events] == ["pending", "cancelled"]
+
+
+@pytest.mark.platform_sensitive
+def test_independent_writers_cannot_both_close_decision(tmp_path, monkeypatch):
+    from concurrent.futures import ThreadPoolExecutor
+    import threading
+
+    events = []
+    monkeypatch.setattr(host.HOST, "publish", lambda topic, data: events.append((topic, data)))
+    path = tmp_path / "decisions.db"
+    stores = [DecisionStore(path, clock=_fixed_clock) for _ in range(2)]
+    # Independent locks model separate processes sharing only SQLite coordination.
+    for writer in stores:
+        writer._lock = threading.RLock()
+    rec = stores[0].create("s-race", "Deploy?", ["yes", "no"])
+    start = threading.Barrier(2)
+
+    def close(index):
+        start.wait(timeout=10)
+        try:
+            return stores[index].answer(rec.id, "yes") if index == 0 else stores[index].cancel(rec.id)
+        except DecisionClosed:
+            return None
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        results = list(pool.map(close, range(2)))
+    winner, = [result for result in results if result is not None]
+    assert stores[0].get(rec.id) == winner
+    assert [data["state"] for _, data in events] == ["pending", winner.state]
+
+
+@pytest.mark.parametrize("ignored", [False, True])
+def test_failed_transition_rolls_back_without_publishing(store, monkeypatch, ignored):
+    import sqlite3
+
+    rec = store.create("s-rollback", "Deploy?", ["yes", "no"])
+    events = []
+    monkeypatch.setattr(host.HOST, "publish", lambda topic, data: events.append((topic, data)))
+    db = store._connect()
+    rejection = "RAISE(IGNORE)" if ignored else "RAISE(ABORT, 'simulated write failure')"
+    db.execute(f"""
+        CREATE TRIGGER reject_answer BEFORE UPDATE ON decisions
+        BEGIN SELECT {rejection}; END
+    """)
+    with pytest.raises(DecisionClosed if ignored else sqlite3.IntegrityError):
+        store.answer(rec.id, "yes")
+    assert store.get(rec.id).pending
+    assert not db.in_transaction
+    assert events == []
+    db.execute("DROP TRIGGER reject_answer")
+    assert store.answer(rec.id, "no").answer == "no"
+    assert len(events) == 1
+
+
 # ── turn driver: park vs auto-answer ────────────────────────────────────────────
 
 
