@@ -170,7 +170,7 @@ export function AppCrash({
       {freed !== null && <LargestKeys freed={freed} />}
       <p className="app-crash__hint">
         {quota
-          ? "Free up space clears this browser's saved chat transcripts (the server keeps the last 24 h). Layout, theme, auth token and dismissals are kept."
+          ? "Free up space clears chat history saved in this browser's local storage, which is what filled up. Chats in the browser's database aren't touched, and the server keeps the last 24 h. Layout, theme, auth token and dismissals are kept."
           : "Layout, theme and auth token are kept. If reloading loops back here, reset chat data — a corrupt saved session is the usual cause."}
       </p>
     </div>

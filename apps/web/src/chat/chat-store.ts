@@ -715,6 +715,11 @@ function persistToTranscripts(current: ChatState) {
     });
 }
 
+/** The open transcript store, or `null` on the localStorage path (palette threads, S3). */
+export function transcriptStoreIfOpen(): TranscriptStore | null {
+  return transcripts;
+}
+
 /** Resolves when every save queued so far has committed (tests; a crash reset before reload). */
 export function transcriptWritesSettled(): Promise<void> {
   return writeChain;

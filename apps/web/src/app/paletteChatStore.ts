@@ -4,8 +4,9 @@
 // chat-store's slug-namespacing + try/catch + debounce. `/clear` mints a fresh thread
 // and wipes the old one's checkpoints.
 import type { ChatMessage } from "../lib/types";
-import { readKey, writeKey } from "../lib/storage";
+import { listKeys, matchKey, readKey, writeKey } from "../lib/storage";
 import { persistBlocked } from "../lib/storageReset";
+import type { TranscriptStore } from "../chat/transcriptStore";
 
 // Per-agent key (ADR 0042 slug routing) — a window on /agent/<slug>/ keeps its own
 // palette thread; host (no slug) uses the bare key. Fixed per page load.
@@ -48,13 +49,45 @@ function sanitize(messages: unknown): ChatMessage[] {
     .map((m) => (m.status === "streaming" && !m.taskId ? { ...m, status: "done" as const } : m));
 }
 
+// ── IndexedDB (epic #4981 S3) ─────────────────────────────────────────────────
+// Once the transcript store is open, a thread's MESSAGES live in its `threads` store (keyed by
+// the localStorage key) and the localStorage key keeps only `{contextId}`: short, written only
+// when a new thread starts, so it never trips WebKit's >1K-overwrite WAL bug (#4974), and the
+// server link survives a store that fails to open. This window's threads are preloaded before
+// React mounts (main.tsx), so loadPaletteThread stays synchronous.
+let threads: TranscriptStore | null = null;
+const preloaded = new Map<string, ChatMessage[]>();
+let threadWrites: Promise<void> = Promise.resolve();
+
+/** Move every palette / DM thread's messages out of localStorage into the store (a copy the
+ *  store already has wins), then preload this window's threads. Awaited at boot. */
+export async function initPaletteThreads(store: TranscriptStore | null): Promise<void> {
+  if (!store) return;
+  const existing = await store.loadThreads("protoagent.palette.chat");
+  for (const key of listKeys("local")) {
+    if (matchKey("local", key)?.spec.id !== "palette.chat") continue;
+    try {
+      const p = JSON.parse(readKey("local", key) || "null") as Partial<PaletteThread> | null;
+      if (!p || typeof p.contextId !== "string" || !Array.isArray(p.messages)) continue;
+      if (!existing.has(key) && p.messages.length) await store.putThread(key, sanitize(p.messages));
+      writeKey("local", key, JSON.stringify({ contextId: p.contextId }));
+    } catch {
+      /* corrupt: leave it for loadPaletteThread to discard */
+    }
+  }
+  preloaded.clear();
+  for (const [key, messages] of await store.loadThreads(baseKey)) preloaded.set(key, messages);
+  threads = store;
+}
+
 export function loadPaletteThread(scope?: string): PaletteThread {
   try {
     const raw = readKey("local", keyFor(scope));
     if (raw) {
       const p = JSON.parse(raw) as Partial<PaletteThread>;
       if (p && typeof p.contextId === "string") {
-        return { contextId: p.contextId, messages: sanitize(p.messages) };
+        const messages = threads ? (preloaded.get(keyFor(scope)) ?? []) : p.messages;
+        return { contextId: p.contextId, messages: sanitize(messages) };
       }
     }
   } catch {
@@ -69,7 +102,18 @@ function write(thread: PaletteThread, scope?: string) {
   // A storage reset (ADR 0114 D6) — never write a cleared thread back.
   if (persistBlocked()) return;
   try {
-    writeKey("local", keyFor(scope), JSON.stringify(thread));
+    const key = keyFor(scope);
+    if (threads) {
+      const store = threads;
+      const link = JSON.stringify({ contextId: thread.contextId });
+      if (readKey("local", key) !== link) writeKey("local", key, link);
+      preloaded.set(key, thread.messages);
+      threadWrites = threadWrites
+        .then(() => store.putThread(key, thread.messages))
+        .catch((err) => console.error("[palette] saving the thread to IndexedDB failed", err));
+      return;
+    }
+    writeKey("local", key, JSON.stringify(thread));
   } catch {
     // storage can be unavailable (hardened contexts)
   }
@@ -110,4 +154,9 @@ export function freshPaletteThread(scope?: string): PaletteThread {
   const next: PaletteThread = { contextId: newContextId(), messages: [] };
   savePaletteThread(next, true, scope);
   return next;
+}
+
+/** Resolves when every queued thread save has committed (tests). */
+export function paletteWritesSettled(): Promise<void> {
+  return threadWrites;
 }
