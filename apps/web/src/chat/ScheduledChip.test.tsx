@@ -177,7 +177,6 @@ describe("ScheduledChip — failed fires still expand (#4726)", () => {
   });
 });
 
-
 describe("scheduled result markdown (#4927)", () => {
   const markdown = "**Failing CI:**\n\n- Fix the build\n- Retry tests";
 
@@ -194,6 +193,8 @@ describe("scheduled result markdown (#4927)", () => {
       "Fix the build", "Retry tests",
     ]);
     expect(summary.textContent).not.toMatch(/\*\*|(?:^|\s)- /);
+    act(() => viewFullResult()!.click());
+    await expect(useDocViewer.getState().doc?.load?.()).resolves.toBe(markdown);
   });
 
   it.each([false, true])("keeps the empty summary fallback (collapse=%s)", async (collapse) => {
@@ -202,6 +203,17 @@ describe("scheduled result markdown (#4927)", () => {
     expect(container.querySelector(".chat-scheduled-summary")?.textContent).toBe("(no output)");
     act(() => viewFullResult()!.click());
     expect(useDocViewer.getState().open).toBe(true);
+  });
+
+  it.each([false, true])("preserves a plain summary (collapse=%s)", async (collapse) => {
+    await act(async () => render(scheduledMessage({ collapse })));
+    if (collapse) await act(async () => toggle().click());
+    expect(container.querySelector(".chat-scheduled-summary")?.textContent).toBe(SUMMARY);
+  });
+
+  it("strips markup before applying the chip's 90-character limit", () => {
+    render(scheduledMessage({ summary: "**" + "x".repeat(91) + "**" }));
+    expect(toggle().textContent).toBe("Scheduled task brand-plan-sweep ran — " + "x".repeat(90) + "…");
   });
 
   it("strips common markdown without flattening lines", () => {
