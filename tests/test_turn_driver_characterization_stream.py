@@ -1114,15 +1114,70 @@ async def test_mid_stream_failure_yields_partial_frames_then_error_and_records(e
 
 
 @pytest.mark.asyncio
-async def test_provider_stream_drop_is_a_clean_rate_limit_message(env):
+async def test_provider_stream_drop_is_a_clean_connection_drop_message(env):
     import httpx
 
     g = env.install(streams=[[text("r1", "par"), Raise(httpx.ReadError("closed"))]])
 
     frames = await _run()
 
-    assert frames == [("text", "par"), ("error", chat_mod._PROVIDER_CLOSED_MSG)]
-    assert g.updates[0][1]["messages"][0].content == f"**Error:** {chat_mod._PROVIDER_CLOSED_MSG}"
+    # A transport drop (not a stall) → the connection-dropped message, no "rate" (#4959).
+    assert frames == [("text", "par"), ("error", chat_mod._STREAM_DROP_MSG)]
+    assert g.updates[0][1]["messages"][0].content == f"**Error:** {chat_mod._STREAM_DROP_MSG}"
+    assert "rate" not in chat_mod._STREAM_DROP_MSG
+
+
+@pytest.mark.asyncio
+async def test_provider_stream_stall_names_the_request_timeout(env):
+    """A StreamStallTimeout is reported as a stall that names the model.request_timeout
+    window parsed from its text — not as a rate limit (#4959)."""
+    from graph.llm import StreamStallTimeout
+
+    stall = StreamStallTimeout(
+        "lead-agent produced no output for 120s while between chunks; the streaming "
+        "request exceeded model.request_timeout and was aborted (#3699)."
+    )
+    g = env.install(streams=[[text("r1", "par"), Raise(stall)]])
+
+    frames = await _run()
+
+    msg = frames[-1][1]
+    assert frames == [("text", "par"), ("error", msg)]
+    assert "for 120s" in msg and "model.request_timeout" in msg and "rate" not in msg
+    assert g.updates[0][1]["messages"][0].content == f"**Error:** {msg}"
+
+
+@pytest.mark.asyncio
+async def test_provider_stream_stall_without_a_window_omits_the_number(env):
+    """A stall whose text carries no parseable window falls back to the no-number
+    stall constant — still a stall, still no "rate" (#4959)."""
+    from graph.llm import StreamStallTimeout
+
+    env.install(streams=[[Raise(StreamStallTimeout("no first token"))]])
+
+    assert await _run() == [("error", chat_mod._STREAM_STALL_MSG)]
+    assert "model.request_timeout" in chat_mod._STREAM_STALL_MSG and "rate" not in chat_mod._STREAM_STALL_MSG
+
+
+@pytest.mark.asyncio
+async def test_fail_turn_warning_no_longer_blames_rate_limit(env, caplog):
+    """The _fail_turn warning for a drained stream keeps the exception type + text but
+    no longer guesses "possible rate limit" (#4959)."""
+    import logging
+
+    import httpx
+
+    env.install(streams=[[Raise(httpx.ReadError("connection reset"))]])
+
+    with caplog.at_level(logging.WARNING, logger="protoagent.server"):
+        await _run()
+
+    warnings = [r.getMessage() for r in caplog.records if r.levelno == logging.WARNING]
+    drop_lines = [m for m in warnings if "model stream" in m]
+    assert drop_lines, f"expected a stream-drop warning, got {warnings!r}"
+    assert all("possible rate limit" not in m for m in drop_lines)
+    # The cause is still logged: exception type + its message.
+    assert any("ReadError" in m and "connection reset" in m for m in drop_lines)
 
 
 @pytest.mark.asyncio
@@ -1272,7 +1327,7 @@ async def test_a_provider_drop_that_mentions_the_context_window_is_not_compacted
     calls, _ = compaction
     env.install(streams=[[Raise(httpx.ReadError(_OVERFLOW))]])
 
-    assert await _run() == [("error", chat_mod._PROVIDER_CLOSED_MSG)]
+    assert await _run() == [("error", chat_mod._STREAM_DROP_MSG)]
     assert calls == []
 
 

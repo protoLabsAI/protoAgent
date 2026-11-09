@@ -569,12 +569,12 @@ def test_provider_closed_stream_is_a_502_not_an_internal_500(monkeypatch):
     # /api/chat answer it as the failed upstream hop it is.
     from graph.llm import StreamStallTimeout
     from operator_api.chat_routes import _turn_error_status
-    from server.chat import _PROVIDER_CLOSED_MSG, turn_error
+    from server.chat import _STREAM_STALL_MSG, turn_error
 
-    err = turn_error(StreamStallTimeout("no first token"), _PROVIDER_CLOSED_MSG)
+    err = turn_error(StreamStallTimeout("no first token"), _STREAM_STALL_MSG)
     assert err["upstream_stream_closed"] is True
     assert _turn_error_status(err)[0] == 502
-    reply = [{"role": "assistant", "content": f"**Error:** {_PROVIDER_CLOSED_MSG}", "error": err}]
+    reply = [{"role": "assistant", "content": f"**Error:** {_STREAM_STALL_MSG}", "error": err}]
     resp = _chat_client(monkeypatch, reply=reply).post("/api/chat", json={"message": "hi"})
-    assert resp.status_code == 502 and resp.json()["detail"]["message"] == _PROVIDER_CLOSED_MSG
+    assert resp.status_code == 502 and resp.json()["detail"]["message"] == _STREAM_STALL_MSG
     assert "upstream_stream_closed" not in turn_error(RuntimeError("bug"))

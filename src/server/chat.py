@@ -31,6 +31,7 @@ import asyncio
 import contextlib
 import json
 import logging
+import re
 import time
 from typing import Any
 
@@ -1306,16 +1307,58 @@ _OVERFLOW_RETRY_PROMPT = (
 _OVERFLOW_NOTICE = (
     "🧹 The request overflowed the model's context window — older history was force-compacted; retrying once."
 )
-_PROVIDER_CLOSED_MSG = "The model provider closed the stream (possibly rate-limited). Please retry."
+# A drained provider stream is reported by CAUSE, not guessed (#4959). The old single
+# "possibly rate-limited" line was wrong on this path: a real 429 is already classified
+# above by ``rate_limit_details``, so this branch never sees one. A silence/idle stall
+# (``model.request_timeout`` lapsed) and a transport-level connection drop are different
+# failures, and neither mentions rate limiting.
+_STREAM_DROP_MSG = "The connection to the model provider dropped mid-reply. Please retry."
+
+
+def _stall_msg(window: str) -> str:
+    """The stall message, optionally naming the idle ``window`` (e.g. ``" for 120s"``)."""
+    return (
+        f"The model stopped sending output{window} and the request was stopped "
+        "(model.request_timeout). Please retry."
+    )
+
+
+# The no-number stall message — the importable constant tests assert against; the numbered
+# variant is built by :func:`_stream_stall_message` when the exception text carries the window.
+_STREAM_STALL_MSG = _stall_msg("")
+
+# ``StreamStallTimeout`` (graph.llm) reads "… produced no output for 120s while …"; pull the
+# window out so the user-facing message can name it. A plain ``_STALL_ERRORS`` instance (the
+# provider client's own stall guard) may not carry it, so the number is best-effort.
+_STALL_SECONDS_RE = re.compile(r"produced no output for (\d+)s")
 
 
 def _is_provider_stream_drop(exc: BaseException) -> bool:
     """The provider dropped the stream and the per-call reconnects
     (graph.llm._astream) were exhausted, or content had already streamed — a clean
-    terminal outcome (most likely rate limiting), not a code bug (#1728)."""
+    terminal outcome, not a code bug (#1728). The specific cause (idle stall vs
+    connection drop) is decided by :func:`_is_stream_stall` (#4959)."""
     from graph.llm import RETRYABLE_STREAM_ERRORS
 
     return isinstance(exc, RETRYABLE_STREAM_ERRORS)
+
+
+def _is_stream_stall(exc: BaseException) -> bool:
+    """A provider-stream failure that is specifically an idle/silence stall — our
+    :class:`graph.llm.StreamStallTimeout`, or the provider client's own stall guard
+    (``graph.llm._STALL_ERRORS``) — rather than a transport-level connection drop
+    (#4959). Mirrors the split in ``graph.llm._guarded_reconnecting_stream``."""
+    from graph.llm import _STALL_ERRORS, StreamStallTimeout
+
+    return isinstance(exc, StreamStallTimeout) or bool(_STALL_ERRORS and isinstance(exc, _STALL_ERRORS))
+
+
+def _stream_stall_message(exc: BaseException) -> str:
+    """The stall message for a :func:`_is_stream_stall` failure, naming the
+    ``model.request_timeout`` window when the exception text carries it (#4959, #3699),
+    otherwise :data:`_STREAM_STALL_MSG` (no number). Never mentions rate limiting."""
+    m = _STALL_SECONDS_RE.search(str(exc))
+    return _stall_msg(f" for {m.group(1)}s" if m else "")
 
 
 async def _overflow_compacted(exc: BaseException, thread_id: str | None, session_id: str) -> bool:
@@ -1428,14 +1471,18 @@ async def _fail_turn(exc: BaseException, session_id: str, *, tag: str, thread_id
     if rate_limit:
         msg = rate_limit["message"]
     elif _is_provider_stream_drop(exc):
+        # Name the real cause (#4959): an idle stall (model.request_timeout lapsed) vs a
+        # transport connection drop. NOT a rate limit — a real 429 was classified above.
+        stalled = _is_stream_stall(exc)
+        msg = _stream_stall_message(exc) if stalled else _STREAM_DROP_MSG
         log.warning(
-            "[%s] provider closed the stream for session=%s (%s: %s) — possible rate limit; failing the turn cleanly",
+            "[%s] model stream %s for session=%s (%s: %s) — failing the turn cleanly",
             tag,
+            "stalled" if stalled else "dropped",
             session_id,
             type(exc).__name__,
             exc,
         )
-        msg = _PROVIDER_CLOSED_MSG
     else:
         log.error("[%s] unhandled exception for session=%s: %s", tag, session_id, exc, exc_info=exc)
         msg = str(exc)
