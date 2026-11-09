@@ -122,6 +122,7 @@ import "./chatTabPalette"; // core's live ⌘K rows: one per open chat tab (side
 import { PaletteButton } from "./PaletteButton";
 import { PaletteChat } from "./PaletteChat";
 import { CORE_SURFACES } from "./coreSurfaces";
+import { SurfaceHost, type SurfaceMeta } from "../shell/SurfaceHost";
 import { listen } from "../lib/desktop";
 import type { RuntimeStatus } from "../lib/types";
 import { readKey, writeKey } from "../lib/storage";
@@ -349,6 +350,9 @@ function WorkspaceApp({ runtime }: { runtime: RuntimeStatus | null }) {
   const rightPanel = useUI((s) => s.rightPanel);
   const setRightPanel = useUI((s) => s.setRightPanel);
   const rightCollapsed = useUI((s) => s.rightCollapsed);
+  // The large-modal surface (#4955 §3.1): Expand opens a rail view here, Dock to rail sends
+  // it back. Desktop-only — the phone mounts no Expand control, so this never opens there.
+  const surfaceModal = useUI((s) => s.surfaceModal);
   const setRightCollapsed = useUI((s) => s.setRightCollapsed);
   const leftCollapsed = useUI((s) => s.leftCollapsed);
   const setLeftCollapsed = useUI((s) => s.setLeftCollapsed);
@@ -1304,7 +1308,20 @@ function WorkspaceApp({ runtime }: { runtime: RuntimeStatus | null }) {
             ) : null}
             {/* On mobile the right dock's surfaces render in the mobile pane instead —
                 pass no bg views here so a background iframe is never mounted twice. */}
-            {renderDock(rightActive, isMobile ? [] : bgViewsFor("right"), dockClaims)}
+            {/* Every right-dock view gets a rail header with Expand (#4955 §3.1): the
+                SurfaceHost frames renderDock's own render — unchanged below it, so the
+                keyed-slot / background-delivery mounting is preserved. Chat is pinned and
+                always-mounted (ChatSlot above); it's never framed (it has no modal view). */}
+            {rightActive === "chat" ? (
+              renderDock(rightActive, isMobile ? [] : bgViewsFor("right"), dockClaims)
+            ) : (
+              <SurfaceHost
+                frame="rail"
+                view={{ id: rightActive, title: metaFor(rightActive)?.label ?? rightActive }}
+              >
+                {renderDock(rightActive, isMobile ? [] : bgViewsFor("right"), dockClaims)}
+              </SurfaceHost>
+            )}
           </>
         }
         bottomContent={
@@ -1486,6 +1503,24 @@ function WorkspaceApp({ runtime }: { runtime: RuntimeStatus | null }) {
     <DocumentViewer />
     {/* The run inspector drawer (#4726) — one root host, opened via openRunInspector(). */}
     <RunInspector />
+    {/* The large-modal surface host (#4955 §3.1) — one shell-level mount, open while
+        `surfaceModal` is set. It frames the SAME view the rail would, resolved through the
+        same renderSurface / plugin-view path, so Expand ⇄ Dock to rail stays in sync with
+        the right dock. Desktop-only: the phone shows no Expand control (its surfaces live
+        in the mobile shell), so this never opens there. The Dialog keeps its default width
+        until design-system gap B3 lands the wide size. */}
+    {!isMobile && surfaceModal ? (
+      <SurfaceHost
+        frame="modal"
+        view={
+          surfaceModal.viewId === "chat"
+            ? undefined
+            : { id: surfaceModal.viewId, title: metaFor(surfaceModal.viewId)?.label ?? surfaceModal.viewId }
+        }
+      >
+        {renderSurface(surfaceModal.viewId)}
+      </SurfaceHost>
+    ) : null}
     {/* The header drawer (hamburger) — global actions + (on mobile) surface nav. */}
     <AppDrawer
       open={drawerOpen}
