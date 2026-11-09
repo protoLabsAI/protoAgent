@@ -300,6 +300,19 @@ def test_a_profile_held_by_another_browser_is_named(make):
     assert r.kind == "cli_error" and "already in use" in r.error
 
 
+@pytest.mark.parametrize("scope,fix", [("per_session", "session_scope is per_session"),
+                                       ("shared", "Another browser")])
+def test_an_agent_session_names_the_agents_profile_in_the_lock_error(monkeypatch, scope, fix):
+    # QA (#4957): a for_agent_session client launches with the agent_browser plugin's profile, so
+    # the "profile in use" diagnosis must name THAT profile and scope, not the client's empty one.
+    monkeypatch.setattr(runner.subprocess, "Popen", CLI(
+        lambda argv: (b"", b"Failed to create a ProcessSingleton for your profile directory", 1)))
+    host = _agent_host(profile="/agents/prof", session_scope=scope)
+    b = client.BrowserClient.for_agent_session({"session_id": "chat-A"}, host=host)
+    r = b.open("https://shop.example/", check_walls=False, recover=False)
+    assert r.kind == "cli_error" and "/agents/prof" in r.error and fix in r.error, r.error
+
+
 def test_navigations_are_paced(make, monkeypatch):
     slept = []
     monkeypatch.setattr(client.time, "sleep", lambda s: slept.append(s))
