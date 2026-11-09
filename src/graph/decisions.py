@@ -199,12 +199,24 @@ def _resolve_db_path() -> Path:
     return instance_paths().store("decisions") / "decisions.db"
 
 
+def _console_link(session_id: str) -> str:
+    """Best-effort console deep-link to the deciding session. A lookup failure
+    degrades to an empty link rather than dropping the whole notification."""
+    try:
+        from graph.sdk import console_url
+        from security.public_console import public_origin
+
+        base = public_origin() or console_url() or ""
+        return f"{base.rstrip('/')}/app/?{urlencode({'session': session_id})}"
+    except Exception:  # noqa: BLE001 — a link lookup must never suppress the text
+        log.exception("Could not build console link for session %s", session_id)
+        return ""
+
+
 def _notify_created(rec: Decision) -> None:
     """Notify only on insert, never on replay, answer, or expiry."""
     try:
         from graph.plugins.chat_surface import notify_chat_surfaces
-        from graph.sdk import console_url
-        from security.public_console import public_origin
 
         agent = rec.agent or "Agent"
         lines = [f"{agent} needs a decision: {rec.question}"]
@@ -215,9 +227,7 @@ def _notify_created(rec: Decision) -> None:
         if rec.expires_at:
             action = rec.default_action or "carry on without this step"
             lines.append(f"If nobody answers by {rec.expires_at}, {agent} will {action}")
-        base = public_origin() or console_url() or ""
-        link = f"{base.rstrip('/')}/app/?{urlencode({'session': rec.session_id})}"
-        notify_chat_surfaces("\n".join(lines), link)
+        notify_chat_surfaces("\n".join(lines), _console_link(rec.session_id))
     except Exception:  # noqa: BLE001 — delivery must never fail a committed insert
         log.exception("Could not queue notification for decision %s", rec.id)
 

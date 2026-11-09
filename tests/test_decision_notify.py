@@ -107,6 +107,22 @@ async def test_optional_hook_disabled_unconfigured_and_stopped_are_skipped(wire)
 
 
 @pytest.mark.asyncio
+async def test_link_lookup_failure_still_notifies_with_empty_link(wire, monkeypatch, caplog):
+    def boom():
+        raise RuntimeError("origin unavailable")
+
+    monkeypatch.setattr("security.public_console.public_origin", boom)
+    monkeypatch.setattr("graph.sdk.console_url", boom)
+    adapter = Surface("fake")
+    wire(adapter)
+    rec = DecisionStore(":memory:").create("session", "Continue?", ["Yes"])
+    assert rec.pending  # a link lookup that raises never breaks the insert
+    await asyncio.wait_for(adapter.delivered.wait(), 2)
+    assert adapter.messages == [("Agent needs a decision: Continue?\n- Yes", "")]
+    assert "Could not build console link" in caplog.text
+
+
+@pytest.mark.asyncio
 async def test_failure_is_logged_and_slow_surface_does_not_block_creation_or_peers(wire, caplog):
     entered, release = asyncio.Event(), asyncio.Event()
 
