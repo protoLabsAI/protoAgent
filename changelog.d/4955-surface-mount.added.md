@@ -1,0 +1,1 @@
+- **Expand any right-rail view into a large window (#4955).** Every view in the console's right dock — core surfaces and plugin views alike — now carries an Expand button in its header. Expand opens the view in a large modal; Dock to rail closes the modal and makes that view the active panel in the right dock again. The phone is unchanged for now.

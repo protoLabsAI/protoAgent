@@ -22,6 +22,7 @@ from langchain_core.tools import tool
 import graph.agent as agent_mod
 from graph.config import LangGraphConfig
 from graph.middleware.completion_guard import NUDGE_MARK, CompletionGuardMiddleware, wrap_up_at
+from graph.middleware.empty_at_cap import EMPTY_GUARD, EmptyAtCapMiddleware
 from graph.middleware.guard_notes import is_guard_note
 from graph.review.findings import findings_delivered
 from graph.subagents.config import REVIEW_FINDER_CONFIG, REVIEW_SYNTHESIZER_CONFIG, SUBAGENT_REGISTRY, SubagentConfig
@@ -827,3 +828,116 @@ async def test_the_completion_record_is_countable_per_subagent(probe, ledger_db)
     assert stats["to_name"] == PROBE
     assert (stats["checked"], stats["complete"], stats["rescued"], stats["incomplete"]) == (3, 2, 1, 1)
     assert stats["nudges"] == 3
+
+
+# ── empty-at-cap: one thinking-off retry for a capped / reasoning-only turn (ADR 0128 S3) ──
+# A turn that ends the loop with no tool call and ≤200 chars because the provider cut it at
+# the output cap (finish_reason=length/max_tokens) or it spent itself thinking gets ONE more
+# try with its reasoning dropped and thinking off — on EVERY subagent, not only those that
+# declare a deliverable, and (behind a flag) on the lead. #4875.
+
+
+def _capped(text: str = "") -> AIMessage:
+    """A turn the provider cut at the output cap: no tool call, (almost) no text."""
+    return AIMessage(content=text, response_metadata={"finish_reason": "length"})
+
+
+@pytest.fixture
+def empty_counts(monkeypatch):
+    """Capture every ``record_empty_completion(reason, recovered)`` the retry emits."""
+    from observability import metrics
+
+    calls: list[tuple[str, bool]] = []
+    monkeypatch.setattr(
+        metrics, "record_empty_completion", lambda model, reason, recovered: calls.append((reason, recovered))
+    )
+    return calls
+
+
+async def test_a_capped_empty_turn_is_retried_once_and_the_retry_is_returned(probe):
+    ping, models = probe([_capped(), AIMessage(content=DELIVERABLE)])
+    out = await _run(ping)
+    assert out.startswith(f"[{PROBE} completed: lane]") and DELIVERABLE in out, out
+    assert len(models[-1].seen) == 2  # the capped turn + ONE retry
+    assert any(is_guard_note(m, EMPTY_GUARD) for m in models[-1].seen[-1])  # the retry saw the note
+
+
+async def test_a_reasoning_only_turn_is_retried_without_its_reasoning(monkeypatch, probe):
+    ping, models = _arm_thinking_finder(monkeypatch, probe, [_looping(), AIMessage(content=DELIVERABLE)])
+    out = await _run_with(ping, "Review the diff.")
+    assert DELIVERABLE in out and "ended without its deliverable" not in out, out
+    retry = models[-1].seen[-1]
+    assert any(is_guard_note(m, EMPTY_GUARD) for m in retry)
+    failed = [m for m in retry if isinstance(m, AIMessage)][-1]
+    extra = failed.additional_kwargs or {}
+    assert not extra.get("reasoning_content") and not extra.get("reasoning"), "the loop was round-tripped"
+
+
+def test_a_tool_call_turn_is_not_an_empty_at_cap_retry():
+    mw = EmptyAtCapMiddleware()
+    assert mw._intervene({"messages": [HumanMessage(content="go"), _call(0)]}) is None
+
+
+def test_a_long_truncated_turn_is_not_retried():
+    # finish_reason=length but 500 chars of answer — a substantial (if cut) reply, not "empty".
+    mw = EmptyAtCapMiddleware()
+    long_capped = AIMessage(content="x" * 500, response_metadata={"finish_reason": "length"})
+    assert mw._intervene({"messages": [HumanMessage(content="go"), long_capped]}) is None
+
+
+async def test_a_second_empty_turn_is_not_retried_again(monkeypatch, probe):
+    # Bounded: one retry per stall, never a loop of them — even when the retry is also capped.
+    ping, models = _arm_finder_like(monkeypatch, probe, [_capped(), _capped()])
+    out = await _run_with(ping, "Review the diff.")
+    assert out.startswith(f"[{PROBE} ended without its deliverable: lane"), out
+    assert len(models[-1].seen) == 2
+
+
+async def test_the_counter_records_reason_and_recovered(monkeypatch, probe, empty_counts):
+    # A capped turn retried into a deliverable: recovered=True under reason=length.
+    ping, _ = _arm_finder_like(monkeypatch, probe, [_capped(), AIMessage(content=DELIVERABLE)])
+    await _run_with(ping, "Review the diff.")
+    assert empty_counts == [("length", True)]
+    empty_counts.clear()
+    # A reasoning-only turn whose retry is still reasoning-only: recovered=False.
+    ping, _ = _arm_finder_like(monkeypatch, probe, [_thinking(), _thinking()])
+    await _run_with(ping, "Review the diff.")
+    assert empty_counts == [("reasoning_only", False)]
+
+
+async def test_a_subagent_with_no_declared_deliverable_still_retries(probe, empty_counts):
+    # marker="" → no CompletionGuard on the stack; EmptyAtCap is attached regardless, so a
+    # capped turn on a plain subagent is still retried.
+    ping, models = probe([_capped(), AIMessage(content="Here is the answer.")], marker="")
+    out = await _run(ping)
+    assert out.startswith(f"[{PROBE} completed: lane]") and "Here is the answer." in out, out
+    assert len(models[-1].seen) == 2
+    assert empty_counts == [("length", True)]
+
+
+async def test_completion_guard_and_empty_at_cap_never_both_retry_one_turn(monkeypatch, probe):
+    # A capped turn: ONLY EmptyAtCap retries it — one empty-at-cap note, no completion nudge.
+    ping, models = _arm_finder_like(monkeypatch, probe, [_capped(), AIMessage(content=DELIVERABLE)])
+    await _run_with(ping, "Review the diff.")
+    retry = models[-1].seen[-1]
+    assert sum(1 for m in retry if is_guard_note(m, EMPTY_GUARD)) == 1
+    assert sum(1 for m in retry if is_guard_note(m, "completion")) == 0
+    # A PLAIN stall (no cap, no reasoning) stays with the completion guard; EmptyAtCap leaves
+    # it alone — the two act on disjoint turns, so no one turn is ever retried twice.
+    ping, models = _arm_finder_like(monkeypatch, probe, [AIMessage(content=NARRATION), AIMessage(content=DELIVERABLE)])
+    await _run_with(ping, "Review the diff.")
+    retry = models[-1].seen[-1]
+    assert sum(1 for m in retry if is_guard_note(m, "completion")) == 1
+    assert sum(1 for m in retry if is_guard_note(m, EMPTY_GUARD)) == 0
+
+
+def test_the_lead_chat_stack_has_no_empty_at_cap_by_default(monkeypatch):
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    stack = agent_mod._build_middleware(LangGraphConfig())
+    assert not any(isinstance(m, EmptyAtCapMiddleware) for m in stack)
+
+
+def test_the_lead_chat_stack_gets_empty_at_cap_behind_the_flag(monkeypatch):
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    stack = agent_mod._build_middleware(LangGraphConfig(empty_retry_lead=True))
+    assert any(isinstance(m, EmptyAtCapMiddleware) for m in stack)
