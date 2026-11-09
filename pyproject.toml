@@ -220,6 +220,30 @@ ignore_imports = [
 ]
 
 [[tool.importlinter.contracts]]
+# ADR 0128 S2a: the generation-profile resolver is host-free — it imports ONLY
+# graph.config (for the GenerationProfile/LangGraphConfig shapes) and stdlib. `graph`
+# itself can't be the forbidden module here (the source is its descendant — import-linter
+# rejects the overlap), so we forbid every sibling root package AND the graph runtime
+# modules a resolver must never pull in (graph.llm in particular would be a cycle, since
+# llm imports this). Ignoring the single `-> graph.config` edge removes this module's only
+# outgoing edge into the graph tree, so no indirect chain through config false-positives;
+# a new DIRECT import of any forbidden module below breaks the contract. The strict
+# "only graph.config" whitelist is additionally asserted by an AST guard in
+# tests/test_generation_profile_resolve.py. It lives next to resolve_subagent_model.
+name = "graph.generation_profile imports only graph.config (host-free)"
+type = "forbidden"
+source_modules = ["graph.generation_profile"]
+forbidden_modules = [
+  "a2a_impl", "deck", "events", "infra", "ingestion", "knowledge", "observability",
+  "operator_api", "ops", "runtime", "scheduler", "security", "server", "tools",
+  "graph.agent", "graph.llm", "graph.middleware", "graph.providers", "graph.sdk",
+  "graph.subagents",
+]
+ignore_imports = [
+  "graph.generation_profile -> graph.config",
+]
+
+[[tool.importlinter.contracts]]
 name = "operator_api does not import server"
 type = "forbidden"
 source_modules = ["operator_api"]
