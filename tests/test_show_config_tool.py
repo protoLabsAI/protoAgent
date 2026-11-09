@@ -592,22 +592,56 @@ def test_version_snapshot_precedes_first_query():
 
         import infra.paths
 
+        # Import-time subprocess calls vary by platform. Fake only build_info's
+        # exact queries against this checkout; pass everything else through.
+        real_run = subprocess.run
         git_calls = []
-        def startup_git(args, **kwargs):
-            assert args[0] == "git"
-            git_calls.append(args)
-            output = "abcdef123\\n" if "rev-parse" in args else ""
-            return subprocess.CompletedProcess(args, 0, stdout=output)
+        git_prefix = ["git", "-C", str(Path.cwd())]
+        sha_command = git_prefix + ["rev-parse", "--short", "HEAD"]
+        status_command = git_prefix + ["status", "--porcelain"]
+
+        def startup_git(args, *popenargs, **kwargs):
+            argv = list(args) if isinstance(args, (list, tuple)) else [args]
+            if argv == sha_command:
+                git_calls.append(argv)
+                return subprocess.CompletedProcess(args, 0, stdout="abcdef123\\n")
+            if argv == status_command:
+                git_calls.append(argv)
+                return subprocess.CompletedProcess(args, 0, stdout="")
+            return real_run(args, *popenargs, **kwargs)
 
         before = datetime.now(timezone.utc)
         with patch("subprocess.run", side_effect=startup_git), patch(
             "infra.paths.app_root", return_value=Path.cwd()
         ):
+            # Exercise passthrough on every host, even when its imports do not
+            # happen to spawn a process. A different rev-parse must stay real too.
+            for command, expected in [
+                ([sys.executable, "-c", "print('passthrough')"], "passthrough"),
+                (git_prefix + ["rev-parse", "--is-inside-work-tree"], "true"),
+            ]:
+                probe = subprocess.run(
+                    command, capture_output=True, text=True, timeout=10,
+                )
+                assert probe.returncode == 0 and probe.stdout.strip() == expected, (
+                    f"passthrough {command!r} returned {probe!r}; git calls: {git_calls!r}"
+                )
+            assert not git_calls, f"passthrough calls were recorded as build queries: {git_calls!r}"
             import server
         after = datetime.now(timezone.utc)
-        assert "infra.build_info" in sys.modules, "server startup must capture build identity"
+        assert "infra.build_info" in sys.modules, (
+            "server startup must capture build identity (infra.build_info not imported)"
+        )
         from infra import build_info as bi
-        assert len(git_calls) == 2
+
+        rev_parse = [c for c in git_calls if c == sha_command]
+        status = [c for c in git_calls if c == status_command]
+        assert len(rev_parse) == 1, (
+            f"build_info must run exactly one git rev-parse at import; recorded git calls: {git_calls!r}"
+        )
+        assert len(status) == 1, (
+            f"build_info must run exactly one git status at import; recorded git calls: {git_calls!r}"
+        )
 
         from graph.config import LangGraphConfig
         from tools.config_tools import build_config_tools
@@ -619,10 +653,20 @@ def test_version_snapshot_precedes_first_query():
             info = json.loads(build_config_tools(LangGraphConfig())[0].invoke(
                 {"section": "version"}
             ))["version"]
-        assert info["uptime_s"] == 7200
-        assert before <= datetime.fromisoformat(info["started_at"]) <= after
-        assert info["git_sha"] == "abcdef123"
-        assert info["git_dirty"] is False
+        assert info["uptime_s"] == 7200, (
+            f"uptime_s must derive from the import-time monotonic anchor; got {info['uptime_s']!r}"
+        )
+        assert before <= datetime.fromisoformat(info["started_at"]) <= after, (
+            f"started_at {info['started_at']!r} must fall within the server import "
+            f"window {before.isoformat()}..{after.isoformat()}"
+        )
+        assert info["git_sha"] == "abcdef123", (
+            f"git_sha must be the sha captured at import, not a later on-disk change; "
+            f"got {info['git_sha']!r}"
+        )
+        assert info["git_dirty"] is False, (
+            f"git_dirty must reflect the clean status captured at import; got {info['git_dirty']!r}"
+        )
     ''')
     env = {**os.environ, "PYTHONPATH": os.pathsep.join([str(root / "src"), str(root)])}
     result = subprocess.run(
