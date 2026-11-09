@@ -1331,6 +1331,16 @@ export type ChatMessage = {
    *  an approval, a plugin composer-form, and any message saved before this shipped (those keep
    *  their legacy text). */
   formResponse?: FormResponseDisplay;
+  /** This operator message is the withdrawal note the DELETE route appended when a standing
+   *  instruction was revoked from the console or the API (#4861, ADR 0127 D6/D3): the server
+   *  stamps it `additional_kwargs.protoagent_directive_withdrawn` so compaction keeps the
+   *  `You withdrew: "…"` note next to the original approval. ChatTranscript renders a tagged
+   *  message as a QUIET event row (the transcript's system-line style), not a user bubble —
+   *  it is a record of a change the operator made, not something they said to the agent. A
+   *  note folded in while a turn was running carries no marker (it rides the steering queue),
+   *  so it renders as a normal operator message. Set during history hydration from the A2A
+   *  message metadata; absent on an ordinary typed turn. */
+  directiveWithdrawn?: boolean;
 };
 
 // ── HITL form-response display metadata (#4259) ──────────────────────────────────

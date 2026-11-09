@@ -27,7 +27,7 @@ import { MAX_SESSIONS } from "./chat-store";
 import { MAX_THUMB_LENGTH } from "./imageThumbnails";
 import { applyText, applyToolEvent } from "./turnReducers";
 import { foldPlan, textRuns } from "./parts";
-import { normaliseMediaText, utf16Fnv1a } from "../lib/api/a2aStream";
+import { DIRECTIVE_WITHDRAWN_KEY, normaliseMediaText, utf16Fnv1a } from "../lib/api/a2aStream";
 import { applyCanonicalTurnText } from "./turnText";
 import { sentTimestamp } from "./ChatMessageView";
 
@@ -188,6 +188,47 @@ describe("durable turn conversion", () => {
       ["user", "deploy it"],
       ["assistant", "answer"],
     ]);
+  });
+
+  it("tags the withdrawal note the DELETE route appended, so the transcript renders it quietly (#4861)", () => {
+    // The marked operator note the server appends when a directive is revoked from the
+    // console/API (chat.py `record_directive_withdrawal`). ChatTranscript turns a tagged
+    // message into a quiet system-line row instead of a user bubble.
+    const messages = messagesFromDurableTurn(
+      turn({
+        history: [
+          { role: "ROLE_USER", parts: [{ text: "deploy it" }] },
+          {
+            role: "ROLE_USER",
+            parts: [{ text: 'You withdrew: "deploy it" — holding the release' }],
+            metadata: { [DIRECTIVE_WITHDRAWN_KEY]: { id: "dir-4a91c2" } },
+          },
+        ],
+      }),
+    );
+    const note = messages.find((m) => m.directiveWithdrawn);
+    expect(note).toMatchObject({
+      role: "user",
+      content: 'You withdrew: "deploy it" — holding the release',
+      directiveWithdrawn: true,
+    });
+    // The opening prompt stays an ordinary, untagged operator message.
+    expect(messages[0]).toMatchObject({ role: "user", content: "deploy it" });
+    expect(messages[0].directiveWithdrawn).toBeUndefined();
+  });
+
+  it("leaves a steering-folded note (no marker) as a normal operator message (#4861)", () => {
+    // A note folded in while a turn ran rides the steering queue and loses the marker, so it
+    // must render as an ordinary operator message — never silently promoted to the event row.
+    const messages = messagesFromDurableTurn(
+      turn({
+        history: [
+          { role: "ROLE_USER", parts: [{ text: "deploy it" }] },
+          { role: "ROLE_USER", parts: [{ text: 'You withdrew: "deploy it"' }] },
+        ],
+      }),
+    );
+    expect(messages.some((m) => m.directiveWithdrawn)).toBe(false);
   });
 
   it("rebuilds the user bubble and drives assistant text/tools through shared reducers", () => {

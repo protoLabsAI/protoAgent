@@ -32,6 +32,7 @@ export {
   consumedSteersFromParts,
   contextFromParts,
   costFromMeta,
+  DIRECTIVE_WITHDRAWN_KEY,
   drainSseBuffer,
   frameIsForeign,
   hitlFromParts,

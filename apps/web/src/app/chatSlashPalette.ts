@@ -184,6 +184,13 @@ const ROWS: Record<string, RowSpec> = {
     find: ["wipe", "reset", "erase", "empty", "delete history", "start over"],
   },
   export: { needsThisChat: true, find: ["download", "save", "transcript", "file", "markdown"] },
+  // Bare `/directives` OPENS the standing-instructions drawer for this chat (#4861) — real
+  // work dispatched, so it does not draft. An argument (`/directives revoke …`) falls through
+  // to the server, but the palette only ever dispatches the bare form.
+  directives: {
+    needsThisChat: true,
+    find: ["standing instructions", "ledger", "approvals", "allowed", "withdraw", "revoke", "rules"],
+  },
   // Dispatched bare, `/btw` posts its own "ask a side question after /btw" note and stops: it
   // needs a question, and a palette row has no way to ask for one. So it DRAFTS, landing the
   // operator in the composer with the token typed — exactly what picking it from the `/` menu

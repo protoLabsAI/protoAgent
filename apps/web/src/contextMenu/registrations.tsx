@@ -1,4 +1,4 @@
-import { ArrowLeftRight, ChevronDown, ChevronsLeft, ChevronsRight, ChevronUp, Download, Eye, EyeOff, Pencil, Plus, Puzzle, RefreshCw, SlidersHorizontal, SquareArrowOutUpRight, Trash2, X } from "lucide-react";
+import { ArrowLeftRight, ChevronDown, ChevronsLeft, ChevronsRight, ChevronUp, Download, Eye, EyeOff, Pencil, Plus, Puzzle, RefreshCw, ScrollText, SlidersHorizontal, SquareArrowOutUpRight, Trash2, X } from "lucide-react";
 
 import { openView } from "../app/usePaletteRegistry";
 import { useUI } from "../state/uiStore";
@@ -250,6 +250,15 @@ registerContextMenu({
       if (ctx.onExport) {
         out.push({ id: "export", label: "Export as Markdown", icon: <Download size={14} />, run: () => ctx.onExport?.() });
       }
+      // The per-chat standing-instructions ledger (#4861) — opens the drawer for THIS tab's
+      // session (which may not be the visible one), the desktop twin of the `/directives`
+      // palette row. Driven straight off the ui store, so it needs no ChatSurface closure.
+      out.push({
+        id: "directives",
+        label: "Standing instructions",
+        icon: <ScrollText size={14} />,
+        run: () => useUI.getState().openDirectives(ctx.sessionId!),
+      });
       // Present only while the external editor is Zed (ChatSurface passes it only then).
       if (ctx.onContinueInZed) {
         out.push({

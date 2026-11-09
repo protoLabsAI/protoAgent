@@ -6,6 +6,7 @@
 // reference. Behaviour ported verbatim from the old hardcoded `runClientSlash` switch.
 
 import { registeredSlashCommands, registerSlashCommand } from "../ext/slashRegistry";
+import { useUI } from "../state/uiStore";
 import { api } from "../lib/api";
 import { errMsg } from "../lib/format";
 import { queryClient } from "../lib/queryClient";
@@ -61,6 +62,28 @@ registerSlashCommand({
   run: (ctx) => {
     if (!ctx.sessionId) return false; // no session → fall through
     void exportChatToFile(ctx.sessionId);
+    ctx.focusComposer();
+    return true;
+  },
+});
+
+// `/directives` (#4861, ADR 0127 D6) — the agent's per-chat ledger of standing
+// instructions. A BARE `/directives` opens the console's drawer (the same surface the
+// ledger strip's View button and the chat-tab "Standing instructions" item open), so the
+// operator sees the full list — Active + History — with the inline withdraw. ANY argument
+// (`/directives revoke <id> [reason]`, or a bad token) returns false so the token falls
+// through UNCHANGED to the SERVER `/directives` command (graph/directives.py), which lists
+// as text and revokes by id — keeping non-console clients (A2A, /v1) and the typed-revoke
+// path exactly as they were. Registering the bare form ALSO gives the drawer a ⌘⇧K palette
+// row (the palette lists client commands), which is the phone's way in.
+registerSlashCommand({
+  name: "directives",
+  description: "Show this chat's standing instructions (the agent's ledger)",
+  usage: "/directives · /directives revoke <id> [reason]",
+  run: (ctx) => {
+    if (!ctx.sessionId) return false; // no session → fall through to the server
+    if (ctx.rest.trim()) return false; // an argument (revoke …) → server path, unchanged
+    useUI.getState().openDirectives(ctx.sessionId);
     ctx.focusComposer();
     return true;
   },

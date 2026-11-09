@@ -5,6 +5,7 @@ import "./coreSlashCommands"; // side-effect: registers /new, /clear, /effort
 
 import type { ComposerFormSpec, SlashContext } from "../ext/slashRegistry";
 import { api } from "../lib/api";
+import { useUI } from "../state/uiStore";
 import { chatStore, REASONING_EFFORTS } from "./chat-store";
 
 function ctx(over: Partial<SlashContext> = {}): SlashContext {
@@ -46,25 +47,25 @@ describe("core slash commands (dogfood the seam, ADR 0061)", () => {
   // These three tests are what stops the note from going stale behind the next command.
 
   const DECLINE_WITHOUT_SESSION = [
-    "clear", "export", "btw", "trajectory", "prompt", "perf", "usage",
+    "clear", "export", "directives", "btw", "trajectory", "prompt", "perf", "usage",
     "compact", "effort", "model", "incognito", "help", "bypass",
   ];
 
-  it("exactly 13 core commands return false (→ fall through) without a session", () => {
+  it("exactly 14 core commands return false (→ fall through) without a session", () => {
     for (const name of DECLINE_WITHOUT_SESSION) {
       expect.soft(findSlashCommand(name)!.run(ctx()), `/${name} without a session`).toBe(false);
     }
     // The count itself is quoted in slashDispatch.ts, ADR 0061 and the changelog.
-    expect(DECLINE_WITHOUT_SESSION).toHaveLength(13);
+    expect(DECLINE_WITHOUT_SESSION).toHaveLength(14);
   });
 
   it("pins the core inventory, so a new command has to face the session question", () => {
-    // A 17th command changes the "13 of the 16" arithmetic every one of those docs cites.
+    // An 18th command changes the "14 of the 17" arithmetic every one of those docs cites.
     // If this trips: decide whether the command needs a session, add it to the list above
     // (or not), and update the note in chat/slashDispatch.ts.
     expect(registeredSlashCommands().map((c) => c.name).sort()).toEqual(
       [
-        "btw", "bypass", "clear", "compact", "effort", "export", "goal", "help",
+        "btw", "bypass", "clear", "compact", "directives", "effort", "export", "goal", "help",
         "incognito", "model", "new", "perf", "prompt", "trajectory", "usage", "watch",
       ],
     );
@@ -213,6 +214,36 @@ describe("/help — the live command/shortcut reference card (#1700)", () => {
     expect(card).toContain("incognito");
     expect(card).toContain("⌘/Ctrl+Enter"); // moved out of the placeholder
     expect(card).toContain("**Capabilities**");
+  });
+});
+
+describe("/directives (#4861)", () => {
+  const cmd = () => findSlashCommand("directives")!;
+
+  it("is registered through the same seam as the other core commands", () => {
+    expect(cmd()).toBeTruthy();
+  });
+
+  it("a bare /directives with a session opens the ledger drawer and claims the token", () => {
+    const open = vi.spyOn(useUI.getState(), "openDirectives").mockImplementation(() => {});
+    let focused = false;
+    const handled = cmd().run(ctx({ sessionId: "s1", focusComposer: () => (focused = true) }));
+    expect(handled).toBe(true); // short-circuits the send
+    expect(open).toHaveBeenCalledWith("s1");
+    expect(focused).toBe(true);
+  });
+
+  it("any argument (`revoke …`) falls through UNCHANGED to the server command", () => {
+    const open = vi.spyOn(useUI.getState(), "openDirectives").mockImplementation(() => {});
+    const handled = cmd().run(ctx({ sessionId: "s1", rest: "revoke dir-4a91c2 holding the release" }));
+    expect(handled).toBe(false); // the token reaches graph/directives.py verbatim
+    expect(open).not.toHaveBeenCalled();
+  });
+
+  it("without a session falls through — there is no drawer to open", () => {
+    const open = vi.spyOn(useUI.getState(), "openDirectives").mockImplementation(() => {});
+    expect(cmd().run(ctx())).toBe(false);
+    expect(open).not.toHaveBeenCalled();
   });
 });
 

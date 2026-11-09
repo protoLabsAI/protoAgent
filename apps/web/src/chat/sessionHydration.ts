@@ -4,6 +4,7 @@
 
 import {
   api,
+  DIRECTIVE_WITHDRAWN_KEY,
   replayDurableChatTurn,
   supersededByFromStatus,
   textFromParts,
@@ -226,7 +227,19 @@ export function messagesFromDurableTurn(turn: DurableChatTurn): ChatMessage[] {
           ),
         });
       }
-      settled.push({ id: `${anchorId}-answer-${settled.length}`, role: "user", content: text, status: "done" });
+      // A withdrawal note the DELETE route appended (#4861) rides this same operator-message
+      // path. The server marks it so compaction keeps it; the console renders a tagged
+      // message as a quiet event row, not a user bubble (ChatTranscript). A note folded in
+      // while a turn ran has no marker (it went through the steering queue) and stays a
+      // normal operator message.
+      const directiveWithdrawn = message.metadata?.[DIRECTIVE_WITHDRAWN_KEY] != null;
+      settled.push({
+        id: `${anchorId}-answer-${settled.length}`,
+        role: "user",
+        content: text,
+        status: "done",
+        ...(directiveWithdrawn ? { directiveWithdrawn: true } : {}),
+      });
       assistant = fresh();
     },
     onReasoning: (delta) => {

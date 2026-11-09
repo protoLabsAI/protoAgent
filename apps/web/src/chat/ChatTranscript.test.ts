@@ -44,7 +44,7 @@ vi.mock("./ChatMessageView", () => ({
   },
 }));
 
-import { ChatTranscript } from "./ChatTranscript";
+import { asTranscriptEventRow, ChatTranscript } from "./ChatTranscript";
 import { STARTER_PROMPTS } from "./starterPrompts";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -463,5 +463,29 @@ describe("ChatMessageView sent-timestamp footer (#3458)", () => {
     });
     expect(el.querySelector(".chat-report-chip")).toBeTruthy();
     expect(chip(el)).toBeNull();
+  });
+});
+
+describe("asTranscriptEventRow — the directive-withdrawal note renders as a quiet event row (#4861)", () => {
+  it("presents a tagged operator message as a system-line note, not a user bubble", () => {
+    const note: ChatMessage = {
+      id: "durable-task-1-answer-1",
+      role: "user",
+      content: 'You withdrew: "once #4801 and #4808 part 1 merge, cut the release"',
+      status: "done",
+      directiveWithdrawn: true,
+    };
+    const row = asTranscriptEventRow(note);
+    expect(row).not.toBe(note); // a derived object — the store copy stays a user message
+    expect(row.role).toBe("system"); // reuses the transcript's existing system-line style
+    expect(row.content).toBe(note.content); // the operator's words are shown verbatim
+    expect(row.noteTone).toBeUndefined(); // neutral — the quietest note, no tone accent
+  });
+
+  it("leaves every other message exactly as it is (same reference — memo stays stable)", () => {
+    const user: ChatMessage = { id: "u1", role: "user", content: "deploy it", status: "done" };
+    const assistant: ChatMessage = { id: "a1", role: "assistant", content: "done", status: "done" };
+    expect(asTranscriptEventRow(user)).toBe(user);
+    expect(asTranscriptEventRow(assistant)).toBe(assistant);
   });
 });

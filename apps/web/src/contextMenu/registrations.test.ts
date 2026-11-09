@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import "./registrations"; // side-effect: registers the core menus (rail-surface, …)
 import { resolveMenu } from "./registry";
@@ -115,6 +115,29 @@ describe("chat-tab bulk-close menu", () => {
     for (const id of ["close-others", "close-left", "close-right"]) {
       expect(items.find((i) => i.id === id)?.danger).toBe(true);
     }
+  });
+});
+
+// "Standing instructions" (#4861): the per-chat directive-ledger drawer, opened for THIS
+// tab's session straight off the ui store (no ChatSurface closure). Present only with a
+// session, never on the empty-space menu.
+describe("chat-tab Standing instructions (#4861)", () => {
+  const noop = () => {};
+
+  afterEach(() => vi.restoreAllMocks());
+
+  it("opens the ledger drawer for this tab's session", () => {
+    const open = vi.spyOn(useUI.getState(), "openDirectives").mockImplementation(() => {});
+    const items = resolveMenu("chat-tab", { sessionId: "s7", onClose: noop }) as Item[];
+    const item = items.find((i) => i.id === "directives") as (Item & { run: () => void }) | undefined;
+    expect(item?.label).toBe("Standing instructions");
+    expect(item?.danger).toBeFalsy();
+    item!.run();
+    expect(open).toHaveBeenCalledWith("s7");
+  });
+
+  it("is never on the empty-space (no-session) menu", () => {
+    expect(ids(resolveMenu("chat-tab", { onNew: noop, onNewIncognito: noop }))).not.toContain("directives");
   });
 });
 

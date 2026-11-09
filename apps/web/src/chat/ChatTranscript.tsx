@@ -41,6 +41,17 @@ type TranscriptMessageRowProps = {
   activityLabel?: string | null;
 };
 
+/** A directive-withdrawal note (#4861, ADR 0127 D6/D3) is an operator message the server
+ *  appended to record that a standing instruction was revoked. Render it through the
+ *  transcript's EXISTING system-line style — a quiet, neutral `.chat-note` row — instead of
+ *  a user bubble: it is a record of a change the operator made, not something they said to
+ *  the agent. Reusing the system path means no new component and no bespoke styling. A note
+ *  folded in while a turn ran carries no marker and keeps its normal operator bubble. Pure:
+ *  returns the same reference when there is nothing to convert, so the memo stays stable. */
+export function asTranscriptEventRow(message: ChatMessage): ChatMessage {
+  return message.directiveWithdrawn ? { ...message, role: "system" } : message;
+}
+
 const TranscriptMessageRow = memo(function TranscriptMessageRow({
   message,
   dismissedToolCalls,
@@ -53,7 +64,7 @@ const TranscriptMessageRow = memo(function TranscriptMessageRow({
   // either its source row or the dismissal set changes, so another row's stream cannot make
   // this settled row expensive again.
   const visibleMessage = useMemo(
-    () => hideDismissedToolCalls(message, dismissedToolCalls),
+    () => asTranscriptEventRow(hideDismissedToolCalls(message, dismissedToolCalls)),
     [dismissedToolCalls, message],
   );
   return (

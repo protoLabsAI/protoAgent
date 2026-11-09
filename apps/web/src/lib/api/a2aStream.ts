@@ -123,6 +123,13 @@ export function textFromParts(parts?: Array<{ kind?: string; text?: string }>) {
 /** Status-message metadata key the server stamps on a task whose pause another task took
  *  over (a2a_impl/hitl_routing.py SUPERSEDED_BY). */
 export const SUPERSEDED_BY_KEY = "protoagent_superseded_by";
+
+/** Message metadata key the DELETE-directive route stamps on the operator withdrawal note
+ *  (`You withdrew: "…"`), mirroring the server's `graph.compaction_engine.
+ *  DIRECTIVE_WITHDRAWN_KWARG` (#4861). When present on an operator message in a turn's
+ *  durable history, the console renders that message as a quiet event row rather than a
+ *  user bubble. */
+export const DIRECTIVE_WITHDRAWN_KEY = "protoagent_directive_withdrawn";
 const SUPERSEDED_TEXT = /^Continued in task (\S+?)\.?$/;
 
 /** The task that took this one's pause over, or undefined (#3963). A plain message sent
