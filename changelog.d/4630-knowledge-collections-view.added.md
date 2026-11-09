@@ -1,0 +1,1 @@
+- **Browse knowledge by collection (#4630).** Open collections to inspect their documents, search their contents, and undo collection deletions.

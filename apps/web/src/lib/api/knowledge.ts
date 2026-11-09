@@ -138,6 +138,16 @@ export const knowledgeApi = {
       { method: "POST", body: { source } },
     );
   },
+  deleteKnowledgeByCollection(collection: string) {
+    return request<{ enabled: boolean; deleted: number; error?: string }>(
+      "/api/knowledge/delete-by-collection", { method: "POST", body: { collection } },
+    );
+  },
+  restoreKnowledgeByCollection(collection: string) {
+    return request<{ enabled: boolean; restored: number; error?: string }>(
+      "/api/knowledge/restore-by-collection", { method: "POST", body: { collection } },
+    );
+  },
   // Document ingestion engine — extract a file/URL/YouTube into the KB (chunked,
   // enriched, embedded). FormData carries `file` OR `url` OR `text`, plus `domain`.
   ingestKnowledge(form: FormData) {

@@ -3,7 +3,7 @@ import { queryOptions, type QueryClient } from "@tanstack/react-query";
 import { api, currentSlug } from "./api";
 import { request } from "./api/http";
 import { setDevHooksEnabled } from "./storage";
-import type { FleetTelemetry, ReviewState } from "./types";
+import type { FleetTelemetry, KnowledgeChunk, ReviewState } from "./types";
 
 // Centralized query keys + option factories (ADR 0013). Surfaces read these via
 // `useSuspenseQuery(...)`; mutations invalidate the matching key. Keep keys
@@ -582,6 +582,34 @@ export const knowledgeQuery = (q: string, reviewState?: ReviewState) =>
       : ([...queryKeys.knowledge, q] as const),
     queryFn: () => api.knowledgeSearch(q, { reviewState }),
   });
+
+// Collection reads share the agent-scoped knowledge invalidation subtree.
+export const collectionsQuery = () => queryOptions({
+  queryKey: [...queryKeys.knowledge, "collections"],
+  queryFn: () => api.listCollections(),
+});
+export const collectionChunksQuery = (collection: string | undefined, q: string, limit: number) => queryOptions({
+  queryKey: [...queryKeys.knowledge, "collection-chunks", collection ?? null, q, limit],
+  queryFn: ({ signal }) => api.knowledgeSearch(q, { collection, k: limit, signal }),
+});
+
+// The current serializer omits collection on hits. Searching each named scope
+// preserves exact membership (including the general fallback) without guessing
+// it from the legacy domain. Bound concurrency to avoid flooding a hybrid store.
+export const collectionsSearchQuery = (collections: { collection: string; chunks: number }[], q: string) => queryOptions({
+  queryKey: [...queryKeys.knowledge, "collections-search", collections.map(c => [c.collection, c.chunks]), q],
+  queryFn: async ({ signal }) => {
+    const results: KnowledgeChunk[] = [];
+    for (let start = 0; start < collections.length; start += 4) {
+      const batch = await Promise.all(collections.slice(start, start + 4).map(async c => {
+        const data = await api.knowledgeSearch(q, { collection: c.collection, k: Math.max(1, c.chunks), signal });
+        return data.results.map(row => ({ ...row, collection: c.collection }));
+      }));
+      results.push(...batch.flat());
+    }
+    return { enabled: true, results: results.sort((a, b) => (b.score ?? 0) - (a.score ?? 0)) };
+  },
+});
 
 export function localChatTurnsQuery(sessionId: string) {
   return queryOptions({

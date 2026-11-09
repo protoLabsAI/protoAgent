@@ -1,0 +1,27 @@
+.kc-browser { display: grid; gap: var(--pl-space-4); color: var(--pl-color-fg); }
+.kc-muted { color: var(--pl-color-fg-muted); }
+.kc-search { display: flex; flex-wrap: wrap; gap: var(--pl-space-3); align-items: center; }
+.kc-search > :first-child { flex: 1; }
+.kc-desktop { overflow-x: auto; }
+.kc-desktop td:first-child { overflow-wrap: anywhere; }
+.kc-desktop td:first-child > span { display: block; }
+.kc-phone { display: none; }
+.kc-browser mark { color: var(--pl-color-fg); background: var(--pl-color-bg-inset); text-decoration: underline; font-weight: var(--pl-font-weight-semibold); }
+.kc-sort-status { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
+.kc-browser .playbook-desc { color: var(--pl-color-fg); display: -webkit-box; -webkit-box-orient: vertical; overflow: hidden; }
+.kc-browser .playbook-meta, .kc-browser .playbook-tools, .kc-browser .playbook-tools code { color: var(--pl-color-fg-muted); }
+@media (max-width: 767px) {
+  .kc-desktop { display: none; }
+  .kc-search > :first-child { flex-basis: 100%; }
+  .kc-search > * { max-width: 100%; }
+  .kc-browser .playbook-card { flex-direction: column; }
+  .kc-browser .playbook-meta { flex-direction: row; justify-content: space-between; align-items: center; }
+  .kc-browser .playbook-tools code { overflow-wrap: anywhere; }
+  .pl-dialog:has(.kc-delete-body) .pl-dialog__foot { flex-direction: column; }
+  .pl-dialog:has(.kc-delete-body) .pl-dialog__foot > button { width: 100%; }
+  .kc-phone { display: grid; gap: var(--pl-space-3); }
+  .kc-phone ul { list-style: none; padding: 0; margin: 0; }
+  .kc-phone-row { display: grid; gap: var(--pl-space-2); width: 100%; min-height: calc(var(--pl-space-8) + var(--pl-space-3)); padding: var(--pl-space-4); text-align: left; color: var(--pl-color-fg); background: var(--pl-color-bg-raised); border: 0; border-bottom: var(--pl-border-width) solid var(--pl-color-border); font: inherit; cursor: pointer; }
+  .kc-phone-row:focus-visible { outline: var(--pl-border-width) solid var(--pl-color-fg); outline-offset: var(--pl-space-1); }
+  .kc-browser .pl-stats { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
