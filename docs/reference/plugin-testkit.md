@@ -69,6 +69,36 @@ The synthetic package name a plugin loads under — mirrors
 `graph.plugins.loader._plugin_module_name` (a hyphen in the module name breaks the
 relative-import machinery, so non-identifier chars become `_`).
 
+### `use_fixture_python`
+
+```python
+use_fixture_python(plugin_id: str, path=None, *, version: str = '3.12', root=None, monkeypatch=None) -> Path
+```
+
+Point `plugin_id`'s Python runtime at a fixture interpreter so `sdk.plugin_python` /
+`sdk.worker` resolve it WITHOUT `uv` or a real venv — the seam a worker contract test
+uses in CI.
+
+Builds a venv-shaped directory (`<root>/bin/python` → `path` on POSIX,
+`<root>/Scripts/python.exe` on Windows) plus the runtime marker, and sets the
+`PROTOAGENT_PLUGIN_PYTHON_<ID>` override to it. The interpreter is linked (`os.symlink`,
+falling back to a copy where symlinks need privilege) so it resolves its own stdlib. Returns
+the created directory.
+
+**Args:**
+
+- `plugin_id` — the plugin whose runtime to redirect.
+- `path` — the fixture interpreter; defaults to `sys.executable` (the test's own Python).
+- `version` — the `major.minor` written into the marker, so `plugin_venv_state` / `plugin_venv_python(version=…)` read it as satisfied. Default `"3.12"`.
+- `root` — where to build the venv-shaped dir; defaults to a fresh `tempfile.mkdtemp`. Pass `tmp_path / "venv"` to tie its lifetime to pytest's cleanup.
+- `monkeypatch` — a pytest `monkeypatch` fixture — when given, the env var is set through it so it is auto-restored; otherwise it is set on `os.environ` (unset it with `use_fixture_python` cleanup or `os.environ.pop(testkit._venv_env_key(id))`).
+
+```python
+def test_worker_round_trip(tmp_path, monkeypatch):
+    testkit.use_fixture_python("my-plugin", root=tmp_path / "venv", monkeypatch=monkeypatch)
+    assert sdk.worker("my-plugin", str(script), {"n": 1}) == {"doubled": 2}
+```
+
 ## `FakeRegistry`
 
 Records what `register(registry)` contributes, with no host — mirrors the real
