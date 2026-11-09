@@ -147,6 +147,7 @@ describe("ChatTranscript render isolation", () => {
   async function renderEmpty(
     onStarterPrompt?: (text: string) => void,
     starterPrompts?: RuntimeStatus["starter_prompts"],
+    onEditStarterPrompts?: () => void,
   ) {
     await act(async () => root.render(createElement(ChatTranscript, {
       sessionId: "empty-session",
@@ -161,8 +162,11 @@ describe("ChatTranscript render isolation", () => {
       onCancelSteer: noop,
       onStarterPrompt,
       starterPrompts,
+      onEditStarterPrompts,
     })));
   }
+
+  const editLink = () => host.querySelector<HTMLButtonElement>('[data-testid="edit-starter-prompts"]');
 
   it("falls back to four built-in starters with their notes when starterPrompts is undefined", async () => {
     await renderEmpty(vi.fn());
@@ -235,6 +239,60 @@ describe("ChatTranscript render isolation", () => {
     expect(host.querySelectorAll("button")).toHaveLength(0);
     for (const { label } of STARTER_PROMPTS) expect(host.textContent).toContain(label);
     expect(host.textContent).toContain("Needs Claude Code installed");
+  });
+
+  it("renders an 'Edit suggestions' control below the chips when onEditStarterPrompts is passed", async () => {
+    await renderEmpty(vi.fn(), undefined, vi.fn());
+    const link = editLink();
+    expect(link).toBeTruthy();
+    expect(link!.textContent).toContain("Edit suggestions");
+    // It sits after the four starter chips, so it is the last of the five buttons.
+    const buttons = host.querySelectorAll("button");
+    expect(buttons).toHaveLength(STARTER_PROMPTS.length + 1);
+    expect(buttons[buttons.length - 1]).toBe(link);
+  });
+
+  it("calls onEditStarterPrompts once on click and sends no starter prompt to the composer", async () => {
+    const onStarterPrompt = vi.fn();
+    const onEditStarterPrompts = vi.fn();
+    await renderEmpty(onStarterPrompt, undefined, onEditStarterPrompts);
+    await act(async () => editLink()!.click());
+    expect(onEditStarterPrompts).toHaveBeenCalledTimes(1);
+    expect(onStarterPrompt).not.toHaveBeenCalled();
+  });
+
+  it("renders no 'Edit suggestions' control when the starter list is empty", async () => {
+    await renderEmpty(vi.fn(), [], vi.fn());
+    expect(editLink()).toBeNull();
+  });
+
+  it("renders no 'Edit suggestions' control when onEditStarterPrompts is not passed", async () => {
+    await renderEmpty(vi.fn());
+    expect(editLink()).toBeNull();
+  });
+
+  it("renders no 'Edit suggestions' control once the chat has messages", async () => {
+    const onEditStarterPrompts = vi.fn();
+    await act(async () =>
+      root.render(
+        createElement(ChatTranscript, {
+          sessionId: "has-messages",
+          messages: [{ id: "m1", role: "user", content: "hi", status: "done" }],
+          dismissedToolCalls,
+          actions,
+          steerQueue,
+          serverTurnLabel: null,
+          status: "idle",
+          onCancelDelegation: noop,
+          onDismissToolCall: noop,
+          onCancelSteer: noop,
+          onStarterPrompt: vi.fn(),
+          onEditStarterPrompts,
+        }),
+      ),
+    );
+    expect(editLink()).toBeNull();
+    expect(onEditStarterPrompts).not.toHaveBeenCalled();
   });
 
   it("does not render settled rows again when a long chat's draft changes", async () => {

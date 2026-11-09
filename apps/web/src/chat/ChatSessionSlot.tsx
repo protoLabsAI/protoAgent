@@ -357,6 +357,24 @@ export function ChatSessionSlot({
   const chatAgentName = brandName(runtime?.identity?.name);
   const directivesRequest = useUI((st) => st.directivesRequest);
   const openGlobalSettings = useUI((st) => st.openGlobalSettings);
+  // The empty chat's "Edit suggestions" link lands the operator on Settings ▸ Chat, where the
+  // Starter prompts editor lives. `openGlobalSettings("chat")` writes both the global section
+  // and the active sidenav section, so it opens on Chat even if Settings last showed another
+  // section. Best-effort: once the panel mounts, bring the editor into view — the panel mounts
+  // asynchronously, so retry across a few frames then give up (landing on Chat is the contract).
+  const editStarterPrompts = useCallback(() => {
+    openGlobalSettings("chat");
+    let frames = 0;
+    const reveal = () => {
+      const el = document.querySelector('[data-testid="starter-prompts-editor"]');
+      if (el) {
+        el.scrollIntoView({ block: "start" });
+      } else if (frames++ < 10) {
+        requestAnimationFrame(reveal);
+      }
+    };
+    requestAnimationFrame(reveal);
+  }, [openGlobalSettings]);
   const visionModel = Boolean(runtime?.model?.vision);
   // A configured vision model can DESCRIBE images for a text-only chat model (#1381), so an
   // image attaches via the pipeline instead of erroring.
@@ -1895,6 +1913,7 @@ export function ChatSessionSlot({
               onCancelSteer={transcriptCancelSteer}
               onStarterPrompt={setDraft}
               starterPrompts={runtime?.starter_prompts}
+              onEditStarterPrompts={editStarterPrompts}
               followSignal={followSignal}
             />
           </ComponentFrameRegistryContext.Provider>

@@ -1,4 +1,4 @@
-import { Chip, Empty } from "@protolabsai/ui/primitives";
+import { Button, Chip, Empty } from "@protolabsai/ui/primitives";
 import { Spinner } from "@protolabsai/ui/data";
 import { Conversation, Message } from "@protolabsai/ui/ai";
 import { TerminalSquare } from "lucide-react";
@@ -28,6 +28,10 @@ type ChatTranscriptProps = {
   onCancelSteer: (id: string) => void;
   onStarterPrompt?: (text: string) => void;
   starterPrompts?: Readonly<RuntimeStatus["starter_prompts"]>;
+  /** Opens Settings ▸ Chat on the Starter prompts editor. When set (and starters are shown),
+   *  a quiet "Edit suggestions" link appears under the chips. The slot owns the navigation —
+   *  this stays presentational. Omitted (or an empty list) ⇒ no link. */
+  onEditStarterPrompts?: () => void;
   /** Bumped on every send: re-pins the transcript to the bottom (it always follows a send). */
   followSignal?: number;
 };
@@ -94,6 +98,7 @@ export const ChatTranscript = memo(function ChatTranscript({
   onCancelSteer,
   onStarterPrompt,
   starterPrompts = STARTER_PROMPTS,
+  onEditStarterPrompts,
   followSignal = 0,
 }: ChatTranscriptProps) {
   const feedback = useSessionFeedback(sessionId, messages, actions.incognito);
@@ -121,15 +126,33 @@ export const ChatTranscript = memo(function ChatTranscript({
       {messages.length === 0 ? (
         <Empty icon={<TerminalSquare />} title={starterPrompts.length ? "Try one of these" : undefined}>
           {starterPrompts.length ? (
-            <div className="chat-starter-prompts" style={{ display: "grid", gap: 8, maxWidth: "100%", textAlign: "left" }}>
-              {starterPrompts.map(({ label, prompt, note }) =>
-                onStarterPrompt ? (
-                  <Chip key={label} block label={label} note={note} onClick={() => onStarterPrompt(prompt)} />
-                ) : (
-                  <Chip key={label} block label={label} note={note} />
-                ),
-              )}
-            </div>
+            <>
+              <div className="chat-starter-prompts" style={{ display: "grid", gap: 8, maxWidth: "100%", textAlign: "left" }}>
+                {starterPrompts.map(({ label, prompt, note }) =>
+                  onStarterPrompt ? (
+                    <Chip key={label} block label={label} note={note} onClick={() => onStarterPrompt(prompt)} />
+                  ) : (
+                    <Chip key={label} block label={label} note={note} />
+                  ),
+                )}
+              </div>
+              {/* Quiet pointer to where these chips are configured (Settings ▸ Chat). Only shown
+                  when the slot wires navigation — an empty list means the operator turned
+                  suggestions off, and there'd be no chips to edit anyway. */}
+              {onEditStarterPrompts ? (
+                <div style={{ marginTop: 4, textAlign: "left" }}>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    data-testid="edit-starter-prompts"
+                    onClick={onEditStarterPrompts}
+                  >
+                    Edit suggestions
+                  </Button>
+                </div>
+              ) : null}
+            </>
           ) : null}
         </Empty>
       ) : (
