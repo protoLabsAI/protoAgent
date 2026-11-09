@@ -61,7 +61,38 @@ describe("collection browser", () => {
   });
   it.each([[false, "Knowledge is off for this agent"], [true, "No knowledge yet"]])("renders enabled=%s with no collections", async (enabled, title) => {
     vi.mocked(api.listCollections).mockResolvedValue({ enabled, collections: [] });
+    vi.mocked(api.knowledgeSearch).mockResolvedValue({ enabled, query: "", results: [], stats: {} });
     await render(); expect(host.textContent).toContain(title);
+  });
+  it("browses and searches without collection support, including a stale deep link and review filter", async () => {
+    window.history.replaceState({}, "", "/app/?collection=old");
+    vi.mocked(api.listCollections).mockResolvedValue({ enabled: true, collections: [] });
+    await render();
+    expect(host.textContent).toContain("Safety note 1");
+    expect(host.textContent).not.toContain("No knowledge yet");
+    expect(host.querySelector('[aria-label="Search in"]')).toBeNull();
+    expect(api.knowledgeSearch).toHaveBeenCalledWith("", { reviewState: undefined });
+    await act(async () => model.seedSearch("Safety")); await settle();
+    expect(api.knowledgeSearch).toHaveBeenCalledWith("Safety", { reviewState: undefined });
+    expect(host.querySelector("mark")?.textContent).toBe("Safety");
+    expect(host.textContent).toContain("51 matches");
+    await act(async () => model.setPendingOnly(true)); await settle();
+    expect(api.knowledgeSearch).toHaveBeenCalledWith("Safety", { reviewState: "pending" });
+    await act(async () => model.invalidate()); await settle();
+    expect(host.textContent).toContain("Safety note 1");
+  });
+  it("does not claim empty knowledge while the fallback is loading or failed", async () => {
+    vi.mocked(api.listCollections).mockResolvedValue({ enabled: true, collections: [] });
+    vi.mocked(api.knowledgeSearch).mockReturnValue(new Promise(() => {}));
+    await render();
+    expect(host.textContent).not.toContain("No knowledge yet");
+    vi.mocked(api.knowledgeSearch).mockRejectedValue(new Error("Offline"));
+    await act(async () => { await qc.cancelQueries(); await model.fallback.refetch(); }); await settle();
+    expect(host.textContent).toContain("Couldn't load knowledge");
+    expect(host.textContent).not.toContain("No knowledge yet");
+    vi.mocked(api.knowledgeSearch).mockResolvedValue({ enabled: true, query: "", results: [chunk(1)], stats: {} });
+    await click("Retry");
+    expect(host.textContent).toContain("Safety note 1");
   });
   it("renders one collection without the dominant-share callout", async () => {
     vi.mocked(api.listCollections).mockResolvedValue({ enabled: true, collections: [{ ...rows[0], retrieved_share_7d: 1 } as Collection] });

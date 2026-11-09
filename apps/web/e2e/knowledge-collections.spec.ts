@@ -18,7 +18,7 @@ async function mock(page: Page) {
     const name = params.get("collection") ?? "claude-import";
     const q = params.get("q") ?? "";
     const row = collections.find(c => c.collection === name)!;
-    const results = q && !"release safety".includes(q.toLowerCase()) ? [] : Array.from({ length: q ? 2 : row.chunks }, (_, i) => ({
+    const results = !state.rows.length || q && !"release safety".includes(q.toLowerCase()) ? [] : Array.from({ length: q ? 2 : row.chunks }, (_, i) => ({
       id: i + 1, heading: `Release safety ${i + 1}`, content: `Check the release checklist before publishing. Verify the build and review the release notes. This is document guidance from ${name}.`,
       preview: "Check the release checklist before publishing.", domain: "legacy-domain", source: `${name}/release-guide-${i % row.sources + 1}.md`,
       source_type: "file", finding_type: null, created_at: row.last_ingested_at, tier: "private", score: 1 / (i + 1),
@@ -46,7 +46,7 @@ async function mock(page: Page) {
 async function openCollection(page: Page, name: string) {
   const surface = page.getByTestId("knowledge-store");
   const link = surface.getByRole("link", { name, exact: true });
-  if (await link.isVisible()) await link.click();
+  if ((page.viewportSize()?.width ?? 1440) >= 768) await link.click();
   else await surface.locator(".kc-phone-row").filter({ hasText: name }).click();
   await expect(surface.getByRole("heading", { name, exact: true })).toBeVisible();
 }
@@ -161,4 +161,45 @@ test("document delete and Undo send the original collection after navigation", a
   expect((await restoration).postDataJSON()).toEqual({
     source: "claude-import/release-guide-1.md", collection: "claude-import",
   });
+});
+
+test("a backend without collection listing retains browse, search, edit and delete", async ({ page }) => {
+  await mock(page);
+  await page.route("**/api/knowledge/collections", route => route.fulfill({ json: { enabled: true, collections: [] } }));
+  let entries = [{ id: 701, heading: "Plugin guide", content: "Original plugin guidance", preview: "Original plugin guidance",
+    domain: "general", source: "plugin-guide.md", source_type: "file", finding_type: null, created_at: null }];
+  const scopes: (string | null)[] = [];
+  await page.route("**/api/knowledge/search?*", route => {
+    const params = new URL(route.request().url()).searchParams;
+    scopes.push(params.get("collection"));
+    const q = params.get("q") ?? "";
+    return route.fulfill({ json: { enabled: true, query: q, results: entries.filter(c => c.content.includes(q)), stats: {} } });
+  });
+  await page.route("**/api/knowledge/chunks/701", route => {
+    if (route.request().method() === "PUT") {
+      entries = [{ ...entries[0], ...route.request().postDataJSON() }];
+      return route.fulfill({ json: { enabled: true, id: 701, replaced: true } });
+    }
+    entries = [];
+    return route.fulfill({ json: { enabled: true, deleted: true } });
+  });
+  await page.goto("/app/?collection=stale");
+  const surface = page.getByTestId("knowledge-store");
+  await expect(surface.getByText("Original plugin guidance", { exact: true })).toBeVisible();
+  await expect(surface.getByText("No knowledge yet")).toHaveCount(0);
+  const search = surface.getByRole("searchbox", { name: "Search knowledge" });
+  await search.fill("Original");
+  await expect(surface.getByRole("status")).toContainText("1 matches");
+  await search.fill("missing");
+  await expect(surface).toContainText(`Nothing in this agent's knowledge matches "missing"`);
+  await search.fill("");
+  await surface.getByLabel("edit entry 701", { exact: true }).click();
+  await surface.getByLabel("content", { exact: true }).fill("Updated plugin guidance");
+  await surface.getByRole("button", { name: "Save changes", exact: true }).click();
+  await expect(surface.getByText("Updated plugin guidance", { exact: true })).toBeVisible();
+  await surface.getByLabel("delete entry 701", { exact: true }).click();
+  await page.getByRole("dialog", { name: "Delete this knowledge entry?" }).getByRole("button", { name: "Delete entry", exact: true }).click();
+  await expect(surface.getByText("No knowledge yet")).toBeVisible();
+  expect(scopes.length).toBeGreaterThan(3);
+  expect(scopes.every(scope => scope === null)).toBe(true);
 });

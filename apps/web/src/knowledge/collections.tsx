@@ -128,9 +128,9 @@ export function highlight(text: string, query: string): ReactNode {
 export function KnowledgeSearch({ model }: { model: Model }) {
   return <div className="kc-search">
     <Input id="knowledge-collection-search" type="search" icon={<Search />} aria-label="Search knowledge"
-      placeholder={model.collection && !model.all ? `Search in ${model.collection}…` : "Search all knowledge…"}
+      placeholder={model.collection && !model.flat && !model.all ? `Search in ${model.collection}…` : "Search all knowledge…"}
       value={model.query} onChange={e => model.setQuery(e.target.value)} onClear={() => model.setQuery("")} />
-    {model.collection && <Tabs variant="segmented" ariaLabel="Search in" active={model.all ? "all" : "collection"}
+    {model.collection && !model.flat && <Tabs variant="segmented" ariaLabel="Search in" active={model.all ? "all" : "collection"}
       items={[{ id: "all", label: "All collections" }, { id: "collection", label: model.collection }]} onSelect={id => model.setAll(id === "all")} />}
   </div>;
 }
@@ -225,6 +225,22 @@ export function CollectionsBrowser({ model, renderCard, onAdd, onSettings }: {
   const actions: RowActions = { onOpen: open, onDelete: requestDelete, onSearch: name => {
     open(name); requestAnimationFrame(() => document.getElementById("knowledge-collection-search")?.focus());
   } };
+  if (model.flat) return <div className="kc-browser" ref={contentRef}>
+    <PanelHeader title="Knowledge" />
+    {collection && <TextLink href={collectionHref()} onClick={e => { e.preventDefault(); open(""); }}>Back to all knowledge</TextLink>}
+    <KnowledgeSearch model={model} />
+    {model.fallback.isPending ? <Skeleton lines={3} />
+      : model.fallback.error ? <Alert status="warning">Couldn't load knowledge. <Button onClick={() => void model.fallback.refetch()}>Retry</Button></Alert>
+      : model.fallback.data?.enabled === false ? <Empty title="Knowledge is off for this agent" description="Turn it on to let the agent read collections you add." action={<Button onClick={onSettings}>Open settings</Button>} />
+      : <>
+        {term && <p role="status" aria-live="polite">{model.fallback.data?.results.length ?? 0} matches</p>}
+        {model.fallback.data?.results.length
+          ? <ul className="playbook-list">{model.fallback.data.results.map(renderCard)}</ul>
+          : term ? <Empty description={`Nothing in this agent's knowledge matches "${term}".`} />
+          : model.pendingOnly ? <Empty title="Nothing awaiting review here." />
+          : <Empty title="No knowledge yet" description="Add a folder, a file or a web page and it becomes a collection this agent can read." action={<Button onClick={onAdd}>Add a source</Button>} />}
+      </>}
+  </div>;
   const loading = list.isPending || (!!collection && !!selected && details.isPending);
   const failed = list.error || (selected && details.error);
   return <div className="kc-browser" ref={contentRef}>

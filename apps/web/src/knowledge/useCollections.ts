@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../lib/api";
-import { collectionChunksQuery, collectionsSearchQuery, collectionsQuery, queryKeys } from "../lib/queries";
+import { collectionChunksQuery, collectionsSearchQuery, collectionsQuery, knowledgeQuery, queryKeys } from "../lib/queries";
 import type { KnowledgeCollection } from "../lib/types";
 
 // Optional fields are deliberately capability checks, never guessed from a name.
@@ -48,6 +48,15 @@ export function useCollections() {
   }, [query]);
   const list = useQuery(collectionsQuery());
   const collections: Collection[] = list.data?.collections ?? [];
+  // list_collections is optional in ADR 0031. An empty listing also covers
+  // unsupported/failed aggregation, so check the original unscoped API before
+  // claiming the agent has no knowledge. Never infer membership from domain.
+  const flat = list.isSuccess && list.data.enabled && !collections.length;
+  const fallback = useQuery({
+    ...knowledgeQuery(term, reviewState),
+    placeholderData: keepPreviousData,
+    enabled: flat,
+  });
   const selected = collections.find(c => c.collection === collection);
   const details = useQuery({
     ...collectionChunksQuery(collection || undefined, "", selected?.chunks ?? 50, reviewState),
@@ -58,7 +67,7 @@ export function useCollections() {
     // keepPreviousData (ADR 0013): a search-as-you-type surface, so each new term keeps
     // the prior results on screen while the next load runs instead of blanking to a skeleton.
     placeholderData: keepPreviousData,
-    enabled: !!term && list.data?.enabled !== false,
+    enabled: !!term && !flat && list.data?.enabled !== false,
   });
   function open(name = "") {
     const state = { ...window.history.state, knowledgeCollections: true };
@@ -123,7 +132,7 @@ export function useCollections() {
     },
     onSuccess: invalidate,
   });
-  return { list, collections, selected, details, search, collection, open, query, setQuery, term, all, setAll,
+  return { list, flat, fallback, collections, selected, details, search, collection, open, query, setQuery, term, all, setAll,
     seedSearch, sort, setSort, ascending, setAscending, pendingOnly, setPendingOnly, remove, restore,
     removeSource, restoreSource, invalidate };
 }
