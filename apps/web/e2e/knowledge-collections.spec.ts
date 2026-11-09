@@ -104,6 +104,12 @@ for (const width of [1440, 390]) {
         await surface.getByRole("searchbox").fill("");
         await expect(surface.getByRole("heading", { name: "Documents", exact: true })).toBeVisible();
         await expect(surface.getByRole("button", { name: "claude-import/release-guide-1.md · 13 chunks", exact: true })).toHaveAttribute("aria-expanded", "true");
+        // Document-level bulk delete (#1770) lives on the open document: a counted confirm.
+        await surface.getByRole("button", { name: "delete all chunks from claude-import/release-guide-1.md", exact: true }).click();
+        const docDialog = page.getByRole("dialog", { name: "Delete all chunks from this document?" });
+        await expect(docDialog).toContainText("Delete all 13 chunks");
+        await docDialog.getByRole("button", { name: "Keep it", exact: true }).click();
+        await expect(docDialog).toHaveCount(0);
         await surface.getByRole("button", { name: "Delete collection…", exact: true }).click();
         const dialog = page.getByRole("dialog", { name: "Delete claude-import?" });
         await expect(dialog).toBeVisible(); await shot("delete-confirm");

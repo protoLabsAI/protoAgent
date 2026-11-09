@@ -6,7 +6,7 @@ import { Menu, MenuItem } from "@protolabsai/ui/menu";
 import { Accordion, AccordionItem, PanelHeader, Tabs } from "@protolabsai/ui/navigation";
 import { ConfirmDialog, Tooltip, useToast } from "@protolabsai/ui/overlays";
 import { Badge, Button, Callout, Empty, TextLink } from "@protolabsai/ui/primitives";
-import { MoreHorizontal, Search } from "lucide-react";
+import { MoreHorizontal, Search, Trash2 } from "lucide-react";
 import { useUI } from "../state/uiStore";
 import { ago, errMsg } from "../lib/format";
 import type { KnowledgeChunk } from "../lib/types";
@@ -76,17 +76,33 @@ export function CollectionList({ rows, sort, ascending, onSort, ...actions }: Ro
     </Select><ul aria-label="Knowledge collections">{sorted.map(row => <CollectionRow key={row.collection} row={row} phone {...actions} />)}</ul></div>
   </>;
 }
-function DocumentChunks({ chunks, renderCard }: { chunks: KnowledgeChunk[]; renderCard: (chunk: KnowledgeChunk) => ReactNode }) {
+// Chunks with no `source` share this bucket; it has no document identity, so the
+// document-level bulk delete (which targets one `source`) never offers to delete it.
+const SOURCELESS = "Entries without a source";
+function DocumentChunks({ chunks, renderCard, source, onDeleteDocument, shiftDel }: {
+  chunks: KnowledgeChunk[]; renderCard: (chunk: KnowledgeChunk) => ReactNode; source: string;
+  onDeleteDocument?: (source: string, count: number, skipConfirm: boolean) => void; shiftDel?: boolean;
+}) {
   const [limit, setLimit] = useState(50);
-  return <><ul className="playbook-list">{chunks.slice(0, limit).map(renderCard)}</ul>
+  // Delete-a-whole-document (#1770): a counted confirm, a Shift+click fast path that skips
+  // it (like the per-chunk delete), and an Undo toast — wired in CollectionsBrowser.
+  const canDelete = onDeleteDocument && source !== SOURCELESS;
+  return <>
+    {canDelete && <div className="kc-doc-actions"><Button variant="ghost" size="sm"
+      className={shiftDel ? "knowledge-del-armed" : undefined}
+      title={shiftDel ? "Delete now — Shift skips the confirmation" : "Delete this whole document (Shift+click to skip the confirm)"}
+      aria-label={`delete all chunks from ${source}`}
+      onClick={e => onDeleteDocument(source, chunks.length, e.shiftKey)}><Trash2 size={14} /> Delete document</Button></div>}
+    <ul className="playbook-list">{chunks.slice(0, limit).map(renderCard)}</ul>
     {chunks.length > limit && <Button onClick={() => setLimit(n => n + 50)}>Show the next 50</Button>}</>;
 }
-export function CollectionDetail({ row, chunks, renderCard, onDelete }: {
+export function CollectionDetail({ row, chunks, renderCard, onDelete, onDeleteDocument, shiftDel }: {
   row: Collection; chunks: KnowledgeChunk[]; renderCard: (chunk: KnowledgeChunk) => ReactNode; onDelete: (row: Collection) => void;
+  onDeleteDocument?: (source: string, count: number, skipConfirm: boolean) => void; shiftDel?: boolean;
 }) {
   const documents = new Map<string, KnowledgeChunk[]>();
   for (const chunk of chunks) {
-    const source = chunk.source || "Entries without a source";
+    const source = chunk.source || SOURCELESS;
     documents.set(source, [...(documents.get(source) ?? []), chunk]);
   }
   return <>
@@ -97,7 +113,8 @@ export function CollectionDetail({ row, chunks, renderCard, onDelete }: {
     {!chunks.length ? <Empty title="This collection is empty." action={!row.plugin && <Button disabled={!!row.ingesting} title={row.ingesting ? "Wait until it finishes adding." : undefined} onClick={() => onDelete(row)}>{row.tier === "commons" ? "Stop sharing…" : "Delete collection…"}</Button>} /> : <>
       <h3>Documents</h3><Accordion>{[...documents].sort(([a], [b]) => a.localeCompare(b)).map(([source, members]) =>
         <AccordionItem key={source} title={`${source} · ${members.length} chunks`} defaultOpen={documents.size === 1}>
-          <DocumentChunks chunks={[...members].sort((a, b) => (a.position ?? a.id) - (b.position ?? b.id))} renderCard={renderCard} />
+          <DocumentChunks chunks={[...members].sort((a, b) => (a.position ?? a.id) - (b.position ?? b.id))} renderCard={renderCard}
+            source={source} onDeleteDocument={onDeleteDocument} shiftDel={shiftDel} />
         </AccordionItem>)}</Accordion></>}
   </>;
 }
@@ -128,10 +145,12 @@ function CollectionLoading({ detail }: { detail: boolean }) {
     <div className="kc-phone"><Skeleton lines={3} /><Skeleton lines={3} /><Skeleton lines={3} /></div>
   </>}</div>;
 }
-export function CollectionsBrowser({ model, renderCard, onAdd, onSettings }: {
-  model: Model; renderCard: (chunk: KnowledgeChunk) => ReactNode; onAdd: () => void; onSettings: () => void;
+export function CollectionsBrowser({ model, renderCard, onAdd, onSettings, shiftDel }: {
+  model: Model; renderCard: (chunk: KnowledgeChunk) => ReactNode; onAdd: () => void; onSettings: () => void; shiftDel?: boolean;
 }) {
   const [pending, setPending] = useState<Collection | null>(null);
+  // The document (per-source) bulk delete awaiting a counted confirm (#1770).
+  const [pendingDoc, setPendingDoc] = useState<{ source: string; count: number } | null>(null);
   const toast = useToast();
   const focusAfterDelete = useRef<string | null>(null);
   const contentRef = useRef<HTMLDivElement>(null);
@@ -189,6 +208,22 @@ export function CollectionsBrowser({ model, renderCard, onAdd, onSettings }: {
       }}>Undo</Button></span> });
     } catch { /* Keep the dialog and its inline retry visible. */ }
   }
+  // Delete a whole ingested document (all chunks of one `source`) — the middle delete
+  // between a single chunk and the whole collection. A reversible soft delete with the
+  // same 10 s Undo toast as the collection path.
+  async function deleteDoc(source: string, count: number) {
+    try {
+      const result = await model.removeSource.mutateAsync(source);
+      const n = result.deleted || count;
+      toast({ tone: "success", title: "Knowledge", duration: 10000, message: <span>Deleted {n} chunk{n === 1 ? "" : "s"} from “{source}”. <Button variant="ghost" size="sm" onClick={async () => {
+        try { await model.restoreSource.mutateAsync(source); toast({ tone: "success", title: "Knowledge", message: `Restored “${source}”.` }); }
+        catch (error) { toast({ tone: "error", title: "Couldn't restore document", message: errMsg(error) }); }
+      }}>Undo</Button></span> });
+    } catch (error) { toast({ tone: "error", title: "Couldn't delete document", message: errMsg(error) }); }
+  }
+  function onDeleteDocument(source: string, count: number, skipConfirm: boolean) {
+    if (skipConfirm) void deleteDoc(source, count); else setPendingDoc({ source, count });
+  }
   const actions: RowActions = { onOpen: open, onDelete: requestDelete, onSearch: name => {
     open(name); requestAnimationFrame(() => document.getElementById("knowledge-collection-search")?.focus());
   } };
@@ -211,7 +246,7 @@ export function CollectionsBrowser({ model, renderCard, onAdd, onSettings }: {
           action={!model.all && <Button onClick={() => model.setAll(true)}>Search all collections</Button>} />
           : <ul className="playbook-list">{search.data.results.map(renderCard)}</ul>}</>)}
       <div hidden={!!term}>{collection ? !selected ? <Callout tone="info">This collection isn't here any more. It may have been deleted. <Button onClick={() => open("")}>Back to all collections</Button></Callout>
-        : <CollectionDetail key={collection} row={selected} chunks={details.data?.results ?? []} renderCard={renderCard} onDelete={requestDelete} />
+        : <CollectionDetail key={collection} row={selected} chunks={details.data?.results ?? []} renderCard={renderCard} onDelete={requestDelete} onDeleteDocument={onDeleteDocument} shiftDel={shiftDel} />
       : !model.collections.length ? <Empty title="No knowledge yet" description="Add a folder, a file or a web page and it becomes a collection this agent can read." action={<Button onClick={onAdd}>Add a source</Button>} />
       : <CollectionList rows={model.collections} sort={model.sort} ascending={model.ascending} onSort={key => {
         model.setAscending(key === model.sort ? !model.ascending : key === "name"); model.setSort(key);
@@ -225,6 +260,12 @@ export function CollectionsBrowser({ model, renderCard, onAdd, onSettings }: {
       {pending?.retrieved_share_7d != null && <p>This collection supplied {Math.round(pending.retrieved_share_7d * 100)}% of the knowledge it read in the last 7 days.</p>}
       {model.remove.error && <Alert status="warning">Couldn't delete {pending?.collection}. Nothing was removed. {errMsg(model.remove.error)} <Button onClick={() => void remove()}>Try again</Button></Alert>}
       </div>
+    </ConfirmDialog>
+    <ConfirmDialog open={pendingDoc !== null} destructive title="Delete all chunks from this document?"
+      confirmLabel="Delete chunks" cancelLabel="Keep it"
+      onConfirm={() => { if (pendingDoc) void deleteDoc(pendingDoc.source, pendingDoc.count); setPendingDoc(null); }}
+      onClose={() => setPendingDoc(null)}>
+      {pendingDoc ? `Delete all ${pendingDoc.count} chunk${pendingDoc.count === 1 ? "" : "s"} from “${pendingDoc.source}”? The agent will stop recalling them. You can undo this from the toast.` : undefined}
     </ConfirmDialog>
   </div>;
 }

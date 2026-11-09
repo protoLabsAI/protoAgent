@@ -66,6 +66,15 @@ export function useCollections() {
       // disappear (or mistake a private deletion for stopping fleet sharing).
       const row = collections.find(c => c.collection === name);
       const contents = await qc.fetchQuery(collectionChunksQuery(name, "", row?.chunks ?? 50));
+      // The /search route NEVER 500s (knowledge_routes.py logs and returns a 200 with an
+      // empty result list on a store error), so an empty read is ambiguous: a genuinely
+      // empty bucket, or a failed one. If the list says this collection has chunks but the
+      // read came back empty, we can't confirm its tier makeup — refuse rather than fail
+      // open and delete a bucket that might hold shared (commons) chunks while reporting
+      // them gone. (A network-level failure throws here and already blocks the delete.)
+      if (row && row.chunks > 0 && !contents.results.length) {
+        throw new Error("Couldn't read this collection's chunks to check for shared entries. Try again.");
+      }
       if (contents.results.some(c => c.tier === "commons")) {
         throw new Error("This collection contains shared chunks. Use the individual chunks' Unshare actions.");
       }
@@ -84,6 +93,26 @@ export function useCollections() {
     },
     onSuccess: invalidate,
   });
+  // Document-level (per-source) bulk delete (#1770) — remove a whole ingested document
+  // (all chunks sharing one `source`) at once. A reversible SOFT delete: the chunks leave
+  // recall immediately but survive a grace window, so restoreSource (the Undo toast) can
+  // bring them back. Scoped to one document, between the per-chunk and whole-collection paths.
+  const removeSource = useMutation({
+    mutationFn: async (source: string) => {
+      const result = await api.deleteKnowledgeBySource(source);
+      if (!result.enabled || result.error) throw new Error(result.error || "Knowledge is off");
+      return result;
+    },
+    onSuccess: invalidate,
+  });
+  const restoreSource = useMutation({
+    mutationFn: async (source: string) => {
+      const result = await api.restoreKnowledgeBySource(source);
+      if (!result.enabled || result.error) throw new Error(result.error || "No chunks could be restored");
+      return result;
+    },
+    onSuccess: invalidate,
+  });
   return { list, collections, selected, details, search, collection, open, query, setQuery, term, all, setAll,
-    seedSearch, sort, setSort, ascending, setAscending, remove, restore, invalidate };
+    seedSearch, sort, setSort, ascending, setAscending, remove, restore, removeSource, restoreSource, invalidate };
 }

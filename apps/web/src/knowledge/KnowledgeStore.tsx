@@ -541,7 +541,7 @@ export function KnowledgeStore() {
           </Dialog>
         ) : null}
 
-        <CollectionsBrowser model={model} renderCard={renderCard} onAdd={() => setIngesting(true)} onSettings={() => useUI.getState().openGlobalSettings("knowledge")} />
+        <CollectionsBrowser model={model} renderCard={renderCard} shiftDel={shiftDel} onAdd={() => setIngesting(true)} onSettings={() => useUI.getState().openGlobalSettings("knowledge")} />
       </div>
 
       <ConfirmDialog

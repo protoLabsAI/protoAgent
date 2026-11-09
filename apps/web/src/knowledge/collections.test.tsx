@@ -135,6 +135,42 @@ describe("collection browser", () => {
     expect(document.querySelector('[role="dialog"]')?.textContent).toContain("Nothing was removed.");
     expect(document.body.textContent).not.toContain("Deleted alpha");
   });
+  it("refuses to delete when the chunk read can't be confirmed (store error returns an empty list)", async () => {
+    const remove = vi.spyOn(api, "deleteKnowledgeByCollection");
+    // The /search route never 500s: a server-side store error comes back as a 200 with an
+    // empty result list, indistinguishable from a genuinely empty bucket. alpha claims 51
+    // chunks, so an empty read is unverifiable — the guard must refuse, not fail open.
+    vi.mocked(api.knowledgeSearch).mockResolvedValue({ enabled: true, query: "", results: [], stats: {} });
+    await render();
+    await act(async () => { await model.remove.mutateAsync("alpha").catch(() => {}); });
+    await settle();
+    expect(remove).not.toHaveBeenCalled();
+    expect(model.remove.error?.message).toContain("Couldn't read");
+  });
+  it("bulk-deletes a whole document with a counted confirm, and Undo restores it (#1770)", async () => {
+    const timers = vi.spyOn(globalThis, "setTimeout");
+    const delDoc = vi.spyOn(api, "deleteKnowledgeBySource").mockResolvedValue({ enabled: true, deleted: 51 });
+    const restoreDoc = vi.spyOn(api, "restoreKnowledgeBySource").mockResolvedValue({ enabled: true, restored: 51 });
+    await render(); await act(async () => model.open("alpha")); await settle();
+    const trigger = document.querySelector<HTMLButtonElement>('[aria-label="delete all chunks from Manual"]');
+    expect(trigger).not.toBeNull();
+    await act(async () => trigger!.click()); await settle();
+    expect(document.querySelector('[role="dialog"]')?.textContent).toContain("Delete all 51 chunks from");
+    await click("Delete chunks"); expect(delDoc).toHaveBeenCalledWith("Manual");
+    expect(document.body.textContent).toContain("Deleted 51 chunks from");
+    expect(timers).toHaveBeenCalledWith(expect.any(Function), 10000);
+    await click("Undo"); expect(restoreDoc).toHaveBeenCalledWith("Manual");
+    expect(document.body.textContent).toContain("Restored");
+  });
+  it("Shift+clicking a document delete skips the confirm (#1770)", async () => {
+    const delDoc = vi.spyOn(api, "deleteKnowledgeBySource").mockResolvedValue({ enabled: true, deleted: 51 });
+    await render(); await act(async () => model.open("alpha")); await settle();
+    const trigger = document.querySelector<HTMLButtonElement>('[aria-label="delete all chunks from Manual"]')!;
+    await act(async () => trigger.dispatchEvent(new MouseEvent("click", { bubbles: true, shiftKey: true })));
+    await settle();
+    expect(delDoc).toHaveBeenCalledWith("Manual");
+    expect(document.body.textContent).not.toContain("Delete all 51 chunks from");
+  });
   it("never sends a private bulk delete for a shared collection", async () => {
     const remove = vi.spyOn(api, "deleteKnowledgeByCollection");
     vi.mocked(api.knowledgeSearch).mockResolvedValue({ enabled: true, query: "", results: [{ ...chunk(1), tier: "commons" }], stats: {} });
