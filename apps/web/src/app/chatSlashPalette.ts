@@ -183,6 +183,7 @@ const ROWS: Record<string, RowSpec> = {
     keybinding: "chat.clear",
     find: ["wipe", "reset", "erase", "empty", "delete history", "start over"],
   },
+  directives: { needsThisChat: true, find: ["standing", "instructions", "ledger"] },
   export: { needsThisChat: true, find: ["download", "save", "transcript", "file", "markdown"] },
   // Dispatched bare, `/btw` posts its own "ask a side question after /btw" note and stops: it
   // needs a question, and a palette row has no way to ask for one. So it DRAFTS, landing the

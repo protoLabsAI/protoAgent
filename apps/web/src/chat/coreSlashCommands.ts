@@ -6,6 +6,7 @@
 // reference. Behaviour ported verbatim from the old hardcoded `runClientSlash` switch.
 
 import { registeredSlashCommands, registerSlashCommand } from "../ext/slashRegistry";
+import { useUI } from "../state/uiStore";
 import { api } from "../lib/api";
 import { errMsg } from "../lib/format";
 import { queryClient } from "../lib/queryClient";
@@ -62,6 +63,16 @@ registerSlashCommand({
     if (!ctx.sessionId) return false; // no session → fall through
     void exportChatToFile(ctx.sessionId);
     ctx.focusComposer();
+    return true;
+  },
+});
+
+registerSlashCommand({
+  name: "directives",
+  description: "Standing instructions",
+  run: (ctx) => {
+    if (!ctx.sessionId || ctx.rest.trim()) return false;
+    useUI.getState().openDirectives(ctx.sessionId);
     return true;
   },
 });

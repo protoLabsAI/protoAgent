@@ -43,6 +43,8 @@ import {
   useServerTurn,
 } from "./server-turn-store";
 import { BackgroundWorkStrip } from "./BackgroundWorkStrip";
+import { DirectiveStrip } from "./DirectiveStrip";
+import { DirectiveDrawer } from "./DirectiveDrawer";
 import { GoalRunStrip } from "./GoalRunStrip";
 import { messageId } from "./messageId";
 import { sentAttachments } from "./imageThumbnails";
@@ -349,6 +351,7 @@ export function ChatSessionSlot({
   // PaletteChat use (App.tsx's chatAgentName), so a renamed agent no longer reads "Message
   // protoAgent…" in the composer.
   const chatAgentName = brandName(runtime?.identity?.name);
+  const directivesRequest = useUI((st) => st.directivesRequest);
   const openGlobalSettings = useUI((st) => st.openGlobalSettings);
   const visionModel = Boolean(runtime?.model?.vision);
   // A configured vision model can DESCRIBE images for a text-only chat model (#1381), so an
@@ -1871,6 +1874,7 @@ export function ChatSessionSlot({
 
   return (
     <div className="chat-session-slot" hidden={!visible}>
+      {directivesRequest?.sessionId === sessionId && <DirectiveDrawer sessionId={sessionId} open onClose={() => useUI.setState({ directivesRequest: null })} />}
       <ArtifactChatSendContext.Provider value={artifactChatSend}>
         <ComponentChatSendContext.Provider value={componentChatSend}>
           <ComponentFrameRegistryContext.Provider value={componentFrameRegistry}>
@@ -1917,6 +1921,7 @@ export function ChatSessionSlot({
             acts only when addressed, and clicking a name is exactly that affordance
             (inserts `@name `). No remove control: history is not removable, and an X
             that gated nothing was confusion pretending to be a control. */}
+        <DirectiveStrip sessionId={sessionId} />
         <GoalRunStrip sessionId={sessionId} />
         <BackgroundWorkStrip sessionId={sessionId} />
         {cast.length ? (

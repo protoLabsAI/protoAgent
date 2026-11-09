@@ -1193,6 +1193,8 @@ export type ChatMessage = {
   attachments?: { name: string; mime: string; thumb: string }[];
   id?: string;
   role: "user" | "assistant" | "system";
+  /** Operator withdrawal event; preserve its stored user role. */
+  protoagent_directive_withdrawn?: { id: string };
   content: string;
   /** Set when this message came from an addressed participant rather than the lead
    *  agent — see `MessageAuthor`. */
