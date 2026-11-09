@@ -52,6 +52,7 @@ def _mod(name: str):
 
 preflight = _mod("preflight")
 tools = _mod("tools")
+boundaries = _mod("boundaries")
 storage = _mod("storage")
 
 # Probe ONCE, with the plugin's own preflight: skip the module unless the CLI is usable and
@@ -72,6 +73,8 @@ def browser():
     os.environ["AGENT_BROWSER_SESSION"] = f"protoagent-forms-{os.getpid()}"
     # main_idle_timeout_min: a backstop for a KILLED run, which never reaches the close below —
     # the CLI's own reaper ends the daemon (and its Chrome) after a few quiet minutes.
+    # The default config, content_boundaries on: browser_eval stays raw either way, and
+    # browser_form_read's markers are stripped in _form() below.
     toolset = {t.name: t for t in tools.get_browser_tools(
         {"binary": "agent-browser", "timeout_s": 120, "main_idle_timeout_min": 3})}
     try:
@@ -99,7 +102,7 @@ async def _form(toolset, scope: str = "") -> dict:
     """``browser_form_read`` → ``{label: field}`` for easy assertions."""
     raw = await toolset["browser_form_read"].ainvoke({"scope": scope})
     assert not raw.startswith("Error:"), raw
-    return {f["label"]: f for f in json.loads(raw)}
+    return {f["label"]: f for f in json.loads(boundaries.strip(raw))}
 
 
 # ── react-select combobox: commit the EXACT option, never the highlighted Enter-trap ──
@@ -300,7 +303,7 @@ async def _form_by_id(toolset) -> dict:
     """``browser_form_read`` → ``{id: field}`` (the phone picker has no usable label yet)."""
     raw = await toolset["browser_form_read"].ainvoke({"scope": ""})
     assert not raw.startswith("Error:"), raw
-    return {f["id"]: f for f in json.loads(raw) if f.get("id")}
+    return {f["id"]: f for f in json.loads(boundaries.strip(raw)) if f.get("id")}
 
 
 async def test_phone_country_reads_back_the_name_not_the_dial_code(browser):
@@ -844,7 +847,7 @@ async def test_form_read_lists_the_orphaned_file_field_with_bare_filename(browse
         up = await browser["browser_upload"].ainvoke({"field": "#writing_sample", "file_path": "orphan_sample.pdf"})
         assert up.startswith("Uploaded orphan_sample.pdf to"), up
 
-        rows = json.loads(await browser["browser_form_read"].ainvoke({"scope": ""}))
+        rows = json.loads(boundaries.strip(await browser["browser_form_read"].ainvoke({"scope": ""})))
         file_rows = [r for r in rows if r["id"] == "writing_sample"]
         assert len(file_rows) == 1, file_rows  # recovered, and not duplicated
         row = file_rows[0]
@@ -1167,7 +1170,7 @@ async def test_form_read_folds_the_hidden_required_shadow_into_the_combobox(brow
     await _open(browser, GREENHOUSE)
     raw = await browser["browser_form_read"].ainvoke({"scope": ""})
     assert not raw.startswith("Error:"), raw
-    rows = json.loads(raw)
+    rows = json.loads(boundaries.strip(raw))
 
     # r1: NO row with an empty label AND empty id AND kind "text" (the shadow input's shape) — and
     # this holds for the OPTIONAL comboboxes' non-required shadows too, not only the required ones.
@@ -1400,7 +1403,7 @@ async def test_iti_button_change_country_aria_label_reduces_to_the_name(browser)
     assert stripped == "true", stripped
 
     raw = await browser["browser_form_read"].ainvoke({"scope": ""})
-    rows = [f for f in json.loads(raw) if f.get("kind") == "combobox"]
+    rows = [f for f in json.loads(boundaries.strip(raw)) if f.get("kind") == "combobox"]
     assert rows and rows[0]["value"] == "United States", rows
 
 

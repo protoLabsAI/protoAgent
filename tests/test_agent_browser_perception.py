@@ -93,6 +93,9 @@ def _tools(monkeypatch, answer=None, **cfg):
 async def test_snapshot_argv(monkeypatch, args, argv):
     t, cli = _tools(monkeypatch)
     await t["browser_snapshot"].ainvoke(args)
+    assert cli.argvs == [["--content-boundaries", *argv]]  # every form is page data → marked
+    t, cli = _tools(monkeypatch, content_boundaries=False)
+    await t["browser_snapshot"].ainvoke(args)
     assert cli.argvs == [argv]
 
 
@@ -273,10 +276,10 @@ async def test_a_plain_id_costs_no_probe(monkeypatch):
 
 
 @pytest.mark.parametrize("tool,args,argv", [
-    ("browser_get_text", {"selector": "#a.b"}, ["get", "text", '[id="a.b"]']),
-    ("browser_get_html", {"selector": "#a.b"}, ["get", "html", '[id="a.b"]']),
+    ("browser_get_text", {"selector": "#a.b"}, ["--content-boundaries", "get", "text", '[id="a.b"]']),
+    ("browser_get_html", {"selector": "#a.b"}, ["--content-boundaries", "get", "html", '[id="a.b"]']),
     ("browser_get_value", {"selector": "#a.b"}, ["get", "value", '[id="a.b"]']),
-    ("browser_snapshot", {"scope": "#a.b"}, ["snapshot", "-i", "-c", "-s", '[id="a.b"]']),
+    ("browser_snapshot", {"scope": "#a.b"}, ["--content-boundaries", "snapshot", "-i", "-c", "-s", '[id="a.b"]']),
     ("browser_wait", {"selector": "#a.b"}, ["wait", '[id="a.b"]']),
 ])
 async def test_every_css_operand_gets_the_dotted_id_fix(monkeypatch, tool, args, argv):

@@ -106,6 +106,8 @@ storage = _mod("storage")
 tools = _mod("tools")
 forms = _mod("forms")
 cli_fetch = _mod("cli_fetch")
+boundaries = _mod("boundaries")
+walls = _mod("walls")
 chrome_install = _mod("chrome_install")
 
 
@@ -227,7 +229,9 @@ async def test_open_passes_url_and_curated_launch_flags(monkeypatch):
         "--disable-backgrounding-occluded-windows,--disable-renderer-backgrounding,"
         "--disable-background-timer-throttling"
     )
-    assert rec[-1] == [
+    # rec[0] is the navigation; the wall probe's eval follows it (walls.py)
+    assert rec[1] == ["ab", "eval", "--stdin"]
+    assert rec[0] == [
         "ab",
         "--allowed-domains",
         "x.com",
@@ -258,7 +262,7 @@ async def test_action_tools_pass_refs(monkeypatch):
     await t["browser_fill"].ainvoke({"selector": "#q", "text": "hi there"})
     assert rec[-1] == ["ab", "fill", "#q", "hi there"]
     await t["browser_snapshot"].ainvoke({})
-    assert rec[-1] == ["ab", "snapshot", "-i", "-c"]
+    assert rec[-1] == ["ab", "--content-boundaries", "snapshot", "-i", "-c"]  # page data → marked
 
 
 def test_all_21_tools_present():
@@ -347,6 +351,20 @@ async def test_get_text_and_html_truncate_too(monkeypatch, tool, args, hint):
     monkeypatch.setattr(tools.subprocess, "Popen", fake_popen(out=b"para\n" * 1000))
     out = await _toolmap({"binary": "ab", "max_response_bytes": 100})[tool].ainvoke(args)
     assert out.startswith("para\npara") and _MARK in out and hint in out
+
+
+async def test_a_cut_bounded_output_closes_its_marker_before_the_truncation_note(monkeypatch):
+    # With content_boundaries on, the CLI's closing marker is in the part that was never read.
+    # The tool closes the block with the SAME nonce, then puts its own note OUTSIDE it.
+    nonce = "ab" * 16
+    opened = f"--- AGENT_BROWSER_PAGE_CONTENT nonce={nonce} origin=https://x.test/ ---\n".encode()
+    monkeypatch.setattr(tools.subprocess, "Popen", fake_popen(out=opened + b"- link \"row\" [ref=e1]\n" * 500))
+    out = await _toolmap({"binary": "ab", "max_response_bytes": 1000})["browser_snapshot"].ainvoke({})
+    *page, close, note = out.split("\n")
+    assert close == f"--- END_AGENT_BROWSER_PAGE_CONTENT nonce={nonce} ---"
+    assert note.startswith(_MARK) and _MARK not in "\n".join(page)
+    inner, marker = boundaries.unwrap("\n".join([*page, close]))
+    assert marker is not None and marker.nonce == nonce and inner.startswith('- link "row"')
 
 
 async def test_a_truncation_with_no_line_break_cuts_cleanly_and_stays_bounded(monkeypatch):
@@ -1155,7 +1173,9 @@ async def test_eval_sends_the_script_over_stdin_not_argv(monkeypatch):
     monkeypatch.setattr(tools.subprocess, "Popen", fake_popen(out="42", record=rec, procs=procs))
     out = await _toolmap({"binary": "ab"})["browser_eval"].ainvoke({"expression": "40 + 2"})
     assert out == "42"
-    assert rec[-1] == ["ab", "eval", "--stdin"]  # the script is NOT an argv item…
+    # eval output stays raw (no --content-boundaries): it's the caller's own script result, often
+    # JSON a caller parses — a wrapped eval is no longer JSON. The script is NOT an argv item…
+    assert rec[-1] == ["ab", "eval", "--stdin"]
     assert procs[-1].stdin.getvalue() == b"40 + 2"  # …it arrives on stdin
 
 
@@ -1695,7 +1715,7 @@ async def test_shared_scope_pins_the_instance_session_through_an_env_copy(monkey
     monkeypatch.setattr(tools.subprocess, "Popen", _popen_capturing(records))
     await _toolmap(cfg)["browser_snapshot"].ainvoke({})
     argv, env = records[-1]
-    assert argv == ["ab", "snapshot", "-i", "-c"]  # argv unchanged
+    assert argv == ["ab", "--content-boundaries", "snapshot", "-i", "-c"]  # argv unchanged
     assert env["AGENT_BROWSER_SESSION"] == rt.instance_session_name() != "default"
     assert env.get("PATH") == os.environ.get("PATH")  # a copy, not a replacement
     assert "AGENT_BROWSER_IDLE_TIMEOUT_MS" not in env  # the main session never reaps by default
@@ -1721,7 +1741,7 @@ async def test_per_session_passes_a_distinct_derived_env_per_chat(monkeypatch):
         await t["browser_snapshot"].ainvoke({})
     argv_b, env_b = records[-1]
 
-    assert argv_a == argv_b == ["ab", "snapshot", "-i", "-c"]  # argv identical
+    assert argv_a == argv_b == ["ab", "--content-boundaries", "snapshot", "-i", "-c"]  # argv identical
     assert env_a["AGENT_BROWSER_SESSION"] == tools._session_name_for("chat-A")
     assert env_b["AGENT_BROWSER_SESSION"] == tools._session_name_for("chat-B")
     assert env_a["AGENT_BROWSER_SESSION"] != env_b["AGENT_BROWSER_SESSION"]
@@ -1898,7 +1918,7 @@ async def test_graph_turn_uses_injected_browser_session(monkeypatch, scope, trac
         assert {env["AGENT_BROWSER_SESSION"] for _, env in records} == {expected}
     else:
         assert all(env["AGENT_BROWSER_SESSION"] == expected for _, env in records)
-    assert {tuple(argv) for argv, _ in records} == {("ab", "snapshot", "-i", "-c"), ("ab", "close")}
+    assert {tuple(argv) for argv, _ in records} == {("ab", "--content-boundaries", "snapshot", "-i", "-c"), ("ab", "close")}
     assert expected in tools._SESSION_LOCKS[asyncio.get_running_loop()]
     assert tools._SESSION_NAME.get() is None
 
@@ -2405,9 +2425,10 @@ async def test_form_read_returns_public_json_in_document_order(monkeypatch):
     monkeypatch.setattr(tools.subprocess, "Popen", fake_popen(out=payload, record=rec, procs=procs))
     out = await _toolmap({"binary": "ab"})["browser_form_read"].ainvoke({})
     # r7: the script rides eval --stdin, never argv
-    assert rec[-1] == ["ab", "eval", "--stdin"]
+    assert rec[-1] == ["ab", "--content-boundaries", "eval", "--stdin"]
     assert "abEnumerate" in procs[-1].stdin.getvalue().decode()
-    data = json.loads(out)
+    assert out.startswith("--- AGENT_BROWSER_PAGE_CONTENT nonce=")  # page data, marked
+    data = json.loads(boundaries.strip(out))
     assert [f["label"] for f in data] == [
         "First name",
         "Email",
@@ -2427,7 +2448,7 @@ async def test_form_read_returns_public_json_in_document_order(monkeypatch):
 async def test_form_read_reports_committed_values_and_options(monkeypatch):
     payload = json.dumps({"ok": True, "fields": _FORM_FIELDS})
     monkeypatch.setattr(tools.subprocess, "Popen", fake_popen(out=payload))
-    data = json.loads(await _toolmap({"binary": "ab"})["browser_form_read"].ainvoke({}))
+    data = json.loads(boundaries.strip(await _toolmap({"binary": "ab"})["browser_form_read"].ainvoke({})))
     by_kind = {f["kind"]: f for f in data}
     # r6: a combobox reports its committed selection, and omits options (not in the DOM)
     assert by_kind["combobox"]["value"] == "United States" and "options" not in by_kind["combobox"]
@@ -4781,7 +4802,7 @@ async def test_the_real_cli_takes_dash_values_the_guard_lets_through(monkeypatch
             filled = await t["browser_fill"].ainvoke({"selector": "#q", "text": value})
             assert not filled.startswith("Error:"), (value, filled)
             assert await t["browser_get_value"].ainvoke({"selector": "#q"}) == value
-        assert await t["browser_eval"].ainvoke({"expression": "-1"}) == "-1"
+        assert boundaries.strip(await t["browser_eval"].ainvoke({"expression": "-1"})) == "-1"
     finally:
         await t["browser_close"].ainvoke({})
 
@@ -4825,7 +4846,9 @@ async def test_the_real_cli_gives_two_instances_two_browsers(monkeypatch, tmp_pa
         assert names["a"] != names["b"]
         for who in ("a", "b"):
             become(who)  # b opened last: on one shared browser, a would now read agent-b
-            assert await t["browser_eval"].ainvoke({"expression": "document.title"}) == f'"agent-{who}"'
+            # content_boundaries is on by default: the title sits inside the page-data markers
+            title = await t["browser_eval"].ainvoke({"expression": "document.title"})
+            assert boundaries.strip(title) == f'"agent-{who}"'
         cdp = {
             subprocess.run([CLI, "--session", name, "get", "cdp-url"], capture_output=True, text=True,
                            timeout=60).stdout.strip()

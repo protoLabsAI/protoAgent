@@ -1047,6 +1047,8 @@ discord:                 # claimed by plugins/discord/ — NOT a core config fie
 
 A plugin section colliding with a reserved built-in (`model`, `mcp`, `plugins`, …) is ignored. Plugin secrets (e.g. `discord.bot_token`) route to `secrets.yaml` dynamically — see **Secrets** above. External plugins (e.g. a Google or Slack integration installed from its own repo) claim their own sections the same way.
 
+The bundled browser plugin claims `agent_browser:` — its keys (including `content_boundaries`, which marks page-derived tool output as untrusted, and `detect_walls`, which reports bot checks and sign-in walls after `browser_open`) are listed in the [browser reference](/reference/browser-automation#settings).
+
 ## Scheduler
 
 Scheduler **enable/disable** is YAML-controlled (`middleware.scheduler` above) so the drawer can flip it without a restart. Backend **selection and runtime knobs** (which backend, where to write the sqlite, where to publish, etc.) are env-driven so the same container image can run under either backend without a rebuild. See [Schedule future work](/guides/scheduler) for the full guide.
