@@ -10,6 +10,14 @@ import { useUI } from "../state/uiStore";
  *  passes it as `children`, so a plugin view is framed exactly like a core one. */
 export type SurfaceMeta = { id: string; title: string };
 
+// Shared by the rail and modal host instances (one module, one rail + one modal host in the
+// shell): the modal host flips this on a plain Close so the rail host's dock branch skips that
+// single `surfaceModal`→null transition. Dock to rail and a plain Close both clear the modal the
+// SAME way — and Expand only ever targets the active right view, so `rightPanel` is unchanged
+// either way — so store state alone can't tell them apart. This ref-shaped flag carries the one
+// bit that can, with no store field. A fresh modal open clears it (see the effect).
+const pendingClose = { current: false };
+
 /**
  * Frame one rail view — in the side rail (`frame="rail"`, wrapping the right dock's own
  * render) or in a large modal (`frame="modal"`, mounted at the shell level while
@@ -40,9 +48,9 @@ export function SurfaceHost({
 
   // Move focus into the view as it changes frame, and announce the move for a screen
   // reader. The modal host (a fresh mount) says "opened in a large window"; the rail host
-  // says "docked to the side rail" when a dock clears the modal back onto this very view.
-  // A plain Close leaves the rail selection untouched (the cleared modal names some other
-  // view), so the rail host stays silent.
+  // says "docked to the side rail" when Dock clears the modal back onto this very view.
+  // A plain Close clears the modal the same way, so the rail host stays silent only because
+  // the modal host flags it via `pendingClose` (see below) — not from store state.
   useEffect(() => {
     const was = prevModal.current;
     prevModal.current = modal;
@@ -52,10 +60,21 @@ export function SurfaceHost({
       (target ?? headingRef.current)?.focus();
     };
     if (frame === "modal" && modal?.viewId === viewId) {
+      // A fresh open supersedes any pending Close, so clear the shared guard here — this also
+      // keeps the rail branch from inheriting a stale flag across opens.
+      pendingClose.current = false;
       // Parent effects run after the Dialog's own focus trap has initialized.
       focusView();
       setAnnouncement(`${title} opened in a large window.`);
     } else if (frame === "rail" && was && !modal && was.viewId === viewId) {
+      // The modal just cleared back onto this very rail view. Dock to rail moves focus into the
+      // view and announces the move; a plain Close (the Dialog's ✕ / Escape / backdrop) must stay
+      // silent — it clears `surfaceModal` identically, so the modal host flagged it via the
+      // shared `pendingClose` guard for exactly this transition. Consume the flag and bail.
+      if (pendingClose.current) {
+        pendingClose.current = false;
+        return;
+      }
       focusView();
       setAnnouncement(`${title} docked to the side rail.`);
     }
@@ -104,7 +123,12 @@ export function SurfaceHost({
           open
           height="fill"
           padding="none"
-          onClose={() => useUI.getState().closeSurfaceModal()}
+          onClose={() => {
+            // A plain Close (not Dock) — flag it so the rail host stays silent and doesn't pull
+            // focus into the rail view on this transition.
+            pendingClose.current = true;
+            useUI.getState().closeSurfaceModal();
+          }}
           title={
             <span style={{ display: "flex", alignItems: "center", gap: "var(--pl-space-2)" }}>
               {heading}

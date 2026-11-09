@@ -970,6 +970,14 @@ function WorkspaceApp({ runtime }: { runtime: RuntimeStatus | null }) {
   // One mounted copy per plugin view key across the three docks (#4802) — filled by renderDock
   // in render order (left, right, bottom), fresh every render.
   const dockClaims = new Set<string>();
+  // While a right-dock view is expanded into the shell modal (desktop only), the modal owns its
+  // single mount — so the right dock must NOT also mount that view, as its active surface OR as a
+  // background slot, or a plugin view's iframe is mounted twice, breaking #4802's one-copy
+  // invariant. `openSurfaceModal` leaves `rightPanel` untouched (Expand only ever targets the
+  // active right view), so `rightActive` still names the expanded view here — hence the explicit
+  // exclusion below. Dock to rail clears `surfaceModal`, so the dock mounts the view again. The
+  // phone opens no modal, so this is always undefined there.
+  const expandedViewId = !isMobile ? surfaceModal?.viewId : undefined;
   // Chat mounts unconditionally on whichever dock holds it (streaming continuity, #613) —
   // left, right, OR the bottom dock. Its slot stays mounted while another surface swaps in
   // on the same dock, so an in-flight stream survives a surface switch on any rail.
@@ -1317,7 +1325,8 @@ function WorkspaceApp({ runtime }: { runtime: RuntimeStatus | null }) {
                 active view — switching Chat ⇄ any other view never remounts its background
                 plugin iframes. Chat is pinned and always-mounted (ChatSlot above) and has no
                 modal to expand into, so it passes no `view`: the host then frames the dock
-                render with no header. */}
+                render with no header. While a view is expanded, the shell modal owns its single
+                mount, so it's withheld from the dock render (see `expandedViewId`). */}
             <SurfaceHost
               frame="rail"
               view={
@@ -1326,7 +1335,15 @@ function WorkspaceApp({ runtime }: { runtime: RuntimeStatus | null }) {
                   : { id: rightActive, title: metaFor(rightActive)?.label ?? rightActive }
               }
             >
-              {renderDock(rightActive, isMobile ? [] : bgViewsFor("right"), dockClaims)}
+              {renderDock(
+                // The expanded view renders ONLY in the shell modal — pass "" so the dock mounts
+                // no active content for it (renderSurface("") is null), keeping the mount single.
+                expandedViewId === rightActive ? "" : rightActive,
+                // …and drop it from this dock's background slots too, so a background-delivery
+                // iframe for the expanded view can't be the second copy.
+                isMobile ? [] : bgViewsFor("right").filter((v) => v.key !== expandedViewId),
+                dockClaims,
+              )}
             </SurfaceHost>
           </>
         }
