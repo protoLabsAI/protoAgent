@@ -41,6 +41,8 @@ export function UtilityWidget({
   onOpen,
   onClose,
   onContextMenu,
+  open: openProp,
+  onOpenChange,
   children,
 }: {
   icon: ReactNode;
@@ -56,9 +58,26 @@ export function UtilityWidget({
   onClose?: () => void;
   /** Right-click the pill — wired to the context-menu system (ADR 0036). */
   onContextMenu?: (e: ReactMouseEvent) => void;
+  /** Controlled open state (Q11). When provided, the widget renders from it instead of its own
+   *  state — so a notification click or an Activity link can open the dialog from outside. Pair
+   *  with `onOpenChange`. Omit both and the widget stays uncontrolled, the default for every
+   *  existing widget. */
+  open?: boolean;
+  /** Called whenever the widget wants the open state to change (pill click → true, dialog
+   *  close → false). Required for the controlled case; also fires in the uncontrolled case. */
+  onOpenChange?: (open: boolean) => void;
   children: ReactNode;
 }) {
-  const [open, setOpen] = useState(false);
+  const [uncontrolledOpen, setUncontrolledOpen] = useState(false);
+  const isControlled = openProp !== undefined;
+  const open = isControlled ? openProp : uncontrolledOpen;
+  const setOpen = (next: boolean) => {
+    // The owner holds the truth when controlled; otherwise keep driving our own state. Either
+    // way tell the owner, so a controlled parent (the Decisions store) and an uncontrolled
+    // listener both hear the change.
+    if (!isControlled) setUncontrolledOpen(next);
+    onOpenChange?.(next);
+  };
   // A body-registered dialog-header action (e.g. a reload button). Reset on close so a
   // stale action never lingers when the dialog re-opens.
   const [headerAction, setHeaderAction] = useState<ReactNode>(null);
@@ -69,6 +88,9 @@ export function UtilityWidget({
       variant="ghost"
       type="button"
       aria-label={label}
+      // Every pill opens a dialog (Q12) — announce it, and whether it's open right now.
+      aria-haspopup="dialog"
+      aria-expanded={open}
       title={info ? undefined : label}
       data-testid={testId}
       onClick={() => {
