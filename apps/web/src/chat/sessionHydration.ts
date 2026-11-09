@@ -419,9 +419,16 @@ export function localTurnIds(messages: ChatMessage[]): Set<string> {
  *  A copy with no durable turn of its own (a send that never got a task) has nothing to
  *  anchor a reconcile on and is left alone. */
 export function isBehindServer(session: ChatSession, summary: DurableChatSession): boolean {
-  const known = localTurnIds(session.messages).size;
-  if (!known || typeof summary.turn_count !== "number") return false;
-  return summary.turn_count > Math.max(known, session.serverTurnCount ?? 0);
+  const held = localTurnIds(session.messages);
+  if (!held.size) return false;
+  // The exact signal: the server's newest turn is one this copy has never held (nor
+  // already reconciled against). A count can't see that once this copy remembers turns
+  // the store has swept — 13 local turns against 11 durable ones read "not behind" while
+  // the newest durable one was missing.
+  const newest = summary.last_task_id;
+  if (newest && !held.has(newest) && session.serverLastTaskId !== newest) return true;
+  if (typeof summary.turn_count !== "number") return false;
+  return summary.turn_count > Math.max(held.size, session.serverTurnCount ?? 0);
 }
 
 /** Reconcile a non-empty local transcript with the server's turns, server-authoritative
@@ -553,7 +560,14 @@ export async function hydrateDurableChatSessions(): Promise<void> {
         const token = eligibility.get(summary.session_id);
         if (token?.behind && token.localSession) {
           const messages = reconcileServerTurns(token.localSession.messages, turns, live_task_id);
-          if (messages !== "retry") reconciled.push({ token, messages, serverTurnCount: summary.turn_count });
+          if (messages !== "retry") {
+            reconciled.push({
+              token,
+              messages,
+              serverTurnCount: summary.turn_count,
+              serverLastTaskId: summary.last_task_id,
+            });
+          }
           continue;
         }
         const session = sessionFromDurableTurns(summary, turns, live_task_id);
@@ -576,4 +590,54 @@ export async function hydrateDurableChatSessions(): Promise<void> {
       }),
     );
   }
+}
+
+/** How often a visible console re-reads the session index while it stays open. */
+export const RESYNC_INTERVAL_MS = 60_000;
+/** The least time between two re-syncs, however often the window regains focus. */
+export const RESYNC_MIN_GAP_MS = 10_000;
+
+let resyncInFlight: Promise<void> | null = null;
+let lastResyncAt = 0;
+
+/** Re-run durable hydration while the console stays open (ADR 0104 multi-device catch-up).
+ *  Boot hydration alone left an open window blind to turns another device ran — the
+ *  phone's replies never reached a desktop window that stayed open all day. Single-flight
+ *  and spaced by RESYNC_MIN_GAP_MS; `force` skips the spacing (not the single flight).
+ *  Every commit still goes through the eligibility veto, so a local edit made while the
+ *  read is out wins. */
+export function resyncDurableChatSessions(opts: { force?: boolean; now?: number } = {}): Promise<void> {
+  if (resyncInFlight) return resyncInFlight;
+  const now = opts.now ?? Date.now();
+  if (!opts.force && now - lastResyncAt < RESYNC_MIN_GAP_MS) return Promise.resolve();
+  lastResyncAt = now;
+  resyncInFlight = hydrateDurableChatSessions().finally(() => {
+    resyncInFlight = null;
+  });
+  return resyncInFlight;
+}
+
+/** Keep an open console in step with the server: re-sync when the window comes back
+ *  (visibility, focus) and on a slow interval while it is visible. A hidden window does
+ *  nothing; it catches up the moment it is shown. Returns the unsubscribe. */
+export function watchDurableSessions(): () => void {
+  if (typeof document === "undefined" || typeof window === "undefined") return () => {};
+  const visible = () => document.visibilityState !== "hidden";
+  const onReturn = () => {
+    if (visible()) void resyncDurableChatSessions();
+  };
+  const timer = window.setInterval(onReturn, RESYNC_INTERVAL_MS);
+  document.addEventListener("visibilitychange", onReturn);
+  window.addEventListener("focus", onReturn);
+  return () => {
+    window.clearInterval(timer);
+    document.removeEventListener("visibilitychange", onReturn);
+    window.removeEventListener("focus", onReturn);
+  };
+}
+
+/** Test seam: forget the spacing and any in-flight re-sync. */
+export function resetDurableResyncForTests(): void {
+  resyncInFlight = null;
+  lastResyncAt = 0;
 }

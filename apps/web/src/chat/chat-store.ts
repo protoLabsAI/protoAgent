@@ -52,6 +52,11 @@ export type ChatSession = {
   // even when that read added nothing, so a count this copy can never match (a turn
   // regenerated away, a tail past the read window) is not re-fetched on every boot.
   serverTurnCount?: number;
+  // The server's newest turn (`/api/chat/sessions` `last_task_id`) this copy was last
+  // reconciled against. A newest turn this copy doesn't hold — and hasn't already
+  // reconciled against — means another client ran a turn here; unlike the count, it
+  // still says so once this copy remembers turns the store has swept (24h retention).
+  serverLastTaskId?: string;
 };
 
 // Reasoning is ON by default in the console (auto-enable) — a fresh tab thinks at
@@ -163,6 +168,7 @@ export type SessionReconcile = {
   token: HydrationEligibility;
   messages: ChatMessage[] | null;
   serverTurnCount: number;
+  serverLastTaskId?: string | null;
 };
 
 function hydrationCanRepairMessage(message: ChatMessage | undefined): message is ChatMessage {
@@ -1040,7 +1046,11 @@ export const chatStore = {
         if (!update || session !== update.token.localSession) return session;
         if (locallyDeletedIds.has(session.id) || locallyDismissedIds.has(session.id)) return session;
         changed = true;
-        if (!update.messages) return { ...session, serverTurnCount: update.serverTurnCount };
+        const marks = {
+          serverTurnCount: update.serverTurnCount,
+          ...(update.serverLastTaskId ? { serverLastTaskId: update.serverLastTaskId } : {}),
+        };
+        if (!update.messages) return { ...session, ...marks };
         const last = [...update.messages].reverse().find((message) => message.role === "assistant");
         // The adopted tail can end on a turn still running elsewhere: mark it like a
         // hydrated session's live turn (mergeHydratedSessions), so the slot reattaches.
@@ -1049,7 +1059,7 @@ export const chatStore = {
         return {
           ...session,
           messages: update.messages,
-          serverTurnCount: update.serverTurnCount,
+          ...marks,
           updatedAt: Math.max(session.updatedAt, Date.now()),
         };
       });

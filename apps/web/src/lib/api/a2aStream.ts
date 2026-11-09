@@ -80,6 +80,10 @@ export type DurableChatSession = {
   session_id: string;
   last_updated: string | null;
   turn_count: number;
+  /** The session's newest-CREATED turn (its task id). A client that holds no turn by this
+   *  id is behind, even while it still remembers turns the store has since swept — which
+   *  `turn_count` alone can't tell. Absent on a server that predates it. */
+  last_task_id?: string | null;
   /** The newest turn's state — served on the `parked` index (#3957), absent otherwise. */
   last_state?: string | null;
 };
