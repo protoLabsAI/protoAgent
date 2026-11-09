@@ -454,6 +454,10 @@ def _init_langgraph_agent(headless_setup: bool = False):
 
     if STATE.tasks_store is None:  # may have been created early (pre-setup) for the routes
         STATE.tasks_store = TaskStore()  # in-process issue tracker (Sprint B), instance-scoped
+    if STATE.decision_store is None:
+        from graph.decisions import DecisionStore
+
+        STATE.decision_store = DecisionStore()
     if STATE.directive_store is None:
         from graph.directives import DirectiveStore
 

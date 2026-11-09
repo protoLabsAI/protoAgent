@@ -427,15 +427,17 @@ class HitlAutoAnswer:
     async def settle(self, config: dict, result: Any, invoke: Callable[[Any], Awaitable[Any]]) -> Any:
         """For an ``ainvoke``-style driver: while the thread is parked at an interrupt,
         apply the policy — resume past it (``invoke(Command(resume={id: sentinel}))``,
-        whose result replaces ``result``) or give up and clear. An attended turn is left
-        untouched (the interrupt stays pending for the driver to surface). Returns the
+        whose result replaces ``result``) or give up and clear. Attended turns and explicit
+        decisions stay pending for the driver to surface. Returns the
         latest result."""
         from langgraph.types import Command
 
         if not self.autonomous:
             return result  # attended: nothing to settle — the driver surfaces the ask
         chat = _chat()
-        while await chat._pending_interrupt_value(config) is not None:
+        while (payload := await chat._pending_interrupt_value(config)) is not None:
+            if _turn_control.is_decision_interrupt(payload):
+                break
             if self.on_interrupt() == GIVE_UP:
                 await self.give_up(config)
                 break

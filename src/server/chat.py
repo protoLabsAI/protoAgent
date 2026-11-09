@@ -1041,6 +1041,15 @@ async def _run_native_turn(
                             payload = _turn_stream._paragraph_break(_carried, payload) + payload
                         _pass_text += payload
                         yield (kind, payload)
+                    elif kind == "input_required" and _turn_control.is_decision_interrupt(payload):
+                        # request_decision (#4725): the agent chose to stop at a choice it may
+                        # not make on its own. This parks even on an AUTONOMOUS turn — the one
+                        # exception to the auto-answer below — and the server records it durably
+                        # (the record outlives the input-required TTL and surfaces in the operator
+                        # inbox; an attended turn parks the same way and writes the same record).
+                        await _turn_control.record_decision_pause(session_id, payload, pass_config)
+                        yield (kind, payload)
+                        out["paused"] = True
                     elif kind == "input_required":
                         _verdict = _auto.on_interrupt()
                         if _verdict == _goal_loop.PARK:
@@ -1615,6 +1624,8 @@ async def _chat_langgraph_stream_impl(
                 # `Command(resume=…)` on a thread with nothing pending is a silent no-op
                 # in LangGraph, so the operator's text would vanish and the task complete
                 # empty. Run it as the fresh message it now is instead.
+                if decision_id := (request_metadata or {}).get("decision_id"):
+                    config = await _turn_control.validate_decision_resume(config, decision_id, session_id)
                 if resume and await _pending_interrupt_value(config) is None:
                     log.info(
                         "[a2a-stream] session=%s: resume on a task with no pending interrupt — running it as a fresh message",

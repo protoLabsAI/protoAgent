@@ -1167,26 +1167,29 @@ async def _run_turn_stream(
     from graph.delegation_usage import billed_graph_config
 
     st = _TurnStreamState(metrics=metrics, pricing=pricing)
-    async for event in STATE.graph.astream_events(
-        graph_input,
-        config=billed_graph_config(config),
-        version="v2",
-    ):
-        kind = event.get("event", "")
-        name = event.get("name", "")
-        # A subagent's events carry the delegating `task`/`task_batch` tool-call id (set
-        # as run metadata in graph.agent._run_subagent), so the console can nest the
-        # subagent's own tool cards under the delegation card BY ID — not by frame order
-        # (the delegation runs detached, so the task's on_tool_end races ahead of these).
-        parent_tool_id = (event.get("metadata") or {}).get("parent_task_id")
-        handler = _handler_for(kind, name)
-        if handler is None:
-            continue
-        # A sync generator, re-yielded frame by frame (see the section comment above
-        # `_TurnStreamState`): no extra await, same frame timing, closed here.
-        with contextlib.closing(handler(st, event, name, parent_tool_id)) as frames:
-            for frame in frames:
-                yield frame
+    from server.turn_control import decision_resume
+
+    async with decision_resume(config, resume_value):
+        async for event in STATE.graph.astream_events(
+            graph_input,
+            config=billed_graph_config(config),
+            version="v2",
+        ):
+            kind = event.get("event", "")
+            name = event.get("name", "")
+            # A subagent's events carry the delegating `task`/`task_batch` tool-call id (set
+            # as run metadata in graph.agent._run_subagent), so the console can nest the
+            # subagent's own tool cards under the delegation card BY ID — not by frame order
+            # (the delegation runs detached, so the task's on_tool_end races ahead of these).
+            parent_tool_id = (event.get("metadata") or {}).get("parent_task_id")
+            handler = _handler_for(kind, name)
+            if handler is None:
+                continue
+            # A sync generator, re-yielded frame by frame (see the section comment above
+            # `_TurnStreamState`): no extra await, same frame timing, closed here.
+            with contextlib.closing(handler(st, event, name, parent_tool_id)) as frames:
+                for frame in frames:
+                    yield frame
 
     # HITL pause (ADR 0003): the agent called ask_human → LangGraph interrupt().
     # The graph is checkpointed at the interrupt; surface the question so the A2A

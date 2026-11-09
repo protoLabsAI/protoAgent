@@ -41,6 +41,7 @@ of what the emitting call sites pass; a key may be absent on a given event.
 | `background.started` | `description`, `job_id`, `origin_session`, `status`, `subagent_type` | `src/background/manager.py` |
 | `chat.progress` | `session_id`, `task_id` | `src/server/a2a.py` |
 | `chat.resumed` | `error`, `origin`, `session_id`, `state`, `task_id`, `text`, `trigger` | `src/server/a2a.py` |
+| `decision.changed` | `id`, `session_id`, `state` | `src/graph/decisions.py` |
 | `delegation.finished` | `completion`, `cost_usd`, `duration_ms`, `error`, `from`, `id`, `nudges`, `outcome`, `parent_id`, `run_id`, `to_instance`, `to_kind`, `to_name` | `src/graph/ledger.py` |
 | `delegation.progress` | `id`, `progress`, `to_name` | `src/graph/ledger.py` |
 | `delegation.started` | _(varies)_ | `src/graph/ledger.py` |

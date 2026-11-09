@@ -161,6 +161,29 @@ def request_user_input(title: str, steps: list[dict], description: str = "") -> 
 
 
 @tool
+def request_decision(question: str, options: list[str | dict], context: str = "") -> str:
+    # Maintainer notes (kept out of the model-facing docstring): unlike ask_human /
+    # request_user_input, a ``kind: "decision"`` interrupt PARKS even on an autonomous turn
+    # (server/turn_control.py) — the agent deliberately chose to stop rather than guess — and
+    # the server records it in the durable decisions ledger (graph/decisions.py) so the park
+    # outlives the input-required TTL sweep and shows in the operator inbox either way. The
+    # resume value is the chosen option, returned here.
+    """Stop and ask the operator to decide; returns the chosen option.
+
+    Use it when a skill rule forbids proceeding on your own judgment, for a destructive or
+    outward-facing step, or for a choice only the operator can make. ``options`` is the list
+    of allowed answers — each a short string, or ``{"id", "label", "description"?}``;
+    ``context`` is optional background for the operator. On an UNATTENDED turn (scheduled /
+    inbox / background) the turn STOPS here until a person answers, so don't guess — only use
+    it for a decision that genuinely cannot be made autonomously.
+    """
+    from langgraph.types import interrupt
+
+    answer = interrupt({"kind": "decision", "question": question, "options": options, "context": context})
+    return answer if isinstance(answer, str) else str(answer)
+
+
+@tool
 def show_component(component: str, props: dict, title: str = "") -> str:
     # ADR 0051: data-only typed widgets rendered inline by the console's component registry
     # (no sandbox). Custom visuals go through show_artifact's sandboxed panel instead.
@@ -930,7 +953,7 @@ def load_skill(name: str) -> str:
 # the operator's answer isn't dropped. An APPROVAL-type interrupt tool (``self_restart``) must
 # NOT be here: a resumer whose fence excludes it must DECLINE it, not run it. Add only
 # question/answer interrupts here; add every lead-only interrupt tool to SUBAGENT_DENIED_TOOLS.
-HITL_TOOL_NAMES = frozenset({"ask_human", "request_user_input"})
+HITL_TOOL_NAMES = frozenset({"ask_human", "request_user_input", "request_decision"})
 
 # Lead-only interrupt tools hard-denied to every subagent: a subagent runs on a
 # checkpointer-less graph, so binding any ``interrupt()``-based tool (answer-type or
@@ -1000,7 +1023,17 @@ def get_all_tools(
     # graph.agent._subagent_tools, so a fork can't enable one via a tools list either.
     # show_component (inline component rendering, ADR 0051 / #1323): table/keyvalue/timeline
     # widgets rendered inline in chat by the console's extensible component registry.
-    tools = [current_time, calculator, web_search, fetch_url, ask_human, request_user_input, load_skill, show_component]
+    tools = [
+        current_time,
+        calculator,
+        web_search,
+        fetch_url,
+        ask_human,
+        request_user_input,
+        request_decision,
+        load_skill,
+        show_component,
+    ]
     tools.extend(build_restart_tools(restart_scheduler))
     # GitHub read tools (PRs/issues/commits) moved to the first-party `github`
     # plugin (opt-in) — not everyone needs them. Enable with plugins.enabled: [github].
@@ -1128,6 +1161,9 @@ DEFERRED_BASE_TOOL_NAMES = frozenset(
         "fetch_url",
         "ask_human",
         "request_user_input",
+        # request_decision is a core HITL capability — never deferred, like its siblings:
+        # the agent must be able to stop-and-ask without first searching for the tool.
+        "request_decision",
         "load_skill",
         "task",
         "task_batch",
