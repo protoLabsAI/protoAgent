@@ -43,6 +43,8 @@ def sparse(**kw) -> dict:
 WALLS = {
     "cloudflare": sparse(title="Just a moment...", text="Checking if the site connection is secure\nEnable JavaScript and cookies to continue"),
     "cloudflare_markup": sparse(title="www.example.com", markers={"cf": True}),
+    # the challenge-platform script alone is not a challenge — but with a 403/503 block status it is
+    "cloudflare_script_403": sparse(title="example.com", status=403, markers={"cf": False, "cf_cp": True}),
     "cloudflare_block": sparse(title="Attention Required! | Cloudflare", text="Sorry, you have been blocked. Ray ID: 8a1b"),
     "browser_check": sparse(title="DDoS-Guard", text="Checking your browser before accessing example.com"),
     "datadome": sparse(title="example.com", status=403, frames=[{"src": "https://geo.captcha-delivery.com/captcha/?initialCid=x", "visible": True}]),
@@ -64,7 +66,8 @@ WALLS = {
     "signin_redirect": sparse(url="https://www.linkedin.com/uas/login?session_redirect=x", title="LinkedIn Login"),
     "signin_form": sparse(url="https://app.example.com/", title="Sign in · Example", password_fields=1, other_fields=1),
 }
-EXPECT = {"cloudflare_markup": "cloudflare", "perimeterx_markup": "perimeterx", "recaptcha": "captcha",
+EXPECT = {"cloudflare_markup": "cloudflare", "cloudflare_script_403": "cloudflare",
+          "perimeterx_markup": "perimeterx", "recaptcha": "captcha",
           "hcaptcha": "captcha", "turnstile": "captcha",
           "amazon_robot_check": "captcha", "imperva_interruption": "captcha", "signin_redirect": "signin", "signin_form": "signin"}
 
@@ -83,6 +86,10 @@ NOT_WALLS = {
     "ordinary page": probe(),
     "page mentioning sign in": probe(title="Docs — how to sign in", text="Click Sign in at the top right. " * 60),
     "page mentioning cloudflare": probe(title="Why we moved to Cloudflare", text="Just a moment... we explain. Checking your browser is what CF does. " * 30),
+    # Bot Fight Mode / JS Detections inject the /cdn-cgi/challenge-platform/ script (markers.cf_cp)
+    # into ordinary 200 pages; a sparse landing / SPA shell / login page carrying it is NOT a wall.
+    "sparse page with only the cloudflare challenge-platform script": sparse(title="Acme Robotics", markers={"cf": False, "cf_cp": True}),
+    "sparse login page behind bot fight mode": sparse(url="https://app.example.com/", title="Acme", markers={"cf": False, "cf_cp": True}),
     "contact form with a captcha": probe(frames=[{"src": "https://www.google.com/recaptcha/api2/anchor?k=x", "visible": True}]),
     "invisible recaptcha badge on a sparse page": sparse(title="Home", frames=[{"src": "https://www.google.com/recaptcha/api2/anchor?size=invisible", "visible": False}]),
     "sign-up form": sparse(url="https://app.example.com/join", title="Create your account", password_fields=1, other_fields=2),
@@ -105,6 +112,28 @@ def test_opening_a_login_page_on_purpose_is_not_a_wall():
     assert walls.classify(page, "https://github.com/login") is None
     # …but being REDIRECTED to it is
     assert walls.classify(page, "https://github.com/settings/profile").kind == "signin"
+
+
+def test_scheme_less_identity_host_is_recognised_as_login():
+    # urlparse needs a scheme to populate hostname: bare "accounts.google.com" lands in path.
+    assert walls.is_login_url("accounts.google.com")
+    assert walls.is_login_url("login.example.com/anything")
+    assert not walls.is_login_url("www.example.com/articles")
+
+
+def test_opening_a_scheme_less_identity_host_on_purpose_is_not_a_wall():
+    page = sparse(url="https://accounts.google.com/signin/v2/identifier", title="Sign in — Google Accounts",
+                  password_fields=1, other_fields=1)
+    # requested as a bare host (no scheme) — the "opened on purpose" exemption must still apply
+    assert walls.classify(page, "accounts.google.com") is None
+    # …but being redirected to that identity host from another site is still a sign-in wall
+    assert walls.classify(page, "https://docs.example.com/report").kind == "signin"
+
+
+def test_different_page_normalises_scheme_less_urls():
+    assert walls._different_page("example.com/a", "https://example.com/a") is False
+    assert walls._different_page("accounts.google.com", "https://accounts.google.com/") is False
+    assert walls._different_page("example.com/a", "https://evil.example.com/a") is True
 
 
 def test_signin_message_never_asks_for_credentials():
@@ -271,7 +300,6 @@ async def test_err_blocked_by_client_navigation_failure(monkeypatch):
     ("browser_snapshot", {}, ["snapshot", "-i", "-c"]),
     ("browser_get_text", {}, ["get", "text", "body"]),
     ("browser_get_html", {"selector": "#main"}, ["get", "html", "#main"]),
-    ("browser_eval", {"expression": "1+1"}, ["eval", "--stdin"]),
 ])
 async def test_page_output_tools_ask_the_cli_for_boundaries(monkeypatch, tool, args, argv):
     rec = []
@@ -282,6 +310,17 @@ async def test_page_output_tools_ask_the_cli_for_boundaries(monkeypatch, tool, a
     rec.clear()
     await _tools(content_boundaries=False)[tool].ainvoke(args)
     assert rec[-1] == ["ab", *argv]
+
+
+async def test_browser_eval_output_stays_raw_and_never_carries_the_flag(monkeypatch):
+    # browser_eval returns the CALLER's own script result (often JSON a caller parses), not page
+    # prose the tool surfaced — so it is never wrapped, even with content_boundaries on (the default).
+    rec = []
+    monkeypatch.setattr(tools.subprocess, "Popen", _scripted(rec, other='{"ok": true}'))
+    out = await _tools()["browser_eval"].ainvoke({"expression": "1+1"})
+    assert rec[-1] == ["ab", "eval", "--stdin"]  # no --content-boundaries
+    assert out == '{"ok": true}'  # JSON reaches the caller intact, parseable as-is
+    assert json.loads(boundaries.strip(out)) == {"ok": True}
 
 
 async def test_action_tools_never_carry_the_flag(monkeypatch):

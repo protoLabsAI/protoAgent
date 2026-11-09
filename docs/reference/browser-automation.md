@@ -155,7 +155,7 @@ classifier: `walls.PROBE_JS` → `walls.check(eval_output, requested_url)`.
 ### Page content is marked as untrusted
 
 With `content_boundaries` on (the default), the output of `browser_snapshot`,
-`browser_get_text`, `browser_get_html`, `browser_eval` and `browser_form_read` reaches the
+`browser_get_text`, `browser_get_html` and `browser_form_read` reaches the
 model inside the CLI's own markers:
 
 ```
@@ -165,9 +165,13 @@ model inside the CLI's own markers:
 ```
 
 The nonce is random per CLI call, so a page can't forge the closing line. The flag is passed
-**per call**, only on those five tools — never through `AGENT_BROWSER_CONTENT_BOUNDARIES`,
+**per call**, only on those four tools — never through `AGENT_BROWSER_CONTENT_BOUNDARIES`,
 because a wrapped `eval` is no longer JSON and every form tool that parses one internally
-fails. `browser_form_read` parses inside the markers and re-wraps its result in the same
+fails. `browser_eval` is for the same reason left **unwrapped**: it returns the result of the
+caller's *own* script (commonly JSON a caller then parses — design-system's `SITE_PROBE_JS`,
+or any `json.loads`), not page prose the tool chose to surface, so wrapping it would break
+every parsing consumer. To read untrusted page text, use `browser_get_text`, which stays
+bounded. `browser_form_read` parses inside the markers and re-wraps its result in the same
 ones. A consumer that parses a tool result (say, the `browser_form_read` JSON) takes the
 text between the markers — `boundaries.strip()` does that. An output cut at the byte cap is closed
 with its own end marker before the `…[truncated: …]` note, so the note is never inside the

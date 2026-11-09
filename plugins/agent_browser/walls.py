@@ -47,7 +47,8 @@ PROBE_JS = r"""(() => {
     links: document.querySelectorAll('a[href]').length,
     frames,
     markers: {
-      cf: has('#challenge-running, #challenge-form, #cf-challenge-running, .cf-browser-verification, #cf-wrapper #cf-error-details, form#challenge-form, script[src*="/cdn-cgi/challenge-platform/"]'),
+      cf: has('#challenge-running, #challenge-form, #cf-challenge-running, .cf-browser-verification, #cf-wrapper #cf-error-details, form#challenge-form'),
+      cf_cp: has('script[src*="/cdn-cgi/challenge-platform/"]'),
       px: has('#px-captcha, [id^="px-captcha"]'),
       dd: has('script[src*="captcha-delivery.com"], script[src*="datadome"]'),
     },
@@ -127,10 +128,21 @@ def parse_probe(output: str) -> dict | None:
     return data if isinstance(data, dict) else None
 
 
+def _with_scheme(url: str) -> str:
+    """``urlparse`` only fills ``hostname`` when the URL has a scheme: ``accounts.google.com``
+    parses with ``hostname=None`` (the whole thing lands in ``path``), so an identity-host check
+    never fires. Prepend ``https://`` when there's no scheme (``//host`` → ``https://host`` too),
+    leaving already-schemed URLs — ``http:``, ``https:``, ``chrome-error:``, ``about:`` — alone."""
+    u = (url or "").strip()
+    if not u or u.startswith("//"):
+        return "https:" + u if u else u
+    return u if re.match(r"^[a-z][a-z0-9+.\-]*:", u, re.I) else "https://" + u
+
+
 def is_login_url(url: str) -> bool:
     """True when ``url`` looks like a sign-in page (path or identity host)."""
     try:
-        p = urlparse(url or "")
+        p = urlparse(_with_scheme(url))
     except ValueError:
         return False
     return bool(_LOGIN_PATH.search(p.path or "") or _LOGIN_HOST.match(p.hostname or ""))
@@ -153,6 +165,13 @@ def classify(probe: dict | None, requested_url: str = "") -> Wall | None:
     # "Sparse" = a page that is essentially just the interstitial: little text, few links.
     sparse = text_len < 1200 and int(probe.get("links") or 0) < 15
 
+    # Cloudflare's /cdn-cgi/challenge-platform/ script (markers.cf_cp) is injected into ordinary,
+    # successfully served 200 pages whenever Bot Fight Mode / JS Detections is on, and it stays in
+    # the DOM — a sparse landing page, SPA shell or login page carries it with no challenge at all.
+    # So it isn't a challenge signal on its own; trust it only alongside a block/deny status. A real
+    # "Just a moment..." challenge is caught by its title and the #challenge-running id (markers.cf).
+    cf = bool(markers.get("cf")) or (bool(markers.get("cf_cp")) and status in (403, 503))
+
     def wall(kind: str, detail: str = "") -> Wall:
         return Wall(kind, url, detail)
 
@@ -163,8 +182,8 @@ def classify(probe: dict | None, requested_url: str = "") -> Wall | None:
     # the JS challenge ("Just a moment...") usually does.
     if re.match(r"^\s*attention required", title, re.I):
         return wall("cloudflare_block", title)
-    if (_CF_TITLES.match(title) and (sparse or markers.get("cf"))) or (markers.get("cf") and sparse) \
-            or (sparse and _CF_TEXT.search(text) and (markers.get("cf") or _CF_TITLES.match(title))):
+    if (_CF_TITLES.match(title) and (sparse or cf)) or (cf and sparse) \
+            or (sparse and _CF_TEXT.search(text) and (cf or _CF_TITLES.match(title))):
         return wall("cloudflare", title)
     if sparse and _BROWSER_CHECK.search(text + " " + title):
         return wall("browser_check", title)
@@ -212,7 +231,7 @@ def _different_page(requested: str, landed: str) -> bool:
     With no requested URL (unknown), a login URL alone counts."""
     if not requested:
         return True
-    a, b = urlparse(requested), urlparse(landed)
+    a, b = urlparse(_with_scheme(requested)), urlparse(_with_scheme(landed))
     return (a.hostname, a.path.rstrip("/")) != (b.hostname, b.path.rstrip("/"))
 
 

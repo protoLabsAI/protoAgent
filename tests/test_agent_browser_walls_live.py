@@ -107,6 +107,13 @@ async def test_a_challenge_that_clears_itself_reports_the_real_page(browser, sit
     assert out.rstrip().endswith("/article.html")
 
 
+async def test_bot_fight_mode_script_on_an_ordinary_page_is_not_a_wall(browser, site):
+    # The /cdn-cgi/challenge-platform/ script is injected into normal 200 pages behind Cloudflare
+    # Bot Fight Mode and never leaves the DOM — a sparse page carrying it must not be a wall.
+    out = await _open(browser, f"{site}/cloudflare-bfm.html")
+    assert out.startswith("✓ Acme Robotics"), out
+
+
 async def test_a_login_redirect_is_a_signin_wall(browser, site):
     out = await _open(browser, f"{site}/members")
     assert out.startswith("Error: blocked by a sign-in wall at "), out
@@ -145,5 +152,7 @@ async def test_page_text_and_form_read_arrive_inside_the_markers(browser, site):
     filled = await browser["browser_fill"].ainvoke({"selector": "Search jobs", "text": "engineer"})
     assert not filled.startswith("Error:"), filled
     assert await browser["browser_get_value"].ainvoke({"selector": "Search jobs"}) == "engineer"
+    # browser_eval returns the caller's own script result RAW — never wrapped in the markers.
     ev = await browser["browser_eval"].ainvoke({"expression": "document.title"})
-    assert boundaries.strip(ev) == '"Remote jobs board"'
+    assert ev == '"Remote jobs board"', ev
+    assert boundaries.unwrap(ev)[1] is None  # not a wrapped block

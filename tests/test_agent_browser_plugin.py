@@ -1173,7 +1173,9 @@ async def test_eval_sends_the_script_over_stdin_not_argv(monkeypatch):
     monkeypatch.setattr(tools.subprocess, "Popen", fake_popen(out="42", record=rec, procs=procs))
     out = await _toolmap({"binary": "ab"})["browser_eval"].ainvoke({"expression": "40 + 2"})
     assert out == "42"
-    assert rec[-1] == ["ab", "--content-boundaries", "eval", "--stdin"]  # the script is NOT an argv item…
+    # eval output stays raw (no --content-boundaries): it's the caller's own script result, often
+    # JSON a caller parses — a wrapped eval is no longer JSON. The script is NOT an argv item…
+    assert rec[-1] == ["ab", "eval", "--stdin"]
     assert procs[-1].stdin.getvalue() == b"40 + 2"  # …it arrives on stdin
 
 
@@ -1186,7 +1188,7 @@ async def test_a_100k_eval_script_stays_under_the_windows_command_line_limit(mon
     script = "1;" + "a".ljust(100_000, "a")  # 100,002 non-flag-shaped chars
     await _toolmap({"binary": "ab"})["browser_eval"].ainvoke({"expression": script})
     argv = rec[-1]
-    assert argv == ["ab", "--content-boundaries", "eval", "--stdin"] and script not in argv  # never on the command line
+    assert argv == ["ab", "eval", "--stdin"] and script not in argv  # never on the command line
     assert len(subprocess.list2cmdline(argv)) < 32_767  # Windows CreateProcess cap
     assert procs[-1].stdin.getvalue() == script.encode()  # delivered via stdin
 
