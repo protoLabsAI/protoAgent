@@ -52,6 +52,7 @@ def _mod(name: str):
 
 preflight = _mod("preflight")
 tools = _mod("tools")
+boundaries = _mod("boundaries")
 storage = _mod("storage")
 
 # Probe ONCE, with the plugin's own preflight: skip the module unless the CLI is usable and
@@ -72,8 +73,11 @@ def browser():
     os.environ["AGENT_BROWSER_SESSION"] = f"protoagent-forms-{os.getpid()}"
     # main_idle_timeout_min: a backstop for a KILLED run, which never reaches the close below —
     # the CLI's own reaper ends the daemon (and its Chrome) after a few quiet minutes.
+    # content_boundaries off: these tests compare raw browser_eval values. The marked (default)
+    # path is covered live in test_agent_browser_walls_live.py.
     toolset = {t.name: t for t in tools.get_browser_tools(
-        {"binary": "agent-browser", "timeout_s": 120, "main_idle_timeout_min": 3})}
+        {"binary": "agent-browser", "timeout_s": 120, "main_idle_timeout_min": 3,
+         "content_boundaries": False})}
     try:
         yield toolset
     finally:
@@ -99,7 +103,7 @@ async def _form(toolset, scope: str = "") -> dict:
     """``browser_form_read`` → ``{label: field}`` for easy assertions."""
     raw = await toolset["browser_form_read"].ainvoke({"scope": scope})
     assert not raw.startswith("Error:"), raw
-    return {f["label"]: f for f in json.loads(raw)}
+    return {f["label"]: f for f in json.loads(boundaries.strip(raw))}
 
 
 # ── react-select combobox: commit the EXACT option, never the highlighted Enter-trap ──
@@ -300,7 +304,7 @@ async def _form_by_id(toolset) -> dict:
     """``browser_form_read`` → ``{id: field}`` (the phone picker has no usable label yet)."""
     raw = await toolset["browser_form_read"].ainvoke({"scope": ""})
     assert not raw.startswith("Error:"), raw
-    return {f["id"]: f for f in json.loads(raw) if f.get("id")}
+    return {f["id"]: f for f in json.loads(boundaries.strip(raw)) if f.get("id")}
 
 
 async def test_phone_country_reads_back_the_name_not_the_dial_code(browser):

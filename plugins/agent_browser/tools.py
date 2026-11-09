@@ -56,7 +56,7 @@ from langgraph.prebuilt import InjectedState
 
 from graph.sdk import multimodal_tool_result
 
-from . import cli_fetch, forms, gate, preflight, runtime, storage
+from . import boundaries, cli_fetch, forms, gate, preflight, runtime, storage, walls
 from .runtime import bad_operand, flag, launch_flags, number
 
 log = logging.getLogger("protoagent.plugins.agent_browser")
@@ -76,6 +76,10 @@ _UPLOAD_POLL_S = 0.25
 # safe default for actions. It is further capped below the plugin's `timeout_s` (see the tools).
 _WAIT_MAX_S = 25.0
 _LOAD_STATES = ("load", "domcontentloaded", "networkidle")
+# A Cloudflare-style JS challenge usually clears itself in a few seconds: browser_open
+# re-probes a TRANSIENT wall this many times, this far apart (~5s), before reporting it.
+_WALL_RECHECKS = 2
+_WALL_RECHECK_S = 2.5
 
 
 def _kill_tree(proc) -> None:
@@ -263,6 +267,10 @@ def get_browser_tools(cfg: dict | None, refresh_gaps=None, *, start_gap: bool = 
     # browser_wait's cap: 25 s, and always below the subprocess timeout so the daemon reports
     # its own timeout before we kill the CLI (a killed CLI leaves the daemon still waiting).
     wait_cap_s = max(0.5, min(_WAIT_MAX_S, timeout - 2.0))
+    # Page-derived output reaches the model inside the CLI's untrusted-content markers (see
+    # boundaries.py); the bot-wall / sign-in-wall check after browser_open (walls.py).
+    bounded = flag(cfg, "content_boundaries", True)
+    detect_walls = flag(cfg, "detect_walls", True)
 
     def _serialized(fn):
         """Run the async tool ``fn`` while holding its session's lock (see above). The session
@@ -514,6 +522,9 @@ def get_browser_tools(cfg: dict | None, refresh_gaps=None, *, start_gap: bool = 
         if cut >= len(data) // 2:
             data = data[:cut]
         text = data.decode("utf-8", "ignore").rstrip()
+        # A cut --content-boundaries output lost its closing marker with the rest: close the
+        # block (same nonce) so the truncation note below sits OUTSIDE the page data.
+        text = boundaries.close_cut(text)
         return (f"{text}\n…[truncated: output passed the {max_bytes}-byte cap and the rest was "
                 f"not read; narrow it with {hint}]")
 
@@ -521,6 +532,36 @@ def get_browser_tools(cfg: dict | None, refresh_gaps=None, *, start_gap: bool = 
                   env_extra: dict | None = None) -> str:
         out = await asyncio.to_thread(_run, *args, stdin=stdin, truncate=truncate, env_extra=env_extra)
         return _explain_stale_ref(out) if out.startswith("Error:") else out
+
+    async def _page(*args: str, stdin: str | None = None, truncate: str = "") -> str:
+        """``_ab`` for a call whose output is PAGE DATA bound for the model: with
+        ``content_boundaries`` on, the CLI wraps it in its untrusted-content markers. Internal
+        evals the form parsers read never come through here (a wrapped eval isn't JSON)."""
+        if bounded:
+            return await _ab(boundaries.FLAG, *args, stdin=stdin, truncate=truncate)
+        return await _ab(*args, stdin=stdin, truncate=truncate)
+
+    async def _wall_check(opened: str, url: str) -> str:
+        """Post-process a ``browser_open`` result: a bot check / block page / sign-in wall that
+        answered instead of the site becomes an ``Error: blocked by …`` handoff (walls.py). A
+        TRANSIENT wall (a JS challenge) is re-probed ``_WALL_RECHECKS`` times first; one that
+        clears reports the page it cleared to. An unreadable probe leaves the result as it was."""
+        if not detect_walls or not url:
+            return opened
+        if opened.startswith("Error:"):
+            wall = walls.classify_failure(opened, url)
+            return walls.message(wall) if wall else opened
+        for attempt in range(_WALL_RECHECKS + 1):
+            probe = walls.parse_probe(await _ab("eval", "--stdin", stdin=walls.PROBE_JS))
+            if probe is None:
+                return opened
+            wall = walls.classify(probe, url)
+            if wall is None:
+                return opened if attempt == 0 else f"✓ {probe.get('title') or ''}\n  {probe.get('url') or url}"
+            if not wall.transient or attempt == _WALL_RECHECKS:
+                return walls.message(wall)
+            await asyncio.sleep(_WALL_RECHECK_S)
+        return opened  # unreachable: the loop always returns
 
     _bad_operand = bad_operand  # runtime.bad_operand — shared with the panel's /nav route
 
@@ -718,13 +759,16 @@ def get_browser_tools(cfg: dict | None, refresh_gaps=None, *, start_gap: bool = 
     @_serialized
     async def browser_open(url: str = "", *, state: Annotated[Any, InjectedState] = None) -> str:
         """Launch the browser (or navigate the current session) to `url`; blank opens
-        about:blank. Start every browsing task here."""
+        about:blank. Start every browsing task here. A bot check or sign-in wall returns
+        `Error: blocked by …` — hand it to the user, don't work around it."""
         # The configured runtime options (headed/profile/device/allowed_domains/stealth/...) are
         # applied here, where the session launches.
         if (bad := _bad_operand(url=url)):
             return bad
         flags = launch_flags(cfg)
-        return await _ab(*flags, "open", url) if url else await _ab(*flags, "open")
+        if not url:
+            return await _ab(*flags, "open")
+        return await _wall_check(await _ab(*flags, "open", url), url)
 
     @tool
     @_serialized
@@ -766,7 +810,7 @@ def get_browser_tools(cfg: dict | None, refresh_gaps=None, *, start_gap: bool = 
             argv += ["-s", await _css_safe(scope)]
         if depth:
             argv += ["-d", str(int(depth))]
-        return await _ab(*argv, truncate="browser_snapshot(scope=<CSS selector>) or depth=")
+        return await _page(*argv, truncate="browser_snapshot(scope=<CSS selector>) or depth=")
 
     @tool
     @_serialized
@@ -775,8 +819,8 @@ def get_browser_tools(cfg: dict | None, refresh_gaps=None, *, start_gap: bool = 
         `body`) — use it to read page content."""
         if (bad := _bad_operand(selector=selector)):
             return bad
-        return await _ab("get", "text", await _css_safe(selector),
-                         truncate="browser_get_text(selector=<a narrower CSS selector or @ref>)")
+        return await _page("get", "text", await _css_safe(selector),
+                           truncate="browser_get_text(selector=<a narrower CSS selector or @ref>)")
 
     @tool
     @_serialized
@@ -786,8 +830,8 @@ def get_browser_tools(cfg: dict | None, refresh_gaps=None, *, start_gap: bool = 
             return bad
         hint = "browser_get_html(selector=<a narrower CSS selector or @ref>)"
         if not selector:
-            return await _ab("get", "html", truncate=hint)
-        return await _ab("get", "html", await _css_safe(selector), truncate=hint)
+            return await _page("get", "html", truncate=hint)
+        return await _page("get", "html", await _css_safe(selector), truncate=hint)
 
     @tool
     @_serialized
@@ -819,10 +863,13 @@ def get_browser_tools(cfg: dict | None, refresh_gaps=None, *, start_gap: bool = 
             return ("Error: browser_form_read can't scope by a @ref — those are resolved by the "
                     "CLI, not in the page. Pass a CSS selector or a visible container label, or "
                     "leave scope blank to read the whole page.")
-        out = await _ab("eval", "--stdin", stdin=forms.read_form_js(scope))
+        out = await _page("eval", "--stdin", stdin=forms.read_form_js(scope))
         if out.startswith("Error:"):
             return out
-        return forms.render_form_read(out, scope)
+        # Parse the JSON inside the markers, then re-wrap the rendered fields in the same ones.
+        inner, marker = boundaries.unwrap(out)
+        rendered = forms.render_form_read(inner, scope)
+        return boundaries.rewrap(rendered, marker) if bounded else rendered
 
     @tool
     @_serialized
@@ -885,6 +932,8 @@ def get_browser_tools(cfg: dict | None, refresh_gaps=None, *, start_gap: bool = 
         current = await _ab("get", "url")
         if current.startswith("Error:"):
             return current
+        # No content-boundaries flag: a wait prints only the condition it was GIVEN (`waited
+        # text "…"`, the selector, the url pattern), never page data (actions.rs handle_wait).
         out = await _ab(*argv, env_extra={"AGENT_BROWSER_DEFAULT_TIMEOUT": ms})
         if out.startswith("Error:") and ("timed out" in out.lower() or "timeout waiting" in out.lower()):
             what = next(iter(given))
@@ -1132,6 +1181,11 @@ def get_browser_tools(cfg: dict | None, refresh_gaps=None, *, start_gap: bool = 
             if (blocked := await _enforce("eval", gate.classify_eval(expression, page), tool="browser_eval",
                                           page_url=page)):
                 return blocked
+        # Output stays RAW (no content-boundary markers, `_ab` not `_page`): `eval` returns the
+        # result of the CALLER's own script — commonly JSON a caller then parses (any
+        # `json.loads`) — not page prose the tool chose to surface. A wrapped eval is no longer
+        # JSON, which is why the flag is never set globally (boundaries.py); the user-facing
+        # tool matches that. To read untrusted page text, use browser_get_text — it's bounded.
         return await _ab("eval", "--stdin", stdin=expression)
 
     # ── capture + session ─────────────────────────────────────────────────────

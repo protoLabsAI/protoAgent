@@ -73,6 +73,9 @@ The [settings reference](/reference/browser-automation#settings) lists every fie
 - **“The browser profile is already in use”:** another browser has that profile
   directory open. With `per_session`, only one chat at a time can use a profile.
   Close the other chat’s browser, or clear **Browser profile dir**.
+- **The agent says it's `blocked by` a bot check or sign-in wall:** open the Browser
+  panel, complete the check or sign in there, then tell the agent to continue. It
+  won't try to solve a check or type your password itself.
 - **Site refuses automation:** complete a login manually or use a headed session
   with a profile. Some sites still refuse automated access; repeated retries may
   not help.

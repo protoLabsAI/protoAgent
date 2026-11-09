@@ -106,7 +106,10 @@ address a form field by its label.
 The bundled **`web-browse` skill** teaches that loop and then defers to the CLI's own,
 always-version-matched guidance (`agent-browser skills get core`), so the instructions
 can't go stale against a newer binary. Two **workflows** ship as recipes —
-`browse-and-extract` and `fill-form`.
+`browse-and-extract` and `fill-form` — run on the plugin's workflow-only `browser`
+subagent. `fill-form` fills by label, reads the form back with `browser_form_read`, and
+**stops**: it reports the filled form and asks you to submit it (or to tell it to). It never
+clicks submit.
 
 Every tool degrades to a readable `Error: …` string instead of raising: a failed browser
 action should inform the agent's loop, not crash the turn. Output is capped
@@ -115,6 +118,60 @@ Reading stops at the cap and the child is killed, so memory stays bounded. The r
 tools (`browser_snapshot`, `browser_get_text`, `browser_get_html`) then return the first
 part, cut at a line break and marked `…[truncated: …]` with how to narrow the read. Every
 other tool returns a short error.
+
+### Bot walls and sign-in walls
+
+After every `browser_open` the plugin reads the landed page's title, URL, status and a few
+markers (one small in-page eval, `walls.py`) and asks: did a bot check, a block page or a
+sign-in wall answer instead of the site? If so the tool returns
+
+```
+Error: blocked by a Cloudflare bot check at https://… — a human check is showing instead
+of the page. Do not try to solve it. Ask the user to clear it in the console Browser panel,
+then continue.
+```
+
+instead of the `✓ Just a moment...` it used to report as success. The `Error: blocked by`
+prefix is deliberate: it keeps the `Error:` failure contract every caller already checks,
+and it is one string to grep for.
+
+| Wall | Recognised by |
+|---|---|
+| Cloudflare challenge / block page | `Just a moment...` / `Attention Required!` titles, `#challenge-running` and `/cdn-cgi/challenge-platform/` markup, on a near-empty page |
+| "Checking your browser" pages | that text (DDoS-Guard, Sucuri, …) on a near-empty page |
+| DataDome · PerimeterX · Akamai | a `captcha-delivery.com` frame · `#px-captcha` / "Press & Hold" · "Access Denied … Reference #" |
+| Google unusual traffic | `google.*/sorry/` or its "unusual traffic" text |
+| CAPTCHA pages | a visible reCAPTCHA / hCaptcha / Turnstile frame on a near-empty page; Amazon's robot check; Imperva's "Pardon Our Interruption" |
+| Refused requests | HTTP 403 / 429; Chrome's `ERR_BLOCKED_BY_CLIENT` |
+| Sign-in walls | a redirect onto a login URL, or a short page dominated by a password field titled "Sign in" |
+
+A JS challenge often clears itself, so a Cloudflare / browser-check wall is re-probed twice
+over ~5 s first; one that clears reports the page it cleared to. False positives are kept
+low on purpose: a page that merely mentions "sign in" or carries a contact-form CAPTCHA is
+not a wall, and opening a login page on purpose is not a wall either (being redirected to
+one is). Turn the check off with `detect_walls: false`. Another plugin can reuse the
+classifier: `walls.PROBE_JS` → `walls.check(eval_output, requested_url)`.
+
+### Page content is marked as untrusted
+
+With `content_boundaries` on (the default), the output of `browser_snapshot`,
+`browser_get_text`, `browser_get_html`, `browser_eval` and `browser_form_read` reaches the
+model inside the CLI's own markers:
+
+```
+--- AGENT_BROWSER_PAGE_CONTENT nonce=2585bb94… origin=https://example.com/ ---
+…page text…
+--- END_AGENT_BROWSER_PAGE_CONTENT nonce=2585bb94… ---
+```
+
+The nonce is random per CLI call, so a page can't forge the closing line. The flag is passed
+**per call**, only on those five tools — never through `AGENT_BROWSER_CONTENT_BOUNDARIES`,
+because a wrapped `eval` is no longer JSON and every form tool that parses one internally
+fails. `browser_form_read` parses inside the markers and re-wraps its result in the same
+ones. A consumer that parses a tool result (say, the `browser_form_read` JSON) takes the
+text between the markers — `boundaries.strip()` does that. An output cut at the byte cap is closed
+with its own end marker before the `…[truncated: …]` note, so the note is never inside the
+page data.
 
 ### Screenshots and PDFs are fenced
 
@@ -310,6 +367,8 @@ Editable in **Settings ▸ Plugins ▸ Agent Browser**, or under `agent_browser:
 | `allowed_domains` | A navigable-domain allowlist. The tightest lever you have on where the agent can go. |
 | `confirm_actions` | Which consequential actions need your approval first: `submit` (the default when unset), `eval`, `upload`, `download`, `all`, or blank/`none` for off. See [Consequential actions ask you first](#consequential-actions-ask-you-first). |
 | `max_output` | Cap the page text returned to the model (the CLI's own LLM-safety knob). |
+| `content_boundaries` | Wrap page-derived output in untrusted-content markers (default on). See [Page content is marked as untrusted](#page-content-is-marked-as-untrusted). |
+| `detect_walls` | Report a bot check, block page or sign-in wall after `browser_open` as `Error: blocked by …` (default on). See [Bot walls and sign-in walls](#bot-walls-and-sign-in-walls). |
 | `stealth` · `user_agent` · `browser_args` | Anti-detection and raw Chrome launch args — see below. |
 
 Launch options apply when the **session launches** (the first `open`). A session already
@@ -348,7 +407,9 @@ responsible for what the agent does on a site.
 | `browser_stream.py` | the CDP bridge — frames out, input in, resize + nav re-arm, the WS ticket |
 | `runtime.py` | what the tools and the panel share: the launch flags, the session name and its env, the idle reaper |
 | `gate.py` | the action gate: target probe, `submit`/`eval`/`upload`/`download` policy, approval card, plugin policies |
-| `skills/` · `workflows/` | the `web-browse` skill and the two recipes |
+| `walls.py` | the bot-wall / sign-in-wall probe and classifier (`browser_open`) |
+| `boundaries.py` | the untrusted-content markers: parse, re-wrap, strip |
+| `skills/` · `workflows/` | the `web-browse` skill and the two recipes (run on the `browser` subagent) |
 
 See also: [Plugins](/guides/plugins) · [Building a plugin view](/guides/building-react-plugin-views)
 · [Sandboxing & egress](/guides/sandboxing).

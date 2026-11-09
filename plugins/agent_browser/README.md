@@ -27,6 +27,16 @@ browser_pdf("page.pdf")      # or browser_screenshot("page.png")
 browser_close()
 ```
 
+Two guards sit on that loop. **Walls:** `browser_open` checks the landed page, and a
+Cloudflare / CAPTCHA / DataDome / PerimeterX / Akamai / Google-sorry interstitial, an HTTP
+403/429, `ERR_BLOCKED_BY_CLIENT` or a sign-in wall comes back as `Error: blocked by <wall> at
+<url> — … ask the user to clear it in the console Browser panel, then continue` instead of a
+`✓` (a self-clearing JS challenge is re-checked for ~5 s first; `detect_walls: false` turns it
+off). **Boundaries:** page-derived output (snapshot, get_text, get_html, eval, form_read)
+arrives inside the CLI's `AGENT_BROWSER_PAGE_CONTENT nonce=… origin=…` markers
+(`content_boundaries`, default on), so the model can tell page data from instructions. A
+consumer that parses a result takes the text between the markers (`boundaries.strip()`).
+
 ## Requirements
 
 Nothing to install by hand:
@@ -64,16 +74,20 @@ Homebrew, Cargo), or a path pinned in the `binary` setting, always wins over the
 | `setup_steps.py` | the setup steps behind the Download agent-browser / Install Chrome buttons |
 | `browser_panel.py` | the Browser panel page + routes — the interactive canvas, the gated nav / stream-ticket / WS-stream routes |
 | `browser_stream.py` | the CDP bridge — screencast frames out, input in, viewport resize + nav re-arm; the WS ticket auth |
+| `walls.py` | bot-wall / sign-in-wall detection after `browser_open` — a dependency-free probe (`PROBE_JS`) + classifier (`check`) other plugins can reuse |
+| `boundaries.py` | the CLI's untrusted-content markers: per-call flag, parse/re-wrap for `browser_form_read`, `strip()` for consumers that parse a result |
 | `runtime.py` | what the tools and the panel share: the launch-flag builder (headed / profile / device / stealth), the session name + child env (`cli_env`), the idle reaper, the profile-in-use error |
 | `skills/web-browse/` | the discovery skill (defers to `agent-browser skills get core`) |
-| `workflows/` | declarative browser recipes (browse-and-extract, fill-form) |
+| `workflows/` | declarative browser recipes (browse-and-extract, fill-form — fills and verifies, never submits), run on the workflow-only `browser` subagent |
 | `__init__.py` | `register()` — preflight, tools, the interactive panel; skills/workflows auto-discovered |
 
 Tests live with the host, in [`tests/test_agent_browser_plugin.py`](../../tests/test_agent_browser_plugin.py)
 and [`tests/test_agent_browser_gate.py`](../../tests/test_agent_browser_gate.py) (host-free: the CLI
 is mocked), and [`tests/test_agent_browser_forms_live.py`](../../tests/test_agent_browser_forms_live.py)
 / [`tests/test_agent_browser_gate_live.py`](../../tests/test_agent_browser_gate_live.py) (real browser —
-see below). The operator knobs (headed, allowed domains, profile, device,
+see below); walls and boundaries in [`tests/test_agent_browser_walls.py`](../../tests/test_agent_browser_walls.py)
+(fixtures per wall class and negatives) and [`tests/test_agent_browser_walls_live.py`](../../tests/test_agent_browser_walls_live.py)
+(real browser against local interstitial / login-redirect / 403 / 429 pages). The operator knobs (headed, allowed domains, profile, device,
 stealth, …) are editable in **Settings ▸ Plugins ▸ Agent Browser**, or under `agent_browser:`
 in `langgraph-config.yaml`.
 
