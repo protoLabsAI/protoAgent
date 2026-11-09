@@ -2560,8 +2560,10 @@ _REACT_SELECT_HTML = """
 """
 
 
-def _run_enumerate_js(html: str):
-    """Run forms._JS_LIB's ``abEnumerate`` against a real DOM and return the field list."""
+def _run_enumerate_js(html: str, pre_js: str = ""):
+    """Run forms._JS_LIB's ``abEnumerate`` against a real DOM and return the field list.
+    ``pre_js`` runs AFTER the lib is defined (so it can reshape the page or override a helper)
+    and BEFORE the enumeration."""
     if not NODE:
         pytest.skip("node not on PATH")
     probe = subprocess.run([NODE, "-e", "require.resolve('jsdom')"], cwd=REPO, capture_output=True, text=True)
@@ -2572,6 +2574,8 @@ def _run_enumerate_js(html: str):
         "const dom = new JSDOM(" + json.dumps(html) + ");\n"
         "global.window = dom.window; global.document = dom.window.document; global.CSS = dom.window.CSS;\n"
         + forms._JS_LIB
+        + "\n"
+        + pre_js
         + "\n"
         "console.log(JSON.stringify(abEnumerate(document)));\n"
     )
@@ -3819,8 +3823,11 @@ def _run_upload_flow_js(html, selector, fake_name, nonce="n1", pre_js=""):
         "  LFOR: info.label_for, LTEXT: info.label_text, FBOX: info.field_box, GLABEL: info.group_label};\n"
         "let v = verifyTpl; for (const k in sub) v = v.split(JSON.stringify('@@' + k + '@@')).join(JSON.stringify(sub[k] || ''));\n"
         "const verify = (0, eval)(v);\n"
-        "const form = (0, eval)(" + json.dumps(forms.read_form_js("")) + ");\n"
-        "console.log(JSON.stringify({info, verify, form}));\n"
+        # read_form_js is async (it awaits the combobox-options pass) — resolve the Promise it
+        # returns before serialising, or `form` stringifies to `{}` and the read looks empty.
+        "Promise.resolve((0, eval)(" + json.dumps(forms.read_form_js("")) + ")).then(function(form){\n"
+        "  console.log(JSON.stringify({info, verify, form}));\n"
+        "}).catch(function(e){ console.error(e && e.stack || e); process.exit(2); });\n"
     )
     out = subprocess.run([NODE, "-e", harness], cwd=REPO, capture_output=True, text=True, timeout=60)
     assert out.returncode == 0, out.stderr
@@ -3857,8 +3864,52 @@ def test_upload_verifies_via_the_field_box_alone_when_the_group_label_is_missing
     out = forms.render_upload(verify, "#resume", "resume-gitlab.pdf", label=info["label"])
     assert out.startswith("Uploaded resume-gitlab.pdf to"), out
     assert "verified via the field's displayed filename" in out
-    rows = json.loads(forms.render_form_read(form))
+    s = forms.render_form_read(form)
+    assert not s.startswith("Error"), s  # the read must return field data, not an error string
+    rows = json.loads(s)
     assert [r["value"] for r in rows if r["id"] == "resume"] == ["resume-gitlab.pdf"], rows
+
+
+_TWO_GROUP_FILE_HTML = """<form>
+  <div role="group" aria-labelledby="lbl-a"><span id="lbl-a">Resume</span>
+    <input id="a" type="file" name="a"></div>
+  <div role="group" aria-labelledby="lbl-b"><span id="lbl-b">Cover letter</span>
+    <input id="b" type="file" name="b"></div>
+</form>"""
+
+
+def test_form_read_keeps_other_fields_when_one_groups_label_is_removed():
+    """#4963: removing ONE field's group label (its `aria-labelledby` + the referenced element)
+    must not empty the read — that field AND its untouched sibling both still come back under
+    their ids. One missing label never collapses the whole read."""
+    pre = (
+        "document.querySelector('[aria-labelledby=\"lbl-a\"]').removeAttribute('aria-labelledby');"
+        "document.getElementById('lbl-a').remove();"
+    )
+    fields = _run_enumerate_js(_TWO_GROUP_FILE_HTML, pre_js=pre)
+    rows = json.loads(forms.render_form_read(json.dumps({"ok": True, "fields": fields})))
+    assert sorted(r["id"] for r in rows) == ["a", "b"]  # both fields, neither dropped
+
+
+def test_form_read_survives_a_field_that_throws_during_enumeration():
+    """#4963 guard: if building one field's descriptor throws (here a label lookup is forced to
+    raise), that field degrades to a bare but addressable row — its id and best-effort value
+    survive, with an empty label — and every OTHER field still reads normally."""
+    pre = (
+        "var _cl = abCandidateLabels;"
+        "abCandidateLabels = function(el){ if(el && el.id === 'boom') throw new Error('x');"
+        " return _cl.apply(this, arguments); };"
+    )
+    html = (
+        "<form>"
+        '<label for="ok">Email</label><input id="ok" name="email" value="ada@x.io">'
+        '<label for="boom">Phone</label><input id="boom" name="phone" value="555">'
+        "</form>"
+    )
+    by_id = {f["id"]: f for f in _run_enumerate_js(html, pre_js=pre)}
+    assert set(by_id) == {"ok", "boom"}  # neither field dropped
+    assert by_id["ok"]["label"] == "Email" and by_id["ok"]["value"] == "ada@x.io"  # intact
+    assert by_id["boom"]["label"] == "" and by_id["boom"]["value"] == "555"  # bare: id + value kept
 
 
 # Review repro: two sibling file fields under ONE wrapper; the cover letter was ALREADY attached
