@@ -78,7 +78,6 @@ let SEL = null;             // selected node id (drawer)
 // next topology poll, made the whole layout jump twice.
 const STICKY = new Map();
 let POLL_S = 8;
-let lastSeq = -1;
 let PEERS = 0;
 let staleRetry = 0;              // readable fleet peers: their work arrives by poll, not bus
 const HIDE_KEY = "orgchart.hidden";
@@ -1198,19 +1197,17 @@ function setLive(state) {
 }
 
 function subscribe() {
-  addEventListener("message", (e) => {
-    if (e.source !== window.parent || e.data?.type !== "protoagent:event") return;
-    if (typeof e.data.seq === "number") {
-      // A bus that restarted counts from zero again: a big step backwards is a reset, not a replay.
-      if (e.data.seq <= lastSeq && lastSeq - e.data.seq < 64) return;
-      lastSeq = e.data.seq;
-    }
-    onEvent(e.data.topic, e.data.data);
-  });
+  // The DS plugin-kit now owns the bus wire protocol (#4805): it posts the `subscribe`
+  // frame, qualifies topics, tracks the `since` high-water mark so a remount replays only
+  // what it missed, and filters this view's own-publish echoes — the fiddly bits a view used
+  // to hand-roll over raw postMessage. We just name the topic pattern and a handler.
   // `background: true` keeps the chart mounted while another view is up, so it is current
-  // the moment the operator comes back to it mid-run.
-  parent.postMessage({ type: "protoagent:subscribe", patterns: ["delegation.#"], background: true }, "*");
-  setLive("live");
+  // the moment the operator comes back to it mid-run. A frame the bus can't deliver (a relay
+  // hiccup, a hidden tab) is still reconciled by the live poll in boot().
+  // Kit 0.71 matches `*`; the host uses `#` for recursive topics. Keep both so
+  // nested delegation topics reach the kit as well as the host relay.
+  setLive("polling");
+  kit.subscribe(["delegation.#", "delegation.*"], (ev) => onEvent(ev.name, ev.data), { background: true });
 }
 
 // ── boot + loops ────────────────────────────────────────────────────────────────────

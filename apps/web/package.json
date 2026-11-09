@@ -12,14 +12,14 @@
     "test:e2e": "npm run build && playwright test",
     "test:e2e:ui": "playwright test --ui",
     "test": "vitest run",
-    "test:unit": "vitest run",
+    "test:unit": "node scripts/copy-plugin-kit.mjs && vitest run",
     "test:watch": "vitest"
   },
   "dependencies": {
     "@pierre/diffs": "1.5.0",
     "@protolabsai/design": "^0.14.0",
-    "@protolabsai/ui": "^0.70.0",
-    "@protolabsai/ui-css": "^0.70.0",
+    "@protolabsai/ui": "^0.71.0",
+    "@protolabsai/ui-css": "^0.71.0",
     "@shikijs/themes": "3.23.0",
     "@shikijs/transformers": "3.23.0",
     "@streamdown/code": "^1.1.1",
