@@ -125,7 +125,10 @@ async function render(node: ReactNode) {
   });
 }
 const pill = () => document.querySelector<HTMLButtonElement>('[data-testid="decisions-widget"]');
-const headBtn = () => document.querySelector<HTMLButtonElement>("button.decisions-head-btn");
+// The phone action button is now the DS ghost icon `Button`; the `aria-haspopup="dialog"` it
+// carries makes it unambiguous against any DS button the sheet renders when open.
+const headBtn = () =>
+  document.querySelector<HTMLButtonElement>('button.pl-btn[aria-haspopup="dialog"]');
 
 // ── UtilityWidget: controlled open + aria-haspopup (Q11, Q12) ────────────────────────────────
 describe("UtilityWidget controlled/uncontrolled open", () => {
@@ -324,13 +327,22 @@ describe("DecisionsHeaderButton", () => {
     expect(headBtn()!.querySelector(".pl-count")!.textContent).toBe("9+");
   });
 
-  it("carries a token-only DS focus-visible ring (Josh's composite-trigger rule)", async () => {
+  it("is the DS ghost icon Button, with no injected stylesheet or hand-rolled ring (Q23, Q24)", async () => {
     setSnap({ loaded: true, state: "ready", pendingCount: 1, decisions: [decision("a")] });
     await render(h(DecisionsHeaderButton));
-    expect(headBtn()!.classList.contains("decisions-head-btn")).toBe(true);
-    const css = [...document.querySelectorAll("style")].map((s) => s.textContent ?? "").join("\n");
-    expect(css).toContain(".decisions-head-btn:focus-visible");
-    expect(css).toContain("outline: var(--pl-border-width) solid var(--pl-color-fg)");
+    const btn = headBtn()!;
+    // The action button renders via the DS `Button variant="ghost" size="md" icon` — size md is
+    // the default so it adds no size class. Its focus ring and tap-target come from the DS.
+    expect(btn.classList.contains("pl-btn")).toBe(true);
+    expect(btn.classList.contains("pl-btn--ghost")).toBe(true);
+    expect(btn.classList.contains("pl-btn--icon")).toBe(true);
+    // The retired hand-rolled class and its injected `<style>` (HEAD_BTN_CSS) are gone — the
+    // component contributes no stylesheet and no `:focus-visible` rule of its own.
+    expect(btn.classList.contains("decisions-head-btn")).toBe(false);
+    expect(host.querySelector("style")).toBeNull();
+    const styleText = [...document.querySelectorAll("style")].map((s) => s.textContent ?? "").join("\n");
+    expect(styleText).not.toContain("decisions-head-btn");
+    expect(styleText).not.toContain("outline: var(--pl-border-width) solid var(--pl-color-fg)");
   });
 
   it("opens the bottom sheet and reflects it in aria-expanded", async () => {
