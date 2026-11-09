@@ -358,8 +358,7 @@ def _import_register(manifest: PluginManifest):
 # branch switch produce a half-updated process. Nothing detected it, and the
 # divergence is invisible from the outside.
 #
-# Only symlinked plugins are tracked. A normal install is an immutable copy the
-# operator doesn't edit under a live process, so it pays nothing here.
+# Symlinked checkouts and plugins under devkit roots are editable while live.
 _SOURCE_FINGERPRINTS: dict[str, tuple[str, str]] = {}
 
 
@@ -384,10 +383,18 @@ def _source_fingerprint(path: Path) -> str:
     return h.hexdigest()
 
 
-def _record_source_fingerprint(manifest: PluginManifest) -> None:
-    """Stamp a symlinked plugin's sources at the moment its modules were imported."""
+def _record_source_fingerprint(manifest: PluginManifest, config=None) -> None:
+    """Stamp editable plugins at import, including ordinary devkit directories."""
+    from graph.plugins.scaffold import live_plugins_dir
+
     try:
-        if not manifest.path.is_symlink():
+        roots = [live_plugins_dir().resolve()]
+        if config is not None:
+            roots.extend(root.resolve() for root in _plugin_roots(config)[1:])
+        target = ((getattr(config, "plugin_config", {}) or {}).get("plugin_devkit") or {}).get("target_dir")
+        if target:
+            roots.append(Path(target).expanduser().resolve())
+        if not manifest.path.is_symlink() and not any(manifest.path.resolve().is_relative_to(r) for r in roots):
             return
         fp = _source_fingerprint(manifest.path)
         if fp:
@@ -397,11 +404,11 @@ def _record_source_fingerprint(manifest: PluginManifest) -> None:
 
 
 def code_drift_warning() -> str | None:
-    """Warn when a symlinked plugin's sources changed since its modules were imported.
+    """Warn when an editable plugin's sources changed since its modules were imported.
 
     Recomputed live (like the co-location and fleet-skew banners) so it appears when a
     checkout moves and clears the moment the plugin is reloaded. Returns ``None`` when
-    nothing is symlinked — the common case, and one ``is_symlink()`` per tracked plugin."""
+    no tracked plugin has changed."""
     drifted = []
     for pid, (path, fp) in sorted(_SOURCE_FINGERPRINTS.items()):
         if _source_fingerprint(Path(path)) != fp:
@@ -410,8 +417,7 @@ def code_drift_warning() -> str | None:
         return None
     names = ", ".join(drifted)
     return (
-        f"[plugins] source changed on disk since import: {names}. This plugin is symlinked to a "
-        "live checkout, and Python caches imported modules — so the process is now serving a MIX "
+        f"[plugins] source changed on disk since import: {names}. Python caches imported modules — so the process is now serving a MIX "
         "of the imported code and whatever is on disk now (anything imported lazily after the "
         "change loads the new version). Reload the plugin or restart the agent; until then, "
         "treat its behaviour as undefined."
@@ -1142,6 +1148,7 @@ def load_plugins(config, *, core_tool_names: set[str] | None = None) -> PluginLo
         try:
             with timed_lifecycle_phase(manifest.id, "load"):
                 register = _import_register(manifest)
+                _record_source_fingerprint(manifest, config)
             with timed_lifecycle_phase(manifest.id, "config"):
                 # Resolved config section (ADR 0019) — defaults if not in plugin_config.
                 section = manifest.config_section or manifest.id
