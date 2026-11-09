@@ -572,6 +572,15 @@ def _build_middleware(
         if mw is not None:
             middleware.append(mw)
 
+    # Empty-at-cap retry on the LEAD chat stack only when the operator opts in (ADR 0128
+    # S3, #4875): a lead turn cut at the output cap or lost to a reasoning loop gets one
+    # thinking-off retry. Off by default (Josh) — the chat lead is unchanged otherwise.
+    # Before provider shaping, mirroring the subagent stack.
+    if getattr(config, "empty_retry_lead", False):
+        from graph.middleware.empty_at_cap import EmptyAtCapMiddleware
+
+        middleware.append(EmptyAtCapMiddleware())
+
     middleware.extend(provider_shape_middleware(config))
     middleware.append(MessageCaptureMiddleware())
 
@@ -1317,6 +1326,13 @@ async def _run_subagent_inner(
     from graph.middleware.codex_reasoning_replay import CodexReasoningReplayRecoveryMiddleware
 
     sub_middleware.append(CodexReasoningReplayRecoveryMiddleware())
+    # One thinking-off retry when a turn ended the loop with no tool call and almost no
+    # text because it hit the output cap or spent itself thinking (ADR 0128 S3, #4875).
+    # On EVERY subagent, and BEFORE the completion guard below so the guard's after_model
+    # runs first and defers empty-at-cap turns here — the two never both retry one turn.
+    from graph.middleware.empty_at_cap import EmptyAtCapMiddleware
+
+    sub_middleware.append(EmptyAtCapMiddleware())
     # A subagent that owes a recognisable deliverable is continued when a turn ends
     # the loop without it, instead of being reported "completed" on a sentence of
     # intent (#3552). Nothing declared, no middleware — the stack is then unchanged.

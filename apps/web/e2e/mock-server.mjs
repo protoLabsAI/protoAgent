@@ -1608,6 +1608,12 @@ const server = createServer(async (req, res) => {
   }
   if (pathname.startsWith("/api/")) {
     if (req.method === "GET") {
+      // Per-turn feedback (useSessionFeedback): off, as on a server without tracing. Without this
+      // route the read 404'd and a "Could not load feedback." alert could appear above the
+      // messages mid-test, shifting them 24px (the hitl-float flake).
+      if (pathname === "/api/feedback") {
+        return sendJson(res, { enabled: false, tracing_enabled: false, turns: [] });
+      }
       // ADR 0104/#2888 fresh-profile recovery. Header-gated so the durable
       // session fixture does not add a chat tab to every unrelated E2E spec.
       if (req.headers["x-e2e-pretool-midturn"] === "1" && pathname === "/api/chat/sessions") {

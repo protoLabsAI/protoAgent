@@ -247,6 +247,7 @@ FROM_YAML_EXAMPLE_FIELDS = {
     "turn_stall_timeout_seconds": 900.0,
     "round_nudge_after": 25,
     "round_hard_cap": 0,
+    "empty_retry_lead": False,
     "max_tokens": 32768,
     "media_public": False,
     "media_retention_days": 0,
