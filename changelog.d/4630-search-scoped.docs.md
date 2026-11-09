@@ -1,1 +1,0 @@
-- **Clarify scoped search documentation (#4630).** Identify `knowledge_search` as the explicit search for rejected and expired knowledge rows, and distinguish `memory_search` and its separate memories store.

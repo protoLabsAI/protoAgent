@@ -1,1 +1,0 @@
-- **Asking "what did I do today from the log" reaches your memories again.** The memory tool rename in v0.232.0 dropped "logged" and "today's entries" from `memory_list`'s description, so the agent answered from its activity totals instead of what it had stored. The cue is back. The nightly eval `memory_list_intent`, which had passed every night until v0.232.0, caught it.
