@@ -126,6 +126,18 @@ describe("collection browser", () => {
     await act(async () => model.invalidate()); await settle();
     expect(host.textContent).toContain("Safety note 1");
   });
+  it("searches the flat fallback for the literal \"collections\" without colliding with the listing key", async () => {
+    // Regression: the full-store search string shares the `knowledge` subtree with the
+    // collections listing. Searching for "collections" once produced the SAME cache key as
+    // collectionsQuery(), so the fallback was served the listing payload ({enabled, collections})
+    // — which has no `results` — and `fallback.data.results.length` threw, crashing the view.
+    vi.mocked(api.listCollections).mockResolvedValue({ enabled: true, collections: [] });
+    await render();
+    await act(async () => model.seedSearch("collections")); await settle();
+    expect(api.knowledgeSearch).toHaveBeenCalledWith("collections", { reviewState: undefined });
+    expect(host.textContent).toContain("51 matches");
+    expect(host.textContent).toContain("Safety note 1");
+  });
   it("does not claim empty knowledge while the fallback is loading or failed", async () => {
     vi.mocked(api.listCollections).mockResolvedValue({ enabled: true, collections: [] });
     vi.mocked(api.knowledgeSearch).mockReturnValue(new Promise(() => {}));

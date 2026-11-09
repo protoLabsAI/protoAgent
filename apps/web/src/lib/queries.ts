@@ -575,11 +575,16 @@ export const playbooksQuery = () =>
 // so toggling the filter never blanks or mislabels the unfiltered list.
 export const knowledgeQuery = (q: string, reviewState?: ReviewState) =>
   queryOptions({
-    // The unfiltered key keeps its historical shape ([slug, "knowledge", q]); the
-    // review filter is an extra trailing segment only when it is set.
+    // Namespace the full-store search under a literal "search" segment, like its
+    // sibling collection reads ("collection-chunks", "collections-search"). The query
+    // STRING then lives one level deeper, so it can never shadow a literal sibling key
+    // — notably `collectionsQuery`'s [slug, "knowledge", "collections"], which q="collections"
+    // used to collide with, serving the listing payload (no `results`) to this search
+    // and crashing the flat Knowledge view. The review filter is an extra trailing
+    // segment only when it is set.
     queryKey: reviewState
-      ? ([...queryKeys.knowledge, q, `review:${reviewState}`] as const)
-      : ([...queryKeys.knowledge, q] as const),
+      ? ([...queryKeys.knowledge, "search", q, `review:${reviewState}`] as const)
+      : ([...queryKeys.knowledge, "search", q] as const),
     queryFn: () => api.knowledgeSearch(q, { reviewState }),
   });
 

@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 
 import { currentSlug } from "./api";
 import {
+  collectionsQuery,
   goalDetailQuery,
   goalsQuery,
   hostRuntimeStatusQuery,
@@ -61,8 +62,21 @@ describe("slug-namespaced query keys (#2887)", () => {
     expect(atPath("/app/agent/roxy/", () => knowledgeQuery("faq").queryKey)).toEqual([
       "roxy",
       "knowledge",
+      "search",
       "faq",
     ]);
+  });
+
+  // The full-store search string lives under a "search" segment so it can never shadow a
+  // sibling literal key. q="collections" used to produce the SAME key as collectionsQuery()
+  // ([slug,"knowledge","collections"]), so the flat fallback read the listing payload (no
+  // `results`) and `fallback.data.results.length` threw, crashing the Knowledge view.
+  it("never lets a search term collide with the collections listing key", () => {
+    atPath("/app/agent/roxy/", () => {
+      expect(knowledgeQuery("collections").queryKey).not.toEqual(collectionsQuery().queryKey);
+      // ...and the pending-review variant is likewise distinct.
+      expect(knowledgeQuery("collections", "pending").queryKey).not.toEqual(collectionsQuery().queryKey);
+    });
   });
 
   it("keeps parent keys as prefixes of their children", () => {
