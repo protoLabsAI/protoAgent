@@ -64,7 +64,11 @@ test("a recalled message is editable and resends the edited text", async ({ page
 
 test("↑ recalls only messages submitted in the current chat tab", async ({ page }) => {
   await page.goto("/app/", { waitUntil: "load" });
+  // Scope to the VISIBLE composer: once a second tab opens, both ChatSessionSlots stay
+  // mounted (the pool keeps hidden tabs streaming), so an unscoped placeholder match would
+  // be ambiguous. Same pattern as chat-delete.spec.ts.
   const composer = page.getByPlaceholder(/Message protoAgent/i).filter({ visible: true });
+  await composer.waitFor({ state: "visible" });
   await composer.fill("alpha");
   await composer.press("Enter");
   await expect(page.locator(".pl-message--user").filter({ hasText: "alpha" })).toBeVisible();
