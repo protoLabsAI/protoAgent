@@ -699,7 +699,8 @@ async def test_resume_registers_without_replay_and_unknown_threads_are_rejected(
     assert fake.requests[0]["contextId"] == "chat-zed-1-aaa"
 
 
-async def test_steer_marker_sits_at_the_fold_even_when_output_raced_the_post():
+@pytest.mark.parametrize("finish_before_reply", [False, True])
+async def test_steer_marker_sits_at_the_fold_even_when_output_raced_the_post(monkeypatch, finish_before_reply):
     """Live navaEngineer: the tail of the pre-steer sentence arrived while the POST was in
     flight. With the steer_consumed boundary the marker lands where the agent READ it."""
     with fa.FakeA2A() as fake:
@@ -713,6 +714,20 @@ async def test_steer_marker_sits_at_the_fold_even_when_output_raced_the_post():
         agent, conn, client = await _agent(fake, steer_grace=2.0)
         sess = await agent.new_session(cwd="/")
         first = await _running(agent, conn, sess.session_id)
+        if finish_before_reply:
+            send_json = agent.a2a.send_json
+            runner = agent._sessions[sess.session_id].runner
+
+            async def delayed_reply(method, path, *args, **kwargs):
+                result = await send_json(method, path, *args, **kwargs)
+                if method == "POST" and path.endswith("/steer"):
+                    # The server can fold the steer and finish streaming before its
+                    # POST response reaches the client. Force that exact ordering.
+                    await asyncio.wait_for(asyncio.shield(runner), 2)
+                    await asyncio.sleep(0)  # run the completion callback too
+                return result
+
+            monkeypatch.setattr(agent.a2a, "send_json", delayed_reply)
         await agent.cancel(session_id=sess.session_id)
         await asyncio.wait_for(first, 1)
         await agent.prompt(prompt=[text_block("B please")], session_id=sess.session_id)

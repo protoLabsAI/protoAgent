@@ -383,6 +383,14 @@ async def _a2a_reaper_loop() -> None:
                     log.info("[a2a-reaper] failed %d orphaned WORKING task(s) (#3418)", n)
             except Exception:
                 log.exception("[a2a-reaper] sweep failed")
+        if STATE.decision_store is not None:
+            try:
+                from graph.decision_expiry import sweep_expired_decisions
+                from operator_api.decision_routes import _resume_parked_turn
+
+                await sweep_expired_decisions(STATE.decision_store, _resume_parked_turn)
+            except Exception:
+                log.exception("[decision] expiry sweep failed")
         await asyncio.sleep(A2A_REAPER_INTERVAL_S)
 
 

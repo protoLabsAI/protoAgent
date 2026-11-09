@@ -131,6 +131,7 @@ class Session:
     attached: asyncio.Event = field(default_factory=asyncio.Event)
     grace_timer: asyncio.Task | None = None
     steer: tuple[str, str] | None = None  # (id, text) queued by a Send Now, not yet folded in
+    adopting: bool = False  # the steering POST has not returned yet
     handoff: asyncio.Task | None = None  # a replay/notice sent after the handler's response (the barrier)
     # Durable-history bookkeeping, so a replay never repeats a turn and never shows a
     # half-written answer as final: task ids already shown in full (replayed, or streamed
@@ -619,7 +620,7 @@ class ProtoAgentACP:
         if s.runner is task:
             s.runner = None
             s.task_id = None
-        if s.detached and s.steer is None:
+        if s.detached and s.steer is None and not s.adopting:
             # Finished while nobody was attached and no Send Now is adopting it: dropped.
             s.held.clear()
 
@@ -686,7 +687,13 @@ class ProtoAgentACP:
         assert runner is not None
         steer_id = f"zed-{uuid.uuid4().hex[:12]}"
         s.steer = (steer_id, text)  # set BEFORE the POST: the fold frame can race the reply
-        status, body = await self.a2a.send_json("POST", f"/api/chat/sessions/{s.id}/steer", {"id": steer_id, "text": text})
+        # A fold clears s.steer. If the stream also finishes before this POST
+        # returns, its completion callback must retain output for this adopter.
+        s.adopting = True
+        try:
+            status, body = await self.a2a.send_json("POST", f"/api/chat/sessions/{s.id}/steer", {"id": steer_id, "text": text})
+        finally:
+            s.adopting = False
         if status != 200 or not (isinstance(body, dict) and body.get("ok")):
             log.warning("steer POST failed (%s) — cancelling and starting a new turn", status)
             s.steer = None

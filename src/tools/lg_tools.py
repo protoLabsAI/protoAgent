@@ -48,9 +48,11 @@ import inspect
 import logging
 import operator as _op
 from datetime import UTC, datetime
+from typing import Annotated, Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from langchain_core.tools import tool
+from langgraph.prebuilt import InjectedState
 
 from tools.fallbacks import with_fallback
 from tools.fleet_demo_tools import _build_fleet_demo_tools
@@ -161,7 +163,9 @@ def request_user_input(title: str, steps: list[dict], description: str = "") -> 
 
 
 @tool
-def request_decision(question: str, options: list[str | dict], context: str = "") -> str:
+def request_decision(question: str, options: list[str | dict], context: str = "",
+                     expires_in_minutes: int | None = None, default_option: str | None = None,
+                     default_action: str | None = None) -> str:
     # Maintainer notes (kept out of the model-facing docstring): unlike ask_human /
     # request_user_input, a ``kind: "decision"`` interrupt PARKS even on an autonomous turn
     # (server/turn_control.py) — the agent deliberately chose to stop rather than guess — and
@@ -176,11 +180,62 @@ def request_decision(question: str, options: list[str | dict], context: str = ""
     ``context`` is optional background for the operator. On an UNATTENDED turn (scheduled /
     inbox / background) the turn STOPS here until a person answers, so don't guess — only use
     it for a decision that genuinely cannot be made autonomously.
+    Pass both ``expires_in_minutes`` (positive) and ``default_option`` (an option id)
+    to apply that default on expiry, or neither to wait indefinitely. ``default_action``
+    is an optional verb phrase describing that action, valid only with expiry.
+    At most one option may carry ``recommended: true``.
     """
     from langgraph.types import interrupt
 
-    answer = interrupt({"kind": "decision", "question": question, "options": options, "context": context})
+    from graph.decisions import DecisionError, normalize_options
+
+    try:
+        opts = normalize_options(options)
+        if (expires_in_minutes is None) != (default_option is None):
+            raise DecisionError("pass both expires_in_minutes and default_option, or neither")
+        if default_action is not None and expires_in_minutes is None:
+            raise DecisionError("default_action requires an expiry")
+        if expires_in_minutes is not None and expires_in_minutes <= 0:
+            raise DecisionError("expires_in_minutes must be positive")
+        if default_option is not None and default_option not in [o["id"] for o in opts]:
+            raise DecisionError("default_option must name an option id")
+    except DecisionError as exc:
+        return f"Error: {exc}"
+    answer = interrupt({"kind": "decision", "question": question, "options": options, "context": context,
+                        "expires_in_minutes": expires_in_minutes, "default_option": default_option,
+                        "default_action": default_action})
     return answer if isinstance(answer, str) else str(answer)
+
+
+@tool
+async def withdraw_decision(decision_id: str, reason: str = "", state: Annotated[Any, InjectedState] = None) -> str:
+    """Withdraw your own pending decision when it is no longer needed, with a reason."""
+    from graph.decision_resume import CANCELLED_RESUME, resume_parked_turn
+    from graph.decisions import DecisionError, decision_store
+    from runtime.state import STATE
+
+    store = decision_store()
+    rec = store.get(decision_id)
+    session_id = _session_id_from(state)
+    agent = getattr(STATE.graph_config, "identity_name", "")
+    # Another session of this agent may learn that the parked choice is obsolete.
+    # Unnamed legacy records can only be withdrawn from their own injected session.
+    owns_record = rec is not None and (
+        (bool(session_id) and rec.session_id == session_id)
+        or (bool(rec.agent) and rec.agent == agent)
+    )
+    if not owns_record:
+        return "Error: decision does not belong to this agent or session"
+    try:
+        updated = store.withdraw(decision_id, reason)
+    except DecisionError as exc:
+        return f"Error: {exc}"
+    # Like operator dismissal, clear the checkpoint after closing the ledger record.
+    # Omit decision_id: the answer gate rejects this now-withdrawn record.
+    resumed = await resume_parked_turn(updated.session_id, CANCELLED_RESUME)
+    if not resumed:
+        return f"Decision {decision_id} withdrawn: {reason}. Warning: could not resume the parked turn."
+    return f"Decision {decision_id} withdrawn: {reason}"
 
 
 @tool
@@ -1031,6 +1086,7 @@ def get_all_tools(
         ask_human,
         request_user_input,
         request_decision,
+        withdraw_decision,
         load_skill,
         show_component,
     ]
@@ -1164,6 +1220,7 @@ DEFERRED_BASE_TOOL_NAMES = frozenset(
         # request_decision is a core HITL capability — never deferred, like its siblings:
         # the agent must be able to stop-and-ask without first searching for the tool.
         "request_decision",
+        "withdraw_decision",
         "load_skill",
         "task",
         "task_batch",

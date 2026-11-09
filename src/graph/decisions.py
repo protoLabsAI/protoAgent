@@ -19,8 +19,8 @@ other durable stores (``inbox/store.py``). Every state change publishes
 ``decision.changed {id, session_id, state}`` on the bus (ADR 0039, the same pattern as
 ``directive.changed``) so a console view refreshes without polling.
 
-This is item 1 of the build; card 2 adds expiry (``expires_at`` / ``default_option``,
-stored-but-unused here) and notifications, card 3 the console view.
+Expiry is delivered through the same guarded checkpoint resume as operator answers.
+Chat-surface notifications are a separate integration.
 """
 
 from __future__ import annotations
@@ -32,7 +32,7 @@ import sqlite3
 import threading
 from collections.abc import Callable
 from dataclasses import asdict, dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 log = logging.getLogger("protoagent.decisions")
@@ -41,7 +41,8 @@ STATE_PENDING = "pending"
 STATE_ANSWERED = "answered"
 STATE_EXPIRED = "expired"
 STATE_CANCELLED = "cancelled"
-STATES = (STATE_PENDING, STATE_ANSWERED, STATE_EXPIRED, STATE_CANCELLED)
+STATE_WITHDRAWN = "withdrawn"
+STATES = (STATE_PENDING, STATE_ANSWERED, STATE_EXPIRED, STATE_CANCELLED, STATE_WITHDRAWN)
 
 #: A question is a sentence or two, not a pasted essay; bounded so one record can't bloat
 #: the store or the inbox render. Options are short labels.
@@ -77,9 +78,12 @@ def normalize_options(raw) -> list[dict]:
     unique (a ``-2`` suffix on a clash) so an answer can address exactly one option, and
     labels/descriptions are clipped. Anything that isn't a string or a mappable dict is
     skipped. Bounded to :data:`MAX_OPTIONS`."""
+    raw = list(raw or [])
+    if sum(isinstance(o, dict) and o.get("recommended") is True for o in raw) > 1:
+        raise DecisionError("at most one option may be recommended")
     out: list[dict] = []
     seen: set[str] = set()
-    for i, item in enumerate(list(raw or [])[:MAX_OPTIONS]):
+    for i, item in enumerate(raw[:MAX_OPTIONS]):
         desc = None
         if isinstance(item, str):
             label = item.strip()
@@ -102,6 +106,8 @@ def normalize_options(raw) -> list[dict]:
         entry = {"id": oid, "label": label or oid}
         if desc:
             entry["description"] = desc[:MAX_LABEL_CHARS]
+        if isinstance(item, dict) and "recommended" in item:
+            entry["recommended"] = item["recommended"] is True
         out.append(entry)
     return out
 
@@ -117,15 +123,30 @@ class Decision:
     state: str = STATE_PENDING
     answer: str | None = None
     answered_at: str | None = None
-    # Card 2 fills these in (expiry + a default the sweep applies); stored-but-unused here.
+    # Optional expiry and its stated default; no expiry waits indefinitely.
     expires_at: str | None = None
     default_option: str | None = None
     thread_id: str = ""
     interrupt_id: str = ""
     context: str = ""
 
+    default_action: str | None = None
+    withdraw_reason: str | None = None
+    answered_by: str | None = None
+    answered_surface: str | None = None
+
+    def option_label(self, option: str | None) -> str | None:
+        return next(
+            (str(o.get("label") or o["id"]) for o in self.options if isinstance(o, dict) and o.get("id") == option),
+            option,
+        )
+
     def to_dict(self) -> dict:
-        return asdict(self)
+        return {
+            **asdict(self),
+            "default_action_text": self.default_action or "carry on without this step",
+            "answer_label": self.option_label(self.answer),
+        }
 
     @property
     def pending(self) -> bool:
@@ -155,6 +176,7 @@ class Decision:
             thread_id=row["thread_id"],
             interrupt_id=row["interrupt_id"],
             context=row["context"],
+            **{k: row[k] for k in ("default_action", "withdraw_reason", "answered_by", "answered_surface")},
         )
 
 
@@ -191,7 +213,8 @@ class DecisionStore:
         if self.path != ":memory:":
             Path(self.path).parent.mkdir(parents=True, exist_ok=True)
         self._shared: sqlite3.Connection | None = None
-        self._init_db()
+        with self._lock:
+            self._init_db()
 
     def _now(self) -> str:
         return self._clock().isoformat(timespec="seconds")
@@ -221,6 +244,7 @@ class DecisionStore:
     def _init_db(self) -> None:
         db = self._connect()
         try:
+            db.execute("BEGIN IMMEDIATE")
             db.execute(
                 """
                 CREATE TABLE IF NOT EXISTS decisions (
@@ -242,6 +266,9 @@ class DecisionStore:
             for column in ("thread_id", "interrupt_id", "context"):
                 if column not in columns:
                     db.execute(f"ALTER TABLE decisions ADD COLUMN {column} TEXT NOT NULL DEFAULT ''")
+            for column in ("default_action", "withdraw_reason", "answered_by", "answered_surface"):
+                if column not in columns:
+                    db.execute(f"ALTER TABLE decisions ADD COLUMN {column} TEXT")
             db.execute("CREATE INDEX IF NOT EXISTS ix_decisions_state ON decisions(state, created_at)")
             db.execute("CREATE INDEX IF NOT EXISTS ix_decisions_session ON decisions(session_id)")
             db.execute("CREATE INDEX IF NOT EXISTS ix_decisions_interrupt ON decisions(thread_id, interrupt_id)")
@@ -263,6 +290,8 @@ class DecisionStore:
         context: str = "",
         default_option: str | None = None,
         expires_at: str | None = None,
+        expires_in_minutes: int | None = None,
+        default_action: str | None = None,
     ) -> Decision:
         """Record a new pending decision. ``options`` is the tool's raw ``list[str | dict]``
         (normalized here). Publishes ``decision.changed`` with ``state="pending"``."""
@@ -275,6 +304,16 @@ class DecisionStore:
         question = question[:MAX_QUESTION_CHARS]
         opts = normalize_options(options)
         default_option = (str(default_option).strip() or None) if default_option else None
+        if expires_in_minutes is not None:
+            if expires_in_minutes <= 0:
+                raise DecisionError("expires_in_minutes must be positive")
+            expires_at = (self._clock() + timedelta(minutes=expires_in_minutes)).isoformat(timespec="seconds")
+        if bool(expires_at) != bool(default_option):
+            raise DecisionError("pass both expiry and default_option, or neither")
+        if default_action is not None and not expires_at:
+            raise DecisionError("default_action requires an expiry")
+        if default_option and default_option not in [o["id"] for o in opts]:
+            raise DecisionError("default_option must name an option id")
         with self._lock:
             db = self._connect()
             try:
@@ -301,6 +340,7 @@ class DecisionStore:
                     state=STATE_PENDING,
                     expires_at=expires_at,
                     default_option=default_option,
+                    default_action=default_action[:MAX_QUESTION_CHARS] if default_action else None,
                 )
                 db.execute(
                     "INSERT INTO decisions (id, session_id, agent, question, options, created_at, state, "
@@ -320,8 +360,8 @@ class DecisionStore:
                     ),
                 )
                 db.execute(
-                    "UPDATE decisions SET thread_id = ?, interrupt_id = ?, context = ? WHERE id = ?",
-                    (rec.thread_id, rec.interrupt_id, rec.context, rec.id),
+                    "UPDATE decisions SET thread_id = ?, interrupt_id = ?, context = ?, default_action = ? WHERE id = ?",
+                    (rec.thread_id, rec.interrupt_id, rec.context, rec.default_action, rec.id),
                 )
                 db.commit()
             finally:
@@ -353,7 +393,7 @@ class DecisionStore:
         return Decision.from_row(row) if row is not None else None
 
     def list(self, *, state: str | None = None, session_id: str | None = None, limit: int = 200) -> list[Decision]:
-        """Decisions newest first, optionally filtered by ``state`` and/or ``session_id``."""
+        """Pending decisions by soonest expiry, then undated oldest first; history newest first."""
         where = []
         params: list = []
         if state:
@@ -366,25 +406,36 @@ class DecisionStore:
         db = self._connect()
         try:
             rows = db.execute(
-                f"SELECT * FROM decisions{clause} ORDER BY created_at DESC, id DESC LIMIT ?",
+                f"SELECT * FROM decisions{clause} ORDER BY CASE WHEN state = 'pending' THEN 0 ELSE 1 END, "
+                "CASE WHEN state = 'pending' THEN expires_at IS NULL END, "
+                "CASE WHEN state = 'pending' THEN julianday(expires_at) END, "
+                "CASE WHEN state = 'pending' THEN created_at END, created_at DESC, id DESC LIMIT ?",
                 (*params, max(1, int(limit))),
             ).fetchall()
         finally:
             self._close(db)
         return [Decision.from_row(r) for r in rows]
 
-    def answer(self, decision_id: str, answer: str) -> Decision:
+    def answer(self, decision_id: str, answer: str, *, answered_by: str = "operator", answered_surface: str = "chat") -> Decision:
         """Mark a pending decision answered with the operator's choice. Raises
         :class:`DecisionNotFound` for an unknown id and :class:`DecisionClosed` when it is
         no longer pending (answering twice is refused). Publishes ``decision.changed``."""
-        return self._close_record(decision_id, STATE_ANSWERED, answer=answer)
+        return self._close_record(decision_id, STATE_ANSWERED, answer=answer, answered_by=answered_by, answered_surface=answered_surface)
 
     def cancel(self, decision_id: str) -> Decision:
         """Cancel a pending decision (the operator dismissed it, or its turn was abandoned).
         Refused when it is no longer pending. Publishes ``decision.changed``."""
         return self._close_record(decision_id, STATE_CANCELLED)
 
-    def _close_record(self, decision_id: str, state: str, *, answer: str | None = None) -> Decision:
+    def withdraw(self, decision_id: str, reason: str = "") -> Decision:
+        return self._close_record(decision_id, STATE_WITHDRAWN, withdraw_reason=reason)
+
+    def expire(self, decision_id: str) -> Decision:
+        return self._close_record(decision_id, STATE_EXPIRED)
+
+    def _close_record(self, decision_id: str, state: str, *, answer: str | None = None,
+                      answered_by: str | None = None, answered_surface: str | None = None,
+                      withdraw_reason: str = "") -> Decision:
         decision_id = (decision_id or "").strip()
         with self._lock:
             db = self._connect()
@@ -398,13 +449,20 @@ class DecisionStore:
                 rec = Decision.from_row(row)
                 if not rec.pending:
                     raise DecisionClosed(f"decision {decision_id} is already {rec.state}")
+                if state == STATE_EXPIRED:
+                    if not rec.expires_at or not rec.default_option or datetime.fromisoformat(rec.expires_at) > self._clock():
+                        raise DecisionError("decision is not due for expiry")
+                    answer = rec.default_option
                 rec.state = state
                 if answer is not None:
                     rec.answer = str(answer)[:MAX_ANSWER_CHARS]
                     rec.answered_at = self._now()
+                rec.answered_by = answered_by
+                rec.answered_surface = answered_surface
+                rec.withdraw_reason = withdraw_reason[:MAX_ANSWER_CHARS]
                 updated = db.execute(
-                    "UPDATE decisions SET state = ?, answer = ?, answered_at = ? WHERE id = ? AND state = ?",
-                    (rec.state, rec.answer, rec.answered_at, rec.id, STATE_PENDING),
+                    "UPDATE decisions SET state = ?, answer = ?, answered_at = ?, answered_by = ?, answered_surface = ?, withdraw_reason = ? WHERE id = ? AND state = ?",
+                    (rec.state, rec.answer, rec.answered_at, rec.answered_by, rec.answered_surface, rec.withdraw_reason, rec.id, STATE_PENDING),
                 )
                 if updated.rowcount != 1:
                     raise DecisionClosed(f"decision {decision_id} is no longer pending")
