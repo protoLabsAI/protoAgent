@@ -1,0 +1,1 @@
+- **Two small buttons are easier to tap on phones and tablets.** "Edit suggestions" under a new chat's starter prompts and the View/Retry button on the standing-instructions strip now have a full-size touch target, like the console's other small controls.

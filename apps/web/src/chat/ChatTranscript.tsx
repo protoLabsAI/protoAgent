@@ -146,6 +146,7 @@ export const ChatTranscript = memo(function ChatTranscript({
                     variant="ghost"
                     size="sm"
                     data-testid="edit-starter-prompts"
+                    className="chat-starter-edit"
                     onClick={onEditStarterPrompts}
                   >
                     Edit suggestions
