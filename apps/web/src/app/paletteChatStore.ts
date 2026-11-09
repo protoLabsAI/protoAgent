@@ -86,7 +86,11 @@ export function loadPaletteThread(scope?: string): PaletteThread {
     if (raw) {
       const p = JSON.parse(raw) as Partial<PaletteThread>;
       if (p && typeof p.contextId === "string") {
-        const messages = threads ? (preloaded.get(keyFor(scope)) ?? []) : p.messages;
+        // The store's copy when it has one. Otherwise whatever is still in localStorage: a thread
+        // whose migration didn't happen keeps its messages there, and showing nothing would lose
+        // them at the next save.
+        const stored = threads ? preloaded.get(keyFor(scope)) : undefined;
+        const messages = stored ?? p.messages;
         return { contextId: p.contextId, messages: sanitize(messages) };
       }
     }
@@ -106,10 +110,17 @@ function write(thread: PaletteThread, scope?: string) {
     if (threads) {
       const store = threads;
       const link = JSON.stringify({ contextId: thread.contextId });
-      if (readKey("local", key) !== link) writeKey("local", key, link);
       preloaded.set(key, thread.messages);
+      // The localStorage key shrinks to the link only once the store holds the messages. Until
+      // then a key that still carries messages (a thread not yet moved) is kept whole and
+      // current, so a failed store write never loses the only copy.
+      if (hasMessages(readKey("local", key))) writeKey("local", key, JSON.stringify(thread));
+      else if (readKey("local", key) !== link) writeKey("local", key, link);
       threadWrites = threadWrites
         .then(() => store.putThread(key, thread.messages))
+        .then(() => {
+          if (readKey("local", key) !== link) writeKey("local", key, link);
+        })
         .catch((err) => console.error("[palette] saving the thread to IndexedDB failed", err));
       return;
     }
@@ -154,6 +165,15 @@ export function freshPaletteThread(scope?: string): PaletteThread {
   const next: PaletteThread = { contextId: newContextId(), messages: [] };
   savePaletteThread(next, true, scope);
   return next;
+}
+
+/** Does this localStorage value still carry a thread's messages (not yet moved to the store)? */
+function hasMessages(raw: string | null): boolean {
+  try {
+    return Array.isArray((JSON.parse(raw || "null") as Partial<PaletteThread> | null)?.messages);
+  } catch {
+    return false;
+  }
 }
 
 /** Resolves when every queued thread save has committed (tests). */

@@ -54,6 +54,34 @@ describe("palette threads in IndexedDB", () => {
     second.store.close();
   });
 
+  it("a thread the store doesn't have keeps the messages still in localStorage", async () => {
+    const { palette, store } = await fresh();
+    await palette.initPaletteThreads(store);
+    // Written after the migration ran (an older console in another tab): not in the store.
+    localStorage.setItem(KEY, JSON.stringify({ contextId: "late", messages: msgs(2) }));
+    expect(palette.loadPaletteThread()).toEqual({ contextId: "late", messages: msgs(2) });
+    store.close();
+  });
+
+  it("a failed store write never shrinks localStorage to the link: its copy stays whole", async () => {
+    localStorage.setItem(KEY, JSON.stringify({ contextId: "c", messages: msgs(1) }));
+    const { palette, store } = await fresh();
+    // The migration's own write fails too, so the thread is still only in localStorage.
+    const { TranscriptStore } = await import("../chat/transcriptStore");
+    const put = vi.spyOn(TranscriptStore.prototype, "putThread").mockRejectedValue(new Error("disk"));
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    await palette.initPaletteThreads(store).catch(() => {});
+    palette.savePaletteThread({ contextId: "c", messages: msgs(3) }, true);
+    await palette.paletteWritesSettled();
+    expect(JSON.parse(localStorage.getItem(KEY)!).messages).toHaveLength(3);
+    put.mockRestore();
+    // Once the store takes the write, the key shrinks to the link.
+    palette.savePaletteThread({ contextId: "c", messages: msgs(4) }, true);
+    await palette.paletteWritesSettled();
+    expect(JSON.parse(localStorage.getItem(KEY)!)).toEqual({ contextId: "c" });
+    store.close();
+  });
+
   it("without the store, threads stay whole in localStorage as before", async () => {
     vi.resetModules();
     const palette = await import("./paletteChatStore");
