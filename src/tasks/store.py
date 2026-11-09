@@ -227,3 +227,33 @@ class TaskStore:
             if cur.rowcount > 0:
                 _publish("task.changed", {"id": issue_id, "action": "deleted"})
             return cur.rowcount > 0
+
+    def restore(self, row: dict[str, Any]) -> dict[str, Any]:
+        """Re-insert a previously deleted issue EXACTLY as it was — its original id and
+        every stored column (status, priority, created/updated/closed timestamps,
+        close_reason, session_id …) — and publish ``task.changed`` with
+        ``action: "restored"`` so the console Tasks panel refreshes. Backs the server-side
+        undo of a console task-delete (#4955 Q10).
+
+        ``row`` is a snapshot taken by :meth:`get` before the delete; the insert covers
+        whichever of the live table's columns the snapshot carries, so it survives a schema
+        that gained a column after the snapshot was taken.
+
+        Refuses (``ValueError``) if an issue already exists under that id: it was recreated
+        between the delete and the undo, so restoring would clobber the newer row and its
+        progress."""
+        issue_id = row.get("id")
+        if not issue_id:
+            raise ValueError("restore: row has no id")
+        with self._lock:
+            if self._row(issue_id) is not None:
+                raise ValueError(f"issue {issue_id!r} already exists")
+            cols = [r["name"] for r in self._conn.execute("PRAGMA table_info(issues)").fetchall()]
+            present = [c for c in cols if c in row]
+            self._conn.execute(
+                f"INSERT INTO issues ({', '.join(present)}) VALUES ({', '.join('?' for _ in present)})",
+                tuple(row[c] for c in present),
+            )
+            self._conn.commit()
+            _publish("task.changed", {"id": issue_id, "action": "restored"})
+            return dict(self._row(issue_id))

@@ -104,7 +104,10 @@ def test_delete_missing_scheduler_job_is_404(real_scheduler_client):
 def test_delete_existing_scheduler_job_still_200(real_scheduler_client):
     client, sched = real_scheduler_client
     sched.add_job("p", "0 9 * * *", job_id="j1")
-    assert client.delete("/api/scheduler/jobs/j1").json() == {"canceled": True}
+    # Cancelling now also hands back an undo_token (#4955 Q10), so the body is no longer
+    # exactly {"canceled": True} — assert the status and the canceled flag.
+    resp = client.delete("/api/scheduler/jobs/j1")
+    assert resp.status_code == 200 and resp.json()["canceled"] is True
 
 
 def test_put_missing_scheduler_job_is_404(real_scheduler_client):
@@ -145,7 +148,10 @@ def test_close_missing_task_is_404(real_tasks_client):
 def test_delete_missing_task_is_404_and_existing_is_200(real_tasks_client):
     client, store = real_tasks_client
     issue = store.create("x")
-    assert client.delete(f"/api/tasks/issues/{issue['id']}").json() == {"deleted": True}
+    # Deleting now also hands back an undo_token (#4955 Q10), so the body is no longer
+    # exactly {"deleted": True} — assert the status and the deleted flag.
+    deleted = client.delete(f"/api/tasks/issues/{issue['id']}")
+    assert deleted.status_code == 200 and deleted.json()["deleted"] is True
     resp = client.delete(f"/api/tasks/issues/{issue['id']}")  # already gone
     assert resp.status_code == 404, resp.text
 
