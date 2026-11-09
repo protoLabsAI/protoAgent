@@ -220,16 +220,24 @@ class PluginManifest:
     #     tools import it in-process would pass the install gate and then die at tool time.
     #     Only non-default (``host``) entries are recorded; absent ⇒ runtime.
     pip_scopes: dict[str, str] = field(default_factory=dict)
-    #   requires_runtimes: non-Python runtimes the plugin needs, as ``{runtime: ">=N"}`` —
-    #     today only ``node`` (ADR 0085, amended 2026-10-15), e.g. ``{node: ">=20"}`` for a
-    #     plugin that runs a vendored JS bundle. The spec is a floor: ``>=N``, ``>=N.N`` or
-    #     ``>=N.N.N`` (a bare ``20`` / ``"v20"`` means ``>=20``); a malformed spec or an
-    #     unknown runtime warns and is ignored. The deps
-    #     gate checks it with the shared resolver (PATH → version managers → the managed
-    #     runtime) and, when nothing satisfies it, raises the setup banner with an
-    #     **Install Node runtime** button. At call time, spawn the node
-    #     ``sdk.node_executable(min_version)`` returns.
-    requires_runtimes: dict[str, str] = field(default_factory=dict)
+    #   requires_runtimes: runtimes the plugin needs, keyed by runtime name (ADR 0085,
+    #     amended 2026-10-15 for ``node`` and 2026-11-08 for ``python``). Two shapes, by key:
+    #       • ``node`` — a normalized version FLOOR string ``">=N[.N[.N]]"`` (a bare ``20`` /
+    #         ``"v20"`` / YAML int ``20`` means ``>=20``), e.g. ``{node: ">=20"}`` for a plugin
+    #         that runs a vendored JS bundle. The deps gate checks it with the shared resolver
+    #         (PATH → version managers → the managed runtime) and, when nothing satisfies it,
+    #         raises the setup banner with an **Install Node runtime** button. At call time,
+    #         spawn the node ``sdk.node_executable(min_version)`` returns.
+    #       • ``python`` — a normalized mapping ``{"version": "3.12", "requirements": [PEP 508
+    #         specs]}`` (``version`` a ``N.N`` string, ``requirements`` possibly empty). Unlike
+    #         node's scalar floor, it declares a whole per-plugin venv: the host provisions it
+    #         at ``<plugin_store>/.venv`` with ``uv`` on the operator's Install click (never on
+    #         load — install ≠ code exec, ADR 0027), and an unmet venv (missing, wrong version
+    #         or a requirements hash that drifted from the manifest) raises the same
+    #         ``runtime-missing`` banner. See ``infra.python_runtime``.
+    #     A malformed spec or an unknown runtime warns and is ignored; it never fails the load.
+    #     ``.get("node")`` yields the str; ``.get("python")`` the dict.
+    requires_runtimes: dict[str, object] = field(default_factory=dict)
     repository: str = ""
     homepage: str = ""
     min_protoagent_version: str = ""
@@ -1223,30 +1231,83 @@ def _parse_requires_pip(entries, plugin_id: str) -> tuple[list[str], list[str], 
 
 
 #: Runtimes ``requires_runtimes:`` understands (ADR 0085 amendment). Anything else warns.
-_KNOWN_RUNTIMES = ("node",)
+_KNOWN_RUNTIMES = ("node", "python")
 # ``>=20`` / ``>= 20.6.1`` / ``>=v20``, or a bare floor ``20`` / ``v20.6`` (YAML int ``20``
 # too) — all normalized to ``>=N[.N[.N]]``, the same floors ``sdk.node_executable`` accepts.
 _RUNTIME_SPEC_RE = re.compile(r"^(?:>=\s*)?v?(\d+(?:\.\d+){0,2})$")
+# ``requires_runtimes.python.version`` — ``major.minor`` only (``3.12``), the floor uv's
+# ``--python`` understands. Deliberately a STRING: a YAML float silently drops a trailing
+# zero (``3.10`` → ``3.1``), so a non-string version is dropped with a warning.
+_PY_VERSION_RE = re.compile(r"^\d+\.\d+$")
 
 
-def _parse_requires_runtimes(raw, plugin_id: str) -> dict[str, str]:
-    """Parse ``requires_runtimes:`` → ``{runtime: ">=N[.N[.N]]"}`` (normalized, no spaces).
+def _parse_python_runtime(spec, plugin_id: str) -> dict | None:
+    """Parse ``requires_runtimes.python`` → ``{"version": "3.12", "requirements": [...]}``.
+
+    ``version`` is a ``N.N`` string; ``requirements`` a list of PEP 508 strings (possibly
+    empty, absent ⇒ ``[]``). A non-mapping value, a non-``N.N`` version, or a non-list
+    ``requirements`` warns and drops the whole python entry; a non-string / blank
+    ``requirements`` member is skipped. Never fails the manifest load (like node)."""
+    if not isinstance(spec, dict):
+        log.warning(
+            "[plugins] %s: requires_runtimes.python must be a mapping like "
+            "{version: '3.12', requirements: [...]} — ignored",
+            plugin_id,
+        )
+        return None
+    version = spec.get("version")
+    version_text = version.strip() if isinstance(version, str) else ""
+    if not _PY_VERSION_RE.match(version_text):
+        log.warning(
+            "[plugins] %s: requires_runtimes.python.version %r is not a 'N.N' string (e.g. '3.12') — ignored",
+            plugin_id,
+            version,
+        )
+        return None
+    raw_reqs = spec.get("requirements", [])
+    if raw_reqs is None:
+        raw_reqs = []
+    if not isinstance(raw_reqs, (list, tuple)):
+        log.warning(
+            "[plugins] %s: requires_runtimes.python.requirements must be a list of PEP 508 strings — ignored",
+            plugin_id,
+        )
+        return None
+    requirements: list[str] = []
+    for entry in raw_reqs:
+        if not isinstance(entry, str) or not entry.strip():
+            log.warning(
+                "[plugins] %s: requires_runtimes.python.requirements entry %r is not a non-empty string — skipped",
+                plugin_id,
+                entry,
+            )
+            continue
+        requirements.append(entry.strip())
+    return {"version": version_text, "requirements": requirements}
+
+
+def _parse_requires_runtimes(raw, plugin_id: str) -> dict[str, object]:
+    """Parse ``requires_runtimes:`` → a per-runtime value, keyed by runtime name.
 
     .. code-block:: yaml
 
         requires_runtimes:
           node: ">=20"
+          python:
+            version: "3.12"
+            requirements: ["requests>=2"]
 
-    Only ``node`` is recognized. A bare floor (``20``, ``"20.6"``, ``"v20"``) means the
-    same as ``>=`` it and is normalized to ``">=20"``. An unknown runtime, a non-mapping
-    value, or any other spec (``"^20"``, ``"<22"``, ``"20.x"``) warns and is dropped — it
+    ``node`` normalizes to a version-floor string ``">=N[.N[.N]]"`` (a bare floor ``20`` /
+    ``"20.6"`` / ``"v20"`` means ``>=`` it); ``python`` normalizes to a mapping
+    ``{"version": "3.12", "requirements": [...]}`` (see ``_parse_python_runtime``). An
+    unknown runtime, a non-mapping value, or any malformed spec warns and is dropped — it
     never fails the manifest load (mirroring ``_parse_requires_pip``)."""
     if raw is None:
         return {}
     if not isinstance(raw, dict):
         log.warning("[plugins] %s: requires_runtimes must be a mapping like {node: '>=20'} — ignored", plugin_id)
         return {}
-    out: dict[str, str] = {}
+    out: dict[str, object] = {}
     for name, spec in raw.items():
         runtime = str(name or "").strip().lower()
         if runtime not in _KNOWN_RUNTIMES:
@@ -1256,6 +1317,11 @@ def _parse_requires_runtimes(raw, plugin_id: str) -> dict[str, str]:
                 name,
                 ", ".join(_KNOWN_RUNTIMES),
             )
+            continue
+        if runtime == "python":
+            parsed = _parse_python_runtime(spec, plugin_id)
+            if parsed is not None:
+                out["python"] = parsed
             continue
         if isinstance(spec, bool):
             m = None

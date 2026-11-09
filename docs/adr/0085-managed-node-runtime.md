@@ -177,6 +177,69 @@ runtime is present. Plugins get a declared requirement, a standard banner and a 
 fix instead of private shims. The cost is that resolution now runs `node --version` once per
 distinct binary per process. The cache keeps that off the hot path.
 
+## Amendment 2026-11-08: plugins declare Python; a per-plugin uv venv (#4807) {#amendment-2026-11-08}
+
+**Problem.** A plugin that ships Python compute (a document pipeline, a heavy numeric or
+ML dependency) has nowhere isolated to put it. `requires_pip` installs into the host or the
+ADR 0094 managed runtime's shared site-packages, so two plugins can collide on versions and
+every heavy dep risks loading into the frozen host — exactly what ADR 0093 / 0058 D2's
+frozen-host gate is there to prevent. Node already had a declared, provisioned-on-demand
+runtime (the 2026-10-15 amendment); Python did not.
+
+**Decision.** `requires_runtimes` grows a second key, `python`, parsed in
+`graph/plugins/manifest.py` beside `node`. Four points:
+
+1. **Schema.** Unlike node's scalar version floor, `python` takes a **mapping**:
+
+   ```yaml
+   requires_runtimes:
+     python:
+       version: "3.12"            # a "N.N" string — the floor uv's --python understands
+       requirements:              # a list of PEP 508 specs (may be empty, may be absent)
+         - "pandas>=2"
+   ```
+
+   It normalizes to `{"version": "3.12", "requirements": [...]}`. `version` must be a `N.N`
+   string (a YAML float would silently drop a trailing zero — `3.10` → `3.1`). A non-mapping
+   value, a non-`N.N` version, or a non-list `requirements` warns and is dropped; the load
+   never fails — the same leniency as node and as `requires_pip`. **Node parsing is
+   unchanged**, and the field now holds node's normalized string *or* python's normalized
+   dict, keyed by runtime (`.get("node")` → str, `.get("python")` → dict).
+
+2. **Per-plugin venv, provisioned with uv, never in-process.** The host provisions a venv at
+   `<plugin_store>/.venv` (`infra/python_runtime.py`: `plugin_venv_dir`,
+   `provision_plugin_venv`) by running `uv venv --python <version>` then `uv pip install`,
+   and records a marker (`version` + a hash of `requirements`) inside the venv so a later
+   load can tell a satisfying venv from a stale one without spawning anything. This keeps
+   ADR 0027's **install ≠ code exec** rule — provisioning runs *only* on the operator's
+   Install click, never on load — and honours ADR 0093 / 0058 D2's frozen-host gate, because
+   a plugin's heavy deps live in its own venv and never load into the host process. A
+   documented override, `PROTOAGENT_PLUGIN_PYTHON_<ID>`, points a plugin's venv at a prepared
+   directory for tests and CI fixtures. (The spawn seam that runs this venv —
+   `sdk.plugin_python` / `sdk.worker` — is part 2 of #4807.)
+
+3. **The existing `runtime-missing` gap, with an Install action.** An unmet python runtime —
+   **no venv, a wrong `version`, or a requirements hash that differs from the manifest** —
+   reuses `loader.RUNTIME_GAP_KEY` (the same banner as node), reported by the same
+   `_report_runtime_gap` on every load. Its fix is a new closed action kind,
+   `install_python`, whose target is forced to the reporting plugin (a plugin can only ever
+   provision its *own* venv, like `install_deps`); the action runs
+   `loader.install_plugin_python`, which calls `provision_plugin_venv` and then re-reports the
+   gap so the banner clears without a reload. The button is offered only when `uv` is present
+   — the same shape as `install_node` being offered only when a managed build can help. A met
+   venv clears the gap; loading only ever *checks*.
+
+4. **`requires_pip` keeps its meaning and its scope.** It is still the plugin's declared pip
+   deps for the host / managed runtime, installed by `install-deps`; it is unchanged by this
+   amendment. `requires_runtimes.python` is the separate "this plugin wants its own isolated
+   interpreter + deps" declaration, and `deps_missing` (what Install deps hands to pip) still
+   never carries a runtime name.
+
+**Consequences.** A Python-heavy plugin gets an isolated, versioned interpreter with its own
+deps, provisioned by one click, with no risk of colliding with another plugin or loading into
+the frozen host. The cost mirrors node's: a one-time (if real) uv download/build when the
+operator opts in, and a `uv` dependency on the host for that step.
+
 ## 6. References
 
 - ADR 0024 / 0025 — CLI coding agents over ACP; the unified delegate registry.
