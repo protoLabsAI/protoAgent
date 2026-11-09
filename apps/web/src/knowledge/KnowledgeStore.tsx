@@ -362,9 +362,9 @@ export function KnowledgeStore() {
     setAdding(false);
     setEditingId(c.id);
     // The chunk's OWN domain is the save value — the server writes this field back as the
-    // row's domain/collection. Prefer it over the browsed collection so a content-only edit
-    // of a legacy row (domain ≠ collection) can't silently relabel it to the open collection.
-    setDraft({ heading: c.heading || "", domain: c.domain || c.collection || model.collection || "general", content: c.content || "" });
+    // row's domain. Use the row's own domain (never the browsed collection) so a content-only
+    // edit of a legacy row (domain ≠ collection) can't silently relabel it to the open collection.
+    setDraft({ heading: c.heading || "", domain: c.domain || c.collection || "general", content: c.content || "" });
   }
 
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
