@@ -73,6 +73,26 @@ def test_general_includes_legacy_null_and_empty_but_not_history(tmp_path):
         assert store.restore_by_collection(name) == 0
 
 
+def test_restore_by_collection_leaves_source_deleted_rows(tmp_path):
+    """An Undo of a collection delete must resurrect ONLY what that delete hid — never a
+    chunk the operator separately soft-deleted by source that still sits in the same
+    collection within its own grace window (the two bulk paths use distinct markers)."""
+    store = KnowledgeStore(tmp_path / "knowledge.db")
+    by_collection = _add(store, "stays-back")  # collection "books"
+    by_source = _add(store, "source-deleted")  # collection "books", its own source
+    assert store.invalidate_by_source("source-deleted") == 1
+    # Only the still-valid row is collection-deleted (the source one is already hidden).
+    assert store.invalidate_by_collection("books") == 1
+    # Restore brings back only the collection-deleted row.
+    assert store.restore_by_collection("books") == 1
+    assert store.get_chunk(by_collection)["invalidated_at"] is None
+    assert store.get_chunk(by_source)["invalidated_at"] is not None
+    assert {r["id"] for r in store.search("orchard", k=20)} == {by_collection}
+    # The source delete keeps its own reversible Undo — the markers never collided.
+    assert store.restore_by_source("source-deleted") == 1
+    assert store.get_chunk(by_source)["invalidated_at"] is None
+
+
 def test_delete_sweeps_past_grace_rows(monkeypatch, tmp_path):
     store = KnowledgeStore(tmp_path / "knowledge.db")
     old = _add(store, "old")

@@ -497,6 +497,20 @@ def _has_fts5(db: sqlite3.Connection) -> bool:
 # this marker they'd be indistinguishable and the sweep would wipe supersession history.
 _BULK_DELETE_REASON = "source_delete"
 
+# A DISTINCT marker for :meth:`KnowledgeStore.invalidate_by_collection` (ADR 0125 P2
+# slice 6, #4630) — NOT ``_BULK_DELETE_REASON``. A collection and a source overlap
+# (the same chunk carries both a ``collection`` and a ``source``), so if a collection
+# delete stamped the shared source marker, :meth:`restore_by_collection` — whose WHERE
+# can only key on the reason, not on which bulk action stamped it — would resurrect
+# chunks the operator had separately soft-deleted *by source* and that are still within
+# the grace window. Keeping the markers apart scopes each Undo to its own delete.
+_COLLECTION_DELETE_REASON = "collection_delete"
+
+# Both bulk soft-delete markers the grace sweep (:meth:`purge_invalidated`) reaps once a
+# row ages past the recovery window. Each restore path still matches its OWN marker only
+# — this set is purge-side (reap-what-both-bulk-paths-stamped), not restore-side.
+_REAPABLE_BULK_REASONS = (_BULK_DELETE_REASON, _COLLECTION_DELETE_REASON)
+
 # ``invalidation_reason`` prefix stamped by :meth:`KnowledgeStore.invalidate_chunk` when a
 # supersede names its replacement (ADR 0108 D7): ``superseded_by:<new row id>``. Audit
 # history exactly like the NULL-reason supersession rows — never reaped by the grace
@@ -2413,11 +2427,17 @@ class KnowledgeStore:
             db.close()
 
     def invalidate_by_collection(self, collection: str) -> int:
-        """Soft-delete valid knowledge in a collection, excluding conversation history.
+        """SOFT-delete every VALID chunk in ``collection`` — the collection analogue of
+        :meth:`invalidate_by_source` (ADR 0125 P2 slice 6, #4630). NULL/empty collections
+        fold into ``general`` (:func:`_collection_clause`, matching
+        :meth:`list_collections`' grouping); conversation ``history`` is excluded. Empty
+        names are a no-op (0) — never an ``invalidated_at = everything`` sweep.
+        Already-invalidated rows keep their timestamp and reason (count is newly-hidden).
 
-        NULL/empty collections belong to "general". Empty names are a no-op.
-        Uses the same bulk-delete marker and grace sweep as delete-by-source;
-        already-invalidated rows keep their timestamp and reason."""
+        Stamps ``invalidation_reason = _COLLECTION_DELETE_REASON`` — a DISTINCT marker,
+        not the source one — so :meth:`restore_by_collection`'s Undo resurrects only what
+        THIS delete hid, never a chunk separately soft-deleted by source that shares the
+        collection. The grace sweep (:meth:`purge_invalidated`) reaps both markers."""
         if not collection or not collection.strip():
             return 0
         clause, params = _collection_clause(collection, history_col="domain")
@@ -2429,7 +2449,7 @@ class KnowledgeStore:
             cur = db.execute(
                 "UPDATE chunks SET invalidated_at = ?, invalidation_reason = ?, updated_at = ? "
                 f"WHERE {clause} AND invalidated_at IS NULL",
-                [now, _BULK_DELETE_REASON, now, *params],
+                [now, _COLLECTION_DELETE_REASON, now, *params],
             )
             db.commit()
             return int(cur.rowcount)
@@ -2440,11 +2460,17 @@ class KnowledgeStore:
             db.close()
 
     def restore_by_collection(self, collection: str) -> int:
-        """Restore bulk-soft-deleted knowledge still present in a collection.
+        """Clear ``invalidated_at`` on every chunk THIS feature soft-deleted in
+        ``collection`` — the inverse of :meth:`invalidate_by_collection`. Uses the same
+        default bucket and history exclusion as the delete. Only rows still present (not
+        yet swept by :meth:`purge_invalidated`) can be restored. Empty names are a no-op.
 
-        Uses the same default bucket and history exclusion as collection deletion.
-        Superseded rows stay invalidated; purged rows cannot be restored.
-        Empty names are a no-op."""
+        Scoped to ``invalidation_reason = _COLLECTION_DELETE_REASON`` — the collection
+        marker, NOT the shared source one — so an Undo can only resurrect what a
+        *collection* delete hid. A chunk the operator soft-deleted by source
+        (``_BULK_DELETE_REASON``), or an auto-supersession audit row (ADR 0069 D9, NULL
+        reason), that happens to live in this collection and is still within its own
+        grace window stays invalidated. Clears the reason marker on the way back out."""
         if not collection or not collection.strip():
             return 0
         clause, params = _collection_clause(collection, history_col="domain")
@@ -2455,7 +2481,7 @@ class KnowledgeStore:
             cur = db.execute(
                 "UPDATE chunks SET invalidated_at = NULL, invalidation_reason = NULL, updated_at = ? "
                 f"WHERE {clause} AND invalidation_reason = ?",
-                [_now_iso(), *params, _BULK_DELETE_REASON],
+                [_now_iso(), *params, _COLLECTION_DELETE_REASON],
             )
             db.commit()
             return int(cur.rowcount)
@@ -2477,9 +2503,11 @@ class KnowledgeStore:
         older than ``older_than_seconds`` ago — the grace sweep that makes a bulk
         delete-by-source (#1770) eventually permanent.
 
-        Reaps ONLY rows stamped ``invalidation_reason = _BULK_DELETE_REASON`` by
-        :meth:`invalidate_by_source`. Auto-supersession rows (ADR 0069 D9, which set
-        ``invalidated_at`` with a NULL reason — or, since ADR 0108 D7, a
+        Reaps ONLY rows stamped a bulk-delete marker (``_REAPABLE_BULK_REASONS``:
+        ``_BULK_DELETE_REASON`` from :meth:`invalidate_by_source`, or
+        ``_COLLECTION_DELETE_REASON`` from :meth:`invalidate_by_collection`) — both bulk
+        soft-deletes share this one grace window. Auto-supersession rows (ADR 0069 D9,
+        which set ``invalidated_at`` with a NULL reason — or, since ADR 0108 D7, a
         ``superseded_by:<id>`` chain marker) are deliberately excluded and kept
         forever as audit history — the ``include_invalidated`` escape hatch stays
         populated. Without this reason filter the sweep would silently wipe that
@@ -2496,10 +2524,11 @@ class KnowledgeStore:
             return 0
         try:
             cutoff = _cutoff if _cutoff is not None else self._invalidated_cutoff(older_than_seconds)
+            placeholders = ", ".join("?" * len(_REAPABLE_BULK_REASONS))
             cur = db.execute(
                 "DELETE FROM chunks "
-                "WHERE invalidated_at IS NOT NULL AND invalidated_at <= ? AND invalidation_reason = ?",
-                (cutoff, _BULK_DELETE_REASON),
+                f"WHERE invalidated_at IS NOT NULL AND invalidated_at <= ? AND invalidation_reason IN ({placeholders})",
+                (cutoff, *_REAPABLE_BULK_REASONS),
             )
             db.commit()
             return int(cur.rowcount)
