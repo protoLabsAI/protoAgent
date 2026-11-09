@@ -88,3 +88,4 @@
 --pl-space-5
 --pl-space-6
 --pl-space-8
+--pl-thumb-size
