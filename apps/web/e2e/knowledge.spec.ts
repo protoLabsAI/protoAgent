@@ -26,7 +26,8 @@ test("Knowledge opens on collections and documents replace source groups", async
   await header.click();
   await expect(surface.getByText("Switchbacks keep the grade walkable.")).toHaveCount(0);
   await expect(surface.getByPlaceholder("Search in general…")).toBeVisible();
-  await expect(surface.getByLabel("pending review filter")).toHaveCount(0);
+  // The pending-review filter stays on this surface: pending rows still deliver to the agent.
+  await expect(surface.getByLabel("pending review filter")).toBeVisible();
 });
 test("layered chunks retain share and unshare actions", async ({ page }) => {
   const surface = await open(page);
@@ -35,8 +36,12 @@ test("layered chunks retain share and unshare actions", async ({ page }) => {
   await expect(surface.getByLabel("share entry 12", { exact: true })).toBeVisible();
   await expect(surface.getByLabel("unshare entry 11", { exact: true })).toBeVisible();
   await expect(surface.getByLabel("share entry 11", { exact: true })).toHaveCount(0);
+  // Tier badges distinguish the shared commons row from the private one.
+  await expect(surface.getByText("commons", { exact: true }).first()).toBeVisible();
+  await expect(surface.getByText("private", { exact: true }).first()).toBeVisible();
   await surface.getByLabel("unshare entry 11", { exact: true }).click();
   const dialog = page.getByRole("dialog", { name: "Unshare from the commons?" });
+  await expect(dialog).toBeVisible();
   await dialog.getByRole("button", { name: "Unshare", exact: true }).click();
   await expect(surface.getByLabel("unshare entry 11", { exact: true })).toHaveCount(0);
 });

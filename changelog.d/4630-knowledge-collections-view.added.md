@@ -1,1 +1,1 @@
-- **Browse knowledge by collection (#4630).** Open collections to inspect their documents, search their contents, and undo collection deletions.
+- **Browse knowledge by collection (#4630).** The Knowledge surface now opens on a sortable list of collections; open one to inspect its documents and chunks, search within it or across all collections, review pending agent-written entries, and delete a document or a whole collection with an undo window.

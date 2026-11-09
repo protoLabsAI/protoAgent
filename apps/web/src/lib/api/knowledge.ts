@@ -44,8 +44,10 @@ export const knowledgeApi = {
   // not the server's thirty (the provider asks for one over its own cap, since an
   // over-full page is the only signal that route gives that there are more matches).
   // `signal` because the DS palette aborts a superseded keystroke, and a request that
-  // ignores that signal runs to completion against the FTS index anyway. Both are omitted
-  // by the Knowledge surface, which keeps the server default and no cancellation.
+  // ignores that signal runs to completion against the FTS index anyway. The ⌘K palette
+  // is not the only caller now: the Knowledge collections browser (ADR 0125 P2 slice 6)
+  // also passes `k` (to read a whole collection's chunks, not the server's default page)
+  // and `signal` (to abort a superseded scoped search); the recall paths still omit both.
   //
   // `prefix` is the third: it widens the query's LAST token to an FTS5 prefix term. The
   // store's index is whole-token (`knowledge/store.py` quotes each token as a phrase), so

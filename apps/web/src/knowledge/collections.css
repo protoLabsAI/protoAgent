@@ -10,6 +10,7 @@
 .kc-visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
 .kc-browser .playbook-desc { color: var(--pl-color-fg); display: -webkit-box; -webkit-box-orient: vertical; overflow: hidden; }
 .kc-browser .playbook-meta, .kc-browser .playbook-tools, .kc-browser .playbook-tools code { color: var(--pl-color-fg-muted); }
+.kc-document-actions { display: flex; justify-content: flex-end; margin-bottom: var(--pl-space-2); }
 @media (max-width: 767px) {
   .kc-desktop { display: none; }
   .kc-search > :first-child { flex-basis: 100%; }

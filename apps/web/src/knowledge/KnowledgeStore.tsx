@@ -2,7 +2,7 @@ import { Combobox, Input, Textarea } from "@protolabsai/ui/forms";
 import { ConfirmDialog, Dialog, useToast } from "@protolabsai/ui/overlays";
 import { Badge, Button, TextLink } from "@protolabsai/ui/primitives";
 import { useMutation } from "@tanstack/react-query";
-import { ArrowDownFromLine, ArrowUpToLine, FileUp, Library, Pencil, Plus, Trash2 } from "lucide-react";
+import { ArrowDownFromLine, ArrowUpToLine, ClipboardCheck, FileUp, Library, Pencil, Plus, Trash2 } from "lucide-react";
 
 import { useEffect, useState } from "react";
 
@@ -17,6 +17,7 @@ import { useUI } from "../state/uiStore";
 import { QuickSetting } from "../settings/QuickSetting";
 import type { KnowledgeChunk } from "../lib/types";
 
+import { ReviewActions, ReviewChip } from "./ReviewVerdict";
 import { takeKnowledgeSearchSeed, useKnowledgeSearchSeedVersion } from "./searchSeed";
 type Draft = { heading: string; domain: string; content: string };
 const EMPTY_DRAFT: Draft = { heading: "", domain: "general", content: "" };
@@ -271,8 +272,9 @@ function IngestForm({
 }
 
 export function KnowledgeStore() {
-  // Action failures (curate / share / ingest) self-report via toast; a read/search
-  // failure is the contained <Alert> below. A blank message is a clear-no-op.
+  // Action failures (curate / share / ingest / review) self-report via toast; a read or
+  // search failure renders as the contained <Alert> inside CollectionsBrowser. A blank
+  // message is a clear-no-op.
   const model = useCollections();
   const names = model.collections.map(c => c.collection);
   const toast = useToast();
@@ -359,7 +361,10 @@ export function KnowledgeStore() {
   function startEdit(c: KnowledgeChunk) {
     setAdding(false);
     setEditingId(c.id);
-    setDraft({ heading: c.heading || "", domain: c.collection || model.collection || c.domain || "general", content: c.content || "" });
+    // The chunk's OWN domain is the save value — the server writes this field back as the
+    // row's domain/collection. Prefer it over the browsed collection so a content-only edit
+    // of a legacy row (domain ≠ collection) can't silently relabel it to the open collection.
+    setDraft({ heading: c.heading || "", domain: c.domain || c.collection || model.collection || "general", content: c.content || "" });
   }
 
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
@@ -396,6 +401,7 @@ export function KnowledgeStore() {
                   <Badge status="neutral">private</Badge>
                 </span>
               ) : null}
+              <ReviewChip chunk={c} />
               {c.heading ? <strong>{c.heading}</strong> : null}
             </div>
             <p className="playbook-desc" style={expanded.has(`${c.tier}:${c.id}`) ? { WebkitLineClamp: "unset" } : { WebkitLineClamp: 6 }}>{highlight(c.content || c.preview, model.term)}</p>
@@ -412,6 +418,10 @@ export function KnowledgeStore() {
           <div className="playbook-meta">
             <span title="added">{ago(c.created_at)}</span>
             <span className="knowledge-chunk-actions">
+              {/* Review verdict (ADR 0108 D7) — nothing for commons rows (read-only here).
+                  Agent-written rows arrive pending and still deliver, so confirm/reject
+                  stays reachable on this surface until the Memory inspector owns it. */}
+              <ReviewActions chunk={c} />
               {c.tier === "private" ? (
                 <Button
                   icon
@@ -467,13 +477,27 @@ export function KnowledgeStore() {
     <section className="panel stage-panel" data-testid="knowledge-store">
       <PanelHeader
         title="Knowledge"
-        kicker="Collections this agent can read"
+        kicker={`Collections this agent can read${model.pendingOnly ? " · pending review" : ""}`}
         actions={
           <>
             {/* Quick-set recall behaviour right where you inspect what the agent knows (ADR 0048). */}
             <QuickSetting keys={["knowledge.top_k", "knowledge.embeddings"]} title="Recall" label="Knowledge recall settings" />
             {enabled ? (
               <>
+                {/* "Pending review" queue (ADR 0108 D7): narrow the browsed chunks + search to
+                    rows awaiting an operator verdict. Agent-written rows keep delivering until
+                    reviewed, so this stays on the Knowledge surface. */}
+                <Button
+                  icon
+                  variant={model.pendingOnly ? "primary" : "ghost"}
+                  type="button"
+                  onClick={() => model.setPendingOnly((v) => !v)}
+                  title={model.pendingOnly ? "Show every entry" : "Show only entries awaiting review"}
+                  aria-label="pending review filter"
+                  aria-pressed={model.pendingOnly}
+                >
+                  <ClipboardCheck size={16} />
+                </Button>
                 <Button
                   icon
                   variant="ghost"

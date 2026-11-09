@@ -36,6 +36,8 @@ async function mock(page: Page) {
     state.rows.push(row);
     return route.fulfill({ json: { enabled: true, restored: row.chunks } });
   });
+  await page.route("**/api/knowledge/delete-by-source", route => route.fulfill({ json: { enabled: true, deleted: 13 } }));
+  await page.route("**/api/knowledge/restore-by-source", route => route.fulfill({ json: { enabled: true, restored: 13 } }));
   await page.addInitScript(() => localStorage.setItem("protoagent.ui", JSON.stringify({ state: {
     surface: "knowledge", mobileActive: "knowledge", rightCollapsed: true, leftCollapsed: false,
   }, version: 14 })));
@@ -76,8 +78,13 @@ for (const width of [1440, 390]) {
         await surface.getByRole("button", { name: "claude-import/release-guide-1.md · 13 chunks", exact: true }).click();
         await expect(surface.getByText("Release safety 1", { exact: true })).toBeVisible();
         await shot("detail");
+        // Agent-written rows can still be reviewed from this surface: the filter and the
+        // per-row confirm/reject verdict controls stay here until the Memory inspector owns them.
+        await expect(surface.getByLabel("pending review filter")).toBeVisible();
+        await expect(surface.getByLabel("confirm entry 1", { exact: true })).toBeVisible();
         await surface.getByLabel("edit entry 1", { exact: true }).click();
-        await expect(surface.getByRole("combobox", { name: "Collection", exact: true })).toHaveValue("claude-import");
+        // A content edit must keep the chunk's OWN domain, not relabel it to the open collection.
+        await expect(surface.getByRole("combobox", { name: "Collection", exact: true })).toHaveValue("legacy-domain");
         await surface.getByRole("button", { name: "Cancel", exact: true }).click();
         await page.goBack(); await expect(surface).toContainText("5 collections · 847 chunks");
         await page.goForward(); await expect(surface.getByRole("heading", { name: "claude-import", exact: true })).toBeVisible();
@@ -104,9 +111,15 @@ for (const width of [1440, 390]) {
         await surface.getByRole("searchbox").fill("");
         await expect(surface.getByRole("heading", { name: "Documents", exact: true })).toBeVisible();
         await expect(surface.getByRole("button", { name: "claude-import/release-guide-1.md · 13 chunks", exact: true })).toHaveAttribute("aria-expanded", "true");
-        // Document delete stays out of the collection-scoped view: delete-by-source has no
-        // collection predicate, so it is not offered here (whole-document removal = Delete collection).
-        await expect(surface.getByRole("button", { name: /^delete all chunks from/ })).toHaveCount(0);
+        // A whole ingested document can be removed in one action from its collection. The confirm
+        // names the document (not "this collection"), since delete-by-source spans collections.
+        const docDelete = surface.getByRole("button", { name: "Delete document claude-import/release-guide-1.md", exact: true });
+        await expect(docDelete).toBeVisible();
+        await docDelete.click();
+        const docDialog = page.getByRole("dialog", { name: "Delete this document?" });
+        await expect(docDialog).toContainText("claude-import/release-guide-1.md");
+        await docDialog.getByRole("button", { name: "Keep it", exact: true }).click();
+        await expect(docDialog).toHaveCount(0);
         await surface.getByRole("button", { name: "Delete collection…", exact: true }).click();
         const dialog = page.getByRole("dialog", { name: "Delete claude-import?" });
         await expect(dialog).toBeVisible(); await shot("delete-confirm");

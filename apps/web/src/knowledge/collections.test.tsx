@@ -147,16 +147,53 @@ describe("collection browser", () => {
     expect(remove).not.toHaveBeenCalled();
     expect(model.remove.error?.message).toContain("Couldn't read");
   });
-  it("groups a detail's chunks by document but offers no cross-collection document delete", async () => {
-    // delete-by-source has no collection predicate (and operator chunks all share source
-    // "console"), so a per-document delete offered from a collection-scoped view would reach
-    // every collection. The detail view must group by source WITHOUT any such delete control.
-    const bySource = vi.spyOn(api, "deleteKnowledgeBySource");
+  async function confirmButton(label: string) {
+    const result = Array.from(document.querySelectorAll<HTMLButtonElement>('[role="dialog"] button')).find(b => b.textContent === label);
+    if (!result) throw new Error(`Dialog button missing: ${label}`);
+    await act(async () => result.click()); await settle();
+  }
+  it("groups a detail's chunks by document and deletes a whole document with a counted confirm and 10-second undo", async () => {
+    const timers = vi.spyOn(globalThis, "setTimeout");
+    const del = vi.spyOn(api, "deleteKnowledgeBySource").mockResolvedValue({ enabled: true, deleted: 51 });
+    const restore = vi.spyOn(api, "restoreKnowledgeBySource").mockResolvedValue({ enabled: true, restored: 51 });
     await render(); await act(async () => model.open("alpha")); await settle();
     expect(host.textContent).toContain("Manual · 51 chunks");
-    expect(document.querySelector('[aria-label^="delete all chunks from"]')).toBeNull();
-    expect(Array.from(document.querySelectorAll("button")).some(b => b.textContent === "Delete document")).toBe(false);
+    const trigger = document.querySelector<HTMLButtonElement>('[aria-label="Delete document Manual"]');
+    await act(async () => trigger!.click()); await settle();
+    expect(document.body.textContent).toContain("This removes all 51 chunks of “Manual”");
+    await confirmButton("Delete document");
+    expect(del).toHaveBeenCalledWith("Manual");
+    expect(document.body.textContent).toContain("Deleted 51 chunks from “Manual”.");
+    expect(timers).toHaveBeenCalledWith(expect.any(Function), 10000);
+    await click("Undo"); expect(restore).toHaveBeenCalledWith("Manual");
+    expect(document.body.textContent).toContain("Restored “Manual”.");
+  });
+  it("does not announce a document deletion when the server removed zero chunks", async () => {
+    vi.spyOn(api, "deleteKnowledgeBySource").mockResolvedValue({ enabled: true, deleted: 0 });
+    await render(); await act(async () => model.open("alpha")); await settle();
+    await act(async () => document.querySelector<HTMLButtonElement>('[aria-label="Delete document Manual"]')!.click()); await settle();
+    await confirmButton("Delete document");
+    expect(document.querySelector('[role="dialog"]')?.textContent).toContain("Couldn't delete “Manual”. Nothing was removed.");
+    expect(document.body.textContent).not.toContain("Deleted");
+  });
+  it("offers no document delete for the shared console bucket or sourceless entries", async () => {
+    // delete-by-source has no collection predicate and operator chunks all share source
+    // "console", so those buckets span collections and must NOT get a per-document delete.
+    const bySource = vi.spyOn(api, "deleteKnowledgeBySource");
+    vi.mocked(api.knowledgeSearch).mockResolvedValue({ enabled: true, query: "", results: [{ ...chunk(1), source: "console" }, { ...chunk(2), source: null }], stats: {} });
+    await render(); await act(async () => model.open("alpha")); await settle();
+    expect(host.textContent).toContain("Entries without a source");
+    expect(document.querySelector('[aria-label^="Delete document"]')).toBeNull();
     expect(bySource).not.toHaveBeenCalled();
+  });
+  it("scopes the detail read to the pending-review verdict and shows a review-specific empty state", async () => {
+    vi.mocked(api.knowledgeSearch).mockResolvedValue({ enabled: true, query: "", results: [], stats: {} });
+    await render(); await act(async () => model.open("alpha")); await settle();
+    expect(host.textContent).toContain("This collection is empty.");
+    await act(async () => model.setPendingOnly(true)); await settle();
+    expect(api.knowledgeSearch).toHaveBeenCalledWith("", expect.objectContaining({ collection: "alpha", reviewState: "pending" }));
+    expect(host.textContent).toContain("Nothing awaiting review here.");
+    expect(host.textContent).not.toContain("This collection is empty.");
   });
   it("never sends a private bulk delete for a shared collection", async () => {
     const remove = vi.spyOn(api, "deleteKnowledgeByCollection");

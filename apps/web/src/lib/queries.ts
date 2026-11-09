@@ -588,21 +588,24 @@ export const collectionsQuery = () => queryOptions({
   queryKey: [...queryKeys.knowledge, "collections"],
   queryFn: () => api.listCollections(),
 });
-export const collectionChunksQuery = (collection: string | undefined, q: string, limit: number) => queryOptions({
-  queryKey: [...queryKeys.knowledge, "collection-chunks", collection ?? null, q, limit],
-  queryFn: ({ signal }) => api.knowledgeSearch(q, { collection, k: limit, signal }),
+// `reviewState` (ADR 0108 D7) scopes a browse/search to one operator verdict — the
+// "pending review" queue, restored on this surface until the Memory inspector owns it.
+// It is its own trailing cache segment so toggling never relabels the unfiltered read.
+export const collectionChunksQuery = (collection: string | undefined, q: string, limit: number, reviewState?: ReviewState) => queryOptions({
+  queryKey: [...queryKeys.knowledge, "collection-chunks", collection ?? null, q, limit, reviewState ?? null],
+  queryFn: ({ signal }) => api.knowledgeSearch(q, { collection, k: limit, signal, reviewState }),
 });
 
 // The current serializer omits collection on hits. Searching each named scope
 // preserves exact membership (including the general fallback) without guessing
 // it from the legacy domain. Bound concurrency to avoid flooding a hybrid store.
-export const collectionsSearchQuery = (collections: { collection: string; chunks: number }[], q: string) => queryOptions({
-  queryKey: [...queryKeys.knowledge, "collections-search", collections.map(c => [c.collection, c.chunks]), q],
+export const collectionsSearchQuery = (collections: { collection: string; chunks: number }[], q: string, reviewState?: ReviewState) => queryOptions({
+  queryKey: [...queryKeys.knowledge, "collections-search", collections.map(c => [c.collection, c.chunks]), q, reviewState ?? null],
   queryFn: async ({ signal }) => {
     const results: KnowledgeChunk[] = [];
     for (let start = 0; start < collections.length; start += 4) {
       const batch = await Promise.all(collections.slice(start, start + 4).map(async c => {
-        const data = await api.knowledgeSearch(q, { collection: c.collection, k: Math.max(1, c.chunks), signal });
+        const data = await api.knowledgeSearch(q, { collection: c.collection, k: Math.max(1, c.chunks), signal, reviewState });
         return data.results.map(row => ({ ...row, collection: c.collection }));
       }));
       results.push(...batch.flat());

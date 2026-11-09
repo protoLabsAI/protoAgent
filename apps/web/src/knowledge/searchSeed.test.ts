@@ -134,11 +134,17 @@ describe("the Knowledge surface adopts a seeded term", () => {
     await vi.waitFor(() => expect(search).toHaveBeenCalledWith("postgres", expect.objectContaining({ collection: "general" })));
   });
 
-  it("adopts a term on an already-open surface without a memory review filter", async () => {
+  it("clears the review filter on a seed, so an already-open surface still shows the picked row", async () => {
     await mount();
     await act(async () => seedKnowledgeSearch("postgres"));
     await vi.waitFor(() => expect(search).toHaveBeenCalledWith("postgres", expect.objectContaining({ collection: "general" })));
-    expect(container.querySelector('[aria-label="pending review filter"]')).toBeNull();
-    expect(vi.mocked(api.knowledgeSearch).mock.calls.every(([, opts]) => opts?.reviewState === undefined)).toBe(true);
+    // Narrow the already-open surface to the pending-review queue.
+    await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="pending review filter"]')!.click());
+    await vi.waitFor(() => expect(search).toHaveBeenCalledWith("postgres", expect.objectContaining({ reviewState: "pending" })));
+    // A fresh ⌘K handoff must clear that filter, or the list it lands on would not contain
+    // the row the operator just picked.
+    await act(async () => seedKnowledgeSearch("redis"));
+    await vi.waitFor(() => expect(search).toHaveBeenCalledWith("redis", expect.objectContaining({ reviewState: undefined })));
+    expect(container.querySelector<HTMLButtonElement>('[aria-label="pending review filter"]')?.getAttribute("aria-pressed")).toBe("false");
   });
 });
