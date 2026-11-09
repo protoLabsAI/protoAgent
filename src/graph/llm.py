@@ -7,6 +7,7 @@ so we use ChatOpenAI for everything.
 import asyncio
 import contextlib
 import contextvars
+import dataclasses
 import hashlib
 import json
 import logging
@@ -25,6 +26,7 @@ from pydantic import Field
 
 from graph import image_limits, llm_limiter
 from graph.config import PROVIDER_TYPE_OPENAI_COMPAT, LangGraphConfig, ModelRoute, Provider, resolve_model_route
+from graph.generation_profile import ResolvedProfile
 from graph.providers.identity import tag_model_provider
 
 log = logging.getLogger(__name__)
@@ -1138,8 +1140,118 @@ def _build_llm_kwargs(config: LangGraphConfig, connection: Provider | None = Non
     return kwargs
 
 
+# ADR 0128 D5: the profile knobs each provider TYPE does not read when it builds its
+# client. A profile is free to set them, so they still land on the config view below
+# (inert for a builder that never reads the field) — but each is logged once per
+# (provider type, knob) so an operator can see the setting was dropped, not honoured.
+# gateway reasoning_effort is forwarded as a native param (whether the far side honours
+# it is the gateway's call), so it's not listed. thinking_budget has no wire today on any
+# of these and context_budget is host-side only (S2b), so neither is applied here.
+_PROFILE_KNOBS_IGNORED: dict[str, frozenset[str]] = {
+    PROVIDER_TYPE_OPENAI_COMPAT: frozenset({"thinking_budget"}),
+    "anthropic-oauth": frozenset({"thinking_budget", "chat_template_kwargs"}),
+    "openai-codex": frozenset({"max_tokens", "thinking", "chat_template_kwargs", "thinking_budget"}),
+    "acp": frozenset({"max_tokens", "thinking", "reasoning_effort", "chat_template_kwargs", "thinking_budget"}),
+}
+# Fired (provider type, knob) pairs — each ignored knob is logged at most once (D5).
+_PROFILE_IGNORE_LOGGED: set[tuple[str, str]] = set()
+# The profile knobs considered for the ignored-knob log and, for the first four, mapped
+# onto the config view. context_budget is deliberately absent (S2b wires it host-side).
+_PROFILE_WIRED_KNOBS = ("max_tokens", "thinking", "reasoning_effort", "chat_template_kwargs", "thinking_budget")
+
+
+def _profile_provider_type(config: LangGraphConfig, model_name: str | None) -> str:
+    """The provider TYPE the dispatch in ``create_llm`` will build for ``model_name``.
+
+    Read-only: it mirrors that dispatch purely so the ADR 0128 D5 ignored-knob log can name
+    the right provider type, and never changes what gets built."""
+    name = (model_name or "").strip()
+    if name.startswith("acp:"):
+        return "acp"
+    slot_provider, _entry, ptype, _model = resolve_slot_target(model_name, config)
+    if not slot_provider and not model_name:
+        slot_provider, _entry, ptype, _model = resolve_slot_target(getattr(config, "model_name", ""), config)
+    if slot_provider:
+        return ptype
+    try:
+        from runtime.acp_runtime import is_acp_runtime
+
+        if is_acp_runtime(config) and not _gateway_configured(config):
+            return "acp"
+    except Exception:  # noqa: BLE001 — a probe for logging must never break model creation
+        pass
+    from graph.providers import is_native_oauth_provider
+
+    if is_native_oauth_provider(getattr(config, "model_provider", "")):
+        if model_name and "/" in model_name and _gateway_configured(config):
+            return PROVIDER_TYPE_OPENAI_COMPAT
+        return getattr(config, "model_provider", "")
+    return PROVIDER_TYPE_OPENAI_COMPAT
+
+
+def _log_ignored_profile_knobs(config: LangGraphConfig, profile: ResolvedProfile, model_name: str | None) -> None:
+    """Log, once per (provider type, knob), each profile knob the resolved provider drops (D5)."""
+    ptype = _profile_provider_type(config, model_name)
+    ignored = _PROFILE_KNOBS_IGNORED.get(ptype)
+    if not ignored:
+        return
+    for knob in _PROFILE_WIRED_KNOBS:
+        if getattr(profile, knob, None) is None or knob not in ignored:
+            continue
+        key = (ptype, knob)
+        if key in _PROFILE_IGNORE_LOGGED:
+            continue
+        _PROFILE_IGNORE_LOGGED.add(key)
+        log.info(
+            "[llm] generation profile sets %s, which the %s provider does not apply; "
+            "leaving it unused (ADR 0128 D5)",
+            knob,
+            ptype,
+        )
+
+
+def _apply_profile(config: LangGraphConfig, profile: ResolvedProfile, model_name: str | None) -> LangGraphConfig:
+    """Return a ``dataclasses.replace`` view of ``config`` with ``profile`` applied (ADR 0128 S2a).
+
+    Only the fields that have a config home are mapped — ``max_tokens`` / ``thinking`` /
+    ``reasoning_effort`` / ``chat_template_kwargs`` — so ``_build_llm_kwargs``,
+    ``build_anthropic_oauth_llm`` and the codex builder keep reading ``config.*`` unchanged.
+    ``chat_template_kwargs`` merges onto the global block (higher layer wins per key, D1), and
+    on the gateway path ``thinking: disabled`` also turns the vLLM template's reasoning off via
+    ``chat_template_kwargs.enable_thinking=false`` (``_build_llm_kwargs`` forwards both it and
+    ``extra_body.thinking.type=disabled``). ``thinking_budget`` has no wire in S2a and
+    ``context_budget`` lands in S2b, so neither is mapped — both only feed the D5 log.
+    """
+    _log_ignored_profile_knobs(config, profile, model_name)
+
+    overrides: dict = {}
+    if profile.max_tokens is not None:
+        overrides["max_tokens"] = profile.max_tokens
+    if profile.thinking is not None:
+        overrides["thinking"] = profile.thinking
+    if profile.reasoning_effort is not None:
+        overrides["reasoning_effort"] = profile.reasoning_effort
+
+    base_ctk = dict(getattr(config, "chat_template_kwargs", None) or {})
+    ctk = dict(base_ctk)
+    if profile.chat_template_kwargs:
+        ctk.update(profile.chat_template_kwargs)
+    if profile.thinking == "disabled":
+        ctk["enable_thinking"] = False
+    if ctk != base_ctk:
+        overrides["chat_template_kwargs"] = ctk
+
+    if not overrides:
+        return config
+    return dataclasses.replace(config, **overrides)
+
+
 def create_llm(
-    config: LangGraphConfig, *, model_name: str | None = None, reasoning_effort: str | None = None
+    config: LangGraphConfig,
+    *,
+    model_name: str | None = None,
+    reasoning_effort: str | None = None,
+    profile: ResolvedProfile | None = None,
 ) -> BaseChatModel:
     """Create a LangChain ChatModel from config.
 
@@ -1150,8 +1262,16 @@ def create_llm(
     client authenticated by a coding-agent OAuth token instead — same native pipeline,
     no gateway. Pass ``model_name`` to build an instance for a different model (used
     for compaction / fallback / subagent slots). Pass ``reasoning_effort`` to override
-    the config's effort for THIS build (the per-turn /effort chat command).
+    the config's effort for THIS build (the per-turn /effort chat command). Pass
+    ``profile`` (a resolved ADR 0128 generation profile) to override the config's
+    ``max_tokens`` / ``thinking`` / ``reasoning_effort`` / ``chat_template_kwargs`` for
+    THIS build; ``None`` or an empty profile leaves the call byte-identical to today.
     """
+    # Apply the generation profile first, as a dataclasses.replace view of the config, so
+    # the dispatch below and every provider builder read the profiled values from `config`
+    # unchanged (ADR 0128 S2a). Empty/None is a no-op, so a profile-less call is unaffected.
+    if profile is not None and not profile.empty:
+        config = _apply_profile(config, profile, model_name)
     # Push the per-process in-flight limiter config from `model.*` (ADR 0115 C4, #3760).
     # This is the one place every chat-model build passes through, so it's where the
     # self-contained limiter (which imports no config, by design) learns its budget. It
