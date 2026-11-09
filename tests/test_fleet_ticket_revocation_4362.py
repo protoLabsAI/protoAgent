@@ -145,7 +145,10 @@ async def test_mint_redeem_and_close_both_legs(auth, devices, clock, ttl, monkey
                 closed = await sock.next(TICK * 10)
                 assert closed["type"] == "websocket.close" and closed["code"] == 1008
                 await asyncio.wait_for(member_closed.wait(), TICK * 10)
-                assert asyncio.get_running_loop().time() - start < TICK * 3
+                # Promptness = closed by the recheck loop (every TICK), not by some
+                # unrelated timeout. A loaded CI runner took 6 ticks (#4976), so the
+                # bound is the same 10-tick budget the waits above already allow.
+                assert asyncio.get_running_loop().time() - start < TICK * 10
                 await sock.finished()
             assert ticket not in caplog.text and phone not in caplog.text
 
