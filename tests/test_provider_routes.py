@@ -503,6 +503,50 @@ def test_delete_release_repoints_and_clears_a_subagent_model(client, monkeypatch
     assert seen["updates"]["subagents"] == {"researcher": {"model": ""}}
 
 
+def test_overlay_subagent_model_pin_is_in_use_and_releasable(client, monkeypatch):
+    """A connection named ONLY by a generalised `subagents.<name>.model` overlay (ADR 0128
+    S1b) — not a typed tier — must count as in use: reported, refused on a bare delete, and
+    repointable in the same transaction. Else the connection is deletable and the pin dangles
+    until that subagent's dispatch."""
+    doc = {
+        "providers": [
+            {"id": "prod-gateway", "type": "openai-compat", "base_url": "https://prod/v1"},
+            {"id": "local-vllm", "type": "openai-compat", "base_url": "http://localhost:8000/v1"},
+        ],
+        "model": {"name": "local-vllm:main"},  # prod-gateway is referenced ONLY by the overlay
+        "subagents": {"review-finder": {"model": "prod-gateway:overlaid"}},
+    }
+    _install(monkeypatch, **doc)
+
+    prod = next(p for p in client.get("/api/config/providers").json()["providers"] if p["id"] == "prod-gateway")
+    by_key = {e["key"]: e for e in prod["in_use"]}
+    assert by_key["subagents.review-finder.model"] == {
+        "key": "subagents.review-finder.model",
+        "value": "prod-gateway:overlaid",
+        "kind": "subagent",
+        "clearable": True,
+    }
+    assert "subagents.review-finder.model=prod-gateway:overlaid" in prod["in_use_by"]
+
+    seen = _apply_spy(monkeypatch, {})
+    # A bare delete is refused and names the overlay pin.
+    bare = client.request("DELETE", "/api/config/providers/prod-gateway")
+    assert bare.status_code == 409
+    assert "subagents.review-finder.model=prod-gateway:overlaid" in bare.json()["detail"]
+    assert seen.get("calls", 0) == 0
+
+    # Repoint the overlay pin in the same transaction that removes the connection.
+    _install(monkeypatch, **doc)
+    r = client.request(
+        "DELETE",
+        "/api/config/providers/prod-gateway",
+        json={"releases": {"subagents.review-finder.model": "local-vllm:sub"}},
+    )
+    assert r.status_code == 200
+    assert seen["updates"]["subagents"] == {"review-finder": {"model": "local-vllm:sub"}}
+    assert [e["id"] for e in seen["updates"]["providers"]] == ["local-vllm"]
+
+
 def test_delete_release_no_host_writes_providers_and_slots_in_one_save(monkeypatch):
     """No host wired: providers (minus pid) AND the released slots land in a SINGLE
     save_yaml_doc, through the same YAML-doc seam the disk fallback already uses."""

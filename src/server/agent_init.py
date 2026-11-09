@@ -1014,6 +1014,8 @@ def _register_plugin_subagents(subagents) -> None:
     if not subagents:
         return
     try:
+        from copy import deepcopy
+
         from graph.subagents.config import SUBAGENT_REGISTRY
     except Exception:  # noqa: BLE001
         log.warning("[plugins] subagent registry unavailable; skipping plugin subagents")
@@ -1027,6 +1029,13 @@ def _register_plugin_subagents(subagents) -> None:
             continue
         SUBAGENT_REGISTRY[name] = cfg
         _plugin_subagent_names.add(name)
+        # ADR 0128 S1b: a plugin spec has no module-level constant, so snapshot the
+        # registered config as the static default the config overlay derives from.
+        # Refresh it on EVERY (re-)registration — a reload that re-registers a changed
+        # SubagentConfig must update this snapshot, or _apply_config_subagents would
+        # keep rebuilding the subagent from its boot-time definition (the overlay reads
+        # this snapshot, never the overlaid live registry entry).
+        _subagent_static_defaults[name] = deepcopy(cfg)
         log.info("[plugins] registered subagent: %s", name)
 
 
@@ -1048,7 +1057,9 @@ def _resolve_plugin_middleware(config, factories) -> list:
     return out
 
 
-# Plugin specs have no module-level constant; snapshot their first registration.
+# Plugin specs have no module-level constant; `_register_plugin_subagents` snapshots
+# each registration here (refreshing on every re-registration, so a reload with a
+# changed plugin spec is picked up rather than masked by the boot-time snapshot).
 _subagent_static_defaults: dict = {}
 _subagent_overlay_warnings: set[tuple[str, str]] = set()
 _disabled_config_subagents: set[str] = set()
@@ -1069,6 +1080,11 @@ def _apply_config_subagents(config) -> None:
         value.name: value for key, value in vars(_sub).items()
         if key.endswith("_CONFIG") and isinstance(value, _sub.SubagentConfig)
     }
+    # Plugin snapshots are taken at registration (_register_plugin_subagents) and
+    # refreshed on every re-registration. This is a first-sight fallback for any plugin
+    # subagent that reached the registry another way: snapshot it ONCE (never the
+    # overlaid live entry a prior apply wrote), so the overlay still derives from a
+    # static default and reloads stay idempotent.
     for name, base in registry.items():
         if name not in bases and name not in _subagent_static_defaults:
             _subagent_static_defaults[name] = deepcopy(base)

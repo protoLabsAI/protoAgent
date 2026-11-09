@@ -72,6 +72,32 @@ def test_plugin_snapshot_and_all_overlay_fields(isolated_registry):
     assert isolated_registry[plugin.name] == replace(plugin, tools=["read_file"])
 
 
+def test_plugin_rereg_with_changed_config_refreshes_static_default(isolated_registry):
+    """A reload that re-registers a plugin subagent with a CHANGED SubagentConfig must be
+    picked up — not masked by the boot-time snapshot the overlay derives from."""
+    first = SubagentConfig(
+        name="plugin-worker", description="plugin", system_prompt="Do work",
+        tools=["read_file"], max_turns=9, model="original",
+    )
+    agent_init._register_plugin_subagents([first])
+    cfg = LangGraphConfig.from_dict({"subagents": {"plugin-worker": {"profile": "lane"}}})
+    agent_init._apply_config_subagents(cfg)
+    assert isolated_registry["plugin-worker"] == replace(first, profile="lane")
+
+    # Reload: the plugin re-registers a changed spec before the overlay re-applies. The
+    # overlay must now derive from the NEW registration, not the original snapshot.
+    changed = SubagentConfig(
+        name="plugin-worker", description="plugin", system_prompt="Do work",
+        tools=["current_time"], max_turns=5, model="updated",
+    )
+    agent_init._register_plugin_subagents([changed])
+    agent_init._apply_config_subagents(cfg)
+    assert isolated_registry["plugin-worker"] == replace(changed, profile="lane")
+    # And still idempotent once the new spec is in place (no second re-registration).
+    agent_init._apply_config_subagents(cfg)
+    assert isolated_registry["plugin-worker"] == replace(changed, profile="lane")
+
+
 def test_unknown_names_warn_once_and_keep_profiles(isolated_registry, caplog):
     cfg = LangGraphConfig.from_dict({"subagents": {
         "missing-worker": {"profile": "missing"},

@@ -92,12 +92,21 @@ def _referencing_view(cfg) -> dict:
     dict the config never exposes."""
     from graph.config import _SUBAGENT_MODEL_SLOTS
 
+    # Typed tiers (`cfg.researcher.model`) PLUS every `subagents.<name>.model` overlay pin
+    # (ADR 0128 S1b). A connection named ONLY by an overlay subagent is in use exactly as a
+    # typed tier is, so the delete guard has to see it; missing it lets the connection be
+    # removed, leaving a dangling reference that only fails at that subagent's dispatch.
+    subagents = {name: str(getattr(getattr(cfg, name, None), "model", "") or "") for name in _SUBAGENT_MODEL_SLOTS}
+    for name, overlay in (getattr(cfg, "subagent_overrides", None) or {}).items():
+        if name in subagents:
+            continue  # a promoted typed tier is the source of truth; never double-count it
+        model = overlay.get("model", "") if isinstance(overlay, dict) else getattr(overlay, "model", "")
+        subagents[name] = str(model or "")
+
     return {
         "slots": {label: str(getattr(cfg, attr, "") or "") for label, attr in _SLOT_ATTRS},
         "favorites": [str(f) for f in (getattr(cfg, "model_favorites", []) or [])],
-        "subagents": {
-            name: str(getattr(getattr(cfg, name, None), "model", "") or "") for name in _SUBAGENT_MODEL_SLOTS
-        },
+        "subagents": subagents,
         "model_provider": str(getattr(cfg, "model_provider", "") or "").lower(),
     }
 
