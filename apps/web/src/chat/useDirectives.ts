@@ -1,5 +1,6 @@
 import { useMemo, useSyncExternalStore } from "react";
 
+import { chatStore } from "./chat-store";
 import { api, ApiError } from "../lib/api";
 import type { DirectiveList, DirectiveRow } from "../lib/api/chat";
 import { onConnectionChange, onTopic } from "../lib/events";
@@ -59,7 +60,22 @@ function createStore(sessionId: string) {
 
   async function revoke(id: string, reason?: string): Promise<RevokeResult> {
     try {
-      await api.revokeDirective(sessionId, id, reason);
+      const { directive } = await api.revokeDirective(sessionId, id, reason);
+      // The server records the operator event in its checkpoint. Mirror the successful
+      // response locally because an idle checkpoint append has no streamed chat turn.
+      const session = chatStore.getSnapshot().sessions.find((s) => s.id === sessionId);
+      const noteId = `directive-withdrawn-${id}`;
+      if (session && !session.messages.some((m) => m.id === noteId)) {
+        // Match graph.directives.withdrawal_note's bounded, first-line copy.
+        const clip = (text: string) => text.length > 2000 ? text.slice(0, 2000).trimEnd() + "…" : text;
+        const firstLine = clip(directive.quote.trim().split(/\r?\n/)[0]);
+        const note = clip(reason?.trim() ?? "");
+        chatStore.updateMessages(sessionId, [...session.messages, {
+          id: noteId, role: "user", status: "done", createdAt: Date.now(),
+          content: `You withdrew: "${firstLine}"${note ? ` — ${note}` : ""}`,
+          protoagent_directive_withdrawn: { id },
+        }]);
+      }
     } catch (error) {
       if (error instanceof ApiError && (error.status === 409 || error.status === 404)) {
         const fresh = await refresh();

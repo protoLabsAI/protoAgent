@@ -247,6 +247,11 @@ registerContextMenu({
         icon: ctx.incognito ? <Eye size={14} /> : <EyeOff size={14} />,
         run: () => ctx.onToggleIncognito?.(),
       });
+      out.push({
+        id: "directives",
+        label: "Standing instructions",
+        run: () => useUI.getState().openDirectives(ctx.sessionId!),
+      });
       if (ctx.onExport) {
         out.push({ id: "export", label: "Export as Markdown", icon: <Download size={14} />, run: () => ctx.onExport?.() });
       }

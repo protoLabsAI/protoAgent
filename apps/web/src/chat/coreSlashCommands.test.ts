@@ -46,32 +46,32 @@ describe("core slash commands (dogfood the seam, ADR 0061)", () => {
   // These three tests are what stops the note from going stale behind the next command.
 
   const DECLINE_WITHOUT_SESSION = [
-    "clear", "export", "btw", "trajectory", "prompt", "perf", "usage",
+    "clear", "export", "directives", "btw", "trajectory", "prompt", "perf", "usage",
     "compact", "effort", "model", "incognito", "help", "bypass",
   ];
 
-  it("exactly 13 core commands return false (→ fall through) without a session", () => {
+  it("exactly 14 core commands return false (→ fall through) without a session", () => {
     for (const name of DECLINE_WITHOUT_SESSION) {
       expect.soft(findSlashCommand(name)!.run(ctx()), `/${name} without a session`).toBe(false);
     }
     // The count itself is quoted in slashDispatch.ts, ADR 0061 and the changelog.
-    expect(DECLINE_WITHOUT_SESSION).toHaveLength(13);
+    expect(DECLINE_WITHOUT_SESSION).toHaveLength(14);
   });
 
   it("pins the core inventory, so a new command has to face the session question", () => {
-    // A 17th command changes the "13 of the 16" arithmetic every one of those docs cites.
+    // A new command changes the session-less inventory documented in slashDispatch.ts.
     // If this trips: decide whether the command needs a session, add it to the list above
     // (or not), and update the note in chat/slashDispatch.ts.
     expect(registeredSlashCommands().map((c) => c.name).sort()).toEqual(
       [
-        "btw", "bypass", "clear", "compact", "effort", "export", "goal", "help",
+        "btw", "bypass", "clear", "compact", "directives", "effort", "export", "goal", "help",
         "incognito", "model", "new", "perf", "prompt", "trajectory", "usage", "watch",
       ],
     );
   });
 
   it("a `true` from a session-less command is NOT proof it did anything visible", () => {
-    // The reason a caller can't just treat "not in the 13" as the safe subset. /new is the
+    // The reason a caller can't just treat "not in the 14" as the safe subset. /new is the
     // only command that genuinely works with no session; /goal (and /watch) claim the token
     // and answer through noteToThread — which the host itself no-ops without a session, so
     // outside the composer the operator sees nothing at all.
@@ -255,4 +255,14 @@ describe("/watch (ADR 0067)", () => {
     cmd().run(ctx({ rest: "clear all", noteToThread: (m) => notes.push(m) }));
     expect(notes.join(" ")).toMatch(/\/watch new/);
   });
+});
+
+it("/directives opens the ledger but leaves arguments for the server", async () => {
+  const { useUI } = await import("../state/uiStore");
+  const open = vi.spyOn(useUI.getState(), "openDirectives");
+  expect(findSlashCommand("directives")!.run(ctx({ sessionId: "s1" }))).toBe(true);
+  expect(open).toHaveBeenCalledWith("s1");
+  open.mockClear();
+  expect(findSlashCommand("directives")!.run(ctx({ sessionId: "s1", rest: "revoke dir-one reason" }))).toBe(false);
+  expect(open).not.toHaveBeenCalled();
 });

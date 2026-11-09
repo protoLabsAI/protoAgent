@@ -196,3 +196,23 @@ it("openDirectives bumps the counter across sessions and excludes it from persis
   expect(persisted).toHaveProperty("showChatUsage");
   useUI.setState({ directivesRequest: null });
 });
+
+it("mirrors a successful withdrawal as one operator event in the current transcript", async () => {
+  const { chatStore } = await import("./chat-store");
+  const session = chatStore.createSession();
+  sessionId = session.id;
+  const directive = row("withdraw-me", { quote: "  Ship it\nwhen ready  ", status: "revoked" });
+  vi.spyOn(api, "listDirectives").mockResolvedValue(list([directive]));
+  vi.spyOn(api, "revokeDirective").mockResolvedValue({ directive });
+  const store = mount();
+  await settle();
+  await store.revoke(directive.id, "  Wait until Monday  ");
+  await store.revoke(directive.id, "  Wait until Monday  ");
+  const notes = chatStore.getSnapshot().sessions.find((s) => s.id === sessionId)!.messages;
+  expect(notes.filter((m) => m.protoagent_directive_withdrawn)).toEqual([
+    expect.objectContaining({
+      role: "user", content: 'You withdrew: "Ship it" — Wait until Monday',
+      protoagent_directive_withdrawn: { id: directive.id },
+    }),
+  ]);
+});

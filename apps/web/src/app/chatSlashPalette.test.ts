@@ -243,7 +243,7 @@ describe("a per-tab MODE is never a one-Enter row", () => {
 
 describe("session semantics — the decision, per command", () => {
   const THIS_CHAT = [
-    "clear", "export", "btw", "trajectory", "prompt", "perf", "usage", "compact",
+    "clear", "export", "directives", "btw", "trajectory", "prompt", "perf", "usage", "compact",
     "bypass", "incognito",
   ];
   const THREAD_ONLY = ["help", "effort", "model", "goal", "watch"];

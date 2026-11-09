@@ -56,6 +56,9 @@ const TranscriptMessageRow = memo(function TranscriptMessageRow({
     () => hideDismissedToolCalls(message, dismissedToolCalls),
     [dismissedToolCalls, message],
   );
+  if (message.protoagent_directive_withdrawn) {
+    return <Message role="system"><span>{message.content}</span></Message>;
+  }
   return (
     <ChatMessageView
       message={visibleMessage}
