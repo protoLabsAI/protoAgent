@@ -1,0 +1,1 @@
+Langfuse fleet generations now report prompt-cache reads and writes. They were read only from the flat telemetry names, but the generation is fed LangChain's `usage_metadata`, which nests them under `input_token_details`, so every cached prompt showed up as fully uncached input. `input` now carries the uncached remainder, matching how `pricing.cost_usd` bills.

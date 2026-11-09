@@ -1073,11 +1073,22 @@ def trace_generation(
     try:
         usage_details = None
         if usage:
+            from observability.pricing import cache_tokens
+
+            # The caller passes LangChain's ``usage_metadata``, whose cache counts sit
+            # NESTED under ``input_token_details`` and are SUBSETS of ``input_tokens``.
+            # Reading only the flat telemetry-row names dropped them, so every cached
+            # prompt landed in Langfuse as fully uncached input (0 cache reads, cost
+            # priced at the full rate). Langfuse prices each usage key on its own, so
+            # ``input`` carries only the uncached remainder — the same split
+            # ``pricing.cost_usd`` bills.
+            cache_read, cache_creation = cache_tokens(usage)
+            inp = int(usage.get("input_tokens") or 0)
             candidates = {
-                "input": usage.get("input_tokens"),
+                "input": max(0, inp - cache_read - cache_creation) if inp else None,
                 "output": usage.get("output_tokens"),
-                "input_cache_read": usage.get("cache_read_input_tokens"),
-                "input_cache_creation": usage.get("cache_creation_input_tokens"),
+                "input_cache_read": cache_read,
+                "input_cache_creation": cache_creation,
                 "total": usage.get("total_tokens"),
             }
             usage_details = {k: int(v) for k, v in candidates.items() if v} or None
