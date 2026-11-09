@@ -23,6 +23,16 @@ from pydantic import BaseModel
 
 log = logging.getLogger("protoagent.server")
 
+#: What ``request_decision`` returns to the model when the operator DISMISSES a decision
+#: instead of choosing an option. The cancel route resumes the parked turn with this so the
+#: checkpoint interrupt is cleared (the turn stops waiting); the ledger record is already
+#: marked ``cancelled``, so the resume only unblocks the thread.
+CANCELLED_RESUME = (
+    "[decision dismissed by the operator] The operator cancelled this decision without "
+    "choosing an option. Do not take the action you were deciding on — acknowledge that it "
+    "was cancelled and end your turn."
+)
+
 
 class AnswerRequest(BaseModel):
     """The operator's answer: a defined option by id (validated against the record's options)
@@ -55,13 +65,17 @@ def _resolve_answer(rec, body: AnswerRequest) -> str:
     raise HTTPException(status_code=400, detail="provide an option_id or free-text answer")
 
 
-async def _resume_parked_turn(session_id: str, answer: str, decision_id: str) -> bool:
-    """Resume the turn parked on this decision with the operator's answer, over the loopback
-    A2A endpoint — the SAME HITL-resume entry point the console uses.
+async def _resume_parked_turn(session_id: str, answer: str, decision_id: str | None = None) -> bool:
+    """Resume the turn parked on this decision with ``answer``, over the loopback A2A
+    endpoint — the SAME HITL-resume entry point the console uses.
 
-    The decision id is checked against the checkpoint interrupt under the turn lock.
-    Delivery failure leaves an unconsumed decision pending, so the operator can retry.
-    The turn driver closes the record only after the checkpoint consumes the answer.
+    With a ``decision_id`` (the answer path) the id is checked against the checkpoint
+    interrupt under the turn lock, and the turn driver closes the record only after the
+    checkpoint consumes the answer. WITHOUT one (the cancel path, which has already closed
+    the record) the check is skipped — the resume only has to CLEAR the lingering checkpoint
+    interrupt so the session isn't wedged for later autonomous turns. Delivery failure
+    leaves the interrupt in place; the operator can retry, and the autonomous hold refuses
+    to park on a non-pending decision anyway, so a failed clear can never block the session.
     """
     import uuid
 
@@ -77,6 +91,13 @@ async def _resume_parked_turn(session_id: str, answer: str, decision_id: str) ->
     headers = {"Content-Type": "application/json", "A2A-Version": "1.0"}
     headers.update(self_invocation_headers())
     message_id = str(uuid.uuid4())
+    # The operator is answering/dismissing: a live human, so an empty origin (interactive) —
+    # `hitl_resume` converts this to a graph resume rather than a fresh turn. A `decision_id`
+    # is carried only on the answer path (it gates validate_decision_resume); the cancel path
+    # omits it so the resume just clears the interrupt on the already-closed record.
+    metadata = {"hitl_resume": True}
+    if decision_id:
+        metadata["decision_id"] = decision_id
     body = {
         "jsonrpc": "2.0",
         "id": message_id,
@@ -87,9 +108,7 @@ async def _resume_parked_turn(session_id: str, answer: str, decision_id: str) ->
                 "parts": [{"text": answer}],
                 "messageId": message_id,
                 "contextId": session_id,
-                # The operator is answering: a live human, so an empty origin (interactive) —
-                # `hitl_resume` converts this to a graph resume rather than a fresh turn.
-                "metadata": {"hitl_resume": True, "decision_id": decision_id},
+                "metadata": metadata,
             },
         },
     }
@@ -162,12 +181,19 @@ def register_decision_routes(app) -> None:
 
     @app.post("/api/decisions/{decision_id}/cancel")
     async def _api_cancel_decision(decision_id: str):
-        """Cancel a pending decision (the operator dismissed it). 404 for an unknown id, 409
-        when it is no longer pending. The parked turn is left as-is for the TTL/abandon path."""
+        """Cancel a pending decision (the operator dismissed it) and unblock the parked turn.
+
+        404 for an unknown id, 409 when it is no longer pending. The record is marked
+        cancelled (recording the operator's intent + publishing ``decision.changed``), then
+        the parked checkpoint interrupt is CLEARED by resuming the turn with a cancellation
+        sentinel — so the session is NOT left blocked for later autonomous (scheduler /
+        inbox / webhook) turns. Clearing is best-effort: the autonomous hold also refuses to
+        park on a non-pending decision, so a failed clear can never wedge the session."""
         try:
             updated = await asyncio.to_thread(decision_store().cancel, decision_id)
         except DecisionNotFound as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         except DecisionClosed as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
+        await _resume_parked_turn(updated.session_id, CANCELLED_RESUME)
         return {"decision": updated.to_dict()}

@@ -60,9 +60,11 @@ async def _collect(agen):
     return [frame async for frame in agen]
 
 
-async def _noop_resume(session_id, answer, decision_id):
-    """A resume that does nothing (no real A2A self-POST in a unit test)."""
-    STATE.decision_store.answer(decision_id, answer)
+async def _noop_resume(session_id, answer, decision_id=None):
+    """A resume that does nothing (no real A2A self-POST in a unit test). Answers the record
+    for the answer path; a cancel-path call (no decision_id) only has to not blow up."""
+    if decision_id:
+        STATE.decision_store.answer(decision_id, answer)
     return True
 
 
@@ -465,6 +467,78 @@ async def test_scheduler_message_does_not_abandon_decision(store, decision_graph
     assert "Input needed first" in reply[0]["content"]
     assert store.get(rec.id).pending
     await turn_control.validate_decision_resume({"configurable": {"thread_id": rec.thread_id}}, rec.id)
+
+
+@pytest.mark.asyncio
+async def test_hold_stops_parking_autonomous_turns_once_decision_is_cancelled(store, monkeypatch):
+    # The regression the reviewer caught: a CANCELLED decision's checkpoint interrupt lingers,
+    # and the autonomous hold would keep parking every later scheduler/inbox/webhook turn —
+    # wedging the session. The hold must park only while a pending record backs the interrupt.
+    thread_id = "a2a:s-wedge"
+    config = {"configurable": {"thread_id": thread_id}}
+    payload = {"kind": "decision", "question": "Deploy?", "options": ["yes", "no"]}
+
+    async def _fake_pending(_cfg):
+        return ("interrupt-x", payload)  # the stale decision interrupt stays on the checkpoint
+
+    monkeypatch.setattr(chat_mod, "_pending_interrupt", _fake_pending)
+    rec = store.create("s-wedge", "Deploy?", ["yes", "no"], thread_id=thread_id, interrupt_id="interrupt-x")
+
+    async def _hold():
+        return await turn_control._hold_if_hitl_pending(
+            "scheduled fire", "s-wedge", config, request_metadata={"origin": "scheduler"}
+        )
+
+    # While pending, the autonomous turn is HELD on the decision (parks for a human).
+    assert await _hold() == payload
+
+    # Once cancelled, the SAME autonomous turn is no longer held — it proceeds (returns None),
+    # so the lingering interrupt can't block every subsequent scheduled turn.
+    store.cancel(rec.id)
+    assert await _hold() is None
+
+    # An already-answered decision is just as stale — also no longer parks an autonomous turn.
+    rec2 = store.create("s-wedge", "Deploy?", ["yes"], thread_id=thread_id, interrupt_id="interrupt-y")
+    store.answer(rec2.id, "yes")
+
+    async def _fake_pending_answered(_cfg):
+        return ("interrupt-y", payload)
+
+    monkeypatch.setattr(chat_mod, "_pending_interrupt", _fake_pending_answered)
+    assert await _hold() is None
+
+
+@pytest.mark.asyncio
+async def test_cancel_route_closes_record_and_clears_parked_turn(store, monkeypatch):
+    # The cancel route must mark the record cancelled AND resume the parked turn to clear the
+    # checkpoint interrupt (no decision_id — the record is already closed, so it only unblocks).
+    rec = store.create("s-cancel", "Deploy?", ["yes", "no"])
+    cleared: dict = {}
+
+    async def _fake_resume(session_id, answer, decision_id=None):
+        cleared.update(session_id=session_id, answer=answer, decision_id=decision_id)
+        return True
+
+    monkeypatch.setattr(decision_routes, "_resume_parked_turn", _fake_resume)
+
+    r = _client().post(f"/api/decisions/{rec.id}/cancel")
+    assert r.status_code == 200
+    assert r.json()["decision"]["state"] == "cancelled"
+    assert store.get(rec.id).state == "cancelled"
+    # It resumed the parked turn to clear the interrupt, with NO decision_id (skips the
+    # validate_decision_resume gate, which would reject the now-cancelled record).
+    assert cleared["session_id"] == "s-cancel"
+    assert cleared["decision_id"] is None
+    assert cleared["answer"] == decision_routes.CANCELLED_RESUME
+
+
+def test_cancel_route_rejects_unknown_and_already_closed(store, monkeypatch):
+    monkeypatch.setattr(decision_routes, "_resume_parked_turn", _noop_resume)
+    c = _client()
+    assert c.post("/api/decisions/nope/cancel").status_code == 404
+    rec = store.create("s-1", "Go?", ["yes", "no"])
+    store.answer(rec.id, "yes")
+    assert c.post(f"/api/decisions/{rec.id}/cancel").status_code == 409
 
 
 @pytest.mark.asyncio

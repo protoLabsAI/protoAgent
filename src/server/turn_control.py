@@ -483,11 +483,44 @@ def _is_autonomous(request_metadata: dict | None) -> bool:
 # does, and the server writes a durable decisions-ledger record (graph/decisions.py) that
 # outlives the input-required TTL sweep. The operator answers it over /api/decisions, which
 # resumes the parked turn. The streaming and non-streaming drivers consult these at call time.
+#
+# The park is gated on the LEDGER RECORD, not merely the checkpoint interrupt: an autonomous
+# turn holds only while the decision is STILL pending (``_decision_interrupt_pending``). Once
+# the decision is cancelled / answered / expired, its interrupt is stale and the hold lets
+# the turn through — so a dismissed decision can never wedge the session's later scheduled
+# fires, even if its checkpoint interrupt lingers.
 
 
 def is_decision_interrupt(payload: object) -> bool:
     """Whether an interrupt payload is a ``request_decision`` pause (``kind == "decision"``)."""
     return isinstance(payload, dict) and str(payload.get("kind") or "").strip().lower() == "decision"
+
+
+async def _decision_interrupt_pending(config: dict) -> bool:
+    """Whether a STILL-PENDING decisions-ledger record backs this thread's checkpoint interrupt.
+
+    The signal that an autonomous turn must PARK (wait for a person) on a decision rather
+    than auto-answer it. A decision interrupt whose record is no longer pending — the
+    operator cancelled it (the cancel route marks the record but the checkpoint interrupt
+    can linger), it was answered, it expired (card 2), or it was never recorded — is STALE:
+    left to park, it would wedge EVERY later autonomous (scheduler / inbox / webhook) turn
+    on the session. So a stale decision interrupt is treated like any other autonomous
+    interrupt (auto-answered by the caller), never parked.
+
+    Reached only on the narrow autonomous-decision branch of the hold, so the extra snapshot
+    read it does (to key the record by interrupt id) never touches the common hold path.
+    Fails OPEN to "not pending" (⇒ don't park, auto-answer): an autonomous turn must never
+    deadlock, so an unresolvable record never holds one."""
+    try:
+        from graph.decisions import decision_store
+
+        found = await _chat()._pending_interrupt(config)
+        interrupt_id = str((found[0] if found else "") or "")
+        thread_id = str((config.get("configurable") or {}).get("thread_id") or "")
+        rec = decision_store().for_interrupt(thread_id, interrupt_id)
+        return rec is not None and rec.pending
+    except Exception:  # noqa: BLE001 — an unresolved record fails open to no-park (no deadlock)
+        return False
 
 
 def _current_agent_name() -> str:
@@ -575,12 +608,18 @@ async def _hold_if_hitl_pending(
     (rather than holding the message back for a narrow-enough pass) keeps it in arrival
     order and never strands it: no such pass may ever come.
 
-    Autonomous turns are exempt except when a decision is pending,
-    and with no pending interrupt this returns ``None`` and the turn is untouched.
-    Callers must hold the per-thread lock (the check must not race a parking turn)."""
+    Autonomous turns are exempt EXCEPT when a decision is still awaiting an answer, and
+    with no pending interrupt this returns ``None`` and the turn is untouched. Callers must
+    hold the per-thread lock (the check must not race a parking turn)."""
     pending_val = await _chat()._pending_interrupt_value(config)
-    if _is_autonomous(request_metadata) and not is_decision_interrupt(pending_val):
-        return None
+    if _is_autonomous(request_metadata):
+        # An autonomous turn never parks for a human — EXCEPT on a request_decision pause
+        # that STILL has a pending ledger record (the agent chose to stop at a choice it may
+        # not make on its own). A decision interrupt with no pending record — cancelled,
+        # answered, expired, or never recorded — is STALE and must NOT hold the turn, or a
+        # dismissed decision would wedge every later scheduled fire on the session.
+        if not (is_decision_interrupt(pending_val) and await _decision_interrupt_pending(config)):
+            return None
     if pending_val is None:
         return None
     if _is_hitl_resume(request_metadata):
