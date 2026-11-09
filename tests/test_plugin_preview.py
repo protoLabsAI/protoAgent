@@ -52,9 +52,62 @@ def test_build_preview_app_mounts_the_real_routers_host_free():
 
     view = client.get("/plugins/preview-fixture/view")
     assert view.status_code == 200
+    assert view.headers["content-type"].startswith("text/html")
     # The REAL fixture page — the one the e2e mounts (background subscribe + publish button).
     assert "protoagent:subscribe" in view.text
     assert "preview-fixture" in view.text
+
+
+@pytest.mark.parametrize(
+    ("entrypoint", "files", "expected"),
+    [
+        (None, ["__init__.py"], "__init__.py"),
+        (None, ["plugin.py"], "plugin.py"),
+        (None, ["__init__.py", "plugin.py"], "__init__.py"),
+        ("custom.py", ["__init__.py", "plugin.py", "custom.py"], "custom.py"),
+        ("nested/entry.py", ["nested/entry.py"], "nested/entry.py"),
+    ],
+)
+def test_preview_loads_runtime_entrypoint_and_relative_imports(tmp_path, entrypoint, files, expected):
+    from fastapi.testclient import TestClient
+
+    manifest = "id: preview-entry\nname: Preview Entry\n"
+    if entrypoint:
+        manifest += f"entrypoint: {entrypoint}\n"
+    (tmp_path / "protoagent.plugin.yaml").write_text(manifest)
+    (tmp_path / "helper.py").write_text("VALUE = 'relative import works'\n")
+    for name in files:
+        entry = tmp_path / name
+        entry.parent.mkdir(parents=True, exist_ok=True)
+        entry.write_text(
+            "from fastapi import APIRouter\n"
+            "from .helper import VALUE\n"
+            "def register(registry):\n"
+            "    router = APIRouter()\n"
+            "    @router.get('/entry')\n"
+            "    def selected():\n"
+            f"        return {{'entry': {name!r}, 'value': VALUE}}\n"
+            "    registry.register_router(router, prefix='/api/plugins/preview-entry')\n"
+        )
+
+    built = preview.build_preview_app(tmp_path)
+    with TestClient(built.app) as client:
+        response = client.get("/api/plugins/preview-entry/entry")
+    assert response.status_code == 200
+    assert response.json() == {"entry": expected, "value": "relative import works"}
+
+
+@pytest.mark.parametrize("entrypoint", [None, "missing.py"])
+def test_preview_reports_missing_entry_without_falling_back(tmp_path, entrypoint):
+    manifest = "id: preview-missing\nname: Preview Missing\n"
+    if entrypoint:
+        manifest += f"entrypoint: {entrypoint}\n"
+        (tmp_path / "__init__.py").write_text("raise AssertionError('must not fall back')\n")
+        (tmp_path / "plugin.py").write_text("raise AssertionError('must not fall back')\n")
+    (tmp_path / "protoagent.plugin.yaml").write_text(manifest)
+
+    with pytest.raises(RuntimeError, match="no entry module"):
+        preview.build_preview_app(tmp_path)
 
 
 def test_layout_seed_defaults_to_first_rail_view_on_the_stage():

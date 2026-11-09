@@ -8,8 +8,6 @@ host-free by the testkit; FastAPI is imported inside ``register`` so the module 
 with no web stack present (the testkit's parity check only needs ``register`` to exist).
 """
 
-from __future__ import annotations
-
 from pathlib import Path
 
 

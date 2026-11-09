@@ -136,8 +136,14 @@ def build_preview_app(plugin_dir, plugin_id: str | None = None) -> PreviewApp:
     pid = plugin_id or manifest.id
     descriptor = build_preview_descriptor(manifest)
 
+    # Match the runtime loader's entry selection without importing the host loader.
+    entries = (manifest.entrypoint,) if manifest.entrypoint else ("__init__.py", "plugin.py")
+    entry = next((name for name in entries if (plugin_dir / name).exists()), None)
+    if entry is None:
+        raise RuntimeError(f"plugin {pid!r} has no entry module (expected {' or '.join(entries)})")
+
     install_host_stubs()
-    module = load_plugin(plugin_dir, pid)
+    module = load_plugin(plugin_dir, pid, entry=entry)
     register = getattr(module, "register", None)
     if not callable(register):
         raise RuntimeError(f"plugin {pid!r} has no register(registry) — nothing to preview")
