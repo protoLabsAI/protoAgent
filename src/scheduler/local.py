@@ -615,6 +615,50 @@ class LocalScheduler:
         finally:
             db.close()
 
+    def set_enabled(self, job_id: str, enabled: bool) -> Job:
+        """Pause (``enabled=False``) or resume (``enabled=True``) a job in place.
+
+        Only the ``enabled`` flag changes while paused — the row stays put, so
+        ``_claim_due_jobs`` (``WHERE enabled = 1``) simply skips it. Resuming a cron
+        job recomputes ``next_fire`` from now via ``_compute_next_fire`` so a job
+        paused across a week of slots fires once at its next slot instead of
+        replaying every missed run on the first tick. A one-shot whose time has
+        already passed is left untouched — the next tick fires it, same as a normal
+        past-due one-shot. Unknown id raises ``ValueError`` (like ``update_job``);
+        returns the updated ``Job``."""
+        db = self._connect()
+        try:
+            row = db.execute(
+                "SELECT * FROM jobs WHERE id = ? AND agent_name = ?",
+                (job_id, self.agent_name),
+            ).fetchone()
+            if row is None:
+                raise ValueError(f"no job {job_id!r} to set_enabled")
+            if enabled and is_cron(row["schedule"]):
+                # Recompute from now so a job paused for a week doesn't fire every
+                # missed slot at once when it resumes (raises on a hand-edited bad
+                # schedule — caught like update_job's recompute, before the write).
+                next_fire = _compute_next_fire(row["schedule"], tz=row["timezone"] if "timezone" in row.keys() else None)
+                db.execute(
+                    "UPDATE jobs SET enabled = ?, next_fire = ? WHERE id = ? AND agent_name = ?",
+                    (int(enabled), next_fire, job_id, self.agent_name),
+                )
+            else:
+                # Pausing (any schedule) or resuming a one-shot: only flip the flag.
+                # A past-due one-shot keeps its next_fire so the next tick fires it.
+                db.execute(
+                    "UPDATE jobs SET enabled = ? WHERE id = ? AND agent_name = ?",
+                    (int(enabled), job_id, self.agent_name),
+                )
+            db.commit()
+            updated = db.execute(
+                "SELECT * FROM jobs WHERE id = ? AND agent_name = ?",
+                (job_id, self.agent_name),
+            ).fetchone()
+            return _row_to_job(updated)
+        finally:
+            db.close()
+
     def list_jobs(self) -> list[Job]:
         db = self._connect()
         try:
