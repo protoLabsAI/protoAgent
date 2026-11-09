@@ -421,6 +421,46 @@ class _TaskStoreAdapter:
             raise NotFoundError(f"No task {issue_id!r}.")
         return {"deleted": True}
 
+    def snapshot(self, issue_id: str) -> dict[str, Any] | None:
+        """The issue's full row for an undo snapshot (#4955 Q10), read DEFENSIVELY: ``None``
+        when the store can't read a row back — a test double without ``get`` — so the delete
+        still succeeds, it just mints no undo token. ``None`` too for an id the store doesn't
+        have (then ``delete`` answers its own 404)."""
+        getter = getattr(self._s, "get", None)
+        if not callable(getter):
+            return None
+        return getter(issue_id)
+
+    def restore(self, row: dict[str, Any]) -> None:
+        """Re-insert a deleted issue through the store's ``restore`` — it re-fires the
+        store's ``task.changed`` event with ``action: "restored"`` (#4955 Q10). An issue
+        already live under that id was recreated after the delete, so restoring would clobber
+        it: the store refuses with ``ValueError``, mapped here to ``ConflictError`` (409), the
+        same "undo would overwrite a newer record" answer goals/watches give."""
+        try:
+            self._s.restore(row)
+        except ValueError as exc:
+            raise ConflictError(
+                "Cannot undo: a task already exists under this id — it was recreated "
+                "after the delete, so restoring would overwrite it."
+            ) from exc
+
+
+def _delete_task_with_undo(task_svc: _TaskStoreAdapter, project_path: str, issue_id: str) -> dict[str, Any]:
+    """Delete an issue and, when the store can read the row back, stash it for a server-side
+    undo (#4955 Q10). The snapshot is taken BEFORE the delete; ``task_svc.snapshot`` returns
+    ``None`` for a store double without ``get`` (then no token is minted and the body is the
+    unchanged ``{"deleted": True}``) or for an id the store doesn't have (then ``delete``
+    raises ``NotFoundError`` → 404 and we never reach the stash). Runs in a worker thread off
+    the event loop like the goal/watch clear handlers that stash the same way."""
+    row = task_svc.snapshot(issue_id)
+    result = task_svc.delete(project_path, issue_id)
+    if row is not None:
+        from operator_api.undo import LEDGER
+
+        result = {**result, "undo_token": LEDGER.stash("task", dict(row), task_svc.restore)}
+    return result
+
 
 def _bg_job_out(job) -> dict:
     """A background job for the console, its ``error`` redacted on the way out (#4726).
@@ -705,9 +745,14 @@ def register_operator_routes(
 
     @app.delete("/api/tasks/issues/{issue_id}")
     async def _tasks_delete(issue_id: str, project_path: str = ""):
+        # Deleting a task stashes the row and hands back an ``undo_token`` so the Work view's
+        # Undo toast (#4955 §4.5) can restore it server-side — ``POST /api/undo/{token}``
+        # within the window re-inserts it (re-firing ``task.changed`` / ``restored``). A
+        # store that can't read the row back mints no token; the success body is otherwise
+        # the unchanged ``{"deleted": True}``.
         _require_tasks()
         try:
-            return await asyncio.to_thread(task_svc.delete, project_path, issue_id)
+            return await asyncio.to_thread(_delete_task_with_undo, task_svc, project_path, issue_id)
         except Exception as exc:
             raise _http_error(exc) from exc
 
@@ -895,15 +940,17 @@ def register_operator_routes(
             return res
 
     # --- Undo (#4955 Q10) ----------------------------------------------------
-    # Server-side undo for a console delete: DELETE /api/goals/{session_id} and
-    # DELETE /api/watches/{watch_id} stash a snapshot and hand back an ``undo_token``;
-    # this redeems it within ``UNDO_WINDOW_S``, writing the record back through the
-    # store's own ``set`` (which re-fires its ``goal.changed`` / ``watch.changed``
-    # event). Done on the server so the Work view's Undo toast still works after the
-    # originating tab is closed (#4955 §4.5). Registered unconditionally and needs no
-    # injected accessor — the ledger is a process-local singleton, and a token can only
-    # exist if a clear minted one; an unknown, expired, or already-used token is a 404
-    # (``NotFoundError`` → ``_http_error``), and changes nothing.
+    # Server-side undo for a console delete: clearing a goal / watch, deleting a task, or
+    # cancelling a scheduled job stashes a snapshot and hands back an ``undo_token``; this
+    # redeems it within ``UNDO_WINDOW_S``, replaying the stashed restore — writing a goal /
+    # watch back through the store's own ``set`` (re-firing its ``goal.changed`` /
+    # ``watch.changed`` event), re-inserting a task through ``TaskStore.restore``
+    # (``task.changed`` / ``restored``), or re-adding a job through ``scheduler.add_job``.
+    # Done on the server so the Work view's Undo toast still works after the originating tab
+    # is closed (#4955 §4.5). Registered unconditionally and needs no injected accessor — the
+    # ledger is a process-local singleton, and a token can only exist if a delete minted one;
+    # an unknown, expired, or already-used token is a 404 (``NotFoundError`` →
+    # ``_http_error``), and changes nothing.
     @app.post("/api/undo/{token}")
     async def _undo(token: str):
         from operator_api.undo import LEDGER

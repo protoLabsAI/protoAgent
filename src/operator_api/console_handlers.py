@@ -469,6 +469,10 @@ async def _operator_scheduler_cancel(job_id: str) -> dict:
 
     if STATE.scheduler is None:
         raise RuntimeError("scheduler is not loaded (disabled or setup incomplete)")
+    # Snapshot the job BEFORE cancelling so the cancel can be undone (#4955 Q10). A job that
+    # isn't there reads None — then there's nothing to stash, and the not-found path below
+    # answers the unchanged 404.
+    job = await asyncio.to_thread(_scheduler_job, STATE.scheduler, job_id)
     canceled = await asyncio.to_thread(STATE.scheduler.cancel_job, job_id)
     if not canceled:
         # `cancel_job` answers False both for "no such job" and for a store error it
@@ -479,7 +483,42 @@ async def _operator_scheduler_cancel(job_id: str) -> dict:
         if await asyncio.to_thread(_scheduler_job, STATE.scheduler, job_id) is None:
             raise NotFoundError(f"No scheduled job {job_id!r}.")
         raise RuntimeError(f"scheduler could not cancel job {job_id!r}")
-    return {"canceled": True}
+    out = {"canceled": True}
+    if job is not None:
+        out["undo_token"] = _stash_schedule_undo(job.as_dict(), STATE.scheduler)
+    return out
+
+
+def _stash_schedule_undo(job: dict, scheduler) -> str:
+    """Stash a just-cancelled scheduled job and return its undo token (#4955 Q10).
+
+    The restore re-adds the job through ``scheduler.add_job`` with its ORIGINAL id, prompt,
+    schedule and timezone (plus its context/origin/ttl/max_fires so the restored job behaves
+    exactly as it did). ``add_job`` recomputes ``next_fire`` from now: a cron job resumes on
+    its next matching slot, and a ONE-SHOT WHOSE TIME HAS ALREADY PASSED is restored as-is —
+    its past fire time is kept, so the scheduler fires it on its next tick rather than
+    dropping it.
+
+    ``scheduler`` is captured here (not re-read from ``STATE`` at redeem time) so the undo
+    targets the same backend the cancelled job lived on. ``add_job`` raises ``ValueError``
+    if a job already exists under that id (one was recreated between the cancel and the undo)
+    — a 400 at the route, so the stale restore doesn't clobber the live job.
+    """
+    from operator_api.undo import LEDGER
+
+    def _restore(data: dict, _sched=scheduler) -> None:
+        _sched.add_job(
+            data["prompt"],
+            data["schedule"],
+            job_id=data.get("id"),
+            timezone=data.get("timezone"),
+            context_id=data.get("context_id"),
+            origin_session=data.get("origin_session"),
+            ttl=data.get("ttl"),
+            max_fires=data.get("max_fires"),
+        )
+
+    return LEDGER.stash("schedule", job, _restore)
 
 
 async def _operator_scheduler_update(job_id: str, req: dict) -> dict:
