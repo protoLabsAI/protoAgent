@@ -13,6 +13,7 @@ import { createServer } from "node:http";
 import { CODE_ROOTS, fsDiffResponse, fsFileResponse } from "./codeFixtures.mjs";
 import { HEAVY_PDF_ID, heavyPdf } from "./pdfFixture.mjs";
 import { readFile, stat } from "node:fs/promises";
+import { readFileSync } from "node:fs";
 import { extname, join, normalize } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -77,6 +78,92 @@ const DIST = fileURLToPath(new URL("../dist", import.meta.url));
 // The in-tree artifact plugin (plugins/artifact) — its shell page, shell.js and vendored libs
 // are served as-is so artifact-panel.spec.ts drives the REAL srcdoc builder.
 const ARTIFACT_PLUGIN = fileURLToPath(new URL("../../../plugins/artifact/", import.meta.url));
+
+// ── Plugin preview harness (#4809, ADR 0034/0039) ────────────────────────────────────────
+// `protoagent plugin preview <dir>` serves a plugin's REAL views + routers host-free, through
+// THIS mock. Two entry points drive the SAME hooks, both inert unless opted into (so every
+// existing spec is byte-for-byte unaffected):
+//   • the CLI exports PLUGIN_PREVIEW_URL (its uvicorn app mounting the plugin's real routers),
+//     PLUGIN_PREVIEW_PLUGIN (a JSON view descriptor the console discovers), and
+//     PLUGIN_PREVIEW_LAYOUT (the localStorage layout seed to inject at boot);
+//   • the plugin-preview e2e names a built-in fixture via the `x-e2e-preview` header and lets
+//     the mock serve the fixture's real page straight off apps/web/e2e/fixtures — so CI needs
+//     no Python, and seeds the layout itself via addInitScript.
+const FIXTURES = fileURLToPath(new URL("./fixtures/", import.meta.url));
+const PLUGIN_PREVIEW_URL = (process.env.PLUGIN_PREVIEW_URL || "").replace(/\/$/, "");
+// View descriptor from the CLI's env file (id, name, version, views, public_paths), else null.
+const PLUGIN_PREVIEW_ENV = readJsonEnvFile(process.env.PLUGIN_PREVIEW_PLUGIN);
+// {key, value} the CLI wants seeded into localStorage before the SPA boots (value is the
+// JSON-encoded zustand `protoagent.ui:<id>` blob). Injected into index.html by serveStatic.
+const PLUGIN_PREVIEW_LAYOUT_SEED = readJsonEnvFile(process.env.PLUGIN_PREVIEW_LAYOUT);
+const _previewDescCache = new Map();
+
+function readJsonEnvFile(path) {
+  if (!path) return null;
+  try {
+    return JSON.parse(readFileSync(path, "utf8"));
+  } catch {
+    return null;
+  }
+}
+
+// The view descriptor for the plugin under preview on THIS request — the CLI's env descriptor,
+// or (in the e2e) the fixture the `x-e2e-preview` header names, read off disk beside its page.
+function previewDescFor(req) {
+  if (PLUGIN_PREVIEW_ENV) return PLUGIN_PREVIEW_ENV;
+  const id = String(req.headers["x-e2e-preview"] || "");
+  if (!id || !/^[\w-]+$/.test(id)) return null;
+  if (!_previewDescCache.has(id)) {
+    _previewDescCache.set(id, readJsonEnvFile(join(FIXTURES, id, "preview.json")));
+  }
+  return _previewDescCache.get(id);
+}
+
+// The runtime-status plugin entry the console discovers the preview plugin's views through.
+function previewPluginEntry(desc) {
+  return {
+    id: desc.id,
+    name: desc.name || desc.id,
+    version: desc.version || "0.0.0",
+    enabled: true,
+    loaded: true,
+    tools: [],
+    skills: 0,
+    views: desc.views || [],
+  };
+}
+
+// Forward one request to the CLI's uvicorn app (the plugin's REAL routers). Only reached when
+// PLUGIN_PREVIEW_URL is set, so the e2e + every other spec never touch it.
+async function proxyToPreview(pathname, search, req, res) {
+  const target = PLUGIN_PREVIEW_URL + pathname + (search || "");
+  const headers = {};
+  for (const [k, v] of Object.entries(req.headers)) {
+    if (k === "host" || k === "connection" || k === "content-length") continue;
+    headers[k] = v;
+  }
+  const hasBody = req.method !== "GET" && req.method !== "HEAD";
+  try {
+    const upstream = await fetch(target, {
+      method: req.method,
+      headers,
+      body: hasBody ? await readRawBody(req) : undefined,
+    });
+    const buf = Buffer.from(await upstream.arrayBuffer());
+    const out = {};
+    upstream.headers.forEach((val, key) => {
+      if (key !== "content-encoding" && key !== "transfer-encoding") out[key] = val;
+    });
+    res.writeHead(upstream.status, out);
+    res.end(buf);
+  } catch (e) {
+    sendJson(res, { detail: "plugin preview upstream unreachable", error: String(e) }, 502);
+  }
+}
+
+// Frames a plugin VIEW page published back through the bridge (POST /api/events/publish),
+// keyed by the tap the browser context opened (x-e2e-bus-tap) — read via GET /api/__test__/bus.
+const busReceived = new Map();
 
 // ---------------------------------------------------------------------------
 // Optional bearer gate (auth-gated-views.spec.ts, #2886). The default mock is
@@ -1146,6 +1233,18 @@ async function serveStatic(pathname, res) {
   }
   try {
     const data = await readFile(filePath);
+    // Plugin preview (#4809): seed the layout into localStorage BEFORE the SPA boots, so the
+    // preview mounts the view(s) the operator asked for. Only when the CLI exported a seed
+    // (PLUGIN_PREVIEW_LAYOUT) — the e2e seeds via addInitScript, so the default stays untouched.
+    if (PLUGIN_PREVIEW_LAYOUT_SEED && filePath.endsWith("index.html")) {
+      const { key, value } = PLUGIN_PREVIEW_LAYOUT_SEED;
+      const seed = `<script>try{localStorage.setItem(${JSON.stringify(key)},${JSON.stringify(value)});}catch(e){}</script>`;
+      let html = data.toString("utf8");
+      html = html.includes("<head>") ? html.replace("<head>", "<head>" + seed) : seed + html;
+      res.writeHead(200, { "content-type": MIME[".html"] });
+      res.end(html);
+      return;
+    }
     res.writeHead(200, { "content-type": MIME[extname(filePath)] || "application/octet-stream" });
     res.end(data);
   } catch {
@@ -1195,6 +1294,40 @@ const server = createServer(async (req, res) => {
       // only the hub's own mint opens a stream through the gate.
       const proxied = url.pathname.startsWith("/agents/");
       return sendJson(res, { token: proxied ? "e2e-member-minted-sse-token" : GATE_SSE_TOKEN });
+    }
+  }
+
+  // Plugin preview routing (#4809) — only matches the plugin under preview, so it's a no-op
+  // for every other spec (previewDescFor returns null without the CLI env / e2e header).
+  {
+    const desc = previewDescFor(req);
+    if (desc) {
+      // DATA router: /api/plugins/<id>/* → the CLI's uvicorn app (its REAL routers). The e2e
+      // leaves PLUGIN_PREVIEW_URL unset and drives the view via the bus, so this stays inert there.
+      if (PLUGIN_PREVIEW_URL && pathname.startsWith(`/api/plugins/${desc.id}/`)) {
+        return proxyToPreview(pathname, url.search, req, res);
+      }
+      // VIEW page: /plugins/<id>/* → proxy to the CLI's app, or (e2e) serve the fixture's real
+      // page off disk, like the artifact shell below.
+      const m = req.method === "GET" && pathname.match(/^\/plugins\/([\w-]+)\/(.*)$/);
+      if (m && m[1] === desc.id) {
+        if (PLUGIN_PREVIEW_URL) return proxyToPreview(pathname, url.search, req, res);
+        const rel = (m[2] || "view").replace(/\?.*$/, "");
+        const file = rel === "view" ? "view.html" : rel.replace(/[^\w./-]/g, "");
+        const abs = normalize(join(FIXTURES, desc.id, "public", file));
+        if (!abs.startsWith(normalize(join(FIXTURES, desc.id, "public")))) {
+          res.writeHead(403).end("forbidden");
+          return;
+        }
+        try {
+          const data = await readFile(abs);
+          res.writeHead(200, { "content-type": MIME[extname(file)] || "text/html; charset=utf-8" });
+          res.end(data);
+        } catch {
+          res.writeHead(404).end("not found");
+        }
+        return;
+      }
     }
   }
 
@@ -1835,6 +1968,24 @@ const server = createServer(async (req, res) => {
       if (pathname === "/api/devices" && req.headers["x-e2e-pairing"] === "public") {
         return sendJson(res, { devices: fleetFor(req).devices ?? [], public_console_url: "https://agent.example.com" });
       }
+      // Plugin preview (#4809): received-frames read — what a VIEW page published back through
+      // the bridge (POST /api/events/publish), keyed by this context's bus tap.
+      if (pathname === "/api/__test__/bus") {
+        return sendJson(res, { received: busReceived.get(url.searchParams.get("tap") || "") ?? [] });
+      }
+      // Plugin preview (#4809): splice the plugin-under-preview's views into runtime status so
+      // the console mounts them. Gated on the CLI env OR the e2e's `x-e2e-preview` header, so a
+      // request outside a preview gets the untouched fixture (every existing spec).
+      if (pathname === "/api/runtime/status") {
+        const desc = previewDescFor(req);
+        if (desc) {
+          const base = { ...RUNTIME_STATUS, mcp: mcpFor(req) };
+          return sendJson(res, {
+            ...base,
+            plugins: [...base.plugins.filter((p) => p.id !== desc.id), previewPluginEntry(desc)],
+          });
+        }
+      }
       const payload = handleApiGet(
         pathname,
         fleetFor(req),
@@ -2005,6 +2156,22 @@ const server = createServer(async (req, res) => {
       const streams = busTaps.get(String(body.tap || "")) ?? new Set();
       for (const write of streams) for (const f of body.frames || []) write(f.topic, f.data || {});
       return sendJson(res, { ok: true, streams: streams.size });
+    }
+    // Plugin-view publish bridge (ADR 0039, #4809). A view page posts `protoagent:publish`;
+    // PluginView mints a token here, then POSTs the (namespaced) event. Record it against this
+    // context's tap so a preview test can assert the page→bus publish landed. Only a page that
+    // publishes ever hits these; no existing spec does, so the routes are inert for them.
+    if (pathname === "/api/events/publish-token" && req.method === "POST") {
+      return sendJson(res, { token: "e2e-plugin-view-publish-token" });
+    }
+    if (pathname === "/api/events/publish" && req.method === "POST") {
+      const tap = String(req.headers["x-e2e-bus-tap"] || "");
+      if (tap) {
+        const got = busReceived.get(tap) ?? [];
+        got.push({ topic: body.topic, data: body.data || {} });
+        busReceived.set(tap, got);
+      }
+      return sendJson(res, { ok: true });
     }
     if (pathname === "/api/__test__/fleet/reset" && req.method === "POST") {
       // Per-spec hermeticity: restore this scope's fleet to the baseline.

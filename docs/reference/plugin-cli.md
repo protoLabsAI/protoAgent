@@ -17,6 +17,7 @@ passes (required deps go into the app's managed Python runtime as part of the in
 | Command | Purpose |
 |---|---|
 | [`check`](#cmd-check) | statically check a plugin without importing its code |
+| [`preview`](#cmd-preview) | serve the built console against the e2e mock backend with this plugin's REAL views + routers — host-free (ADR 0034/0039, #4809) |
 | [`new`](#cmd-new) | scaffold a new plugin skeleton on disk (ready to fill in + enable) |
 | [`new-bundle`](#cmd-new-bundle) | scaffold a plugin BUNDLE (protoagent.bundle.yaml, ADR 0040) |
 | [`install`](#cmd-install) | install a plugin — or a bundle of plugins — from a git URL (does NOT enable it) |
@@ -39,6 +40,21 @@ Statically check a plugin without importing its code.
 |---|---|
 | `dir` | plugin directory |
 | `--json` | print machine-readable findings |
+
+## `preview` {#cmd-preview}
+
+```
+python -m server plugin preview [-h] [--port PORT] [--layout file.json] [--open] dir
+```
+
+Serve the built console against the e2e mock backend with this plugin's REAL views + routers — host-free (ADR 0034/0039, #4809).
+
+| Argument | Meaning |
+|---|---|
+| `dir` | plugin directory |
+| `--port` | port the console mock serves on (default 4319) (default `4319`) |
+| `--layout` | JSON mapping which views mount where, e.g. {"surface":"main","right":"side"} — mount a view in the surface and the right panel at once (default: the first rail view) |
+| `--open` | open the preview in your browser once it's up |
 
 ## `new` {#cmd-new}
 

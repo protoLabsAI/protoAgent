@@ -14,6 +14,7 @@ import json
 import logging
 import sys
 from dataclasses import asdict
+from pathlib import Path
 
 from graph.plugins import installer, scaffold
 
@@ -67,6 +68,22 @@ def _build_parser() -> argparse.ArgumentParser:
     pc = sub.add_parser("check", help="statically check a plugin without importing its code")
     pc.add_argument("dir", help="plugin directory")
     pc.add_argument("--json", action="store_true", help="print machine-readable findings")
+
+    pp = sub.add_parser(
+        "preview",
+        help="serve the built console against the e2e mock backend with this plugin's REAL "
+        "views + routers — host-free (ADR 0034/0039, #4809)",
+    )
+    pp.add_argument("dir", help="plugin directory")
+    pp.add_argument("--port", type=int, default=4319, help="port the console mock serves on (default 4319)")
+    pp.add_argument(
+        "--layout",
+        default=None,
+        metavar="file.json",
+        help='JSON mapping which views mount where, e.g. {"surface":"main","right":"side"} — '
+        "mount a view in the surface and the right panel at once (default: the first rail view)",
+    )
+    pp.add_argument("--open", action="store_true", help="open the preview in your browser once it's up")
 
     pn = sub.add_parser("new", help="scaffold a new plugin skeleton on disk (ready to fill in + enable)")
     pn.add_argument("name", help='human name (the id is slugified from it, e.g. "My Plugin" -> my-plugin)')
@@ -158,6 +175,26 @@ def run_plugin_cli(argv: list[str]) -> int:
             for f in findings:
                 print(f"{f.file}:{f.line}: {f.severity} [{f.code}] {f.message} Fix: {f.fix}")
         return int(any(f.severity == "error" for f in findings))
+    if args.cmd == "preview":
+        from graph.plugins.preview import ConsoleBundleMissing, run_preview
+
+        layout = None
+        if args.layout:
+            try:
+                layout = json.loads(Path(args.layout).read_text(encoding="utf-8"))
+            except (OSError, ValueError) as exc:
+                print(f"✗ could not read --layout {args.layout!r}: {exc}", file=sys.stderr)
+                return 1
+            if not isinstance(layout, dict):
+                print(f"✗ --layout {args.layout!r} must be a JSON object", file=sys.stderr)
+                return 1
+        try:
+            return run_preview(args.dir, port=args.port, layout=layout, open_browser=args.open)
+        except ConsoleBundleMissing as exc:
+            print(f"✗ {exc}", file=sys.stderr)
+            return 1
+        except KeyboardInterrupt:
+            return 0
     try:
         if args.cmd == "new":
             try:
