@@ -43,10 +43,21 @@ def test_nested_langchain_cache_counts_are_reported(fake_langfuse):
     }
 
 
-def test_flat_telemetry_names_still_work(fake_langfuse):
-    usage = {"input_tokens": 1_000, "output_tokens": 10, "cache_read_input_tokens": 900}
+def test_flat_telemetry_names_pass_through_unchanged(fake_langfuse):
+    # The ACP coder's shape: input_tokens already excludes cache, so no subtraction.
+    usage = {
+        "input_tokens": 100,
+        "output_tokens": 50,
+        "cache_read_input_tokens": 700,
+        "cache_creation_input_tokens": 30,
+    }
     tracing.trace_generation(name="t", usage=usage)
-    assert _usage_details(fake_langfuse) == {"input": 100, "output": 10, "input_cache_read": 900}
+    assert _usage_details(fake_langfuse) == {
+        "input": 100,
+        "output": 50,
+        "input_cache_read": 700,
+        "input_cache_creation": 30,
+    }
 
 
 def test_service_tier_prefixed_cache_read(fake_langfuse):

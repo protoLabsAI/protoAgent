@@ -1075,17 +1075,22 @@ def trace_generation(
         if usage:
             from observability.pricing import cache_tokens
 
-            # The caller passes LangChain's ``usage_metadata``, whose cache counts sit
-            # NESTED under ``input_token_details`` and are SUBSETS of ``input_tokens``.
-            # Reading only the flat telemetry-row names dropped them, so every cached
-            # prompt landed in Langfuse as fully uncached input (0 cache reads, cost
-            # priced at the full rate). Langfuse prices each usage key on its own, so
-            # ``input`` carries only the uncached remainder — the same split
-            # ``pricing.cost_usd`` bills.
+            # Two usage shapes arrive here. The flat telemetry-row names
+            # (``cache_read_input_tokens``) pass through as given; the ACP coder's
+            # ``input_tokens`` already EXCLUDES cache there. LangChain's
+            # ``usage_metadata`` (the fleet generation) nests the cache counts under
+            # ``input_token_details`` as SUBSETS of ``input_tokens``. Reading only the
+            # flat names dropped them, so every cached LangChain prompt reached
+            # Langfuse as fully uncached input. Langfuse prices each usage key on its
+            # own, so ``input`` must carry only the uncached remainder. Subtract only
+            # for the nested shape.
             cache_read, cache_creation = cache_tokens(usage)
-            inp = int(usage.get("input_tokens") or 0)
+            inp = usage.get("input_tokens")
+            flat = "cache_read_input_tokens" in usage or "cache_creation_input_tokens" in usage
+            if inp and not flat:
+                inp = max(0, int(inp) - cache_read - cache_creation)
             candidates = {
-                "input": max(0, inp - cache_read - cache_creation) if inp else None,
+                "input": inp,
                 "output": usage.get("output_tokens"),
                 "input_cache_read": cache_read,
                 "input_cache_creation": cache_creation,
