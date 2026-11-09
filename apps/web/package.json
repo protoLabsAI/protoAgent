@@ -12,7 +12,7 @@
     "test:e2e": "npm run build && playwright test",
     "test:e2e:ui": "playwright test --ui",
     "test": "vitest run",
-    "test:unit": "vitest run",
+    "test:unit": "node scripts/copy-plugin-kit.mjs && vitest run",
     "test:watch": "vitest"
   },
   "dependencies": {

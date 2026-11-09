@@ -1204,8 +1204,10 @@ function subscribe() {
   // `background: true` keeps the chart mounted while another view is up, so it is current
   // the moment the operator comes back to it mid-run. A frame the bus can't deliver (a relay
   // hiccup, a hidden tab) is still reconciled by the live poll in boot().
-  kit.subscribe(["delegation.#"], (ev) => onEvent(ev.name, ev.data), { background: true });
-  setLive("live");
+  // Kit 0.71 matches `*`; the host uses `#` for recursive topics. Keep both so
+  // nested delegation topics reach the kit as well as the host relay.
+  setLive("polling");
+  kit.subscribe(["delegation.#", "delegation.*"], (ev) => onEvent(ev.name, ev.data), { background: true });
 }
 
 // ── boot + loops ────────────────────────────────────────────────────────────────────

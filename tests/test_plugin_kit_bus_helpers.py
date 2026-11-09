@@ -5,11 +5,10 @@ to @protolabsai/ui's no-build plugin-kit; this card bumps `apps/web` to the rele
 carries them (0.71.0), and `apps/web/scripts/copy-plugin-kit.mjs` copies that file verbatim
 into `public/_ds/plugin-kit.js` at build time so plugin iframes load it same-origin.
 
-The kit is an npm artifact and is NOT committed, so — like tests/test_plugin_view_ds_tokens.py
-— the dependency *pin* is checked everywhere (the always-on guard), and the copied file's
-exports are checked wherever the real kit resolves (a build or `npm ci` ran). Skipping the
-latter is harmless: it can only miss a regression in the published artifact, never pass a stale
-pin.
+The kit is an npm artifact and is NOT committed. The dependency pin is checked in
+Python CI; apps/web/src/lib/pluginKitBus.test.ts checks the copied artifact's exports
+and runs the actual kit against the host relay in the web unit CI lane (without skips).
+The Python artifact check below is an additional check when a web build is available.
 """
 
 from __future__ import annotations

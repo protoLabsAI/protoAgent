@@ -62,8 +62,8 @@ describe("live relay (no since — the pre-#1640 path, now with seq)", () => {
     relay.deliver("other.created", { id: "x" }, 6);
     relay.deliver("board.moved", { id: "b1" }, 7);
     expect(posted).toEqual([
-      { topic: "board.created", data: { id: "b1" }, seq: 5 },
-      { topic: "board.moved", data: { id: "b1" }, seq: 7 },
+      { name: "board.created", topic: "board.created", data: { id: "b1" }, seq: 5 },
+      { name: "board.moved", topic: "board.moved", data: { id: "b1" }, seq: 7 },
     ]);
   });
 
@@ -79,7 +79,7 @@ describe("live relay (no since — the pre-#1640 path, now with seq)", () => {
     relay.subscribe({ patterns: ["stats.#"] });
     relay.deliver("board.created", {}, 1);
     relay.deliver("stats.tick", {}, 2);
-    expect(posted).toEqual([{ topic: "stats.tick", data: {}, seq: 2 }]);
+    expect(posted).toEqual([{ name: "stats.tick", topic: "stats.tick", data: {}, seq: 2 }]);
   });
 
   it("relays a seq-less frame as-is (no dedupe possible, nothing silently dropped)", () => {
@@ -88,8 +88,8 @@ describe("live relay (no since — the pre-#1640 path, now with seq)", () => {
     relay.deliver("board.created", { id: "b1" });
     relay.deliver("board.created", { id: "b1" }, 3);
     expect(posted).toEqual([
-      { topic: "board.created", data: { id: "b1" } },
-      { topic: "board.created", data: { id: "b1" }, seq: 3 },
+      { name: "board.created", topic: "board.created", data: { id: "b1" } },
+      { name: "board.created", topic: "board.created", data: { id: "b1" }, seq: 3 },
     ]);
   });
 });
@@ -106,8 +106,8 @@ describe("replay on subscribe (since)", () => {
     const { posted, relay } = harness(buffer);
     relay.subscribe({ patterns: ["board.#"], since: 1 });
     expect(posted).toEqual([
-      { topic: "board.moved", data: { id: "b1" }, seq: 3 },
-      { topic: "board.done", data: { id: "b1" }, seq: 4 },
+      { name: "board.moved", topic: "board.moved", data: { id: "b1" }, seq: 3 },
+      { name: "board.done", topic: "board.done", data: { id: "b1" }, seq: 4 },
     ]);
   });
 
@@ -131,7 +131,7 @@ describe("replay on subscribe (since)", () => {
     // …and the next new one flows straight through.
     relay.deliver("board.archived", { id: "b1" }, 5);
     expect(posted.map((f) => f.seq)).toEqual([3, 4, 5]);
-    expect(posted[2]).toEqual({ topic: "board.archived", data: { id: "b1" }, seq: 5 });
+    expect(posted[2]).toEqual({ name: "board.archived", topic: "board.archived", data: { id: "b1" }, seq: 5 });
   });
 
   it("non-matching buffered frames advance nothing (their seqs stay deliverable-adjacent)", () => {

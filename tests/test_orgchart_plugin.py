@@ -949,7 +949,7 @@ def test_live_bus_rides_the_ds_kit_subscribe_helper_not_raw_postmessage():
     which is NOT bus traffic (and a sibling test pins it)."""
     js, _css, _html = _view_files()
     # Subscribes via the kit, to the delegation topic, kept alive in the background.
-    assert 'kit.subscribe(["delegation.#"], (ev) => onEvent(ev.name, ev.data), { background: true });' in js
+    assert 'kit.subscribe(["delegation.#", "delegation.*"], (ev) => onEvent(ev.name, ev.data), { background: true });' in js
     # No hand-rolled bus frame remains — neither the subscribe post nor the event listener —
     # and the discarded manual seq high-water mark is gone (the kit tracks it now).
     assert "protoagent:subscribe" not in js

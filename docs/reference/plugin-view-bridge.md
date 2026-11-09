@@ -29,7 +29,7 @@ const kit = await import(BASE + "/_ds/plugin-kit.js");
 
 // Listen. `patterns` is a string or string[] (`*` is the wildcard); the handler runs for each
 // matching frame as { name, data, seq }. Returns an unsubscribe function.
-const stop = kit.subscribe(["delegation.#"], (ev) => render(ev.name, ev.data), { background: true });
+const stop = kit.subscribe(["delegation.#", "delegation.*"], (ev) => render(ev.name, ev.data), { background: true });
 
 // Talk back. The topic is forced into your plugin's namespace (see below).
 kit.publish("status", { phase: "done" });
@@ -37,6 +37,10 @@ kit.publish("status", { phase: "done" });
 // Every frame, raw — including your own echoes. A low-level escape hatch under subscribe.
 const off = kit.onEvent((frame) => console.debug(frame));
 ```
+
+The host sends both `topic` (the original wire field) and its identical `name` alias
+for kit callbacks. Kit 0.71 matches `*`, while the host uses `#` for recursive
+matching; the paired patterns above cover both matchers, including nested topics.
 
 - **Topic qualification.** `publish` qualifies your topic with your plugin's id unless it is already
   prefixed — the same rule as the host's `registry.emit`
@@ -71,7 +75,7 @@ The handshake, theming, and authed-fetch helpers (`initPluginView`, `apiFetch`, 
 | `protoagent:ready` | page → host | *(none)* |
 | `protoagent:theme` | host → page | `{ theme: object }` |
 | `protoagent:subscribe` | page → host | `{ patterns: string[], since?: number, background?: boolean }` |
-| `protoagent:event` | host → page | `{ topic: string, data: object, seq?: number }` |
+| `protoagent:event` | host → page | `{ topic: string, name: string, data: object, seq?: number }` |
 | `protoagent:publish` | page → host | `{ topic: string, data?: object }` |
 | `protoagent:keybindings` | page → host | `{ bindings: [{ id, keys, label?, group? }] }` |
 | `protoagent:keybinding` | host → page | `{ id: string }` |
