@@ -17,7 +17,51 @@
 | Requested cases | 40 PV4 + 20 changed-fact |
 | Generated fixtures / baseline results | None |
 
-## Run evidence
+## Latest retry (review round 3)
+
+Retried on 2026-11-09 UTC (2026-11-08 America/Los_Angeles), from
+`4d93af65a4ba036a5afc4e423af5b58a9e6ac64e`, with the same explicit command below.
+Both invocations logged `Extraction model: anthropic-oauth:claude-haiku-5-5`
+before fetching. A read-only configuration check confirmed the main model is
+`anthropic-oauth:claude-sonnet-5-5`; no instance configuration was changed.
+
+The first invocation ended with `TimeoutError: The read operation timed out`.
+The second exhausted all three HTTP attempts at offset 0:
+
+```text
+Extraction model: anthropic-oauth:claude-haiku-5-5
+PV4 offset 0: HTTP 502; retrying
+PV4 offset 0: HTTP 502; retrying
+urllib.error.HTTPError: HTTP Error 502: Bad Gateway
+```
+
+A separate one-row HEAD probe also returned HTTP 502. Neither builder invocation
+reached extraction or created fixtures, so the missing-fixture blocker remains
+unresolved and the three-run baseline could not be collected. Recovery remains
+the builder and runner commands below after dataset service access recovers.
+
+Focused validation on this head: **27 passed, 3 failed** across
+`test_memory_fixtures_pv4.py`, `test_memory_fixtures_frozen.py`, and
+`test_memory_retrieval_eval.py`. All failures are the absent frozen fixtures;
+no tests, questions, or assertions were changed.
+
+The local full gate passed lint, import contracts, attribution, and lockfile
+checks with `UV_CACHE_DIR="$PWD/.uv-cache"`. Its pytest phase was interrupted
+after the dataset blocker was confirmed: **42 failed, 2,779 passed, 76 skipped**.
+Failures included sandbox-denied loopback socket binding (`PermissionError:
+[Errno 1] Operation not permitted`); this interrupted run is not a successful
+gate or evidence of matching failures on main. No unrelated code was changed.
+
+[PR Python CI at this head](https://github.com/protoLabsAI/protoAgent/actions/runs/42544239894/job/128925663168)
+likewise reports **3 failed, 17,922 passed, 118 skipped**: exactly the three
+frozen-fixture tests. Windows Python (both shards), Fleet integration, A2A smoke,
+and zed-acp pass in that workflow. On
+[main at `7219cdbbf16e`](https://github.com/protoLabsAI/protoAgent/actions/runs/42548788589),
+Python, both Windows Python shards, Fleet integration, A2A smoke, and zed-acp
+have all completed successfully. The fixture failures therefore do not also
+fail on main; there are no unrelated failing CI suites to repair.
+
+## Previous run evidence
 
 The preflight loaded the instance configuration, assigned the explicit override
 in memory, and checked `_resolve_aux_model(config, "")` was nonempty and distinct
@@ -65,7 +109,7 @@ PV4/changed-fact/overall pass counts, and each case's pass count out of three. F
 every zero-of-three case as a candidate harness bug without modifying its question
 or assertions. The runner writes its report under `evals/results/`.
 
-## Validation and CI comparison
+## Previous validation and CI comparison
 
 The builder/runner tests, including bounded retry and model-log coverage, pass:
 **27 passed**. The three frozen-fixture tests still fail because the requested
