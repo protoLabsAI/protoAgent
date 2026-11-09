@@ -121,12 +121,24 @@ export function serverResultLabel(origin: string): string | null {
   return "Autonomous run";
 }
 
+/** Remove common markdown formatting for compact plain-text previews, retaining line breaks. */
+export function plainPreviewText(md: string): string {
+  return md
+    .replace(/^[ \t]*(?:>[ \t]*)+/gm, "")
+    .replace(/^[ \t]*(?:#{1,6}[ \t]+|[-*+][ \t]+|\d+\.[ \t]+)/gm, "")
+    .replace(/\[([^\]]+)\]\([^)]*\)/g, "$1")
+    .replace(/`+([^`]+)`+/g, "$1")
+    .replace(/(\*\*|__)(.*?)\1/g, "$2")
+    .replace(/\*([^*]+)\*/g, "$1")
+    .replace(/\b_([^_]+)_\b/g, "$1");
+}
+
 /** The collapsed card's preview line (#3028): the body of a leading `## Summary` heading when
  *  the result has one, else the head of the whole content — whitespace-flattened and clipped
  *  to `max` chars. */
 export function serverResultPreview(content: string, max = 120): string {
   const source = summarySection(content) ?? content;
-  const flat = source.replace(/\s+/g, " ").trim();
+  const flat = plainPreviewText(source).replace(/\s+/g, " ").trim();
   return flat.length > max ? `${flat.slice(0, max).trimEnd()}…` : flat;
 }
 

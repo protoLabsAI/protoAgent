@@ -12,6 +12,8 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { useDocViewer } from "../docviewer";
 import type { ChatMessage } from "../lib/types";
 import { ChatMessageView } from "./ChatMessageView";
+import { preloadMarkdown } from "./LazyMarkdown";
+import { plainPreviewText, serverResultPreview } from "./server-turn-store";
 
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -57,7 +59,8 @@ function clickKey(el: HTMLElement, key: string) {
   });
 }
 
-beforeEach(() => {
+beforeEach(async () => {
+  await preloadMarkdown();
   container = document.createElement("div");
   document.body.appendChild(container);
   root = createRoot(container);
@@ -171,5 +174,60 @@ describe("ScheduledChip — failed fires still expand (#4726)", () => {
     expect(container.querySelector(".chat-scheduled-chip--failed")).toBeTruthy();
     act(() => toggle().click());
     expect(body()?.querySelector(".chat-scheduled-summary")?.textContent).toBe(SUMMARY);
+  });
+});
+
+describe("scheduled result markdown (#4927)", () => {
+  const markdown = "**Failing CI:**\n\n- Fix the build\n- Retry tests";
+
+  it.each([false, true])("renders markdown in the result body (collapse=%s)", async (collapse) => {
+    await act(async () => render(scheduledMessage({ summary: markdown, collapse })));
+    if (collapse) {
+      expect(toggle().textContent).toContain("Failing CI: Fix the build Retry tests");
+      expect(toggle().textContent).not.toMatch(/\*\*|(?:^|\s)- /);
+      await act(async () => toggle().click());
+    }
+    const summary = container.querySelector(".chat-scheduled-summary")!;
+    expect(summary.querySelector('[data-streamdown="strong"]')?.textContent).toBe("Failing CI:");
+    expect([...summary.querySelectorAll("li")].map((li) => li.textContent)).toEqual([
+      "Fix the build", "Retry tests",
+    ]);
+    expect(summary.textContent).not.toMatch(/\*\*|(?:^|\s)- /);
+    act(() => viewFullResult()!.click());
+    await expect(useDocViewer.getState().doc?.load?.()).resolves.toBe(markdown);
+  });
+
+  it.each([false, true])("keeps the empty summary fallback (collapse=%s)", async (collapse) => {
+    await act(async () => render(scheduledMessage({ summary: "", collapse })));
+    if (collapse) await act(async () => toggle().click());
+    expect(container.querySelector(".chat-scheduled-summary")?.textContent).toBe("(no output)");
+    act(() => viewFullResult()!.click());
+    expect(useDocViewer.getState().open).toBe(true);
+  });
+
+  it.each([false, true])("preserves a plain summary (collapse=%s)", async (collapse) => {
+    await act(async () => render(scheduledMessage({ collapse })));
+    if (collapse) await act(async () => toggle().click());
+    expect(container.querySelector(".chat-scheduled-summary")?.textContent).toBe(SUMMARY);
+  });
+
+  it("strips markup before applying the chip's 90-character limit", () => {
+    render(scheduledMessage({ summary: "**" + "x".repeat(91) + "**" }));
+    expect(toggle().textContent).toBe("Scheduled task brand-plan-sweep ran — " + "x".repeat(90) + "…");
+  });
+
+  it("strips common markdown without flattening lines", () => {
+    expect(plainPreviewText("# Heading\n> **bold** __strong__ *italic* _emphasis_ `code`\n- [link](https://example.com)\n* item\n1. numbered"))
+      .toBe("Heading\nbold strong italic emphasis code\nlink\nitem\nnumbered");
+    expect(plainPreviewText("plain snake_case and 2 * 3")).toBe("plain snake_case and 2 * 3");
+    expect(plainPreviewText("")).toBe("");
+  });
+
+  it("strips markdown before flattening and truncating server previews", () => {
+    expect(serverResultPreview(markdown)).toBe("Failing CI: Fix the build Retry tests");
+    expect(serverResultPreview("## Summary\n" + markdown + "\n## Details\nHidden"))
+      .toBe("Failing CI: Fix the build Retry tests");
+    expect(serverResultPreview("**" + "x".repeat(121) + "**")).toBe("x".repeat(120) + "…");
+    expect(serverResultPreview("**abcdef**", 3)).toBe("abc…");
   });
 });
