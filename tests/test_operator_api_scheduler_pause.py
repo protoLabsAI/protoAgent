@@ -196,3 +196,50 @@ def test_failing_publisher_does_not_break_pause(scheduler_client, monkeypatch):
     assert resp.status_code == 200
     assert resp.json()["job"]["enabled"] is False
     assert sched.get_job("j1").enabled is False
+
+
+@pytest.mark.parametrize("operation", ["list", "add", "update", "cancel"])
+def test_existing_routes_do_not_echo_not_implemented(operation, caplog):
+    secret = "/private/var/secret/backend.py: internal implementation detail"
+
+    async def unsupported(*args):
+        raise NotImplementedError(secret)
+
+    app = FastAPI()
+    register_operator_routes(
+        app,
+        runtime_status=lambda: {},
+        subagent_list=lambda: [],
+        subagent_run=lambda r: None,
+        subagent_batch=lambda r: None,
+        **{f"scheduler_{operation}": unsupported},
+    )
+    client = TestClient(app)
+    if operation == "list":
+        response = client.get("/api/scheduler/jobs")
+    elif operation == "add":
+        response = client.post(
+            "/api/scheduler/jobs", json={"prompt": "p", "schedule": "0 9 * * *"}
+        )
+    elif operation == "update":
+        response = client.put("/api/scheduler/jobs/j1", json={"schedule": "0 17 * * *"})
+    else:
+        response = client.delete("/api/scheduler/jobs/j1")
+
+    assert response.status_code == 500
+    assert "error id" in response.json()["detail"]
+    assert secret not in response.text
+    assert secret in caplog.text
+
+
+def test_pause_unsupported_error_does_not_echo_backend_details(scheduler_client, monkeypatch):
+    client, sched = scheduler_client
+    sched.add_job("p", "0 9 * * *", job_id="j1")
+
+    def unsupported(*args):
+        raise NotImplementedError("/private/var/secret/backend.py")
+
+    monkeypatch.setattr(sched, "set_enabled", unsupported)
+    response = client.post("/api/scheduler/jobs/j1/enabled", json={"enabled": False})
+    assert response.status_code == 501
+    assert response.json()["detail"] == "This scheduler backend does not support pause/resume."
