@@ -209,7 +209,7 @@ async def test_provider_stream_drop_leaves_the_same_record_on_both_surfaces(grap
 
     g = graph([drop])
     out = await chat_mod.chat("hello", "s-drop")
-    assert out[0]["content"] == f"**Error:** {chat_mod._PROVIDER_CLOSED_MSG}"
+    assert out[0]["content"] == f"**Error:** {chat_mod._STREAM_DROP_MSG}"
     nonstream_record = g.recorded[-1]["messages"][0].content
 
     async def _dropping_turn(*a, **k):
@@ -218,7 +218,7 @@ async def test_provider_stream_drop_leaves_the_same_record_on_both_surfaces(grap
 
     monkeypatch.setattr(chat_mod, "_run_native_turn", _dropping_turn)
     frames = [f async for f in chat_mod._chat_langgraph_stream_impl("hello", "s-drop")]
-    assert frames[-1] == ("error", chat_mod._PROVIDER_CLOSED_MSG)
+    assert frames[-1] == ("error", chat_mod._STREAM_DROP_MSG)
     assert g.recorded[-1]["messages"][0].content == nonstream_record
 
 
