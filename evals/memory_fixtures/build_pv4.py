@@ -4,8 +4,12 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import hashlib
 import json
+import os
 import random
+import re
+import sqlite3
 from collections import defaultdict
 from contextlib import closing
 from datetime import date, timedelta
@@ -20,6 +24,11 @@ from knowledge.memories import MemoryStore
 SEED = 125
 DEFAULT_USERS = tuple(sorted(random.Random(SEED).sample(range(126, 156), 12)))
 DEFAULT_OUTPUT = Path(__file__).parent / "pv4"
+# Per-chat checkpoints live OUTSIDE the checkout: a board coder round deletes and
+# recreates its worktree, so progress kept under the repo is lost every round and the
+# next round pays for every extraction call again (bd-9w23j, ~2,400 calls per attempt).
+WORK_ROOT_ENV = "PV4_WORK_DIR"
+DEFAULT_WORK_ROOT = Path.home() / ".cache" / "protoagent" / "pv4-extract"
 
 
 def fetch_page(offset: int, length: int) -> dict:
@@ -97,6 +106,56 @@ def write_jsonl(path, rows):
         temporary.unlink(missing_ok=True)
 
 
+def default_work_dir(config) -> Path:
+    """Checkpoint directory for one extraction model, so a model change never resumes
+    another model's partial store."""
+    from graph.agent import _resolve_aux_model
+
+    model = _resolve_aux_model(config, "") or getattr(config, "model_name", "") or "default"
+    root = Path(os.environ.get(WORK_ROOT_ENV) or DEFAULT_WORK_ROOT)
+    return root / (re.sub(r"[^A-Za-z0-9._-]+", "_", model).strip("_") or "default")
+
+
+def chats_digest(chats) -> str:
+    return hashlib.sha256(json.dumps(chats, ensure_ascii=False).encode("utf-8")).hexdigest()
+
+
+def checkpoint_done(checkpoint: Path, digest: str) -> int:
+    """Chats already extracted into ``checkpoint`` for exactly these chats; 0 when the
+    checkpoint is missing, unreadable or was taken over different chats."""
+    if not checkpoint.is_file():
+        return 0
+    try:
+        with closing(sqlite3.connect(checkpoint)) as db:
+            row = db.execute("SELECT done, digest FROM pv4_progress").fetchone()
+    except sqlite3.Error:
+        return 0
+    return int(row[0]) if row and row[1] == digest else 0
+
+
+def save_checkpoint(store_path: Path, checkpoint: Path, done: int, digest: str) -> None:
+    """Snapshot the working store with its progress in ONE file, replaced atomically:
+    a crash leaves either the previous checkpoint or this one, never a store whose
+    progress count disagrees with its rows (which would extract a chat twice)."""
+    temporary = checkpoint.with_name(checkpoint.name + ".tmp")
+    temporary.unlink(missing_ok=True)
+    try:
+        with closing(sqlite3.connect(store_path)) as src, closing(sqlite3.connect(temporary)) as dst:
+            src.backup(dst)
+            dst.execute("CREATE TABLE IF NOT EXISTS pv4_progress (done INTEGER NOT NULL, digest TEXT NOT NULL)")
+            dst.execute("DELETE FROM pv4_progress")
+            dst.execute("INSERT INTO pv4_progress (done, digest) VALUES (?, ?)", (done, digest))
+            dst.commit()
+        os.replace(temporary, checkpoint)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def restore_checkpoint(checkpoint: Path, store_path: Path) -> None:
+    with closing(sqlite3.connect(checkpoint)) as src, closing(sqlite3.connect(store_path)) as dst:
+        src.backup(dst)
+
+
 def transcript(document):
     if isinstance(document, str) and document.strip():
         return document
@@ -106,15 +165,22 @@ def transcript(document):
 
 
 async def build(output=DEFAULT_OUTPUT, *, users=DEFAULT_USERS, count=40, seed=SEED,
-                config=None, yes=False, force=False, fetch=fetch_page, extract=None):
-    """Build frozen fixtures; fetch and extraction seams support offline tests."""
+                config=None, yes=False, force=False, fetch=fetch_page, extract=None, work_dir=None):
+    """Build frozen fixtures; fetch and extraction seams support offline tests.
+
+    ``work_dir`` holds a per-user checkpoint taken after every chat, so an interrupted
+    run (a killed process, an ended session, a deleted worktree) resumes at the next
+    chat instead of re-extracting the user. A real run (one given a ``config``) uses
+    ``default_work_dir(config)`` when none is passed; offline callers get no checkpoints."""
     if not users or len(set(users)) != len(users):
         raise ValueError("users must be nonempty and unique")
+    if work_dir is None and config is not None:
+        work_dir = default_work_dir(config)
     rows = fetch_users(users, fetch)
     cases = select_cases(rows, count, seed)
     output = Path(output)
     pending = [uid for uid in sorted(rows) if force or not (output / f"user_{uid}.jsonl").exists()]
-    chats = {}
+    chats, digests, done = {}, {}, {}
     for uid in pending:
         documents = rows[uid][0]["documents"]
         if len(documents) != 200:
@@ -122,21 +188,38 @@ async def build(output=DEFAULT_OUTPUT, *, users=DEFAULT_USERS, count=40, seed=SE
         if any(row["documents"] != documents for row in rows[uid]):
             raise ValueError(f"user {uid}: inconsistent documents across questions")
         chats[uid] = [transcript(doc) for doc in documents]
-    print(f"Extraction calls: {sum(map(len, chats.values()))}; users: {len(pending)}; "
-          f"skipped: {len(rows) - len(pending)}")
-    if chats and not yes and input("Continue? [y/N] ").strip().lower() not in {"y", "yes"}:
+        digests[uid] = chats_digest(chats[uid])
+        checkpoint = Path(work_dir) / f"user_{uid}.db" if work_dir is not None else None
+        if checkpoint is not None and force:
+            checkpoint.unlink(missing_ok=True)
+        done[uid] = checkpoint_done(checkpoint, digests[uid]) if checkpoint is not None else 0
+    remaining = sum(len(chats[uid]) - done[uid] for uid in chats)
+    resumed = sum(done.values())
+    print(f"Extraction calls: {remaining}; users: {len(pending)}; "
+          f"skipped: {len(rows) - len(pending)}"
+          + (f"; resumed from checkpoint: {resumed} chats" if resumed else "")
+          + (f"; checkpoints: {work_dir}" if work_dir is not None else ""), flush=True)
+    if remaining and not yes and input("Continue? [y/N] ").strip().lower() not in {"y", "yes"}:
         return
     if extract is None:
         from graph.memory_facts import extract_and_store_facts
         extract = extract_and_store_facts
     output.mkdir(parents=True, exist_ok=True)
+    if work_dir is not None:
+        Path(work_dir).mkdir(parents=True, exist_ok=True)
     for uid, documents in chats.items():
+        checkpoint = Path(work_dir) / f"user_{uid}.db" if work_dir is not None else None
         with TemporaryDirectory(prefix=f"pv4-u{uid}-") as directory:
-            store = MemoryStore(Path(directory) / "agent.db")
-            for index, chat in enumerate(documents):
-                await extract(chat, memory_store=store, config=config,
+            store_path = Path(directory) / "agent.db"
+            if done[uid]:
+                restore_checkpoint(checkpoint, store_path)
+            store = MemoryStore(store_path)
+            for index in range(done[uid], len(documents)):
+                await extract(documents[index], memory_store=store, config=config,
                               source=f"pv4-u{uid}-c{index}",
                               as_of=(date(2000, 1, 1) + timedelta(days=index)).isoformat())
+                if checkpoint is not None:
+                    save_checkpoint(store_path, checkpoint, index + 1, digests[uid])
             with closing(store._connect()) as db:
                 exported = [dict(row) for row in db.execute(
                     f"SELECT {', '.join(FIELDS)} FROM memories ORDER BY id"
@@ -145,7 +228,7 @@ async def build(output=DEFAULT_OUTPUT, *, users=DEFAULT_USERS, count=40, seed=SE
             # Extraction never raises; a zero-row user is indistinguishable from a
             # broken gateway, so surface the count for the mandatory fixture review.
             flag = " (no durable facts — check the extraction model)" if not exported else ""
-            print(f"user {uid}: {len(exported)} stored rows{flag}")
+            print(f"user {uid}: {len(exported)} stored rows{flag}", flush=True)
     write_jsonl(output / "cases.jsonl", cases)
 
 
