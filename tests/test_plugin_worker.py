@@ -13,6 +13,7 @@ from __future__ import annotations
 import asyncio
 import os
 import textwrap
+import time
 from pathlib import Path
 
 import pytest
@@ -84,6 +85,28 @@ def _write(tmp_path: Path, name: str, body: str) -> Path:
     return script
 
 
+def _pid_gone(pid: int) -> bool:
+    """Whether ``pid`` no longer resolves to a live process. Signal 0 is a liveness probe on
+    POSIX (``ESRCH`` → gone); on Windows ``os.kill`` opens the process and a just-reaped pid
+    fails to open, so the same ``OSError`` means gone."""
+    try:
+        os.kill(pid, 0)
+    except OSError:
+        return True
+    return False
+
+
+def _wait_pid_gone(pid: int, deadline: float = 5.0) -> bool:
+    """Poll ``_pid_gone`` until the child is reaped or ``deadline`` elapses — a just-killed pid
+    can linger a tick before the OS releases it (notably on Windows)."""
+    end = time.monotonic() + deadline
+    while time.monotonic() < end:
+        if _pid_gone(pid):
+            return True
+        time.sleep(0.05)
+    return _pid_gone(pid)
+
+
 # ── plugin_python ──────────────────────────────────────────────────────────────────────
 
 
@@ -151,13 +174,19 @@ def test_worker_timeout_returns_an_error_and_kills_the_child(tmp_path, monkeypat
     testkit.use_fixture_python(PLUGIN_ID, root=tmp_path / "venv", monkeypatch=monkeypatch)
     script = _write(tmp_path, "sleep.py", SLEEP_SCRIPT)
     pidfile = tmp_path / "child.pid"
-    result = sdk.worker(PLUGIN_ID, [str(script), str(pidfile)], {}, timeout=1)
+    # Generous enough that even a cold Windows interpreter writes its pidfile and enters the
+    # sleep before the cutoff, yet far below the child's 30 s sleep.
+    start = time.monotonic()
+    result = sdk.worker(PLUGIN_ID, [str(script), str(pidfile)], {}, timeout=8)
+    elapsed = time.monotonic() - start
     assert result["ok"] is False
     assert "timed out" in result["error"].lower()
-    # The child must have been killed and reaped — its PID no longer resolves.
+    # Cut off at the timeout, nowhere near the 30 s sleep → the child was actually interrupted.
+    assert elapsed < 20
+    # And it was killed and reaped — its recorded PID no longer resolves (poll: a just-reaped
+    # pid can linger a tick, especially on Windows).
     pid = int(pidfile.read_text())
-    with pytest.raises(OSError):
-        os.kill(pid, 0)
+    assert _wait_pid_gone(pid), f"worker left child pid {pid} running after the timeout"
 
 
 def test_worker_non_zero_exit_returns_the_stderr_tail(tmp_path, monkeypatch):

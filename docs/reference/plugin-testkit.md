@@ -72,26 +72,25 @@ relative-import machinery, so non-identifier chars become `_`).
 ### `use_fixture_python`
 
 ```python
-use_fixture_python(plugin_id: str, path=None, *, version: str = '3.12', root=None, monkeypatch=None) -> Path
+use_fixture_python(plugin_id: str, path=None, *, version: str | None = None, root=None, monkeypatch=None) -> Path
 ```
 
 Point `plugin_id`'s Python runtime at a fixture interpreter so `sdk.plugin_python` /
-`sdk.worker` resolve it WITHOUT `uv` or a real venv — the seam a worker contract test
-uses in CI.
+`sdk.worker` resolve it WITHOUT `uv` — the seam a worker contract test uses in CI.
 
-Builds a venv-shaped directory (`<root>/bin/python` → `path` on POSIX,
-`<root>/Scripts/python.exe` on Windows) plus the runtime marker, and sets the
-`PROTOAGENT_PLUGIN_PYTHON_<ID>` override to it. The interpreter is linked (`os.symlink`,
-falling back to a copy where symlinks need privilege) so it resolves its own stdlib. Returns
-the created directory.
+Builds a real, throwaway venv at `root` from the fixture interpreter using the stdlib
+`venv` module (no `uv`, no pip, no network) and sets the `PROTOAGENT_PLUGIN_PYTHON_<ID>`
+override to it. A real venv — not a lone symlink/copy of `python.exe` — is what makes the
+resolved interpreter find its own stdlib on Windows as well as POSIX, so the worker actually
+runs there. Returns the venv directory.
 
 **Args:**
 
 - `plugin_id` — the plugin whose runtime to redirect.
 - `path` — the fixture interpreter; defaults to `sys.executable` (the test's own Python).
-- `version` — the `major.minor` written into the marker, so `plugin_venv_state` / `plugin_venv_python(version=…)` read it as satisfied. Default `"3.12"`.
-- `root` — where to build the venv-shaped dir; defaults to a fresh `tempfile.mkdtemp`. Pass `tmp_path / "venv"` to tie its lifetime to pytest's cleanup.
-- `monkeypatch` — a pytest `monkeypatch` fixture — when given, the env var is set through it so it is auto-restored; otherwise it is set on `os.environ` (unset it with `use_fixture_python` cleanup or `os.environ.pop(testkit._venv_env_key(id))`).
+- `version` — the `major.minor` written into the marker, so `plugin_venv_state` / `plugin_venv_python(version=…)` read it as satisfied. Defaults to the fixture interpreter's own version (so `plugin_venv_state` reports `"ok"`).
+- `root` — where to build the venv; defaults to a fresh `tempfile.mkdtemp`. Pass `tmp_path / "venv"` to tie its lifetime to pytest's cleanup.
+- `monkeypatch` — a pytest `monkeypatch` fixture — when given, the env var is set through it so it is auto-restored; otherwise it is set on `os.environ` (unset it with `os.environ.pop(testkit._venv_env_key(id))`).
 
 ```python
 def test_worker_round_trip(tmp_path, monkeypatch):
