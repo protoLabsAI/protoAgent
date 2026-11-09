@@ -67,11 +67,13 @@ def _normalize(path: str) -> str:
 
 
 # Everything outside apps/web that the web job reads. The e2e mock server serves the
-# in-tree artifact plugin; two vitest files import Python sources with `?raw`.
+# in-tree artifact plugin; two vitest files import Python sources with `?raw`, and the
+# plugin-kit bus test `?raw`-imports the orgchart view to exercise its real subscription.
 # tests/test_windows_ci_scope.py scans apps/web for relative references that leave the
 # workspace and fails if one isn't covered here.
 _WEB_EXTERNAL_PATHS = (
     "plugins/artifact/",
+    "plugins/orgchart/view/orgchart.js",
     "src/runtime/flags.py",
     "src/graph/snapshot_op.py",
 )
