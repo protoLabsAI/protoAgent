@@ -160,3 +160,59 @@ def test_failed_sweep_does_not_block_delete(monkeypatch, tmp_path):
 
     monkeypatch.setattr(store, "purge_invalidated", fail)
     assert _post(_client(monkeypatch, store), "delete")["deleted"] == 1
+
+
+@pytest.mark.parametrize("collection", ["books", "general"])
+def test_document_delete_and_undo_stay_in_collection(monkeypatch, tmp_path, collection):
+    private = KnowledgeStore(tmp_path / "private.db")
+    commons = KnowledgeStore(tmp_path / "commons.db")
+    target = _add(private, "same.pdf", collection)
+    other = _add(private, "same.pdf", "other")
+    previously_deleted = _add(private, "same.pdf", "archived")
+    unrelated = _add(private, "different.pdf", collection)
+    shared = _add(commons, "same.pdf", collection)
+    superseded = private.add_chunk("old revision", source="same.pdf", collection=collection)
+    assert private.invalidate_chunk(superseded)
+    assert private.invalidate_by_collection("archived") == 1
+    # The general bucket includes legacy NULL/empty collections, just like browse.
+    if collection == "general":
+        with sqlite3.connect(private.path) as db:
+            db.execute("UPDATE chunks SET collection = NULL WHERE id = ?", (target,))
+    client = _client(monkeypatch, LayeredKnowledgeStore(private, commons))
+    body = {"source": "same.pdf", "collection": collection}
+    assert client.post("/api/knowledge/delete-by-source", json=body).json() == {
+        "enabled": True, "deleted": 1,
+    }
+    assert private.get_chunk(target)["invalidated_at"] is not None
+    assert private.get_chunk(other)["invalidated_at"] is None
+    assert private.get_chunk(unrelated)["invalidated_at"] is None
+    assert commons.get_chunk(shared)["invalidated_at"] is None
+    assert client.post("/api/knowledge/restore-by-source", json=body).json() == {
+        "enabled": True, "restored": 1,
+    }
+    assert private.get_chunk(target)["invalidated_at"] is None
+    assert private.get_chunk(previously_deleted)["invalidated_at"] is not None
+    assert private.get_chunk(superseded)["invalidated_at"] is not None
+
+
+@pytest.mark.parametrize("action,count", [("delete", "deleted"), ("restore", "restored")])
+def test_source_scope_never_falls_back_to_global(monkeypatch, action, count):
+    class LegacyBackend:
+        def invalidate_by_source(self, source):
+            pytest.fail("Scoped requests must never call a global-only backend")
+
+        restore_by_source = invalidate_by_source
+
+    client = _client(monkeypatch, LegacyBackend())
+    for collection in ("", "   ", None, 42):
+        response = client.post(
+            f"/api/knowledge/{action}-by-source",
+            json={"source": "same.pdf", "collection": collection},
+        )
+        assert response.status_code == 400
+    result = client.post(
+        f"/api/knowledge/{action}-by-source",
+        json={"source": "same.pdf", "collection": "books"},
+    ).json()
+    assert result[count] == 0
+    assert result["error"]

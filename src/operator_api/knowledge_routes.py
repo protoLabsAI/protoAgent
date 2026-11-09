@@ -903,6 +903,12 @@ def register_knowledge_routes(app) -> None:
         store = STATE.knowledge_store
         if store is None:
             return {"enabled": False, "deleted": 0}
+        scope = {}
+        if "collection" in (body or {}):
+            collection = body["collection"]
+            if not isinstance(collection, str) or not collection.strip():
+                return JSONResponse({"detail": "collection must be a non-empty string"}, status_code=400)
+            scope["collection"] = collection
         source = str((body or {}).get("source", "")).strip()
         if not source:
             return JSONResponse({"detail": "source is required"}, status_code=400)
@@ -922,7 +928,7 @@ def register_knowledge_routes(app) -> None:
             except Exception:  # noqa: BLE001 — the sweep is opportunistic, never fatal
                 log.exception("[knowledge] purge_invalidated sweep failed")
         try:
-            deleted = await asyncio.to_thread(invalidate, source)
+            deleted = await asyncio.to_thread(invalidate, source, **scope)
         except Exception as exc:  # noqa: BLE001 — never 500 the console
             log.exception("[knowledge] delete-by-source failed")
             return {"enabled": True, "deleted": 0, "error": str(exc)}
@@ -933,6 +939,12 @@ def register_knowledge_routes(app) -> None:
         store = STATE.knowledge_store
         if store is None:
             return {"enabled": False, "restored": 0}
+        scope = {}
+        if "collection" in (body or {}):
+            collection = body["collection"]
+            if not isinstance(collection, str) or not collection.strip():
+                return JSONResponse({"detail": "collection must be a non-empty string"}, status_code=400)
+            scope["collection"] = collection
         source = str((body or {}).get("source", "")).strip()
         if not source:
             return JSONResponse({"detail": "source is required"}, status_code=400)
@@ -940,7 +952,7 @@ def register_knowledge_routes(app) -> None:
         if restore is None:
             return {"enabled": True, "restored": 0, "error": "this knowledge backend can't restore by source"}
         try:
-            restored = await asyncio.to_thread(restore, source)
+            restored = await asyncio.to_thread(restore, source, **scope)
         except Exception as exc:  # noqa: BLE001 — never 500 the console
             log.exception("[knowledge] restore-by-source failed")
             return {"enabled": True, "restored": 0, "error": str(exc)}

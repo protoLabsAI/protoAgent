@@ -127,17 +127,18 @@ export const knowledgeApi = {
   // Bulk delete-by-source (#1770) — remove a whole ingest (all chunks sharing one
   // `source`) in one call. It's a reversible SOFT delete: the chunks leave recall
   // immediately but survive a grace window, so `restoreKnowledgeBySource` (the Undo
-  // toast) can bring them back. `deleted` is the count invalidated.
-  deleteKnowledgeBySource(source: string) {
+  // toast) can bring them back. `deleted` is the count invalidated. An optional
+  // collection restricts both deletion and Undo to one document bucket.
+  deleteKnowledgeBySource(source: string, collection?: string) {
     return request<{ enabled: boolean; deleted: number; error?: string }>(
       "/api/knowledge/delete-by-source",
-      { method: "POST", body: { source } },
+      { method: "POST", body: { source, ...(collection !== undefined ? { collection } : {}) } },
     );
   },
-  restoreKnowledgeBySource(source: string) {
+  restoreKnowledgeBySource(source: string, collection?: string) {
     return request<{ enabled: boolean; restored: number; error?: string }>(
       "/api/knowledge/restore-by-source",
-      { method: "POST", body: { source } },
+      { method: "POST", body: { source, ...(collection !== undefined ? { collection } : {}) } },
     );
   },
   deleteKnowledgeByCollection(collection: string) {

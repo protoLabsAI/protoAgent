@@ -78,10 +78,8 @@ export function CollectionList({ rows, sort, ascending, onSort, ...actions }: Ro
 }
 // Chunks with no `source` share this bucket; it has no document identity of its own.
 const SOURCELESS = "Entries without a source";
-// A per-document delete is safe only for a real, document-identifying source. The
-// sourceless bucket and the shared "console" source (every operator-typed entry, which
-// spans collections) are NOT single documents — delete-by-source on them would reach
-// other collections, so they get no document-delete control.
+// Only document-identifying sources get this action; manually added and sourceless
+// entries remain individually editable and deletable.
 export function isDeletableDocument(source: string) {
   return source !== SOURCELESS && source !== "console";
 }
@@ -152,7 +150,7 @@ export function CollectionsBrowser({ model, renderCard, onAdd, onSettings }: {
   model: Model; renderCard: (chunk: KnowledgeChunk) => ReactNode; onAdd: () => void; onSettings: () => void;
 }) {
   const [pending, setPending] = useState<Collection | null>(null);
-  const [pendingDoc, setPendingDoc] = useState<{ source: string; count: number } | null>(null);
+  const [pendingDoc, setPendingDoc] = useState<{ source: string; count: number; collection: string } | null>(null);
   const toast = useToast();
   const focusAfterDelete = useRef<string | null>(null);
   const contentRef = useRef<HTMLDivElement>(null);
@@ -210,15 +208,16 @@ export function CollectionsBrowser({ model, renderCard, onAdd, onSettings }: {
       }}>Undo</Button></span> });
     } catch { /* Keep the dialog and its inline retry visible. */ }
   }
-  function requestDeleteDoc(source: string, count: number) { model.removeSource.reset(); setPendingDoc({ source, count }); }
+  function requestDeleteDoc(source: string, count: number) { model.removeSource.reset(); setPendingDoc({ source, count, collection }); }
   async function removeDoc() {
     if (!pendingDoc || model.removeSource.isPending) return;
-    const { source } = pendingDoc;
+    const { source, collection: documentCollection } = pendingDoc;
+    const document = { source, collection: documentCollection };
     try {
-      const result = await model.removeSource.mutateAsync(source);
+      const result = await model.removeSource.mutateAsync(document);
       setPendingDoc(null);
       toast({ tone: "success", title: "Knowledge", duration: 10000, message: <span>Deleted {result.deleted} chunk{result.deleted === 1 ? "" : "s"} from “{source}”. <Button variant="ghost" size="sm" onClick={async () => {
-        try { await model.restoreSource.mutateAsync(source); toast({ tone: "success", title: "Knowledge", message: `Restored “${source}”.` }); }
+        try { await model.restoreSource.mutateAsync(document); toast({ tone: "success", title: "Knowledge", message: `Restored “${source}”.` }); }
         catch (error) { toast({ tone: "error", title: "Couldn't restore document", message: errMsg(error) }); }
       }}>Undo</Button></span> });
     } catch { /* Keep the dialog and its inline retry visible. */ }
@@ -264,7 +263,7 @@ export function CollectionsBrowser({ model, renderCard, onAdd, onSettings }: {
       confirmLabel={model.removeSource.isPending ? <><Spinner /> Deleting…</> : "Delete document"} cancelLabel="Keep it" onConfirm={() => void removeDoc()}
       onClose={() => { if (!model.removeSource.isPending) setPendingDoc(null); }}>
       <div className="kc-delete-body">
-      <p>This removes all {pendingDoc?.count} chunk{pendingDoc?.count === 1 ? "" : "s"} of “{pendingDoc?.source}” from this agent's knowledge, wherever it was ingested. It stops reading them from its next turn. You can undo this for a short time afterwards.</p>
+      <p>This removes all {pendingDoc?.count} chunk{pendingDoc?.count === 1 ? "" : "s"} of “{pendingDoc?.source}” from “{pendingDoc?.collection}”. It stops reading them from its next turn. You can undo this for a short time afterwards.</p>
       {model.removeSource.error && <Alert status="warning">Couldn't delete “{pendingDoc?.source}”. Nothing was removed. {errMsg(model.removeSource.error)} <Button onClick={() => void removeDoc()}>Try again</Button></Alert>}
       </div>
     </ConfirmDialog>

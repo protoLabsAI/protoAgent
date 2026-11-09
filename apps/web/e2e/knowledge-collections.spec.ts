@@ -111,13 +111,13 @@ for (const width of [1440, 390]) {
         await surface.getByRole("searchbox").fill("");
         await expect(surface.getByRole("heading", { name: "Documents", exact: true })).toBeVisible();
         await expect(surface.getByRole("button", { name: "claude-import/release-guide-1.md · 13 chunks", exact: true })).toHaveAttribute("aria-expanded", "true");
-        // A whole ingested document can be removed in one action from its collection. The confirm
-        // names the document (not "this collection"), since delete-by-source spans collections.
+        // A whole ingested document can be removed in one action within its collection.
         const docDelete = surface.getByRole("button", { name: "Delete document claude-import/release-guide-1.md", exact: true });
         await expect(docDelete).toBeVisible();
         await docDelete.click();
         const docDialog = page.getByRole("dialog", { name: "Delete this document?" });
         await expect(docDialog).toContainText("claude-import/release-guide-1.md");
+        await expect(docDialog).toContainText("from “claude-import”");
         await docDialog.getByRole("button", { name: "Keep it", exact: true }).click();
         await expect(docDialog).toHaveCount(0);
         await surface.getByRole("button", { name: "Delete collection…", exact: true }).click();
@@ -141,3 +141,24 @@ for (const width of [1440, 390]) {
     }
   });
 }
+
+test("document delete and Undo send the original collection after navigation", async ({ page }) => {
+  await mock(page);
+  await page.goto("/app/");
+  await openCollection(page, "claude-import");
+  const surface = page.getByTestId("knowledge-store");
+  await surface.getByRole("button", { name: "claude-import/release-guide-1.md · 13 chunks", exact: true }).click();
+  await surface.getByRole("button", { name: "Delete document claude-import/release-guide-1.md", exact: true }).click();
+  const deletion = page.waitForRequest("**/api/knowledge/delete-by-source");
+  await page.getByRole("dialog", { name: "Delete this document?" }).getByRole("button", { name: "Delete document", exact: true }).click();
+  expect((await deletion).postDataJSON()).toEqual({
+    source: "claude-import/release-guide-1.md", collection: "claude-import",
+  });
+  await surface.getByRole("link", { name: "Back to all collections" }).click();
+  await openCollection(page, "release-runbooks");
+  const restoration = page.waitForRequest("**/api/knowledge/restore-by-source");
+  await page.getByRole("button", { name: "Undo", exact: true }).click();
+  expect((await restoration).postDataJSON()).toEqual({
+    source: "claude-import/release-guide-1.md", collection: "claude-import",
+  });
+});

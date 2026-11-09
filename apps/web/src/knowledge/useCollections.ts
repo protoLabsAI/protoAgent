@@ -102,14 +102,11 @@ export function useCollections() {
     },
     onSuccess: invalidate,
   });
-  // Document-level (per-source) delete — remove a whole ingested document in one reversible
-  // soft delete (#1770). delete-by-source has NO collection predicate, so this is offered
-  // ONLY on a real, document-identifying source (never the sourceless or shared "console"
-  // bucket, whose rows span collections); the confirm copy names the document, not "this
-  // collection", so the operator isn't told a cross-collection delete is scoped to one bucket.
+  // Capture both identifiers so Undo retains its scope after navigation.
   const removeSource = useMutation({
-    mutationFn: async (source: string) => {
-      const result = await api.deleteKnowledgeBySource(source);
+    mutationFn: async ({ source, collection }: { source: string; collection: string }) => {
+      if (!collection.trim()) throw new Error("A collection is required");
+      const result = await api.deleteKnowledgeBySource(source, collection);
       if (!result.enabled || result.error) throw new Error(result.error || "Knowledge is off");
       // Report the server's count, never the local one: a zero means nothing was removed.
       if (!result.deleted) throw new Error("No chunks were removed.");
@@ -118,8 +115,9 @@ export function useCollections() {
     onSuccess: invalidate,
   });
   const restoreSource = useMutation({
-    mutationFn: async (source: string) => {
-      const result = await api.restoreKnowledgeBySource(source);
+    mutationFn: async ({ source, collection }: { source: string; collection: string }) => {
+      if (!collection.trim()) throw new Error("A collection is required");
+      const result = await api.restoreKnowledgeBySource(source, collection);
       if (!result.enabled || result.error || !result.restored) throw new Error(result.error || "No chunks could be restored");
       return result;
     },

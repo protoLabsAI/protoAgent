@@ -2349,7 +2349,7 @@ class KnowledgeStore:
     # survive a grace window so an Undo — restore_by_source — can bring them back.
     # purge_invalidated is the sweep that eventually makes the removal permanent.
 
-    def invalidate_by_source(self, source: str) -> int:
+    def invalidate_by_source(self, source: str, *, collection: str | None = None) -> int:
         """SOFT-delete every VALID chunk sharing ``source`` — stamp
         ``invalidated_at`` so the whole ingest leaves recall at once while the rows
         survive for a grace window. Backs the console's bulk "delete all chunks
@@ -2357,6 +2357,7 @@ class KnowledgeStore:
         permanent by :meth:`purge_invalidated`. Empty/whitespace ``source`` is a
         no-op (0) — never an ``invalidated_at = everything`` sweep. Returns the
         count newly invalidated (already-invalidated rows aren't recounted).
+        Optional collection scopes the document to the same bucket as browse.
 
         Stamps ``invalidation_reason = _BULK_DELETE_REASON`` alongside
         ``invalidated_at`` so :meth:`purge_invalidated` can tell a reapable bulk
@@ -2364,6 +2365,10 @@ class KnowledgeStore:
         leaves the reason NULL and is kept forever."""
         if not source or not source.strip():
             return 0
+        if collection is not None and not collection.strip():
+            return 0
+        clause, params = _collection_clause(collection, history_col="domain")
+        scope = f" AND {clause}" if clause else ""
         db = self._get_db()
         if db is None:
             return 0
@@ -2371,8 +2376,8 @@ class KnowledgeStore:
             now = _now_iso()
             cur = db.execute(
                 "UPDATE chunks SET invalidated_at = ?, invalidation_reason = ?, updated_at = ? "
-                "WHERE source = ? AND invalidated_at IS NULL",
-                (now, _BULK_DELETE_REASON, now, source),
+                f"WHERE source = ? AND invalidated_at IS NULL{scope}",
+                [now, _BULK_DELETE_REASON, now, source, *params],
             )
             db.commit()
             return int(cur.rowcount)
@@ -2382,12 +2387,12 @@ class KnowledgeStore:
         finally:
             db.close()
 
-    def restore_by_source(self, source: str) -> int:
+    def restore_by_source(self, source: str, *, collection: str | None = None) -> int:
         """Clear ``invalidated_at`` on every BULK-SOFT-DELETED chunk sharing
         ``source`` — the inverse of :meth:`invalidate_by_source`, backing the
         console's Undo toast (#1770). Only rows still present (not yet swept by
         :meth:`purge_invalidated`) can be restored. Empty ``source`` is a no-op.
-        Returns the count restored.
+        Returns the count restored. Optional collection uses the same scope as delete.
 
         Scoped to ``invalidation_reason = _BULK_DELETE_REASON`` so an Undo can only
         resurrect what THIS feature soft-deleted — never an auto-supersession audit
@@ -2395,14 +2400,18 @@ class KnowledgeStore:
         reason marker on the way back out."""
         if not source or not source.strip():
             return 0
+        if collection is not None and not collection.strip():
+            return 0
+        clause, params = _collection_clause(collection, history_col="domain")
+        scope = f" AND {clause}" if clause else ""
         db = self._get_db()
         if db is None:
             return 0
         try:
             cur = db.execute(
                 "UPDATE chunks SET invalidated_at = NULL, invalidation_reason = NULL, updated_at = ? "
-                "WHERE source = ? AND invalidation_reason = ?",
-                (_now_iso(), source, _BULK_DELETE_REASON),
+                f"WHERE source = ? AND invalidation_reason = ?{scope}",
+                [_now_iso(), source, _BULK_DELETE_REASON, *params],
             )
             db.commit()
             return int(cur.rowcount)

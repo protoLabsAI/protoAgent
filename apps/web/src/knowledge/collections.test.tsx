@@ -162,10 +162,11 @@ describe("collection browser", () => {
     await act(async () => trigger!.click()); await settle();
     expect(document.body.textContent).toContain("This removes all 51 chunks of “Manual”");
     await confirmButton("Delete document");
-    expect(del).toHaveBeenCalledWith("Manual");
+    expect(del).toHaveBeenCalledWith("Manual", "alpha");
     expect(document.body.textContent).toContain("Deleted 51 chunks from “Manual”.");
     expect(timers).toHaveBeenCalledWith(expect.any(Function), 10000);
-    await click("Undo"); expect(restore).toHaveBeenCalledWith("Manual");
+    await act(async () => model.open("beta")); await settle();
+    await click("Undo"); expect(restore).toHaveBeenCalledWith("Manual", "alpha");
     expect(document.body.textContent).toContain("Restored “Manual”.");
   });
   it("does not announce a document deletion when the server removed zero chunks", async () => {
