@@ -71,6 +71,16 @@ describe("desktop chat stream fallback (#4975)", () => {
     expect(onText).not.toHaveBeenCalledWith("fallback answer", false);
   });
 
+  it("does not re-send a message the shell refused as already sent", async () => {
+    // Tauri invoke rejects with the command's error STRING, not an Error.
+    native.invoke.mockRejectedValue("chat_stream: already sent: message web-1-abc");
+
+    await expect(api.streamChat("twice daily", "chat-1", { onText: vi.fn() })).rejects.toBe(
+      "chat_stream: already sent: message web-1-abc",
+    );
+    expect(chatPosts()).toHaveLength(0);
+  });
+
   it("still falls back when the native command failed before the server took the turn", async () => {
     native.invoke.mockRejectedValue(new Error("command chat_stream not found"));
     const onText = vi.fn();

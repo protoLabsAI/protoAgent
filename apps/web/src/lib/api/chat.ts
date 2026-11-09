@@ -38,6 +38,16 @@ type GetTaskResult = NonNullable<A2AFrame["result"]>;
 /** A native-vision image a send (or a steer) carries: bare base64 + its mime + filename —
  *  the shape the attachment tray produces (useAttachments). The turn path ships it as an
  *  A2A part; the steer route takes it as a `[mime, data-URI]` pair (see `steerChat`). */
+
+/** The desktop shell's error for a replayed `chat_stream` it refused (lib.rs
+ *  DUPLICATE_SEND_REFUSAL): the message was already sent, so nothing may re-send it. */
+export const DUPLICATE_SEND_REFUSAL = "chat_stream: already sent";
+
+export function isDuplicateSendRefusal(err: unknown): boolean {
+  const text = typeof err === "string" ? err : err instanceof Error ? err.message : String(err ?? "");
+  return text.startsWith(DUPLICATE_SEND_REFUSAL);
+}
+
 export type ChatImagePart = { b64: string; mime: string; name: string };
 
 /** The Task a unary `GetTask` answered with, or undefined (#3957).
@@ -386,7 +396,10 @@ export const chatApi = {
         handlers.onDone?.();
         return;
       } catch (err) {
-        if (streamed) throw err;
+        // A refusal from the shell means this exact message was already sent (a replayed
+        // request, #4975): the server has it, so a re-send over /api/chat, which carries no
+        // messageId the server could dedupe, would run the turn a second time.
+        if (streamed || isDuplicateSendRefusal(err)) throw err;
         console.warn("[desktop] native chat stream failed; falling back to /api/chat:", err);
       }
       try {

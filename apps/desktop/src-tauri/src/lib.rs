@@ -422,6 +422,10 @@ impl SentMessages {
 
 /// The client `messageId` of a message-sending A2A body (None for a `SubscribeToTask`,
 /// which is a read and safe to repeat).
+/// The error prefix of a refused replay. Shared with the console (chat.ts), which must not
+/// fall back to re-sending a message the shell refused because it was already sent.
+const DUPLICATE_SEND_REFUSAL: &str = "chat_stream: already sent";
+
 fn sent_message_id(body: &serde_json::Value) -> Option<&str> {
     let method = body.get("method")?.as_str()?;
     if method != "SendStreamingMessage" && method != "SendMessage" {
@@ -458,7 +462,9 @@ async fn chat_stream(
             .claim(id, Instant::now())
         {
             log::warn!("desktop: chat_stream replay of message {id} refused (already sent)");
-            return Err(format!("message {id} was already sent"));
+            // The page matches this prefix (chat.ts DUPLICATE_SEND_REFUSAL) so it doesn't
+            // treat the refusal as "never reached the server" and re-send over /api/chat.
+            return Err(format!("{DUPLICATE_SEND_REFUSAL}: message {id}"));
         }
     }
 
