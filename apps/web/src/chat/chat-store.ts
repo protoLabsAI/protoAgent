@@ -680,12 +680,21 @@ function persist(state: ChatState) {
 // Serializing EVERY session to localStorage per update
 // is the dominant main-thread cost of a streaming turn (and each write fires a
 // cross-window `storage` event that FleetTurnWatch re-parses). So streaming
-// updates persist on a trailing ~300ms timer; structural changes (session
+// updates persist on a trailing ~2s timer; structural changes (session
 // add/remove/rename/switch, stream start/done) and page unload flush
 // immediately. Only the localStorage WRITE is deferred — the in-memory state
 // and listener notify stay synchronous, so the UI streams live.
+//
+// Why 2s and not shorter: every write re-stringifies the agent's WHOLE transcript
+// key (hundreds of KB), and WebKit (the desktop app, Safari) stores it as one SQLite
+// value — any edit shifts every overflow page after it, so each save rewrites the
+// whole blob into the write-ahead log. At 300ms a 60s streamed turn wrote ~120 such
+// blobs (~50 MB of WAL on a 450 KB key); in the desktop app a WebKit reader pinned
+// since launch keeps that WAL from ever checkpointing until the app quits (204 MB
+// after 9.5h, 2026-11-09). A crash mid-stream loses at most ~2s of text, and the
+// server's durable copy of the in-flight turn redraws it (ADR 0104 reattach/hydration).
 
-export const PERSIST_DEBOUNCE_MS = 300;
+export const PERSIST_DEBOUNCE_MS = 2_000;
 
 let persistTimer: ReturnType<typeof setTimeout> | null = null;
 let persistDirty = false;
