@@ -939,3 +939,52 @@ def register_knowledge_routes(app) -> None:
             log.exception("[knowledge] restore-by-source failed")
             return {"enabled": True, "restored": 0, "error": str(exc)}
         return {"enabled": True, "restored": int(restored)}
+
+    # Collection bulk actions share the source lifecycle and 24-hour grace window.
+    @app.post("/api/knowledge/delete-by-collection")
+    async def _api_knowledge_delete_by_collection(body: dict | None = None):
+        store = STATE.knowledge_store
+        if store is None:
+            return {"enabled": False, "deleted": 0}
+        collection = str((body or {}).get("collection") or "").strip()
+        if not collection:
+            return JSONResponse({"detail": "collection is required"}, status_code=400)
+        invalidate = getattr(store, "invalidate_by_collection", None)
+        if invalidate is None:
+            return {"enabled": True, "deleted": 0, "error": "this knowledge backend can't bulk-delete by collection"}
+        # Opportunistic grace sweep: no scheduler owns knowledge here, so each bulk
+        # delete first hard-purges anything invalidated past the recovery window —
+        # that's what makes the "permanent removal" of AC4 real. Best-effort; a
+        # sweep failure must never block the delete the operator actually asked for.
+        purge = getattr(store, "purge_invalidated", None)
+        if purge is not None:
+            try:
+                swept = await asyncio.to_thread(purge, _INVALIDATED_GRACE_SECONDS)
+                if swept:
+                    log.info("[knowledge] swept %d past-grace invalidated chunk(s)", swept)
+            except Exception:  # noqa: BLE001 — the sweep is opportunistic, never fatal
+                log.exception("[knowledge] purge_invalidated sweep failed")
+        try:
+            deleted = await asyncio.to_thread(invalidate, collection)
+        except Exception as exc:  # noqa: BLE001 — never 500 the console
+            log.exception("[knowledge] delete-by-collection failed")
+            return {"enabled": True, "deleted": 0, "error": str(exc)}
+        return {"enabled": True, "deleted": int(deleted)}
+
+    @app.post("/api/knowledge/restore-by-collection")
+    async def _api_knowledge_restore_by_collection(body: dict | None = None):
+        store = STATE.knowledge_store
+        if store is None:
+            return {"enabled": False, "restored": 0}
+        collection = str((body or {}).get("collection") or "").strip()
+        if not collection:
+            return JSONResponse({"detail": "collection is required"}, status_code=400)
+        restore = getattr(store, "restore_by_collection", None)
+        if restore is None:
+            return {"enabled": True, "restored": 0, "error": "this knowledge backend can't restore by collection"}
+        try:
+            restored = await asyncio.to_thread(restore, collection)
+        except Exception as exc:  # noqa: BLE001 — never 500 the console
+            log.exception("[knowledge] restore-by-collection failed")
+            return {"enabled": True, "restored": 0, "error": str(exc)}
+        return {"enabled": True, "restored": int(restored)}
