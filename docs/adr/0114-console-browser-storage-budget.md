@@ -230,7 +230,9 @@ destructive overwrites.
 
 **Write path.**
 
-- Streaming deltas stay debounced at 300 ms. Other changes write immediately.
+- Streaming deltas are debounced at 2 s (300 ms until #4971: each save rewrites the whole
+  key, and in WebKit that piled up in a WAL that never checkpointed while the app ran,
+  #4974). Other changes write immediately.
 - `persist` diffs sessions by reference against the last-persisted snapshot, so
   non-transcript state changes write nothing to IDB.
 - Each write is one `readwrite` transaction: `get`, check `rev`, then `put` with
@@ -245,7 +247,7 @@ destructive overwrites.
   as well.
 
 **What `pagehide` can lose.** `pagehide` flushes, but an IDB transaction started
-there isn't guaranteed to commit. At risk is anything written in the last ≤300 ms
+there isn't guaranteed to commit. At risk is anything written in the last ≤2 s
 that hasn't committed. For streamed text, the server holds it and S2's reattach
 restores it. For client-only rows the loss is real but tiny: a system note, a
 scheduled card, the local cut after a rewind, or a settings change.

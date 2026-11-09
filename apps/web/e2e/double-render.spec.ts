@@ -143,7 +143,7 @@ test("sibling tab reloading mid-turn (double-boot): reply still renders exactly 
 // second time. Two different ids, so `dedupeMessages` never collapsed them and the
 // duplicate persisted to localStorage for good.
 /** Every persisted bubble as `role:content`, for polling the store past its trailing
- *  300ms persist timer. */
+ *  persist timer (PERSIST_DEBOUNCE_MS). */
 async function persistedBubbles(page: Page): Promise<string[]> {
   return page.evaluate(
     ([key]) => {
@@ -182,7 +182,7 @@ test("interjecting mid-turn: the answer renders once, with the steer inline", as
   // The split really happened: two assistant bubbles for the one turn, the operator's
   // interjection between them — and the narration in exactly one of them.
   //
-  // POLLED, not slept on: persistence is a trailing 300ms timer, so the answer can be on
+  // POLLED, not slept on: persistence is a trailing ~2s timer, so the answer can be on
   // screen before the store has it. The ORDER is what proves the steer was consumed
   // INLINE — a steer the agent never folded in settles through the turn-end fallback,
   // which places it BEFORE the assistant bubble, so this assertion cannot pass on a
