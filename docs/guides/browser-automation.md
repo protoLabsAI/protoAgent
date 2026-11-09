@@ -36,6 +36,23 @@ PDF output is always US Letter; see [capture limits](/reference/browser-automati
 <figure class="docs-media"><video controls playsinline preload="none" poster="/media/browser-control/v1-poster.png" aria-label="Navigate public example pages in the live Browser panel, then ask the agent to save a screenshot." style="max-width:100%"><source src="/media/browser-control/v1.mp4"><a href="/media/browser-control/v1.mp4">Download video</a></video><p><a href="/media/browser-control/v1.mp4">Open video</a> · <a href="/media/browser-control/v1-steps.txt">Read the text walkthrough</a></p><figcaption>The Browser panel and agent share the same session. This silent recording shows manual navigation and a real saved screenshot; no login is required.</figcaption></figure>
 <!-- /docs-media -->
 
+## Approve a submission
+
+The agent fills forms but doesn't send them without you. When it tries to submit a
+form, place an order, send a message or delete something, the chat shows an
+approval card such as *Submit the form on boards.greenhouse.io — button “Submit
+application”*.
+
+1. Check the page in the Browser panel. Is the form complete, and is it the right
+   page?
+2. Choose **Allow** to run that one action, or **Don't allow** to stop it. If you
+   decline, the agent leaves the page as it is and asks you how to proceed.
+
+A scheduled, background or delegated run can't show you a card, so its submit is
+refused and the page is left for you. To also approve JavaScript, uploads or
+downloads, or to turn the check off, change **Confirm actions**; see
+[the reference](/reference/browser-automation#consequential-actions-ask-you-first).
+
 ## Change browser settings
 
 Open **Settings → Plugins → Agent Browser**. Useful controls include the home URL,

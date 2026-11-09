@@ -82,8 +82,9 @@ def launch_flags(cfg: dict | None) -> list[str]:
         f += ["--device", str(cfg["device"]).strip()]
     if str(cfg.get("allowed_domains") or "").strip():
         f += ["--allowed-domains", str(cfg["allowed_domains"]).strip()]
-    if str(cfg.get("confirm_actions") or "").strip():
-        f += ["--confirm-actions", str(cfg["confirm_actions"]).strip()]
+    # `confirm_actions` is NOT a CLI flag here any more: the CLI's --confirm-actions gates by verb
+    # and, run as a subprocess, parks a gated command on a confirmation id nothing answers (it
+    # auto-denies after 60 s). The plugin's own target-aware gate (gate.py) owns that key.
     max_output = number(cfg, "max_output", 0, cast=int)
     if max_output > 0:
         f += ["--max-output", str(max_output)]

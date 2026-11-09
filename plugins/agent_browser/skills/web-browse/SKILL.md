@@ -80,7 +80,11 @@ Fill a form like this:
 
 **Never click a submit/apply button unless the operator has explicitly told you to
 submit.** Filling a form is not the same as sending it; leave it filled and verified, and
-say so. And a **captcha or a login is a human step** — you cannot solve it. Stop, say which
+say so. A submit (or a send, order, payment or delete) also raises an approval card for
+the operator; the browser tool won't run until they answer. If the result is `Error: the
+operator declined` or `Error: blocked by the browser action gate`, stop. Don't retry, and
+don't work around it with JavaScript, the Enter key or another selector. Tell the user the
+page is ready for them. And a **captcha or a login is a human step** — you cannot solve it. Stop, say which
 page needs it, and let the operator take over.
 
 ## Capture a page as a file
