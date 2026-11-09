@@ -336,3 +336,17 @@ Decisions taken during implementation and hands-on testing. Each is also written
      eviction, quarantine and navigation.
    - **Reads only.** Writes and actions stay on the `send` bridge (D4), so every mutation remains a
      visible, confirmed user turn.
+10. **A standalone page placement for the browser (D2, 2026-11-08).** `open_artifact` on a rendered
+    artifact (html, react, markdown, mermaid, svg, vega-lite) returns a link to
+    `/plugins/artifact/media/artifact/<id>/page`: the shell in a third mode beside the panel and
+    the embed, rendering ONE version full-tab through the same frame builder, so the nested
+    sandbox and its per-kind CSP are unchanged. It has no embedder, so it takes no bearer and no
+    handshake: the route embeds the version as inert JSON and gates itself on the same expiring
+    core media signature as the file open link (`_media.TTL_S`), domain-separated
+    (`artifact-page:`) and bound to the id, position, kind, commit `ts` and a sha256 of the
+    source. Any bad, missing, expired or other-version ticket, or a file artifact, is a bare 404.
+    The page makes no gated call: `ask`, `send` and `openLink` are refused in the shell, render
+    verdicts are not relayed, and code links are dropped. Its theme is the DS kit's own:
+    `?theme=light|dark` sets `data-theme`, else `prefers-color-scheme`. Response headers:
+    `nosniff`, `no-store`, `Referrer-Policy: no-referrer`, `X-Frame-Options: DENY`. No document
+    CSP, because a srcdoc frame inherits its parent's policy.
