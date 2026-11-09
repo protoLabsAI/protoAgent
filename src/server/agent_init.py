@@ -1014,6 +1014,8 @@ def _register_plugin_subagents(subagents) -> None:
     if not subagents:
         return
     try:
+        from copy import deepcopy
+
         from graph.subagents.config import SUBAGENT_REGISTRY
     except Exception:  # noqa: BLE001
         log.warning("[plugins] subagent registry unavailable; skipping plugin subagents")
@@ -1027,6 +1029,13 @@ def _register_plugin_subagents(subagents) -> None:
             continue
         SUBAGENT_REGISTRY[name] = cfg
         _plugin_subagent_names.add(name)
+        # ADR 0128 S1b: a plugin spec has no module-level constant, so snapshot the
+        # registered config as the static default the config overlay derives from.
+        # Refresh it on EVERY (re-)registration — a reload that re-registers a changed
+        # SubagentConfig must update this snapshot, or _apply_config_subagents would
+        # keep rebuilding the subagent from its boot-time definition (the overlay reads
+        # this snapshot, never the overlaid live registry entry).
+        _subagent_static_defaults[name] = deepcopy(cfg)
         log.info("[plugins] registered subagent: %s", name)
 
 
@@ -1048,41 +1057,76 @@ def _resolve_plugin_middleware(config, factories) -> list:
     return out
 
 
-# Built-in subagents whose runtime config the operator can override in YAML
-# (subagents.<name>.{enabled,tools,max_turns,model}). Add an entry here + a
-# SubagentDef field on LangGraphConfig when you make another built-in overridable.
-_OVERRIDABLE_SUBAGENTS = ("researcher",)
+# Plugin specs have no module-level constant; `_register_plugin_subagents` snapshots
+# each registration here (refreshing on every re-registration, so a reload with a
+# changed plugin spec is picked up rather than masked by the boot-time snapshot).
+_subagent_static_defaults: dict = {}
+_subagent_overlay_warnings: set[tuple[str, str]] = set()
+_disabled_config_subagents: set[str] = set()
 
 
 def _apply_config_subagents(config) -> None:
-    """Apply the YAML subagent override (``subagents.<name>``: enabled / tools /
-    max_turns / model) onto the built-in registry entries — what makes the documented
-    knobs actually take effect at runtime (the resolution path in ``_run_subagent``
-    already existed). Derives each entry from its static default (SSOT, so it's
-    idempotent across reloads and an un-overridden config is a true no-op);
-    ``enabled: false`` removes the subagent (not delegatable). Runs at init + reload."""
+    """Apply sparse operator overlays at init/reload, always from static defaults."""
     try:
-        from dataclasses import replace
+        from copy import deepcopy
+        from dataclasses import asdict, replace
 
         from graph.subagents import config as _sub
-        from graph.subagents.config import SUBAGENT_REGISTRY
     except Exception:  # noqa: BLE001
         return
-    bases = {"researcher": getattr(_sub, "RESEARCHER_CONFIG", None)}
-    for name in _OVERRIDABLE_SUBAGENTS:
-        base = bases.get(name)
-        sub = getattr(config, name, None)
-        if base is None or sub is None:
+
+    registry = _sub.SUBAGENT_REGISTRY
+    bases = {
+        value.name: value for key, value in vars(_sub).items()
+        if key.endswith("_CONFIG") and isinstance(value, _sub.SubagentConfig)
+    }
+    # Plugin snapshots are taken at registration (_register_plugin_subagents) and
+    # refreshed on every re-registration. This is a first-sight fallback for any plugin
+    # subagent that reached the registry another way: snapshot it ONCE (never the
+    # overlaid live entry a prior apply wrote), so the overlay still derives from a
+    # static default and reloads stay idempotent.
+    for name, base in registry.items():
+        if name not in bases and name not in _subagent_static_defaults:
+            _subagent_static_defaults[name] = deepcopy(base)
+    bases.update(_subagent_static_defaults)
+    # Do not resurrect workers removed by another registry owner. Only our own
+    # enabled:false removals need restoration (researcher keeps its legacy behavior).
+    active_names = registry.keys() | _disabled_config_subagents | {"researcher"}
+    bases = {name: base for name, base in bases.items() if name in active_names}
+    overlays = dict(getattr(config, "subagent_overrides", {}))
+    researcher = getattr(config, "researcher", None)
+    if researcher is not None:
+        overlays["researcher"] = asdict(researcher)
+
+    def warn_once(kind, name, message):
+        key = (kind, name)
+        if key not in _subagent_overlay_warnings:
+            _subagent_overlay_warnings.add(key)
+            log.warning(message, name)
+
+    for name in overlays.keys() - bases.keys():
+        warn_once("subagent", name, "Unknown subagent %r in config; skipping overlay")
+    for name, base in bases.items():
+        sub = overlays.get(name, {})
+        if not sub.get("enabled", True):
+            registry.pop(name, None)
+            _disabled_config_subagents.add(name)
             continue
-        if not getattr(sub, "enabled", True):
-            SUBAGENT_REGISTRY.pop(name, None)  # disabled → not delegatable
-            continue
-        SUBAGENT_REGISTRY[name] = replace(
-            base,
-            tools=list(sub.tools) if sub.tools else list(base.tools),
-            max_turns=sub.max_turns or base.max_turns,
-            model=(sub.model or "").strip() or base.model,
-        )
+        changes = {key: deepcopy(value) for key, value in sub.items() if key != "enabled"}
+        # An empty turn limit inherits the static default for every worker.
+        changes["max_turns"] = sub.get("max_turns") or base.max_turns
+        # Preserve the researcher's historical empty-value fallbacks.
+        if name == "researcher":
+            changes.update(
+                tools=list(sub.get("tools") or base.tools),
+                model=(sub.get("model") or "").strip() or base.model,
+            )
+        entry = replace(deepcopy(base), **changes)
+        for profile in (entry.profile, entry.final_profile):
+            if profile and profile not in getattr(config, "model_profiles", {}):
+                warn_once("profile", profile, "Unknown model profile %r; keeping name unresolved")
+        registry[name] = entry
+        _disabled_config_subagents.discard(name)
 
 
 def _build_plugins(config, existing_tools=None):

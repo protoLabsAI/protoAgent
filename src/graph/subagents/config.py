@@ -109,6 +109,9 @@ class SubagentConfig:
     # there is one (`nudge_contract`); with only a `completion_check`, a generic phrase.
     completion_contract: str = ""
     inherit_read_tools: bool = True
+    # Role names only; generation settings are resolved separately (ADR 0128).
+    profile: str = ""
+    final_profile: str = ""
 
     def delivered(self) -> Callable[[str], bool] | None:
         """The test a finished answer must pass, or None when this subagent declares none."""
