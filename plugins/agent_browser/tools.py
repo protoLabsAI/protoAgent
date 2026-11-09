@@ -42,6 +42,7 @@ import contextvars
 import functools
 import logging
 import os
+import re
 import secrets
 import signal
 import subprocess
@@ -70,6 +71,11 @@ _JOIN_TIMEOUT_S = 5.0
 # re-checked before it is reported as "nothing is attached", and how often.
 _UPLOAD_SETTLE_S = 2.5
 _UPLOAD_POLL_S = 0.25
+# browser_wait's longest wait. The daemon's wait has to finish INSIDE the CLI's fixed 30 s IPC
+# read timeout (cli/src/connection.rs) or the CLI re-sends it; 25 s is the CLI's own documented
+# safe default for actions. It is further capped below the plugin's `timeout_s` (see the tools).
+_WAIT_MAX_S = 25.0
+_LOAD_STATES = ("load", "domcontentloaded", "networkidle")
 
 
 def _kill_tree(proc) -> None:
@@ -193,6 +199,24 @@ _RECHECK_AFTER_SUCCESS_S = 10.0
 _PAGE_HAS_CONTENT_JS = "+!!(document.body && (document.body.innerText.trim() || document.body.children.length))"
 
 
+# A stale/unknown `@eN` ref. The CLI (0.27.1, cli/src/native/element.rs) says `Unknown ref: eN`
+# when the ref isn't in the current ref map (no snapshot issued it, or a newer snapshot replaced
+# it), and `Could not locate element with role=… name=…` when the cached node is gone AND its
+# role+name re-query found nothing (the page re-rendered). Raw, neither tells the model what to
+# do, so jobCoach retried the dead ref; this says it.
+_STALE_REF = re.compile(r"Unknown ref: @?(e\d+)|Could not locate element with role=")
+
+
+def _explain_stale_ref(out: str) -> str:
+    m = _STALE_REF.search(out)
+    if not m:
+        return out
+    ref = f"@{m.group(1)}" if m.group(1) else "that @ref"
+    return (f"Error: {ref} is stale or unknown — the page changed since the snapshot that issued "
+            f"it. Run browser_snapshot again and use a fresh ref; for a form field, address it by "
+            f"its visible LABEL instead (browser_form_read lists them), which survives re-renders.")
+
+
 def get_browser_tools(cfg: dict | None, refresh_gaps=None, *, start_gap: bool = False):
     """Build the browser toolset.
 
@@ -236,6 +260,9 @@ def get_browser_tools(cfg: dict | None, refresh_gaps=None, *, start_gap: bool = 
     # `idle_timeout_min`, the main session after `main_idle_timeout_min` (default never).
     chat_idle_ms = runtime.idle_timeout_ms(cfg, chat=True)
     main_idle_ms = runtime.idle_timeout_ms(cfg, chat=False)
+    # browser_wait's cap: 25 s, and always below the subprocess timeout so the daemon reports
+    # its own timeout before we kill the CLI (a killed CLI leaves the daemon still waiting).
+    wait_cap_s = max(0.5, min(_WAIT_MAX_S, timeout - 2.0))
 
     def _serialized(fn):
         """Run the async tool ``fn`` while holding its session's lock (see above). The session
@@ -321,13 +348,21 @@ def get_browser_tools(cfg: dict | None, refresh_gaps=None, *, start_gap: bool = 
                 f"point the plugin's `binary` setting at the native agent-browser binary, or put "
                 f"node on PATH. The console's setup banner says so too.")
 
-    def _run(*args: str, stdin: str | None = None) -> str:
+    def _run(*args: str, stdin: str | None = None, truncate: str = "",
+             env_extra: dict | None = None) -> str:
         """Run `agent-browser <args>` and return stdout, or a readable error.
 
         Uses Popen with one drain thread per pipe (concurrent, so a full stderr can't
         deadlock stdout) enforcing an aggregate byte cap owned here. On overflow the child
-        is killed and a bounded diagnostic is returned; on timeout the child is terminated.
-        Either way the child is reaped — no zombies.
+        is killed and reading stops AT the cap (memory stays bounded); a call that passes
+        ``truncate`` (a narrowing hint — the reading tools: snapshot, get text/html) then
+        returns the FIRST part of stdout cut on a line boundary plus a marker naming that
+        hint, while every other call keeps the bounded "output exceeded" error (a cut eval
+        result would be unparseable JSON). On timeout the child is terminated. Either way the
+        child is reaped — no zombies.
+
+        `env_extra` is merged over the child's env for this one call (browser_wait's
+        per-call AGENT_BROWSER_DEFAULT_TIMEOUT); it never touches os.environ.
 
         `stdin`, when given, is fed to the child on its standard input — the path
         `browser_eval` takes so the JS goes to `agent-browser eval --stdin` rather than
@@ -352,7 +387,8 @@ def get_browser_tools(cfg: dict | None, refresh_gaps=None, *, start_gap: bool = 
             proc = subprocess.Popen([exe, *args],
                                     stdin=subprocess.PIPE if stdin is not None else None,
                                     stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                                    start_new_session=True, env=child_env)
+                                    start_new_session=True,
+                                    env={**child_env, **env_extra} if env_extra else child_env)
         except OSError as e:
             # Surface it to the OPERATOR too, not just into the model's loop: the console
             # showed `warnings: []` while every browser call failed, which is the gap the
@@ -378,8 +414,10 @@ def get_browser_tools(cfg: dict | None, refresh_gaps=None, *, start_gap: bool = 
                     with lock:
                         if overflow:
                             break
+                        room = max_bytes - total
                         total += len(block)
                         if total > max_bytes:  # aggregate crossed the cap → stop + kill
+                            buf.extend(block[:max(room, 0)])  # keep up to the cap, never past it
                             overflow = True
                             hit = True
                             break
@@ -446,6 +484,9 @@ def get_browser_tools(cfg: dict | None, refresh_gaps=None, *, start_gap: bool = 
         if timed_out:
             return f"Error: `agent-browser {' '.join(args)}` timed out after {timeout:g}s"
         if overflow:
+            if truncate and out_bytes.strip():
+                _recheck(failed=False)
+                return _truncated(out_bytes, truncate)
             return f"Error: output exceeded {max_bytes} bytes (truncated)"
         out = out_bytes.decode("utf-8", "replace").strip()
         if proc.returncode != 0:
@@ -463,10 +504,39 @@ def get_browser_tools(cfg: dict | None, refresh_gaps=None, *, start_gap: bool = 
         _recheck(failed=False)  # a clean run is evidence the setup works — clear any banner
         return out or "(ok)"
 
-    async def _ab(*args: str, stdin: str | None = None) -> str:
-        return await asyncio.to_thread(_run, *args, stdin=stdin)
+    def _truncated(data: bytes, hint: str) -> str:
+        """The first part of an over-cap output, cut at its last line break (so a snapshot
+        doesn't end mid-line) and marked as cut — unless that break is in the first half (one
+        huge text line), where dropping the line would drop most of the content; then it is cut
+        at the cap, never mid-UTF-8-character. The rest was never read — reading stopped at
+        the cap — so its size is unknown."""
+        cut = data.rfind(b"\n")
+        if cut >= len(data) // 2:
+            data = data[:cut]
+        text = data.decode("utf-8", "ignore").rstrip()
+        return (f"{text}\n…[truncated: output passed the {max_bytes}-byte cap and the rest was "
+                f"not read; narrow it with {hint}]")
+
+    async def _ab(*args: str, stdin: str | None = None, truncate: str = "",
+                  env_extra: dict | None = None) -> str:
+        out = await asyncio.to_thread(_run, *args, stdin=stdin, truncate=truncate, env_extra=env_extra)
+        return _explain_stale_ref(out) if out.startswith("Error:") else out
 
     _bad_operand = bad_operand  # runtime.bad_operand — shared with the panel's /nav route
+
+    async def _css_safe(selector: str) -> str:
+        """``selector``, or ``[id="…"]`` when it is a ``#…`` id holding CSS-special characters
+        (``#input-candidate.name-3``) that matches nothing as CSS but names an element's exact
+        id — decided in the page (see ``forms.id_probe_target``). Plain selectors cost nothing;
+        a probe that fails leaves the selector as given, so the CLI's own error still speaks."""
+        sel = selector.strip()
+        if bad_operand(selector=sel):  # belt and braces: never hand a flag-shaped value to argv
+            return selector
+        raw_id = forms.id_probe_target(sel)
+        if not raw_id:
+            return sel
+        out = await _ab("eval", "--stdin", stdin=forms.id_probe_js(sel, raw_id))
+        return forms.id_attr_selector(raw_id) if forms.parse_id_probe(out) == "id" else sel
 
     async def _resolve_field(selector: str) -> tuple[str, str]:
         """Resolve a model-supplied locator to a selector the CLI can act on THIS call.
@@ -484,8 +554,11 @@ def get_browser_tools(cfg: dict | None, refresh_gaps=None, *, start_gap: bool = 
         # — exactly as the direct-to-CLI path did.
         if (bad := _bad_operand(selector=selector)):
             return "", bad
-        if forms.classify(selector) in ("ref", "css"):
+        kind = forms.classify(selector)
+        if kind == "ref":
             return selector.strip(), ""
+        if kind == "css":
+            return await _css_safe(selector), ""
         out = await _ab("eval", "--stdin", stdin=forms.resolve_js(selector))
         if out.startswith("Error:"):
             return "", out
@@ -545,7 +618,8 @@ def get_browser_tools(cfg: dict | None, refresh_gaps=None, *, start_gap: bool = 
         target = await _target_of(sel)
         return await _enforce("click", gate.classify_click(target), tool="browser_click", selector=shown, target=target)
 
-    async def _capture(verb: str, path: str, default_name: str, *, view: bool = False) -> str:
+    async def _capture(verb: str, path: str, default_name: str, *, view: bool = False,
+                       pre: tuple = (), post: tuple = ()) -> str:
         """Run a file-producing command (``screenshot`` / ``pdf``) inside the fence.
 
         The fence is resolved BEFORE the subprocess, so a rejected path never reaches
@@ -595,7 +669,8 @@ def get_browser_tools(cfg: dict | None, refresh_gaps=None, *, start_gap: bool = 
         with storage.in_flight(target):
             temp = storage.temp_path_for(target)
             try:
-                out = await _ab(verb, str(temp))
+                # `pre` = global flags before the verb (--annotate), `post` = verb options (--full).
+                out = await _ab(*pre, verb, *post, str(temp))
             except BaseException:
                 # Cancelled mid-capture: the target was never touched. Drop our temp; if the
                 # CLI writes it after we've gone, the next prune sweeps the orphan.
@@ -672,17 +747,36 @@ def get_browser_tools(cfg: dict | None, refresh_gaps=None, *, start_gap: bool = 
     # ── perception ────────────────────────────────────────────────────────────
     @tool
     @_serialized
-    async def browser_snapshot(*, state: Annotated[Any, InjectedState] = None) -> str:
-        """Get the page's accessibility tree with `@eN` element refs — the way to 'see'
-        the page. Call before acting; the action tools target these refs."""
-        return await _ab("snapshot")
+    async def browser_snapshot(full: bool = False, scope: str = "", depth: int = 0, *,
+                               state: Annotated[Any, InjectedState] = None) -> str:
+        """List the page's interactive elements (fields, buttons, links, headings) with `@eN`
+        refs — call before acting; the action tools target these refs. Body text is omitted:
+        read content with `browser_get_text`. `full=true`: the whole tree incl. text (large).
+        `scope`: CSS selector to limit it to; `depth`: max tree depth (0 = no limit)."""
+        # Default is `snapshot -i -c` (interactive + compact): 5-8x smaller than the bare full
+        # tree on real pages (Wikipedia article 381 KB -> 71 KB; a Greenhouse application
+        # 23.8 KB -> 2.8 KB) with every form field, button, link and heading still carrying its
+        # ref. `--urls` is not default: it more than doubles a link-heavy page (71 -> 184 KB).
+        if (bad := _bad_operand(scope=scope)):
+            return bad
+        if depth < 0:
+            return "Error: depth must be 0 (no limit) or a positive number of levels."
+        argv = ["snapshot"] if full else ["snapshot", "-i", "-c"]
+        if scope.strip():
+            argv += ["-s", await _css_safe(scope)]
+        if depth:
+            argv += ["-d", str(int(depth))]
+        return await _ab(*argv, truncate="browser_snapshot(scope=<CSS selector>) or depth=")
 
     @tool
     @_serialized
     async def browser_get_text(selector: str = "body", *, state: Annotated[Any, InjectedState] = None) -> str:
         """Get the visible text of an element (`@eN` ref or CSS selector; default the whole
         `body`) — use it to read page content."""
-        return _bad_operand(selector=selector) or await _ab("get", "text", selector)
+        if (bad := _bad_operand(selector=selector)):
+            return bad
+        return await _ab("get", "text", await _css_safe(selector),
+                         truncate="browser_get_text(selector=<a narrower CSS selector or @ref>)")
 
     @tool
     @_serialized
@@ -690,7 +784,10 @@ def get_browser_tools(cfg: dict | None, refresh_gaps=None, *, start_gap: bool = 
         """Get the HTML of an element (a `@eN` ref or CSS selector), or the page."""
         if (bad := _bad_operand(selector=selector)):
             return bad
-        return await _ab("get", "html", selector) if selector else await _ab("get", "html")
+        hint = "browser_get_html(selector=<a narrower CSS selector or @ref>)"
+        if not selector:
+            return await _ab("get", "html", truncate=hint)
+        return await _ab("get", "html", await _css_safe(selector), truncate=hint)
 
     @tool
     @_serialized
@@ -726,6 +823,75 @@ def get_browser_tools(cfg: dict | None, refresh_gaps=None, *, start_gap: bool = 
         if out.startswith("Error:"):
             return out
         return forms.render_form_read(out, scope)
+
+    @tool
+    @_serialized
+    async def browser_wait(selector: str = "", text: str = "", url: str = "", load: str = "",
+                           js: str = "", timeout_s: float = 0, *,
+                           state: Annotated[Any, InjectedState] = None) -> str:
+        """Wait until ONE condition holds — use instead of sleeps or browser_eval polling loops:
+        `selector` (CSS) is visible, `text` appears on the page, the URL contains `url`, `load`
+        state (`load`/`domcontentloaded`/`networkidle`) is reached, or JS expression `js` is
+        truthy (e.g. `!document.querySelector('.spinner')` for "gone"). `timeout_s`: default and
+        max ~25s."""
+        given = {k: v for k, v in (("selector", selector), ("text", text), ("url", url),
+                                   ("load", load), ("js", js)) if str(v).strip()}
+        if len(given) != 1:
+            return ("Error: browser_wait takes exactly ONE of selector, text, url, load, js "
+                    f"(got {', '.join(given) or 'none'}).")
+        if (bad := _bad_operand(**given)):
+            return bad
+        try:
+            requested = float(timeout_s or 0)
+        except (TypeError, ValueError):
+            return "Error: timeout_s must be a number of seconds."
+        if requested < 0:
+            return "Error: timeout_s must be positive (or 0 for the default)."
+        secs = min(requested, wait_cap_s) if requested else wait_cap_s
+        ms = str(max(100, int(secs * 1000)))
+        if selector:
+            if forms.is_ref(selector):
+                return ("Error: browser_wait's selector is CSS (the CLI checks it in-page), not a "
+                        "@ref — pass a CSS selector, or wait for its text with text=.")
+            if selector.strip().isdigit():
+                return ("Error: a bare number would be a fixed sleep — wait for a selector, text, "
+                        "url, load state or js condition instead.")
+            argv = ["wait", await _css_safe(selector)]
+        elif text:
+            argv = ["wait", "--text", text, "--timeout", ms]
+        elif url:
+            # CLI 0.27.1 matches `location.href.includes(url)` — a plain substring, despite the
+            # README's `**/dash` example — so a glob would never match. Strip edge globs; refuse
+            # an inner one rather than wait the full timeout for nothing.
+            pat = url.strip().strip("*")
+            if "*" in pat or not pat:
+                return ("Error: url is a plain substring of the page URL (no wildcards) — e.g. "
+                        "url=\"/dashboard\".")
+            if (bad := _bad_operand(url=pat)):
+                return bad
+            argv = ["wait", "--url", pat]
+        elif load:
+            if load.strip() not in _LOAD_STATES:
+                return "Error: load must be one of: load, domcontentloaded, networkidle."
+            argv = ["wait", "--load", load.strip()]
+        else:
+            argv = ["wait", "--fn", js]
+        # Every wait carries an explicit timeout. The daemon's own default (30 s) EQUALS the CLI's
+        # IPC read timeout, so an un-timed wait that never succeeds makes the CLI retry it 5x and
+        # queues ~2.5 min of waits on the session (seen live). Only `--text` takes `--timeout`;
+        # the other forms take the CLI's AGENT_BROWSER_DEFAULT_TIMEOUT, which it injects into the
+        # command. That env var ALSO sets the default of a daemon the CLI launches, so make sure
+        # the daemon is up first (`get url` starts it with the normal env).
+        current = await _ab("get", "url")
+        if current.startswith("Error:"):
+            return current
+        out = await _ab(*argv, env_extra={"AGENT_BROWSER_DEFAULT_TIMEOUT": ms})
+        if out.startswith("Error:") and ("timed out" in out.lower() or "timeout waiting" in out.lower()):
+            what = next(iter(given))
+            return (f"Error: waited {int(ms) / 1000:g}s for {what}={given[what]!r} and it didn't "
+                    "happen. Check the page with browser_snapshot (or browser_get_text) before "
+                    "waiting again.")
+        return out
 
     # ── interaction ───────────────────────────────────────────────────────────
     @tool
@@ -971,12 +1137,18 @@ def get_browser_tools(cfg: dict | None, refresh_gaps=None, *, start_gap: bool = 
     # ── capture + session ─────────────────────────────────────────────────────
     @tool
     @_serialized
-    async def browser_screenshot(path: str = "", *, state: Annotated[Any, InjectedState] = None) -> str:
+    async def browser_screenshot(path: str = "", full_page: bool = False, annotate: bool = False, *,
+                                 state: Annotated[Any, InjectedState] = None) -> str:
         """Save a PNG screenshot of the page and return its absolute path (also attached for
         vision); pass that to `save_file_artifact` to show it. `path`: optional filename/relative
-        path inside this plugin's capture directory (blank = auto-named); outside it is refused."""
-        # Two unnamed captures never overwrite each other.
-        return await _capture("screenshot", path, "page.png", view=True)
+        path inside this plugin's capture directory (blank = auto-named); outside it is refused.
+        `full_page`: the whole scrollable page; `annotate`: draw numbered `@eN` ref labels."""
+        # Two unnamed captures never overwrite each other. CLI 0.27.1: `--full` is a screenshot
+        # option; `--annotate` is a GLOBAL flag (it labels interactive elements [N] = @eN, prints
+        # the legend, and caches those refs so the action tools can use them at once).
+        return await _capture("screenshot", path, "page.png", view=True,
+                              pre=("--annotate",) if annotate else (),
+                              post=("--full",) if full_page else ())
 
     @tool
     @_serialized
@@ -998,7 +1170,7 @@ def get_browser_tools(cfg: dict | None, refresh_gaps=None, *, start_gap: bool = 
     return [
         browser_open, browser_back, browser_forward, browser_reload,
         browser_snapshot, browser_get_text, browser_get_html, browser_get_value,
-        browser_form_read,
+        browser_form_read, browser_wait,
         browser_click, browser_fill, browser_type, browser_select, browser_upload,
         browser_press, browser_hover,
         browser_eval, browser_screenshot, browser_pdf, browser_close,

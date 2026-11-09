@@ -16,6 +16,7 @@ tools:
   - browser_select
   - browser_upload
   - browser_get_text
+  - browser_wait
   - browser_press
   - browser_eval
   - browser_screenshot
@@ -29,14 +30,32 @@ Drive a real browser through the `agent-browser` CLI.  Every task follows the
 same four-step loop:
 
 1. **Open** — `browser_open <url>` to navigate to the target page.
-2. **Snapshot** — `browser_snapshot` to get the accessibility tree with
-   compact `@eN` element refs (e.g. `@e7`).
+2. **Snapshot** — `browser_snapshot` lists the page's interactive elements
+   (fields, buttons, links, headings) with compact `@eN` refs (e.g. `@e7`).
 3. **Act** — use an `@eN` ref (or a CSS selector) with `browser_click`,
    `browser_fill`, `browser_type`, `browser_press`, etc.
 4. **Verify** — run `browser_snapshot` again (or `browser_get_text`) to
    confirm the action succeeded; repeat steps 3–4 until done.
 
 When finished, call `browser_close` to free the browser session.
+
+**Snapshot to act, `browser_get_text` to read.** The default snapshot leaves out body
+text to stay small; read an article, a job description or a result with
+`browser_get_text` (narrow it with a CSS `selector`). `browser_snapshot(full=true)` is
+the whole tree with text — large, use it only when the interactive view is missing
+something. On a big page, narrow either one with `scope=` / `selector=` (a section's
+CSS selector); an output past the size cap comes back cut and says so.
+
+**Wait with `browser_wait`, never with sleeps or `browser_eval` polling loops.** After
+a click that loads or reveals something, wait for exactly what you expect next:
+`selector=` (visible), `text=`, `url=` (a substring of the new URL), `load="networkidle"`,
+or `js=` (any truthy expression — `!document.querySelector('.spinner')` for "gone").
+It returns as soon as the condition holds and errors after the timeout (≤ ~25 s); then
+snapshot to see why rather than waiting again.
+
+**A stale ref is not a retry.** If a tool says an `@eN` ref is stale or unknown, the page
+changed: run `browser_snapshot` again for fresh refs (or address a form field by its
+label) — the old ref will never come back.
 
 The browser is yours alone: other agents on this machine have their own. If a page
 you opened earlier is gone (`about:blank`), your browser was closed after sitting

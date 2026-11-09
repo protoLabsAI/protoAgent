@@ -18,8 +18,9 @@ The model's loop is **open → snapshot → act on a `@ref` → verify**:
 
 ```
 browser_open("example.com")
-browser_snapshot()           # accessibility tree with @e1, @e2… refs
+browser_snapshot()           # interactive elements with @e1, @e2… refs (full=true: whole tree)
 browser_click("@e2")         # act on a ref (or a CSS selector)
+browser_wait(text="Saved")   # wait for the result: selector / text / url / load / js
 browser_fill("@e3", "…")
 browser_get_text("body")     # read / extract
 browser_pdf("page.pdf")      # or browser_screenshot("page.png")
@@ -54,7 +55,7 @@ Homebrew, Cargo), or a path pinned in the `binary` setting, always wins over the
 
 | File | What |
 |---|---|
-| `tools.py` | the 20 browser tools — subprocess wrappers over the CLI, the byte cap, the fenced captures, and the action gate's hooks |
+| `tools.py` | the 21 browser tools — subprocess wrappers over the CLI, the byte cap (reading tools return a marked first part), `browser_wait`, the fenced captures, and the action gate's hooks |
 | `gate.py` | the action gate — resolves what a click / Enter / eval / upload will really hit (`@eN` refs included), decides by `confirm_actions` (default `submit`), asks the operator with an approval card, refuses where no one can answer; plus the `agent_browser.add_gate_policy` / `describe_target` services for other plugins |
 | `storage.py` | the capture write fence — `browser_screenshot` / `browser_pdf` resolve inside this plugin's instance store, an escape is refused; also the collision-free default filename and oldest-first retention (200 files / 512 MB) |
 | `preflight.py` | the setup-gap probe — which CLI resolves (PATH > pinned path > the download), does it have a Chrome to drive — and the banners' buttons |

@@ -76,6 +76,10 @@ The [settings reference](/reference/browser-automation#settings) lists every fie
 - **Site refuses automation:** complete a login manually or use a headed session
   with a profile. Some sites still refuse automated access; repeated retries may
   not help.
+- **A long page comes back cut off:** a result marked `…[truncated: …]` reached the
+  plugin's size cap (**Max response bytes**). Ask the agent to read one section, for
+  example by passing a CSS selector to `browser_get_text` or a `scope` to
+  `browser_snapshot`.
 - **Saved capture has no download:** ask the agent to offer the existing file as an
   artifact. Large files can exceed the artifact limit; inspect the tool’s warning.
 

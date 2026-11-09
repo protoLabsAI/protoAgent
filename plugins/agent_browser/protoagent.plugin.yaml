@@ -21,7 +21,7 @@ description: >-
   **Download agent-browser** button), and the banner's **Install Chrome** button fetches
   the browser it drives. An `npm i -g agent-browser` install on PATH still wins. Ships
   DISABLED; enable with `plugins: { enabled: [agent_browser] }`.
-# Bundled but OPT-IN: the pack contributes 20 tools and drives a real browser at
+# Bundled but OPT-IN: the pack contributes 21 tools and drives a real browser at
 # `network: ["*"]`, so it turns on deliberately — never by shipping.
 enabled: false
 # The standalone repo this bundled copy retires (#3445). An installed copy that
@@ -42,7 +42,8 @@ config:
                             # either way; Chrome is only ever installed from its own button.
   timeout_s: 60             # per-command subprocess timeout
   max_response_bytes: 200000  # aggregate stdout+stderr byte cap per command; untrusted page
-                            # output over this is dropped and the tool returns a bounded error
+                            # output is read only up to this; snapshot/get text/html return the
+                            # first part marked "…[truncated: …]", other tools a bounded error
                             # (memory + model-context safety). Read/enforced by the plugin wrapper.
   session_scope: shared     # how the agent-browser SESSION is scoped across concurrent chats
                             # (#4509): `shared` (default) = one session for everyone, which the
@@ -101,7 +102,7 @@ settings:
   - { key: stream_quality, label: "Panel stream quality", type: number, description: "Interactive panel JPEG quality (1–100). Higher = crisper, more bandwidth. The panel also renders at your dock's size × device-pixel-ratio." }
   - { key: max_output, label: "Max page-text output (chars)", type: number, description: "Cap characters of page text returned to the model (LLM-safety). 0 = the CLI default." }
   - { key: timeout_s, label: "Command timeout (s)", type: number, description: "Per-command subprocess timeout for the browser tools." }
-  - { key: max_response_bytes, label: "Max response bytes", type: number, description: "Aggregate stdout+stderr byte cap per browser command. Output beyond this is dropped and the tool returns a bounded error — protects process memory and the model's context from unbounded page content. Default 200000." }
+  - { key: max_response_bytes, label: "Max response bytes", type: number, description: "Aggregate stdout+stderr byte cap per browser command. Reading stops at the cap, which protects process memory and the model's context from unbounded page content. The snapshot and get text/html tools return the first part, marked as truncated; other tools return a short error. Default 200000." }
   - { key: binary, label: "agent-browser binary", type: string, description: "The agent-browser CLI on PATH (override with a pinned absolute path if needed)." }
   - { key: cli_autofetch, label: "Download the CLI on first use", type: bool, description: "When no agent-browser CLI is on PATH, download the pinned, checksum-verified release the first time the browser is used. Off = install it yourself (npm i -g agent-browser) or use the setup banner's Download button. Chrome is never downloaded automatically." }
   - { key: session_scope, label: "Session scope", type: string, description: "How the browser session is scoped across concurrent chats. 'shared' (default) = one browser for this agent, which the console Browser panel and screencast follow. 'per_session' = each chat session drives its own browser so two chats at once don't share one page — the panel still follows the shared one. Either way, other agents on this machine have their own browsers. A Browser profile dir can back only one browser at a time, so with per_session only one chat can use it at once." }

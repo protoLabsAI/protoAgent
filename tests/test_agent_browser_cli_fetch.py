@@ -736,7 +736,7 @@ async def test_first_use_downloads_the_cli_then_runs_it(monkeypatch):
     monkeypatch.setattr(tools.subprocess, "Popen", lambda args, **kw: argv.append(list(args)) or _Proc())
     out = await {t.name: t for t in tools.get_browser_tools({})}["browser_snapshot"].ainvoke({})
     assert out == "ok"
-    assert Path(argv[0][0]) == cli_fetch.fetched_path() and argv[0][1:] == ["snapshot"]
+    assert Path(argv[0][0]) == cli_fetch.fetched_path() and argv[0][1:] == ["snapshot", "-i", "-c"]
 
 
 async def test_first_use_with_autofetch_off_never_downloads(monkeypatch):
