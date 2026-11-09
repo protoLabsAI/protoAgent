@@ -592,29 +592,41 @@ def test_version_snapshot_precedes_first_query():
 
         import infra.paths
 
-        # Hold the REAL runner from before the patch. Some import-time code shells
-        # out during ``import server`` on Windows (a non-git subprocess.run), so the
-        # fake must pass any non-git call straight through — only build_info's own
-        # git rev-parse / status are faked, and only those are recorded, so an
-        # unrelated subprocess call can neither fail nor inflate the count.
+        # Import-time subprocess calls vary by platform. Fake only build_info's
+        # exact queries against this checkout; pass everything else through.
         real_run = subprocess.run
         git_calls = []
+        git_prefix = ["git", "-C", str(Path.cwd())]
+        sha_command = git_prefix + ["rev-parse", "--short", "HEAD"]
+        status_command = git_prefix + ["status", "--porcelain"]
 
-        def startup_git(args, **kwargs):
+        def startup_git(args, *popenargs, **kwargs):
             argv = list(args) if isinstance(args, (list, tuple)) else [args]
-            is_git = bool(argv) and argv[0] == "git"
-            if is_git and "rev-parse" in argv:
+            if argv == sha_command:
                 git_calls.append(argv)
                 return subprocess.CompletedProcess(args, 0, stdout="abcdef123\\n")
-            if is_git and "status" in argv:
+            if argv == status_command:
                 git_calls.append(argv)
                 return subprocess.CompletedProcess(args, 0, stdout="")
-            return real_run(args, **kwargs)
+            return real_run(args, *popenargs, **kwargs)
 
         before = datetime.now(timezone.utc)
         with patch("subprocess.run", side_effect=startup_git), patch(
             "infra.paths.app_root", return_value=Path.cwd()
         ):
+            # Exercise passthrough on every host, even when its imports do not
+            # happen to spawn a process. A different rev-parse must stay real too.
+            for command, expected in [
+                ([sys.executable, "-c", "print('passthrough')"], "passthrough"),
+                (git_prefix + ["rev-parse", "--is-inside-work-tree"], "true"),
+            ]:
+                probe = subprocess.run(
+                    command, capture_output=True, text=True, timeout=10,
+                )
+                assert probe.returncode == 0 and probe.stdout.strip() == expected, (
+                    f"passthrough {command!r} returned {probe!r}; git calls: {git_calls!r}"
+                )
+            assert not git_calls, f"passthrough calls were recorded as build queries: {git_calls!r}"
             import server
         after = datetime.now(timezone.utc)
         assert "infra.build_info" in sys.modules, (
@@ -622,8 +634,8 @@ def test_version_snapshot_precedes_first_query():
         )
         from infra import build_info as bi
 
-        rev_parse = [c for c in git_calls if "rev-parse" in c]
-        status = [c for c in git_calls if "status" in c]
+        rev_parse = [c for c in git_calls if c == sha_command]
+        status = [c for c in git_calls if c == status_command]
         assert len(rev_parse) == 1, (
             f"build_info must run exactly one git rev-parse at import; recorded git calls: {git_calls!r}"
         )
