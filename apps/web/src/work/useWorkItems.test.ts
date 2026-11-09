@@ -117,7 +117,7 @@ afterEach(() => {
 });
 
 describe("useWorkItems — load, map, filter", () => {
-  it("takes every source to ready with items mapped to a WorkStatus (r1)", async () => {
+  it("takes every source to ready with items mapped to a WorkStatus", async () => {
     const r = mount({ sessionId: "s1", thisChatOnly: false });
     await flush();
     const w = r.current;
@@ -133,7 +133,7 @@ describe("useWorkItems — load, map, filter", () => {
     expect(w.goals.loadedAt).toEqual(expect.any(Number));
   });
 
-  it("thisChatOnly filters only the sources that carry a session id (r2)", async () => {
+  it("thisChatOnly filters only the sources that carry a session id", async () => {
     spies.decisions.mockResolvedValue({ decisions: [dec("d1", "pending", "s1"), dec("d2", "pending", "s2")], pending: 2 });
     spies.goals.mockResolvedValue({ goals: [{ session_id: "s1", condition: "a", status: "active" }, { session_id: "s2", condition: "b", status: "active" }], enabled: true });
     spies.background.mockResolvedValue({ enabled: true, jobs: [{ id: "b1", status: "running", subagent_type: "c", description: "d", origin_session: "s1" }, { id: "b2", status: "running", subagent_type: "c", description: "e", origin_session: "s2" }] });
@@ -162,14 +162,16 @@ describe("useWorkItems — load, map, filter", () => {
 });
 
 describe("useWorkItems — live refresh", () => {
-  it("refetches only the source a push names (r3)", async () => {
+  it("refetches only the source a push names", async () => {
     const r = mount({ sessionId: "s1", thisChatOnly: false });
     await flush();
+    expect(spies.decisions).toHaveBeenCalledTimes(1);
     expect(spies.watches).toHaveBeenCalledTimes(1);
     expect(spies.goals).toHaveBeenCalledTimes(1);
     expect(spies.tasks).toHaveBeenCalledTimes(1);
     expect(spies.background).toHaveBeenCalledTimes(1);
     expect(spies.schedules).toHaveBeenCalledTimes(1);
+    expect(spies.directives).toHaveBeenCalledTimes(1);
 
     emit("watch.changed");
     await flush();
@@ -191,6 +193,18 @@ describe("useWorkItems — live refresh", () => {
     await flush();
     expect(spies.tasks).toHaveBeenCalledTimes(2);
 
+    // A `decision.changed` refetches decisions (prefix-keyed) and nothing else.
+    emit("decision.changed", { id: "d1", session_id: "s1", state: "answered" });
+    await flush();
+    expect(spies.decisions).toHaveBeenCalledTimes(2);
+    expect(spies.directives).toHaveBeenCalledTimes(1);
+
+    // A `directive.changed` refetches directives (its session-scoped key matched by prefix).
+    emit("directive.changed", { id: "x1", session_id: "s1" });
+    await flush();
+    expect(spies.directives).toHaveBeenCalledTimes(2);
+    expect(spies.decisions).toHaveBeenCalledTimes(2);
+
     emit("scheduler.changed", { job_id: "j1", action: "added" });
     await flush();
     expect(spies.schedules).toHaveBeenCalledTimes(2);
@@ -200,7 +214,7 @@ describe("useWorkItems — live refresh", () => {
     expect(r.current.decisions.status).toBe("ready");
   });
 
-  it("polls schedules every 60s until a scheduler.changed, then stops (r5)", async () => {
+  it("polls schedules every 60s until a scheduler.changed, then stops", async () => {
     vi.useFakeTimers();
     focusManager.setFocused(true);
     mount({ thisChatOnly: false });
@@ -222,7 +236,7 @@ describe("useWorkItems — live refresh", () => {
 });
 
 describe("useWorkItems — error vs stale", () => {
-  it("reports error for a first-load failure and leaves the others ready (r4)", async () => {
+  it("reports error for a first-load failure and leaves the others ready", async () => {
     spies.goals.mockRejectedValue(new Error("boom"));
     const r = mount({ sessionId: "s1", thisChatOnly: false });
     await flush();
@@ -235,7 +249,7 @@ describe("useWorkItems — error vs stale", () => {
     expect(w.tasks.status).toBe("ready");
   });
 
-  it("keeps items and reports stale when a refresh fails after a good load (r4)", async () => {
+  it("keeps items and reports stale when a refresh fails after a good load", async () => {
     const r = mount({ sessionId: "s1", thisChatOnly: false });
     await flush();
     expect(r.current.watches.status).toBe("ready");
@@ -251,7 +265,7 @@ describe("useWorkItems — error vs stale", () => {
     expect(w.goals.status).toBe("ready"); // one source failing never touches another
   });
 
-  it("retry() refetches a failed source (r4)", async () => {
+  it("retry() refetches a failed source", async () => {
     spies.decisions.mockRejectedValueOnce(new Error("down")).mockResolvedValue({ decisions: [dec("d1", "pending", "s1")], pending: 1 });
     const r = mount({ sessionId: "s1", thisChatOnly: false });
     await flush();
@@ -263,7 +277,7 @@ describe("useWorkItems — error vs stale", () => {
   });
 });
 
-describe("work API helpers (r6)", () => {
+describe("work API helpers", () => {
   it("undo POSTs the token to /api/undo/{token}", async () => {
     const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ restored: true, kind: "task" })));
     vi.stubGlobal("fetch", fetchMock);

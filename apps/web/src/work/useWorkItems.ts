@@ -9,10 +9,11 @@
  * source speaks one `WorkStatus` vocabulary.
  *
  * Freshness is bus-driven, not polled: a single `onTopic` subscription invalidates exactly
- * the source a `goal.changed` / `watch.changed` / `task.changed` / `background.*` /
- * `scheduler.changed` push names (bd-0ia51.8). Schedules are the one exception — the backend
- * only emits `scheduler.changed` from bd-0ia51.8 onward, so they poll every 60s UNTIL the
- * first such event proves the bus is wired, then stop.
+ * the source a `decision.changed` / `goal.changed` / `watch.changed` / `task.changed` /
+ * `background.*` / `scheduler.changed` / `directive.changed` push names (bd-0ia51.8).
+ * Schedules are the one exception — the backend only emits `scheduler.changed` from
+ * bd-0ia51.8 onward, so they poll every 60s UNTIL the first such event proves the bus is
+ * wired, then stop.
  *
  * It owns the goals/watches/tasks/schedules TanStack keys from `lib/queries`, so an
  * invalidation here and anywhere else in the console share one cache entry; the other four
@@ -299,6 +300,10 @@ export function useWorkItems({ sessionId, thisChatOnly }: UseWorkItemsParams): W
     };
     const onBackground = invalidate(workKey("background"));
     const offs = [
+      // `invalidate(workKey("decisions"|"directives"))` is a PREFIX match, so the directives
+      // key matches whatever session segment it carries — the effect stays `[qc]`-only and
+      // never re-subscribes on a session switch.
+      onTopic("decision.changed", invalidate(workKey("decisions"))),
       onTopic("goal.changed", invalidate(queryKeys.goals)),
       onTopic("watch.changed", invalidate(queryKeys.watches)),
       onTopic("task.changed", invalidate(queryKeys.tasks)),
@@ -309,6 +314,7 @@ export function useWorkItems({ sessionId, thisChatOnly }: UseWorkItemsParams): W
         setSchedulerSeen(true);
         void qc.invalidateQueries({ queryKey: queryKeys.schedules });
       }),
+      onTopic("directive.changed", invalidate(workKey("directives"))),
     ];
     return () => {
       for (const off of offs) off();
