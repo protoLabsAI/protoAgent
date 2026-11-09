@@ -494,8 +494,8 @@ def _stash_schedule_undo(job: dict, scheduler) -> str:
 
     The restore re-adds the job through ``scheduler.add_job`` with its ORIGINAL id, prompt,
     schedule and timezone (plus its context/origin/ttl/max_fires so the restored job behaves
-    exactly as it did). ``add_job`` recomputes ``next_fire`` from now: a cron job resumes on
-    its next matching slot, and a ONE-SHOT WHOSE TIME HAS ALREADY PASSED is restored as-is —
+    exactly as it did). The snapshot also preserves its fence, paused state, timestamps
+    and run history atomically. A ONE-SHOT WHOSE TIME HAS ALREADY PASSED is restored as-is —
     its past fire time is kept, so the scheduler fires it on its next tick rather than
     dropping it.
 
@@ -507,6 +507,8 @@ def _stash_schedule_undo(job: dict, scheduler) -> str:
     from operator_api.undo import LEDGER
 
     def _restore(data: dict, _sched=scheduler) -> None:
+        from scheduler.interface import Job
+
         _sched.add_job(
             data["prompt"],
             data["schedule"],
@@ -516,6 +518,7 @@ def _stash_schedule_undo(job: dict, scheduler) -> str:
             origin_session=data.get("origin_session"),
             ttl=data.get("ttl"),
             max_fires=data.get("max_fires"),
+            restore_state=Job(**data),
         )
 
     return LEDGER.stash("schedule", job, _restore)

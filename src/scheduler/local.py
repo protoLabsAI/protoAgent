@@ -503,6 +503,7 @@ class LocalScheduler:
         origin_session: str | None = None,
         ttl: str | None = None,
         max_fires: int | None = None,
+        restore_state: Job | None = None,
     ) -> Job:
         if not prompt or not prompt.strip():
             raise ValueError("scheduler: prompt is required")
@@ -534,6 +535,14 @@ class LocalScheduler:
             # enqueued by a fenced turn fires fenced (``[]`` outside a turn).
             fence=_creating_fence(),
         )
+        if restore_state is not None:
+            # Apply before INSERT so polling never sees fresh-job defaults for
+            # a restored paused or fenced job, even briefly.
+            for field in (
+                "fence", "enabled", "created_at", "next_fire", "last_fire",
+                "fire_count", "consecutive_failures", "last_error", "last_ok",
+            ):
+                setattr(job, field, getattr(restore_state, field))
         db = self._connect()
         try:
             if not self._adopt_existing_jobs:
@@ -543,8 +552,8 @@ class LocalScheduler:
             db.execute(
                 "INSERT INTO jobs (id, prompt, schedule, agent_name, next_fire, "
                 "last_fire, enabled, created_at, timezone, context_id, origin_session, "
-                "ttl, max_fires, fire_count, fence) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "ttl, max_fires, fire_count, fence, consecutive_failures, last_error, last_ok) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     job.id,
                     job.prompt,
@@ -561,6 +570,9 @@ class LocalScheduler:
                     job.max_fires,
                     job.fire_count,
                     json.dumps(job.fence),
+                    job.consecutive_failures,
+                    job.last_error,
+                    job.last_ok,
                 ),
             )
             db.commit()

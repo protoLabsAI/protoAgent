@@ -15,6 +15,9 @@ past-one-shot restore, and the unknown / already-used 404s.
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
+from unittest.mock import AsyncMock
+
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -212,9 +215,82 @@ def test_schedule_undo_refuses_a_recreated_id(scheduler_client):
     assert client.post(f"/api/undo/{token}").status_code == 404
 
 
+@pytest.mark.parametrize("enabled", [True, False])
+@pytest.mark.parametrize("fence", [["current_time"], []])
+def test_schedule_undo_preserves_execution_state(scheduler_client, enabled, fence):
+    from graph.fence_scope import current_fence, fence_scope
+
+    client, sched = scheduler_client
+    with fence_scope(fence):
+        sched.add_job(
+            "report", "0 9 * * *", job_id="stateful", timezone="America/Chicago",
+            context_id="target", origin_session="origin", ttl="7d", max_fires=5,
+        )
+    sched.set_enabled("stateful", enabled)
+    # Seed a previously fired job, including its failure backoff and expiry clock.
+    with sched._connect() as db:
+        db.execute(
+            "UPDATE jobs SET created_at = ?, next_fire = ?, last_fire = ?, "
+            "fire_count = 4, consecutive_failures = 3, last_error = ?, last_ok = ? "
+            "WHERE id = ?",
+            ("2026-01-01T00:00:00+00:00", "2026-01-03T00:00:00+00:00",
+             "2026-01-02T00:00:00+00:00", "turn failed",
+             "2026-01-01T09:00:00+00:00", "stateful"),
+        )
+    original = sched.get_job("stateful").as_dict()
+    token = client.delete("/api/scheduler/jobs/stateful").json()["undo_token"]
+    assert current_fence() == []
+    assert client.post(f"/api/undo/{token}").status_code == 200
+    assert sched.get_job("stateful").as_dict() == original
+    due = sched._claim_due_jobs(datetime(2026, 1, 4, tzinfo=UTC))
+    assert [job.id for job in due] == (["stateful"] if enabled else [])
+
+
+@pytest.mark.asyncio
+async def test_restored_schedule_fire_carries_fence(scheduler_client, monkeypatch):
+    import httpx
+    from graph.fence_scope import fence_scope
+
+    client, sched = scheduler_client
+    with fence_scope(["current_time"]):
+        sched.add_job("report", "2020-01-01T00:00:00+00:00", job_id="fenced")
+    token = client.delete("/api/scheduler/jobs/fenced").json()["undo_token"]
+    assert client.post(f"/api/undo/{token}").status_code == 200
+    http = AsyncMock()
+    http.__aenter__.return_value = http
+    http.post.return_value = httpx.Response(200, json={"result": {}})
+    monkeypatch.setattr(httpx, "AsyncClient", lambda **kwargs: http)
+    (job,) = sched._claim_due_jobs(datetime.now(UTC))
+    assert await sched._fire(job) is True
+    message = http.post.call_args.kwargs["json"]["params"]["message"]
+    assert message["metadata"]["subagent_fence"] == ["current_time"]
+
+
+def test_expired_schedule_token_changes_nothing(scheduler_client, monkeypatch):
+    client, sched = scheduler_client
+    monkeypatch.setattr(LEDGER, "_clock", lambda: 0)
+    sched.add_job("report", "0 9 * * *", job_id="expired")
+    token = client.delete("/api/scheduler/jobs/expired").json()["undo_token"]
+    monkeypatch.setattr(LEDGER, "_clock", lambda: LEDGER._window_s + 1)
+    assert client.post(f"/api/undo/{token}").status_code == 404
+    assert sched.get_job("expired") is None
+
+
 # ── shared 404 ────────────────────────────────────────────────────────────────
 
 
 def test_unknown_token_is_404(tasks_client):
     client, _ = tasks_client
     assert client.post("/api/undo/never-minted-this").status_code == 404
+
+
+def test_expired_task_token_changes_nothing(tasks_client, events, monkeypatch):
+    client, store = tasks_client
+    monkeypatch.setattr(LEDGER, "_clock", lambda: 0)
+    issue = store.create("expired task")
+    token = client.delete(f"/api/tasks/issues/{issue['id']}").json()["undo_token"]
+    before = list(events)
+    monkeypatch.setattr(LEDGER, "_clock", lambda: LEDGER._window_s + 1)
+    assert client.post(f"/api/undo/{token}").status_code == 404
+    assert store.get(issue["id"]) is None
+    assert events == before
