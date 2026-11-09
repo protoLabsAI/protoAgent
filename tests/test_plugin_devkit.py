@@ -411,7 +411,7 @@ def test_test_plugin_reports_no_tests(tmp_path):
     out_root = tmp_path / "out"
     out_root.mkdir()
     scaffold = mod._build_scaffold_tool({"target_dir": str(out_root)})
-    _run(scaffold.ainvoke({"name": "Bare One", "enable": False}))  # no with_tests
+    _run(scaffold.ainvoke({"name": "Bare One", "enable": False, "with_tests": False}))
     tp = mod._build_test_tool({"target_dir": str(out_root)})
     out = _run(tp.ainvoke({"plugin_id": "bare-one"}))
     assert "no tests collected" in out
@@ -1191,3 +1191,13 @@ def test_install_plugin_names_required_deps_still_missing(monkeypatch, tmp_path)
     assert "widgets needs Python package(s) not installed yet: definitely-not-real-xyz>=1" in lines[0]
     assert "also-not-real" not in lines[0]  # optional ones aren't a blocker
     assert mod._deps_still_needed([]) == []
+
+
+def test_scaffold_tool_bus_and_defaults(tmp_path):
+    mod = _load_devkit_module(tmp_path)
+    scaffold = mod._build_scaffold_tool({"target_dir": str(tmp_path)})
+    out = _run(scaffold.ainvoke({"name": "Bus Tool", "with_view": "bus", "enable": False}))
+    assert "scaffolded" in out
+    assert (tmp_path / "bus-tool/views/main.html").is_file()
+    assert (tmp_path / "bus-tool/tests/test_bus_view.py").is_file()
+    assert (tmp_path / "bus-tool/skills/bus-tool-skill/SKILL.md").is_file()
