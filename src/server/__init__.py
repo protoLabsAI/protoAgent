@@ -756,6 +756,7 @@ def _main():
         scheduler_add=_console._operator_scheduler_add,
         scheduler_cancel=_console._operator_scheduler_cancel,
         scheduler_update=_console._operator_scheduler_update,
+        scheduler_set_enabled=_console._operator_scheduler_set_enabled,
         goal_list=_console._operator_goals_list,
         goal_clear=_console._operator_goals_clear,
         goal_set=_console._operator_goals_set,

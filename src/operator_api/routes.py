@@ -160,6 +160,14 @@ class ScheduleUpdateRequest(BaseModel):
     timezone: str | None = None  # IANA tz for cron eval (None = UTC)
 
 
+class ScheduleSetEnabledRequest(BaseModel):
+    """``POST /api/scheduler/jobs/{id}/enabled`` — the Work view's Pause/Resume control
+    (#4955 §4.3). ``enabled: false`` pauses the job (it stays in the store but no tick
+    fires it); ``enabled: true`` resumes it."""
+
+    enabled: bool
+
+
 class InboxAddRequest(BaseModel):
     text: str
     priority: str = "next"  # now | next | later
@@ -278,7 +286,9 @@ def _http_error(exc: Exception) -> HTTPException:
 
     ``ValueError`` (the caller's input) is a 400 and ``NotFoundError`` a 404, both with the
     handler's own message; a ``ConflictError`` (an undo that would clobber a live record)
-    and a "not loaded" ``RuntimeError`` are each a 409. Anything else is a
+    and a "not loaded" ``RuntimeError`` are each a 409; a ``NotImplementedError`` (a backend
+    that doesn't support the operation, e.g. a scheduler without pause/resume) is a 501.
+    Anything else is a
     fault in our code: it is logged here with its traceback under a short error id, and the
     client gets a generic message carrying that id (#3973) — never ``str(exc)``, which
     leaked file paths and library internals to whoever made the request."""
@@ -288,6 +298,10 @@ def _http_error(exc: Exception) -> HTTPException:
         return HTTPException(status_code=404, detail=str(exc))
     if isinstance(exc, ConflictError):
         return HTTPException(status_code=409, detail=str(exc))
+    # NotImplementedError subclasses RuntimeError, so this must precede the "not loaded"
+    # RuntimeError check below (whose message test it would otherwise fall past to a 500).
+    if isinstance(exc, NotImplementedError):
+        return HTTPException(status_code=501, detail=str(exc))
     if isinstance(exc, RuntimeError) and "not loaded" in str(exc).lower():
         return HTTPException(status_code=409, detail=str(exc))
     error_id = uuid.uuid4().hex[:8]
@@ -495,6 +509,7 @@ def register_operator_routes(
     scheduler_add: Callable[[dict[str, Any]], Awaitable[dict[str, Any]]] | None = None,
     scheduler_cancel: Callable[[str], Awaitable[dict[str, Any]]] | None = None,
     scheduler_update: Callable[[str, dict[str, Any]], Awaitable[dict[str, Any]]] | None = None,
+    scheduler_set_enabled: Callable[[str, bool], Awaitable[dict[str, Any]]] | None = None,
     goal_list: Callable[[], Awaitable[dict[str, Any]]] | None = None,
     goal_clear: Callable[[str, bool], Awaitable[dict[str, Any]]] | None = None,
     goal_set: Callable[[dict[str, Any]], Awaitable[dict[str, Any]]] | None = None,
@@ -805,6 +820,19 @@ def register_operator_routes(
             if isinstance(res, dict) and res.get("canceled") is False:
                 raise HTTPException(status_code=404, detail=f"No scheduled job {job_id!r}.")
             return res
+
+    if scheduler_set_enabled is not None:
+
+        @app.post("/api/scheduler/jobs/{job_id}/enabled")
+        async def _scheduler_set_enabled(job_id: str, req: ScheduleSetEnabledRequest):
+            # Pause (``enabled=false``) / resume (``enabled=true``) a job in place — the Work
+            # view's Schedules toggle (#4955 §4.3). An unknown id is a 404 (NotFoundError); a
+            # backend without ``set_enabled`` is a 501 (NotImplementedError). Returns the job
+            # with its new ``enabled`` value.
+            try:
+                return await scheduler_set_enabled(job_id, req.enabled)
+            except Exception as exc:
+                raise _http_error(exc) from exc
 
     # --- Goals ---------------------------------------------------------------
     # List goals across sessions + clear one. Goals are *set* in chat (`/goal`);
