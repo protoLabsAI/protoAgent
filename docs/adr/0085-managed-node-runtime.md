@@ -223,7 +223,8 @@ runtime (the 2026-10-15 amendment); Python did not.
    reuses `loader.RUNTIME_GAP_KEY` (the same banner as node), reported by the same
    `_report_runtime_gap` on every load. Its fix is a new closed action kind,
    `install_python`, whose target is forced to the reporting plugin (a plugin can only ever
-   provision its *own* venv, like `install_deps`); the action runs
+   provision its *own* venv, like `install_deps`); the console POSTs the operator-only
+   `/api/plugins/install-python` with that plugin id. The route rechecks source consent and runs
    `loader.install_plugin_python`, which calls `provision_plugin_venv` and then re-reports the
    gap so the banner clears without a reload. The button is offered only when `uv` is present
    — the same shape as `install_node` being offered only when a managed build can help. A met

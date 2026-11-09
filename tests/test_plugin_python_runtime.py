@@ -307,3 +307,75 @@ def test_install_action_rejects_a_plugin_without_a_python_runtime(monkeypatch, t
 def test_install_python_action_target_is_forced_to_the_reporting_plugin(gaps):
     setup_gaps.report("atlas", "k", "msg", action={"kind": "install_python", "target": "other", "label": "Go"})
     assert setup_gaps.active()[0]["actions"] == [{"kind": "install_python", "target": "atlas", "label": "Go"}]
+
+
+def test_install_route_provisions_declared_runtime(gaps, venv_override, tmp_path, monkeypatch):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from operator_api.plugin_routes import register_plugin_routes
+
+    manifest = _py_plugin(tmp_path)
+    monkeypatch.setattr("graph.plugins.installer.effective_copies", lambda: {"atlas": manifest})
+    monkeypatch.setattr("graph.plugins.installer.effective_source_url", lambda pid: "")
+    monkeypatch.setattr(pr.shutil, "which", lambda name: "/opt/uv")
+    calls = []
+    monkeypatch.setattr(pr.subprocess, "run", lambda cmd, **kw: calls.append(cmd) or _Proc())
+    loader._report_runtime_gap(manifest)
+    app = FastAPI()
+    register_plugin_routes(app)
+    client = TestClient(app)
+    assert calls == []
+    response = client.post("/api/plugins/install-python", json={"id": "atlas", "version": "9.9"})
+    assert response.status_code == 200
+    assert response.json() == {"ok": True}
+    assert any("3.12" in cmd for cmd in calls)
+    assert _gap() is None
+
+
+@pytest.mark.parametrize("plugin_id", [None, "", "../atlas", 123])
+def test_install_route_rejects_invalid_id(plugin_id, monkeypatch):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from operator_api.plugin_routes import register_plugin_routes
+
+    app = FastAPI()
+    register_plugin_routes(app)
+    assert TestClient(app).post("/api/plugins/install-python", json={"id": plugin_id}).status_code == 400
+
+
+def test_install_route_checks_consent_and_reports_failure(monkeypatch):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from operator_api import plugin_routes
+
+    calls = []
+    monkeypatch.setattr("graph.plugins.installer.effective_source_url", lambda pid: "github.com/example/atlas")
+    monkeypatch.setattr(plugin_routes, "_consent_needs_ack", lambda url: {"needs_ack": True, "source": url})
+    monkeypatch.setattr(loader, "install_plugin_python", lambda pid: calls.append(pid) or pr.VenvProvisionResult(ok=False, error="uv missing"))
+    app = FastAPI()
+    plugin_routes.register_plugin_routes(app)
+    client = TestClient(app)
+    assert client.post("/api/plugins/install-python", json={"id": "atlas"}).json()["needs_ack"]
+    assert calls == []
+    monkeypatch.setattr(plugin_routes, "_consent_needs_ack", lambda url: None)
+    response = client.post("/api/plugins/install-python", json={"id": "atlas"})
+    assert response.status_code == 400
+    assert response.json()["detail"] == "uv missing"
+    assert calls == ["atlas"]
+
+
+def test_python_install_route_requires_operator_despite_plugin_exemptions():
+    from a2a_impl import auth
+    from graph.plugins.manifest import _parse_public_paths
+
+    saved = (list(auth._PLUGIN_PUBLIC), list(auth._PLUGIN_FEDERATION))
+    try:
+        claimed = ["/api/plugins/atlas/"]
+        auth.set_public_prefixes(_parse_public_paths(claimed, "atlas"))
+        auth.set_federation_prefixes(_parse_public_paths(claimed, "atlas", kind="federation_path"))
+        assert auth._is_public("/api/plugins/atlas/anything")
+        assert not auth._is_public("/api/plugins/install-python")
+        assert auth._requires_operator("/api/plugins/install-python")
+    finally:
+        auth.set_public_prefixes(saved[0])
+        auth.set_federation_prefixes(saved[1])
