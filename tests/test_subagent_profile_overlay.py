@@ -98,6 +98,27 @@ def test_plugin_rereg_with_changed_config_refreshes_static_default(isolated_regi
     assert isolated_registry["plugin-worker"] == replace(changed, profile="lane")
 
 
+@pytest.mark.parametrize("name", ["researcher", "review-finder", "plugin-worker"])
+@pytest.mark.parametrize("value", ["", "null", "0", "7"])
+def test_yaml_turn_limit_inherits_static_default(isolated_registry, tmp_path, name, value):
+    plugin = SubagentConfig(
+        name="plugin-worker", description="plugin", system_prompt="Work", max_turns=9,
+    )
+    agent_init._register_plugin_subagents([plugin])
+    base = deepcopy(isolated_registry[name])
+    path = tmp_path / "config.yaml"
+    # Seed an override first so clearing it must recover the static default,
+    # rather than retaining the limit from the previous application.
+    path.write_text(f"subagents:\n  {name}:\n    max_turns: 3\n")
+    agent_init._apply_config_subagents(LangGraphConfig.from_yaml(path))
+    assert isolated_registry[name].max_turns == 3
+
+    path.write_text(f"subagents:\n  {name}:\n    max_turns: {value}\n")
+    for _ in range(2):
+        agent_init._apply_config_subagents(LangGraphConfig.from_yaml(path))
+        assert isolated_registry[name] == replace(base, max_turns=7 if value == "7" else base.max_turns)
+
+
 def test_unknown_names_warn_once_and_keep_profiles(isolated_registry, caplog):
     cfg = LangGraphConfig.from_dict({"subagents": {
         "missing-worker": {"profile": "missing"},

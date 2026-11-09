@@ -1113,11 +1113,12 @@ def _apply_config_subagents(config) -> None:
             _disabled_config_subagents.add(name)
             continue
         changes = {key: deepcopy(value) for key, value in sub.items() if key != "enabled"}
+        # An empty turn limit inherits the static default for every worker.
+        changes["max_turns"] = sub.get("max_turns") or base.max_turns
         # Preserve the researcher's historical empty-value fallbacks.
         if name == "researcher":
             changes.update(
                 tools=list(sub.get("tools") or base.tools),
-                max_turns=sub.get("max_turns") or base.max_turns,
                 model=(sub.get("model") or "").strip() or base.model,
             )
         entry = replace(deepcopy(base), **changes)
