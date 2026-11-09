@@ -1,0 +1,17 @@
+id: preview-fixture
+name: Preview Fixture
+version: 0.0.0
+description: >-
+  A host-free view-harness fixture (#4809). Its single page subscribes with
+  `background: true` and is declared as TWO views — one on the stage, one in the
+  right panel — so `plugin preview`'s layout seed can mount both at once. That is
+  the cadview freeze shape (two mounts + a background subscribe); the harness proves
+  the publish reaches both mounts without a reload storm.
+enabled: false
+config_section: preview_fixture
+# ADR 0039 — the page publishes `preview-fixture.ping` back through the bridge.
+emits: ["preview-fixture.ping"]
+subscribes: ["preview-fixture.*"]
+views:
+  - { id: main, label: "Preview Main", icon: LayoutDashboard, path: /plugins/preview-fixture/view }
+  - { id: side, label: "Preview Side", icon: FileText, path: /plugins/preview-fixture/view, placement: right }

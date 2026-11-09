@@ -1,0 +1,10 @@
+{
+  "id": "preview-fixture",
+  "name": "Preview Fixture",
+  "version": "0.0.0",
+  "public_paths": ["/plugins/preview-fixture/view"],
+  "views": [
+    { "id": "main", "label": "Preview Main", "icon": "LayoutDashboard", "path": "/plugins/preview-fixture/view" },
+    { "id": "side", "label": "Preview Side", "icon": "FileText", "path": "/plugins/preview-fixture/view", "placement": "right" }
+  ]
+}
