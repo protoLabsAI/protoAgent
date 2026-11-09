@@ -8,12 +8,13 @@ import hashlib
 import json
 import os
 import random
-import re
-import sqlite3
 from collections import defaultdict
 from contextlib import closing
 from datetime import date, timedelta
 from pathlib import Path
+from re import sub
+from sqlite3 import Error as SQLiteError
+from sqlite3 import connect as sqlite_connect
 from tempfile import TemporaryDirectory
 from urllib.parse import urlencode
 from urllib.request import urlopen
@@ -113,7 +114,7 @@ def default_work_dir(config) -> Path:
 
     model = _resolve_aux_model(config, "") or getattr(config, "model_name", "") or "default"
     root = Path(os.environ.get(WORK_ROOT_ENV) or DEFAULT_WORK_ROOT)
-    return root / (re.sub(r"[^A-Za-z0-9._-]+", "_", model).strip("_") or "default")
+    return root / (sub(r"[^A-Za-z0-9._-]+", "_", model).strip("_") or "default")
 
 
 def chats_digest(chats) -> str:
@@ -126,9 +127,9 @@ def checkpoint_done(checkpoint: Path, digest: str) -> int:
     if not checkpoint.is_file():
         return 0
     try:
-        with closing(sqlite3.connect(checkpoint)) as db:
+        with closing(sqlite_connect(checkpoint)) as db:
             row = db.execute("SELECT done, digest FROM pv4_progress").fetchone()
-    except sqlite3.Error:
+    except SQLiteError:
         return 0
     return int(row[0]) if row and row[1] == digest else 0
 
@@ -140,7 +141,7 @@ def save_checkpoint(store_path: Path, checkpoint: Path, done: int, digest: str) 
     temporary = checkpoint.with_name(checkpoint.name + ".tmp")
     temporary.unlink(missing_ok=True)
     try:
-        with closing(sqlite3.connect(store_path)) as src, closing(sqlite3.connect(temporary)) as dst:
+        with closing(sqlite_connect(store_path)) as src, closing(sqlite_connect(temporary)) as dst:
             src.backup(dst)
             dst.execute("CREATE TABLE IF NOT EXISTS pv4_progress (done INTEGER NOT NULL, digest TEXT NOT NULL)")
             dst.execute("DELETE FROM pv4_progress")
@@ -152,7 +153,7 @@ def save_checkpoint(store_path: Path, checkpoint: Path, done: int, digest: str) 
 
 
 def restore_checkpoint(checkpoint: Path, store_path: Path) -> None:
-    with closing(sqlite3.connect(checkpoint)) as src, closing(sqlite3.connect(store_path)) as dst:
+    with closing(sqlite_connect(checkpoint)) as src, closing(sqlite_connect(store_path)) as dst:
         src.backup(dst)
 
 
