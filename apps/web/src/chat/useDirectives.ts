@@ -3,6 +3,7 @@ import { useMemo, useSyncExternalStore } from "react";
 import { api, ApiError } from "../lib/api";
 import type { DirectiveList, DirectiveRow } from "../lib/api/chat";
 import { onConnectionChange, onTopic } from "../lib/events";
+import { hydrateDurableChatSessions } from "./sessionHydration";
 
 export type DirectivesSnapshot = {
   state: "loading" | "ready" | "failed" | "stale";
@@ -69,6 +70,8 @@ function createStore(sessionId: string) {
       return { error };
     }
     await refresh();
+    // DELETE has now persisted the quiet note as a durable turn.
+    void hydrateDurableChatSessions();
     return { ok: true };
   }
 

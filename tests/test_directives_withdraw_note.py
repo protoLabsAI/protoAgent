@@ -174,6 +174,47 @@ def test_delete_with_reason_appends_one_operator_note_with_the_marker(store, mon
     assert human_kind(msg) == OPERATOR
 
 
+@pytest.mark.asyncio
+async def test_delete_note_survives_task_store_reload_and_reaches_turns(store, monkeypatch, sid, tmp_path):
+    import httpx
+    from a2a.server.tasks import DatabaseTaskStore
+    from a2a_impl.stores import make_sqlite_engine
+
+    graph = FakeGraph()
+    app = _client(monkeypatch, graph).app
+    path = str(tmp_path / "tasks.db")
+    engine = make_sqlite_engine(path)
+    await DatabaseTaskStore(engine).initialize()
+    monkeypatch.setattr(rs.STATE, "a2a_task_engine", engine)
+    d = store.record(sid, APPROVAL)
+    try:
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+            response = await client.delete(
+                f"/api/chat/sessions/{sid}/directives/{d.id}", params={"reason": "plan changed"},
+            )
+            assert response.status_code == 200
+            await engine.dispose()
+            engine = make_sqlite_engine(path)
+            monkeypatch.setattr(rs.STATE, "a2a_task_engine", engine)
+            # The reader cannot obtain anything from the graph: only durable tasks survive.
+            monkeypatch.setattr(rs.STATE, "graph", None)
+            response = await client.get(f"/api/chat/sessions/{sid}/turns")
+            assert response.status_code == 200
+            [turn] = response.json()["turns"]
+            assert turn["state"] == "TASK_STATE_COMPLETED"
+            assert turn["artifacts"] == []
+            assert response.json()["live_task_id"] is None
+            [note] = turn["history"]
+            assert note["role"] == "ROLE_USER"
+            assert note["parts"] == [{"text": withdrawal_note(APPROVAL, "plan changed")}]
+            assert note["metadata"][DIRECTIVE_WITHDRAWN_KWARG] == {"id": d.id}
+            # A repeated DELETE is a conflict, never a second transcript note.
+            assert (await client.delete(f"/api/chat/sessions/{sid}/directives/{d.id}")).status_code == 409
+            assert len((await client.get(f"/api/chat/sessions/{sid}/turns")).json()["turns"]) == 1
+    finally:
+        await engine.dispose()
+
+
 def test_delete_without_reason_appends_a_note_without_the_default(store, monkeypatch, sid):
     graph = FakeGraph()
     c = _client(monkeypatch, graph)

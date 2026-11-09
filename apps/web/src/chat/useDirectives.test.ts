@@ -1,7 +1,9 @@
+vi.mock("./sessionHydration", () => ({ hydrateDurableChatSessions: vi.fn(async () => {}) }));
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { api, ApiError } from "../lib/api";
 import type { DirectiveRow } from "../lib/api/chat";
+import { hydrateDurableChatSessions } from "./sessionHydration";
 import { useUI } from "../state/uiStore";
 
 const listeners = new Set<(data: Record<string, unknown>) => void>();
@@ -33,6 +35,7 @@ let sequence = 0;
 let sessionId: string;
 let cleanup: (() => void)[];
 beforeEach(() => {
+  vi.mocked(hydrateDurableChatSessions).mockClear();
   sessionId = `session-${++sequence}`;
   cleanup = [];
 });
@@ -137,6 +140,7 @@ describe("directive ledger shared store", () => {
       : status === 409 ? { conflict: closed }
       : status === 404 ? { gone: true } : { error });
     expect(fetch).toHaveBeenCalledTimes(status === 500 ? 1 : 2);
+    expect(hydrateDurableChatSessions).toHaveBeenCalledTimes(status === 200 ? 1 : 0);
   });
 
   it("does not present an old row as a fresh conflict when refetch fails", async () => {

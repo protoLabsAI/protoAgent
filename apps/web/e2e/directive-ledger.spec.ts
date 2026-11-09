@@ -222,20 +222,28 @@ for (const v of MATRIX) {
   });
 
   test(`transcript — the "You withdrew" row renders as a quiet event, not a user bubble (${v.tag})`, async ({ page }, testInfo) => {
-    const messages: Msg[] = [
-      { id: "u1", role: "user", content: RELEASE_QUOTE, status: "done", createdAt: 1 },
-      { id: "a1", role: "assistant", content: "Recorded. I'll cut the release once both PRs merge.", status: "done", createdAt: 2 },
-      {
-        id: "w1",
-        role: "user",
-        content: `You withdrew: "${RELEASE_QUOTE}" — holding the release until Monday`,
-        status: "done",
-        createdAt: 3,
-        directiveWithdrawn: true,
-      },
-    ];
-    await seed(page, { theme: v.theme, messages });
+    await seed(page, { theme: v.theme });
     await routeBoot(page);
+    // Exercise the real /turns wire contract, not a pre-tagged localStorage row.
+    await page.route(/\/api\/chat\/sessions(\?|$)/, (route) => route.fulfill({ json: {
+      sessions: [{ session_id: SESSION, last_updated: "2026-11-07T19:30:00Z", turn_count: 2 }],
+    } }));
+    await page.route(/\/api\/chat\/sessions\/[^/]+\/turns/, (route) => route.fulfill({ json: {
+      live_task_id: null,
+      turns: [{
+        task_id: "approval", state: "TASK_STATE_COMPLETED", last_updated: "2026-11-07T19:00:00Z",
+        text: "Recorded. I'll cut the release once both PRs merge.",
+        history: [{ role: "ROLE_USER", parts: [{ text: RELEASE_QUOTE }] }],
+      }, {
+        task_id: "directive-withdrawn-dir-a10001", state: "TASK_STATE_COMPLETED",
+        last_updated: "2026-11-07T19:30:00Z", text: "", artifacts: [],
+        history: [{
+          role: "ROLE_USER",
+          parts: [{ text: `You withdrew: "${RELEASE_QUOTE}" — holding the release until Monday` }],
+          metadata: { protoagent_directive_withdrawn: { id: "dir-a10001" } },
+        }],
+      }],
+    } }));
     await mockDirectives(page, { rows: [], fail: false });
     await page.setViewportSize({ width: v.w, height: v.h });
     await page.goto("/app/", { waitUntil: "load" });
@@ -256,6 +264,22 @@ test("the withdraw flow: Withdraw… → reason → Withdraw moves the entry to 
   await seed(page, { theme: "light" });
   await routeBoot(page);
   await mockDirectives(page, state);
+  await page.route(/\/api\/chat\/sessions(\?|$)/, (route) => route.fulfill({ json: {
+    sessions: state.rows[0].status === "revoked"
+      ? [{ session_id: SESSION, last_updated: "2026-11-07T19:30:00Z", turn_count: 1 }] : [],
+  } }));
+  await page.route(/\/api\/chat\/sessions\/[^/]+\/turns/, (route) => route.fulfill({ json: {
+    live_task_id: null,
+    turns: state.rows[0].status === "revoked" ? [{
+      task_id: "directive-withdrawn-dir-a10001", state: "TASK_STATE_COMPLETED",
+      last_updated: "2026-11-07T19:30:00Z", text: "", artifacts: [],
+      history: [{
+        role: "ROLE_USER",
+        parts: [{ text: `You withdrew: "${RELEASE_QUOTE}" — ${state.rows[0].close_reason}` }],
+        metadata: { protoagent_directive_withdrawn: { id: "dir-a10001" } },
+      }],
+    }] : [],
+  } }));
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.goto("/app/", { waitUntil: "load" });
 
@@ -274,6 +298,8 @@ test("the withdraw flow: Withdraw… → reason → Withdraw moves the entry to 
   // … and lands in History as a withdrawn entry.
   await drawer(page).getByRole("button", { name: /History \(1\)/ }).click();
   await expect(drawer(page).getByText(/Withdrawn by you/)).toBeVisible();
+  await expect(page.locator('[data-testid="note-card"]', { hasText: "You withdrew" })).toHaveCount(1);
+  await expect(page.locator(".chat-user-text", { hasText: "You withdrew" })).toHaveCount(0);
 });
 
 test("a bare /directives with no argument opens the drawer (its palette entry point)", async ({ page }) => {

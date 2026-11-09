@@ -98,7 +98,7 @@ function operatorThumbnails(turn: DurableChatTurn): ChatMessage["attachments"] {
 function durableIncognito(turns: DurableChatTurn[]): boolean {
   for (const turn of [...turns].reverse()) {
     const user = [...(turn.history ?? [])].reverse().find(isOperatorMessage);
-    if (user) return user.metadata?.incognito === true;
+    if (user && user.metadata?.[DIRECTIVE_WITHDRAWN_KEY] == null) return user.metadata?.incognito === true;
   }
   return false;
 }
@@ -118,6 +118,7 @@ export function messagesFromDurableTurn(turn: DurableChatTurn): ChatMessage[] {
   // borrowed one (the sent-time footer shows nothing for them instead of the wrong time).
   const repliedAt = recordedAt(turn.last_updated);
   const prompt = operatorPrompt(turn);
+  const directiveWithdrawn = (turn.history ?? []).find(isOperatorMessage)?.metadata?.[DIRECTIVE_WITHDRAWN_KEY] != null;
   // Restored thumbnails are SHOWN inline, so strip their names from the bubble text — the
   // rebuilt bubble then reads exactly as the live one did (typed text + inline previews)
   // instead of naming an image it also shows. With no thumbnails this is a no-op and the
@@ -133,6 +134,7 @@ export function messagesFromDurableTurn(turn: DurableChatTurn): ChatMessage[] {
           role: "user",
           content,
           status: "done",
+          ...(directiveWithdrawn ? { directiveWithdrawn: true, taskId: turn.task_id } : {}),
           ...(thumbnails?.length ? { attachments: thumbnails } : {}),
         },
       ]
@@ -307,7 +309,7 @@ export function messagesFromDurableTurn(turn: DurableChatTurn): ChatMessage[] {
   // `settleTurnBubbles` folds the same case away). A non-terminal turn keeps its empty
   // trailing bubble: that is the one a reattach streams into.
   const turnBubbles =
-    settled.length && terminal && isEmptyPlaceholder(assistant) && !assistant.components?.length
+    (settled.length || directiveWithdrawn) && terminal && isEmptyPlaceholder(assistant) && !assistant.components?.length
       ? settled
       : [...settled, assistant];
   // Stamped on the turn's own bubbles, as the live settle does, so no later producer of
@@ -416,7 +418,7 @@ export function sessionFromDurableTurns(
 
 /** A bubble of the session's OWN turns — not a participant's (`author`), and tied to a task. */
 function isOwnTurnBubble(message: ChatMessage): boolean {
-  return message.role === "assistant" && !message.author && Boolean(message.taskId);
+  return (message.role === "assistant" || message.directiveWithdrawn === true) && !message.author && Boolean(message.taskId);
 }
 
 /** The durable task ids this local transcript already holds a turn for. */

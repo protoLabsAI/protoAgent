@@ -190,6 +190,23 @@ describe("durable turn conversion", () => {
     ]);
   });
 
+  it("restores a standalone withdrawal task without an empty assistant bubble", () => {
+    const messages = messagesFromDurableTurn(turn({
+      text: "",
+      artifacts: [],
+      history: [{
+        role: "ROLE_USER",
+        parts: [{ text: 'You withdrew: "deploy it"' }],
+        metadata: { [DIRECTIVE_WITHDRAWN_KEY]: { id: "dir-4a91c2" } },
+      }],
+    }));
+    expect(messages).toHaveLength(1);
+    expect(localTurnIds(messages).size).toBe(1);
+    expect(messages[0]).toMatchObject({
+      role: "user", content: 'You withdrew: "deploy it"', directiveWithdrawn: true,
+    });
+  });
+
   it("tags the withdrawal note the DELETE route appended, so the transcript renders it quietly (#4861)", () => {
     // The marked operator note the server appends when a directive is revoked from the
     // console/API (chat.py `record_directive_withdrawal`). ChatTranscript turns a tagged
@@ -665,6 +682,21 @@ describe("durable turn conversion", () => {
       history: [{ role: "ROLE_USER", parts: [{ text: "[Autonomous wake]" }], metadata: { origin: "scheduler" } }],
     });
     expect(sessionFromDurableTurns(summary(), [privateTurn, scheduled])?.incognito).toBe(true);
+  });
+
+  it("keeps incognito when the newest durable task is a withdrawal event", () => {
+    const privateTurn = turn({
+      task_id: "private",
+      history: [{ role: "ROLE_USER", parts: [{ text: "private" }], metadata: { incognito: true } }],
+    });
+    const withdrawal = turn({
+      task_id: "withdrawal", text: "", artifacts: [],
+      history: [{ role: "ROLE_USER", parts: [{ text: 'You withdrew: "private"' }],
+        metadata: { [DIRECTIVE_WITHDRAWN_KEY]: { id: "dir-a10001" } } }],
+    });
+    expect(sessionFromDurableTurns(summary(), [privateTurn, withdrawal])?.incognito).toBe(true);
+    const local = [...messagesFromDurableTurn(privateTurn), ...messagesFromDurableTurn(withdrawal)];
+    expect(reconcileServerTurns(local, [privateTurn, withdrawal])).toBeNull();
   });
 
   it("restores incognito from the newest durable operator message", () => {
