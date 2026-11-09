@@ -63,7 +63,7 @@ export function lastWrittenAt(value: string | null): number | null {
   }
 }
 
-type Candidate = Evicted & { tier: 1 | 2; writtenAt: number };
+type Candidate = Evicted & { tier: 1 | 2; writtenAt: number; /** chunk keys removed with it */ also: string[] };
 
 /** Transcript keys eviction may remove, in eviction order. `exclude` is the key a failing
  *  write is trying to save, which is never removed out from under it. */
@@ -71,11 +71,27 @@ export function evictionCandidates(opts: { now?: number; exclude?: string } = {}
   const now = opts.now ?? Date.now();
   const here = currentSlug();
   const out: Candidate[] = [];
-  for (const key of listKeys("local")) {
+  const keys = listKeys("local");
+  const present = new Set(keys);
+  // A chat's chunks (#4973) go with their agent's main key; counted into its size here.
+  const chunksOf = new Map<string, string[]>();
+  for (const key of keys) {
+    if (matchKey("local", key)?.spec.id !== "chat.chunk") continue;
+    const main = key.slice(0, key.indexOf(".chunk."));
+    chunksOf.set(main, [...(chunksOf.get(main) ?? []), key]);
+  }
+  for (const key of keys) {
     if (key === opts.exclude) continue;
     const match = matchKey("local", key);
     if (!match || match.spec.category !== "transcript" || !match.spec.evictable) continue;
     const slug = match.slug ?? "host";
+    if (match.spec.id === "chat.chunk") {
+      // Only an ORPHAN chunk (its main key is gone) stands alone; nothing reads it.
+      const main = key.slice(0, key.indexOf(".chunk."));
+      if (present.has(main) || main === opts.exclude) continue;
+      out.push({ key, slug, bytes: entryBytes(key, readKey("local", key) ?? ""), tier: 1, writtenAt: 0, also: [] });
+      continue;
+    }
     if (slug === "host" || slug === here) continue;
     const value = readKey("local", key);
     const written = lastWrittenAt(value);
@@ -84,7 +100,9 @@ export function evictionCandidates(opts: { now?: number; exclude?: string } = {}
     // A fleet agent's key is only evicted when we KNOW it's been quiet; a thread with no
     // time (palette/DM) might be in use, so it goes only once its agent has left the fleet.
     if (inFleet && written === null) continue;
-    out.push({ key, slug, bytes: entryBytes(key, value ?? ""), tier: inFleet ? 2 : 1, writtenAt: written ?? 0 });
+    const also = chunksOf.get(key) ?? [];
+    const bytes = also.reduce((n, chunk) => n + entryBytes(chunk, readKey("local", chunk) ?? ""), entryBytes(key, value ?? ""));
+    out.push({ key, slug, bytes, tier: inFleet ? 2 : 1, writtenAt: written ?? 0, also });
   }
   return out.sort((a, b) => a.tier - b.tier || a.writtenAt - b.writtenAt || b.bytes - a.bytes);
 }
@@ -104,6 +122,7 @@ export function evict(needBytes: number, opts: { reason: EvictionReport["reason"
   for (const candidate of evictionCandidates(opts)) {
     if (freedBytes >= needBytes) break;
     removeKey("local", candidate.key);
+    for (const chunk of candidate.also) removeKey("local", chunk);
     evicted.push({ key: candidate.key, slug: candidate.slug, bytes: candidate.bytes });
     freedBytes += candidate.bytes;
   }

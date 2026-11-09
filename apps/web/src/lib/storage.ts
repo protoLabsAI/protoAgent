@@ -79,6 +79,16 @@ export const KEY_REGISTRY: readonly KeySpec[] = [
   { id: "uislice", area: "local", pattern: /^proto:uislice:([^:]+)(?::([^:/]+))?$/, category: "layout", slug: (m) => hostOr(m[2]), evictable: true },
   // ── transcripts ──
   { id: "chat.sessions", area: "local", pattern: new RegExp(`^protoagent\\.chat\\.sessions(?::${SLUG})?$`), category: "transcript", slug: (m) => hostOr(m[1]), evictable: true },
+  // A chunk of one chat's settled history (#4973, chat/transcriptChunks.ts): named by the chat
+  // and a hash of its content. Evicted with its agent's main key, or as an orphan once that's gone.
+  {
+    id: "chat.chunk",
+    area: "local",
+    pattern: new RegExp(`^protoagent\\.chat\\.sessions(?::${SLUG})?\\.chunk\\.([^.]+)\\.([0-9a-z-]+)$`),
+    category: "transcript",
+    slug: (m) => hostOr(m[1]),
+    evictable: true,
+  },
   {
     id: "palette.chat",
     area: "local",

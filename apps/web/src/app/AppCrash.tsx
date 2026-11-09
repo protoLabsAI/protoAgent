@@ -31,7 +31,10 @@ type NoFlushGlobals = { __protoagentForceQuotaCrash?: boolean };
 export function resetChatData() {
   blockPersistInThisPage();
   listKeys("local")
-    .filter((k) => matchKey("local", k)?.spec.id === "chat.sessions")
+    .filter((k) => {
+      const id = matchKey("local", k)?.spec.id;
+      return id === "chat.sessions" || id === "chat.chunk";
+    })
     .forEach((k) => removeKey("local", k));
   broadcastStorageReset();
 }

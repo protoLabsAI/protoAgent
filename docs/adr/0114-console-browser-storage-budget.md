@@ -17,6 +17,18 @@
 > from D4: there is no BroadcastChannel presence ping. The 24 h recent-write rule stands in for
 > it, and a window that does lose its key writes it back on its next save.
 
+> **November 9, 2026 (#4973):** transcripts save in content-named chunks ahead of the IDB move
+> (`chat/transcriptChunks.ts`). A chat over 16K characters keeps its settled history in
+> `protoagent.chat.sessions[:<slug>].chunk.<sessionId>.<hash>` keys, each written once. The main
+> key keeps the chat's metadata, its chunk list and only the unsettled tail, which always holds
+> the live turn. A streaming save therefore rewrites the tail, not the agent's whole history:
+> 85×/10×/14× fewer characters per save on the three largest real transcripts. Chunk boundaries
+> are deterministic (a chunk closes at ≥ 32K characters before a user message), so appending
+> never renames an earlier chunk. A missing chunk becomes one visible note. Chunks are
+> registered as `chat.chunk` transcripts: evicted with their agent's main key, collected as
+> orphans, and cleared by the crash reset. The IDB epic (#4981) should keep these chunks as
+> records; a record per chat would bring back the whole-chat rewrite D2 assumed.
+
 Status: **Proposed**
 
 Amends: ADR 0104 (the primary transcript store moves from `localStorage` to IndexedDB)

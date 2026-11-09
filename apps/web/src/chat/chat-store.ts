@@ -9,7 +9,8 @@ import {
   shownRuns,
   turnBubbleIndexes,
 } from "./turnText";
-import { readKey, writeKey } from "../lib/storage";
+import { listKeys, readKey, removeKey, writeKey } from "../lib/storage";
+import { agentChunkPrefix, expandSessions, orphanChunks, packSessions } from "./transcriptChunks";
 import { attachmentDisplay, validThumbnails } from "./imageThumbnails";
 import { persistBlocked } from "../lib/storageReset";
 
@@ -592,10 +593,59 @@ function streamingIds(state: ChatState): Set<string> {
   return new Set(Object.keys(state.sessionStatusMap).filter((id) => state.sessionStatusMap[id] === "streaming"));
 }
 
+// ── chunked transcripts (#4973, chat/transcriptChunks.ts) ─────────────────────
+// A chunk key is named by its content, so a parsed chunk never goes stale: cache it, and
+// a save that re-reads the main key doesn't re-parse a chat's whole settled history.
+const chunkCache = new Map<string, ChatMessage[]>();
+
+function readChunk(key: string): ChatMessage[] | null {
+  const cached = chunkCache.get(key);
+  if (cached) return cached;
+  try {
+    const raw = readKey("local", key);
+    const parsed: unknown = raw ? JSON.parse(raw) : null;
+    if (!Array.isArray(parsed)) return null;
+    chunkCache.set(key, parsed as ChatMessage[]);
+    return parsed as ChatMessage[];
+  } catch {
+    return null;
+  }
+}
+
+/** A main-key value as the in-memory state: every chat's chunks put back before its tail. */
+export function parsePersisted(raw: string | null): PersistedChatState | null {
+  if (!raw) return null;
+  return sanitizePersisted(expandSessions(STORAGE_KEY, JSON.parse(raw), readChunk));
+}
+
+/** Write `payload` chunked: new chunks first, then the main key that names them, then drop
+ *  this agent's chunks nothing names any more. A chunk that can't be written makes this
+ *  save fall back to the old inline form (the caller's quota path). Returns the main write. */
+function writeChunked(payload: PersistedChatState): ReturnType<typeof writeKey> | null {
+  const { sessions, chunkValues } = packSessions(STORAGE_KEY, payload.sessions);
+  const prefix = agentChunkPrefix(STORAGE_KEY);
+  const present = new Set(listKeys("local").filter((key) => key.startsWith(prefix)));
+  for (const [key, json] of chunkValues) {
+    if (present.has(key)) continue;
+    if (!writeKey("local", key, json).ok) return null;
+    present.add(key);
+    chunkCache.set(key, JSON.parse(json) as ChatMessage[]);
+  }
+  const result = writeKey("local", STORAGE_KEY, JSON.stringify({ ...payload, sessions }));
+  if (result.ok) collectChunks(present, new Set(chunkValues.keys()));
+  return result;
+}
+
+function collectChunks(present: Iterable<string>, referenced: ReadonlySet<string>) {
+  for (const key of orphanChunks(STORAGE_KEY, present, referenced)) {
+    removeKey("local", key);
+    chunkCache.delete(key);
+  }
+}
+
 function loadPersisted(): PersistedChatState {
   try {
-    const raw = readKey("local", STORAGE_KEY);
-    const state = raw ? sanitizePersisted(JSON.parse(raw)) : null;
+    const state = parsePersisted(readKey("local", STORAGE_KEY));
     if (state) {
       const sessions = state.sessions.filter((session) => !locallyDismissedIds.has(session.id));
       if (sessions.length) {
@@ -630,8 +680,7 @@ function persist(state: ChatState) {
     // streaming sessions stay authoritative; locally-deleted ones are not resurrected.
     let sessions = state.sessions;
     try {
-      const raw = readKey("local", STORAGE_KEY);
-      const onDisk = raw ? sanitizePersisted(JSON.parse(raw)) : null;
+      const onDisk = parsePersisted(readKey("local", STORAGE_KEY));
       if (onDisk) {
         sessions = mergeSessions(state.sessions, onDisk.sessions, {
           streamingIds: streamingIds(state),
@@ -656,8 +705,13 @@ function persist(state: ChatState) {
     // Only bounded preview fields enter the durable cache.
     payload.sessions = payload.sessions.map((s) => ({ ...s, messages: s.messages.map((m) =>
       m.attachments ? { ...m, attachments: validThumbnails(m.attachments) } : m) }));
+    const chunked = writeChunked(payload);
+    if (chunked?.ok) return;
+    // Inline fallback: a chunk or the main key didn't fit. Write the old one-value form (it
+    // names no chunks, so the next good save collects them), then, under quota pressure,
+    // discard the oldest previews while keeping transcript text.
     let result = writeKey("local", STORAGE_KEY, JSON.stringify(payload));
-    // Under quota pressure, discard oldest previews while retaining transcript text.
+    if (result.ok) collectChunks(listKeys("local"), new Set());
     const oldest = [...payload.sessions].sort((a, b) => a.updatedAt - b.updatedAt);
     for (const session of oldest) {
       for (const message of session.messages) {
@@ -897,7 +951,7 @@ try {
   window.addEventListener("storage", (e: StorageEvent) => {
     if (e.key !== STORAGE_KEY || e.newValue == null) return; // other key, or a tenant-clear
     try {
-      const incoming = sanitizePersisted(JSON.parse(e.newValue));
+      const incoming = parsePersisted(e.newValue);
       if (incoming) mergeFromStorage(incoming);
     } catch {
       // Ignore a malformed cross-tab write — our own state is unaffected.
