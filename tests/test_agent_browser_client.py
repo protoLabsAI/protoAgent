@@ -138,6 +138,8 @@ def test_the_factory_reads_cores_config_live(monkeypatch):
 
 @pytest.mark.parametrize("bad", [dict(session=""), dict(session="--headed"), dict(session="a/b"),
                                  dict(session="x" * 25), dict(session="ok", own_tab="has space"),
+                                 dict(session="ok", own_tab="close"), dict(session="ok", own_tab="List"),
+                                 dict(session="ok", own_tab="new"), dict(session="ok", own_tab="t3"),
                                  dict(session="ok", browser_args=["--a,--b"]),
                                  dict(session="ok", browser_args=["nodash"]),
                                  dict(session="ok", profile="--headed")])

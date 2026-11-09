@@ -95,8 +95,8 @@ BAD_ARGUMENT = "bad_argument"  # refused before running (an option-shaped operan
 TOO_LARGE = "too_large"        # the output passed the byte cap (non-truncatable command)
 KINDS = (OK, TIMEOUT, WALL, CLI_ERROR, SCRIPT_ERROR, UNAVAILABLE, BAD_ARGUMENT, TOO_LARGE)
 
-# The CLI re-sends a command whose reply hasn't come in 30 s (its socket read timeout) up to 5x.
-_IPC_READ_TIMEOUT_S = 30.0
+# The CLI re-sends a command whose reply hasn't come in 30 s (its socket read timeout) up to 5x,
+# so every wait below carries its own timeout, kept under that 30 s.
 _WAIT_MAX_S = 25.0
 _LOAD_STATES = ("load", "domcontentloaded", "networkidle")
 _WALL_RECHECKS = 2
@@ -104,6 +104,14 @@ _WALL_RECHECK_S = 2.5
 _SESSION_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]*$")
 _SESSION_MAX = 24        # the CLI's socket is <dir>/<name>.sock; a unix socket path caps near 104 bytes
 _LABEL_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_-]{0,31}$")
+# `tab <label>` shares its slot with the CLI's own tab subcommands and `t<N>` tab ids, so a label
+# spelled like one would run a different command (QA, #4941).
+_TAB_WORDS = frozenset({"list", "new", "close"})
+_TAB_ID_RE = re.compile(r"^t\d+$", re.I)
+
+
+def _valid_label(label: str) -> bool:
+    return bool(_LABEL_RE.match(label)) and label.lower() not in _TAB_WORDS and not _TAB_ID_RE.match(label)
 # Chrome's own targets that take the active slot: the Gemini side panel, as a `webview`.
 _GEMINI_PANEL = "gemini.google.com/glic"
 _BLOCKED = "ERR_BLOCKED_BY_CLIENT"
@@ -267,9 +275,9 @@ class BrowserClient:
                                  f"commas); got {a!r}")
         self.browser_args = tuple(args)
         own_tab = str(own_tab or "").strip()
-        if own_tab and not _LABEL_RE.match(own_tab):
+        if own_tab and not _valid_label(own_tab):
             raise ValueError(f"own_tab must be a short label (a letter, then letters, digits, "
-                             f"'-' or '_'); got {own_tab!r}")
+                             f"'-' or '_'; not list/new/close or a t<N> tab id); got {own_tab!r}")
         self.own_tab = own_tab
         self.timeout_s = max(1.0, float(timeout_s))
         self.nav_timeout_s = max(5.0, float(nav_timeout_s))
@@ -431,7 +439,7 @@ class BrowserClient:
         take focus — a hung tab — so it was closed and opened afresh). Launch flags ride along, so
         a dead daemon comes back with this client's profile."""
         label = str(label or self.own_tab).strip()
-        if not _LABEL_RE.match(label):
+        if not _valid_label(label):
             return Result(BAD_ARGUMENT, error=f"tab label {label!r} is not a short label")
         flags = self.launch_flags()
         with self.hold():
