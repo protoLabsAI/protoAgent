@@ -1117,12 +1117,12 @@ async def test_mid_stream_failure_yields_partial_frames_then_error_and_records(e
 async def test_provider_stream_drop_is_a_clean_connection_drop_message(env):
     import httpx
 
-    g = env.install(streams=[[text("r1", "par"), Raise(httpx.ReadError("closed"))]])
+    g = env.install(streams=[[text("r1", "par"), Raise(httpx.ReadError("closed"))], [Raise(httpx.ReadError("closed"))]])
 
     frames = await _run()
 
     # A transport drop (not a stall) → the connection-dropped message, no "rate" (#4959).
-    assert frames == [("text", "par"), ("error", chat_mod._STREAM_DROP_MSG)]
+    assert frames == [("text", "par"), ("tool_start", chat_mod._STREAM_DROP_NOTICE), ("error", chat_mod._STREAM_DROP_MSG)]
     assert g.updates[0][1]["messages"][0].content == f"**Error:** {chat_mod._STREAM_DROP_MSG}"
     assert "rate" not in chat_mod._STREAM_DROP_MSG
 
@@ -1137,12 +1137,12 @@ async def test_provider_stream_stall_names_the_request_timeout(env):
         "lead-agent produced no output for 120s while between chunks; the streaming "
         "request exceeded model.request_timeout and was aborted (#3699)."
     )
-    g = env.install(streams=[[text("r1", "par"), Raise(stall)]])
+    g = env.install(streams=[[text("r1", "par"), Raise(stall)], [Raise(stall)]])
 
     frames = await _run()
 
     msg = frames[-1][1]
-    assert frames == [("text", "par"), ("error", msg)]
+    assert frames == [("text", "par"), ("tool_start", chat_mod._STREAM_DROP_NOTICE), ("error", msg)]
     assert "for 120s" in msg and "model.request_timeout" in msg and "rate" not in msg
     assert g.updates[0][1]["messages"][0].content == f"**Error:** {msg}"
 
@@ -1153,9 +1153,9 @@ async def test_provider_stream_stall_without_a_window_omits_the_number(env):
     stall constant — still a stall, still no "rate" (#4959)."""
     from graph.llm import StreamStallTimeout
 
-    env.install(streams=[[Raise(StreamStallTimeout("no first token"))]])
+    env.install(streams=[[Raise(StreamStallTimeout("no first token"))], [Raise(StreamStallTimeout("no first token"))]])
 
-    assert await _run() == [("error", chat_mod._STREAM_STALL_MSG)]
+    assert await _run() == [("tool_start", chat_mod._STREAM_DROP_NOTICE), ("error", chat_mod._STREAM_STALL_MSG)]
     assert "model.request_timeout" in chat_mod._STREAM_STALL_MSG and "rate" not in chat_mod._STREAM_STALL_MSG
 
 
@@ -1167,7 +1167,7 @@ async def test_fail_turn_warning_no_longer_blames_rate_limit(env, caplog):
 
     import httpx
 
-    env.install(streams=[[Raise(httpx.ReadError("connection reset"))]])
+    env.install(streams=[[Raise(httpx.ReadError("connection reset"))], [Raise(httpx.ReadError("connection reset"))]])
 
     with caplog.at_level(logging.WARNING, logger="protoagent.server"):
         await _run()
@@ -1325,9 +1325,9 @@ async def test_a_provider_drop_that_mentions_the_context_window_is_not_compacted
     import httpx
 
     calls, _ = compaction
-    env.install(streams=[[Raise(httpx.ReadError(_OVERFLOW))]])
+    env.install(streams=[[Raise(httpx.ReadError(_OVERFLOW))], [Raise(httpx.ReadError(_OVERFLOW))]])
 
-    assert await _run() == [("error", chat_mod._STREAM_DROP_MSG)]
+    assert await _run() == [("tool_start", chat_mod._STREAM_DROP_NOTICE), ("error", chat_mod._STREAM_DROP_MSG)]
     assert calls == []
 
 

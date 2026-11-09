@@ -956,7 +956,7 @@ async def _run_native_turn(
     """One native LangGraph turn (the non-ACP path): run the graph, the dropped-turn
     kicker retry, and goal-mode continuations, then yield the terminal done frame. Extracted from _chat_langgraph_stream so the A2A handler can hold a per-thread
     lock around the whole turn without a deep in-line reindent. ``overflow_retry`` marks
-    the context-overflow re-run, whose recovery prompt is never goal-kicked-off (#3891 F1).
+    a recovery re-run (overflow or stream drop), whose prompt is never goal-kicked-off (#3891 F1).
     ``fence`` (the overflow retry's) replaces the request metadata's fence: the retry
     keeps the fence the failed pass narrowed to (``_turn_stream._carried_fence``)."""
     from graph.goals.goal_turn import goal_turn
@@ -1307,6 +1307,11 @@ _OVERFLOW_RETRY_PROMPT = (
 _OVERFLOW_NOTICE = (
     "🧹 The request overflowed the model's context window — older history was force-compacted; retrying once."
 )
+_STREAM_DROP_RETRY_PROMPT = (
+    "(The previous model reply was cut off mid-stream. Your completed tool calls "
+    "are saved in this thread. Continue exactly where you left off; do not repeat finished work.)"
+)
+_STREAM_DROP_NOTICE = "⚠️ The model stream dropped mid-reply; resuming from the last checkpoint (once)."
 # A drained provider stream is reported by CAUSE, not guessed (#4959). The old single
 # "possibly rate-limited" line was wrong on this path: a real 429 is already classified
 # above by ``rate_limit_details``, so this branch never sees one. A silence/idle stall
@@ -1579,8 +1584,8 @@ async def _chat_langgraph_stream_impl(
         # its provider rejects it mid-turn, instead of failing every re-drive (#3957).
         inherited_pick_scope(_eff_model if _eff_model != _req_model else ""),
     ):
-        # Set only once the NATIVE turn is about to run: the overflow recovery in the
-        # handler below compacts + retries that thread, and must not fire for a failure
+        # Set only once the NATIVE turn is about to run: recovery in the handler below
+        # retries that thread, and must not fire for a failure
         # from the pre-turn chain or the ACP runtime (which never used it).
         _tid: str | None = None
         try:
@@ -1759,6 +1764,44 @@ async def _chat_langgraph_stream_impl(
                     return
                 except Exception as retry_exc:  # noqa: BLE001 — second failure surfaces honestly
                     log.exception("[a2a-stream] overflow retry failed for session=%s: %s", session_id, retry_exc)
+                    e = retry_exc
+            elif _tid is not None and _is_provider_stream_drop(e):
+                # A2A collects the final result: continue from saved tool rounds once.
+                # This elif excludes an overflow retry; retry failures go straight to
+                # _fail_turn below, so neither recovery can trigger another retry.
+                log.warning(
+                    "[a2a-stream] model stream dropped for session=%s (%s: %s) — resuming once",
+                    session_id,
+                    type(e).__name__,
+                    e,
+                )
+                yield ("tool_start", _STREAM_DROP_NOTICE)
+                try:
+                    _retry_fence = await _turn_stream._carried_fence(config, _metadata_fence(request_metadata))
+                    async with (
+                        _turn_control._thread_lock(_tid),
+                        _turn_activity.holding(session_id, str((request_metadata or {}).get("a2a.task_id") or "")),
+                    ):
+                        with _turn_control._interactive_turn_priority((request_metadata or {}).get("origin")):
+                            async with contextlib.aclosing(
+                                _run_native_turn(
+                                    _STREAM_DROP_RETRY_PROMPT,
+                                    session_id,
+                                    config,
+                                    request_metadata=request_metadata,
+                                    resume=False,
+                                    images=None,
+                                    # Recovery prompts must not get a second goal kickoff.
+                                    overflow_retry=True,
+                                    fence=_retry_fence,
+                                    **({"model_notice": _model_notice} if _model_notice else {}),
+                                )
+                            ) as _retry_frames:
+                                async for frame in _retry_frames:
+                                    yield frame
+                    return
+                except Exception as retry_exc:  # noqa: BLE001 — second failure surfaces honestly
+                    log.exception("[a2a-stream] stream-drop retry failed for session=%s: %s", session_id, retry_exc)
                     e = retry_exc
             # Same record as the non-streaming path: the two surfaces must leave the
             # SAME transcript, or an exported thread depends on which one ran (#2593).
