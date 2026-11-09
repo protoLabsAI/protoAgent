@@ -1,0 +1,1 @@
+- **Reusable rail and modal surface host (#4955).** Adds Expand and Dock to rail controls with per-view state retention, focus handoff, accessible move announcements, and surface deep-link helpers. App integration follows separately.
