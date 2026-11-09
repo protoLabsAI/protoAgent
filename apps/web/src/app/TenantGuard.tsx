@@ -2,6 +2,7 @@ import { useToast } from "@protolabsai/ui/overlays";
 import { useEffect } from "react";
 
 import { SWITCHED_FLAG, tenantCheck } from "../lib/tenant";
+import { clearSavedTranscripts } from "../chat/chat-store";
 import { clearTranscriptDatabase } from "../chat/transcriptStore";
 import { blockPersistInThisPage } from "../lib/storageReset";
 import { readKey, removeKey } from "../lib/storage";
@@ -44,7 +45,11 @@ export function TenantGuard({ uid }: { uid: string | undefined }) {
       // transcripts in IndexedDB go too (epic #4981), then the reload, whatever happens.
       // Block saves first, so the unload flush can't write the old backend's chats back.
       blockPersistInThisPage();
-      void clearTranscriptDatabase().finally(() => window.location.reload());
+      // Through the chat store: it waits for any save already queued, then clears on its own
+      // connection, so nothing queued before the block can land after the clear.
+      void clearSavedTranscripts()
+        .catch(() => clearTranscriptDatabase())
+        .finally(() => window.location.reload());
     }
   }, [uid]);
 
