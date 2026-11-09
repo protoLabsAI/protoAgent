@@ -1,0 +1,1 @@
+- **Delete knowledge collections (#4630).** Remove a whole collection from recall and restore it before the existing 24-hour grace sweep permanently removes its chunks.

@@ -2412,6 +2412,59 @@ class KnowledgeStore:
         finally:
             db.close()
 
+    def invalidate_by_collection(self, collection: str) -> int:
+        """Soft-delete valid knowledge in a collection, excluding conversation history.
+
+        NULL/empty collections belong to "general". Empty names are a no-op.
+        Uses the same bulk-delete marker and grace sweep as delete-by-source;
+        already-invalidated rows keep their timestamp and reason."""
+        if not collection or not collection.strip():
+            return 0
+        clause, params = _collection_clause(collection, history_col="domain")
+        db = self._get_db()
+        if db is None:
+            return 0
+        try:
+            now = _now_iso()
+            cur = db.execute(
+                "UPDATE chunks SET invalidated_at = ?, invalidation_reason = ?, updated_at = ? "
+                f"WHERE {clause} AND invalidated_at IS NULL",
+                [now, _BULK_DELETE_REASON, now, *params],
+            )
+            db.commit()
+            return int(cur.rowcount)
+        except sqlite3.DatabaseError as exc:
+            log.warning("[knowledge] invalidate_by_collection failed: %s", exc)
+            return 0
+        finally:
+            db.close()
+
+    def restore_by_collection(self, collection: str) -> int:
+        """Restore bulk-soft-deleted knowledge still present in a collection.
+
+        Uses the same default bucket and history exclusion as collection deletion.
+        Superseded rows stay invalidated; purged rows cannot be restored.
+        Empty names are a no-op."""
+        if not collection or not collection.strip():
+            return 0
+        clause, params = _collection_clause(collection, history_col="domain")
+        db = self._get_db()
+        if db is None:
+            return 0
+        try:
+            cur = db.execute(
+                "UPDATE chunks SET invalidated_at = NULL, invalidation_reason = NULL, updated_at = ? "
+                f"WHERE {clause} AND invalidation_reason = ?",
+                [_now_iso(), *params, _BULK_DELETE_REASON],
+            )
+            db.commit()
+            return int(cur.rowcount)
+        except sqlite3.DatabaseError as exc:
+            log.warning("[knowledge] restore_by_collection failed: %s", exc)
+            return 0
+        finally:
+            db.close()
+
     def _invalidated_cutoff(self, older_than_seconds: int) -> str:
         """The ``invalidated_at`` boundary for :meth:`purge_invalidated`: rows
         stamped at or before this UTC-ISO instant are past the grace window. Shared
