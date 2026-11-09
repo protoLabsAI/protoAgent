@@ -4,12 +4,14 @@ import importlib
 import sqlite3
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import httpx
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from graph import decision_resume
 from graph.decision_expiry import sweep_expired_decisions
 from graph.decisions import DecisionClosed, DecisionStore
 from operator_api import decision_routes
@@ -78,16 +80,18 @@ def test_get_fields_and_sort_order(ledger):
     assert c.get(f"/api/decisions/{slow.id}").json()["default_action_text"] == "carry on without this step"
 
 
-def test_withdraw_tool_and_cancel_reason(ledger, monkeypatch):
+@pytest.mark.asyncio
+async def test_withdraw_tool_and_cancel_reason(ledger, monkeypatch):
+    monkeypatch.setattr(decision_resume, "resume_parked_turn", AsyncMock(return_value=True))
     store, _ = ledger
     rec = store.create("s", "Release?", OPTIONS)
-    assert withdraw_decision.invoke({"decision_id": rec.id, "state": {"session_id": "other"}}).startswith("Error:")
+    assert (await withdraw_decision.ainvoke({"decision_id": rec.id, "state": {"session_id": "other"}})).startswith("Error:")
     assert store.get(rec.id).pending
-    assert "withdrawn" in withdraw_decision.invoke(
+    assert "withdrawn" in await withdraw_decision.ainvoke(
         {"decision_id": rec.id, "reason": "Build failed", "state": {"session_id": "s"}}
     )
     assert store.get(rec.id).withdraw_reason == "Build failed"
-    assert withdraw_decision.invoke({"decision_id": rec.id, "state": {"session_id": "s"}}).startswith("Error:")
+    assert (await withdraw_decision.ainvoke({"decision_id": rec.id, "state": {"session_id": "s"}})).startswith("Error:")
     calls = []
 
     async def resume(*args):
@@ -371,13 +375,80 @@ def test_lost_response_after_consumption_still_reports_success(ledger, monkeypat
     assert response.json()["resumed"] is True
 
 
-def test_agent_can_withdraw_its_decision_from_another_session(ledger, monkeypatch):
+@pytest.mark.asyncio
+async def test_agent_can_withdraw_its_decision_from_another_session(ledger, monkeypatch):
+    resume = AsyncMock(return_value=True)
+    monkeypatch.setattr(decision_resume, "resume_parked_turn", resume)
     store, _ = ledger
     monkeypatch.setattr(STATE, "graph_config", SimpleNamespace(identity_name="release-agent"))
     own = store.create("parked", "Release?", OPTIONS, agent="release-agent")
     other = store.create("parked-other", "Release?", OPTIONS, agent="other-agent")
     args = {"state": {"session_id": "working"}, "reason": "Release abandoned"}
-    assert withdraw_decision.invoke({"decision_id": other.id, **args}).startswith("Error:")
-    assert "withdrawn" in withdraw_decision.invoke({"decision_id": own.id, **args})
+    assert (await withdraw_decision.ainvoke({"decision_id": other.id, **args})).startswith("Error:")
+    assert "withdrawn" in await withdraw_decision.ainvoke({"decision_id": own.id, **args})
     assert store.get(own.id).withdraw_reason == "Release abandoned"
     assert store.get(other.id).pending
+    resume.assert_awaited_once_with("parked", decision_resume.CANCELLED_RESUME)
+
+
+@pytest.mark.asyncio
+async def test_withdraw_from_another_session_clears_real_checkpoint(ledger, parked, monkeypatch):
+    from graph.config import LangGraphConfig
+
+    store, _ = ledger
+    graph, config, _, _received = parked
+    monkeypatch.setattr(STATE, "graph_config", LangGraphConfig(identity_name="release-agent"))
+    monkeypatch.setattr(STATE, "goal_controller", None)
+    monkeypatch.setattr(STATE, "active_port", 7871)
+    config["configurable"]["thread_id"] = turn_control._resolve_thread_id(None, "s")
+    rec = await park(graph, config)
+    assert await chat._pending_interrupt_value(config) is not None
+    posted = []
+
+    class Transport:
+        def __init__(self, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            pass
+
+        async def post(self, url, **kwargs):
+            message = kwargs["json"]["params"]["message"]
+            posted.append(message)
+            assert store.get(rec.id).state == "withdrawn"
+            frames = [frame async for frame in chat._chat_langgraph_stream(
+                message["parts"][0]["text"], message["contextId"],
+                request_metadata=message["metadata"],
+            )]
+            assert not [payload for kind, payload in frames if kind == "error"]
+            return SimpleNamespace(status_code=200, json=lambda: {})
+
+    monkeypatch.setattr(httpx, "AsyncClient", Transport)
+    result = await withdraw_decision.ainvoke({
+        "decision_id": rec.id, "reason": "Release abandoned",
+        "state": {"session_id": "working"},
+    })
+    assert result == f"Decision {rec.id} withdrawn: Release abandoned"
+    assert posted[0]["contextId"] == "s"
+    assert posted[0]["metadata"] == {"hitl_resume": True}
+    assert (await graph.aget_state(config)).values["result"] == decision_resume.CANCELLED_RESUME
+    assert await chat._pending_interrupt_value(config) is None
+    assert await turn_control._hold_if_hitl_pending(
+        "Next task", "s", config, request_metadata={}
+    ) is None
+    assert store.get(rec.id).withdraw_reason == "Release abandoned"
+
+
+@pytest.mark.asyncio
+async def test_withdraw_reports_resume_delivery_failure(ledger, monkeypatch):
+    store, _ = ledger
+    rec = store.create("s", "Release?", OPTIONS)
+    resume = AsyncMock(return_value=False)
+    monkeypatch.setattr(decision_resume, "resume_parked_turn", resume)
+    result = await withdraw_decision.ainvoke({"decision_id": rec.id, "state": {"session_id": "s"}})
+    assert "Warning: could not resume the parked turn" in result
+    assert store.get(rec.id).state == "withdrawn"
+    resume.assert_awaited_once_with("s", decision_resume.CANCELLED_RESUME)
