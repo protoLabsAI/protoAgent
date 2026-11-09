@@ -114,21 +114,27 @@ export function SurfaceHost({
     );
   }
 
+  // A view-less rail host frames a PINNED surface (chat): it stays mounted so the shell can
+  // wrap the right dock's render unconditionally — keeping the framed content at one tree
+  // position whatever the active view — but it adds no header (nothing to Expand) and no
+  // full-height footprint (its sibling pinned surface owns the space). The outer div is the
+  // SAME element either way and `body` keeps its child index, so the content it frames (and
+  // any background plugin iframe inside it) never remounts as `view` appears or clears.
   return (
-    <div style={{ display: "flex", flexDirection: "column", height: "100%", minHeight: 0 }}>
+    <div style={{ display: "flex", flexDirection: "column", minHeight: 0, height: view ? "100%" : undefined }}>
       {status}
-      <PanelHeader
-        title={heading}
-        actions={
-          view ? (
+      {view ? (
+        <PanelHeader
+          title={heading}
+          actions={
             <Tooltip label="Expand">
               <Button icon aria-label="Expand" onClick={() => useUI.getState().openSurfaceModal(view.id)}>
                 <Maximize2 aria-hidden="true" />
               </Button>
             </Tooltip>
-          ) : undefined
-        }
-      />
+          }
+        />
+      ) : null}
       {body}
     </div>
   );

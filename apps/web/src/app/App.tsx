@@ -1307,21 +1307,27 @@ function WorkspaceApp({ runtime }: { runtime: RuntimeStatus | null }) {
               />
             ) : null}
             {/* On mobile the right dock's surfaces render in the mobile pane instead —
-                pass no bg views here so a background iframe is never mounted twice. */}
+                pass no bg views here so a background iframe is never mounted twice.
+                (The DS AppShell renders only leftContent below its mobile breakpoint, so
+                this host never mounts on the phone — no Expand control there, Q16/§3.1.) */}
             {/* Every right-dock view gets a rail header with Expand (#4955 §3.1): the
-                SurfaceHost frames renderDock's own render — unchanged below it, so the
-                keyed-slot / background-delivery mounting is preserved. Chat is pinned and
-                always-mounted (ChatSlot above); it's never framed (it has no modal view). */}
-            {rightActive === "chat" ? (
-              renderDock(rightActive, isMobile ? [] : bgViewsFor("right"), dockClaims)
-            ) : (
-              <SurfaceHost
-                frame="rail"
-                view={{ id: rightActive, title: metaFor(rightActive)?.label ?? rightActive }}
-              >
-                {renderDock(rightActive, isMobile ? [] : bgViewsFor("right"), dockClaims)}
-              </SurfaceHost>
-            )}
+                SurfaceHost frames renderDock's own render — unchanged below it, so #4802's
+                keyed-slot / background-delivery mounting is preserved. The host is mounted
+                UNCONDITIONALLY so renderDock keeps ONE React tree position whatever the
+                active view — switching Chat ⇄ any other view never remounts its background
+                plugin iframes. Chat is pinned and always-mounted (ChatSlot above) and has no
+                modal to expand into, so it passes no `view`: the host then frames the dock
+                render with no header. */}
+            <SurfaceHost
+              frame="rail"
+              view={
+                rightActive === "chat"
+                  ? undefined
+                  : { id: rightActive, title: metaFor(rightActive)?.label ?? rightActive }
+              }
+            >
+              {renderDock(rightActive, isMobile ? [] : bgViewsFor("right"), dockClaims)}
+            </SurfaceHost>
           </>
         }
         bottomContent={
