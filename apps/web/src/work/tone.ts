@@ -72,6 +72,11 @@ export function fromActivity(raw: string): WorkStatus {
 export function fromDecision(raw: string): WorkStatus {
   return map("decision", raw, { pending: "needs-you", answered: "done", expired: "cancelled", cancelled: "cancelled", withdrawn: "cancelled" });
 }
+// A standing directive (graph/directives): in force until the agent fulfils it or the
+// operator revokes it — a passive constraint, so an active one waits like a watch.
+export function fromDirective(raw: string): WorkStatus {
+  return map("directive", raw, { in_force: "waiting", fulfilled: "done", revoked: "cancelled" });
+}
 
 /** `now` is epoch milliseconds (Date.now()); numeric input timestamps are epoch seconds.
  * The tooltip is a full local timestamp, ready for the DS Tooltip's content prop. */
