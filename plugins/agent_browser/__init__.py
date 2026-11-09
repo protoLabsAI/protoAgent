@@ -29,7 +29,7 @@ import threading
 # Module-level, not inside register(): a call-time `from . import x` resolves through
 # sys.modules, which a later load of this package (a reload, a second test loader) has
 # replaced — register() would then report through ANOTHER copy's preflight and state.
-from . import gate, preflight, setup_steps
+from . import client, gate, preflight, setup_steps
 
 log = logging.getLogger("protoagent.plugins.agent_browser")
 
@@ -87,6 +87,14 @@ def register(registry) -> None:
             add_service("describe_target", gate.describe_target, "Plain-words name of a resolved browser target.")
         except Exception:  # noqa: BLE001 — the seam is optional; the gate itself still works
             log.exception("[agent_browser] registering the gate services failed")
+        # The browser client for OTHER plugins (client.py): core's hardened CLI path — byte cap,
+        # process-group kill, CLI resolution, option guard, a named session, typed results —
+        # instead of each plugin shelling out to agent-browser on its own.
+        try:
+            add_service("client", client.make_factory(_live_cfg, _refresh_gaps),
+                        "Build a typed browser client on a plugin's own agent-browser session.")
+        except Exception:  # noqa: BLE001 — optional; the tools still work
+            log.exception("[agent_browser] registering the client service failed")
 
     # Browser tools (subprocess wrappers over the agent-browser CLI).
     try:

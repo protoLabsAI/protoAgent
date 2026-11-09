@@ -41,11 +41,11 @@ import asyncio
 import contextvars
 import functools
 import logging
-import os
 import re
 import secrets
-import signal
-import subprocess
+# runner.run calls subprocess.Popen through this same module object; the tests patch
+# tools.subprocess.Popen, which is why the import stays here.
+import subprocess  # noqa: F401
 import threading
 import time
 import weakref
@@ -56,17 +56,13 @@ from langgraph.prebuilt import InjectedState
 
 from graph.sdk import multimodal_tool_result
 
-from . import boundaries, cli_fetch, forms, gate, preflight, runtime, storage, walls
+from . import boundaries, cli_fetch, forms, gate, preflight, runner, runtime, storage, walls
 from .runtime import bad_operand, flag, launch_flags, number
 
 log = logging.getLogger("protoagent.plugins.agent_browser")
 
 # Default aggregate stdout+stderr byte cap when `max_response_bytes` is unset.
 _DEFAULT_MAX_RESPONSE_BYTES = 200_000
-_READ_CHUNK = 65_536
-# How long to wait for the pipe-draining threads once the CLI has exited (or been killed).
-# Normally they finish at once; see _run for the case where they can't.
-_JOIN_TIMEOUT_S = 5.0
 # browser_upload's post-attach verify: how long an EMPTY read-back (no filename, no chip) is
 # re-checked before it is reported as "nothing is attached", and how often.
 _UPLOAD_SETTLE_S = 2.5
@@ -80,23 +76,8 @@ _LOAD_STATES = ("load", "domcontentloaded", "networkidle")
 # re-probes a TRANSIENT wall this many times, this far apart (~5s), before reporting it.
 _WALL_RECHECKS = 2
 _WALL_RECHECK_S = 2.5
-
-
-def _kill_tree(proc) -> None:
-    """Kill the CLI AND everything it started. It runs in its own session
-    (``start_new_session=True``), so its pid is its process-group id and one ``killpg``
-    reaches a grandchild that would otherwise keep our pipes open — the case that left the
-    drain threads, and the ``asyncio.to_thread`` worker joined on them, blocked forever."""
-    try:
-        proc.kill()
-    except OSError:
-        pass
-    pid = getattr(proc, "pid", None)
-    if isinstance(pid, int) and hasattr(os, "killpg"):
-        try:
-            os.killpg(pid, signal.SIGKILL)
-        except OSError:  # group already gone (ProcessLookupError) or not ours
-            pass
+# How often a tool re-tries the cross-thread session guard a plugin client holds (runner.guard).
+_GUARD_POLL_S = 0.05
 
 
 # ── browser actions are serialised per session ───────────────────────────────────────
@@ -280,11 +261,23 @@ def get_browser_tools(cfg: dict | None, refresh_gaps=None, *, start_gap: bool = 
         @functools.wraps(fn)
         async def wrapper(*args, **kwargs):
             state = kwargs.pop("state", None)
-            token = _SESSION_NAME.set(_resolve_session_name(scope, state))
+            name = _resolve_session_name(scope, state)
+            token = _SESSION_NAME.set(name)
             state_token = _CALL_STATE.set(state)
             try:
                 async with _session_lock():
-                    return await fn(*args, **kwargs)
+                    # Also the process-wide guard a plugin client on the SAME session takes
+                    # (runner.guard): it runs in another thread or loop, which the asyncio lock
+                    # can't see. Uncontended (the normal case — a client has its own session)
+                    # this is one non-blocking acquire. Polled, not a blocking acquire in a worker
+                    # thread: a cancelled turn must never leave the guard held.
+                    guard, owner = runner.guard(name), object()
+                    while not guard.try_acquire(owner):
+                        await asyncio.sleep(_GUARD_POLL_S)
+                    try:
+                        return await fn(*args, **kwargs)
+                    finally:
+                        guard.release(owner)
             finally:
                 _CALL_STATE.reset(state_token)
                 _SESSION_NAME.reset(token)
@@ -360,9 +353,8 @@ def get_browser_tools(cfg: dict | None, refresh_gaps=None, *, start_gap: bool = 
              env_extra: dict | None = None) -> str:
         """Run `agent-browser <args>` and return stdout, or a readable error.
 
-        Uses Popen with one drain thread per pipe (concurrent, so a full stderr can't
-        deadlock stdout) enforcing an aggregate byte cap owned here. On overflow the child
-        is killed and reading stops AT the cap (memory stays bounded); a call that passes
+        The subprocess itself runs in ``runner.run`` (byte cap, process-group kill, bounded
+        joins — shared with the plugin client). On overflow a call that passes
         ``truncate`` (a narrowing hint — the reading tools: snapshot, get text/html) then
         returns the FIRST part of stdout cut on a line boundary plus a marker naming that
         hint, while every other call keeps the bounded "output exceeded" error (a cut eval
@@ -389,105 +381,18 @@ def get_browser_tools(cfg: dict | None, refresh_gaps=None, *, start_gap: bool = 
         session = _session_key()
         is_chat = scope == "per_session" and session != _shared_session_name()
         child_env = runtime.cli_env(session, chat_idle_ms if is_chat else main_idle_ms)
-        try:
-            # Its own session: its pid becomes a process-group id, so a timeout can kill
-            # everything it started (see _kill_tree). Ignored on Windows.
-            proc = subprocess.Popen([exe, *args],
-                                    stdin=subprocess.PIPE if stdin is not None else None,
-                                    stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                                    start_new_session=True,
-                                    env={**child_env, **env_extra} if env_extra else child_env)
-        except OSError as e:
+        # The subprocess mechanics — byte cap, process-group kill, bounded joins, the stdin
+        # feeder — live in runner.run, shared with the plugin client (client.py).
+        res = runner.run([exe, *args], env={**child_env, **env_extra} if env_extra else child_env,
+                         timeout=timeout, max_bytes=max_bytes, stdin=stdin)
+        if res.launch_error is not None:
             # Surface it to the OPERATOR too, not just into the model's loop: the console
             # showed `warnings: []` while every browser call failed, which is the gap the
             # setup-gap seam exists for.
             _recheck(failed=True, force=True)
-            return _launch_error(e)
-
-        out_buf, err_buf = bytearray(), bytearray()
-        total = 0
-        overflow = False
-        lock = threading.Lock()
-
-        def _drain(pipe, buf: bytearray) -> None:
-            nonlocal total, overflow
-            hit = False
-            try:
-                # read1, not read: BufferedReader.read(n) blocks until it has n bytes or EOF,
-                # so when a descendant holds the pipe open (no EOF, ever) the CLI's last
-                # output sat in the reader's buffer and a bounded join returned NOTHING.
-                # read1 hands over whatever has arrived.
-                read = getattr(pipe, "read1", pipe.read)
-                for block in iter(lambda: read(_READ_CHUNK), b""):
-                    with lock:
-                        if overflow:
-                            break
-                        room = max_bytes - total
-                        total += len(block)
-                        if total > max_bytes:  # aggregate crossed the cap → stop + kill
-                            buf.extend(block[:max(room, 0)])  # keep up to the cap, never past it
-                            overflow = True
-                            hit = True
-                            break
-                        buf.extend(block)
-            except (OSError, ValueError):
-                pass  # pipe closed under us (e.g. after kill) — nothing more to read
-            finally:
-                try:
-                    pipe.close()
-                except Exception:
-                    pass
-            if hit:
-                _kill_tree(proc)  # unblock the sibling reader and let wait() return
-
-        drains = [threading.Thread(target=_drain, args=(proc.stdout, out_buf), daemon=True),
-                  threading.Thread(target=_drain, args=(proc.stderr, err_buf), daemon=True)]
-        for t in drains:
-            t.start()
-
-        feeder = None
-        if stdin is not None:
-            def _feed() -> None:
-                # The drains are already reading stdout/stderr, so a child that streams
-                # output while it consumes a large script can't wedge this write.
-                try:
-                    proc.stdin.write(stdin.encode("utf-8"))
-                except (OSError, ValueError):
-                    pass  # child closed its end / exited early — its exit code carries the story
-                finally:
-                    try:
-                        proc.stdin.close()
-                    except Exception:
-                        pass
-            feeder = threading.Thread(target=_feed, daemon=True)
-            feeder.start()
-
-        timed_out = False
-        try:
-            proc.wait(timeout=timeout)
-        except subprocess.TimeoutExpired:
-            timed_out = True
-            _kill_tree(proc)  # terminate the CLI and anything it started …
-            try:
-                proc.wait(timeout=5)  # … and reap, so we never leave a zombie
-            except subprocess.TimeoutExpired:
-                pass
-        # BOUNDED joins. The kill above takes the CLI's whole process group, which is what
-        # closes the pipes in practice. A descendant that left the group (its own setsid) can
-        # still hold them; the drains then stay blocked in `pipe.read()` — daemon threads,
-        # they end when it does — but THIS call returns instead of pinning an
-        # asyncio.to_thread worker for the life of the process (the reviewer's reproducer: a
-        # CLI that backgrounds `sleep 300`). What the CLI wrote before exiting was already
-        # read, so the snapshot below is its full output.
-        for t in drains:
-            t.join(timeout=_JOIN_TIMEOUT_S)
-        if feeder is not None:
-            feeder.join(timeout=_JOIN_TIMEOUT_S)  # the write is done once the child exits
-        if any(t.is_alive() for t in drains):
-            log.warning("[agent_browser] `agent-browser %s` exited but something it started "
-                        "kept its output open; returning what it wrote", " ".join(args[:2]))
-        with lock:  # a still-running drain may append: take a consistent snapshot
-            out_bytes, err_bytes = bytes(out_buf), bytes(err_buf)
+            return _launch_error(res.launch_error)
+        out_bytes, err_bytes = res.out, res.err
+        timed_out, overflow = res.timed_out, res.overflow
 
         if timed_out:
             return f"Error: `agent-browser {' '.join(args)}` timed out after {timeout:g}s"
@@ -497,7 +402,7 @@ def get_browser_tools(cfg: dict | None, refresh_gaps=None, *, start_gap: bool = 
                 return _truncated(out_bytes, truncate)
             return f"Error: output exceeded {max_bytes} bytes (truncated)"
         out = out_bytes.decode("utf-8", "replace").strip()
-        if proc.returncode != 0:
+        if res.returncode != 0:
             err = (err_bytes.decode("utf-8", "replace") or out or "").strip()
             # A non-zero exit can ALSO be a setup gap the boot-time preflight didn't catch
             # — most often "the CLI is here but has no Chrome to drive", which never raises

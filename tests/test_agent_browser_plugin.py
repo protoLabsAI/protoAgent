@@ -5406,7 +5406,7 @@ async def test_a_cli_that_exits_but_leaves_a_descendant_holding_the_pipes_still_
     """The other half: a descendant that left the process group (its own session) holds our
     pipes after the CLI exits 0. There's nothing to kill, so the bounded join is the
     backstop — the call returns what the CLI wrote instead of waiting on the stray process."""
-    monkeypatch.setattr(tools, "_JOIN_TIMEOUT_S", 0.5, raising=False)
+    monkeypatch.setattr(tools.runner, "JOIN_TIMEOUT_S", 0.5)  # the subprocess path lives in runner.py
     pidfile = tmp_path / "grandchild.pid"
     cli = tmp_path / "leaks"
     cli.write_text(

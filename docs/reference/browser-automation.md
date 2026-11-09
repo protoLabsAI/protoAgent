@@ -398,11 +398,110 @@ levers, weakest to strongest:
 No setting defeats detection entirely, and none of them change the fact that you are
 responsible for what the agent does on a site.
 
+## For plugin authors: the browser client
+
+A plugin that needs a browser of its own (a price checker, a scraper) shouldn't shell out
+to `agent-browser` itself. Get the browser client through the
+[`agent_browser.client` service](/adr/0116-local-first-data-analyst-duckdb-and-vega-lite-charts)
+instead. It runs every command through the same code as the browser tools: the byte cap,
+the process-group kill on a timeout, CLI resolution (PATH, then `binary`, then the pinned
+download on first use) and the guard against option-shaped arguments. Results come back
+typed instead of as strings.
+
+```python
+from graph import sdk
+
+make = getattr(sdk, "service", lambda _name: None)("agent_browser.client")
+if make is None:
+    ...  # agent_browser is off, or the core is older than the client: fall back or say so
+browser = make(session="shop", profile="~/.protoagent/shop-profile", headed=True,
+               own_tab="shoptab", min_interval_s=1.5, nav_timeout_s=30)
+
+r = browser.open("https://shop.example/search?q=lamp")
+if r.kind == "wall":        # a bot check, block page or sign-in wall: r.wall.kind / r.wall.label
+    return f"The site is showing {r.wall.label}. Clear it in the browser window, then retry."
+if r.kind == "timeout":     # the browser didn't answer (a stuck tab, a site not answering), not a wall
+    return r.error
+browser.wait(selector="li.result", timeout_s=10)  # a timeout here is an answer, not a crash
+rows = browser.eval_json("JSON.stringify([...document.querySelectorAll('li.result')].map(e => e.innerText))").value
+```
+
+Build the client once, at the top of your tool builder, and share it between your tools. The
+pacing clock lives on the instance. Every method is **synchronous and thread-safe**. Call it
+from a sync tool (LangChain runs those in a worker thread), or wrap it in
+`asyncio.to_thread`. Never call it on the event loop.
+
+**Every method returns a `Result`.** `kind` is a plain string, so you can branch on it
+without importing anything:
+
+| `kind` | Meaning |
+|---|---|
+| `ok` | It worked. `text` holds the CLI output; `value` holds the parsed payload (`open`: `{url, title}`, `eval_json`: the script's result, `tabs`: the tab list). |
+| `timeout` | No answer in time. The browser or its tab is stuck, or the site is not answering. Not a wall. |
+| `wall` | A bot check, block page or sign-in wall answered instead of the page. `wall.kind`, `wall.label`, `wall.url`, `wall.transient`. |
+| `cli_error` | The CLI ran and failed: no such element, a profile already in use, Chrome refused. |
+| `script_error` | `eval_json`: the page script threw an error. |
+| `unavailable` | There is no CLI to run: not installed, still downloading, or it can't start. |
+| `bad_argument` | Refused before anything ran: an option-shaped operand, a malformed wait. |
+| `too_large` | The output passed the byte cap. (`get_text` and `snapshot` return a cut first part with `truncated=True` instead.) |
+
+`error` is a plain sentence that says what to do next, safe to show verbatim. Methods
+don't raise for an expected failure. If you'd rather use exceptions,
+`r.raise_for_error()` raises `browser.Error` with the same `kind`.
+
+**Methods:** `open(url, check_walls=True, recover=True)`; `wait(selector= | text= | url= | load= | js=, timeout_s=10)`;
+`eval_json(script)`; `get_text(selector="body", content_boundaries=False)`;
+`snapshot(interactive=True, compact=True, scope="", depth=0)`; `check_wall(requested_url="")`;
+`get_url()`; `tabs()`; `focus_tab(label="")`; `close_panels()`; `close()`; and `hold()`, a
+context manager that keeps a multi-step sequence together.
+
+**Options**, all keyword arguments to `make(...)`:
+
+| Option | Default | |
+|---|---|---|
+| `session` | required | Your browser's name: letters, digits, `-`, `_`, up to 24 characters. |
+| `instance_scoped` | `True` | Prefix it with this instance's name (`pa-<instance>-<hash>-<session>`) so two agents on one machine never share a Chrome. Set `False` to keep a fixed name that an operator has already signed in under. |
+| `profile` · `headed` · `user_agent` · `browser_args` | none | Launch options: a Chrome profile directory or name, a visible window, a User-Agent, extra Chrome flags (each `--name[=value]`). The client adds none of its own: no stealth, no anti-throttle flags. |
+| `own_tab` | none | A tab label. The client navigates only that tab (see below). |
+| `timeout_s` · `nav_timeout_s` | 30 · 45 | Per command, and per `open`. |
+| `min_interval_s` | 0 | The minimum gap between navigations, so you don't hit a site faster than a person would. |
+| `idle_timeout_min` | 0 (never) | Close the browser after this long idle. It applies when the client starts the browser. |
+
+What it handles for you:
+
+- **Launch options go with every `open(url)`**, and the client never runs `open` without a
+  URL. The CLI keeps one set of launch options per browser and settles them on each launch
+  request. `open <url>` with flags sends one request: same options reuse the browser,
+  different options relaunch it on the same profile, and no browser starts one. A URL-less
+  `open` with flags sends that request plus a second one with no profile, and Chrome
+  relaunches onto a temp profile, so your sign-in is gone. `open("")` is refused. Use
+  `open("about:blank")` for a blank page.
+- **Waits always carry a timeout** (10 s by default, 25 s at most). The CLI gives up
+  reading the daemon's reply after 30 s and **re-sends the command, up to five times**. A
+  wait with the daemon's default 30 s timeout that never succeeds therefore costs about
+  2.5 minutes.
+- **A navigation that hangs is cut off after `nav_timeout_s`**, so the CLI doesn't re-send it
+  five times. The client then recovers once. With an `own_tab`, it replaces that tab first.
+  If that also times out, it reports `timeout` and says it is not a wall.
+- **`own_tab`.** agent-browser runs every command on the active tab, and makes any new
+  target active. In a headed window you share with the operator, that can be Chrome's
+  Gemini side panel (navigating it fails with `ERR_BLOCKED_BY_CLIENT`) or one of the
+  operator's own pages. With `own_tab`, every navigation first switches to the client's
+  labelled tab. A panel that grabs the tab mid-navigation is closed and the navigation is
+  retried once. A tab of the client's own that won't take focus is replaced. The only things
+  ever closed are Chrome's own panels and the client's own tab, never a page of the
+  operator's.
+- **The same lock as the tools.** If your `session` is the agent's own browser, a client
+  sequence and a `browser_fill` can't interleave. On a session of your own, the client never
+  waits for the tools.
+
 ## Where things live
 
 | File | What |
 |---|---|
 | `tools.py` | the 21 tools — subprocess wrappers, the byte cap, the fenced captures, the gate's hooks |
+| `runner.py` | the one way a CLI command runs (byte cap, process-group kill, bounded joins) and the per-session guard, shared by the tools and the client |
+| `client.py` | the browser client for other plugins (the `agent_browser.client` service) |
 | `storage.py` | the capture write fence |
 | `preflight.py` | the setup-gap probe (which CLI resolves, does it have a Chrome) and the banners' buttons |
 | `cli_fetch.py` | the pinned, SHA-256-verified CLI download: the pins, the atomic install, the cache |

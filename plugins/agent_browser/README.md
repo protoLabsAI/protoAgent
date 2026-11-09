@@ -75,6 +75,8 @@ Homebrew, Cargo), or a path pinned in the `binary` setting, always wins over the
 | `browser_panel.py` | the Browser panel page + routes — the interactive canvas, the gated nav / stream-ticket / WS-stream routes |
 | `browser_stream.py` | the CDP bridge — screencast frames out, input in, viewport resize + nav re-arm; the WS ticket auth |
 | `walls.py` | bot-wall / sign-in-wall detection after `browser_open` — a dependency-free probe (`PROBE_JS`) + classifier (`check`) other plugins can reuse |
+| `runner.py` | the one hardened subprocess path (aggregate byte cap, process-group kill, bounded joins, stdin feeder) the tools and the client both run on, plus the process-wide per-session guard |
+| `client.py` | the browser client OTHER plugins get from the `agent_browser.client` service — see [For plugin authors](#for-plugin-authors-the-browser-client) |
 | `boundaries.py` | the CLI's untrusted-content markers: per-call flag, parse/re-wrap for `browser_form_read`, `strip()` for consumers that parse a result |
 | `runtime.py` | what the tools and the panel share: the launch-flag builder (headed / profile / device / stealth), the session name + child env (`cli_env`), the idle reaper, the profile-in-use error |
 | `skills/web-browse/` | the discovery skill (defers to `agent-browser skills get core`) |
@@ -114,6 +116,29 @@ and the panel turn into a readable `Error:` naming the cause and the fix.
 first browser call after the upgrade starts the agent's own (empty) browser. The `default`
 daemon keeps running until it's closed (`agent-browser --session default close`) or the
 machine reboots.
+
+## For plugin authors: the browser client
+
+Another plugin that needs its own browser gets it through the `agent_browser.client` service
+(ADR 0116), never an import and never its own `subprocess.run`:
+
+```python
+make = getattr(sdk, "service", lambda _n: None)("agent_browser.client")
+browser = make(session="shop", profile="~/.protoagent/shop-profile", headed=True, own_tab="shoptab")
+r = browser.open(url)          # r.kind: ok | timeout | wall | cli_error | unavailable | bad_argument | …
+```
+
+`client.BrowserClient` runs every command through `runner.run` (the tools' byte cap,
+process-group kill and CLI resolution) on the plugin's own named session (instance-prefixed by
+default), takes the same per-session guard as the tools, sends the launch flags on every
+`open <url>` and never a URL-less `open`, gives every wait an explicit timeout below the
+CLI's 30 s IPC re-send, cuts a hung navigation off and recovers once, can own a labelled tab
+(the Gemini-panel guard proven in ebay-plugin), and runs the `walls.py` check after a
+navigation. Sync and thread-safe; every method returns a typed `Result`. The full contract:
+[docs/reference/browser-automation.md › For plugin authors](../../docs/reference/browser-automation.md#for-plugin-authors-the-browser-client).
+Tests: [`tests/test_agent_browser_client.py`](../../tests/test_agent_browser_client.py) (scripted
+CLI) and [`tests/test_agent_browser_client_live.py`](../../tests/test_agent_browser_client_live.py)
+(real browser).
 
 ## Live form tests (real browser)
 
