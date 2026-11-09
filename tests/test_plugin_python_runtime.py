@@ -20,6 +20,10 @@ from graph.plugins import loader, setup_gaps
 from graph.plugins.manifest import _parse_requires_runtimes, load_manifest
 from infra import python_runtime as pr
 
+# ``infra.python_runtime`` branches on ``os.name`` (venv layout, interpreter path), so the
+# Windows CI lane must run this module — mark the whole file platform_sensitive.
+pytestmark = pytest.mark.platform_sensitive
+
 
 # ── helpers ───────────────────────────────────────────────────────────────────
 
