@@ -1,0 +1,1 @@
+- **Shared Work statuses and rows (#4955).** Add a consistent status vocabulary, source mappings, local timestamp formatting, and an accessible shared row with status dots and badges for the Work view.

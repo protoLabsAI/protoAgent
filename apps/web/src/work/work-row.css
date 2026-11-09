@@ -1,0 +1,32 @@
+/* The DS base :where(button):focus-visible rule supplies the focus ring. */
+.work-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--pl-space-2);
+  padding: var(--pl-space-3);
+  width: 100%;
+  border: 0;
+  border-radius: var(--pl-radius);
+  background: var(--pl-color-bg-raised);
+  color: var(--pl-color-fg);
+  font: inherit;
+  text-align: start;
+  cursor: pointer;
+}
+.work-row__body {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.work-row__title {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+}
+.work-row__meta {
+  display: block;
+  color: var(--pl-color-fg-muted);
+  font-size: var(--pl-font-size-sm);
+}
