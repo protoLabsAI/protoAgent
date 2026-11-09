@@ -11,9 +11,24 @@ Two properties:
 import logging
 from types import SimpleNamespace
 
+import pytest
+
 import graph.llm as llm
 from graph.config import GenerationProfile, LangGraphConfig
 from graph.generation_profile import ResolvedProfile, resolve_profile
+
+
+@pytest.fixture(autouse=True)
+def _reset_profile_ignore_log():
+    """The D5 "once per (provider type, knob)" ledger is a module global; isolate every
+    test from it so ordering (or an xdist worker's earlier state) can't skew the count."""
+    saved = set(llm._PROFILE_IGNORE_LOGGED)
+    llm._PROFILE_IGNORE_LOGGED.clear()
+    try:
+        yield
+    finally:
+        llm._PROFILE_IGNORE_LOGGED.clear()
+        llm._PROFILE_IGNORE_LOGGED.update(saved)
 
 
 def _gateway_kwargs(monkeypatch, cfg, **create_kwargs) -> dict:
@@ -112,7 +127,7 @@ def test_gateway_routing_profile_caps_tokens_and_disables_thinking(monkeypatch):
 def test_ignored_knob_logs_once_per_provider_and_knob(monkeypatch, caplog):
     # The gateway honours max_tokens but has no thinking_budget wire (ADR 0128 D5), so a
     # profile that sets both reports only thinking_budget, and only once across two builds.
-    llm._PROFILE_IGNORE_LOGGED.clear()
+    # The autouse fixture has already cleared the module-level ledger for this test.
     cfg = LangGraphConfig(
         **_GATEWAY_CFG,
         model_profiles={"cap": GenerationProfile(thinking_budget=2048, max_tokens=4096)},
