@@ -7,6 +7,8 @@ export type WorkSectionContext = {
   state: SurfaceState;
   onOpen: (item: WorkItem) => void;
   onBack: () => void;
+  /** The focused chat, for the per-session sections (the directive ledger). */
+  sessionId?: string;
 };
 type WorkSection = { label: string; render: (context: WorkSectionContext) => ReactNode };
 export const sections = new Map<string, WorkSection>();
@@ -26,4 +28,4 @@ export function registerWorkSection(id: string, section: WorkSection): () => voi
 }
 export const subscribe = (notify: () => void) => { listeners.add(notify); return () => { listeners.delete(notify); }; };
 
-export const getVersion = () => version;
+export const getSnapshot = () => version;

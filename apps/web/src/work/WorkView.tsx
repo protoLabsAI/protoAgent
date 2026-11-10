@@ -5,7 +5,9 @@ import { useUI } from "../state/uiStore";
 import type { SurfaceState } from "../shell/surfaceState";
 import { useWorkItems, type WorkItem, type WorkItems } from "./useWorkItems";
 import { WorkOverview, workSections } from "./WorkOverview";
-import { sections, subscribe, getVersion } from "./sectionRegistry";
+import { sections, subscribe, getSnapshot } from "./sectionRegistry";
+import "./sections/decisions";
+import "./sections/directives";
 import "./sections/tasks";
 import "./sections/schedules";
 import "./work-view.css";
@@ -14,7 +16,7 @@ export { registerWorkSection, type WorkSectionContext } from "./sectionRegistry"
 const emptyState: SurfaceState = {};
 
 export function WorkView({ frame = "rail", sessionId }: { frame?: "rail" | "modal"; sessionId?: string }) {
-  useSyncExternalStore(subscribe, getVersion);
+  useSyncExternalStore(subscribe, getSnapshot);
   const state = useUI((s) => s.surfaceStates.work ?? emptyState);
   const section = state.section ?? "overview";
   const thisChat = typeof state.filters?.thisChat === "boolean" ? state.filters.thisChat : frame === "rail";
@@ -50,7 +52,7 @@ export function WorkView({ frame = "rail", sessionId }: { frame?: "rail" | "moda
   }, [label, count, needs, loading]);
   const onBack = () => update({ itemId: undefined });
   const onOpen = (item: WorkItem) => update({ itemId: `${item.kind}:${item.id}`, scrollTop: listRef.current?.scrollTop ?? state.scrollTop });
-  const context = { sources, state, onOpen, onBack };
+  const context = { sources, state, onOpen, onBack, sessionId };
   const selected = items.find((item) => `${item.kind}:${item.id}` === state.itemId || item.id === state.itemId);
   const selectedSection = selected && ({ decision: "decisions", goal: "goals", watch: "watches", task: "tasks", schedule: "schedules", background: "background", activity: "activity", directive: "directives" } as const)[selected.kind];
   const detailRenderer = sections.get(selectedSection ?? section);
