@@ -66,8 +66,10 @@ const test = base.extend({
 // through lib/storage.ts, which never throws.
 
 test("boots, navigates and reloads with localStorage filled to the real quota", async ({ page }) => {
-  // Ten full boots plus the required one-second hydration dwell need the same
-  // budget as the legacy-migration reload test, especially in WebKit on CI.
+  // Ten reloads that each boot the console on a full ~5 MB localStorage take ~3.5 s apiece on
+  // CI's WebKit, so the loop alone outgrew 30 s: a trace of run 42905695468 shows nine rounds
+  // passing every assertion before the clock ran out mid-reload. Same budget as its
+  // ten-reload sibling below.
   test.setTimeout(60_000);
   const errors: string[] = [];
   page.on("pageerror", (e) => errors.push(e.message));
