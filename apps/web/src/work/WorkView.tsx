@@ -12,6 +12,8 @@ export type WorkSectionContext = {
   state: SurfaceState;
   onOpen: (item: WorkItem) => void;
   onBack: () => void;
+  /** The focused chat, for the per-session sections (the directive ledger). */
+  sessionId?: string;
 };
 type WorkSection = { label: string; render: (context: WorkSectionContext) => ReactNode };
 const sections = new Map<string, WorkSection>();
@@ -69,7 +71,7 @@ export function WorkView({ frame = "rail", sessionId }: { frame?: "rail" | "moda
   }, [label, count, needs, loading]);
   const onBack = () => update({ itemId: undefined });
   const onOpen = (item: WorkItem) => update({ itemId: `${item.kind}:${item.id}`, scrollTop: listRef.current?.scrollTop ?? state.scrollTop });
-  const context = { sources, state, onOpen, onBack };
+  const context = { sources, state, onOpen, onBack, sessionId };
   const selected = items.find((item) => `${item.kind}:${item.id}` === state.itemId || item.id === state.itemId);
   const selectedSection = selected && ({ decision: "decisions", goal: "goals", watch: "watches", task: "tasks", schedule: "schedules", background: "background", activity: "activity", directive: "directives" } as const)[selected.kind];
   const detailRenderer = sections.get(selectedSection ?? section);
