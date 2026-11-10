@@ -322,8 +322,12 @@ describe("clearing", () => {
     expect(dialog()!.textContent).toContain("Clear agents no longer in your fleet?");
     expect(dialog()!.textContent).toMatch(/Removes 3 saved chats \(\d+ KB\) from threedee and promptinjection\./);
     await act(async () => [...dialog()!.querySelectorAll("button")].find((b) => b.textContent === "Clear chats")!.click());
-    await settle();
-    expect(rowNames()).toEqual(["warBoss", "Layout and preferences"]);
+    // The clear runs IndexedDB work: wait for its result, not a fixed number of ticks (under a
+    // full-suite load the fake store takes longer than settle()'s five).
+    await vi.waitFor(async () => {
+      await settle();
+      expect(rowNames()).toEqual(["warBoss", "Layout and preferences"]);
+    });
     expect(button("Clear them")).toBeUndefined();
   });
 
@@ -336,8 +340,10 @@ describe("clearing", () => {
     expect(dialog()!.textContent).toContain("Clear quick chats from this browser?");
     expect(dialog()!.textContent).toMatch(/Removes 2 quick chat threads \(\d+ KB\) from the command palette and direct messages\./);
     await act(async () => [...dialog()!.querySelectorAll("button")].find((b) => b.textContent === "Clear quick chats")!.click());
-    await settle();
-    expect(node.querySelector('[data-slug="quick"]')).toBeNull();
+    await vi.waitFor(async () => {
+      await settle();
+      expect(node.querySelector('[data-slug="quick"]')).toBeNull();
+    });
     expect((await transcriptStoreIfOpen()!.loadThreads("protoagent.palette.chat")).size).toBe(0);
     // With nothing left to clear, focus lands on the section heading, never <body>.
     expect(document.activeElement?.textContent).toBe("What's using space");
@@ -351,8 +357,10 @@ describe("clearing", () => {
     await click("Clear protoAgent's chats");
     expect(dialog()!.textContent).toMatch(/Removes 1 saved chat \(\d+ KB\) from this browser\./);
     await act(async () => [...dialog()!.querySelectorAll("button")].find((b) => b.textContent === "Clear chats")!.click());
-    await settle();
-    expect((await transcriptStoreIfOpen()!.loadAgent("host")).sessions.map((s) => s.id)).toEqual([id]);
-    expect(node.querySelector('[data-slug="host"]')!.textContent).toContain("1 chat ·");
+    await vi.waitFor(async () => {
+      await settle();
+      expect((await transcriptStoreIfOpen()!.loadAgent("host")).sessions.map((s) => s.id)).toEqual([id]);
+      expect(node.querySelector('[data-slug="host"]')!.textContent).toContain("1 chat ·");
+    });
   });
 });
