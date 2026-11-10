@@ -152,10 +152,34 @@ export const automationApi = {
   // (ADR 0079) — the "Stop goal" action. Returns how many tasks were closed.
   clearGoal(sessionId: string, closeTasks = false) {
     const q = closeTasks ? "?close_tasks=true" : "";
-    return request<{ cleared: boolean; tasks_closed?: number }>(
+    // The delete mints a short-lived `undo_token` (#4955 Q10/§4.5) the Work view's Undo toast
+    // redeems via `undo(token)`; absent when nothing was cleared.
+    return request<{ cleared: boolean; tasks_closed?: number; undo_token?: string }>(
       `/api/goals/${encodeURIComponent(sessionId)}${q}`,
       { method: "DELETE" },
     );
+  },
+
+  // Edit a goal in place (#4955 Q9) — the Work view's Edit button. A PARTIAL update that
+  // changes only the completion-contract fields (outcome/constraints/boundaries/stop_when)
+  // and the two per-goal budgets (max_iterations/no_progress_limit); the condition, verifier,
+  // status and history are set once or owned by the drive loop, so a body naming any of them
+  // is a 400. Written through the goal store's own `set`, which re-fires `goal.changed`.
+  editGoal(
+    sessionId: string,
+    body: {
+      outcome?: string;
+      constraints?: string[];
+      boundaries?: string[];
+      stop_when?: string;
+      max_iterations?: number;
+      no_progress_limit?: number | null;
+    },
+  ) {
+    return request<{ goal: GoalState | null }>(`/api/goals/${encodeURIComponent(sessionId)}`, {
+      method: "PATCH",
+      body,
+    });
   },
 
   // Goal lifecycle (ADR 0079) — re-arm: extend an active goal's iteration budget
@@ -231,9 +255,20 @@ export const automationApi = {
   },
 
   clearWatch(id: string) {
-    return request<{ cleared: boolean }>(`/api/watches/${encodeURIComponent(id)}`, {
+    // Like clearGoal, the delete returns an `undo_token` (#4955 Q10/§4.5) for the Undo toast.
+    return request<{ cleared: boolean; undo_token?: string }>(`/api/watches/${encodeURIComponent(id)}`, {
       method: "DELETE",
     });
+  },
+
+  // Edit a watch in place (#4955) — the Work view's Edit button. A PARTIAL update over the
+  // trusted operator channel (ADR 0067): only keys present in the body change, so a blank
+  // deadline/interval left out is untouched. Maps a rejected spec to 400.
+  editWatch(id: string, body: Record<string, unknown>) {
+    return request<{ ok: boolean; message?: string; watch?: WatchState | null }>(
+      `/api/watches/${encodeURIComponent(id)}`,
+      { method: "PATCH", body },
+    );
   },
 
   // Workflows are an opt-in plugin (plugins/workflows) — it serves /api/plugins/workflows.
