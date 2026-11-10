@@ -232,6 +232,8 @@
 /* Only the handle owns the swipe; transcript scrolling and the home edge stay native. */
 .mshell-work-handle {
   display: flex;
+  align-items: center;
+  justify-content: center;
   width: 100%;
   touch-action: none;
   margin-bottom: var(--pl-space-1);
