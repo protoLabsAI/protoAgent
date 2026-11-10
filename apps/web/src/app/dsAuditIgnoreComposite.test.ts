@@ -51,7 +51,7 @@ const MATCHER = /ds-audit-ignore(-next-line)?(?:[:\s]+([a-z][a-z,\s-]*))?/;
 const TARGETS = [
   { suffix: "/AppDrawer.tsx", line: 77, note: "surface-row button" },
   { suffix: "/AppDrawer.tsx", line: 96, note: "Settings-row button" },
-  { suffix: "/ComposerModelSelect.tsx", line: 126, note: "model-menu trigger" },
+  { suffix: "/ComposerModelSelect.tsx", line: 129, note: "model-menu trigger" },
 ];
 
 describe(`sanctioned composite ${BTN}> DS-audit exceptions (protoContent#551)`, () => {

@@ -1,8 +1,9 @@
-import { useQuery } from "@tanstack/react-query";
-import { useState } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useEffect, useState } from "react";
 import { Button } from "@protolabsai/ui/primitives";
 
 import { api } from "../lib/api";
+import { onConnectionChange, onTopic } from "../lib/events";
 import { errMsg } from "../lib/format";
 import { localChatTurnsQuery } from "../lib/queries";
 
@@ -15,6 +16,26 @@ export async function stopLocalTurns(sessionId: string) {
 
 export function LocalTurnControls({ sessionId, visible }: { sessionId: string; visible: boolean }) {
   const turns = useQuery({ ...localChatTurnsQuery(sessionId), enabled: visible });
+  const qc = useQueryClient();
+  // Pushed, not polled (#5064): refresh when the server says this session's turns changed,
+  // and on every (re)connect so a change made while the stream was down is not missed.
+  useEffect(() => {
+    if (!visible) return;
+    const { queryKey } = localChatTurnsQuery(sessionId);
+    const refresh = () => void qc.invalidateQueries({ queryKey });
+    const offTopic = onTopic("chat.local_turns", (data) => {
+      if (data?.session_id === sessionId) refresh();
+    });
+    let wasConnected: boolean | undefined;
+    const offConnection = onConnectionChange((connected) => {
+      if (connected && wasConnected === false) refresh();
+      wasConnected = connected;
+    });
+    return () => {
+      offTopic();
+      offConnection();
+    };
+  }, [qc, sessionId, visible]);
   const [stopping, setStopping] = useState(false);
   const [error, setError] = useState("");
   if (!turns.data?.turns.length) return null;

@@ -1,4 +1,4 @@
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Fragment, useEffect, useRef, useState } from "react";
 import { errMsg } from "../lib/format";
 import { stopLocalTurns } from "./LocalTurnControls";
@@ -6,7 +6,7 @@ import { stopLocalTurns } from "./LocalTurnControls";
 import { Badge } from "@protolabsai/ui/primitives";
 import { Menu, MenuItem, MenuSeparator, type MenuHandle } from "@protolabsai/ui/menu";
 
-import { runtimeStatusQuery, settingsSchemaQuery } from "../lib/queries";
+import { localChatTurnsQuery, runtimeStatusQuery, settingsSchemaQuery } from "../lib/queries";
 import { chatStore, useChatState } from "./chat-store";
 import { bareModel, composerModelSections, groupByLane, lanesFromOptions, modelPickerData, sameModel } from "./modelForm";
 
@@ -27,6 +27,7 @@ export function ComposerModelSelect() {
   const touchTrigger = useRef(false);
   const [switching, setSwitching] = useState(false);
   const [switchError, setSwitchError] = useState("");
+  const qc = useQueryClient();
   useEffect(() => {
     if (switching || !restoreAfterSwitch.current) return;
     restoreAfterSwitch.current = false;
@@ -93,6 +94,8 @@ export function ComposerModelSelect() {
           setSwitchError("");
           try {
             await stopLocalTurns(currentSessionId);
+            // The turns this just stopped are gone: refresh the Stop banner now (#5064).
+            void qc.invalidateQueries({ queryKey: localChatTurnsQuery(currentSessionId).queryKey });
             chatStore.setSessionModel(currentSessionId, isDefault ? "" : model);
           } catch (e) {
             setSwitchError(errMsg(e));

@@ -246,3 +246,65 @@ async def test_stop_and_disconnect_preserve_inflight_cleanup(first):
     finally:
         release.set()
         await asyncio.gather(pending, *([stop] if stop else []), return_exceptions=True)
+
+
+@pytest.mark.asyncio
+async def test_turn_changes_are_pushed_not_polled(monkeypatch):
+    """#5064: the console refreshes a session's running REST turns on `chat.local_turns`
+    instead of polling every second, so every change to the set must be published —
+    registration, an operator Stop and the unwind — with metadata only."""
+    from graph.plugins.host import HOST
+
+    events = []
+    monkeypatch.setattr(HOST, "publish", lambda topic, data, **kw: events.append((topic, data, kw)))
+    entered = asyncio.Event()
+
+    @local_turns.tracked
+    async def driver(message, session_id, **kwargs):
+        entered.set()
+        await asyncio.Event().wait()
+
+    task = asyncio.create_task(driver("secret prompt", "pushed", origin="api-chat"))
+    await asyncio.wait_for(entered.wait(), 5)
+    assert events == [("chat.local_turns", {"session_id": "pushed"}, {"retain": False})]
+    turn_id = local_turns.snapshot("pushed")[0]["id"]
+    assert await local_turns.cancel("pushed", turn_id)
+    await task
+    assert local_turns.snapshot("pushed") == []
+    # Registered, Stop requested, unwound: three changes, never any prompt content.
+    assert [data for _, data, _ in events] == [{"session_id": "pushed"}] * 3
+
+    # A detached turn announces its own registration once, not again from the nested wrapper.
+    events.clear()
+    release = asyncio.Event()
+
+    async def work():
+        await release.wait()
+        return [{"role": "assistant", "content": "done"}]
+
+    local_turns.start_detached(work(), session_id="detached", origin="api-chat", error_adapter=lambda exc: {})
+    await asyncio.sleep(0)
+    assert [data for _, data, _ in events] == [{"session_id": "detached"}]
+    release.set()
+    for _ in range(20):
+        if not local_turns.snapshot("detached"):
+            break
+        await asyncio.sleep(0.01)
+    assert local_turns.snapshot("detached") == []
+    assert [data for _, data, _ in events][-1] == {"session_id": "detached"}
+
+
+@pytest.mark.asyncio
+async def test_a_failing_bus_never_breaks_a_turn(monkeypatch):
+    from graph.plugins.host import HOST
+
+    def broken(*args, **kwargs):
+        raise RuntimeError("bus down")
+
+    monkeypatch.setattr(HOST, "publish", broken)
+
+    @local_turns.tracked
+    async def driver(message, session_id, **kwargs):
+        return [{"role": "assistant", "content": "ok"}]
+
+    assert await driver("hi", "bus-down", origin="api-chat") == [{"role": "assistant", "content": "ok"}]

@@ -6,6 +6,28 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { api } from "../lib/api";
 import { LocalTurnControls, stopLocalTurns } from "./LocalTurnControls";
 
+// The server pushes `chat.local_turns`; capture the subscriptions instead of opening a stream.
+const bus = vi.hoisted(() => ({
+  topics: new Map<string, Set<(data: Record<string, unknown>) => void>>(),
+  connection: new Set<(connected: boolean) => void>(),
+}));
+vi.mock("../lib/events", () => ({
+  onTopic: (topic: string, fn: (data: Record<string, unknown>) => void) => {
+    const set = bus.topics.get(topic) ?? new Set();
+    set.add(fn);
+    bus.topics.set(topic, set);
+    return () => set.delete(fn);
+  },
+  onConnectionChange: (fn: (connected: boolean) => void) => {
+    bus.connection.add(fn);
+    fn(true);
+    return () => bus.connection.delete(fn);
+  },
+}));
+const emit = (data: Record<string, unknown>) => bus.topics.get("chat.local_turns")?.forEach((fn) => fn(data));
+const setConnected = (connected: boolean) => bus.connection.forEach((fn) => fn(connected));
+const settle = () => act(async () => { await new Promise((resolve) => setTimeout(resolve, 20)); });
+
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 let container: HTMLDivElement;
 let root: Root;
@@ -66,4 +88,39 @@ it("does not finish a model-switch stop until every older request has settled", 
   finish({ stopped: true });
   await pending;
   expect(done).toBe(true);
+});
+
+it("refreshes when the server pushes a change for this session, and never polls (#5064)", async () => {
+  let running = false;
+  const list = vi.spyOn(api, "localChatTurns").mockImplementation(async () => ({ turns: running ? [turn] : [] }));
+  await render();
+  expect(container.textContent).not.toContain("Chat request still running");
+  const initial = list.mock.calls.length;
+  // Idle: no request at all for well past the old one-second poll.
+  await act(async () => { await new Promise((resolve) => setTimeout(resolve, 1300)); });
+  expect(list.mock.calls.length).toBe(initial);
+  running = true;
+  await act(async () => { emit({ session_id: "other" }); });
+  await settle();
+  expect(container.textContent).not.toContain("Chat request still running");
+  await act(async () => { emit({ session_id: "same" }); });
+  await settle();
+  expect(container.textContent).toContain("Chat request still running");
+  running = false;
+  await act(async () => { emit({ session_id: "same" }); });
+  await settle();
+  expect(container.textContent).not.toContain("Chat request still running");
+});
+
+it("re-reads the running turns after the event stream reconnects", async () => {
+  let running = false;
+  vi.spyOn(api, "localChatTurns").mockImplementation(async () => ({ turns: running ? [turn] : [] }));
+  await render();
+  running = true; // a change the console missed while disconnected
+  await act(async () => { setConnected(false); });
+  await settle();
+  expect(container.textContent).not.toContain("Chat request still running");
+  await act(async () => { setConnected(true); });
+  await settle();
+  expect(container.textContent).toContain("Chat request still running");
 });

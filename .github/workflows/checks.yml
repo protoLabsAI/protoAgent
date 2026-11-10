@@ -548,7 +548,7 @@ jobs:
         run: npm run test:unit --workspace @protoagent/web
 
   web-e2e-shard:
-    name: Web E2E shard ${{ matrix.shard }}/4
+    name: Web E2E ${{ matrix.lane }}
     # Path-scoped: the job drives the built SPA against a mock backend, so a PR that
     # touches nothing it reads (scripts/windows_ci_scope.py `_needs_web`) skips it.
     # Fails OPEN: if classification itself failed, the shards still run.
@@ -565,14 +565,22 @@ jobs:
     # @playwright/test version — a guard step below fails loudly on drift.
     container:
       image: mcr.microsoft.com/playwright:v1.61.1-noble
-    # Sharded 4 ways: one runner took ~15 min for the ~830-test suite at 2 workers
-    # (17-21 min job wall-clock). Each shard builds the SPA (~15 s) and runs a quarter
-    # of the suite at the config's CI worker count. Don't re-throttle workers to calm
-    # one flaky spec — fix or quarantine the spec.
+    # Chromium-engine projects sharded 4 ways, plus one dedicated WebKit lane. One runner
+    # took ~15 min for the ~860-test suite at 2 workers. Playwright shards in project order,
+    # so plain --shard put ALL 56 WebKit tests in shard 4/4 next to 110 Chromium ones at 4
+    # workers on 4 vCPUs: unrelated WebKit tests took turns timing out (screenshots,
+    # reload loops) and that shard always ran 2-3 min longer (2026-11-10). WebKit now runs
+    # alone at 2 workers, one per 2 vCPUs. Don't re-throttle the Chromium shards to calm a
+    # flaky spec — fix or quarantine the spec.
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2, 3, 4]
+        include:
+          - { lane: shard 1/4, id: s1, args: --project=flows --project=chromium --project=mobile --project=tablet --shard=1/4 }
+          - { lane: shard 2/4, id: s2, args: --project=flows --project=chromium --project=mobile --project=tablet --shard=2/4 }
+          - { lane: shard 3/4, id: s3, args: --project=flows --project=chromium --project=mobile --project=tablet --shard=3/4 }
+          - { lane: shard 4/4, id: s4, args: --project=flows --project=chromium --project=mobile --project=tablet --shard=4/4 }
+          - { lane: WebKit, id: webkit, args: --project=webkit --project=mobile-webkit --workers=2 }
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7
@@ -601,12 +609,12 @@ jobs:
         # deterministic mock backend (apps/web/e2e/mock-server.mjs) — no Python,
         # model, or network. Guards the operator-console rendering contract:
         # tool-call cards, markdown, slash commands, runtime panel.
-        run: npm run test:e2e --workspace @protoagent/web -- --shard=${{ matrix.shard }}/4
+        run: npm run test:e2e --workspace @protoagent/web -- ${{ matrix.args }}
       - name: Preserve scrollback paint evidence
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: web-e2e-paint-evidence-${{ matrix.shard }}
+          name: web-e2e-paint-evidence-${{ matrix.id }}
           path: apps/web/test-results/
           if-no-files-found: ignore
           retention-days: 14
