@@ -22,3 +22,16 @@ test("view keyboard menu and collapsed rail menu open the correct surface", asyn
   await dialog.getByRole("button", { name: "Close", exact: true }).click();
   await expect(dialog).toHaveCount(0);
 });
+
+test("right-clicking blank space inside Work opens its view menu", async ({ page }) => {
+  await page.goto("/app/", { waitUntil: "load" });
+  const list = page.locator('.work-view[data-frame="rail"] .work-view__list');
+  await expect(list).toBeVisible();
+  // Click the pane's padding: the full-height child, not SurfaceHost, receives this event.
+  await list.click({ button: "right", position: { x: 2, y: 2 } });
+  await page.getByRole("menuitem", { name: "Open in large window", exact: true }).click();
+  const dialog = page.getByRole("dialog");
+  await expect(dialog.getByRole("heading", { name: "Work", exact: true })).toBeVisible();
+  await dialog.getByRole("button", { name: "Dock to rail", exact: true }).click();
+  await expect(list).toBeVisible();
+});

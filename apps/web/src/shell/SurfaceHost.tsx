@@ -108,9 +108,15 @@ export function SurfaceHost({
       aria-haspopup={canExpand ? "menu" : undefined}
       tabIndex={canExpand ? 0 : -1}
       onContextMenu={(e) => {
-        // Only our own background belongs to this menu. Child panels, editors and
-        // custom menus retain their events; iframe events never bubble here.
-        if (!canExpand || e.defaultPrevented || e.target !== e.currentTarget || window.getSelection()?.toString()) return;
+        // Blank space in full-size child panels is also view background. Let child
+        // menus handle the event first, and preserve native menus on controls/editors.
+        // Events inside an iframe never bubble here; its rail menu remains available.
+        if (!canExpand || e.defaultPrevented || window.getSelection()?.toString()) return;
+        if (!(e.target instanceof Element) || !e.currentTarget.contains(e.target)) return;
+        const control = e.target.closest(
+          'input, textarea, select, button, a[href], iframe, audio, video, summary, [contenteditable]:not([contenteditable="false"]), [role="button"], [role="link"], [role="textbox"], [tabindex]',
+        );
+        if (control && control !== e.currentTarget && e.currentTarget.contains(control)) return;
         openContextMenu("surface-view", e, { id: view.id });
       }}
       onKeyDown={(e) => {

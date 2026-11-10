@@ -64,6 +64,24 @@ describe("SurfaceHost rail frame", () => {
     expect(useUI.getState().surfaceModal?.viewId).toBe("work");
   });
 
+  it("opens from nested panel background without replacing a child's custom menu", () => {
+    act(() => root.render(<SurfaceHost frame="rail" view={work}>
+      <div style={{ flex: 1 }}><section data-testid="background" /></div>
+      <div onContextMenu={(e) => {
+        e.preventDefault();
+        useContextMenuStore.getState().openMenu("child-menu", e.clientX, e.clientY);
+      }}><span data-testid="custom">Custom content</span></div>
+    </SurfaceHost>));
+    const backgroundEvent = new MouseEvent("contextmenu", { bubbles: true, cancelable: true });
+    act(() => container.querySelector('[data-testid="background"]')!.dispatchEvent(backgroundEvent));
+    expect(backgroundEvent.defaultPrevented).toBe(true);
+    expect(useContextMenuStore.getState()).toMatchObject({ open: true, type: "surface-view", ctx: { id: "work" } });
+    act(() => container.querySelector('[data-testid="custom"]')!.dispatchEvent(
+      new MouseEvent("contextmenu", { bubbles: true, cancelable: true }),
+    ));
+    expect(useContextMenuStore.getState().type).toBe("child-menu");
+  });
+
   it.each(["ContextMenu", "F10"])("opens the view menu with %s", (key) => {
     act(() => root.render(<SurfaceHost frame="rail" view={work}>{content("work")}</SurfaceHost>));
     const host = container.querySelector<HTMLElement>('[role="region"]')!;
@@ -75,11 +93,15 @@ describe("SurfaceHost rail frame", () => {
 
   it("leaves child editing, custom menus, iframe targets and selected text alone", () => {
     act(() => root.render(<SurfaceHost frame="rail" view={work}>
-      <input /><div contentEditable suppressContentEditableWarning>Editable</div>
-      <button onContextMenu={(e) => e.preventDefault()}>Custom</button><iframe title="Plugin" />
+      <input /><textarea /><select /><a href="#"><span>Link</span></a>
+      <div role="button"><span>Action</span></div>
+      <div contentEditable suppressContentEditableWarning><span>Editable</span></div>
+      <button>Action</button><iframe title="Plugin" />
     </SurfaceHost>));
-    for (const child of container.querySelectorAll("input, [contenteditable], button, iframe")) {
-      act(() => child.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true })));
+    for (const child of container.querySelectorAll("input, textarea, select, a span, [role=button] span, [contenteditable] span, button, iframe")) {
+      const event = new MouseEvent("contextmenu", { bubbles: true, cancelable: true });
+      act(() => child.dispatchEvent(event));
+      expect(event.defaultPrevented).toBe(false);
       act(() => child.dispatchEvent(new KeyboardEvent("keydown", { key: "ContextMenu", bubbles: true })));
       expect(useContextMenuStore.getState().open).toBe(false);
     }
