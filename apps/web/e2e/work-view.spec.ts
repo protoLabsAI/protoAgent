@@ -102,9 +102,13 @@ test("modal traps keyboard focus in both directions and Escape closes it", async
   await expect(first).not.toBeFocused();
   await page.keyboard.press("Tab");
   await expect(first).toBeFocused();
-  // Move off Dock's tooltip: Escape dismisses that transient layer first.
+  // Move off Dock's tooltip and wait for its exit animation to unmount it.
+  // Focus moving to Close alone does not mean Radix has removed the tooltip's
+  // Escape listener: that transient layer can still consume the next Escape.
+  await page.mouse.move(0, 0);
   await page.keyboard.press("Tab");
   await expect(dialog.getByRole("button", { name: "Close", exact: true })).toBeFocused();
+  await expect(page.getByRole("tooltip", { includeHidden: true })).toHaveCount(0);
   await page.keyboard.press("Escape");
   await expect(dialog).toHaveCount(0);
   await expect(railView(page)).toBeVisible();
