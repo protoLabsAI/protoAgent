@@ -35,10 +35,11 @@
 // Kept store-only (no component state) so any surface can mount it; HITL and
 // transient-status hooks are injected by the caller.
 
-import { api, supersededByFromStatus, type DurableChatTurn, type TurnStreamHandlers } from "../lib/api";
+import { api, supersededByFromStatus, textFromParts, type DurableChatTurn, type TurnStreamHandlers } from "../lib/api";
 import type { ChatMessage, HitlPayload } from "../lib/types";
 import { chatStore } from "./chat-store";
 import { applyDelegateProgress } from "./delegateProgress";
+import { isEmptyPlaceholder } from "./roomBubble";
 import { isLiveServerTurn, serverTurnLabel } from "./server-turn-store";
 import { messagesFromDurableTurns } from "./sessionHydration";
 import { beginReattach, reconcileSessionStatus } from "./sessionLiveness";
@@ -333,6 +334,8 @@ export function reattachTurn(sessionId: string, assistantId: string, taskId: str
     onPaused = () => resolve("paused");
   });
 
+  let continuationIndex = 0;
+  let continuationCount = 0;
   const handlers: TurnStreamHandlers = {
     signal: controller.signal,
     // Every Task frame is a full authoritative snapshot, not a delta. Reset
@@ -345,8 +348,16 @@ export function reattachTurn(sessionId: string, assistantId: string, taskId: str
       // split to place a consumed steer / delegation folds back to one bubble first
       // (resetTurnForSnapshot) — the snapshot flattens every text frame into one
       // accumulation and cannot honestly re-derive where the split belonged.
+      // Stored operator continuations DO retain their boundaries; the callback
+      // below rebuilds those pauses in order while reusing their answer rows.
       const cur = chatStore.getSnapshot().sessions.find((s) => s.id === sessionId);
-      if (cur) chatStore.updateMessages(sessionId, resetTurnForSnapshot(cur.messages, assistantId));
+      if (cur) {
+        continuationIndex = cur.messages.findIndex((m) =>
+          m.id === assistantId || m.splitOf === assistantId || m.id?.startsWith(`${assistantId}-answer-`),
+        );
+        continuationCount = 0;
+        chatStore.updateMessages(sessionId, resetTurnForSnapshot(cur.messages, assistantId));
+      }
       updateMessage(sessionId, assistantId, (m) => ({
         ...m,
         content: "",
@@ -388,6 +399,46 @@ export function reattachTurn(sessionId: string, assistantId: string, taskId: str
     },
     onCost: (usage) => updateMessage(sessionId, assistantId, (m) => applyUsage(m, usage)),
     onContext: (contextWindow) => updateMessage(sessionId, assistantId, (m) => ({ ...m, contextWindow })),
+    onContinuationMessage: (message) => {
+      if (message.metadata?.hidden === true || message.metadata?.origin) return;
+      const display = message.metadata?.display;
+      const text = typeof display === "string" ? display : textFromParts(message.parts);
+      if (!text) return;
+      const cur = chatStore.getSnapshot().sessions.find((s) => s.id === sessionId);
+      const assistant = cur?.messages.find((m) => m.id === assistantId);
+      if (!cur || !assistant) return;
+      const messages = [...cur.messages];
+      const frozen: ChatMessage[] = [];
+      if (!isEmptyPlaceholder(assistant) || assistant.decisionId) {
+        frozen.push({
+          ...assistant,
+          id: `${assistantId}-continuation-${continuationCount}`,
+          splitOf: assistantId,
+          status: "done",
+          paused: undefined,
+          toolCalls: assistant.toolCalls?.map((call) =>
+            call.status === "running" ? { ...call, status: "done" as const, paused: undefined } : call,
+          ),
+        });
+      }
+      // Snapshot reset keeps operator rows. Reuse the next answer in order, including
+      // identical answers to different pauses, instead of adding another on every retry.
+      const tail = messages.findIndex((m) => m.id === assistantId);
+      const answerIndex = messages.findIndex((m, index) =>
+        index >= continuationIndex && index < tail && m.role === "user" && m.content === text,
+      );
+      const reuse = answerIndex !== -1;
+      if (reuse) continuationIndex = answerIndex;
+      messages.splice(continuationIndex, 0, ...frozen, ...(reuse ? [] : [{
+        id: `${assistantId}-answer-replay-${continuationCount}`,
+        role: "user" as const, content: text, status: "done" as const,
+      }]));
+      continuationIndex += frozen.length + 1;
+      continuationCount += 1;
+      chatStore.updateMessages(sessionId, messages.map((m) => m.id === assistantId ? {
+        id: assistantId, role: "assistant", content: "", status: "streaming", taskId,
+      } : m));
+    },
     onHitlPayload: (payload) => updateMessage(sessionId, assistantId, (m) => applyDecisionIdentity(m, payload)),
     onInputRequired: (payload) => hooks.onHitl?.(payload),
     onFailed: () => {

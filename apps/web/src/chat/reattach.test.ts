@@ -1209,3 +1209,52 @@ describe("reattach footer time matches a reload", () => {
     expect(assistantMessage(sessionId)!.createdAt).toBeGreaterThanOrEqual(before);
   });
 });
+
+describe("reattach preserves each decision pause", () => {
+  const messagesOf = (id: string) => chatStore.getSnapshot().sessions.find((s) => s.id === id)!.messages;
+  it.each([
+    ["working", true], ["completed", true], ["input-required", true], ["working", false],
+  ] as const)("rebuilds continuation boundaries through repeated %s snapshots (hydrated=%s)", async (state, restored) => {
+    const decision = (id: string) => ({
+      role: "ROLE_AGENT",
+      parts: [{ data: { kind: "decision", decision_id: id, question: "Ship?" }, metadata: { mimeType: "application/vnd.protolabs.hitl-v1+json" } }],
+    });
+    const history = [
+      { role: "ROLE_USER", parts: [{ text: "Release" }] },
+      ...(restored ? [{ role: "ROLE_AGENT", parts: [], metadata: { "https://proto-labs.ai/a2a/ext/tool-call-v1": { toolCallId: "decision-tool", name: "request_decision", phase: "started", args: "{}" } } }] : []),
+      decision("decision-A"), decision("decision-A"),
+      { role: "ROLE_USER", parts: [{ text: "Ship" }], metadata: { hitl_resume: true } },
+      decision("decision-B"), decision("decision-B"),
+    ];
+    const turn = {
+      task_id: TASK_ID, state, last_updated: "2026-08-20T12:00:00Z", text: "answer",
+      status: { state }, history, artifacts: [{ parts: [{ text: "answer" }] }],
+    };
+    const hydrated = messagesFromDurableTurn(turn);
+    const session = chatStore.createSession();
+    const anchor = hydrated[hydrated.length - 1].id!;
+    chatStore.updateMessages(session.id, restored ? hydrated : [hydrated[0], {
+      id: anchor, role: "assistant", content: "", status: "streaming", taskId: TASK_ID,
+    }]);
+    const shape = (messages: typeof hydrated) => messages.map((m) => ({
+      role: m.role, content: m.content, decisionId: m.decisionId,
+      tools: m.toolCalls?.map((c) => ({ id: c.id, status: c.status })),
+    }));
+    const snapshots: ReturnType<typeof shape>[] = [];
+    resumeTask.mockImplementation(async (_taskId, _sessionId, handlers) => {
+      const dispatch = makeA2ADispatcher(session.id, handlers!);
+      for (let i = 0; i < 2; i += 1) {
+        dispatch({ result: { task: { id: TASK_ID, ...turn } } });
+        snapshots.push(shape(messagesOf(session.id)));
+      }
+    });
+    getTask.mockResolvedValue({ state, text: "answer" });
+    const cancel = reattachTurn(session.id, anchor, TASK_ID);
+    await settle();
+    expect(snapshots).toEqual([shape(hydrated), shape(hydrated)]);
+    expect(shape(messagesOf(session.id))).toEqual(shape(hydrated));
+    expect(messagesOf(session.id).filter((m) => m.decisionId).map((m) => m.decisionId)).toEqual(["decision-A", "decision-B"]);
+    expect(messagesOf(session.id).filter((m) => m.role === "user").map((m) => m.content)).toEqual(["Release", "Ship"]);
+    cancel();
+  });
+});

@@ -548,7 +548,7 @@ export type TurnStreamHandlers = {
   onSteerConsumed?: (items: ConsumedSteer[]) => void;
   /** A coding delegate's live state (#3979) — a whole snapshot for the card `evt.id`. */
   onDelegateProgress?: (evt: DelegateProgressEvent) => void;
-  /** A durable rebuild only (`replaySteers`): an operator message that arrived MID-task —
+  /** Snapshot replay: an operator message that arrived MID-task —
    *  the answer that continued a paused task on its own id (A2A §3.4.3, #3930). The
    *  task's opening message is not one; the rebuild draws that bubble separately. */
   onContinuationMessage?: (message: { role?: string; parts?: RawPart[]; metadata?: ExtMetadata }) => void;
@@ -654,9 +654,11 @@ function replayTaskSnapshot(
   // at (its trailing bubble takes the whole answer, see sessionHydration.ts). Otherwise, and
   // for turns recorded before the offsets existed, the text lands after the frames as before.
   const textArtifacts = arts.filter((a) => textFromParts(a.parts)).length;
-  const splitsTurn =
-    !!opts.replaySteers &&
-    history.some((m, i) => (isUserRole(m.role) && history.slice(0, i).some((p) => isUserRole(p.role))) || !!consumedSteersFromParts(m.parts));
+  const splitsTurn = history.some((m, i) =>
+    ((!!opts.replaySteers || !!handlers.onContinuationMessage) &&
+      isUserRole(m.role) && history.slice(0, i).some((p) => isUserRole(p.role))) ||
+    (!!opts.replaySteers && !!consumedSteersFromParts(m.parts)),
+  );
   // The offsets index the text the executor STREAMED. A finished turn's stored answer can
   // differ (a goal drive keeps only its last pass + the goal note; output extraction strips),
   // and an offset from an earlier pass would then cut it mid-word. So a finished turn
@@ -690,7 +692,7 @@ function replayTaskSnapshot(
   let openingSeen = false;
   for (const msg of history) {
     if (isUserRole(msg.role)) {
-      if (opts.replaySteers && openingSeen) handlers.onContinuationMessage?.(msg);
+      if (openingSeen) handlers.onContinuationMessage?.(msg);
       openingSeen = true;
       continue;
     }
