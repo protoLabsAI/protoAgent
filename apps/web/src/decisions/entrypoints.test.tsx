@@ -4,8 +4,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { DecisionRow } from "../lib/api/decisions";
 
-// The two entry points read the fleet-wide useDecisions() singleton; drive it by hand so the
-// tests exercise the composites' rendering (labels, badge, controlled open, focus return) without
+// The widget reads the fleet-wide useDecisions() singleton; drive it by hand so the
+// tests exercise the widget's rendering (labels, badge, controlled open) without
 // the store's network/bus. Integration cases use the real store with API/event boundaries mocked.
 // createRoot + act, like the other console UI suites — no RTL dep.
 const store = vi.hoisted(() => ({
@@ -47,7 +47,6 @@ import { decisionsApi } from "../lib/api/decisions";
 import { decisionsStoreForTest } from "./useDecisions";
 
 import { UtilityWidget } from "../app/UtilityWidget";
-import { DecisionsHeaderButton } from "./DecisionsHeaderButton";
 import {
   DecisionsWidget,
   DECISIONS_DIALOG_WIDTH,
@@ -125,10 +124,6 @@ async function render(node: ReactNode) {
   });
 }
 const pill = () => document.querySelector<HTMLButtonElement>('[data-testid="decisions-widget"]');
-// The phone action button is now the DS ghost icon `Button`; the `aria-haspopup="dialog"` it
-// carries makes it unambiguous against any DS button the sheet renders when open.
-const headBtn = () =>
-  document.querySelector<HTMLButtonElement>('button.pl-btn[aria-haspopup="dialog"]');
 
 // ── UtilityWidget: controlled open + aria-haspopup (Q11, Q12) ────────────────────────────────
 describe("UtilityWidget controlled/uncontrolled open", () => {
@@ -189,18 +184,6 @@ describe("entry points with the shared Decisions store", () => {
     await act(async () => document.querySelector<HTMLButtonElement>(".pl-dialog__close")!.click());
     expect(decisionsStoreForTest.getSnapshot().panelOpen).toBe(false);
     expect(document.querySelector('[role="dialog"]')).toBeNull();
-  });
-
-  it("opens and dismisses the phone sheet through the store and restores focus", async () => {
-    await render(h(DecisionsHeaderButton));
-    const button = headBtn()!;
-    await act(async () => button.click());
-    expect(decisionsStoreForTest.getSnapshot().panelOpen).toBe(true);
-    expect(button.getAttribute("aria-expanded")).toBe("true");
-    await act(async () => document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
-    expect(decisionsStoreForTest.getSnapshot().panelOpen).toBe(false);
-    expect(document.querySelector('[role="dialog"]')).toBeNull();
-    expect(document.activeElement).toBe(button);
   });
 });
 
@@ -287,105 +270,5 @@ describe("DecisionsWidget", () => {
     expect(document.body.textContent).toContain("Your agents stopped to ask you these.");
     // jsdom drops the min() width but keeps the companion max-width, proving a width flowed through.
     expect(dialog!.getAttribute("style") ?? "").toContain("max-width: 100%");
-  });
-});
-
-// ── DecisionsHeaderButton: the phone entry point ─────────────────────────────────────────────
-describe("DecisionsHeaderButton", () => {
-  it("renders nothing while the count is 0 or before the first load", async () => {
-    await render(h(DecisionsHeaderButton));
-    expect(headBtn()).toBeNull();
-    // Count > 0 but not loaded yet (first load) — still hidden.
-    setSnap({ pendingCount: 2 });
-    await render(h(DecisionsHeaderButton));
-    expect(headBtn()).toBeNull();
-    // Loaded with a pending decision — now it appears.
-    setSnap({ loaded: true, state: "ready" });
-    await render(h(DecisionsHeaderButton));
-    expect(headBtn()).not.toBeNull();
-    setSnap({ pendingCount: 0 });
-    await render(h(DecisionsHeaderButton));
-    expect(headBtn()).toBeNull();
-    expect(document.querySelector('[role="dialog"]')).toBeNull();
-  });
-
-  it("shows the icon + a Count beside it, both aria-hidden, with the §4.1 name and aria-haspopup", async () => {
-    setSnap({ loaded: true, state: "ready", pendingCount: 2, decisions: [decision("a")] });
-    await render(h(DecisionsHeaderButton));
-    const btn = headBtn()!;
-    expect(btn.getAttribute("aria-label")).toBe("Decisions, 2 waiting on you");
-    expect(btn.getAttribute("title")).toBe("Decisions waiting on you");
-    expect(btn.getAttribute("aria-haspopup")).toBe("dialog");
-    expect(btn.getAttribute("aria-expanded")).toBe("false");
-    const badge = btn.querySelector(".pl-count")!;
-    expect(badge.textContent).toBe("2");
-    expect(badge.getAttribute("aria-hidden")).toBe("true");
-    expect(btn.querySelector("svg")!.getAttribute("aria-hidden")).toBe("true");
-
-    setSnap({ pendingCount: 20 });
-    await render(h(DecisionsHeaderButton));
-    expect(headBtn()!.querySelector(".pl-count")!.textContent).toBe("9+");
-  });
-
-  it("is the DS ghost icon Button, with no injected stylesheet or hand-rolled ring (Q23, Q24)", async () => {
-    setSnap({ loaded: true, state: "ready", pendingCount: 1, decisions: [decision("a")] });
-    await render(h(DecisionsHeaderButton));
-    const btn = headBtn()!;
-    // The action button renders via the DS `Button variant="ghost" size="md" icon` — size md is
-    // the default so it adds no size class. Its focus ring and tap-target come from the DS.
-    expect(btn.classList.contains("pl-btn")).toBe(true);
-    expect(btn.classList.contains("pl-btn--ghost")).toBe(true);
-    expect(btn.classList.contains("pl-btn--icon")).toBe(true);
-    // The retired hand-rolled class and its injected `<style>` (HEAD_BTN_CSS) are gone — the
-    // component contributes no stylesheet and no `:focus-visible` rule of its own.
-    expect(btn.classList.contains("decisions-head-btn")).toBe(false);
-    expect(host.querySelector("style")).toBeNull();
-    const styleText = [...document.querySelectorAll("style")].map((s) => s.textContent ?? "").join("\n");
-    expect(styleText).not.toContain("decisions-head-btn");
-    expect(styleText).not.toContain("outline: var(--pl-border-width) solid var(--pl-color-fg)");
-  });
-
-  it("opens the bottom sheet and reflects it in aria-expanded", async () => {
-    setSnap({ loaded: true, state: "ready", pendingCount: 1, decisions: [decision("a")] });
-    await render(h(DecisionsHeaderButton));
-    expect(document.querySelector(".pl-drawer--bottom")).toBeNull();
-    await act(async () => headBtn()!.click());
-    expect(store.openPanel).toHaveBeenCalledTimes(1);
-    setSnap({ panelOpen: true });
-    await render(h(DecisionsHeaderButton));
-    expect(document.querySelector(".pl-drawer--bottom")).not.toBeNull();
-    expect(headBtn()!.getAttribute("aria-expanded")).toBe("true");
-  });
-
-  it("returns focus to the button on close", async () => {
-    setSnap({ loaded: true, state: "ready", pendingCount: 1, decisions: [decision("a")] });
-    await render(h(DecisionsHeaderButton));
-    const btn = headBtn()!;
-    setSnap({ panelOpen: true });
-    await render(h(DecisionsHeaderButton));
-    setSnap({ panelOpen: false });
-    await render(h(DecisionsHeaderButton));
-    expect(document.activeElement).toBe(btn);
-  });
-
-  it("falls back to New chat when the button has gone (last decision cleared, §5.1)", async () => {
-    const newChat = document.createElement("button");
-    newChat.textContent = "New chat";
-    document.body.append(newChat);
-    const fallbackFocus = { current: newChat as HTMLElement };
-
-    setSnap({ loaded: true, state: "ready", pendingCount: 1, decisions: [decision("a")], panelOpen: true });
-    await render(h(DecisionsHeaderButton, { fallbackFocus }));
-    expect(headBtn()).not.toBeNull();
-    // The last decision clears while the sheet is open — the button unmounts, the sheet stays.
-    setSnap({ pendingCount: 0, decisions: [] });
-    await render(h(DecisionsHeaderButton, { fallbackFocus }));
-    expect(headBtn()).toBeNull();
-    expect(document.querySelector(".pl-drawer--bottom")).not.toBeNull();
-    // Closing the sheet now returns focus to New chat.
-    setSnap({ panelOpen: false });
-    await render(h(DecisionsHeaderButton, { fallbackFocus }));
-    expect(document.activeElement).toBe(newChat);
-    newChat.remove();
   });
 });
