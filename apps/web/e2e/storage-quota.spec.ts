@@ -44,7 +44,7 @@ test("boots, navigates and reloads with localStorage filled to the real quota", 
     }
   });
   expect(rawWrite).toBe("QuotaExceededError");
-  await expect(page.getByText("Browser storage is full", { exact: true })).toBeVisible();
+  await expect(page.getByText("New messages aren't being saved in this browser", { exact: true })).toBeVisible();
 
   // Layout setters (useUI) and a chat turn all persist — every write fails, none throws.
   await page.getByTestId("settings-widget").click();
