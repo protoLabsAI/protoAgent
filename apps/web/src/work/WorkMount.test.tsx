@@ -122,6 +122,36 @@ describe("Work surface mount", () => {
     expect(host.textContent).not.toContain("to show"); // the "No … to show" unregistered fallback
   });
 
+  it("keeps §5.2's empty-state contract once mounted: only Goals offers a create control", async () => {
+    // The mount is where the Work view replaces WorkPanel, so it's where WorkPanel's per-section
+    // quick-adds (work-add-watch / work-add-task / work-add-schedule) stop being reachable. That
+    // removal is by design: work-view.md §5.2 says the section empty state is a bare `Empty` and
+    // "No other section has an action" — only Goals adds a button (Q15). Watches, tasks and
+    // schedules are agent-created (goal/watch creation also stays on the /goal new & /watch new
+    // chat commands). This locks that contract at the mounted surface so a quick-add can't creep
+    // back in unnoticed. The persistent "This chat" filter button shares the list pane, so drop it.
+    const listActions = () =>
+      [...host.querySelectorAll(".work-view__list button")]
+        .map((el) => el.textContent?.trim() ?? "")
+        .filter((text) => text && text !== "This chat");
+
+    useUI.setState({ surfaceStates: { work: { section: "goals" } } });
+    await render();
+    expect(host.querySelector(".work-view__list")?.textContent).toContain("No goals");
+    expect(listActions()).toContain("New goal");
+
+    for (const [section, emptyCopy] of [
+      ["watches", "No watches"],
+      ["tasks", "No tasks"],
+      ["schedules", "No schedules"],
+    ] as const) {
+      useUI.setState({ surfaceStates: { work: { section } } });
+      await render();
+      expect(host.querySelector(".work-view__list")?.textContent, section).toContain(emptyCopy);
+      expect(listActions(), section).toEqual([]);
+    }
+  });
+
   it("Expand opens Work in the modal and Dock to rail brings it back with the same section", async () => {
     useUI.setState({ surfaceStates: { work: { section: "background" } } });
     await render();
