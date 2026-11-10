@@ -31,6 +31,7 @@ from __future__ import annotations
 import asyncio
 import contextvars
 import functools
+import logging
 import time
 import uuid
 from collections import OrderedDict
@@ -119,6 +120,25 @@ _DETACHED_OWNER: contextvars.ContextVar[asyncio.Task | None] = contextvars.Conte
 # Injectable clock so tests can drive TTL eviction deterministically.
 _clock: Callable[[], float] = time.monotonic
 
+log = logging.getLogger(__name__)
+
+# The console shows a session's running REST turns from ``snapshot`` and refreshes it when
+# this topic arrives, instead of polling every second (#5064). Metadata only: the session
+# id, never a prompt or response. Live-only (``retain=False``): a reconnecting console
+# re-reads the snapshot itself, and per-turn churn must not evict durable replay events.
+CHANGED_TOPIC = "chat.local_turns"
+
+
+def _changed(session_id: str) -> None:
+    """Best-effort publish that ``session_id``'s live turns changed; never raises."""
+    try:
+        from graph.plugins.host import HOST
+
+        if HOST.publish is not None:
+            HOST.publish(CHANGED_TOPIC, {"session_id": session_id}, retain=False)
+    except Exception:  # noqa: BLE001 — a missing/failing bus must never break a chat turn
+        log.exception("failed to publish %s", CHANGED_TOPIC)
+
 
 def snapshot(session_id: str) -> list[dict]:
     """Metadata only — never copy prompts or incognito content into a new store."""
@@ -160,6 +180,7 @@ def start_detached(
     turn = LocalTurn(turn_id, session_id, origin, task)
     _ACTIVE[turn_id] = turn
     _DETACHED_TASKS.add(task)
+    _changed(session_id)
 
     def finished(task):
         _DETACHED_TASKS.discard(task)
@@ -169,6 +190,7 @@ def start_detached(
             _record(turn, "canceled", response=None, messages=None, error=None)
             _ACTIVE.pop(turn_id, None)
             turn.stopped.set()
+            _changed(turn.session_id)
 
     task.add_done_callback(finished)
     return turn_id
@@ -241,6 +263,7 @@ async def cancel(session_id: str, turn_id: str, *, timeout: float = 5) -> bool:
         return False
     if not turn.cancel_requested:
         turn.cancel_requested = True
+        _changed(session_id)
         # Disconnect may already be unwinding this same driver.
         if not turn.task.cancelling():
             turn.task.cancel()
@@ -282,8 +305,11 @@ def tracked(driver):
             _DETACHED_OWNER.set(task)
         turn_id = spec.turn_id if spec is not None else uuid.uuid4().hex
         incognito = spec.incognito if spec is not None else False
-        turn = _ACTIVE.get(turn_id) or LocalTurn(turn_id, session_id, kwargs.get("origin", "local"), task)
+        registered = _ACTIVE.get(turn_id)
+        turn = registered or LocalTurn(turn_id, session_id, kwargs.get("origin", "local"), task)
         _ACTIVE[turn.id] = turn
+        if registered is None:  # start_detached already announced its own registration
+            _changed(turn.session_id)
         try:
             result = await driver(message, session_id, **kwargs)
             if spec is not None:
@@ -329,5 +355,6 @@ def tracked(driver):
         finally:
             _ACTIVE.pop(turn.id, None)
             turn.stopped.set()
+            _changed(turn.session_id)
 
     return run

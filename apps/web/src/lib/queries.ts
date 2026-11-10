@@ -623,7 +623,8 @@ export function localChatTurnsQuery(sessionId: string) {
   return queryOptions({
     queryKey: queryKeys.localChatTurns(sessionId),
     queryFn: () => api.localChatTurns(sessionId),
-    refetchInterval: 1000,
+    // No polling (#5064): the server publishes `chat.local_turns` whenever this session's
+    // running REST turns change, and LocalTurnControls refreshes on it and on reconnect.
   });
 }
 
