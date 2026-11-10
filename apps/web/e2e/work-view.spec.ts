@@ -71,7 +71,7 @@ test("rail → Expand → item → Dock preserves the section, scroll and item",
   await list(railView(page)).evaluate((el) => { el.scrollTop = 300; });
   await expectScroll(railView(page), 300);
   await expandWork(page);
-  await expect(modalView(page).getByRole("tab", { name: /Tasks/ })).toHaveAttribute("aria-selected", "true");
+  await expect(modalView(page).getByRole("button", { name: /Work sections/ })).toHaveAccessibleName("Tasks Work sections");
   await expectScroll(modalView(page), 300);
   await row(modalView(page)).click();
   await expect(modalView(page).getByRole("heading", { name: "Work item 12", exact: true })).toBeVisible();
@@ -83,10 +83,11 @@ test("rail → Expand → item → Dock preserves the section, scroll and item",
   await railView(page).getByRole("button", { name: "Back to Tasks", exact: true }).click();
   await expectScroll(railView(page), scroll);
   await expect(row(railView(page))).toBeVisible();
+  await expect(row(railView(page))).toBeFocused();
   await row(railView(page)).click();
   await expandWork(page);
   await expect(modalView(page).getByRole("heading", { name: "Work item 12", exact: true })).toBeFocused();
-  await expect(modalView(page).getByRole("tab", { name: /Tasks/ })).toHaveAttribute("aria-selected", "true");
+  await expect(modalView(page).getByRole("button", { name: /Work sections/ })).toHaveAccessibleName("Tasks Work sections");
 });
 
 test("modal traps keyboard focus in both directions and Escape closes it", async ({ page }) => {
@@ -141,12 +142,12 @@ test("task delete confirms inline and Undo restores the row", async ({ page }) =
 
 test("Decisions pill opens Decisions; Open Work resets to Overview", async ({ page }) => {
   await page.getByTestId("decisions-widget").click();
-  await expect(modalView(page).getByRole("tab", { name: /Decisions/ })).toHaveAttribute("aria-selected", "true");
+  await expect(modalView(page).getByRole("button", { name: /Work sections/ })).toHaveAccessibleName("Decisions Work sections");
   await expect(modalView(page).locator(".work-row", { hasText: "Ship the Work view?" })).toBeVisible();
   await page.keyboard.press("Escape");
   await page.keyboard.press("ControlOrMeta+Shift+k");
   await page.locator(".pl-cmdk-commands__input").fill("Open Work");
   await page.getByRole("option", { name: "Open Work", exact: true }).click();
-  await expect(modalView(page).getByRole("tab", { name: /Overview/ })).toHaveAttribute("aria-selected", "true");
+  await expect(modalView(page).getByRole("button", { name: /Work sections/ })).toHaveAccessibleName("Overview Work sections");
   await expect(modalView(page).getByRole("region", { name: "Needs you", exact: true })).toBeVisible();
 });

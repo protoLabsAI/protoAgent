@@ -261,6 +261,7 @@ function WatchesList({ ctx }: { ctx: WorkSectionContext }) {
           status={item.status}
           title={item.title}
           meta={watchKind(item.raw as WatchState)}
+          focusKey={`${item.kind}:${item.id}`}
           onOpen={() => ctx.onOpen(item)}
         />
       ))}

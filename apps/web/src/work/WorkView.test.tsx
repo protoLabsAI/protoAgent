@@ -57,10 +57,10 @@ it("orders all five lanes and hides empty lanes and help lines", async () => {
 it("defaults the rail filter on, counts other chats, and shows all on request", async () => {
   data.sources.goals.items = [item("elsewhere", "running", { kind: "goal", sessionId: "there" })];
   await render();
-  expect(host.querySelector('[aria-pressed="true"]')?.textContent).toBe("This chat");
+  expect(host.querySelector('.work-view__scope [aria-pressed="true"]')?.textContent).toBe("This chat");
   expect(host.textContent).toContain("Nothing in this chat. 1 items in other chats.");
   await click("Show all chats");
-  expect(host.querySelector('[aria-pressed="false"]')).toBeTruthy();
+  expect(host.querySelector('.work-view__scope [aria-pressed="true"]')?.textContent).toBe("All");
   expect(host.querySelector(".work-row")?.textContent).toContain("elsewhere");
   expect(useUI.getState().surfaceStates.work.filters?.thisChat).toBe(false);
 });
@@ -68,7 +68,7 @@ it("defaults the rail filter on, counts other chats, and shows all on request", 
 it("defaults the modal filter off and preserves session-less items when enabled", async () => {
   data.sources.tasks.items = [item("global", "running"), item("local", "running", { sessionId: "here" }), item("remote", "running", { sessionId: "there" })];
   await render("modal");
-  expect(host.querySelector('[aria-pressed="false"]')).toBeTruthy();
+  expect(host.querySelector('.work-view__scope [aria-pressed="true"]')?.textContent).toBe("All");
   await click("This chat");
   expect(host.querySelectorAll(".work-row")).toHaveLength(2);
   expect(host.textContent).not.toContain("remote");
@@ -101,6 +101,7 @@ it("round-trips selection, scroll and filters across frames and back", async () 
   await render();
   const list = host.querySelector<HTMLDivElement>(".work-view__list")!;
   expect(list.scrollTop).toBe(75);
+  vi.spyOn(list, "getClientRects").mockReturnValue([{}] as unknown as DOMRectList);
   await act(async () => { list.scrollTop = 120; list.dispatchEvent(new Event("scroll", { bubbles: true })); });
   await act(async () => host.querySelector<HTMLButtonElement>(".work-row")!.click());
   expect(useUI.getState().surfaceStates.work.itemId).toBe("task:row");
@@ -113,7 +114,9 @@ it("round-trips selection, scroll and filters across frames and back", async () 
   expect(useUI.getState().surfaceModal?.state.itemId).toBeUndefined();
   expect(host.querySelector<HTMLDivElement>(".work-view__list")!.scrollTop).toBe(120);
   expect(host.textContent).toContain("Pick an item to see its details.");
-  expect(css).toContain("@container work-view (max-width: 900px)");
+  expect(css).toContain("@container work-view (min-width: 48rem)");
+  expect(css).not.toContain(".pl-");
+  expect(document.activeElement).toBe(host.querySelector(".work-row"));
 });
 
 it("renders quiet unregistered sections and uses registered renderers", async () => {
@@ -122,7 +125,7 @@ it("renders quiet unregistered sections and uses registered renderers", async ()
   expect(host.textContent).toContain("No watches to show");
   await act(async () => { dispose = registerWorkSection("watches", { label: "Watches", render: () => <p>Watch list</p> }); });
   expect(host.textContent).toContain("Watch list");
-  expect(host.querySelectorAll('[role="tab"]')).toHaveLength(9);
+  expect(host.querySelectorAll('[aria-label="Work sections"] [role="tab"]')).toHaveLength(9);
 });
 
 it("summarizes disabled schedules and reveals older Done items with Show more", async () => {
@@ -168,4 +171,65 @@ it("the palette New goal intent opens the registered Goals creator in Work", asy
   } finally {
     catalog.mockRestore();
   }
+});
+
+it("passes raw counts including zero to SideNav and clears selection on scope change", async () => {
+  data.sources.tasks.items = [item("row", "running")];
+  useUI.setState({ surfaceStates: { work: { filters: { thisChat: false, retained: true } } } });
+  await render("modal");
+  const nav = host.querySelector('[aria-label="Work sections"]')!;
+  expect(nav.querySelectorAll(".pl-count")).toHaveLength(9);
+  expect(nav.querySelector(".pl-count .pl-count")).toBeNull();
+  expect(Array.from(nav.querySelectorAll(".pl-count")).map((node) => node.textContent)).toContain("0");
+  await act(async () => host.querySelector<HTMLButtonElement>(".work-row")!.click());
+  expect(document.activeElement).toBe(host.querySelector(".work-view__detail h2"));
+  expect(host.querySelector(".work-row")?.getAttribute("aria-current")).toBe("true");
+  await click("This chat");
+  expect(useUI.getState().surfaceStates.work.itemId).toBeUndefined();
+  expect(useUI.getState().surfaceStates.work.filters).toEqual({ thisChat: true, retained: true });
+});
+
+it("omits only loading badges while retaining ready zero counts", async () => {
+  data.sources.tasks.status = "loading";
+  await render();
+  const nav = host.querySelector('[aria-label="Work sections"]')!;
+  const tabs = Array.from(nav.querySelectorAll('[role="tab"]'));
+  expect(tabs.find((node) => node.textContent === "Tasks")?.querySelector(".pl-count")).toBeNull();
+  expect(tabs.find((node) => node.textContent === "Overview")?.querySelector(".pl-count")).toBeNull();
+  expect(nav.querySelectorAll(".pl-count")).toHaveLength(7);
+  expect(Array.from(nav.querySelectorAll(".pl-count")).every((node) => node.textContent === "0")).toBe(true);
+});
+
+it("restores the originating row for legacy unqualified item ids", async () => {
+  data.sources.tasks.items = [item("legacy", "running")];
+  useUI.setState({ surfaceStates: { work: { section: "tasks", itemId: "legacy" } } });
+  await render();
+  expect(host.querySelector(".work-row")?.getAttribute("aria-current")).toBe("true");
+  await click("Back to Tasks");
+  expect(document.activeElement).toBe(host.querySelector(".work-row"));
+});
+
+it("restores focus to the Goals section row after detail", async () => {
+  data.sources.goals.items = [item("goal-row", "running", {
+    kind: "goal", raw: { session_id: "here", status: "active", outcome: "Goal row" },
+  })];
+  useUI.setState({ surfaceStates: { work: { section: "goals" } } });
+  await render();
+  const row = host.querySelector<HTMLButtonElement>(".work-row")!;
+  await act(async () => row.click());
+  expect(row.getAttribute("aria-current")).toBe("true");
+  expect(document.activeElement).toBe(host.querySelector(".work-view__detail h2"));
+  await click("Back to Goals");
+  expect(document.activeElement).toBe(row);
+});
+
+it("focuses a restored detail when its source finishes loading", async () => {
+  data.sources.tasks.status = "loading";
+  useUI.setState({ surfaceStates: { work: { section: "tasks", itemId: "task:restored" } } });
+  await render();
+  data.sources.tasks.status = "ready";
+  data.sources.tasks.items = [item("restored", "running")];
+  await render();
+  expect(document.activeElement).toBe(host.querySelector(".work-view__detail h2"));
+  expect(host.querySelector(".work-row")?.getAttribute("aria-current")).toBe("true");
 });

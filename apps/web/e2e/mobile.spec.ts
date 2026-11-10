@@ -54,7 +54,8 @@ test("mobile: drawer and handle share the Work sheet and preserve its section", 
   await expect(sheet).toHaveClass(/pl-drawer--full/);
   await expect(page.locator(".mshell-pushed")).toHaveCount(0);
   await expect(page.locator(".chat-stage")).toHaveCount(1);
-  await sheet.getByRole("tab", { name: /^Goals/ }).click();
+  await sheet.getByRole("button", { name: /Work sections/ }).click();
+  await page.getByRole("menuitemradio", { name: "Goals", exact: true }).click();
   await sheet.getByRole("button", { name: "Close", exact: true }).tap();
   await expect(sheet).toHaveCount(0);
   await expect(handle).toBeFocused();
@@ -64,7 +65,7 @@ test("mobile: drawer and handle share the Work sheet and preserve its section", 
   await drawer.getByRole("button", { name: "Work", exact: true }).tap();
   await expect(drawer).toHaveCount(0);
   await expect(sheet).toBeVisible();
-  await expect(sheet.getByRole("tab", { selected: true })).toContainText("Goals");
+  await expect(sheet.getByRole("button", { name: /Work sections/ })).toContainText("Goals");
   await expect(page.locator(".mshell-pushed")).toHaveCount(0);
   await sheet.getByRole("button", { name: "Close", exact: true }).tap();
   await expect(sheet).toHaveCount(0);

@@ -70,13 +70,16 @@ export default defineConfig({
       testMatch: /tablet\.spec\.ts/,
     },
     // WebKit covers the WKWebView plugin-preview harness and the mobile Work handle
-    // layout, terminal decision states, Knowledge history, and storage reload recovery. Chromium also discovers
-    // these specs; other suites are not duplicated.
+    // layout, progressive Work panes, terminal decision states, Knowledge history, and storage reload recovery.
+    // Chromium also discovers these specs; other suites are not duplicated.
     // The Playwright container (checks.yml web-e2e) ships WebKit, so no extra install is needed.
     {
       name: "webkit",
       use: { ...devices["Desktop Safari"] },
-      testMatch: /(?:plugin-preview-.*|work-handle-layout|decision-needed|knowledge-collections|storage-quota)\.spec\.ts$/,
+      testMatch: [
+        /(?:plugin-preview-.*|work-handle-layout|decision-needed|knowledge-collections|storage-quota)\.spec\.ts$/,
+        /work-mobile-layout\.spec\.ts$/,
+      ],
     },
   ],
   webServer: process.env.FLOW_BASE_URL ? undefined : {

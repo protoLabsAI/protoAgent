@@ -73,6 +73,6 @@ test("the running pill keeps its pulsing dot round and shows the whole count", a
   await pill.click();
   const work = page.locator('.work-view[data-frame="modal"]');
   await expect(work).toBeVisible();
-  await expect(work.getByRole("tab", { selected: true })).toContainText("Background agents");
+  await expect(work.getByRole("button", { name: /Work sections/ })).toContainText("Background agents");
   await expect(page.locator(".bg-jobs-list")).toHaveCount(0);
 });

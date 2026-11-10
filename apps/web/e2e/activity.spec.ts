@@ -17,7 +17,7 @@ test("Work Activity preserves pending triage and live completed turns after clea
   await page.getByTestId("activity-widget").click();
   const work = page.locator('.work-view[data-frame="modal"]');
   await expect(work).toBeVisible();
-  await expect(work.getByRole("tab", { selected: true })).toContainText("Activity");
+  await expect(work.getByRole("button", { name: /Work sections/ })).toContainText("Activity");
   await expect(page.getByTestId("activity-badge")).toHaveCount(0);
   const feed = work.getByTestId("unified-feed");
   await expect(feed).toBeVisible();
@@ -64,5 +64,5 @@ test("Decisions pill opens the Work Decisions section", async ({ page }) => {
   await page.getByTestId("decisions-widget").click();
   const work = page.locator('.work-view[data-frame="modal"]');
   await expect(work).toBeVisible();
-  await expect(work.getByRole("tab", { selected: true })).toContainText("Decisions");
+  await expect(work.getByRole("button", { name: /Work sections/ })).toContainText("Decisions");
 });

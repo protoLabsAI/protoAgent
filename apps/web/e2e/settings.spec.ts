@@ -46,7 +46,7 @@ test("the settings dialog lists the domain groups (host, no scope toggle)", asyn
   await openSettings(page);
   // One consolidated surface — no Global/Workspace segmented toggle (ADR 0048: scope is a
   // per-field badge, not a nav axis).
-  await expect(page.locator(".pl-tabs--segmented")).toHaveCount(0);
+  await expect(page.locator(".settings-overlay .pl-tabs--segmented")).toHaveCount(0);
   // The e2e default (/app/, no /agent/<slug>/) is the host console, so the Agent + Capabilities
   // + host-only Box + This-console groups all render, by domain.
   const sidenav = page.locator(".settings-overlay .pl-sidenav");
