@@ -45,7 +45,7 @@ for (const mode of ["light", "dark"] as const) {
       await page.route("**/api/theme", (route) => route.fulfill({ json: { theme: { mode, overrides: {} } } }));
     });
 
-    test("quiet pill and empty dialog", async ({ page }) => {
+    test("quiet pill and empty Work Decisions section", async ({ page }) => {
       await setup(page, []);
       await page.goto("/app/");
       const pill = page.getByRole("button", { name: "Decisions, nothing waiting", exact: true });
@@ -53,7 +53,9 @@ for (const mode of ["light", "dark"] as const) {
       await expect(pill).not.toContainText("0");
       await screenshot(page, `${mode}-quiet`);
       await pill.click();
-      await expect(page.getByRole("dialog", { name: "Decisions waiting on you" })).toContainText("Nothing is waiting on you.");
+      const work = page.locator('.work-view[data-frame="modal"]');
+      await expect(work.getByRole("tab", { selected: true })).toContainText("Decisions");
+      await expect(work).toContainText("No decisions to show");
       await screenshot(page, `${mode}-empty`);
     });
 
@@ -64,7 +66,11 @@ for (const mode of ["light", "dark"] as const) {
       await pill.hover();
       await expect(page.getByRole("tooltip")).toContainText("and 2 more");
       await pill.click();
-      await expect(page.getByRole("dialog").getByRole("article")).toHaveCount(3);
+      const work = page.locator('.work-view[data-frame="modal"]');
+      await expect(work.getByRole("tab", { selected: true })).toContainText("Decisions");
+      await expect(work.locator(".work-row")).toHaveCount(3);
+      await work.locator(".work-row").first().click();
+      await expect(work.getByRole("article")).toHaveCount(1);
       await screenshot(page, `${mode}-three`);
     });
 
@@ -81,7 +87,9 @@ for (const mode of ["light", "dark"] as const) {
         await expect(page.getByRole("tooltip")).toContainText("Ship the release after the checks pass?");
         if (result === "sent") await screenshot(page, `${mode}-pending-hover`);
         await pill.click();
-        const dialog = page.getByRole("dialog", { name: "Decisions waiting on you" });
+        const dialog = page.locator('.work-view[data-frame="modal"]');
+        await expect(dialog.getByRole("tab", { selected: true })).toContainText("Decisions");
+        await dialog.locator(".work-row").click();
         await dialog.getByRole("button", { name: "Ship the release", exact: true }).click();
         const copy = { sent: 'Sent: "Ship the release".', answered: 'Already answered:',
           expired: "went ahead", withdrawn: "doesn't need this any more", error: "Couldn't send your answer." };

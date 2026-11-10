@@ -24,6 +24,7 @@ import { jobFailureReason } from "../../app/background-jobs";
 import { Markdown } from "../../chat/LazyMarkdown";
 import { chatStore, useChatState } from "../../chat/chat-store";
 import { BackgroundToolFeed, useBackgroundProgress } from "../../app/BackgroundToolFeed";
+import { CopyResult } from "../../app/BackgroundJobs";
 import { SubagentsPanel } from "../../app/SubagentsPanel";
 
 /** A subagent slug (`research-assistant`, `delegate`) as a human display name — never the
@@ -46,6 +47,7 @@ function ResultText({ text }: { text: string }) {
   const [expanded, setExpanded] = useState(false);
   return (
     <div className="work-background__result">
+      <CopyResult text={text} />
       <div style={expanded ? undefined : CLAMP_8}>
         <Markdown>{text}</Markdown>
       </div>
