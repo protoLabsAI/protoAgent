@@ -1742,6 +1742,8 @@ async def test_shared_scope_pins_the_instance_session_through_an_env_copy(monkey
     The child gets a COPY of os.environ with this instance's session pinned; the lock keys
     off the same name; an operator AGENT_BROWSER_SESSION still wins."""
     monkeypatch.delenv("AGENT_BROWSER_SESSION", raising=False)
+    # conftest sets a suite-wide reaper for real daemons; this asserts the PLUGIN adds none.
+    monkeypatch.delenv("AGENT_BROWSER_IDLE_TIMEOUT_MS", raising=False)
     records = []
     monkeypatch.setattr(tools.subprocess, "Popen", _popen_capturing(records))
     await _toolmap(cfg)["browser_snapshot"].ainvoke({})

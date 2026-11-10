@@ -258,6 +258,16 @@ def pytest_configure(config):  # noqa: ARG001
     # setdefault just keeps any pre-fixture read off the dev/CI machine's real file.
     os.environ.setdefault("PROTOAGENT_HOST_CONFIG", "/nonexistent/protoagent-host-config.test.yaml")
 
+    # A dead-man's switch for every real `agent-browser` daemon a test starts. The live
+    # browser tests close their session in a fixture teardown, but a KILLED run (a gate
+    # timeout, a stopped coder, Ctrl-C twice) never reaches it, and the daemon then keeps its
+    # Chrome alive until the machine reboots: 21 of them, up to 10 days old, were holding
+    # most of this machine's swap on 2026-11-10. The daemon reads this once at spawn and
+    # exits, closing Chrome, after that long with no command. The plugin's `cli_env` copies
+    # the process env, so setting it here covers every live module, present and future,
+    # with no per-fixture opt-in. `setdefault`, so a deliberate value still wins.
+    os.environ.setdefault("AGENT_BROWSER_IDLE_TIMEOUT_MS", "180000")
+
 
 @pytest.fixture(autouse=True)
 def _reset_a2a_auth_guard():
