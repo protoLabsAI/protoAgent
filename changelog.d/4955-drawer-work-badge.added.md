@@ -1,0 +1,1 @@
+- **Mobile Work attention count (#4955).** The hamburger drawer's Work row now shows how many items need you, with an accessible count label, so the hamburger alert leads to the right destination.

@@ -49,8 +49,8 @@ const MATCHER = /ds-audit-ignore(-next-line)?(?:[:\s]+([a-z][a-z,\s-]*))?/;
 // inline, so adding it did not move these lines — the acceptance criteria name exactly these
 // positions, and the audit reports its findings there.
 const TARGETS = [
-  { suffix: "/AppDrawer.tsx", line: 74, note: "surface-row button" },
-  { suffix: "/AppDrawer.tsx", line: 91, note: "Settings-row button" },
+  { suffix: "/AppDrawer.tsx", line: 77, note: "surface-row button" },
+  { suffix: "/AppDrawer.tsx", line: 96, note: "Settings-row button" },
   { suffix: "/ComposerModelSelect.tsx", line: 113, note: "model-menu trigger" },
 ];
 
