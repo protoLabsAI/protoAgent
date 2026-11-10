@@ -148,3 +148,29 @@ describe("surface deep links", () => {
     expect(() => formatSurfaceLink("", { section: "overview" })).toThrow();
   });
 });
+
+
+describe("SurfaceHost sheet frame", () => {
+  it("renders a titled full-screen bottom sheet and keeps state across close and reopen", () => {
+    useUI.setState({ rightPanel: "knowledge" });
+    const state = { section: "goals", itemId: "goal-1", filters: { query: "saved" } };
+    act(() => useUI.getState().openSurfaceModal("work", state));
+    act(() => root.render(<SurfaceHost frame="sheet" view={work}>{content("work")}</SurfaceHost>));
+    const sheet = document.querySelector(".pl-drawer--bottom.pl-drawer--full")!;
+    expect(sheet).not.toBeNull();
+    expect(sheet.querySelector(".pl-drawer__title")?.textContent).toBe("Work");
+    expect(sheet.querySelector('[data-testid="content-work"]')).not.toBeNull();
+    expect(document.querySelector(".pl-dialog")).toBeNull();
+    expect(button("Expand")).toBeUndefined();
+    expect(button("Dock to rail")).toBeUndefined();
+    expect(document.activeElement).toBe(sheet.querySelector("[data-surface-focus]"));
+    click("Close");
+    expect(useUI.getState().surfaceModal).toBeNull();
+    expect(useUI.getState().rightPanel).toBe("knowledge");
+    expect(useUI.getState().surfaceStates.work).toEqual(state);
+    act(() => root.render(null));
+    act(() => useUI.getState().openSurfaceModal("work"));
+    act(() => root.render(<SurfaceHost frame="sheet" view={work}>{content("work")}</SurfaceHost>));
+    expect(useUI.getState().surfaceModal?.state).toEqual(state);
+  });
+});

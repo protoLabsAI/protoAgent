@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Maximize2, PanelRight } from "lucide-react";
 import { Button } from "@protolabsai/ui/primitives";
 import { PanelHeader } from "@protolabsai/ui/navigation";
-import { Dialog, Tooltip } from "@protolabsai/ui/overlays";
+import { Dialog, Drawer, Tooltip } from "@protolabsai/ui/overlays";
 
 import { useUI } from "../state/uiStore";
 
@@ -26,15 +26,15 @@ const pendingClose = { current: false };
  * through both frames — core surfaces via `renderSurface`, plugin views via the plugin
  * path — so every right-dock view gets the two moves for free, with no per-view wiring.
  *
- * App mounting/registration lives in the shell (App.tsx): the phone mounts neither host
- * (its surfaces live in the mobile shell), so it shows no Expand / Dock control.
+ * Phones open the same surface state in a full-screen bottom sheet, with no
+ * Expand / Dock control. App mounting lives in the shell (App.tsx).
  */
 export function SurfaceHost({
   frame,
   view,
   children,
 }: {
-  frame: "rail" | "modal";
+  frame: "rail" | "modal" | "sheet";
   view: SurfaceMeta | undefined;
   children: ReactNode;
 }) {
@@ -59,13 +59,13 @@ export function SurfaceHost({
       const target = contentRef.current?.querySelector<HTMLElement>("[data-surface-focus]");
       (target ?? headingRef.current)?.focus();
     };
-    if (frame === "modal" && modal?.viewId === viewId) {
+    if ((frame === "modal" || frame === "sheet") && modal?.viewId === viewId) {
       // A fresh open supersedes any pending Close, so clear the shared guard here — this also
       // keeps the rail branch from inheriting a stale flag across opens.
       pendingClose.current = false;
       // Parent effects run after the Dialog's own focus trap has initialized.
       focusView();
-      setAnnouncement(`${title} opened in a large window.`);
+      setAnnouncement(`${title} opened in ${frame === "sheet" ? "a full-screen sheet" : "a large window"}.`);
     } else if (frame === "rail" && was && !modal && was.viewId === viewId) {
       // The modal just cleared back onto this very rail view. Dock to rail moves focus into the
       // view and announces the move; a plain Close (the Dialog's ✕ / Escape / backdrop) must stay
@@ -113,6 +113,27 @@ export function SurfaceHost({
       {announcement}
     </div>
   );
+
+  if (frame === "sheet") {
+    if (!view) return null;
+    return (
+      <>
+        {status}
+        <Drawer
+          open
+          side="bottom"
+          fullScreen
+          title={view.title}
+          onClose={() => {
+            pendingClose.current = true;
+            useUI.getState().closeSurfaceModal();
+          }}
+        >
+          {body}
+        </Drawer>
+      </>
+    );
+  }
 
   if (frame === "modal") {
     if (!view) return null;

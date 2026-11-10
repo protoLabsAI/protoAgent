@@ -162,7 +162,7 @@ describe("applyNavIntent — surface: opens the large shell MODAL on a section (
     useUI.setState({ mobileActive: "knowledge" });
     const state = section === "new-goal" ? { section: "goals", filters: { create: true } } : { section };
     applyNavIntent(JSON.parse(JSON.stringify({ kind: "surface", id: "work", state })) as NavIntent);
-    expect(useUI.getState().mobileActive).toBe("work");
+    expect(useUI.getState().mobileActive).toBe("knowledge");
     expect(useUI.getState().surfaceStates.work).toEqual(state);
     expect(useUI.getState().surfaceModal).toEqual({ viewId: "work", state });
     expect(useUI.getState().rightCollapsed).toBe(true);

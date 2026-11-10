@@ -1,5 +1,5 @@
 /**
- * VENDORED — @protolabsai/design@0.14.0, src/video-motion.js, byte-for-byte.
+ * VENDORED — @protolabsai/design@0.14.1, src/video-motion.js, byte-for-byte.
  *
  * Relative dependency of tokens.js; keep this flat sibling allowlisted in _routes.py.
  * DO NOT EDIT BY HAND — copy verbatim from the package.
