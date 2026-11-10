@@ -1325,6 +1325,14 @@ function WorkspaceApp({ runtime }: { runtime: RuntimeStatus | null }) {
           }
         }}
         onRailBackgroundContextMenu={onRailBackgroundContextMenu}
+        onRailDoubleClick={(side, _e, id) => {
+          if (isMobile || side !== "right" || id === "chat") return;
+          // Native double-click follows two selections, which may collapse the dock.
+          // Keep the rail host mounted so it observes Dock and restores focus. Expand
+          // the clicked id, reusing its saved state regardless of the preceding selection.
+          setRightCollapsed(false);
+          useUI.getState().openSurfaceModal(id);
+        }}
         onRailContextMenu={(side, e, id) => {
           // A plugin view's rail id is `plugin:<pluginId>:<viewId>` — resolve the owning
           // plugin's id + display name so the menu can offer "Configure…" (ADR 0036/0059).
