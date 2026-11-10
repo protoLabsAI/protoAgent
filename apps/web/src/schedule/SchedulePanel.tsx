@@ -9,7 +9,7 @@ import {
   useSuspenseQuery,
 } from "@tanstack/react-query";
 import { CalendarClock, Pencil, Plus, Trash2 } from "lucide-react";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useState, type ReactNode } from "react";
 
 import { ScheduleBuilder, type BuilderOut } from "./ScheduleBuilder";
 
@@ -20,7 +20,7 @@ import { api } from "../lib/api";
 import { errMsg } from "../lib/format";
 import { queryKeys, schedulesQuery } from "../lib/queries";
 import type { ScheduledJob } from "../lib/types";
-import { canonicalSchedule, describeSchedule, localZone, parseSchedule } from "./schedule-builder";
+import { canonicalSchedule, describeSchedule, localZone, parseSchedule, type ParsedSchedule } from "./schedule-builder";
 
 // Scheduled jobs (Activity → Schedule). The list is a useSuspenseQuery; add/cancel
 // are useMutations that invalidate it. Adding is a friendly modal that builds the
@@ -32,63 +32,83 @@ import { canonicalSchedule, describeSchedule, localZone, parseSchedule } from ".
 const NEW_INITIAL = { parsed: { mode: "once" as const, onceDate: "", onceTime: "" }, timezone: localZone() };
 
 // Exported so the Work overview's Schedule-card quick-add reuses it (that host owns its
-// own open-state + add mutation) — one form, two hosts.
+// own open-state + add mutation) — one form, two hosts. The Work view's Schedules section
+// reuses it a third way, for in-place EDIT: pass `initial` to seed the prompt + builder
+// (and `title` / `submitLabel` for the edit wording), and wire `onAdd` to the update (PUT)
+// call. The job-id field is for new jobs only, so edit mode hides it.
 export function ScheduleModal({
   open,
   onClose,
   onAdd,
   busy,
+  initial,
+  title,
+  submitLabel,
 }: {
   open: boolean;
   onClose: () => void;
   onAdd: (body: { prompt: string; schedule: string; job_id?: string; timezone?: string }) => void;
   busy: boolean;
+  /** Seed the prompt + builder (edit mode); omitted for the add flow, which starts blank. */
+  initial?: { prompt: string; parsed: ParsedSchedule; timezone: string; schedule?: string };
+  title?: ReactNode;
+  submitLabel?: ReactNode;
 }) {
-  const [prompt, setPrompt] = useState("");
+  const editing = !!initial;
+  const [prompt, setPrompt] = useState(initial?.prompt ?? "");
   const [jobId, setJobId] = useState("");
   const [out, setOut] = useState<BuilderOut>({ schedule: "", valid: false, error: "" });
   const onBuilderChange = useCallback((o: BuilderOut) => setOut(o), []);
-  // Reset to a clean slate each time the modal opens (the builder remounts via `key`).
+  // Re-seed each time the modal opens (the builder remounts via `key` and re-emits `out`).
+  // Keyed on `open` only, so typing isn't wiped by a parent re-render while it's open.
   useEffect(() => {
     if (open) {
-      setPrompt("");
+      setPrompt(initial?.prompt ?? "");
       setJobId("");
-      setOut({ schedule: "", valid: false, error: "" });
+      // The remounted builder emits its state; resetting here would overwrite
+      // that child effect and leave Save disabled until the timing changes.
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
 
-  const canSubmit = !!prompt.trim() && out.valid && !busy;
+  // As in the detail dialog, an unchanged stored schedule can take prompt edits
+  // even when it is a past one-off or a legacy expression.
+  const scheduleUnchanged = initial?.schedule !== undefined
+    && out.schedule.trim() === canonicalSchedule(initial.schedule);
+  const canSubmit = !!prompt.trim() && (out.valid || scheduleUnchanged) && !busy;
 
   return (
     <Dialog
       open={open}
       padding="roomy"
       onClose={onClose}
-      title={<><CalendarClock size={16} /> New schedule</>}
+      title={title ?? <><CalendarClock size={16} /> New schedule</>}
       width="min(560px, 94vw)"
       className="schedule-dialog"
       footer={
         <>
           <Button type="button" onClick={onClose}>Cancel</Button>
           <Button type="button" variant="primary" disabled={!canSubmit} data-testid="schedule-submit"
-                  onClick={() => onAdd({ prompt: prompt.trim(), schedule: out.schedule, job_id: jobId.trim() || undefined, timezone: out.timezone })}>
-            <Plus size={16} /> Schedule
+                  onClick={() => onAdd({ prompt: prompt.trim(), schedule: scheduleUnchanged ? initial!.schedule! : out.schedule, job_id: jobId.trim() || undefined, timezone: out.timezone })}>
+            <Plus size={16} /> {submitLabel ?? "Schedule"}
           </Button>
         </>
       }
     >
       <div className="schedule-form" data-testid="schedule-modal">
-        <ScheduleBuilder key={open ? "open" : "closed"} initial={NEW_INITIAL} onChange={onBuilderChange} />
+        <ScheduleBuilder key={open ? "open" : "closed"} initial={initial ?? NEW_INITIAL} onChange={onBuilderChange} />
 
         <label className="field">
           <span>Prompt (delivered to the agent when it fires)</span>
           <Textarea value={prompt} onChange={(e) => setPrompt(e.target.value)} rows={4}
                     placeholder="What the agent should do when this fires" data-testid="schedule-prompt" />
         </label>
-        <label className="field">
-          <span>Job id (optional)</span>
-          <Input value={jobId} onChange={(e) => setJobId(e.target.value)} placeholder="auto" />
-        </label>
+        {!editing && (
+          <label className="field">
+            <span>Job id (optional)</span>
+            <Input value={jobId} onChange={(e) => setJobId(e.target.value)} placeholder="auto" />
+          </label>
+        )}
 
       </div>
     </Dialog>

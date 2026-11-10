@@ -8,6 +8,8 @@ import { WorkOverview, workSections } from "./WorkOverview";
 import { sections, subscribe, getSnapshot } from "./sectionRegistry";
 import "./sections/decisions";
 import "./sections/directives";
+import "./sections/tasks";
+import "./sections/schedules";
 import "./work-view.css";
 
 export { registerWorkSection, type WorkSectionContext } from "./sectionRegistry";
