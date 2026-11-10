@@ -1,0 +1,1 @@
+- **Decision identity survives chat replay.** Assistant messages retain the durable decision ledger ID across live pauses, snapshots, settlement, and restored history, while older transcripts and other input requests remain compatible.

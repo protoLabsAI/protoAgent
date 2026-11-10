@@ -5,7 +5,7 @@
 // Each takes the assistant ChatMessage and returns the next one; callers map
 // over the session's messages.
 
-import type { ChatMessage, ComponentSpec, ToolCall, ToolEvent, TurnUsage } from "../lib/types";
+import type { ChatMessage, ComponentSpec, HitlPayload, ToolCall, ToolEvent, TurnUsage } from "../lib/types";
 import type { ToolArgsEvent } from "../lib/api/a2aStream";
 import { addComponent, addToolRef, appendReasoning, appendText, replaceText } from "./parts";
 import { isTaskPaused } from "./taskState";
@@ -326,4 +326,11 @@ export function createToolArgsTracker() {
       return Object.keys(buffers).length;
     },
   };
+}
+
+/** Retain the ledger handle independently of the active form, including settled replay.
+ * Missing ids (legacy wire or a failed ledger write) never erase a known identity. */
+export function applyDecisionIdentity(message: ChatMessage, payload: HitlPayload): ChatMessage {
+  if (payload.kind !== "decision" || !payload.decision_id) return message;
+  return { ...message, decisionId: payload.decision_id };
 }

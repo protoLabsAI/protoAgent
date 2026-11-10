@@ -554,6 +554,8 @@ export type TurnStreamHandlers = {
   onContinuationMessage?: (message: { role?: string; parts?: RawPart[]; metadata?: ExtMetadata }) => void;
   onCost?: (usage: TurnUsage) => void;
   onContext?: (ctx: ContextWindow) => void;
+  /** Durable HITL metadata, including historical pauses; does not reopen the active form. */
+  onHitlPayload?: (payload: HitlPayload) => void;
   onInputRequired?: (payload: HitlPayload) => void;
   onFailed?: (message: string) => void;
   onDone?: () => void;
@@ -693,6 +695,8 @@ function replayTaskSnapshot(
       continue;
     }
     catchUpText(msg.metadata);
+    const hitl = hitlFromParts(msg.parts);
+    if (hitl) handlers.onHitlPayload?.(hitl);
     const toolEvent = toolEventFromMeta(msg.metadata);
     // Replayed, not live: the client clock between this frame and its pair is the replay's
     // own microseconds, never the call's duration (#4076).
@@ -735,7 +739,9 @@ function replayTaskSnapshot(
   const state = (task.status?.state || "").toString();
   if (/input.required/i.test(state)) {
     const parts = (task.status as { message?: { parts?: RawPart[] } } | undefined)?.message?.parts;
-    handlers.onInputRequired?.(hitlFromParts(parts) || { question: textFromParts(parts) });
+    const payload = hitlFromParts(parts) || { question: textFromParts(parts) };
+    handlers.onHitlPayload?.(payload);
+    handlers.onInputRequired?.(payload);
   }
 }
 
@@ -803,7 +809,9 @@ export function makeA2ADispatcher(
       const progress = delegateProgressFromParts(parts);
       if (progress) handlers.onDelegateProgress?.(progress);
       if (state === "input-required" || state === "TASK_STATE_INPUT_REQUIRED") {
-        handlers.onInputRequired?.(hitlFromParts(parts) || { question: messageText });
+        const payload = hitlFromParts(parts) || { question: messageText };
+        handlers.onHitlPayload?.(payload);
+        handlers.onInputRequired?.(payload);
       }
       if (state === "failed" || state === "TASK_STATE_FAILED") {
         handlers.onFailed?.(messageText || "the turn failed");

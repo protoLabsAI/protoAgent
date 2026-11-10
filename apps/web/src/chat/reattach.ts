@@ -44,6 +44,7 @@ import { messagesFromDurableTurns } from "./sessionHydration";
 import { beginReattach, reconcileSessionStatus } from "./sessionLiveness";
 import {
   applyComponent,
+  applyDecisionIdentity,
   applyReasoning,
   applyText,
   applyToolEventToTurn,
@@ -387,6 +388,7 @@ export function reattachTurn(sessionId: string, assistantId: string, taskId: str
     },
     onCost: (usage) => updateMessage(sessionId, assistantId, (m) => applyUsage(m, usage)),
     onContext: (contextWindow) => updateMessage(sessionId, assistantId, (m) => ({ ...m, contextWindow })),
+    onHitlPayload: (payload) => updateMessage(sessionId, assistantId, (m) => applyDecisionIdentity(m, payload)),
     onInputRequired: (payload) => hooks.onHitl?.(payload),
     onFailed: () => {
       /* terminal failure — the post-stream GetTask below finalizes with the error text */

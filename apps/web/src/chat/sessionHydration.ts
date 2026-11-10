@@ -25,7 +25,7 @@ import { attachmentDisplay, displayWithoutThumbnailNames, validThumbnails } from
 import { rendersText, replaceText, textRuns } from "./parts";
 import { isEmptyPlaceholder, replyClaimsAnswer, roomReplyBubble } from "./roomBubble";
 import { isTaskCanceled, isTaskFailed, isTaskPaused, isTaskTerminal } from "./taskState";
-import { applyComponent, applyReasoning, applyText, applyToolEvent, applyUsage, pauseBubble, stopBubble } from "./turnReducers";
+import { applyComponent, applyDecisionIdentity, applyReasoning, applyText, applyToolEvent, applyUsage, pauseBubble, stopBubble } from "./turnReducers";
 
 // A date-time with no zone designator: `2026-10-09T23:11:04` / `2026-10-09 23:11:04.123`.
 const ZONELESS_DATE_TIME = /^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?$/;
@@ -153,8 +153,9 @@ export function messagesFromDurableTurn(turn: DurableChatTurn): ChatMessage[] {
   // An `@`-addressed turn's answer is its participants' bubbles; its stored answer text
   // only restates them for clients that draw no bubbles (#3449), so it must not land too.
   let answeredByParticipants = false;
+  // A decision handle belongs to its pause bubble even when no text/tool frame was stored.
   const freeze = () => {
-    if (!isEmptyPlaceholder(assistant)) {
+    if (!isEmptyPlaceholder(assistant) || assistant.decisionId) {
       settled.push({
         ...assistant,
         id: `${anchorId}-${settled.length}`,
@@ -193,7 +194,7 @@ export function messagesFromDurableTurn(turn: DurableChatTurn): ChatMessage[] {
       // accumulation, so how much of the prose preceded the interjection is not
       // recoverable. Ids are the steer's own, so a later live settle is a no-op
       // (steerPlacement.placeConsumedSteers dedupes on them).
-      if (!isEmptyPlaceholder(assistant)) {
+      if (!isEmptyPlaceholder(assistant) || assistant.decisionId) {
         settled.push({ ...assistant, id: `${anchorId}-${settled.length}`, status: "done", splitOf: anchorId });
       }
       settled.push(
@@ -215,7 +216,7 @@ export function messagesFromDurableTurn(turn: DurableChatTurn): ChatMessage[] {
       const display = message.metadata?.display;
       const text = typeof display === "string" ? display : textFromParts(message.parts);
       if (!text) return;
-      if (!isEmptyPlaceholder(assistant)) {
+      if (!isEmptyPlaceholder(assistant) || assistant.decisionId) {
         settled.push({
           ...assistant,
           id: `${anchorId}-${settled.length}`,
@@ -228,6 +229,9 @@ export function messagesFromDurableTurn(turn: DurableChatTurn): ChatMessage[] {
       }
       settled.push({ id: `${anchorId}-answer-${settled.length}`, role: "user", content: text, status: "done" });
       assistant = fresh();
+    },
+    onHitlPayload: (payload) => {
+      assistant = applyDecisionIdentity(assistant, payload);
     },
     onReasoning: (delta) => {
       assistant = applyReasoning(assistant, delta);
@@ -294,7 +298,7 @@ export function messagesFromDurableTurn(turn: DurableChatTurn): ChatMessage[] {
   // `settleTurnBubbles` folds the same case away). A non-terminal turn keeps its empty
   // trailing bubble: that is the one a reattach streams into.
   const turnBubbles =
-    settled.length && terminal && isEmptyPlaceholder(assistant) && !assistant.components?.length
+    settled.length && terminal && isEmptyPlaceholder(assistant) && !assistant.decisionId && !assistant.components?.length
       ? settled
       : [...settled, assistant];
   // Stamped on the turn's own bubbles, as the live settle does, so no later producer of
