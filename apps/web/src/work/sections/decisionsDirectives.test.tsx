@@ -340,8 +340,8 @@ describe("Work decision actions", () => {
     expect(host.querySelector(".work-view__list")?.scrollTop).toBe(81);
   });
 
-  it.each([503, 404])("does not restore stale Work query answer controls when reconciliation returns %s", async (status) => {
-    const id = `reconnect-unavailable-${status}`;
+  it("drops a selected decision the server reports gone (404) after reconnect", async () => {
+    const id = "reconnect-gone";
     data.sources.decisions.items = [decisionItem(decisionRow(id))];
     const saved = { section: "decisions", itemId: `decision:${id}`, filters: { thisChat: true }, scrollTop: 81 };
     workState(saved);
@@ -351,22 +351,51 @@ describe("Work decision actions", () => {
       connection.online = false;
       connection.listeners.forEach((listener) => listener(false));
     });
-    // No decision.changed event: Work's independent query keeps its old pending row.
     vi.mocked(decisionsApi.listDecisions).mockResolvedValue({ decisions: [], pending: 0 });
-    vi.mocked(decisionsApi.getDecision).mockRejectedValue(new ApiError(status, "unavailable"));
+    vi.mocked(decisionsApi.getDecision).mockRejectedValue(new ApiError(404, "gone"));
     await act(async () => {
       connection.online = true;
       connection.listeners.forEach((listener) => listener(true));
     });
+    expect(decisionsStoreForTest.getSnapshot().missing[id]).toBe(true);
     expect(host.querySelector('[role="group"][aria-label="Answer"]')).toBeNull();
-    expect(vi.mocked(decisionsApi.getDecision).mock.calls.some(([requested]) => requested === id)).toBe(true);
-    const snapshot = decisionsStoreForTest.getSnapshot();
-    if (status === 404) expect(snapshot.missing[id]).toBe(true);
-    else expect(snapshot.records[id].state).toBe("pending");
-    expect(data.sources.decisions.items[0].status).toBe("needs-you");
     expect(rowFor(`Question ${id}`)).toBeUndefined();
     expect(useUI.getState().surfaceStates.work).toEqual(saved);
-    expect(host.querySelector(".work-view__list")?.scrollTop).toBe(81);
+  });
+
+  it("a settled Work row wins over a shared record still cached as pending (the reconcile GET failed)", async () => {
+    const id = "reconnect-503";
+    const pending = decisionRow(id);
+    data.sources.decisions.items = [decisionItem(pending)];
+    workState({ section: "decisions", itemId: `decision:${id}`, filters: { thisChat: true } });
+    await render();
+    expect(decisionsStoreForTest.getSnapshot().records[id]?.state).toBe("pending");
+    await act(async () => {
+      connection.online = false;
+      connection.listeners.forEach((listener) => listener(false));
+    });
+    vi.mocked(decisionsApi.listDecisions).mockResolvedValue({ decisions: [], pending: 0 });
+    vi.mocked(decisionsApi.getDecision).mockRejectedValue(new ApiError(503, "unavailable"));
+    // Work's own list re-reads on reconnect (useWorkItems) and now carries the settled row.
+    data.sources.decisions.items = [decisionItem(decisionRow(id, { state: "answered", answer_label: "Stop" }))];
+    await act(async () => {
+      connection.online = true;
+      connection.listeners.forEach((listener) => listener(true));
+    });
+    expect(decisionsStoreForTest.getSnapshot().records[id].state).toBe("pending");
+    expect(host.querySelector('[role="group"][aria-label="Answer"]')).toBeNull();
+    expect(host.querySelector(".work-decision-detail")?.textContent).toContain("Stop");
+  });
+
+  it("keeps a new pending decision from Work's list when the shared refresh fails", async () => {
+    data.sources.decisions.items = [];
+    workState({ section: "decisions", filters: { thisChat: true } });
+    await render();
+    expect(decisionsStoreForTest.getSnapshot().loaded).toBe(true);
+    vi.mocked(decisionsApi.listDecisions).mockRejectedValue(new Error("down"));
+    data.sources.decisions.items = [decisionItem(decisionRow("brand-new"))];
+    await render();
+    expect(rowFor("Question brand-new")).toBeTruthy();
   });
 
   it.each(["answered", "expired", "withdrawn", "cancelled"] as const)("shares %s conflicts and retains the selected terminal record", async (state) => {

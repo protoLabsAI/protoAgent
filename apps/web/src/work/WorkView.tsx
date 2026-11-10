@@ -10,6 +10,7 @@ import { useKbIntents } from "../keybindings/intents";
 import { isConnected, onConnectionChange } from "../lib/events";
 import { useDecisions } from "../decisions/useDecisions";
 import { decisionMeta, fromDecision } from "./tone";
+import type { DecisionRow } from "../lib/api/decisions";
 import { useUI } from "../state/uiStore";
 import type { SurfaceState } from "../shell/surfaceState";
 import { useWorkItems, type WorkItem, type WorkItems } from "./useWorkItems";
@@ -26,6 +27,13 @@ import "./work-view.css";
 export { registerWorkSection, type WorkSectionContext } from "./sectionRegistry";
 const emptyState: SurfaceState = {};
 
+/** The shared record to show over Work's row, if any: a settled state is one-way, so a row Work
+ *  already has as settled keeps it over a shared record still cached as pending. */
+function sharedOverride(row: DecisionRow | undefined, shared: DecisionRow | undefined): DecisionRow | undefined {
+  if (!shared) return undefined;
+  return row && row.state !== "pending" && shared.state === "pending" ? undefined : shared;
+}
+
 export function WorkView({ frame = "rail", sessionId }: { frame?: "rail" | "modal"; sessionId?: string }) {
   useSyncExternalStore(subscribe, getSnapshot);
   const state = useUI((s) => s.surfaceStates.work ?? emptyState);
@@ -35,15 +43,11 @@ export function WorkView({ frame = "rail", sessionId }: { frame?: "rail" | "moda
   const agentOnline = useSyncExternalStore(onConnectionChange, isConnected);
   const decisions = useDecisions();
   const allSources = { ...useWorkItems({ sessionId, thisChatOnly: false }) };
-  // The Work query can retain pending rows across an SSE gap. Once the shared store
-  // has loaded, its pending list is authoritative even if a departed row's GET failed
-  // or returned 404. Keep known terminal rows, but never revive stale answer controls.
-  const pendingDecisionIds = new Set(decisions.decisions.map((row) => row.id));
-  allSources.decisions = { ...allSources.decisions, items: allSources.decisions.items.filter((item) => {
-    if (decisions.missing[item.id]) return false;
-    const record = decisions.records[item.id] ?? item.raw as { state: string };
-    return record.state !== "pending" || !decisions.loaded || pendingDecisionIds.has(item.id);
-  }) };
+  // Work lists every decision (history too); the shared store holds the answer path's records.
+  // A settled state is final, so whichever copy has settled wins; otherwise the shared record
+  // wins. A row the server reported gone (404) is dropped. Work's own list catches up on
+  // reconnect (useWorkItems), so neither copy needs to be authoritative over the other.
+  allSources.decisions = { ...allSources.decisions, items: allSources.decisions.items.filter((item) => !decisions.missing[item.id]) };
   const selectedDecisionId = state.itemId?.startsWith("decision:") ? state.itemId.slice(9) : undefined;
   const retained = selectedDecisionId ? decisions.records[selectedDecisionId] : undefined;
   if (retained && retained.state !== "pending" && !allSources.decisions.items.some((item) => item.id === retained.id)) {
@@ -55,7 +59,7 @@ export function WorkView({ frame = "rail", sessionId }: { frame?: "rail" | "moda
   }
   const sources = Object.fromEntries(Object.entries(allSources).map(([key, source]) => [key, {
     ...source, items: source.items.map((item) => {
-      const record = item.kind === "decision" ? decisions.records[item.id] : undefined;
+      const record = item.kind === "decision" ? sharedOverride(item.raw as DecisionRow | undefined, decisions.records[item.id]) : undefined;
       return record ? { ...item, raw: record, status: fromDecision(record.state), meta: decisionMeta(record, !thisChat) } : item;
     }).filter((item) => !thisChat || !sessionId || !item.sessionId || item.sessionId === sessionId),
   }])) as WorkItems;

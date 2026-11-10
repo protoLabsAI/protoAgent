@@ -13,6 +13,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   listeners: new Map<string, Set<(data: Record<string, unknown>) => void>>(),
+  conn: new Set<(connected: boolean) => void>(),
 }));
 vi.mock("../lib/events", () => ({
   onTopic: (topic: string, fn: (data: Record<string, unknown>) => void) => {
@@ -20,6 +21,11 @@ vi.mock("../lib/events", () => ({
     set.add(fn);
     mocks.listeners.set(topic, set);
     return () => set.delete(fn);
+  },
+  onConnectionChange: (fn: (connected: boolean) => void) => {
+    mocks.conn.add(fn);
+    fn(true);
+    return () => mocks.conn.delete(fn);
   },
 }));
 
@@ -221,6 +227,22 @@ describe("useWorkItems — live refresh", () => {
     expect(spies.goals).toHaveBeenCalledTimes(2);
     expect(spies.watches).toHaveBeenCalledTimes(2);
     expect(r.current.decisions.status).toBe("ready");
+  });
+
+  it("refetches decisions once on an offline → online edge, not on subscribe", async () => {
+    const r = mount({ thisChatOnly: false });
+    await flush();
+    expect(spies.decisions).toHaveBeenCalledTimes(1); // the subscribe-time "connected" is not a reconnect
+
+    spies.decisions.mockResolvedValue({ decisions: [dec("d1", "answered", "s1")], pending: 0 });
+    for (const fn of mocks.conn) fn(false);
+    await flush();
+    expect(spies.decisions).toHaveBeenCalledTimes(1);
+    for (const fn of mocks.conn) fn(true);
+    await flush();
+    expect(spies.decisions).toHaveBeenCalledTimes(2);
+    expect(r.current.decisions.items[0]).toMatchObject({ id: "d1", status: "done" });
+    expect(spies.goals).toHaveBeenCalledTimes(1);
   });
 
   it("polls schedules every 60s until a scheduler.changed, then stops", async () => {

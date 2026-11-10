@@ -501,6 +501,18 @@ describe("DecisionCard", () => {
     expect(buttons().find((b) => b.textContent?.trim() === "Hold the release")?.disabled).toBe(false);
   });
 
+  it("drops the options and Try again when a failed send's decision settles elsewhere", async () => {
+    const onAnswer = vi.fn().mockRejectedValue(new Error("network"));
+    await renderNode(<DecisionCard decision={decision("a")} onAnswer={onAnswer} />);
+    await click("Merge with the WARN");
+    expect(document.body.textContent).toContain("Couldn't send your answer");
+    // Same card instance, new record: someone else answered while the error was showing.
+    await renderNode(<DecisionCard decision={{ ...decision("a"), state: "withdrawn" }} onAnswer={onAnswer} />);
+    expect(document.body.textContent).not.toContain("Couldn't send your answer");
+    expect(buttons().some((b) => b.textContent?.trim() === "Try again")).toBe(false);
+    expect(document.querySelector('[role="group"][aria-label="Answer"]')).toBeNull();
+  });
+
   it("treats a 200 with resumed=false as a failed send, not a Sent success", async () => {
     // Delivery to the parked turn failed; the decision is still pending server-side. The card
     // must NOT show "Sent" — it keeps the options enabled and offers Try again (§4.4).
