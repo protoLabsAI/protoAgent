@@ -369,3 +369,138 @@ def test_mutation_returns_snapshot_even_if_deleted_after_commit(store, monkeypat
         assert store.get(result["id"]) is None
     finally:
         other._conn.close()
+
+
+@pytest.mark.parametrize("snapshot_available", [True, False])
+def test_delete_undo_captures_the_row_actually_deleted(store, monkeypatch, snapshot_available):
+    """An update between a legacy snapshot and delete must not be lost by Undo."""
+    from operator_api.routes import _TaskStoreAdapter, _delete_task_with_undo
+    from operator_api.undo import UndoLedger
+
+    ledger = UndoLedger()
+    monkeypatch.setattr("operator_api.undo.LEDGER", ledger)
+    original = store.create("original", session_id="session")
+    adapter = _TaskStoreAdapter(store)
+    # Model a snapshot taken before another client commits an update. The real
+    # store must use its atomic delete path instead of this separate read.
+    monkeypatch.setattr(adapter, "snapshot", lambda issue_id: original if snapshot_available else None)
+    store.update(original["id"], title="latest")
+    result = _delete_task_with_undo(adapter, "", original["id"])
+    assert result["deleted"] is True
+    assert ledger.restore(result["undo_token"]) == "task"
+    assert store.get(original["id"])["title"] == "latest"
+    assert store.get(original["id"])["session_id"] == "session"
+
+
+@pytest.mark.platform_sensitive
+@pytest.mark.asyncio
+async def test_precreated_tasks_concurrent_reads_delete_and_double_undo(store, monkeypatch):
+    """QA bd-vaa.10: eight clients, no concurrent creates, two redeems per token."""
+    import asyncio
+
+    from fastapi import FastAPI
+    from httpx import ASGITransport, AsyncClient
+
+    from operator_api.routes import register_operator_routes
+    from operator_api.undo import UndoLedger
+
+    monkeypatch.setattr("operator_api.undo.LEDGER", UndoLedger())
+    monkeypatch.setattr("tasks.store._publish", lambda *args: None)
+    rows = [store.create(f"task {index}", session_id=f"session-{index}") for index in range(80)]
+    app = FastAPI()
+    register_operator_routes(
+        app, runtime_status=lambda: {}, subagent_list=lambda: [],
+        subagent_run=lambda r: None, subagent_batch=lambda r: None, tasks_store=store,
+    )
+
+    async def exercise(client_index):
+        async with AsyncClient(
+            transport=ASGITransport(app=app, raise_app_exceptions=False), base_url="http://test"
+        ) as client:
+            for iteration in range(3):
+                for original in rows[client_index::8]:
+                    issue_id = original["id"]
+                    url = f"/api/tasks/issues/{issue_id}"
+                    updated, listing = await asyncio.gather(
+                        client.patch(url, json={"title": f"{issue_id}-{iteration}", "status": "in_progress"}),
+                        client.get("/api/tasks/issues"),
+                    )
+                    assert updated.status_code == 200, updated.text
+                    assert listing.status_code == 200, listing.text
+                    snapshot = updated.json()["issue"]
+                    assert await asyncio.to_thread(store.get, issue_id) == snapshot
+                    deleted = await client.delete(url)
+                    assert deleted.status_code == 200, deleted.text
+                    assert deleted.json()["deleted"] is True
+                    token = deleted.json()["undo_token"]
+                    assert token
+                    results = await asyncio.gather(
+                        client.post(f"/api/undo/{token}"), client.post(f"/api/undo/{token}"),
+                    )
+                    assert sorted(r.status_code for r in results) == [200, 404], [r.text for r in results]
+                    assert await asyncio.to_thread(store.get, issue_id) == snapshot
+
+    await asyncio.gather(*(exercise(index) for index in range(8)))
+    assert len(store.list()) == 80
+
+
+@pytest.mark.parametrize("operation", ["get", "list"])
+def test_reads_hold_connection_lock_through_fetch(store, monkeypatch, operation):
+    """Guard the shared-connection fix independently of SQLite build/timing."""
+    row = store.create("original")
+    connection = store._conn
+
+    class GuardedCursor:
+        def __init__(self, cursor):
+            self.cursor = cursor
+
+        def fetchone(self):
+            assert store._lock.locked()
+            return self.cursor.fetchone()
+
+        def fetchall(self):
+            assert store._lock.locked()
+            return self.cursor.fetchall()
+
+    class GuardedConnection:
+        def execute(self, *args):
+            assert store._lock.locked()
+            return GuardedCursor(connection.execute(*args))
+
+    monkeypatch.setattr(store, "_conn", GuardedConnection())
+    if operation == "get":
+        assert store.get(row["id"]) == row
+    else:
+        assert store.list() == [row]
+
+
+@pytest.mark.platform_sensitive
+def test_competing_deletes_return_exactly_one_snapshot(store, monkeypatch):
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Barrier
+
+    row = store.create("original", session_id="session")
+    other = TaskStore(db_path=str(store.path))
+    barrier = Barrier(2)
+    events = []
+
+    def publish(topic, data):
+        # Publication must happen after commit and outside the connection lock.
+        assert store.get(row["id"]) == (None if data["action"] == "deleted" else row)
+        events.append((topic, data))
+
+    monkeypatch.setattr("tasks.store._publish", publish)
+
+    def delete(connection):
+        barrier.wait(timeout=10)
+        return connection.delete_with_snapshot(row["id"])
+
+    try:
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            results = list(pool.map(delete, (store, other)))
+        assert results.count(None) == 1
+        assert [result for result in results if result is not None] == [row]
+        assert events == [("task.changed", {"id": row["id"], "action": "deleted"})]
+        assert store.restore(row) == row
+    finally:
+        other._conn.close()
