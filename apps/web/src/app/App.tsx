@@ -25,6 +25,9 @@ import { ChatAttendance } from "./ChatAttendance";
 import { PluginChangeWatch } from "./PluginChangeWatch";
 import { ServerTurnWatch } from "./ServerTurnWatch";
 import { BackgroundJobs } from "./BackgroundJobs";
+import { DecisionsWidget } from "../decisions/DecisionsWidget";
+import { DecisionsSheet } from "../decisions/DecisionsPanel";
+import { useDecisions } from "../decisions/useDecisions";
 import { ProtoLabsIcon } from "./ProtoLabsIcon";
 import { bootGatePhase, bootGateReady, BOOT_STUCK_MS, BOOT_FAILED_MS } from "./bootGate";
 import { dedupeRailById } from "./rail";
@@ -403,7 +406,28 @@ function WorkspaceApp({ runtime }: { runtime: RuntimeStatus | null }) {
   const openGlobalSettings = useUI((s) => s.openGlobalSettings);
   const closeGlobalSettings = useUI((s) => s.closeGlobalSettings);
   const [drawerOpen, setDrawerOpen] = useState(false);
-  const [sessionSheetOpen, setSessionSheetOpen] = useState(false);
+  const decisions = useDecisions();
+  const [sessionSheetRequested, setSessionSheetRequested] = useState(false);
+  // Notification opens take priority on this render; clear the request before paint
+  // so closing Decisions cannot reopen Sessions. The two sheets never render together.
+  const sessionSheetOpen = sessionSheetRequested && !decisions.panelOpen;
+  useLayoutEffect(() => {
+    if (decisions.panelOpen) setSessionSheetRequested(false);
+  }, [decisions.panelOpen]);
+  const setSessionSheetOpen = (open: boolean) => {
+    if (open) decisions.closePanel();
+    setSessionSheetRequested(open);
+  };
+  const announcedDecisions = useRef(new Set<string>());
+  const [decisionAnnouncements, setDecisionAnnouncements] = useState<{ id: string; text: string }[]>([]);
+  useEffect(() => {
+    const fresh = decisions.decisions.filter((decision) => !announcedDecisions.current.has(decision.id));
+    if (!fresh.length) return;
+    for (const decision of fresh) announcedDecisions.current.add(decision.id);
+    setDecisionAnnouncements(fresh.map((decision) => ({
+      id: decision.id, text: `${decision.agent || "An agent"} needs a decision.`,
+    })));
+  }, [decisions.decisions]);
   const [projectPath, setProjectPath] = useLocalStorageState("protoagent.projectPath", "");
   const queryClient = useQueryClient();
 
@@ -1065,6 +1089,24 @@ function WorkspaceApp({ runtime }: { runtime: RuntimeStatus | null }) {
         backs the desktop quick-command (step 4). */}
     <CommandPalette open={paletteOpen} onOpenChange={setPaletteOpen} registry={paletteRegistry} />
     <div className={`app-shell${isTauriMac ? " is-tauri-mac" : ""}`}>
+      <div
+        role="status"
+        aria-live="polite"
+        aria-atomic="true"
+        data-testid="decision-announcement"
+        style={{ position: "absolute", width: 1, height: 1, overflow: "hidden", clipPath: "inset(50%)" }}
+      >
+        {decisionAnnouncements.map(({ id, text }) => <span key={id}>{text} </span>)}
+      </div>
+      {isMobile && (
+        <DecisionsSheet
+          open={decisions.panelOpen}
+          onClose={decisions.closePanel}
+          decisions={decisions.decisions}
+          loading={!decisions.loaded}
+          onAnswer={decisions.answer}
+        />
+      )}
       {/* Cross-agent awareness: toast + native-notify when ANOTHER agent's turn
           finishes (per-window SSE can't see it — this watches the other slugs'
           persisted in-flight turns and polls their durable tasks via the hub). */}
@@ -1409,6 +1451,7 @@ function WorkspaceApp({ runtime }: { runtime: RuntimeStatus | null }) {
                 {/* The palette's only visible way in (ADR 0057) — an icon pill, AFTER Settings:
                     that one keeps the far-left slot operators already reach for by position. */}
                 <PaletteButton />
+                <DecisionsWidget />
                 {/* Widgets (bottom-left): background subagents (ADR 0050 Phase 3) and the
                     unified feed (#3029) — one pill merging the former inbox + read-only
                     Activity feeds. Each is a pill with a hover info popover + a click dialog. */}
