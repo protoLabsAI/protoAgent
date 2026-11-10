@@ -18,6 +18,7 @@ import { runtimeStatusQuery } from "../lib/queries";
 import { useUI } from "../state/uiStore";
 import { ConfirmDialog } from "@protolabsai/ui/overlays";
 import type { ChatMessage, SystemNoteTone } from "../lib/types";
+import { hasDecisionTranscript, HitlDisplay } from "./HitlDisplay";
 import { HitlForm } from "./HitlForm";
 import { notifyIfHidden } from "../lib/notify";
 import {
@@ -1899,6 +1900,8 @@ export function ChatSessionSlot({
   // components can't evict another's. Created once per slot (the slot outlives individual turns).
   const [componentFrameRegistry] = useState(() => createFrameRegistry());
 
+  const transcriptHandlesDecision = hasDecisionTranscript(hitl, messages);
+
   if (!session) return null;
 
   return (
@@ -1989,7 +1992,8 @@ export function ChatSessionSlot({
             the chat behind it. Other hosts (GoalsPanel) render HitlForm in-flow. */}
         {(hitl || composerForm) && (
           <div className="hitl-float">
-            {hitl && (
+            {hitl && transcriptHandlesDecision && <HitlDisplay display={hitl.display} />}
+            {hitl && !transcriptHandlesDecision && (
               <HitlForm
                 payload={hitl}
                 busy={status === "streaming"}

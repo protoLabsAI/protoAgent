@@ -1,0 +1,1 @@
+- **Reactive decision cards in chat (#4725).** Live and restored transcripts now read durable decision IDs through the shared decision cache and answer flow. Answered, expired, and withdrawn decisions update in place, with no duplicate generic decision form; legacy prompts and inert HITL tables retain their existing behavior.

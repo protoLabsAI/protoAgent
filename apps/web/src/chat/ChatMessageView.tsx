@@ -28,6 +28,7 @@ import { ChatComponent } from "./ChatComponent";
 import { DelegateProgressView } from "./DelegateProgressView";
 import { hideDanglingMarker } from "./danglingMarker";
 import { Markdown } from "./LazyMarkdown";
+import { DecisionTranscript } from "./HitlDisplay";
 import { NoteCard } from "./NoteCard";
 import { openEvalCaseEditor } from "./EvalCaseEditor";
 import { openPromptViewer } from "./PromptViewer";
@@ -416,7 +417,9 @@ export function ChatMessageView({
           {activityLabel ? <span className="chat-streaming-label">{activityLabel}</span> : null}
         </div>
       ) : null}
-      {paused ? (
+      {message.role === "assistant" && message.decisionId?.trim() ? (
+        <DecisionTranscript key={message.decisionId} id={message.decisionId} />
+      ) : paused ? (
         <div className="chat-paused-indicator" role="status">
           <PauseCircle size={13} aria-hidden />
           <span>Waiting for your input</span>

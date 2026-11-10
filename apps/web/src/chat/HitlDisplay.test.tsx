@@ -4,6 +4,15 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { HitlDisplayTable, HitlPayload } from "../lib/types";
 import { HitlForm } from "./HitlForm";
 
+import { decisionsApi, type DecisionRow } from "../lib/api/decisions";
+import { ApiError } from "../lib/api/http";
+import { ChatMessageView } from "./ChatMessageView";
+import { DecisionTranscript, hasDecisionTranscript } from "./HitlDisplay";
+import { messagesFromDurableTurn } from "./sessionHydration";
+import type { ChatMessage } from "../lib/types";
+import slotSource from "./ChatSessionSlot.tsx?raw";
+
+
 // Keep prose synchronous; the form and design-system controls/table are real.
 vi.mock("./LazyMarkdown", () => ({ Markdown: ({ children }: { children: string }) => h("p", null, children) }));
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -175,5 +184,142 @@ describe("HITL inert display", () => {
     render({ ...approval, display: candidate });
     expect(container.querySelector("table")).toBeNull();
     expect(button("Approve").disabled).toBe(false);
+  });
+});
+
+// Exercise the real shared cache, hook and card; only transport and bus are controlled.
+const decisionBus = vi.hoisted(() => new Set<(payload: Record<string, unknown>) => void>());
+vi.mock("../lib/events", () => ({
+  onTopic: (topic: string, callback: (payload: Record<string, unknown>) => void) => {
+    if (topic === "decision.changed") decisionBus.add(callback);
+    return () => decisionBus.delete(callback);
+  },
+  onConnectionChange: () => () => {},
+}));
+vi.mock("../lib/notify", () => ({ notifyIfHidden: vi.fn() }));
+
+
+let sequence = 0;
+const record = (): DecisionRow => ({
+  id: `transcript-${++sequence}`, session_id: "chat-test", agent: "Engineer", question: "Ship?",
+  options: [{ id: "ship", label: "Ship it" }], created_at: "2026-11-08T14:45:00Z",
+  state: "pending", answer: null, answered_at: null, expires_at: null, default_option: null,
+  thread_id: "thread", interrupt_id: "interrupt", context: "", default_action: null,
+  withdraw_reason: null, answered_by: null, answered_surface: null,
+  default_action_text: "carry on without this step", answer_label: null,
+});
+const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
+
+describe("durable decision transcript", () => {
+  let current: DecisionRow;
+  beforeEach(() => {
+    current = record();
+    vi.stubGlobal("ResizeObserver", class { observe() {} disconnect() {} });
+    vi.spyOn(decisionsApi, "listDecisions").mockImplementation(async () => ({
+      decisions: current.state === "pending" ? [current] : [], pending: current.state === "pending" ? 1 : 0,
+    }));
+    vi.spyOn(decisionsApi, "getDecision").mockImplementation(async () => current);
+  });
+  afterEach(() => vi.unstubAllGlobals());
+  const mount = async () => act(async () => {
+    root.render(h(ChatMessageView, { message: {
+      id: "assistant", role: "assistant", content: "", status: "streaming", paused: true, decisionId: current.id,
+    } }));
+    await flush();
+  });
+
+  it.each(["answered", "expired", "withdrawn", "cancelled"] as const)("reacts to pending → %s through the shared bus", async (state) => {
+    await mount();
+    expect(button("Ship it").disabled).toBe(false);
+    expect(container.querySelectorAll('[role="group"][aria-label="Answer"]')).toHaveLength(1);
+    current = { ...current, state, answer_label: "Ship it", answered_at: "2026-11-08T15:00:00Z" };
+    await act(async () => { decisionBus.forEach((fn) => fn({ id: current.id })); await flush(); });
+    expect(button("Ship it")).toBeUndefined();
+    expect(container.textContent).toContain(state === "answered" ? 'You chose "Ship it"' : state === "expired" ? "No answer by" : "doesn't need this any more");
+    expect(container.textContent).not.toContain("Waiting for your input");
+  });
+
+  it("submits once through shared arbitration and uses a 409 terminal record", async () => {
+    const answer = vi.spyOn(decisionsApi, "answerDecision").mockImplementation(async () => {
+      current = { ...current, state: "expired" };
+      return { answered_elsewhere: true, decision: current };
+    });
+    await mount();
+    await act(async () => { button("Ship it").click(); await flush(); });
+    expect(answer).toHaveBeenCalledExactlyOnceWith(current.id, { option_id: "ship", surface: "console" });
+    expect(container.textContent).toContain("No answer by");
+    expect(container.textContent).not.toContain("You chose");
+    expect(button("Ship it")).toBeUndefined();
+    expect(onSubmit).not.toHaveBeenCalled();
+  });
+
+  it("rerenders without duplicate subscriptions, unmounts, and reads the next identity", async () => {
+    await mount();
+    await mount();
+    expect(decisionBus.size).toBe(1);
+    act(() => root.render(null));
+    expect(decisionBus.size).toBe(0);
+    current = { ...record(), question: "A different decision?" };
+    await mount();
+    expect(container.textContent).toContain("A different decision?");
+    expect(container.querySelectorAll("article")).toHaveLength(1);
+  });
+
+  it("keeps a successful answer in the transcript and resets interaction state for a new ID", async () => {
+    vi.spyOn(decisionsApi, "answerDecision").mockImplementation(async () => {
+      current = { ...current, state: "answered", answer_label: "Ship it" };
+      return { answered_elsewhere: false, decision: current, resumed: true };
+    });
+    await mount();
+    await act(async () => { button("Ship it").click(); await flush(); });
+    expect(container.textContent).toContain('You chose "Ship it"');
+    await mount();
+    expect(button("Ship it")).toBeUndefined();
+    current = { ...record(), question: "Ship again?" };
+    await mount();
+    expect(button("Ship it").disabled).toBe(false);
+    expect(container.textContent).not.toContain("You chose");
+  });
+
+  it("shows safe loading and missing-record text without generic answer controls", async () => {
+    vi.mocked(decisionsApi.listDecisions).mockResolvedValue({ decisions: [], pending: 0 });
+    let reject!: (reason: unknown) => void;
+    vi.mocked(decisionsApi.getDecision).mockImplementation(() => new Promise((_resolve, fail) => { reject = fail; }));
+    await act(async () => { root.render(h(DecisionTranscript, { id: current.id })); });
+    expect(container.textContent).toContain("Loading decision");
+    await act(async () => { reject(new ApiError(404, "missing")); await flush(); });
+    expect(container.textContent).toContain("no longer available");
+    expect(container.querySelector("button, textarea")).toBeNull();
+  });
+
+  it("hydrates historical wire identity into the same terminal card without live-submit behavior", async () => {
+    current = { ...current, state: "answered", answer_label: "Ship it" };
+    const payload = { kind: "decision", decision_id: current.id, question: "Ship?" };
+    const messages = messagesFromDurableTurn({
+      task_id: "historic", state: "completed", last_updated: "2026-11-08T15:00:00Z", text: "Shipped.",
+      status: { state: "completed" }, artifacts: [],
+      history: [{ role: "ROLE_AGENT", parts: [{ data: payload, metadata: { mimeType: "application/vnd.protolabs.hitl-v1+json" } }] }],
+    });
+    const message = messages.find((m) => m.decisionId === current.id)!;
+    expect(message).toBeDefined();
+    await act(async () => { root.render(h(ChatMessageView, { message })); await flush(); });
+    expect(container.textContent).toContain('You chose "Ship it"');
+    expect(container.querySelector("button, textarea")).toBeNull();
+  });
+
+  it("only suppresses the generic form for its matching authoritative transcript", () => {
+    const message: ChatMessage = { role: "assistant", content: "Ship?", status: "done", decisionId: current.id };
+    const payload: HitlPayload = { kind: "decision", decision_id: current.id };
+    expect(hasDecisionTranscript(payload, [message])).toBe(true);
+    for (const fallback of [{ kind: "decision" }, { ...payload, decision_id: "" }, { ...payload, decision_id: "other" }, approval, { question: "Generic?", display }] satisfies HitlPayload[]) {
+      expect(hasDecisionTranscript(fallback, [message])).toBe(false);
+    }
+    expect(hasDecisionTranscript(payload, [])).toBe(false);
+    expect(slotSource).toContain("hasDecisionTranscript(hitl, messages)");
+    expect(slotSource).toContain("hitl && !transcriptHandlesDecision && (");
+    expect(slotSource).toContain("hitl && transcriptHandlesDecision && <HitlDisplay display={hitl.display} />");
+    act(() => root.render(h(ChatMessageView, { message: { ...message, decisionId: undefined } })));
+    expect(container.querySelector(".decision-transcript, button, textarea")).toBeNull();
+    expect(decisionsApi.getDecision).not.toHaveBeenCalled();
   });
 });

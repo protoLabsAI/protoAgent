@@ -1,5 +1,8 @@
 import { Table, TBody, Td, Th, THead, Tr } from "@protolabsai/ui/data";
-import type { HitlDisplayTable } from "../lib/types";
+import { useRef } from "react";
+import { DecisionCard } from "../decisions/DecisionCard";
+import { useDecision, useDecisions } from "../decisions/useDecisions";
+import type { ChatMessage, HitlPayload, HitlDisplayTable } from "../lib/types";
 
 const isObject = (value: unknown): value is Record<string, unknown> =>
   value !== null && typeof value === "object" && !Array.isArray(value);
@@ -50,6 +53,37 @@ export function HitlDisplay({ display }: { display: unknown }) {
           ))}
         </TBody>
       </Table>
+    </div>
+  );
+}
+
+/** Only the matching transcript card may replace a live generic decision form. */
+export function hasDecisionTranscript(payload: HitlPayload | null, messages: ChatMessage[]): boolean {
+  return payload?.kind === "decision" && Boolean(payload.decision_id?.trim())
+    && messages.some((message) => message.role === "assistant" && message.decisionId === payload.decision_id);
+}
+
+/** Durable identity is the only input: never synthesize a record from a historical prompt. */
+export function DecisionTranscript({ id }: { id: string }) {
+  const { record, state } = useDecision(id);
+  const { answer } = useDecisions();
+  const host = useRef<HTMLDivElement>(null);
+  const focusComposer = () => host.current?.closest(".chat-session-slot")
+    ?.querySelector<HTMLTextAreaElement>(".composer-wrap textarea")?.focus();
+  return (
+    <div ref={host} className="decision-transcript">
+      {record ? (
+        <DecisionCard
+          key={id}
+          decision={record}
+          presentation="transcript"
+          onAnswer={(optionId) => answer(id, optionId)}
+          onOpenChat={focusComposer}
+          onReplyInChat={focusComposer}
+        />
+      ) : (
+        <p role="status">{state === "missing" ? "This decision is no longer available." : "Loading decision…"}</p>
+      )}
     </div>
   );
 }
