@@ -258,7 +258,7 @@ async def test_restored_schedule_fire_carries_fence(scheduler_client, monkeypatc
     assert client.post(f"/api/undo/{token}").status_code == 200
     http = AsyncMock()
     http.__aenter__.return_value = http
-    http.post.return_value = httpx.Response(200, json={"result": {}})
+    http.post.return_value = httpx.Response(200, json={"result": {"status": {"state": "TASK_STATE_COMPLETED"}}})
     monkeypatch.setattr(httpx, "AsyncClient", lambda **kwargs: http)
     (job,) = sched._claim_due_jobs(datetime.now(UTC))
     assert await sched._fire(job) is True

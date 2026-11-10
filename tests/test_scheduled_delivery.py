@@ -227,3 +227,163 @@ def _async_return(value):
         return value
 
     return _f
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("outcome", ["completed", "failed", "canceled", "missing"])
+@pytest.mark.parametrize("restart", [False, True])
+@pytest.mark.parametrize("disconnect", ["read", "timeout", "refused"])
+async def test_early_handle_disconnect_and_durable_reconciliation(tmp_path, monkeypatch, outcome, restart, disconnect):
+    import asyncio
+
+    import httpx
+    from a2a.server.context import ServerCallContext
+    from a2a.server.tasks import DatabaseTaskStore
+    from a2a_impl.stores import make_sqlite_engine
+    from scheduler.local import LocalScheduler
+    from tests._a2a_app import build_app, drain_handlers, poll_terminal
+
+    gate = asyncio.Event()
+    runs = []
+
+    async def model(text, ctx, **kwargs):
+        runs.append(text)
+        await gate.wait()
+        if outcome == "failed":
+            yield ("error", "deterministic model failure")
+        else:
+            yield ("done", "finished once")
+
+    engine = make_sqlite_engine(str(tmp_path / "tasks.db"))
+    store = DatabaseTaskStore(engine)
+    await store.initialize()
+    app = build_app(model, task_store=store)
+    events = []
+    scheduler = LocalScheduler("reconcile", invoke_url="http://test", db_dir=tmp_path,
+                               event_publish=lambda topic, data: events.append((topic, data)))
+    job = scheduler.add_job("run once", "* * * * *")
+    with scheduler._connect() as db:
+        db.execute("UPDATE jobs SET consecutive_failures = 2, last_error = 'previous failure'")
+    real_client = httpx.AsyncClient
+    disconnected = True
+    methods = []
+
+    class Client(real_client):
+        async def post(self, *args, **kwargs):
+            method = kwargs["json"]["method"]
+            methods.append(method)
+            if method == "GetTask" and disconnected:
+                with scheduler._connect() as db:
+                    claim = db.execute("SELECT * FROM occurrences").fetchone()
+                    assert claim["task_id"]  # persisted BEFORE waiting for completion
+                    assert claim["task_state"] in ("submitted", "working")
+                if disconnect == "refused":
+                    import errno
+                    raise httpx.ConnectError("refused during GetTask") from OSError(errno.ECONNREFUSED, "refused")
+                error = httpx.ReadTimeout if disconnect == "timeout" else httpx.ReadError
+                raise error("deterministic disconnect after handle")
+            return await super().post(*args, **kwargs)
+
+    monkeypatch.setattr(httpx, "AsyncClient", lambda **kw: Client(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"))
+    monkeypatch.setattr("scheduler.local._POLL_INTERVAL_S", 0.001)
+    try:
+        assert await scheduler._fire(job) is None
+        with scheduler._connect() as db:
+            claim = dict(db.execute("SELECT * FROM occurrences").fetchone())
+        task_id = claim["task_id"]
+        assert claim["state"] == "unknown"
+        assert scheduler.get_job(job.id).fire_count == 0
+        assert "pending" in scheduler.get_job(job.id).last_error
+        assert not any(topic == "turn.finished" for topic, _ in events)
+        assert scheduler._claim_due_jobs(datetime.now(UTC)) == []
+        disconnected = False
+        async with real_client(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+            if outcome == "canceled":
+                response = await client.post("/a2a", headers={"A2A-Version": "1.0"}, json={
+                    "jsonrpc": "2.0", "id": "cancel", "method": "CancelTask", "params": {"id": task_id}})
+                assert "error" not in response.json()
+            gate.set()
+            terminal = await poll_terminal(client, task_id)
+            assert terminal["status"]["state"] == "TASK_STATE_" + (
+                "COMPLETED" if outcome == "missing" else outcome.upper())
+        await drain_handlers()
+        if outcome == "missing":
+            await store.delete(task_id, ServerCallContext())
+        if restart:
+            await engine.dispose()
+            engine = make_sqlite_engine(str(tmp_path / "tasks.db"))
+            store = DatabaseTaskStore(engine)
+            await store.initialize()
+            # New handler has no active task registry; only GetTask can recover.
+            app = build_app(model, task_store=store)
+            scheduler = LocalScheduler("reconcile", invoke_url="http://test", db_dir=tmp_path,
+                                       event_publish=lambda topic, data: events.append((topic, data)))
+        for _ in range(3):
+            await scheduler._reconcile_occurrences()
+        stored = scheduler.get_job(job.id)
+        assert len(runs) == 1
+        assert methods.count("SendMessage") == 1
+        finished = [data for topic, data in events if topic == "turn.finished"]
+        with scheduler._connect() as db:
+            settled = dict(db.execute("SELECT * FROM occurrences").fetchone())
+        if outcome == "missing":
+            assert stored.fire_count == 0
+            assert stored.consecutive_failures == 2
+            assert "missing or unavailable" in stored.last_error
+            assert settled["state"] == "unknown"
+            assert finished == []
+            assert scheduler._claim_due_jobs(datetime.now(UTC)) == []
+        else:
+            assert settled["state"] == "settled"
+            assert settled["task_state"] == outcome
+            assert stored.fire_count == 1
+            assert stored.consecutive_failures == {"completed": 0, "failed": 3, "canceled": 2}[outcome]
+            assert len(finished) == 1
+            assert finished[0]["task_id"] == task_id
+            if outcome == "canceled":
+                assert "ok" not in finished[0]
+                assert stored.last_error == "previous failure"
+            else:
+                assert finished[0]["ok"] is (outcome == "completed")
+    finally:
+        gate.set()
+        await drain_handlers()
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_older_task_settlement_preserves_same_id_wait_chain(tmp_path, monkeypatch):
+    import asyncio
+
+    import httpx
+    from scheduler.local import LocalScheduler
+    from tests._a2a_app import build_app, drain_handlers
+
+    scheduler = LocalScheduler("wait-chain", invoke_url="http://test", db_dir=tmp_path)
+    past = (datetime.now(UTC) - timedelta(seconds=1)).isoformat()
+    future = (datetime.now(UTC) + timedelta(hours=1)).isoformat()
+    job = scheduler.add_job("old turn", past, job_id="wait:chat")
+    newer = []
+
+    async def model(text, ctx, **kwargs):
+        newer.append(scheduler.update_job(job.id, schedule=future, prompt="next turn"))
+        yield ("done", "old turn finished")
+
+    app = build_app(model)
+    real_client = httpx.AsyncClient
+    monkeypatch.setattr(httpx, "AsyncClient", lambda **kw: real_client(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"))
+    monkeypatch.setattr("scheduler.local._POLL_INTERVAL_S", 0.001)
+    try:
+        await scheduler._tick()
+        await asyncio.gather(*scheduler._fire_tasks)
+        await scheduler._reconcile_occurrences()
+        assert scheduler.get_job(job.id) == newer[0]
+        with scheduler._connect() as db:
+            occurrence = db.execute("SELECT * FROM occurrences").fetchone()
+            assert occurrence["state"] == "settled"
+            assert occurrence["task_state"] == "completed"
+        assert scheduler._claim_due_jobs(datetime.now(UTC) + timedelta(hours=2))[0].next_fire == future
+    finally:
+        await drain_handlers()

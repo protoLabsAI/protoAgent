@@ -15,7 +15,8 @@ Architecture:
   and ticks once per ``_POLL_INTERVAL_S`` (1s default). Cheap because
   sqlite reads with an indexed ``next_fire`` filter cost microseconds.
 - Firing = HTTP POST to the running agent's own ``/a2a`` endpoint as
-  a ``message/send``. Going through HTTP rather than calling into the
+  a ``SendMessage`` with ``returnImmediately`` and durable ``GetTask`` polls.
+  Going through HTTP rather than calling into the
   graph directly gets us free parity with real callers — same audit
   log, same cost-v1 capture, same auth path.
 - One-shot ISO schedules are deleted after firing. Cron schedules
@@ -35,6 +36,7 @@ import logging
 import os
 import sqlite3
 import uuid
+from contextlib import closing
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -405,13 +407,14 @@ class LocalScheduler:
         self._task: asyncio.Task | None = None
         self._stopping = False
         self._lock_fd = None  # owner-lock fd (ADR 0004) held while polling
-        # In-flight fires (job ids) + their background tasks. message/send blocks
-        # until the agent turn reaches a terminal state, so a fire can take as long
+        # In-flight fires (job ids) + their background tasks. We await the task
+        # until it reaches a terminal state, so a fire can take as long
         # as the turn — we run it off the poll loop and guard against re-claiming a
         # job that's still firing (the cause of duplicate scheduled turns).
         self._claimed_messages: dict[str, str] = {}
         self._inflight_ids: set[str] = set()
         self._fire_tasks: set[asyncio.Task] = set()
+        self._reconcile_task: asyncio.Task | None = None
         # Fire timeout must comfortably exceed a real turn (web research + subagents
         # can run minutes); too-short here false-fails long turns into a re-fire loop.
         try:
@@ -475,6 +478,10 @@ class LocalScheduler:
                 db.execute("INSERT INTO occurrences SELECT * FROM occurrences_previous")
                 db.execute("DROP TABLE occurrences_previous")
                 db.commit()
+            add_missing_columns(db, "occurrences", (
+                ("task_id", "TEXT"), ("job_snapshot", "TEXT"),
+                ("task_state", "TEXT"), ("diagnostic", "TEXT"),
+            ))
             # Additive migrations for stores created before each column existed. Only the
             # missing ones are ALTERed, and a failed ALTER raises: a lock timeout used to
             # pass as "column already present" and leave the store without it.
@@ -838,6 +845,15 @@ class LocalScheduler:
                 return
 
     async def _tick(self) -> None:
+        # Recovery may reach a disconnected receiver; keep it off the cadence
+        # loop just like sends, and allow only one recovery pass at a time.
+        if self._reconcile_task is None or self._reconcile_task.done():
+            claims = self._pending_reconciliation()
+            if claims:
+                self._reconcile_task = asyncio.create_task(
+                    self._reconcile_occurrences(claims), name="scheduler.reconcile")
+                self._fire_tasks.add(self._reconcile_task)
+                self._reconcile_task.add_done_callback(self._fire_tasks.discard)
         now = datetime.now(UTC)
         due = self._claim_due_jobs(now)
         for job in due:
@@ -866,6 +882,13 @@ class LocalScheduler:
         try:
             with keep_awake.hold(f"scheduled run {job.id}"):
                 ok = await self._fire(job)
+            with closing(self._connect()) as db, db:
+                reconciled = db.execute(
+                    "SELECT task_state FROM occurrences WHERE job_id = ? AND next_fire = ? AND created_at = ?",
+                    (job.id, job.next_fire, job.created_at),
+                ).fetchone()
+            if reconciled and reconciled["task_state"] in ("completed", "failed", "rejected", "canceled", "cancelled"):
+                return  # Terminal bookkeeping was committed with the occurrence.
             if ok is None:
                 return  # Unresolved delivery stays quarantined, including across restart.
             if not cron:
@@ -896,7 +919,7 @@ class LocalScheduler:
             self._claimed_messages.pop(job.id, None)
             self._inflight_ids.discard(job.id)
 
-    def _record_fire_outcome(self, job: Job, *, failure: str) -> None:
+    def _record_fire_outcome(self, job: Job, *, failure: str, db: sqlite3.Connection | None = None) -> None:
         """Record whether the turn worked, and back a failing job off (#3376).
 
         Success resets the streak — a job that recovers is immediately back on its
@@ -913,11 +936,14 @@ class LocalScheduler:
         worse than a slow retry. Backoff stops the daily burn of a whole turn on a
         broken job while keeping it self-healing.
 
-        Best-effort — scheduling bookkeeping must never break a fire.
+        Best-effort when called alone. A supplied transaction owns commit and
+        rollback, so errors propagate to keep occurrence settlement atomic.
         """
-        db = self._connect()
+        own_db = db is None
+        db = db or self._connect()
         try:
-            db.execute("BEGIN IMMEDIATE")
+            if own_db:
+                db.execute("BEGIN IMMEDIATE")
             if not self._owns_occurrence(db, job):
                 return
             # Commit the known result and its dispatch state together: a crash
@@ -929,7 +955,8 @@ class LocalScheduler:
                     "UPDATE jobs SET consecutive_failures = 0, last_error = NULL, last_ok = ? WHERE id = ?",
                     (datetime.now(UTC).isoformat(), job.id),
                 )
-                db.commit()
+                if own_db:
+                    db.commit()
                 return
             db.execute(
                 "UPDATE jobs SET consecutive_failures = consecutive_failures + 1, last_error = ? WHERE id = ?",
@@ -938,7 +965,8 @@ class LocalScheduler:
             row = db.execute("SELECT consecutive_failures, next_fire FROM jobs WHERE id = ?", (job.id,)).fetchone()
             streak = int(row["consecutive_failures"]) if row else 1
             if streak < BACKOFF_AFTER_FAILURES or not is_cron(job.schedule):
-                db.commit()
+                if own_db:
+                    db.commit()
                 return
             slots = min(2 ** (streak - BACKOFF_AFTER_FAILURES), MAX_BACKOFF_SLOTS)
             # Base the backoff on the PERSISTED post-claim next_fire, not the stale
@@ -952,14 +980,16 @@ class LocalScheduler:
             try:
                 nxt = datetime.fromisoformat(base)
             except ValueError:
-                db.commit()
+                if own_db:
+                    db.commit()
                 return
             for _ in range(slots):
                 nxt = datetime.fromisoformat(_compute_next_fire(job.schedule, after=nxt, tz=job.timezone))
             db.execute("UPDATE jobs SET next_fire = ? WHERE id = ?", (nxt.isoformat(), job.id))
             db.execute("UPDATE occurrences SET expected_next = ? WHERE job_id = ? AND next_fire = ? AND created_at = ?",
                        (nxt.isoformat(), job.id, job.next_fire, job.created_at))
-            db.commit()
+            if own_db:
+                db.commit()
             log.error(
                 "[scheduler] job %s has failed %d times in a row — backing off %d slot(s) to %s. Last error: %s",
                 job.id,
@@ -969,17 +999,22 @@ class LocalScheduler:
                 failure,
             )
         except (sqlite3.DatabaseError, ValueError):
+            if not own_db:
+                raise
             log.exception("[scheduler] could not record the fire outcome for job %s", job.id)
         finally:
-            db.close()
+            if own_db:
+                db.close()
 
-    def _settle_cron_expiry(self, job: Job) -> None:
+    def _settle_cron_expiry(self, job: Job, *, db: sqlite3.Connection | None = None) -> None:
         """Post-fire bookkeeping for a recurring job (#2992): increment its
         ``fire_count`` and auto-cancel it once it reaches ``max_fires`` or its
         TTL (measured from ``created_at``) has elapsed."""
-        db = self._connect()
+        own_db = db is None
+        db = db or self._connect()
         try:
-            db.execute("BEGIN IMMEDIATE")
+            if own_db:
+                db.execute("BEGIN IMMEDIATE")
             if not self._owns_occurrence(db, job):
                 return
             db.execute("UPDATE jobs SET fire_count = fire_count + 1 WHERE id = ?", (job.id,))
@@ -999,11 +1034,15 @@ class LocalScheduler:
             if expired:
                 db.execute("DELETE FROM jobs WHERE id = ?", (job.id,))
                 log.info("[scheduler] Job %s expired: reached %s", job.id, reason)
-            db.commit()
+            if own_db:
+                db.commit()
         except sqlite3.DatabaseError:
+            if not own_db:
+                raise
             log.exception("[scheduler] expiry settlement failed for job %s", job.id)
         finally:
-            db.close()
+            if own_db:
+                db.close()
 
     def _increment_fire_count(self, job_id: str) -> int:
         """Bump ``fire_count`` for a fired job and return the new value (0 if
@@ -1077,6 +1116,8 @@ class LocalScheduler:
                 "VALUES (?, ?, ?, 'claimed', ?, ?, ?)",
                 (job.id, job.next_fire, message_id, job.created_at, expected, row["last_error"]),
             )
+            db.execute("UPDATE occurrences SET job_snapshot = ? WHERE message_id = ?",
+                       (json.dumps(job.as_dict()), message_id))
             db.execute("UPDATE jobs SET last_error = ? WHERE id = ?", (_DELIVERY_UNKNOWN, job.id))
             db.commit()
             return message_id
@@ -1098,6 +1139,12 @@ class LocalScheduler:
         db = self._connect()
         try:
             db.execute("BEGIN IMMEDIATE")
+            claim = db.execute(
+                "SELECT state FROM occurrences WHERE job_id = ? AND next_fire = ? AND created_at = ?",
+                (job.id, job.next_fire, job.created_at),
+            ).fetchone()
+            if claim and claim["state"] == "settled":
+                return
             if state != "unknown" and self._owns_occurrence(db, job):
                 # Cancellation and refused connections preserve the preceding outcome.
                 db.execute(
@@ -1105,7 +1152,7 @@ class LocalScheduler:
                     "WHERE job_id = ? AND next_fire = ? AND created_at = ?) WHERE id = ? AND last_error = ?",
                     (job.id, job.next_fire, job.created_at, job.id, _DELIVERY_UNKNOWN),
                 )
-            db.execute("UPDATE occurrences SET state = ? WHERE job_id = ? AND next_fire = ? AND created_at = ?",
+            db.execute("UPDATE occurrences SET state = ? WHERE job_id = ? AND next_fire = ? AND created_at = ? AND state != 'settled'",
                        (state, job.id, job.next_fire, job.created_at))
             db.commit()
         except sqlite3.DatabaseError:
@@ -1230,6 +1277,94 @@ class LocalScheduler:
 
         return self_invocation_headers(self._bearer, self._api_key)
 
+    def _remember_task(self, job: Job, task_id: str) -> None:
+        # Commit before awaiting another network operation. Failure leaves the
+        # original claim quarantined; it must never become a retryable send.
+        with closing(self._connect()) as db, db:
+            db.execute(
+                "UPDATE occurrences SET task_id = ? WHERE job_id = ? AND next_fire = ? AND created_at = ?",
+                (task_id, job.id, job.next_fire, job.created_at),
+            )
+
+    async def _get_task(self, client, task_id: str) -> dict:
+        response = await client.post(
+            f"{self._invoke_url}/a2a",
+            headers={"A2A-Version": "1.0", **self._auth_headers()},
+            json={"jsonrpc": "2.0", "id": str(uuid.uuid4()), "method": "GetTask",
+                  "params": {"id": task_id}},
+        )
+        response.raise_for_status()
+        return response.json()
+
+    def _settle_task(self, job: Job, task_id: str, payload: dict) -> bool:
+        result = payload.get("result") or {}
+        task = result.get("task", result)
+        state = str((task.get("status") or {}).get("state", "")).lower().removeprefix("task_state_")
+        valid = not payload.get("error") and task.get("id") == task_id
+        terminal = valid and state in {"completed", "failed", "rejected", "canceled", "cancelled"}
+        diagnostic = (f"task {task_id} pending ({state or 'unknown'}); not automatically resent" if valid else
+                      f"task {task_id} missing or unavailable; not automatically resent")
+        failure = _a2a_turn_failure(payload) if terminal else ""
+        canceled = state in {"canceled", "cancelled"}
+        with closing(self._connect()) as db, db:
+            db.execute("BEGIN IMMEDIATE")
+            claim = db.execute(
+                "SELECT state, previous_error FROM occurrences WHERE job_id = ? AND next_fire = ? AND created_at = ?",
+                (job.id, job.next_fire, job.created_at),
+            ).fetchone()
+            if claim is None or claim["state"] == "settled":
+                return True
+            owns = self._owns_occurrence(db, job)
+            if terminal and owns:
+                if canceled:
+                    db.execute("UPDATE jobs SET last_error = ? WHERE id = ?", (claim["previous_error"], job.id))
+                else:
+                    self._record_fire_outcome(job, failure=failure, db=db)
+                if is_cron(job.schedule):
+                    self._settle_cron_expiry(job, db=db)
+                else:
+                    db.execute("DELETE FROM jobs WHERE id = ?", (job.id,))
+            elif owns:
+                db.execute("UPDATE jobs SET last_error = ? WHERE id = ?", (diagnostic, job.id))
+            db.execute(
+                "UPDATE occurrences SET state = ?, task_state = ?, diagnostic = ? "
+                "WHERE job_id = ? AND next_fire = ? AND created_at = ?",
+                ("settled" if terminal else "unknown", state if valid else "missing",
+                 (failure or None) if terminal else diagnostic, job.id, job.next_fire, job.created_at),
+            )
+        if terminal:
+            if failure:
+                log.error("[scheduler] job %s fired but the turn FAILED: %s", job.id, failure)
+            self._publish_turn(
+                "turn.finished", session_id=job.context_id or ACTIVITY_CONTEXT,
+                origin="watch" if job.id.startswith("watch-") else "scheduler",
+                trigger=job.id, ok=None if canceled else not failure, task_id=task_id,
+            )
+        return terminal
+
+    def _pending_reconciliation(self) -> list[sqlite3.Row]:
+        with closing(self._connect()) as db, db:
+            claims = db.execute(
+                "SELECT * FROM occurrences WHERE state IN ('claimed', 'unknown') "
+                "AND task_id IS NOT NULL AND job_snapshot IS NOT NULL"
+            ).fetchall()
+        return [claim for claim in claims if claim["job_id"] not in self._inflight_ids]
+
+    async def _reconcile_occurrences(self, claims=None) -> None:
+        """Read durable snapshots only; a lost live subscription is not task loss."""
+        import httpx
+
+        for claim in self._pending_reconciliation() if claims is None else claims:
+            if claim["job_id"] in self._inflight_ids:
+                continue
+            job = Job(**json.loads(claim["job_snapshot"]))
+            try:
+                async with httpx.AsyncClient(timeout=min(self._fire_timeout_s, 10)) as client:
+                    payload = await self._get_task(client, claim["task_id"])
+                self._settle_task(job, claim["task_id"], payload)
+            except Exception:  # noqa: BLE001 — transport loss cannot authorize a resend
+                log.warning("[scheduler] task %s reconciliation unavailable; not resending", claim["task_id"])
+
     async def _fire(self, job: Job) -> bool | None:
         """Deliver a job by POSTing to the agent's own A2A endpoint.
 
@@ -1254,8 +1389,8 @@ class LocalScheduler:
         headers = {"Content-Type": "application/json", "A2A-Version": "1.0"}
         headers.update(self._auth_headers())
 
-        # Realtime: announce the dispatch on the bus (ADR 0051) so a console shows the
-        # scheduled job firing — before the POST, which blocks for the whole turn.
+        # Realtime: announce dispatch before the POST (ADR 0051). The early handle
+        # lets us monitor the turn independently of that HTTP connection.
         if self._publish is not None:
             try:
                 self._publish(
@@ -1283,10 +1418,9 @@ class LocalScheduler:
         is_goal_run = job.id.startswith("goal-run:")
         fire_origin = "watch" if is_watch else "scheduler"
 
-        # Turn-lifecycle events (#1767): a scheduled/watch fire holds the connection open
-        # for the WHOLE turn (the A2A handler runs it synchronously), so without these the
-        # console shows nothing — no typing indicator, no stream — during the agent's
-        # longest turns. Emit `turn.started` before the POST and `turn.finished` after so
+        # Turn-lifecycle events (#1767): keep scheduled/watch turns visible while
+        # awaiting their outcome. Emit `turn.started` before the POST and
+        # `turn.finished` only after a terminal snapshot is durably settled so
         # the console renders its typing indicator, labelled by trigger. The session id is
         # the fire's context (a `wait`/`run_in_session` resume lands in a chat session; a
         # plain cron lands in the Activity thread).
@@ -1316,6 +1450,7 @@ class LocalScheduler:
             "id": message_id,
             "method": "SendMessage",
             "params": {
+                "configuration": {"returnImmediately": True},
                 "message": {
                     "role": "ROLE_USER",
                     "parts": [{"text": wake_prompt}],
@@ -1347,6 +1482,19 @@ class LocalScheduler:
         try:
             async with httpx.AsyncClient(timeout=self._fire_timeout_s) as client:
                 r = await client.post(f"{self._invoke_url}/a2a", headers=headers, json=body)
+                if r.status_code < 400:
+                    initial = r.json()
+                    task_id = task_id_from_response(initial)
+                    if task_id:
+                        self._remember_task(job, task_id)
+                        # Bound this wait; subsequent ticks use the same durable handle.
+                        async with asyncio.timeout(self._fire_timeout_s):
+                            payload = initial
+                            while not self._settle_task(job, task_id, payload):
+                                await asyncio.sleep(_POLL_INTERVAL_S)
+                                payload = await self._get_task(client, task_id)
+                        dispatch_state = "settled"
+                        return True
             dispatch_state = "retryable"
             if r.status_code >= 400:
                 log.error(
@@ -1360,14 +1508,20 @@ class LocalScheduler:
             # answers 200 with a failed task in the body, so read the outcome before
             # calling this a success.
             try:
-                payload = r.json()
+                payload = initial
                 failure = _a2a_turn_failure(payload)
                 # The durable task id this fire ran under — stamped on `turn.finished`
                 # below so a console can tell WHICH turn ended (a2a_impl.wire).
                 task_id = task_id_from_response(payload)
                 canceled = _a2a_turn_canceled(payload)
-            except Exception:  # noqa: BLE001 — an unreadable body must not fail the fire
+            except Exception:  # noqa: BLE001 — an unreadable body remains unresolved
                 failure, canceled = "", False
+            result = payload.get("result", {}) if isinstance(payload, dict) else {}
+            result = result.get("task", result)
+            completed = str((result.get("status") or {}).get("state", "")).upper() in {"COMPLETED", "TASK_STATE_COMPLETED"}
+            if not failure and not canceled and not completed:
+                dispatch_state = "unknown"
+                return None
             dispatch_state = "settled"
             if canceled:
                 # Stopped, not failed: leave the streak and last_ok exactly as they were.
@@ -1388,6 +1542,10 @@ class LocalScheduler:
             ok = not failure
             return True
         except httpx.ConnectError as exc:
+            if task_id:
+                # A refusal during GetTask says nothing about the accepted send.
+                dispatch_state = "unknown"
+                return None
             # Only an explicit refusal proves the receiver did not accept this
             # request. Windows ConnectEx can report ERROR_CONNECTION_REFUSED
             # (1225) as winerror with errno=EINVAL, while Winsock uses 10061.
@@ -1414,7 +1572,7 @@ class LocalScheduler:
         finally:
             self._finish_dispatch(job, dispatch_state)
             # Timeout/cancellation is not evidence that the receiver's turn ended.
-            if dispatch_state != "unknown":
+            if dispatch_state != "unknown" and not task_id:
                 self._publish_turn(
                     "turn.finished",
                     session_id=session_id,

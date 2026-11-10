@@ -235,6 +235,42 @@ and reconciliation. Live `SubscribeToTask` remains an in-process subscription,
 while durable cross-restart `GetTask` is the recovery contract once a handle is
 known. Ledger retention/compaction and automatic recovery are outside this slice.
 
+## Scheduler task reconciliation — S2
+
+`SendMessage` now requests the public A2A 1.0
+`configuration.returnImmediately` option. The returned task ID is committed to
+its occurrence before any wait or `GetTask` request. An additive migration stores
+that handle, the claimed job snapshot, the observed task state, and a diagnostic;
+pre-existing S1 claims keep their quarantine unchanged.
+
+The scheduler polls durable `GetTask` snapshots while waiting and reconciles known
+handles on subsequent ticks, including after scheduler or receiver restart. It
+never sends another message to recover a known handle. This path needs no live
+subscription: `SubscribeToTask` is usable only while a producer is live in the
+receiver process, and its absence cannot establish failure. Submitted, working,
+input-required, and auth-required snapshots remain pending. Only completed,
+failed/rejected, or canceled snapshots settle an occurrence. Missing tasks and
+unreadable responses remain unresolved with a diagnostic, without advancing
+failure counters or inventing a terminal event.
+
+Terminal outcome, failure backoff, delivery count/expiry, one-shot removal, and
+ledger settlement share a SQLite transaction. Reconciliation is idempotent. Job
+mutations require the original generation and expected slot still to match, so
+an older turn cannot overwrite or delete a later same-ID wait-chain reschedule.
+Canceled tasks preserve the preceding failure streak and do not report success.
+The terminal event is best-effort after commit; an event lost during a crash is
+not replayed as another settlement.
+
+**Operator recovery limits:** inspect the retained occurrence and receiver task
+before replacing an unresolved schedule. A missing/pruned task or a claim without
+a handle cannot prove whether effects happened. Restoring the receiver task store
+may make a known handle recoverable; canceling and recreating the schedule is an
+explicit new execution and may duplicate effects. There is no automatic resend or
+operator API to declare unknown work safe. Retention/compaction of this ledger and
+durable receiver acceptance/deduplication remain separate work. Stable message
+IDs and durable task lookups do **not** promise exactly-once execution across the
+send/accept/handle-persistence crash window.
+
 ## References
 
 - The A2A alignment audit + realtime/component research that informed this (the cancel/
