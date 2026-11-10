@@ -1,9 +1,25 @@
-import { ArrowLeftRight, ChevronDown, ChevronsLeft, ChevronsRight, ChevronUp, Download, Eye, EyeOff, Pencil, Plus, Puzzle, RefreshCw, SlidersHorizontal, SquareArrowOutUpRight, Trash2, X } from "lucide-react";
+import { ArrowLeftRight, ChevronDown, ChevronsLeft, ChevronsRight, ChevronUp, Download, Maximize2, Eye, EyeOff, Pencil, Plus, Puzzle, RefreshCw, SlidersHorizontal, SquareArrowOutUpRight, Trash2, X } from "lucide-react";
 
 import { openView } from "../app/usePaletteRegistry";
 import { useUI } from "../state/uiStore";
 import { registerContextMenu } from "./registry";
 import type { MenuEntry } from "./types";
+
+// Both host background and rail-icon menus use the existing surface transition.
+function expandSurface(id: string): MenuEntry {
+  return {
+    id: "open-large-window",
+    label: "Open in large window",
+    icon: <Maximize2 size={14} />,
+    run: () => useUI.getState().openSurfaceModal(id),
+  };
+}
+
+registerContextMenu({
+  type: "surface-view",
+  items: (ctx: { id?: string }): MenuEntry[] =>
+    ctx?.id && ctx.id !== "chat" ? [expandSurface(ctx.id)] : [],
+});
 
 // First customer (ADR 0036 D6 / ADR 0035 D2): right-click a rail icon → reorder it within its
 // rail (Move up/down), move it to another dock, Configure the owning plugin, or Hide it from the
@@ -116,6 +132,7 @@ registerContextMenu({
     // chat to the bottom dock (its slot mounts unconditionally there too). Moving chat across docks
     // remounts it: a brief blip on an in-flight stream; a deliberate action.
     return [
+      ...(ctx.side === "right" && ctx.id !== "chat" ? [expandSurface(ctx.id)] : []),
       {
         id: "move-up",
         label: "Move up",

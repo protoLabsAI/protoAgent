@@ -1,9 +1,9 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { Maximize2, PanelRight } from "lucide-react";
+import { PanelRight } from "lucide-react";
 import { Button } from "@protolabsai/ui/primitives";
-import { PanelHeader } from "@protolabsai/ui/navigation";
 import { Dialog, Drawer, Tooltip } from "@protolabsai/ui/overlays";
 
+import { openContextMenu, useContextMenuStore } from "../contextMenu/store";
 import { useUI } from "../state/uiStore";
 
 /** Identity of the view a host frames. The shell resolves the view's content itself and
@@ -13,9 +13,8 @@ export type SurfaceMeta = { id: string; title: string };
 // Shared by the rail and modal host instances (one module, one rail + one modal host in the
 // shell): the modal host flips this on a plain Close so the rail host's dock branch skips that
 // single `surfaceModal`→null transition. Dock to rail and a plain Close both clear the modal the
-// SAME way — and Expand only ever targets the active right view, so `rightPanel` is unchanged
-// either way — so store state alone can't tell them apart. This ref-shaped flag carries the one
-// bit that can, with no store field. A fresh modal open clears it (see the effect).
+// SAME way, leaving `rightPanel` unchanged either way — so store state alone can't tell them
+// apart. This ref-shaped flag carries the one bit that can, with no store field. A fresh modal open clears it (see the effect).
 const pendingClose = { current: false };
 
 /**
@@ -60,7 +59,7 @@ export function SurfaceHost({
       // A selected item's heading takes precedence over its (possibly hidden) list row.
       const target = contentRef.current?.querySelector<HTMLElement>('[data-surface-focus][tabindex="-1"]')
         ?? contentRef.current?.querySelector<HTMLElement>("[data-surface-focus]");
-      (target ?? headingRef.current)?.focus({ preventScroll: true });
+      (target ?? headingRef.current ?? contentRef.current)?.focus({ preventScroll: true });
     };
     if ((frame === "modal" || frame === "sheet") && modal?.viewId === viewId) {
       // A fresh open supersedes any pending Close, so clear the shared guard here — this also
@@ -100,9 +99,33 @@ export function SurfaceHost({
   // did when they were a direct child of the DS dock column. A block parent leaves that
   // `flex` inert, so the surface collapsed to content height (a 150px-tall artifact iframe)
   // and swallowed clicks. `overflow: auto` still lets a natural-height view scroll.
+  const canExpand = frame === "rail" && !!view && view.id !== "chat";
   const body = (
     <div
       ref={contentRef}
+      role={canExpand ? "region" : undefined}
+      aria-label={canExpand ? `${title} view` : undefined}
+      aria-haspopup={canExpand ? "menu" : undefined}
+      tabIndex={canExpand ? 0 : -1}
+      onContextMenu={(e) => {
+        // Blank space in full-size child panels is also view background. Let child
+        // menus handle the event first, and preserve native menus on controls/editors.
+        // Events inside an iframe never bubble here; its rail menu remains available.
+        if (!canExpand || e.defaultPrevented || window.getSelection()?.toString()) return;
+        if (!(e.target instanceof Element) || !e.currentTarget.contains(e.target)) return;
+        const control = e.target.closest(
+          'input, textarea, select, button, a[href], iframe, audio, video, summary, [contenteditable]:not([contenteditable="false"]), [role="button"], [role="link"], [role="textbox"], [tabindex]',
+        );
+        if (control && control !== e.currentTarget && e.currentTarget.contains(control)) return;
+        openContextMenu("surface-view", e, { id: view.id });
+      }}
+      onKeyDown={(e) => {
+        if (!canExpand || e.defaultPrevented || e.target !== e.currentTarget) return;
+        if (e.key !== "ContextMenu" && !(e.shiftKey && e.key === "F10")) return;
+        e.preventDefault();
+        const rect = e.currentTarget.getBoundingClientRect();
+        useContextMenuStore.getState().openMenu("surface-view", rect.left, rect.top, { id: view.id });
+      }}
       style={{ flex: 1, minHeight: 0, overflow: "auto", display: "flex", flexDirection: "column" }}
     >
       {children}
@@ -182,18 +205,6 @@ export function SurfaceHost({
   return (
     <div style={{ display: "flex", flexDirection: "column", minHeight: 0, height: view ? "100%" : undefined }}>
       {status}
-      {view ? (
-        <PanelHeader
-          title={heading}
-          actions={
-            <Tooltip label="Expand">
-              <Button icon aria-label="Expand" onClick={() => useUI.getState().openSurfaceModal(view.id)}>
-                <Maximize2 aria-hidden="true" />
-              </Button>
-            </Tooltip>
-          }
-        />
-      ) : null}
       {body}
     </div>
   );
