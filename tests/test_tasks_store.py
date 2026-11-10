@@ -187,3 +187,185 @@ def test_session_id_column_migrates_onto_a_legacy_board(tmp_path):
     assert rows[0]["session_id"] == ""  # existing row backfilled to the default
     # and new session-attributed creates work on the migrated board
     assert store.create("new", session_id="s9")["session_id"] == "s9"
+
+
+@pytest.mark.platform_sensitive
+def test_ids_survive_delete_all_and_restart(store):
+    original = store.create("A")
+    assert store.delete(original["id"])
+    store._conn.close()
+    reopened = TaskStore(db_path=str(store.path))
+    try:
+        other = reopened.create("B")
+        assert other["id"] == "task-2"
+        assert reopened.restore(original) == original
+        assert {row["id"] for row in reopened.list()} == {original["id"], other["id"]}
+        with pytest.raises(ValueError, match="already exists"):
+            reopened.restore(original)
+    finally:
+        reopened._conn.close()
+
+
+@pytest.mark.platform_sensitive
+def test_sequence_migrates_legacy_ids_and_reserves_restored_ids(store):
+    original = store.create("original")
+    # Model an existing board with no persistent sequence, including legacy IDs.
+    with store._conn:
+        store._conn.execute("DROP TABLE task_sequence")
+        store._conn.execute("UPDATE issues SET id = 'bd-42'")
+    store._conn.close()
+    reopened = TaskStore(db_path=str(store.path))
+    try:
+        assert reopened.get("bd-42")["title"] == "original"
+        assert reopened.delete("bd-42")
+        assert reopened.create("next")["id"] == "task-43"
+        reopened.restore({**original, "id": "task-100"})
+        assert reopened.delete("task-100")
+        assert reopened.create("after restore")["id"] == "task-101"
+    finally:
+        reopened._conn.close()
+
+
+def test_failed_write_rolls_back_and_store_remains_usable(store):
+    import sqlite3
+
+    original = store.create("original")
+    with pytest.raises(sqlite3.IntegrityError):
+        store.restore({"id": "task-500"})  # Missing required title/timestamps.
+    assert not store._conn.in_transaction
+    with pytest.raises(ValueError):
+        store.create("invalid priority", priority="not a number")
+    assert not store._conn.in_transaction
+    assert store.get(original["id"]) == original
+    assert store.create("after failure")["id"] == "task-2"
+
+
+@pytest.mark.platform_sensitive
+def test_multiple_connections_serialize_task_operations(store, monkeypatch):
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Barrier
+
+    monkeypatch.setattr("tasks.store._publish", lambda *args: None)
+    other = TaskStore(db_path=str(store.path))
+    start = Barrier(2)
+
+    def exercise(connection):
+        start.wait(timeout=10)
+        ids = []
+        for index in range(40):
+            row = connection.create(f"task {index}")
+            ids.append(row["id"])
+            updated = connection.update(row["id"], title="updated")
+            assert updated["title"] == "updated"
+            assert connection.delete(row["id"])
+            assert connection.restore(updated) == updated
+            assert connection.close(row["id"])["status"] == "closed"
+            assert connection.delete(row["id"])
+        return ids
+
+    try:
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            results = list(pool.map(exercise, (store, other)))
+        ids = [issue_id for result in results for issue_id in result]
+        assert len(set(ids)) == 80
+        assert store.list() == []
+        assert other.create("after stress")["id"] == "task-81"
+    finally:
+        other._conn.close()
+
+
+@pytest.mark.asyncio
+async def test_eight_http_clients_create_update_delete_undo(store, monkeypatch):
+    import asyncio
+
+    from fastapi import FastAPI
+    from httpx import ASGITransport, AsyncClient
+
+    from operator_api.routes import register_operator_routes
+    from operator_api.undo import UndoLedger
+
+    # A private ledger keeps tokens isolated from other tests.
+    monkeypatch.setattr("operator_api.undo.LEDGER", UndoLedger())
+    monkeypatch.setattr("tasks.store._publish", lambda *args: None)
+    app = FastAPI()
+    register_operator_routes(
+        app,
+        runtime_status=lambda: {},
+        subagent_list=lambda: [],
+        subagent_run=lambda r: None,
+        subagent_batch=lambda r: None,
+        tasks_store=store,
+    )
+
+    async def exercise(client_index):
+        ids = []
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            async def create(title):
+                response = await client.post("/api/tasks/issues", json={"title": title})
+                assert response.status_code == 200, response.text
+                row = response.json()["issue"]
+                ids.append(row["id"])
+                return row
+
+            for index in range(15):
+                original = await create(f"{client_index}-{index}")
+                url = f"/api/tasks/issues/{original['id']}"
+                updated = await client.patch(url, json={"status": "in_progress"})
+                assert updated.status_code == 200, updated.text
+                snapshot = updated.json()["issue"]
+                deleted = await client.delete(url)
+                assert deleted.status_code == 200, deleted.text
+                token = deleted.json()["undo_token"]
+                other = await create("unrelated")
+                assert other["id"] != original["id"]
+                undo = await client.post(f"/api/undo/{token}")
+                assert undo.status_code == 200, undo.text
+                assert store.get(original["id"]) == snapshot
+                assert store.get(other["id"]) == other
+                assert (await client.post(f"/api/undo/{token}")).status_code == 404
+                # Competing PATCH/delete requests must succeed or report missing,
+                # never return a server error or mutate an unrelated task.
+                patched, removed = await asyncio.gather(
+                    client.patch(url, json={"title": "racing update"}), client.delete(url)
+                )
+                assert patched.status_code in (200, 404), patched.text
+                assert removed.status_code == 200, removed.text
+                assert (await client.get("/api/tasks/issues")).status_code == 200
+        return ids
+
+    results = await asyncio.gather(*(exercise(index) for index in range(8)))
+    ids = [issue_id for result in results for issue_id in result]
+    assert len(ids) == len(set(ids)) == 240
+    assert len(store.list()) == 120
+
+
+@pytest.mark.platform_sensitive
+@pytest.mark.parametrize("operation", ["create", "update", "close", "restore"])
+def test_mutation_returns_snapshot_even_if_deleted_after_commit(store, monkeypatch, operation):
+    """A concurrent writer may delete immediately after commit, before publication returns."""
+    other = TaskStore(db_path=str(store.path))
+    row = store.create("original")
+    if operation == "restore":
+        store.delete(row["id"])
+
+    def delete_after_commit(topic, data):
+        # Use SQL to avoid recursively publishing another event. This also proves
+        # callbacks run after commit and outside the store's connection lock.
+        assert store.get(data["id"]) is not None
+        with other._conn:
+            other._conn.execute("DELETE FROM issues WHERE id = ?", (data["id"],))
+
+    monkeypatch.setattr("tasks.store._publish", delete_after_commit)
+    try:
+        if operation == "create":
+            result = store.create("created")
+        elif operation == "update":
+            result = store.update(row["id"], title="updated")
+        elif operation == "close":
+            result = store.close(row["id"])
+        else:
+            result = store.restore(row)
+        assert result["title"] == {"create": "created", "update": "updated"}.get(operation, "original")
+        assert store.get(result["id"]) is None
+    finally:
+        other._conn.close()
