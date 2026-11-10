@@ -204,8 +204,9 @@ Crash boundaries and policy:
 - After send, before a definitive response or durable settlement: the receiver may
   still be executing or may already have completed. Read/write timeouts, unproven
   connection errors, and local cancellation preserve the quarantine.
-- A proven connection refusal (`ECONNREFUSED` in the exception chain) permits a
-  retry using the same message identity. Existing HTTP-error handling and terminal
+- A proven connection refusal (`ECONNREFUSED`, Winsock `WSAECONNREFUSED`
+  (10061), or Windows `ERROR_CONNECTION_REFUSED` (1225) in the exception
+  chain) permits a retry using the same message identity. Existing HTTP-error handling and terminal
   success/failure/cancellation handling remain in place.
 - A known result settles only the claimed occurrence. Outcome updates, expiry,
   and one-shot removal must not alter a newer same-ID wait-chain schedule.

@@ -1388,11 +1388,16 @@ class LocalScheduler:
             ok = not failure
             return True
         except httpx.ConnectError as exc:
-            # Only ECONNREFUSED proves the receiver did not accept this request.
+            # Only an explicit refusal proves the receiver did not accept this
+            # request. Windows ConnectEx can report ERROR_CONNECTION_REFUSED
+            # (1225) as winerror with errno=EINVAL, while Winsock uses 10061.
             cause: BaseException | None = exc
             refused = False
             while cause is not None:
-                if isinstance(cause, OSError) and cause.errno == errno.ECONNREFUSED:
+                if isinstance(cause, OSError) and (
+                    cause.errno in (errno.ECONNREFUSED, 10061)
+                    or getattr(cause, "winerror", None) in (10061, 1225)
+                ):
                     refused = True
                     break
                 cause = cause.__cause__ or cause.__context__

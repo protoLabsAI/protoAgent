@@ -1687,7 +1687,12 @@ async def test_claim_persistence_failure_prevents_send(tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_connection_refusal_retries_same_message_identity(tmp_path, monkeypatch):
+@pytest.mark.platform_sensitive
+@pytest.mark.parametrize("error_code,winerror", [
+    (errno.ECONNREFUSED, None), (10061, None),
+    (errno.EINVAL, 10061), (errno.EINVAL, 1225),
+])
+async def test_connection_refusal_retries_same_message_identity(tmp_path, monkeypatch, error_code, winerror):
     import httpx
 
     s = _make_scheduler(tmp_path)
@@ -1698,7 +1703,11 @@ async def test_connection_refusal_retries_same_message_identity(tmp_path, monkey
         async def post(self, url, headers=None, json=None):
             messages.append(json["params"]["message"]["messageId"])
             if len(messages) == 1:
-                raise httpx.ConnectError("refused") from ConnectionRefusedError(errno.ECONNREFUSED, "refused")
+                # Model both Winsock and proactor ConnectEx on every host.
+                cause = OSError(error_code, "refused")
+                if winerror is not None:
+                    cause.winerror = winerror
+                raise httpx.ConnectError("refused") from cause
             return _FakeResponse()
 
     monkeypatch.setattr(httpx, "AsyncClient", lambda **kw: RefusedThenOK(None))
@@ -1745,7 +1754,9 @@ async def test_late_result_does_not_modify_new_wait_occurrence(tmp_path, monkeyp
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("error", ["connect", "connect_timeout", "read", "write"])
+@pytest.mark.platform_sensitive
+@pytest.mark.parametrize("error", ["connect", "connect_timeout", "read", "write",
+                                  "invalid", "windows_timeout"])
 async def test_unproven_transport_errors_are_not_retryable(tmp_path, monkeypatch, error):
     import httpx
 
@@ -1753,7 +1764,15 @@ async def test_unproven_transport_errors_are_not_retryable(tmp_path, monkeypatch
               "read": httpx.ReadTimeout, "write": httpx.WriteError}
     s = _make_scheduler(tmp_path)
     job = s.add_job("uncertain", (datetime.now(UTC) - timedelta(seconds=1)).isoformat())
-    monkeypatch.setattr(httpx, "AsyncClient", lambda **kw: _FakeClient(None, raise_exc=errors[error]("lost")))
+    if error in {"invalid", "windows_timeout"}:
+        cause = OSError(errno.EINVAL, "connection refused")
+        if error == "windows_timeout":
+            cause.winerror = 10060  # WSAETIMEDOUT is not proof of refusal.
+        exc = httpx.ConnectError("connection refused")
+        exc.__cause__ = cause
+    else:
+        exc = errors[error]("lost")
+    monkeypatch.setattr(httpx, "AsyncClient", lambda **kw: _FakeClient(None, raise_exc=exc))
     await s._tick()
     await asyncio.gather(*s._fire_tasks)
     assert s._claim_due_jobs(datetime.now(UTC)) == []
