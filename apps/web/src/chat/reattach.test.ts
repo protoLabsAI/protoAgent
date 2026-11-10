@@ -25,6 +25,7 @@ import { liveMessageId } from "./server-turn-store";
 import { messagesFromDurableTurn } from "./sessionHydration";
 import { beginLocalTurn, reconcileSessionStatus } from "./sessionLiveness";
 import { finalizeStoppedMessages } from "./stopTurn";
+import { formResponseText } from "./useHitl";
 
 vi.mock("../lib/api", async (importOriginal) => {
   const mod = await importOriginal<typeof import("../lib/api")>();
@@ -1260,7 +1261,15 @@ describe("reattach preserves each decision pause", () => {
 });
 
 describe("decision replay after a local visible answer", () => {
-  it.each(["decision", "form"] as const)("rebuilds %s then decision B without duplicating local answers or leaking B", async (kind) => {
+  it.each([
+    ["decision", "plain"], ["form", "plain"],
+    ["form", "display"], ["form", "stored-text"],
+  ] as const)("rebuilds %s (%s) then decision B without duplicating local answers or leaking B", async (kind, wire) => {
+    const formResponse = { title: "Release", groups: [{ fields: [{ label: "Action", value: "Ship" }] }] };
+    const rawAnswer = JSON.stringify({ action: "Ship" });
+    const display = formResponseText(formResponse);
+    const content = wire === "plain" ? "Ship" : rawAnswer;
+    const durableAnswer = wire === "plain" ? "Ship" : display;
     const pause = (payload: object) => ({
       role: "ROLE_AGENT",
       parts: [{ data: payload, metadata: { mimeType: "application/vnd.protolabs.hitl-v1+json" } }],
@@ -1271,14 +1280,14 @@ describe("decision replay after a local visible answer", () => {
       history: [
         { role: "ROLE_USER", parts: [{ text: "Release" }] },
         pause({ kind, question: "Ship?", ...(kind === "decision" ? { decision_id: "decision-A" } : {}) }),
-        { role: "ROLE_USER", parts: [{ text: "Ship" }], metadata: { hitl_resume: true } },
+        { role: "ROLE_USER", parts: [{ text: wire === "display" ? rawAnswer : durableAnswer }],
+          metadata: { hitl_resume: true, ...(wire === "display" ? { display } : {}) } },
         pause({ kind: "decision", decision_id: "decision-B", question: "Deploy?" }),
       ],
     };
     const session = chatStore.createSession();
     // runTurn settles the pause and appends a random answer/new assistant id.
-    const answer = { id: "local-answer", role: "user" as const, content: "Ship", status: "done" as const,
-      formResponse: { title: "Release", groups: [{ fields: [{ label: "Action", value: "Ship" }] }] } };
+    const answer = { id: "local-answer", role: "user" as const, content, status: "done" as const, formResponse };
     chatStore.updateMessages(session.id, [
       { id: "older", role: "assistant", content: "Earlier task", taskId: "unrelated", decisionId: "older-id" },
       { id: "prompt", role: "user", content: "Release" },
@@ -1289,7 +1298,8 @@ describe("decision replay after a local visible answer", () => {
     ]);
     const shape = (messages: ReturnType<typeof messagesFromDurableTurn>) => messages.map((m) =>
       [m.role, m.content, m.decisionId]);
-    const expected = shape(messagesFromDurableTurn(turn));
+    const expected = shape(messagesFromDurableTurn(turn)).map((row) =>
+      row[0] === "user" && row[1] === durableAnswer ? [row[0], content, row[2]] : row);
     const snapshots: ReturnType<typeof shape>[] = [];
     resumeTask.mockImplementation(async (_taskId, _sessionId, handlers) => {
       const dispatch = makeA2ADispatcher(session.id, handlers!);
@@ -1305,6 +1315,7 @@ describe("decision replay after a local visible answer", () => {
     expect(snapshots).toEqual([expected, expected]);
     expect(shape(messages.slice(1))).toEqual(expected);
     expect(messages.find((m) => m.id === answer.id)).toEqual({ ...answer, taskId: TASK_ID });
+    expect(messages.filter((m) => m.role === "user").map((m) => m.content)).toEqual(["Release", content]);
     expect(messages[0]).toMatchObject({ id: "older", content: "Earlier task", decisionId: "older-id" });
     expect(messages.filter((m) => m.decisionId === "decision-B")).toHaveLength(1);
     cancel();

@@ -56,6 +56,7 @@ import {
 } from "./turnReducers";
 import { isTaskCanceled, isTaskFailed, isTaskPaused, isTaskStateUnknown, isTaskTerminal } from "./taskState";
 import { applyCanonicalTurnText, resetTurnForSnapshot, settleTurnBubbles } from "./turnText";
+import { formResponseText } from "./useHitl";
 
 export { pauseBubble, unpauseBubble } from "./turnReducers";
 
@@ -435,9 +436,12 @@ export function reattachTurn(sessionId: string, assistantId: string, taskId: str
       }
       // Snapshot reset keeps operator rows. Reuse the next answer in order, including
       // identical answers to different pauses, instead of adding another on every retry.
+      // Local form content is resume JSON; durable history carries its labelled display.
+      // Match that presentation too, preserving the local JSON and form card on reuse.
       const tail = messages.findIndex((m) => m.id === assistantId);
       const answerIndex = messages.findIndex((m, index) =>
-        index >= continuationIndex && index < tail && m.role === "user" && m.content === text,
+        index >= continuationIndex && index < tail && m.role === "user" &&
+        (m.content === text || (m.formResponse && formResponseText(m.formResponse) === text)),
       );
       const reuse = answerIndex !== -1;
       if (reuse) {
