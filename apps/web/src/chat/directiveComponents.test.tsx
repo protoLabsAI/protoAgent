@@ -4,17 +4,17 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { ToastProvider } from "@protolabsai/ui/overlays";
 import type { DirectiveRow } from "../lib/api/chat";
 import type { DirectivesSnapshot, RevokeResult } from "./useDirectives";
+import { useUI } from "../state/uiStore";
 import { DirectiveStrip } from "./DirectiveStrip";
 import { DirectiveDrawer } from "./DirectiveDrawer";
 import { DirectiveEntry } from "./DirectiveEntry";
 import css from "./chat.css?raw";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-const mocks = vi.hoisted(() => ({ mobile: false, open: vi.fn(), refresh: vi.fn(), revoke: vi.fn() }));
+const mocks = vi.hoisted(() => ({ mobile: false, refresh: vi.fn(), revoke: vi.fn() }));
 let snapshot: DirectivesSnapshot;
 vi.mock("./useDirectives", () => ({ useDirectives: () => ({ ...snapshot, refresh: mocks.refresh, revoke: mocks.revoke }) }));
 vi.mock("../lib/useIsMobile", () => ({ useIsMobile: () => mocks.mobile }));
-vi.mock("../state/uiStore", () => ({ useUI: (selector: (s: unknown) => unknown) => selector({ openDirectives: mocks.open }) }));
 let host: HTMLDivElement;
 let root: Root;
 let view: ReactElement;
@@ -57,7 +57,7 @@ it("renders singular, plural and mobile copy, full labels and opens the session"
   snapshot.active.push(row("two")); await render();
   expect(host.textContent).toContain('2 active instructions · "Quote one" and 1 more');
   expect(host.querySelector('[role="status"]')?.getAttribute("aria-label")).toBe("2 active instructions: Quote one; Quote two");
-  await click("View"); expect(mocks.open).toHaveBeenCalledWith("s");
+  await click("View"); expect(useUI.getState().surfaceStates.work.section).toBe("directives");
   mocks.mobile = true; await render(); expect(host.textContent).toContain('2 active · "Quote one"');
   expect(host.textContent).not.toContain("more");
   snapshot.state = "stale"; await render(); expect(buttons("View")).toHaveLength(1);

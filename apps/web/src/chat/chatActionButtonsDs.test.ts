@@ -155,7 +155,7 @@ describe("chat action buttons → DS Button (#551 card 2)", () => {
     expect(el.querySelector(".chat-delegation-brief")).toBeTruthy();
   });
 
-  it("background-work strip 'View' is a ghost/sm DS Button that keeps its openBackgroundJobs handler", async () => {
+  it("background-work strip 'View' is a ghost/sm DS Button that opens Work Background", async () => {
     // Mount first (this subscribes the store and registers the bus handlers), then seed a
     // running job for this session so the strip renders.
     const el = await mount(createElement(BackgroundWorkStrip, { sessionId: "sess-1" }));
@@ -170,10 +170,12 @@ describe("chat action buttons → DS Button (#551 card 2)", () => {
     const view = btnByText(el, "View");
     expectGhostButton(view, "sm");
     expect(el.querySelector(".chat-bgwork-open")).toBeNull();
-    // onClick still asks the UI store to open the Background agents panel.
+    // View selects Work Background without requesting the legacy panel.
     const before = useUI.getState().backgroundJobsRequest;
     await act(async () => view!.click());
-    expect(useUI.getState().backgroundJobsRequest).toBe(before + 1);
+    expect(useUI.getState().backgroundJobsRequest).toBe(before);
+    expect(useUI.getState().rightPanel).toBe("work");
+    expect(useUI.getState().surfaceStates.work.section).toBe("background");
   });
 
   it("the retired hand-rolled control classes are gone from chat.css", () => {

@@ -45,37 +45,40 @@ for (const width of [1440, 390]) {
       await expect(page.locator(".pl-message--user").filter({ hasText: NOTE })).toHaveCount(0);
       await page.screenshot({ path: info.outputPath("strip.png"), fullPage: true, animations: "disabled" });
       await strip.getByRole("button", { name: "View" }).click();
-      const drawer = page.getByRole("dialog", { name: "Standing instructions" });
-      await expect(drawer.getByText(QUOTE, { exact: true })).toBeVisible();
-      await page.screenshot({ path: info.outputPath("drawer.png"), fullPage: true, animations: "disabled" });
-      await drawer.getByRole("button", { name: "Withdraw…" }).click();
-      await drawer.getByLabel("Reason (optional)").fill("Hold until Monday");
+      // The phone shell does not mount a right rail; the selection survives widening.
+      if (width === 390) await page.setViewportSize({ width: 1440, height: 900 });
+      const rail = page.locator('.work-view[data-frame="rail"]');
+      await expect(page.getByRole("dialog", { name: "Standing instructions" })).toHaveCount(0);
+      await expect(rail.getByRole("button", { name: "This chat", exact: true })).toHaveAttribute("aria-pressed", "true");
+      await expect(rail.getByText(QUOTE, { exact: true })).toBeVisible();
+      await page.screenshot({ path: info.outputPath("rail.png"), fullPage: true, animations: "disabled" });
+      await rail.getByRole("button", { name: "Withdraw…" }).click();
+      await rail.getByLabel("Reason (optional)").fill("Hold until Monday");
       await page.screenshot({ path: info.outputPath("confirm.png"), fullPage: true, animations: "disabled" });
-      await drawer.getByRole("button", { name: "Withdraw", exact: true }).click();
-      await expect(drawer.getByText("Nothing is active right now.")).toBeVisible();
+      await rail.getByRole("button", { name: "Withdraw", exact: true }).click();
+      await expect(rail.getByText("Nothing is active right now.")).toBeVisible();
       expect(reason).toBe("Hold until Monday");
-      await drawer.getByRole("button", { name: "History (1)" }).click();
-      await expect(drawer.getByText("Note: Hold until Monday")).toBeVisible();
+      await rail.getByRole("button", { name: "History (1)" }).click();
+      await expect(rail.getByText("Note: Hold until Monday")).toBeVisible();
       await page.screenshot({ path: info.outputPath("history.png"), fullPage: true, animations: "disabled" });
-      await page.keyboard.press("Escape");
-      await expect(drawer).toBeHidden();
+
       await expect(strip).toHaveClass(/chat-ledger--idle/);
       await expect(page.locator(".pl-message--system").filter({ hasText: 'You withdrew: "' + QUOTE + '" — Hold until Monday' })).toBeVisible();
       const composer = page.getByPlaceholder(/Message protoAgent/i);
       await composer.fill("/directives ");
       await composer.press("Enter");
-      await expect(drawer).toBeVisible();
+      await expect(rail.locator(".work-section--directives")).toBeVisible();
       await expect(composer).toHaveValue("");
       await page.keyboard.press("Escape");
       await page.keyboard.press("ControlOrMeta+Shift+k");
       await page.locator(".pl-cmdk-commands__input").fill("/directives");
       await page.getByRole("option", { name: "/directives · Standing instructions" }).click();
-      await expect(drawer).toBeVisible();
+      await expect(rail.locator(".work-section--directives")).toBeVisible();
       await page.keyboard.press("Escape");
       if (width === 1440) {
         await page.locator(".pl-tabbar__tab").filter({ hasText: "Release instructions" }).click({ button: "right" });
         await page.getByRole("menuitem", { name: "Standing instructions", exact: true }).click();
-        await expect(drawer).toBeVisible();
+        await expect(rail.locator(".work-section--directives")).toBeVisible();
       }
     });
   }
