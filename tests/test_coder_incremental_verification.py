@@ -5,6 +5,9 @@ import pytest
 
 from plugins.coder.solve import Budget, Verdict, solve
 
+# Verifier process cleanup exercises platform-specific subprocess handling.
+pytestmark = pytest.mark.platform_sensitive
+
 
 def verdict(passed=False, failed=1):
     return Verdict(passed, total=1, failed=0 if passed else failed, output="fix formatting")
