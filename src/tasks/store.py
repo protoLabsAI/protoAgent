@@ -119,6 +119,8 @@ class TaskStore:
     # ── helpers ───────────────────────────────────────────────────────────────
 
     def _row(self, issue_id: str) -> sqlite3.Row | None:
+        # Caller holds _lock until the cursor is consumed (including read-only
+        # callers). check_same_thread=False does not serialize connection access.
         return self._conn.execute("SELECT * FROM issues WHERE id = ?", (issue_id,)).fetchone()
 
     def _reserve_id(self, issue_id: str) -> None:
@@ -248,12 +250,23 @@ class TaskStore:
         return result
 
     def delete(self, issue_id: str) -> bool:
+        return self.delete_with_snapshot(issue_id) is not None
+
+    def delete_with_snapshot(self, issue_id: str) -> dict[str, Any] | None:
+        """Atomically capture and delete a task, returning its full Undo snapshot.
+
+        The write transaction prevents another connection from updating or
+        replacing the row between the snapshot and deletion. Missing IDs return
+        None and publish no event, just like :meth:`delete` returning False.
+        """
         with self._write():
-            cur = self._conn.execute("DELETE FROM issues WHERE id = ?", (issue_id,))
-            deleted = cur.rowcount > 0
-        if deleted:
-            _publish("task.changed", {"id": issue_id, "action": "deleted"})
-        return deleted
+            row = self._row(issue_id)
+            if row is None:
+                return None
+            snapshot = dict(row)
+            self._conn.execute("DELETE FROM issues WHERE id = ?", (issue_id,))
+        _publish("task.changed", {"id": issue_id, "action": "deleted"})
+        return snapshot
 
     def restore(self, row: dict[str, Any]) -> dict[str, Any]:
         """Re-insert a previously deleted issue EXACTLY as it was — its original id and
@@ -262,7 +275,8 @@ class TaskStore:
         ``action: "restored"`` so the console Tasks panel refreshes. Backs the server-side
         undo of a console task-delete (#4955 Q10).
 
-        ``row`` is a snapshot taken by :meth:`get` before the delete; the insert covers
+        ``row`` is a snapshot taken by :meth:`delete_with_snapshot` (or a legacy
+        caller's :meth:`get` before deletion); the insert covers
         whichever of the live table's columns the snapshot carries, so it survives a schema
         that gained a column after the snapshot was taken.
 
