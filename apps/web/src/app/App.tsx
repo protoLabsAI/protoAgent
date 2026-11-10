@@ -988,6 +988,7 @@ function WorkspaceApp({ runtime }: { runtime: RuntimeStatus | null }) {
   // surface pushed over it. One level deep by design — a phone doesn't need a rail of
   // co-equal surfaces, it needs chat plus somewhere to go and back.
   const mobileAtRoot = mobileActive === "chat";
+  const onMobileBack = useCallback(() => setMobileActive("chat"), [setMobileActive]);
   // Docked background plugin views live in the ROOT layer alongside chat: they're iframes
   // that must never unmount, and one of them can be the active surface (shown by display
   // toggle, no pushed layer) — which is why MobileShell inerts on `pushed`, not on back.
@@ -1209,7 +1210,7 @@ function WorkspaceApp({ runtime }: { runtime: RuntimeStatus | null }) {
           pushed={mobilePushed}
           title={mobileTitle}
           showBack={!mobileAtRoot}
-          onBack={() => setMobileActive("chat")}
+          onBack={onMobileBack}
           onOpenDrawer={() => setDrawerOpen(true)}
           onOpenWork={() => useUI.getState().openSurfaceModal("work")}
           sheetOpen={!!surfaceModal || decisions.panelOpen || drawerOpen || globalSettingsOpen}
@@ -1324,6 +1325,14 @@ function WorkspaceApp({ runtime }: { runtime: RuntimeStatus | null }) {
           }
         }}
         onRailBackgroundContextMenu={onRailBackgroundContextMenu}
+        onRailDoubleClick={(side, _e, id) => {
+          if (isMobile || side !== "right" || id === "chat") return;
+          // Native double-click follows two selections, which may collapse the dock.
+          // Keep the rail host mounted so it observes Dock and restores focus. Expand
+          // the clicked id, reusing its saved state regardless of the preceding selection.
+          setRightCollapsed(false);
+          useUI.getState().openSurfaceModal(id);
+        }}
         onRailContextMenu={(side, e, id) => {
           // A plugin view's rail id is `plugin:<pluginId>:<viewId>` — resolve the owning
           // plugin's id + display name so the menu can offer "Configure…" (ADR 0036/0059).

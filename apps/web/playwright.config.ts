@@ -54,6 +54,13 @@ export default defineConfig({
       use: { ...devices["iPhone 13"], browserName: "chromium" },
       testMatch: /mobile\.spec\.ts/,
     },
+    // Session-sheet focus restoration and model-menu opening depend on Safari touch behavior.
+    {
+      name: "mobile-webkit",
+      use: { ...devices["iPhone 13"] },
+      testMatch: /mobile\.spec\.ts/,
+      grep: /session sheet|returns to its opener after touch|no input zooms|composer model menu/,
+    },
     // Tablet band of the DESKTOP shell (#4336 S5). The spec sets a device profile per describe
     // block (iPad Mini / iPad Pro 11 / Galaxy Tab S4, both orientations), so this project only
     // pins the engine — chromium, for the same CI-install reason as the mobile project above.
@@ -63,13 +70,14 @@ export default defineConfig({
       testMatch: /tablet\.spec\.ts/,
     },
     // WebKit covers the WKWebView plugin-preview harness and the mobile Work handle
-    // layout, plus terminal decision states. Chromium also discovers these specs; other suites are not duplicated.
+    // layout, progressive Work panes, terminal decision states, Knowledge history, and storage reload recovery.
+    // Chromium also discovers these specs; other suites are not duplicated.
     // The Playwright container (checks.yml web-e2e) ships WebKit, so no extra install is needed.
     {
       name: "webkit",
       use: { ...devices["Desktop Safari"] },
       testMatch: [
-        /(?:plugin-preview-.*|work-handle-layout|decision-needed)\.spec\.ts$/,
+        /(?:plugin-preview-.*|work-handle-layout|decision-needed|knowledge-collections|storage-quota)\.spec\.ts$/,
         /work-mobile-layout\.spec\.ts$/,
       ],
     },

@@ -1,0 +1,1 @@
+- **Phone Knowledge navigation.** Prevent shell rerenders and reloads from duplicating history entries, so browser Back and Forward return between the collection list and detail reliably.

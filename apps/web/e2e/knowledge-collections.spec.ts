@@ -74,6 +74,7 @@ for (const width of [1440, 390]) {
         if (width === 1440) await expect(surface.getByRole("table")).toBeVisible();
         else await expect(surface.getByRole("list", { name: "Knowledge collections" })).toBeVisible();
         await shot("list");
+        const listHistoryLength = await page.evaluate(() => history.length);
         await openCollection(page, "claude-import");
         await surface.getByRole("button", { name: "claude-import/release-guide-1.md · 13 chunks", exact: true }).click();
         await expect(surface.getByText("Release safety 1", { exact: true })).toBeVisible();
@@ -86,9 +87,19 @@ for (const width of [1440, 390]) {
         // A content edit must keep the chunk's OWN domain, not relabel it to the open collection.
         await expect(surface.getByRole("combobox", { name: "Collection", exact: true })).toHaveValue("legacy-domain");
         await surface.getByRole("button", { name: "Cancel", exact: true }).click();
+        // Background App updates used to add duplicate detail entries during this dwell.
+        await page.waitForTimeout(1500);
+        expect(await page.evaluate(() => history.length)).toBe(listHistoryLength + 1);
         await page.goBack(); await expect(surface).toContainText("5 collections · 847 chunks");
         await page.goForward(); await expect(surface.getByRole("heading", { name: "claude-import", exact: true })).toBeVisible();
         await page.reload(); await expect(surface.getByRole("heading", { name: "claude-import", exact: true })).toBeVisible();
+        expect(await page.evaluate(() => history.length)).toBe(listHistoryLength + 1);
+        await page.goBack();
+        await expect(surface).toContainText("5 collections · 847 chunks");
+        await expect(page).not.toHaveURL(/collection=/);
+        await page.goForward();
+        await expect(surface.getByRole("heading", { name: "claude-import", exact: true })).toBeVisible();
+        await expect(page).toHaveURL(/collection=claude-import/);
         await surface.getByRole("button", { name: "claude-import/release-guide-1.md · 13 chunks", exact: true }).click();
         await surface.getByRole("searchbox").fill("release");
         await expect(surface.getByRole("status")).toContainText("2 matches in claude-import");

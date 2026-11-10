@@ -535,13 +535,11 @@ jobs:
     # @playwright/test version — a guard step below fails loudly on drift.
     container:
       image: mcr.microsoft.com/playwright:v1.61.1-noble
-    # This single job runs BOTH the vitest unit suite (~2.5 min) and the build+Playwright
-    # E2E smoke (~6.5 min) back to back, so the job lands at ~9.5–10 min — right against a
-    # 10-min cap. It flaked as a `cancelled` timeout when a run drifted a few seconds over
-    # (a hard timeout is killed mid-step, not reported as a failure), and the margin only
-    # shrinks as the unit suite grows (each new guard adds vitest time). 15 min gives real
-    # headroom without masking a genuine hang — a broken test still errors in seconds.
-    timeout-minutes: 15
+    # Unit tests and build+Playwright run sequentially. Run 42831892534 spent five
+    # minutes in vitest, then was cancelled at the 15-minute job limit while the
+    # 796-test browser suite was still progressing. Allow room for the full suite
+    # and artifact upload; individual Playwright test/assertion timeouts stay bounded.
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
@@ -559,7 +557,7 @@ jobs:
         # Pure-logic unit tests (chat-store reducers, the A2A SSE frame parser,
         # the uiStore persist migration). Fast — runs before the heavier
         # Playwright path so a reducer regression fails the job early.
-        run: npm run test:unit --workspace @protoagent/web
+        run: npm run test:unit --workspace @protoagent/web -- --maxWorkers=2
       - name: Playwright version must match the container image
         # The pinned container ships the browsers for exactly one Playwright
         # version. When package-lock bumps @playwright/test, bump the job's
@@ -577,7 +575,7 @@ jobs:
         # deterministic mock backend (apps/web/e2e/mock-server.mjs) — no Python,
         # model, or network. Guards the operator-console rendering contract:
         # tool-call cards, markdown, slash commands, runtime panel.
-        run: npm run test:e2e --workspace @protoagent/web
+        run: npm run test:e2e --workspace @protoagent/web -- --workers=2
       - name: Preserve scrollback paint evidence
         if: always()
         uses: actions/upload-artifact@v7

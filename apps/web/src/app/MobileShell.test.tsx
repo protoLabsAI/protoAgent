@@ -3,7 +3,7 @@
 // (variant ghost, size md, icon), while the session-title switcher stays a sanctioned raw
 // composite <button> and the centring spacer stays a plain <span>. createRoot/act + the real
 // chat-store, like the other console UI suites (FleetRoom.test.tsx) — no testing-library dep.
-import { act, createElement as h } from "react";
+import { act, createElement as h, StrictMode } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -316,5 +316,56 @@ describe("phone Needs you indicator", () => {
     expect(needsYouCount(sources)).toBe(1);
     sources.goals.items = [];
     expect(needsYouCount(sources)).toBe(0);
+  });
+});
+
+
+describe("mobile history ownership", () => {
+  beforeEach(() => window.history.replaceState(null, "", "/app/"));
+  afterEach(() => vi.restoreAllMocks());
+
+  it("pushes once across rerenders and calls the latest Back callback", () => {
+    const push = vi.spyOn(window.history, "pushState");
+    const original = vi.fn();
+    const latest = vi.fn();
+    mount({ showBack: true, onBack: original });
+    mount({ showBack: true, onBack: latest, needsYouCount: 2 });
+    expect(push).toHaveBeenCalledTimes(1);
+    act(() => window.dispatchEvent(new PopStateEvent("popstate")));
+    expect(original).not.toHaveBeenCalled();
+    expect(latest).toHaveBeenCalledTimes(1);
+    mount({ showBack: false });
+    act(() => window.dispatchEvent(new PopStateEvent("popstate")));
+    expect(latest).toHaveBeenCalledTimes(1);
+    mount({ showBack: true });
+    expect(push).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not duplicate the entry during StrictMode effect replay", () => {
+    const push = vi.spyOn(window.history, "pushState");
+    act(() => root.render(h(StrictMode, null, h(MobileShell, baseProps({ showBack: true })))));
+    expect(push).toHaveBeenCalledTimes(1);
+  });
+
+  it("preserves collection history on reload and leaves capture listeners in control", () => {
+    const state = { mobilePush: true, knowledgeCollections: true, other: "preserved" };
+    window.history.replaceState(state, "", "/app/?collection=claude-import");
+    const push = vi.spyOn(window.history, "pushState");
+    const onBack = vi.fn();
+    const capture = (event: PopStateEvent) => {
+      if (event.state?.knowledgeCollections) event.stopImmediatePropagation();
+    };
+    window.addEventListener("popstate", capture, true);
+    try {
+      mount({ showBack: true, onBack });
+      expect(push).not.toHaveBeenCalled();
+      expect(window.history.state).toEqual(state);
+      act(() => window.dispatchEvent(new PopStateEvent("popstate", { state })));
+      expect(onBack).not.toHaveBeenCalled();
+      act(() => window.dispatchEvent(new PopStateEvent("popstate", { state: null })));
+      expect(onBack).toHaveBeenCalledTimes(1);
+    } finally {
+      window.removeEventListener("popstate", capture, true);
+    }
   });
 });

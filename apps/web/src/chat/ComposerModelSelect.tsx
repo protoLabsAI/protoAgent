@@ -1,10 +1,10 @@
 import { useQuery } from "@tanstack/react-query";
-import { Fragment, useState } from "react";
+import { Fragment, useEffect, useRef, useState } from "react";
 import { errMsg } from "../lib/format";
 import { stopLocalTurns } from "./LocalTurnControls";
 
 import { Badge } from "@protolabsai/ui/primitives";
-import { Menu, MenuItem, MenuSeparator } from "@protolabsai/ui/menu";
+import { Menu, MenuItem, MenuSeparator, type MenuHandle } from "@protolabsai/ui/menu";
 
 import { runtimeStatusQuery, settingsSchemaQuery } from "../lib/queries";
 import { chatStore, useChatState } from "./chat-store";
@@ -21,8 +21,19 @@ import { bareModel, composerModelSections, groupByLane, lanesFromOptions, modelP
 // provider. Rows are plain model names grouped under a provider heading, because
 // "anthropic-oauth:claude-sonnet-5" is slot syntax, not something to read in a menu.
 export function ComposerModelSelect() {
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const restoreAfterSwitch = useRef(false);
+  const menuRef = useRef<MenuHandle>(null);
+  const touchTrigger = useRef(false);
   const [switching, setSwitching] = useState(false);
   const [switchError, setSwitchError] = useState("");
+  useEffect(() => {
+    if (switching || !restoreAfterSwitch.current) return;
+    restoreAfterSwitch.current = false;
+    // Selection closes while the trigger is disabled during stopLocalTurns.
+    // Finish Radix's focus return once enabled, unless the user moved elsewhere.
+    if (document.activeElement === document.body) triggerRef.current?.focus({ preventScroll: true });
+  }, [switching]);
   const schema = useQuery(settingsSchemaQuery());
   const runtime = useQuery(runtimeStatusQuery());
   const { sessions, currentSessionId } = useChatState();
@@ -77,6 +88,7 @@ export function ComposerModelSelect() {
         key={model}
         disabled={switching}
         onSelect={async () => {
+          restoreAfterSwitch.current = true;
           setSwitching(true);
           setSwitchError("");
           try {
@@ -108,9 +120,30 @@ export function ComposerModelSelect() {
     <>
     {switchError ? <span role="alert">{switchError}</span> : null}
     <Menu
+      ref={menuRef}
       className="composer-model-menu"
       trigger={
-        <button /* ds-audit-ignore hand-rolled-control — composite row/trigger, protoContent#551 */ type="button" className="composer-model-select" disabled={switching} aria-label="Model for this chat">
+        <button /* ds-audit-ignore hand-rolled-control — composite row/trigger, protoContent#551 */ type="button" className="composer-model-select" disabled={switching} aria-label="Model for this chat"
+          ref={triggerRef}
+          onPointerDownCapture={(event) => {
+            touchTrigger.current = event.pointerType === "touch" || event.pointerType === "pen";
+            // DS prevents pointerdown to defer touch opening to click. WebKit can
+            // suppress that click entirely. Skip that handler without cancelling
+            // the native gesture, so scrolling/cancelled taps still do not open.
+            if (touchTrigger.current) event.stopPropagation();
+          }}
+          onPointerCancel={() => { touchTrigger.current = false; }}
+          onKeyDownCapture={() => { touchTrigger.current = false; }}
+          onClick={(event) => {
+            if (!touchTrigger.current) return;
+            touchTrigger.current = false;
+            // Safari does not focus tapped buttons; establish the opener before
+            // Radix takes focus so dismissal can return here instead of the editor.
+            event.currentTarget.focus({ preventScroll: true });
+            if (event.currentTarget.getAttribute("aria-expanded") === "true") menuRef.current?.close();
+            else menuRef.current?.open();
+          }}
+        >
           {bareModel(effectiveModel, knownLanes)}
         </button>
       }

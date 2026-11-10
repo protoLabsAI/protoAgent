@@ -1,0 +1,640 @@
+{
+  "baseSHA": "fd88e796085e8111810408fc553c002cef395aac",
+  "scope": "Playwright WebKit on macOS; native WKWebView acceptance remains required",
+  "initial": {
+    "timeline": [
+      {
+        "time": 1794323465838,
+        "event": "navigation",
+        "url": "/app/"
+      },
+      {
+        "time": 1794323466176,
+        "event": "requestfailed",
+        "id": 38,
+        "method": "GET",
+        "url": "http://127.0.0.1:4397/api/chat/attend",
+        "resourceType": "eventsource",
+        "navigation": false,
+        "failure": {
+          "errorText": "cancelled"
+        }
+      },
+      {
+        "time": 1794323466319,
+        "event": "requestfailed",
+        "id": 47,
+        "method": "POST",
+        "url": "http://127.0.0.1:4397/a2a",
+        "resourceType": "fetch",
+        "navigation": false,
+        "failure": {
+          "errorText": "cancelled"
+        }
+      },
+      {
+        "time": 1794323466319,
+        "event": "requestfailed",
+        "id": 37,
+        "method": "GET",
+        "url": "http://127.0.0.1:4397/api/events",
+        "resourceType": "eventsource",
+        "navigation": false,
+        "failure": {
+          "errorText": "cancelled"
+        }
+      },
+      {
+        "time": 1794323466331,
+        "event": "pageerror",
+        "message": "/127.0.0.1:4397/api/feedback?session_id=chat-1794323465922-mwqw7p due to access control checks.",
+        "stack": "Fetch API cannot load http://127.0.0.1:4397/api/feedback?session_id=chat-1794323465922-mwqw7p due to access control checks.\n    at te (http://127.0.0.1:4397/app/assets/index-BEKQYTW-.js:875:25752)\n    at unknown (http://127.0.0.1:4397/app/assets/index-BEKQYTW-.js:1005:264)"
+      },
+      {
+        "time": 1794323466335,
+        "event": "navigation",
+        "url": "/app/"
+      },
+      {
+        "time": 1794323466504,
+        "event": "requestfailed",
+        "id": 83,
+        "method": "GET",
+        "url": "http://127.0.0.1:4397/api/chat/attend",
+        "resourceType": "eventsource",
+        "navigation": false,
+        "failure": {
+          "errorText": "cancelled"
+        }
+      }
+    ],
+    "browserRequestedPaths": [
+      "http://127.0.0.1:4397/a2a",
+      "http://127.0.0.1:4397/api/activity",
+      "http://127.0.0.1:4397/api/archetypes",
+      "http://127.0.0.1:4397/api/background",
+      "http://127.0.0.1:4397/api/chat/attend",
+      "http://127.0.0.1:4397/api/chat/commands",
+      "http://127.0.0.1:4397/api/chat/mentions",
+      "http://127.0.0.1:4397/api/chat/sessions",
+      "http://127.0.0.1:4397/api/chat/sessions/chat-1794323465922-mwqw7p/directives",
+      "http://127.0.0.1:4397/api/chat/sessions/chat-1794323465922-mwqw7p/local-turns",
+      "http://127.0.0.1:4397/api/config",
+      "http://127.0.0.1:4397/api/config/soul/history",
+      "http://127.0.0.1:4397/api/decisions",
+      "http://127.0.0.1:4397/api/events",
+      "http://127.0.0.1:4397/api/flags",
+      "http://127.0.0.1:4397/api/fleet",
+      "http://127.0.0.1:4397/api/goals",
+      "http://127.0.0.1:4397/api/plugins/installed",
+      "http://127.0.0.1:4397/api/plugins/updates",
+      "http://127.0.0.1:4397/api/runtime/python",
+      "http://127.0.0.1:4397/api/runtime/status",
+      "http://127.0.0.1:4397/api/scheduler/jobs",
+      "http://127.0.0.1:4397/api/settings/schema",
+      "http://127.0.0.1:4397/api/sse-token",
+      "http://127.0.0.1:4397/api/tasks/issues",
+      "http://127.0.0.1:4397/api/theme",
+      "http://127.0.0.1:4397/api/watches",
+      "http://127.0.0.1:4397/app/",
+      "http://127.0.0.1:4397/app/assets/engine-compile-qj7RUWE4.js",
+      "http://127.0.0.1:4397/app/assets/index-BEKQYTW-.js",
+      "http://127.0.0.1:4397/app/assets/index-DkGn6pjW.css",
+      "http://127.0.0.1:4397/app/assets/mermaid-GHXKKRXX-DADCInRQ.js",
+      "http://127.0.0.1:4397/manifest.json",
+      "https://fonts.googleapis.com/css2",
+      "https://fonts.gstatic.com/s/geist/v5/gyByhwUxId8gMEwcGFWNOITd.woff2",
+      "https://fonts.gstatic.com/s/geistmono/v6/or3nQ6H-1_WfwkMZI_qYFrcdmhHkjko.woff2"
+    ],
+    "serverRequestedPaths": [
+      "/a2a",
+      "/api/activity",
+      "/api/archetypes",
+      "/api/background",
+      "/api/chat/attend",
+      "/api/chat/commands",
+      "/api/chat/mentions",
+      "/api/chat/sessions",
+      "/api/chat/sessions/chat-1794323465922-mwqw7p/directives",
+      "/api/chat/sessions/chat-1794323465922-mwqw7p/local-turns",
+      "/api/config",
+      "/api/config/soul/history",
+      "/api/decisions",
+      "/api/events",
+      "/api/flags",
+      "/api/fleet",
+      "/api/goals",
+      "/api/plugins/installed",
+      "/api/plugins/updates",
+      "/api/runtime/python",
+      "/api/runtime/status",
+      "/api/scheduler/jobs",
+      "/api/settings/schema",
+      "/api/sse-token",
+      "/api/tasks/issues",
+      "/api/theme",
+      "/api/watches",
+      "/app/",
+      "/app/assets/engine-compile-qj7RUWE4.js",
+      "/app/assets/index-BEKQYTW-.js",
+      "/app/assets/index-DkGn6pjW.css",
+      "/app/assets/mermaid-GHXKKRXX-DADCInRQ.js",
+      "/manifest.json"
+    ]
+  },
+  "webkitTwoWorkerResults": [
+    {
+      "title": "boots, navigates and reloads with localStorage filled to the real quota",
+      "status": "passed",
+      "pageerrors": [],
+      "failedRequests": [
+        {
+          "count": 10,
+          "example": {
+            "time": 1794323791421,
+            "event": "requestfailed",
+            "id": 38,
+            "method": "GET",
+            "url": "http://127.0.0.1:4397/api/chat/attend",
+            "resourceType": "eventsource",
+            "navigation": false,
+            "failure": {
+              "errorText": "cancelled"
+            }
+          }
+        },
+        {
+          "count": 10,
+          "example": {
+            "time": 1794323791421,
+            "event": "requestfailed",
+            "id": 37,
+            "method": "GET",
+            "url": "http://127.0.0.1:4397/api/events",
+            "resourceType": "eventsource",
+            "navigation": false,
+            "failure": {
+              "errorText": "cancelled"
+            }
+          }
+        },
+        {
+          "count": 8,
+          "example": {
+            "time": 1794323798475,
+            "event": "requestfailed",
+            "id": 357,
+            "method": "GET",
+            "url": "http://127.0.0.1:4397/api/activity",
+            "resourceType": "fetch",
+            "navigation": false,
+            "failure": {
+              "errorText": "cancelled"
+            }
+          }
+        }
+      ],
+      "mockDefaults": [
+        {
+          "count": 11,
+          "example": {
+            "id": 62,
+            "event": "request",
+            "time": 1794323789960,
+            "method": "GET",
+            "pathname": "/api/runtime/python",
+            "origin": null,
+            "status": null,
+            "headersSent": false,
+            "finished": false,
+            "allowOrigin": null,
+            "allowCredentials": null
+          }
+        },
+        {
+          "count": 11,
+          "example": {
+            "id": 62,
+            "event": "close",
+            "time": 1794323789960,
+            "method": "GET",
+            "pathname": "/api/runtime/python",
+            "origin": null,
+            "status": 200,
+            "headersSent": true,
+            "finished": true,
+            "allowOrigin": null,
+            "allowCredentials": null
+          }
+        },
+        {
+          "count": 11,
+          "example": {
+            "id": 76,
+            "event": "request",
+            "time": 1794323790014,
+            "method": "GET",
+            "pathname": "/api/chat/attend",
+            "origin": null,
+            "status": null,
+            "headersSent": false,
+            "finished": false,
+            "allowOrigin": null,
+            "allowCredentials": null
+          }
+        },
+        {
+          "count": 10,
+          "example": {
+            "id": 76,
+            "event": "close",
+            "time": 1794323791421,
+            "method": "GET",
+            "pathname": "/api/chat/attend",
+            "origin": null,
+            "status": 200,
+            "headersSent": true,
+            "finished": false,
+            "allowOrigin": null,
+            "allowCredentials": null
+          }
+        }
+      ]
+    },
+    {
+      "title": "the simulateQuotaBytes dev flag fails writes without crashing",
+      "status": "passed",
+      "pageerrors": [],
+      "failedRequests": [],
+      "mockDefaults": [
+        {
+          "count": 1,
+          "example": {
+            "id": 41,
+            "event": "request",
+            "time": 1794323789951,
+            "method": "GET",
+            "pathname": "/api/runtime/python",
+            "origin": null,
+            "status": null,
+            "headersSent": false,
+            "finished": false,
+            "allowOrigin": null,
+            "allowCredentials": null
+          }
+        },
+        {
+          "count": 1,
+          "example": {
+            "id": 41,
+            "event": "close",
+            "time": 1794323789951,
+            "method": "GET",
+            "pathname": "/api/runtime/python",
+            "origin": null,
+            "status": 200,
+            "headersSent": true,
+            "finished": true,
+            "allowOrigin": null,
+            "allowCredentials": null
+          }
+        },
+        {
+          "count": 1,
+          "example": {
+            "id": 68,
+            "event": "request",
+            "time": 1794323790000,
+            "method": "GET",
+            "pathname": "/api/chat/attend",
+            "origin": null,
+            "status": null,
+            "headersSent": false,
+            "finished": false,
+            "allowOrigin": null,
+            "allowCredentials": null
+          }
+        }
+      ]
+    },
+    {
+      "title": "a render-time quota crash recovers through Free up space & reload",
+      "status": "passed",
+      "pageerrors": [],
+      "failedRequests": [
+        {
+          "count": 2,
+          "example": {
+            "time": 1794323790742,
+            "event": "requestfailed",
+            "id": 37,
+            "method": "GET",
+            "url": "http://127.0.0.1:4397/api/events",
+            "resourceType": "eventsource",
+            "navigation": false,
+            "failure": {
+              "errorText": "cancelled"
+            }
+          }
+        }
+      ],
+      "mockDefaults": [
+        {
+          "count": 3,
+          "example": {
+            "id": 123,
+            "event": "request",
+            "time": 1794323790652,
+            "method": "GET",
+            "pathname": "/api/runtime/python",
+            "origin": null,
+            "status": null,
+            "headersSent": false,
+            "finished": false,
+            "allowOrigin": null,
+            "allowCredentials": null
+          }
+        },
+        {
+          "count": 3,
+          "example": {
+            "id": 123,
+            "event": "close",
+            "time": 1794323790652,
+            "method": "GET",
+            "pathname": "/api/runtime/python",
+            "origin": null,
+            "status": 200,
+            "headersSent": true,
+            "finished": true,
+            "allowOrigin": null,
+            "allowCredentials": null
+          }
+        },
+        {
+          "count": 1,
+          "example": {
+            "id": 200,
+            "event": "request",
+            "time": 1794323791128,
+            "method": "GET",
+            "pathname": "/api/chat/attend",
+            "origin": null,
+            "status": null,
+            "headersSent": false,
+            "finished": false,
+            "allowOrigin": null,
+            "allowCredentials": null
+          }
+        }
+      ]
+    },
+    {
+      "title": "beta ignores destructive storage QA hooks",
+      "status": "passed",
+      "pageerrors": [],
+      "failedRequests": [],
+      "mockDefaults": [
+        {
+          "count": 1,
+          "example": {
+            "id": 268,
+            "event": "request",
+            "time": 1794323791609,
+            "method": "GET",
+            "pathname": "/api/runtime/python",
+            "origin": null,
+            "status": null,
+            "headersSent": false,
+            "finished": false,
+            "allowOrigin": null,
+            "allowCredentials": null
+          }
+        },
+        {
+          "count": 1,
+          "example": {
+            "id": 268,
+            "event": "close",
+            "time": 1794323791609,
+            "method": "GET",
+            "pathname": "/api/runtime/python",
+            "origin": null,
+            "status": 200,
+            "headersSent": true,
+            "finished": true,
+            "allowOrigin": null,
+            "allowCredentials": null
+          }
+        },
+        {
+          "count": 1,
+          "example": {
+            "id": 282,
+            "event": "request",
+            "time": 1794323791671,
+            "method": "GET",
+            "pathname": "/api/chat/attend",
+            "origin": null,
+            "status": null,
+            "headersSent": false,
+            "finished": false,
+            "allowOrigin": null,
+            "allowCredentials": null
+          }
+        }
+      ]
+    },
+    {
+      "title": "prod ignores destructive storage QA hooks",
+      "status": "passed",
+      "pageerrors": [],
+      "failedRequests": [],
+      "mockDefaults": [
+        {
+          "count": 1,
+          "example": {
+            "id": 323,
+            "event": "request",
+            "time": 1794323792186,
+            "method": "GET",
+            "pathname": "/api/runtime/python",
+            "origin": null,
+            "status": null,
+            "headersSent": false,
+            "finished": false,
+            "allowOrigin": null,
+            "allowCredentials": null
+          }
+        },
+        {
+          "count": 1,
+          "example": {
+            "id": 323,
+            "event": "close",
+            "time": 1794323792186,
+            "method": "GET",
+            "pathname": "/api/runtime/python",
+            "origin": null,
+            "status": 200,
+            "headersSent": true,
+            "finished": true,
+            "allowOrigin": null,
+            "allowCredentials": null
+          }
+        },
+        {
+          "count": 1,
+          "example": {
+            "id": 329,
+            "event": "request",
+            "time": 1794323792233,
+            "method": "GET",
+            "pathname": "/api/chat/attend",
+            "origin": null,
+            "status": null,
+            "headersSent": false,
+            "finished": false,
+            "allowOrigin": null,
+            "allowCredentials": null
+          }
+        }
+      ]
+    },
+    {
+      "title": "a claimed pairing token that cannot be stored shows recovery before the console",
+      "status": "passed",
+      "pageerrors": [],
+      "failedRequests": [],
+      "mockDefaults": []
+    },
+    {
+      "title": "classifies a handled unload fetch independently of the console",
+      "status": "passed",
+      "pageerrors": [
+        {
+          "time": 1794323793027,
+          "event": "pageerror",
+          "message": "/127.0.0.1:4397/__e2e/unload-target due to access control checks.",
+          "stack": "Fetch API cannot load http://127.0.0.1:4397/__e2e/unload-target due to access control checks.\n    at unknown (http://127.0.0.1:4397/__e2e/unload-fetch:1:51)"
+        }
+      ],
+      "failedRequests": [],
+      "mockDefaults": []
+    },
+    {
+      "title": "migrates all 2400 legacy messages and retains them through ten reloads",
+      "status": "passed",
+      "pageerrors": [],
+      "failedRequests": [
+        {
+          "count": 10,
+          "example": {
+            "time": 1794323794793,
+            "event": "requestfailed",
+            "id": 38,
+            "method": "GET",
+            "url": "http://127.0.0.1:4397/api/chat/attend",
+            "resourceType": "eventsource",
+            "navigation": false,
+            "failure": {
+              "errorText": "cancelled"
+            }
+          }
+        },
+        {
+          "count": 10,
+          "example": {
+            "time": 1794323794793,
+            "event": "requestfailed",
+            "id": 37,
+            "method": "GET",
+            "url": "http://127.0.0.1:4397/api/events",
+            "resourceType": "eventsource",
+            "navigation": false,
+            "failure": {
+              "errorText": "cancelled"
+            }
+          }
+        }
+      ],
+      "mockDefaults": [
+        {
+          "count": 11,
+          "example": {
+            "id": 447,
+            "event": "request",
+            "time": 1794323793586,
+            "method": "GET",
+            "pathname": "/api/runtime/python",
+            "origin": null,
+            "status": null,
+            "headersSent": false,
+            "finished": false,
+            "allowOrigin": null,
+            "allowCredentials": null
+          }
+        },
+        {
+          "count": 11,
+          "example": {
+            "id": 447,
+            "event": "close",
+            "time": 1794323793586,
+            "method": "GET",
+            "pathname": "/api/runtime/python",
+            "origin": null,
+            "status": 200,
+            "headersSent": true,
+            "finished": true,
+            "allowOrigin": null,
+            "allowCredentials": null
+          }
+        },
+        {
+          "count": 11,
+          "example": {
+            "id": 454,
+            "event": "request",
+            "time": 1794323793710,
+            "method": "GET",
+            "pathname": "/api/chat/attend",
+            "origin": null,
+            "status": null,
+            "headersSent": false,
+            "finished": false,
+            "allowOrigin": null,
+            "allowCredentials": null
+          }
+        },
+        {
+          "count": 10,
+          "example": {
+            "id": 454,
+            "event": "close",
+            "time": 1794323794794,
+            "method": "GET",
+            "pathname": "/api/chat/attend",
+            "origin": null,
+            "status": 200,
+            "headersSent": true,
+            "finished": false,
+            "allowOrigin": null,
+            "allowCredentials": null
+          }
+        }
+      ]
+    }
+  ],
+  "chromiumTwoWorkerResult": "8 passed",
+  "interpretation": "Handled unload fetch reproduces without application code; no feedback request reached the initial mock. Missing attendance and Python runtime routes caused retry traffic. Corrected mocks plus completed-turn and dwell reloads pass strict console pageerror assertions. No CORS policy was added.",
+  "webkitOneWorkerResult": "8 passed (31.4s)",
+  "baselineCI": {
+    "url": "https://github.com/protoLabsAI/protoAgent/actions/runs/42841147113",
+    "completedJobs": [
+      "Lint (ruff + import contracts)",
+      "Python tests"
+    ],
+    "conclusion": "success for listed jobs; overall workflow still in progress"
+  }
+}

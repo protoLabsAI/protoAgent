@@ -126,6 +126,51 @@ test("mobile shell: the session sheet replaces the tab strip", async ({ page }) 
   await expect(sheet).toHaveCount(0);
 });
 
+// Safari does not focus tapped buttons. Keep the iPhone touch profile in both engines.
+test("returns to its opener after touch and keyboard dismissal", async ({ page, browserName }) => {
+  await page.goto("/app/", { waitUntil: "load" });
+  const opener = page.locator("button.mshell-title");
+  const composer = page.getByPlaceholder(/Message protoAgent/i);
+  const sheet = page.getByRole("dialog", { name: "Chats", exact: true });
+  await expect(opener).toHaveAccessibleName("New chat");
+  await expect(opener).toHaveAttribute("aria-haspopup", "dialog");
+  await expect(opener).toHaveAttribute("aria-expanded", "false");
+  const box = await opener.boundingBox();
+  expect(box && box.width >= 44 && box.height >= 44).toBe(true);
+
+  for (const dismissal of ["Escape", "Close", "overlay"] as const) {
+    // Start away from the opener so capturing stale focus cannot pass on iOS.
+    await composer.focus();
+    await expect(composer).toBeFocused();
+    await opener.tap();
+    await expect(sheet).toBeVisible();
+    await expect(sheet).toHaveAttribute("aria-modal", "true");
+    await expect(opener).toHaveAttribute("aria-expanded", "true");
+    await expect.poll(() => sheet.evaluate((el) => el.contains(document.activeElement))).toBe(true);
+    if (dismissal === "Escape") await page.keyboard.press("Escape");
+    else if (dismissal === "Close") await sheet.getByRole("button", { name: "Close", exact: true }).tap();
+    else await page.locator(".pl-overlay--drawer").tap({ position: { x: 8, y: 8 } });
+    await expect(sheet).toHaveCount(0);
+    await expect(opener, `focus after ${dismissal}`).toBeFocused();
+    await expect(opener).toHaveAttribute("aria-expanded", "false");
+  }
+
+  for (const key of ["Enter", "Space"]) {
+    // Reopen from restored focus without programmatically focusing the title.
+    await page.keyboard.press(key);
+    await expect(sheet).toBeVisible();
+    // Safari's default keyboard setting uses Option+Tab to include buttons.
+    const tabs = browserName === "webkit" ? ["Alt+Tab", "Alt+Shift+Tab"] : ["Tab", "Shift+Tab"];
+    for (const tab of tabs) {
+      await page.keyboard.press(tab);
+      await expect.poll(() => sheet.evaluate((el) => el.contains(document.activeElement))).toBe(true);
+    }
+    await page.keyboard.press("Escape");
+    await expect(sheet).toHaveCount(0);
+    await expect(opener).toBeFocused();
+  }
+});
+
 // Guards #2512: the sheet's Delete must run the SAME confirm lifecycle as the desktop
 // tab strip — never a silent local removal that skips the dialog and the server purge.
 test("mobile shell: deleting from the session sheet confirms first", async ({ page }) => {
