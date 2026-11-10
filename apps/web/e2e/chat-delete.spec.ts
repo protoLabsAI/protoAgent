@@ -23,8 +23,9 @@ test("closing a chat tab confirms first; cancel keeps it, confirm deletes", asyn
   const dialog = page.getByRole("dialog", { name: "Delete this chat?" });
   await expect(dialog).toBeVisible();
 
-  // Cancel → nothing deleted.
-  await page.getByRole("button", { name: "Cancel" }).click();
+  // Cancel → nothing deleted. (Scope to the dialog: the default-open Work surface can render a
+  // work-row whose status badge reads "Cancelled", which an unscoped name:"Cancel" would match.)
+  await dialog.getByRole("button", { name: "Cancel" }).click();
   await expect(dialog).toBeHidden();
   await expect(page.locator(".pl-tabbar__tab")).toHaveCount(2);
 

@@ -101,8 +101,9 @@ test("mobile shell: deleting from the session sheet confirms first", async ({ pa
   const dialog = page.getByRole("dialog", { name: "Delete this chat?" });
   await expect(dialog).toBeVisible();
 
-  // Cancel keeps both sessions.
-  await page.getByRole("button", { name: "Cancel" }).click();
+  // Cancel keeps both sessions. (Scope to the dialog: the Work surface can render a work-row
+  // whose status badge reads "Cancelled", which an unscoped name:"Cancel" would match.)
+  await dialog.getByRole("button", { name: "Cancel" }).click();
   await expect(dialog).toBeHidden();
   await page.locator(".mshell-title").click();
   await expect(page.locator(".session-sheet-row")).toHaveCount(2);
