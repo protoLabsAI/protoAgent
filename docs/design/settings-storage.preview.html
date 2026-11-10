@@ -1,0 +1,300 @@
+<style>
+  .mk-bar{position:sticky;top:0;z-index:10;display:flex;flex-wrap:wrap;gap:var(--pl-space-3);align-items:end;
+    padding:var(--pl-space-3) var(--pl-space-4);background:var(--pl-color-bg-raised);border-bottom:1px solid var(--pl-color-border)}
+  .mk-bar .pl-field{margin:0}
+  .mk-stage{padding:var(--pl-space-4)}
+  .mk-frame{box-sizing:border-box;width:100%;max-width:1440px;margin-inline:auto;overflow:hidden;
+    border:1px solid var(--pl-color-border);border-radius:var(--pl-radius);background:var(--pl-color-bg)}
+  .mk-frame[data-w="phone"]{max-width:390px}
+  .mk-screen{padding:var(--pl-space-4)}
+  .mk-sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+
+  /* settings shell (placement only) */
+  .st-shell{display:grid;grid-template-columns:12rem minmax(0,44rem);gap:var(--pl-space-6)}
+  .mk-frame[data-w="phone"] .st-shell{grid-template-columns:minmax(0,1fr)}
+  .mk-frame[data-w="phone"] .st-rail{display:none}
+  .st-rail{font-size:var(--pl-font-size-sm);color:var(--pl-color-fg-muted)}
+  .st-rail ul{list-style:none;margin:var(--pl-space-1) 0 0;padding:0;display:grid;gap:var(--pl-space-0_5)}
+  .st-rail li{padding:var(--pl-space-1) var(--pl-space-2);border-radius:var(--pl-radius)}
+  .st-rail [aria-current="page"]{background:var(--pl-color-bg-hover);color:var(--pl-color-fg)}
+  .st-panel{min-width:0;display:grid;gap:var(--pl-space-6)}
+  .st-body{display:grid;gap:var(--pl-space-6);font-size:var(--pl-font-size-sm)}
+  .st-sec{display:grid;gap:var(--pl-space-2);min-width:0}
+  .st-h{margin:0;font-size:var(--pl-font-size-sm);font-weight:var(--pl-font-weight-medium)}
+  .st-sub,.st-muted{margin:0;color:var(--pl-color-fg-muted)}
+  .st-status{display:grid;gap:var(--pl-space-2)}
+  .st-head{margin:0;display:flex;align-items:center;gap:var(--pl-space-2);font-size:var(--pl-font-size-base);font-weight:var(--pl-font-weight-medium)}
+  .st-head .pl-dot{flex:none}
+  .st-actions{display:flex;flex-wrap:wrap;gap:var(--pl-space-2)}
+  .st-list{list-style:none;margin:0;padding:0;border:1px solid var(--pl-color-border);border-radius:var(--pl-radius-md)}
+  .st-row{display:flex;flex-wrap:wrap;align-items:center;gap:var(--pl-space-1) var(--pl-space-3);padding:var(--pl-space-2) var(--pl-space-3);min-height:var(--pl-space-8)}
+  .st-row + .st-row{border-top:1px solid var(--pl-color-border)}
+  .st-name{flex:1 1 12rem;min-width:0;display:flex;flex-wrap:wrap;align-items:center;gap:var(--pl-space-1_5)}
+  .st-name small{color:var(--pl-color-fg-muted);font-size:var(--pl-font-size-xs)}
+  .st-meta{color:var(--pl-color-fg-muted);font-variant-numeric:tabular-nums;white-space:nowrap}
+  .st-end{display:flex;align-items:center;gap:var(--pl-space-2);margin-left:auto}
+  .st-note{flex-basis:100%;color:var(--pl-color-fg-muted);font-size:var(--pl-font-size-xs)}
+  .st-setting{display:flex;flex-wrap:wrap;gap:var(--pl-space-2) var(--pl-space-4);align-items:center;justify-content:space-between}
+  .st-setting > div:first-child{flex:1 1 16rem;min-width:0}
+  .st-on{display:inline-flex;align-items:center;gap:var(--pl-space-1_5)}
+  .st-details summary{cursor:pointer;color:var(--pl-color-fg-muted)}
+  .st-details ul{margin:var(--pl-space-2) 0 0;padding-left:var(--pl-space-4);color:var(--pl-color-fg-muted);font-size:var(--pl-font-size-xs);display:grid;gap:var(--pl-space-1)}
+  .st-details code{font-family:var(--pl-font-mono);overflow-wrap:anywhere}
+  .pl-overlay[hidden]{display:none}
+  .dlg-body p{margin:0 0 var(--pl-space-2)}
+  .dlg-body ol{margin:0 0 var(--pl-space-2);padding-left:var(--pl-space-5)}
+</style>
+<div class="mk-bar" role="toolbar" aria-label="Preview controls">
+  <div class="pl-field"><span id="mk-t">Theme</span>
+    <div class="pl-segmented" role="group" aria-labelledby="mk-t">
+      <button type="button" class="pl-seg" data-theme-btn="system" aria-pressed="false">System</button>
+      <button type="button" class="pl-seg" data-theme-btn="light" aria-pressed="false">Light</button>
+      <button type="button" class="pl-seg" data-theme-btn="dark" aria-pressed="false">Dark</button>
+    </div></div>
+  <div class="pl-field"><span id="mk-w">Width</span>
+    <div class="pl-segmented" role="group" aria-labelledby="mk-w">
+      <button type="button" class="pl-seg" data-w-btn="desk" aria-pressed="false">Desktop 1440</button>
+      <button type="button" class="pl-seg" data-w-btn="phone" aria-pressed="false">Phone 390</button>
+    </div></div>
+  <div class="pl-field"><label for="mk-state">State</label><select id="mk-state" class="pl-select"></select></div>
+</div>
+<div class="mk-stage"><section class="mk-frame" id="mk-frame" aria-label="Preview"><div class="mk-screen" id="mk-screen"></div></section></div>
+<div class="mk-sr" role="status" id="mk-live"></div>
+
+<div class="pl-overlay" id="dlg" hidden>
+  <div class="pl-dialog" role="dialog" aria-modal="true" aria-labelledby="dlg-t" tabindex="-1">
+    <div class="pl-dialog__head"><div class="pl-dialog__title" id="dlg-t"></div>
+      <button type="button" class="pl-iconbtn pl-dialog__close" aria-label="Close" data-dlg-cancel>×</button></div>
+    <div class="pl-dialog__body dlg-body" id="dlg-b"></div>
+    <div class="pl-dialog__foot">
+      <button type="button" class="pl-btn pl-btn--ghost" data-dlg-cancel>Cancel</button>
+      <button type="button" class="pl-btn pl-btn--danger" id="dlg-ok"></button>
+    </div>
+  </div>
+</div>
+<div class="pl-toast-stack" data-position="bottom-right" role="region" aria-label="Notifications" id="toasts"></div>
+
+<script>
+(() => {
+  const esc = (t) => String(t ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
+  const size = (kb) => kb < 1000 ? `${Math.round(kb)} KB` : `${(kb / 1000).toFixed(1)} MB`;
+  const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`;
+
+  // ① Sample data from BRIEF.md (a real desktop profile, rounded). No dates in the sample, so no "last saved".
+  const AGENTS = [
+    { name: "protoEngineer", chats: 2, kb: 610, here: true },
+    { name: "warBoss", chats: 5, kb: 450 },
+    { name: "cliffNotes", sub: "necroMunda", chats: 6, kb: 370 },
+    { name: "brandLaunch", chats: 1, kb: 345 },
+    { name: "jobCoach", chats: 2, kb: 290 },
+    { name: "protoAgent", chats: 7, kb: 186 }, /* host: stand-in name, the sample doesn't give it */
+    { name: "killteamCoach", chats: 1, kb: 180 },
+    { name: "threeDee", chats: 4, kb: 175, gone: true },
+    { name: "merchantAgent", chats: 1, kb: 145 },
+    { name: "promptInjection", chats: 1, kb: 127, gone: true },
+  ];
+  const QUICK = { threads: 4, kb: 70 }, PREFS = 45;
+  const AUTO_CLEAR = { when: "Today at 14:12", auto: true, chats: 5, kb: 302,
+    what: "threeDee (4 chats) and promptInjection (1 chat), which are no longer in your fleet" };
+
+  // A state is a starting model; actions in the preview mutate it.
+  const base = (o) => ({ agents: AGENTS.map((a) => ({ ...a })), quick: { ...QUICK }, prefs: PREFS,
+    est: { usedKb: 3400, quotaKb: 60e6, quotaLabel: "60 GB" }, secure: true, persist: "unasked",
+    pressure: "ok", replying: false, last: null, ...o });
+  const STATES = {
+    normal: { label: "Normal", make: () => base() },
+    freed:  { label: "Freed (after an automatic clear)", make: () => base({
+      agents: AGENTS.filter((a) => !a.gone).map((a) => ({ ...a })), est: { usedKb: 3098, quotaKb: 60e6, quotaLabel: "60 GB" },
+      pressure: "evicted", last: AUTO_CLEAR }) },
+    full:   { label: "Full (not saving, reply running)", make: () => base({ est: { usedKb: 3700, quotaKb: 3700, quotaLabel: "3.7 MB" },
+      pressure: "failing", replying: true }) },
+    lan:    { label: "Normal on plain http (LAN)", make: () => base({ est: null, secure: false }) },
+    refused: { label: "Keep data refused by the browser", make: () => base({ persist: "refused" }) },
+  };
+
+  let m = null;
+  const sumKb = () => m.agents.reduce((s, a) => s + a.kb, 0) + m.quick.kb + m.prefs;
+  const overhead = () => (m.est ? m.est.usedKb - sumKb() : 0);
+  const pct = () => (m.est ? (m.est.usedKb / m.est.quotaKb) * 100 : null);
+  const gone = () => m.agents.filter((a) => a.gone);
+  const shrink = (kb) => { if (m.est) m.est.usedKb -= kb; };
+
+  function status() {
+    const p = pct();
+    if (m.pressure === "failing") return `
+      <div class="pl-callout pl-callout--warning st-status">
+        <p class="st-head">New messages aren't being saved in this browser.</p>
+        <div class="pl-callout__body"><p class="st-muted">Chats keep working, and the server keeps the last 24 hours of each one. Free up space to start saving again.</p></div>
+        <div class="st-actions"><button type="button" class="pl-btn pl-btn--primary" data-act="free">Free up space</button></div>
+      </div>`;
+    const room = m.est ? `${size(m.est.usedKb)} used${p < 80 ? ", with plenty of room left" : ""}.` : `About ${size(sumKb())} saved.`;
+    const freed = m.last && m.last.auto ? ` Made room ${m.last.when.toLowerCase()} by clearing ${plural(m.last.chats, "old chat", "old chats")}.` : "";
+    return `<div class="st-status"><div class="st-head"><span class="pl-dot pl-dot--success" aria-hidden="true"></span>Chats are saving in this browser.</div>
+      <p class="st-muted">${room}${freed}</p></div>`;
+  }
+
+  function agentRow(a, i) {
+    const blocked = a.here && m.replying;
+    const tags = [a.here ? `<span class="pl-badge">this window</span>` : "", a.gone ? `<span class="pl-badge">not in fleet</span>` : ""].join("");
+    return `<li class="st-row"><div class="st-name">${esc(a.name)}${a.sub ? ` <small>${esc(a.sub)}</small>` : ""}${tags}</div>
+      <div class="st-end"><span class="st-meta">${plural(a.chats, "chat", "chats")} · ${size(a.kb)}</span>
+      <button type="button" class="pl-btn pl-btn--ghost pl-btn--sm" data-act="agent" data-i="${i}" aria-label="Clear ${esc(a.name)}'s chats"${blocked ? " disabled" : ""}>Clear</button></div>
+      ${blocked ? `<div class="st-note">Replying now. You can clear this after the reply finishes.</div>` : ""}</li>`;
+  }
+
+  function usage() {
+    const rows = m.agents.map(agentRow).join("");
+    const g = gone();
+    return `<section class="st-sec" aria-labelledby="use-h">
+      <h3 class="st-h" id="use-h">What's using space</h3>
+      <p class="st-sub">Clearing removes this browser's copy only. The server keeps the last 24 hours of each chat, and your other devices aren't affected.</p>
+      ${g.length && m.pressure !== "failing" ? `<div class="st-setting"><p class="st-muted">${plural(g.length, "agent is", "agents are")} no longer in your fleet (${size(g.reduce((s, a) => s + a.kb, 0))}).</p><button type="button" class="pl-btn pl-btn--sm" data-act="gone">Clear them</button></div>` : ""}
+      <ul class="st-list">${rows}
+        ${m.quick.threads ? `<li class="st-row"><div class="st-name">Quick chats</div><div class="st-end"><span class="st-meta">${plural(m.quick.threads, "thread", "threads")} · ${size(m.quick.kb)}</span>
+          <button type="button" class="pl-btn pl-btn--ghost pl-btn--sm" data-act="quick" aria-label="Clear quick chats">Clear</button></div></li>` : ""}
+        <li class="st-row"><div class="st-name">Layout and preferences</div><div class="st-end"><span class="st-meta">${size(m.prefs)}</span></div>
+          <div class="st-note">Includes your sign-in, so it isn't cleared here.</div></li>
+      </ul></section>`;
+  }
+
+  function keep() {
+    let right;
+    if (!m.secure) right = `<button type="button" class="pl-btn pl-btn--sm" disabled>Keep data</button>`;
+    else if (m.persist === "refused") right = `<button type="button" class="pl-btn pl-btn--sm" data-act="persist">Keep data</button>`;
+    else if (m.persist === "granted") right = `<span class="st-on"><span class="pl-dot pl-dot--success" aria-hidden="true"></span>On</span>`;
+    else right = `<button type="button" class="pl-btn pl-btn--sm" data-act="persist">Keep data</button>`;
+    const desc = !m.secure
+      ? "Only works on a secure (https) address or in the desktop app. This console is on plain http."
+      : m.persist === "refused"
+        ? "This browser chose not to keep it this time. That's the browser's call and nothing is wrong: your chats save as usual. Browsers often say yes later, for example once you've used the console for a while or bookmarked it."
+      : m.persist === "granted"
+        ? "The browser won't clear this console's data on its own. The console still clears old chats itself when it runs out of room."
+        : "Asks the browser not to clear this console's data on its own, for example when your disk is low.";
+    return `<section class="st-sec st-setting" aria-labelledby="keep-h"><div><h3 class="st-h" id="keep-h">Keep data</h3><p class="st-sub">${desc}</p></div>${right}</section>`;
+  }
+
+  function lastClear() {
+    const t = m.last ? `${esc(m.last.when)}: ${plural(m.last.chats, "chat", "chats")} from ${esc(m.last.what)}. ${size(m.last.kb)} freed.` : "Nothing has been cleared automatically.";
+    return `<section class="st-sec" aria-labelledby="last-h"><h3 class="st-h" id="last-h">Last automatic clear</h3><p class="st-sub">${t}</p></section>`;
+  }
+
+  function details() {
+    const chats = m.agents.reduce((s, a) => s + a.kb, 0) + m.quick.kb;
+    return `<details class="st-details"><summary>Technical details</summary><ul>
+      <li>Browser's estimate: ${m.est ? `${size(m.est.usedKb)} used of about ${m.est.quotaLabel}, including about ${size(overhead())} of browser overhead` : "unavailable (needs a secure address and Safari 17 or later)"}.</li>
+      <li>Chats: about ${size(chats)} in the <code>protoagent-transcripts</code> IndexedDB database.</li>
+      <li>Layout, preferences, dismissals and sign-in: about ${size(m.prefs)} in localStorage.</li>
+      <li>Persistent storage: ${!m.secure ? "not available on this address" : m.persist === "granted" ? "granted" : m.persist === "refused" ? "requested, not granted" : "not requested"}. Saving: ${m.pressure === "failing" ? "failing" : "ok"}.</li></ul></details>`;
+  }
+
+  function render() {
+    return `<div class="st-shell"><nav class="st-rail" aria-label="Settings"><span class="pl-eyebrow">This console</span>
+        <ul><li>Theme</li><li>Chat</li><li>Keyboard</li><li aria-current="page">Storage</li></ul></nav>
+      <section class="st-panel"><div class="pl-panel-header"><div class="pl-panel-header__titles">
+        <div class="pl-panel-header__kicker">what this browser keeps for this console — saved on this device</div>
+        <h2 class="pl-panel-header__title">Storage</h2></div></div>
+        <div class="st-body">${status()}${usage()}${keep()}${lastClear()}${details()}</div></section></div>`;
+  }
+
+  // ── dialog + toast ──
+  const dlg = document.getElementById("dlg"), dlgBox = dlg.querySelector(".pl-dialog");
+  let onOk = null, returnTo = null;
+  function confirmDlg(title, body, okLabel, fn) {
+    returnTo = document.activeElement;
+    document.getElementById("dlg-t").textContent = title;
+    document.getElementById("dlg-b").innerHTML = body;
+    document.getElementById("dlg-ok").textContent = okLabel;
+    onOk = fn; dlg.hidden = false; dlgBox.focus();
+  }
+  function closeDlg() { dlg.hidden = true; onOk = null; (document.querySelector(returnTo && returnTo.dataset.act ? "#use-h" : "#mk-state") || document.body); if (returnTo && document.body.contains(returnTo)) returnTo.focus(); else document.getElementById("use-h")?.setAttribute("tabindex", "-1"), document.getElementById("use-h")?.focus(); }
+  dlg.querySelectorAll("[data-dlg-cancel]").forEach((b) => b.addEventListener("click", closeDlg));
+  dlg.addEventListener("mousedown", (e) => { if (e.target === dlg) closeDlg(); });
+  document.getElementById("dlg-ok").addEventListener("click", () => { const f = onOk; closeDlg(); f && f(); });
+  dlg.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") { e.preventDefault(); closeDlg(); }
+    if (e.key === "Tab") { const f = [...dlg.querySelectorAll("button")]; const i = f.indexOf(document.activeElement);
+      if (e.shiftKey && i <= 0) { e.preventDefault(); f[f.length - 1].focus(); } else if (!e.shiftKey && i === f.length - 1) { e.preventDefault(); f[0].focus(); } }
+  });
+  function toast(msg) {
+    const t = document.createElement("div"); t.className = "pl-toast"; t.setAttribute("role", "status");
+    t.innerHTML = `<div class="pl-toast__body"><div class="pl-toast__msg">${esc(msg)}</div></div><button type="button" class="pl-iconbtn pl-toast__close" aria-label="Dismiss">×</button>`;
+    t.querySelector("button").onclick = () => t.remove();
+    document.getElementById("toasts").append(t); setTimeout(() => t.remove(), 5000);
+  }
+  const STAYS = (who) => `<p>Stays: the server's copy of the last 24 hours of each chat, ${who}, and anything on your other devices. Chats open in a tab stay too.</p>`;
+  function settle() { if (m.pressure === "failing") m.pressure = "ok"; redraw(); }
+
+  const screen = document.getElementById("mk-screen");
+  function redraw() { screen.innerHTML = render(); }
+  screen.addEventListener("click", (e) => {
+    const b = e.target.closest("[data-act]"); if (!b || b.disabled) return;
+    const act = b.dataset.act;
+    if (act === "agent") {
+      const a = m.agents[+b.dataset.i];
+      confirmDlg(`Clear ${a.name}'s chats from this browser?`,
+        `<p>Removes ${plural(a.chats, "saved chat", "saved chats")} (${size(a.kb)}) from this browser.</p>${STAYS(`${esc(a.name)}'s memory and settings`)}`,
+        "Clear chats", () => { m.agents.splice(+b.dataset.i, 1); shrink(a.kb);
+          toast(`Cleared ${a.name}'s chats from this browser. ${size(a.kb)} freed.`); settle(); });
+    } else if (act === "gone") {
+      const g = gone(), kb = g.reduce((s, a) => s + a.kb, 0), n = g.reduce((s, a) => s + a.chats, 0);
+      confirmDlg("Clear agents no longer in your fleet?",
+        `<p>Removes ${plural(n, "saved chat", "saved chats")} (${size(kb)}) from ${g.map((a) => esc(a.name)).join(" and ")}.</p>${STAYS("every agent still in your fleet")}`,
+        "Clear chats", () => { m.agents = m.agents.filter((a) => !a.gone); shrink(kb);
+          toast(`Cleared ${plural(n, "chat", "chats")} from agents no longer in your fleet. ${size(kb)} freed.`); settle(); });
+    } else if (act === "quick") {
+      const q = m.quick;
+      confirmDlg("Clear quick chats from this browser?",
+        `<p>Removes ${plural(q.threads, "quick chat thread", "quick chat threads")} (${size(q.kb)}) from the command palette and direct messages.</p>${STAYS("every agent's regular chats")}`,
+        "Clear quick chats", () => { shrink(q.kb); m.quick = { threads: 0, kb: 0 };
+          toast(`Cleared quick chats from this browser. ${size(q.kb)} freed.`); settle(); });
+    } else if (act === "free") {
+      const here = m.agents.find((a) => a.here);
+      confirmDlg("Free up space?",
+        `<p>Clears old chats from this browser until new messages fit, in this order:</p>
+         <ol><li>Agents no longer in your fleet (${gone().map((a) => esc(a.name)).join(", ")})</li><li>Quick chats from other windows</li><li>Agents you haven't opened in a day</li><li>${esc(here.name)}'s oldest chats</li></ol>
+         <p>Never cleared: chats open in a tab, and ${esc(here.name)}'s reply in progress. The server keeps the last 24 hours of each chat.</p>`,
+        "Free up space", () => { const g = gone(), kb = g.reduce((s, a) => s + a.kb, 0) + m.quick.kb, n = g.reduce((s, a) => s + a.chats, 0) + m.quick.threads;
+          m.agents = m.agents.filter((a) => !a.gone); m.quick = { threads: 0, kb: 0 }; shrink(kb);
+          toast(`Made room: cleared ${plural(n, "old chat", "old chats")} (${size(kb)}). New messages are saving again.`); settle(); });
+    } else if (act === "persist") { m.persist = "granted"; toast("This browser will keep your data."); redraw(); }
+  });
+
+  const $ = (s) => document.querySelector(s), root = document.documentElement;
+  const frame = $("#mk-frame"), pick = $("#mk-state"), live = $("#mk-live");
+  const press = (sel, on) => document.querySelectorAll(sel).forEach((b) => {
+    const v = on(b); b.setAttribute("aria-pressed", String(v)); b.classList.toggle("pl-seg--active", v);
+  });
+  let forced = null; const host = {};
+  const park = () => { for (const p of [...root.style]) if (p.startsWith("--pl-")) { host[p] = root.style.getPropertyValue(p); root.style.removeProperty(p); } };
+  new MutationObserver(() => { if (forced) park(); }).observe(root, { attributes: true, attributeFilter: ["style"] });
+  function setTheme(t) {
+    forced = t === "system" ? null : t;
+    if (forced) { park(); root.setAttribute("data-theme", forced); }
+    else { root.removeAttribute("data-theme"); for (const p in host) root.style.setProperty(p, host[p]); }
+    press("[data-theme-btn]", (b) => b.dataset.themeBtn === t);
+  }
+  function setWidth(w) { frame.dataset.w = w; press("[data-w-btn]", (b) => b.dataset.wBtn === w); }
+  function show(k) { pick.value = k; m = STATES[k].make(); redraw(); }
+
+  for (const [k, s] of Object.entries(STATES)) pick.add(new Option(s.label, k));
+  document.querySelectorAll("[data-theme-btn]").forEach((b) => b.addEventListener("click", () => setTheme(b.dataset.themeBtn)));
+  document.querySelectorAll("[data-w-btn]").forEach((b) => b.addEventListener("click", () => setWidth(b.dataset.wBtn)));
+  pick.addEventListener("change", () => { show(pick.value); live.textContent = `Showing: ${STATES[pick.value].label}`; });
+
+  const name = (el) => el.tagName.toLowerCase() + (typeof el.className === "string" && el.className.trim() ? "." + el.className.trim().split(/\s+/).join(".") : "");
+  const clipped = (el) => { for (let a = el.parentElement; a && a !== frame; a = a.parentElement) if (getComputedStyle(a).overflowX !== "visible") return true; return false; };
+  const problems = [];
+  for (const [w, px] of [["desk", 1440], ["phone", 390]]) {
+    setWidth(w); frame.style.width = px + "px"; frame.style.maxWidth = "none";
+    for (const k of Object.keys(STATES)) {
+      show(k);
+      const edge = frame.getBoundingClientRect().right + 1;
+      const bad = [...screen.querySelectorAll("*")].filter((el) => el.getBoundingClientRect().right > edge && !clipped(el));
+      if (bad.length) problems.push(`${px} px, ${STATES[k].label}: ${bad.slice(0, 3).map(name).join(", ")} past the edge`);
+    }
+  }
+  frame.style.width = frame.style.maxWidth = "";
+  setTheme("system"); setWidth("desk"); show(Object.keys(STATES)[0]);
+  if (problems.length) (window.__artErr || console.error)("Layout check failed:\n" + problems.join("\n"));
+})();
+</script>
