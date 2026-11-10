@@ -113,6 +113,7 @@ export function MobileShell({
   banners?: ReactNode;
 }) {
   const chatState = useChatState();
+  const sessionSheetTriggerRef = useRef<HTMLButtonElement>(null);
   const current = chatState.sessions.find((s) => s.id === chatState.currentSessionId);
   // "+" is a no-op when the blank it would reuse is already what you're looking at, so
   // disable it rather than let it read as a dead tap. If the blank is on ANOTHER tab the
@@ -184,6 +185,7 @@ export function MobileShell({
             {/* The session title IS the switcher — tapping it opens the sheet. Replaces the
                 DS TabBar's `responsive` <select>, which ChatSurface suppresses on mobile. */}
             <button
+              ref={sessionSheetTriggerRef}
               type="button"
               className="mshell-title"
               onClick={() => onSessionSheetChange(true)}
@@ -247,7 +249,7 @@ export function MobileShell({
         {pushed != null ? <div className="mshell-pushed">{pushed}</div> : null}
       </div>
 
-      <SessionSheet open={sessionSheetOpen} onClose={() => onSessionSheetChange(false)} />
+      <SessionSheet open={sessionSheetOpen} onClose={() => onSessionSheetChange(false)} triggerRef={sessionSheetTriggerRef} />
     </div>
   );
 }

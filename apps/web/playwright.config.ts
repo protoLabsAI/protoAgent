@@ -54,6 +54,13 @@ export default defineConfig({
       use: { ...devices["iPhone 13"], browserName: "chromium" },
       testMatch: /mobile\.spec\.ts/,
     },
+    // Session-sheet focus restoration depends on Safari's touch focus behavior.
+    {
+      name: "mobile-webkit",
+      use: { ...devices["iPhone 13"] },
+      testMatch: /mobile\.spec\.ts/,
+      grep: /session sheet|returns to its opener after touch|no input zooms/,
+    },
     // Tablet band of the DESKTOP shell (#4336 S5). The spec sets a device profile per describe
     // block (iPad Mini / iPad Pro 11 / Galaxy Tab S4, both orientations), so this project only
     // pins the engine — chromium, for the same CI-install reason as the mobile project above.
