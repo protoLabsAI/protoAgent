@@ -359,7 +359,11 @@ describe("durable decision transcript", () => {
   it("shows safe loading and missing-record text without generic answer controls", async () => {
     vi.mocked(decisionsApi.listDecisions).mockResolvedValue({ decisions: [], pending: 0 });
     let reject!: (reason: unknown) => void;
-    vi.mocked(decisionsApi.getDecision).mockImplementation(() => new Promise((_resolve, fail) => { reject = fail; }));
+    // The shared store re-reads earlier tests' still-pending decisions when the pending list
+    // comes back without them; settle those, and hold only this test's decision open.
+    vi.mocked(decisionsApi.getDecision).mockImplementation((id) => id === current.id
+      ? new Promise((_resolve, fail) => { reject = fail; })
+      : Promise.resolve({ ...record(), id, state: "withdrawn" }));
     await act(async () => { root.render(h(DecisionTranscript, { id: current.id })); });
     expect(container.textContent).toContain("Loading decision");
     await act(async () => { reject(new ApiError(404, "missing")); await flush(); });
