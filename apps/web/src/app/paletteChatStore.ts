@@ -72,14 +72,16 @@ registerSaveRetry("palette", async () => {
  *  store already has wins), then preload this window's threads. Awaited at boot. */
 export async function initPaletteThreads(store: TranscriptStore | null, isLate: () => boolean = () => false): Promise<void> {
   if (!store) return;
-  const existing = await store.loadThreads("protoagent.palette.chat");
   const links: [string, string][] = [];
   for (const key of listKeys("local")) {
     if (matchKey("local", key)?.spec.id !== "palette.chat") continue;
     try {
       const p = JSON.parse(readKey("local", key) || "null") as Partial<PaletteThread> | null;
       if (!p || typeof p.contextId !== "string" || !Array.isArray(p.messages)) continue;
-      if (!existing.has(key) && p.messages.length) await store.putThread(key, sanitize(p.messages));
+      // A key that still carries messages is never older than the store's copy: keys shrink to
+      // the link only once the store holds the thread, so a full key was written after (a
+      // late boot's page, an older console). It wins, even over an empty list (a fresh thread).
+      await store.putThread(key, sanitize(p.messages));
       links.push([key, JSON.stringify({ contextId: p.contextId })]);
     } catch {
       /* corrupt: leave it for loadPaletteThread to discard */

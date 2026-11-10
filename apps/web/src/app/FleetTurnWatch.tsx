@@ -129,8 +129,17 @@ export function FleetTurnWatch() {
     }
 
     let prev: Watch[] = [];
+    let running = false;
     async function round() {
-      if (stopped) return;
+      if (stopped || running) return; // a slow round never overlaps the next tick
+      running = true;
+      try {
+        await roundOnce();
+      } finally {
+        running = false;
+      }
+    }
+    async function roundOnce() {
       // Saved transcripts live in IndexedDB once the store opened (epic #4981); localStorage
       // otherwise (and for a window still on an older console).
       let candidates = scanOtherSlugs(current);
