@@ -1,5 +1,8 @@
 import { Table, TBody, Td, Th, THead, Tr } from "@protolabsai/ui/data";
-import type { HitlDisplayTable } from "../lib/types";
+import { createContext, useContext, useEffect, useRef, type RefObject } from "react";
+import { DecisionCard } from "../decisions/DecisionCard";
+import { useDecision, useDecisions } from "../decisions/useDecisions";
+import type { ChatMessage, HitlPayload, HitlDisplayTable } from "../lib/types";
 
 const isObject = (value: unknown): value is Record<string, unknown> =>
   value !== null && typeof value === "object" && !Array.isArray(value);
@@ -50,6 +53,78 @@ export function HitlDisplay({ display }: { display: unknown }) {
           ))}
         </TBody>
       </Table>
+    </div>
+  );
+}
+
+/** Only the matching transcript card may replace a live generic decision form. */
+export function hasDecisionTranscript(payload: HitlPayload | null, messages: ChatMessage[]): boolean {
+  return payload?.kind === "decision" && Boolean(payload.decision_id?.trim())
+    && messages.some((message) => message.role === "assistant" && message.decisionId === payload.decision_id);
+}
+
+/** Slot-local bridge: historical cards cannot arm a reply to a different live interrupt. */
+export const DecisionTranscriptContext = createContext<{
+  reply: (id: string) => void;
+  settled: (id: string) => void;
+} | null>(null);
+
+export function useLiveDecisionTranscript(
+  hitlRef: RefObject<HitlPayload | null>,
+  updateHitl: (payload: HitlPayload | null) => void,
+  resumeHitl: (response: string) => Promise<void>,
+) {
+  const replyId = useRef<string | null>(null);
+  const matches = (id: string) => hitlRef.current?.kind === "decision" && hitlRef.current.decision_id === id;
+  return {
+    reply(id: string) {
+      if (matches(id)) replyId.current = id;
+    },
+    settled(id: string) {
+      if (replyId.current === id) replyId.current = null;
+      // Clearing local UI is not another resume: server arbitration already owns that.
+      if (matches(id)) updateHitl(null);
+    },
+    submitReply(text: string): boolean {
+      const id = replyId.current;
+      if (!id || !matches(id)) return false;
+      if (text.trim()) {
+        replyId.current = null;
+        void resumeHitl(text.trim());
+      }
+      return true;
+    },
+  };
+}
+
+/** Durable identity is the only input: never synthesize a record from a historical prompt. */
+export function DecisionTranscript({ id }: { id: string }) {
+  const { record, state } = useDecision(id);
+  const { answer } = useDecisions();
+  const live = useContext(DecisionTranscriptContext);
+  useEffect(() => {
+    if (record && record.state !== "pending") live?.settled(id);
+  }, [id, record, live]);
+  const host = useRef<HTMLDivElement>(null);
+  const focusComposer = () => host.current?.closest(".chat-session-slot")
+    ?.querySelector<HTMLTextAreaElement>(".composer-wrap textarea")?.focus();
+  return (
+    <div ref={host} className="decision-transcript">
+      {record ? (
+        <DecisionCard
+          key={id}
+          decision={record}
+          presentation="transcript"
+          onAnswer={(optionId) => answer(id, optionId)}
+          onOpenChat={focusComposer}
+          onReplyInChat={() => {
+            live?.reply(id);
+            focusComposer();
+          }}
+        />
+      ) : (
+        <p role="status">{state === "missing" ? "This decision is no longer available." : "Loading decision…"}</p>
+      )}
     </div>
   );
 }

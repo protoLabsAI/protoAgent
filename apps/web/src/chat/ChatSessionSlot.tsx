@@ -18,6 +18,7 @@ import { runtimeStatusQuery } from "../lib/queries";
 import { useUI } from "../state/uiStore";
 import { ConfirmDialog } from "@protolabsai/ui/overlays";
 import type { ChatMessage, SystemNoteTone } from "../lib/types";
+import { DecisionTranscriptContext, hasDecisionTranscript, HitlDisplay, useLiveDecisionTranscript } from "./HitlDisplay";
 import { HitlForm } from "./HitlForm";
 import { notifyIfHidden } from "../lib/notify";
 import {
@@ -225,6 +226,7 @@ export function ChatSessionSlot({
     noteToThread,
     lastAssistantId: () => lastAssistantId,
   });
+  const decisionTranscript = useLiveDecisionTranscript(hitlRef, updateHitl, resumeHitl);
   const abortRef = useRef<AbortController | null>(null);
   // The live turn's reveal-queue flush (#2993): stop() settles bubbles outside
   // runTurn's closure, and it must drain any withheld answer tail first.
@@ -762,6 +764,15 @@ export function ChatSessionSlot({
     // as mid-turn steering. Attachments stay in the tray for the next real send.
     if (draft.trim() && (hitl || serverTurnControl || canSend)) {
       repinTranscript(); // a send always brings the transcript back to the latest (B6)
+    }
+    if (decisionTranscript.submitReply(draft)) {
+      if (draft.trim()) {
+        recordSubmitted(draft.trim());
+        setDraft("");
+        setSlashCtx(null);
+        setSlashIndex(0);
+      }
+      return;
     }
     if (hitl) {
       void queueSteer();
@@ -1899,6 +1910,8 @@ export function ChatSessionSlot({
   // components can't evict another's. Created once per slot (the slot outlives individual turns).
   const [componentFrameRegistry] = useState(() => createFrameRegistry());
 
+  const transcriptHandlesDecision = hasDecisionTranscript(hitl, messages);
+
   if (!session) return null;
 
   return (
@@ -1907,22 +1920,24 @@ export function ChatSessionSlot({
       <ArtifactChatSendContext.Provider value={artifactChatSend}>
         <ComponentChatSendContext.Provider value={componentChatSend}>
           <ComponentFrameRegistryContext.Provider value={componentFrameRegistry}>
-            <ChatTranscript
-              sessionId={sessionId}
-              messages={messages}
-              dismissedToolCalls={dismissedToolCalls}
-              actions={transcriptActions}
-              steerQueue={steerQueue}
-              serverTurnLabel={serverTurnLabel}
-              status={status}
-              onCancelDelegation={transcriptCancelDelegation}
-              onDismissToolCall={transcriptDismissToolCall}
-              onCancelSteer={transcriptCancelSteer}
-              onStarterPrompt={setDraft}
-              starterPrompts={runtime?.starter_prompts}
-              onEditStarterPrompts={editStarterPrompts}
-              followSignal={followSignal}
-            />
+            <DecisionTranscriptContext.Provider value={decisionTranscript}>
+              <ChatTranscript
+                sessionId={sessionId}
+                messages={messages}
+                dismissedToolCalls={dismissedToolCalls}
+                actions={transcriptActions}
+                steerQueue={steerQueue}
+                serverTurnLabel={serverTurnLabel}
+                status={status}
+                onCancelDelegation={transcriptCancelDelegation}
+                onDismissToolCall={transcriptDismissToolCall}
+                onCancelSteer={transcriptCancelSteer}
+                onStarterPrompt={setDraft}
+                starterPrompts={runtime?.starter_prompts}
+                onEditStarterPrompts={editStarterPrompts}
+                followSignal={followSignal}
+              />
+            </DecisionTranscriptContext.Provider>
           </ComponentFrameRegistryContext.Provider>
         </ComponentChatSendContext.Provider>
       </ArtifactChatSendContext.Provider>
@@ -1989,7 +2004,8 @@ export function ChatSessionSlot({
             the chat behind it. Other hosts (GoalsPanel) render HitlForm in-flow. */}
         {(hitl || composerForm) && (
           <div className="hitl-float">
-            {hitl && (
+            {hitl && transcriptHandlesDecision && <HitlDisplay display={hitl.display} />}
+            {hitl && !transcriptHandlesDecision && (
               <HitlForm
                 payload={hitl}
                 busy={status === "streaming"}
