@@ -187,7 +187,9 @@ re-scopes the existing timeout finding bd-vaa.11 to contain uncertainty before
 adding automatic recovery.
 
 The local scheduler adds an additive SQLite `occurrences` ledger keyed by
-`(job_id, next_fire)`, where `next_fire` is the claimed slot. It stores a stable
+`(job_id, next_fire, created_at)`, where `next_fire` is the claimed slot and
+`created_at` identifies the schedule generation. Earlier S1 ledgers are migrated
+without discarding occurrences from canceled generations. It stores a stable
 `message_id`, explicit dispatch state (`claimed`, `unknown`, `retryable`,
 `settled`), the schedule's `created_at`, its expected post-claim `next_fire`,
 and its previous diagnostic. Existing jobs need no conversion; they acquire a
@@ -209,7 +211,10 @@ Crash boundaries and policy:
   and one-shot removal must not alter a newer same-ID wait-chain schedule.
 
 Both `claimed` and `unknown` exclude automatic redispatch and stale-fire
-recovery, including a recurring schedule's advanced slot. The existing
+recovery for the entire schedule generation, including after pause/resume moves
+a recurring schedule to a later slot. Canceling and recreating an ID creates a
+new generation with its own message identities and settlement; old claims remain
+as evidence and cannot quarantine the replacement. The existing
 `last_error` field reports **delivery unknown; not automatically retried**;
 uncertainty does not increment confirmed execution failures or deliveries, change
 `last_ok`, or emit a fabricated terminal `turn.finished`. Cancellation of a

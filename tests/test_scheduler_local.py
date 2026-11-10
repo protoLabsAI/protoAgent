@@ -1832,3 +1832,79 @@ async def test_late_cron_success_cannot_expire_replacement(tmp_path, monkeypatch
     await s._tick()
     await asyncio.gather(*s._fire_tasks)
     assert s.get_job(job.id) == replacement[0]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("state", ["claimed", "unknown"])
+async def test_resume_cannot_bypass_unresolved_cron_generation(tmp_path, monkeypatch, state):
+    import httpx
+
+    s = _make_scheduler(tmp_path)
+    past = datetime.now(UTC) - timedelta(days=4)
+    job = s.add_job("uncertain cron", "* * * * *", job_id="resume")
+    with s._connect() as db:
+        db.execute("UPDATE jobs SET next_fire = ? WHERE id = ?", (past.isoformat(), job.id))
+    job = s.get_job(job.id)
+    assert s._claim_occurrence(job, advance_at=past)
+    if state == "unknown":
+        s._finish_dispatch(job, state)
+    s.set_enabled(job.id, False)
+    # Resume beyond BOTH timestamps in the original claim, while still overdue.
+    resumed_slot = (past + timedelta(days=1)).isoformat()
+    monkeypatch.setattr("scheduler.local._compute_next_fire", lambda *a, **kw: resumed_slot)
+    resumed = s.set_enabled(job.id, True)
+    assert resumed.next_fire == resumed_slot
+    calls = []
+    monkeypatch.setattr(httpx, "AsyncClient", lambda **kw: calls.append(kw))
+    for scheduler in (s, _make_scheduler(tmp_path)):
+        scheduler._recover_missed_fires()
+        assert scheduler.get_job(job.id) == resumed
+        assert scheduler._claim_due_jobs(datetime.now(UTC)) == []
+        assert scheduler._claim_occurrence(resumed) is None
+        for _ in range(3):
+            await scheduler._tick()
+        assert scheduler.get_job(job.id).last_error == "delivery unknown; not automatically retried"
+    assert calls == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("state", ["claimed", "unknown", "retryable", "settled"])
+async def test_recreated_same_slot_has_independent_claim_and_settlement(tmp_path, monkeypatch, state):
+    import httpx
+
+    s = _make_scheduler(tmp_path)
+    slot = (datetime.now(UTC) - timedelta(seconds=1)).isoformat()
+    old = s.add_job("old", slot, job_id="wait:same-slot")
+    old_message = s._claim_occurrence(old)
+    s._finish_dispatch(old, state)
+    assert s.cancel_job(old.id)
+    replacement = s.add_job("replacement", slot, job_id=old.id)
+    assert replacement.created_at != old.created_at
+    s = _make_scheduler(tmp_path)
+    messages = []
+
+    class ReplacementClient(_FakeClient):
+        async def post(self, url, headers=None, json=None):
+            messages.append(json["params"]["message"]["messageId"])
+            before = s.get_job(old.id)
+            # A late response for the canceled generation cannot settle this send.
+            s._record_fire_outcome(old, failure="late failure")
+            s._finish_dispatch(old, "settled")
+            assert s.get_job(old.id) == before
+            with s._connect() as db:
+                claim = db.execute("SELECT * FROM occurrences WHERE created_at = ?",
+                                   (replacement.created_at,)).fetchone()
+                assert claim["state"] == "claimed"
+            return _FakeResponse()
+
+    monkeypatch.setattr(httpx, "AsyncClient", lambda **kw: ReplacementClient(None))
+    await s._tick()
+    await asyncio.gather(*s._fire_tasks)
+    assert len(messages) == 1
+    assert messages[0] != old_message
+    assert s.get_job(old.id) is None
+    with s._connect() as db:
+        claims = db.execute("SELECT * FROM occurrences ORDER BY created_at").fetchall()
+        assert len(claims) == 2
+        assert [c["message_id"] for c in claims] == [old_message, messages[0]]
+        assert all(c["state"] == "settled" for c in claims)

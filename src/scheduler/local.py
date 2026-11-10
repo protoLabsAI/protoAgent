@@ -350,7 +350,7 @@ CREATE TABLE IF NOT EXISTS occurrences (
     created_at TEXT NOT NULL,
     expected_next TEXT NOT NULL,
     previous_error TEXT,
-    PRIMARY KEY (job_id, next_fire)
+    PRIMARY KEY (job_id, next_fire, created_at)
 );
 
 -- Persistent even when the last one-shot job is deleted. Only the scheduler
@@ -465,6 +465,16 @@ class LocalScheduler:
         try:
             db = self._connect()
             db.executescript(_SCHEMA)
+            # Preserve canceled generations when a replacement uses the same slot.
+            keys = {r["name"] for r in db.execute("PRAGMA table_info(occurrences)") if r["pk"]}
+            if "created_at" not in keys:
+                db.execute("BEGIN IMMEDIATE")
+                db.execute("ALTER TABLE occurrences RENAME TO occurrences_previous")
+                ledger_schema = _SCHEMA.split("CREATE TABLE IF NOT EXISTS occurrences", 1)[1].split(";", 1)[0]
+                db.execute("CREATE TABLE occurrences" + ledger_schema)
+                db.execute("INSERT INTO occurrences SELECT * FROM occurrences_previous")
+                db.execute("DROP TABLE occurrences_previous")
+                db.commit()
             # Additive migrations for stores created before each column existed. Only the
             # missing ones are ALTERed, and a failed ALTER raises: a lock timeout used to
             # pass as "column already present" and leave the store without it.
@@ -903,8 +913,8 @@ class LocalScheduler:
                 return
             # Commit the known result and its dispatch state together: a crash
             # must not leave a quarantined claim with a cleared diagnostic.
-            db.execute("UPDATE occurrences SET state = 'settled' WHERE job_id = ? AND next_fire = ?",
-                       (job.id, job.next_fire))
+            db.execute("UPDATE occurrences SET state = 'settled' WHERE job_id = ? AND next_fire = ? AND created_at = ?",
+                       (job.id, job.next_fire, job.created_at))
             if not failure:
                 db.execute(
                     "UPDATE jobs SET consecutive_failures = 0, last_error = NULL, last_ok = ? WHERE id = ?",
@@ -938,8 +948,8 @@ class LocalScheduler:
             for _ in range(slots):
                 nxt = datetime.fromisoformat(_compute_next_fire(job.schedule, after=nxt, tz=job.timezone))
             db.execute("UPDATE jobs SET next_fire = ? WHERE id = ?", (nxt.isoformat(), job.id))
-            db.execute("UPDATE occurrences SET expected_next = ? WHERE job_id = ? AND next_fire = ?",
-                       (nxt.isoformat(), job.id, job.next_fire))
+            db.execute("UPDATE occurrences SET expected_next = ? WHERE job_id = ? AND next_fire = ? AND created_at = ?",
+                       (nxt.isoformat(), job.id, job.next_fire, job.created_at))
             db.commit()
             log.error(
                 "[scheduler] job %s has failed %d times in a row — backing off %d slot(s) to %s. Last error: %s",
@@ -1035,9 +1045,14 @@ class LocalScheduler:
                              (job.id, self.agent_name)).fetchone()
             if row is None or row["created_at"] != job.created_at:
                 return None
-            old = db.execute("SELECT * FROM occurrences WHERE job_id = ? AND next_fire = ?",
-                             (job.id, job.next_fire)).fetchone()
-            if old and old["state"] in ("claimed", "unknown"):
+            old = db.execute("SELECT * FROM occurrences WHERE job_id = ? AND next_fire = ? AND created_at = ?",
+                             (job.id, job.next_fire, job.created_at)).fetchone()
+            unresolved = db.execute(
+                "SELECT 1 FROM occurrences WHERE job_id = ? AND created_at = ? "
+                "AND state IN ('claimed', 'unknown')",
+                (job.id, job.created_at),
+            ).fetchone()
+            if unresolved:
                 return None
             if advance_at is not None and row["next_fire"] != job.next_fire:
                 return None
@@ -1065,8 +1080,8 @@ class LocalScheduler:
     def _owns_occurrence(self, db: sqlite3.Connection, job: Job) -> bool:
         row = db.execute("SELECT created_at, next_fire FROM jobs WHERE id = ? AND agent_name = ?",
                          (job.id, self.agent_name)).fetchone()
-        claim = db.execute("SELECT expected_next FROM occurrences WHERE job_id = ? AND next_fire = ?",
-                           (job.id, job.next_fire)).fetchone()
+        claim = db.execute("SELECT expected_next FROM occurrences WHERE job_id = ? AND next_fire = ? AND created_at = ?",
+                           (job.id, job.next_fire, job.created_at)).fetchone()
         expected = claim["expected_next"] if claim else job.next_fire
         return bool(row and row["created_at"] == job.created_at and row["next_fire"] == expected)
 
@@ -1078,11 +1093,11 @@ class LocalScheduler:
                 # Cancellation and refused connections preserve the preceding outcome.
                 db.execute(
                     "UPDATE jobs SET last_error = (SELECT previous_error FROM occurrences "
-                    "WHERE job_id = ? AND next_fire = ?) WHERE id = ? AND last_error = ?",
-                    (job.id, job.next_fire, job.id, _DELIVERY_UNKNOWN),
+                    "WHERE job_id = ? AND next_fire = ? AND created_at = ?) WHERE id = ? AND last_error = ?",
+                    (job.id, job.next_fire, job.created_at, job.id, _DELIVERY_UNKNOWN),
                 )
-            db.execute("UPDATE occurrences SET state = ? WHERE job_id = ? AND next_fire = ?",
-                       (state, job.id, job.next_fire))
+            db.execute("UPDATE occurrences SET state = ? WHERE job_id = ? AND next_fire = ? AND created_at = ?",
+                       (state, job.id, job.next_fire, job.created_at))
             db.commit()
         except sqlite3.DatabaseError:
             # Leaving 'claimed' is safe: recovery must not resend it.
@@ -1098,7 +1113,7 @@ class LocalScheduler:
                 "AND NOT EXISTS (SELECT 1 FROM occurrences o WHERE o.job_id = jobs.id "
                 "AND o.created_at = jobs.created_at AND "
                 "(o.next_fire = jobs.next_fire AND o.state != 'retryable' "
-                "OR o.expected_next = jobs.next_fire AND o.state IN ('claimed', 'unknown'))) "
+                "OR o.state IN ('claimed', 'unknown'))) "
                 "ORDER BY next_fire ASC",
                 (self.agent_name, now.isoformat()),
             ).fetchall()
@@ -1145,8 +1160,7 @@ class LocalScheduler:
             rows = db.execute(
                 "SELECT * FROM jobs WHERE agent_name = ? AND enabled = 1 AND next_fire <= ? "
                 "AND NOT EXISTS (SELECT 1 FROM occurrences o WHERE o.job_id = jobs.id "
-                "AND o.created_at = jobs.created_at AND o.state IN ('claimed', 'unknown') "
-                "AND (o.next_fire = jobs.next_fire OR o.expected_next = jobs.next_fire))",
+                "AND o.created_at = jobs.created_at AND o.state IN ('claimed', 'unknown'))",
                 (self.agent_name, cutoff_recent.isoformat()),
             ).fetchall()
             for row in rows:
