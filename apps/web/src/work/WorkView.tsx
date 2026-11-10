@@ -10,6 +10,7 @@ import "./sections/decisions";
 import "./sections/directives";
 import "./sections/tasks";
 import "./sections/schedules";
+import "./sections/activity";
 import "./work-view.css";
 
 export { registerWorkSection, type WorkSectionContext } from "./sectionRegistry";

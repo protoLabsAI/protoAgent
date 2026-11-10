@@ -62,7 +62,9 @@ export function OriginProvenance({ entry }: { entry: ActivityEntry }) {
   );
 }
 
-export function ActivitySurface() {
+// Work owns its completed-turn list/detail; reuse the inbox triage without fetching
+// or rendering a second completed timeline there. The legacy dialog keeps both.
+export function ActivitySurface({ pendingOnly = false }: { pendingOnly?: boolean }) {
   // --- Completed activity timeline. Held newest-first (as the API returns), rendered
   //     oldest-first. Persisted rows use positive database IDs; live-only rows count
   //     downward so a same-millisecond event burst cannot collide with a React key or
@@ -81,6 +83,7 @@ export function ActivitySurface() {
   const dismissed = useRef<Set<number>>(new Set());
 
   const loadActivity = useCallback(async () => {
+    if (pendingOnly) return;
     setActivityLoading(true);
     try {
       const r = await api.activity();
@@ -91,7 +94,7 @@ export function ActivitySurface() {
     } finally {
       setActivityLoading(false);
     }
-  }, []);
+  }, [pendingOnly]);
 
   const loadInbox = useCallback(async () => {
     setInboxLoading(true);
@@ -127,6 +130,7 @@ export function ActivitySurface() {
   useEffect(
     () =>
       onServerEvent("activity.message", (data) => {
+        if (pendingOnly) return;
         const text = typeof data.text === "string" ? data.text : "";
         if (!text) return;
         const entry: ActivityEntry = {
@@ -142,7 +146,7 @@ export function ActivitySurface() {
         };
         setEntries((prev) => [entry, ...prev]);
       }),
-    [],
+    [pendingOnly],
   );
 
   // Live: a new inbound item pushes `inbox.item` — refetch to pick it up with its
@@ -236,12 +240,12 @@ export function ActivitySurface() {
       ) : null}
 
       {/* COMPLETED (below): the read-only provenance timeline (ADR 0022). */}
-      {activityError ? (
+      {!pendingOnly && activityError ? (
         <div className="activity-error" role="alert">
           {activityError}
         </div>
       ) : null}
-      <div className="activity-feed" ref={scrollRef} data-testid="feed-completed">
+      {!pendingOnly && <div className="activity-feed" ref={scrollRef} data-testid="feed-completed">
         {nothing ? (
           <Empty
             className="activity-empty"
@@ -296,7 +300,7 @@ export function ActivitySurface() {
             </div>
           </div>
         ))}
-      </div>
+      </div>}
     </div>
   );
 }

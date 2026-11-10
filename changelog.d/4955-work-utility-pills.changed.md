@@ -1,1 +1,1 @@
-- **Work utility pills (#4955).** Decisions, Background jobs and Activity now open their respective Work sections, preserving pending and unread badges and showing a pulsing indicator with the running-job count.
+- **Work utility pills (#4955).** Decisions, Background jobs and Activity now open their respective Work sections, preserving pending and unread badges and showing a pulsing indicator with the running-job count. Work Activity retains pending-inbox triage and dismiss controls alongside the live completed-turn feed.

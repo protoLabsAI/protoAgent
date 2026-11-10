@@ -17,7 +17,8 @@
 import { useState } from "react";
 import { Badge, Button, Callout, Empty } from "@protolabsai/ui/primitives";
 import { Alert, Skeleton } from "@protolabsai/ui/data";
-import { registerWorkSection, type WorkSectionContext } from "../WorkView";
+import { registerWorkSection, type WorkSectionContext } from "../sectionRegistry";
+import { ActivitySurface } from "../../activity/ActivitySurface";
 import { WorkRow } from "../WorkRow";
 import { WorkDetail, type WorkField } from "../WorkDetail";
 import { relTime } from "../tone";
@@ -112,6 +113,7 @@ function ActivityList({ ctx }: { ctx: WorkSectionContext }) {
 
   return (
     <div className="work-activity">
+      <ActivitySurface pendingOnly />
       {source.status === "error" ? (
         <Alert status="warning">
           Couldn&apos;t load activity.{" "}
