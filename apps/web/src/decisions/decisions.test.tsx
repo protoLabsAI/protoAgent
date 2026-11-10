@@ -429,6 +429,41 @@ describe("DecisionCard", () => {
     expect(document.querySelector(".pl-callout--info")).toBeTruthy();
   });
 
+  for (const presentation of ["panel", "transcript"] as const) {
+    for (const state of ["expired", "withdrawn", "cancelled"] as const) {
+      it(`${presentation}: a ${state} conflict uses the returned terminal record`, async () => {
+        const onAnswer = vi.fn().mockResolvedValue({
+          answered_elsewhere: true,
+          decision: decision("a", {
+            state,
+            default_action_text: "paused deployment until tomorrow",
+            withdraw_reason: "  The release was superseded.  ",
+          }),
+        });
+        await renderNode(<DecisionCard decision={decision("a")} presentation={presentation} onAnswer={onAnswer} />);
+        await click("Merge with the WARN");
+        const result = host.querySelector('[aria-live="polite"][tabindex="-1"]');
+        expect(result?.textContent).toBe(state === "expired"
+          ? "No answer by the deadline, so protoEngineer went ahead and paused deployment until tomorrow."
+          : "protoEngineer doesn't need this any more. The release was superseded.");
+        expect(document.activeElement).toBe(result);
+        expect(host.querySelector('[role="group"][aria-label="Answer"]')).toBeNull();
+        expect(host.querySelector(".pl-callout--info")).toBeNull();
+        expect(Boolean(host.querySelector(".pl-callout"))).toBe(presentation === "panel");
+        expect(onAnswer).toHaveBeenCalledExactlyOnceWith("merge");
+      });
+    }
+  }
+
+  it("preserves the answered conflict fallback when the response has no record", async () => {
+    const onAnswer = vi.fn().mockResolvedValue({ answered_elsewhere: true, decision: null });
+    await renderNode(<DecisionCard decision={decision("a")} onAnswer={onAnswer} />);
+    await click("Merge with the WARN");
+    expect(host.textContent).toContain('Already answered: you chose "an option". Nothing else changed.');
+    expect(host.querySelector(".pl-callout--info")).toBeTruthy();
+    expect(host.querySelector('[role="group"][aria-label="Answer"]')).toBeNull();
+  });
+
   it("keeps the options enabled on a send failure and offers Try again", async () => {
     const onAnswer = vi.fn().mockRejectedValue(new Error("network"));
     await renderNode(<DecisionCard decision={decision("a")} onAnswer={onAnswer} />);

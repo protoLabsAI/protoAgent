@@ -210,16 +210,19 @@ export function DecisionCard({
       </p>
     );
   } else if (phase.kind === "answeredElsewhere") {
+    // The API uses answered_elsewhere for every 409, including expiry and withdrawal.
+    // Prefer its terminal record while retaining the legacy missing-record fallback.
+    const record = phase.record ?? decision;
     body = isTranscript ? (
       // A 409 under us in a transcript freezes on the returned record's frozen line, not the callout.
       <p ref={result} tabIndex={-1} style={muted} aria-live="polite">
-        {transcriptLine(phase.record ?? decision)}
+        {transcriptLine(record)}
       </p>
     ) : (
       <div ref={result} tabIndex={-1} aria-live="polite">
-        {TERMINAL.has((phase.record ?? decision).state)
-          ? closedCallout(phase.record ?? decision)
-          : answeredElsewhereCallout(phase.record ?? decision)}
+        {TERMINAL.has(record.state)
+          ? closedCallout(record)
+          : answeredElsewhereCallout(record)}
       </div>
     );
   } else if (phase.kind === "sent") {
