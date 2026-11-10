@@ -1,0 +1,1 @@
+- **Retired Work panel removed (#4955).** Remove the old WorkPanel and overview helpers now that WorkView owns all entry points, preserving shared watch lifetime formatting.

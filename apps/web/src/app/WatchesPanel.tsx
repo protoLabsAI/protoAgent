@@ -19,7 +19,7 @@ import { errMsg } from "../lib/format";
 import { onServerEvent } from "../lib/events";
 import { PanelHeader } from "@protolabsai/ui/navigation";
 import { watchesQuery, verifiersQuery, queryKeys } from "../lib/queries";
-import { watchLifetime } from "./workOverview";
+import { watchLifetime } from "../work/tone";
 import { ErrorBoundary, PanelError, PanelSkeleton } from "./ErrorBoundary";
 import { ScrollArea } from "@protolabsai/ui/data";
 import { StatusPill } from "./StatusPill";
