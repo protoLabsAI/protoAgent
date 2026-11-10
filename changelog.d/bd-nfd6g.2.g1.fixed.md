@@ -1,0 +1,1 @@
+- **Concurrent task deletion preserves Undo snapshots.** Capture each task snapshot in the same transaction as its deletion so Undo restores the row actually removed. Add repeated multi-client coverage for shared SQLite reads, complete Undo tokens, and exactly one successful redemption per token.

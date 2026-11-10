@@ -10,6 +10,9 @@ import { act, useEffect } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { SurfaceHost, type SurfaceMeta } from "../shell/SurfaceHost";
+import "../contextMenu/registrations";
+import { resolveMenu } from "../contextMenu/registry";
+import { useContextMenuStore } from "../contextMenu/store";
 import { useUI } from "../state/uiStore";
 
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -104,6 +107,16 @@ function Shell({ mobile = false }: { mobile?: boolean }) {
 let container: HTMLDivElement;
 let root: Root;
 
+function expand() {
+  const target = document.querySelector('[role="region"][aria-haspopup="menu"]')!;
+  expect(target).not.toBeNull();
+  act(() => target.dispatchEvent(new KeyboardEvent("keydown", { key: "ContextMenu", bubbles: true, cancelable: true })));
+  const menu = useContextMenuStore.getState();
+  expect(menu.open).toBe(true);
+  const entry = resolveMenu(menu.type, menu.ctx).find((e) => e.id === "open-large-window")!;
+  expect(entry).toBeDefined();
+  act(() => { if ("run" in entry) entry.run(menu.ctx, { close: menu.close }); });
+}
 function button(label: string) {
   return [...document.querySelectorAll("button")].find(
     (el) => el.getAttribute("aria-label") === label || el.textContent === label,
@@ -137,14 +150,15 @@ describe("SurfaceHost mounted in the shell", () => {
     act(() => useUI.setState({ rightPanel: id }));
     act(() => root.render(<Shell />));
 
-    // r1: the view shows an Expand button in its rail header, with no modal open yet, mounted once.
-    expect(button("Expand")).toBeDefined();
+    // r1: the view offers a background menu without a duplicate header, with no modal open yet, mounted once.
+    expect(button("Expand")).toBeUndefined();
+    expect(document.querySelector('[role="region"][aria-haspopup="menu"]')).not.toBeNull();
     expect(document.querySelector('[role="dialog"]')).toBeNull();
     expect(live[id]).toBe(1);
 
     // r2: Expand opens the SAME view in the shell modal — and it is mounted EXACTLY once (the
     // dock withheld it, the modal owns the mount). A double mount (dock + modal) would read 2.
-    click("Expand");
+    expand();
     const dialog = document.querySelector('[role="dialog"]');
     expect(dialog).not.toBeNull();
     expect(useUI.getState().surfaceModal?.viewId).toBe(id);
@@ -169,19 +183,21 @@ describe("SurfaceHost mounted in the shell", () => {
   it("keeps the right dock's background slot mounted across a Chat ⇄ view switch", () => {
     act(() => useUI.setState({ rightPanel: "work" }));
     act(() => root.render(<Shell />));
-    expect(button("Expand")).toBeDefined(); // a framed view → Expand present
+    expect(button("Expand")).toBeUndefined();
+    expect(document.querySelector('[role="region"][aria-haspopup="menu"]')).not.toBeNull(); // a framed view → menu available
     expect(slot.mounts).toBe(1);
 
-    // → Chat: the host stays mounted but frames no view, so its header / Expand go away…
+    // → Chat: the host stays mounted but frames no view, so its view menu goes away…
     act(() => useUI.setState({ rightPanel: "chat" }));
     expect(button("Expand")).toBeUndefined();
     // …and the background slot is never unmounted.
     expect(slot.mounts).toBe(1);
     expect(slot.unmounts).toBe(0);
 
-    // → back to a (different) framed view: still one mount, Expand returns.
+    // → back to a (different) framed view: still one mount, the view menu returns.
     act(() => useUI.setState({ rightPanel: "plugin:stub:main" }));
-    expect(button("Expand")).toBeDefined();
+    expect(button("Expand")).toBeUndefined();
+    expect(document.querySelector('[role="region"][aria-haspopup="menu"]')).not.toBeNull();
     expect(slot.mounts).toBe(1);
     expect(slot.unmounts).toBe(0);
   });
@@ -189,7 +205,7 @@ describe("SurfaceHost mounted in the shell", () => {
   it("Dock to rail announces the move", () => {
     act(() => useUI.setState({ rightPanel: "work" }));
     act(() => root.render(<Shell />));
-    click("Expand");
+    expand();
     click("Dock to rail");
     expect(announced()).toContain("docked to the side rail");
     expect(live.work).toBe(1); // back in the dock, mounted once
@@ -202,7 +218,7 @@ describe("SurfaceHost mounted in the shell", () => {
   it("a plain Close of an expanded view stays silent", () => {
     act(() => useUI.setState({ rightPanel: "work" }));
     act(() => root.render(<Shell />));
-    click("Expand");
+    expand();
     click("Close");
     expect(useUI.getState().surfaceModal).toBeNull();
     expect(useUI.getState().rightPanel).toBe("work");

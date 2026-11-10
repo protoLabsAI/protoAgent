@@ -450,6 +450,18 @@ class _TaskStoreAdapter:
             return None
         return getter(issue_id)
 
+    def delete_with_snapshot(self, project_path: str, issue_id: str) -> dict[str, Any] | None:
+        """Use the store's atomic delete, retaining compatibility with older adapters."""
+        deleter = getattr(self._s, "delete_with_snapshot", None)
+        if callable(deleter):
+            row = deleter(issue_id)
+            if row is None:
+                raise NotFoundError(f"No task {issue_id!r}.")
+            return row
+        row = self.snapshot(issue_id)
+        self.delete(project_path, issue_id)
+        return row
+
     def restore(self, row: dict[str, Any]) -> None:
         """Re-insert a deleted issue through the store's ``restore`` — it re-fires the
         store's ``task.changed`` event with ``action: "restored"`` (#4955 Q10). An issue
@@ -467,13 +479,13 @@ class _TaskStoreAdapter:
 
 def _delete_task_with_undo(task_svc: _TaskStoreAdapter, project_path: str, issue_id: str) -> dict[str, Any]:
     """Delete an issue and, when the store can read the row back, stash it for a server-side
-    undo (#4955 Q10). The snapshot is taken BEFORE the delete; ``task_svc.snapshot`` returns
-    ``None`` for a store double without ``get`` (then no token is minted and the body is the
-    unchanged ``{"deleted": True}``) or for an id the store doesn't have (then ``delete``
-    raises ``NotFoundError`` → 404 and we never reach the stash). Runs in a worker thread off
+    undo (#4955 Q10). TaskStore captures the snapshot in the deletion transaction; older
+    stores fall back to a separate read. A store double without ``get`` still deletes
+    without a token. Missing IDs raise ``NotFoundError`` → 404 before the stash.
+    Runs in a worker thread off
     the event loop like the goal/watch clear handlers that stash the same way."""
-    row = task_svc.snapshot(issue_id)
-    result = task_svc.delete(project_path, issue_id)
+    row = task_svc.delete_with_snapshot(project_path, issue_id)
+    result = {"deleted": True}
     if row is not None:
         from operator_api.undo import LEDGER
 

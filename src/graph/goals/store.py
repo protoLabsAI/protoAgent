@@ -13,12 +13,27 @@ import json
 import logging
 import os
 import tempfile
+import time
 from threading import RLock
 from pathlib import Path
 
 from graph.goals.types import GoalState
 
 log = logging.getLogger(__name__)
+
+
+def _replace_goal(source: str, destination: Path) -> None:
+    """Retry transient Windows sharing failures without giving up atomicity."""
+    for attempt in range(6):
+        try:
+            os.replace(source, destination)
+            return
+        except OSError as exc:
+            # Readers outside this store (including virus scanners) can briefly
+            # deny replacement on Windows. Other failures should surface at once.
+            if getattr(exc, "winerror", None) not in (5, 32, 33) or attempt == 5:
+                raise
+            time.sleep(0.01 * 2**attempt)
 
 
 def _publish(topic: str, data: dict) -> None:
@@ -119,28 +134,32 @@ class GoalStore:
                     pass
 
     def get(self, session_id: str) -> GoalState | None:
-        path = self._path(session_id)
-        if not path.exists():
-            return None
-        try:
-            with open(path, encoding="utf-8") as fh:
-                return GoalState.from_dict(json.load(fh))
-        except (OSError, json.JSONDecodeError, ValueError, TypeError) as exc:
-            log.warning("[goal] failed to read %s: %s", path, exc)
-            return None
+        # Windows cannot replace a file while a normal Python reader has it open.
+        with self.transaction():
+            path = self._path(session_id)
+            if not path.exists():
+                return None
+            try:
+                with open(path, encoding="utf-8") as fh:
+                    return GoalState.from_dict(json.load(fh))
+            except (OSError, json.JSONDecodeError, ValueError, TypeError) as exc:
+                log.warning("[goal] failed to read %s: %s", path, exc)
+                return None
 
     def set(self, state: GoalState) -> None:
+        """Persist a goal atomically; raise on failure so callers cannot claim success."""
         with self.transaction():
             path = self._path(state.session_id)
             tmp_fd, tmp_path = tempfile.mkstemp(dir=self._base, suffix=".tmp")
             try:
                 with os.fdopen(tmp_fd, "w", encoding="utf-8") as fh:
                     json.dump(state.to_dict(), fh, indent=2, default=str)
-                os.replace(tmp_path, path)
+                _replace_goal(tmp_path, path)
                 tmp_path = None
                 _publish("goal.changed", {"session_id": state.session_id})
             except OSError as exc:
                 log.error("[goal] write failed for session %s: %s", state.session_id, exc)
+                raise
             finally:
                 if tmp_path is not None:
                     try:
@@ -173,10 +192,11 @@ class GoalStore:
         """
         states: list[GoalState] = []
         for path in self._base.glob("*.json"):
-            try:
-                with open(path, encoding="utf-8") as fh:
-                    states.append(GoalState.from_dict(json.load(fh)))
-            except (OSError, json.JSONDecodeError, ValueError, TypeError) as exc:
-                log.warning("[goal] skipping %s: %s", path, exc)
+            with self.transaction():
+                try:
+                    with open(path, encoding="utf-8") as fh:
+                        states.append(GoalState.from_dict(json.load(fh)))
+                except (OSError, json.JSONDecodeError, ValueError, TypeError) as exc:
+                    log.warning("[goal] skipping %s: %s", path, exc)
         states.sort(key=lambda s: getattr(s, "started_at", 0) or 0, reverse=True)
         return states

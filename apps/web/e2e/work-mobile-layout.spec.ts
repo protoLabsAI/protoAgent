@@ -1,5 +1,11 @@
 import { expect, test, type Locator, type Page } from "@playwright/test";
 
+async function expandWork(page: Page) {
+  await page.getByRole("region", { name: "Work view", exact: true }).focus();
+  await page.keyboard.press("Shift+F10");
+  await page.getByRole("menuitem", { name: "Open in large window", exact: true }).click();
+}
+
 async function selectTasks(page: Page, work: Locator) {
   const picker = work.getByRole("button", { name: /Work sections/ });
   await picker.focus();
@@ -91,7 +97,7 @@ for (const theme of ["light", "dark"] as const) {
       const railScreenshot = info.outputPath(`rail-${theme}.png`);
       await page.screenshot({ path: railScreenshot });
       await info.attach("Rail", { path: railScreenshot, contentType: "image/png" });
-      await page.getByRole("button", { name: "Expand", exact: true }).last().click();
+      await expandWork(page);
       work = page.getByRole("dialog", { name: /^Work/ }).locator(".work-view");
       await expect(work.locator(".work-view__list")).toBeVisible();
       await expect(work.locator(".work-view__detail")).toBeVisible();
@@ -110,7 +116,7 @@ for (const theme of ["light", "dark"] as const) {
       await expect.poll(() => work.locator(".work-view__list").evaluate(el => el.scrollTop)).toBe(scroll);
       await expect(work.getByRole("button", { name: "This chat", exact: true })).toHaveAttribute("aria-pressed", "true");
       await page.getByRole("dialog", { name: /^Work/ }).getByLabel("Close", { exact: true }).click();
-      await page.getByRole("button", { name: "Expand", exact: true }).last().click();
+      await expandWork(page);
       await expect(work.locator(".work-view__detail h2")).toHaveText("Layout task 25");
       await expect.poll(() => work.locator(".work-view__list").evaluate(el => el.scrollTop)).toBe(scroll);
       await page.getByRole("button", { name: "Dock to rail" }).click();
