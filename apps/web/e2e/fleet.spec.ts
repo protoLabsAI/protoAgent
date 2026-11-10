@@ -224,7 +224,7 @@ test("New agent → From a bundle URL → preview + trust → set up → create 
   const urlField = page.getByLabel("Repository URL");
   await urlField.fill("not a repo");
   await page.getByRole("button", { name: "Look up" }).click();
-  await expect(page.getByRole("alert")).toContainText("isn't a git repository URL");
+  await expect(page.locator(".bundle-url-source").getByRole("alert")).toContainText("isn't a git repository URL");
 
   // A GitHub /tree/<ref> page URL folds to repo + ref.
   await urlField.fill("https://github.com/acme/analyst-archetype/tree/v0.1.0");
@@ -267,7 +267,7 @@ test("New agent → From a bundle URL: an unreadable repo shows the server's rea
   await page.getByRole("tab", { name: "From a bundle URL" }).click();
   await page.getByLabel("Repository URL").fill("https://github.com/acme/missing-archetype");
   await page.getByRole("button", { name: "Look up" }).click();
-  await expect(page.getByRole("alert")).toContainText("repository not found");
+  await expect(page.locator(".bundle-url-source").getByRole("alert")).toContainText("repository not found");
   await expect(page.getByRole("button", { name: /^Next/ })).toBeDisabled();
 });
 

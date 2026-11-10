@@ -1622,6 +1622,12 @@ const server = createServer(async (req, res) => {
   }
   if (pathname.startsWith("/api/")) {
     if (req.method === "GET") {
+      // Both the chat strip and the default Work rail read this per-chat source.
+      // Unconfigured chats have no directives, not a failed ledger. Directive specs
+      // override this response with their own rows and withdrawal lifecycle.
+      if (/^\/api\/chat\/sessions\/[^/]+\/directives$/.test(pathname)) {
+        return sendJson(res, { directives: [], in_force: 0 });
+      }
       // Per-turn feedback (useSessionFeedback): off, as on a server without tracing. Without this
       // route the read 404'd and a "Could not load feedback." alert could appear above the
       // messages mid-test, shifting them 24px (the hitl-float flake).

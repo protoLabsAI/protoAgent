@@ -4,6 +4,23 @@ const SESSION = "chat-directive-e2e";
 const QUOTE = "Cut the release once both PRs merge";
 const NOTE = 'You withdrew: "Pause deploys" — freeze lifted';
 
+test("a fresh chat loads an empty directive ledger in the strip and Work rail", async ({ page }) => {
+  const directives = page.waitForResponse((response) =>
+    /\/api\/chat\/sessions\/[^/]+\/directives$/.test(new URL(response.url()).pathname));
+  await page.goto("/app/");
+  const response = await directives;
+  expect(response.ok()).toBe(true);
+  expect(await response.json()).toEqual({ directives: [], in_force: 0 });
+  const composer = page.getByPlaceholder(/Message protoAgent/i);
+  await composer.fill("/directives ");
+  await composer.press("Enter");
+  const rail = page.locator('.work-view[data-frame="rail"]');
+  await expect(rail.locator(".work-section--directives")).toBeVisible();
+  await expect(rail.getByText("No standing instructions", { exact: true })).toBeVisible();
+  await expect(page.locator(".chat-ledger")).toHaveClass(/chat-ledger--idle/);
+  await expect(rail.getByRole("alert")).toHaveCount(0);
+});
+
 for (const width of [1440, 390]) {
   for (const mode of ["light", "dark"]) {
     test(`ledger withdrawal and entry points at ${width} ${mode}`, async ({ page }, info) => {
