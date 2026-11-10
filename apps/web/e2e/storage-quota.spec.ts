@@ -293,6 +293,26 @@ test("classifies a handled unload fetch independently of the console", async ({ 
   expect(await isolated.json()).toEqual([]);
 });
 
+test("polling stops on pagehide and resumes when the document returns", async ({ page }) => {
+  const errors: string[] = [];
+  page.on("pageerror", (error) => errors.push(error.message));
+  const polls: Request[] = [];
+  page.on("request", (request) => {
+    if (new URL(request.url()).pathname.endsWith("/local-turns")) polls.push(request);
+  });
+  await page.goto("/app/");
+  await expect(page.getByPlaceholder(/Message protoAgent/i)).toBeVisible();
+  await expect.poll(() => polls.length).toBeGreaterThan(0);
+  await page.evaluate(() => window.dispatchEvent(new PageTransitionEvent("pagehide", { persisted: true })));
+  const before = polls.length;
+  // Cross several one-second poll ticks while this document is parked.
+  await page.waitForTimeout(2500);
+  expect(polls).toHaveLength(before);
+  await page.evaluate(() => window.dispatchEvent(new PageTransitionEvent("pageshow", { persisted: true })));
+  await expect.poll(() => polls.length).toBeGreaterThan(before);
+  expect(errors).toEqual([]);
+});
+
 test("migrates all 2400 legacy messages and retains them through ten reloads", async ({ page }) => {
   test.setTimeout(60_000);
   const errors: string[] = [];
