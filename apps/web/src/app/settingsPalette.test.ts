@@ -61,7 +61,7 @@ describe("coverage is derived from the section table, not hand-listed", () => {
       (id) => !SETTINGS_PALETTE_EXCLUDED.includes(id),
     );
     expect(rows().map((c) => c.id)).toEqual(expected.map((id) => `settings:${id}`));
-    // …and that really is nearly everything: 22 of the 23 declared sections.
+    // …and that really is nearly everything: 23 of the 24 declared sections.
     expect(rows()).toHaveLength(ALL_SECTIONS.length - SETTINGS_PALETTE_EXCLUDED.length);
     expect(SETTINGS_PALETTE_EXCLUDED).toEqual(["developer"]);
   });
@@ -228,6 +228,7 @@ describe("typing the obvious word lands on the right pane", () => {
       "settings:theme",
       "settings:chat",
       "settings:keybindings",
+      "settings:storage",
     ]);
   });
 

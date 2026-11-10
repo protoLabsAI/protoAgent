@@ -115,6 +115,7 @@ test("the generated rows cover the table, carry their nav heading, and honour th
     "Settings: Theme",
     "Settings: Chat",
     "Settings: Keyboard",
+    "Settings: Storage",
   ]);
   // Absent, and the absence is the assertion. Developer IS in the dialog's rail here
   // (settings.spec.ts pins that), and SETTINGS_PALETTE_EXCLUDED still drops its row, because

@@ -199,7 +199,8 @@ describe("a save that hits the IndexedDB quota", () => {
     setFleetSlugs(null);
 
     expect(heard).toHaveBeenCalledTimes(1);
-    expect(heard.mock.calls[0][0].evicted).toEqual([{ key: "idb:gone-agent/g", slug: "gone-agent", bytes: 0 }]);
+    expect(heard.mock.calls[0][0].evicted).toEqual([{ key: "idb:gone-agent/g", slug: "gone-agent", bytes: expect.any(Number) }]);
+    expect(heard.mock.calls[0][0].freedBytes).toBeGreaterThan(9_000);
     const store = await reopen();
     expect((await store.loadAgent("host")).sessions.map((s) => s.id)).toContain(id); // the retry saved it
     expect((await store.loadAgent("gone-agent")).sessions).toEqual([]);
@@ -247,6 +248,28 @@ describe("eviction across a squeeze and across tabs", () => {
       expect(owner.chatStore.getSnapshot().sessions.map((s) => s.id)).toEqual(["open"]);
     });
     other.close();
+  });
+});
+
+describe("which saves are failing", () => {
+  it("a quick chat's save fitting never hides that chat saves still fail; a probe never clears it", async () => {
+    const { initTranscriptBackend, withQuotaEviction, transcriptSaveFailing } = await freshStore();
+    await initTranscriptBackend();
+    const full = () => Promise.reject(new DOMException("full", "QuotaExceededError"));
+    await withQuotaEviction(full, "chats").catch(() => undefined);
+    expect(transcriptSaveFailing()).toBe(true);
+    await withQuotaEviction(async () => {}, "palette"); // a quick chat fits
+    expect(transcriptSaveFailing()).toBe(true); // chats still don't
+    let first = true;
+    await withQuotaEviction(async () => {
+      if (first) {
+        first = false;
+        throw new DOMException("full", "QuotaExceededError");
+      }
+    }, null); // Free up space's probe "succeeds" after one step
+    expect(transcriptSaveFailing()).toBe(true);
+    await withQuotaEviction(async () => {}, "chats"); // a real chat save fits
+    expect(transcriptSaveFailing()).toBe(false);
   });
 });
 

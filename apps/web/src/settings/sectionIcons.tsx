@@ -1,4 +1,4 @@
-import { Activity, Bot, BookMarked, Brain, ChartColumn, Cpu, Database, FlaskConical, Gauge, Keyboard, KeyRound, Lock, MessageSquare, Network, Package, Palette, Plug, Puzzle, Server, Smartphone, Sparkles, Wrench } from "lucide-react";
+import { Activity, Bot, BookMarked, Brain, ChartColumn, Cpu, Database, FlaskConical, Gauge, HardDrive, Keyboard, KeyRound, Lock, MessageSquare, Network, Package, Palette, Plug, Puzzle, Server, Smartphone, Sparkles, Wrench } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import type { ReactNode } from "react";
 
@@ -44,6 +44,7 @@ const ICONS: Record<SettingsSectionIcon, LucideIcon> = {
   Palette,
   MessageSquare,
   Keyboard,
+  HardDrive,
   FlaskConical,
 };
 

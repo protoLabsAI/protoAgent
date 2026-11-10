@@ -144,6 +144,9 @@ const SECTION_KEYWORDS: Record<SettingsSectionId, string[]> = {
   // carry exactly this vocabulary, and it shipped as a DUPLICATE "Settings: Keyboard" the
   // moment the generator landed beside it. The vocabulary belongs on the generated row.
   keybindings: ["shortcuts", "hotkeys", "keybinding", "chord", "hotkey", "rebind", "keys"],
+  // This browser's copy of the console's data (Settings ▸ Storage). "storage" and "disk" stay
+  // on Overview, which is the box's own disk; these are the browser's words.
+  storage: ["browser storage", "indexeddb", "localstorage", "clear chats", "quota", "free up space", "keep data", "cache"],
   // Never reached: `developer` is filtered out below (see SETTINGS_PALETTE_EXCLUDED), but the
   // map is exhaustive over the id union, so it still needs an entry.
   developer: ["flags", "channel", "experimental", "internal", "debug"],

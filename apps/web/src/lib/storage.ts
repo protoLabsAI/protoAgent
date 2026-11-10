@@ -124,6 +124,10 @@ export const KEY_REGISTRY: readonly KeySpec[] = [
   { id: "editor", area: "local", pattern: /^protoagent\.editor$/, category: "prefs", slug: noSlug, evictable: false },
   { id: "openFilesIn", area: "local", pattern: /^protoagent\.openFilesIn$/, category: "prefs", slug: noSlug, evictable: false },
   { id: "projectPath", area: "local", pattern: /^protoagent\.projectPath$/, category: "prefs", slug: noSlug, evictable: false },
+  // Settings → Storage's "Last automatic clear" (docs/design/settings-storage.md §3.5): when the
+  // console last cleared old chats on its own, how many and from where. Written only by the
+  // automatic paths (lib/storageEviction.ts), never by a clear the operator asks for.
+  { id: "storage.lastAutoClear", area: "local", pattern: /^protoagent\.storage\.lastAutoClear$/, category: "ephemeral", slug: noSlug, evictable: false },
   // ── sessionStorage (per tab) ──
   { id: "schedwatch.notified", area: "session", pattern: /^protoagent\.schedwatch\.notified$/, category: "ephemeral", slug: noSlug, evictable: false },
   { id: "bgwatch.notified", area: "session", pattern: /^protoagent\.bgwatch\.notified$/, category: "ephemeral", slug: noSlug, evictable: false },

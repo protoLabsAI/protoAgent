@@ -48,6 +48,12 @@ type SessionRecord = {
 };
 type ChunkRecord = { slug: string; sessionId: string; hash: string; messages: Message[] };
 export type AgentRecord = { slug: string; order: string[]; currentSessionId: string | null };
+/** One saved session, as Settings → Storage counts it (`bytes`: JSON length of its records). */
+export type SessionUsage = { slug: string; id: string; updatedAt: number; bytes: number };
+export type ThreadUsage = { key: string; bytes: number };
+/** What one eviction step removed: a session (`slug`/`id`) or a thread (`slug` "palette", `id`
+ *  its key), with the JSON length of what went. */
+export type Evicted = { slug: string; id: string; bytes: number };
 
 function promised<T>(request: IDBRequest<T>): Promise<T> {
   return new Promise((resolve, reject) => {
@@ -188,6 +194,40 @@ export class TranscriptStore {
     await done(tx);
   }
 
+  /** What the store holds, for Settings → Storage: every saved session (its agent, when it was
+   *  last written, and its size) and every palette / DM thread. A size is the JSON length of
+   *  the records (the session record plus its chunks), an estimate rather than disk use. */
+  async usage(): Promise<{ sessions: SessionUsage[]; threads: ThreadUsage[] }> {
+    const tx = this.db.transaction(["sessions", "chunks", "threads"], "readonly");
+    const [records, chunks, threads] = await Promise.all([
+      promised(tx.objectStore("sessions").getAll()) as Promise<SessionRecord[]>,
+      promised(tx.objectStore("chunks").getAll()) as Promise<ChunkRecord[]>,
+      promised(tx.objectStore("threads").getAll()) as Promise<{ key: string; messages: Message[] }[]>,
+    ]);
+    const chunkBytes = new Map<string, number>();
+    for (const chunk of chunks) {
+      const id = JSON.stringify([chunk.slug, chunk.sessionId]);
+      chunkBytes.set(id, (chunkBytes.get(id) ?? 0) + JSON.stringify(chunk).length);
+    }
+    return {
+      sessions: records.map((record) => ({
+        slug: record.slug,
+        id: record.id,
+        updatedAt: record.updatedAt,
+        bytes: JSON.stringify(record).length + (chunkBytes.get(JSON.stringify([record.slug, record.id])) ?? 0),
+      })),
+      threads: threads.map((thread) => ({ key: thread.key, bytes: JSON.stringify(thread).length })),
+    };
+  }
+
+  /** Remove palette / DM threads by key. */
+  async deleteThreads(keys: string[]): Promise<void> {
+    if (!keys.length) return;
+    const tx = this.db.transaction("threads", "readwrite");
+    for (const key of keys) tx.objectStore("threads").delete(key);
+    await done(tx);
+  }
+
   /** Every agent with saved sessions, and how many. */
   async slugs(): Promise<Map<string, number>> {
     const tx = this.db.transaction("sessions", "readonly");
@@ -242,23 +282,21 @@ export class TranscriptStore {
     threadPrefix: string;
     now?: number;
     quietMs?: number;
-  }): Promise<{ slug: string; id: string }[]> {
+  }): Promise<Evicted[]> {
     const now = opts.now ?? Date.now();
     const quiet = opts.quietMs ?? 24 * 60 * 60 * 1000;
     const tx = this.db.transaction(["sessions", "threads"], "readonly");
     const records = (await promised(tx.objectStore("sessions").getAll())) as SessionRecord[];
-    const threadKeys = (await promised(tx.objectStore("threads").getAllKeys())) as string[];
+    const threads = (await promised(tx.objectStore("threads").getAll())) as { key: string; messages: Message[] }[];
     const others = records.filter((r) => r.slug !== opts.keepSlug && r.slug !== "host");
     const gone = opts.fleet ? others.filter((r) => !opts.fleet!.has(r.slug)) : [];
     if (gone.length) return this.drop(gone);
     // This window's threads: its own key, or that key + ":dm:<member>". Everything else is foreign.
     const ownThread = (key: string) => key === opts.threadPrefix || key.startsWith(`${opts.threadPrefix}:dm:`);
-    const foreignThreads = threadKeys.filter((key) => !ownThread(key));
+    const foreignThreads = threads.filter((thread) => !ownThread(thread.key));
     if (foreignThreads.length) {
-      const del = this.db.transaction("threads", "readwrite");
-      for (const key of foreignThreads) del.objectStore("threads").delete(key);
-      await done(del);
-      return foreignThreads.map((key) => ({ slug: "palette", id: key }));
+      await this.deleteThreads(foreignThreads.map((thread) => thread.key));
+      return foreignThreads.map((thread) => ({ slug: "palette", id: thread.key, bytes: JSON.stringify(thread).length }));
     }
     const stale = others.filter((r) => now - r.updatedAt >= quiet).sort((a, b) => a.updatedAt - b.updatedAt);
     if (stale.length) return this.drop(stale);
@@ -268,11 +306,25 @@ export class TranscriptStore {
     return mine.length ? this.drop(mine.slice(0, 1)) : [];
   }
 
-  private async drop(records: SessionRecord[]): Promise<{ slug: string; id: string }[]> {
+  private async drop(records: SessionRecord[]): Promise<Evicted[]> {
+    const sizes = await this.chunkBytes(records);
     const bySlug = new Map<string, string[]>();
     for (const r of records) bySlug.set(r.slug, [...(bySlug.get(r.slug) ?? []), r.id]);
     for (const [slug, ids] of bySlug) await this.deleteSessions(slug, ids);
-    return records.map((r) => ({ slug: r.slug, id: r.id }));
+    return records.map((r, i) => ({ slug: r.slug, id: r.id, bytes: JSON.stringify(r).length + sizes[i] }));
+  }
+
+  /** The JSON length of each record's chunks. */
+  private async chunkBytes(records: SessionRecord[]): Promise<number[]> {
+    const tx = this.db.transaction("chunks", "readonly");
+    return Promise.all(
+      records.map(async (r) => {
+        const chunks = (await promised(
+          tx.objectStore("chunks").getAll(IDBKeyRange.bound([r.slug, r.id], [r.slug, r.id, []])),
+        )) as ChunkRecord[];
+        return chunks.reduce((n, chunk) => n + JSON.stringify(chunk).length, 0);
+      }),
+    );
   }
 
   /** Remove everything (a backend switch, the crash reset). */

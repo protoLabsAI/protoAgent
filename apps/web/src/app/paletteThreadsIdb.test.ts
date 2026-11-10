@@ -82,6 +82,31 @@ describe("palette threads in IndexedDB", () => {
     store.close();
   });
 
+  it("a quick chat's failed save is retried by Free up space, and the warning clears", async () => {
+    vi.resetModules();
+    const chatStore = await import("../chat/chat-store");
+    expect(await chatStore.initTranscriptBackend()).toBe("idb");
+    const palette = await import("./paletteChatStore");
+    await palette.initPaletteThreads(chatStore.transcriptStoreIfOpen());
+    const { TranscriptStore } = await import("../chat/transcriptStore");
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const put = vi.spyOn(TranscriptStore.prototype, "putThread").mockRejectedValue(new DOMException("full", "QuotaExceededError"));
+    palette.savePaletteThread({ contextId: "c", messages: msgs(2) }, true);
+    await palette.paletteWritesSettled();
+    expect(chatStore.transcriptSaveFailing()).toBe(true);
+
+    // Room appears (an agent that left the fleet still has chats), and the store takes writes again.
+    put.mockRestore();
+    const { setFleetSlugs } = await import("../lib/storageEviction");
+    setFleetSlugs(["host"]);
+    await chatStore.transcriptStoreIfOpen()!.putSessions("gone", [{ id: "g", title: "g", createdAt: 1, updatedAt: 1, messages: msgs(1) }]);
+    await chatStore.freeUpSpace();
+    setFleetSlugs(null);
+
+    expect(chatStore.transcriptSaveFailing()).toBe(false);
+    expect((await chatStore.transcriptStoreIfOpen()!.loadThreads(KEY)).get(KEY)).toEqual(msgs(2));
+  });
+
   it("without the store, threads stay whole in localStorage as before", async () => {
     vi.resetModules();
     const palette = await import("./paletteChatStore");

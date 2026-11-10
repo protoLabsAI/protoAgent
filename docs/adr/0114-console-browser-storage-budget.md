@@ -81,6 +81,23 @@
 > pin still happens. The WAL then grows a few MB a day, not hundreds, and the desktop app
 > reclaims it at launch (#4980).
 
+> **November 9, 2026 (#5015): Settings → Storage, amending D6.** The page is built to the
+> approved spec `docs/design/settings-storage.md`. Three changes to D6's description of it:
+> - **One database, so nothing to clear for another backend.** There is one database now,
+>   `protoagent-transcripts`, and a backend switch already clears it. D6's "clearing another
+>   backend's database" is dropped.
+> - **No meter and no nearly-full state.** The signal keeps `ok | evicted | failing`, with no
+>   `near` value. Automatic clearing (D5) handles a filling browser, and `failing` covers the
+>   case where it couldn't. `evicted` is read from a small `ephemeral` key holding the last
+>   automatic clear (`protoagent.storage.lastAutoClear`). It is written by the automatic paths
+>   and by Free up space, which runs the same routine by hand, and never by a manual Clear.
+>   IndexedDB saves that still fail after clearing now set `failing` too
+>   (`transcriptSaveFailing` in `chat/chat-store.ts`), next to the localStorage latch.
+> - **The per-row Clear covers agents and quick chats only.** Clearing removes this browser's
+>   copy (never the server's) and, for the agent you're on, keeps chats open in a tab and is
+>   disabled while a reply runs. Layout, preferences, sign-in and dismissals are shown, not
+>   cleared, and the page has no "Reset layout".
+
 Status: **Proposed**
 
 Amends: ADR 0104 (the primary transcript store moves from `localStorage` to IndexedDB)

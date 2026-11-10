@@ -49,7 +49,14 @@ export function StorageUpkeep() {
   const toast = useToast();
   const fleet = useQuery({ queryKey: queryKeys.fleet, queryFn: () => api.fleet(), retry: false });
 
-  useEffect(() => subscribeEvictions((report) => toast({ tone: "info", ...evictionToast(report) })), [toast]);
+  // Free up space (Settings → Storage) says what it cleared itself.
+  useEffect(
+    () =>
+      subscribeEvictions((report) => {
+        if (report.reason !== "free") toast({ tone: "info", ...evictionToast(report) });
+      }),
+    [toast],
+  );
 
   // Only a full read (one that includes this instance) counts; anything else is "unknown".
   const agents = fleet.data?.agents;

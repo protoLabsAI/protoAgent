@@ -9,8 +9,16 @@ import {
   shownRuns,
   turnBubbleIndexes,
 } from "./turnText";
-import { isQuotaError, listKeys, matchKey, readKey, removeKey, writeKey } from "../lib/storage";
-import { fleetSlugsSnapshot, reportEviction } from "../lib/storageEviction";
+import { entryBytes, isQuotaError, listKeys, matchKey, readKey, removeKey, storagePressure, writeKey } from "../lib/storage";
+import {
+  evict,
+  fleetSlugsSnapshot,
+  LOCAL_BUDGET_BYTES,
+  LOCAL_TARGET_BYTES,
+  reportEviction,
+  subscribeEvictions,
+  type EvictionReport,
+} from "../lib/storageEviction";
 import { agentChunkPrefix, expandSessions, orphanChunks, packSessions } from "./transcriptChunks";
 import { openTranscriptStore, type SessionLike, type TranscriptStore } from "./transcriptStore";
 import { attachmentDisplay, validThumbnails } from "./imageThumbnails";
@@ -728,19 +736,30 @@ const PALETTE_KEY = AGENT === "host" ? "protoagent.palette.chat" : `protoagent.p
 /** Run an IndexedDB write; on a quota error free space (ADR 0114 D5) one step at a time and
  *  retry, until it fits or nothing is left to remove. Never removes this agent's open tabs or
  *  a chat with a live turn. Says what it cleared (the storage toast). */
-export async function withQuotaEviction(write: () => Promise<void>): Promise<void> {
+export async function withQuotaEviction(
+  write: () => Promise<void>,
+  source: SaveSource | null = "chats",
+): Promise<void> {
+  const failing = (on: boolean) => {
+    if (source) setSaveFailing(source, on);
+  };
   try {
     await write();
+    failing(false);
     return;
   } catch (err) {
     if (!isQuotaError(err) || !transcripts) throw err;
   }
-  const protect = new Set([...state.activeSessions, ...streamingIds(state), ...(state.currentSessionId ? [state.currentSessionId] : [])]);
-  const all: { slug: string; id: string }[] = [];
+  const protect = protectedChatIds();
+  const all: { slug: string; id: string; bytes: number }[] = [];
   // One toast for the whole squeeze, and other tabs told what went (they may hold it open).
   const announce = () => {
     if (!all.length) return;
-    reportEviction({ reason: "quota", freedBytes: 0, evicted: all.map((r) => ({ key: `idb:${r.slug}/${r.id}`, slug: r.slug, bytes: 0 })) });
+    reportEviction({
+      reason: evictionReason,
+      freedBytes: all.reduce((n, r) => n + r.bytes, 0),
+      evicted: all.map((r) => ({ key: `idb:${r.slug}/${r.id}`, slug: r.slug, bytes: r.bytes })),
+    });
     const bySlug = new Map<string, string[]>();
     for (const r of all) if (r.slug !== "palette") bySlug.set(r.slug, [...(bySlug.get(r.slug) ?? []), r.id]);
     for (const [agent, ids] of bySlug) {
@@ -754,12 +773,19 @@ export async function withQuotaEviction(write: () => Promise<void>): Promise<voi
       all.push(...removed);
       try {
         await write();
+        failing(false);
         return;
       } catch (err) {
         if (!isQuotaError(err)) throw err;
       }
     }
-    await write(); // nothing left to free: let the quota error surface to the caller's catch
+    try {
+      await write(); // nothing left to free: let the quota error surface to the caller's catch
+      failing(false);
+    } catch (err) {
+      if (isQuotaError(err)) failing(true);
+      throw err;
+    }
   } finally {
     // This agent's evicted chats aren't open here (they were never `protect`ed): drop them from
     // this tab too, or its next save would write them straight back. A local drop, not a delete.
@@ -770,6 +796,171 @@ export async function withQuotaEviction(write: () => Promise<void>): Promise<voi
     }
     announce();
   }
+}
+
+// ── Settings → Storage (docs/design/settings-storage.md) ─────────────────────
+// What the page needs from the chat store: whether IndexedDB saves are failing (the D6
+// `failing` state; the localStorage latch is storage.ts's), which of this agent's chats are in
+// use, clearing one agent's saved chats from this browser, and Free up space.
+
+/** Chats of this agent that clearing never removes: open tabs, the focused chat, live replies. */
+export function protectedChatIds(): Set<string> {
+  return new Set([...state.activeSessions, ...streamingIds(state), ...(state.currentSessionId ? [state.currentSessionId] : [])]);
+}
+
+/** This window's agent as the transcript store names it ("host" for this instance). */
+export function transcriptAgent(): string {
+  return AGENT;
+}
+
+/** Which saves are failing for lack of space. Chats and quick chats are tracked apart, so a quick
+ *  chat's save succeeding never hides that chat saves still fail (and the other way round). */
+export type SaveSource = "chats" | "palette";
+const failingSources = new Set<SaveSource>();
+let saveFailing = false;
+const saveFailingListeners = new Set<() => void>();
+/** How a source re-runs its latest failed save (the palette registers one): Free up space
+ *  calls it once it has made room, so that source's failing state can clear without waiting
+ *  for the operator's next message. */
+const saveRetries = new Map<SaveSource, () => Promise<void>>();
+export function registerSaveRetry(source: SaveSource, retry: () => Promise<void>): void {
+  saveRetries.set(source, retry);
+}
+/** Who an IndexedDB eviction is reported as: Free up space runs the same routine by hand. */
+let evictionReason: EvictionReport["reason"] = "quota";
+
+function setSaveFailing(source: SaveSource, on: boolean) {
+  if (on) failingSources.add(source);
+  else failingSources.delete(source);
+  const next = failingSources.size > 0;
+  if (saveFailing === next) return;
+  saveFailing = next;
+  for (const fn of saveFailingListeners) {
+    try {
+      fn();
+    } catch {
+      /* a listener never breaks a save */
+    }
+  }
+}
+
+/** True while an IndexedDB save is failing for lack of space, even after clearing old chats. */
+export function transcriptSaveFailing(): boolean {
+  return saveFailing;
+}
+
+export function subscribeTranscriptSaveFailing(fn: () => void): () => void {
+  saveFailingListeners.add(fn);
+  return () => saveFailingListeners.delete(fn);
+}
+
+/** Clear one agent's saved chats from THIS browser (never the server's copy). For this window's
+ *  agent, chats open in a tab, the focused chat and a live reply stay, as with automatic
+ *  clearing. Other tabs of that agent drop their copies of the cleared chats unless they have
+ *  them open. Not an automatic clear: nothing is reported as an eviction. Returns what went. */
+export async function clearSavedChats(slug: string): Promise<{ chats: number; bytes: number }> {
+  const protect = slug === AGENT ? protectedChatIds() : new Set<string>();
+  if (transcripts) {
+    await writeChain; // let a queued save land first, so it can't write a cleared chat back
+    const { sessions } = await transcripts.usage();
+    const gone = sessions.filter((s) => s.slug === slug && !protect.has(s.id));
+    const ids = gone.map((s) => s.id);
+    await transcripts.deleteSessions(slug, ids);
+    if (slug === AGENT) dropLocalCopies(ids);
+    if (ids.length) transcriptChannel?.postMessage({ agent: slug, ids: [], deleted: [], evicted: ids } satisfies TranscriptMessage);
+    return { chats: ids.length, bytes: gone.reduce((n, s) => n + s.bytes, 0) };
+  }
+  // localStorage: the agent's key and its chunk keys.
+  const key = slug === "host" ? "protoagent.chat.sessions" : `protoagent.chat.sessions:${slug}`;
+  const chunkKeys = listKeys("local").filter((k) => k.startsWith(agentChunkPrefix(key)));
+  if (slug !== AGENT) {
+    const raw = readKey("local", key);
+    let chats = 0;
+    try {
+      const parsed = JSON.parse(raw ?? "null") as { sessions?: unknown[] } | null;
+      chats = Array.isArray(parsed?.sessions) ? parsed.sessions.length : 0;
+    } catch {
+      chats = 0;
+    }
+    const bytes = chunkKeys.reduce((n, k) => n + entryBytes(k, readKey("local", k) ?? ""), raw === null ? 0 : entryBytes(key, raw));
+    removeKey("local", key);
+    for (const k of chunkKeys) removeKey("local", k);
+    return { chats, bytes };
+  }
+  let onDisk: ChatSession[] = [];
+  try {
+    onDisk = parsePersisted(readKey("local", STORAGE_KEY))?.sessions ?? [];
+  } catch {
+    onDisk = [];
+  }
+  const gone = onDisk.filter((s) => !protect.has(s.id));
+  // The key goes first, so the save below can't merge the cleared chats back from it.
+  removeKey("local", STORAGE_KEY);
+  for (const k of chunkKeys) removeKey("local", k);
+  dropLocalCopies(gone.map((s) => s.id));
+  persistDirty = true;
+  flushChatPersist();
+  return { chats: gone.length, bytes: gone.reduce((n, s) => n + 2 * JSON.stringify(s).length, 0) };
+}
+
+/** This tab's copies of cleared chats go (a local drop, not a retirement: the server's 24 h
+ *  history can still bring one back). */
+function dropLocalCopies(ids: string[]) {
+  const inUse = protectedChatIds();
+  for (const id of ids) {
+    persistedRefs.delete(id);
+    if (!inUse.has(id) && state.sessions.some((s) => s.id === id) && state.sessions.length > 1) removeLocalSession(id);
+  }
+}
+
+/** Free up space (Settings → Storage, in the `failing` state): the automatic routine started by
+ *  hand. It clears old chats in the D5 order until this agent's unsaved chats fit, reports it as
+ *  an automatic clear (reason `free`, so the "Last automatic clear" record is written), and says
+ *  what it removed and whether saving works again. */
+export async function freeUpSpace(): Promise<{ chats: number; bytes: number; saving: boolean }> {
+  let chats = 0;
+  let bytes = 0;
+  const off = subscribeEvictions((report) => {
+    if (report.reason !== "free") return;
+    chats += report.evicted.reduce((n, e) => n + (e.chats ?? 1), 0);
+    bytes += report.freedBytes || report.evicted.reduce((n, e) => n + e.bytes, 0);
+  });
+  evictionReason = "free";
+  try {
+    if (storagePressure().state === "failing") {
+      evict(LOCAL_BUDGET_BYTES - LOCAL_TARGET_BYTES, { reason: "free" });
+      persistDirty = true;
+      flushChatPersist();
+    }
+    if (transcripts) {
+      // The chats whose save failed are written again; a quota error on the way clears old
+      // chats one step at a time (withQuotaEviction) until they fit.
+      const before = writeChain;
+      persistToTranscripts(state);
+      const attempted = writeChain !== before;
+      await writeChain;
+      if (!attempted && saveFailing) {
+        // Nothing of this agent's is waiting (a quick chat's save failed): clear one step. A
+        // probe, not a save: it tracks no failing state, so only the next REAL save that fits
+        // can say saving works again.
+        let first = true;
+        await withQuotaEviction(async () => {
+          if (!first) return;
+          first = false;
+          throw new DOMException("The quota has been exceeded.", "QuotaExceededError");
+        }, null).catch(() => undefined);
+      }
+      // Re-run the other sources' failed saves now there may be room (a quick chat's).
+      for (const source of [...failingSources]) {
+        if (source === "chats") continue;
+        await saveRetries.get(source)?.().catch(() => undefined);
+      }
+    }
+  } finally {
+    evictionReason = "quota";
+    off();
+  }
+  return { chats, bytes, saving: !saveFailing && storagePressure().state !== "failing" };
 }
 
 /** The open transcript store, or `null` on the localStorage path (palette threads, S3). */
