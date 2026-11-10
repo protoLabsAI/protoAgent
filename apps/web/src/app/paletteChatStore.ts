@@ -7,7 +7,7 @@ import type { ChatMessage } from "../lib/types";
 import { entryBytes, listKeys, matchKey, readKey, removeKey, writeKey } from "../lib/storage";
 import { persistBlocked } from "../lib/storageReset";
 import type { TranscriptStore } from "../chat/transcriptStore";
-import { transcriptStoreIfOpen, withQuotaEviction } from "../chat/chat-store";
+import { registerSaveRetry, transcriptStoreIfOpen, withQuotaEviction } from "../chat/chat-store";
 
 // Per-agent key (ADR 0042 slug routing) — a window on /agent/<slug>/ keeps its own
 // palette thread; host (no slug) uses the bare key. Fixed per page load.
@@ -59,6 +59,14 @@ function sanitize(messages: unknown): ChatMessage[] {
 let threads: TranscriptStore | null = null;
 const preloaded = new Map<string, ChatMessage[]>();
 let threadWrites: Promise<void> = Promise.resolve();
+/** The latest thread save that failed for lack of space, for Free up space to retry. */
+let failedSave: { key: string; save: () => Promise<void> } | null = null;
+registerSaveRetry("palette", async () => {
+  const pending = failedSave;
+  if (!pending) return;
+  threadWrites = threadWrites.then(pending.save).catch(() => undefined);
+  await threadWrites;
+});
 
 /** Move every palette / DM thread's messages out of localStorage into the store (a copy the
  *  store already has wins), then preload this window's threads. Awaited at boot. */
@@ -117,12 +125,16 @@ function write(thread: PaletteThread, scope?: string) {
       // current, so a failed store write never loses the only copy.
       if (hasMessages(readKey("local", key))) writeKey("local", key, JSON.stringify(thread));
       else if (readKey("local", key) !== link) writeKey("local", key, link);
-      threadWrites = threadWrites
-        .then(() => withQuotaEviction(() => store.putThread(key, thread.messages), "palette"))
-        .then(() => {
+      const save = () =>
+        withQuotaEviction(() => store.putThread(key, thread.messages), "palette").then(() => {
           if (readKey("local", key) !== link) writeKey("local", key, link);
-        })
-        .catch((err) => console.error("[palette] saving the thread to IndexedDB failed", err));
+          if (failedSave?.key === key) failedSave = null;
+        });
+      threadWrites = threadWrites.then(save).catch((err) => {
+        // Kept so Free up space can retry it once it has made room (registerSaveRetry).
+        failedSave = { key, save };
+        console.error("[palette] saving the thread to IndexedDB failed", err);
+      });
       return;
     }
     writeKey("local", key, JSON.stringify(thread));

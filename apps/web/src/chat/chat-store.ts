@@ -819,6 +819,13 @@ export type SaveSource = "chats" | "palette";
 const failingSources = new Set<SaveSource>();
 let saveFailing = false;
 const saveFailingListeners = new Set<() => void>();
+/** How a source re-runs its latest failed save (the palette registers one): Free up space
+ *  calls it once it has made room, so that source's failing state can clear without waiting
+ *  for the operator's next message. */
+const saveRetries = new Map<SaveSource, () => Promise<void>>();
+export function registerSaveRetry(source: SaveSource, retry: () => Promise<void>): void {
+  saveRetries.set(source, retry);
+}
 /** Who an IndexedDB eviction is reported as: Free up space runs the same routine by hand. */
 let evictionReason: EvictionReport["reason"] = "quota";
 
@@ -942,6 +949,11 @@ export async function freeUpSpace(): Promise<{ chats: number; bytes: number; sav
           first = false;
           throw new DOMException("The quota has been exceeded.", "QuotaExceededError");
         }, null).catch(() => undefined);
+      }
+      // Re-run the other sources' failed saves now there may be room (a quick chat's).
+      for (const source of [...failingSources]) {
+        if (source === "chats") continue;
+        await saveRetries.get(source)?.().catch(() => undefined);
       }
     }
   } finally {
