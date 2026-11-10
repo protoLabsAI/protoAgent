@@ -748,7 +748,7 @@ _GOAL_EDITABLE_FIELDS = ("outcome", "constraints", "boundaries", "stop_when", "m
 
 
 async def _operator_goals_update(session_id: str, body: dict) -> dict:
-    """Edit a goal in place (#4955 Q9) — the Work view's Edit button. Loads the goal, applies
+    """Edit a goal in place (#4955 Q9). Loads the goal, applies
     ONLY the editable fields the body names, and writes it back through ``store.set`` (which
     re-fires ``goal.changed`` so every open console refreshes). Returns the updated goal.
 
@@ -784,35 +784,40 @@ async def _operator_goals_update(session_id: str, body: dict) -> dict:
         raise ValueError(problem)
 
     store = STATE.goal_controller.store
-    state = await asyncio.to_thread(store.get, session_id)
-    if state is None:
-        raise NotFoundError(f"no goal for session {session_id!r}")
 
-    max_iterations = body.get("max_iterations")
-    if max_iterations is not None and max_iterations < state.iteration:
-        raise ValueError(
-            f"max_iterations ({max_iterations}) is below the goal's current iteration "
-            f"({state.iteration}); it would exhaust the goal immediately."
-        )
+    def update():
+        with store.transaction():
+            state = store.get(session_id)
+            if state is None:
+                raise NotFoundError(f"no goal for session {session_id!r}")
 
-    # Apply only the keys present. A string is coerced like the set handler does; a budget
-    # sent as an explicit ``null`` is a no-op (the field stays at its current value).
-    if "outcome" in body:
-        state.outcome = str(body["outcome"] or "")
-    if "constraints" in body:
-        state.constraints = _as_str_list(body["constraints"])
-    if "boundaries" in body:
-        state.boundaries = _as_str_list(body["boundaries"])
-    if "stop_when" in body:
-        state.stop_when = str(body["stop_when"] or "")
-    if max_iterations is not None:
-        state.max_iterations = max_iterations
-    no_progress_limit = body.get("no_progress_limit")
-    if no_progress_limit is not None:
-        state.no_progress_limit = no_progress_limit
+            max_iterations = body.get("max_iterations")
+            if max_iterations is not None and max_iterations < state.iteration:
+                raise ValueError(
+                    f"max_iterations ({max_iterations}) is below the goal's current iteration "
+                    f"({state.iteration}); it would exhaust the goal immediately."
+                )
 
-    await asyncio.to_thread(store.set, state)
-    return {"goal": state.to_dict()}
+            # Apply only the keys present. A string is coerced like the set handler does; a budget
+            # sent as an explicit ``null`` is a no-op (the field stays at its current value).
+            if "outcome" in body:
+                state.outcome = str(body["outcome"] or "")
+            if "constraints" in body:
+                state.constraints = _as_str_list(body["constraints"])
+            if "boundaries" in body:
+                state.boundaries = _as_str_list(body["boundaries"])
+            if "stop_when" in body:
+                state.stop_when = str(body["stop_when"] or "")
+            if max_iterations is not None:
+                state.max_iterations = max_iterations
+            no_progress_limit = body.get("no_progress_limit")
+            if no_progress_limit is not None:
+                state.no_progress_limit = no_progress_limit
+
+            store.set(state)
+            return {"goal": state.to_dict()}
+
+    return await asyncio.to_thread(update)
 
 
 def _safe_kick(session_id: str, prompt: str) -> bool:

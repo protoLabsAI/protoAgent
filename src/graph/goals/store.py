@@ -13,6 +13,7 @@ import json
 import logging
 import os
 import tempfile
+from threading import RLock
 from pathlib import Path
 
 from graph.goals.types import GoalState
@@ -68,8 +69,17 @@ def _safe_name(session_id: str) -> str:
 
 class GoalStore:
     def __init__(self, base_dir: str | os.PathLike | None = None):
+        self._lock = RLock()
         self._base = Path(base_dir) if base_dir else _resolve_base()
         log.info("[goal] store path: %s", self._base)
+
+    def transaction(self):
+        """Serialize a synchronous read/modify/write against this store's writers.
+
+        Never hold this lock across an await: verifier calls and lifecycle hooks
+        must run outside the transaction.
+        """
+        return self._lock
 
     def _path(self, session_id: str) -> Path:
         return self._base / f"{_safe_name(session_id)}.json"
@@ -120,38 +130,40 @@ class GoalStore:
             return None
 
     def set(self, state: GoalState) -> None:
-        path = self._path(state.session_id)
-        tmp_fd, tmp_path = tempfile.mkstemp(dir=self._base, suffix=".tmp")
-        try:
-            with os.fdopen(tmp_fd, "w", encoding="utf-8") as fh:
-                json.dump(state.to_dict(), fh, indent=2, default=str)
-            os.replace(tmp_path, path)
-            tmp_path = None
-            _publish("goal.changed", {"session_id": state.session_id})
-        except OSError as exc:
-            log.error("[goal] write failed for session %s: %s", state.session_id, exc)
-        finally:
-            if tmp_path is not None:
-                try:
-                    os.unlink(tmp_path)
-                except OSError:
-                    pass
+        with self.transaction():
+            path = self._path(state.session_id)
+            tmp_fd, tmp_path = tempfile.mkstemp(dir=self._base, suffix=".tmp")
+            try:
+                with os.fdopen(tmp_fd, "w", encoding="utf-8") as fh:
+                    json.dump(state.to_dict(), fh, indent=2, default=str)
+                os.replace(tmp_path, path)
+                tmp_path = None
+                _publish("goal.changed", {"session_id": state.session_id})
+            except OSError as exc:
+                log.error("[goal] write failed for session %s: %s", state.session_id, exc)
+            finally:
+                if tmp_path is not None:
+                    try:
+                        os.unlink(tmp_path)
+                    except OSError:
+                        pass
 
     # Update is identical to set (whole-record write); kept as an alias for
     # call-site readability.
     update = set
 
     def clear(self, session_id: str) -> bool:
-        path = self._path(session_id)
-        try:
-            path.unlink()
-            _publish("goal.changed", {"session_id": session_id})
-            return True
-        except FileNotFoundError:
-            return False
-        except OSError as exc:
-            log.warning("[goal] clear failed for %s: %s", session_id, exc)
-            return False
+        with self.transaction():
+            path = self._path(session_id)
+            try:
+                path.unlink()
+                _publish("goal.changed", {"session_id": session_id})
+                return True
+            except FileNotFoundError:
+                return False
+            except OSError as exc:
+                log.warning("[goal] clear failed for %s: %s", session_id, exc)
+                return False
 
     def all(self) -> list[GoalState]:
         """Every persisted goal across sessions, newest-started first.

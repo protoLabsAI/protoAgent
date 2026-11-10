@@ -173,3 +173,123 @@ def test_patch_goals_disabled_503(monkeypatch, tmp_path):
     # missing.
     client, _ = _client(monkeypatch, tmp_path, controller=False)
     assert client.patch("/api/goals/s1", json={"outcome": "x"}).status_code == 503
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("met", [False, True])
+async def test_patch_during_verifier_preserves_edit_and_progress(monkeypatch, tmp_path, met):
+    import asyncio
+
+    from graph.goals import controller
+    from graph.goals.types import VerifyResult
+    from operator_api.console_handlers import _operator_goals_update
+
+    _, ctrl = _client(monkeypatch, tmp_path)
+    _seed(ctrl, max_iterations=1)
+    entered, release = asyncio.Event(), asyncio.Event()
+
+    async def verify(*args):
+        entered.set()
+        await release.wait()
+        return VerifyResult(met, "verified", "evidence")
+
+    monkeypatch.setattr(controller, "run_verifier", verify)
+    monkeypatch.setattr("graph.self_improvement.schedule_review", lambda *args: None)
+    task = asyncio.create_task(ctrl.evaluate("s1", last_text="done"))
+    try:
+        await asyncio.wait_for(entered.wait(), 5)
+        response = await _operator_goals_update(
+            "s1", {"outcome": "edited", "stop_when": "approval needed", "max_iterations": 10}
+        )
+        assert response["goal"]["outcome"] == "edited"
+    finally:
+        release.set()
+    decision = await asyncio.wait_for(task, 5)
+    stored = ctrl.store.get("s1")
+    assert stored.outcome == "edited"
+    assert stored.stop_when == "approval needed"
+    assert stored.max_iterations == 10
+    assert stored.status == ("achieved" if met else "active")
+    assert stored.iteration == (0 if met else 1)
+    assert len(stored.history) == 1
+    assert decision.action == ("done" if met else "continue")
+    if not met:
+        assert "edited" in decision.message
+
+
+@pytest.mark.asyncio
+async def test_patch_waiting_for_completion_preserves_terminal_state(monkeypatch, tmp_path):
+    import asyncio
+    import threading
+
+    from graph.goals.types import VerifyResult
+    from operator_api.console_handlers import _operator_goals_update
+
+    _, ctrl = _client(monkeypatch, tmp_path)
+    _seed(ctrl)
+    entered, release = threading.Event(), threading.Event()
+    original_get = ctrl.store.get
+
+    def paused_get(session_id):
+        state = original_get(session_id)
+        if threading.current_thread() is not threading.main_thread() and not entered.is_set():
+            entered.set()
+            assert release.wait(5)
+        return state
+
+    monkeypatch.setattr(ctrl.store, "get", paused_get)
+    monkeypatch.setattr("graph.self_improvement.schedule_review", lambda *args: None)
+    patch = asyncio.create_task(_operator_goals_update("s1", {"outcome": "edited"}))
+    assert await asyncio.to_thread(entered.wait, 5)
+
+    # Complete on a separate loop/thread while PATCH holds its read/modify/write
+    # transaction. Without that transaction PATCH can restore the old active state.
+    started = threading.Event()
+
+    def complete():
+        started.set()
+        return asyncio.run(ctrl.finish_mid_turn("s1", VerifyResult(True, "passed", "proof")))
+
+    completion = asyncio.create_task(asyncio.to_thread(complete))
+    try:
+        assert await asyncio.to_thread(started.wait, 5)
+    finally:
+        release.set()
+    await asyncio.wait_for(asyncio.gather(patch, completion), 5)
+    stored = ctrl.store.get("s1")
+    assert stored.status == "achieved"
+    assert stored.finished_at is not None
+    assert stored.history[-1]["status"] == "achieved"
+    assert stored.outcome == "edited"
+
+
+@pytest.mark.asyncio
+async def test_patch_during_finish_hooks_keeps_achieved_state(monkeypatch, tmp_path):
+    import asyncio
+
+    from graph.goals.types import VerifyResult
+    from operator_api.console_handlers import _operator_goals_update
+
+    _, ctrl = _client(monkeypatch, tmp_path)
+    _seed(ctrl)
+    entered, release = asyncio.Event(), asyncio.Event()
+
+    async def hooks(*args):
+        entered.set()
+        await release.wait()
+
+    monkeypatch.setattr("graph.goals.hooks.fire_goal_hooks", hooks)
+    monkeypatch.setattr("graph.self_improvement.schedule_review", lambda *args: None)
+    completion = asyncio.create_task(ctrl.finish_mid_turn("s1", VerifyResult(True, "passed", "proof")))
+    try:
+        await asyncio.wait_for(entered.wait(), 5)
+        # Hooks may themselves trigger goal operations. They must not hold the
+        # store transaction, and a PATCH here must retain the terminal history.
+        response = await asyncio.wait_for(_operator_goals_update("s1", {"outcome": "edited"}), 5)
+        assert response["goal"]["status"] == "achieved"
+        assert response["goal"]["history"][-1]["status"] == "achieved"
+    finally:
+        release.set()
+    await asyncio.wait_for(completion, 5)
+    assert ctrl.store.get("s1").outcome == "edited"
+    assert ctrl.store.get("s1").status == "achieved"
