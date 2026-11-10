@@ -8,8 +8,10 @@
  * The detail shows §2.7's fields: type and priority as "Bug · high" (numeric priority 0–3
  * reads urgent / high / normal / low), assignee, updated/closed times, a clamped
  * description and the created date. The only "Never shown" field, the id, lives in
- * Technical details. Actions: Edit (the existing PATCH, reusing `TaskCreateDialog`) and
- * Delete…, which hands back an `undo_token` (bd-0ia51.5) driving the §4.5 undo toast.
+ * Technical details. Actions mirror the base `TasksPanel` board controls: the Start /
+ * Mark open and Close / Reopen status transitions (the PATCH/close routes), Edit (the
+ * existing PATCH, reusing `TaskCreateDialog`) and Delete…, which hands back an
+ * `undo_token` (bd-0ia51.5) driving the §4.5 undo toast.
  */
 import { useState, type CSSProperties } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
@@ -21,7 +23,7 @@ import { api } from "../../lib/api";
 import { queryKeys } from "../../lib/queries";
 import type { Task } from "../../lib/types";
 import { TaskCreateDialog } from "../../app/TasksPanel";
-import { issueType, type IssueDraft } from "../../app/tasks";
+import { issueStatus, issueType, type IssueDraft } from "../../app/tasks";
 import { relTime } from "../tone";
 import { WorkDetail, type WorkAction, type WorkField } from "../WorkDetail";
 import { WorkRow } from "../WorkRow";
@@ -112,8 +114,38 @@ function TaskDetail({ item }: { item: WorkItem }) {
     onError: () => toast({ tone: "warning", message: "Couldn't save the task." }),
   });
 
+  // Status transitions, mirroring the base `TasksPanel` board buttons so the same moves are
+  // reachable from the Work surface: an open/blocked task can be Started (→ in_progress) and an
+  // in-progress one Marked open (→ open); any non-closed task Closed (the close route), and a
+  // closed one Reopened (→ open). The PATCH/close succeed silently — the field table refreshes
+  // to the new status; a failure surfaces WorkDetail's inline "Couldn't …" Alert (no undo).
+  const status = issueStatus(task);
+  const isClosed = status === "closed";
+  const isActive = status === "in_progress";
+
   const actions: WorkAction[] = [
     { id: "edit", label: "Edit", run: async () => setEditOpen(true) },
+  ];
+  if (!isClosed) {
+    actions.push({
+      id: "start",
+      label: isActive ? "Mark open" : "Start",
+      run: async () => {
+        await api.updateTask(task.id, { status: isActive ? "open" : "in_progress" });
+        refresh();
+      },
+    });
+  }
+  actions.push({
+    id: isClosed ? "reopen" : "close",
+    label: isClosed ? "Reopen" : "Close",
+    run: async () => {
+      if (isClosed) await api.updateTask(task.id, { status: "open" });
+      else await api.closeTask(task.id);
+      refresh();
+    },
+  });
+  actions.push(
     {
       id: "delete",
       label: "Delete…",
@@ -132,7 +164,7 @@ function TaskDetail({ item }: { item: WorkItem }) {
         return { undoToken: res.undo_token };
       },
     },
-  ];
+  );
 
   return (
     <>

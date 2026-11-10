@@ -317,6 +317,38 @@ describe("Delete and undo (r3)", () => {
   });
 });
 
+describe("Lifecycle re-arm (ADR 0079)", () => {
+  it("an active goal offers Add 4 iterations, which POSTs rearm with add_iterations", async () => {
+    const rearm = vi.spyOn(api, "rearmGoal").mockResolvedValue({ ok: true, message: "extended" });
+    const goal: GoalState = { session_id: "sess-ext", condition: "extend me", status: "active", outcome: "active goal", iteration: 2, max_iterations: 10 };
+    await mount(goalsSection.render(ctx({ sources: sources({ goals: withItems([goalItem(goal, "running")]) }), itemId: "goal:sess-ext" })));
+
+    expect(buttons().some((b) => b.textContent?.trim() === "Restart goal")).toBe(false);
+    await act(async () => button("Add 4 iterations").click());
+    await flush();
+    expect(rearm).toHaveBeenCalledWith("sess-ext", { add_iterations: 4 });
+  });
+
+  it("an exhausted goal offers Restart goal, which POSTs rearm with no added budget", async () => {
+    const rearm = vi.spyOn(api, "rearmGoal").mockResolvedValue({ ok: true, resumed: true });
+    const goal: GoalState = { session_id: "sess-exh", condition: "ran out", status: "exhausted", outcome: "exhausted goal", iteration: 10, max_iterations: 10 };
+    await mount(goalsSection.render(ctx({ sources: sources({ goals: withItems([goalItem(goal, "failed")]) }), itemId: "goal:sess-exh" })));
+
+    expect(buttons().some((b) => b.textContent?.trim() === "Add 4 iterations")).toBe(false);
+    await act(async () => button("Restart goal").click());
+    await flush();
+    expect(rearm).toHaveBeenCalledWith("sess-exh", {});
+  });
+
+  it("an achieved goal offers neither re-arm control", async () => {
+    const goal: GoalState = { session_id: "sess-ok", condition: "done", status: "achieved", outcome: "achieved goal", iteration: 4 };
+    await mount(goalsSection.render(ctx({ sources: sources({ goals: withItems([goalItem(goal, "done")]) }), itemId: "goal:sess-ok" })));
+    const btnLabels = buttons().map((b) => b.textContent?.trim());
+    expect(btnLabels).not.toContain("Add 4 iterations");
+    expect(btnLabels).not.toContain("Restart goal");
+  });
+});
+
 describe("New goal (r4)", () => {
   it("the empty Goals section shows New goal, which opens GoalCreateDialog", async () => {
     await mount(goalsSection.render(ctx({ sources: sources({ goals: emptySrc() }) })));
