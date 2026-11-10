@@ -1,0 +1,1 @@
+- **Center the mobile Open Work grab line.** The line now sits in the horizontal and vertical center of its full-width button above the composer.

@@ -62,15 +62,13 @@ export default defineConfig({
       use: { browserName: "chromium" },
       testMatch: /tablet\.spec\.ts/,
     },
-    // WebKit, because the desktop app runs WKWebView (#4809) — the only project on this engine.
-    // Scoped to the plugin-preview harness specs ALONE so the existing suites don't double in CI
-    // time: the `chromium` project above already runs plugin-preview-*.spec.ts (it's neither
-    // mobile nor tablet), so between the two the harness runs on both engines, as the card asks.
+    // WebKit covers the WKWebView plugin-preview harness and the mobile Work handle
+    // layout. Chromium also discovers these specs; other suites are not duplicated.
     // The Playwright container (checks.yml web-e2e) ships WebKit, so no extra install is needed.
     {
       name: "webkit",
       use: { ...devices["Desktop Safari"] },
-      testMatch: /plugin-preview-.*\.spec\.ts$/,
+      testMatch: /(?:plugin-preview-.*|work-handle-layout)\.spec\.ts$/,
     },
   ],
   webServer: process.env.FLOW_BASE_URL ? undefined : {
