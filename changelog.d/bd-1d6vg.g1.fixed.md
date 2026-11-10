@@ -1,0 +1,1 @@
+- **Incremental solver verification.** Verify bounded candidate pipelines before launching more alternatives, stop launches after a pass, preserve started work, and bound verification independently. Reap verifier process trees on timeout and cancellation.

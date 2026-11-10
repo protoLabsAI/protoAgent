@@ -22,6 +22,8 @@ import re
 import sys
 import tempfile
 
+from infra.proc import akill_tree, group_kwargs
+
 from .solve import Verdict
 
 # Count tokens within pytest's summary line, e.g. "1 failed, 2 passed".
@@ -110,15 +112,20 @@ async def run_tests(
                 stderr=asyncio.subprocess.STDOUT,
                 stdin=asyncio.subprocess.DEVNULL,
                 env=child_env,
+                **group_kwargs(),
             )
         except FileNotFoundError as exc:  # pragma: no cover - env-dependent
             return Verdict(passed=False, output=f"could not launch pytest: {exc}")
         try:
             stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=timeout)
         except asyncio.TimeoutError:
-            proc.kill()
+            await akill_tree(proc)
             await proc.wait()
             return Verdict(passed=False, output=f"tests timed out after {timeout:.0f}s")
+        except asyncio.CancelledError:
+            await akill_tree(proc)
+            await proc.wait()
+            raise
         out = (stdout or b"").decode(errors="replace")
         if len(out) > truncate:
             out = out[:truncate] + f"\n…[truncated to {truncate} chars]"

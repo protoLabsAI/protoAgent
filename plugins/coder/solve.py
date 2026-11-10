@@ -77,6 +77,7 @@ class SolveResult:
     candidates_tried: int
     verdict: Optional[Verdict] = None
     note: str = ""
+    candidates: list[Candidate] = field(default_factory=list)
 
 
 @dataclass
@@ -104,6 +105,21 @@ class Budget:
 FORCEABLE_RUNGS = ("greedy", "best-of-k", "tree-search", "fusion")
 
 
+@dataclass
+class Candidate:
+    """Started work, retained even when verification raises or is cancelled.
+
+    Board adapters own worktree retention and subprocess cleanup. They may supply
+    a journal to inspect on exceptions, and must retain partial work themselves
+    when generation is interrupted before returning its worktree handle.
+    """
+
+    index: int
+    solution: Optional[str] = None
+    verdict: Optional[Verdict] = None
+    error: Optional[BaseException] = None
+
+
 async def solve(
     task: str,
     *,
@@ -115,17 +131,32 @@ async def solve(
     fusion_generate: Optional[Generate] = None,
     fusion_k: int = 2,
     force_rung: Optional[str] = None,
+    generation_concurrency: int = 1,
+    verification_concurrency: int = 1,
+    verification_semaphore: Optional[asyncio.Semaphore] = None,
+    full_batch: bool = False,
+    candidates: Optional[list[Candidate]] = None,
 ) -> SolveResult:
-    """Run the execution-grounded ladder. See module docstring.
+    """Run the ladder with bounded generate→verify pipelines.
 
-    ``verify=None`` (no oracle) ⇒ greedy 1-shot, returned with ``passed=None`` and
-    a scope note — never an un-grounded best-of-k.
+    ``generation_concurrency`` bounds whole pipelines, not just dispatch. Existing
+    callers default to serial pipelines, including adapters with a session cap of
+    one. Higher limits must respect the adapter's operator cap. Verification has
+    its own limit; a shared ``verification_semaphore`` additionally bounds testing
+    across solves (neither limit controls workers inside a test command).
 
-    ``force_rung`` bypasses the whole cascade — see the module docstring. Raises
-    ``ValueError`` for an unknown rung name or ``force_rung="fusion"`` with no
-    ``fusion_generate`` configured (a misconfigured test, not a runtime outcome to
-    report as a ``SolveResult``).
+    A pass stops new alternatives; started siblings finish and are retained. The
+    earliest-started passing candidate wins, independent of completion order.
+    ``full_batch=True`` explicitly opts into comparing all requested alternatives.
+    Failures feed subsequent launches. Exceptions stop launches, drain siblings,
+    then propagate. Cancellation (including an enclosing asyncio.timeout deadline)
+    cancels and joins every pipeline before propagating; injected callbacks must
+    clean up their processes and preserve worktrees in their cancellation handlers.
+    Started generations are charged even if they fail or are cancelled. Supply a
+    ``candidates`` journal to recover completed handles on exceptional exits.
     """
+    if generation_concurrency < 1 or verification_concurrency < 1:
+        raise ValueError("concurrency limits must be positive")
     if force_rung is not None:
         if force_rung not in FORCEABLE_RUNGS:
             raise ValueError(f"force_rung must be one of {FORCEABLE_RUNGS}, got {force_rung!r}")
@@ -133,197 +164,126 @@ async def solve(
             raise ValueError("force_rung='fusion' requires fusion_generate to be configured")
         if verify is None:
             raise ValueError("force_rung requires a verifier — there's nothing to test a rung against otherwise")
-        return await _solve_forced_rung(
-            force_rung,
-            task,
-            generate=generate,
-            verify=verify,
-            budget=budget,
-            k=k,
-            tree_depth=tree_depth,
-            fusion_generate=fusion_generate,
-            fusion_k=fusion_k,
+
+    journal = candidates if candidates is not None else []
+    started = len(journal)
+    verification_slots = asyncio.Semaphore(verification_concurrency)
+    best: Optional[Candidate] = None
+
+    async def attempt(gen: Generate, feedback: Optional[str]) -> Candidate:
+        # No await between checking the shared budget and charging started work.
+        if not budget.can_afford():
+            raise RuntimeError("generation budget exhausted")
+        budget.spend()
+        candidate = Candidate(len(journal))
+        journal.append(candidate)
+        try:
+            candidate.solution = await gen(task, feedback=feedback)
+            if verify is not None:
+                async with verification_slots:
+                    if verification_semaphore is None:
+                        candidate.verdict = await verify(candidate.solution)
+                    else:
+                        async with verification_semaphore:
+                            candidate.verdict = await verify(candidate.solution)
+            return candidate
+        except BaseException as exc:
+            candidate.error = exc
+            raise
+
+    async def batch(gen: Generate, count: int, *, refine: bool = False) -> Optional[Candidate]:
+        nonlocal best
+        pending = set()
+        completed = []
+        errors = []
+        launched = 0
+        stop = False
+        try:
+            while pending or (launched < count and budget.can_afford() and not stop):
+                # Reserve only actual slots. Never queue the entire batch behind
+                # an adapter's dispatch semaphore.
+                slots = min(generation_concurrency - len(pending), budget.remaining, count - launched)
+                if not stop:
+                    for _ in range(slots):
+                        feedback = best.verdict.feedback() if best and best.verdict else None
+                        pending.add(asyncio.create_task(attempt(gen, feedback)))
+                        launched += 1
+                    # Let starts charge their budget before considering more work.
+                if not pending:
+                    break
+                done, pending = await asyncio.wait(pending, return_when=asyncio.FIRST_COMPLETED)
+                for future in done:
+                    try:
+                        candidate = future.result()
+                    except BaseException as exc:
+                        errors.append(exc)
+                        stop = True
+                        continue
+                    completed.append(candidate)
+                    verdict = candidate.verdict
+                    if verdict is not None:
+                        if verdict.passed and not full_batch:
+                            stop = True
+                        if best is None or (verdict.failed, -candidate.index if refine else candidate.index) < (
+                            best.verdict.failed, -best.index if refine else best.index
+                        ):
+                            best = candidate
+            if errors:
+                raise errors[0]
+        finally:
+            # Also covers caller cancellation/deadline: no detached tasks survive.
+            for future in pending:
+                future.cancel()
+            await asyncio.gather(*pending, return_exceptions=True)
+        passing = [c for c in completed if c.verdict and c.verdict.passed]
+        return min(passing, key=lambda c: c.index) if passing else None
+
+    def result(candidate: Optional[Candidate], rung: str, note: str) -> SolveResult:
+        verdict = candidate.verdict if candidate else None
+        return SolveResult(
+            candidate.solution if candidate else None,
+            verdict.passed if verdict else None,
+            rung, budget.spent, len(journal) - started, verdict, note,
+            list(journal[started:]),
         )
 
-    tried = 0
-
-    # ── No oracle: honest greedy degrade ──────────────────────────────────────
+    if not budget.can_afford():
+        return result(None, "none", "budget exhausted before any generation")
     if verify is None:
-        if not budget.can_afford(1):
-            return SolveResult(None, None, "none", budget.spent, 0, note="budget exhausted before any generation")
-        code = await generate(task, feedback=None)
-        budget.spend(1)
-        return SolveResult(
-            code,
-            None,
-            "greedy",
-            budget.spent,
-            1,
-            note="no verifier/tests supplied — returned a single un-verified candidate (coder shines on verifiable tasks)",
-        )
+        candidate = await attempt(generate, None)
+        return result(candidate, "greedy", "no verifier/tests supplied — returned a single un-verified candidate")
 
-    # ── Rung 1: greedy ────────────────────────────────────────────────────────
-    if not budget.can_afford(1):
-        # No generation happened, so the oracle never ran ⇒ passed=None ("unknown"),
-        # not False ("ran and failed") — keep the SolveResult.passed contract honest.
-        return SolveResult(None, None, "none", budget.spent, 0, note="budget exhausted before any generation")
-    code = await generate(task, feedback=None)
-    budget.spend(1)
-    tried += 1
-    verdict = await verify(code)
-    if verdict.passed:
-        return SolveResult(code, True, "greedy", budget.spent, tried, verdict, "solved 1-shot")
-    best, best_verdict = code, verdict  # carry the best partial for refinement/return
+    if force_rung in ("best-of-k", "fusion"):
+        gen = fusion_generate if force_rung == "fusion" else generate
+        count = fusion_k if force_rung == "fusion" else k
+        if count <= 0:
+            return result(None, "none", "budget exhausted before any generation")
+        winner = await batch(gen, count)
+        return result(winner or best, force_rung, f"forced {force_rung} (test)")
 
-    # ── Rung 2: best-of-k ─────────────────────────────────────────────────────
-    n = min(k - 1, budget.remaining)  # we already spent one greedy gen
-    if n > 0:
-        cands = await asyncio.gather(*(generate(task, feedback=None) for _ in range(n)))
-        budget.spend(n)
-        tried += n
-        verdicts = await asyncio.gather(*(verify(c) for c in cands))
-        for c, v in zip(cands, verdicts):
-            if v.passed:
-                return SolveResult(c, True, "best-of-k", budget.spent, tried, v, f"solved by best-of-{k}")
-            if v.failed < best_verdict.failed:  # fewer failures = better partial
-                best, best_verdict = c, v
+    winner = await batch(generate, 1)
+    if winner or force_rung == "greedy":
+        return result(winner or best, force_rung or "greedy", "solved 1-shot" if winner else "forced greedy (test)")
 
-    # ── Rung 3: tree-search — refine on the failing tests ─────────────────────
+    if force_rung is None:
+        winner = await batch(generate, max(0, k - 1))
+        if winner:
+            return result(winner, "best-of-k", f"solved by best-of-{k}")
+
     for depth in range(tree_depth):
-        if not budget.can_afford(1):
+        if not budget.can_afford():
             break
-        refined = await generate(task, feedback=best_verdict.feedback())
-        budget.spend(1)
-        tried += 1
-        v = await verify(refined)
-        if v.passed:
-            return SolveResult(refined, True, "tree-search", budget.spent, tried, v, f"solved by refine@{depth + 1}")
-        # `<=` (vs `<` in best-of-k/fusion) is deliberate: a refine chain continues
-        # from the LATEST attempt's feedback, so an equal-failure refinement still
-        # advances `best` to keep the next round's feedback consistent with it.
-        if v.failed <= best_verdict.failed:
-            best, best_verdict = refined, v
+        winner = await batch(generate, 1, refine=True)
+        if winner:
+            return result(winner, "tree-search", f"solved by refine@{depth + 1}")
+    if force_rung == "tree-search":
+        return result(best, "tree-search", "forced tree-search (test) — no refinement passed")
 
-    # ── Rung 4: fusion — richest proposals, oracle-selected (P3) ──────────────
-    if fusion_generate is not None and budget.can_afford(1):
-        fk = min(fusion_k, budget.remaining)
-        cands = await asyncio.gather(*(fusion_generate(task, feedback=best_verdict.feedback()) for _ in range(fk)))
-        budget.spend(fk)
-        tried += fk
-        verdicts = await asyncio.gather(*(verify(c) for c in cands))
-        for c, v in zip(cands, verdicts):
-            if v.passed:
-                return SolveResult(c, True, "fusion", budget.spent, tried, v, f"solved by fusion (k={fk})")
-            if v.failed < best_verdict.failed:
-                best, best_verdict = c, v
-
-    # ── Exhausted: return the best partial, naming the failing cases ──────────
-    return SolveResult(
-        best,
-        False,
-        "best-partial",
-        budget.spent,
-        tried,
-        best_verdict,
-        f"no candidate passed within budget; best partial has {best_verdict.failed}/{best_verdict.total} failing",
-    )
-
-
-async def _solve_forced_rung(
-    rung: str,
-    task: str,
-    *,
-    generate: Generate,
-    verify: Verify,
-    budget: Budget,
-    k: int,
-    tree_depth: int,
-    fusion_generate: Optional[Generate],
-    fusion_k: int,
-) -> SolveResult:
-    """Run exactly ONE rung, once, and stop — no cascade, no escalation past it.
-    Reports pass/fail against the real verifier; never used by the real ladder
-    path (``solve()`` only reaches here when the CALLER explicitly asked for one
-    rung, an operator/testing affordance — see the module docstring)."""
-    if rung == "greedy":
-        if not budget.can_afford(1):
-            return SolveResult(None, None, "none", budget.spent, 0, note="budget exhausted before any generation")
-        code = await generate(task, feedback=None)
-        budget.spend(1)
-        v = await verify(code)
-        note = "forced greedy (test) — passed" if v.passed else f"forced greedy (test) — {v.failed}/{v.total} failing"
-        return SolveResult(code, v.passed, "greedy", budget.spent, 1, v, note)
-
-    if rung == "best-of-k":
-        n = min(k, budget.remaining)
-        if n <= 0:
-            return SolveResult(None, None, "none", budget.spent, 0, note="budget exhausted before any generation")
-        cands = await asyncio.gather(*(generate(task, feedback=None) for _ in range(n)))
-        budget.spend(n)
-        verdicts = await asyncio.gather(*(verify(c) for c in cands))
-        best, best_v = cands[0], verdicts[0]
-        for c, v in zip(cands, verdicts):
-            if v.passed:
-                return SolveResult(c, True, "best-of-k", budget.spent, n, v, f"forced best-of-{n} (test) — passed")
-            if v.failed < best_v.failed:
-                best, best_v = c, v
-        return SolveResult(
-            best, False, "best-of-k", budget.spent, n, best_v, f"forced best-of-{n} (test) — no candidate passed"
-        )
-
-    if rung == "tree-search":
-        if not budget.can_afford(1):
-            return SolveResult(None, None, "none", budget.spent, 0, note="budget exhausted before any generation")
-        seed = await generate(task, feedback=None)
-        budget.spend(1)
-        tried = 1
-        best, best_v = seed, await verify(seed)
-        if best_v.passed:
-            return SolveResult(
-                seed,
-                True,
-                "tree-search",
-                budget.spent,
-                tried,
-                best_v,
-                "forced tree-search (test) — seed passed before any refine",
-            )
-        for depth in range(tree_depth):
-            if not budget.can_afford(1):
-                break
-            refined = await generate(task, feedback=best_v.feedback())
-            budget.spend(1)
-            tried += 1
-            v = await verify(refined)
-            if v.passed:
-                return SolveResult(
-                    refined,
-                    True,
-                    "tree-search",
-                    budget.spent,
-                    tried,
-                    v,
-                    f"forced tree-search (test) — solved by refine@{depth + 1}",
-                )
-            if v.failed <= best_v.failed:
-                best, best_v = refined, v
-        return SolveResult(
-            best, False, "tree-search", budget.spent, tried, best_v, "forced tree-search (test) — no refinement passed"
-        )
-
-    # rung == "fusion" (validated by the caller; fusion_generate is guaranteed non-None)
-    fk = min(fusion_k, budget.remaining)
-    if fk <= 0:
-        return SolveResult(None, None, "none", budget.spent, 0, note="budget exhausted before any generation")
-    cands = await asyncio.gather(*(fusion_generate(task, feedback=None) for _ in range(fk)))
-    budget.spend(fk)
-    verdicts = await asyncio.gather(*(verify(c) for c in cands))
-    best, best_v = cands[0], verdicts[0]
-    for c, v in zip(cands, verdicts):
-        if v.passed:
-            return SolveResult(c, True, "fusion", budget.spent, fk, v, f"forced fusion (test, k={fk}) — passed")
-        if v.failed < best_v.failed:
-            best, best_v = c, v
-    return SolveResult(
-        best, False, "fusion", budget.spent, fk, best_v, f"forced fusion (test, k={fk}) — no candidate passed"
+    if fusion_generate is not None and budget.can_afford():
+        winner = await batch(fusion_generate, fusion_k)
+        if winner:
+            return result(winner, "fusion", f"solved by fusion (k={fusion_k})")
+    return result(
+        best, "best-partial",
+        f"no candidate passed within budget; best partial has {best.verdict.failed}/{best.verdict.total} failing",
     )
