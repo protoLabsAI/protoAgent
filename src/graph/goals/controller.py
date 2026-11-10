@@ -435,12 +435,13 @@ class GoalController:
         tag). Recorded on the goal state; the post-turn ``evaluate`` honours it AFTER the
         verifier, so a goal the world already satisfies still finishes ``achieved``.
         Returns (ok, msg)."""
-        state = self.active_goal(session_id)
-        if state is None:
-            return (False, "no active goal for this session.")
-        state.abandon_reason = (reason or "").strip() or "agent flagged the goal unachievable"
-        self._store.set(state)
-        return (True, "goal will stop after this turn (flagged unachievable).")
+        with self._store.transaction():
+            state = self.active_goal(session_id)
+            if state is None:
+                return (False, "no active goal for this session.")
+            state.abandon_reason = (reason or "").strip() or "agent flagged the goal unachievable"
+            self._store.set(state)
+            return (True, "goal will stop after this turn (flagged unachievable).")
 
     def _parse_set(self, rest: str):
         """Return (verifier_spec, condition, max_iterations|None, no_progress_limit|None,
@@ -489,14 +490,27 @@ class GoalController:
         # a same-turn abandon_goal give-up must not mask that.
         result = await run_verifier(state.verifier, self._verify_ctx(state, last_text, tool_summary))
 
+        # Verification can await external work. Reload under the same transaction
+        # used by PATCH so neither the edit nor the drive-loop progress is lost.
+        with self._store.transaction():
+            current = self.active_goal(session_id)
+            if current is None or current.started_at != state.started_at:
+                return None
+            decision = self._evaluate_result(current, result)
+        if decision.action == "done":
+            await self._finish_reactions(decision.state)
+        return decision
+
+    def _evaluate_result(self, state: GoalState, result) -> Decision:
+        """Apply a verifier result inside a synchronous store transaction."""
         if result.met:
-            return await self._finish(state, "achieved", result.reason or "verifier passed", evidence=result.evidence)
+            return self._record_finish(state, "achieved", result.reason or "verifier passed", evidence=result.evidence)
 
         # 2. Verifier not met — honour an explicit give-up. The agent records it
         # DURING its turn via the `abandon_goal` tool (persisted to the goal state); we
         # read it here, AFTER the verifier, so ground truth still wins over give-up.
         if state.abandon_reason:
-            return await self._finish(state, "unachievable", state.abandon_reason)
+            return self._record_finish(state, "unachievable", state.abandon_reason)
 
         # 3. Not met — track progress, decide continue vs stop. No-progress detection needs a
         # per-iteration fingerprint that is stable ⟺ the agent made no real progress:
@@ -518,11 +532,11 @@ class GoalController:
 
         limit = state.no_progress_limit or getattr(self._config, "goal_no_progress_limit", 3)
         if state.iteration >= state.max_iterations:
-            return await self._finish(
+            return self._record_finish(
                 state, "exhausted", f"ran out of iteration budget ({state.max_iterations})", evidence=result.evidence
             )
         if state.no_progress_streak >= limit:
-            return await self._finish(
+            return self._record_finish(
                 state,
                 "unachievable",
                 f"no progress after {state.no_progress_streak} attempts: {result.reason}",
@@ -624,21 +638,23 @@ class GoalController:
     def remember_model(self, session_id: str, model: str) -> None:
         """An explicit pick on a turn that drives this goal becomes the goal's model
         (#3957), so the next re-drive without a pick (a watch / schedule fire) uses it."""
-        state = self.active_goal(session_id)
-        if state is None or state.model == (model or ""):
-            return
-        state.model = model or ""
-        self._store.set(state)
+        with self._store.transaction():
+            state = self.active_goal(session_id)
+            if state is None or state.model == (model or ""):
+                return
+            state.model = model or ""
+            self._store.set(state)
 
     def note_round_cap(self, session_id: str, reason: str) -> None:
         """Record on the goal's timeline that the drive paused because a goal-driven turn hit
         its per-turn round cap (#3957). The goal stays ACTIVE (a pause, like the ADR 0079
         handoff) — the next operator message or trigger drives it again."""
-        state = self.active_goal(session_id)
-        if state is None:
-            return
-        self._record_history(state, "round_cap", reason, "")
-        self._store.set(state)
+        with self._store.transaction():
+            state = self.active_goal(session_id)
+            if state is None:
+                return
+            self._record_history(state, "round_cap", reason, "")
+            self._store.set(state)
 
     def rearm(self, session_id: str, *, add_iterations: int = 0) -> tuple[bool, str, bool, GoalState | None]:
         """Re-arm a goal so its drive loop can (re)start. On an ACTIVE goal this only raises
@@ -647,26 +663,27 @@ class GoalController:
         clears finished_at / abandon_reason, resets the iteration + no-progress counters for a
         fresh attempt (the timeline ``history`` is preserved), and adds any extra budget. The
         caller kicks a turn when ``resumed`` is True. Returns (ok, message, resumed, state)."""
-        state = self._store.get(session_id)
-        if state is None:
-            return (False, "no goal for this session.", False, None)
-        add = max(0, int(add_iterations or 0))
-        resumed = not state.active
-        if resumed:
-            state.status = "active"
-            state.finished_at = None
-            state.abandon_reason = ""
-            state.iteration = 0
-            state.no_progress_streak = 0
-            state.last_progress_signature = ""
-        if add:
-            state.max_iterations += add
-        elif not resumed:
-            # Active goal, no budget added → nothing to do (avoid a pointless write/kick).
-            return (False, "goal is already active — add iterations to extend it.", False, state)
-        self._store.set(state)
-        verb = "restarted" if resumed else "budget extended"
-        return (True, f"Goal {verb}. {state.status_line()}", resumed, state)
+        with self._store.transaction():
+            state = self._store.get(session_id)
+            if state is None:
+                return (False, "no goal for this session.", False, None)
+            add = max(0, int(add_iterations or 0))
+            resumed = not state.active
+            if resumed:
+                state.status = "active"
+                state.finished_at = None
+                state.abandon_reason = ""
+                state.iteration = 0
+                state.no_progress_streak = 0
+                state.last_progress_signature = ""
+            if add:
+                state.max_iterations += add
+            elif not resumed:
+                # Active goal, no budget added → nothing to do (avoid a pointless write/kick).
+                return (False, "goal is already active — add iterations to extend it.", False, state)
+            self._store.set(state)
+            verb = "restarted" if resumed else "budget extended"
+            return (True, f"Goal {verb}. {state.status_line()}", resumed, state)
 
     def _progress_signature(self, state: GoalState, result) -> str:
         """A per-iteration fingerprint that stays constant ⟺ the agent made no progress
@@ -681,8 +698,16 @@ class GoalController:
         return f"rv:{result.reason}\x00{result.evidence}"
 
     async def _finish(self, state: GoalState, status: str, reason: str, *, evidence: str = "") -> Decision:
+        with self._store.transaction():
+            current = self._store.get(state.session_id)
+            if current is not None:
+                state = current
+            decision = self._record_finish(state, status, reason, evidence=evidence)
+        await self._finish_reactions(state)
+        return decision
+
+    def _record_finish(self, state: GoalState, status: str, reason: str, *, evidence: str = "") -> Decision:
         from time import time
-        from graph.goals.hooks import fire_goal_hooks
 
         state.status = status
         state.last_reason = reason
@@ -691,6 +716,13 @@ class GoalController:
         state.finished_at = time()
         self._record_history(state, status, reason, evidence or state.last_evidence)
         self._store.set(state)
+        glyph = {"achieved": "✓", "exhausted": "⏳", "unachievable": "✗", "expired": "⌛"}.get(status, "•")
+        return Decision(action="done", state=state, note=f"{glyph} goal {status}: {reason}")
+
+    async def _finish_reactions(self, state: GoalState) -> None:
+        from graph.goals.hooks import fire_goal_hooks
+
+        status, reason, evidence = state.status, state.last_reason, state.last_evidence
         # The reactions below may enqueue turns (``run_in_session`` from a hook or a bus
         # subscriber): they run under the fence of the turn that SET the goal (graph/fence_scope).
         goal_fence = getattr(state, "fence", None)
@@ -725,8 +757,6 @@ class GoalController:
                     )
             except Exception:  # noqa: BLE001
                 log.debug("[goals] goal.* bus emit failed", exc_info=True)
-        glyph = {"achieved": "✓", "exhausted": "⏳", "unachievable": "✗", "expired": "⌛"}.get(status, "•")
-        return Decision(action="done", state=state, note=f"{glyph} goal {status}: {reason}")
 
     def _continuation(self, state: GoalState, result) -> str:
         # Re-state the completion contract every drive turn (ADR 0073) — mirrors

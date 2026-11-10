@@ -1534,8 +1534,8 @@ function WorkspaceApp({ runtime }: { runtime: RuntimeStatus | null }) {
         `surfaceModal` is set. It frames the SAME view the rail would, resolved through the
         same renderSurface / plugin-view path, so Expand ⇄ Dock to rail stays in sync with
         the right dock. Desktop-only: the phone shows no Expand control (its surfaces live
-        in the mobile shell), so this never opens there. The Dialog keeps its default width
-        until design-system gap B3 lands the wide size. */}
+        in the mobile shell), so this never opens there. The Dialog uses `size="wide"`
+        (DS gap B3, ds-zb8) — a near-full-screen modal frame for the Work view. */}
     {!isMobile && surfaceModal ? (
       <SurfaceHost
         frame="modal"

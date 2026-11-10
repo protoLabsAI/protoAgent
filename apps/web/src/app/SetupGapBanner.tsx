@@ -8,6 +8,7 @@ import { api } from "../lib/api";
 import { nodeRuntimeQuery, queryKeys } from "../lib/queries";
 import { errMsg } from "../lib/format";
 import { depsInstallToast, useDepsInstaller } from "../plugins/depsInstall";
+import { useTrustAck } from "../plugins/TrustAckDialog";
 import { useUI } from "../state/uiStore";
 import { readKey, removeKey, writeKey } from "../lib/storage";
 
@@ -228,6 +229,7 @@ function ctaLabel(action: SetupGapAction, gap: SetupGap): string {
   if (action.kind === "plugin_config") return `Configure ${gap.label}`;
   if (action.kind === "plugin_setup") return "Run setup";
   if (action.kind === "install_deps") return "Install dependencies";
+  if (action.kind === "install_python") return "Install Python runtime";
   if (action.kind === "install_node") return "Install Node runtime";
   return "Open settings";
 }
@@ -343,6 +345,44 @@ function InstallDepsButton({ gap, action }: { gap: SetupGap; action: SetupGapAct
   );
 }
 
+/** Provision only this gap's plugin through the host's operator-only route. */
+function InstallPythonButton({ gap, action }: { gap: SetupGap; action: SetupGapAction }) {
+  const toast = useToast();
+  const queryClient = useQueryClient();
+  const [busy, setBusy] = useState(false);
+  const { requestAck, ackDialog } = useTrustAck({
+    onAckError: (message) => toast({ tone: "error", title: "Python runtime didn't install", message }),
+  });
+
+  const install = async () => {
+    setBusy(true);
+    try {
+      const res = await api.installPluginPython(gap.plugin);
+      if (res.needs_ack) {
+        requestAck({ url: res.source ?? gap.plugin, source: res.source ?? gap.plugin, retry: () => void install() });
+        return;
+      }
+      if (res.ok !== true) throw new Error("Python runtime provisioning failed");
+      toast({ tone: "success", title: "Python runtime installed", message: gap.label });
+    } catch (err) {
+      toast({ tone: "error", title: "Python runtime didn't install", message: errMsg(err) });
+    } finally {
+      setBusy(false);
+      void queryClient.invalidateQueries({ queryKey: queryKeys.runtime });
+    }
+  };
+
+  return (
+    <>
+      <Button variant="primary" size="sm" type="button" loading={busy} disabled={busy}
+        onClick={() => void install()} data-testid="setup-gap-install-python">
+        {busy ? "Installing…" : ctaLabel(action, gap)}
+      </Button>
+      {ackDialog}
+    </>
+  );
+}
+
 /**
  * An `install_node` CTA: provisions the managed Node runtime (ADR 0085) right from a plugin's
  * "needs Node.js" banner, through the same host-targeted POST /api/runtime/node/install the
@@ -449,6 +489,9 @@ export function SetupGapBanner({ gap, onDismiss }: { gap: SetupGap; onDismiss: (
       }
       if (action.kind === "install_deps") {
         return <InstallDepsButton key={`${action.kind}:${index}`} gap={gap} action={action} />;
+      }
+      if (action.kind === "install_python") {
+        return <InstallPythonButton key={`${action.kind}:${index}`} gap={gap} action={action} />;
       }
       if (action.kind === "install_node") {
         return <InstallNodeButton key={`${action.kind}:${index}`} gap={gap} action={action} />;

@@ -91,9 +91,14 @@ class SchedulerBackend(Protocol):
         origin_session: str | None = None,
         ttl: str | None = None,
         max_fires: int | None = None,
+        restore_state: Job | None = None,
     ) -> Job:
         """Persist a new job. Returns the stored ``Job`` (with
         backend-assigned id and next_fire if the caller didn't set them).
+
+        ``restore_state`` is a trusted undo snapshot: persist its fence, enabled
+        state, timestamps and run history atomically with the new row. Without
+        it, new jobs use fresh state and the calling turn's fence.
 
         ``timezone`` is an IANA name the cron expression is evaluated in
         (None = UTC). Raises ``ValueError`` for malformed schedule/timezone.

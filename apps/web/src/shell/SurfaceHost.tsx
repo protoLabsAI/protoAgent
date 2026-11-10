@@ -121,6 +121,7 @@ export function SurfaceHost({
         {status}
         <Dialog
           open
+          size="wide"
           height="fill"
           padding="none"
           onClose={() => {

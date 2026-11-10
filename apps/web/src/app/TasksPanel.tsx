@@ -17,7 +17,7 @@ import {
   Plus,
   Trash2,
 } from "lucide-react";
-import { Suspense, useEffect, useState } from "react";
+import { Suspense, useEffect, useState, type ReactNode } from "react";
 
 import { api } from "../lib/api";
 import { errMsg } from "../lib/format";
@@ -60,22 +60,33 @@ type ConfirmRequest = {
 // an always-visible inline form — keeps the board the focus, with the full set of
 // fields (title, type, priority, description) only when you're adding. Exported so the
 // Work overview's Tasks-card quick-add reuses it (that host owns its own open-state +
-// create mutation) — one form, two hosts.
+// create mutation) — one form, two hosts. The Work view's Tasks section reuses it a
+// third way, for in-place EDIT: pass `initial` to seed the draft, plus `title` /
+// `submitLabel` for the edit wording, and wire `onCreate` to the update (PATCH) call.
 export function TaskCreateDialog({
   open,
   onClose,
   onCreate,
   busy,
+  initial,
+  title,
+  submitLabel,
 }: {
   open: boolean;
   onClose: () => void;
   onCreate: (draft: IssueDraft) => void;
   busy: boolean;
+  /** Seed the form (edit mode); omitted for the create flow, which starts blank. */
+  initial?: IssueDraft;
+  title?: ReactNode;
+  submitLabel?: ReactNode;
 }) {
-  const [draft, setDraft] = useState<IssueDraft>(emptyIssueDraft);
-  // Reset to a blank draft each time the dialog opens.
+  const [draft, setDraft] = useState<IssueDraft>(initial ?? emptyIssueDraft);
+  // Re-seed each time the dialog opens — from `initial` in edit mode, else a blank draft.
+  // Keyed on `open` only, so typing into a seeded form isn't wiped by a parent re-render.
   useEffect(() => {
-    if (open) setDraft(emptyIssueDraft);
+    if (open) setDraft(initial ?? emptyIssueDraft);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
 
   const canSubmit = !!draft.title.trim() && !busy;
@@ -85,7 +96,7 @@ export function TaskCreateDialog({
       open={open}
       padding="roomy"
       onClose={onClose}
-      title={<><Boxes size={16} /> New task</>}
+      title={title ?? <><Boxes size={16} /> New task</>}
       width="min(520px, 94vw)"
       footer={
         <>
@@ -98,7 +109,7 @@ export function TaskCreateDialog({
             data-testid="task-create-submit"
             onClick={() => onCreate(draft)}
           >
-            {busy ? null : <Plus size={16} />} Create task
+            {busy ? null : <Plus size={16} />} {submitLabel ?? "Create task"}
           </Button>
         </>
       }

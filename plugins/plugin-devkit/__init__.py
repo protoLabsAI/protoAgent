@@ -19,6 +19,8 @@ agent-facing half + the live-enable that needs the running graph.
 from __future__ import annotations
 
 import asyncio
+import json
+from datetime import datetime, timezone
 import logging
 import os
 import re as _re
@@ -475,7 +477,7 @@ def _build_file_tools(config: dict | None) -> list:
         target.write_text(content)
         return (
             f"✓ wrote {path} ({len(content)} chars) — call reload_plugins to make it live, "
-            f"test_plugin({plugin_id!r}) to run its suite" + skill_note
+            f"the plugin is now untested until test_plugin({plugin_id!r}) passes" + skill_note
         )
 
     return [plugin_list_files, plugin_read_file, plugin_write_file]
@@ -547,12 +549,66 @@ def _lint_skills(pdir: Path) -> str | None:
     return "\n".join(lines) if lines else None
 
 
+def _pass_stamp_path(pdir: Path) -> Path:
+    from hashlib import sha256
+
+    from graph.sdk import plugin_store
+
+    # Include the directory identity: two roots can contain the same plugin id.
+    key = sha256(str(pdir.resolve()).encode()).hexdigest()
+    return plugin_store("test-passes", plugin_id="plugin-devkit") / f"{key}.json"
+
+
+def _untested_plugins(target_dir: str | None) -> list[str]:
+    from graph.plugins.loader import _source_fingerprint
+
+    warnings = []
+    seen = set()
+    for root in _devkit_roots(target_dir):
+        for manifest in sorted(root.glob("*/protoagent.plugin.yaml")):
+            pdir = manifest.parent.resolve()
+            if pdir in seen:
+                continue
+            seen.add(pdir)
+            try:
+                stamp = json.loads(_pass_stamp_path(pdir).read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                stamp = None
+            fingerprint = _source_fingerprint(pdir)
+            if not isinstance(stamp, dict) or not fingerprint or stamp.get("fingerprint") != fingerprint:
+                warnings.append(
+                    f"{pdir.name} changed since its tests last passed — run test_plugin({pdir.name!r})"
+                )
+    return warnings
+
+
 def _verify_plugin(pdir: Path) -> str:
     """The verify step: skill lint FIRST (a broken skill fails fast and loudly),
     then the pytest suite. One string, ✗-prefixed when anything failed."""
+    from graph.plugins.check import check_plugin
+    from graph.plugins.loader import _source_fingerprint
+
+    fingerprint = _source_fingerprint(pdir)
     lint = _lint_skills(pdir)
     out = _run_pytest(pdir)
-    return f"{lint}\n{out}" if lint else out
+    if out.startswith("✓ tests passed") and fingerprint:
+        # Never certify an edit made while the sandboxed suite was running.
+        if fingerprint == _source_fingerprint(pdir):
+            try:
+                _pass_stamp_path(pdir).write_text(json.dumps({
+                    "fingerprint": fingerprint,
+                    "passed_at": datetime.now(timezone.utc).isoformat(),
+                }), encoding="utf-8")
+            except OSError as exc:
+                out += f"\n⚠ could not record test pass: {exc}"
+    findings = check_plugin(pdir)
+    report = f"{lint}\n{out}" if lint else out
+    for finding in findings:
+        report += (
+            f"\n{finding.severity}: {finding.code} {finding.file}:{finding.line}: "
+            f"{finding.message} Fix: {finding.fix}"
+        )
+    return report
 
 
 def _run_pytest(pdir: Path) -> str:
@@ -1284,9 +1340,12 @@ async def reload_plugins() -> str:
             # failure buried real breakage in ~a dozen lines of "unknown error" noise.
             if m.get("enabled") and not m.get("loaded")
         ]
+        target_dir = (_REGISTRY.config or {}).get("target_dir") if _REGISTRY is not None else None
+        untested = _untested_plugins(target_dir)
+        suffix = "\n" + "\n".join(untested) if untested else ""
         if failed:
             detail = "\n".join(f"{pid}: {err}" for pid, err in failed)
-            return f"⚠ reloaded, but these plugins FAILED to load — fix the code and reload again:\n{detail}"
+            return f"⚠ reloaded, but these plugins FAILED to load — fix the code and reload again:\n{detail}" + suffix
 
         # The silent-no-op catch (live QA 2026-08-07): a plugin that LOADED but
         # registered nothing. Scoped to plugins under the devkit's roots — a bundled
@@ -1294,7 +1353,7 @@ async def reload_plugins() -> str:
         # factories) must not trip it, and those never live in the scaffold dirs.
         def _under_devkit_roots(pid: str) -> bool:
             try:
-                _plugin_dir(pid, None)
+                _plugin_dir(pid, target_dir)
                 return True
             except ValueError:
                 return False
@@ -1307,8 +1366,8 @@ async def reload_plugins() -> str:
             if w
         ]
         if quiet:
-            return "✓ reloaded, but:\n" + "\n".join(quiet)
-        return "✓ reloaded — your plugin edits are live on the next turn."
+            return "✓ reloaded, but:\n" + "\n".join(quiet) + suffix
+        return "✓ reloaded — your plugin edits are live on the next turn." + suffix
     except Exception as e:  # noqa: BLE001
         return f"✗ reload failed: {e}"
 

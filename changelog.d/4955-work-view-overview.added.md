@@ -1,0 +1,1 @@
+- **Work view shell and Overview (#4955).** Add nine-section navigation, chat filtering, five work lanes, independent source feedback, and rail/modal detail navigation with saved position. The shell is available for the later WorkPanel replacement without changing the current app mount.
