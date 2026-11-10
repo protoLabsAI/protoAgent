@@ -7,9 +7,10 @@ import { HitlForm } from "./HitlForm";
 import { decisionsApi, type DecisionRow } from "../lib/api/decisions";
 import { ApiError } from "../lib/api/http";
 import { ChatMessageView } from "./ChatMessageView";
-import { DecisionTranscript, hasDecisionTranscript } from "./HitlDisplay";
+import { DecisionTranscript, DecisionTranscriptContext, useLiveDecisionTranscript, hasDecisionTranscript } from "./HitlDisplay";
 import { messagesFromDurableTurn } from "./sessionHydration";
 import type { ChatMessage } from "../lib/types";
+import { useHitl } from "./useHitl";
 import slotSource from "./ChatSessionSlot.tsx?raw";
 
 
@@ -237,6 +238,80 @@ describe("durable decision transcript", () => {
     expect(button("Ship it")).toBeUndefined();
     expect(container.textContent).toContain(state === "answered" ? 'You chose "Ship it"' : state === "expired" ? "No answer by" : "doesn't need this any more");
     expect(container.textContent).not.toContain("Waiting for your input");
+  });
+
+  const runTurn = vi.fn(async () => {});
+  let liveHitl: ReturnType<typeof useHitl>;
+  let bridge: ReturnType<typeof useLiveDecisionTranscript>;
+  function LiveSlot() {
+    liveHitl = useHitl({ sessionId: "chat-test", runTurn, noteToThread: vi.fn(), lastAssistantId: () => undefined });
+    bridge = useLiveDecisionTranscript(liveHitl.hitlRef, liveHitl.updateHitl, liveHitl.resumeHitl);
+    return h(DecisionTranscriptContext.Provider, { value: bridge },
+      h("div", { className: "chat-session-slot" },
+        h(DecisionTranscript, { id: current.id }),
+        h("div", { className: "composer-wrap" }, h("textarea")),
+      ));
+  }
+  async function mountLive() {
+    runTurn.mockClear();
+    await act(async () => { root.render(h(LiveSlot)); await flush(); });
+    act(() => liveHitl.updateHitl({ kind: "decision", decision_id: current.id }));
+  }
+
+  it("arms a free-text interrupt answer from Reply in chat instead, once", async () => {
+    await mountLive();
+    expect(bridge.submitReply("ordinary steer")).toBe(false);
+    click(button("Reply in chat instead"));
+    expect(document.activeElement).toBe(container.querySelector("textarea"));
+    act(() => { expect(bridge.submitReply("  Hold for review  ")).toBe(true); });
+    expect(runTurn).toHaveBeenCalledExactlyOnceWith("Hold for review", { hitlResume: true });
+    expect(liveHitl.hitlRef.current).toBeNull();
+    expect(bridge.submitReply("next turn")).toBe(false);
+    expect(slotSource).toContain("decisionTranscript.submitReply(draft)");
+  });
+
+  it.each(["answered", "expired", "withdrawn", "cancelled"] as const)(
+    "clears the matching live interrupt on %s without a second resume",
+    async (state) => {
+      await mountLive();
+      click(button("Reply in chat instead"));
+      current = { ...current, state };
+      await act(async () => { decisionBus.forEach((fn) => fn({ id: current.id })); await flush(); });
+      expect(liveHitl.hitlRef.current).toBeNull();
+      expect(bridge.submitReply("next turn")).toBe(false);
+      expect(runTurn).not.toHaveBeenCalled();
+    },
+  );
+
+  it("clears the live interrupt after an option answer, but retains it on delivery failure", async () => {
+    const answer = vi.spyOn(decisionsApi, "answerDecision").mockImplementation(async () => ({
+      answered_elsewhere: false, decision: current, resumed: false,
+    }));
+    await mountLive();
+    await act(async () => { button("Ship it").click(); await flush(); });
+    expect(liveHitl.hitlRef.current?.decision_id).toBe(current.id);
+    answer.mockImplementation(async () => {
+      current = { ...current, state: "answered" };
+      return { answered_elsewhere: false, decision: current, resumed: true };
+    });
+    await act(async () => { button("Ship it").click(); await flush(); });
+    expect(liveHitl.hitlRef.current).toBeNull();
+    expect(runTurn).not.toHaveBeenCalled();
+  });
+
+  it("never arms or clears a different or generic live interrupt from a historical card", async () => {
+    await mountLive();
+    const other: HitlPayload = { kind: "decision", decision_id: "newer" };
+    act(() => liveHitl.updateHitl(other));
+    click(button("Reply in chat instead"));
+    expect(bridge.submitReply("steer")).toBe(false);
+    current = { ...current, state: "withdrawn" };
+    await act(async () => { decisionBus.forEach((fn) => fn({ id: current.id })); await flush(); });
+    expect(liveHitl.hitlRef.current).toBe(other);
+    act(() => liveHitl.updateHitl(approval));
+    act(() => bridge.settled(current.id));
+    expect(liveHitl.hitlRef.current).toBe(approval);
+    expect(runTurn).not.toHaveBeenCalled();
   });
 
   it("submits once through shared arbitration and uses a 409 terminal record", async () => {

@@ -1,5 +1,5 @@
 import { Table, TBody, Td, Th, THead, Tr } from "@protolabsai/ui/data";
-import { useRef } from "react";
+import { createContext, useContext, useEffect, useRef, type RefObject } from "react";
 import { DecisionCard } from "../decisions/DecisionCard";
 import { useDecision, useDecisions } from "../decisions/useDecisions";
 import type { ChatMessage, HitlPayload, HitlDisplayTable } from "../lib/types";
@@ -63,10 +63,48 @@ export function hasDecisionTranscript(payload: HitlPayload | null, messages: Cha
     && messages.some((message) => message.role === "assistant" && message.decisionId === payload.decision_id);
 }
 
+/** Slot-local bridge: historical cards cannot arm a reply to a different live interrupt. */
+export const DecisionTranscriptContext = createContext<{
+  reply: (id: string) => void;
+  settled: (id: string) => void;
+} | null>(null);
+
+export function useLiveDecisionTranscript(
+  hitlRef: RefObject<HitlPayload | null>,
+  updateHitl: (payload: HitlPayload | null) => void,
+  resumeHitl: (response: string) => Promise<void>,
+) {
+  const replyId = useRef<string | null>(null);
+  const matches = (id: string) => hitlRef.current?.kind === "decision" && hitlRef.current.decision_id === id;
+  return {
+    reply(id: string) {
+      if (matches(id)) replyId.current = id;
+    },
+    settled(id: string) {
+      if (replyId.current === id) replyId.current = null;
+      // Clearing local UI is not another resume: server arbitration already owns that.
+      if (matches(id)) updateHitl(null);
+    },
+    submitReply(text: string): boolean {
+      const id = replyId.current;
+      if (!id || !matches(id)) return false;
+      if (text.trim()) {
+        replyId.current = null;
+        void resumeHitl(text.trim());
+      }
+      return true;
+    },
+  };
+}
+
 /** Durable identity is the only input: never synthesize a record from a historical prompt. */
 export function DecisionTranscript({ id }: { id: string }) {
   const { record, state } = useDecision(id);
   const { answer } = useDecisions();
+  const live = useContext(DecisionTranscriptContext);
+  useEffect(() => {
+    if (record && record.state !== "pending") live?.settled(id);
+  }, [id, record, live]);
   const host = useRef<HTMLDivElement>(null);
   const focusComposer = () => host.current?.closest(".chat-session-slot")
     ?.querySelector<HTMLTextAreaElement>(".composer-wrap textarea")?.focus();
@@ -79,7 +117,10 @@ export function DecisionTranscript({ id }: { id: string }) {
           presentation="transcript"
           onAnswer={(optionId) => answer(id, optionId)}
           onOpenChat={focusComposer}
-          onReplyInChat={focusComposer}
+          onReplyInChat={() => {
+            live?.reply(id);
+            focusComposer();
+          }}
         />
       ) : (
         <p role="status">{state === "missing" ? "This decision is no longer available." : "Loading decision…"}</p>
