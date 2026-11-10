@@ -988,6 +988,7 @@ function WorkspaceApp({ runtime }: { runtime: RuntimeStatus | null }) {
   // surface pushed over it. One level deep by design — a phone doesn't need a rail of
   // co-equal surfaces, it needs chat plus somewhere to go and back.
   const mobileAtRoot = mobileActive === "chat";
+  const onMobileBack = useCallback(() => setMobileActive("chat"), [setMobileActive]);
   // Docked background plugin views live in the ROOT layer alongside chat: they're iframes
   // that must never unmount, and one of them can be the active surface (shown by display
   // toggle, no pushed layer) — which is why MobileShell inerts on `pushed`, not on back.
@@ -1209,7 +1210,7 @@ function WorkspaceApp({ runtime }: { runtime: RuntimeStatus | null }) {
           pushed={mobilePushed}
           title={mobileTitle}
           showBack={!mobileAtRoot}
-          onBack={() => setMobileActive("chat")}
+          onBack={onMobileBack}
           onOpenDrawer={() => setDrawerOpen(true)}
           onOpenWork={() => useUI.getState().openSurfaceModal("work")}
           sheetOpen={!!surfaceModal || decisions.panelOpen || drawerOpen || globalSettingsOpen}

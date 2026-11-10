@@ -35,6 +35,8 @@ export function useCollections() {
     const onPop = (event: PopStateEvent) => {
       // MobileShell dismisses the whole pushed surface on popstate. These entries
       // belong to this browser instead; consume them before that shell listener.
+      // Check the destination entry, for both Back and Forward. open() marks the
+      // list as well as the detail; MobileShell must preserve these marks on reload.
       if (event.state?.knowledgeCollections) event.stopImmediatePropagation();
       const name = new URLSearchParams(window.location.search).get("collection") ?? "";
       setCollection(name); setAll(!name); setQuery(""); setTerm("");
