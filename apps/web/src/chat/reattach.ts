@@ -40,7 +40,7 @@ import type { ChatMessage, HitlPayload } from "../lib/types";
 import { chatStore } from "./chat-store";
 import { applyDelegateProgress } from "./delegateProgress";
 import { isEmptyPlaceholder } from "./roomBubble";
-import { isLiveServerTurn, serverTurnLabel } from "./server-turn-store";
+import { isLiveServerTurn, serverTurnEnded, serverTurnLabel } from "./server-turn-store";
 import { messagesFromDurableTurns } from "./sessionHydration";
 import { beginReattach, reconcileSessionStatus } from "./sessionLiveness";
 import {
@@ -114,8 +114,42 @@ export function shouldReattach(
   sessionId: string,
 ): last is ChatMessage & { id: string; taskId: string } {
   if (!last || last.status !== "streaming" || !last.taskId || !last.id) return false;
-  if (isLiveServerTurn(last, last.taskId, sessionId) && serverTurnLabel(sessionId) !== null) return false;
+  // Watched live only while ITS turn runs: another server turn in flight on this session
+  // keeps the label up, and must not vouch for a preview whose own turn was reported over.
+  if (
+    isLiveServerTurn(last, last.taskId, sessionId) &&
+    serverTurnLabel(sessionId) !== null &&
+    !serverTurnEnded(sessionId, last.taskId)
+  ) {
+    return false;
+  }
   return true;
+}
+
+/** The bubble the slot's reattach should resubscribe through, or undefined.
+ *
+ *  Normally the lead turn's latest bubble (leadAssistantMessage). But two server turns can
+ *  overlap on one session, and the later one's settled answer then sits BELOW the earlier
+ *  one's preview. If nothing settled that preview (a watch reaction has no `chat.resumed`; a
+ *  parked turn has none either), it is no longer the latest bubble, so nothing reattached to
+ *  it and it spun until a reload. A preview whose own turn this console saw end is picked up
+ *  from wherever it sits. */
+export function reattachTarget(
+  messages: ChatMessage[] | undefined,
+  sessionId: string,
+): (ChatMessage & { id: string; taskId: string }) | undefined {
+  const last = leadAssistantMessage(messages);
+  if (shouldReattach(last, sessionId)) return last;
+  const stranded = (messages ?? []).find(
+    (message) =>
+      message.role === "assistant" &&
+      message !== last &&
+      !!message.taskId &&
+      isLiveServerTurn(message, message.taskId, sessionId) &&
+      serverTurnEnded(sessionId, message.taskId) &&
+      shouldReattach(message, sessionId),
+  );
+  return stranded as (ChatMessage & { id: string; taskId: string }) | undefined;
 }
 
 /** The lead turn's latest assistant bubble — skipping rows a PARTICIPANT spoke (`author`)
@@ -184,8 +218,8 @@ export function settleAnsweredPause(messages: ChatMessage[], messageId: string |
  * no `chat.resumed` settles a park — and before, the key never moved, so nothing
  * reattached and the approval card only appeared after a reload. */
 export function reattachKeyForMessages(messages: ChatMessage[] | undefined, sessionId = ""): string {
-  const last = leadAssistantMessage(messages);
-  return shouldReattach(last, sessionId) ? `${last.id}:${last.taskId}` : "";
+  const target = reattachTarget(messages, sessionId);
+  return target ? `${target.id}:${target.taskId}` : "";
 }
 
 function updateMessage(sessionId: string, assistantId: string, fn: (m: any) => any) {
@@ -621,10 +655,10 @@ export function reattachTurn(sessionId: string, assistantId: string, taskId: str
 export function reattachOrReconcile(sessionId: string, hooks: ReattachHooks = {}): (() => void) | undefined {
   const snap = chatStore.getSnapshot().sessions.find((s) => s.id === sessionId);
   // The same bubble `reattachKey` names: a participant's row after the preview is not it.
-  const last = leadAssistantMessage(snap?.messages);
+  const last = reattachTarget(snap?.messages, sessionId);
   // Not a server-fired turn this console is watching live: the bus already feeds that
   // preview, and a second producer wrote every chunk twice (see shouldReattach).
-  if (!shouldReattach(last, sessionId)) {
+  if (!last) {
     reconcileSessionStatus(sessionId);
     return undefined;
   }

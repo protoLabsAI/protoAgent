@@ -21,7 +21,7 @@ import { makeA2ADispatcher } from "../lib/api/a2aStream";
 import { foldPlan } from "./parts";
 import { chatStore } from "./chat-store";
 import { reattachKeyForMessages, reattachOrReconcile, reattachTurn, settleAnsweredPause } from "./reattach";
-import { liveMessageId } from "./server-turn-store";
+import { liveMessageId, noteTurnFinished, noteTurnStarted, resetServerTurns } from "./server-turn-store";
 import { messagesFromDurableTurn } from "./sessionHydration";
 import { beginLocalTurn, reconcileSessionStatus } from "./sessionLiveness";
 import { finalizeStoppedMessages } from "./stopTurn";
@@ -304,6 +304,74 @@ describe("reattach key skips participant rows", () => {
     rerender();
     expect(slotCancelled).toBe(true);
     expect(sessionStatus(session.id)).toBe("idle");
+  });
+});
+
+describe("two server turns overlapping on one session", () => {
+  afterEach(() => resetServerTurns());
+
+  // The sequence a watch reaction produces when it closes a task: the self-improvement review
+  // is queued into the same chat and its `turn.started` lands while the reaction still runs.
+  // The reaction (origin `watch`) has no `chat.resumed`; the reattach is what settles it.
+  it("the first turn's preview is settled when it ends, not left spinning under the second's answer", async () => {
+    const session = chatStore.createSession();
+    const WATCH = "task-watch";
+    const REVIEW = "task-review";
+    const watchId = liveMessageId(WATCH, session.id);
+    const messagesOf = () => chatStore.getSnapshot().sessions.find((s) => s.id === session.id)!.messages;
+    const fold = (taskId: string, text: string) =>
+      chatStore.updateMessages(
+        session.id,
+        applyProgressFrame(messagesOf(), { session: session.id, taskId, kind: "text", text }),
+      );
+    // The watch turn already ended on the server by the time anything resubscribes.
+    resumeTask.mockRejectedValue(new Error("Task is in terminal state"));
+    getTask.mockResolvedValue({ state: "completed", text: "Adoption merged." } as never);
+    replayTask.mockResolvedValue(undefined as never);
+
+    // The slot's reattach effect, keyed on reattachKeyForMessages.
+    let key = "";
+    const rerender = () => {
+      const next = reattachKeyForMessages(messagesOf(), session.id);
+      if (next === key) return;
+      key = next;
+      const cancel = reattachOrReconcile(session.id);
+      if (cancel) cancels.push(cancel);
+    };
+
+    noteTurnStarted(session.id, "reacting to a triggered watch…");
+    fold(WATCH, "Checking the adoption PR…");
+    rerender();
+    expect(key).toBe(""); // watched live: the bus feeds it
+
+    noteTurnStarted(session.id, "running a scheduled task…"); // the review, queued behind it
+    noteTurnFinished(session.id, WATCH); // the count drops to 1 — the label stays up
+    rerender();
+    expect(key).toBe(`${watchId}:${WATCH}`);
+    await settle();
+    expect(messagesOf().find((m) => m.id === watchId)?.status).toBe("done");
+
+    // The review streams and settles through `chat.resumed`, below the reaction's bubble.
+    fold(REVIEW, "Reviewing…");
+    const render = resumedTurnRender({ session_id: session.id, task_id: REVIEW, text: "No changes.", state: "completed" })!;
+    chatStore.updateMessages(session.id, settleResumedTurn(messagesOf(), render, "scheduler", "resume-1"));
+    noteTurnFinished(session.id, REVIEW);
+    rerender();
+    expect(messagesOf().filter((m) => m.status === "streaming")).toEqual([]);
+  });
+
+  it("a preview already buried under the later turn's answer is still picked up", () => {
+    const session = chatStore.createSession();
+    const watchId = liveMessageId("task-watch", session.id);
+    chatStore.updateMessages(session.id, [
+      { id: watchId, role: "assistant", content: "Checking…", status: "streaming", taskId: "task-watch" },
+      { id: "review", role: "assistant", content: "No changes.", status: "done", taskId: "task-review" },
+    ]);
+    const messagesOf = () => chatStore.getSnapshot().sessions.find((s) => s.id === session.id)!.messages;
+    expect(reattachKeyForMessages(messagesOf(), session.id)).toBe("");
+    noteTurnStarted(session.id, "reacting to a triggered watch…");
+    noteTurnFinished(session.id, "task-watch");
+    expect(reattachKeyForMessages(messagesOf(), session.id)).toBe(`${watchId}:task-watch`);
   });
 });
 
