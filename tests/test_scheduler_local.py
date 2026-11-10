@@ -9,6 +9,7 @@ all get explicit cases — they're the parts most likely to regress.
 from __future__ import annotations
 
 import asyncio
+import errno
 import sqlite3
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -740,7 +741,7 @@ async def test_fire_defers_quietly_when_agent_not_reachable(tmp_path, monkeypatc
             return False
 
         async def post(self, *_a, **_kw):
-            raise httpx.ConnectError("connection refused")
+            raise httpx.ConnectError("connection refused") from ConnectionRefusedError(errno.ECONNREFUSED, "refused")
 
     monkeypatch.setattr(httpx, "AsyncClient", _Refused)
 
@@ -1532,8 +1533,9 @@ class TestBackoffFromPostClaimNextFire:
         for job in s._claim_due_jobs(now):
             s._inflight_ids.add(job.id)
             cron = is_cron(job.schedule)
-            if cron:
-                s._reschedule_or_delete(job, fired_at=now)
+            message_id = s._claim_occurrence(job, advance_at=now)
+            assert message_id
+            s._claimed_messages[job.id] = message_id
             await s._fire_and_settle(job, cron)
 
     @pytest.mark.asyncio
@@ -1609,3 +1611,425 @@ class TestBackoffFromPostClaimNextFire:
         await self._claim_fire_settle(s, datetime(2026, 1, 1, 0, 0, tzinfo=UTC))
 
         assert self._row(s, "os") is None  # fired once, removed
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("cron", [False, True])
+async def test_accepted_timeout_quarantines_across_ticks_and_restart(tmp_path, monkeypatch, cron):
+    """The receiver keeps running after its unary caller loses the response."""
+    import httpx
+
+    events = []
+    s = _make_scheduler(tmp_path, event_publish=lambda t, d: events.append((t, d)))
+    past = (datetime.now(UTC) - timedelta(seconds=5)).isoformat()
+    job = s.add_job("slow accepted turn", "* * * * *" if cron else past, job_id="slow")
+    with s._connect() as db:
+        db.execute("UPDATE jobs SET next_fire = ? WHERE id = ?", (past, job.id))
+    accepted = []
+    receiver_done = asyncio.Event()
+
+    async def receiver():
+        await receiver_done.wait()
+
+    running = []
+
+    class AcceptedClient(_FakeClient):
+        async def post(self, url, headers=None, json=None):
+            accepted.append(json["params"]["message"]["messageId"])
+            running.append(asyncio.create_task(receiver()))
+            with s._connect() as db:
+                claim = db.execute("SELECT * FROM occurrences").fetchone()
+                assert claim["message_id"] == accepted[-1]
+                assert claim["next_fire"] == past
+                assert claim["state"] == "claimed"
+            raise httpx.ReadTimeout("accepted but response took too long")
+
+    monkeypatch.setattr(httpx, "AsyncClient", lambda **kw: AcceptedClient(None))
+    try:
+        await s._tick()
+        await asyncio.gather(*s._fire_tasks)
+        assert not running[0].done()
+        for _ in range(3):
+            await s._tick()
+        restarted = _make_scheduler(tmp_path)
+        restarted._recover_missed_fires()
+        # Even cron's next slot remains fenced by its unresolved predecessor.
+        assert restarted._claim_due_jobs(datetime.now(UTC) + timedelta(days=2)) == []
+        await restarted._tick()
+        assert len(accepted) == 1
+        stored = restarted.get_job(job.id)
+        assert stored.last_error == "delivery unknown; not automatically retried"
+        assert stored.consecutive_failures == stored.fire_count == 0
+        assert stored.last_ok is None
+        assert "turn.finished" not in [t for t, _ in events]
+        with restarted._connect() as db:
+            assert db.execute("SELECT state FROM occurrences").fetchone()["state"] == "unknown"
+    finally:
+        receiver_done.set()
+        await asyncio.gather(*running)
+
+
+@pytest.mark.asyncio
+async def test_claim_persistence_failure_prevents_send(tmp_path, monkeypatch):
+    import httpx
+
+    s = _make_scheduler(tmp_path)
+    s.add_job("must not send", (datetime.now(UTC) - timedelta(seconds=1)).isoformat())
+    with s._connect() as db:
+        db.execute("CREATE TRIGGER reject_claim BEFORE INSERT ON occurrences "
+                   "BEGIN SELECT RAISE(ABORT, 'disk unavailable'); END")
+    calls = []
+    monkeypatch.setattr(httpx, "AsyncClient", lambda **kw: calls.append(kw))
+    await s._tick()
+    assert not s._fire_tasks
+    assert calls == []
+    assert s.list_jobs()[0].last_error is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.platform_sensitive
+@pytest.mark.parametrize("error_code,winerror", [
+    (errno.ECONNREFUSED, None), (10061, None),
+    (errno.EINVAL, 10061), (errno.EINVAL, 1225),
+])
+async def test_connection_refusal_retries_same_message_identity(tmp_path, monkeypatch, error_code, winerror):
+    import httpx
+
+    s = _make_scheduler(tmp_path)
+    job = s.add_job("retry", (datetime.now(UTC) - timedelta(seconds=1)).isoformat())
+    messages = []
+
+    class RefusedThenOK(_FakeClient):
+        async def post(self, url, headers=None, json=None):
+            messages.append(json["params"]["message"]["messageId"])
+            if len(messages) == 1:
+                # Model both Winsock and proactor ConnectEx on every host.
+                cause = OSError(error_code, "refused")
+                if winerror is not None:
+                    cause.winerror = winerror
+                raise httpx.ConnectError("refused") from cause
+            return _FakeResponse()
+
+    monkeypatch.setattr(httpx, "AsyncClient", lambda **kw: RefusedThenOK(None))
+    await s._tick()
+    await asyncio.gather(*s._fire_tasks)
+    assert s.get_job(job.id).last_error is None
+    with s._connect() as db:
+        assert db.execute("SELECT state FROM occurrences").fetchone()["state"] == "retryable"
+    await s._tick()
+    await asyncio.gather(*s._fire_tasks)
+    assert len(messages) == 2 and messages[0] == messages[1]
+    assert s.get_job(job.id) is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("replacement", ["update", "replace", "cancel"])
+@pytest.mark.parametrize("failed", [False, True])
+async def test_late_result_does_not_modify_new_wait_occurrence(tmp_path, monkeypatch, replacement, failed):
+    import httpx
+
+    s = _make_scheduler(tmp_path)
+    job = s.add_job("old", (datetime.now(UTC) - timedelta(seconds=1)).isoformat(), job_id="wait:chat")
+    entered, release = asyncio.Event(), asyncio.Event()
+
+    class SlowClient(_FakeClient):
+        async def post(self, *args, **kwargs):
+            entered.set()
+            await release.wait()
+            return _FakeResponse(payload=_failed_body("late failure") if failed else None)
+
+    monkeypatch.setattr(httpx, "AsyncClient", lambda **kw: SlowClient(None))
+    await s._tick()
+    await entered.wait()
+    if replacement == "update":
+        s.update_job(job.id, "new", _FUTURE_ISO)
+    else:
+        s.cancel_job(job.id)
+        if replacement == "replace":
+            s.add_job("new", _FUTURE_ISO, job_id=job.id)
+    before = s.get_job(job.id)
+    release.set()
+    await asyncio.gather(*s._fire_tasks)
+    assert s.get_job(job.id) == before
+
+
+@pytest.mark.asyncio
+@pytest.mark.platform_sensitive
+@pytest.mark.parametrize("error", ["connect", "connect_timeout", "read", "write",
+                                  "invalid", "windows_timeout"])
+async def test_unproven_transport_errors_are_not_retryable(tmp_path, monkeypatch, error):
+    import httpx
+
+    errors = {"connect": httpx.ConnectError, "connect_timeout": httpx.ConnectTimeout,
+              "read": httpx.ReadTimeout, "write": httpx.WriteError}
+    s = _make_scheduler(tmp_path)
+    job = s.add_job("uncertain", (datetime.now(UTC) - timedelta(seconds=1)).isoformat())
+    if error in {"invalid", "windows_timeout"}:
+        cause = OSError(errno.EINVAL, "connection refused")
+        if error == "windows_timeout":
+            cause.winerror = 10060  # WSAETIMEDOUT is not proof of refusal.
+        exc = httpx.ConnectError("connection refused")
+        exc.__cause__ = cause
+    else:
+        exc = errors[error]("lost")
+    monkeypatch.setattr(httpx, "AsyncClient", lambda **kw: _FakeClient(None, raise_exc=exc))
+    await s._tick()
+    await asyncio.gather(*s._fire_tasks)
+    assert s._claim_due_jobs(datetime.now(UTC)) == []
+    assert s.get_job(job.id).last_error == "delivery unknown; not automatically retried"
+
+
+@pytest.mark.asyncio
+@pytest.mark.platform_sensitive
+async def test_real_connection_refusal_is_retryable(tmp_path):
+    """Exercise httpx/httpcore/anyio's real exception chain, not just a stub."""
+    import socket
+
+    # Reserve then close a loopback port: a still-bound, non-listening socket
+    # can blackhole SYNs on macOS, which is correctly unknown rather than refused.
+    with socket.socket() as sock:
+        sock.bind(("127.0.0.1", 0))
+        port = sock.getsockname()[1]
+    s = _make_scheduler(tmp_path)
+    s._invoke_url = f"http://127.0.0.1:{port}"
+    # Windows can take several seconds to report a refused loopback connect.
+    # A two-second deadline tests ConnectTimeout instead of ECONNREFUSED there.
+    s._fire_timeout_s = 15
+    job = s.add_job("refused", (datetime.now(UTC) - timedelta(seconds=1)).isoformat())
+    await s._tick()
+    await asyncio.gather(*s._fire_tasks)
+    assert s.get_job(job.id).last_error is None
+    with s._connect() as db:
+        assert db.execute("SELECT state FROM occurrences").fetchone()["state"] == "retryable"
+    assert [j.id for j in s._claim_due_jobs(datetime.now(UTC))] == [job.id]
+
+
+@pytest.mark.asyncio
+@pytest.mark.platform_sensitive
+async def test_real_accepted_read_timeout_stays_quarantined_after_restart(tmp_path):
+    """An HTTP receiver can keep running after the unary client's deadline."""
+    accepted = []
+    handlers = set()
+    release = asyncio.Event()
+
+    async def receive(reader, writer):
+        task = asyncio.current_task()
+        handlers.add(task)
+        try:
+            headers = await reader.readuntil(b"\r\n\r\n")
+            length = next(int(line.split(b":", 1)[1]) for line in headers.split(b"\r\n")
+                          if line.lower().startswith(b"content-length:"))
+            accepted.append(await reader.readexactly(length))
+            await release.wait()
+        finally:
+            writer.close()
+            await writer.wait_closed()
+            handlers.discard(task)
+
+    server = await asyncio.start_server(receive, "127.0.0.1", 0)
+    try:
+        s = _make_scheduler(tmp_path)
+        s._invoke_url = f"http://127.0.0.1:{server.sockets[0].getsockname()[1]}"
+        s._fire_timeout_s = 0.5
+        job = s.add_job("accepted", (datetime.now(UTC) - timedelta(seconds=1)).isoformat())
+        await s._tick()
+        await asyncio.gather(*s._fire_tasks)
+        assert len(accepted) == 1
+        assert handlers  # The receiver is still running after the client timed out.
+        restarted = _make_scheduler(tmp_path)
+        restarted._invoke_url = s._invoke_url
+        for scheduler in (s, restarted):
+            scheduler._recover_missed_fires()
+            for _ in range(3):
+                await scheduler._tick()
+            assert not scheduler._fire_tasks
+            stored = scheduler.get_job(job.id)
+            assert stored.last_error == "delivery unknown; not automatically retried"
+            assert stored.fire_count == stored.consecutive_failures == 0
+            assert stored.last_ok is None
+            with scheduler._connect() as db:
+                assert db.execute("SELECT state FROM occurrences").fetchone()["state"] == "unknown"
+        assert len(accepted) == 1
+    finally:
+        server.close()
+        release.set()
+        await asyncio.gather(*handlers)
+        await server.wait_closed()
+
+
+@pytest.mark.asyncio
+async def test_local_dispatch_cancellation_leaves_unknown_claim(tmp_path, monkeypatch):
+    import httpx
+
+    events = []
+    s = _make_scheduler(tmp_path, event_publish=lambda t, d: events.append(t))
+    job = s.add_job("cancel client", (datetime.now(UTC) - timedelta(seconds=1)).isoformat())
+    entered = asyncio.Event()
+
+    class PendingClient(_FakeClient):
+        async def post(self, *args, **kwargs):
+            entered.set()
+            await asyncio.Event().wait()
+
+    monkeypatch.setattr(httpx, "AsyncClient", lambda **kw: PendingClient(None))
+    await s._tick()
+    await entered.wait()
+    task = next(iter(s._fire_tasks))
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert s.get_job(job.id).last_error == "delivery unknown; not automatically retried"
+    assert s._claim_due_jobs(datetime.now(UTC)) == []
+    assert "turn.finished" not in events
+    assert s.cancel_job(job.id)
+    assert s.get_job(job.id) is None
+
+
+@pytest.mark.asyncio
+async def test_late_cron_success_cannot_expire_replacement(tmp_path, monkeypatch):
+    import httpx
+
+    s = _make_scheduler(tmp_path)
+    job = s.add_job("old", "* * * * *", job_id="replace-cron", max_fires=1)
+    past = (datetime.now(UTC) - timedelta(seconds=1)).isoformat()
+    with s._connect() as db:
+        db.execute("UPDATE jobs SET next_fire = ? WHERE id = ?", (past, job.id))
+    replacement = []
+
+    class ReplacingClient(_FakeClient):
+        async def post(self, *args, **kwargs):
+            s.cancel_job(job.id)
+            replacement.append(s.add_job("new", "* * * * *", job_id=job.id, max_fires=1))
+            return _FakeResponse()
+
+    monkeypatch.setattr(httpx, "AsyncClient", lambda **kw: ReplacingClient(None))
+    await s._tick()
+    await asyncio.gather(*s._fire_tasks)
+    assert s.get_job(job.id) == replacement[0]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("state", ["claimed", "unknown"])
+async def test_resume_cannot_bypass_unresolved_cron_generation(tmp_path, monkeypatch, state):
+    import httpx
+
+    s = _make_scheduler(tmp_path)
+    past = datetime.now(UTC) - timedelta(days=4)
+    job = s.add_job("uncertain cron", "* * * * *", job_id="resume")
+    with s._connect() as db:
+        db.execute("UPDATE jobs SET next_fire = ? WHERE id = ?", (past.isoformat(), job.id))
+    job = s.get_job(job.id)
+    assert s._claim_occurrence(job, advance_at=past)
+    if state == "unknown":
+        s._finish_dispatch(job, state)
+    s.set_enabled(job.id, False)
+    # Resume beyond BOTH timestamps in the original claim, while still overdue.
+    resumed_slot = (past + timedelta(days=1)).isoformat()
+    monkeypatch.setattr("scheduler.local._compute_next_fire", lambda *a, **kw: resumed_slot)
+    resumed = s.set_enabled(job.id, True)
+    assert resumed.next_fire == resumed_slot
+    calls = []
+    monkeypatch.setattr(httpx, "AsyncClient", lambda **kw: calls.append(kw))
+    for scheduler in (s, _make_scheduler(tmp_path)):
+        scheduler._recover_missed_fires()
+        assert scheduler.get_job(job.id) == resumed
+        assert scheduler._claim_due_jobs(datetime.now(UTC)) == []
+        assert scheduler._claim_occurrence(resumed) is None
+        for _ in range(3):
+            await scheduler._tick()
+        assert scheduler.get_job(job.id).last_error == "delivery unknown; not automatically retried"
+    assert calls == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("state", ["claimed", "unknown", "retryable", "settled"])
+async def test_recreated_same_slot_has_independent_claim_and_settlement(tmp_path, monkeypatch, state):
+    import httpx
+
+    s = _make_scheduler(tmp_path)
+    slot = (datetime.now(UTC) - timedelta(seconds=1)).isoformat()
+    old = s.add_job("old", slot, job_id="wait:same-slot")
+    old_message = s._claim_occurrence(old)
+    s._finish_dispatch(old, state)
+    assert s.cancel_job(old.id)
+    replacement = s.add_job("replacement", slot, job_id=old.id)
+    assert replacement.created_at != old.created_at
+    s = _make_scheduler(tmp_path)
+    messages = []
+
+    class ReplacementClient(_FakeClient):
+        async def post(self, url, headers=None, json=None):
+            messages.append(json["params"]["message"]["messageId"])
+            before = s.get_job(old.id)
+            # A late response for the canceled generation cannot settle this send.
+            s._record_fire_outcome(old, failure="late failure")
+            s._finish_dispatch(old, "settled")
+            assert s.get_job(old.id) == before
+            with s._connect() as db:
+                claim = db.execute("SELECT * FROM occurrences WHERE created_at = ?",
+                                   (replacement.created_at,)).fetchone()
+                assert claim["state"] == "claimed"
+            return _FakeResponse()
+
+    monkeypatch.setattr(httpx, "AsyncClient", lambda **kw: ReplacementClient(None))
+    await s._tick()
+    await asyncio.gather(*s._fire_tasks)
+    assert len(messages) == 1
+    assert messages[0] != old_message
+    assert s.get_job(old.id) is None
+    with s._connect() as db:
+        claims = db.execute("SELECT * FROM occurrences ORDER BY created_at").fetchall()
+        assert len(claims) == 2
+        assert [c["message_id"] for c in claims] == [old_message, messages[0]]
+        assert all(c["state"] == "settled" for c in claims)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failed", [False, True])
+@pytest.mark.parametrize("max_fires", [1, 2])
+async def test_cron_resume_during_turn_preserves_settlement(tmp_path, monkeypatch, failed, max_fires):
+    import httpx
+
+    s = _make_scheduler(tmp_path)
+    job = s.add_job("running cron", "* * * * *", max_fires=max_fires)
+    with s._connect() as db:
+        db.execute("UPDATE jobs SET next_fire = ? WHERE id = ?",
+                   ((datetime.now(UTC) - timedelta(seconds=1)).isoformat(), job.id))
+    entered, release = asyncio.Event(), asyncio.Event()
+    calls = []
+
+    class SlowClient(_FakeClient):
+        async def post(self, *args, **kwargs):
+            calls.append(1)
+            entered.set()
+            await release.wait()
+            return _FakeResponse(payload=_failed_body("turn failed") if failed else None)
+
+    monkeypatch.setattr(httpx, "AsyncClient", lambda **kw: SlowClient(None))
+    await s._tick()
+    await entered.wait()
+    try:
+        # Force resume to move beyond the post-claim slot without a wall-clock wait.
+        for days in (1, 2):
+            slot = (datetime.now(UTC) + timedelta(days=days)).isoformat()
+            monkeypatch.setattr("scheduler.local._compute_next_fire", lambda *a, **kw: slot)
+            s.set_enabled(job.id, False)
+            assert s.set_enabled(job.id, True).next_fire == slot
+        await s._tick()
+        assert calls == [1]
+    finally:
+        release.set()
+        await asyncio.gather(*s._fire_tasks)
+    stored = s.get_job(job.id)
+    if max_fires == 1:
+        assert stored is None
+    else:
+        assert stored.fire_count == 1
+        assert stored.next_fire == slot
+        assert stored.consecutive_failures == int(failed)
+        assert stored.last_error == ("**Error:** turn failed" if failed else None)
+        assert bool(stored.last_ok) is not failed
+    with s._connect() as db:
+        assert db.execute("SELECT state FROM occurrences").fetchone()["state"] == "settled"
+    await s._tick()
+    assert calls == [1]

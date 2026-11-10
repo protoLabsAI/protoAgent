@@ -160,3 +160,59 @@ def test_shutdown_underway_abandons_without_arming(monkeypatch):
     assert sleep_calls == []  # ...but it bailed before the first sleep
     assert STATE.restart_requested is False
     exited.assert_not_called()
+
+
+def test_scheduler_claim_before_send_survives_restart_and_stale_recovery(tmp_path):
+    """A crash between the durable claim and POST cannot safely be distinguished
+    from a crash after the receiver accepted it, even after the recovery window."""
+    from datetime import UTC, datetime, timedelta
+
+    from scheduler.local import LocalScheduler
+
+    scheduler = LocalScheduler("claim-test", invoke_url="http://127.0.0.1:7870", db_dir=tmp_path)
+    past = (datetime.now(UTC) - timedelta(days=3)).isoformat()
+    job = scheduler.add_job("crash before send", past)
+    message_id = scheduler._claim_occurrence(job)
+    assert message_id
+
+    restarted = LocalScheduler("claim-test", invoke_url="http://127.0.0.1:7870", db_dir=tmp_path)
+    restarted._recover_missed_fires()
+    assert restarted._claim_due_jobs(datetime.now(UTC)) == []
+    stored = restarted.get_job(job.id)
+    assert stored is not None
+    assert stored.last_error == "delivery unknown; not automatically retried"
+    assert stored.consecutive_failures == stored.fire_count == 0
+    with restarted._connect() as db:
+        claim = db.execute("SELECT * FROM occurrences").fetchone()
+        assert claim["state"] == "claimed"
+        assert claim["message_id"] == message_id
+        assert claim["next_fire"] == job.next_fire
+
+
+def test_initial_occurrence_ledger_migrates_without_losing_quarantine(tmp_path):
+    from datetime import UTC, datetime, timedelta
+
+    from scheduler.local import LocalScheduler
+
+    s = LocalScheduler("migration", invoke_url="http://127.0.0.1:7870", db_dir=tmp_path)
+    job = s.add_job("claimed", (datetime.now(UTC) - timedelta(seconds=1)).isoformat())
+    message_id = s._claim_occurrence(job)
+    with s._connect() as db:
+        db.execute("ALTER TABLE occurrences RENAME TO occurrences_new")
+        db.execute("""CREATE TABLE occurrences (
+            job_id TEXT NOT NULL, next_fire TEXT NOT NULL,
+            message_id TEXT NOT NULL, state TEXT NOT NULL, created_at TEXT NOT NULL,
+            expected_next TEXT NOT NULL, previous_error TEXT,
+            PRIMARY KEY (job_id, next_fire))""")
+        db.execute("INSERT INTO occurrences SELECT * FROM occurrences_new")
+        db.execute("DROP TABLE occurrences_new")
+    for _ in range(2):
+        restarted = LocalScheduler("migration", invoke_url="http://127.0.0.1:7870", db_dir=tmp_path)
+        assert restarted._claim_due_jobs(datetime.now(UTC)) == []
+        assert restarted.get_job(job.id).last_error == "delivery unknown; not automatically retried"
+        with restarted._connect() as db:
+            claim = db.execute("SELECT * FROM occurrences").fetchone()
+            assert claim["message_id"] == message_id
+            assert claim["state"] == "claimed"
+            keys = {r["name"] for r in db.execute("PRAGMA table_info(occurrences)") if r["pk"]}
+            assert keys == {"job_id", "next_fire", "created_at"}
