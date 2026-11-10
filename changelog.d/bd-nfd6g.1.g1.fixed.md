@@ -1,0 +1,1 @@
+- **Task IDs survive deletion and restart.** Persist task numbering so Undo restores the original task beside newly created tasks, and serialize concurrent task writes and reads to prevent races.

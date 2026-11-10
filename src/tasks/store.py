@@ -15,6 +15,7 @@ from __future__ import annotations
 import os
 import sqlite3
 import threading
+from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -55,8 +56,8 @@ def _resolve_db_path(db_path: str | None) -> Path:
 
 
 class TaskStore:
-    """SQLite-backed issue tracker. Thread-safe via a single lock (the server
-    runs one process; contention is low)."""
+    """SQLite-backed issue tracker. A lock guards each connection; write
+    transactions serialize mutations across store instances too."""
 
     def __init__(self, db_path: str | None = None):
         self.path = _resolve_db_path(db_path)
@@ -70,7 +71,7 @@ class TaskStore:
         self._init_schema()
 
     def _init_schema(self) -> None:
-        with self._lock:
+        with self._write():
             self._conn.execute(
                 """
                 CREATE TABLE IF NOT EXISTS issues (
@@ -96,19 +97,43 @@ class TaskStore:
             cols = {r["name"] for r in self._conn.execute("PRAGMA table_info(issues)").fetchall()}
             if "session_id" not in cols:
                 self._conn.execute("ALTER TABLE issues ADD COLUMN session_id TEXT NOT NULL DEFAULT ''")
-            self._conn.commit()
+
+            # Persist the high-water mark independently of surviving tasks. Seed
+            # existing boards from their rows without lowering it on restart.
+            self._conn.execute(
+                "CREATE TABLE IF NOT EXISTS task_sequence ("
+                "singleton INTEGER PRIMARY KEY CHECK (singleton = 1), high_water INTEGER NOT NULL)"
+            )
+            self._conn.execute("INSERT OR IGNORE INTO task_sequence VALUES (1, 0)")
+            for row in self._conn.execute("SELECT id FROM issues").fetchall():
+                self._reserve_id(row["id"])
+
+    @contextmanager
+    def _write(self):
+        # Serialize read/modify/write across connections too, and roll back failed
+        # operations so neither partial writes nor allocated IDs leak into a retry.
+        with self._lock, self._conn:
+            self._conn.execute("BEGIN IMMEDIATE")
+            yield
 
     # ── helpers ───────────────────────────────────────────────────────────────
 
     def _row(self, issue_id: str) -> sqlite3.Row | None:
         return self._conn.execute("SELECT * FROM issues WHERE id = ?", (issue_id,)).fetchone()
 
+    def _reserve_id(self, issue_id: str) -> None:
+        # Legacy bd- IDs share the numeric namespace with task- IDs.
+        prefix, _, number = issue_id.partition("-")
+        if prefix in {"task", "bd"} and number.isdigit():
+            self._conn.execute(
+                "UPDATE task_sequence SET high_water = MAX(high_water, ?) WHERE singleton = 1",
+                (int(number),),
+            )
+
     def _next_id(self) -> str:
-        # New ids use the `task-` prefix; legacy `bd-` ids (pre beads→tasks rename)
-        # are still read so numbering stays monotonic on an existing board.
-        rows = self._conn.execute("SELECT id FROM issues WHERE id LIKE 'task-%' OR id LIKE 'bd-%'").fetchall()
-        nums = [int(n) for r in rows if (n := r["id"].split("-", 1)[-1]).isdigit()]
-        return f"task-{(max(nums) + 1) if nums else 1}"
+        self._conn.execute("UPDATE task_sequence SET high_water = high_water + 1 WHERE singleton = 1")
+        number = self._conn.execute("SELECT high_water FROM task_sequence WHERE singleton = 1").fetchone()[0]
+        return f"task-{number}"
 
     @staticmethod
     def _norm_status(status: str | None) -> str:
@@ -136,7 +161,7 @@ class TaskStore:
         if not title:
             raise ValueError("title is required")
         now = _now()
-        with self._lock:
+        with self._write():
             issue_id = self._next_id()
             self._conn.execute(
                 "INSERT INTO issues (id, title, description, status, priority, issue_type, "
@@ -154,9 +179,9 @@ class TaskStore:
                     session_id or "",
                 ),
             )
-            self._conn.commit()
-            _publish("task.changed", {"id": issue_id, "action": "created"})
-            return dict(self._row(issue_id))
+            result = dict(self._row(issue_id))
+        _publish("task.changed", {"id": issue_id, "action": "created"})
+        return result
 
     def list(self, *, include_closed: bool = True, session_id: str | None = None) -> list[dict[str, Any]]:
         where: list[str] = []
@@ -168,12 +193,14 @@ class TaskStore:
             where.append("session_id = ?")
             params.append(session_id)
         clause = f" WHERE {' AND '.join(where)}" if where else ""
-        rows = self._conn.execute(f"SELECT * FROM issues{clause} ORDER BY created_at", params).fetchall()
-        return [dict(r) for r in rows]
+        with self._lock:
+            rows = self._conn.execute(f"SELECT * FROM issues{clause} ORDER BY created_at", params).fetchall()
+            return [dict(r) for r in rows]
 
     def get(self, issue_id: str) -> dict[str, Any] | None:
-        row = self._row(issue_id)
-        return dict(row) if row else None
+        with self._lock:
+            row = self._row(issue_id)
+            return dict(row) if row else None
 
     def update(self, issue_id: str, **fields: Any) -> dict[str, Any]:
         if not issue_id:
@@ -195,38 +222,38 @@ class TaskStore:
                 value = int(value)
             sets.append(f"{key} = ?")
             vals.append(value)
-        with self._lock:
+        with self._write():
             if self._row(issue_id) is None:
                 raise KeyError(f"unknown issue {issue_id!r}")
             sets.append("updated_at = ?")
             vals.append(_now())
             self._conn.execute(f"UPDATE issues SET {', '.join(sets)} WHERE id = ?", (*vals, issue_id))
-            self._conn.commit()
-            _publish("task.changed", {"id": issue_id, "action": "updated"})
-            return dict(self._row(issue_id))
+            result = dict(self._row(issue_id))
+        _publish("task.changed", {"id": issue_id, "action": "updated"})
+        return result
 
     def close(self, issue_id: str, reason: str | None = None) -> dict[str, Any]:
         if not issue_id:
             raise ValueError("issue_id is required")
         now = _now()
-        with self._lock:
+        with self._write():
             if self._row(issue_id) is None:
                 raise KeyError(f"unknown issue {issue_id!r}")
             self._conn.execute(
                 "UPDATE issues SET status='closed', closed_at=?, close_reason=?, updated_at=? WHERE id=?",
                 (now, reason or "", now, issue_id),
             )
-            self._conn.commit()
-            _publish("task.changed", {"id": issue_id, "action": "closed"})
-            return dict(self._row(issue_id))
+            result = dict(self._row(issue_id))
+        _publish("task.changed", {"id": issue_id, "action": "closed"})
+        return result
 
     def delete(self, issue_id: str) -> bool:
-        with self._lock:
+        with self._write():
             cur = self._conn.execute("DELETE FROM issues WHERE id = ?", (issue_id,))
-            self._conn.commit()
-            if cur.rowcount > 0:
-                _publish("task.changed", {"id": issue_id, "action": "deleted"})
-            return cur.rowcount > 0
+            deleted = cur.rowcount > 0
+        if deleted:
+            _publish("task.changed", {"id": issue_id, "action": "deleted"})
+        return deleted
 
     def restore(self, row: dict[str, Any]) -> dict[str, Any]:
         """Re-insert a previously deleted issue EXACTLY as it was — its original id and
@@ -245,7 +272,7 @@ class TaskStore:
         issue_id = row.get("id")
         if not issue_id:
             raise ValueError("restore: row has no id")
-        with self._lock:
+        with self._write():
             if self._row(issue_id) is not None:
                 raise ValueError(f"issue {issue_id!r} already exists")
             cols = [r["name"] for r in self._conn.execute("PRAGMA table_info(issues)").fetchall()]
@@ -254,6 +281,7 @@ class TaskStore:
                 f"INSERT INTO issues ({', '.join(present)}) VALUES ({', '.join('?' for _ in present)})",
                 tuple(row[c] for c in present),
             )
-            self._conn.commit()
-            _publish("task.changed", {"id": issue_id, "action": "restored"})
-            return dict(self._row(issue_id))
+            result = dict(self._row(issue_id))
+            self._reserve_id(issue_id)
+        _publish("task.changed", {"id": issue_id, "action": "restored"})
+        return result
