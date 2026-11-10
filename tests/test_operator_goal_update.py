@@ -14,6 +14,15 @@ from graph.goals.store import GoalStore
 from graph.goals.types import GoalState
 from operator_api.routes import register_operator_routes
 
+pytestmark = pytest.mark.platform_sensitive
+
+
+def _replace_error(winerror):
+    error = PermissionError("replacement denied")
+    if winerror is not None:
+        error.winerror = winerror
+    return error
+
 
 def _client(monkeypatch, tmp_path, *, controller=True):
     import runtime.state as rs
@@ -218,15 +227,31 @@ async def test_patch_during_verifier_preserves_edit_and_progress(monkeypatch, tm
 
 
 @pytest.mark.asyncio
-async def test_patch_waiting_for_completion_preserves_terminal_state(monkeypatch, tmp_path):
+@pytest.mark.parametrize("winerror", [None, 5, 32, 33])
+async def test_patch_waiting_for_completion_preserves_terminal_state(monkeypatch, tmp_path, winerror):
     import asyncio
+    import json
     import threading
 
+    from graph.goals import store
     from graph.goals.types import VerifyResult
     from operator_api.console_handlers import _operator_goals_update
 
     _, ctrl = _client(monkeypatch, tmp_path)
     _seed(ctrl)
+    original_replace = store.os.replace
+    attempts = {}
+
+    def contended_replace(source, destination):
+        # Fail both the edit and terminal write twice, then perform a real swap.
+        with open(source, encoding="utf-8") as fh:
+            status = json.load(fh)["status"]
+        attempts[status] = attempts.get(status, 0) + 1
+        if winerror is not None and attempts[status] <= 2:
+            raise _replace_error(winerror)
+        original_replace(source, destination)
+
+    monkeypatch.setattr(store.os, "replace", contended_replace)
     entered, release = threading.Event(), threading.Event()
     original_get = ctrl.store.get
 
@@ -261,6 +286,78 @@ async def test_patch_waiting_for_completion_preserves_terminal_state(monkeypatch
     assert stored.finished_at is not None
     assert stored.history[-1]["status"] == "achieved"
     assert stored.outcome == "edited"
+    assert attempts == dict.fromkeys(("active", "achieved"), 1 if winerror is None else 3)
+    assert not list(tmp_path.glob("*.tmp"))
+
+
+@pytest.mark.parametrize("winerror", [None, 5, 32, 33, 112])
+def test_patch_failed_replace_reports_failure_and_preserves_goal(monkeypatch, tmp_path, winerror):
+    from graph.goals import store
+    from graph.plugins import host
+
+    client, ctrl = _client(monkeypatch, tmp_path)
+    _seed(ctrl, outcome="old", status="achieved", finished_at=123)
+    before = ctrl.store.get("s1").to_dict()
+    events, sleeps, attempts = [], [], []
+    error = _replace_error(winerror)
+
+    def denied_replace(source, destination):
+        attempts.append(source)
+        raise error
+
+    monkeypatch.setattr(store.os, "replace", denied_replace)
+    monkeypatch.setattr(store.time, "sleep", sleeps.append)
+    monkeypatch.setattr(host.HOST, "publish", lambda *args: events.append(args))
+    response = client.patch("/api/goals/s1", json={"outcome": "edited"})
+    assert response.status_code == 500
+    assert ctrl.store.get("s1").to_dict() == before
+    assert events == []
+    assert len(attempts) == (6 if winerror in (5, 32, 33) else 1)
+    assert sleeps == ([0.01, 0.02, 0.04, 0.08, 0.16] if winerror in (5, 32, 33) else [])
+    assert not list(tmp_path.glob("*.tmp"))
+
+
+@pytest.mark.parametrize("reader", ["get", "all"])
+def test_goal_readers_close_file_before_replacement(monkeypatch, tmp_path, reader):
+    import threading
+    from concurrent.futures import ThreadPoolExecutor
+
+    from graph.goals import store
+
+    _, ctrl = _client(monkeypatch, tmp_path)
+    state = _seed(ctrl)
+    state.outcome = "edited"
+    reading, release, writing, replaced = (threading.Event() for _ in range(4))
+    original_load, original_replace = store.json.load, store.os.replace
+
+    def paused_load(fh):
+        reading.set()
+        assert release.wait(5)
+        return original_load(fh)
+
+    def replace(source, destination):
+        replaced.set()
+        return original_replace(source, destination)
+
+    def write():
+        writing.set()
+        ctrl.store.set(state)
+
+    monkeypatch.setattr(store.json, "load", paused_load)
+    monkeypatch.setattr(store.os, "replace", replace)
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        read = pool.submit(ctrl.store.get, "s1") if reader == "get" else pool.submit(ctrl.store.all)
+        try:
+            assert reading.wait(5)
+            written = pool.submit(write)
+            assert writing.wait(5)
+            assert not replaced.wait(0.1)
+        finally:
+            release.set()
+        read.result(timeout=5)
+        written.result(timeout=5)
+    assert replaced.is_set()
+    assert ctrl.store.get("s1").outcome == "edited"
 
 
 @pytest.mark.asyncio
