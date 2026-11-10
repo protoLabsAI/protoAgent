@@ -1,0 +1,1 @@
+- **WebKit storage QA request diagnostics.** Capture correlated browser and mock-server request lifecycles, characterize handled unload fetch errors independently of the console, and supply missing attendance and Python runtime mock responses. Exercise real-quota recovery and 2,400-message migration across repeated reloads without filtering console page errors.

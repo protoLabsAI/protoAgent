@@ -571,6 +571,17 @@ function handleApiGet(
     case "/api/runtime/status":
       // `mcp` is the caller's SCOPED roster (see mcpFor) — never the shared baseline.
       return { ...RUNTIME_STATUS, mcp };
+    case "/api/runtime/python":
+      // Like Node below, the default has no provisioning work. A missing route
+      // triggers query retries unrelated to storage recovery.
+      return {
+        python: {
+          needed: false, managed: false, managed_version: null, exe: null,
+          baseline_installed: false, baseline_current: false, supported: true,
+          target_version: "3.12.13",
+        },
+        install: { state: "idle", pct: 0, message: "", error: null },
+      };
     case "/api/runtime/node":
       // Default: a system Node is present, so <NodeRuntimeCard> stays hidden and no
       // spec sees the banner unless it explicitly page.route()s the missing state.
@@ -1272,8 +1283,54 @@ const E2E_MEDIA_PNG = Buffer.from(
   "base64",
 );
 
+// Opt-in reload diagnostics: bounded per-test scopes, no bodies or credentials.
+const requestLifecycles = new Map();
+let lifecycleId = 0;
+function recordLifecycle(req, res, pathname) {
+  const scope = req.headers["x-e2e-lifecycle"];
+  if (typeof scope !== "string" || !/^[a-zA-Z0-9-]{1,80}$/.test(scope)) return;
+  if (!requestLifecycles.has(scope)) {
+    if (requestLifecycles.size >= 32) requestLifecycles.delete(requestLifecycles.keys().next().value);
+    requestLifecycles.set(scope, []);
+  }
+  const events = requestLifecycles.get(scope);
+  const id = ++lifecycleId;
+  res.setHeader("x-e2e-request-id", String(id));
+  const record = (event) => {
+    if (events.length >= 2000) events.shift();
+    events.push({
+      id, event, time: Date.now(), method: req.method, pathname,
+      origin: req.headers.origin ?? null,
+      preflightMethod: req.headers["access-control-request-method"] ?? null,
+      preflightHeaders: req.headers["access-control-request-headers"] ?? null,
+      status: res.headersSent ? res.statusCode : null,
+      headersSent: res.headersSent, finished: res.writableFinished,
+      allowOrigin: res.getHeader("access-control-allow-origin") ?? null,
+      allowCredentials: res.getHeader("access-control-allow-credentials") ?? null,
+      allowMethods: res.getHeader("access-control-allow-methods") ?? null,
+      allowHeaders: res.getHeader("access-control-allow-headers") ?? null,
+    });
+  };
+  record("request");
+  req.once("aborted", () => record("aborted"));
+  res.once("finish", () => record("finish"));
+  res.once("close", () => record("close"));
+}
+
 const server = createServer(async (req, res) => {
   const url = new URL(req.url, `http://localhost:${PORT}`);
+  if (url.pathname === "/__e2e/request-lifecycle" && req.method === "GET") {
+    return sendJson(res, requestLifecycles.get(req.headers["x-e2e-lifecycle"]) ?? []);
+  }
+  recordLifecycle(req, res, url.pathname);
+  // Minimal engine control: a handled same-origin fetch during document teardown.
+  // No console code, storage, routing interception or CORS policy participates.
+  if (url.pathname === "/__e2e/unload-fetch") {
+    res.writeHead(200, { "content-type": "text/html" });
+    return res.end('<script>addEventListener("pagehide", () => { fetch("/__e2e/unload-target").catch(() => {}); });</script>');
+  }
+  if (url.pathname === "/__e2e/unload-target") return sendJson(res, { ok: true });
+
   // Fleet slug proxy (ADR 0042): /agents/<slug>/<path> is the hub re-proxying the console to a
   // specific agent. The mock strips the /agents/<slug> prefix and serves the same handlers.
   const pathname = url.pathname.replace(/^\/agents\/[^/]+/, "") || url.pathname;
@@ -1512,6 +1569,19 @@ const server = createServer(async (req, res) => {
     // for the markdown image chrome (#1960) to render a real, loadable image.
     res.writeHead(200, { "content-type": "image/png" });
     return res.end(E2E_MEDIA_PNG);
+  }
+  // Presence is a held stream in the real API, not a missing static resource.
+  // A 404 here made every mounted chat repeatedly mint tokens/reconnect, including
+  // during reload, provoking WebKit's handled-fetch access-control diagnostic.
+  if (pathname === "/api/chat/attend" && req.method === "GET") {
+    res.writeHead(200, {
+      "content-type": "text/event-stream",
+      "cache-control": "no-cache",
+      connection: "keep-alive",
+    });
+    res.write(": attended\n\n");
+    req.once("close", () => res.end());
+    return;
   }
   if (pathname === "/api/events" && req.method === "GET") {
     // Server→client SSE push channel (ADR 0003). Hold the connection open so
