@@ -1048,7 +1048,7 @@ async def _run_native_turn(
                         # exception to the auto-answer below — and the server records it durably
                         # (the record outlives the input-required TTL and surfaces in the operator
                         # inbox; an attended turn parks the same way and writes the same record).
-                        await _turn_control.record_decision_pause(session_id, payload, pass_config)
+                        payload = await _turn_control.decision_pause_payload(session_id, payload, pass_config)
                         yield (kind, payload)
                         out["paused"] = True
                     elif kind == "input_required":
@@ -1693,6 +1693,7 @@ async def _chat_langgraph_stream_impl(
                     if hold is _turn_control._HITL_RESUME:
                         resume = True
                     elif hold is not None:
+                        hold = await _turn_control.decision_pause_payload(session_id, hold, config)
                         yield ("input_required", _interrupt_payload(hold))
                         return
                 # ADR 0115 D6 (#3760): a live operator turn (empty origin) runs under

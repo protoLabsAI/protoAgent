@@ -566,6 +566,19 @@ async def record_decision_pause(session_id: str, payload: object, config: dict) 
         return None
 
 
+async def decision_pause_payload(session_id: str, payload: object, config: dict) -> object:
+    """Attach the durable ledger identity without mutating the checkpoint payload.
+
+    Call under the thread lock, including when echoing a held pause. Recording is
+    best-effort: failure preserves the pause and logs the error. Generic HITL passes
+    through unchanged.
+    """
+    record = await record_decision_pause(session_id, payload, config)
+    if record is not None:
+        return {**payload, "decision_id": record.id}
+    return payload
+
+
 def _is_hitl_resume(request_metadata: dict | None) -> bool:
     """Whether this message IS the operator's answer to the pending HITL pause.
 

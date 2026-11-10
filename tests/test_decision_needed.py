@@ -668,3 +668,160 @@ async def test_delayed_a2a_decision_answer_never_runs_as_fresh_or_later_input(
     assert any(kind == "error" for kind, _ in frames)
     assert store.get(rec.id).answer == "yes"
     assert len(store.list(state="pending")) == int(new_pause)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("origin", ["api-chat", "scheduler"])
+@pytest.mark.parametrize("continuation", [False, True])
+@pytest.mark.parametrize("driver", ["stream", "sync"])
+@pytest.mark.parametrize("fail_store", [False, True])
+async def test_decision_payload_identity_across_pause_paths(
+    store, decision_graph, monkeypatch, caplog, origin, continuation, driver, fail_store
+):
+    """Both drivers carry the committed id on initial and goal-continuation pauses."""
+    from langchain_core.messages import AIMessage
+    from server import goal_loop
+
+    config = {"configurable": {"thread_id": "a2a:s-real"}}
+    original_stream = turn_stream._run_turn_stream
+    original_invoke = decision_graph.ainvoke
+    calls = 0
+
+    async def initial_reply_then_invoke(value, config):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return {"messages": [AIMessage(content="Working on it.")]}
+        return await original_invoke(value, config)
+
+    async def initial_reply_then_stream(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            yield ("text", "Working on it.")
+            yield ("__raw__", "Working on it.")
+        else:
+            async for frame in original_stream(*args, **kwargs):
+                yield frame
+
+    async def steps(self):
+        yield goal_loop.GoalContinuation("Continue", self.config)
+        pytest.fail("goal drive continued after parking")
+
+    if continuation:
+        monkeypatch.setattr(goal_loop.GoalDrive, "steps", steps)
+        monkeypatch.setattr(decision_graph, "ainvoke", initial_reply_then_invoke)
+        monkeypatch.setattr(turn_stream, "_run_turn_stream", initial_reply_then_stream)
+
+    create = store.create
+
+    def record_under_lock(*args, **kwargs):
+        assert turn_control._thread_lock(config["configurable"]["thread_id"]).locked()
+        if fail_store:
+            raise OSError("ledger unavailable")
+        return create(*args, **kwargs)
+
+    monkeypatch.setattr(store, "create", record_under_lock)
+    if driver == "sync":
+        reply = await _sync_turn(origin)
+        assert "Input needed" in reply[0]["content"]
+        payload = reply[0]["hitl"]
+    else:
+        async with turn_control._thread_lock(config["configurable"]["thread_id"]):
+            frames = await _collect(chat_mod._run_native_turn(
+                "deploy", "s-real", config, request_metadata={"origin": origin}
+            ))
+        assert not any(kind == "done" for kind, _ in frames)
+        payload, = [value for kind, value in frames if kind == "input_required"]
+
+    checkpoint = await chat_mod._pending_interrupt_value(config)
+    assert payload["kind"] == "decision"
+    assert "decision_id" not in checkpoint  # enrichment must not mutate graph state
+    if fail_store:
+        assert payload == checkpoint
+        assert store.list() == []
+        assert "could not record a parked decision" in caplog.text
+    else:
+        rec, = store.list(state="pending")
+        assert payload == {**checkpoint, "decision_id": rec.id}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("origin", ["api-chat", "scheduler"])
+async def test_repeated_hold_preserves_decision_identity(store, decision_graph, monkeypatch, origin):
+    from graph.config import LangGraphConfig
+
+    first = await _sync_turn(origin)
+    rec, = store.list(state="pending")
+    assert first[0]["hitl"]["decision_id"] == rec.id
+    repeated = await _sync_turn(origin, message="another message")
+    assert repeated[0]["hitl"] == first[0]["hitl"]
+    monkeypatch.setattr(STATE, "graph_config", LangGraphConfig())
+    frames = await _collect(chat_mod._chat_langgraph_stream(
+        "another streamed message", "s-real", request_metadata={"origin": origin}
+    ))
+    payload, = [value for kind, value in frames if kind == "input_required"]
+    assert payload == first[0]["hitl"]
+    assert [row.id for row in store.list()] == [rec.id]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("payload", ["Which environment?", {"question": "Go?"},
+                                      {"kind": "form", "title": "Details", "steps": []},
+                                      {"kind": "approval", "title": "Approve?"}])
+async def test_identity_enrichment_preserves_generic_hitl(store, payload):
+    assert await turn_control.decision_pause_payload("s", payload, {}) is payload
+    assert store.list() == []
+
+
+@pytest.mark.asyncio
+async def test_executor_persists_decision_identity_for_replay(store, decision_graph, tmp_path):
+    import httpx
+    import protolabs_a2a as pa
+    from a2a.server.tasks import DatabaseTaskStore
+    from a2a.server.context import ServerCallContext
+    from a2a_impl.executor import HITL_MIME
+    from a2a_impl.stores import make_sqlite_engine
+    from google.protobuf.json_format import MessageToDict
+    from tests._a2a_app import build_app, drain_handlers, poll_terminal, send_msg
+
+    emitted = []
+
+    async def stream(text, session_id, **kwargs):
+        config = {"configurable": {"thread_id": f"a2a:{session_id}"}}
+        async with turn_control._thread_lock(config["configurable"]["thread_id"]):
+            async for frame in chat_mod._run_native_turn(text, session_id, config, request_metadata={}):
+                if frame[0] == "input_required":
+                    emitted.append(frame[1])
+                yield frame
+
+    db = str(tmp_path / "tasks.db")
+    engine = make_sqlite_engine(db)
+    task_store = DatabaseTaskStore(engine)
+    await task_store.initialize()
+    try:
+        app = build_app(stream, task_store=task_store)
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+            response = await send_msg(client)
+            task = response.json()["result"]["task"]
+            final = await poll_terminal(client, task["id"])
+        assert final["status"]["state"] == "TASK_STATE_INPUT_REQUIRED"
+        rec, = store.list(state="pending")
+        assert emitted[0]["decision_id"] == rec.id
+    finally:
+        await drain_handlers()
+        await engine.dispose()
+
+    engine = make_sqlite_engine(db)
+    try:
+        reopened = DatabaseTaskStore(engine)
+        await reopened.initialize()
+        saved = await reopened.get(task["id"], ServerCallContext())
+        wire = MessageToDict(saved)
+        assert wire["status"] == final["status"]
+        payloads = [data for part in wire["status"]["message"]["parts"]
+                    for mime, data in [pa.read_data(part)] if mime == HITL_MIME]
+        assert payloads == emitted
+        assert payloads[0]["decision_id"] == rec.id
+    finally:
+        await engine.dispose()
