@@ -220,6 +220,12 @@ uncertainty does not increment confirmed execution failures or deliveries, chang
 `last_ok`, or emit a fabricated terminal `turn.finished`. Cancellation of a
 schedule still removes its job row; the ledger retains the delivery evidence.
 
+Cron resume atomically carries forward the expected post-claim slot for claims
+that still own the schedule. A turn completing after pause/resume therefore still
+records its outcome and counts toward `max_fires`. Claims already superseded by
+an explicit schedule edit or a replacement generation cannot regain ownership
+through resume.
+
 This is containment, **not exactly-once delivery**. A stable message ID is an
 identity for reconciliation, not evidence of durable receiver deduplication.
 There is no atomic transaction spanning SQLite and the receiver. Unknown delivery

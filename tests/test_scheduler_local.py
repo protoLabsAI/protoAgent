@@ -1908,3 +1908,54 @@ async def test_recreated_same_slot_has_independent_claim_and_settlement(tmp_path
         assert len(claims) == 2
         assert [c["message_id"] for c in claims] == [old_message, messages[0]]
         assert all(c["state"] == "settled" for c in claims)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failed", [False, True])
+@pytest.mark.parametrize("max_fires", [1, 2])
+async def test_cron_resume_during_turn_preserves_settlement(tmp_path, monkeypatch, failed, max_fires):
+    import httpx
+
+    s = _make_scheduler(tmp_path)
+    job = s.add_job("running cron", "* * * * *", max_fires=max_fires)
+    with s._connect() as db:
+        db.execute("UPDATE jobs SET next_fire = ? WHERE id = ?",
+                   ((datetime.now(UTC) - timedelta(seconds=1)).isoformat(), job.id))
+    entered, release = asyncio.Event(), asyncio.Event()
+    calls = []
+
+    class SlowClient(_FakeClient):
+        async def post(self, *args, **kwargs):
+            calls.append(1)
+            entered.set()
+            await release.wait()
+            return _FakeResponse(payload=_failed_body("turn failed") if failed else None)
+
+    monkeypatch.setattr(httpx, "AsyncClient", lambda **kw: SlowClient(None))
+    await s._tick()
+    await entered.wait()
+    try:
+        # Force resume to move beyond the post-claim slot without a wall-clock wait.
+        for days in (1, 2):
+            slot = (datetime.now(UTC) + timedelta(days=days)).isoformat()
+            monkeypatch.setattr("scheduler.local._compute_next_fire", lambda *a, **kw: slot)
+            s.set_enabled(job.id, False)
+            assert s.set_enabled(job.id, True).next_fire == slot
+        await s._tick()
+        assert calls == [1]
+    finally:
+        release.set()
+        await asyncio.gather(*s._fire_tasks)
+    stored = s.get_job(job.id)
+    if max_fires == 1:
+        assert stored is None
+    else:
+        assert stored.fire_count == 1
+        assert stored.next_fire == slot
+        assert stored.consecutive_failures == int(failed)
+        assert stored.last_error == ("**Error:** turn failed" if failed else None)
+        assert bool(stored.last_ok) is not failed
+    with s._connect() as db:
+        assert db.execute("SELECT state FROM occurrences").fetchone()["state"] == "settled"
+    await s._tick()
+    assert calls == [1]

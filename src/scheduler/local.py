@@ -669,6 +669,7 @@ class LocalScheduler:
         returns the updated ``Job``."""
         db = self._connect()
         try:
+            db.execute("BEGIN IMMEDIATE")
             row = db.execute(
                 "SELECT * FROM jobs WHERE id = ? AND agent_name = ?",
                 (job_id, self.agent_name),
@@ -683,6 +684,14 @@ class LocalScheduler:
                 db.execute(
                     "UPDATE jobs SET enabled = ?, next_fire = ? WHERE id = ? AND agent_name = ?",
                     (int(enabled), next_fire, job_id, self.agent_name),
+                )
+                # Resume moves the slot, not the running occurrence's ownership.
+                # Carry only claims that still owned the row before this move;
+                # an explicit schedule edit must keep fencing off late results.
+                db.execute(
+                    "UPDATE occurrences SET expected_next = ? WHERE job_id = ? "
+                    "AND created_at = ? AND expected_next = ?",
+                    (next_fire, job_id, row["created_at"], row["next_fire"]),
                 )
             else:
                 # Pausing (any schedule) or resuming a one-shot: only flip the flag.
