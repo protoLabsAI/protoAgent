@@ -1,4 +1,62 @@
-import { expect, test } from "@playwright/test";
+import { randomUUID } from "node:crypto";
+import { expect, test as base, type Request } from "@playwright/test";
+
+// Keep every error: these records diagnose failures, never allowlist them.
+const test = base.extend({
+  page: async ({ page }, use, testInfo) => {
+    const scope = randomUUID();
+    await page.setExtraHTTPHeaders({ "x-e2e-lifecycle": scope });
+    const events: object[] = [];
+    const ids = new Map<Request, number>();
+    const record = (event: string, detail: object) => events.push({ time: Date.now(), event, ...detail });
+    const detail = (request: Request) => ({
+      id: ids.get(request), method: request.method(),
+      url: new URL(request.url()).origin + new URL(request.url()).pathname,
+      resourceType: request.resourceType(), navigation: request.isNavigationRequest(),
+      origin: request.headers().origin ?? null,
+      preflightMethod: request.headers()["access-control-request-method"] ?? null,
+      preflightHeaders: request.headers()["access-control-request-headers"] ?? null,
+    });
+    page.on("request", (request) => {
+      ids.set(request, ids.size + 1);
+      record("request", detail(request));
+    });
+    page.on("requestfailed", (request) => record("requestfailed", {
+      ...detail(request), failure: request.failure(),
+    }));
+    page.on("requestfinished", (request) => record("requestfinished", detail(request)));
+    page.on("response", (response) => {
+      const headers = response.headers();
+      record("response", {
+        ...detail(response.request()), status: response.status(),
+        serverId: headers["x-e2e-request-id"] ?? null,
+        allowOrigin: headers["access-control-allow-origin"] ?? null,
+        allowCredentials: headers["access-control-allow-credentials"] ?? null,
+        allowMethods: headers["access-control-allow-methods"] ?? null,
+        allowHeaders: headers["access-control-allow-headers"] ?? null,
+      });
+    });
+    page.on("framenavigated", (frame) => {
+      if (frame === page.mainFrame()) record("navigation", { url: new URL(frame.url()).pathname });
+    });
+    page.on("pageerror", (error) => record("pageerror", { message: error.message, stack: error.stack }));
+    page.on("console", (message) => {
+      if (message.type() === "error") record("console.error", { message: message.text() });
+    });
+    try {
+      await use(page);
+    } finally {
+      const response = await page.request.get("/__e2e/request-lifecycle", {
+        headers: { "x-e2e-lifecycle": scope },
+      });
+      await testInfo.attach("request-lifecycle", {
+        body: JSON.stringify({ browser: events, server: await response.json() }, null, 2),
+        contentType: "application/json",
+      });
+    }
+  },
+});
+
 
 // ADR 0114 slice 1 — a full browser-storage quota never crashes the console.
 //
@@ -52,12 +110,26 @@ test("boots, navigates and reloads with localStorage filled to the real quota", 
   await page.getByTestId("settings-widget").click();
   await expect(page.locator(".settings-overlay")).toBeVisible();
   await page.keyboard.press("Escape");
+  const feedback = page.waitForResponse((response) => new URL(response.url()).pathname === "/api/feedback");
   await composer.fill("hello from a full quota");
   await composer.press("Enter");
   await expect(page.locator(".pl-message--user").last()).toContainText("hello from a full quota");
 
-  // The old failure mode was a crash LOOP — Reload must boot too.
-  await page.reload({ waitUntil: "load" });
+  // Finish the turn before exercising persisted-state recovery. Reloading immediately
+  // after the optimistic user row cancels the stream and starts feedback during unload;
+  // the isolated engine control below covers that diagnostic separately.
+  await expect(page.locator(".pl-message--assistant .markdown")).toContainText("Done — found 8 results.");
+  expect(await (await feedback).finished()).toBeNull();
+
+  // The old failure mode was a crash LOOP — repeated Reload must boot too.
+  for (let reload = 0; reload < 10; reload++) {
+    // Dwell on the restored console: its composer paints before session hydration
+    // effects finish. Back-to-back document destruction tests the engine control.
+    await page.waitForTimeout(1000);
+    await page.reload({ waitUntil: "load" });
+    await expect(composer).toBeVisible();
+    await expect(page.locator(".pl-message--user").last()).toContainText("hello from a full quota");
+  }
   await expect(page.getByPlaceholder(/Message protoAgent/i)).toBeVisible();
   await expect(page.locator(".app-crash")).toHaveCount(0);
   expect(errors).toEqual([]);
@@ -183,4 +255,101 @@ test("a claimed pairing token that cannot be stored shows recovery before the co
   expect(await page.evaluate(() => localStorage.getItem("protoagent.authToken"))).toBeNull();
   await page.getByRole("button", { name: "Continue to console" }).click();
   await expect(page.getByPlaceholder(/Message protoAgent/i)).toBeVisible();
+});
+
+
+// This is an engine characterization, not an exception to the console's zero-error
+// assertions. WebKit emits a pageerror even with a rejection handler, before the
+// fetch enters the network lifecycle. Native WKWebView still needs device acceptance.
+test("classifies a handled unload fetch independently of the console", async ({ page, browserName }) => {
+  const errors: string[] = [];
+  const requests: string[] = [];
+  page.on("pageerror", (error) => errors.push(error.message));
+  page.on("request", (request) => requests.push(new URL(request.url()).pathname));
+  await page.goto("/__e2e/unload-fetch");
+  // Establish that the same-origin endpoint works while the document is alive.
+  expect(await page.evaluate(async () => (await fetch("/__e2e/unload-target")).json())).toEqual({ ok: true });
+  requests.length = 0;
+  await page.goto("/__e2e/unload-target");
+  if (browserName === "webkit") {
+    expect(errors).toHaveLength(1);
+    expect(errors[0]).toMatch(/\/__e2e\/unload-target.*due to access control checks/);
+    // Only the destination document reaches the network, not the pagehide fetch.
+    expect(requests).toEqual(["/__e2e/unload-target"]);
+  } else {
+    expect(errors).toEqual([]);
+  }
+  const lifecycle = await page.evaluate(async () => (await fetch("/__e2e/request-lifecycle")).json());
+  expect(lifecycle).toEqual(expect.arrayContaining([
+    expect.objectContaining({ pathname: "/__e2e/unload-target", event: "finish", status: 200, finished: true }),
+  ]));
+  expect(lifecycle.every((event: { allowOrigin: unknown }) => event.allowOrigin === null)).toBe(true);
+  const isolated = await page.request.get("/__e2e/request-lifecycle", {
+    headers: { "x-e2e-lifecycle": randomUUID() },
+  });
+  expect(await isolated.json()).toEqual([]);
+});
+
+test("migrates all 2400 legacy messages and retains them through ten reloads", async ({ page }) => {
+  test.setTimeout(60_000);
+  const errors: string[] = [];
+  page.on("pageerror", (error) => errors.push(error.message));
+  await page.addInitScript(() => {
+    if (sessionStorage.getItem("e2e.migrated")) return;
+    sessionStorage.setItem("e2e.migrated", "1");
+    localStorage.setItem("protoagent.chat.sessions", JSON.stringify({
+      version: 1, currentSessionId: "migration-qa",
+      sessions: [{
+        id: "migration-qa", title: "Migration QA", createdAt: 1, updatedAt: 1,
+        messages: Array.from({ length: 2400 }, (_, i) => ({
+          id: `legacy-${i}`, role: "user", status: "done", content: `message ${i}`,
+        })),
+      }],
+    }));
+  });
+  const attendance = page.waitForResponse((response) => new URL(response.url()).pathname === "/api/chat/attend");
+  const python = page.waitForResponse((response) => new URL(response.url()).pathname === "/api/runtime/python");
+  await page.goto("/app/");
+  expect((await attendance).headers()["content-type"]).toBe("text/event-stream");
+  expect((await python).status()).toBe(200);
+  const expected = Array.from({ length: 2400 }, (_, i) => ({ id: `legacy-${i}`, content: `message ${i}` }));
+  for (let reload = 0; reload <= 10; reload++) {
+    await expect(page.getByPlaceholder(/Message protoAgent/i)).toBeVisible();
+    await expect.poll(() => page.evaluate(() => localStorage.getItem("protoagent.chat.sessions"))).toBeNull();
+    const messages = await page.evaluate(async () => {
+      const db = await new Promise<IDBDatabase>((resolve, reject) => {
+        const request = indexedDB.open("protoagent-transcripts");
+        request.onsuccess = () => resolve(request.result);
+        request.onerror = () => reject(request.error);
+      });
+      try {
+        const tx = db.transaction(["sessions", "chunks"], "readonly");
+        type Message = { id: string; content: string };
+        type Session = { slug: string; id: string; chunks: string[]; tail: Message[] };
+        type Chunk = { slug: string; sessionId: string; hash: string; messages: Message[] };
+        const read = <T,>(store: string) => new Promise<T[]>((resolve, reject) => {
+          const request = tx.objectStore(store).getAll();
+          request.onsuccess = () => resolve(request.result);
+          request.onerror = () => reject(request.error);
+        });
+        const [sessions, chunks] = await Promise.all([read<Session>("sessions"), read<Chunk>("chunks")]);
+        const session = sessions.find((record) => record.slug === "host" && record.id === "migration-qa");
+        if (!session) return [];
+        return [
+          ...session.chunks.flatMap((hash: string) => chunks.find((chunk) =>
+            chunk.slug === "host" && chunk.sessionId === "migration-qa" && chunk.hash === hash)?.messages ?? []),
+          ...session.tail,
+        ].map(({ id, content }) => ({ id, content }));
+      } finally {
+        db.close();
+      }
+    });
+    expect(messages).toEqual(expected);
+    await expect(page.locator(".app-crash")).toHaveCount(0);
+    if (reload < 10) {
+      await page.waitForTimeout(1000);
+      await page.reload();
+    }
+  }
+  expect(errors).toEqual([]);
 });
