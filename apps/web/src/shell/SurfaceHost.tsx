@@ -39,6 +39,7 @@ export function SurfaceHost({
   children: ReactNode;
 }) {
   const modal = useUI((s) => s.surfaceModal);
+  const modalViewId = modal?.viewId;
   const contentRef = useRef<HTMLDivElement>(null);
   const headingRef = useRef<HTMLSpanElement>(null);
   const prevModal = useRef(modal);
@@ -56,8 +57,10 @@ export function SurfaceHost({
     prevModal.current = modal;
     if (!viewId || !title) return;
     const focusView = () => {
-      const target = contentRef.current?.querySelector<HTMLElement>("[data-surface-focus]");
-      (target ?? headingRef.current)?.focus();
+      // A selected item's heading takes precedence over its (possibly hidden) list row.
+      const target = contentRef.current?.querySelector<HTMLElement>('[data-surface-focus][tabindex="-1"]')
+        ?? contentRef.current?.querySelector<HTMLElement>("[data-surface-focus]");
+      (target ?? headingRef.current)?.focus({ preventScroll: true });
     };
     if ((frame === "modal" || frame === "sheet") && modal?.viewId === viewId) {
       // A fresh open supersedes any pending Close, so clear the shared guard here — this also
@@ -78,7 +81,9 @@ export function SurfaceHost({
       focusView();
       setAnnouncement(`${title} docked to the side rail.`);
     }
-  }, [frame, modal, viewId, title]);
+  // The modal's saved state changes on every scroll. Only a frame/view transition
+  // should restore focus; reacting to that state traps keyboard users on the first row.
+  }, [frame, modalViewId, viewId, title]);
 
   const heading = (
     <span
