@@ -7,6 +7,7 @@ import { api } from "../../lib/api";
 import { chatStore } from "../../chat/chat-store";
 import { useKbIntents } from "../../keybindings/intents";
 import { decisionsApi } from "../../lib/api/decisions";
+import { ApiError } from "../../lib/api/http";
 import { decisionsStoreForTest } from "../../decisions/useDecisions";
 import { WorkView } from "../WorkView";
 import { decisionMeta, fromDecision, fromDirective } from "../tone";
@@ -322,10 +323,7 @@ describe("Work decision actions", () => {
       connection.listeners.forEach((listener) => listener(false));
     });
     const get = vi.mocked(decisionsApi.getDecision).mockImplementation(async (requested) => {
-      if (requested === id) {
-        data.sources.decisions.items = [];
-        return terminal;
-      }
+      if (requested === id) return terminal;
       throw new Error("unavailable");
     });
     vi.mocked(decisionsApi.listDecisions).mockResolvedValue({ decisions: [], pending: 0 });
@@ -342,21 +340,33 @@ describe("Work decision actions", () => {
     expect(host.querySelector(".work-view__list")?.scrollTop).toBe(81);
   });
 
-  it("does not restore stale answer controls when a departed decision cannot be reloaded", async () => {
-    data.sources.decisions.items = [decisionItem(decisionRow("reconnect-unavailable"))];
-    workState({ section: "decisions", itemId: "decision:reconnect-unavailable", filters: { thisChat: true } });
+  it.each([503, 404])("does not restore stale Work query answer controls when reconciliation returns %s", async (status) => {
+    const id = `reconnect-unavailable-${status}`;
+    data.sources.decisions.items = [decisionItem(decisionRow(id))];
+    const saved = { section: "decisions", itemId: `decision:${id}`, filters: { thisChat: true }, scrollTop: 81 };
+    workState(saved);
     await render();
+    expect(host.querySelector('[role="group"][aria-label="Answer"]')).toBeTruthy();
     await act(async () => {
       connection.online = false;
       connection.listeners.forEach((listener) => listener(false));
     });
+    // No decision.changed event: Work's independent query keeps its old pending row.
+    vi.mocked(decisionsApi.listDecisions).mockResolvedValue({ decisions: [], pending: 0 });
+    vi.mocked(decisionsApi.getDecision).mockRejectedValue(new ApiError(status, "unavailable"));
     await act(async () => {
-      data.sources.decisions.items = [];
       connection.online = true;
       connection.listeners.forEach((listener) => listener(true));
     });
     expect(host.querySelector('[role="group"][aria-label="Answer"]')).toBeNull();
-    expect(useUI.getState().surfaceStates.work.itemId).toBe("decision:reconnect-unavailable");
+    expect(vi.mocked(decisionsApi.getDecision).mock.calls.some(([requested]) => requested === id)).toBe(true);
+    const snapshot = decisionsStoreForTest.getSnapshot();
+    if (status === 404) expect(snapshot.missing[id]).toBe(true);
+    else expect(snapshot.records[id].state).toBe("pending");
+    expect(data.sources.decisions.items[0].status).toBe("needs-you");
+    expect(rowFor(`Question ${id}`)).toBeUndefined();
+    expect(useUI.getState().surfaceStates.work).toEqual(saved);
+    expect(host.querySelector(".work-view__list")?.scrollTop).toBe(81);
   });
 
   it.each(["answered", "expired", "withdrawn", "cancelled"] as const)("shares %s conflicts and retains the selected terminal record", async (state) => {

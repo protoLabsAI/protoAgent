@@ -35,6 +35,15 @@ export function WorkView({ frame = "rail", sessionId }: { frame?: "rail" | "moda
   const agentOnline = useSyncExternalStore(onConnectionChange, isConnected);
   const decisions = useDecisions();
   const allSources = { ...useWorkItems({ sessionId, thisChatOnly: false }) };
+  // The Work query can retain pending rows across an SSE gap. Once the shared store
+  // has loaded, its pending list is authoritative even if a departed row's GET failed
+  // or returned 404. Keep known terminal rows, but never revive stale answer controls.
+  const pendingDecisionIds = new Set(decisions.decisions.map((row) => row.id));
+  allSources.decisions = { ...allSources.decisions, items: allSources.decisions.items.filter((item) => {
+    if (decisions.missing[item.id]) return false;
+    const record = decisions.records[item.id] ?? item.raw as { state: string };
+    return record.state !== "pending" || !decisions.loaded || pendingDecisionIds.has(item.id);
+  }) };
   const selectedDecisionId = state.itemId?.startsWith("decision:") ? state.itemId.slice(9) : undefined;
   const retained = selectedDecisionId ? decisions.records[selectedDecisionId] : undefined;
   if (retained && retained.state !== "pending" && !allSources.decisions.items.some((item) => item.id === retained.id)) {
