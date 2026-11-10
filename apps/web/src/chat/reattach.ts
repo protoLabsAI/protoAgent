@@ -352,15 +352,27 @@ export function reattachTurn(sessionId: string, assistantId: string, taskId: str
       // below rebuilds those pauses in order while reusing their answer rows.
       const cur = chatStore.getSnapshot().sessions.find((s) => s.id === sessionId);
       if (cur) {
-        continuationIndex = cur.messages.findIndex((m) =>
-          m.id === assistantId || m.splitOf === assistantId || m.id?.startsWith(`${assistantId}-answer-`),
+        // Visible local HITL answers start a new assistant id on the SAME task.
+        // A Task snapshot includes those earlier pauses too, even though runTurn
+        // did not link them with splitOf. Fold them into this replay's anchor so
+        // their randomly identified operator rows can be reused in order.
+        const tail = cur.messages.findIndex((m) => m.id === assistantId);
+        const replayMessages = cur.messages.map((m, index) =>
+          index < tail && m.role === "assistant" && !m.author && m.taskId === taskId
+            ? { ...m, splitOf: assistantId }
+            : m,
+        );
+        continuationIndex = replayMessages.findIndex((m) =>
+          m.id === assistantId || m.splitOf === assistantId || m.id?.startsWith(`${assistantId}-answer-`) ||
+          (m.role === "user" && m.taskId === taskId),
         );
         continuationCount = 0;
-        chatStore.updateMessages(sessionId, resetTurnForSnapshot(cur.messages, assistantId));
+        chatStore.updateMessages(sessionId, resetTurnForSnapshot(replayMessages, assistantId));
       }
       updateMessage(sessionId, assistantId, (m) => ({
         ...m,
         content: "",
+        decisionId: undefined,
         reasoning: undefined,
         components: undefined,
         toolCalls: undefined,
@@ -428,10 +440,14 @@ export function reattachTurn(sessionId: string, assistantId: string, taskId: str
         index >= continuationIndex && index < tail && m.role === "user" && m.content === text,
       );
       const reuse = answerIndex !== -1;
-      if (reuse) continuationIndex = answerIndex;
+      if (reuse) {
+        continuationIndex = answerIndex;
+        // Keep the task boundary even when a generic pause has no bubble to freeze.
+        messages[answerIndex] = { ...messages[answerIndex], taskId };
+      }
       messages.splice(continuationIndex, 0, ...frozen, ...(reuse ? [] : [{
         id: `${assistantId}-answer-replay-${continuationCount}`,
-        role: "user" as const, content: text, status: "done" as const,
+        role: "user" as const, content: text, status: "done" as const, taskId,
       }]));
       continuationIndex += frozen.length + 1;
       continuationCount += 1;
