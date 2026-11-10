@@ -516,30 +516,19 @@ jobs:
           . .venv/bin/activate
           python scripts/live_smoke.py
 
-  web-e2e:
-    name: Web E2E smoke
-    # Path-scoped: the job drives the built SPA against a mock backend, so a PR that
-    # touches nothing it reads (scripts/windows_ci_scope.py `_needs_web`) skips it —
-    # a job skipped by `if:` reports success, keeping the required check green.
-    # Fails OPEN: if classification itself failed, the job still runs.
+  web-unit:
+    name: Web unit tests (vitest)
+    # Path-scoped like the E2E shards (scripts/windows_ci_scope.py `_needs_web`); fails
+    # OPEN if classification failed. Its own job so it runs in parallel with the shards
+    # instead of ahead of them — the "Web E2E smoke" gate below still requires it.
     needs: windows-scope
     if: >-
       !cancelled() &&
       (needs.windows-scope.result != 'success' || needs.windows-scope.outputs.web_tests == 'true')
     runs-on: ubuntu-latest  # workspace-config: allow-hosted-runner public repo — GH-hosted is free
-    # Browsers + system deps come PREINSTALLED in the Playwright job container —
-    # ZERO apt at runtime. This retires the apt lock-contention flake class that
-    # failed five runs across 2026-08-18/19 and outlived two rounds of runner
-    # hardening (#2845/#2849): background apt could hold the dpkg locks (or just
-    # fetch slowly) longer than any polite wait. The tag is pinned to the LOCKED
-    # @playwright/test version — a guard step below fails loudly on drift.
-    container:
-      image: mcr.microsoft.com/playwright:v1.61.1-noble
-    # Unit tests and build+Playwright run sequentially. Run 42831892534 spent five
-    # minutes in vitest, then was cancelled at the 15-minute job limit while the
-    # 796-test browser suite was still progressing. Allow room for the full suite
-    # and artifact upload; individual Playwright test/assertion timeouts stay bounded.
-    timeout-minutes: 25
+    # jsdom only — no browser, so no Playwright container. ~6 min was wall-clock at
+    # --maxWorkers=2 (environment setup dominates: ~300 s of ~340 s); default workers.
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
@@ -555,9 +544,46 @@ jobs:
         run: npm ci
       - name: Run unit tests (vitest)
         # Pure-logic unit tests (chat-store reducers, the A2A SSE frame parser,
-        # the uiStore persist migration). Fast — runs before the heavier
-        # Playwright path so a reducer regression fails the job early.
-        run: npm run test:unit --workspace @protoagent/web -- --maxWorkers=2
+        # the uiStore persist migration, component tests under jsdom).
+        run: npm run test:unit --workspace @protoagent/web
+
+  web-e2e-shard:
+    name: Web E2E shard ${{ matrix.shard }}/4
+    # Path-scoped: the job drives the built SPA against a mock backend, so a PR that
+    # touches nothing it reads (scripts/windows_ci_scope.py `_needs_web`) skips it.
+    # Fails OPEN: if classification itself failed, the shards still run.
+    needs: windows-scope
+    if: >-
+      !cancelled() &&
+      (needs.windows-scope.result != 'success' || needs.windows-scope.outputs.web_tests == 'true')
+    runs-on: ubuntu-latest  # workspace-config: allow-hosted-runner public repo — GH-hosted is free
+    # Browsers + system deps come PREINSTALLED in the Playwright job container —
+    # ZERO apt at runtime. This retires the apt lock-contention flake class that
+    # failed five runs across 2026-08-18/19 and outlived two rounds of runner
+    # hardening (#2845/#2849): background apt could hold the dpkg locks (or just
+    # fetch slowly) longer than any polite wait. The tag is pinned to the LOCKED
+    # @playwright/test version — a guard step below fails loudly on drift.
+    container:
+      image: mcr.microsoft.com/playwright:v1.61.1-noble
+    # Sharded 4 ways: one runner took ~15 min for the ~830-test suite at 2 workers
+    # (17-21 min job wall-clock). Each shard builds the SPA (~15 s) and runs a quarter
+    # of the suite at the config's CI worker count. Don't re-throttle workers to calm
+    # one flaky spec — fix or quarantine the spec.
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "20"
+          cache: npm
+      - name: Use npm 11
+        run: npm install -g npm@11
+      - name: Install dependencies
+        run: npm ci
       - name: Playwright version must match the container image
         # The pinned container ships the browsers for exactly one Playwright
         # version. When package-lock bumps @playwright/test, bump the job's
@@ -567,7 +593,7 @@ jobs:
           want="1.61.1"
           have=$(node -p "require('@playwright/test/package.json').version")
           if [ "$have" != "$want" ]; then
-            echo "::error::@playwright/test is $have but the web-e2e container is pinned to v$want — update the container image tag in checks.yml (job web-e2e) to mcr.microsoft.com/playwright:v$have-noble"
+            echo "::error::@playwright/test is $have but the web-e2e container is pinned to v$want — update the container image tag in checks.yml (job web-e2e-shard) to mcr.microsoft.com/playwright:v$have-noble"
             exit 1
           fi
       - name: Run E2E smoke (built SPA vs mock backend)
@@ -575,12 +601,42 @@ jobs:
         # deterministic mock backend (apps/web/e2e/mock-server.mjs) — no Python,
         # model, or network. Guards the operator-console rendering contract:
         # tool-call cards, markdown, slash commands, runtime panel.
-        run: npm run test:e2e --workspace @protoagent/web -- --workers=2
+        run: npm run test:e2e --workspace @protoagent/web -- --shard=${{ matrix.shard }}/4
       - name: Preserve scrollback paint evidence
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: web-e2e-paint-evidence
+          name: web-e2e-paint-evidence-${{ matrix.shard }}
           path: apps/web/test-results/
           if-no-files-found: ignore
           retention-days: 14
+
+  web-e2e:
+    # The REQUIRED check (ruleset) — keep this name. A gate over the vitest job and
+    # every E2E shard; succeeds when web tests were out of scope (both skipped).
+    name: Web E2E smoke
+    needs: [windows-scope, web-unit, web-e2e-shard]
+    if: ${{ always() }}
+    runs-on: ubuntu-latest  # workspace-config: allow-hosted-runner public repo — GH-hosted is free
+    timeout-minutes: 5
+    steps:
+      - name: Require vitest and every E2E shard
+        shell: bash
+        env:
+          SCOPE_RESULT: ${{ needs.windows-scope.result }}
+          WEB_REQUIRED: ${{ needs.windows-scope.outputs.web_tests }}
+          UNIT_RESULT: ${{ needs.web-unit.result }}
+          E2E_RESULT: ${{ needs.web-e2e-shard.result }}
+        run: |
+          # Classification failed => the lanes ran fail-open, so they must have passed.
+          if [ "${SCOPE_RESULT}" != "success" ] || [ "${WEB_REQUIRED}" = "true" ]; then
+            if [ "${UNIT_RESULT}" != "success" ]; then
+              echo "::error::Web unit tests did not succeed (${UNIT_RESULT})."
+              exit 1
+            fi
+            if [ "${E2E_RESULT}" != "success" ]; then
+              echo "::error::One or more Web E2E shards did not succeed (${E2E_RESULT})."
+              exit 1
+            fi
+          fi
+          echo "Web gate complete: scope=${SCOPE_RESULT} required=${WEB_REQUIRED} unit=${UNIT_RESULT} e2e=${E2E_RESULT}"
