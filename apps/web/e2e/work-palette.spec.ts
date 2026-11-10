@@ -15,8 +15,12 @@ test("Work search lists one overview entry and opens every section in the modal"
     await page.locator(".pl-cmdk-commands__input").fill(label);
     await page.getByRole("option", { name: label, exact: true }).click();
     await expect(page.getByRole("button", { name: "Dock to rail", exact: true })).toBeVisible();
-    const selected = page.locator('.work-view[data-frame="modal"] .pl-sidenav__item[aria-selected="true"]');
-    await expect(selected.locator(".pl-sidenav__label")).toHaveText(section);
+    const picker = page.locator('.work-view[data-frame="modal"]').getByRole("button", { name: /Work sections/ });
+    await expect(picker).toHaveAccessibleName(`${section} Work sections`);
+    await picker.click();
+    await expect(page.getByRole("menuitemradio", { name: section, exact: true })).toHaveAttribute("aria-checked", "true");
+    await page.keyboard.press("Escape");
+    await expect(picker).toBeFocused();
     await page.keyboard.press("Escape");
     await expect(page.getByRole("button", { name: "Dock to rail", exact: true })).toHaveCount(0);
   }
@@ -29,7 +33,7 @@ test("Work search lists one overview entry and opens every section in the modal"
   await expect(page.getByPlaceholder(/Search commands/)).toHaveCount(0);
   await page.getByRole("option", { name: "Open Work", exact: true }).click();
   await expect(page.getByRole("button", { name: "Dock to rail", exact: true })).toBeVisible();
-  await expect(page.locator('.work-view[data-frame="modal"] .pl-sidenav__item[aria-selected="true"] .pl-sidenav__label')).toHaveText("Overview");
+  await expect(page.locator('.work-view[data-frame="modal"]').getByRole("button", { name: /Work sections/ })).toHaveAccessibleName("Overview Work sections");
 });
 
 for (const dock of ["left", "right", "bottom"] as const) {

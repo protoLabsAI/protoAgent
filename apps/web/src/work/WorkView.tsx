@@ -92,7 +92,7 @@ export function WorkView({ frame = "rail", sessionId }: { frame?: "rail" | "moda
   return <div className="work-view" data-frame={frame} data-selected={!!state.itemId}>
     <div className="work-view__header">
       {state.itemId && <Button className="work-view__back" variant="ghost" onClick={onBack}>Back to {label}</Button>}
-      <div className="work-view__picker"><SideNav responsive ariaLabel="Work sections" active={section} onSelect={selectSection}
+      <div className="work-view__picker"><SideNav collapsed ariaLabel="Work sections" active={section} onSelect={selectSection}
         items={Object.entries(workSections).map(([id, defaultLabel]) => ({ id, label: sections.get(id)?.label ?? defaultLabel,
           badge: (id === "overview" ? loading : sources[id as keyof WorkItems]?.status === "loading") ? undefined : (id === "overview" ? items.length : sources[id as keyof WorkItems]?.items.length ?? 0),
         }))} /></div>
