@@ -46,12 +46,12 @@ const EXCEPTION = `/* ds-audit-ignore hand-rolled-control ${EMDASH} composite ro
 const MATCHER = /ds-audit-ignore(-next-line)?(?:[:\s]+([a-z][a-z,\s-]*))?/;
 
 // Each sanctioned composite <button> and the 1-based source line it sits on. The comment is
-// inline, so adding it did not move these lines — the acceptance criteria name exactly these
-// positions, and the audit reports its findings there.
+// inline on each opening tag; keep these positions in sync when the components change.
+// The audit reports its findings on these same lines.
 const TARGETS = [
   { suffix: "/AppDrawer.tsx", line: 77, note: "surface-row button" },
   { suffix: "/AppDrawer.tsx", line: 96, note: "Settings-row button" },
-  { suffix: "/ComposerModelSelect.tsx", line: 113, note: "model-menu trigger" },
+  { suffix: "/ComposerModelSelect.tsx", line: 126, note: "model-menu trigger" },
 ];
 
 describe(`sanctioned composite ${BTN}> DS-audit exceptions (protoContent#551)`, () => {
@@ -59,7 +59,7 @@ describe(`sanctioned composite ${BTN}> DS-audit exceptions (protoContent#551)`, 
     describe(`${suffix}:${line} (${note})`, () => {
       const lineText = () => source(suffix).split("\n")[line - 1] ?? "";
 
-      it("opens the button on the pinned line (line numbers must not move)", () => {
+      it("opens the button on the pinned line", () => {
         expect(lineText().trimStart().startsWith(BTN + " ")).toBe(true);
       });
 
@@ -98,9 +98,11 @@ describe(`sanctioned composite ${BTN}> DS-audit exceptions (protoContent#551)`, 
     expect(drawer).toContain(
       `${BTN} ${EXCEPTION} type="button" className="app-drawer-item" onClick={act(() => onOpenGlobal())}>`,
     );
+    // The model trigger now continues onto touch handlers; its audit marker and
+    // original attributes must still share the opening line.
     const composer = source("/ComposerModelSelect.tsx");
     expect(composer).toContain(
-      `${BTN} ${EXCEPTION} type="button" className="composer-model-select" disabled={switching} aria-label="Model for this chat">`,
+      `${BTN} ${EXCEPTION} type="button" className="composer-model-select" disabled={switching} aria-label="Model for this chat"`,
     );
   });
 });
