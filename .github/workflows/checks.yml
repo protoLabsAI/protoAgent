@@ -557,7 +557,7 @@ jobs:
         # Pure-logic unit tests (chat-store reducers, the A2A SSE frame parser,
         # the uiStore persist migration). Fast — runs before the heavier
         # Playwright path so a reducer regression fails the job early.
-        run: npm run test:unit --workspace @protoagent/web
+        run: npm run test:unit --workspace @protoagent/web -- --maxWorkers=2
       - name: Playwright version must match the container image
         # The pinned container ships the browsers for exactly one Playwright
         # version. When package-lock bumps @playwright/test, bump the job's
@@ -575,7 +575,7 @@ jobs:
         # deterministic mock backend (apps/web/e2e/mock-server.mjs) — no Python,
         # model, or network. Guards the operator-console rendering contract:
         # tool-call cards, markdown, slash commands, runtime panel.
-        run: npm run test:e2e --workspace @protoagent/web
+        run: npm run test:e2e --workspace @protoagent/web -- --workers=2
       - name: Preserve scrollback paint evidence
         if: always()
         uses: actions/upload-artifact@v7

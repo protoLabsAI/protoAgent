@@ -94,8 +94,16 @@ test("after a reload with warm local storage the form is back, and answering it 
   await page.goto("/app/", { waitUntil: "load" });
   const sessionId = await park(page, bodies, "crackers");
 
-  // Same profile: localStorage keeps the transcript, so hydration leaves it alone and the
-  // reattach is the only way back to the form.
+  // The form can paint before the debounced transcript write finishes. Establish the
+  // warm-cache precondition before reloading, just as the stream-failure cases do below.
+  await expect.poll(async () =>
+    (await persistedChat(page))?.sessions.find((s) => s.id === sessionId)
+      ?.messages.filter((m) => m.role === "assistant")
+      .map((m) => [m.status, m.paused, m.taskId]),
+  ).toEqual([["streaming", true, taskFor(sessionId)]]);
+
+  // Same profile: the persisted transcript makes hydration leave it alone, so reattach
+  // is the only way back to the form.
   const subscribed = page.waitForRequest(
     (req) =>
       req.url().endsWith("/a2a") &&
