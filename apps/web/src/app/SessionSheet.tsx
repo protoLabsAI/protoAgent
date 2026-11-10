@@ -1,5 +1,5 @@
 import { EyeOff, Plus, X } from "lucide-react";
-import { useLayoutEffect, useRef } from "react";
+import { useLayoutEffect, useRef, type RefObject } from "react";
 
 import { Drawer } from "@protolabsai/ui/overlays";
 import { Button } from "@protolabsai/ui/primitives";
@@ -14,24 +14,36 @@ import { chatStore, unusedSession, useChatState } from "../chat/chat-store";
 // up from the bottom, under the thumb. The Drawer owns the sheet chrome, the scrim/overlay
 // dismiss, Esc, the focus trap and the <body> portal, so this component is just the sheet's
 // content now (mirrors AppDrawer's swap onto the DS Drawer).
-export function SessionSheet({ open, onClose }: { open: boolean; onClose: () => void }) {
+export function SessionSheet({ open, onClose, triggerRef }: {
+  open: boolean;
+  onClose: () => void;
+  triggerRef?: RefObject<HTMLButtonElement | null>;
+}) {
   const chat = useChatState();
   const blank = unusedSession(chat);
 
   // DS Drawer 0.62 traps focus on open but never returns it to the opener on close, and it
   // exposes no panel ref to hook that from the outside — so the consumer restores focus.
-  // Capture the focused trigger BEFORE the Drawer's focus-trap moves focus into the panel:
-  // this layout effect flushes ahead of the Drawer's passive focus-trap effect. On close,
-  // send focus back to the header title button that opened the sheet (MobileShell.tsx).
+  // Prefer the explicit trigger: Safari does not necessarily focus tapped buttons.
+  // Keep the active-element fallback for callers without a trigger ref, capturing it
+  // before the Drawer's passive focus-trap effect moves focus into the panel.
   const openerRef = useRef<HTMLElement | null>(null);
   useLayoutEffect(() => {
     if (open) {
-      openerRef.current = document.activeElement as HTMLElement | null;
+      openerRef.current = triggerRef?.current ?? document.activeElement as HTMLElement | null;
     } else if (openerRef.current) {
-      openerRef.current.focus();
+      const opener = openerRef.current;
+      opener.focus();
       openerRef.current = null;
+      // The Drawer dismisses its backdrop on mousedown. The browser's default
+      // focus action can then blur the restored trigger; repair that after the event.
+      // Do not steal focus from a follow-up dialog (for example, Delete chat).
+      const frame = requestAnimationFrame(() => {
+        if (document.activeElement === document.body && opener.isConnected) opener.focus();
+      });
+      return () => cancelAnimationFrame(frame);
     }
-  }, [open]);
+  }, [open, triggerRef]);
 
   return (
     <Drawer open={open} onClose={onClose} side="bottom" title="Chats">
