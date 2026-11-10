@@ -87,8 +87,8 @@ async function click(label: string) {
   expect(el, label).toBeDefined();
   await act(async () => el!.click());
 }
-function activeTab() {
-  return document.querySelector('[role="tab"][aria-selected="true"]')?.textContent ?? "";
+function activeSection() {
+  return document.querySelector(".work-view__picker button")?.textContent ?? "";
 }
 
 beforeEach(() => {
@@ -111,13 +111,18 @@ describe("Work surface mount", () => {
     for (const kind of KINDS) expect(sections.has(kind), kind).toBe(true);
   });
 
-  it("frames WorkView — not WorkPanel — in the right dock, with the Overview and nine section tabs", async () => {
+  it("frames WorkView — not WorkPanel — in the right dock, with the Overview and nine section menu items", async () => {
     await render();
     // It's WorkView: its two-pane shell and section nav, never a WorkPanel overview card.
     expect(host.querySelector(".work-view__panes")).not.toBeNull();
     expect(host.querySelector('[data-testid^="work-card-"]')).toBeNull();
     // Overview plus the eight sources = nine entries in the nav.
-    expect(host.querySelectorAll('[role="tab"]')).toHaveLength(9);
+    const trigger = host.querySelector<HTMLButtonElement>(".work-view__picker button")!;
+    await act(async () => trigger.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })));
+    const menu = document.querySelector<HTMLElement>('[role="menu"][aria-label="Work sections"]')!;
+    expect(menu.querySelectorAll('[role="menuitemradio"]')).toHaveLength(9);
+    expect(menu.querySelector('[aria-checked="true"]')?.textContent).toContain("Overview");
+    await act(async () => menu.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
     expect(host.textContent).toContain("Nothing going on");
     // Framed by the rail host, so it offers the view menu and no modal is open yet.
     expect(button("Expand")).toBeUndefined();
@@ -130,7 +135,7 @@ describe("Work surface mount", () => {
     // its own body (the Manage subagents link) appearing proves the barrel wiring took effect.
     useUI.setState({ surfaceStates: { work: { section: "background" } } });
     await render();
-    expect(activeTab()).toContain("Background agents");
+    expect(activeSection()).toContain("Background agents");
     expect(host.querySelector(".work-background")).not.toBeNull();
     expect(button("Manage subagents")).toBeDefined();
     expect(host.textContent).not.toContain("to show"); // the "No … to show" unregistered fallback
@@ -169,7 +174,7 @@ describe("Work surface mount", () => {
   it("Expand opens Work in the modal and Dock to rail brings it back with the same section", async () => {
     useUI.setState({ surfaceStates: { work: { section: "background" } } });
     await render();
-    expect(activeTab()).toContain("Background agents");
+    expect(activeSection()).toContain("Background agents");
 
     // Expand → the SAME view opens in the shell modal, still on the Background section.
     expand();
@@ -186,6 +191,6 @@ describe("Work surface mount", () => {
     expect(useUI.getState().rightPanel).toBe("work");
     expect(useUI.getState().surfaceStates.work.section).toBe("background");
     expect(host.querySelector(".work-background")).not.toBeNull();
-    expect(activeTab()).toContain("Background agents");
+    expect(activeSection()).toContain("Background agents");
   });
 });

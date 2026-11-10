@@ -25,6 +25,7 @@ async function selectTasks(page: Page, work: Locator) {
   await expect(menu.getByRole("menuitemradio", { name: /Tasks/ })).toBeFocused();
   await page.keyboard.press("Enter");
   await expect(picker).toContainText("Tasks");
+  await expect(picker).toBeFocused();
   await picker.click();
   await expect(menu.getByRole("menuitemradio", { name: "Tasks", exact: true })).toHaveAttribute("aria-checked", "true");
   await expect(menu.locator(".pl-count .pl-count")).toHaveCount(0);
@@ -49,6 +50,42 @@ for (const theme of ["light", "dark"] as const) {
           priority: 1, issue_type: "task", created_at: "2026-06-02T09:00:00Z",
         })),
       } }));
+    });
+
+    test("collapsed picker selects every section without a width cap", async ({ page }) => {
+      await page.setViewportSize({ width: 1440, height: 1000 });
+      await page.goto("/app/");
+      await expandWork(page);
+      const work = page.getByRole("dialog", { name: /^Work/ }).locator(".work-view");
+      const slot = work.locator(".work-view__picker");
+      const picker = slot.getByRole("button", { name: /Work sections/ });
+      const menu = page.getByRole("menu", { name: "Work sections" });
+      for (const width of [390, 768, 1000]) {
+        await work.evaluate((el, value) => { el.style.width = `${value}px`; }, width);
+        await expect(slot).toHaveCSS("max-width", "none");
+        if (width >= 768) expect((await slot.boundingBox())!.width).toBeGreaterThan(240);
+        await expect(picker).toBeVisible();
+        await expect(work.getByRole("tablist", { name: "Work sections" })).toHaveCount(0);
+        await expect.poll(() => work.evaluate(el => el.scrollWidth <= el.clientWidth)).toBe(true);
+        await selectTasks(page, work);
+        for (const label of ["Overview", "Decisions", "Goals", "Watches", "Tasks", "Schedules", "Background agents", "Activity", "Directives"]) {
+          await picker.press("Space");
+          const item = menu.getByRole("menuitemradio", { name: label, exact: true });
+          await expect(item.locator(".pl-menu__badge")).toHaveCount(1);
+          await expect(item.locator(".pl-menu__badge .pl-count")).toHaveCount(0);
+          await expect(item.locator(".pl-menu__badge")).toHaveText(/^\d+$/);
+          if (label === "Tasks") await expect(item.locator(".pl-menu__badge")).toHaveText("35");
+          await item.focus();
+          await page.keyboard.press("Enter");
+          await expect(picker).toHaveAccessibleName(`${label} Work sections`);
+          await expect(picker).toBeFocused();
+          await picker.press("Enter");
+          await expect(item).toHaveAttribute("aria-checked", "true");
+          await page.keyboard.press("Escape");
+          await expect(picker).toBeFocused();
+          await expect(work.getByRole("button", { name: "This chat", exact: true })).toHaveAttribute("aria-pressed", "true");
+        }
+      }
     });
 
     for (const width of [390, 560]) {

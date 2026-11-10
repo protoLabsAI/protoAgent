@@ -29,6 +29,16 @@ async function click(text: string) {
   expect(button, text).toBeTruthy();
   await act(async () => button!.click());
 }
+async function openSections() {
+  const trigger = host.querySelector<HTMLButtonElement>(".work-view__picker button")!;
+  await act(async () => trigger.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })));
+  const menu = document.querySelector<HTMLElement>('[role="menu"][aria-label="Work sections"]')!;
+  expect(menu).not.toBeNull();
+  return menu;
+}
+async function closeSections(menu: HTMLElement) {
+  await act(async () => menu.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
+}
 beforeEach(() => {
   client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   data.sources = Object.fromEntries(kinds.map((kind) => [kind, { items: [], status: "ready", error: null, loadedAt: 1, retry: vi.fn() } as WorkSource])) as WorkItems;
@@ -125,7 +135,9 @@ it("renders quiet unregistered sections and uses registered renderers", async ()
   expect(host.textContent).toContain("No watches to show");
   await act(async () => { dispose = registerWorkSection("watches", { label: "Watches", render: () => <p>Watch list</p> }); });
   expect(host.textContent).toContain("Watch list");
-  expect(host.querySelectorAll('[aria-label="Work sections"] [role="tab"]')).toHaveLength(9);
+  const menu = await openSections();
+  expect(menu.querySelectorAll('[role="menuitemradio"]')).toHaveLength(9);
+  await closeSections(menu);
 });
 
 it("summarizes disabled schedules and reveals older Done items with Show more", async () => {
@@ -177,10 +189,11 @@ it("passes raw counts including zero to SideNav and clears selection on scope ch
   data.sources.tasks.items = [item("row", "running")];
   useUI.setState({ surfaceStates: { work: { filters: { thisChat: false, retained: true } } } });
   await render("modal");
-  const nav = host.querySelector('[aria-label="Work sections"]')!;
-  expect(nav.querySelectorAll(".pl-count")).toHaveLength(9);
-  expect(nav.querySelector(".pl-count .pl-count")).toBeNull();
-  expect(Array.from(nav.querySelectorAll(".pl-count")).map((node) => node.textContent)).toContain("0");
+  const nav = await openSections();
+  expect(nav.querySelectorAll(".pl-menu__badge")).toHaveLength(9);
+  expect(nav.querySelector(".pl-menu__badge .pl-count")).toBeNull();
+  expect(Array.from(nav.querySelectorAll(".pl-menu__badge")).map((node) => node.textContent)).toContain("0");
+  await closeSections(nav);
   await act(async () => host.querySelector<HTMLButtonElement>(".work-row")!.click());
   expect(document.activeElement).toBe(host.querySelector(".work-view__detail h2"));
   expect(host.querySelector(".work-row")?.getAttribute("aria-current")).toBe("true");
@@ -192,12 +205,13 @@ it("passes raw counts including zero to SideNav and clears selection on scope ch
 it("omits only loading badges while retaining ready zero counts", async () => {
   data.sources.tasks.status = "loading";
   await render();
-  const nav = host.querySelector('[aria-label="Work sections"]')!;
-  const tabs = Array.from(nav.querySelectorAll('[role="tab"]'));
-  expect(tabs.find((node) => node.textContent === "Tasks")?.querySelector(".pl-count")).toBeNull();
-  expect(tabs.find((node) => node.textContent === "Overview")?.querySelector(".pl-count")).toBeNull();
-  expect(nav.querySelectorAll(".pl-count")).toHaveLength(7);
-  expect(Array.from(nav.querySelectorAll(".pl-count")).every((node) => node.textContent === "0")).toBe(true);
+  const nav = await openSections();
+  const tabs = Array.from(nav.querySelectorAll('[role="menuitemradio"]'));
+  expect(tabs.find((node) => node.textContent === "Tasks")?.querySelector(".pl-menu__badge")).toBeNull();
+  expect(tabs.find((node) => node.textContent === "Overview")?.querySelector(".pl-menu__badge")).toBeNull();
+  expect(nav.querySelectorAll(".pl-menu__badge")).toHaveLength(7);
+  expect(Array.from(nav.querySelectorAll(".pl-menu__badge")).every((node) => node.textContent === "0")).toBe(true);
+  await closeSections(nav);
 });
 
 it("restores the originating row for legacy unqualified item ids", async () => {
