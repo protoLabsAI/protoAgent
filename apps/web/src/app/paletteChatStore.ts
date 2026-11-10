@@ -68,8 +68,9 @@ registerSaveRetry("palette", async () => {
   await threadWrites;
 });
 
-/** Move every palette / DM thread's messages out of localStorage into the store (a copy the
- *  store already has wins), then preload this window's threads. Awaited at boot. */
+/** Move every palette / DM thread's messages out of localStorage into the store (a key that
+ *  still carries messages wins: it's never older than the store's copy), then preload this
+ *  window's threads. Awaited at boot; past `isLate` it switches nothing and shrinks nothing. */
 export async function initPaletteThreads(store: TranscriptStore | null, isLate: () => boolean = () => false): Promise<void> {
   if (!store) return;
   const links: [string, string][] = [];
