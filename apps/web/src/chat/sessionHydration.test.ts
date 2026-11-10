@@ -1988,4 +1988,19 @@ describe("decision identity in durable history", () => {
     expect(legacy[legacy.length - 1]?.decisionId).toBeUndefined();
     expect(legacy[legacy.length - 1]?.content).toBe("answer");
   });
+
+  it.each(["completed", "input-required"])("keeps a recorded identity when later %s wire omits it", (state) => {
+    const messages = messagesFromDurableTurn(turn({
+      state,
+      status: { state, message: decision() },
+      history: [decision("ledger-recorded"), decision()],
+    }));
+    const assistant = messages[messages.length - 1];
+    expect(assistant).toMatchObject({
+      role: "assistant", decisionId: "ledger-recorded", content: "answer",
+      status: state === "completed" ? "done" : "streaming",
+    });
+    expect(assistant.paused).toBe(state === "input-required" ? true : undefined);
+    expect(messages.filter((message) => message.decisionId)).toHaveLength(1);
+  });
 });
