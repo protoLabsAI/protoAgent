@@ -14,6 +14,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SurfaceHost, type SurfaceMeta } from "../shell/SurfaceHost";
 import { WorkView } from "./WorkView";
 import { sections } from "./sectionRegistry";
+import "../contextMenu/registrations";
+import { resolveMenu } from "../contextMenu/registry";
+import { useContextMenuStore } from "../contextMenu/store";
 import { useUI } from "../state/uiStore";
 import type { WorkItems, WorkSource, WorkSourceKind } from "./useWorkItems";
 // Importing the production barrel is the whole point of the mount — it must register all eight
@@ -64,6 +67,16 @@ async function render() {
     ),
   );
 }
+function expand() {
+  const target = document.querySelector('[role="region"][aria-haspopup="menu"]')!;
+  expect(target).not.toBeNull();
+  act(() => target.dispatchEvent(new KeyboardEvent("keydown", { key: "ContextMenu", bubbles: true, cancelable: true })));
+  const menu = useContextMenuStore.getState();
+  expect(menu.open).toBe(true);
+  const entry = resolveMenu(menu.type, menu.ctx).find((e) => e.id === "open-large-window")!;
+  expect(entry).toBeDefined();
+  act(() => { if ("run" in entry) entry.run(menu.ctx, { close: menu.close }); });
+}
 function button(label: string) {
   return [...document.querySelectorAll("button")].find(
     (el) => el.getAttribute("aria-label") === label || el.textContent?.trim() === label,
@@ -106,8 +119,9 @@ describe("Work surface mount", () => {
     // Overview plus the eight sources = nine entries in the nav.
     expect(host.querySelectorAll('[role="tab"]')).toHaveLength(9);
     expect(host.textContent).toContain("Nothing going on");
-    // Framed by the rail host, so it carries the Expand control and no modal is open yet.
-    expect(button("Expand")).toBeDefined();
+    // Framed by the rail host, so it offers the view menu and no modal is open yet.
+    expect(button("Expand")).toBeUndefined();
+    expect(document.querySelector('[role="region"][aria-haspopup="menu"]')).not.toBeNull();
     expect(document.querySelector('[role="dialog"]')).toBeNull();
   });
 
@@ -158,7 +172,7 @@ describe("Work surface mount", () => {
     expect(activeTab()).toContain("Background agents");
 
     // Expand → the SAME view opens in the shell modal, still on the Background section.
-    await click("Expand");
+    expand();
     const dialog = document.querySelector('[role="dialog"]');
     expect(dialog).not.toBeNull();
     expect(useUI.getState().surfaceModal?.viewId).toBe("work");

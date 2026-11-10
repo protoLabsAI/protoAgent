@@ -3,6 +3,9 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { SurfaceHost, type SurfaceMeta } from "./SurfaceHost";
 import { formatSurfaceLink, parseSurfaceLink } from "./surfaceState";
+import "../contextMenu/registrations";
+import { resolveMenu } from "../contextMenu/registry";
+import { useContextMenuStore } from "../contextMenu/store";
 import { useUI } from "../state/uiStore";
 
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -34,6 +37,7 @@ function click(label: string) {
 }
 
 beforeEach(() => {
+  useContextMenuStore.getState().close();
   useUI.setState(useUI.getInitialState(), true);
   container = document.createElement("div");
   document.body.appendChild(container);
@@ -45,12 +49,97 @@ afterEach(() => {
 });
 
 describe("SurfaceHost rail frame", () => {
-  it("heads the view and opens the modal from Expand", () => {
-    act(() => root.render(<SurfaceHost frame="rail" view={work}>{content("work")}</SurfaceHost>));
-    expect(container.querySelector("h2")?.textContent).toBe("Work");
-    expect(document.querySelector('[role="dialog"]')).toBeNull();
-    click("Expand");
+  it("keeps only the child heading and actions and opens from its background menu", () => {
+    act(() => root.render(<SurfaceHost frame="rail" view={work}><h2>Work</h2><button>History</button></SurfaceHost>));
+    expect(container.querySelectorAll("h2")).toHaveLength(1);
+    expect(button("History")).toBeDefined();
+    expect(button("Expand")).toBeUndefined();
+    const host = container.querySelector('[role="region"]')!;
+    act(() => host.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true })));
+    const menu = useContextMenuStore.getState();
+    expect(menu.type).toBe("surface-view");
+    const entry = resolveMenu(menu.type, menu.ctx).find((e) => e.id === "open-large-window")!;
+    expect("run" in entry).toBe(true);
+    act(() => { if ("run" in entry) entry.run(menu.ctx, { close: menu.close }); });
     expect(useUI.getState().surfaceModal?.viewId).toBe("work");
+  });
+
+  it.each(["ContextMenu", "F10"])("opens the view menu with %s", (key) => {
+    act(() => root.render(<SurfaceHost frame="rail" view={work}>{content("work")}</SurfaceHost>));
+    const host = container.querySelector<HTMLElement>('[role="region"]')!;
+    host.focus();
+    expect(document.activeElement).toBe(host);
+    act(() => host.dispatchEvent(new KeyboardEvent("keydown", { key, shiftKey: key === "F10", bubbles: true, cancelable: true })));
+    expect(useContextMenuStore.getState()).toMatchObject({ open: true, type: "surface-view", ctx: { id: "work" } });
+  });
+
+  it("leaves child editing, custom menus, iframe targets and selected text alone", () => {
+    act(() => root.render(<SurfaceHost frame="rail" view={work}>
+      <input /><div contentEditable suppressContentEditableWarning>Editable</div>
+      <button onContextMenu={(e) => e.preventDefault()}>Custom</button><iframe title="Plugin" />
+    </SurfaceHost>));
+    for (const child of container.querySelectorAll("input, [contenteditable], button, iframe")) {
+      act(() => child.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true })));
+      act(() => child.dispatchEvent(new KeyboardEvent("keydown", { key: "ContextMenu", bubbles: true })));
+      expect(useContextMenuStore.getState().open).toBe(false);
+    }
+    const range = document.createRange();
+    range.selectNodeContents(container.querySelector("[contenteditable]")!);
+    window.getSelection()!.removeAllRanges();
+    window.getSelection()!.addRange(range);
+    expect(window.getSelection()!.toString()).toBe("Editable");
+    act(() => container.querySelector('[role="region"]')!.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true })));
+    expect(useContextMenuStore.getState().open).toBe(false);
+    window.getSelection()!.removeAllRanges();
+  });
+
+  it("preserves the plugin DOM and flex sizing as the pinned host gains and loses a view", () => {
+    const render = (view: SurfaceMeta | undefined) => act(() => root.render(
+      <SurfaceHost frame="rail" view={view}><iframe title="Plugin" style={{ flex: 1 }} /></SurfaceHost>,
+    ));
+    render(undefined);
+    const iframe = container.querySelector("iframe")!;
+    const body = iframe.parentElement!;
+    expect(body.style.display).toBe("flex");
+    expect(body.style.minHeight).toBe("0px");
+    expect(body.style.overflow).toBe("auto");
+    render({ id: "plugin:notes:main", title: "Notes" });
+    expect(container.querySelector("iframe")).toBe(iframe);
+    render(undefined);
+    expect(container.querySelector("iframe")).toBe(iframe);
+    expect(body.parentElement!.style.height).toBe("");
+    expect(body.tabIndex).toBe(-1);
+  });
+
+  it.each(["work", "plugin:notes:main"])("expands inactive collapsed rail id %s and preserves state through Dock", (id) => {
+    const state = { section: "all", itemId: "item-1", scrollTop: 321 };
+    useUI.setState({ rightPanel: "knowledge", rightCollapsed: true,
+      railOrder: { left: ["chat"], right: ["knowledge", id], bottom: [], hidden: [] },
+      surfaceStates: { [id]: state } });
+    const entries = resolveMenu("rail-surface", { id, side: "right", pluginId: "notes", pluginUpdatable: true });
+    expect(entries.map((e) => e.id)).toEqual(expect.arrayContaining(["move-up", "hide", "configure", "update"]));
+    const entry = entries.find((e) => e.id === "open-large-window")!;
+    act(() => { if ("run" in entry) entry.run({}, { close: () => {} }); });
+    expect(useUI.getState().surfaceModal).toEqual({ viewId: id, state });
+    expect(useUI.getState().rightPanel).toBe("knowledge");
+    act(() => useUI.getState().dockSurface(id));
+    expect(useUI.getState()).toMatchObject({ rightPanel: id, rightCollapsed: false, surfaceStates: { [id]: state } });
+  });
+
+  it("excludes Chat and other docks from rail expansion", () => {
+    for (const side of ["left", "right", "bottom"] as const) {
+      useUI.setState({ railOrder: { left: [], right: [], bottom: [], hidden: [], [side]: ["chat", "work"] } });
+      expect(resolveMenu("rail-surface", { id: "chat", side }).some((e) => e.id === "open-large-window")).toBe(false);
+      if (side !== "right") expect(resolveMenu("rail-surface", { id: "work", side }).some((e) => e.id === "open-large-window")).toBe(false);
+    }
+  });
+
+  it("focuses the host without adding a heading when docking content without a focus marker", () => {
+    act(() => root.render(<SurfaceHost frame="rail" view={work}><div>Panel</div></SurfaceHost>));
+    act(() => useUI.getState().openSurfaceModal("work"));
+    act(() => useUI.getState().dockSurface("work"));
+    expect(document.activeElement).toBe(container.querySelector('[role="region"]'));
+    expect(container.querySelector("h2")).toBeNull();
   });
 
   it("renders its content but no Expand control when it has no view", () => {
