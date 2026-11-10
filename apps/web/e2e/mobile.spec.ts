@@ -30,10 +30,11 @@ test("mobile shell: chat is the root, surfaces push over it", async ({ page }) =
   await page.getByTestId("header-menu").click();
   const drawer = page.getByTestId("app-drawer");
   await expect(drawer).toBeVisible();
-  await drawer.getByRole("button", { name: "Work", exact: true }).click();
+  await drawer.getByRole("button", { name: "Knowledge", exact: true }).click();
   await expect(drawer).toHaveCount(0); // picking a surface closes the drawer
   await expect(page.locator(".mshell-pushed")).toBeVisible();
-  await expect(page.locator(".mshell-title-text")).toHaveText("Work");
+  await expect(page.locator(".mshell-title-text")).toHaveText("Knowledge");
+  await expect(page.getByRole("button", { name: "Open Work", exact: true })).toHaveCount(0);
 
   // The streaming-continuity contract (#613): chat is COVERED, never unmounted — a pushed
   // view must not tear down an in-flight turn.
@@ -42,6 +43,50 @@ test("mobile shell: chat is the root, surfaces push over it", async ({ page }) =
   // Back returns to the chat root.
   await page.locator('button[aria-label="Back"]').click();
   await expect(page.locator(".mshell-pushed")).toHaveCount(0);
+});
+
+test("mobile: drawer and handle share the Work sheet and preserve its section", async ({ page }) => {
+  await page.goto("/app/", { waitUntil: "load" });
+  const handle = page.getByRole("button", { name: "Open Work", exact: true });
+  await handle.tap();
+  const sheet = page.getByRole("dialog", { name: "Work", exact: true });
+  await expect(sheet).toBeVisible();
+  await expect(sheet).toHaveClass(/pl-drawer--full/);
+  await expect(page.locator(".mshell-pushed")).toHaveCount(0);
+  await expect(page.locator(".chat-stage")).toHaveCount(1);
+  await sheet.getByRole("tab", { name: /^Goals/ }).click();
+  await sheet.getByRole("button", { name: "Close", exact: true }).tap();
+  await expect(sheet).toHaveCount(0);
+  await expect(handle).toBeFocused();
+
+  await page.getByTestId("header-menu").tap();
+  const drawer = page.getByTestId("app-drawer");
+  await drawer.getByRole("button", { name: "Work", exact: true }).tap();
+  await expect(drawer).toHaveCount(0);
+  await expect(sheet).toBeVisible();
+  await expect(sheet.getByRole("tab", { selected: true })).toContainText("Goals");
+  await expect(page.locator(".mshell-pushed")).toHaveCount(0);
+  await sheet.getByRole("button", { name: "Close", exact: true }).tap();
+  await expect(sheet).toHaveCount(0);
+
+  await handle.focus();
+  await page.keyboard.press("Enter");
+  await expect(sheet).toBeVisible();
+  await sheet.getByRole("button", { name: "Close", exact: true }).tap();
+  await expect(sheet).toHaveCount(0);
+
+  // Exercise real pointer capture with release outside the handle.
+  for (const [dx, dy] of [[0, -30], [60, -60], [0, -60]]) {
+    const box = (await handle.boundingBox())!;
+    const x = box.x + box.width / 2;
+    const y = box.y + box.height / 2;
+    await page.mouse.move(x, y);
+    await page.mouse.down();
+    await page.mouse.move(x + dx, y + dy, { steps: 6 });
+    await page.mouse.up();
+    if (dx === 0 && dy === -60) await expect(sheet).toBeVisible();
+    else await expect(sheet).toHaveCount(0);
+  }
 });
 
 test("mobile shell: the session sheet replaces the tab strip", async ({ page }) => {

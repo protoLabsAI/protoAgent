@@ -134,7 +134,17 @@ for (const width of [1440, 768, 390]) {
       if (matching.length !== 1) throw new Error(`Expected one notification, got ${matching.length}`);
       matching[0].onclick?.();
     });
-    await expect(page.getByRole("dialog", { name: "Decisions waiting on you" })).toBeVisible();
+    if (width < 768) {
+      const work = page.getByRole("dialog", { name: "Work", exact: true });
+      await expect(work).toBeVisible();
+      await expect(work).toHaveClass(/pl-drawer--full/);
+      await expect(work.getByRole("tab", { selected: true })).toContainText("Decisions");
+      await expect(work.locator(".work-row")).toContainText("Ship the release after the checks pass?");
+      await expect(page.getByRole("dialog", { name: "Chats", exact: true })).toHaveCount(0);
+    } else {
+      await expect(page.getByRole("dialog", { name: "Decisions waiting on you" })).toBeVisible();
+      await expect(page.getByRole("button", { name: "Open Work", exact: true })).toHaveCount(0);
+    }
     await expect(page.getByRole("dialog")).toHaveCount(1);
     await page.keyboard.press("Escape");
     await expect(page.getByRole("dialog")).toHaveCount(0);
