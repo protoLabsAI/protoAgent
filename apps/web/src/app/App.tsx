@@ -26,7 +26,6 @@ import { PluginChangeWatch } from "./PluginChangeWatch";
 import { ServerTurnWatch } from "./ServerTurnWatch";
 import { BackgroundJobs } from "./BackgroundJobs";
 import { DecisionsWidget } from "../decisions/DecisionsWidget";
-import { DecisionsSheet } from "../decisions/DecisionsPanel";
 import { useDecisions } from "../decisions/useDecisions";
 import { ProtoLabsIcon } from "./ProtoLabsIcon";
 import { bootGatePhase, bootGateReady, BOOT_STUCK_MS, BOOT_FAILED_MS } from "./bootGate";
@@ -410,10 +409,14 @@ function WorkspaceApp({ runtime }: { runtime: RuntimeStatus | null }) {
   const [sessionSheetRequested, setSessionSheetRequested] = useState(false);
   // Notification opens take priority on this render; clear the request before paint
   // so closing Decisions cannot reopen Sessions. The two sheets never render together.
-  const sessionSheetOpen = sessionSheetRequested && !decisions.panelOpen;
+  const sessionSheetOpen = sessionSheetRequested && !decisions.panelOpen && !surfaceModal;
   useLayoutEffect(() => {
-    if (decisions.panelOpen) setSessionSheetRequested(false);
-  }, [decisions.panelOpen]);
+    if (decisions.panelOpen || surfaceModal) setSessionSheetRequested(false);
+    if (isMobile && decisions.panelOpen) {
+      decisions.closePanel();
+      useUI.getState().openSurfaceModal("work", { section: "decisions" });
+    }
+  }, [decisions.panelOpen, decisions.closePanel, isMobile, surfaceModal]);
   const setSessionSheetOpen = (open: boolean) => {
     if (open) decisions.closePanel();
     setSessionSheetRequested(open);
@@ -1126,15 +1129,7 @@ function WorkspaceApp({ runtime }: { runtime: RuntimeStatus | null }) {
       >
         {decisionAnnouncements.map(({ id, text }) => <span key={id}>{text} </span>)}
       </div>
-      {isMobile && (
-        <DecisionsSheet
-          open={decisions.panelOpen}
-          onClose={decisions.closePanel}
-          decisions={decisions.decisions}
-          loading={!decisions.loaded}
-          onAnswer={decisions.answer}
-        />
-      )}
+
       {/* Cross-agent awareness: toast + native-notify when ANOTHER agent's turn
           finishes (per-window SSE can't see it — this watches the other slugs'
           persisted in-flight turns and polls their durable tasks via the hub). */}
@@ -1202,6 +1197,8 @@ function WorkspaceApp({ runtime }: { runtime: RuntimeStatus | null }) {
           showBack={!mobileAtRoot}
           onBack={() => setMobileActive("chat")}
           onOpenDrawer={() => setDrawerOpen(true)}
+          onOpenWork={() => useUI.getState().openSurfaceModal("work")}
+          sheetOpen={!!surfaceModal || decisions.panelOpen || drawerOpen || globalSettingsOpen}
           sessionSheetOpen={sessionSheetOpen}
           onSessionSheetChange={setSessionSheetOpen}
           banners={
@@ -1650,7 +1647,10 @@ function WorkspaceApp({ runtime }: { runtime: RuntimeStatus | null }) {
         icon: s.icon,
       }))}
       activeSurface={isMobile ? mobileActive : leftActive}
-      onSelectSurface={setMobileActive}
+      onSelectSurface={(id) => {
+        if (isMobile && id === "work") useUI.getState().openSurfaceModal("work");
+        else setMobileActive(id);
+      }}
       onOpenGlobal={openGlobalSettings}
       version={runtime?.version}
       identity={
