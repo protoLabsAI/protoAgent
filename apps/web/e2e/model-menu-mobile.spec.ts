@@ -53,6 +53,8 @@ test("mobile: composer model menu retains touch focus, selects, and reopens", as
   const composer = page.getByPlaceholder(/Message protoAgent/i);
   const trigger = page.getByRole("button", { name: "Model for this chat" });
   const sheet = page.locator(".pl-menu.composer-model-menu");
+  await expect(trigger).toBeVisible();
+  const defaultModel = await trigger.innerText();
   await composer.tap();
   await composer.fill("Keep this draft");
   await expect(composer).toBeFocused();
@@ -79,6 +81,15 @@ test("mobile: composer model menu retains touch focus, selects, and reopens", as
   await expect(sheet).toBeVisible();
   await page.keyboard.press("Escape");
   await expect(trigger).toBeFocused();
+  // A later touch must still work after keyboard dismissal, including clearing
+  // the per-chat override by selecting the configured default again.
+  await trigger.tap();
+  await expect(sheet).toBeVisible();
+  await sheet.getByRole("menuitem").filter({ hasText: "default" }).tap();
+  await expect(sheet).toBeHidden();
+  await expect(trigger).toHaveText(defaultModel);
+  await expect(trigger).toBeFocused();
+  await expect(composer).toHaveValue("Keep this draft");
   await composer.tap();
   await expect(composer).toBeFocused();
 });
