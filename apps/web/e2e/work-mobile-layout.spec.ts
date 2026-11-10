@@ -52,15 +52,19 @@ for (const theme of ["light", "dark"] as const) {
       } }));
     });
 
-    test("collapsed picker selects every section without a width cap", async ({ page }) => {
-      await page.setViewportSize({ width: 1440, height: 1000 });
-      await page.goto("/app/");
-      await expandWork(page);
-      const work = page.getByRole("dialog", { name: /^Work/ }).locator(".work-view");
-      const slot = work.locator(".work-view__picker");
-      const picker = slot.getByRole("button", { name: /Work sections/ });
-      const menu = page.getByRole("menu", { name: "Work sections" });
-      for (const width of [390, 768, 1000]) {
+    // One test per container width, not one test walking all three: each width opens and
+    // keyboard-drives the picker for every section (~110 browser round-trips), and all three
+    // in a single test ran past the 30s budget on CI WebKit — failing on whichever step the
+    // timeout happened to interrupt.
+    for (const width of [390, 768, 1000]) {
+      test(`collapsed picker at ${width} selects every section without a width cap`, async ({ page }) => {
+        await page.setViewportSize({ width: 1440, height: 1000 });
+        await page.goto("/app/");
+        await expandWork(page);
+        const work = page.getByRole("dialog", { name: /^Work/ }).locator(".work-view");
+        const slot = work.locator(".work-view__picker");
+        const picker = slot.getByRole("button", { name: /Work sections/ });
+        const menu = page.getByRole("menu", { name: "Work sections" });
         await work.evaluate((el, value) => { el.style.width = `${value}px`; }, width);
         await expect(slot).toHaveCSS("max-width", "none");
         if (width >= 768) expect((await slot.boundingBox())!.width).toBeGreaterThan(240);
@@ -85,8 +89,8 @@ for (const theme of ["light", "dark"] as const) {
           await expect(picker).toBeFocused();
           await expect(work.getByRole("button", { name: "This chat", exact: true })).toHaveAttribute("aria-pressed", "true");
         }
-      }
-    });
+      });
+    }
 
     for (const width of [390, 560]) {
       test(`phone ${width} uses progressive panes`, async ({ page }, info) => {
