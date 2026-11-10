@@ -49,7 +49,7 @@ test("copies a finished job's full result, tail included", async ({ page }) => {
 
   await page.getByRole("button", { name: /^Background agents/ }).click();
   const work = page.locator('.work-view[data-frame="modal"]');
-  await expect(work.getByRole("tab", { selected: true })).toContainText("Background agents");
+  await expect(work.getByRole("button", { name: /Work sections/ })).toContainText("Background agents");
   await work.locator(".work-row").click();
   await expect(work.locator(".work-background__result")).toBeVisible();
 

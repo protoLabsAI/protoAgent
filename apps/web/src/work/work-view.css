@@ -2,6 +2,13 @@
 .work-view__header { display: flex; align-items: center; flex-wrap: wrap; gap: var(--pl-space-2); padding: var(--pl-space-3); }
 .work-view__picker { flex: 1 1 8rem; max-width: 15rem; min-width: 0; }
 .work-view__scope { margin-left: auto; }
+/* Keep the scope choices independently tappable on touch devices. */
+@media (hover: none) {
+  .work-view__scope button {
+    min-width: var(--pl-space-12);
+    min-height: var(--pl-space-12);
+  }
+}
 .work-view__panes { display: flex; flex: 1; min-height: 0; gap: var(--pl-space-3); }
 .work-view__list, .work-view__detail { flex: 1; min-width: 0; overflow: auto; padding: var(--pl-space-3); }
 .work-view__detail { display: none; }

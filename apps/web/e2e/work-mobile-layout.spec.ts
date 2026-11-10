@@ -19,6 +19,11 @@ async function selectTasks(page: Page, work: Locator) {
   await expect(menu.getByRole("menuitemradio", { name: /Tasks/ })).toBeFocused();
   await page.keyboard.press("Enter");
   await expect(picker).toContainText("Tasks");
+  await picker.click();
+  await expect(menu.getByRole("menuitemradio", { name: "Tasks", exact: true })).toHaveAttribute("aria-checked", "true");
+  await expect(menu.locator(".pl-count .pl-count")).toHaveCount(0);
+  await page.keyboard.press("Escape");
+  await expect(picker).toBeFocused();
 }
 
 async function openRow(work: Locator) {
@@ -29,7 +34,7 @@ async function openRow(work: Locator) {
 
 for (const theme of ["light", "dark"] as const) {
   test.describe(theme, () => {
-    test.use({ colorScheme: theme });
+    test.use({ colorScheme: theme, hasTouch: true });
     test.beforeEach(async ({ page }) => {
       await page.route("**/api/theme", route => route.fulfill({ json: { theme: { mode: theme, overrides: {} } } }));
       await page.route("**/api/tasks/issues**", route => route.fulfill({ json: {
@@ -49,6 +54,11 @@ for (const theme of ["light", "dark"] as const) {
         const work = page.locator(".work-view:visible");
         await selectTasks(page, work);
         await expect(work.locator(".work-view__detail")).toBeHidden();
+        for (const name of ["This chat", "All"]) {
+          const box = await work.getByRole("button", { name, exact: true }).boundingBox();
+          expect(box!.width).toBeGreaterThanOrEqual(44);
+          expect(box!.height).toBeGreaterThanOrEqual(44);
+        }
         await expect(work.locator(".pl-count .pl-count")).toHaveCount(0);
         const listScreenshot = info.outputPath(`phone-list-${width}-${theme}.png`);
         await page.screenshot({ path: listScreenshot });
