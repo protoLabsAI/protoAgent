@@ -165,18 +165,18 @@ export function DecisionCard({
     );
   }
 
-  function closedCallout() {
-    if (decision.state === "expired") {
-      const when = decision.expires_at ? formatGivenAt(decision.expires_at) : "the deadline";
+  function closedCallout(record: DecisionRow) {
+    if (record.state === "expired") {
+      const when = record.expires_at ? formatGivenAt(record.expires_at) : "the deadline";
       return (
         <Callout tone="neutral">
-          {`No answer by ${when}, so ${agent} went ahead and ${decision.default_action_text}.`}
+          {`No answer by ${when}, so ${agent} went ahead and ${record.default_action_text}.`}
         </Callout>
       );
     }
-    if (decision.state === "answered") return answeredElsewhereCallout(decision);
+    if (record.state === "answered") return answeredElsewhereCallout(record);
     // withdrawn / cancelled — "no longer needed"
-    const reason = decision.withdraw_reason?.trim();
+    const reason = record.withdraw_reason?.trim();
     return (
       <Callout tone="neutral">
         {`${agent} doesn't need this any more.${reason ? ` ${reason}` : ""}`}
@@ -217,7 +217,9 @@ export function DecisionCard({
       </p>
     ) : (
       <div ref={result} tabIndex={-1} aria-live="polite">
-        {phase.record ? answeredElsewhereCallout(phase.record) : answeredElsewhereCallout(decision)}
+        {TERMINAL.has((phase.record ?? decision).state)
+          ? closedCallout(phase.record ?? decision)
+          : answeredElsewhereCallout(phase.record ?? decision)}
       </div>
     );
   } else if (phase.kind === "sent") {
@@ -231,7 +233,7 @@ export function DecisionCard({
     );
   } else if (phase.kind === "idle" && TERMINAL.has(decision.state)) {
     body = (
-      <div aria-live="polite">{closedCallout()}</div>
+      <div aria-live="polite">{closedCallout(decision)}</div>
     );
   } else {
     // pending (idle / sending / error): show the options
