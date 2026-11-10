@@ -11,9 +11,7 @@ import type { DecisionRow } from "../../lib/api/decisions";
 import type { DirectiveRow } from "../../lib/api/chat";
 import type { DirectivesSnapshot } from "../../chat/useDirectives";
 
-// Registers the two sections under test as a side effect of import.
-import "./decisions";
-import "./directives";
+// Import only WorkView: production must register its built-in sections itself.
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -162,8 +160,8 @@ describe("Decisions section", () => {
     expect(lanes[1].querySelector("h3")?.textContent).toBe("Doing"); // sits below Needs you
 
     // Opening the pin straight from the Overview renders the unchanged DecisionCard as its detail.
-    workState({ section: "overview", itemId: "decision:live", filters: { thisChat: false } });
-    await render("modal");
+    await act(async () => (firstRow as HTMLButtonElement).click());
+    expect(useUI.getState().surfaceStates.work.itemId).toBe("decision:live");
     const detail = host.querySelector(".work-view__detail");
     expect(detail?.textContent).toContain("Question live");
     expect(detail?.textContent).toContain("Reply in chat instead"); // a DecisionCard-only affordance

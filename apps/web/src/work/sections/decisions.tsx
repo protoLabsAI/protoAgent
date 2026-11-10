@@ -22,7 +22,7 @@ import { DecisionCard } from "../../decisions/DecisionCard";
 import { decisionMeta } from "../tone";
 import { WorkRow } from "../WorkRow";
 import type { WorkItem } from "../useWorkItems";
-import { registerWorkSection, type WorkSectionContext } from "../WorkView";
+import { registerWorkSection, type WorkSectionContext } from "../sectionRegistry";
 
 /** The selected decision's detail: the DecisionCard, unchanged. */
 function DecisionDetail({ row }: { row: DecisionRow }): ReactNode {

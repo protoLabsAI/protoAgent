@@ -18,7 +18,7 @@ import type { ReactNode } from "react";
 import { Empty } from "@protolabsai/ui/primitives";
 
 import { DirectiveDrawerBody } from "../../chat/DirectiveDrawer";
-import { registerWorkSection, type WorkSectionContext } from "../WorkView";
+import { registerWorkSection, type WorkSectionContext } from "../sectionRegistry";
 
 function renderDirectives(ctx: WorkSectionContext): ReactNode {
   const sessionId = ctx.sessionId || ctx.sources.directives.items[0]?.sessionId;
