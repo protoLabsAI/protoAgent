@@ -127,6 +127,9 @@ async def _native_turn(
     and is exempt from the hold, exactly as a streaming turn from that origin is; the
     operator surfaces (``local`` / ``api-chat`` / ``v1`` / ``plugin``) stay attended.
 
+    Decision pauses also include the full ``hitl`` payload beside the reply text,
+    with ``decision_id`` only when the ledger write succeeds.
+
     ``telemetry_sink`` is the wrapper's telemetry sink: a turn that ends parked at a HITL
     ask (or held behind one) stamps ``state = "input_required"`` on it, so its row says
     what the A2A surface's does for the same park instead of ``completed`` (#3945).
@@ -182,6 +185,7 @@ async def _native_turn(
         )
         if hold is not None and hold is not _turn_control._HITL_RESUME:
             _parked()
+            hold = await _turn_control.decision_pause_payload(session_id, hold, config)
             payload = _chat()._interrupt_payload(hold)
             question = payload.get("question") or payload.get("title") or "The agent needs input to continue."
             return [
@@ -191,6 +195,7 @@ async def _native_turn(
                         f"🙋 **Input needed first:** {question}\n\n"
                         "_(Your message is queued — the agent gets it right after you answer.)_"
                     ),
+                    **({"hitl": payload} if _turn_control.is_decision_interrupt(payload) else {}),
                 }
             ]
         if hold is _turn_control._HITL_RESUME:
@@ -241,7 +246,7 @@ async def _native_turn(
         interrupt_val = await _chat()._pending_interrupt_value(config)
         if auto.autonomous and not _turn_control.is_decision_interrupt(interrupt_val):
             interrupt_val = None
-        await _turn_control.record_decision_pause(session_id, interrupt_val, config)
+        interrupt_val = await _turn_control.decision_pause_payload(session_id, interrupt_val, config)
     raw = _last_ai(result)
     response = extract_output(raw)
 
@@ -261,6 +266,7 @@ async def _native_turn(
             {
                 "role": "assistant",
                 "content": (f"{response}\n\n" if response else "") + _input_needed(interrupt_val),
+                **({"hitl": interrupt_val} if _turn_control.is_decision_interrupt(interrupt_val) else {}),
                 "usage": _turn_telemetry.sum_usage(usage_cb.usage_metadata),
             }
         ]
@@ -337,7 +343,7 @@ async def _native_turn(
                     interrupt_val = await _chat()._pending_interrupt_value(cont_config)
                     if auto.autonomous and not _turn_control.is_decision_interrupt(interrupt_val):
                         interrupt_val = None
-                    await _turn_control.record_decision_pause(session_id, interrupt_val, cont_config)
+                    interrupt_val = await _turn_control.decision_pause_payload(session_id, interrupt_val, cont_config)
             step.text = extract_output(_last_ai(result))
             if interrupt_val is not None:
                 _parked()
@@ -345,6 +351,7 @@ async def _native_turn(
                     {
                         "role": "assistant",
                         "content": (f"{step.text}\n\n" if step.text else "") + _input_needed(interrupt_val),
+                        **({"hitl": interrupt_val} if _turn_control.is_decision_interrupt(interrupt_val) else {}),
                         "usage": _turn_telemetry.sum_usage(usage_cb.usage_metadata),
                     }
                 ]
