@@ -1,0 +1,5 @@
+- **Work hub in the command palette (#4955).** ⌘K now lists "Open Work" plus a row per
+  Work section (Decisions, Goals, Watches, Tasks, Schedules, Background agents, Activity,
+  Directives) and "Work: New goal…", each opening the Work surface in the large shell modal
+  on the matching section. They route through a serializable NavIntent, so they work from the
+  desktop launcher too.

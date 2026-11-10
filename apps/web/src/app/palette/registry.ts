@@ -20,7 +20,7 @@
 // own iframe (themed/authed via the handshake) instead of navigating to its rail.
 import type { ReactNode } from "react";
 import { createElement, useEffect, useMemo, useRef, useSyncExternalStore } from "react";
-import { Download, Keyboard, PanelsTopLeft, Settings2, Store, Users } from "lucide-react";
+import { Download, Keyboard, LayoutDashboard, PanelsTopLeft, Settings2, Store, Users } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { commandsView, createPaletteRegistry, pluginView } from "@protolabsai/ui/command-palette";
 import type {
@@ -182,6 +182,55 @@ _link(
     keywords: ["plugins", "install", "url", "git"],
   },
   { kind: "plugins", tab: "local" },
+);
+// The Work hub (#4955 §3.6) as palette rows: a top-level "Open Work" plus one row per
+// section, every one opening the large shell MODAL (bd-0ia51.2) through the `surface` intent
+// — so they route identically in the console window and the desktop launcher, like every
+// other deep-link here. They wear Work's own rail glyph (LayoutDashboard, `coreSurfaces.tsx`)
+// so the group has no icon step. The generated `open:work` "Go to" surface row still docks
+// Work to the rail; these are the MODAL path and carry the section, so there is no duplicate
+// hand-written Work row. "Open Work" lands on Overview; each section row lands on its own
+// section; "New goal…" lands on Goals with the create form open (Q15), carried in
+// `SurfaceState.filters`. The section ids are WorkView's own (`WorkOverview.workSections`),
+// so a row can't drift onto a section that does not exist.
+_link(
+  {
+    id: "work",
+    label: "Open Work",
+    icon: glyph(LayoutDashboard),
+    keywords: ["work", "overview", "hub", "decisions", "goals", "tasks", "schedules"],
+  },
+  { kind: "surface", id: "work", state: { section: "overview" } },
+);
+const WORK_SECTIONS: Array<[string, string]> = [
+  ["decisions", "Decisions"],
+  ["goals", "Goals"],
+  ["watches", "Watches"],
+  ["tasks", "Tasks"],
+  ["schedules", "Schedules"],
+  ["background", "Background agents"],
+  ["activity", "Activity"],
+  ["directives", "Directives"],
+];
+for (const [section, label] of WORK_SECTIONS) {
+  _link(
+    {
+      id: `work:${section}`,
+      label: `Work: ${label}`,
+      icon: glyph(LayoutDashboard),
+      keywords: ["work", section, label.toLowerCase()],
+    },
+    { kind: "surface", id: "work", state: { section } },
+  );
+}
+_link(
+  {
+    id: "work:new-goal",
+    label: "Work: New goal…",
+    icon: glyph(LayoutDashboard),
+    keywords: ["work", "new", "goal", "create", "add"],
+  },
+  { kind: "surface", id: "work", state: { section: "goals", filters: { create: true } } },
 );
 // …and one row per Settings SECTION, generated from the section table rather than hand-listed
 // here. Three sections used to be reachable from ⌘K (the bare "Settings" above, plus

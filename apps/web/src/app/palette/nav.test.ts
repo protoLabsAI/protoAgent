@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { useUI } from "../../state/uiStore";
 import { applyNavIntent, navigate, openView, setPaletteNavigator } from "./nav";
+import type { NavIntent } from "./nav";
 
 // The dock-routing chokepoint (finding 14) had NO test, which is how it silently no-opped
 // EVERY programmatic navigation on mobile until the `setMobileActive` fix: the mobile shell
@@ -21,6 +22,8 @@ beforeEach(() => {
     rightCollapsed: true,
     bottomCollapsed: true,
     mobileActive: "chat",
+    surfaceModal: null,
+    surfaceStates: {},
   });
 });
 
@@ -119,6 +122,50 @@ describe("applyNavIntent — the serializable intent the launcher forwards", () 
   });
 });
 
+describe("applyNavIntent — surface: opens the large shell MODAL on a section (#4955 §3.6)", () => {
+  // Every Work palette row (`registry.ts`) opens the modal through this arm. The eight
+  // section ids are WorkView's own (`WorkOverview.workSections`).
+  const SECTIONS = [
+    "decisions", "goals", "watches", "tasks", "schedules", "background", "activity", "directives",
+  ];
+
+  it("opens the modal on the requested section and persists it as the saved place", () => {
+    applyNavIntent({ kind: "surface", id: "work", state: { section: "decisions" } });
+    const s = useUI.getState();
+    expect(s.surfaceModal).toEqual({ viewId: "work", state: { section: "decisions" } });
+    // openSurfaceModal writes the modal AND the view's saved place, so the modal remembers it.
+    expect(s.surfaceStates.work).toEqual({ section: "decisions" });
+  });
+
+  it("Open Work lands on Overview", () => {
+    applyNavIntent({ kind: "surface", id: "work", state: { section: "overview" } });
+    expect(useUI.getState().surfaceModal).toEqual({ viewId: "work", state: { section: "overview" } });
+  });
+
+  it("New goal… lands on Goals with the create flag set in filters (Q15)", () => {
+    applyNavIntent({ kind: "surface", id: "work", state: { section: "goals", filters: { create: true } } });
+    const modal = useUI.getState().surfaceModal!;
+    expect(modal.state.section).toBe("goals");
+    expect(modal.state.filters).toEqual({ create: true });
+  });
+
+  it("without a state, opens the modal on the view's last-saved place", () => {
+    useUI.setState({ surfaceStates: { work: { section: "tasks" } } });
+    applyNavIntent({ kind: "surface", id: "work" });
+    expect(useUI.getState().surfaceModal).toEqual({ viewId: "work", state: { section: "tasks" } });
+  });
+
+  it("every Work section row round-trips through the launcher's JSON Tauri payload", () => {
+    for (const section of SECTIONS) {
+      const intent: NavIntent = { kind: "surface", id: "work", state: { section } };
+      // The launcher forwards the intent over a Tauri event — a JSON serialize/parse. Applying
+      // the replayed copy must reproduce the in-process result, i.e. the arm is serializable.
+      applyNavIntent(JSON.parse(JSON.stringify(intent)) as NavIntent);
+      expect(useUI.getState().surfaceModal).toEqual({ viewId: "work", state: { section } });
+    }
+  });
+});
+
 describe("setPaletteNavigator — the launcher's window handoff", () => {
   it("diverts every navigation to the sink, leaving THIS window's store alone", () => {
     const sink = vi.fn();
@@ -135,6 +182,16 @@ describe("setPaletteNavigator — the launcher's window handoff", () => {
     setPaletteNavigator(null);
     navigate({ kind: "view", id: "memory" });
     expect(useUI.getState().surface).toBe("memory");
+  });
+
+  it("forwards a surface intent verbatim rather than opening the modal in the launcher window", () => {
+    const sink = vi.fn();
+    setPaletteNavigator(sink);
+    const intent: NavIntent = { kind: "surface", id: "work", state: { section: "goals", filters: { create: true } } };
+    navigate(intent);
+    expect(sink).toHaveBeenCalledWith(intent);
+    // The shell-less launcher window must not touch its own store — it hands the intent off.
+    expect(useUI.getState().surfaceModal).toBeNull();
   });
 });
 
