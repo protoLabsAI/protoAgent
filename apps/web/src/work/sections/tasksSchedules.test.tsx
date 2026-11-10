@@ -25,6 +25,11 @@ import { TasksSection } from "./tasks";
 import type { WorkItem, WorkItems, WorkSource } from "../useWorkItems";
 import type { WorkSectionContext } from "../WorkView";
 
+vi.mock("../../schedule/schedule-builder", async (importOriginal) => ({
+  ...await importOriginal<typeof import("../../schedule/schedule-builder")>(),
+  localZone: () => "America/Los_Angeles",
+}));
+
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 let root: Root | null = null;
@@ -101,6 +106,13 @@ async function mount(node: ReactNode) {
   });
   await act(async () => root!.render(h(QueryClientProvider, { client }, h(ToastProvider, null, node))));
 }
+async function changeValue(input: HTMLInputElement | HTMLTextAreaElement, value: string) {
+  const prototype = input instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(prototype, "value")!.set!.call(input, value);
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+}
 async function flush() {
   await act(async () => {});
 }
@@ -161,6 +173,38 @@ describe("Schedules section (§2.8)", () => {
     expect(allText()).toContain("(Asia/Tokyo)");
   });
 
+  it.each([null, "Asia/Tokyo"])("Edit preserves stored timezone %s on a prompt-only save", async (timezone) => {
+    await mount(h(SchedulesSection, ctx({
+      sources: sources({ schedules: src([scheduleItem({ timezone })]) }),
+      state: { itemId: "schedule:job-7" },
+    })));
+    await act(async () => button("Edit").click());
+    const prompt = document.querySelector<HTMLTextAreaElement>('[data-testid="schedule-prompt"]')!;
+    expect(prompt.value).toBe("Post the weekly standup\nand @-mention the team");
+    expect(allText()).not.toContain("Job id (optional)");
+    await changeValue(prompt, "Updated prompt");
+    expect(button("Save changes").disabled).toBe(false);
+    await act(async () => button("Save changes").click());
+    expect(apiMock.updateSchedule).toHaveBeenCalledWith("job-7", {
+      prompt: "Updated prompt", schedule: "0 9 * * 1-5", timezone,
+    });
+  });
+
+  it("allows prompt edits to a stored past one-off and preserves its exact timestamp", async () => {
+    const schedule = "2020-01-01T09:00:00Z";
+    await mount(h(SchedulesSection, ctx({
+      sources: sources({ schedules: src([scheduleItem({ schedule })]) }),
+      state: { itemId: "schedule:job-7" },
+    })));
+    await act(async () => button("Edit").click());
+    await changeValue(document.querySelector<HTMLTextAreaElement>('[data-testid="schedule-prompt"]')!, "Updated prompt");
+    expect(button("Save changes").disabled).toBe(false);
+    await act(async () => button("Save changes").click());
+    expect(apiMock.updateSchedule).toHaveBeenCalledWith("job-7", {
+      prompt: "Updated prompt", schedule, timezone: null,
+    });
+  });
+
   it("Pause calls the enabled route with false (r2)", async () => {
     await mount(h(SchedulesSection, ctx({
       sources: sources({ schedules: src([scheduleItem()]) }),
@@ -211,6 +255,21 @@ describe("Tasks section (§2.7)", () => {
     expect(allText()).toContain("Updated");
     expect(allText()).toContain("Steps to reproduce are in the ticket.");
     expect(allText()).not.toContain("task-3"); // id only in Technical details
+  });
+
+  it("Edit seeds the task dialog and saves through the update API", async () => {
+    await mount(h(TasksSection, ctx({
+      sources: sources({ tasks: src([taskItem()]) }),
+      state: { itemId: "task:task-3" },
+    })));
+    await act(async () => button("Edit").click());
+    const title = document.querySelector<HTMLInputElement>('[data-testid="task-create-title"]')!;
+    expect(title.value).toBe("Fix the flaky login test");
+    await changeValue(title, "Fix login");
+    await act(async () => button("Save changes").click());
+    expect(apiMock.updateTask).toHaveBeenCalledWith("task-3", {
+      title: "Fix login", description: "Steps to reproduce are in the ticket.", type: "bug", priority: 1,
+    });
   });
 
   it("maps numeric priority 0–3 to urgent / high / normal / low (r3)", async () => {

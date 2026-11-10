@@ -26,7 +26,7 @@ import { WEEKDAYS, localZone, parseSchedule } from "../../schedule/schedule-buil
 import { relTime } from "../tone";
 import { WorkDetail, type WorkAction, type WorkField } from "../WorkDetail";
 import { WorkRow } from "../WorkRow";
-import { registerWorkSection, type WorkSectionContext } from "../WorkView";
+import { registerWorkSection, type WorkSectionContext } from "../sectionRegistry";
 import type { WorkItem, WorkSource } from "../useWorkItems";
 
 /** The prompt's first line — the row/detail title. Never the job id (§2.8 field 1). */
@@ -156,7 +156,7 @@ function ScheduleDetail({ item, state }: { item: WorkItem; state: WorkSectionCon
         busy={edit.isPending}
         title="Edit schedule"
         submitLabel="Save changes"
-        initial={{ prompt: job.prompt, parsed: parseSchedule(job.schedule), timezone: job.timezone ?? localZone() }}
+        initial={{ prompt: job.prompt, schedule: job.schedule, parsed: parseSchedule(job.schedule), timezone: job.timezone ?? "" }}
         onAdd={(body) => edit.mutate({ prompt: body.prompt, schedule: body.schedule, timezone: body.timezone ?? null })}
       />
     </>

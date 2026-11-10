@@ -25,7 +25,7 @@ import { issueType, type IssueDraft } from "../../app/tasks";
 import { relTime } from "../tone";
 import { WorkDetail, type WorkAction, type WorkField } from "../WorkDetail";
 import { WorkRow } from "../WorkRow";
-import { registerWorkSection, type WorkSectionContext } from "../WorkView";
+import { registerWorkSection, type WorkSectionContext } from "../sectionRegistry";
 import type { WorkItem, WorkSource } from "../useWorkItems";
 
 /** Numeric priority → word (§2.7 field 3). Only 0–3 are defined; anything else is blank. */

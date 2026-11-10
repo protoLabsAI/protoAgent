@@ -50,7 +50,7 @@ export function ScheduleModal({
   onAdd: (body: { prompt: string; schedule: string; job_id?: string; timezone?: string }) => void;
   busy: boolean;
   /** Seed the prompt + builder (edit mode); omitted for the add flow, which starts blank. */
-  initial?: { prompt: string; parsed: ParsedSchedule; timezone: string };
+  initial?: { prompt: string; parsed: ParsedSchedule; timezone: string; schedule?: string };
   title?: ReactNode;
   submitLabel?: ReactNode;
 }) {
@@ -65,12 +65,17 @@ export function ScheduleModal({
     if (open) {
       setPrompt(initial?.prompt ?? "");
       setJobId("");
-      setOut({ schedule: "", valid: false, error: "" });
+      // The remounted builder emits its state; resetting here would overwrite
+      // that child effect and leave Save disabled until the timing changes.
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
 
-  const canSubmit = !!prompt.trim() && out.valid && !busy;
+  // As in the detail dialog, an unchanged stored schedule can take prompt edits
+  // even when it is a past one-off or a legacy expression.
+  const scheduleUnchanged = initial?.schedule !== undefined
+    && out.schedule.trim() === canonicalSchedule(initial.schedule);
+  const canSubmit = !!prompt.trim() && (out.valid || scheduleUnchanged) && !busy;
 
   return (
     <Dialog
@@ -84,7 +89,7 @@ export function ScheduleModal({
         <>
           <Button type="button" onClick={onClose}>Cancel</Button>
           <Button type="button" variant="primary" disabled={!canSubmit} data-testid="schedule-submit"
-                  onClick={() => onAdd({ prompt: prompt.trim(), schedule: out.schedule, job_id: jobId.trim() || undefined, timezone: out.timezone })}>
+                  onClick={() => onAdd({ prompt: prompt.trim(), schedule: scheduleUnchanged ? initial!.schedule! : out.schedule, job_id: jobId.trim() || undefined, timezone: out.timezone })}>
             <Plus size={16} /> {submitLabel ?? "Schedule"}
           </Button>
         </>
