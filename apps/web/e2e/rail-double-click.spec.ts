@@ -50,12 +50,19 @@ for (const initial of ["active", "inactive", "collapsed"] as const) {
   });
 }
 
-for (const active of [false, true]) {
-  test(`double-clicking ${active ? "active" : "inactive"} plugin opens the clicked plugin only`, async ({ page }) => {
+for (const initial of ["active", "inactive", "collapsed"] as const) {
+  test(`double-clicking ${initial} plugin opens the clicked plugin only`, async ({ page }) => {
     await page.goto("/app/", { waitUntil: "load" });
     await expect(page.getByRole("region", { name: "Work view", exact: true })).toBeVisible();
     const scratch = rail(page).getByRole("button", { name: "Scratch", exact: true });
-    if (active) await scratch.click();
+    if (initial !== "inactive") {
+      await scratch.click();
+      await expect(page.getByRole("region", { name: "Scratch view", exact: true })).toBeVisible();
+      if (initial === "collapsed") {
+        await scratch.click();
+        await expect(page.getByRole("region", { name: "Scratch view", exact: true })).not.toBeVisible();
+      }
+    }
     await scratch.dblclick();
     const dialog = page.getByRole("dialog");
     await expect(dialog).toHaveCount(1);
@@ -65,6 +72,13 @@ for (const active of [false, true]) {
     await dialog.getByRole("button", { name: "Dock to rail", exact: true }).click();
     await expect(dialog).toHaveCount(0);
     await expect(page.getByRole("region", { name: "Scratch view", exact: true })).toBeVisible();
+    await expect(page.locator(".plugin-view-frame")).toHaveCount(1);
+    // Dock must leave ordinary selection usable, without a stale modal or iframe.
+    await scratch.click();
+    await expect(page.getByRole("region", { name: "Scratch view", exact: true })).not.toBeVisible();
+    await scratch.click();
+    await expect(page.getByRole("region", { name: "Scratch view", exact: true })).toBeVisible();
+    await expect(dialog).toHaveCount(0);
     await expect(page.locator(".plugin-view-frame")).toHaveCount(1);
   });
 }
