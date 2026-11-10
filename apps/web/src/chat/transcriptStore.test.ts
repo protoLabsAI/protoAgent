@@ -3,7 +3,7 @@ import { IDBFactory } from "fake-indexeddb";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { ChatMessage } from "../lib/types";
-import { openTranscriptStore, type SessionLike, type TranscriptStore } from "./transcriptStore";
+import { openTranscriptStore, withinMs, type SessionLike, type TranscriptStore } from "./transcriptStore";
 
 // Epic #4981 S1: chat transcripts in IndexedDB, keeping #4984's content-named chunks so a
 // streaming save writes only the tail record.
@@ -215,5 +215,13 @@ describe("opening the database", () => {
     expect(await openTranscriptStore({ factory: silent, timeoutMs: 20 })).toBeNull();
     const throwing = { open: () => { throw new Error("SecurityError"); } } as unknown as IDBFactory;
     expect(await openTranscriptStore({ factory: throwing })).toBeNull();
+  });
+});
+
+describe("a wedged store never holds a reload", () => {
+  it("withinMs settles even when the work never does", async () => {
+    const never = new Promise<string>(() => {});
+    expect(await withinMs(never, 20)).toBeUndefined();
+    expect(await withinMs(Promise.resolve("done"), 20)).toBe("done");
   });
 });

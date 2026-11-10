@@ -273,6 +273,29 @@ describe("which saves are failing", () => {
   });
 });
 
+describe("a boot that runs past its deadline", () => {
+  it("keeps every localStorage transcript the migration copied: the page mounts and writes there", async () => {
+    localStorage.setItem(MAIN, v1([{ id: "h1", messages: chat(1) }]));
+    const { chatStore, initTranscriptBackend, flushChatPersist } = await freshStore();
+    const { TranscriptStore } = await import("./transcriptStore");
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    const real = TranscriptStore.prototype.loadAgent;
+    vi.spyOn(TranscriptStore.prototype, "loadAgent").mockImplementation(async function (this: InstanceType<typeof TranscriptStore>, slug) {
+      if (slug === "host") await gate; // the load after the migration is the slow step
+      return real.call(this, slug);
+    });
+    expect(await initTranscriptBackend({ deadlineMs: 30 })).toBe("local");
+    // Mounted on localStorage: a new message saves there.
+    chatStore.updateMessages("h1", [...chat(1), { id: "late", role: "user", content: "while booting", status: "done" }]);
+    flushChatPersist();
+    release();
+    await new Promise((r) => setTimeout(r, 50));
+    const saved = JSON.parse(localStorage.getItem(MAIN)!);
+    expect(saved.sessions[0].messages.map((m: ChatMessage) => m.id)).toContain("late");
+  });
+});
+
 describe("staying on localStorage", () => {
   it("when IndexedDB isn't available", async () => {
     localStorage.setItem(MAIN, v1([{ id: "h1", messages: chat(1) }]));

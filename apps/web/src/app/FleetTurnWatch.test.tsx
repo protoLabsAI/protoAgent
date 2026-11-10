@@ -120,6 +120,21 @@ describe("FleetTurnWatch", () => {
     });
   }
 
+  it("a turn its own window settled as FAILED toasts as an error, not a finish", async () => {
+    serveGetTask({ id: TASK, status: { state: "TASK_STATE_WORKING" } });
+    await mount();
+    expect(mocks.toast).not.toHaveBeenCalled();
+    // The owning window finalizes the turn (it vanishes from storage), and it failed.
+    localStorage.removeItem("protoagent.chat.sessions:ava");
+    serveGetTask({ id: TASK, status: { state: "TASK_STATE_FAILED" } });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(6_000);
+    });
+    await settle();
+    expect(mocks.toast).toHaveBeenCalledTimes(1);
+    expect(mocks.toast.mock.calls[0][0]).toMatchObject({ tone: "error", title: "Ava finished a turn" });
+  });
+
   it("keeps polling a turn that is still working", async () => {
     serveGetTask({ id: TASK, status: { state: "TASK_STATE_WORKING" } });
     await mount();

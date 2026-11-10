@@ -107,6 +107,36 @@ describe("palette threads in IndexedDB", () => {
     expect((await chatStore.transcriptStoreIfOpen()!.loadThreads(KEY)).get(KEY)).toEqual(msgs(2));
   });
 
+  it("a palette boot past its bound shrinks nothing and stays on localStorage", async () => {
+    localStorage.setItem(KEY, JSON.stringify({ contextId: "c", messages: msgs(2) }));
+    const { palette, store } = await fresh();
+    await palette.initPaletteThreads(store, () => true);
+    expect(JSON.parse(localStorage.getItem(KEY)!).messages).toHaveLength(2); // still whole
+    palette.savePaletteThread({ contextId: "c", messages: msgs(3) }, true);
+    expect(JSON.parse(localStorage.getItem(KEY)!).messages).toHaveLength(3); // saved to localStorage
+    store.close();
+  });
+
+  it("the next boot keeps what a late boot's page saved to localStorage, over the store's older copy", async () => {
+    // Boot 1 committed: the store holds the thread, localStorage only the link.
+    localStorage.setItem(KEY, JSON.stringify({ contextId: "c", messages: msgs(2) }));
+    let { palette, store } = await fresh();
+    await palette.initPaletteThreads(store);
+    expect(JSON.parse(localStorage.getItem(KEY)!)).toEqual({ contextId: "c" });
+    store.close();
+    // Boot 2 runs late: its page stays on localStorage and saves a newer thread there.
+    ({ palette, store } = await fresh());
+    await palette.initPaletteThreads(store, () => true);
+    palette.savePaletteThread({ contextId: "c", messages: msgs(3) }, true);
+    store.close();
+    // Boot 3 commits: the newer messages win, and nothing is lost when the key shrinks.
+    ({ palette, store } = await fresh());
+    await palette.initPaletteThreads(store);
+    expect(palette.loadPaletteThread()).toEqual({ contextId: "c", messages: msgs(3) });
+    expect(JSON.parse(localStorage.getItem(KEY)!)).toEqual({ contextId: "c" });
+    store.close();
+  });
+
   it("without the store, threads stay whole in localStorage as before", async () => {
     vi.resetModules();
     const palette = await import("./paletteChatStore");

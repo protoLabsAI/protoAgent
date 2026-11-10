@@ -63,7 +63,11 @@ const transcriptsReady = initTranscriptBackend()
   .then(async (backend) => {
     // Palette / DM threads too (S3), bounded on their own: a stall here must not hold the mount.
     if (backend === "idb") {
-      await Promise.race([initPaletteThreads(transcriptStoreIfOpen()), new Promise((r) => setTimeout(r, 3_000))]);
+      let late = false;
+      await Promise.race([
+        initPaletteThreads(transcriptStoreIfOpen(), () => late),
+        new Promise((r) => setTimeout(() => r((late = true)), 3_000)),
+      ]);
     }
   })
   .catch(() => {});

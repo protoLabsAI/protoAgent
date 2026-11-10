@@ -129,8 +129,17 @@ export function FleetTurnWatch() {
     }
 
     let prev: Watch[] = [];
+    let running = false;
     async function round() {
-      if (stopped) return;
+      if (stopped || running) return; // a slow round never overlaps the next tick
+      running = true;
+      try {
+        await roundOnce();
+      } finally {
+        running = false;
+      }
+    }
+    async function roundOnce() {
       // Saved transcripts live in IndexedDB once the store opened (epic #4981); localStorage
       // otherwise (and for a window still on an older console).
       let candidates = scanOtherSlugs(current);
@@ -150,8 +159,13 @@ export function FleetTurnWatch() {
       }
       if (stopped) return;
       // A watched turn that VANISHED from storage was finalized by its (open) owner window.
+      // Ask the task how it ended (a failed turn must not toast as finished); if the agent
+      // can't be reached, it ended somehow, and "completed" is the old, best-effort answer.
       for (const old of prev) {
-        if (!candidates.some((c) => c.taskId === old.taskId)) void announce(old, "completed");
+        if (candidates.some((c) => c.taskId === old.taskId)) continue;
+        void taskState(old.slug, old.taskId)
+          .catch(() => "completed")
+          .then((state) => announce(old, isTaskTerminal(state) ? state : "completed"));
       }
       prev = candidates;
       for (const w of candidates) {
