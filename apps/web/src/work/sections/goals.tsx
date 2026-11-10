@@ -1,0 +1,323 @@
+// The Goals section of the Work view (#4955 §2.5, §5). Registered on import — the side effect
+// is the whole wiring; WorkView mounts it in a later card. ONE `render(ctx)` serves both panes:
+// a falsy `ctx.state.itemId` lists the goals as `WorkRow`s, a set one finds the goal and shows
+// its `WorkDetail`. Every field, its order and its wording come from the §2.5 table; ids, the
+// raw status, the verifier and the per-turn evidence live only in Technical details.
+
+import { useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
+import { Button, Empty } from "@protolabsai/ui/primitives";
+import { Alert } from "@protolabsai/ui/data";
+import { useToast } from "@protolabsai/ui/overlays";
+
+import { registerWorkSection, type WorkSectionContext } from "../WorkView";
+import { WorkRow } from "../WorkRow";
+import { WorkDetail, type WorkAction, type WorkField } from "../WorkDetail";
+import { relTime } from "../tone";
+import type { WorkItem } from "../useWorkItems";
+import { api } from "../../lib/api";
+import { queryKeys } from "../../lib/queries";
+import { errMsg } from "../../lib/format";
+import { GoalCreateDialog } from "../../app/GoalsPanel";
+import { HitlForm } from "../../chat/HitlForm";
+import {
+  DEFAULT_MAX_ITERATIONS,
+  goalFormPayload,
+  goalSetDetail,
+  parseMaxIterations,
+  splitLines,
+  type GoalSetBody,
+} from "../../chat/goalForm";
+import type { GoalEvent, GoalState, HitlPayload } from "../../lib/types";
+
+// §2.3 — every timestamp is local relative time ("10 min ago", "today at 17:14"), with the
+// full stamp in a hover tooltip. Goals store epoch seconds, which `relTime` already expects.
+function when(epoch: number | null | undefined, prefix: string): WorkField["value"] {
+  if (epoch == null) return "";
+  const { text, tooltip } = relTime(epoch);
+  if (!text) return "";
+  return (
+    <span title={tooltip}>
+      {prefix}
+      {text}
+    </span>
+  );
+}
+
+function bullets(items: string[] | undefined): WorkField["value"] {
+  if (!items || items.length === 0) return "";
+  return (
+    <ul>
+      {items.map((t, i) => (
+        <li key={i}>{t}</li>
+      ))}
+    </ul>
+  );
+}
+
+// §2.5 field 10 — the raw per-iteration `status` ("continue" …) is never shown; it reads as
+// prose, and the terminal turn says "achieved", "ran out of turns" or "couldn't be done".
+function historyWord(status: string): string {
+  switch (status) {
+    case "achieved":
+      return "achieved";
+    case "exhausted":
+      return "ran out of turns";
+    case "unachievable":
+      return "couldn't be done";
+    default:
+      return "kept going";
+  }
+}
+
+function history(events: GoalEvent[] | undefined): WorkField["value"] {
+  if (!events || events.length === 0) return "";
+  return (
+    <ul>
+      {events.map((e, i) => (
+        <li key={i}>
+          Turn {e.iteration} · {historyWord(e.status)}
+          {e.reason ? ` · ${e.reason}` : ""}
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+// The §2.5 table, fields 3–11 (1 = Goal is the title, 2 = Status is the badge). An empty value
+// hides its line (WorkDetail drops it — never a dash). Progress NEVER reads "n/0" or "∞": with
+// no limit it is just "Turn 3".
+function goalFields(g: GoalState): WorkField[] {
+  const iter = g.iteration ?? 0;
+  const max = g.max_iterations;
+  const progress = max && max > 0 ? `Turn ${iter} of ${max}` : `Turn ${iter}`;
+  const streak = g.no_progress_streak ?? 0;
+  const stalled =
+    streak > 0
+      ? `No progress for ${streak}${g.no_progress_limit ? ` of ${g.no_progress_limit}` : ""} checks`
+      : "";
+  return [
+    { label: "Progress", value: progress },
+    { label: "Stalled", value: stalled },
+    { label: "Latest check", value: g.last_reason ? `Last check: ${g.last_reason}` : "" },
+    { label: "Started", value: when(g.started_at, "Started ") },
+    { label: "Finished", value: when(g.finished_at, "Finished ") },
+    { label: "Stop rule", value: g.stop_when ? `Stops and asks you if: ${g.stop_when}` : "" },
+    { label: "Must not change", value: bullets(g.constraints) },
+    { label: "In scope", value: bullets(g.boundaries) },
+    { label: "Why it stopped", value: g.abandon_reason ? `The agent stopped: ${g.abandon_reason}` : "" },
+    { label: "History", value: history(g.history) },
+    { label: "Fresh context", value: g.fresh_context ? "Each turn starts a clean thread" : "" },
+  ];
+}
+
+// §2.5 "Never shown" → Technical details: session id, the raw status, verifier type + args,
+// and the raw evidence. Copyable, collapsed at the bottom of the detail.
+function goalTechnical(g: GoalState): Record<string, string> {
+  const tech: Record<string, string> = { "Session id": g.session_id, Status: g.status };
+  if (g.verifier) tech.Verifier = JSON.stringify(g.verifier);
+  if (g.last_evidence) tech["Last evidence"] = g.last_evidence;
+  return tech;
+}
+
+// The Edit form reuses the goal creator's completion-contract fields (goalForm step 2) —
+// outcome / constraints / boundaries / stop rule / budget — pre-filled with the goal's current
+// values so it opens ready to tweak. These are exactly the fields `PATCH /api/goals` accepts.
+function editGoalPayload(g: GoalState): HitlPayload {
+  const contract = goalFormPayload().steps![1];
+  const props = (contract.schema as { properties: Record<string, Record<string, unknown>> }).properties;
+  const withDefault = (key: string, value: unknown) => ({ ...props[key], default: value });
+  return {
+    kind: "form",
+    title: "Edit goal",
+    description: contract.description,
+    steps: [
+      {
+        title: "Edit goal",
+        schema: {
+          type: "object",
+          properties: {
+            outcome: withDefault("outcome", g.outcome ?? ""),
+            constraints: withDefault("constraints", (g.constraints ?? []).join("\n")),
+            boundaries: withDefault("boundaries", (g.boundaries ?? []).join("\n")),
+            stop_when: withDefault("stop_when", g.stop_when ?? ""),
+            max_iterations: withDefault("max_iterations", g.max_iterations ?? DEFAULT_MAX_ITERATIONS),
+          },
+        },
+      },
+    ],
+  };
+}
+
+function GoalDetailView({ ctx, item }: { ctx: WorkSectionContext; item: WorkItem }) {
+  void ctx;
+  const qc = useQueryClient();
+  const toast = useToast();
+  const [editing, setEditing] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const g = item.raw as GoalState;
+  const refresh = () => void qc.invalidateQueries({ queryKey: queryKeys.goals });
+
+  if (editing) {
+    return (
+      <div className="work-detail" data-testid="goal-edit">
+        <HitlForm
+          payload={editGoalPayload(g)}
+          busy={saving}
+          onCancel={() => setEditing(false)}
+          onSubmit={(answers) => {
+            const a = typeof answers === "object" && answers ? (answers as Record<string, unknown>) : {};
+            setSaving(true);
+            api
+              .editGoal(g.session_id, {
+                outcome: String(a.outcome ?? "").trim(),
+                constraints: splitLines(a.constraints),
+                boundaries: splitLines(a.boundaries),
+                stop_when: String(a.stop_when ?? "").trim(),
+                max_iterations: parseMaxIterations(a.max_iterations),
+              })
+              .then(() => {
+                refresh();
+                toast({ tone: "success", message: "Goal updated." });
+                setEditing(false);
+              })
+              .catch((e) => toast({ tone: "error", title: "Couldn't update the goal", message: errMsg(e) }))
+              .finally(() => setSaving(false));
+          }}
+        />
+      </div>
+    );
+  }
+
+  const title = g.outcome?.trim() || g.condition || g.session_id;
+  const active = item.status === "running" || item.status === "waiting";
+  const actions: WorkAction[] = [{ id: "edit", label: "Edit", run: async () => void setEditing(true) }];
+  // An active goal can be Stopped (stops the drive loop and closes its tasks, §4.4 confirm);
+  // any goal can be Deleted, which hands back an undo token for the §4.5 Undo toast.
+  if (active) {
+    actions.push({
+      id: "stop",
+      label: "Stop…",
+      destructive: true,
+      confirm: {
+        prompt: "Stop this goal?",
+        explanation: "The agent stops driving it and closes the tasks it opened.",
+        confirmLabel: "Stop goal",
+        keepLabel: "Keep it",
+      },
+      run: async () => {
+        const res = await api.clearGoal(g.session_id, true);
+        refresh();
+        return { undoToken: res.undo_token };
+      },
+    });
+  }
+  actions.push({
+    id: "delete",
+    label: "Delete…",
+    destructive: true,
+    confirm: {
+      prompt: "Delete this goal?",
+      explanation: "The agent stops working toward it. Work it has already done stays.",
+      confirmLabel: "Delete",
+      keepLabel: "Keep it",
+    },
+    run: async () => {
+      const res = await api.clearGoal(g.session_id, false);
+      refresh();
+      return { undoToken: res.undo_token };
+    },
+  });
+
+  return (
+    <WorkDetail
+      title={title}
+      status={item.status}
+      fields={goalFields(g)}
+      actions={actions}
+      technical={goalTechnical(g)}
+      type="Goal"
+      onUndo={async (token) => {
+        await api.undo(token);
+        refresh();
+      }}
+    />
+  );
+}
+
+function GoalsList({ ctx }: { ctx: WorkSectionContext }) {
+  const source = ctx.sources.goals;
+  const qc = useQueryClient();
+  const toast = useToast();
+  const [creating, setCreating] = useState(false);
+  const [busy, setBusy] = useState(false);
+
+  if (source.status === "error") {
+    return (
+      <Alert status="warning">
+        Couldn&apos;t load goals. The agent still has them. Only this view failed.{" "}
+        <Button variant="ghost" size="sm" onClick={() => source.retry()}>
+          Retry
+        </Button>
+      </Alert>
+    );
+  }
+
+  const createGoal = (body: GoalSetBody) => {
+    setBusy(true);
+    api
+      .setGoal(body)
+      .then((res) => {
+        void qc.invalidateQueries({ queryKey: queryKeys.goals });
+        toast({ tone: "success", title: "Goal set", message: goalSetDetail(res.message) || "The agent has a new goal." });
+        setCreating(false);
+      })
+      .catch((e) => toast({ tone: "error", title: "Couldn't set goal", message: errMsg(e) }))
+      .finally(() => setBusy(false));
+  };
+
+  return (
+    <>
+      {source.items.length === 0 ? (
+        // §5.2 — the one section with an empty-state action: New goal opens the shared creator.
+        <Empty title="No goals" description="The agent sets one when it has a testable outcome to drive toward.">
+          <Button variant="primary" onClick={() => setCreating(true)}>
+            New goal
+          </Button>
+        </Empty>
+      ) : (
+        source.items.map((item) => (
+          <WorkRow
+            key={item.id}
+            status={item.status}
+            title={item.title}
+            meta={goalRowMeta(item.raw as GoalState)}
+            onOpen={() => ctx.onOpen(item)}
+          />
+        ))
+      )}
+      <GoalCreateDialog open={creating} onClose={() => setCreating(false)} onCreate={createGoal} busy={busy} />
+    </>
+  );
+}
+
+// Row meta: the progress line, so the list reads the same "Turn N" the detail does.
+function goalRowMeta(g: GoalState): string {
+  const iter = g.iteration ?? 0;
+  const max = g.max_iterations;
+  return max && max > 0 ? `Turn ${iter} of ${max}` : `Turn ${iter}`;
+}
+
+export function GoalsSection({ ctx }: { ctx: WorkSectionContext }) {
+  const itemId = ctx.state.itemId;
+  if (itemId) {
+    const item = ctx.sources.goals.items.find((i) => `${i.kind}:${i.id}` === itemId || i.id === itemId);
+    if (!item) return <Empty title="This goal is no longer here." />;
+    return <GoalDetailView ctx={ctx} item={item} />;
+  }
+  return <GoalsList ctx={ctx} />;
+}
+
+export const goalsSection = { label: "Goals", render: (ctx: WorkSectionContext) => <GoalsSection ctx={ctx} /> };
+
+registerWorkSection("goals", goalsSection);
