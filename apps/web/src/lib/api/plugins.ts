@@ -118,6 +118,11 @@ export const pluginsApi = {
       { method: "DELETE" },
     );
   },
+  installPluginPython(id: string) {
+    return request<{ ok?: boolean; needs_ack?: boolean; source?: string }>("/api/plugins/install-python", {
+      method: "POST", body: { id },
+    });
+  },
   // Pip-install a plugin's declared requires_pip (the code-exec step `install`
   // deliberately skips) — previously CLI-only.
   installPluginDeps(id: string) {

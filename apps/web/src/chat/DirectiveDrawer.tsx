@@ -29,7 +29,7 @@ export function DirectiveDrawer({ sessionId, open, onClose }: { sessionId: strin
   </Drawer>;
 }
 
-function DirectiveDrawerBody({ sessionId }: { sessionId: string }) {
+export function DirectiveDrawerBody({ sessionId }: { sessionId: string }) {
   const { state, active, history, loadedAt, refresh, revoke } = useDirectives(sessionId);
   // A refresh can remove a row before revoke resolves. Keep its component alive so
   // the result callout remains in its place for this view, including keyboard focus.

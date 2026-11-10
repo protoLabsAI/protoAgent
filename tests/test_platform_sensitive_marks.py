@@ -53,6 +53,9 @@ _HUB_MODULES = {
     "graph.settings_schema",
     "graph.fleet.supervisor",  # one Windows branch in a large HTTP/pairing module
     "graph.providers.oauth",
+    "graph.plugins.testkit",  # one os.name branch in the fixture-venv helper; imported by ~36
+    # plugin tests for host stubs/registry, which don't exercise that venv-layout branch (the
+    # module that does — test_plugin_worker — carries the module-level platform_sensitive mark).
 }
 
 

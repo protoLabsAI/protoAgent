@@ -50,6 +50,14 @@ class ConflictError(Exception):
     overwrite the newer record and its progress, so the restore refuses instead."""
 
 
+class GoalsDisabledError(Exception):
+    """Goal mode is switched off (no goal controller wired) — ``_http_error`` answers 503.
+
+    Raised by ``_operator_goals_update`` (#4955 Q9): a goal-edit request can't be served when
+    the feature isn't running, and 503 (not 404/409) tells the console the capability is
+    unavailable rather than the goal missing."""
+
+
 class SubagentRunRequest(BaseModel):
     session_id: str = "manual-subagent"
     type: str = "researcher"
@@ -158,6 +166,14 @@ class ScheduleUpdateRequest(BaseModel):
     prompt: str | None = None
     schedule: str | None = None  # 5-field cron expression OR an ISO-8601 datetime
     timezone: str | None = None  # IANA tz for cron eval (None = UTC)
+
+
+class ScheduleSetEnabledRequest(BaseModel):
+    """``POST /api/scheduler/jobs/{id}/enabled`` — the Work view's Pause/Resume control
+    (#4955 §4.3). ``enabled: false`` pauses the job (it stays in the store but no tick
+    fires it); ``enabled: true`` resumes it."""
+
+    enabled: bool
 
 
 class InboxAddRequest(BaseModel):
@@ -278,7 +294,8 @@ def _http_error(exc: Exception) -> HTTPException:
 
     ``ValueError`` (the caller's input) is a 400 and ``NotFoundError`` a 404, both with the
     handler's own message; a ``ConflictError`` (an undo that would clobber a live record)
-    and a "not loaded" ``RuntimeError`` are each a 409. Anything else is a
+    and a "not loaded" ``RuntimeError`` are each a 409; a ``GoalsDisabledError`` (goal mode
+    off) is a 503. Anything else is a
     fault in our code: it is logged here with its traceback under a short error id, and the
     client gets a generic message carrying that id (#3973) — never ``str(exc)``, which
     leaked file paths and library internals to whoever made the request."""
@@ -288,6 +305,8 @@ def _http_error(exc: Exception) -> HTTPException:
         return HTTPException(status_code=404, detail=str(exc))
     if isinstance(exc, ConflictError):
         return HTTPException(status_code=409, detail=str(exc))
+    if isinstance(exc, GoalsDisabledError):
+        return HTTPException(status_code=503, detail=str(exc))
     if isinstance(exc, RuntimeError) and "not loaded" in str(exc).lower():
         return HTTPException(status_code=409, detail=str(exc))
     error_id = uuid.uuid4().hex[:8]
@@ -421,6 +440,46 @@ class _TaskStoreAdapter:
             raise NotFoundError(f"No task {issue_id!r}.")
         return {"deleted": True}
 
+    def snapshot(self, issue_id: str) -> dict[str, Any] | None:
+        """The issue's full row for an undo snapshot (#4955 Q10), read DEFENSIVELY: ``None``
+        when the store can't read a row back — a test double without ``get`` — so the delete
+        still succeeds, it just mints no undo token. ``None`` too for an id the store doesn't
+        have (then ``delete`` answers its own 404)."""
+        getter = getattr(self._s, "get", None)
+        if not callable(getter):
+            return None
+        return getter(issue_id)
+
+    def restore(self, row: dict[str, Any]) -> None:
+        """Re-insert a deleted issue through the store's ``restore`` — it re-fires the
+        store's ``task.changed`` event with ``action: "restored"`` (#4955 Q10). An issue
+        already live under that id was recreated after the delete, so restoring would clobber
+        it: the store refuses with ``ValueError``, mapped here to ``ConflictError`` (409), the
+        same "undo would overwrite a newer record" answer goals/watches give."""
+        try:
+            self._s.restore(row)
+        except ValueError as exc:
+            raise ConflictError(
+                "Cannot undo: a task already exists under this id — it was recreated "
+                "after the delete, so restoring would overwrite it."
+            ) from exc
+
+
+def _delete_task_with_undo(task_svc: _TaskStoreAdapter, project_path: str, issue_id: str) -> dict[str, Any]:
+    """Delete an issue and, when the store can read the row back, stash it for a server-side
+    undo (#4955 Q10). The snapshot is taken BEFORE the delete; ``task_svc.snapshot`` returns
+    ``None`` for a store double without ``get`` (then no token is minted and the body is the
+    unchanged ``{"deleted": True}``) or for an id the store doesn't have (then ``delete``
+    raises ``NotFoundError`` → 404 and we never reach the stash). Runs in a worker thread off
+    the event loop like the goal/watch clear handlers that stash the same way."""
+    row = task_svc.snapshot(issue_id)
+    result = task_svc.delete(project_path, issue_id)
+    if row is not None:
+        from operator_api.undo import LEDGER
+
+        result = {**result, "undo_token": LEDGER.stash("task", dict(row), task_svc.restore)}
+    return result
+
 
 def _bg_job_out(job) -> dict:
     """A background job for the console, its ``error`` redacted on the way out (#4726).
@@ -455,6 +514,7 @@ def register_operator_routes(
     scheduler_add: Callable[[dict[str, Any]], Awaitable[dict[str, Any]]] | None = None,
     scheduler_cancel: Callable[[str], Awaitable[dict[str, Any]]] | None = None,
     scheduler_update: Callable[[str, dict[str, Any]], Awaitable[dict[str, Any]]] | None = None,
+    scheduler_set_enabled: Callable[[str, bool], Awaitable[dict[str, Any]]] | None = None,
     goal_list: Callable[[], Awaitable[dict[str, Any]]] | None = None,
     goal_clear: Callable[[str, bool], Awaitable[dict[str, Any]]] | None = None,
     goal_set: Callable[[dict[str, Any]], Awaitable[dict[str, Any]]] | None = None,
@@ -705,9 +765,14 @@ def register_operator_routes(
 
     @app.delete("/api/tasks/issues/{issue_id}")
     async def _tasks_delete(issue_id: str, project_path: str = ""):
+        # Deleting a task stashes the row and hands back an ``undo_token`` so the Work view's
+        # Undo toast (#4955 §4.5) can restore it server-side — ``POST /api/undo/{token}``
+        # within the window re-inserts it (re-firing ``task.changed`` / ``restored``). A
+        # store that can't read the row back mints no token; the success body is otherwise
+        # the unchanged ``{"deleted": True}``.
         _require_tasks()
         try:
-            return await asyncio.to_thread(task_svc.delete, project_path, issue_id)
+            return await asyncio.to_thread(_delete_task_with_undo, task_svc, project_path, issue_id)
         except Exception as exc:
             raise _http_error(exc) from exc
 
@@ -761,6 +826,24 @@ def register_operator_routes(
                 raise HTTPException(status_code=404, detail=f"No scheduled job {job_id!r}.")
             return res
 
+    if scheduler_set_enabled is not None:
+
+        @app.post("/api/scheduler/jobs/{job_id}/enabled")
+        async def _scheduler_set_enabled(job_id: str, req: ScheduleSetEnabledRequest):
+            # Pause (``enabled=false``) / resume (``enabled=true``) a job in place — the Work
+            # view's Schedules toggle (#4955 §4.3). An unknown id is a 404 (NotFoundError); a
+            # backend without ``set_enabled`` is a 501 (NotImplementedError). Returns the job
+            # with its new ``enabled`` value.
+            try:
+                return await scheduler_set_enabled(job_id, req.enabled)
+            except NotImplementedError as exc:
+                raise HTTPException(
+                    status_code=501,
+                    detail="This scheduler backend does not support pause/resume.",
+                ) from exc
+            except Exception as exc:
+                raise _http_error(exc) from exc
+
     # --- Goals ---------------------------------------------------------------
     # List goals across sessions + clear one. Goals are *set* in chat (`/goal`);
     # the console surface is a read + clear view.
@@ -800,6 +883,22 @@ def register_operator_routes(
             state = await asyncio.to_thread(store.get, session_id)
             plan = await asyncio.to_thread(store.read_plan, session_id) if state else ""
             return {"enabled": True, "goal": state.to_dict() if state else None, "plan": plan or ""}
+        except Exception as exc:
+            raise _http_error(exc) from exc
+
+    # Edit a goal in place (#4955 Q9) — the Work view's Edit button. A PARTIAL update: only
+    # the completion-contract fields (outcome/constraints/boundaries/stop_when) and the two
+    # per-goal budgets (max_iterations/no_progress_limit) may change; naming the condition,
+    # verifier, status or history (set once, or owned by the drive loop) is a 400. Reads the
+    # controller directly like the GET above, so no injected fn: an unknown session is a 404,
+    # goals-off a 503, a max_iterations below the goal's current iteration a 400. The write
+    # goes through ``store.set``, which re-fires ``goal.changed``.
+    @app.patch("/api/goals/{session_id}")
+    async def _goal_update(session_id: SessionId, body: dict | None = Body(default=None)):
+        from operator_api.console_handlers import _operator_goals_update
+
+        try:
+            return await _operator_goals_update(session_id, body or {})
         except Exception as exc:
             raise _http_error(exc) from exc
 
@@ -895,15 +994,17 @@ def register_operator_routes(
             return res
 
     # --- Undo (#4955 Q10) ----------------------------------------------------
-    # Server-side undo for a console delete: DELETE /api/goals/{session_id} and
-    # DELETE /api/watches/{watch_id} stash a snapshot and hand back an ``undo_token``;
-    # this redeems it within ``UNDO_WINDOW_S``, writing the record back through the
-    # store's own ``set`` (which re-fires its ``goal.changed`` / ``watch.changed``
-    # event). Done on the server so the Work view's Undo toast still works after the
-    # originating tab is closed (#4955 §4.5). Registered unconditionally and needs no
-    # injected accessor — the ledger is a process-local singleton, and a token can only
-    # exist if a clear minted one; an unknown, expired, or already-used token is a 404
-    # (``NotFoundError`` → ``_http_error``), and changes nothing.
+    # Server-side undo for a console delete: clearing a goal / watch, deleting a task, or
+    # cancelling a scheduled job stashes a snapshot and hands back an ``undo_token``; this
+    # redeems it within ``UNDO_WINDOW_S``, replaying the stashed restore — writing a goal /
+    # watch back through the store's own ``set`` (re-firing its ``goal.changed`` /
+    # ``watch.changed`` event), re-inserting a task through ``TaskStore.restore``
+    # (``task.changed`` / ``restored``), or re-adding a job through ``scheduler.add_job``.
+    # Done on the server so the Work view's Undo toast still works after the originating tab
+    # is closed (#4955 §4.5). Registered unconditionally and needs no injected accessor — the
+    # ledger is a process-local singleton, and a token can only exist if a delete minted one;
+    # an unknown, expired, or already-used token is a 404 (``NotFoundError`` →
+    # ``_http_error``), and changes nothing.
     @app.post("/api/undo/{token}")
     async def _undo(token: str):
         from operator_api.undo import LEDGER

@@ -84,6 +84,7 @@ CEILING: tuple[CeilingRule, ...] = (
     _rule({"POST"}, "/api/plugins/install", "install a plugin"),
     _rule({"POST"}, "/api/plugins/sync", "sync plugins"),
     _rule({"POST"}, "/api/plugins/install-deps", "install plugin dependencies"),
+    _rule({"POST"}, "/api/plugins/install-python", "provision a plugin's Python runtime"),
     _rule({"POST"}, "/api/plugins/ack", "acknowledge a plugin"),
     _rule({"POST"}, "/api/plugins/{id}/update", "update a plugin"),
     _rule({"POST"}, "/api/plugins/{id}/enabled", "enable or disable a plugin"),

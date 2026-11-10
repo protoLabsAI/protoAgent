@@ -431,6 +431,20 @@ async def _operator_subagent_batch(req: dict):
     )
 
 
+def _publish_scheduler_changed(job_id: str, action: str) -> None:
+    """Best-effort ``scheduler.changed`` so the Work view's Schedules section refreshes live
+    on a console-driven add / edit / cancel / pause / resume / undo-restore instead of
+    polling (#4955 §4.3, §5.4). The scheduler itself only publishes ``scheduler.fired`` (ADR
+    0051); these mutations don't go through its poll loop, so they announce themselves here on
+    the same bus (``_event_bus`` — what the scheduler gets as ``event_publish``). ``action`` is
+    one of "added", "updated", "canceled", "enabled", "disabled" or "restored". A bus hiccup is
+    logged and never fails the request that already succeeded."""
+    try:
+        _event_bus.publish("scheduler.changed", {"job_id": job_id, "action": action})
+    except Exception:  # noqa: BLE001 — the event is best-effort
+        log.exception("[scheduler] changed-event publish failed for %s (%s)", job_id, action)
+
+
 async def _operator_scheduler_list() -> dict:
     import asyncio
 
@@ -461,6 +475,7 @@ async def _operator_scheduler_add(req: dict) -> dict:
         job_id=req.get("job_id") or None,
         timezone=req.get("timezone") or None,
     )
+    _publish_scheduler_changed(job.id, "added")
     return job.as_dict()
 
 
@@ -469,6 +484,10 @@ async def _operator_scheduler_cancel(job_id: str) -> dict:
 
     if STATE.scheduler is None:
         raise RuntimeError("scheduler is not loaded (disabled or setup incomplete)")
+    # Snapshot the job BEFORE cancelling so the cancel can be undone (#4955 Q10). A job that
+    # isn't there reads None — then there's nothing to stash, and the not-found path below
+    # answers the unchanged 404.
+    job = await asyncio.to_thread(_scheduler_job, STATE.scheduler, job_id)
     canceled = await asyncio.to_thread(STATE.scheduler.cancel_job, job_id)
     if not canceled:
         # `cancel_job` answers False both for "no such job" and for a store error it
@@ -479,7 +498,47 @@ async def _operator_scheduler_cancel(job_id: str) -> dict:
         if await asyncio.to_thread(_scheduler_job, STATE.scheduler, job_id) is None:
             raise NotFoundError(f"No scheduled job {job_id!r}.")
         raise RuntimeError(f"scheduler could not cancel job {job_id!r}")
-    return {"canceled": True}
+    _publish_scheduler_changed(job_id, "canceled")
+    out = {"canceled": True}
+    if job is not None:
+        out["undo_token"] = _stash_schedule_undo(job.as_dict(), STATE.scheduler)
+    return out
+
+
+def _stash_schedule_undo(job: dict, scheduler) -> str:
+    """Stash a just-cancelled scheduled job and return its undo token (#4955 Q10).
+
+    The restore re-adds the job through ``scheduler.add_job`` with its ORIGINAL id, prompt,
+    schedule and timezone (plus its context/origin/ttl/max_fires so the restored job behaves
+    exactly as it did). The snapshot also preserves its fence, paused state, timestamps
+    and run history atomically. A ONE-SHOT WHOSE TIME HAS ALREADY PASSED is restored as-is —
+    its past fire time is kept, so the scheduler fires it on its next tick rather than
+    dropping it.
+
+    ``scheduler`` is captured here (not re-read from ``STATE`` at redeem time) so the undo
+    targets the same backend the cancelled job lived on. ``add_job`` raises ``ValueError``
+    if a job already exists under that id (one was recreated between the cancel and the undo)
+    — a 400 at the route, so the stale restore doesn't clobber the live job.
+    """
+    from operator_api.undo import LEDGER
+
+    def _restore(data: dict, _sched=scheduler) -> None:
+        from scheduler.interface import Job
+
+        _sched.add_job(
+            data["prompt"],
+            data["schedule"],
+            job_id=data.get("id"),
+            timezone=data.get("timezone"),
+            context_id=data.get("context_id"),
+            origin_session=data.get("origin_session"),
+            ttl=data.get("ttl"),
+            max_fires=data.get("max_fires"),
+            restore_state=Job(**data),
+        )
+        _publish_scheduler_changed(data.get("id"), "restored")
+
+    return LEDGER.stash("schedule", job, _restore)
 
 
 async def _operator_scheduler_update(job_id: str, req: dict) -> dict:
@@ -516,7 +575,36 @@ async def _operator_scheduler_update(job_id: str, req: dict) -> dict:
         schedule,
         timezone=timezone,
     )
+    _publish_scheduler_changed(job_id, "updated")
     return job.as_dict()
+
+
+async def _operator_scheduler_set_enabled(job_id: str, enabled: bool) -> dict:
+    """Pause (``enabled=False``) or resume (``enabled=True``) a job in place — the Work view's
+    Schedules toggle (#4955 §4.3).
+
+    Calls the backend's OPTIONAL ``set_enabled`` (bd-0ia51.6) through ``getattr``; a backend
+    that doesn't implement it raises ``NotImplementedError`` (a 501 at the route). An unknown
+    id is a 404 (``NotFoundError``) — checked before the call so the ``ValueError`` the backend
+    raises for a missing id doesn't come back as a 400, while a genuine bad-schedule
+    ``ValueError`` on resume still does. Publishes ``scheduler.changed`` ("enabled" on resume,
+    "disabled" on pause) and returns ``{"job": job.as_dict()}``."""
+    import asyncio
+
+    if STATE.scheduler is None:
+        raise RuntimeError("scheduler is not loaded (disabled or setup incomplete)")
+    set_enabled = getattr(STATE.scheduler, "set_enabled", None)
+    if not callable(set_enabled):
+        raise NotImplementedError("This scheduler backend does not support pause/resume.")
+    # Mirror update's 404-before-mutate: an unknown id is a 404, not the ValueError
+    # set_enabled raises for it (which _http_error would answer 400).
+    if await asyncio.to_thread(_scheduler_job, STATE.scheduler, job_id) is None:
+        from operator_api.routes import NotFoundError
+
+        raise NotFoundError(f"No scheduled job {job_id!r}.")
+    job = await asyncio.to_thread(set_enabled, job_id, enabled)
+    _publish_scheduler_changed(job_id, "enabled" if enabled else "disabled")
+    return {"job": job.as_dict()}
 
 
 def _scheduler_job(scheduler, job_id: str):
@@ -650,6 +738,86 @@ async def _operator_goals_set(body: dict) -> dict:
     # the loop STREAMS LIVE into it, rather than running as a headless background turn.
     kicked = _safe_kick(sid, "Begin working toward your active goal now.") if body.get("kick", True) else False
     return {"ok": True, "message": msg, "kicked": kicked}
+
+
+# The only keys a ``PATCH /api/goals/{sid}`` body may carry (#4955 Q9) — the completion
+# contract (ADR 0073) plus the two per-goal budgets. The condition, verifier, status and
+# per-iteration history are deliberately absent: they're set once (condition/verifier) or
+# owned by the drive loop (status/history), so a body naming any other key is a 400.
+_GOAL_EDITABLE_FIELDS = ("outcome", "constraints", "boundaries", "stop_when", "max_iterations", "no_progress_limit")
+
+
+async def _operator_goals_update(session_id: str, body: dict) -> dict:
+    """Edit a goal in place (#4955 Q9). Loads the goal, applies
+    ONLY the editable fields the body names, and writes it back through ``store.set`` (which
+    re-fires ``goal.changed`` so every open console refreshes). Returns the updated goal.
+
+    The condition, verifier, status and history never change here — a body naming any of them
+    (or any other non-editable key) is a ``ValueError`` → 400, and nothing is written. An
+    unknown session is a ``NotFoundError`` → 404; goal mode switched off is a
+    ``GoalsDisabledError`` → 503. A ``max_iterations`` below the goal's current ``iteration``
+    would strand the drive loop (``iteration >= max_iterations`` is already true), so it's a
+    400 too. ``max_iterations``/``no_progress_limit`` reuse the goal-set bounds (a whole
+    number in ``1..MAX``)."""
+    import asyncio
+
+    from graph.goals.types import goal_budget_problem
+    from operator_api.routes import GoalsDisabledError, NotFoundError
+
+    if STATE.goal_controller is None:
+        raise GoalsDisabledError("goal mode is not enabled")
+    body = body or {}
+    rejected = sorted(k for k in body if k not in _GOAL_EDITABLE_FIELDS)
+    if rejected:
+        raise ValueError(
+            "these goal fields cannot be edited in place: "
+            + ", ".join(rejected)
+            + " (editable: "
+            + ", ".join(_GOAL_EDITABLE_FIELDS)
+            + ")"
+        )
+    # Same bounds as the goal-set request model (1..MAX, a whole number, never a bool).
+    # ``goal_budget_problem`` skips an absent/``None`` value, so only a key the body actually
+    # sent is checked.
+    problem = goal_budget_problem(body.get("max_iterations"), body.get("no_progress_limit"))
+    if problem is not None:
+        raise ValueError(problem)
+
+    store = STATE.goal_controller.store
+
+    def update():
+        with store.transaction():
+            state = store.get(session_id)
+            if state is None:
+                raise NotFoundError(f"no goal for session {session_id!r}")
+
+            max_iterations = body.get("max_iterations")
+            if max_iterations is not None and max_iterations < state.iteration:
+                raise ValueError(
+                    f"max_iterations ({max_iterations}) is below the goal's current iteration "
+                    f"({state.iteration}); it would exhaust the goal immediately."
+                )
+
+            # Apply only the keys present. A string is coerced like the set handler does; a budget
+            # sent as an explicit ``null`` is a no-op (the field stays at its current value).
+            if "outcome" in body:
+                state.outcome = str(body["outcome"] or "")
+            if "constraints" in body:
+                state.constraints = _as_str_list(body["constraints"])
+            if "boundaries" in body:
+                state.boundaries = _as_str_list(body["boundaries"])
+            if "stop_when" in body:
+                state.stop_when = str(body["stop_when"] or "")
+            if max_iterations is not None:
+                state.max_iterations = max_iterations
+            no_progress_limit = body.get("no_progress_limit")
+            if no_progress_limit is not None:
+                state.no_progress_limit = no_progress_limit
+
+            store.set(state)
+            return {"goal": state.to_dict()}
+
+    return await asyncio.to_thread(update)
 
 
 def _safe_kick(session_id: str, prompt: str) -> bool:

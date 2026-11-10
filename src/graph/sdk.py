@@ -2169,3 +2169,214 @@ def node_executable(min_version: str | None = None) -> Path | None:
         log.debug("[sdk] node_executable lookup failed", exc_info=True)
         return None
     return hit.path if hit else None
+
+
+# ── per-plugin Python venv + worker (ADR 0085 amendment 2026-11-08, #4807 part 2) ─────────
+# A plugin with heavy, host-incompatible Python deps (build123d, torch, …) can't load them
+# into the frozen host process. Part 1 (#4954) added `requires_runtimes: {python: {version,
+# requirements}}`, provisioned `<plugin_store>/.venv` with uv on the operator's Install, and
+# the runtime-missing setup banner. This is the call seam: resolve that venv's interpreter and
+# run a short JSON-line worker in it — so a plugin stops hand-rolling its own venv + gap + a
+# JSON-over-stdout subprocess (cadview's `CadView.worker`/`problem()` are the template #4807
+# retires). Blocking by nature, so `aworker` offers the off-the-event-loop form, matching how
+# `knowledge_search`/`knowledge_add` thread their blocking work.
+
+#: How much of a failed worker's stderr the error dict carries — enough for a traceback's tail,
+#: bounded so a chatty child can't balloon the message.
+_WORKER_STDERR_TAIL = 2000
+
+
+def plugin_python(plugin_id: str) -> Path | None:
+    """The interpreter of this plugin's provisioned Python venv, or None.
+
+    A plugin that declares ``requires_runtimes: {python: {version, requirements}}`` gets its
+    OWN ``<plugin_store>/.venv`` (provisioned with ``uv`` on the operator's Install click,
+    ADR 0085 amendment) — separate from the box-shared managed runtime
+    (:func:`managed_python_exe`), so its heavy deps never load into the host process. This
+    returns that venv's ``python`` only when it is actually on disk; None means it is not
+    provisioned (never installed, half-built, or wiped), so the caller degrades with an
+    actionable message rather than spawning a path that fails. Honours the
+    ``PROTOAGENT_PLUGIN_PYTHON_<ID>`` override (tests / CI point it at a fixture venv via
+    ``graph.plugins.testkit.use_fixture_python`` so contract tests run without uv).
+
+    Cheap (one ``stat``), never spawns, never raises — a bad id or a lookup failure reads as
+    None. Most callers want :func:`worker` / :func:`aworker` instead of spawning by hand.
+
+    ```python
+    from graph import sdk
+
+    exe = sdk.plugin_python(registry.plugin_id)
+    if exe is None:
+        return "This plugin's Python runtime isn't provisioned — hit Provision Python runtime in Settings."
+    ```
+    """
+    try:
+        from infra.python_runtime import plugin_venv_python
+
+        return plugin_venv_python(plugin_id)
+    except Exception:  # noqa: BLE001 — a bad id / lookup failure reads as "not provisioned"
+        log.debug("[sdk] plugin_python lookup failed for %r", plugin_id, exc_info=True)
+        return None
+
+
+def _worker_argv(argv_or_script) -> list[str]:
+    """Normalize the second ``worker`` argument into the argv to append after the interpreter.
+
+    A single ``str``/``Path`` is one script path (``["cad_worker.py"]``); a list/tuple is a
+    full argv (``["-m", "cad.worker", "--fast"]``), so a plugin can run a module or pass
+    flags. Raises ``ValueError`` on an empty spec (``worker`` turns that into an error dict)."""
+    if isinstance(argv_or_script, (str, Path)):
+        argv = [str(argv_or_script)]
+    elif isinstance(argv_or_script, (list, tuple)):
+        argv = [str(a) for a in argv_or_script]
+    else:
+        raise ValueError(f"argv_or_script must be a path or an argv list, got {type(argv_or_script).__name__}")
+    if not argv or not argv[0]:
+        raise ValueError("argv_or_script must name a script or module to run")
+    return argv
+
+
+def _worker_no_runtime_error(plugin_id: str) -> dict:
+    """The structured error a worker returns when the plugin's venv isn't provisioned — the
+    same remedy the runtime-missing setup banner offers, so an agent reading it knows what to
+    do next instead of seeing a bare spawn failure."""
+    return {
+        "ok": False,
+        "error": (
+            f"no provisioned Python runtime for plugin {plugin_id!r} — declare "
+            "requires_runtimes.python in the plugin manifest and provision its venv from the "
+            'setup banner ("Provision Python runtime"), or run uv yourself and reload the plugin.'
+        ),
+    }
+
+
+def worker(plugin_id: str, argv_or_script, payload, *, timeout: float = 60) -> dict:
+    """Run a short JSON-line worker in this plugin's venv and return its one-line result.
+
+    The protocol is deliberately tiny: the child is spawned under :func:`plugin_python`,
+    ``payload`` is written to its stdin as ONE ``json`` line, and its result is read as the
+    LAST non-empty line of stdout (so the child may log to stderr freely, and its result is
+    simply the final line it prints). The child must emit a JSON **object**; that parsed dict
+    is returned verbatim on success. This is the seam a heavy-dependency plugin uses instead
+    of loading its deps into the host — the compute lives in the venv, the host just hands it
+    a payload and takes back a dict.
+
+    Structured, never-raising errors (``{"ok": False, "error": …}``) on:
+      * no runtime — the venv isn't provisioned (carries the setup-banner remedy);
+      * timeout — the child is killed and reaped, then an error is returned (``returncode``
+        omitted);
+      * non-zero exit — ``error`` carries the stderr tail, with ``returncode`` and ``stderr``;
+      * non-JSON output — the child printed nothing parseable as a final JSON object.
+    A success dict carrying the child's own ``ok`` field is passed through untouched, so a
+    worker that reports its own failure is distinguishable from these host-level ones.
+
+    Args:
+        plugin_id: the owning plugin's id (``registry.plugin_id``).
+        argv_or_script: a single script path, or a full argv (``["-m", "pkg.worker"]``),
+            appended after the interpreter.
+        payload: a JSON-serializable value, written to the child's stdin as one line.
+        timeout: seconds before the child is killed (default 60).
+
+    Blocking — call it from a thread / background surface, or use :func:`aworker` on the event
+    loop.
+
+    ```python
+    from graph import sdk
+
+    out = sdk.worker(registry.plugin_id, "cad_worker.py", {"op": "mesh", "stl": path}, timeout=120)
+    if not out.get("ok", True):
+        return f"CAD worker failed: {out['error']}"
+    return out["summary"]
+    ```
+    """
+    import subprocess
+
+    exe = plugin_python(plugin_id)
+    if exe is None:
+        return _worker_no_runtime_error(plugin_id)
+    try:
+        argv = _worker_argv(argv_or_script)
+    except ValueError as exc:
+        return {"ok": False, "error": str(exc)}
+    try:
+        stdin_line = json.dumps(payload) + "\n"
+    except (TypeError, ValueError) as exc:
+        return {"ok": False, "error": f"payload is not JSON-serializable: {exc}"}
+
+    cmd = [str(exe), *argv]
+    # Popen (not subprocess.run) so a timeout reliably kills AND reaps the child and we still
+    # recover its partial stderr — run()'s TimeoutExpired carries no stderr on POSIX.
+    try:
+        proc = subprocess.Popen(  # noqa: S603 — fixed argv, no shell, interpreter is ours
+            cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
+        )
+    except OSError as exc:
+        return {"ok": False, "error": f"could not start worker for plugin {plugin_id!r}: {exc}"}
+    try:
+        out, err = proc.communicate(input=stdin_line, timeout=timeout)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        _, err = proc.communicate()  # drain + reap the killed child (no second timeout needed)
+        return {
+            "ok": False,
+            "error": _worker_detail(f"worker for plugin {plugin_id!r} timed out after {timeout}s", err),
+            "stderr": _tail(err),
+        }
+    except Exception as exc:  # noqa: BLE001 — never raise into a plugin engine
+        with contextlib.suppress(Exception):
+            proc.kill()
+        return {"ok": False, "error": f"worker for plugin {plugin_id!r} failed to run: {exc}"}
+
+    if proc.returncode != 0:
+        return {
+            "ok": False,
+            "error": _worker_detail(f"worker for plugin {plugin_id!r} exited {proc.returncode}", err),
+            "returncode": proc.returncode,
+            "stderr": _tail(err),
+        }
+    result = _parse_worker_result(out)
+    if result is None:
+        return {
+            "ok": False,
+            "error": _worker_detail(
+                f"worker for plugin {plugin_id!r} produced no JSON object on stdout (got {_tail(out, 300)!r})", err
+            ),
+            "stderr": _tail(err),
+        }
+    return result
+
+
+async def aworker(plugin_id: str, argv_or_script, payload, *, timeout: float = 60) -> dict:
+    """Awaitable :func:`worker` — runs the blocking spawn in a thread so it never blocks the
+    event loop (same shape as :func:`knowledge_search`'s ``asyncio.to_thread``). Use this from
+    async plugin code (a tool coroutine, a surface tick); the return value and error contract
+    are identical to :func:`worker`."""
+    return await asyncio.to_thread(worker, plugin_id, argv_or_script, payload, timeout=timeout)
+
+
+def _tail(text: str | None, limit: int = _WORKER_STDERR_TAIL) -> str:
+    """The last ``limit`` chars of ``text``, stripped — the bounded diagnostic tail an error
+    dict carries (mirrors ``infra.python_runtime._uv_tail``)."""
+    return (text or "").strip()[-limit:]
+
+
+def _worker_detail(message: str, stderr: str | None) -> str:
+    """``message``, plus the stderr tail when the child wrote any — so a single ``error`` field
+    carries the traceback a failed worker printed."""
+    tail = _tail(stderr)
+    return f"{message}: {tail}" if tail else message
+
+
+def _parse_worker_result(stdout: str | None) -> dict | None:
+    """The worker's result: the LAST non-empty line of stdout parsed as a JSON object, or None
+    when there is no such line or it isn't a JSON object. Taking the last line lets the child
+    print progress lines before its result without breaking the round trip."""
+    for line in reversed((stdout or "").splitlines()):
+        if not line.strip():
+            continue
+        try:
+            value = json.loads(line)
+        except (ValueError, TypeError):
+            return None
+        return value if isinstance(value, dict) else None
+    return None

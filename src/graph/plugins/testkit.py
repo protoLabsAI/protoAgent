@@ -28,13 +28,21 @@ from __future__ import annotations
 
 import importlib.util
 import inspect
+import json
+import os
 import re
 import sys
 import tempfile
 import types
 from pathlib import Path, PurePosixPath
 
-__all__ = ["plugin_module_name", "load_plugin", "install_host_stubs", "FakeRegistry"]
+__all__ = [
+    "plugin_module_name",
+    "load_plugin",
+    "install_host_stubs",
+    "FakeRegistry",
+    "use_fixture_python",
+]
 
 
 def plugin_module_name(plugin_id: str) -> str:
@@ -73,6 +81,102 @@ def load_plugin(root, plugin_id: str | None = None, *, entry: str = "__init__.py
         sys.modules.pop(name, None)
         raise
     return module
+
+
+# ── fixture Python runtime (#4807 part 2) ──────────────────────────────────────────────
+# ``sdk.plugin_python`` / ``sdk.worker`` resolve a plugin's venv through
+# ``infra.python_runtime``, which honours the ``PROTOAGENT_PLUGIN_PYTHON_<ID>`` override. A
+# contract test for a worker shouldn't need ``uv`` to provision a venv in CI, so this builds a
+# throwaway one with the stdlib ``venv`` module (from the test's own interpreter by default)
+# and points that override at it. Host-free by contract, so the two constants + the key rule
+# are duplicated from ``infra.python_runtime`` (a parity test keeps them in sync — same
+# reasoning as the ``_slugify_slash`` / ``SERVICE_NAME_RE`` duplications below).
+_VENV_ENV_PREFIX = "PROTOAGENT_PLUGIN_PYTHON_"
+_VENV_MARKER = ".protoagent-plugin-runtime.json"
+
+
+def _venv_env_key(plugin_id: str) -> str:
+    """The override env var for ``plugin_id`` — mirrors ``infra.python_runtime._venv_env_key``
+    (upper-cased id, every run of non-alphanumerics folded to ``_``)."""
+    return _VENV_ENV_PREFIX + re.sub(r"[^A-Z0-9]+", "_", plugin_id.upper())
+
+
+def _interpreter_version(interp: Path) -> str:
+    """The ``major.minor`` of ``interp``. The running interpreter's is read directly; any other
+    is probed once — written into the runtime marker so ``plugin_venv_state`` reads it as the
+    provisioned version."""
+    if interp == Path(sys.executable).resolve():
+        return f"{sys.version_info.major}.{sys.version_info.minor}"
+    import subprocess
+
+    out = subprocess.run(  # noqa: S603 — fixed argv, interpreter path supplied by the test
+        [str(interp), "-c", "import sys;print(f'{sys.version_info.major}.{sys.version_info.minor}')"],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    return out.stdout.strip()
+
+
+def _build_fixture_venv(base: Path, interp: Path) -> None:
+    """Create a REAL venv at ``base`` from ``interp`` with the stdlib ``venv`` module (no ``uv``,
+    no pip, no network) so the interpreter it exposes (``bin/python`` / ``Scripts\\python.exe``)
+    actually resolves its own stdlib on EVERY OS — a bare symlink or copy of ``python.exe`` can't
+    on Windows (it has no ``pyvenv.cfg`` landmark, so it never finds its prefix). When ``interp``
+    is the running interpreter we build in-process; otherwise we drive that interpreter's own
+    ``-m venv``."""
+    base.parent.mkdir(parents=True, exist_ok=True)
+    if interp == Path(sys.executable).resolve():
+        import venv
+
+        venv.create(str(base), with_pip=False, clear=True, symlinks=os.name != "nt")
+    else:
+        import subprocess
+
+        subprocess.run([str(interp), "-m", "venv", "--without-pip", "--clear", str(base)], check=True)  # noqa: S603
+
+
+def use_fixture_python(plugin_id: str, path=None, *, version: str | None = None, root=None, monkeypatch=None) -> Path:
+    """Point ``plugin_id``'s Python runtime at a fixture interpreter so ``sdk.plugin_python`` /
+    ``sdk.worker`` resolve it WITHOUT ``uv`` — the seam a worker contract test uses in CI.
+
+    Builds a real, throwaway venv at ``root`` from the fixture interpreter using the stdlib
+    ``venv`` module (no ``uv``, no pip, no network) and sets the ``PROTOAGENT_PLUGIN_PYTHON_<ID>``
+    override to it. A real venv — not a lone symlink/copy of ``python.exe`` — is what makes the
+    resolved interpreter find its own stdlib on Windows as well as POSIX, so the worker actually
+    runs there. Returns the venv directory.
+
+    Args:
+        plugin_id: the plugin whose runtime to redirect.
+        path: the fixture interpreter; defaults to ``sys.executable`` (the test's own Python).
+        version: the ``major.minor`` written into the marker, so ``plugin_venv_state`` /
+            ``plugin_venv_python(version=…)`` read it as satisfied. Defaults to the fixture
+            interpreter's own version (so ``plugin_venv_state`` reports ``"ok"``).
+        root: where to build the venv; defaults to a fresh ``tempfile.mkdtemp``. Pass
+            ``tmp_path / "venv"`` to tie its lifetime to pytest's cleanup.
+        monkeypatch: a pytest ``monkeypatch`` fixture — when given, the env var is set through
+            it so it is auto-restored; otherwise it is set on ``os.environ`` (unset it with
+            ``os.environ.pop(testkit._venv_env_key(id))``).
+
+    ```python
+    def test_worker_round_trip(tmp_path, monkeypatch):
+        testkit.use_fixture_python("my-plugin", root=tmp_path / "venv", monkeypatch=monkeypatch)
+        assert sdk.worker("my-plugin", str(script), {"n": 1}) == {"doubled": 2}
+    ```
+    """
+    interp = Path(path).resolve() if path else Path(sys.executable).resolve()
+    base = Path(root) if root is not None else Path(tempfile.mkdtemp(prefix="protoagent-fixture-venv-"))
+    _build_fixture_venv(base, interp)
+    marker_version = str(version) if version else _interpreter_version(interp)
+    (base / _VENV_MARKER).write_text(
+        json.dumps({"version": marker_version, "requirements_hash": ""}), encoding="utf-8"
+    )
+    key = _venv_env_key(plugin_id)
+    if monkeypatch is not None:
+        monkeypatch.setenv(key, str(base))
+    else:
+        os.environ[key] = str(base)
+    return base
 
 
 # ── host stubs ───────────────────────────────────────────────────────────────────────

@@ -1120,6 +1120,7 @@ def test_verify_plugin_lints_skills_before_pytest(tmp_path, monkeypatch):
     mod = _load_devkit_module(tmp_path)
     pdir = tmp_path / "p"
     (pdir / "skills" / "broken").mkdir(parents=True)
+    (pdir / "protoagent.plugin.yaml").write_text("id: p\nname: P\n")
     (pdir / "skills" / "broken" / "SKILL.md").write_text(BAD_SKILL)
     (pdir / "skills" / "fine").mkdir(parents=True)
     (pdir / "skills" / "fine" / "SKILL.md").write_text(GOOD_SKILL)
@@ -1201,3 +1202,97 @@ def test_scaffold_tool_bus_and_defaults(tmp_path):
     assert (tmp_path / "bus-tool/views/main.html").is_file()
     assert (tmp_path / "bus-tool/tests/test_bus_view.py").is_file()
     assert (tmp_path / "bus-tool/skills/bus-tool-skill/SKILL.md").is_file()
+
+
+@pytest.mark.platform_sensitive
+@pytest.mark.parametrize("custom_root", [False, True])
+def test_pass_stamp_and_reload_warning(monkeypatch, tmp_path, custom_root):
+    import json
+    from datetime import datetime
+    from types import SimpleNamespace
+
+    import graph.sdk as sdk
+    import server.agent_init as agent_init
+    from runtime.state import STATE
+
+    mod = _load_devkit_module(tmp_path)
+    root = tmp_path / "plugins"
+    store = tmp_path / "store"
+    store.mkdir()
+    monkeypatch.setattr(sdk, "plugin_store", lambda *a, **kw: store)
+    monkeypatch.setattr(mod.scaffold, "live_plugins_dir", lambda: tmp_path / "live" if custom_root else root)
+    config = {"target_dir": str(root)}
+    mod._REGISTRY = SimpleNamespace(config=config)
+    mod.scaffold.scaffold_plugin("Stamp", target_dir=str(root), with_skill=False)
+    pdir = root / "stamp"
+    monkeypatch.setattr(STATE, "graph", object(), raising=False)
+    # Warnings must survive the existing load-failure reporting branch too.
+    monkeypatch.setattr(STATE, "plugin_meta", [{"id": "broken", "enabled": True, "loaded": False}], raising=False)
+    calls = []
+    monkeypatch.setattr(agent_init, "_apply_settings_changes", lambda: (calls.append(True) or True, []))
+    assert "stamp changed since" in _run(mod.reload_plugins.ainvoke({}))
+    tp = mod._build_test_tool(config)
+    out = _run(tp.ainvoke({"plugin_id": "stamp"}))
+    assert "✓ tests passed" in out
+    assert "warn: tools-without-skills" in out
+    assert "Add skills/<name>/SKILL.md" in out
+    stamp = json.loads(mod._pass_stamp_path(pdir).read_text())
+    assert stamp["fingerprint"] == plugin_loader._source_fingerprint(pdir)
+    assert datetime.fromisoformat(stamp["passed_at"]).tzinfo is not None
+    # A fresh module must read the persisted stamp, not depend on process globals.
+    fresh = _load_devkit_module(tmp_path)
+    fresh._REGISTRY = mod._REGISTRY
+    assert "stamp changed since" not in _run(fresh.reload_plugins.ainvoke({}))
+    writer = next(t for t in mod._build_file_tools(config) if t.name == "plugin_write_file")
+    out = writer.invoke({"plugin_id": "stamp", "path": "extra.py", "content": "VALUE = 1\n"})
+    assert "now untested until test_plugin('stamp') passes" in out
+    out = _run(fresh.reload_plugins.ainvoke({}))
+    assert "stamp changed since its tests last passed — run test_plugin('stamp')" in out
+    assert "FAILED to load" in out
+    assert len(calls) == 3
+
+
+@pytest.mark.parametrize("outcome", ["✗ tests failed", "✗ no tests collected", "✗ tests timed out"])
+def test_unsuccessful_suite_does_not_stamp(monkeypatch, tmp_path, outcome):
+    mod = _load_devkit_module(tmp_path)
+    mod.scaffold.scaffold_plugin("Fail", target_dir=str(tmp_path), with_skill=False)
+    monkeypatch.setattr(mod, "_run_pytest", lambda p: outcome)
+    monkeypatch.setattr(mod, "_pass_stamp_path", lambda p: tmp_path / "stamp.json")
+    out = mod._verify_plugin(tmp_path / "fail")
+    assert outcome in out and "tools-without-skills" in out
+    assert not (tmp_path / "stamp.json").exists()
+
+
+def test_edit_during_suite_is_not_certified(monkeypatch, tmp_path):
+    mod = _load_devkit_module(tmp_path)
+    mod.scaffold.scaffold_plugin("Race", target_dir=str(tmp_path))
+
+    def run(pdir):
+        (pdir / "edited.py").write_text("VALUE = 1\n")
+        return "✓ tests passed"
+
+    monkeypatch.setattr(mod, "_run_pytest", run)
+    monkeypatch.setattr(mod, "_pass_stamp_path", lambda p: tmp_path / "stamp.json")
+    mod._verify_plugin(tmp_path / "race")
+    assert not (tmp_path / "stamp.json").exists()
+
+
+@pytest.mark.platform_sensitive
+@pytest.mark.parametrize("custom_root", [False, True])
+def test_devkit_directory_code_drift(monkeypatch, tmp_path, custom_root):
+    from graph.plugins import scaffold
+
+    root = tmp_path / "plugins"
+    scaffold.scaffold_plugin("Drifter", target_dir=str(root), with_tool=False)
+    monkeypatch.setattr(scaffold, "live_plugins_dir", lambda: tmp_path / "live" if custom_root else root)
+    monkeypatch.setattr(plugin_loader, "_plugin_roots", lambda config: [root])
+    monkeypatch.setattr(plugin_loader, "_SOURCE_FINGERPRINTS", {})
+    config = _cfg(plugins_enabled=["drifter"], plugin_config={"plugin_devkit": {"target_dir": str(root)}} if custom_root else {})
+    assert not (root / "drifter").is_symlink()
+    result = load_plugins(config)
+    assert next(m for m in result.meta if m["id"] == "drifter")["loaded"]
+    assert plugin_loader.code_drift_warning() is None
+    (root / "drifter" / "edited.py").write_text("VALUE = 1\n")
+    assert "drifter" in plugin_loader.code_drift_warning()
+    load_plugins(config)
+    assert plugin_loader.code_drift_warning() is None
