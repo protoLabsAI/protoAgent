@@ -4,7 +4,7 @@
 // its `WorkDetail`. Every field, its order and its wording come from the §2.5 table; ids, the
 // raw status, the verifier and the per-turn evidence live only in Technical details.
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { Button, Empty } from "@protolabsai/ui/primitives";
 import { Alert } from "@protolabsai/ui/data";
@@ -278,6 +278,10 @@ function GoalsList({ ctx }: { ctx: WorkSectionContext }) {
   const toast = useToast();
   const [creating, setCreating] = useState(false);
   const [busy, setBusy] = useState(false);
+  // Open after the containing Work modal mounts, so this dialog's portal sits above it.
+  useEffect(() => {
+    if (ctx.state.filters?.create === true) setCreating(true);
+  }, [ctx.state.filters?.create]);
 
   const closeCreator = () => {
     setCreating(false);
@@ -334,7 +338,7 @@ function GoalsList({ ctx }: { ctx: WorkSectionContext }) {
           />
         ))
       )}
-      <GoalCreateDialog open={creating || ctx.state.filters?.create === true} onClose={closeCreator} onCreate={createGoal} busy={busy} />
+      <GoalCreateDialog open={creating} onClose={closeCreator} onCreate={createGoal} busy={busy} />
     </>
   );
 }

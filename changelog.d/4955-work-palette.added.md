@@ -5,3 +5,5 @@
   desktop launcher too.
   On mobile, these commands navigate to Work. New goal opens the creation form, and closing
   it clears the request so returning to Work does not reopen it.
+  Opening Work from any dock transfers its mounted view to the modal, preventing duplicate
+  goal creation dialogs when Work lives in the left or bottom dock.

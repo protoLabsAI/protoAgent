@@ -988,13 +988,12 @@ function WorkspaceApp({ runtime }: { runtime: RuntimeStatus | null }) {
   // One mounted copy per plugin view key across the three docks (#4802) — filled by renderDock
   // in render order (left, right, bottom), fresh every render.
   const dockClaims = new Set<string>();
-  // While a right-dock view is expanded into the shell modal (desktop only), the modal owns its
-  // single mount — so the right dock must NOT also mount that view, as its active surface OR as a
+  // While a view is expanded into the shell modal (desktop only), the modal owns its
+  // single mount — so no dock may also mount that view, as its active surface OR as a
   // background slot, or a plugin view's iframe is mounted twice, breaking #4802's one-copy
-  // invariant. `openSurfaceModal` leaves `rightPanel` untouched (Expand only ever targets the
-  // active right view), so `rightActive` still names the expanded view here — hence the explicit
-  // exclusion below. Dock to rail clears `surfaceModal`, so the dock mounts the view again. The
-  // phone opens no modal, so this is always undefined there.
+  // invariant. Palette commands can expand a view from any dock without changing its active
+  // surface — hence the exclusions below. Closing the modal clears `surfaceModal`, so the
+  // dock mounts the view again. The phone opens no modal, so this is always undefined there.
   const expandedViewId = !isMobile ? surfaceModal?.viewId : undefined;
   // Chat mounts unconditionally on whichever dock holds it (streaming continuity, #613) —
   // left, right, OR the bottom dock. Its slot stays mounted while another surface swaps in
@@ -1319,8 +1318,8 @@ function WorkspaceApp({ runtime }: { runtime: RuntimeStatus | null }) {
               />
             ) : null}
             {renderDock(
-              isMobile ? mobileActive : leftActive,
-              isMobile ? bgViewsDocked : bgViewsFor("left"),
+              isMobile ? mobileActive : expandedViewId === leftActive ? "" : leftActive,
+              isMobile ? bgViewsDocked : bgViewsFor("left").filter((v) => v.key !== expandedViewId),
               dockClaims,
             )}
           </>
@@ -1381,7 +1380,11 @@ function WorkspaceApp({ runtime }: { runtime: RuntimeStatus | null }) {
                 enabledPluginIds={enabledPluginIds}
               />
             ) : null}
-            {renderDock(bottomActive, isMobile ? [] : bgViewsFor("bottom"), dockClaims)}
+            {renderDock(
+              expandedViewId === bottomActive ? "" : bottomActive,
+              isMobile ? [] : bgViewsFor("bottom").filter((v) => v.key !== expandedViewId),
+              dockClaims,
+            )}
           </>
         }
         utilityBar={
