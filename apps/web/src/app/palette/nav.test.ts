@@ -129,6 +129,16 @@ describe("applyNavIntent — surface: opens the large shell MODAL on a section (
     "decisions", "goals", "watches", "tasks", "schedules", "background", "activity", "directives",
   ];
 
+  it.each(["overview", ...SECTIONS, "new-goal"])("routes %s from another mobile surface", (section) => {
+    useUI.setState({ mobileActive: "knowledge" });
+    const state = section === "new-goal" ? { section: "goals", filters: { create: true } } : { section };
+    applyNavIntent(JSON.parse(JSON.stringify({ kind: "surface", id: "work", state })) as NavIntent);
+    expect(useUI.getState().mobileActive).toBe("work");
+    expect(useUI.getState().surfaceStates.work).toEqual(state);
+    expect(useUI.getState().surfaceModal).toEqual({ viewId: "work", state });
+    expect(useUI.getState().rightCollapsed).toBe(true);
+  });
+
   it("opens the modal on the requested section and persists it as the saved place", () => {
     applyNavIntent({ kind: "surface", id: "work", state: { section: "decisions" } });
     const s = useUI.getState();

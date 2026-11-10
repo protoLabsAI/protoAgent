@@ -110,6 +110,8 @@ export function applyNavIntent(intent: NavIntent) {
       // saved place, so the row that says "Work ▸ Goals" lands on Goals and the modal
       // remembers it. An absent `state` opens on whatever place was last saved.
       ui.openSurfaceModal(intent.id, intent.state);
+      // Mobile renders the active surface instead of the desktop modal.
+      ui.setMobileActive(intent.id);
       break;
     case "plugins":
       // Plugins is a Settings section; Settings is the dialog now (2026-06). Open it on the

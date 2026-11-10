@@ -10,11 +10,12 @@ import { Button, Empty } from "@protolabsai/ui/primitives";
 import { Alert } from "@protolabsai/ui/data";
 import { useToast } from "@protolabsai/ui/overlays";
 
-import { registerWorkSection, type WorkSectionContext } from "../WorkView";
+import { registerWorkSection, type WorkSectionContext } from "../sectionRegistry";
 import { WorkRow } from "../WorkRow";
 import { WorkDetail, type WorkAction, type WorkField } from "../WorkDetail";
 import { relTime } from "../tone";
 import type { WorkItem } from "../useWorkItems";
+import { useUI } from "../../state/uiStore";
 import { api } from "../../lib/api";
 import { queryKeys } from "../../lib/queries";
 import { errMsg } from "../../lib/format";
@@ -278,6 +279,17 @@ function GoalsList({ ctx }: { ctx: WorkSectionContext }) {
   const [creating, setCreating] = useState(false);
   const [busy, setBusy] = useState(false);
 
+  const closeCreator = () => {
+    setCreating(false);
+    const ui = useUI.getState();
+    const state = ui.surfaceStates.work ?? ctx.state;
+    if (state.filters?.create === true) {
+      const filters = { ...state.filters };
+      delete filters.create;
+      ui.setSurfaceState("work", { ...state, filters });
+    }
+  };
+
   if (source.status === "error") {
     return (
       <Alert status="warning">
@@ -296,7 +308,7 @@ function GoalsList({ ctx }: { ctx: WorkSectionContext }) {
       .then((res) => {
         void qc.invalidateQueries({ queryKey: queryKeys.goals });
         toast({ tone: "success", title: "Goal set", message: goalSetDetail(res.message) || "The agent has a new goal." });
-        setCreating(false);
+        closeCreator();
       })
       .catch((e) => toast({ tone: "error", title: "Couldn't set goal", message: errMsg(e) }))
       .finally(() => setBusy(false));
@@ -322,7 +334,7 @@ function GoalsList({ ctx }: { ctx: WorkSectionContext }) {
           />
         ))
       )}
-      <GoalCreateDialog open={creating} onClose={() => setCreating(false)} onCreate={createGoal} busy={busy} />
+      <GoalCreateDialog open={creating || ctx.state.filters?.create === true} onClose={closeCreator} onCreate={createGoal} busy={busy} />
     </>
   );
 }

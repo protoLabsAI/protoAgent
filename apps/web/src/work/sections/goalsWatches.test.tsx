@@ -21,9 +21,15 @@ vi.mock("../WorkView", () => ({
     return () => {};
   },
 }));
+vi.mock("../sectionRegistry", () => ({
+  registerWorkSection: (id: string, section: { label: string; render: (ctx: unknown) => ReactNode }) => {
+    registrations.push([id, section]);
+    return () => {};
+  },
+}));
 vi.mock("../../app/GoalsPanel", () => ({
-  GoalCreateDialog: ({ open }: { open: boolean }) =>
-    open ? h("div", { "data-testid": "goal-create-dialog" }, "New goal") : null,
+  GoalCreateDialog: ({ open, onClose }: { open: boolean; onClose: () => void }) =>
+    open ? h("div", { "data-testid": "goal-create-dialog" }, h("button", { onClick: onClose }, "Cancel creation")) : null,
 }));
 vi.mock("../../chat/HitlForm", () => ({
   HitlForm: ({ onSubmit }: { onSubmit: (a: Record<string, unknown>) => void }) =>
@@ -37,6 +43,8 @@ vi.mock("../../chat/HitlForm", () => ({
     ),
 }));
 
+import { useUI } from "../../state/uiStore";
+import { applyNavIntent } from "../../app/palette/nav";
 import { api } from "../../lib/api";
 import { goalsSection } from "./goals";
 import { watchesSection } from "./watches";
@@ -113,6 +121,7 @@ function ctx(over: { sources?: WorkItems; itemId?: string }): never {
 beforeEach(() => {
   root = null;
   host = null;
+  useUI.setState({ surfaceStates: {}, surfaceModal: null });
 });
 afterEach(async () => {
   await act(async () => root?.unmount());
@@ -350,6 +359,26 @@ describe("Lifecycle re-arm (ADR 0079)", () => {
 });
 
 describe("New goal (r4)", () => {
+  it("opens on mount and on repeated palette requests, clearing the flag on cancel", async () => {
+    const openCreator = () => applyNavIntent({ kind: "surface", id: "work", state: { section: "goals", filters: { create: true, thisChat: false } } });
+    function LiveGoals() {
+      const state = useUI((s) => s.surfaceStates.work!);
+      return goalsSection.render({ sources: sources({}), state, onOpen: vi.fn(), onBack: vi.fn() });
+    }
+    openCreator();
+    await mount(h(LiveGoals));
+    expect(host!.querySelector('[data-testid="goal-create-dialog"]')).not.toBeNull();
+    await act(async () => button("Cancel creation").click());
+    expect(host!.querySelector('[data-testid="goal-create-dialog"]')).toBeNull();
+    expect(useUI.getState().surfaceStates.work.filters).toEqual({ thisChat: false });
+    expect(useUI.getState().surfaceModal!.state.filters).toEqual({ thisChat: false });
+    await act(async () => openCreator());
+    expect(host!.querySelector('[data-testid="goal-create-dialog"]')).not.toBeNull();
+    await act(async () => button("Cancel creation").click());
+    await act(async () => useUI.getState().openSurfaceModal("work"));
+    expect(host!.querySelector('[data-testid="goal-create-dialog"]')).toBeNull();
+  });
+
   it("the empty Goals section shows New goal, which opens GoalCreateDialog", async () => {
     await mount(goalsSection.render(ctx({ sources: sources({ goals: emptySrc() }) })));
     expect(buttons().some((b) => b.textContent?.trim() === "New goal")).toBe(true);

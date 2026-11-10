@@ -4,6 +4,8 @@ import { ToastProvider } from "@protolabsai/ui/overlays";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { WorkView, registerWorkSection } from "./WorkView";
+import { api } from "../lib/api";
+import { applyNavIntent } from "../app/palette/nav";
 import { useUI } from "../state/uiStore";
 import type { WorkItem, WorkItems, WorkSource, WorkSourceKind } from "./useWorkItems";
 import css from "./work-view.css?raw";
@@ -115,11 +117,11 @@ it("round-trips selection, scroll and filters across frames and back", async () 
 });
 
 it("renders quiet unregistered sections and uses registered renderers", async () => {
-  useUI.setState({ surfaceStates: { work: { section: "goals" } } });
+  useUI.setState({ surfaceStates: { work: { section: "watches" } } });
   await render("modal");
-  expect(host.textContent).toContain("No goals to show");
-  await act(async () => { dispose = registerWorkSection("goals", { label: "Goals", render: () => <p>Goal list</p> }); });
-  expect(host.textContent).toContain("Goal list");
+  expect(host.textContent).toContain("No watches to show");
+  await act(async () => { dispose = registerWorkSection("watches", { label: "Watches", render: () => <p>Watch list</p> }); });
+  expect(host.textContent).toContain("Watch list");
   expect(host.querySelectorAll('[role="tab"]')).toHaveLength(9);
 });
 
@@ -155,4 +157,15 @@ it.each(["tasks", "schedules"] as const)("loads the %s list and detail through W
   await act(async () => host.querySelector<HTMLButtonElement>(".work-row")!.click());
   expect(host.querySelector(".work-view__detail")?.textContent).toContain("Edit");
   expect(host.querySelector(".work-view__detail")?.textContent).not.toContain("Details will appear here.");
+});
+
+it("the palette New goal intent opens the registered Goals creator in Work", async () => {
+  const catalog = vi.spyOn(api, "verifiers").mockResolvedValue({ types: [], plugin_checks: [] });
+  try {
+    applyNavIntent({ kind: "surface", id: "work", state: { section: "goals", filters: { create: true } } });
+    await render("modal");
+    expect(document.querySelector('[data-testid="goal-create-dialog"]')).not.toBeNull();
+  } finally {
+    catalog.mockRestore();
+  }
 });

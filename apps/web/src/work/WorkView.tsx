@@ -7,6 +7,7 @@ import { useWorkItems, type WorkItem, type WorkItems } from "./useWorkItems";
 import { WorkOverview, workSections } from "./WorkOverview";
 import { sections, subscribe, getSnapshot } from "./sectionRegistry";
 import "./sections/decisions";
+import "./sections/goals";
 import "./sections/directives";
 import "./sections/tasks";
 import "./sections/schedules";
