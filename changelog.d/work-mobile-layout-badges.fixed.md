@@ -1,0 +1,1 @@
+- **Compact Work navigation.** Replace the permanent section column with a compact picker and segmented scope, correct nested count badges, and preserve selection, scroll and focus across progressive panes and wide modal layouts.

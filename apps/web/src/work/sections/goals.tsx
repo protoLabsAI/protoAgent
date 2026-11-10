@@ -334,6 +334,7 @@ function GoalsList({ ctx }: { ctx: WorkSectionContext }) {
             status={item.status}
             title={item.title}
             meta={goalRowMeta(item.raw as GoalState)}
+            focusKey={`${item.kind}:${item.id}`}
             onOpen={() => ctx.onOpen(item)}
           />
         ))
