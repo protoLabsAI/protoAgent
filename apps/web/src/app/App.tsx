@@ -1653,6 +1653,7 @@ function WorkspaceApp({ runtime }: { runtime: RuntimeStatus | null }) {
     {/* The header drawer (hamburger) — global actions + (on mobile) surface nav. */}
     <AppDrawer
       open={drawerOpen}
+      badges={{ work: attentionCount }}
       onClose={() => setDrawerOpen(false)}
       mobile={isMobile}
       surfaces={[...railSurfaces("left"), ...railSurfaces("right"), ...railSurfaces("bottom")].map((s) => ({

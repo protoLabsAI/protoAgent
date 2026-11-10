@@ -2,6 +2,7 @@ import type { ReactNode } from "react";
 import { BookOpen, Bug, Github, ScrollText, Settings2 } from "lucide-react";
 
 import { Drawer } from "@protolabsai/ui/overlays";
+import { Count } from "@protolabsai/ui/primitives";
 
 import "./app-drawer.css";
 
@@ -17,6 +18,7 @@ export function AppDrawer({
   onClose,
   mobile,
   surfaces,
+  badges = {},
   activeSurface,
   onSelectSurface,
   onOpenGlobal,
@@ -27,6 +29,7 @@ export function AppDrawer({
   onClose: () => void;
   mobile: boolean;
   surfaces: SurfaceItem[];
+  badges?: Record<string, number>;
   activeSurface: string;
   onSelectSurface: (id: string) => void;
   onOpenGlobal: (section?: string) => void;
@@ -75,10 +78,12 @@ export function AppDrawer({
                   key={s.id}
                   type="button"
                   className={`app-drawer-item${s.id === activeSurface ? " on" : ""}`}
+                  aria-label={badges[s.id] > 0 ? `${s.label}, ${badges[s.id]} need you` : undefined}
                   onClick={act(() => onSelectSurface(s.id))}
                 >
                   <span className="app-drawer-ico">{s.icon}</span>
                   {s.label}
+                  {badges[s.id] > 0 ? <Count>{badges[s.id]}</Count> : null}
                 </button>
               ))}
             </section>
