@@ -1,6 +1,7 @@
 import { Button } from "@protolabsai/ui/primitives";
 import { Spinner } from "@protolabsai/ui/data";
 
+import { openView } from "../app/palette/nav";
 import { useUI } from "../state/uiStore";
 import { useRunningBackgroundJobs, type JobLite } from "./backgroundJobStore";
 
@@ -28,8 +29,7 @@ export function BackgroundWorkStrip({ sessionId }: { sessionId: string }) {
       scrollTop: 0,
       filters: { ...ui.surfaceStates.work?.filters, thisChat: true },
     });
-    ui.setRightPanel("work");
-    ui.setRightCollapsed(false);
+    openView("work");
   };
   if (running.length === 0) {
     return <div className="chat-bgwork chat-bgwork--idle" role="status" data-testid="chat-bgwork" />;

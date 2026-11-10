@@ -14,7 +14,8 @@ for (const width of [1440, 390]) {
           version: 1, currentSessionId: session,
           sessions: [{ id: session, title: "Release instructions", createdAt: 1, updatedAt: 2,
             messages: [{ id: "withdrawal", role: "user", content: note, status: "done",
-              protoagent_directive_withdrawn: { id: "dir-old" } }] }],
+              protoagent_directive_withdrawn: { id: "dir-old" } }] },
+            { id: "other-chat", title: "Other chat", createdAt: 3, updatedAt: 3, messages: [] }],
         }));
       }, { session: SESSION, note: NOTE });
       await page.route("**/api/theme", (route) => route.fulfill({ json: { theme: { mode, overrides: {} } } }));
@@ -45,8 +46,6 @@ for (const width of [1440, 390]) {
       await expect(page.locator(".pl-message--user").filter({ hasText: NOTE })).toHaveCount(0);
       await page.screenshot({ path: info.outputPath("strip.png"), fullPage: true, animations: "disabled" });
       await strip.getByRole("button", { name: "View" }).click();
-      // The phone shell does not mount a right rail; the selection survives widening.
-      if (width === 390) await page.setViewportSize({ width: 1440, height: 900 });
       const rail = page.locator('.work-view[data-frame="rail"]');
       await expect(page.getByRole("dialog", { name: "Standing instructions" })).toHaveCount(0);
       await expect(rail.getByRole("button", { name: "This chat", exact: true })).toHaveAttribute("aria-pressed", "true");
@@ -62,12 +61,14 @@ for (const width of [1440, 390]) {
       await expect(rail.getByText("Note: Hold until Monday")).toBeVisible();
       await page.screenshot({ path: info.outputPath("history.png"), fullPage: true, animations: "disabled" });
 
+      if (width === 390) await page.getByRole("button", { name: "Back", exact: true }).click();
       await expect(strip).toHaveClass(/chat-ledger--idle/);
       await expect(page.locator(".pl-message--system").filter({ hasText: 'You withdrew: "' + QUOTE + '" — Hold until Monday' })).toBeVisible();
       const composer = page.getByPlaceholder(/Message protoAgent/i);
       await composer.fill("/directives ");
       await composer.press("Enter");
       await expect(rail.locator(".work-section--directives")).toBeVisible();
+      if (width === 390) await page.getByRole("button", { name: "Back", exact: true }).click();
       await expect(composer).toHaveValue("");
       await page.keyboard.press("Escape");
       await page.keyboard.press("ControlOrMeta+Shift+k");
@@ -76,9 +77,11 @@ for (const width of [1440, 390]) {
       await expect(rail.locator(".work-section--directives")).toBeVisible();
       await page.keyboard.press("Escape");
       if (width === 1440) {
+        await page.locator(".pl-tabbar__tab").filter({ hasText: "Other chat" }).click();
         await page.locator(".pl-tabbar__tab").filter({ hasText: "Release instructions" }).click({ button: "right" });
         await page.getByRole("menuitem", { name: "Standing instructions", exact: true }).click();
         await expect(rail.locator(".work-section--directives")).toBeVisible();
+        await expect(rail.getByRole("button", { name: "History (1)" })).toBeVisible();
       }
     });
   }

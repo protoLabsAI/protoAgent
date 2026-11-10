@@ -1,6 +1,7 @@
 import { act, type ReactElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { chatStore } from "./chat-store";
 import { useUI } from "../state/uiStore";
 import { DirectiveStrip, DirectiveWorkRequest } from "./DirectiveStrip";
 import { GoalRunStrip } from "./GoalRunStrip";
@@ -33,6 +34,7 @@ beforeEach(() => {
   data.failed = false;
   data.goals = [{ session_id: "here", condition: "Ship it", status: "active" } as GoalState];
   useUI.setState({ ...initial, rightPanel: "context", rightCollapsed: true, surfaceModal: null,
+    mobileActive: "chat", railOrder: { left: ["chat"], right: ["work", "context"], bottom: [], hidden: [] },
     directivesRequest: null, surfaceStates: { work: { section: "tasks", itemId: "task:old", scrollTop: 80,
       filters: { thisChat: false, retained: true } } } });
   host = document.createElement("div"); document.body.append(host); root = createRoot(host);
@@ -48,8 +50,21 @@ async function click(label: string) {
 }
 function expectWork(section: string, itemId?: string) {
   const ui = useUI.getState();
-  expect(ui.rightPanel).toBe("work");
-  expect(ui.rightCollapsed).toBe(false);
+  expect(ui.mobileActive).toBe("work");
+  expect(ui.railOrder.hidden).not.toContain("work");
+  if (ui.railOrder.left.includes("work")) {
+    expect(ui.surface).toBe("work");
+    expect(ui.leftCollapsed).toBe(false);
+  } else if (ui.railOrder.bottom.includes("work")) {
+    expect(ui.bottomPanel).toBe("work");
+    expect(ui.bottomCollapsed).toBe(false);
+    expect(ui.bottomHeight).toBeGreaterThanOrEqual(120);
+  } else {
+    expect(ui.railOrder.right).toContain("work");
+    expect(ui.rightPanel).toBe("work");
+    expect(ui.rightCollapsed).toBe(false);
+    expect(ui.rightWidth).toBeGreaterThanOrEqual(280);
+  }
   expect(ui.surfaceModal).toBeNull();
   expect(ui.surfaceStates.work).toEqual({ section, itemId, scrollTop: 0, filters: { thisChat: true, retained: true } });
   expect(ui.backgroundJobsRequest).toBe(initial.backgroundJobsRequest);
@@ -94,4 +109,35 @@ it("leaves requests for other chats unconsumed", async () => {
   await act(async () => useUI.getState().openDirectives("here"));
   expect(useUI.getState().directivesRequest?.sessionId).toBe("here");
   expect(useUI.getState().rightPanel).toBe("context");
+});
+
+for (const dock of ["left", "right", "bottom", "hidden"] as const) {
+  it.each(["directives", "goals", "background", "request"] as const)(
+    `reveals %s from ${dock}, including mobile navigation and collapsed zero-size docks`, async (entry) => {
+      const railOrder = { left: ["chat"], right: ["context"], bottom: [] as string[], hidden: [] as string[] };
+      railOrder[dock].push("work");
+      useUI.setState({ railOrder, leftCollapsed: true, rightCollapsed: true, bottomCollapsed: true,
+        rightWidth: 0, bottomHeight: 0 });
+      if (entry === "request") {
+        await render(<DirectiveWorkRequest sessionId="here" />);
+        await act(async () => useUI.getState().openDirectives("here"));
+      } else {
+        const Strip = entry === "directives" ? DirectiveStrip : entry === "goals" ? GoalRunStrip : BackgroundWorkStrip;
+        await render(<Strip sessionId="here" />);
+        await click("View");
+      }
+      expectWork(entry === "request" ? "directives" : entry, entry === "goals" ? "goal:here" : undefined);
+    },
+  );
+}
+
+it("selects a previously visited inactive chat before consuming its directive request", async () => {
+  const target = chatStore.createSession();
+  const current = chatStore.createSession({ incognito: true });
+  expect(current.id).not.toBe(target.id);
+  expect(chatStore.getSnapshot().currentSessionId).toBe(current.id);
+  await render(<><DirectiveWorkRequest sessionId={target.id} /><DirectiveWorkRequest sessionId={current.id} /></>);
+  await act(async () => useUI.getState().openDirectives(target.id));
+  expect(chatStore.getSnapshot().currentSessionId).toBe(target.id);
+  expectWork("directives");
 });

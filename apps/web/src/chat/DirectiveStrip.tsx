@@ -2,7 +2,9 @@ import { useEffect } from "react";
 import { Button } from "@protolabsai/ui/primitives";
 import { StatusDot } from "@protolabsai/ui/data";
 import { useIsMobile } from "../lib/useIsMobile";
+import { openView } from "../app/palette/nav";
 import { useUI } from "../state/uiStore";
+import { chatStore } from "./chat-store";
 import { useDirectives } from "./useDirectives";
 
 function openWorkDirectives() {
@@ -14,8 +16,7 @@ function openWorkDirectives() {
     scrollTop: 0,
     filters: { ...ui.surfaceStates.work?.filters, thisChat: true },
   });
-  ui.setRightPanel("work");
-  ui.setRightCollapsed(false);
+  openView("work");
 }
 
 /** Consume console /directives requests without mounting the legacy drawer. */
@@ -23,6 +24,8 @@ export function DirectiveWorkRequest({ sessionId }: { sessionId: string }) {
   const request = useUI((s) => s.directivesRequest);
   useEffect(() => {
     if (request?.sessionId !== sessionId) return;
+    // Inactive session slots stay mounted; Work reads the selected chat.
+    chatStore.switchSession(sessionId);
     openWorkDirectives();
     useUI.setState({ directivesRequest: null });
   }, [request, sessionId]);

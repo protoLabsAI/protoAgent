@@ -10,6 +10,7 @@ import { dismissGoal, useDismissedGoals } from "../goals/dismissedGoals";
 import { useNow } from "../goals/useNow";
 import { goalsQuery } from "../lib/queries";
 import type { GoalState } from "../lib/types";
+import { openView } from "../app/palette/nav";
 import { useUI } from "../state/uiStore";
 import { verifierLabel } from "./goalForm";
 
@@ -52,8 +53,7 @@ export function GoalRunStrip({ sessionId }: { sessionId: string }) {
       scrollTop: 0,
       filters: { ...ui.surfaceStates.work?.filters, thisChat: true },
     });
-    ui.setRightPanel("work");
-    ui.setRightCollapsed(false);
+    openView("work");
   };
   // The live region is ONLY the state text (`Goal driving · iteration i/n`, `Goal achieved`):
   // the outcome line carries a relative time ("3m ago") that `useNow` re-renders every minute,
