@@ -1773,7 +1773,9 @@ async def test_real_connection_refusal_is_retryable(tmp_path):
         port = sock.getsockname()[1]
     s = _make_scheduler(tmp_path)
     s._invoke_url = f"http://127.0.0.1:{port}"
-    s._fire_timeout_s = 2
+    # Windows can take several seconds to report a refused loopback connect.
+    # A two-second deadline tests ConnectTimeout instead of ECONNREFUSED there.
+    s._fire_timeout_s = 15
     job = s.add_job("refused", (datetime.now(UTC) - timedelta(seconds=1)).isoformat())
     await s._tick()
     await asyncio.gather(*s._fire_tasks)
@@ -1781,6 +1783,59 @@ async def test_real_connection_refusal_is_retryable(tmp_path):
     with s._connect() as db:
         assert db.execute("SELECT state FROM occurrences").fetchone()["state"] == "retryable"
     assert [j.id for j in s._claim_due_jobs(datetime.now(UTC))] == [job.id]
+
+
+@pytest.mark.asyncio
+@pytest.mark.platform_sensitive
+async def test_real_accepted_read_timeout_stays_quarantined_after_restart(tmp_path):
+    """An HTTP receiver can keep running after the unary client's deadline."""
+    accepted = []
+    handlers = set()
+    release = asyncio.Event()
+
+    async def receive(reader, writer):
+        task = asyncio.current_task()
+        handlers.add(task)
+        try:
+            headers = await reader.readuntil(b"\r\n\r\n")
+            length = next(int(line.split(b":", 1)[1]) for line in headers.split(b"\r\n")
+                          if line.lower().startswith(b"content-length:"))
+            accepted.append(await reader.readexactly(length))
+            await release.wait()
+        finally:
+            writer.close()
+            await writer.wait_closed()
+            handlers.discard(task)
+
+    server = await asyncio.start_server(receive, "127.0.0.1", 0)
+    try:
+        s = _make_scheduler(tmp_path)
+        s._invoke_url = f"http://127.0.0.1:{server.sockets[0].getsockname()[1]}"
+        s._fire_timeout_s = 0.5
+        job = s.add_job("accepted", (datetime.now(UTC) - timedelta(seconds=1)).isoformat())
+        await s._tick()
+        await asyncio.gather(*s._fire_tasks)
+        assert len(accepted) == 1
+        assert handlers  # The receiver is still running after the client timed out.
+        restarted = _make_scheduler(tmp_path)
+        restarted._invoke_url = s._invoke_url
+        for scheduler in (s, restarted):
+            scheduler._recover_missed_fires()
+            for _ in range(3):
+                await scheduler._tick()
+            assert not scheduler._fire_tasks
+            stored = scheduler.get_job(job.id)
+            assert stored.last_error == "delivery unknown; not automatically retried"
+            assert stored.fire_count == stored.consecutive_failures == 0
+            assert stored.last_ok is None
+            with scheduler._connect() as db:
+                assert db.execute("SELECT state FROM occurrences").fetchone()["state"] == "unknown"
+        assert len(accepted) == 1
+    finally:
+        server.close()
+        release.set()
+        await asyncio.gather(*handlers)
+        await server.wait_closed()
 
 
 @pytest.mark.asyncio
