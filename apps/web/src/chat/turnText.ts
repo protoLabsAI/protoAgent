@@ -25,10 +25,10 @@ import { renderedPrefixEnd, rendersText, replaceText, textRuns } from "./parts";
 import { isEmptyPlaceholder } from "./roomBubble";
 
 /** Nothing of this turn's own to show: no answer text, no ordered parts, no tool
- *  cards, no reasoning, no inline component. A split turn's continuation looks
+ *  cards, no reasoning, no inline component, no durable decision. A split turn's continuation looks
  *  like this until the agent says something after the inserted row. */
 function carriesNothing(message: ChatMessage): boolean {
-  return isEmptyPlaceholder(message) && !message.components?.length;
+  return isEmptyPlaceholder(message) && !message.components?.length && !message.decisionId;
 }
 
 function withoutText(parts: ChatPart[] | undefined): ChatPart[] {

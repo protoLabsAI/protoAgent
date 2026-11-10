@@ -536,3 +536,20 @@ describe("repairAddressedTurnEcho", () => {
     expect(repairAddressedTurnEcho(partial)).toBe(partial);
   });
 });
+
+describe("decision-only split bubbles", () => {
+  it("keeps both decision identities when a split turn settles without text", () => {
+    const messages = [frozen({ decisionId: "decision-A" }), user("Ship"), live({ decisionId: "decision-B" })];
+    expect(settleTurnBubbles(messages, "A")).toEqual(messages);
+    expect(settleTurnBubbles(applyCanonicalTurnText(messages, "A", ""), "A").map((m) => m.decisionId))
+      .toEqual(["decision-A", undefined, "decision-B"]);
+  });
+
+  it("keeps a decision-bearing earlier half when canonical text diverges", () => {
+    const messages = [frozen({ content: "old", decisionId: "decision-A" }), user("Ship"), live()];
+    const settled = settleTurnBubbles(applyCanonicalTurnText(messages, "A", "new"), "A");
+    expect(settled.map((m) => [m.content, m.decisionId])).toEqual([
+      ["", "decision-A"], ["Ship", undefined], ["new", undefined],
+    ]);
+  });
+});

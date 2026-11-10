@@ -64,6 +64,7 @@ import { lastOperatorAssistantId, rewindableTailId } from "./parts";
 import { createRevealQueue } from "./revealQueue";
 import {
   applyComponent,
+  applyDecisionIdentity,
   applyReasoning,
   applyText,
   applyToolEventToTurn,
@@ -1320,6 +1321,14 @@ export function ChatSessionSlot({
                   : item,
               ),
             );
+          }
+        },
+        onHitlPayload: (payload) => {
+          const latest = chatStore.getSnapshot().sessions.find((item) => item.id === session.id);
+          if (latest) {
+            chatStore.updateMessages(session.id, latest.messages.map((item) =>
+              item.id === assistantId ? applyDecisionIdentity(item, payload) : item,
+            ));
           }
         },
         onInputRequired: (payload) => {

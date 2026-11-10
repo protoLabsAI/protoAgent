@@ -548,12 +548,14 @@ export type TurnStreamHandlers = {
   onSteerConsumed?: (items: ConsumedSteer[]) => void;
   /** A coding delegate's live state (#3979) — a whole snapshot for the card `evt.id`. */
   onDelegateProgress?: (evt: DelegateProgressEvent) => void;
-  /** A durable rebuild only (`replaySteers`): an operator message that arrived MID-task —
+  /** Snapshot replay: an operator message that arrived MID-task —
    *  the answer that continued a paused task on its own id (A2A §3.4.3, #3930). The
    *  task's opening message is not one; the rebuild draws that bubble separately. */
   onContinuationMessage?: (message: { role?: string; parts?: RawPart[]; metadata?: ExtMetadata }) => void;
   onCost?: (usage: TurnUsage) => void;
   onContext?: (ctx: ContextWindow) => void;
+  /** Durable HITL metadata, including historical pauses; does not reopen the active form. */
+  onHitlPayload?: (payload: HitlPayload) => void;
   onInputRequired?: (payload: HitlPayload) => void;
   onFailed?: (message: string) => void;
   onDone?: () => void;
@@ -652,9 +654,11 @@ function replayTaskSnapshot(
   // at (its trailing bubble takes the whole answer, see sessionHydration.ts). Otherwise, and
   // for turns recorded before the offsets existed, the text lands after the frames as before.
   const textArtifacts = arts.filter((a) => textFromParts(a.parts)).length;
-  const splitsTurn =
-    !!opts.replaySteers &&
-    history.some((m, i) => (isUserRole(m.role) && history.slice(0, i).some((p) => isUserRole(p.role))) || !!consumedSteersFromParts(m.parts));
+  const splitsTurn = history.some((m, i) =>
+    ((!!opts.replaySteers || !!handlers.onContinuationMessage) &&
+      isUserRole(m.role) && history.slice(0, i).some((p) => isUserRole(p.role))) ||
+    (!!opts.replaySteers && !!consumedSteersFromParts(m.parts)),
+  );
   // The offsets index the text the executor STREAMED. A finished turn's stored answer can
   // differ (a goal drive keeps only its last pass + the goal note; output extraction strips),
   // and an offset from an earlier pass would then cut it mid-word. So a finished turn
@@ -688,11 +692,13 @@ function replayTaskSnapshot(
   let openingSeen = false;
   for (const msg of history) {
     if (isUserRole(msg.role)) {
-      if (opts.replaySteers && openingSeen) handlers.onContinuationMessage?.(msg);
+      if (openingSeen) handlers.onContinuationMessage?.(msg);
       openingSeen = true;
       continue;
     }
     catchUpText(msg.metadata);
+    const hitl = hitlFromParts(msg.parts);
+    if (hitl) handlers.onHitlPayload?.(hitl);
     const toolEvent = toolEventFromMeta(msg.metadata);
     // Replayed, not live: the client clock between this frame and its pair is the replay's
     // own microseconds, never the call's duration (#4076).
@@ -735,7 +741,9 @@ function replayTaskSnapshot(
   const state = (task.status?.state || "").toString();
   if (/input.required/i.test(state)) {
     const parts = (task.status as { message?: { parts?: RawPart[] } } | undefined)?.message?.parts;
-    handlers.onInputRequired?.(hitlFromParts(parts) || { question: textFromParts(parts) });
+    const payload = hitlFromParts(parts) || { question: textFromParts(parts) };
+    handlers.onHitlPayload?.(payload);
+    handlers.onInputRequired?.(payload);
   }
 }
 
@@ -803,7 +811,9 @@ export function makeA2ADispatcher(
       const progress = delegateProgressFromParts(parts);
       if (progress) handlers.onDelegateProgress?.(progress);
       if (state === "input-required" || state === "TASK_STATE_INPUT_REQUIRED") {
-        handlers.onInputRequired?.(hitlFromParts(parts) || { question: messageText });
+        const payload = hitlFromParts(parts) || { question: messageText };
+        handlers.onHitlPayload?.(payload);
+        handlers.onInputRequired?.(payload);
       }
       if (state === "failed" || state === "TASK_STATE_FAILED") {
         handlers.onFailed?.(messageText || "the turn failed");

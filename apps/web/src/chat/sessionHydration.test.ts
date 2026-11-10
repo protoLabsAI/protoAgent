@@ -1931,3 +1931,76 @@ describe("room replies survive a rebuild from durable turns", () => {
     expect(messages[3].content).toBe("The lead's summary.");
   });
 });
+
+
+describe("decision identity in durable history", () => {
+  const decision = (id?: string) => ({
+    role: "ROLE_AGENT",
+    parts: [{ data: { kind: "decision", question: "Ship?", options: ["Ship", "Wait"], ...(id ? { decision_id: id } : {}) }, metadata: { mimeType: "application/vnd.protolabs.hitl-v1+json" } }],
+  });
+
+  it.each([false, true])("keeps the historical decision on its assistant across continuation (hidden=%s)", (hidden) => {
+    const messages = messagesFromDurableTurn(turn({ history: [
+      { role: "ROLE_USER", parts: [{ text: "Release" }] },
+      { role: "ROLE_AGENT", parts: [], metadata: { [TOOL]: { toolCallId: "decision-tool", name: "request_decision", phase: "started", args: "{}" } } },
+      decision("ledger-original"),
+      decision("ledger-original"),
+      { role: "ROLE_USER", parts: [{ text: "Ship" }], metadata: { hitl_resume: true, hidden } },
+    ] }));
+    const identified = messages.filter((m) => m.decisionId);
+    expect(identified).toHaveLength(1);
+    expect(identified[0]).toMatchObject({ role: "assistant", decisionId: "ledger-original", status: "done" });
+    expect(identified[0].toolCalls?.[0]).toMatchObject({ id: "decision-tool", status: "done" });
+    expect(messages.filter((m) => m.role === "user").map((m) => m.content)).toEqual(hidden ? ["Release"] : ["Release", "Ship"]);
+    expect(messages[messages.length - 1]?.content).toBe("answer");
+  });
+
+  it("retains a decision-only pause before a visible continuation", () => {
+    const messages = messagesFromDurableTurn(turn({ history: [
+      { role: "ROLE_USER", parts: [{ text: "Release" }] },
+      decision("ledger-no-tool"),
+      { role: "ROLE_USER", parts: [{ text: "Ship" }], metadata: { hitl_resume: true } },
+    ] }));
+    expect(messages.map((m) => [m.role, m.decisionId, m.content])).toEqual([
+      ["user", undefined, "Release"],
+      ["assistant", "ledger-no-tool", ""],
+      ["user", undefined, "Ship"],
+      ["assistant", undefined, "answer"],
+    ]);
+  });
+
+  it("restores a parked decision in a fresh session and leaves legacy ids absent", async () => {
+    vi.spyOn(chatStore, "getSnapshot").mockReturnValue({ sessions: [] } as never);
+    const commit = vi.spyOn(chatStore, "hydrateSessions").mockImplementation(() => {});
+    vi.spyOn(api, "chatSessions").mockResolvedValue({ sessions: [summary()] });
+    vi.spyOn(api, "chatSessionTurns").mockResolvedValue({ turns: [turn({
+      state: "TASK_STATE_INPUT_REQUIRED",
+      status: { state: "TASK_STATE_INPUT_REQUIRED", message: decision("ledger-cold") },
+      history: [decision("ledger-cold")],
+    })] });
+    await hydrateDurableChatSessions();
+    expect(commit).toHaveBeenCalledTimes(1);
+    const restored = commit.mock.calls[0][0][0].messages;
+    expect(restored[restored.length - 1]).toMatchObject({
+      decisionId: "ledger-cold", role: "assistant", status: "streaming", paused: true,
+    });
+    const legacy = messagesFromDurableTurn(turn({ history: [decision()] }));
+    expect(legacy[legacy.length - 1]?.decisionId).toBeUndefined();
+    expect(legacy[legacy.length - 1]?.content).toBe("answer");
+  });
+
+  it.each(["completed", "input-required"])("keeps a recorded identity when later %s wire omits it", (state) => {
+    const messages = messagesFromDurableTurn(turn({
+      state,
+      status: { state, message: decision() },
+      history: [decision("ledger-recorded"), decision()],
+    }));
+    const assistant = messages[messages.length - 1];
+    expect(assistant).toMatchObject({
+      role: "assistant", decisionId: "ledger-recorded", content: "answer",
+      status: state === "completed" ? "done" : "streaming",
+    });
+    expect(assistant.paused).toBe(state === "input-required" ? true : undefined);
+    expect(messages.filter((message) => message.decisionId)).toHaveLength(1);
+  });
+});

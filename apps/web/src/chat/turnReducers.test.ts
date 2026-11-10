@@ -7,11 +7,13 @@
 import { describe, expect, it } from "vitest";
 
 import type { DurableChatTurn } from "../lib/api";
-import type { ChatMessage } from "../lib/types";
+import type { ChatMessage, HitlPayload } from "../lib/types";
 import { reattachKeyForMessages, settleAnsweredPause, shouldReattach } from "./reattach";
 import { messagesFromDurableTurn } from "./sessionHydration";
 import { makeA2ADispatcher } from "../lib/api/a2aStream";
 import {
+  applyDecisionIdentity,
+  applyText,
   applyToolEvent,
   createParkTracker,
   isParkedState,
@@ -258,5 +260,68 @@ describe("settleBubbleFromTask — the watchdog's finalize", () => {
 
   it("falls back to now only when the server sent no timestamp; failed settles as error", () => {
     expect(settleBubbleFromTask(running, { failed: true, now: 1234 })).toMatchObject({ status: "error", createdAt: 1234 });
+  });
+});
+
+
+describe("durable decision identity", () => {
+  const payload: HitlPayload = { kind: "decision", question: "Ship?", decision_id: "decision-ledger-7" };
+  const message = { role: "ROLE_AGENT", parts: [{ data: payload, metadata: { mimeType: "application/vnd.protolabs.hitl-v1+json" } }] };
+  const base = (): ChatMessage => ({ id: "assistant", role: "assistant", content: "", status: "streaming" });
+
+  it.each([false, true])("live and snapshot agree (continued=%s), including repeated frames and settlement", (continued) => {
+    let live = base();
+    const forms: HitlPayload[] = [];
+    const dispatch = makeA2ADispatcher("", {
+      onTaskId: (taskId) => { live = { ...live, taskId }; },
+      onText: (text, append) => { live = applyText(live, text, append); },
+      onHitlPayload: (value) => { live = applyDecisionIdentity(live, value); },
+      onInputRequired: (value) => forms.push(value),
+    });
+    if (!continued) dispatch({ result: { task: { id: "task-decision", status: { state: "submitted" } } } });
+    const frame = { result: { statusUpdate: { taskId: "task-decision", status: { state: "input-required", message } } } };
+    dispatch(frame);
+    dispatch(frame);
+    expect(live.decisionId).toBe(payload.decision_id);
+    expect(forms).toEqual([payload, payload]);
+    live = settleStreamEnd(live, { parked: true });
+    expect(live.paused).toBe(true);
+    const task = {
+      id: "task-decision",
+      status: { state: "completed" },
+      history: [message, message],
+      artifacts: [{ parts: [{ text: "Shipped." }] }],
+    };
+    let replay = base();
+    const replayForms: HitlPayload[] = [];
+    const snapshot = makeA2ADispatcher("", {
+      onTaskId: (taskId) => { replay = { ...replay, taskId }; },
+      onText: (text, append) => { replay = applyText(replay, text, append); },
+      onHitlPayload: (value) => { replay = applyDecisionIdentity(replay, value); },
+      onInputRequired: (value) => replayForms.push(value),
+    });
+    snapshot({ result: { task } });
+    snapshot({ result: { task } });
+    dispatch({ result: { artifactUpdate: { taskId: task.id, artifact: task.artifacts[0] } } });
+    live = settleStreamEnd(unpauseBubble(live), { parked: false, now: 123 });
+    replay = settleStreamEnd(replay, { parked: false, now: 123 });
+    expect(replay).toEqual(live);
+    expect(replayForms).toEqual([]);
+    // An older snapshot or generic pause cannot erase a handle already observed.
+    const older = { ...task, history: [], status: { state: "input-required", message: { parts: [{ text: "Continue?" }] } } };
+    dispatch({ result: { task: older } });
+    expect(live.decisionId).toBe(payload.decision_id);
+    expect(stopBubble(live).decisionId).toBe(payload.decision_id);
+    expect(settleBubbleFromTask(live, { failed: false, now: 123 }).decisionId).toBe(payload.decision_id);
+  });
+
+  it("does not invent ids for legacy decisions or change generic HITL", () => {
+    const original = parkedLive();
+    for (const value of [{ kind: "decision" }, { question: "Which?" }, { kind: "approval", decision_id: "unrelated" }, { kind: "form" }] satisfies HitlPayload[]) {
+      expect(applyDecisionIdentity(original, value)).toBe(original);
+      const known = applyDecisionIdentity(original, payload);
+      expect(applyDecisionIdentity(known, value)).toBe(known);
+    }
+    expect(applyDecisionIdentity(original, payload).toolCalls).toBe(original.toolCalls);
   });
 });

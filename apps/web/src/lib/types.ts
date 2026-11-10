@@ -1334,6 +1334,8 @@ export type ChatMessage = {
    *  an approval, a plugin composer-form, and any message saved before this shipped (those keep
    *  their legacy text). */
   formResponse?: FormResponseDisplay;
+  /** Durable decisions-ledger identity from HITL wire; absent on legacy transcripts. */
+  decisionId?: string;
 };
 
 // ── HITL form-response display metadata (#4259) ──────────────────────────────────
@@ -1388,7 +1390,9 @@ export type HitlDisplayTable = {
 export type HitlPayload = {
   // Inert presentation only; host actions still own the interrupt response.
   display?: HitlDisplayTable;
-  kind?: "form" | "approval";
+  kind?: "form" | "approval" | "decision";
+  /** Present only when the server persisted the decision in its ledger. */
+  decision_id?: string;
   title?: string;
   description?: string;
   steps?: HitlFormStep[];

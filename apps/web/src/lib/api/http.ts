@@ -6,6 +6,32 @@
 import { notifyAuthRequired } from "../auth";
 import { apiUrl, applyAuth, currentSlug, isAgentPath, memberPath } from "./routing";
 
+// Poll timers can run while a document is being torn down. WebKit reports a
+// fetch started then as an access-control pageerror even if its rejection is
+// handled. Cancel active reads and stop new ones as navigation starts, with
+// pagehide also covering Safari flows that omit beforeunload. Restore reads on
+// cancelled navigation or when pageshow returns from the back/forward cache.
+let pageHidden = false;
+let pageLeaving = false;
+const activeReads = new Set<AbortController>();
+function stopReads() {
+  pageLeaving = true;
+  for (const controller of activeReads) controller.abort();
+}
+if (typeof window !== "undefined") {
+  window.addEventListener("beforeunload", () => {
+    stopReads();
+    // A draft confirmation may cancel navigation. Resume on the next task if
+    // pagehide did not commit it; never leave the surviving console paused.
+    setTimeout(() => { if (!pageHidden) pageLeaving = false; }, 0);
+  });
+  window.addEventListener("pagehide", () => {
+    pageHidden = true;
+    stopReads();
+  });
+  window.addEventListener("pageshow", () => { pageHidden = pageLeaving = false; });
+}
+
 export type RequestOptions = Omit<RequestInit, "body"> & {
   body?: unknown;
   /** Pin to the HUB (never slug-route) — for origin-level reads like the tenant uid
@@ -135,6 +161,24 @@ export function isMemberScoped(path: string, host?: boolean): boolean {
 }
 
 export async function request<T>(path: string, options: RequestOptions = {}): Promise<T> {
+  if ((options.method ?? "GET").toUpperCase() !== "GET") return requestJson<T>(path, options);
+  if (pageLeaving) {
+    throw new DOMException("The page is navigating away", "AbortError");
+  }
+  const controller = new AbortController();
+  const onAbort = () => controller.abort();
+  if (options.signal?.aborted) controller.abort();
+  else options.signal?.addEventListener("abort", onAbort, { once: true });
+  activeReads.add(controller);
+  try {
+    return await requestJson<T>(path, { ...options, signal: controller.signal });
+  } finally {
+    activeReads.delete(controller);
+    options.signal?.removeEventListener("abort", onAbort);
+  }
+}
+
+async function requestJson<T>(path: string, options: RequestOptions): Promise<T> {
   const { host, ...init } = options;  // `host` is ours (routing), not a fetch RequestInit field
   const headers = applyAuth(new Headers(init.headers));
   let body: BodyInit | undefined;

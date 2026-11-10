@@ -25,6 +25,7 @@ import { liveMessageId } from "./server-turn-store";
 import { messagesFromDurableTurn } from "./sessionHydration";
 import { beginLocalTurn, reconcileSessionStatus } from "./sessionLiveness";
 import { finalizeStoppedMessages } from "./stopTurn";
+import { formResponseText } from "./useHitl";
 
 vi.mock("../lib/api", async (importOriginal) => {
   const mod = await importOriginal<typeof import("../lib/api")>();
@@ -1207,5 +1208,116 @@ describe("reattach footer time matches a reload", () => {
     attach(sessionId);
     await settle();
     expect(assistantMessage(sessionId)!.createdAt).toBeGreaterThanOrEqual(before);
+  });
+});
+
+describe("reattach preserves each decision pause", () => {
+  const messagesOf = (id: string) => chatStore.getSnapshot().sessions.find((s) => s.id === id)!.messages;
+  it.each([
+    ["working", true], ["completed", true], ["input-required", true], ["working", false],
+  ] as const)("rebuilds continuation boundaries through repeated %s snapshots (hydrated=%s)", async (state, restored) => {
+    const decision = (id: string) => ({
+      role: "ROLE_AGENT",
+      parts: [{ data: { kind: "decision", decision_id: id, question: "Ship?" }, metadata: { mimeType: "application/vnd.protolabs.hitl-v1+json" } }],
+    });
+    const history = [
+      { role: "ROLE_USER", parts: [{ text: "Release" }] },
+      ...(restored ? [{ role: "ROLE_AGENT", parts: [], metadata: { "https://proto-labs.ai/a2a/ext/tool-call-v1": { toolCallId: "decision-tool", name: "request_decision", phase: "started", args: "{}" } } }] : []),
+      decision("decision-A"), decision("decision-A"),
+      { role: "ROLE_USER", parts: [{ text: "Ship" }], metadata: { hitl_resume: true } },
+      decision("decision-B"), decision("decision-B"),
+    ];
+    const turn = {
+      task_id: TASK_ID, state, last_updated: "2026-08-20T12:00:00Z", text: "answer",
+      status: { state }, history, artifacts: [{ parts: [{ text: "answer" }] }],
+    };
+    const hydrated = messagesFromDurableTurn(turn);
+    const session = chatStore.createSession();
+    const anchor = hydrated[hydrated.length - 1].id!;
+    chatStore.updateMessages(session.id, restored ? hydrated : [hydrated[0], {
+      id: anchor, role: "assistant", content: "", status: "streaming", taskId: TASK_ID,
+    }]);
+    const shape = (messages: typeof hydrated) => messages.map((m) => ({
+      role: m.role, content: m.content, decisionId: m.decisionId,
+      tools: m.toolCalls?.map((c) => ({ id: c.id, status: c.status })),
+    }));
+    const snapshots: ReturnType<typeof shape>[] = [];
+    resumeTask.mockImplementation(async (_taskId, _sessionId, handlers) => {
+      const dispatch = makeA2ADispatcher(session.id, handlers!);
+      for (let i = 0; i < 2; i += 1) {
+        dispatch({ result: { task: { id: TASK_ID, ...turn } } });
+        snapshots.push(shape(messagesOf(session.id)));
+      }
+    });
+    getTask.mockResolvedValue({ state, text: "answer" });
+    const cancel = reattachTurn(session.id, anchor, TASK_ID);
+    await settle();
+    expect(snapshots).toEqual([shape(hydrated), shape(hydrated)]);
+    expect(shape(messagesOf(session.id))).toEqual(shape(hydrated));
+    expect(messagesOf(session.id).filter((m) => m.decisionId).map((m) => m.decisionId)).toEqual(["decision-A", "decision-B"]);
+    expect(messagesOf(session.id).filter((m) => m.role === "user").map((m) => m.content)).toEqual(["Release", "Ship"]);
+    cancel();
+  });
+});
+
+describe("decision replay after a local visible answer", () => {
+  it.each([
+    ["decision", "plain"], ["form", "plain"],
+    ["form", "display"], ["form", "stored-text"],
+  ] as const)("rebuilds %s (%s) then decision B without duplicating local answers or leaking B", async (kind, wire) => {
+    const formResponse = { title: "Release", groups: [{ fields: [{ label: "Action", value: "Ship" }] }] };
+    const rawAnswer = JSON.stringify({ action: "Ship" });
+    const display = formResponseText(formResponse);
+    const content = wire === "plain" ? "Ship" : rawAnswer;
+    const durableAnswer = wire === "plain" ? "Ship" : display;
+    const pause = (payload: object) => ({
+      role: "ROLE_AGENT",
+      parts: [{ data: payload, metadata: { mimeType: "application/vnd.protolabs.hitl-v1+json" } }],
+    });
+    const turn = {
+      task_id: TASK_ID, state: "completed", last_updated: "2026-08-20T12:00:00Z", text: "",
+      status: { state: "completed" }, artifacts: [],
+      history: [
+        { role: "ROLE_USER", parts: [{ text: "Release" }] },
+        pause({ kind, question: "Ship?", ...(kind === "decision" ? { decision_id: "decision-A" } : {}) }),
+        { role: "ROLE_USER", parts: [{ text: wire === "display" ? rawAnswer : durableAnswer }],
+          metadata: { hitl_resume: true, ...(wire === "display" ? { display } : {}) } },
+        pause({ kind: "decision", decision_id: "decision-B", question: "Deploy?" }),
+      ],
+    };
+    const session = chatStore.createSession();
+    // runTurn settles the pause and appends a random answer/new assistant id.
+    const answer = { id: "local-answer", role: "user" as const, content, status: "done" as const, formResponse };
+    chatStore.updateMessages(session.id, [
+      { id: "older", role: "assistant", content: "Earlier task", taskId: "unrelated", decisionId: "older-id" },
+      { id: "prompt", role: "user", content: "Release" },
+      { id: "local-pause", role: "assistant", content: "", taskId: TASK_ID,
+        ...(kind === "decision" ? { decisionId: "decision-A" } : {}) },
+      answer,
+      { id: ASSISTANT_ID, role: "assistant", content: "", status: "streaming", taskId: TASK_ID, decisionId: "decision-B" },
+    ]);
+    const shape = (messages: ReturnType<typeof messagesFromDurableTurn>) => messages.map((m) =>
+      [m.role, m.content, m.decisionId]);
+    const expected = shape(messagesFromDurableTurn(turn)).map((row) =>
+      row[0] === "user" && row[1] === durableAnswer ? [row[0], content, row[2]] : row);
+    const snapshots: ReturnType<typeof shape>[] = [];
+    resumeTask.mockImplementation(async (_taskId, _sessionId, handlers) => {
+      const dispatch = makeA2ADispatcher(session.id, handlers!);
+      for (let i = 0; i < 2; i += 1) {
+        dispatch({ result: { task: { id: TASK_ID, ...turn } } });
+        snapshots.push(shape(chatStore.getSnapshot().sessions.find((s) => s.id === session.id)!.messages.slice(1)));
+      }
+    });
+    getTask.mockResolvedValue({ state: "completed", text: "" });
+    const cancel = reattachTurn(session.id, ASSISTANT_ID, TASK_ID);
+    await settle();
+    const messages = chatStore.getSnapshot().sessions.find((s) => s.id === session.id)!.messages;
+    expect(snapshots).toEqual([expected, expected]);
+    expect(shape(messages.slice(1))).toEqual(expected);
+    expect(messages.find((m) => m.id === answer.id)).toEqual({ ...answer, taskId: TASK_ID });
+    expect(messages.filter((m) => m.role === "user").map((m) => m.content)).toEqual(["Release", content]);
+    expect(messages[0]).toMatchObject({ id: "older", content: "Earlier task", decisionId: "older-id" });
+    expect(messages.filter((m) => m.decisionId === "decision-B")).toHaveLength(1);
+    cancel();
   });
 });

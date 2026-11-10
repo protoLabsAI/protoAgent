@@ -340,26 +340,28 @@ describe("knowledgeSearchProvider — failure is named, not silent", () => {
 });
 
 describe("api.knowledgeSearch — the wire the provider needs", () => {
-  it("puts k on the query string and hands the signal to fetch", async () => {
+  it("puts k on the query string and cancels fetch when the caller aborts", async () => {
     let url = "";
     let init: RequestInit | undefined;
     vi.stubGlobal(
       "fetch",
-      vi.fn(async (u: string | URL | Request, i?: RequestInit) => {
+      vi.fn((u: string | URL | Request, i?: RequestInit) => {
         url = String(u);
         init = i;
-        return new Response(JSON.stringify(ok([])), {
-          status: 200,
-          headers: { "Content-Type": "application/json" },
+        return new Promise<Response>((_resolve, reject) => {
+          i?.signal?.addEventListener("abort", () => reject(new DOMException("Aborted", "AbortError")), { once: true });
         });
       }),
     );
     const ac = new AbortController();
-    await api.knowledgeSearch("postgres", { k: 6, signal: ac.signal });
-    vi.unstubAllGlobals();
+    const pending = api.knowledgeSearch("postgres", { k: 6, signal: ac.signal });
     expect(url).toContain("q=postgres");
     expect(url).toContain("k=6");
-    expect(init?.signal).toBe(ac.signal);
+    expect(init?.signal?.aborted).toBe(false);
+    ac.abort();
+    expect(init?.signal?.aborted).toBe(true);
+    await expect(pending).rejects.toMatchObject({ name: "AbortError" });
+    vi.unstubAllGlobals();
   });
 
   it("omits k entirely when the caller does not ask, keeping the server default", async () => {
