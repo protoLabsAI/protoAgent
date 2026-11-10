@@ -1,5 +1,4 @@
 import { Dialog, Tooltip, useToast } from "@protolabsai/ui/overlays";
-import { ToolCard, ToolCardList, ToolSection } from "@protolabsai/ui/tool-card";
 import { Spinner, StatusDot } from "@protolabsai/ui/data";
 import { Accordion, AccordionItem } from "@protolabsai/ui/navigation";
 import { Button, Count } from "@protolabsai/ui/primitives";
@@ -17,7 +16,6 @@ import type { BackgroundJobDTO } from "../lib/types";
 import { useUI } from "../state/uiStore";
 import { openRunInspector } from "../runs/store";
 import {
-  applyProgress,
   byRecency,
   fmtElapsed,
   jobFailureReason,
@@ -28,6 +26,7 @@ import {
   type ProgressTool,
 } from "./background-jobs";
 import { readKey, writeKey } from "../lib/storage";
+import { BackgroundToolFeed, recordBackgroundProgress, useBackgroundProgress } from "./BackgroundToolFeed";
 
 // Background-jobs UtilityBar pill + dialog (ADR 0050 Phase 3 / ADR 0051). Hydrates from
 // GET /api/background, then tracks live via the bus: `background.{started,completed}` for
@@ -64,7 +63,7 @@ function markSeen(ids: string[]) {
 export function BackgroundJobs() {
   const [enabled, setEnabled] = useState(false);
   const [jobs, setJobs] = useState<Record<string, BackgroundJobDTO>>({});
-  const [progress, setProgress] = useState<Record<string, ProgressTool[]>>({});
+  const progress = useBackgroundProgress((state) => state.jobs);
   const [open, setOpen] = useState(false);
   const [seen, setSeen] = useState<Set<string>>(() => seenSet());
   const [, setTick] = useState(0); // re-render for live elapsed while open
@@ -149,16 +148,13 @@ export function BackgroundJobs() {
     const offProgress = onTopic("background.progress", (d) => {
       const id = String(d.job_id || "");
       if (!id) return;
-      setProgress((p) => ({
-        ...p,
-        [id]: applyProgress(p[id] || [], {
-          phase: String(d.phase || ""),
-          tool: d.tool ? String(d.tool) : undefined,
-          tool_call_id: d.tool_call_id ? String(d.tool_call_id) : undefined,
-          error: !!d.error,
-          output: d.output ? String(d.output) : undefined,
-        }),
-      }));
+      recordBackgroundProgress(id, {
+        phase: String(d.phase || ""),
+        tool: d.tool ? String(d.tool) : undefined,
+        tool_call_id: d.tool_call_id ? String(d.tool_call_id) : undefined,
+        error: !!d.error,
+        output: d.output ? String(d.output) : undefined,
+      });
     });
 
     const offDone = onTopic("background.completed", (d) => {
@@ -413,15 +409,7 @@ export function BgJobRow({
   // Copy affordance). Rendered inside the AccordionItem's panel.
   const detail = (
     <>
-      {hasTools ? (
-        <ToolCardList className="bg-jobs-feed">
-          {tools.map((t) => (
-            <ToolCard key={t.id} name={t.tool} status={t.error ? "error" : t.done ? "done" : "running"}>
-              {t.output ? <ToolSection label="output">{t.output}</ToolSection> : null}
-            </ToolCard>
-          ))}
-        </ToolCardList>
-      ) : null}
+      <BackgroundToolFeed tools={tools} />
       {hasResult ? (
         <>
           <div className="bg-jobs-resulthead">

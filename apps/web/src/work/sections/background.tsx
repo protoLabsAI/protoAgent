@@ -23,6 +23,7 @@ import { api } from "../../lib/api";
 import { jobFailureReason } from "../../app/background-jobs";
 import { Markdown } from "../../chat/LazyMarkdown";
 import { chatStore, useChatState } from "../../chat/chat-store";
+import { BackgroundToolFeed, useBackgroundProgress } from "../../app/BackgroundToolFeed";
 import { SubagentsPanel } from "../../app/SubagentsPanel";
 
 /** A subagent slug (`research-assistant`, `delegate`) as a human display name — never the
@@ -71,6 +72,7 @@ function FromChat({ sessionId }: { sessionId: string }) {
 
 function BackgroundDetail({ item, onDone }: { item: WorkItem; onDone: () => void }) {
   const job = item.raw as BackgroundJobDTO;
+  const tools = useBackgroundProgress((state) => state.jobs[job.id]);
   const reason = jobFailureReason(job);
   const fields: WorkField[] = [
     { label: "Role", value: roleLabel(job.subagent_type) },
@@ -79,6 +81,7 @@ function BackgroundDetail({ item, onDone }: { item: WorkItem; onDone: () => void
     { label: "Finished", value: job.completed_at ? relTime(job.completed_at).text : null },
     // Only a failed or cancelled job explains why it ended — a completed one never does.
     { label: "Why it ended", value: reason ? `Stopped: ${reason}` : null },
+    { label: "Tool activity", value: tools?.length ? <BackgroundToolFeed tools={tools} /> : null },
     { label: "Result", value: job.result ? <ResultText text={job.result} /> : null },
   ];
   return (

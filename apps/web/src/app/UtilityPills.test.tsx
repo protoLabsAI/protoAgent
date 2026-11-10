@@ -12,7 +12,10 @@ vi.mock("../lib/events", () => ({
     mocks.listeners.set(topic, fn);
     return () => mocks.listeners.delete(topic);
   },
-  onTopic: () => () => {},
+  onTopic: (topic: string, fn: (data: Record<string, unknown>) => void) => {
+    mocks.listeners.set(topic, fn);
+    return () => mocks.listeners.delete(topic);
+  },
   onConnectionChange: () => () => {},
 }));
 vi.mock("../decisions/useDecisions", () => ({
@@ -31,12 +34,17 @@ import { DecisionsWidget } from "../decisions/DecisionsWidget";
 import { ActivityWidget } from "../activity/ActivityWidget";
 import { BackgroundJobs } from "./BackgroundJobs";
 import { UtilityWidget } from "./UtilityWidget";
+import { useBackgroundProgress } from "./BackgroundToolFeed";
+import { sections } from "../work/sectionRegistry";
+import type { WorkItems } from "../work/useWorkItems";
+import "../work/sections/background";
 
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 let root: Root;
 let container: HTMLDivElement;
 beforeEach(() => {
   useUI.setState({ surfaceModal: null, backgroundJobsRequest: 0 });
+  useBackgroundProgress.setState({ jobs: {} });
   localStorage.clear();
   mocks.pendingCount = 2;
   mocks.openPanel.mockClear();
@@ -121,4 +129,54 @@ it("keeps plugin utility widgets opening their own dialog", () => {
   act(() => pill("plugin").click());
   expect(document.querySelector('[role="dialog"]')?.textContent).toContain("Plugin content");
   expect(useUI.getState().surfaceModal).toBeNull();
+});
+
+
+it("keeps earlier tool outputs and live progress in the background detail opened from the pill", async () => {
+  const job = { id: "job-1", status: "running" as const, subagent_type: "coder", description: "Build the report" };
+  vi.spyOn(api, "background").mockResolvedValue({ enabled: true, jobs: [job] });
+  const empty = { items: [], status: "ready" as const, error: null, loadedAt: 1, retry: vi.fn() };
+  const sources: WorkItems = {
+    decisions: empty, goals: empty, watches: empty, tasks: empty,
+    schedules: empty, activity: empty, directives: empty,
+    background: {
+    items: [{ id: job.id, kind: "background", status: "running", title: job.description, meta: "", raw: job }],
+    status: "ready", error: null, loadedAt: 1, retry: vi.fn(),
+  } };
+  function Harness() {
+    const modal = useUI((state) => state.surfaceModal);
+    return <>
+      <BackgroundJobs />
+      {modal ? sections.get("background")!.render({
+        sources, state: modal.state || {}, onBack: vi.fn(),
+        onOpen: (item) => useUI.getState().openSurfaceModal("work", { section: "background", itemId: item.id }),
+      }) : null}
+    </>;
+  }
+  const progress = (data: Record<string, unknown>) => act(() => {
+    mocks.listeners.get("background.progress")?.({ job_id: job.id, ...data });
+  });
+  await act(async () => root.render(<Harness />));
+  progress({ phase: "tool_end", tool: "read_file", tool_call_id: "read", output: "Earlier file contents" });
+  progress({ phase: "tool_start", tool: "run_tests", tool_call_id: "tests" });
+  progress({ job_id: "other-job", phase: "tool_start", tool: "unrelated_tool", tool_call_id: "other" });
+  await act(async () => pill("background-jobs-pill").click());
+  await act(async () => container.querySelector<HTMLButtonElement>(".work-row")!.click());
+  const feed = () => container.querySelector(".bg-jobs-feed")!;
+  expect(feed().textContent).toContain("read_file");
+  expect(feed().textContent).toContain("run_tests");
+  expect(feed().textContent).not.toContain("unrelated_tool");
+  // Open the actual DS tool cards to read their output, including a result arriving live.
+  act(() => feed().querySelectorAll<HTMLButtonElement>("button").forEach((button) => button.click()));
+  expect(feed().textContent).toContain("Earlier file contents");
+  progress({ phase: "tool_end", tool: "run_tests", tool_call_id: "tests", error: true, output: "Test failed: missing fixture" });
+  act(() => Array.from(feed().querySelectorAll<HTMLButtonElement>("button")).find((button) => button.textContent?.includes("run_tests"))!.click());
+  expect(feed().textContent).toContain("Test failed: missing fixture");
+  expect(feed().querySelectorAll("button")).toHaveLength(2);
+  // Switching sections and returning retains the same history.
+  act(() => useUI.getState().closeSurfaceModal());
+  await act(async () => pill("background-jobs-pill").click());
+  await act(async () => container.querySelector<HTMLButtonElement>(".work-row")!.click());
+  act(() => feed().querySelectorAll<HTMLButtonElement>("button").forEach((button) => button.click()));
+  expect(feed().textContent).toContain("Test failed: missing fixture");
 });
