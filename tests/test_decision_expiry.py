@@ -110,7 +110,7 @@ async def test_withdraw_tool_and_cancel_reason(ledger, monkeypatch):
 
 
 @pytest.fixture
-def parked(ledger, monkeypatch):
+def parked(ledger, monkeypatch, request):
     from typing import TypedDict
     from langgraph.graph import StateGraph, START, END
     from langgraph.checkpoint.memory import InMemorySaver
@@ -125,7 +125,7 @@ def parked(ledger, monkeypatch):
                 {
                     "question": "Release?",
                     "options": OPTIONS,
-                    "expires_in_minutes": 5,
+                    "expires_in_minutes": getattr(request, "param", 5),
                     "default_option": "hold",
                     "default_action": "keep holding",
                 }
@@ -142,11 +142,12 @@ def parked(ledger, monkeypatch):
     received = []
 
     async def resume(session_id, answer, decision_id, *, resolution=None):
-        cfg = await turn_control.validate_decision_resume(config, decision_id, session_id)
-        cfg["configurable"]["decision_resolution"] = resolution or {}
-        async with turn_control.decision_resume(cfg, answer):
-            received.append(answer)
-            await graph.ainvoke(Command(resume=await chat._resume_payload(cfg, answer)), cfg)
+        async with turn_control._thread_lock(config["configurable"]["thread_id"]):
+            cfg = await turn_control.validate_decision_resume(config, decision_id, session_id)
+            cfg["configurable"]["decision_resolution"] = resolution or {}
+            async with turn_control.decision_resume(cfg, answer):
+                received.append(answer)
+                await graph.ainvoke(Command(resume=await chat._resume_payload(cfg, answer)), cfg)
         return True
 
     return graph, config, resume, received
@@ -287,31 +288,102 @@ def test_answer_race_returns_winning_attribution(ledger, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_existing_host_loop_runs_expiry_even_without_a2a_engine(ledger, monkeypatch):
+@pytest.mark.parametrize("parked", [1], indirect=True)
+@pytest.mark.parametrize("failure", [None, "offline", "exception"])
+@pytest.mark.parametrize("slow_reaper", [False, True])
+async def test_host_loop_expires_new_decisions_on_time_and_retries(
+    ledger, parked, monkeypatch, failure, slow_reaper
+):
     import asyncio
-    from graph import decision_expiry
+    from a2a_impl import stores
+    from graph.decision_expiry import DECISION_EXPIRY_INTERVAL_S
 
     loops = importlib.import_module("server.maintenance_loops")
-    store, _ = ledger
-    calls = []
-    sleeps = []
+    store, clock = ledger
+    graph, config, resume, received = parked
+    real_sleep = asyncio.sleep
+    finished = asyncio.Event()
+    blocked = asyncio.Event()
+    children = set()
+    attempts = []
+    rec = None
+    ticks = 0
 
-    async def sweep(actual_store, resume):
-        assert actual_store is store
-        assert resume is decision_routes._resume_parked_turn
-        calls.append(True)
+    async def deliver(*args, **kwargs):
+        attempts.append(clock.now)
+        if len(attempts) == 1 and failure:
+            if failure == "exception":
+                raise RuntimeError("transport unavailable")
+            return False
+        return await resume(*args, **kwargs)
 
     async def sleep(seconds):
-        sleeps.append(seconds)
-        if len(sleeps) == 2:
-            raise asyncio.CancelledError
+        nonlocal rec, ticks
+        children.add(asyncio.current_task())
+        if seconds == 45:
+            return  # allow the actual reaper to enter its first pass
+        if seconds == loops.A2A_REAPER_INTERVAL_S:
+            await blocked.wait()
+            return
+        assert 0 < seconds <= 1  # lock down the production tolerance, not just the constant
+        assert seconds == DECISION_EXPIRY_INTERVAL_S
+        if rec is None:
+            # Created after the first sweep, with a deadline between polling ticks.
+            clock.now += timedelta(milliseconds=250)
+            rec = await park(graph, config)
+        ticks += 1
+        if ticks == 65:
+            finished.set()
+            await blocked.wait()
+        clock.now += timedelta(seconds=seconds)
+        await real_sleep(0)
 
-    monkeypatch.setattr(STATE, "a2a_task_engine", None)
-    monkeypatch.setattr(decision_expiry, "sweep_expired_decisions", sweep)
+    async def reap(*args, **kwargs):
+        await blocked.wait()  # a stalled A2A sweep must not hold up decision expiry
+
+    monkeypatch.setattr(STATE, "a2a_task_engine", object() if slow_reaper else None)
+    monkeypatch.setattr(stores, "reap_orphaned_working_tasks", reap)
+    monkeypatch.setattr(decision_routes, "_resume_parked_turn", deliver)
     monkeypatch.setattr(loops.asyncio, "sleep", sleep)
-    with pytest.raises(asyncio.CancelledError):
-        await loops._a2a_reaper_loop()
-    assert calls == [True]
+    host = asyncio.create_task(loops._a2a_reaper_loop())
+    try:
+        await asyncio.wait_for(finished.wait(), timeout=10)
+    finally:
+        host.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await host
+    assert all(task.done() for task in children)
+    deadline = datetime.fromisoformat(rec.expires_at)
+    assert 0 <= (attempts[0] - deadline).total_seconds() <= 1
+    assert len(attempts) == (2 if failure else 1)
+    if failure:
+        assert (attempts[1] - attempts[0]).total_seconds() == DECISION_EXPIRY_INTERVAL_S
+    assert store.get(rec.id).state == "expired"
+    assert store.get(rec.id).answer == "hold"
+    assert len(received) == 1
+    assert (await graph.aget_state(config)).values["result"] == received[0]
+    with pytest.raises(DecisionClosed):
+        await resume("s", "late operator answer", rec.id)
+
+
+@pytest.mark.asyncio
+async def test_operator_answer_racing_expiry_consumes_checkpoint_once(ledger, parked):
+    import asyncio
+
+    store, clock = ledger
+    graph, config, resume, received = parked
+    rec = await park(graph, config)
+    clock.now += timedelta(minutes=5)
+    results = await asyncio.gather(
+        resume("s", "Operator chose: Release (go)", rec.id, resolution={"answer": "go"}),
+        sweep_expired_decisions(store, resume),
+        return_exceptions=True,
+    )
+    assert len(received) == 1
+    assert (await graph.aget_state(config)).values["result"] == received[0]
+    assert store.get(rec.id).state in {"answered", "expired"}
+    assert all(not isinstance(result, Exception) or isinstance(result, DecisionClosed) for result in results)
+    assert await sweep_expired_decisions(store, resume) == 0
 
 
 @pytest.mark.asyncio

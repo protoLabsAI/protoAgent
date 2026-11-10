@@ -1,4 +1,4 @@
-"""Retryable decision expiry, driven by the host's existing A2A reaper tick."""
+"""Retryable decision expiry, driven by an independent host maintenance cadence."""
 
 from datetime import datetime
 import logging
@@ -6,6 +6,10 @@ import logging
 from graph.decisions import DecisionStore
 
 log = logging.getLogger("protoagent.decisions")
+
+# Maximum polling delay on a healthy, responsive host (delivery time is additional).
+# Independent of A2A retention/reaping; also bounds discovery of newly created rows.
+DECISION_EXPIRY_INTERVAL_S = 1.0
 
 
 async def sweep_expired_decisions(store: DecisionStore, resume) -> int:

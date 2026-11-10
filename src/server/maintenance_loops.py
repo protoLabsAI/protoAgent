@@ -349,6 +349,43 @@ A2A_REAPER_INTERVAL_S = 300.0
 
 
 async def _a2a_reaper_loop() -> None:
+    """Own both maintenance tasks, cancelling and joining them on host shutdown.
+
+    Decision deadlines must not wait for the reaper's boot delay, slow database
+    work, or five-minute cadence. Keep their task in this existing lifespan slot.
+    """
+    tasks = [asyncio.create_task(_orphaned_a2a_reaper_loop()), asyncio.create_task(_decision_expiry_loop())]
+    try:
+        await asyncio.gather(*tasks)
+    finally:
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+
+
+async def _decision_expiry_loop() -> None:
+    """Check deadlines immediately at startup and every second, including retries.
+
+    Healthy-host detection latency is at most DECISION_EXPIRY_INTERVAL_S plus
+    event-loop scheduling and the preceding sweep's delivery time. Model execution,
+    session-lock contention, and unavailable transports can delay completion;
+    failed deliveries remain pending and retry on the next pass.
+    """
+    from graph.decision_expiry import DECISION_EXPIRY_INTERVAL_S
+
+    while True:
+        if STATE.decision_store is not None:
+            try:
+                from graph.decision_expiry import sweep_expired_decisions
+                from operator_api.decision_routes import _resume_parked_turn
+
+                await sweep_expired_decisions(STATE.decision_store, _resume_parked_turn)
+            except Exception:
+                log.exception("[decision] expiry sweep failed")
+        await asyncio.sleep(DECISION_EXPIRY_INTERVAL_S)
+
+
+async def _orphaned_a2a_reaper_loop() -> None:
     """Periodically fail orphaned WORKING A2A tasks (#3418).
 
     Boot reconciliation (``reconcile_interrupted_tasks``) covers a restart and the
@@ -383,14 +420,6 @@ async def _a2a_reaper_loop() -> None:
                     log.info("[a2a-reaper] failed %d orphaned WORKING task(s) (#3418)", n)
             except Exception:
                 log.exception("[a2a-reaper] sweep failed")
-        if STATE.decision_store is not None:
-            try:
-                from graph.decision_expiry import sweep_expired_decisions
-                from operator_api.decision_routes import _resume_parked_turn
-
-                await sweep_expired_decisions(STATE.decision_store, _resume_parked_turn)
-            except Exception:
-                log.exception("[decision] expiry sweep failed")
         await asyncio.sleep(A2A_REAPER_INTERVAL_S)
 
 
