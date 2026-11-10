@@ -245,3 +245,14 @@
 @media (min-width: 768px) {
   .mshell-work-handle { display: none; }
 }
+
+.mshell-menu {
+  position: relative;
+}
+
+.mshell-menu-dot {
+  position: absolute;
+  top: var(--pl-space-1);
+  right: var(--pl-space-1);
+  display: flex;
+}

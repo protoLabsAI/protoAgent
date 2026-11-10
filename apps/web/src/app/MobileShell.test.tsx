@@ -13,6 +13,8 @@ import { chatStore, unusedSession } from "../chat/chat-store";
 import mobileShellCss from "./mobile-shell.css?raw";
 import appSource from "./App.tsx?raw";
 import { useUI } from "../state/uiStore";
+import { needsYouCount } from "./App";
+import type { WorkItem, WorkItems, WorkSource } from "../work/useWorkItems";
 import { MobileShell, MobileWorkHandle } from "./MobileShell";
 
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -30,6 +32,7 @@ function baseProps(over: Partial<ShellProps> = {}): ShellProps {
     showBack: false,
     onBack: () => {},
     onOpenDrawer: () => {},
+    needsYouCount: 0,
     onOpenWork: () => {},
     sessionSheetOpen: false,
     onSessionSheetChange: () => {},
@@ -267,5 +270,51 @@ describe("phone Work entry points", () => {
       { getState: () => ({ openSurfaceModal: (...args: unknown[]) => calls.push(args) }) },
     );
     expect(calls).toEqual([["sessions", false], "close decisions", ["work", { section: "decisions" }]]);
+  });
+});
+
+describe("phone Needs you indicator", () => {
+  it.each([[0, "Menu"], [1, "Menu, 1 needs you"], [3, "Menu, 3 need you"]] as const)(
+    "shows the count %i in the accessible name",
+    (count, label) => {
+      mount({ needsYouCount: count });
+      const menu = byLabel(label)!;
+      expectDsGhostIcon(menu, label);
+      expect(menu.querySelectorAll(".pl-dot")).toHaveLength(count > 0 ? 1 : 0);
+      if (count > 0) {
+        expect(menu.querySelector(".pl-dot--warning")).not.toBeNull();
+        expect(menu.querySelector(".pl-dot--pulse")).toBeNull();
+      }
+    },
+  );
+
+  it("removes the dot when the last item no longer needs you", () => {
+    mount({ needsYouCount: 1 });
+    mount({ needsYouCount: 0 });
+    expect(byLabel("Menu")!.querySelector(".pl-dot")).toBeNull();
+  });
+
+  it("counts the lane across chats and sources, ignoring error and loading data", () => {
+    const item = (status: WorkItem["status"], sessionId: string): WorkItem => ({
+      id: sessionId, kind: "decision", title: "Question", meta: "", raw: {}, status, sessionId,
+    });
+    const source = (status: WorkSource["status"], items: WorkItem[] = []): WorkSource => ({
+      status, items, loadedAt: null, error: null, retry: () => {},
+    });
+    const sources: WorkItems = {
+      decisions: source("ready", [item("needs-you", "current"), item("needs-you", "other")]),
+      goals: source("stale", [item("needs-you", "third")]),
+      watches: source("error", [item("needs-you", "error")]),
+      tasks: source("loading", [item("needs-you", "loading")]),
+      schedules: source("ready", [item("scheduled", "scheduled")]),
+      background: source("ready", [item("running", "running")]),
+      activity: source("ready", [item("failed", "failed"), item("done", "done")]),
+      directives: source("ready", [item("waiting", "waiting")]),
+    };
+    expect(needsYouCount(sources)).toBe(3);
+    sources.decisions.items = [];
+    expect(needsYouCount(sources)).toBe(1);
+    sources.goals.items = [];
+    expect(needsYouCount(sources)).toBe(0);
   });
 });

@@ -1,3 +1,4 @@
+import { StatusDot } from "@protolabsai/ui/data";
 import { Button } from "@protolabsai/ui/primitives";
 import { ChevronDown, ChevronLeft, Menu, Plus, Search } from "lucide-react";
 import { createContext, useContext, useEffect, useRef, type ReactNode } from "react";
@@ -87,6 +88,7 @@ export function MobileShell({
   showBack,
   onBack,
   onOpenDrawer,
+  needsYouCount,
   onOpenWork,
   sheetOpen = false,
   sessionSheetOpen,
@@ -102,6 +104,7 @@ export function MobileShell({
   showBack: boolean;
   onBack: () => void;
   onOpenDrawer: () => void;
+  needsYouCount: number;
   onOpenWork: () => void;
   sheetOpen?: boolean;
   sessionSheetOpen: boolean;
@@ -149,13 +152,19 @@ export function MobileShell({
               size="md"
               icon
               type="button"
-              aria-label="Menu"
+              className="mshell-menu"
+              aria-label={needsYouCount > 0 ? `Menu, ${needsYouCount} ${needsYouCount === 1 ? "needs" : "need"} you` : "Menu"}
               // Same hook as the desktop HamburgerMenu — one selector opens the drawer in
               // either shell, so drawer specs don't fork per breakpoint.
               data-testid="header-menu"
               onClick={onOpenDrawer}
             >
               <Menu size={20} aria-hidden />
+              {needsYouCount > 0 && (
+                <span className="mshell-menu-dot" aria-hidden="true">
+                  <StatusDot status="warning" pulse={false} />
+                </span>
+              )}
             </Button>
             {/* The session title IS the switcher — tapping it opens the sheet. Replaces the
                 DS TabBar's `responsive` <select>, which ChatSurface suppresses on mobile. */}

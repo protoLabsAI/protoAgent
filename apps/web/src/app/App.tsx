@@ -114,6 +114,8 @@ import { onConnectionChange, onServerEvent, onTopic } from "../lib/events";
 import { useToast } from "@protolabsai/ui/overlays";
 import { StatusPill } from "./StatusPill";
 import { WorkView } from "../work/WorkView";
+import { useWorkItems, type WorkItems } from "../work/useWorkItems";
+import { laneFor } from "../work/tone";
 // Load the eight built-in Work sections for their registration side-effect (#4955 §5), so
 // the Work surface mounts with every section live — none falls back to the unregistered Empty.
 import "../work/sections";
@@ -151,6 +153,14 @@ import { readKey, writeKey } from "../lib/storage";
 // inbound (inbox), and timed (schedule — cron is a trigger, not a work-type).
 // The agent's persistent working memory, grouped in the right sidebar:
 // its notebook, its task board, and its goals.
+
+/** Count the same lane as Work, across every successfully loaded source. */
+export function needsYouCount(sources: WorkItems): number {
+  return Object.values(sources).reduce((count, source) => {
+    if (source.status === "error" || source.status === "loading") return count;
+    return count + source.items.filter((item) => laneFor(item.status) === "needs-you").length;
+  }, 0);
+}
 
 function useLocalStorageState(key: string, fallback: string) {
   const [value, setValue] = useState(() => {
@@ -867,6 +877,9 @@ function WorkspaceApp({ runtime }: { runtime: RuntimeStatus | null }) {
     () => null,
   );
 
+  const workSources = useWorkItems({ sessionId: workSessionId ?? undefined, thisChatOnly: false });
+  const attentionCount = needsYouCount(workSources);
+
   // `frame` tells a framed surface whether it's rendering inside the right-rail dock or the
   // large shell modal — the rail host passes the default, the modal mount passes "modal". Only
   // the Work view reads it today (its rail/modal layout + default filters, #4955 §2.1/§5).
@@ -1191,6 +1204,7 @@ function WorkspaceApp({ runtime }: { runtime: RuntimeStatus | null }) {
           the shell; the DS one still drives every desktop viewport unchanged. */}
       {isMobile ? (
         <MobileShell
+          needsYouCount={attentionCount}
           root={mobileRoot}
           pushed={mobilePushed}
           title={mobileTitle}
