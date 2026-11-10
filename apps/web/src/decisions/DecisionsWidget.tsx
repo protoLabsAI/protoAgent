@@ -51,7 +51,10 @@ export function decisionsInfo(top: DecisionRow | null, pendingCount: number): Re
   );
 }
 
-export function DecisionsWidget() {
+export function DecisionsWidget({ onOpen }: {
+  /** Shell pill navigation; other entry points retain the legacy Decisions dialog. */
+  onOpen?: () => void;
+} = {}) {
   const { decisions, pendingCount, top, loaded, panelOpen, openPanel, closePanel, answer } =
     useDecisions();
   const visibleCount = loaded ? pendingCount : 0;
@@ -66,7 +69,7 @@ export function DecisionsWidget() {
       dialogTitle="Decisions waiting on you"
       dialogWidth={DECISIONS_DIALOG_WIDTH}
       open={panelOpen}
-      onOpenChange={(next) => (next ? openPanel() : closePanel())}
+      onOpenChange={(next) => (next ? (onOpen ?? openPanel)() : closePanel())}
     >
       <DecisionsPanel decisions={decisions} loading={!loaded} onAnswer={answer} />
     </UtilityWidget>

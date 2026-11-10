@@ -1,8 +1,7 @@
 import { Dialog, Tooltip, useToast } from "@protolabsai/ui/overlays";
-import { ToolCard, ToolCardList, ToolSection } from "@protolabsai/ui/tool-card";
-import { Spinner } from "@protolabsai/ui/data";
+import { Spinner, StatusDot } from "@protolabsai/ui/data";
 import { Accordion, AccordionItem } from "@protolabsai/ui/navigation";
-import { Button } from "@protolabsai/ui/primitives";
+import { Button, Count } from "@protolabsai/ui/primitives";
 import { ArrowUpRight, Bot, Check, CheckCircle2, Copy, Square, Trash2, Workflow, XCircle } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
@@ -17,7 +16,6 @@ import type { BackgroundJobDTO } from "../lib/types";
 import { useUI } from "../state/uiStore";
 import { openRunInspector } from "../runs/store";
 import {
-  applyProgress,
   byRecency,
   fmtElapsed,
   jobFailureReason,
@@ -28,11 +26,13 @@ import {
   type ProgressTool,
 } from "./background-jobs";
 import { readKey, writeKey } from "../lib/storage";
+import { BackgroundToolFeed, recordBackgroundProgress, useBackgroundProgress } from "./BackgroundToolFeed";
 
 // Background-jobs UtilityBar pill + dialog (ADR 0050 Phase 3 / ADR 0051). Hydrates from
 // GET /api/background, then tracks live via the bus: `background.{started,completed}` for
 // lifecycle and `background.progress` for a running job's tool-by-tool feed. The pill shows
-// a spinner + count while jobs run and an unread dot when jobs finish; the dialog lists each
+// a pulsing dot + count while jobs run and an unread dot when jobs finish. The pill opens
+// Work; the retained legacy dialog (also opened by the chat strip) lists each
 // job's status, elapsed, live tool activity, result (markdown), and a Stop control for
 // running jobs. (Pure helpers live in ./background-jobs — react-dom-free + unit-tested.)
 
@@ -63,7 +63,7 @@ function markSeen(ids: string[]) {
 export function BackgroundJobs() {
   const [enabled, setEnabled] = useState(false);
   const [jobs, setJobs] = useState<Record<string, BackgroundJobDTO>>({});
-  const [progress, setProgress] = useState<Record<string, ProgressTool[]>>({});
+  const progress = useBackgroundProgress((state) => state.jobs);
   const [open, setOpen] = useState(false);
   const [seen, setSeen] = useState<Set<string>>(() => seenSet());
   const [, setTick] = useState(0); // re-render for live elapsed while open
@@ -148,16 +148,13 @@ export function BackgroundJobs() {
     const offProgress = onTopic("background.progress", (d) => {
       const id = String(d.job_id || "");
       if (!id) return;
-      setProgress((p) => ({
-        ...p,
-        [id]: applyProgress(p[id] || [], {
-          phase: String(d.phase || ""),
-          tool: d.tool ? String(d.tool) : undefined,
-          tool_call_id: d.tool_call_id ? String(d.tool_call_id) : undefined,
-          error: !!d.error,
-          output: d.output ? String(d.output) : undefined,
-        }),
-      }));
+      recordBackgroundProgress(id, {
+        phase: String(d.phase || ""),
+        tool: d.tool ? String(d.tool) : undefined,
+        tool_call_id: d.tool_call_id ? String(d.tool_call_id) : undefined,
+        error: !!d.error,
+        output: d.output ? String(d.output) : undefined,
+      });
     });
 
     const offDone = onTopic("background.completed", (d) => {
@@ -277,14 +274,14 @@ export function BackgroundJobs() {
       <Tooltip label={info}>
         <Button
           // A square icon button only when it holds just the icon: with the running count
-          // beside the spinner, a fixed square squeezed the spinner into an oval.
+          // beside the status dot, a fixed square would squeeze the indicator.
           icon={running === 0}
           size="xs"
           variant="ghost"
           type="button"
           className={`bg-jobs-pill${running > 0 ? " bg-jobs-pill--running" : ""}`}
           onClick={() => {
-            setOpen(true);
+            useUI.getState().openSurfaceModal("work", { section: "background" });
             // Persist past this session (#2692) — a reload must not re-show a badge
             // for a job the user already reviewed.
             markSeen(unreadIds);
@@ -294,8 +291,8 @@ export function BackgroundJobs() {
           aria-label={`Background agents${running ? ` — ${running} running` : ""}`}
           data-testid="background-jobs-pill"
         >
-          {running > 0 ? <Spinner size={13} /> : <Bot size={13} />}
-          {running > 0 ? <span>{running}</span> : null}
+          {running > 0 ? <StatusDot status="info" pulse /> : <Bot size={13} />}
+          {running > 0 ? <Count>{running}</Count> : null}
           {unread > 0 ? <span className="bg-jobs-unread" aria-label={`${unread} finished`} /> : null}
         </Button>
       </Tooltip>
@@ -412,15 +409,7 @@ export function BgJobRow({
   // Copy affordance). Rendered inside the AccordionItem's panel.
   const detail = (
     <>
-      {hasTools ? (
-        <ToolCardList className="bg-jobs-feed">
-          {tools.map((t) => (
-            <ToolCard key={t.id} name={t.tool} status={t.error ? "error" : t.done ? "done" : "running"}>
-              {t.output ? <ToolSection label="output">{t.output}</ToolSection> : null}
-            </ToolCard>
-          ))}
-        </ToolCardList>
-      ) : null}
+      <BackgroundToolFeed tools={tools} />
       {hasResult ? (
         <>
           <div className="bg-jobs-resulthead">

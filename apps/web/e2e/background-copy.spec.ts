@@ -1,6 +1,6 @@
 import { expect, test } from "@playwright/test";
 
-// Copy a finished background job's FULL result out of the Background-agents panel (#2352).
+// Copy a finished background job's FULL result out of the Work Background section (#2352).
 //
 // The reported friction: a delegate's reply landed in the panel and the operator had to
 // select several thousand words out of a scrolling markdown pane by hand. The panel
@@ -9,7 +9,7 @@ import { expect, test } from "@playwright/test";
 // WHOLE report, tail included, not a preview.
 
 const JOB_ID = "bg-copyable0001";
-// Long enough that .bg-jobs-result scrolls — i.e. the case where hand-selecting is painful
+// Long enough that the result is clamped — i.e. the case where hand-selecting is painful
 // and the copy affordance must stay reachable rather than scrolling away with the text.
 const BODY = Array.from({ length: 60 }, (_, i) => `Result line ${i + 1} of the delegate's reply.`).join("\n\n");
 const TAIL_MARKER = "TAIL-OF-THE-REPLY-42";
@@ -47,15 +47,13 @@ test("copies a finished job's full result, tail included", async ({ page }) => {
 
   await page.goto("/app/", { waitUntil: "load" });
 
-  // Open the Background-agents panel from the utility-bar pill, then expand the row via
-  // its DS Accordion trigger (the row's only collapsed disclosure control).
   await page.getByRole("button", { name: /^Background agents/ }).click();
-  const row = page.locator(".bg-jobs-row").first();
-  await expect(row).toBeVisible();
-  await row.getByRole("button", { expanded: false }).click();
-  await expect(row.locator(".bg-jobs-result")).toBeVisible();
+  const work = page.locator('.work-view[data-frame="modal"]');
+  await expect(work.getByRole("tab", { selected: true })).toContainText("Background agents");
+  await work.locator(".work-row").click();
+  await expect(work.locator(".work-background__result")).toBeVisible();
 
-  const copyBtn = row.getByRole("button", { name: "Copy result to clipboard" });
+  const copyBtn = work.getByRole("button", { name: "Copy result to clipboard" });
   await expect(copyBtn).toBeVisible();
   await copyBtn.click();
 
@@ -69,11 +67,8 @@ test("copies a finished job's full result, tail included", async ({ page }) => {
   expect(clip.length).toBeGreaterThan(2000); // > the 2000-char background.completed preview
 });
 
-// A job with nothing to show — no result and no tool feed — must not be expandable. The DS
-// AccordionItem is rendered `disabled`, so its trigger is inert (the old raw disclosure
-// button was likewise `disabled` when !canExpand). Guards the "no button-in-button" markup:
-// the only collapsed control in the row is the accordion trigger itself.
-test("a job with no result and no tools cannot be expanded", async ({ page }) => {
+// Empty jobs still expose their metadata, but have no result or expansion controls.
+test("a job with no result and no tools has no result controls", async ({ page }) => {
   await page.route("**/api/background", (route) =>
     route.fulfill({
       json: {
@@ -97,11 +92,10 @@ test("a job with no result and no tools cannot be expanded", async ({ page }) =>
   await page.goto("/app/", { waitUntil: "load" });
   await page.getByRole("button", { name: /^Background agents/ }).click();
 
-  const row = page.locator(".bg-jobs-row").first();
-  await expect(row).toBeVisible();
-
-  // The accordion trigger is disabled → the row can't open, and no result panel exists.
-  const trigger = row.locator(".pl-accordion__trigger");
-  await expect(trigger).toBeDisabled();
-  await expect(row.locator(".bg-jobs-result")).toHaveCount(0);
+  const work = page.locator('.work-view[data-frame="modal"]');
+  await work.locator(".work-row").click();
+  await expect(work.locator(".work-view__detail")).toContainText("finished with an empty reply");
+  await expect(work.locator(".work-background__result")).toHaveCount(0);
+  await expect(work.getByRole("button", { name: "Show full text" })).toHaveCount(0);
+  await expect(work.getByRole("button", { name: "Copy result to clipboard" })).toHaveCount(0);
 });

@@ -10,7 +10,7 @@
  *
  * Freshness is bus-driven, not polled: a single `onTopic` subscription invalidates exactly
  * the source a `decision.changed` / `goal.changed` / `watch.changed` / `task.changed` /
- * `background.*` / `scheduler.changed` / `directive.changed` push names (bd-0ia51.8).
+ * `background.*` / `activity.message` / `scheduler.changed` / `directive.changed` push names (bd-0ia51.8).
  * Schedules are the one exception — the backend only emits `scheduler.changed` from
  * bd-0ia51.8 onward, so they poll every 60s UNTIL the first such event proves the bus is
  * wired, then stop.
@@ -310,6 +310,9 @@ export function useWorkItems({ sessionId, thisChatOnly }: UseWorkItemsParams): W
       onTopic("goal.changed", invalidate(queryKeys.goals)),
       onTopic("watch.changed", invalidate(queryKeys.watches)),
       onTopic("task.changed", invalidate(queryKeys.tasks)),
+      // Completed turns are persisted before this push; refresh while Work is open
+      // so the widget can safely suppress the unread badge for the visible section.
+      onTopic("activity.message", invalidate(workKey("activity"))),
       onTopic("background.started", onBackground),
       onTopic("background.progress", onBackground),
       onTopic("background.completed", onBackground),

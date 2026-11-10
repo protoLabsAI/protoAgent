@@ -1,8 +1,8 @@
 import { expect, test } from "@playwright/test";
 
-// The bottom-bar background-agents pill shows a spinner + the running count while jobs run.
-// It was a fixed-square icon button, so the count squeezed the spinner into an oval and the
-// digit half-hid under the unread dot (Josh, 2026-10-04). Running: the spinner stays round and
+// The bottom-bar background-agents pill shows a pulsing dot + the running count while jobs run.
+// It was a fixed-square icon button, so the count squeezed the pulsing dot into an oval and the
+// digit half-hid under the unread dot (Josh, 2026-10-04). Running: the pulsing dot stays round and
 // the count is fully inside the pill.
 
 const SESSION = "chat-bgpill-e2e";
@@ -11,7 +11,7 @@ function sse(frames: { topic: string; data: Record<string, unknown> }[]) {
   return frames.map((f) => `data: ${JSON.stringify(f)}\n\n`).join("");
 }
 
-test("the running pill keeps its spinner round and shows the whole count", async ({ page }) => {
+test("the running pill keeps its pulsing dot round and shows the whole count", async ({ page }) => {
   await page.addInitScript(
     ([session]) => {
       window.localStorage.setItem(
@@ -58,6 +58,7 @@ test("the running pill keeps its spinner round and shows the whole count", async
   const pill = page.getByTestId("background-jobs-pill");
   await expect(pill).toHaveAccessibleName(/1 running/);
 
+  await expect(pill.locator(".pl-dot--pulse")).toBeVisible();
   const m = await pill.evaluate((el) => {
     const icon = el.firstElementChild as HTMLElement;
     const r = icon.getBoundingClientRect();
@@ -67,6 +68,11 @@ test("the running pill keeps its spinner round and shows the whole count", async
     return { w: r.width, h: r.height, cLeft: c.left, cRight: c.right, iconRight: r.right, pLeft: p.left, pRight: p.right };
   });
   expect(Math.abs(m.w - m.h)).toBeLessThanOrEqual(1); // round, not squished
-  expect(m.cLeft).toBeGreaterThanOrEqual(m.iconRight); // the count sits beside the spinner…
+  expect(m.cLeft).toBeGreaterThanOrEqual(m.iconRight); // the count sits beside the pulsing dot…
   expect(m.cRight).toBeLessThanOrEqual(m.pRight + 0.5); // …and inside the pill
+  await pill.click();
+  const work = page.locator('.work-view[data-frame="modal"]');
+  await expect(work).toBeVisible();
+  await expect(work.getByRole("tab", { selected: true })).toContainText("Background agents");
+  await expect(page.locator(".bg-jobs-list")).toHaveCount(0);
 });

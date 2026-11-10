@@ -194,6 +194,14 @@ describe("useWorkItems — live refresh", () => {
     await flush();
     expect(spies.tasks).toHaveBeenCalledTimes(2);
 
+    spies.activity.mockResolvedValue(history("s1", [actEntry(2, "completed"), actEntry(1, "completed")]));
+    emit("activity.message", { text: "activity 2", origin: "scheduler" });
+    await flush();
+    expect(spies.activity).toHaveBeenCalledTimes(2);
+    expect(r.current.activity.items.map((item) => item.title)).toEqual(["activity 2", "activity 1"]);
+    expect(spies.tasks).toHaveBeenCalledTimes(2);
+    expect(spies.background).toHaveBeenCalledTimes(2);
+
     // A `decision.changed` refetches decisions (prefix-keyed) and nothing else.
     emit("decision.changed", { id: "d1", session_id: "s1", state: "answered" });
     await flush();

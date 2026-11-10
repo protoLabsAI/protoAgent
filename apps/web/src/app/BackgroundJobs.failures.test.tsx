@@ -36,6 +36,7 @@ vi.mock("../lib/events", () => ({
   onConnectionChange: () => () => {},
 }));
 
+import { useUI } from "../state/uiStore";
 import { BackgroundJobs, CopyResult } from "./BackgroundJobs";
 import { restoreRemoved, revertCancel } from "./background-jobs";
 
@@ -76,9 +77,7 @@ afterEach(() => {
 
 async function openDialog() {
   await act(async () => root.render(h(BackgroundJobs)));
-  const pill = document.querySelector<HTMLButtonElement>('[data-testid="background-jobs-pill"]');
-  if (!pill) throw new Error("no pill");
-  await act(async () => pill.click());
+  await act(async () => useUI.getState().openBackgroundJobs());
 }
 
 function button(match: (b: HTMLButtonElement) => boolean): HTMLButtonElement {

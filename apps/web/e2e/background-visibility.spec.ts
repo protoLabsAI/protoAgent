@@ -48,7 +48,7 @@ test("the unread badge is durable across reload once the panel has been opened",
   // Opening the panel marks the job "seen" — persisted to localStorage, not volatile
   // React state, so it must survive a reload.
   await pill.click();
-  await expect(page.locator(".bg-jobs-row")).toBeVisible();
+  await expect(page.locator(".work-background .work-row", { hasText: DESC })).toBeVisible();
   await page.keyboard.press("Escape");
 
   await page.reload({ waitUntil: "load" });
@@ -83,4 +83,27 @@ test("a completion for a session that isn't a local tab toasts the panel, not a 
   await expect(toast).toBeVisible({ timeout: 15_000 });
   await expect(toast).toContainText("see the Background agents panel");
   await expect(toast).not.toContainText("open the chat to read it");
+});
+
+
+test("Work background detail shows tool progress captured before opening the pill", async ({ page }) => {
+  await page.route("**/api/background", (route) => route.fulfill({ json: {
+    enabled: true,
+    jobs: [{ id: JOB_ID, status: "running", subagent_type: "coder", description: DESC }],
+  } }));
+  await page.route("**/api/events**", (route) => route.fulfill({
+    status: 200,
+    headers: { "content-type": "text/event-stream", "cache-control": "no-cache" },
+    body: [
+      { phase: "tool_end", tool: "read_file", tool_call_id: "read", output: "Captured tool output" },
+      { phase: "tool_start", tool: "run_tests", tool_call_id: "tests" },
+    ].map((data) => `data: ${JSON.stringify({ topic: "background.progress", data: { job_id: JOB_ID, ...data } })}\n\n`).join(""),
+  }));
+  await page.goto("/app/", { waitUntil: "load" });
+  await page.getByTestId("background-jobs-pill").click();
+  await page.locator(".work-background .work-row", { hasText: DESC }).click();
+  const feed = page.locator(".work-detail .bg-jobs-feed");
+  await expect(feed).toContainText("run_tests");
+  await feed.getByRole("button", { name: /read_file/ }).click();
+  await expect(feed).toContainText("Captured tool output");
 });

@@ -199,5 +199,5 @@ test("dismiss ✕ removes the chip, survives reload, and the report stays in the
   // The dismissed report is still reviewable in the Background agents panel — the
   // dismiss affects chat rendering only, never the durable registry.
   await page.getByTestId("background-jobs-pill").click();
-  await expect(page.locator(".bg-jobs-row").filter({ hasText: TITLE })).toBeVisible();
+  await expect(page.locator(".work-row").filter({ hasText: TITLE })).toBeVisible();
 });
