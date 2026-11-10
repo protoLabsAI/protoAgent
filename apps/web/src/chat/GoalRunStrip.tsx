@@ -10,6 +10,8 @@ import { dismissGoal, useDismissedGoals } from "../goals/dismissedGoals";
 import { useNow } from "../goals/useNow";
 import { goalsQuery } from "../lib/queries";
 import type { GoalState } from "../lib/types";
+import { openView } from "../app/palette/nav";
+import { useUI } from "../state/uiStore";
 import { verifierLabel } from "./goalForm";
 
 /** Which goal (if any) this chat's strip shows, and how: the session's goal while it drives,
@@ -42,6 +44,17 @@ export function GoalRunStrip({ sessionId }: { sessionId: string }) {
   if (!state) return null;
   const { goal, phase } = state;
   const verifier = verifierLabel(goal.verifier);
+  const openWork = () => {
+    const ui = useUI.getState();
+    ui.setSurfaceState("work", {
+      ...ui.surfaceStates.work,
+      section: "goals",
+      itemId: `goal:${goal.session_id}`,
+      scrollTop: 0,
+      filters: { ...ui.surfaceStates.work?.filters, thisChat: true },
+    });
+    openView("work");
+  };
   // The live region is ONLY the state text (`Goal driving · iteration i/n`, `Goal achieved`):
   // the outcome line carries a relative time ("3m ago") that `useNow` re-renders every minute,
   // and a role="status" around it would re-announce the whole strip to screen readers each tick.
@@ -58,6 +71,7 @@ export function GoalRunStrip({ sessionId }: { sessionId: string }) {
           </span>{" "}
           · {goal.condition}
         </span>
+        <Button variant="ghost" size="sm" onClick={openWork}>View</Button>
       </div>
     );
   }
@@ -82,6 +96,7 @@ export function GoalRunStrip({ sessionId }: { sessionId: string }) {
         · {goal.condition}
         <span className="chat-goal-strip-outcome"> — {line}</span>
       </span>
+      <Button variant="ghost" size="sm" onClick={openWork}>View</Button>
       <Button
         variant="ghost"
         size="xs"

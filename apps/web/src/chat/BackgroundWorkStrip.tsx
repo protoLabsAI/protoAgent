@@ -1,6 +1,7 @@
 import { Button } from "@protolabsai/ui/primitives";
 import { Spinner } from "@protolabsai/ui/data";
 
+import { openView } from "../app/palette/nav";
 import { useUI } from "../state/uiStore";
 import { useRunningBackgroundJobs, type JobLite } from "./backgroundJobStore";
 
@@ -19,7 +20,17 @@ export function jobLabel(job: Pick<JobLite, "description" | "subagent_type">): s
  *  reserved empty line left a blank band above the composer most of the time. */
 export function BackgroundWorkStrip({ sessionId }: { sessionId: string }) {
   const running = useRunningBackgroundJobs(sessionId);
-  const openBackgroundJobs = useUI((s) => s.openBackgroundJobs);
+  const openWork = () => {
+    const ui = useUI.getState();
+    ui.setSurfaceState("work", {
+      ...ui.surfaceStates.work,
+      section: "background",
+      itemId: undefined,
+      scrollTop: 0,
+      filters: { ...ui.surfaceStates.work?.filters, thisChat: true },
+    });
+    openView("work");
+  };
   if (running.length === 0) {
     return <div className="chat-bgwork chat-bgwork--idle" role="status" data-testid="chat-bgwork" />;
   }
@@ -31,7 +42,7 @@ export function BackgroundWorkStrip({ sessionId }: { sessionId: string }) {
       <span className="chat-bgwork-list" title={labels.join("\n")}>
         <strong className="chat-bgwork-count">{count}</strong> · {labels.join(" · ")}
       </span>
-      <Button variant="ghost" size="sm" onClick={openBackgroundJobs}>
+      <Button variant="ghost" size="sm" onClick={openWork}>
         View
       </Button>
     </div>

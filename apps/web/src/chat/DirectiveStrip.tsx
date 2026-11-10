@@ -1,13 +1,40 @@
+import { useEffect } from "react";
 import { Button } from "@protolabsai/ui/primitives";
 import { StatusDot } from "@protolabsai/ui/data";
 import { useIsMobile } from "../lib/useIsMobile";
+import { openView } from "../app/palette/nav";
 import { useUI } from "../state/uiStore";
+import { chatStore } from "./chat-store";
 import { useDirectives } from "./useDirectives";
+
+function openWorkDirectives() {
+  const ui = useUI.getState();
+  ui.setSurfaceState("work", {
+    ...ui.surfaceStates.work,
+    section: "directives",
+    itemId: undefined,
+    scrollTop: 0,
+    filters: { ...ui.surfaceStates.work?.filters, thisChat: true },
+  });
+  openView("work");
+}
+
+/** Consume console /directives requests without mounting the legacy drawer. */
+export function DirectiveWorkRequest({ sessionId }: { sessionId: string }) {
+  const request = useUI((s) => s.directivesRequest);
+  useEffect(() => {
+    if (request?.sessionId !== sessionId) return;
+    // Inactive session slots stay mounted; Work reads the selected chat.
+    chatStore.switchSession(sessionId);
+    openWorkDirectives();
+    useUI.setState({ directivesRequest: null });
+  }, [request, sessionId]);
+  return null;
+}
 
 export function DirectiveStrip({ sessionId }: { sessionId: string }) {
   const { state, active, refresh } = useDirectives(sessionId);
   const mobile = useIsMobile();
-  const openDirectives = useUI((s) => s.openDirectives);
   const failed = state === "failed";
   const idle = !failed && (state === "loading" || active.length === 0);
   const count = `${active.length} active instruction${active.length === 1 ? "" : "s"}`;
@@ -21,7 +48,7 @@ export function DirectiveStrip({ sessionId }: { sessionId: string }) {
           {` · "${active[0].quote}"${!mobile && active.length > 1 ? ` and ${active.length - 1} more` : ""}`}
         </>}
       </span>
-      <Button variant="ghost" size="sm" className="chat-ledger-action" onClick={() => failed ? void refresh() : openDirectives(sessionId)}>
+      <Button variant="ghost" size="sm" className="chat-ledger-action" onClick={() => failed ? void refresh() : openWorkDirectives()}>
         {failed ? "Retry" : "View"}
       </Button>
     </>}
