@@ -125,6 +125,16 @@ export const automationApi = {
     });
   },
 
+  // Pause (`enabled=false`) or resume (`enabled=true`) a job in place — the Work view's
+  // Schedules toggle (#4955 §4.3). The server publishes `scheduler.changed` and answers
+  // `{job}` with the new `enabled` value; a backend without pause/resume is a 501.
+  setScheduleEnabled(jobId: string, enabled: boolean) {
+    return request<{ job: ScheduledJob }>(
+      `/api/scheduler/jobs/${encodeURIComponent(jobId)}/enabled`,
+      { method: "POST", body: { enabled } },
+    );
+  },
+
   goals() {
     return request<{ goals: GoalState[]; enabled: boolean }>("/api/goals");
   },
@@ -375,6 +385,16 @@ export const automationApi = {
     return request<{ deleted?: string; project_path?: string }>(
       `/api/tasks/issues/${encodeURIComponent(issueId)}`,
       { method: "DELETE" },
+    );
+  },
+
+  // Server-side undo for a console delete (#4955 Q10/§4.5): a goal/watch clear, a task
+  // delete or a schedule cancel mints a short-lived `undo_token`; this redeems it within
+  // the window, replaying the stashed restore. An unknown/expired/used token is a 404.
+  undo(token: string) {
+    return request<{ restored: boolean; kind: string }>(
+      `/api/undo/${encodeURIComponent(token)}`,
+      { method: "POST" },
     );
   },
 };

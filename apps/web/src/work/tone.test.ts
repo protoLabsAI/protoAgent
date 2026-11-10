@@ -2,7 +2,7 @@ import { act, createElement } from "react";
 import { createRoot } from "react-dom/client";
 import { describe, expect, it, vi } from "vitest";
 import { WorkRow } from "./WorkRow";
-import { fromActivity, fromBackgroundJob, fromDecision, fromGoal, fromSchedule, fromTask, fromWatch, laneFor, relTime, statusTone, statusWord, type WorkStatus } from "./tone";
+import { fromActivity, fromBackgroundJob, fromDecision, fromDirective, fromGoal, fromSchedule, fromTask, fromWatch, laneFor, relTime, statusTone, statusWord, type WorkStatus } from "./tone";
 import rowCss from "./work-row.css?raw";
 
 const mappings: [string, (raw: string) => WorkStatus, Record<string, WorkStatus>][] = [
@@ -12,6 +12,7 @@ const mappings: [string, (raw: string) => WorkStatus, Record<string, WorkStatus>
   ["background", fromBackgroundJob, { running: "running", completed: "done", failed: "failed", canceled: "cancelled" }],
   ["activity", fromActivity, { completed: "done", failed: "failed", canceled: "cancelled" }],
   ["decision", fromDecision, { pending: "needs-you", answered: "done", expired: "cancelled", cancelled: "cancelled", withdrawn: "cancelled" }],
+  ["directive", fromDirective, { in_force: "waiting", fulfilled: "done", revoked: "cancelled" }],
 ];
 
 describe.each(mappings)("%s raw statuses", (_kind, mapper, cases) => {
