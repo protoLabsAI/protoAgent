@@ -1,5 +1,6 @@
 import type { Status } from "@protolabsai/ui/primitives";
 import type { ScheduledJob } from "../lib/types";
+import type { DecisionRow } from "../lib/api/decisions";
 
 export type WorkStatus = "needs-you" | "running" | "waiting" | "scheduled" | "paused" | "done" | "failed" | "cancelled";
 export type WorkLane = "needs-you" | "doing" | "waiting" | "next" | "done";
@@ -92,4 +93,37 @@ export function relTime(epochOrIso: number | string, now: number = Date.now()): 
     ? `${minutes} min ago`
     : `${sameDay ? "today" : day} at ${time}`;
   return { text, tooltip: date.toLocaleString("en-GB", { dateStyle: "full", timeStyle: "long" }) };
+}
+
+/** Who answered, in plain words: the operator is "you"; otherwise the agent/name as given. */
+function answeredBy(row: DecisionRow): string {
+  if (!row.answered_by) return "";
+  return row.answered_by === "operator" || row.answered_by === "console" ? "you" : row.answered_by;
+}
+
+/**
+ * The single meta line under a decision (§2.4). It feeds BOTH the Decisions section row and the
+ * Overview "Needs you" pin, which share these fields: "Asked {time}" while pending, "Answered:
+ * {label} · by {who} · {time}" once answered, and "Withdrawn: {reason}" when closed without an
+ * answer. The agent (field 5) is prepended only in the agent-wide ("All chats") filter; the
+ * Overview pin is filter-agnostic (`allChats` false), so it shows "Asked {time}" and no agent.
+ * Never carries an id of any kind (§2.3, §2.4 "Never shown").
+ */
+export function decisionMeta(row: DecisionRow, allChats: boolean): string {
+  const parts: string[] = [];
+  if (allChats && row.agent) parts.push(row.agent);
+  if (row.state === "pending") {
+    const asked = relTime(row.created_at).text;
+    if (asked) parts.push(`Asked ${asked}`);
+  } else if (row.state === "answered") {
+    const label = row.answer_label ?? row.answer ?? "an option";
+    const who = answeredBy(row);
+    const when = relTime(row.answered_at ?? row.created_at).text;
+    parts.push(`Answered: ${label}${who ? ` · by ${who}` : ""}${when ? ` · ${when}` : ""}`);
+  } else {
+    // expired / cancelled / withdrawn — all map to the "cancelled" badge (§2.4 field 2).
+    const reason = row.withdraw_reason?.trim();
+    if (reason) parts.push(`Withdrawn: ${reason}`);
+  }
+  return parts.join(" · ");
 }

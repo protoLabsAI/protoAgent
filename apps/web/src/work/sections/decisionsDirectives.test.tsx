@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ToastProvider } from "@protolabsai/ui/overlays";
 
 import { WorkView } from "../WorkView";
-import { fromDecision, fromDirective } from "../tone";
+import { decisionMeta, fromDecision, fromDirective } from "../tone";
 import { useUI } from "../../state/uiStore";
 import type { WorkItem, WorkItems, WorkSource, WorkSourceKind } from "../useWorkItems";
 import type { DecisionRow } from "../../lib/api/decisions";
@@ -66,7 +66,9 @@ const decisionRow = (id: string, patch: Partial<DecisionRow> = {}): DecisionRow 
   ...patch,
 });
 function decisionItem(row: DecisionRow): WorkItem {
-  return { kind: "decision", id: row.id, status: fromDecision(row.state), title: row.question, meta: "", sessionId: row.session_id || undefined, raw: row };
+  // meta mirrors the real normalizer (useWorkItems.mapDecision) so the Overview pin shows what
+  // ships; the Decisions section ignores it and recomputes from `raw` with the live filter.
+  return { kind: "decision", id: row.id, status: fromDecision(row.state), title: row.question, meta: decisionMeta(row, false), sessionId: row.session_id || undefined, raw: row };
 }
 
 const directiveRow = (id: string, patch: Partial<DirectiveRow> = {}): DirectiveRow => ({
@@ -139,6 +141,31 @@ describe("Decisions section", () => {
     const detail = host.querySelector(".work-view__detail");
     expect(detail?.textContent).toContain("protoEngineer");
     expect(detail?.textContent).toContain("Go ahead");
+    expect(detail?.textContent).toContain("Reply in chat instead"); // a DecisionCard-only affordance
+    expect(detail?.querySelector('[role="group"][aria-label="Answer"]')).toBeTruthy();
+  });
+
+  it("pins a pending decision first in the Overview Needs you lane with 'Asked {time}', opening the DecisionCard (r1 §2.1)", async () => {
+    data.sources.decisions.items = [decisionItem(decisionRow("live", { created_at: new Date(Date.now() - 4 * 60_000).toISOString() }))];
+    // A running task fills the Doing lane; the pending decision must still sit above it (§1).
+    data.sources.tasks.items = [{ kind: "task", id: "t1", status: "running", title: "Build the thing", meta: "", raw: {} }];
+    workState({ section: "overview", filters: { thisChat: false } });
+    await render("modal");
+
+    const lanes = [...host.querySelectorAll("section")];
+    // "Needs you" is the first lane, and its first (pinned) row is the pending decision with
+    // the §2.4 field-3 pin — "Asked {time}" — not the agent name the old pin carried.
+    expect(lanes[0].querySelector("h3")?.textContent).toBe("Needs you");
+    const firstRow = lanes[0].querySelector(".work-row");
+    expect(firstRow?.textContent).toContain("Question live");
+    expect(firstRow?.textContent).toContain("Asked 4 min ago");
+    expect(lanes[1].querySelector("h3")?.textContent).toBe("Doing"); // sits below Needs you
+
+    // Opening the pin straight from the Overview renders the unchanged DecisionCard as its detail.
+    workState({ section: "overview", itemId: "decision:live", filters: { thisChat: false } });
+    await render("modal");
+    const detail = host.querySelector(".work-view__detail");
+    expect(detail?.textContent).toContain("Question live");
     expect(detail?.textContent).toContain("Reply in chat instead"); // a DecisionCard-only affordance
     expect(detail?.querySelector('[role="group"][aria-label="Answer"]')).toBeTruthy();
   });

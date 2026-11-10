@@ -19,37 +19,10 @@ import { Empty } from "@protolabsai/ui/primitives";
 
 import { decisionsApi, type DecisionRow } from "../../lib/api/decisions";
 import { DecisionCard } from "../../decisions/DecisionCard";
-import { relTime } from "../tone";
+import { decisionMeta } from "../tone";
 import { WorkRow } from "../WorkRow";
 import type { WorkItem } from "../useWorkItems";
 import { registerWorkSection, type WorkSectionContext } from "../WorkView";
-
-/** Who answered, in plain words: the operator is "you"; otherwise the agent/name as given. */
-function answeredBy(row: DecisionRow): string {
-  if (!row.answered_by) return "";
-  return row.answered_by === "operator" || row.answered_by === "console" ? "you" : row.answered_by;
-}
-
-/** The single meta line under a decision row (§2.4). Never carries an id of any kind. */
-export function decisionMeta(row: DecisionRow, allChats: boolean): string {
-  const parts: string[] = [];
-  // §2.4 field 5: the agent only shows in the agent-wide filter.
-  if (allChats && row.agent) parts.push(row.agent);
-  if (row.state === "pending") {
-    const asked = relTime(row.created_at).text;
-    if (asked) parts.push(`Asked ${asked}`);
-  } else if (row.state === "answered") {
-    const label = row.answer_label ?? row.answer ?? "an option";
-    const who = answeredBy(row);
-    const when = relTime(row.answered_at ?? row.created_at).text;
-    parts.push(`Answered: ${label}${who ? ` · by ${who}` : ""}${when ? ` · ${when}` : ""}`);
-  } else {
-    // expired / cancelled / withdrawn — all map to the "cancelled" badge (§2.4 field 2).
-    const reason = row.withdraw_reason?.trim();
-    if (reason) parts.push(`Withdrawn: ${reason}`);
-  }
-  return parts.join(" · ");
-}
 
 /** The selected decision's detail: the DecisionCard, unchanged. */
 function DecisionDetail({ row }: { row: DecisionRow }): ReactNode {

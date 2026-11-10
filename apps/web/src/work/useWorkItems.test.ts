@@ -123,6 +123,7 @@ describe("useWorkItems — load, map, filter", () => {
     const w = r.current;
     (Object.keys(w) as WorkSourceKind[]).forEach((k) => expect(w[k].status).toBe("ready"));
     expect(w.decisions.items[0]).toMatchObject({ kind: "decision", id: "d1", status: "needs-you", sessionId: "s1" });
+    expect(w.decisions.items[0].meta).toMatch(/^Asked /); // §2.4 Overview pin: "Asked {time}", not the agent name
     expect(w.goals.items[0]).toMatchObject({ kind: "goal", id: "s1", status: "running", sessionId: "s1" });
     expect(w.watches.items[0]).toMatchObject({ kind: "watch", id: "w1", status: "waiting" });
     expect(w.tasks.items[0]).toMatchObject({ kind: "task", id: "t1", status: "running" });
