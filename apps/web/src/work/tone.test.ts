@@ -2,7 +2,8 @@ import { act, createElement } from "react";
 import { createRoot } from "react-dom/client";
 import { describe, expect, it, vi } from "vitest";
 import { WorkRow } from "./WorkRow";
-import { fromActivity, fromBackgroundJob, fromDecision, fromDirective, fromGoal, fromSchedule, fromTask, fromWatch, laneFor, relTime, statusTone, statusWord, type WorkStatus } from "./tone";
+import type { WatchState } from "../lib/types";
+import { formatWatchDuration, watchLifetime, fromActivity, fromBackgroundJob, fromDecision, fromDirective, fromGoal, fromSchedule, fromTask, fromWatch, laneFor, relTime, statusTone, statusWord, type WorkStatus } from "./tone";
 import rowCss from "./work-row.css?raw";
 
 const mappings: [string, (raw: string) => WorkStatus, Record<string, WorkStatus>][] = [
@@ -109,4 +110,60 @@ it("uses muted meta, clamped titles and no status text colour", () => {
   expect(rowCss).toMatch(/\.work-row__meta\s*\{[^}]*color: var\(--pl-color-fg-muted\)/);
   expect(rowCss).toContain("-webkit-line-clamp: 2");
   expect(rowCss).not.toMatch(/fg-subtle|color-status|\dpx/);
+});
+
+const watch = (over: Partial<WatchState>): WatchState => ({
+  id: "w",
+  condition: "c",
+  status: "active",
+  ...over,
+});
+
+describe("watch lifetime knobs (console parity with list_watches)", () => {
+  const now = new Date(2026, 6, 1, 12, 0, 0).getTime();
+  const inSecs = (s: number) => now / 1000 + s;
+
+  it("formatWatchDuration matches the server's _duration bands", () => {
+    expect(formatWatchDuration(45)).toBe("45s");
+    expect(formatWatchDuration(600)).toBe("10m");
+    expect(formatWatchDuration(7200)).toBe("2h");
+    expect(formatWatchDuration(3 * 86400)).toBe("3d");
+    expect(formatWatchDuration(-5)).toBe("0s"); // a just-lapsed deadline never reads negative
+  });
+
+  it("reports only the knobs that are set", () => {
+    const w = watch({ status: "active", interval_s: 1800, deadline: inSecs(7200), stall_after: 3 });
+    expect(watchLifetime(w, now)).toEqual(["every 30m", "expires in 2h", "stall after 3"]);
+    expect(watchLifetime(watch({ status: "active" }), now)).toEqual([]);
+    expect(watchLifetime(watch({ status: "active", stall_after: 2 }), now)).toEqual(["stall after 2"]);
+  });
+
+  it("says 'past its deadline' instead of counting down through zero", () => {
+    const lapsed = watch({ status: "active", deadline: inSecs(-30) });
+    expect(watchLifetime(lapsed, now)).toEqual(["past its deadline"]);
+  });
+
+  it("stays silent on a terminal watch", () => {
+    // "expires in 2h" is meaningless once a watch is met/expired — the same rule the server
+    // applies before building its status line.
+    for (const status of ["met", "expired"]) {
+      const w = watch({ status, interval_s: 1800, deadline: inSecs(7200), stall_after: 3 });
+      expect(watchLifetime(w, now)).toEqual([]);
+    }
+  });
+});
+
+describe("a repeating watch shows how often it has fired", () => {
+  const now = new Date(2026, 6, 1, 12, 0, 0).getTime();
+
+  it("surfaces the fire count once it is non-trivial", () => {
+    // Each fire can enqueue an agent turn, so a climbing count is a cost signal.
+    const w = watch({ status: "active", repeat: true, fire_count: 14 });
+    expect(watchLifetime(w, now)).toContain("fired 14×");
+  });
+
+  it("stays quiet for a one-shot, or a repeater that has barely fired", () => {
+    expect(watchLifetime(watch({ status: "active", fire_count: 9 }), now)).toEqual([]);
+    expect(watchLifetime(watch({ status: "active", repeat: true, fire_count: 1 }), now)).toEqual(["repeating"]);
+  });
 });

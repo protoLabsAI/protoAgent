@@ -1,5 +1,5 @@
 import type { Status } from "@protolabsai/ui/primitives";
-import type { ScheduledJob } from "../lib/types";
+import type { ScheduledJob, WatchState } from "../lib/types";
 import type { DecisionRow } from "../lib/api/decisions";
 
 export type WorkStatus = "needs-you" | "running" | "waiting" | "scheduled" | "paused" | "done" | "failed" | "cancelled";
@@ -126,4 +126,44 @@ export function decisionMeta(row: DecisionRow, allChats: boolean): string {
     if (reason) parts.push(`Withdrawn: ${reason}`);
   }
   return parts.join(" · ");
+}
+
+/** A compact span: `45s` / `30m` / `2h` / `3d`. Mirrors `_duration` in
+ *  `graph/watches/types.py` — the same watch reads the same way in the console and in the
+ *  agent's own `list_watches`, so an operator and the agent describe it identically.
+ *  Rounded on purpose: this is prose, not arithmetic. */
+export function formatWatchDuration(seconds: number): string {
+  const s = Math.max(0, seconds);
+  if (s < 90) return `${Math.round(s)}s`;
+  if (s < 5400) return `${Math.round(s / 60)}m`;
+  if (s < 172800) return `${Math.round(s / 3600)}h`;
+  return `${Math.round(s / 86400)}d`;
+}
+
+/** The lifetime facts an ACTIVE watch carries — `["every 30m", "expires in 2h",
+ *  "stall after 3"]` — for the panel's meta line. Mirrors `Watch._lifetime_suffix`.
+ *
+ *  Terminal watches return `[]`: "expires in …" is meaningless once a watch is met or
+ *  expired, which is the same rule the server applies before building its status line.
+ *  A deadline already in the past reads `past its deadline` rather than `expires in 0s` —
+ *  the tick just hasn't run yet. */
+export function watchLifetime(watch: WatchState, now: number = Date.now()): string[] {
+  if (watch.status !== "active") return [];
+  const parts: string[] = [];
+  // Lead with the disposition: a repeating/change watch behaves differently enough from a
+  // one-shot tripwire that it shouldn't look identical in the list. Mirrors the server's
+  // `_lifetime_suffix`.
+  if (watch.trigger === "change") parts.push("on change");
+  if (watch.repeat) parts.push("repeating");
+  if (watch.interval_s) parts.push(`every ${formatWatchDuration(watch.interval_s)}`);
+  if (watch.deadline != null) {
+    const left = watch.deadline - now / 1000;
+    parts.push(left > 0 ? `expires in ${formatWatchDuration(left)}` : "past its deadline");
+  }
+  if (watch.stall_after) parts.push(`stall after ${watch.stall_after}`);
+  // A repeating watch that has fired more than a handful of times is worth seeing at a
+  // glance — each fire can enqueue an agent turn, so a high count is a cost signal, not
+  // trivia. Only shown once it's non-trivial, to keep a normal row quiet.
+  if (watch.repeat && (watch.fire_count ?? 0) > 1) parts.push(`fired ${watch.fire_count}×`);
+  return parts;
 }
