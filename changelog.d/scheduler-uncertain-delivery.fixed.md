@@ -1,0 +1,1 @@
+- **Scheduler uncertain-delivery containment (bd-vaa.11).** Persist occurrence claims and stable message identities before dispatch, quarantine ambiguous delivery across ticks and restarts, and report delivery uncertainty without fabricating a failed turn. Proven connection refusal remains retryable, and late settlement preserves newer same-ID schedules.

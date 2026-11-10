@@ -178,6 +178,51 @@ for a registered webhook (on every status/artifact frame, including terminal). N
   instead of blocking. Tunable; the model can still force foreground when it needs the result
   inline.
 
+## Scheduler delivery containment — S1 (bd-vaa.11)
+
+The scheduler's unary `SendMessage` waits for the whole turn. A read timeout
+can therefore mean the receiver accepted the request and is still executing it.
+Retrying that one-shot as a delivery failure can execute it twice. This amendment
+re-scopes the existing timeout finding bd-vaa.11 to contain uncertainty before
+adding automatic recovery.
+
+The local scheduler adds an additive SQLite `occurrences` ledger keyed by
+`(job_id, next_fire)`, where `next_fire` is the claimed slot. It stores a stable
+`message_id`, explicit dispatch state (`claimed`, `unknown`, `retryable`,
+`settled`), the schedule's `created_at`, its expected post-claim `next_fire`,
+and its previous diagnostic. Existing jobs need no conversion; they acquire a
+ledger entry on first dispatch. Cron advancement and claim persistence share
+one transaction. Failure to commit the claim prevents sending.
+
+Crash boundaries and policy:
+
+- Before claim commit: no send has occurred; the schedule remains eligible.
+- After claim commit, before send: restart cannot prove that no send occurred.
+  The occurrence remains quarantined, deliberately sacrificing automatic liveness.
+- After send, before a definitive response or durable settlement: the receiver may
+  still be executing or may already have completed. Read/write timeouts, unproven
+  connection errors, and local cancellation preserve the quarantine.
+- A proven connection refusal (`ECONNREFUSED` in the exception chain) permits a
+  retry using the same message identity. Existing HTTP-error handling and terminal
+  success/failure/cancellation handling remain in place.
+- A known result settles only the claimed occurrence. Outcome updates, expiry,
+  and one-shot removal must not alter a newer same-ID wait-chain schedule.
+
+Both `claimed` and `unknown` exclude automatic redispatch and stale-fire
+recovery, including a recurring schedule's advanced slot. The existing
+`last_error` field reports **delivery unknown; not automatically retried**;
+uncertainty does not increment confirmed execution failures or deliveries, change
+`last_ok`, or emit a fabricated terminal `turn.finished`. Cancellation of a
+schedule still removes its job row; the ledger retains the delivery evidence.
+
+This is containment, **not exactly-once delivery**. A stable message ID is an
+identity for reconciliation, not evidence of durable receiver deduplication.
+There is no atomic transaction spanning SQLite and the receiver. Unknown delivery
+without a task handle remains quarantined in S1; dependent S2 adds early handles
+and reconciliation. Live `SubscribeToTask` remains an in-process subscription,
+while durable cross-restart `GetTask` is the recovery contract once a handle is
+known. Ledger retention/compaction and automatic recovery are outside this slice.
+
 ## References
 
 - The A2A alignment audit + realtime/component research that informed this (the cancel/

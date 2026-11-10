@@ -160,3 +160,30 @@ def test_shutdown_underway_abandons_without_arming(monkeypatch):
     assert sleep_calls == []  # ...but it bailed before the first sleep
     assert STATE.restart_requested is False
     exited.assert_not_called()
+
+
+def test_scheduler_claim_before_send_survives_restart_and_stale_recovery(tmp_path):
+    """A crash between the durable claim and POST cannot safely be distinguished
+    from a crash after the receiver accepted it, even after the recovery window."""
+    from datetime import UTC, datetime, timedelta
+
+    from scheduler.local import LocalScheduler
+
+    scheduler = LocalScheduler("claim-test", invoke_url="http://127.0.0.1:7870", db_dir=tmp_path)
+    past = (datetime.now(UTC) - timedelta(days=3)).isoformat()
+    job = scheduler.add_job("crash before send", past)
+    message_id = scheduler._claim_occurrence(job)
+    assert message_id
+
+    restarted = LocalScheduler("claim-test", invoke_url="http://127.0.0.1:7870", db_dir=tmp_path)
+    restarted._recover_missed_fires()
+    assert restarted._claim_due_jobs(datetime.now(UTC)) == []
+    stored = restarted.get_job(job.id)
+    assert stored is not None
+    assert stored.last_error == "delivery unknown; not automatically retried"
+    assert stored.consecutive_failures == stored.fire_count == 0
+    with restarted._connect() as db:
+        claim = db.execute("SELECT * FROM occurrences").fetchone()
+        assert claim["state"] == "claimed"
+        assert claim["message_id"] == message_id
+        assert claim["next_fire"] == job.next_fire
