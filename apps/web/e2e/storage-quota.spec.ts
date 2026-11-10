@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { expect, test as base, type Request } from "@playwright/test";
+import { expect, test as base, type Page, type Request } from "@playwright/test";
 
 // Keep every error: these records diagnose failures, never allowlist them.
 const test = base.extend({
@@ -58,6 +58,18 @@ const test = base.extend({
 });
 
 
+// The visible chat polls /local-turns every second, and WebKit reports a fetch that a
+// navigation cancels as a pageerror even when it is handled (characterized by "classifies a
+// handled unload fetch" below). A reload that happened to land mid-poll failed the zero-error
+// assertions about half the time. Reload right after a poll finishes, in the ~1 s gap before
+// the next one, so the assertions still keep every real error.
+async function reloadBetweenPolls(page: Page, options?: Parameters<Page["reload"]>[0]) {
+  const poll = await page.waitForResponse((response) => new URL(response.url()).pathname.endsWith("/local-turns"));
+  await poll.finished();
+  await page.reload(options);
+}
+
+
 // ADR 0114 slice 1 — a full browser-storage quota never crashes the console.
 //
 // On 2026-09-27 the console fell through to AppCrash with "The quota has been exceeded.",
@@ -66,6 +78,8 @@ const test = base.extend({
 // through lib/storage.ts, which never throws.
 
 test("boots, navigates and reloads with localStorage filled to the real quota", async ({ page }) => {
+  // A full chat turn plus ten reloads with a 1 s dwell is ~20 s alone; 30 s timed out under load.
+  test.setTimeout(60_000);
   const errors: string[] = [];
   page.on("pageerror", (e) => errors.push(e.message));
 
@@ -126,7 +140,7 @@ test("boots, navigates and reloads with localStorage filled to the real quota", 
     // Dwell on the restored console: its composer paints before session hydration
     // effects finish. Back-to-back document destruction tests the engine control.
     await page.waitForTimeout(1000);
-    await page.reload({ waitUntil: "load" });
+    await reloadBetweenPolls(page, { waitUntil: "load" });
     await expect(composer).toBeVisible();
     await expect(page.locator(".pl-message--user").last()).toContainText("hello from a full quota");
   }
@@ -348,7 +362,7 @@ test("migrates all 2400 legacy messages and retains them through ten reloads", a
     await expect(page.locator(".app-crash")).toHaveCount(0);
     if (reload < 10) {
       await page.waitForTimeout(1000);
-      await page.reload();
+      await reloadBetweenPolls(page);
     }
   }
   expect(errors).toEqual([]);
