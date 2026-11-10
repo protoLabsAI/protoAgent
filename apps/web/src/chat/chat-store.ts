@@ -20,7 +20,7 @@ import {
   type EvictionReport,
 } from "../lib/storageEviction";
 import { agentChunkPrefix, expandSessions, orphanChunks, packSessions } from "./transcriptChunks";
-import { openTranscriptStore, type SessionLike, type TranscriptStore } from "./transcriptStore";
+import { openTranscriptStore, withinMs, type SessionLike, type TranscriptStore } from "./transcriptStore";
 import { attachmentDisplay, validThumbnails } from "./imageThumbnails";
 import { persistBlocked } from "../lib/storageReset";
 
@@ -987,6 +987,11 @@ export async function liveTurnsElsewhere(exceptAgent: string) {
 /** Clear every saved transcript (AppCrash's reset, a backend switch). Waits for any queued save,
  *  then clears on the store's own connection, so nothing queued can land after the clear. */
 export async function clearSavedTranscripts(): Promise<void> {
+  // Bounded: a wedged IndexedDB (a save that never settles) must not keep the reload waiting.
+  await withinMs(clearSavedTranscriptsNow(), 3_000);
+}
+
+async function clearSavedTranscriptsNow(): Promise<void> {
   await writeChain;
   const store = transcripts ?? (await openTranscriptStore());
   if (!store) return;
@@ -1039,7 +1044,12 @@ async function onTranscriptMessage(message: TranscriptMessage) {
 
 /** Every agent's transcript keys in localStorage, imported into the store, newer copy winning,
  *  then removed (with their chunk keys). Dismissal sets stay where they are. */
-async function migrateLocalTranscripts(store: TranscriptStore): Promise<void> {
+/** Import every localStorage transcript into the store. Returns the keys it imported; the
+ *  caller removes them only once the page has committed to the store. A boot past its deadline
+ *  mounts on localStorage and writes to those keys, so removing them then would delete chats
+ *  the store never got (the next boot imports them again; the newer copy wins). */
+async function migrateLocalTranscripts(store: TranscriptStore): Promise<string[]> {
+  const imported: string[] = [];
   for (const key of listKeys("local")) {
     const match = matchKey("local", key);
     if (match?.spec.id !== "chat.sessions") continue;
@@ -1061,6 +1071,13 @@ async function migrateLocalTranscripts(store: TranscriptStore): Promise<void> {
         await store.putAgent({ slug: agent, order: parsed.sessions.map((s) => s.id), currentSessionId: parsed.currentSessionId });
       }
     }
+    imported.push(key);
+  }
+  return imported;
+}
+
+function removeMigratedKeys(keys: string[]): void {
+  for (const key of keys) {
     removeKey("local", key);
     for (const chunk of listKeys("local")) if (chunk.startsWith(agentChunkPrefix(key))) removeKey("local", chunk);
   }
@@ -1100,15 +1117,17 @@ async function bootTranscripts(open: typeof openTranscriptStore, isLate: () => b
   try {
     // Anything this page saved to localStorage before the store opened goes in first.
     flushChatPersist();
-    await migrateLocalTranscripts(store);
+    const migrated = await migrateLocalTranscripts(store);
     const { sessions: loaded, currentSessionId: savedCurrent } = await store.loadAgent(AGENT);
     if (isLate()) {
-      // The migration may have committed: that's fine, localStorage still holds nothing it
-      // removed that the store doesn't. This page stays on localStorage; the next boot loads.
+      // The migration may have copied chats into the store, but it removed nothing: this page
+      // stays on localStorage (and keeps writing there), and the next boot merges again.
       store.close();
       return "local";
     }
     const saved = sanitizePersisted({ version: 1, sessions: loaded, currentSessionId: savedCurrent });
+    // Committed to the store from here on (not late): only now may localStorage's copies go.
+    removeMigratedKeys(migrated);
     transcripts = store;
     if (saved) {
       const sessions = saved.sessions.filter((session) => !locallyDismissedIds.has(session.id));

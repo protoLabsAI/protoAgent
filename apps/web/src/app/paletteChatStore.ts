@@ -70,22 +70,28 @@ registerSaveRetry("palette", async () => {
 
 /** Move every palette / DM thread's messages out of localStorage into the store (a copy the
  *  store already has wins), then preload this window's threads. Awaited at boot. */
-export async function initPaletteThreads(store: TranscriptStore | null): Promise<void> {
+export async function initPaletteThreads(store: TranscriptStore | null, isLate: () => boolean = () => false): Promise<void> {
   if (!store) return;
   const existing = await store.loadThreads("protoagent.palette.chat");
+  const links: [string, string][] = [];
   for (const key of listKeys("local")) {
     if (matchKey("local", key)?.spec.id !== "palette.chat") continue;
     try {
       const p = JSON.parse(readKey("local", key) || "null") as Partial<PaletteThread> | null;
       if (!p || typeof p.contextId !== "string" || !Array.isArray(p.messages)) continue;
       if (!existing.has(key) && p.messages.length) await store.putThread(key, sanitize(p.messages));
-      writeKey("local", key, JSON.stringify({ contextId: p.contextId }));
+      links.push([key, JSON.stringify({ contextId: p.contextId })]);
     } catch {
       /* corrupt: leave it for loadPaletteThread to discard */
     }
   }
+  const loaded = await store.loadThreads(baseKey);
+  // Past the boot's bound the page mounted on localStorage and may have saved a thread there
+  // since: switch nothing and shrink nothing (the next boot migrates again).
+  if (isLate()) return;
+  for (const [key, link] of links) writeKey("local", key, link);
   preloaded.clear();
-  for (const [key, messages] of await store.loadThreads(baseKey)) preloaded.set(key, messages);
+  for (const [key, messages] of loaded) preloaded.set(key, messages);
   threads = store;
 }
 

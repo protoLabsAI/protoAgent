@@ -150,8 +150,13 @@ export function FleetTurnWatch() {
       }
       if (stopped) return;
       // A watched turn that VANISHED from storage was finalized by its (open) owner window.
+      // Ask the task how it ended (a failed turn must not toast as finished); if the agent
+      // can't be reached, it ended somehow, and "completed" is the old, best-effort answer.
       for (const old of prev) {
-        if (!candidates.some((c) => c.taskId === old.taskId)) void announce(old, "completed");
+        if (candidates.some((c) => c.taskId === old.taskId)) continue;
+        void taskState(old.slug, old.taskId)
+          .catch(() => "completed")
+          .then((state) => announce(old, isTaskTerminal(state) ? state : "completed"));
       }
       prev = candidates;
       for (const w of candidates) {

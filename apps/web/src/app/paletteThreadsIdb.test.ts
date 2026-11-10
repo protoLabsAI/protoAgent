@@ -107,6 +107,16 @@ describe("palette threads in IndexedDB", () => {
     expect((await chatStore.transcriptStoreIfOpen()!.loadThreads(KEY)).get(KEY)).toEqual(msgs(2));
   });
 
+  it("a palette boot past its bound shrinks nothing and stays on localStorage", async () => {
+    localStorage.setItem(KEY, JSON.stringify({ contextId: "c", messages: msgs(2) }));
+    const { palette, store } = await fresh();
+    await palette.initPaletteThreads(store, () => true);
+    expect(JSON.parse(localStorage.getItem(KEY)!).messages).toHaveLength(2); // still whole
+    palette.savePaletteThread({ contextId: "c", messages: msgs(3) }, true);
+    expect(JSON.parse(localStorage.getItem(KEY)!).messages).toHaveLength(3); // saved to localStorage
+    store.close();
+  });
+
   it("without the store, threads stay whole in localStorage as before", async () => {
     vi.resetModules();
     const palette = await import("./paletteChatStore");

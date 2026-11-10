@@ -389,7 +389,17 @@ export function openTranscriptStore(opts: { name?: string; timeoutMs?: number; f
 
 /** Clear every saved transcript, from a page that may not have the store open (AppCrash's
  *  reset, a backend switch before reload). Best-effort and bounded: resolves either way. */
+/** Settle within `ms` whatever `work` does: a wedged IndexedDB must never keep a reset or a
+ *  backend switch from reloading. */
+export function withinMs<T>(work: Promise<T>, ms: number): Promise<T | undefined> {
+  return Promise.race([work, new Promise<undefined>((resolve) => setTimeout(() => resolve(undefined), ms))]);
+}
+
 export async function clearTranscriptDatabase(opts: { factory?: IDBFactory; timeoutMs?: number } = {}): Promise<void> {
+  await withinMs(clearTranscriptDatabaseNow(opts), opts.timeoutMs ?? OPEN_TIMEOUT_MS);
+}
+
+async function clearTranscriptDatabaseNow(opts: { factory?: IDBFactory; timeoutMs?: number }): Promise<void> {
   const store = await openTranscriptStore(opts);
   if (!store) return;
   try {
