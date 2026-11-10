@@ -80,6 +80,7 @@ test("the settings dialog lists the domain groups (host, no scope toggle)", asyn
     "Theme",
     "Chat",
     "Keyboard",
+    "Storage",
     "Developer", // ADR 0068 — shown off prod (the mock serves channel "dev")
   ]);
   await section(page, "Behavior");

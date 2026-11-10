@@ -44,7 +44,9 @@ test("boots, navigates and reloads with localStorage filled to the real quota", 
     }
   });
   expect(rawWrite).toBe("QuotaExceededError");
-  await expect(page.getByText("Browser storage is full", { exact: true })).toBeVisible();
+  // Chats save to IndexedDB (epic #4981), so a full localStorage only stops layout and
+  // preferences saving: the banner says exactly that, not that messages aren't saved.
+  await expect(page.getByText("Some console settings aren't being saved in this browser", { exact: true })).toBeVisible();
 
   // Layout setters (useUI) and a chat turn all persist — every write fails, none throws.
   await page.getByTestId("settings-widget").click();
@@ -86,33 +88,27 @@ test("the simulateQuotaBytes dev flag fails writes without crashing", async ({ p
 });
 
 test("a render-time quota crash recovers through Free up space & reload", async ({ page }) => {
-  // A >64 KB saved transcript (the realistic hog) plus keys the recovery must NOT touch.
-  // While the transcript key exists, the e2e hook forces a render-time quota throw — so the
-  // crash reproduces on every load until the recovery actually clears it (a Reload loop). The
-  // hook is gated like the Developer panel; the mock's dev channel turns it on.
+  // A >64 KB localStorage transcript (the realistic hog) plus keys the recovery must NOT
+  // touch. While the hog exists, the e2e hook forces a render-time quota throw — so the crash
+  // reproduces on every load until the recovery actually clears it (a Reload loop). The hook
+  // is gated like the Developer panel; the mock's dev channel turns it on.
+  //
+  // The hog is a CORRUPT palette value, not a well-formed transcript: chat transcripts and
+  // palette/DM threads move to IndexedDB at boot (epic #4981 S2/S3), so a valid one is gone
+  // from localStorage before anything renders. A malformed leftover the migration can't read
+  // stays, is still a transcript-category key, and is exactly what Free up space must clear.
   await page.addInitScript(() => {
     if (!sessionStorage.getItem("e2e.seeded")) {
       sessionStorage.setItem("e2e.seeded", "1");
       const big = "lorem ipsum ".repeat(8000); // ~96 KB of characters
-      const blob = {
-        version: 1,
-        currentSessionId: "s-big",
-        sessions: [
-          {
-            id: "s-big",
-            title: "A very long chat",
-            createdAt: Date.now(),
-            updatedAt: Date.now(),
-            messages: [{ id: "a1", role: "assistant", content: big, status: "done" }],
-          },
-        ],
-      };
-      localStorage.setItem("protoagent.chat.sessions", JSON.stringify(blob));
-      localStorage.setItem("protoagent.palette.chat", JSON.stringify({ contextId: "c1", messages: [] }));
+      localStorage.setItem(
+        "protoagent.palette.chat",
+        JSON.stringify({ contextId: "c1", messages: big }), // `messages` isn't a list: unreadable
+      );
       localStorage.setItem("protoagent.chat.sessions.dismissed", JSON.stringify(["kept"]));
       localStorage.setItem("protoagent.keybindings", JSON.stringify({ state: { overrides: {} }, version: 0 }));
     }
-    if (localStorage.getItem("protoagent.chat.sessions")) {
+    if (localStorage.getItem("protoagent.palette.chat")?.includes("lorem ipsum")) {
       (window as unknown as { __protoagentForceQuotaCrash?: boolean }).__protoagentForceQuotaCrash = true;
     }
   });
@@ -128,20 +124,19 @@ test("a render-time quota crash recovers through Free up space & reload", async 
 
   await page.locator(".app-crash").getByRole("button", { name: /Free up space/ }).click();
 
-  // Reloaded into a working console.
+  // Reloaded into a working console (freeing the >64 KB hog reloads; it doesn't stop at the
+  // largest-keys list).
   await expect(page.getByPlaceholder(/Message protoAgent/i)).toBeVisible();
   await expect(page.locator(".app-crash")).toHaveCount(0);
   const kept = await page.evaluate(() => ({
     dismissed: localStorage.getItem("protoagent.chat.sessions.dismissed"),
     keybindings: localStorage.getItem("protoagent.keybindings"),
-    palette: localStorage.getItem("protoagent.palette.chat"),
+    palette: localStorage.getItem("protoagent.palette.chat") ?? "",
   }));
   expect(kept.dismissed).toBe(JSON.stringify(["kept"]));
   expect(kept.keybindings).not.toBeNull();
-  expect(kept.palette).toBeNull(); // palette threads are transcripts too
-  // The crashed page's unload flush did NOT write the old transcript back.
-  const transcript = await page.evaluate(() => localStorage.getItem("protoagent.chat.sessions") ?? "");
-  expect(transcript).not.toContain("lorem ipsum");
+  // The hog is gone, and the crashed page's unload flush did NOT write it back.
+  expect(kept.palette).not.toContain("lorem ipsum");
 });
 
 for (const channel of ["beta", "prod"]) {

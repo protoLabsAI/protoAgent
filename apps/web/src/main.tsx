@@ -26,6 +26,8 @@ import { watchThemeChanges } from "./lib/agentTheme";
 import { migrateLegacyDeviceToken, redeemPairingFromUrl } from "./lib/pairing";
 import { startDeviceTokenRotation } from "./lib/deviceRotation";
 import { installStorageEviction } from "./lib/storageEviction";
+import { initTranscriptBackend, transcriptStoreIfOpen } from "./chat/chat-store";
+import { initPaletteThreads } from "./app/paletteChatStore";
 
 // A phone paired before #4336 S3 holds its device token in the OPERATOR key. Move it to its
 // own key before anything sends a request. Copy-then-remove, so a failed write leaves the
@@ -54,10 +56,27 @@ if (!launcher) void activateSlugAgent(); // cold-agent resume + keep-warm touch 
 // render even if the claim rejects. With no `#pair=` fragment the promise resolves
 // synchronously-ish (no network call at all), so the normal boot is unaffected.
 let pairingError: string | null = null;
-void redeemPairingFromUrl()
-  .then((res) => {
-    if (res && !res.ok) pairingError = res.error;
+// Chat transcripts load from IndexedDB before anything mounts (epic #4981 S2): no surface may
+// read or change a chat that hasn't loaded. Bounded (TRANSCRIPT_BOOT_DEADLINE_MS); on any
+// failure the console keeps localStorage. Never rejects.
+const transcriptsReady = initTranscriptBackend()
+  .then(async (backend) => {
+    // Palette / DM threads too (S3), bounded on their own: a stall here must not hold the mount.
+    if (backend === "idb") {
+      let late = false;
+      await Promise.race([
+        initPaletteThreads(transcriptStoreIfOpen(), () => late),
+        new Promise((r) => setTimeout(() => r((late = true)), 3_000)),
+      ]);
+    }
   })
+  .catch(() => {});
+void Promise.all([
+  redeemPairingFromUrl().then((res) => {
+    if (res && !res.ok) pairingError = res.error;
+  }).catch(() => {}),
+  transcriptsReady,
+])
   .finally(() => {
 ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>

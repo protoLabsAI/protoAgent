@@ -35,7 +35,8 @@ import type { GatedSection } from "./sectionGate";
 //                  console only; Fleet renders in every sister agent's window too (it names
 //                  the hub's fleet from anywhere). Box-runtime + telemetry knobs are chips on
 //                  Fleet / Telemetry, not a separate empty panel.
-//   This console — device-local prefs (NOT agent config, no cascade): Theme · Chat · Keyboard.
+//   This console — device-local prefs (NOT agent config, no cascade): Theme · Chat · Keyboard ·
+//                  Storage.
 
 export type SectionMeta = GatedSection & {
   /** Nav label. Stable — the persisted `settingsSection` in uiStore keys off `id`, not this. */
@@ -124,6 +125,8 @@ export const CONSOLE_SECTIONS = [
   { id: "theme", label: "Theme", icon: "Palette" },
   { id: "chat", label: "Chat", icon: "MessageSquare" },
   { id: "keybindings", label: "Keyboard", icon: "Keyboard" },
+  // What this browser keeps for this console, and clearing it (docs/design/settings-storage.md).
+  { id: "storage", label: "Storage", icon: "HardDrive" },
 ] as const satisfies readonly SectionMeta[];
 
 // The Developer panel (ADR 0068) joins "This console" only off prod — a dev build, a

@@ -1,5 +1,7 @@
 import { expect, test, type Page } from "@playwright/test";
 
+import { persistedChat } from "./persistedChat";
+
 // The stalled-stream watchdog in ChatSessionSlot (#3972). A live turn's stream that stops
 // sending frames for WATCHDOG_IDLE_MS (45s) is checked against the durable task (GetTask);
 // the watchdog's onTerminal then settles the bubble from it. These hold a turn open on the
@@ -12,13 +14,10 @@ import { expect, test, type Page } from "@playwright/test";
 type Stored = { sessions: { messages: { role: string; status?: string; taskId?: string }[] }[] };
 
 async function lastAssistant(page: Page) {
-  return page.evaluate(() => {
-    const raw = window.localStorage.getItem("protoagent.chat.sessions");
-    const state = raw ? (JSON.parse(raw) as Stored) : null;
-    const messages = (state?.sessions ?? []).flatMap((s) => s.messages);
-    const last = [...messages].reverse().find((m) => m.role === "assistant");
-    return last ? { status: last.status, taskId: last.taskId } : null;
-  });
+  const state = (await persistedChat(page)) as Stored | null;
+  const messages = (state?.sessions ?? []).flatMap((s) => s.messages);
+  const last = [...messages].reverse().find((m) => m.role === "assistant");
+  return last ? { status: last.status, taskId: last.taskId } : null;
 }
 
 async function stallAndWait(page: Page, state: string) {

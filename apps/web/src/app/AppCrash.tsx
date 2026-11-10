@@ -15,6 +15,8 @@ import {
   subscribeDevHooks,
 } from "../lib/storage";
 import { blockPersistInThisPage, broadcastStorageReset } from "../lib/storageReset";
+// Import-light too: only the chunk helpers (epic #4981 S2: transcripts live in IndexedDB).
+import { clearTranscriptDatabase } from "../chat/transcriptStore";
 import "./app-crash.css";
 
 // Full-page fallback for the ROOT error boundary (#872) — a render throw that
@@ -158,7 +160,14 @@ export function AppCrash({
           variant="ghost"
           onClick={() => {
             resetChatData();
-            reload();
+            // Saved transcripts live in IndexedDB now: clear them too, then reload either way.
+            // Through the chat store when it's alive (it waits for queued saves first, so none
+            // lands after the clear); directly when it isn't.
+            const queued = (globalThis as { __protoagentClearSavedTranscripts?: () => Promise<void> })
+              .__protoagentClearSavedTranscripts;
+            void (queued ? queued() : clearTranscriptDatabase())
+              .catch(() => clearTranscriptDatabase())
+              .finally(reload);
           }}
         >
           <Trash2 size={14} /> Reset chat data &amp; reload
@@ -167,7 +176,7 @@ export function AppCrash({
       {freed !== null && <LargestKeys freed={freed} />}
       <p className="app-crash__hint">
         {quota
-          ? "Free up space clears this browser's saved chat transcripts (the server keeps the last 24 h). Layout, theme, auth token and dismissals are kept."
+          ? "Free up space clears chat history saved in this browser's local storage, which is what filled up. Chats in the browser's database aren't touched, and the server keeps the last 24 h. Layout, theme, auth token and dismissals are kept."
           : "Layout, theme and auth token are kept. If reloading loops back here, reset chat data — a corrupt saved session is the usual cause."}
       </p>
     </div>

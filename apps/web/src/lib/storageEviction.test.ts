@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { __resetStorageSeamForTests, readKey, storagePressure, writeKey } from "./storage";
+import { __resetStorageSeamForTests, matchKey, readKey, storagePressure, writeKey } from "./storage";
 import {
   LOCAL_BUDGET_BYTES,
   RECENT_WRITE_MS,
@@ -8,7 +8,11 @@ import {
   evict,
   evictionCandidates,
   installStorageEviction,
+  LAST_AUTO_CLEAR_KEY,
+  lastAutoClear,
   lastWrittenAt,
+  recordAutoClear,
+  reportEviction,
   setFleetSlugs,
   subscribeEvictions,
 } from "./storageEviction";
@@ -150,5 +154,50 @@ describe("when eviction runs", () => {
   it("never clears the key the failing write is saving", () => {
     seed({ "protoagent.chat.sessions:gone-4": chats(NOW - 2 * DAY) });
     expect(evict(1, { reason: "quota", now: NOW, exclude: "protoagent.chat.sessions:gone-4" }).evicted).toEqual([]);
+  });
+});
+
+describe("the last automatic clear (Settings → Storage §3.5)", () => {
+  it("has its own small key, registered as ephemeral and never evicted", () => {
+    expect(matchKey("local", LAST_AUTO_CLEAR_KEY)?.spec).toMatchObject({ category: "ephemeral", evictable: false });
+  });
+
+  it("is written by a localStorage eviction: when, how many chats, from whom, and whether they'd left the fleet", () => {
+    seed({
+      "protoagent.chat.sessions:gone-5": JSON.stringify({
+        version: 1,
+        sessions: [{ id: "a", messages: [], updatedAt: NOW - 30 * DAY }, { id: "b", messages: [], updatedAt: NOW - 30 * DAY }],
+      }),
+      "protoagent.chat.sessions:quiet-2": chats(NOW - 3 * DAY),
+    });
+    const report = evict(Number.MAX_SAFE_INTEGER, { reason: "budget", now: NOW });
+    const record = lastAutoClear()!;
+    expect(record.chats).toBe(3);
+    expect(record.bytes).toBe(report.freedBytes);
+    expect(record.agents).toEqual([
+      { slug: "gone-5", chats: 2, gone: true },
+      { slug: "quiet-2", chats: 1, gone: false },
+    ]);
+    expect(record.quick).toBe(0);
+    expect(Date.now() - record.at).toBeLessThan(60_000);
+  });
+
+  it("is written by an IndexedDB eviction too, counting quick-chat threads apart", () => {
+    reportEviction({
+      reason: "quota",
+      freedBytes: 900,
+      evicted: [
+        { key: "idb:gone-5/s1", slug: "gone-5", bytes: 500 },
+        { key: "idb:palette/protoagent.palette.chat:x", slug: "palette", bytes: 400 },
+      ],
+    });
+    expect(lastAutoClear()).toMatchObject({ chats: 2, bytes: 900, quick: 1, agents: [{ slug: "gone-5", chats: 1, gone: true }] });
+  });
+
+  it("nothing removed writes nothing; a corrupt record reads as none", () => {
+    recordAutoClear({ reason: "quota", evicted: [], freedBytes: 0 });
+    expect(lastAutoClear()).toBeNull();
+    local.setItem(LAST_AUTO_CLEAR_KEY, "{not json");
+    expect(lastAutoClear()).toBeNull();
   });
 });

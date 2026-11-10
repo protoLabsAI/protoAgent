@@ -1,6 +1,7 @@
 import { expect, test, type Page, type Request } from "@playwright/test";
 
 import { seedCurrentChat } from "./chat-helpers";
+import { persistedChat } from "./persistedChat";
 
 // #3956: a turn parked LIVE on an `ask_human` question, in the SAME browser profile.
 //
@@ -171,15 +172,11 @@ for (const mode of ["DROPNET", "ERRFRAME"]) {
     // Persisted as parked — the shape a reload reattaches through (the store writes on a
     // debounce, so poll until the settle lands).
     await expect
-      .poll(() =>
-        page.evaluate(
-          (id) =>
-            JSON.parse(localStorage.getItem("protoagent.chat.sessions") || "{}")
-              .sessions.find((s: { id: string }) => s.id === id)
-              .messages.filter((m: { role: string }) => m.role === "assistant")
-              .map((m: { status: string; paused?: boolean; taskId?: string }) => [m.status, m.paused, m.taskId]),
-          sessionId,
-        ),
+      .poll(async () =>
+        (await persistedChat(page))!
+          .sessions.find((s) => s.id === sessionId)!
+          .messages.filter((m) => m.role === "assistant")
+          .map((m) => [m.status, m.paused, m.taskId]),
       )
       .toEqual([["streaming", true, taskFor(sessionId)]]);
 
@@ -202,13 +199,11 @@ test("a plugin composer form on the stream does not leave the turn paused (#3956
   await expect(page.locator(`${SLOT} .chat-paused-indicator`)).toHaveCount(0);
   // The store persists on a debounce: poll until the settled bubble lands.
   await expect
-    .poll(() =>
-      page.evaluate(() =>
-        JSON.parse(localStorage.getItem("protoagent.chat.sessions") || "{}")
-          .sessions.flatMap((s: { messages: { role: string; status: string; paused?: boolean }[] }) => s.messages)
-          .filter((m: { role: string }) => m.role === "assistant")
-          .map((m: { status: string; paused?: boolean }) => [m.status, m.paused ?? null]),
-      ),
+    .poll(async () =>
+      (await persistedChat(page))!
+        .sessions.flatMap((s) => s.messages)
+        .filter((m) => m.role === "assistant")
+        .map((m) => [m.status, m.paused ?? null]),
     )
     .toEqual([["done", null]]);
 });

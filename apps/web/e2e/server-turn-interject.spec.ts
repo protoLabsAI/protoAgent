@@ -1,4 +1,5 @@
 import { expect, test, type Page, type Request, type Route } from "@playwright/test";
+import { persistedChat } from "./persistedChat";
 
 // An interjection typed into an ATTENDED server-fired turn (a background push-resume, a
 // scheduled fire, a watch reaction) must behave like the steer it is.
@@ -414,15 +415,9 @@ async function documentOrder(page: Page, texts: string[]): Promise<number[]> {
 
 /** User messages carrying the interjection in the persisted store (display state only). */
 async function persistedInterjections(page: Page, session: string): Promise<number> {
-  return page.evaluate(
-    ([id, text]) => {
-      const raw = window.localStorage.getItem("protoagent.chat.sessions");
-      const state = raw ? (JSON.parse(raw) as { sessions: { id: string; messages: { role: string; content: string }[] }[] }) : null;
-      const row = state?.sessions.find((s) => s.id === id);
-      return row ? row.messages.filter((m) => m.role === "user" && m.content === text).length : -1;
-    },
-    [session, INTERJECTION] as const,
-  );
+  const state = await persistedChat(page);
+  const row = state?.sessions.find((s) => s.id === session);
+  return row ? row.messages.filter((m) => m.role === "user" && m.content === INTERJECTION).length : -1;
 }
 
 test("the server's consumed marker settles a queued interjection at the boundary it was read", async ({ page }) => {

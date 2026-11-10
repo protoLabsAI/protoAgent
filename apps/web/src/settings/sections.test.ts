@@ -177,8 +177,8 @@ describe("the section table's two render-time quirks survive extraction", () => 
         .find((g) => g.label === "This console")
         ?.sections.map((s) => s.id);
     // Every gate off, off the host — the console group is untouched either way.
-    expect(consoleOf(false)).toEqual(["theme", "chat", "keybindings"]);
-    expect(consoleOf(true)).toEqual(["theme", "chat", "keybindings", "developer"]);
+    expect(consoleOf(false)).toEqual(["theme", "chat", "keybindings", "storage"]);
+    expect(consoleOf(true)).toEqual(["theme", "chat", "keybindings", "storage", "developer"]);
   });
 
   it("the resolvable set is exactly the flattened nav", () => {
@@ -215,6 +215,7 @@ describe("section ids and order are a contract", () => {
       "theme",
       "chat",
       "keybindings",
+      "storage",
       "developer",
     ]);
   });

@@ -1,5 +1,7 @@
 import { expect, test } from "@playwright/test";
 
+import { persistedChat } from "./persistedChat";
+
 test("sent images render bounded previews that survive reload", async ({ page }) => {
   await page.goto("/app/", { waitUntil: "load" });
   const composer = page.getByPlaceholder(/Message protoAgent/i);
@@ -24,8 +26,8 @@ test("sent images render bounded previews that survive reload", async ({ page })
   await expect(slot).not.toContainText("Attached: photo.png");
   expect(await thumbnail.locator("img").evaluate((img: HTMLImageElement) => [img.naturalWidth, img.naturalHeight]))
     .toEqual([320, 160]);
-  await expect.poll(() => page.evaluate(() => localStorage.getItem("protoagent.chat.sessions"))).toContain("data:image/jpeg;");
-  const saved = await page.evaluate(() => localStorage.getItem("protoagent.chat.sessions")!);
+  await expect.poll(async () => JSON.stringify(await persistedChat(page))).toContain("data:image/jpeg;");
+  const saved = JSON.stringify(await persistedChat(page));
   expect(saved).not.toContain(original);
   await page.reload();
   await expect(thumbnail).toBeVisible();

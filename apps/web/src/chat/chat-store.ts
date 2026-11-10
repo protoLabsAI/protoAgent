@@ -9,8 +9,18 @@ import {
   shownRuns,
   turnBubbleIndexes,
 } from "./turnText";
-import { listKeys, readKey, removeKey, writeKey } from "../lib/storage";
+import { entryBytes, isQuotaError, listKeys, matchKey, readKey, removeKey, storagePressure, writeKey } from "../lib/storage";
+import {
+  evict,
+  fleetSlugsSnapshot,
+  LOCAL_BUDGET_BYTES,
+  LOCAL_TARGET_BYTES,
+  reportEviction,
+  subscribeEvictions,
+  type EvictionReport,
+} from "../lib/storageEviction";
 import { agentChunkPrefix, expandSessions, orphanChunks, packSessions } from "./transcriptChunks";
+import { openTranscriptStore, withinMs, type SessionLike, type TranscriptStore } from "./transcriptStore";
 import { attachmentDisplay, validThumbnails } from "./imageThumbnails";
 import { persistBlocked } from "../lib/storageReset";
 
@@ -649,6 +659,514 @@ function collectChunks(present: Iterable<string>, referenced: ReadonlySet<string
   }
 }
 
+// ── IndexedDB backend (epic #4981 S2, chat/transcriptStore.ts) ───────────────
+// WebKit's localStorage stops checkpointing its write-ahead log after the first overwrite of a
+// value over 1K characters (#4974), and every transcript save was one. So transcripts live in
+// IndexedDB once `initTranscriptBackend` has opened it — awaited in main.tsx BEFORE React
+// mounts, so no surface can read or mutate a session that hasn't loaded yet (the boot gate that
+// replaces ADR 0114 D2's per-session load barrier). If IndexedDB is missing, refuses, or stalls,
+// the console keeps the localStorage path above for the page's lifetime.
+//
+// Writes are per session: only sessions whose object changed since the last save are written
+// (state updates are immutable, so a reference compare is exact), so one tab's save can't
+// clobber another tab's other chats. Saves are chained so they commit in order. Other tabs hear
+// about them on a BroadcastChannel and re-read just those sessions.
+
+/** This window's agent in the transcript store ("host" for the bare key). */
+const AGENT = STORAGE_KEY.includes(":") ? STORAGE_KEY.slice(STORAGE_KEY.indexOf(":") + 1) : "host";
+export const TRANSCRIPT_CHANNEL = "protoagent:transcripts";
+
+let transcripts: TranscriptStore | null = null;
+/** What the store holds for this agent, by the session OBJECT last written. */
+const persistedRefs = new Map<string, ChatSession>();
+let writeChain: Promise<void> = Promise.resolve();
+let transcriptChannel: BroadcastChannel | null = null;
+const transcriptListeners = new Set<(agent: string) => void>();
+/** The tab order + focused chat last saved to the store's `agents` record. */
+let lastAgentWritten = "";
+/** Deletes whose write failed: retried with the next save. */
+const pendingRemovals = new Set<string>();
+
+type TranscriptMessage = { agent: string; ids: string[]; deleted: string[]; evicted?: string[] };
+
+/** The session as it is saved: ephemeral overlays dropped, only bounded image previews kept. */
+function storable(session: ChatSession): ChatSession {
+  const messages = session.messages
+    .filter((m) => !m.ephemeral)
+    .map((m) => (m.attachments ? { ...m, attachments: validThumbnails(m.attachments) } : m));
+  return { ...session, messages };
+}
+
+function persistToTranscripts(current: ChatState) {
+  const store = transcripts!;
+  const sessions = current.sessions.slice(0, MAX_SESSIONS);
+  const changed = sessions.filter((session) => persistedRefs.get(session.id) !== session);
+  const live = new Set(sessions.map((session) => session.id));
+  const removed = [...new Set([...persistedRefs.keys(), ...pendingRemovals])].filter((id) => !live.has(id));
+  pendingRemovals.clear();
+  for (const session of changed) persistedRefs.set(session.id, session);
+  for (const id of removed) persistedRefs.delete(id);
+  const agentRecord = { slug: AGENT, order: sessions.map((s) => s.id), currentSessionId: current.currentSessionId };
+  const agentKey = JSON.stringify(agentRecord);
+  const agentChanged = agentKey !== lastAgentWritten;
+  lastAgentWritten = agentKey;
+  if (!changed.length && !removed.length && !agentChanged) return;
+  const payload = changed.map((session) => storable(session) as unknown as SessionLike);
+  writeChain = writeChain
+    .then(async () => {
+      await withQuotaEviction(() => store.putSessions(AGENT, payload));
+      await store.deleteSessions(AGENT, removed);
+      if (agentChanged) await store.putAgent(agentRecord);
+      transcriptChannel?.postMessage({ agent: AGENT, ids: changed.map((s) => s.id), deleted: removed } satisfies TranscriptMessage);
+    })
+    .catch((err) => {
+      // A failed save (quota: S4) must not stop later ones. The next change re-saves the
+      // session, so forget the reference that never made it.
+      for (const session of changed) if (persistedRefs.get(session.id) === session) persistedRefs.delete(session.id);
+      // …and redo the tab order and the deletes too: none of them is known to have landed.
+      if (agentChanged) lastAgentWritten = "";
+      for (const id of removed) pendingRemovals.add(id);
+      console.error("[chat] saving to IndexedDB failed", err);
+    });
+}
+
+/** The palette thread key prefix of this window (mirrors app/paletteChatStore.ts). */
+const PALETTE_KEY = AGENT === "host" ? "protoagent.palette.chat" : `protoagent.palette.chat:${AGENT}`;
+
+/** Run an IndexedDB write; on a quota error free space (ADR 0114 D5) one step at a time and
+ *  retry, until it fits or nothing is left to remove. Never removes this agent's open tabs or
+ *  a chat with a live turn. Says what it cleared (the storage toast). */
+export async function withQuotaEviction(
+  write: () => Promise<void>,
+  source: SaveSource | null = "chats",
+): Promise<void> {
+  const failing = (on: boolean) => {
+    if (source) setSaveFailing(source, on);
+  };
+  try {
+    await write();
+    failing(false);
+    return;
+  } catch (err) {
+    if (!isQuotaError(err) || !transcripts) throw err;
+  }
+  const protect = protectedChatIds();
+  const all: { slug: string; id: string; bytes: number }[] = [];
+  // One toast for the whole squeeze, and other tabs told what went (they may hold it open).
+  const announce = () => {
+    if (!all.length) return;
+    reportEviction({
+      reason: evictionReason,
+      freedBytes: all.reduce((n, r) => n + r.bytes, 0),
+      evicted: all.map((r) => ({ key: `idb:${r.slug}/${r.id}`, slug: r.slug, bytes: r.bytes })),
+    });
+    const bySlug = new Map<string, string[]>();
+    for (const r of all) if (r.slug !== "palette") bySlug.set(r.slug, [...(bySlug.get(r.slug) ?? []), r.id]);
+    for (const [agent, ids] of bySlug) {
+      transcriptChannel?.postMessage({ agent, ids: [], deleted: [], evicted: ids } satisfies TranscriptMessage);
+    }
+  };
+  try {
+    for (let step = 0; step < 50; step++) {
+      const removed = await transcripts.evictStep({ keepSlug: AGENT, fleet: fleetSlugsSnapshot(), protect, threadPrefix: PALETTE_KEY });
+      if (!removed.length) break;
+      all.push(...removed);
+      try {
+        await write();
+        failing(false);
+        return;
+      } catch (err) {
+        if (!isQuotaError(err)) throw err;
+      }
+    }
+    try {
+      await write(); // nothing left to free: let the quota error surface to the caller's catch
+      failing(false);
+    } catch (err) {
+      if (isQuotaError(err)) failing(true);
+      throw err;
+    }
+  } finally {
+    // This agent's evicted chats aren't open here (they were never `protect`ed): drop them from
+    // this tab too, or its next save would write them straight back. A local drop, not a delete.
+    for (const r of all) {
+      if (r.slug !== AGENT) continue;
+      persistedRefs.delete(r.id);
+      if (state.sessions.some((s) => s.id === r.id) && state.sessions.length > 1) removeLocalSession(r.id);
+    }
+    announce();
+  }
+}
+
+// ── Settings → Storage (docs/design/settings-storage.md) ─────────────────────
+// What the page needs from the chat store: whether IndexedDB saves are failing (the D6
+// `failing` state; the localStorage latch is storage.ts's), which of this agent's chats are in
+// use, clearing one agent's saved chats from this browser, and Free up space.
+
+/** Chats of this agent that clearing never removes: open tabs, the focused chat, live replies. */
+export function protectedChatIds(): Set<string> {
+  return new Set([...state.activeSessions, ...streamingIds(state), ...(state.currentSessionId ? [state.currentSessionId] : [])]);
+}
+
+/** This window's agent as the transcript store names it ("host" for this instance). */
+export function transcriptAgent(): string {
+  return AGENT;
+}
+
+/** Which saves are failing for lack of space. Chats and quick chats are tracked apart, so a quick
+ *  chat's save succeeding never hides that chat saves still fail (and the other way round). */
+export type SaveSource = "chats" | "palette";
+const failingSources = new Set<SaveSource>();
+let saveFailing = false;
+const saveFailingListeners = new Set<() => void>();
+/** How a source re-runs its latest failed save (the palette registers one): Free up space
+ *  calls it once it has made room, so that source's failing state can clear without waiting
+ *  for the operator's next message. */
+const saveRetries = new Map<SaveSource, () => Promise<void>>();
+export function registerSaveRetry(source: SaveSource, retry: () => Promise<void>): void {
+  saveRetries.set(source, retry);
+}
+/** Who an IndexedDB eviction is reported as: Free up space runs the same routine by hand. */
+let evictionReason: EvictionReport["reason"] = "quota";
+
+function setSaveFailing(source: SaveSource, on: boolean) {
+  if (on) failingSources.add(source);
+  else failingSources.delete(source);
+  const next = failingSources.size > 0;
+  if (saveFailing === next) return;
+  saveFailing = next;
+  for (const fn of saveFailingListeners) {
+    try {
+      fn();
+    } catch {
+      /* a listener never breaks a save */
+    }
+  }
+}
+
+/** True while an IndexedDB save is failing for lack of space, even after clearing old chats. */
+export function transcriptSaveFailing(): boolean {
+  return saveFailing;
+}
+
+export function subscribeTranscriptSaveFailing(fn: () => void): () => void {
+  saveFailingListeners.add(fn);
+  return () => saveFailingListeners.delete(fn);
+}
+
+/** Clear one agent's saved chats from THIS browser (never the server's copy). For this window's
+ *  agent, chats open in a tab, the focused chat and a live reply stay, as with automatic
+ *  clearing. Other tabs of that agent drop their copies of the cleared chats unless they have
+ *  them open. Not an automatic clear: nothing is reported as an eviction. Returns what went. */
+export async function clearSavedChats(slug: string): Promise<{ chats: number; bytes: number }> {
+  const protect = slug === AGENT ? protectedChatIds() : new Set<string>();
+  if (transcripts) {
+    await writeChain; // let a queued save land first, so it can't write a cleared chat back
+    const { sessions } = await transcripts.usage();
+    const gone = sessions.filter((s) => s.slug === slug && !protect.has(s.id));
+    const ids = gone.map((s) => s.id);
+    await transcripts.deleteSessions(slug, ids);
+    if (slug === AGENT) dropLocalCopies(ids);
+    if (ids.length) transcriptChannel?.postMessage({ agent: slug, ids: [], deleted: [], evicted: ids } satisfies TranscriptMessage);
+    return { chats: ids.length, bytes: gone.reduce((n, s) => n + s.bytes, 0) };
+  }
+  // localStorage: the agent's key and its chunk keys.
+  const key = slug === "host" ? "protoagent.chat.sessions" : `protoagent.chat.sessions:${slug}`;
+  const chunkKeys = listKeys("local").filter((k) => k.startsWith(agentChunkPrefix(key)));
+  if (slug !== AGENT) {
+    const raw = readKey("local", key);
+    let chats = 0;
+    try {
+      const parsed = JSON.parse(raw ?? "null") as { sessions?: unknown[] } | null;
+      chats = Array.isArray(parsed?.sessions) ? parsed.sessions.length : 0;
+    } catch {
+      chats = 0;
+    }
+    const bytes = chunkKeys.reduce((n, k) => n + entryBytes(k, readKey("local", k) ?? ""), raw === null ? 0 : entryBytes(key, raw));
+    removeKey("local", key);
+    for (const k of chunkKeys) removeKey("local", k);
+    return { chats, bytes };
+  }
+  let onDisk: ChatSession[] = [];
+  try {
+    onDisk = parsePersisted(readKey("local", STORAGE_KEY))?.sessions ?? [];
+  } catch {
+    onDisk = [];
+  }
+  const gone = onDisk.filter((s) => !protect.has(s.id));
+  // The key goes first, so the save below can't merge the cleared chats back from it.
+  removeKey("local", STORAGE_KEY);
+  for (const k of chunkKeys) removeKey("local", k);
+  dropLocalCopies(gone.map((s) => s.id));
+  persistDirty = true;
+  flushChatPersist();
+  return { chats: gone.length, bytes: gone.reduce((n, s) => n + 2 * JSON.stringify(s).length, 0) };
+}
+
+/** This tab's copies of cleared chats go (a local drop, not a retirement: the server's 24 h
+ *  history can still bring one back). */
+function dropLocalCopies(ids: string[]) {
+  const inUse = protectedChatIds();
+  for (const id of ids) {
+    persistedRefs.delete(id);
+    if (!inUse.has(id) && state.sessions.some((s) => s.id === id) && state.sessions.length > 1) removeLocalSession(id);
+  }
+}
+
+/** Free up space (Settings → Storage, in the `failing` state): the automatic routine started by
+ *  hand. It clears old chats in the D5 order until this agent's unsaved chats fit, reports it as
+ *  an automatic clear (reason `free`, so the "Last automatic clear" record is written), and says
+ *  what it removed and whether saving works again. */
+export async function freeUpSpace(): Promise<{ chats: number; bytes: number; saving: boolean }> {
+  let chats = 0;
+  let bytes = 0;
+  const off = subscribeEvictions((report) => {
+    if (report.reason !== "free") return;
+    chats += report.evicted.reduce((n, e) => n + (e.chats ?? 1), 0);
+    bytes += report.freedBytes || report.evicted.reduce((n, e) => n + e.bytes, 0);
+  });
+  evictionReason = "free";
+  try {
+    if (storagePressure().state === "failing") {
+      evict(LOCAL_BUDGET_BYTES - LOCAL_TARGET_BYTES, { reason: "free" });
+      persistDirty = true;
+      flushChatPersist();
+    }
+    if (transcripts) {
+      // The chats whose save failed are written again; a quota error on the way clears old
+      // chats one step at a time (withQuotaEviction) until they fit.
+      const before = writeChain;
+      persistToTranscripts(state);
+      const attempted = writeChain !== before;
+      await writeChain;
+      if (!attempted && saveFailing) {
+        // Nothing of this agent's is waiting (a quick chat's save failed): clear one step. A
+        // probe, not a save: it tracks no failing state, so only the next REAL save that fits
+        // can say saving works again.
+        let first = true;
+        await withQuotaEviction(async () => {
+          if (!first) return;
+          first = false;
+          throw new DOMException("The quota has been exceeded.", "QuotaExceededError");
+        }, null).catch(() => undefined);
+      }
+      // Re-run the other sources' failed saves now there may be room (a quick chat's).
+      for (const source of [...failingSources]) {
+        if (source === "chats") continue;
+        await saveRetries.get(source)?.().catch(() => undefined);
+      }
+    }
+  } finally {
+    evictionReason = "quota";
+    off();
+  }
+  return { chats, bytes, saving: !saveFailing && storagePressure().state !== "failing" };
+}
+
+/** The open transcript store, or `null` on the localStorage path (palette threads, S3). */
+export function transcriptStoreIfOpen(): TranscriptStore | null {
+  return transcripts;
+}
+
+/** Resolves when every save queued so far has committed (tests; a crash reset before reload). */
+export function transcriptWritesSettled(): Promise<void> {
+  return writeChain;
+}
+
+/** Hear that some agent's saved transcripts changed in another tab or window (FleetTurnWatch). */
+export function subscribeTranscriptChanges(fn: (agent: string) => void): () => void {
+  transcriptListeners.add(fn);
+  return () => transcriptListeners.delete(fn);
+}
+
+/** Turns still streaming in OTHER agents' saved chats, or `null` on the localStorage path. */
+export async function liveTurnsElsewhere(exceptAgent: string) {
+  return transcripts ? transcripts.liveTurns(exceptAgent) : null;
+}
+
+/** Clear every saved transcript (AppCrash's reset, a backend switch). Waits for any queued save,
+ *  then clears on the store's own connection, so nothing queued can land after the clear. */
+export async function clearSavedTranscripts(): Promise<void> {
+  // Bounded: a wedged IndexedDB (a save that never settles) must not keep the reload waiting.
+  await withinMs(clearSavedTranscriptsNow(), 3_000);
+}
+
+async function clearSavedTranscriptsNow(): Promise<void> {
+  await writeChain;
+  const store = transcripts ?? (await openTranscriptStore());
+  if (!store) return;
+  await store.clear();
+  persistedRefs.clear();
+  if (!transcripts) store.close();
+}
+
+// AppCrash (the root boundary's fallback) must not import this module, which may be what threw:
+// it reaches the queue-aware clear through this global, or clears directly when it's absent.
+try {
+  (globalThis as { __protoagentClearSavedTranscripts?: () => Promise<void> }).__protoagentClearSavedTranscripts =
+    clearSavedTranscripts;
+} catch {
+  /* non-browser context */
+}
+
+async function onTranscriptMessage(message: TranscriptMessage) {
+  if (!message || typeof message.agent !== "string") return;
+  for (const fn of transcriptListeners) {
+    try {
+      fn(message.agent);
+    } catch {
+      /* a listener never breaks sync */
+    }
+  }
+  if (message.agent !== AGENT || !transcripts) return;
+  // Another tab evicted some of this agent's chats under quota pressure. One this tab has open
+  // (or streaming) stays, and is saved again on its next change; any other copy goes quietly:
+  // a local drop, not a retirement, so the server's history can still bring it back.
+  if (Array.isArray(message.evicted) && message.evicted.length) {
+    const inUse = new Set([...state.activeSessions, ...streamingIds(state), ...(state.currentSessionId ? [state.currentSessionId] : [])]);
+    for (const id of message.evicted) {
+      persistedRefs.delete(id);
+      if (!inUse.has(id) && state.sessions.some((s) => s.id === id) && state.sessions.length > 1) removeLocalSession(id);
+    }
+  }
+  if (!Array.isArray(message.ids) || !message.ids.length) return;
+  const loaded = await transcripts.loadSessions(AGENT, message.ids);
+  const incoming = sanitizePersisted({ version: 1, sessions: loaded, currentSessionId: null });
+  if (!incoming) return;
+  mergeFromStorage(incoming);
+  // What we adopted is exactly what the store holds: never echo it back as a change.
+  for (const session of state.sessions) {
+    if (incoming.sessions.some((s) => s.id === session.id) && session === incoming.sessions.find((s) => s.id === session.id)) {
+      persistedRefs.set(session.id, session);
+    }
+  }
+}
+
+/** Every agent's transcript keys in localStorage, imported into the store, newer copy winning,
+ *  then removed (with their chunk keys). Dismissal sets stay where they are. */
+/** Import every localStorage transcript into the store. Returns the keys it imported; the
+ *  caller removes them only once the page has committed to the store. A boot past its deadline
+ *  mounts on localStorage and writes to those keys, so removing them then would delete chats
+ *  the store never got (the next boot imports them again; the newer copy wins). */
+async function migrateLocalTranscripts(store: TranscriptStore): Promise<string[]> {
+  const imported: string[] = [];
+  for (const key of listKeys("local")) {
+    const match = matchKey("local", key);
+    if (match?.spec.id !== "chat.sessions") continue;
+    const agent = match.slug ?? "host";
+    let parsed: PersistedChatState | null = null;
+    try {
+      const raw = readKey("local", key);
+      parsed = raw ? sanitizePersisted(expandSessions(key, JSON.parse(raw), readChunkOf)) : null;
+    } catch {
+      parsed = null; // corrupt: nothing to keep
+    }
+    if (parsed?.sessions.length) {
+      const existing = new Map((await store.loadSessions(agent, parsed.sessions.map((s) => s.id))).map((s) => [s.id, s]));
+      const newer = parsed.sessions.filter((s) => !existing.has(s.id) || existing.get(s.id)!.updatedAt < s.updatedAt);
+      await store.putSessions(agent, newer.map((s) => storable(s) as unknown as SessionLike));
+      // Keep the tab order and focus a localStorage copy had, unless the store already has its own.
+      const known = await store.loadAgent(agent);
+      if (!known.currentSessionId) {
+        await store.putAgent({ slug: agent, order: parsed.sessions.map((s) => s.id), currentSessionId: parsed.currentSessionId });
+      }
+    }
+    imported.push(key);
+  }
+  return imported;
+}
+
+function removeMigratedKeys(keys: string[]): void {
+  for (const key of keys) {
+    removeKey("local", key);
+    for (const chunk of listKeys("local")) if (chunk.startsWith(agentChunkPrefix(key))) removeKey("local", chunk);
+  }
+}
+
+function readChunkOf(key: string): ChatMessage[] | null {
+  return readChunk(key);
+}
+
+/** Open the transcript store, migrate localStorage into it, and load this agent's chats.
+ *  Awaited before React mounts. Returns which backend the page uses. Never throws. */
+export const TRANSCRIPT_BOOT_DEADLINE_MS = 5_000;
+
+export async function initTranscriptBackend(
+  opts: { open?: typeof openTranscriptStore; deadlineMs?: number } = {},
+): Promise<"idb" | "local"> {
+  if (persistBlocked()) return "local";
+  // Past the deadline the app mounts on localStorage, and a late load must NOT then swap the
+  // state under it: every step below checks `late` before it changes anything.
+  let late = false;
+  const deadline = new Promise<"local">((resolve) =>
+    setTimeout(() => {
+      late = true;
+      resolve("local");
+    }, opts.deadlineMs ?? TRANSCRIPT_BOOT_DEADLINE_MS),
+  );
+  return Promise.race([deadline, bootTranscripts(opts.open ?? openTranscriptStore, () => late)]);
+}
+
+async function bootTranscripts(open: typeof openTranscriptStore, isLate: () => boolean): Promise<"idb" | "local"> {
+  const store = await open();
+  if (!store) return "local";
+  if (isLate()) {
+    store.close();
+    return "local";
+  }
+  try {
+    // Anything this page saved to localStorage before the store opened goes in first.
+    flushChatPersist();
+    const migrated = await migrateLocalTranscripts(store);
+    const { sessions: loaded, currentSessionId: savedCurrent } = await store.loadAgent(AGENT);
+    if (isLate()) {
+      // The migration may have copied chats into the store, but it removed nothing: this page
+      // stays on localStorage (and keeps writing there), and the next boot merges again.
+      store.close();
+      return "local";
+    }
+    const saved = sanitizePersisted({ version: 1, sessions: loaded, currentSessionId: savedCurrent });
+    // Committed to the store from here on (not late): only now may localStorage's copies go.
+    removeMigratedKeys(migrated);
+    transcripts = store;
+    if (saved) {
+      const sessions = saved.sessions.filter((session) => !locallyDismissedIds.has(session.id));
+      if (sessions.length) {
+        const currentSessionId = sessions.some((s) => s.id === saved.currentSessionId) ? saved.currentSessionId : sessions[0].id;
+        const adopted = { ...saved, sessions, currentSessionId };
+        state = { ...state, ...adopted, ...bootLiveTurns(adopted) };
+      }
+    }
+    persistedRefs.clear();
+    for (const session of state.sessions) if (loaded.some((l) => l.id === session.id)) persistedRefs.set(session.id, session);
+    lastAgentWritten = JSON.stringify({ slug: AGENT, order: state.sessions.slice(0, MAX_SESSIONS).map((s) => s.id), currentSessionId: state.currentSessionId });
+    try {
+      transcriptChannel = new BroadcastChannel(TRANSCRIPT_CHANNEL);
+      transcriptChannel.onmessage = (e) => void onTranscriptMessage(e.data as TranscriptMessage);
+    } catch {
+      transcriptChannel = null; // no BroadcastChannel: other tabs catch up on reload
+    }
+    listeners.forEach((listener) => listener());
+    return "idb";
+  } catch (err) {
+    console.error("[chat] IndexedDB transcripts unavailable; staying on localStorage", err);
+    transcripts = null;
+    store.close();
+    return "local";
+  }
+}
+
+/** Test seam: drop the IndexedDB backend (and its sync) without touching saved data. */
+export function __resetTranscriptBackendForTests(): void {
+  transcripts?.close();
+  transcripts = null;
+  persistedRefs.clear();
+  transcriptChannel?.close();
+  transcriptChannel = null;
+  writeChain = Promise.resolve();
+  lastAgentWritten = "";
+}
+
 function loadPersisted(): PersistedChatState {
   try {
     const state = parsePersisted(readKey("local", STORAGE_KEY));
@@ -679,6 +1197,10 @@ function loadPersisted(): PersistedChatState {
 // `storage-reset` broadcast (another tab), this store stops writing — see lib/storageReset.ts.
 function persist(state: ChatState) {
   if (persistBlocked()) return;
+  if (transcripts) {
+    persistToTranscripts(state);
+    return;
+  }
   try {
     // Read-merge-write: a concurrent tab sharing this key may have written sessions we
     // don't have (or newer copies) since our last read. Fold them in so our write never
@@ -771,9 +1293,14 @@ function schedulePersist() {
   }, PERSIST_DEBOUNCE_MS);
 }
 
-/** Write any pending (debounced) state to localStorage NOW. No-op when clean —
- * so a tenant-clear + reload (lib/tenant.ts) is never undone by an unload
- * flush that had nothing pending. Exported for tests + the unload hooks. */
+/** Write any pending (debounced) state NOW. No-op when clean, so a tenant-clear + reload
+ * (lib/tenant.ts) is never undone by an unload flush that had nothing pending. Exported for
+ * tests + the unload hooks.
+ *
+ * On localStorage this write completes before it returns. On IndexedDB (epic #4981) it only
+ * STARTS the save: a transaction begun in pagehide usually commits, but nothing guarantees it
+ * before teardown. What's at risk is the last ≤2s of a streaming reply (the server's copy of
+ * the turn redraws it on reattach, ADR 0104) or a change made in the instant before closing. */
 export function flushChatPersist() {
   if (persistTimer !== null) {
     clearTimeout(persistTimer);

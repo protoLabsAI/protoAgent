@@ -25,6 +25,7 @@ import {
   registerEvictionHook,
   removeKey,
   usageBytes,
+  writeKey,
 } from "./storage";
 
 /** UTF-16 bytes of localStorage the console aims to stay under (WebKit/Chromium allow ~5 MB). */
@@ -34,8 +35,67 @@ export const LOCAL_TARGET_BYTES = Math.floor(LOCAL_BUDGET_BYTES * 0.85);
 /** A transcript written this recently is treated as live: an open (maybe frozen) window owns it. */
 export const RECENT_WRITE_MS = 24 * 60 * 60 * 1000;
 
-export type Evicted = { key: string; slug: string; bytes: number };
-export type EvictionReport = { reason: "quota" | "budget"; evicted: Evicted[]; freedBytes: number };
+/** `chats`: how many saved chats went with the key (absent = one). */
+export type Evicted = { key: string; slug: string; bytes: number; chats?: number };
+/** `free`: the operator pressed Free up space (Settings → Storage), which runs this same
+ *  routine by hand. It still counts as an automatic clear, but the page says what it did. */
+export type EvictionReport = { reason: "quota" | "budget" | "free"; evicted: Evicted[]; freedBytes: number };
+
+// ── the last automatic clear (docs/design/settings-storage.md §3.5) ────────────────────────
+
+export const LAST_AUTO_CLEAR_KEY = "protoagent.storage.lastAutoClear";
+
+/** The last time the console cleared old chats on its own. `agents[].gone`: the agent had left
+ *  the fleet at the time. `quick`: palette / DM threads cleared. */
+export type AutoClear = {
+  at: number;
+  chats: number;
+  bytes: number;
+  agents: { slug: string; chats: number; gone: boolean }[];
+  quick: number;
+};
+
+const isQuickChat = (key: string) =>
+  key.startsWith("idb:palette/") || matchKey("local", key)?.spec.id === "palette.chat";
+
+/** Remember what an automatic clear removed (never called for a clear the operator asked for). */
+export function recordAutoClear(report: EvictionReport, now: number = Date.now()): void {
+  if (!report.evicted.length) return;
+  const agents = new Map<string, number>();
+  let quick = 0;
+  for (const e of report.evicted) {
+    if (isQuickChat(e.key)) quick += 1;
+    else agents.set(e.slug, (agents.get(e.slug) ?? 0) + (e.chats ?? 1));
+  }
+  const bytes = report.freedBytes || report.evicted.reduce((n, e) => n + e.bytes, 0);
+  const record: AutoClear = {
+    at: now,
+    chats: [...agents.values()].reduce((n, c) => n + c, 0) + quick,
+    bytes,
+    agents: [...agents].filter(([, chats]) => chats > 0).map(([slug, chats]) => ({ slug, chats, gone: fleetSlugs !== null && !fleetSlugs.has(slug) })),
+    quick,
+  };
+  writeKey("local", LAST_AUTO_CLEAR_KEY, JSON.stringify(record));
+}
+
+/** The last automatic clear, or `null` when there is none (or it can't be read). */
+export function lastAutoClear(): AutoClear | null {
+  try {
+    const parsed = JSON.parse(readKey("local", LAST_AUTO_CLEAR_KEY) ?? "null") as Partial<AutoClear> | null;
+    if (!parsed || typeof parsed.at !== "number" || typeof parsed.chats !== "number") return null;
+    return {
+      at: parsed.at,
+      chats: parsed.chats,
+      bytes: typeof parsed.bytes === "number" ? parsed.bytes : 0,
+      agents: Array.isArray(parsed.agents)
+        ? parsed.agents.filter((a) => a && typeof a.slug === "string" && typeof a.chats === "number").map((a) => ({ slug: a.slug, chats: a.chats, gone: a.gone === true }))
+        : [],
+      quick: typeof parsed.quick === "number" ? parsed.quick : 0,
+    };
+  } catch {
+    return null;
+  }
+}
 
 let fleetSlugs: ReadonlySet<string> | null = null;
 
@@ -43,6 +103,11 @@ let fleetSlugs: ReadonlySet<string> | null = null;
  *  host entry). `null` = unknown: then no agent counts as "no longer in the fleet". */
 export function setFleetSlugs(slugs: Iterable<string> | null): void {
   fleetSlugs = slugs ? new Set(slugs) : null;
+}
+
+/** The fleet as last set, or `null` when unknown (IndexedDB eviction, chat-store). */
+export function fleetSlugsSnapshot(): ReadonlySet<string> | null {
+  return fleetSlugs;
 }
 
 /** When the transcript key was last written, from its own content; `null` = unknown. A chat
@@ -60,6 +125,16 @@ export function lastWrittenAt(value: string | null): number | null {
     return newest;
   } catch {
     return null;
+  }
+}
+
+/** How many chats a transcript key holds (a palette / DM thread is one). */
+function sessionCount(value: string | null): number {
+  try {
+    const parsed = JSON.parse(value ?? "null") as { sessions?: unknown[] } | null;
+    return Array.isArray(parsed?.sessions) ? parsed.sessions.length : 1;
+  } catch {
+    return 1;
   }
 }
 
@@ -89,7 +164,7 @@ export function evictionCandidates(opts: { now?: number; exclude?: string } = {}
       // Only an ORPHAN chunk (its main key is gone) stands alone; nothing reads it.
       const main = key.slice(0, key.indexOf(".chunk."));
       if (present.has(main) || main === opts.exclude) continue;
-      out.push({ key, slug, bytes: entryBytes(key, readKey("local", key) ?? ""), tier: 1, writtenAt: 0, also: [] });
+      out.push({ key, slug, bytes: entryBytes(key, readKey("local", key) ?? ""), chats: 0, tier: 1, writtenAt: 0, also: [] });
       continue;
     }
     if (slug === "host" || slug === here) continue;
@@ -102,7 +177,7 @@ export function evictionCandidates(opts: { now?: number; exclude?: string } = {}
     if (inFleet && written === null) continue;
     const also = chunksOf.get(key) ?? [];
     const bytes = also.reduce((n, chunk) => n + entryBytes(chunk, readKey("local", chunk) ?? ""), entryBytes(key, value ?? ""));
-    out.push({ key, slug, bytes, tier: inFleet ? 2 : 1, writtenAt: written ?? 0, also });
+    out.push({ key, slug, bytes, chats: sessionCount(value), tier: inFleet ? 2 : 1, writtenAt: written ?? 0, also });
   }
   return out.sort((a, b) => a.tier - b.tier || a.writtenAt - b.writtenAt || b.bytes - a.bytes);
 }
@@ -115,6 +190,20 @@ export function subscribeEvictions(fn: (report: EvictionReport) => void): () => 
   return () => listeners.delete(fn);
 }
 
+/** Tell listeners about an eviction made elsewhere (the IndexedDB store). */
+export function reportEviction(report: EvictionReport): void {
+  if (!report.evicted.length) return;
+  recordAutoClear(report);
+  console.info("[storage] evicted old transcripts", { reason: report.reason, keys: report.evicted.map((e) => e.key) });
+  for (const fn of listeners) {
+    try {
+      fn(report);
+    } catch {
+      // never break the write that triggered it
+    }
+  }
+}
+
 /** Remove candidates in order until `needBytes` are freed (or none are left). */
 export function evict(needBytes: number, opts: { reason: EvictionReport["reason"]; now?: number; exclude?: string }): EvictionReport {
   const evicted: Evicted[] = [];
@@ -123,11 +212,12 @@ export function evict(needBytes: number, opts: { reason: EvictionReport["reason"
     if (freedBytes >= needBytes) break;
     removeKey("local", candidate.key);
     for (const chunk of candidate.also) removeKey("local", chunk);
-    evicted.push({ key: candidate.key, slug: candidate.slug, bytes: candidate.bytes });
+    evicted.push({ key: candidate.key, slug: candidate.slug, bytes: candidate.bytes, chats: candidate.chats });
     freedBytes += candidate.bytes;
   }
   const report: EvictionReport = { reason: opts.reason, evicted, freedBytes };
   if (evicted.length) {
+    recordAutoClear(report);
     console.info("[storage] evicted old transcripts", { reason: opts.reason, freedBytes, keys: evicted.map((e) => e.key) });
     for (const fn of listeners) {
       try {

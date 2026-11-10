@@ -1,5 +1,6 @@
 import { expect, test } from "@playwright/test";
 import type { Page } from "@playwright/test";
+import { persistedChat } from "./persistedChat";
 
 // Contextual quick-settings + the topbar Settings overlay (ADR 0048): a gear icon
 // opens a dialog editing fields via the same /api/settings path, and the central
@@ -64,7 +65,7 @@ test("the chat composer model picker overrides the model per-tab (no global save
   // The override lands on the chat session (persisted by a trailing timer) — once it is in
   // the store, any settings write the pick made has gone out too.
   await expect
-    .poll(() => page.evaluate(() => window.localStorage.getItem("protoagent.chat.sessions") ?? ""))
+    .poll(async () => JSON.stringify((await persistedChat(page)) ?? ""))
     .toContain("protolabs/fast");
   expect(settingsWrite).toBe(false);
 });

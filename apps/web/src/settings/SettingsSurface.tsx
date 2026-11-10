@@ -28,6 +28,7 @@ import { SnapshotPanel } from "./SnapshotPanel";
 import { FleetSurface } from "./FleetSurface";
 import { KeybindingsPanel } from "./KeybindingsPanel";
 import { ChatSettingsPanel } from "./ChatSettingsPanel";
+import { StoragePanel } from "./StoragePanel";
 import { DeveloperPanel } from "./DeveloperPanel";
 import { developerPanelVisible, useDeveloperChannel } from "../flags/flags";
 import { OverviewPanel } from "./OverviewPanel";
@@ -134,6 +135,7 @@ const RENDERERS: Record<SettingsSectionId, () => ReactNode> = {
   theme: () => <ThemeSurface />,
   chat: () => <ChatSettingsPanel />,
   keybindings: () => <KeybindingsPanel />,
+  storage: () => <StoragePanel />,
   developer: () => <DeveloperPanel />,
 };
 
@@ -214,7 +216,9 @@ export function SettingsSurface({ initialSection }: { initialSection?: string } 
   return (
     <div className="settings-shell">
       <SideNav responsive={isMobile} ariaLabel="Settings sections" groups={navGroups} active={active.id} onSelect={(id) => setSection(id)} />
-      <div className="settings-content">
+      {/* Keyed by section: switching sections remounts the content, so one section's unsaved
+          edits can never carry into the next (they shared a React position before). */}
+      <div className="settings-content" key={active.id}>
         {RENDERERS[active.id]()}
       </div>
     </div>

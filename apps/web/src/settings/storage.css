@@ -1,0 +1,141 @@
+/* Settings ▸ Storage (docs/design/settings-storage.md §8): the row layout and its phone-width
+   wrap. Spacing uses the DS space tokens only; colours are DS text tokens. */
+.storage-panel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--pl-space-6);
+  font-size: var(--pl-font-size-sm);
+  max-width: 44rem;
+}
+.storage-section,
+.storage-status {
+  display: flex;
+  flex-direction: column;
+  gap: var(--pl-space-2);
+  min-width: 0;
+}
+.storage-h {
+  margin: 0;
+  font-size: var(--pl-font-size-sm);
+  font-weight: var(--pl-font-weight-medium);
+  color: var(--pl-color-fg);
+}
+.storage-h:focus { outline: none; }
+.storage-h:focus-visible { outline: 2px solid var(--pl-color-accent); outline-offset: 2px; }
+.storage-muted {
+  margin: 0;
+  color: var(--pl-color-fg-muted);
+}
+/* The status sentence: sans, base size, medium. Never the Callout title, which the DS styles as
+   a lowercase mono kicker. */
+.storage-status__head {
+  margin: 0;
+  display: flex;
+  align-items: center;
+  gap: var(--pl-space-2);
+  font-size: var(--pl-font-size-base);
+  font-weight: var(--pl-font-weight-medium);
+  color: var(--pl-color-fg);
+}
+.storage-gone {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--pl-space-2) var(--pl-space-4);
+}
+
+/* Rows: name and badges, then the count and Clear. They wrap at phone width, the count and
+   Clear dropping to a second line aligned right. */
+.storage-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  border: 1px solid var(--pl-color-border);
+  border-radius: var(--pl-radius-md);
+}
+.storage-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--pl-space-1) var(--pl-space-3);
+  padding: var(--pl-space-2) var(--pl-space-3);
+  min-height: var(--pl-space-8);
+}
+.storage-row + .storage-row { border-top: 1px solid var(--pl-color-border); }
+.storage-row__name {
+  flex: 1 1 12rem;
+  min-width: 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--pl-space-1_5);
+  overflow-wrap: anywhere;
+}
+.storage-row__name small {
+  color: var(--pl-color-fg-muted);
+  font-size: var(--pl-font-size-xs);
+}
+.storage-row__end {
+  display: flex;
+  align-items: center;
+  gap: var(--pl-space-2);
+  margin-left: auto;
+}
+.storage-row__meta {
+  color: var(--pl-color-fg-muted);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.storage-row__note {
+  flex-basis: 100%;
+  color: var(--pl-color-fg-muted);
+  font-size: var(--pl-font-size-xs);
+}
+@media (pointer: coarse) {
+  .storage-row { min-height: 44px; }
+}
+
+/* Keep data sits in a Chat-style setting row, its button at the row's end. */
+.storage-panel .storage-keep.setting-row { padding: 0; border-bottom: 0; }
+.storage-keep > .pl-btn,
+.storage-keep > .storage-on { justify-self: end; }
+.storage-on {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--pl-space-1_5);
+}
+
+.storage-details summary {
+  cursor: pointer;
+  color: var(--pl-color-fg-muted);
+}
+.storage-details ul {
+  margin: var(--pl-space-2) 0 0;
+  padding-left: var(--pl-space-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--pl-space-1);
+  color: var(--pl-color-fg-muted);
+  font-size: var(--pl-font-size-xs);
+}
+.storage-details code {
+  font-family: var(--pl-font-mono);
+  overflow-wrap: anywhere;
+}
+
+.storage-dialog p { margin: 0 0 var(--pl-space-2); }
+.storage-dialog ol { margin: 0 0 var(--pl-space-2); padding-left: var(--pl-space-5); }
+
+/* Screen-reader-only live region: clipped, never display:none (that silences it). */
+.storage-panel .storage-sr {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}

@@ -18,10 +18,10 @@ it("keeps unsaved-cache warning visible until a write actually frees space", () 
     local.setItem("protoagent.ui", "x".repeat(100));
     local.setItem("plugin.hog", "x".repeat(370));
     act(() => { writeKey("local", "protoagent.chat.sessions", "x".repeat(50)); });
-    expect(container.textContent).toContain("Browser storage is full");
-    expect(container.textContent).toContain("may not survive a reload");
+    expect(container.textContent).toContain("New messages aren't being saved in this browser");
+    expect(container.textContent).toContain("Settings → Storage");
     act(() => { writeKey("local", "protoagent.ui", "y".repeat(100)); });
-    expect(container.textContent).toContain("Browser storage is full");
+    expect(container.textContent).toContain("New messages aren't being saved in this browser");
     act(() => { writeKey("local", "protoagent.ui", "{}"); });
     expect(container.textContent).toBe("");
   } finally {
