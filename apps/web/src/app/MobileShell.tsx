@@ -120,16 +120,31 @@ export function MobileShell({
   const blank = unusedSession(chatState);
   const newChatIsNoop = blank != null && blank.id === chatState.currentSessionId;
 
+  // Callback identity is not navigation: App and the chat store can rerender while
+  // a collection owns the current history entry. Keep the listener fresh without
+  // rebuilding the shell's history entry on those renders.
+  const backAction = useRef(onBack);
+  useEffect(() => { backAction.current = onBack; }, [onBack]);
+  const wasShowingBack = useRef(showBack);
+
   // Android + installed-PWA hardware back should pop the pushed view rather than exit the
   // app. Push a history entry whenever we leave the chat root and pop it on back, so the
   // system gesture and the header chevron run the same dismissal path.
   useEffect(() => {
-    if (!showBack) return;
-    window.history.pushState({ mobilePush: true }, "");
-    const onPop = () => onBack();
+    if (!showBack) {
+      wasShowingBack.current = false;
+      return;
+    }
+    // Reuse restored entries on reload/remount (including collection-owned entries),
+    // and during StrictMode effect replay. A new departure from chat still pushes.
+    if (!wasShowingBack.current || !window.history.state?.mobilePush) {
+      window.history.pushState({ mobilePush: true }, "");
+    }
+    wasShowingBack.current = true;
+    const onPop = () => backAction.current();
     window.addEventListener("popstate", onPop);
     return () => window.removeEventListener("popstate", onPop);
-  }, [showBack, onBack]);
+  }, [showBack]);
 
   return (
     <div className="mshell">
