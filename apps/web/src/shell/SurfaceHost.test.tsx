@@ -169,6 +169,17 @@ describe("SurfaceHost rail frame", () => {
     expect(container.querySelector('[data-testid="content-work"]')).not.toBeNull();
     expect(button("Expand")).toBeUndefined();
   });
+
+  it("does not offer a view menu on pinned Chat", () => {
+    act(() => root.render(<SurfaceHost frame="rail" view={{ id: "chat", title: "Chat" }}>{content("chat")}</SurfaceHost>));
+    const body = container.querySelector('[data-testid="content-chat"]')!.parentElement!;
+    expect(body.tabIndex).toBe(-1);
+    expect(container.querySelector('[role="region"]')).toBeNull();
+    const event = new MouseEvent("contextmenu", { bubbles: true, cancelable: true });
+    act(() => body.dispatchEvent(event));
+    expect(event.defaultPrevented).toBe(false);
+    expect(useContextMenuStore.getState().open).toBe(false);
+  });
 });
 
 describe("SurfaceHost modal frame", () => {
