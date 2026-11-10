@@ -1,39 +1,20 @@
-import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from "react";
 import { Button, Count, Empty } from "@protolabsai/ui/primitives";
 import { SideNav } from "@protolabsai/ui/navigation";
 import { useUI } from "../state/uiStore";
 import type { SurfaceState } from "../shell/surfaceState";
 import { useWorkItems, type WorkItem, type WorkItems } from "./useWorkItems";
 import { WorkOverview, workSections } from "./WorkOverview";
+import { sections, subscribe, getSnapshot } from "./sectionRegistry";
+import "./sections/decisions";
+import "./sections/directives";
 import "./work-view.css";
 
-export type WorkSectionContext = {
-  sources: WorkItems;
-  state: SurfaceState;
-  onOpen: (item: WorkItem) => void;
-  onBack: () => void;
-};
-type WorkSection = { label: string; render: (context: WorkSectionContext) => ReactNode };
-const sections = new Map<string, WorkSection>();
-const listeners = new Set<() => void>();
-let version = 0;
-/** Register a section's list/detail renderer; the returned disposer supports plugin teardown. */
-export function registerWorkSection(id: string, section: WorkSection): () => void {
-  sections.set(id, section);
-  version++;
-  listeners.forEach((notify) => notify());
-  return () => {
-    if (sections.get(id) !== section) return;
-    sections.delete(id);
-    version++;
-    listeners.forEach((notify) => notify());
-  };
-}
+export { registerWorkSection, type WorkSectionContext } from "./sectionRegistry";
 const emptyState: SurfaceState = {};
-const subscribe = (notify: () => void) => { listeners.add(notify); return () => { listeners.delete(notify); }; };
 
 export function WorkView({ frame = "rail", sessionId }: { frame?: "rail" | "modal"; sessionId?: string }) {
-  useSyncExternalStore(subscribe, () => version);
+  useSyncExternalStore(subscribe, getSnapshot);
   const state = useUI((s) => s.surfaceStates.work ?? emptyState);
   const section = state.section ?? "overview";
   const thisChat = typeof state.filters?.thisChat === "boolean" ? state.filters.thisChat : frame === "rail";
@@ -69,7 +50,7 @@ export function WorkView({ frame = "rail", sessionId }: { frame?: "rail" | "moda
   }, [label, count, needs, loading]);
   const onBack = () => update({ itemId: undefined });
   const onOpen = (item: WorkItem) => update({ itemId: `${item.kind}:${item.id}`, scrollTop: listRef.current?.scrollTop ?? state.scrollTop });
-  const context = { sources, state, onOpen, onBack };
+  const context = { sources, state, onOpen, onBack, sessionId };
   const selected = items.find((item) => `${item.kind}:${item.id}` === state.itemId || item.id === state.itemId);
   const selectedSection = selected && ({ decision: "decisions", goal: "goals", watch: "watches", task: "tasks", schedule: "schedules", background: "background", activity: "activity", directive: "directives" } as const)[selected.kind];
   const detailRenderer = sections.get(selectedSection ?? section);

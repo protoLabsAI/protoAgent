@@ -37,6 +37,7 @@ import type {
   WatchState,
 } from "../lib/types";
 import {
+  decisionMeta,
   fromActivity,
   fromBackgroundJob,
   fromDecision,
@@ -124,7 +125,9 @@ function mapDecision(row: DecisionRow): WorkItem {
     id: row.id,
     status: fromDecision(row.state),
     title: row.question,
-    meta: row.agent || "",
+    // The Overview "Needs you" pin shows the §2.4 meta — "Asked {time}" while pending — not the
+    // raw agent name; the agent (field 5) rides the per-section row in the agent-wide filter.
+    meta: decisionMeta(row, false),
     sessionId: row.session_id || undefined,
     raw: row,
   };
