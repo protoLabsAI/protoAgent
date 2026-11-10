@@ -42,6 +42,7 @@ import {
   noteTurnFinished,
   noteTurnStarted,
   useServerTurn,
+  useServerTurnsEnded,
 } from "./server-turn-store";
 import { BackgroundWorkStrip } from "./BackgroundWorkStrip";
 import { DirectiveStrip, DirectiveWorkRequest } from "./DirectiveStrip";
@@ -336,6 +337,9 @@ export function ChatSessionSlot({
   // running into THIS session — the browser can't stream it, so show a labelled typing
   // indicator. Suppressed while this tab is itself streaming (its own spinner covers it).
   const serverTurnLabel = useServerTurn(sessionId);
+  // Re-render when a NAMED server turn ends here: with two overlapping, the label above does
+  // not move when the first finishes, and `reattachKey` below would never be re-evaluated.
+  useServerTurnsEnded(sessionId);
   // A turn is in flight that the composer can steer or stop — EITHER this browser
   // streaming its own turn (Enter queues a steer) OR an attended server turn
   // (Enter queues an interjection through its durable control task). Named for the

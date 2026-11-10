@@ -129,7 +129,7 @@ export function ServerTurnWatch() {
       const taskId = String(data.task_id ?? "");
       // Disarm the indicator FIRST: its per-session count is what tells us whether this
       // finish was the last server turn in flight, which decides the un-addressed case.
-      noteTurnFinished(session);
+      noteTurnFinished(session, taskId);
       if (taskId) {
         chatStore.clearServerTurnControl(session, taskId);
         return;

@@ -169,9 +169,32 @@ export function noteTurnStarted(sessionId: string, label: string) {
   emit();
 }
 
-/** A `turn.finished` for `sessionId` — disarm once the last in-flight turn settles. */
-export function noteTurnFinished(sessionId: string) {
+// Server turns this console has been told ENDED, by task id, per session. The ref-count above
+// answers "is ANY server turn in flight here" — which is not "is THIS turn still running" once
+// two overlap. A watch reaction that closes a task queues the self-improvement review into the
+// same chat before the reaction's own turn has ended: when the reaction then finishes, the count
+// only drops to 1, so nothing said its preview was over. A watch turn has no `chat.resumed` to
+// settle it (the reattach does), and the review's settled answer then became the last bubble —
+// the reaction's preview spun for good. Naming the ended task lets the reattach pick it up.
+// Bounded per session: only a preview still on screen is ever looked up.
+const ENDED_TASKS_KEPT = 32;
+const ended = new Map<string, string[]>();
+const endedEpochs = new Map<string, number>();
+
+/** Whether this console saw the `turn.finished` of `taskId` in `sessionId`. False for a turn an
+ *  older server finished without naming its task — those keep the count-only behaviour. */
+export function serverTurnEnded(sessionId: string, taskId: string): boolean {
+  return !!taskId && (ended.get(sessionId)?.includes(taskId) ?? false);
+}
+
+/** A `turn.finished` for `sessionId` — disarm once the last in-flight turn settles. `taskId`
+ *  (when the server named it) records WHICH turn ended, for {@link serverTurnEnded}. */
+export function noteTurnFinished(sessionId: string, taskId = "") {
   if (!sessionId) return;
+  if (taskId && !serverTurnEnded(sessionId, taskId)) {
+    ended.set(sessionId, [...(ended.get(sessionId) ?? []), taskId].slice(-ENDED_TASKS_KEPT));
+    endedEpochs.set(sessionId, (endedEpochs.get(sessionId) ?? 0) + 1);
+  }
   const next = (counts.get(sessionId) ?? 0) - 1;
   if (next <= 0) {
     counts.delete(sessionId);
@@ -187,6 +210,8 @@ export function resetServerTurns() {
   counts.clear();
   labels.clear();
   origins.clear();
+  ended.clear();
+  endedEpochs.clear();
   emit();
 }
 
@@ -222,6 +247,17 @@ export function useServerTurn(sessionId: string | null | undefined): string | nu
     () => "",
   );
   return label || null;
+}
+
+/** Subscribe a component to "a named server turn ended in this session". The label alone does
+ *  not move when one of two overlapping turns finishes, so a slot keyed only on it never
+ *  re-evaluates what it should reattach to. Returns a counter that only ever grows. */
+export function useServerTurnsEnded(sessionId: string | null | undefined): number {
+  return useSyncExternalStore(
+    subscribe,
+    () => (sessionId ? (endedEpochs.get(sessionId) ?? 0) : 0),
+    () => 0,
+  );
 }
 
 /** The set of sessions with a server turn in flight — for decorating ALL tabs at once (the
