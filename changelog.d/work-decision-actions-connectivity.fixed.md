@@ -1,0 +1,1 @@
+- **Work decision actions and connectivity.** Connect decision source-chat and reply actions to chat navigation and composer focus, reflect live connectivity, and share answer arbitration and terminal records with the decision store while preserving Work selection and layout.

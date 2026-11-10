@@ -1,6 +1,15 @@
 import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from "react";
 import { Button, Empty } from "@protolabsai/ui/primitives";
 import { SideNav, Tabs } from "@protolabsai/ui/navigation";
+import { useToast } from "@protolabsai/ui/overlays";
+import { api } from "../lib/api";
+import { sessionFromDurableTurns, SESSION_TURN_LIMIT } from "../chat/sessionHydration";
+import { openView } from "../app/palette/nav";
+import { chatStore } from "../chat/chat-store";
+import { useKbIntents } from "../keybindings/intents";
+import { isConnected, onConnectionChange } from "../lib/events";
+import { useDecisions } from "../decisions/useDecisions";
+import { decisionMeta, fromDecision } from "./tone";
 import { useUI } from "../state/uiStore";
 import type { SurfaceState } from "../shell/surfaceState";
 import { useWorkItems, type WorkItem, type WorkItems } from "./useWorkItems";
@@ -22,9 +31,24 @@ export function WorkView({ frame = "rail", sessionId }: { frame?: "rail" | "moda
   const state = useUI((s) => s.surfaceStates.work ?? emptyState);
   const section = state.section ?? "overview";
   const thisChat = typeof state.filters?.thisChat === "boolean" ? state.filters.thisChat : frame === "rail";
-  const allSources = useWorkItems({ sessionId, thisChatOnly: false });
+  const toast = useToast();
+  const agentOnline = useSyncExternalStore(onConnectionChange, isConnected);
+  const decisions = useDecisions();
+  const allSources = { ...useWorkItems({ sessionId, thisChatOnly: false }) };
+  const selectedDecisionId = state.itemId?.startsWith("decision:") ? state.itemId.slice(9) : undefined;
+  const retained = selectedDecisionId ? decisions.records[selectedDecisionId] : undefined;
+  if (retained && !allSources.decisions.items.some((item) => item.id === retained.id)) {
+    // Keep the selected terminal record visible after the pending source refreshes.
+    allSources.decisions = { ...allSources.decisions, items: [...allSources.decisions.items, {
+      kind: "decision", id: retained.id, raw: retained, title: retained.question,
+      status: fromDecision(retained.state), meta: decisionMeta(retained, !thisChat), sessionId: retained.session_id,
+    }] };
+  }
   const sources = Object.fromEntries(Object.entries(allSources).map(([key, source]) => [key, {
-    ...source, items: source.items.filter((item) => !thisChat || !sessionId || !item.sessionId || item.sessionId === sessionId),
+    ...source, items: source.items.map((item) => {
+      const record = item.kind === "decision" ? decisions.records[item.id] : undefined;
+      return record ? { ...item, raw: record, status: fromDecision(record.state), meta: decisionMeta(record, !thisChat) } : item;
+    }).filter((item) => !thisChat || !sessionId || !item.sessionId || item.sessionId === sessionId),
   }])) as WorkItems;
   const items = Object.values(sources).flatMap((source) => source.items);
   const selected = items.find((item) => `${item.kind}:${item.id}` === state.itemId || item.id === state.itemId);
@@ -84,7 +108,30 @@ export function WorkView({ frame = "rail", sessionId }: { frame?: "rail" | "moda
     update({ itemId: undefined });
   };
   const onOpen = (item: WorkItem) => update({ itemId: `${item.kind}:${item.id}`, scrollTop: listRef.current?.scrollTop ?? state.scrollTop });
-  const context = { sources, state, onOpen, onBack, sessionId };
+  const openSourceChat = async (sourceSessionId: string, reply = false) => {
+    try {
+      if (!chatStore.getSnapshot().sessions.some((session) => session.id === sourceSessionId)) {
+        const { turns, live_task_id } = await api.chatSessionTurns(sourceSessionId, SESSION_TURN_LIMIT);
+        const session = sessionFromDurableTurns({ session_id: sourceSessionId,
+          last_updated: turns[0]?.last_updated ?? null, turn_count: turns.length }, turns, live_task_id);
+        if (!session) throw new Error("The source chat is unavailable.");
+        chatStore.restoreDismissedSession(sourceSessionId);
+        const token = chatStore.captureHydrationEligibility(sourceSessionId);
+        if (token) chatStore.hydrateSessions([session], [token]);
+      }
+      if (!chatStore.getSnapshot().sessions.some((session) => session.id === sourceSessionId)) {
+        throw new Error("The source chat is unavailable.");
+      }
+    } catch {
+      toast({ tone: "error", title: "Couldn't open source chat", message: "Try again when the agent is connected." });
+      return;
+    }
+    chatStore.switchSession(sourceSessionId);
+    useUI.getState().closeSurfaceModal();
+    openView("chat");
+    if (reply) useKbIntents.getState().focusComposer();
+  };
+  const context = { sources, state, onOpen, onBack, sessionId, decisionActions: { agentOnline, openSourceChat, answerDecision: decisions.answer } };
   const selectedSection = selected && ({ decision: "decisions", goal: "goals", watch: "watches", task: "tasks", schedule: "schedules", background: "background", activity: "activity", directive: "directives" } as const)[selected.kind];
   const detailRenderer = sections.get(selectedSection ?? section);
   const selectSection = (id: string) => update({ section: id, itemId: undefined, scrollTop: 0 });

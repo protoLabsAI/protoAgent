@@ -3,6 +3,11 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ToastProvider } from "@protolabsai/ui/overlays";
 
+import { api } from "../../lib/api";
+import { chatStore } from "../../chat/chat-store";
+import { useKbIntents } from "../../keybindings/intents";
+import { decisionsApi } from "../../lib/api/decisions";
+import { decisionsStoreForTest } from "../../decisions/useDecisions";
 import { WorkView } from "../WorkView";
 import { decisionMeta, fromDecision, fromDirective } from "../tone";
 import { useUI } from "../../state/uiStore";
@@ -29,6 +34,17 @@ vi.mock("../../chat/useDirectives", () => ({
   useDirectives: () => ({ ...dir.snapshot, refresh: dir.refresh, revoke: dir.revoke }),
 }));
 vi.mock("../../lib/useIsMobile", () => ({ useIsMobile: () => false }));
+
+const connection = vi.hoisted(() => ({ online: true, listeners: new Set<(online: boolean) => void>() }));
+vi.mock("../../lib/events", () => ({
+  isConnected: () => connection.online,
+  onConnectionChange: (listener: (online: boolean) => void) => {
+    connection.listeners.add(listener);
+    listener(connection.online);
+    return () => connection.listeners.delete(listener);
+  },
+  onTopic: () => () => {},
+}));
 
 const kinds: WorkSourceKind[] = ["decisions", "goals", "watches", "tasks", "schedules", "background", "activity", "directives"];
 function emptySources(): WorkItems {
@@ -100,7 +116,13 @@ const rowFor = (text: string) => rows().find((r) => r.textContent?.includes(text
 const buttons = (text: string) => [...document.querySelectorAll<HTMLButtonElement>("button")].filter((b) => b.textContent?.trim() === text);
 
 beforeEach(() => {
+  vi.restoreAllMocks();
   vi.clearAllMocks();
+  connection.online = true;
+  vi.spyOn(decisionsApi, "listDecisions").mockImplementation(async () => {
+    const decisions = data.sources.decisions.items.map((item) => item.raw as DecisionRow).filter((row) => row.state === "pending");
+    return { decisions, pending: decisions.length };
+  });
   vi.stubGlobal("ResizeObserver", class {
     observe() {}
     unobserve() {}
@@ -215,6 +237,110 @@ describe("Decisions section", () => {
     await render("rail");
     expect(host.querySelector(".work-view__detail")?.textContent).toContain("Should we ship?");
     for (const id of ["d-id-777", "thr-999", "int-888"]) expect(host.textContent).not.toContain(id);
+  });
+});
+
+describe("Work decision actions", () => {
+  it.each([false, true])("opens a different source session, reply=%s, retaining Work state", async (reply) => {
+    const source = chatStore.createSession({ incognito: true });
+    const current = chatStore.createSession();
+    chatStore.switchSession(current.id);
+    data.sources.decisions.items = [decisionItem(decisionRow("navigate", { session_id: source.id }))];
+    const saved = { section: "decisions", itemId: "decision:navigate", filters: { thisChat: false }, scrollTop: 81 };
+    workState(saved);
+    useUI.getState().openSurfaceModal("work");
+    useUI.setState({ surface: "knowledge", mobileActive: "work", leftCollapsed: true });
+    const nonce = useKbIntents.getState().composerFocusNonce;
+    await render("modal", current.id);
+    const card = host.querySelector(".work-decision-detail")!;
+    const action = reply ? buttons("Reply in chat instead")[0] : card.querySelector<HTMLAnchorElement>("a")!;
+    await act(async () => action.click());
+    expect(chatStore.getSnapshot().currentSessionId).toBe(source.id);
+    expect(useUI.getState()).toMatchObject({ surface: "chat", mobileActive: "chat", leftCollapsed: false, surfaceModal: null });
+    expect(useKbIntents.getState().composerFocusNonce).toBe(nonce + Number(reply));
+    expect(useUI.getState().surfaceStates.work).toEqual(saved);
+    await render("rail", source.id);
+    expect(host.querySelector(".work-decision-detail")).toBe(card);
+    expect(host.querySelector(".work-view__list")?.scrollTop).toBe(81);
+    expect(useUI.getState().surfaceStates.work.filters).toEqual({ thisChat: false });
+  });
+
+  it.each([false, true])("loads a durable source before navigation, failure=%s", async (fails) => {
+    const sourceId = fails ? "missing-source" : "durable-source";
+    const current = chatStore.createSession();
+    const load = vi.spyOn(api, "chatSessionTurns");
+    if (fails) load.mockRejectedValue(new Error("offline"));
+    else load.mockResolvedValue({ turns: [{
+      task_id: "durable-task", state: "TASK_STATE_COMPLETED", last_updated: "2026-11-08T14:45:00Z", text: "Demo response",
+      artifacts: [{ parts: [{ text: "Demo response" }] }],
+      history: [{ role: "ROLE_USER", parts: [{ text: "Demo question" }] }],
+    }] });
+    data.sources.decisions.items = [decisionItem(decisionRow(sourceId, { session_id: sourceId }))];
+    workState({ section: "decisions", itemId: `decision:${sourceId}`, filters: { thisChat: false } });
+    await render("modal", current.id);
+    const nonce = useKbIntents.getState().composerFocusNonce;
+    await act(async () => buttons("Reply in chat instead")[0].click());
+    expect(load).toHaveBeenCalledExactlyOnceWith(sourceId, 50);
+    expect(chatStore.getSnapshot().currentSessionId).toBe(fails ? current.id : sourceId);
+    expect(useKbIntents.getState().composerFocusNonce).toBe(nonce + Number(!fails));
+    if (fails) expect(document.body.textContent).toContain("Couldn't open source chat");
+    else expect(chatStore.getSnapshot().sessions.find((session) => session.id === sourceId)?.messages.some((message) => message.content === "Demo response")).toBe(true);
+  });
+
+  it("tracks disconnect and reconnect without remounting the detail", async () => {
+    data.sources.decisions.items = [decisionItem(decisionRow("presence"))];
+    workState({ section: "decisions", itemId: "decision:presence", filters: { thisChat: true } });
+    await render();
+    const detail = host.querySelector(".work-decision-detail");
+    expect(detail?.textContent).not.toContain("offline");
+    await act(async () => {
+      connection.online = false;
+      connection.listeners.forEach((listener) => listener(false));
+    });
+    expect(detail?.textContent).toContain("offline");
+    await act(async () => {
+      connection.online = true;
+      connection.listeners.forEach((listener) => listener(true));
+    });
+    expect(host.querySelector(".work-decision-detail")).toBe(detail);
+    expect(detail?.textContent).not.toContain("offline");
+  });
+
+  it.each(["answered", "expired", "withdrawn", "cancelled"] as const)("shares %s conflicts and retains the selected terminal record", async (state) => {
+    const id = `conflict-${state}`;
+    const pending = decisionRow(id);
+    const terminal = decisionRow(id, { state, answer_label: state === "answered" ? "Stop" : null });
+    data.sources.decisions.items = [decisionItem(pending)];
+    const answer = vi.spyOn(decisionsApi, "answerDecision").mockImplementation(async () => {
+      data.sources.decisions.items = [];
+      return { answered_elsewhere: true, decision: terminal };
+    });
+    workState({ section: "decisions", itemId: `decision:${id}`, filters: { thisChat: true } });
+    await render();
+    await act(async () => buttons("Go ahead")[0].click());
+    expect(answer).toHaveBeenCalledExactlyOnceWith(id, { option_id: "go", surface: "console" });
+    expect(decisionsStoreForTest.getSnapshot().records[id]).toEqual(terminal);
+    const detail = host.querySelector(".work-decision-detail")!;
+    expect(detail.querySelector('[role="group"][aria-label="Answer"]')).toBeNull();
+    expect(detail.textContent?.includes("Already answered")).toBe(state === "answered");
+    expect(detail.contains(document.activeElement)).toBe(true);
+    expect(useUI.getState().surfaceStates.work.itemId).toBe(`decision:${id}`);
+  });
+
+  it("updates an idle detail from the same shared cache when another surface answers", async () => {
+    const pending = decisionRow("cache-update");
+    data.sources.decisions.items = [decisionItem(pending)];
+    workState({ section: "decisions", itemId: "decision:cache-update", filters: { thisChat: true } });
+    await render();
+    const terminal = { ...pending, state: "withdrawn" as const, withdraw_reason: "No longer required" };
+    vi.spyOn(decisionsApi, "answerDecision").mockImplementation(async () => {
+      data.sources.decisions.items = [];
+      return { answered_elsewhere: true, decision: terminal };
+    });
+    await act(async () => { await decisionsStoreForTest.answer(pending.id, "go"); });
+    const detail = host.querySelector(".work-decision-detail")!;
+    expect(detail.textContent).toContain("No longer required");
+    expect(detail.querySelector('[role="group"][aria-label="Answer"]')).toBeNull();
   });
 });
 
