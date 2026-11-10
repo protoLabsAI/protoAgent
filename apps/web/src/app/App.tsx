@@ -1451,10 +1451,10 @@ function WorkspaceApp({ runtime }: { runtime: RuntimeStatus | null }) {
                 {/* The palette's only visible way in (ADR 0057) — an icon pill, AFTER Settings:
                     that one keeps the far-left slot operators already reach for by position. */}
                 <PaletteButton />
-                <DecisionsWidget />
+                <DecisionsWidget onOpen={() => useUI.getState().openSurfaceModal("work", { section: "decisions" })} />
                 {/* Widgets (bottom-left): background subagents (ADR 0050 Phase 3) and the
                     unified feed (#3029) — one pill merging the former inbox + read-only
-                    Activity feeds. Each is a pill with a hover info popover + a click dialog. */}
+                    Activity feeds. These pills open their own sections in the Work modal. */}
                 <BackgroundJobs />
                 <ActivityWidget />
                 {/* Plugin-contributed utility widgets (`views[].utility`): a pill that opens

@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { Activity } from "lucide-react";
 import { Count } from "@protolabsai/ui/primitives";
 
+import { useUI } from "../state/uiStore";
 import { onServerEvent } from "../lib/events";
 import { isPendingNowInboxPage } from "../lib/queries";
 import { UtilityWidget } from "../app/UtilityWidget";
@@ -11,8 +12,8 @@ import { ActivitySurface } from "./ActivitySurface";
  * The unified feed widget (#3029) — one utility-bar pill that replaced the two former
  * Activity and Inbox pills. Its unread badge tracks BOTH bus events: `inbox.item`
  * (pending inbound stimuli, ADR 0003) and `activity.message` (completed agent turns,
- * ADR 0022) — incrementing only while the dialog is closed. Click opens the merged
- * feed (pending items on top, completed provenance timeline below) and clears the badge.
+ * ADR 0022) — incrementing only while the Work Activity section is closed. Opening
+ * that section, from the pill or another Work entry point, clears the badge.
  */
 export function ActivityWidget() {
   const [unread, setUnread] = useState(0);
@@ -21,7 +22,17 @@ export function ActivityWidget() {
   // no chat turn is open. It rides the SAME `inbox.item` bump — no extra unread increment — so a
   // fired now item (which pushes only `activity.message`, never `inbox.item`) can't double-count.
   const [pendingNow, setPendingNow] = useState(false);
-  const openRef = useRef(false);
+  const activityOpen = useUI((s) =>
+    s.surfaceModal?.viewId === "work" && s.surfaceModal.state.section === "activity",
+  );
+  const openRef = useRef(activityOpen);
+  useEffect(() => {
+    openRef.current = activityOpen;
+    if (activityOpen) {
+      setUnread(0);
+      setPendingNow(false);
+    }
+  }, [activityOpen]);
   useEffect(
     () => onServerEvent("activity.message", () => { if (!openRef.current) setUnread((n) => n + 1); }),
     [],
@@ -66,8 +77,13 @@ export function ActivityWidget() {
       }
       dialogTitle="Feed"
       dialogWidth="min(720px, 94vw)"
-      onOpen={() => { openRef.current = true; setUnread(0); setPendingNow(false); }}
-      onClose={() => { openRef.current = false; }}
+      open={false}
+      onOpen={() => {
+        openRef.current = true;
+        setUnread(0);
+        setPendingNow(false);
+        useUI.getState().openSurfaceModal("work", { section: "activity" });
+      }}
     >
       <ActivitySurface />
     </UtilityWidget>
