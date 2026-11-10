@@ -116,7 +116,9 @@ def test_checks_workflow_preserves_stable_gate_and_full_suite_shards() -> None:
     for job in ("web-unit", "web-e2e-shard"):
         lane = workflow.split(f"\n  {job}:\n", 1)[1].split("\n\n  ", 1)[0]
         assert fail_open in lane, job
-    assert "--shard=${{ matrix.shard }}/4" in workflow
+    # Chromium shards + a dedicated WebKit lane, so WebKit never piles into one shard.
+    assert "--shard=4/4 }" in workflow
+    assert "--project=webkit --project=mobile-webkit --workers=2" in workflow
     # "Web E2E smoke" is the REQUIRED check: a gate over both lanes that always reports.
     gate = workflow.split("\n  web-e2e:\n", 1)[1].split("\n\n  ", 1)[0]
     assert "name: Web E2E smoke" in gate
