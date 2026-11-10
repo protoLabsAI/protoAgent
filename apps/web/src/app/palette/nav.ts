@@ -11,6 +11,7 @@ import { chatStore } from "../../chat/chat-store";
 import { agentHref } from "../../lib/api";
 import { seedKnowledgeSearch } from "../../knowledge/searchSeed";
 import { runBindingById } from "../../keybindings/useKeybindings";
+import type { SurfaceState } from "../../shell/surfaceState";
 
 // A dock opened programmatically must open at a usable size. The DS AppShell width is
 // CONTROLLED and stored verbatim (a drag streams transients down to 0 — that's how it
@@ -85,7 +86,15 @@ export type NavIntent =
   // INTENT rather than a direct `chatStore.switchSession` at the call site so it crosses the
   // launcher boundary like every other navigation, and so the id is validated in the window
   // that owns the store — see `applyNavIntent`.
-  | { kind: "chat"; sessionId: string };
+  | { kind: "chat"; sessionId: string }
+  // Open a surface in the large shell MODAL on a specific saved place (#4955 §3.6 — the Work
+  // hub's palette rows). A separate arm from `{ kind: "view" }` because that one DOCKS/ROUTES
+  // to a rail; this one opens the modal via `openSurfaceModal`, carrying the view's
+  // `SurfaceState` so the row can land on a named section (and set a flag, e.g. Work ▸ Goals
+  // with `{create: true}` for "New goal…", Q15). `SurfaceState` is plain data, so the arm
+  // stays serializable and crosses the launcher → main-window boundary like every other
+  // intent. `state` is optional: omitted, the surface opens on its last-saved place.
+  | { kind: "surface"; id: string; state?: SurfaceState };
 
 /** Apply an intent to THIS window's UI store. The default navigator, and what the main
  *  window calls when it receives a forwarded intent from the launcher. */
@@ -94,6 +103,15 @@ export function applyNavIntent(intent: NavIntent) {
   switch (intent.kind) {
     case "view":
       openView(intent.id);
+      break;
+    case "surface":
+      // Open the surface's large shell modal on the requested place (the Work hub's ⌘K rows,
+      // #4955 §3.6). `openSurfaceModal` writes the modal AND persists the state as the view's
+      // saved place, so the row that says "Work ▸ Goals" lands on Goals and the modal
+      // remembers it. An absent `state` opens on whatever place was last saved.
+      ui.openSurfaceModal(intent.id, intent.state);
+      // Mobile renders the active surface instead of the desktop modal.
+      ui.setMobileActive(intent.id);
       break;
     case "plugins":
       // Plugins is a Settings section; Settings is the dialog now (2026-06). Open it on the

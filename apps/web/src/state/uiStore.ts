@@ -372,16 +372,34 @@ export const useUI = create<UIState>()(
         };
       }),
       closeSurfaceModal: () => set({ surfaceModal: null }),
-      dockSurface: (viewId) => set((s) => ({
-        rightPanel: viewId,
-        rightCollapsed: false,
-        surfaceModal: null,
-        surfaceStates: {
-          ...s.surfaceStates,
-          [viewId]: s.surfaceModal?.viewId === viewId
-            ? s.surfaceModal.state : s.surfaceStates[viewId] ?? {},
-        },
-      })),
+      dockSurface: (viewId) => set((s) => {
+        // A modal may open without a visible rail entry (e.g. from the palette).
+        // Keep an existing placement; otherwise restore the surface's default dock.
+        const side = (["left", "right", "bottom"] as const).find(
+          (dock) => s.railOrder[dock].includes(viewId),
+        ) ?? coreDefaultSide(viewId) ?? "left";
+        const railOrder = {
+          ...s.railOrder,
+          hidden: (s.railOrder.hidden ?? []).filter((id) => id !== viewId),
+          [side]: s.railOrder[side].includes(viewId)
+            ? s.railOrder[side] : [...s.railOrder[side], viewId],
+        };
+        return {
+          railOrder,
+          ...(side === "right"
+            ? { rightPanel: viewId, rightCollapsed: false, rightWidth: s.rightWidth < 280 ? 360 : s.rightWidth }
+            : side === "bottom"
+              ? { bottomPanel: viewId, bottomCollapsed: false, bottomHeight: s.bottomHeight < 120 ? 240 : s.bottomHeight }
+              : { surface: viewId, leftCollapsed: false }),
+          mobileActive: viewId,
+          surfaceModal: null,
+          surfaceStates: {
+            ...s.surfaceStates,
+            [viewId]: s.surfaceModal?.viewId === viewId
+              ? s.surfaceModal.state : s.surfaceStates[viewId] ?? {},
+          },
+        };
+      }),
       surface: "chat",
       rightPanel: "work",
       pluginsTab: "local",

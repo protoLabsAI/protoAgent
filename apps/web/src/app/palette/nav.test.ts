@@ -2,6 +2,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { useUI } from "../../state/uiStore";
 import { applyNavIntent, navigate, openView, setPaletteNavigator } from "./nav";
+import type { NavIntent } from "./nav";
+import { registeredPaletteCommands } from "../../ext/paletteRegistry";
+import "./registry";
 
 // The dock-routing chokepoint (finding 14) had NO test, which is how it silently no-opped
 // EVERY programmatic navigation on mobile until the `setMobileActive` fix: the mobile shell
@@ -21,6 +24,8 @@ beforeEach(() => {
     rightCollapsed: true,
     bottomCollapsed: true,
     mobileActive: "chat",
+    surfaceModal: null,
+    surfaceStates: {},
   });
 });
 
@@ -119,6 +124,87 @@ describe("applyNavIntent — the serializable intent the launcher forwards", () 
   });
 });
 
+describe("applyNavIntent — surface: opens the large shell MODAL on a section (#4955 §3.6)", () => {
+  it.each([
+    ["work", "Open Work", "overview"],
+    ["work:decisions", "Work: Decisions", "decisions"],
+    ["work:goals", "Work: Goals", "goals"],
+    ["work:watches", "Work: Watches", "watches"],
+    ["work:tasks", "Work: Tasks", "tasks"],
+    ["work:schedules", "Work: Schedules", "schedules"],
+    ["work:background", "Work: Background agents", "background"],
+    ["work:activity", "Work: Activity", "activity"],
+    ["work:directives", "Work: Directives", "directives"],
+    ["work:new-goal", "Work: New goal…", "goals"],
+  ])("registered row %s forwards and replays its modal destination", (id, label, section) => {
+    const rows = registeredPaletteCommands("static").filter((row) => row.id === id);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].label).toBe(label);
+    const sink = vi.fn();
+    const close = vi.fn();
+    setPaletteNavigator(sink);
+    rows[0].run({ close });
+    const state = id === "work:new-goal" ? { section, filters: { create: true } } : { section };
+    expect(sink).toHaveBeenCalledExactlyOnceWith({ kind: "surface", id: "work", state });
+    expect(close).toHaveBeenCalledOnce();
+    expect(useUI.getState().surfaceModal).toBeNull();
+    applyNavIntent(JSON.parse(JSON.stringify(sink.mock.calls[0][0])));
+    expect(useUI.getState().surfaceModal).toEqual({ viewId: "work", state });
+  });
+
+  // Every Work palette row (`registry.ts`) opens the modal through this arm. The eight
+  // section ids are WorkView's own (`WorkOverview.workSections`).
+  const SECTIONS = [
+    "decisions", "goals", "watches", "tasks", "schedules", "background", "activity", "directives",
+  ];
+
+  it.each(["overview", ...SECTIONS, "new-goal"])("routes %s from another mobile surface", (section) => {
+    useUI.setState({ mobileActive: "knowledge" });
+    const state = section === "new-goal" ? { section: "goals", filters: { create: true } } : { section };
+    applyNavIntent(JSON.parse(JSON.stringify({ kind: "surface", id: "work", state })) as NavIntent);
+    expect(useUI.getState().mobileActive).toBe("work");
+    expect(useUI.getState().surfaceStates.work).toEqual(state);
+    expect(useUI.getState().surfaceModal).toEqual({ viewId: "work", state });
+    expect(useUI.getState().rightCollapsed).toBe(true);
+  });
+
+  it("opens the modal on the requested section and persists it as the saved place", () => {
+    applyNavIntent({ kind: "surface", id: "work", state: { section: "decisions" } });
+    const s = useUI.getState();
+    expect(s.surfaceModal).toEqual({ viewId: "work", state: { section: "decisions" } });
+    // openSurfaceModal writes the modal AND the view's saved place, so the modal remembers it.
+    expect(s.surfaceStates.work).toEqual({ section: "decisions" });
+  });
+
+  it("Open Work lands on Overview", () => {
+    applyNavIntent({ kind: "surface", id: "work", state: { section: "overview" } });
+    expect(useUI.getState().surfaceModal).toEqual({ viewId: "work", state: { section: "overview" } });
+  });
+
+  it("New goal… lands on Goals with the create flag set in filters (Q15)", () => {
+    applyNavIntent({ kind: "surface", id: "work", state: { section: "goals", filters: { create: true } } });
+    const modal = useUI.getState().surfaceModal!;
+    expect(modal.state.section).toBe("goals");
+    expect(modal.state.filters).toEqual({ create: true });
+  });
+
+  it("without a state, opens the modal on the view's last-saved place", () => {
+    useUI.setState({ surfaceStates: { work: { section: "tasks" } } });
+    applyNavIntent({ kind: "surface", id: "work" });
+    expect(useUI.getState().surfaceModal).toEqual({ viewId: "work", state: { section: "tasks" } });
+  });
+
+  it("every Work section row round-trips through the launcher's JSON Tauri payload", () => {
+    for (const section of SECTIONS) {
+      const intent: NavIntent = { kind: "surface", id: "work", state: { section } };
+      // The launcher forwards the intent over a Tauri event — a JSON serialize/parse. Applying
+      // the replayed copy must reproduce the in-process result, i.e. the arm is serializable.
+      applyNavIntent(JSON.parse(JSON.stringify(intent)) as NavIntent);
+      expect(useUI.getState().surfaceModal).toEqual({ viewId: "work", state: { section } });
+    }
+  });
+});
+
 describe("setPaletteNavigator — the launcher's window handoff", () => {
   it("diverts every navigation to the sink, leaving THIS window's store alone", () => {
     const sink = vi.fn();
@@ -135,6 +221,16 @@ describe("setPaletteNavigator — the launcher's window handoff", () => {
     setPaletteNavigator(null);
     navigate({ kind: "view", id: "memory" });
     expect(useUI.getState().surface).toBe("memory");
+  });
+
+  it("forwards a surface intent verbatim rather than opening the modal in the launcher window", () => {
+    const sink = vi.fn();
+    setPaletteNavigator(sink);
+    const intent: NavIntent = { kind: "surface", id: "work", state: { section: "goals", filters: { create: true } } };
+    navigate(intent);
+    expect(sink).toHaveBeenCalledWith(intent);
+    // The shell-less launcher window must not touch its own store — it hands the intent off.
+    expect(useUI.getState().surfaceModal).toBeNull();
   });
 });
 

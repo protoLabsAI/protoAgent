@@ -34,7 +34,7 @@ function click(label: string) {
 }
 
 beforeEach(() => {
-  useUI.setState({ surfaceModal: null, surfaceStates: {}, rightPanel: "work", rightCollapsed: false });
+  useUI.setState(useUI.getInitialState(), true);
   container = document.createElement("div");
   document.body.appendChild(container);
   root = createRoot(container);
@@ -75,13 +75,33 @@ describe("SurfaceHost modal frame", () => {
     expect(container.querySelector('[role="status"]')?.textContent).toBe("Work opened in a large window.");
   });
 
-  it("Dock to rail re-selects the view in the right dock and clears the modal", () => {
-    act(() => useUI.getState().openSurfaceModal("work"));
-    act(() => root.render(<SurfaceHost frame="modal" view={work}>{content("work")}</SurfaceHost>));
-    click("Dock to rail");
-    expect(useUI.getState().surfaceModal).toBeNull();
-    expect(useUI.getState().rightPanel).toBe("work");
-  });
+  it.each(["left", "right", "bottom", "hidden"] as const)(
+    "Dock to rail reveals Work from %s and preserves its section",
+    (placement) => {
+      const railOrder = { left: ["chat"], right: ["knowledge"], bottom: ["logs"], hidden: [] as string[] };
+      railOrder[placement].push("work");
+      useUI.setState({
+        railOrder, surface: "chat", rightPanel: "knowledge", bottomPanel: "logs",
+        leftCollapsed: true, rightCollapsed: true, bottomCollapsed: true,
+        rightWidth: 0, bottomHeight: 0,
+      });
+      act(() => useUI.getState().openSurfaceModal("work", { section: "goals" }));
+      act(() => root.render(<SurfaceHost frame="modal" view={work}>{content("work")}</SurfaceHost>));
+      click("Dock to rail");
+      const s = useUI.getState();
+      const side = placement === "hidden" ? "right" : placement;
+      expect(s.surfaceModal).toBeNull();
+      expect(s.railOrder[side]).toContain("work");
+      expect(s.railOrder.hidden).not.toContain("work");
+      expect(s.surfaceStates.work).toEqual({ section: "goals" });
+      expect(s.surface).toBe(side === "left" ? "work" : "chat");
+      expect(s.rightPanel).toBe(side === "right" ? "work" : "knowledge");
+      expect(s.bottomPanel).toBe(side === "bottom" ? "work" : "logs");
+      expect(s[`${side}Collapsed`]).toBe(false);
+      if (side === "right") expect(s.rightWidth).toBe(360);
+      if (side === "bottom") expect(s.bottomHeight).toBe(240);
+    },
+  );
 
   it("Close clears the modal without changing the rail selection", () => {
     useUI.setState({ rightPanel: "work" });

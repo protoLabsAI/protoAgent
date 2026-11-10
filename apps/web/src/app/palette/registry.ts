@@ -20,7 +20,7 @@
 // own iframe (themed/authed via the handshake) instead of navigating to its rail.
 import type { ReactNode } from "react";
 import { createElement, useEffect, useMemo, useRef, useSyncExternalStore } from "react";
-import { Download, Keyboard, PanelsTopLeft, Settings2, Store, Users } from "lucide-react";
+import { Download, Keyboard, LayoutDashboard, PanelsTopLeft, Settings2, Store, Users } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { commandsView, createPaletteRegistry, pluginView } from "@protolabsai/ui/command-palette";
 import type {
@@ -182,6 +182,54 @@ _link(
     keywords: ["plugins", "install", "url", "git"],
   },
   { kind: "plugins", tab: "local" },
+);
+// The Work hub (#4955 §3.6) as palette rows: a top-level "Open Work" plus one row per
+// section, every one opening the large shell MODAL (bd-0ia51.2) through the `surface` intent
+// — so they route identically in the console window and the desktop launcher, like every
+// other deep-link here. They wear Work's own rail glyph (LayoutDashboard, `coreSurfaces.tsx`)
+// so the group has no icon step. "Open Work" shares its id with the generated surface row
+// below: root search deduplicates them, while the Open picker retains Work. Each section row
+// lands on its own section; "New goal…" lands on Goals with the create form open (Q15), carried in
+// `SurfaceState.filters`. The section ids are WorkView's own (`WorkOverview.workSections`),
+// so a row can't drift onto a section that does not exist.
+_link(
+  {
+    id: "work",
+    label: "Open Work",
+    icon: glyph(LayoutDashboard),
+    keywords: ["work", "open", "go to", "surface", "overview", "hub", "decisions", "goals", "tasks", "schedules"],
+  },
+  { kind: "surface", id: "work", state: { section: "overview" } },
+);
+const WORK_SECTIONS: Array<[string, string]> = [
+  ["decisions", "Decisions"],
+  ["goals", "Goals"],
+  ["watches", "Watches"],
+  ["tasks", "Tasks"],
+  ["schedules", "Schedules"],
+  ["background", "Background agents"],
+  ["activity", "Activity"],
+  ["directives", "Directives"],
+];
+for (const [section, label] of WORK_SECTIONS) {
+  _link(
+    {
+      id: `work:${section}`,
+      label: `Work: ${label}`,
+      icon: glyph(LayoutDashboard),
+      keywords: ["work", section, label.toLowerCase()],
+    },
+    { kind: "surface", id: "work", state: { section } },
+  );
+}
+_link(
+  {
+    id: "work:new-goal",
+    label: "Work: New goal…",
+    icon: glyph(LayoutDashboard),
+    keywords: ["work", "new", "goal", "create", "add"],
+  },
+  { kind: "surface", id: "work", state: { section: "goals", filters: { create: true } } },
 );
 // …and one row per Settings SECTION, generated from the section table rather than hand-listed
 // here. Three sections used to be reachable from ⌘K (the bare "Settings" above, plus
@@ -427,15 +475,17 @@ export function usePaletteRegistry(
         views.map((v) => v.id),
         viewFor,
       ).map<Command>((v) => ({
-        id: `open:${v.id}`,
-        label: v.title,
+        id: v.id === "work" ? "work" : `open:${v.id}`,
+        label: v.id === "work" ? "Open Work" : v.title,
         icon: v.icon,
         // "Go to" is a real group header AND part of the DS haystack, so typing "go to"
         // still lists every surface the way the `Open` submorph does.
         group: "Go to",
         keywords: ["open", "go", "surface", v.kind],
         run: (c) => {
-          navigate({ kind: "view", id: v.id });
+          navigate(v.id === "work"
+            ? { kind: "surface", id: "work", state: { section: "overview" } }
+            : { kind: "view", id: v.id });
           c.close();
         },
       })),
