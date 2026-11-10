@@ -44,7 +44,9 @@ test("boots, navigates and reloads with localStorage filled to the real quota", 
     }
   });
   expect(rawWrite).toBe("QuotaExceededError");
-  await expect(page.getByText("New messages aren't being saved in this browser", { exact: true })).toBeVisible();
+  // Chats save to IndexedDB (epic #4981), so a full localStorage only stops layout and
+  // preferences saving: the banner says exactly that, not that messages aren't saved.
+  await expect(page.getByText("Some console settings aren't being saved in this browser", { exact: true })).toBeVisible();
 
   // Layout setters (useUI) and a chat turn all persist — every write fails, none throws.
   await page.getByTestId("settings-widget").click();

@@ -243,6 +243,31 @@ describe("full (saving fails) with a reply running", () => {
   });
 });
 
+describe("Free up space that finds nothing to clear", () => {
+  it("says so, and the page still shows saving fails", async () => {
+    const id = chatStore.getSnapshot().currentSessionId!;
+    await seed("host", [{ id, kb: 10 }]); // only the focused chat: nothing clearable
+    const put = vi.spyOn(TranscriptStore.prototype, "putSessions").mockRejectedValue(new DOMException("full", "QuotaExceededError"));
+    chatStore.updateMessages(id, chat(id, 11));
+    flushChatPersist();
+    await transcriptWritesSettled();
+    await render();
+    expect(node.querySelector(".pl-callout--warning")).toBeTruthy();
+
+    await click("Free up space");
+    const freeButtons = [...dialog()!.querySelectorAll("button")].filter((b) => b.textContent === "Free up space");
+    await act(async () => freeButtons[0].click());
+    await vi.waitFor(async () => {
+      await settle();
+      expect(document.body.textContent).toContain(
+        "There was nothing left to clear automatically. Clear an agent's chats or quick chats below to make room.",
+      );
+    });
+    expect(node.querySelector(".pl-callout--warning")).toBeTruthy();
+    put.mockRestore();
+  });
+});
+
 describe("plain http", () => {
   it("no browser estimate, and Keep data disabled with the reason", async () => {
     estimate = null;

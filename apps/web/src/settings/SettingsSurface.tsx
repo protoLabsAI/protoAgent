@@ -216,7 +216,9 @@ export function SettingsSurface({ initialSection }: { initialSection?: string } 
   return (
     <div className="settings-shell">
       <SideNav responsive={isMobile} ariaLabel="Settings sections" groups={navGroups} active={active.id} onSelect={(id) => setSection(id)} />
-      <div className="settings-content">
+      {/* Keyed by section: switching sections remounts the content, so one section's unsaved
+          edits can never carry into the next (they shared a React position before). */}
+      <div className="settings-content" key={active.id}>
         {RENDERERS[active.id]()}
       </div>
     </div>

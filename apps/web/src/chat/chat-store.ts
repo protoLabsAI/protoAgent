@@ -736,10 +736,16 @@ const PALETTE_KEY = AGENT === "host" ? "protoagent.palette.chat" : `protoagent.p
 /** Run an IndexedDB write; on a quota error free space (ADR 0114 D5) one step at a time and
  *  retry, until it fits or nothing is left to remove. Never removes this agent's open tabs or
  *  a chat with a live turn. Says what it cleared (the storage toast). */
-export async function withQuotaEviction(write: () => Promise<void>): Promise<void> {
+export async function withQuotaEviction(
+  write: () => Promise<void>,
+  source: SaveSource | null = "chats",
+): Promise<void> {
+  const failing = (on: boolean) => {
+    if (source) setSaveFailing(source, on);
+  };
   try {
     await write();
-    setSaveFailing(false);
+    failing(false);
     return;
   } catch (err) {
     if (!isQuotaError(err) || !transcripts) throw err;
@@ -767,7 +773,7 @@ export async function withQuotaEviction(write: () => Promise<void>): Promise<voi
       all.push(...removed);
       try {
         await write();
-        setSaveFailing(false);
+        failing(false);
         return;
       } catch (err) {
         if (!isQuotaError(err)) throw err;
@@ -775,9 +781,9 @@ export async function withQuotaEviction(write: () => Promise<void>): Promise<voi
     }
     try {
       await write(); // nothing left to free: let the quota error surface to the caller's catch
-      setSaveFailing(false);
+      failing(false);
     } catch (err) {
-      if (isQuotaError(err)) setSaveFailing(true);
+      if (isQuotaError(err)) failing(true);
       throw err;
     }
   } finally {
@@ -807,14 +813,21 @@ export function transcriptAgent(): string {
   return AGENT;
 }
 
+/** Which saves are failing for lack of space. Chats and quick chats are tracked apart, so a quick
+ *  chat's save succeeding never hides that chat saves still fail (and the other way round). */
+export type SaveSource = "chats" | "palette";
+const failingSources = new Set<SaveSource>();
 let saveFailing = false;
 const saveFailingListeners = new Set<() => void>();
 /** Who an IndexedDB eviction is reported as: Free up space runs the same routine by hand. */
 let evictionReason: EvictionReport["reason"] = "quota";
 
-function setSaveFailing(on: boolean) {
-  if (saveFailing === on) return;
-  saveFailing = on;
+function setSaveFailing(source: SaveSource, on: boolean) {
+  if (on) failingSources.add(source);
+  else failingSources.delete(source);
+  const next = failingSources.size > 0;
+  if (saveFailing === next) return;
+  saveFailing = next;
   for (const fn of saveFailingListeners) {
     try {
       fn();
@@ -920,13 +933,15 @@ export async function freeUpSpace(): Promise<{ chats: number; bytes: number; sav
       const attempted = writeChain !== before;
       await writeChain;
       if (!attempted && saveFailing) {
-        // Nothing of this agent's is waiting (a quick chat's save failed): clear one step.
+        // Nothing of this agent's is waiting (a quick chat's save failed): clear one step. A
+        // probe, not a save: it tracks no failing state, so only the next REAL save that fits
+        // can say saving works again.
         let first = true;
         await withQuotaEviction(async () => {
           if (!first) return;
           first = false;
           throw new DOMException("The quota has been exceeded.", "QuotaExceededError");
-        }).catch(() => undefined);
+        }, null).catch(() => undefined);
       }
     }
   } finally {

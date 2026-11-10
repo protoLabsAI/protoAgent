@@ -251,6 +251,28 @@ describe("eviction across a squeeze and across tabs", () => {
   });
 });
 
+describe("which saves are failing", () => {
+  it("a quick chat's save fitting never hides that chat saves still fail; a probe never clears it", async () => {
+    const { initTranscriptBackend, withQuotaEviction, transcriptSaveFailing } = await freshStore();
+    await initTranscriptBackend();
+    const full = () => Promise.reject(new DOMException("full", "QuotaExceededError"));
+    await withQuotaEviction(full, "chats").catch(() => undefined);
+    expect(transcriptSaveFailing()).toBe(true);
+    await withQuotaEviction(async () => {}, "palette"); // a quick chat fits
+    expect(transcriptSaveFailing()).toBe(true); // chats still don't
+    let first = true;
+    await withQuotaEviction(async () => {
+      if (first) {
+        first = false;
+        throw new DOMException("full", "QuotaExceededError");
+      }
+    }, null); // Free up space's probe "succeeds" after one step
+    expect(transcriptSaveFailing()).toBe(true);
+    await withQuotaEviction(async () => {}, "chats"); // a real chat save fits
+    expect(transcriptSaveFailing()).toBe(false);
+  });
+});
+
 describe("staying on localStorage", () => {
   it("when IndexedDB isn't available", async () => {
     localStorage.setItem(MAIN, v1([{ id: "h1", messages: chat(1) }]));

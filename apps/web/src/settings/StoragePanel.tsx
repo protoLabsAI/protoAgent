@@ -213,6 +213,8 @@ export function StoragePanel() {
           });
         } else if (res.saving) {
           toast({ message: "New messages are saving again." });
+        } else {
+          toast({ message: "There was nothing left to clear automatically. Clear an agent's chats or quick chats below to make room." });
         }
       }
     } catch (err) {

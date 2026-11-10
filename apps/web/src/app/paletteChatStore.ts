@@ -118,7 +118,7 @@ function write(thread: PaletteThread, scope?: string) {
       if (hasMessages(readKey("local", key))) writeKey("local", key, JSON.stringify(thread));
       else if (readKey("local", key) !== link) writeKey("local", key, link);
       threadWrites = threadWrites
-        .then(() => withQuotaEviction(() => store.putThread(key, thread.messages)))
+        .then(() => withQuotaEviction(() => store.putThread(key, thread.messages), "palette"))
         .then(() => {
           if (readKey("local", key) !== link) writeKey("local", key, link);
         })
