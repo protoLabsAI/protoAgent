@@ -111,7 +111,10 @@ import { brandName } from "../lib/brand";
 import { onConnectionChange, onServerEvent, onTopic } from "../lib/events";
 import { useToast } from "@protolabsai/ui/overlays";
 import { StatusPill } from "./StatusPill";
-import { WorkPanel } from "./WorkPanel";
+import { WorkView } from "../work/WorkView";
+// Load the eight built-in Work sections for their registration side-effect (#4955 §5), so
+// the Work surface mounts with every section live — none falls back to the unregistered Empty.
+import "../work/sections";
 import { invalidateAllAfterSetup } from "../setup/finish";
 import { SetupWizard } from "../setup/SetupWizard";
 import { hostRuntimeStatusQuery, installedPluginsQuery, pluginUpdatesQuery, refreshGoalsOnEvent, runtimeStatusQuery } from "../lib/queries";
@@ -799,12 +802,26 @@ function WorkspaceApp({ runtime }: { runtime: RuntimeStatus | null }) {
   // via `focus_main`).
   useForwardedPaletteNotices(toast);
 
-  function renderSurface(id: string): ReactNode {
+  // The chat currently on screen — the Work view scopes its "This chat" filter and the
+  // per-session directive ledger to it (null when no chat is selected / the console is signed
+  // out, which the view reads as "no chat in view").
+  const workSessionId = useSyncExternalStore(
+    chatStore.subscribe,
+    () => chatStore.getSnapshot().currentSessionId,
+    () => null,
+  );
+
+  // `frame` tells a framed surface whether it's rendering inside the right-rail dock or the
+  // large shell modal — the rail host passes the default, the modal mount passes "modal". Only
+  // the Work view reads it today (its rail/modal layout + default filters, #4955 §2.1/§5).
+  function renderSurface(id: string, frame: "rail" | "modal" = "rail"): ReactNode {
     switch (id) {
-      // The Work hub (2026-06) folds Goals + Tasks(Tasks) + Schedule into one right-rail
-      // surface (Overview + tabs). It owns those three panels now — no standalone surfaces.
+      // The Work hub (#4955) is one right-rail surface: an Overview plus a section per work
+      // source (Goals, Watches, Tasks, Schedules, Background agents, Activity, Decisions,
+      // Directives), each self-registered into the view. Expand / Dock to rail come free from
+      // the SurfaceHost frame this renders inside.
       case "work":
-        return <WorkPanel confirm={setConfirmState} />;
+        return <WorkView frame={frame} sessionId={workSessionId ?? undefined} />;
       // Knowledge is the searchable Store; its Memory settings folded into
       // Settings ▸ Workspace ▸ Memory (ADR 0048 S-C).
       case "knowledge":
@@ -1545,7 +1562,7 @@ function WorkspaceApp({ runtime }: { runtime: RuntimeStatus | null }) {
             : { id: surfaceModal.viewId, title: metaFor(surfaceModal.viewId)?.label ?? surfaceModal.viewId }
         }
       >
-        {renderSurface(surfaceModal.viewId)}
+        {renderSurface(surfaceModal.viewId, "modal")}
       </SurfaceHost>
     ) : null}
     {/* The header drawer (hamburger) — global actions + (on mobile) surface nav. */}

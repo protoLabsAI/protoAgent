@@ -1,0 +1,1 @@
+- **Work surface is now the unified Work view (#4955).** Opening Work from the rail renders the new Work view — an Overview plus a section per work source (Goals, Watches, Tasks, Schedules, Background agents, Activity, Decisions, Directives) — inside the surface frame, so Expand opens it in a large window and Dock to rail returns it to the same section.
