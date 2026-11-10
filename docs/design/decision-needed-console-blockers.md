@@ -54,3 +54,63 @@ and capture the full light/dark screenshot matrix from the actual mounted UI.
 No screenshots or feature-validation results are claimed by this handoff. The
 feature remains incomplete, so this change must not close #4725. The external
 loop retains ownership of commits, pushes and the ready-for-review PR lifecycle.
+
+## Mount follow-up (2026-11-09, redo of bd-bqyfs)
+
+The three original composite gaps above are now closed. The phone header is dropped
+by Josh's scope change: `DecisionsHeaderButton` remains unused, and neither
+`MobileShell.tsx` nor `mobile-shell.css` changes. Q13's spacer replacement and
+Q23/Q24's new header button/focus ring are therefore no longer applicable.
+
+The independent utility-bar mount, app-level polite announcement, and notification
+panel routing are implemented. For Q15, App derives `sessionSheetOpen` with
+`!panelOpen`, clears the session request before paint when Decisions opens, and
+closes Decisions before accepting a session-sheet open. Both Drawers cannot render
+open together, and closing Decisions cannot restore an old session-sheet request.
+
+Three remaining contracts prevent completing the requested integration with the
+existing composites:
+
+- **Source-chat identity (r3, in-chat portion of r5):**
+  `src/tools/lg_tools.py::request_decision` interrupts with `kind`, `question`,
+  `options`, `context`, expiry and default fields, but no decision id.
+  `src/server/chat.py` awaits `record_decision_pause` and discards its returned
+  record before yielding the original payload. `record_decision_pause` in
+  `src/server/turn_control.py` does not mutate that payload. Consequently the
+  console cannot call `useDecision(id)` for this interrupt. The id must be emitted
+  and retained in durable task history before the live and historical transcript
+  paths can mount the card reliably. Do not guess identity from question text or
+  substitute a chat-local decision record. `HitlDisplay.tsx` is left unchanged.
+- **Mounted panel context (offline portion of r5):** `DecisionsPanel` accepts
+  `agentOnline`, `onOpenChat` and `onReplyInChat`, but `DecisionsWidget` exposes no
+  props and supplies none of these. Its cards default to online and its chat links
+  have no callback. The widget needs to expose these existing panel contracts so
+  the shell can supply presence and navigation. An offline screenshot of this
+  mounted widget would currently misrepresent actual behavior.
+
+- **Closed conflict copy (expired/withdrawn portion of r5):** The browser tests
+  demonstrate that `DecisionCard.choose` maps every 409 to `answeredElsewhere`.
+  In panel mode that always invokes `answeredElsewhereCallout`, even when the
+  returned record is expired or withdrawn. Both cases incorrectly say "Already
+  answered". The spec retains the required assertions as explicit expected
+  failures until the prerequisite composite handles each closed state. No passing
+  screenshot of these states is claimed.
+
+The browser spec covers the reachable pill/dialog states, answer success and 409,
+failed-send retry availability, notifications at desktop/tablet/phone widths, and
+sheet exclusivity. `DECISION_SCREENSHOTS=1` captures reachable desktop states in
+both themes under `apps/web/e2e/screenshots/decision-needed/`. Source-chat, offline, expired and withdrawn
+screenshots are declined pending the contracts above. This partial mount must not
+close #4725. The external loop still owns committing evidence, head-SHA raw image
+URLs, and the ready-for-review PR lifecycle.
+
+Validation of the partial mount: web unit tests passed (409 files, 4,918 tests),
+web build/typechecks passed, and the browser spec completed with 14 passing cases
+plus four explicit expected failures (expired/withdrawn in both themes). Fourteen
+1440px PNGs capture quiet, empty, pending hover, three agents, sent, answered
+elsewhere and failed-send states in light/dark. The repository gate passed ruff,
+import contracts, attribution and lockfile checks. Its unsandboxed fail-fast Python
+run stopped after 3,142 passes and 120 skips at
+`test_the_vendored_embed_css_matches_the_installed_package`: the existing vendored
+CSS header names `@protolabsai/ui-css@0.71.0`, while the lockfile installs 0.72.0.
+That unrelated vendored asset is unchanged; a full Python gate pass is not claimed.
