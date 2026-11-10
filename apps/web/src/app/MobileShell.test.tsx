@@ -179,6 +179,27 @@ describe("phone Work entry points", () => {
     expect(onOpenWork).toHaveBeenCalledTimes(2);
   });
 
+  it.each([[1, 0], [0, -1], [-1, 1], [4, -4], [0, 8]])(
+    "opens once for a tap with finger jitter (%i, %i)",
+    (dx, dy) => {
+      const onOpenWork = vi.fn();
+      mount({ onOpenWork });
+      swipe(dx, dy);
+      expect(onOpenWork).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it("allows a jittery tap and keyboard activation after a rejected drag", () => {
+    const onOpenWork = vi.fn();
+    mount({ onOpenWork });
+    swipe(0, -30);
+    expect(onOpenWork).not.toHaveBeenCalled();
+    act(() => byLabel("Open Work")!.click());
+    expect(onOpenWork).toHaveBeenCalledTimes(1);
+    swipe(1, -1);
+    expect(onOpenWork).toHaveBeenCalledTimes(2);
+  });
+
   it("does not listen on the message root", () => {
     const onOpenWork = vi.fn();
     mount({ onOpenWork });

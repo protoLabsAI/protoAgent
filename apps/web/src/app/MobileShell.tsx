@@ -33,8 +33,9 @@ export function MobileWorkHandle() {
         start.current = null;
         const dx = event.clientX - origin.x;
         const dy = event.clientY - origin.y;
-        // A drag must not become a click, even when it misses the threshold.
-        suppressClick.current = Math.abs(dx) + Math.abs(dy) > 0;
+        // Allow normal finger jitter during a tap; suppress clicks after drags,
+        // including those that miss the upward-swipe threshold.
+        suppressClick.current = Math.hypot(dx, dy) > 8;
         if (!work.blocked && dy <= -48 && Math.abs(dy) > 2 * Math.abs(dx)) {
           event.currentTarget.focus();
           work.onOpen();
