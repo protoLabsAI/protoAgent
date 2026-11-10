@@ -8,9 +8,8 @@ import { seedCurrentChat } from "./chat-helpers";
 
 test("mod+shift+K toggles the command palette (mod+K no longer does, #2949)", async ({ page }) => {
   await page.goto("/app/", { waitUntil: "load" });
-  // The runtime probe mounts the shell asynchronously after load; its keybinding host
-  // must exist before sending a keypress (a zero-count palette assertion cannot wait for it).
-  await expect(page.getByTestId("header-menu")).toBeVisible();
+  // A missing palette also matches before React mounts and registers keybindings.
+  await page.getByPlaceholder(/Message protoAgent/i).focus();
   await expect(page.locator(".pl-cmdk__panel")).toHaveCount(0);
   await page.keyboard.press("ControlOrMeta+Shift+k");
   await expect(page.locator(".pl-cmdk__panel")).toBeVisible();
