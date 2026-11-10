@@ -165,18 +165,18 @@ export function DecisionCard({
     );
   }
 
-  function closedCallout() {
-    if (decision.state === "expired") {
-      const when = decision.expires_at ? formatGivenAt(decision.expires_at) : "the deadline";
+  function closedCallout(record: DecisionRow) {
+    if (record.state === "expired") {
+      const when = record.expires_at ? formatGivenAt(record.expires_at) : "the deadline";
       return (
         <Callout tone="neutral">
-          {`No answer by ${when}, so ${agent} went ahead and ${decision.default_action_text}.`}
+          {`No answer by ${when}, so ${agent} went ahead and ${record.default_action_text}.`}
         </Callout>
       );
     }
-    if (decision.state === "answered") return answeredElsewhereCallout(decision);
+    if (record.state === "answered") return answeredElsewhereCallout(record);
     // withdrawn / cancelled — "no longer needed"
-    const reason = decision.withdraw_reason?.trim();
+    const reason = record.withdraw_reason?.trim();
     return (
       <Callout tone="neutral">
         {`${agent} doesn't need this any more.${reason ? ` ${reason}` : ""}`}
@@ -210,14 +210,19 @@ export function DecisionCard({
       </p>
     );
   } else if (phase.kind === "answeredElsewhere") {
+    // The API uses answered_elsewhere for every 409, including expiry and withdrawal.
+    // Prefer its terminal record while retaining the legacy missing-record fallback.
+    const record = phase.record ?? decision;
     body = isTranscript ? (
       // A 409 under us in a transcript freezes on the returned record's frozen line, not the callout.
       <p ref={result} tabIndex={-1} style={muted} aria-live="polite">
-        {transcriptLine(phase.record ?? decision)}
+        {transcriptLine(record)}
       </p>
     ) : (
       <div ref={result} tabIndex={-1} aria-live="polite">
-        {phase.record ? answeredElsewhereCallout(phase.record) : answeredElsewhereCallout(decision)}
+        {TERMINAL.has(record.state)
+          ? closedCallout(record)
+          : answeredElsewhereCallout(record)}
       </div>
     );
   } else if (phase.kind === "sent") {
@@ -231,7 +236,7 @@ export function DecisionCard({
     );
   } else if (phase.kind === "idle" && TERMINAL.has(decision.state)) {
     body = (
-      <div aria-live="polite">{closedCallout()}</div>
+      <div aria-live="polite">{closedCallout(decision)}</div>
     );
   } else {
     // pending (idle / sending / error): show the options

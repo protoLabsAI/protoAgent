@@ -10,7 +10,7 @@ const decision = (id = "decision-one", agent = "protoEngineer"): DecisionRow => 
   answered_surface: null, default_action_text: "kept holding the release", answer_label: null,
 });
 
-async function setup(page: Page, rows: DecisionRow[], result: "sent" | "answered" | "expired" | "withdrawn" | "error" = "sent") {
+async function setup(page: Page, rows: DecisionRow[], result: "sent" | "answered" | "expired" | "withdrawn" | "cancelled" | "error" = "sent") {
   let pending = [...rows];
   const answers: unknown[] = [];
   await page.emulateMedia({ reducedMotion: "reduce" });
@@ -21,8 +21,11 @@ async function setup(page: Page, rows: DecisionRow[], result: "sent" | "answered
     if (result === "error") return route.fulfill({ status: 503, json: { detail: "Unavailable" } });
     const row = rows.find((d) => route.request().url().includes(`/${d.id}/`))!;
     const settled = { ...row, state: result === "sent" ? "answered" : result,
-      answer: result === "expired" || result === "withdrawn" ? null : "ship",
-      answer_label: result === "expired" || result === "withdrawn" ? null : "Ship the release",
+      answer: result === "expired" || result === "withdrawn" || result === "cancelled" ? null : "ship",
+      answer_label: result === "expired" || result === "withdrawn" || result === "cancelled" ? null : "Ship the release",
+      expires_at: result === "expired" ? "2026-11-09T14:04:00Z" : null,
+      default_action_text: "paused deployment until tomorrow",
+      withdraw_reason: "The release was superseded.",
       answered_at: "2026-11-09T14:05:00Z", answered_surface: "chat" };
     pending = pending.filter((d) => d.id !== row.id);
     return route.fulfill({ status: result === "sent" ? 200 : 409,
@@ -40,6 +43,7 @@ async function screenshot(page: Page, name: string) {
 
 for (const mode of ["light", "dark"] as const) {
   test.describe(mode, () => {
+    test.use({ timezoneId: "UTC", locale: "en-US" });
     test.beforeEach(async ({ page }) => {
       await page.setViewportSize({ width: 1440, height: 900 });
       await page.route("**/api/theme", (route) => route.fulfill({ json: { theme: { mode, overrides: {} } } }));
@@ -74,12 +78,9 @@ for (const mode of ["light", "dark"] as const) {
       await screenshot(page, `${mode}-three`);
     });
 
-    for (const result of ["sent", "answered", "expired", "withdrawn", "error"] as const) {
+    for (const result of ["sent", "answered", "expired", "withdrawn", "cancelled", "error"] as const) {
       test(`answer: ${result}`, async ({ page }) => {
-        // Prerequisite defect: the panel card treats every 409 as an answer, including
-        // expired/withdrawn records. Keep the required copy assertion as an expected
-        // failure until the composite is corrected; do not bless the wrong message.
-        test.fail(result === "expired" || result === "withdrawn", "DecisionCard renders an answered callout for every 409; see decision-needed-console-blockers.md");
+        await page.clock.setFixedTime(new Date("2026-11-10T12:00:00Z"));
         const answers = await setup(page, [decision()], result);
         await page.goto("/app/");
         const pill = page.getByRole("button", { name: "Decisions, 1 waiting on you" });
@@ -92,8 +93,19 @@ for (const mode of ["light", "dark"] as const) {
         await dialog.locator(".work-row").click();
         await dialog.getByRole("button", { name: "Ship the release", exact: true }).click();
         const copy = { sent: 'Sent: "Ship the release".', answered: 'Already answered:',
-          expired: "went ahead", withdrawn: "doesn't need this any more", error: "Couldn't send your answer." };
+          expired: "went ahead", withdrawn: "doesn't need this any more", cancelled: "doesn't need this any more", error: "Couldn't send your answer." };
         await expect(dialog).toContainText(copy[result]);
+        if (result === "expired" || result === "withdrawn" || result === "cancelled") {
+          const card = dialog.getByRole("article");
+          await expect(card).not.toContainText("Already answered:");
+          await expect(card.getByRole("group", { name: "Answer", exact: true })).toHaveCount(0);
+          await expect(card.locator('[aria-live="polite"][tabindex="-1"]')).toBeFocused();
+          if (result === "expired") {
+            await expect(card).toContainText("No answer by yesterday at 2:04 PM, so protoEngineer went ahead and paused deployment until tomorrow.");
+          } else {
+            await expect(card).toContainText("protoEngineer doesn't need this any more. The release was superseded.");
+          }
+        }
         expect(answers).toEqual([{ option_id: "ship", surface: "console" }]);
         if (result === "error") await expect(dialog.getByRole("button", { name: "Ship the release", exact: true })).toBeEnabled();
         else await expect(page.getByRole("button", { name: "Decisions, nothing waiting", exact: true })).toBeVisible();

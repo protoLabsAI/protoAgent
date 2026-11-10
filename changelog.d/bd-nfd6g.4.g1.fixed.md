@@ -1,0 +1,1 @@
+- **Decisions show the actual terminal state after an answer conflict.** Expired decisions display their deadline and default action, and withdrawn or cancelled decisions display their reason instead of claiming an option was chosen.
