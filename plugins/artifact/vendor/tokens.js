@@ -1,5 +1,5 @@
 /**
- * VENDORED — @protolabsai/design@0.14.0, the token tree (src/tokens.js), byte-for-byte.
+ * VENDORED — @protolabsai/design@0.14.1, the token tree (src/tokens.js), byte-for-byte.
  *
  * The relative dependency of the vendored `./embed` module (pl-design-embed.mjs), which does
  * `import { tokens, flatten } from "./tokens.js"`. The browser resolves that specifier against

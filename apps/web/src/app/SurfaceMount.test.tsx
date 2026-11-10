@@ -5,8 +5,7 @@
 // shell-level modal host while `surfaceModal` is set, both resolving the SAME view id. Crucially
 // it models App's single-mount rule — while a view is expanded the dock withholds it, so the
 // modal owns the only mount (#4802) — and counts mounts so a regression to a double mount fails
-// here. The phone runs a separate shell — the DS AppShell renders only leftContent below its
-// breakpoint — that mounts neither host, so it shows no Expand / Dock control.
+// here. The phone uses a sheet host with no Expand / Dock control.
 import { act, useEffect } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -77,12 +76,19 @@ function dock(active: string) {
 // whatever the active view — the pinned chat view passes no `view`, so it's framed with no
 // Expand. While `surfaceModal` is set it also mounts a shell-level modal host resolving the
 // SAME view id, and withholds that view from the dock render (App passes "" for it) so the
-// modal owns the only mount. The phone shell mounts neither host — its surfaces render bare.
+// modal owns the only mount. The phone frames the expanded surface in a sheet.
 function Shell({ mobile = false }: { mobile?: boolean }) {
   const surfaceModal = useUI((s) => s.surfaceModal);
   const active = useUI((s) => s.rightPanel);
-  const expandedViewId = mobile ? undefined : surfaceModal?.viewId;
-  if (mobile) return <>{META[active] ? content(active) : null}</>;
+  const expandedViewId = surfaceModal?.viewId;
+  if (mobile) return (
+    <>
+      {META[active] && active !== expandedViewId ? content(active) : null}
+      {surfaceModal ? (
+        <SurfaceHost frame="sheet" view={META[surfaceModal.viewId]}>{content(surfaceModal.viewId)}</SurfaceHost>
+      ) : null}
+    </>
+  );
   return (
     <>
       <SurfaceHost frame="rail" view={active === "chat" ? undefined : META[active]}>
@@ -205,12 +211,13 @@ describe("SurfaceHost mounted in the shell", () => {
   });
 
   it("renders no Expand or Dock control on the phone", () => {
-    // A set surfaceModal must still yield no controls — the phone shell mounts no host.
+    // The phone sheet owns the only mount and has no frame-switching controls.
     act(() => useUI.getState().openSurfaceModal("work"));
     act(() => root.render(<Shell mobile />));
     expect(button("Expand")).toBeUndefined();
     expect(button("Dock to rail")).toBeUndefined();
-    expect(document.querySelector('[role="dialog"]')).toBeNull();
-    expect(container.querySelector('[data-testid="content-work"]')).not.toBeNull();
+    expect(document.querySelector(".pl-drawer--full")).not.toBeNull();
+    expect(document.querySelector('[data-testid="content-work"]')).not.toBeNull();
+    expect(live.work).toBe(1);
   });
 });

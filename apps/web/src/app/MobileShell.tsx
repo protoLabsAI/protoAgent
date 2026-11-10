@@ -131,7 +131,10 @@ export function MobileShell({
               type="button"
               aria-label="Search commands"
               title="Search commands, surfaces and agents"
-              onClick={() => useKbIntents.getState().togglePalette()}
+              onClick={(event) => {
+                event.currentTarget.focus();
+                useKbIntents.getState().togglePalette();
+              }}
             >
               <Search size={20} aria-hidden />
             </Button>

@@ -334,3 +334,27 @@ test("mobile shell: a paired phone whose home stops answering is shown its other
   await expect(notice.getByRole("link")).toHaveText(["Tailnet HTTPS · box.tail1234.ts.net"]);
   await expect(notice).toContainText("Opening one means pairing this phone again there.");
 });
+
+
+test("mobile: Work opens from the palette as a full-height sheet and restores focus", async ({ page }) => {
+  await page.goto("/app/", { waitUntil: "load" });
+  const opener = page.getByRole("button", { name: "Search commands" });
+  await opener.tap();
+  const palette = page.locator(".pl-cmdk__panel");
+  await palette.locator(".pl-cmdk-commands__input").fill("Open Work");
+  await palette.locator(".pl-cmdk-commands__label", { hasText: /^Open Work$/ }).click();
+  const sheet = page.locator(".pl-drawer--bottom.pl-drawer--full");
+  await expect(sheet).toBeVisible();
+  await expect(sheet).toHaveAccessibleName("Work");
+  await expect(sheet.locator(".pl-drawer__title")).toHaveText("Work");
+  await expect(page.locator(".pl-dialog")).toHaveCount(0);
+  await expect(sheet.getByRole("button", { name: /^(Expand|Dock to rail)$/ })).toHaveCount(0);
+  await expect.poll(async () => sheet.evaluate((el) => {
+    const rect = el.getBoundingClientRect();
+    return Math.abs(rect.height - window.innerHeight) < 2 && Math.abs(rect.width - window.innerWidth) < 2
+      && Math.abs(rect.top) < 2 && Math.abs(rect.left) < 2;
+  })).toBe(true);
+  await sheet.getByRole("button", { name: "Close", exact: true }).tap();
+  await expect(sheet).toHaveCount(0);
+  await expect(opener).toBeFocused();
+});

@@ -807,6 +807,35 @@ function WorkspaceApp({ runtime }: { runtime: RuntimeStatus | null }) {
   // rebindable keybinding (ADR 0063) that toggles it — no DS-internal hotkey hook.
   const paletteOpen = useKbIntents((s) => s.paletteOpen);
   const setPaletteOpen = useKbIntents((s) => s.setPaletteOpen);
+
+  // Capture before the palette/sheet steals focus. A palette row disappears when
+  // selected, so its sheet returns to the control that opened the palette instead.
+  useEffect(() => {
+    if (!isMobile) return;
+    let paletteOpener: HTMLElement | null = null;
+    let sheetOpener: HTMLElement | null = null;
+    let restoreFrame = 0;
+    const activeElement = () => document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const unsubscribePalette = useKbIntents.subscribe((next, prev) => {
+      if (next.paletteOpen && !prev.paletteOpen) paletteOpener = activeElement();
+    });
+    const unsubscribeSurface = useUI.subscribe((next, prev) => {
+      if (next.surfaceModal && !prev.surfaceModal) {
+        cancelAnimationFrame(restoreFrame);
+        sheetOpener = useKbIntents.getState().paletteOpen ? paletteOpener : activeElement();
+      } else if (!next.surfaceModal && prev.surfaceModal) {
+        const opener = sheetOpener;
+        restoreFrame = requestAnimationFrame(() => {
+          if (opener?.isConnected) opener.focus();
+        });
+      }
+    });
+    return () => {
+      unsubscribePalette();
+      unsubscribeSurface();
+      cancelAnimationFrame(restoreFrame);
+    };
+  }, [isMobile]);
   // The single global keydown host — resolves combos against the registry (scope + overrides).
   useGlobalKeybindings();
   // Desktop launcher handoff (ADR 0057): the frameless ⌥Space launcher window can't
@@ -1017,8 +1046,8 @@ function WorkspaceApp({ runtime }: { runtime: RuntimeStatus | null }) {
   // background slot, or a plugin view's iframe is mounted twice, breaking #4802's one-copy
   // invariant. Palette commands can expand a view from any dock without changing its active
   // surface — hence the exclusions below. Closing the modal clears `surfaceModal`, so the
-  // dock mounts the view again. The phone opens no modal, so this is always undefined there.
-  const expandedViewId = !isMobile ? surfaceModal?.viewId : undefined;
+  // dock mounts the view again. The phone sheet follows the same single-mount rule.
+  const expandedViewId = surfaceModal?.viewId;
   // Chat mounts unconditionally on whichever dock holds it (streaming continuity, #613) —
   // left, right, OR the bottom dock. Its slot stays mounted while another surface swaps in
   // on the same dock, so an in-flight stream survives a surface switch on any rail.
@@ -1360,8 +1389,8 @@ function WorkspaceApp({ runtime }: { runtime: RuntimeStatus | null }) {
               />
             ) : null}
             {renderDock(
-              isMobile ? mobileActive : expandedViewId === leftActive ? "" : leftActive,
-              isMobile ? bgViewsDocked : bgViewsFor("left").filter((v) => v.key !== expandedViewId),
+              (isMobile ? mobileActive : leftActive) === expandedViewId ? "" : isMobile ? mobileActive : leftActive,
+              (isMobile ? bgViewsDocked : bgViewsFor("left")).filter((v) => v.key !== expandedViewId),
               dockClaims,
             )}
           </>
@@ -1596,12 +1625,11 @@ function WorkspaceApp({ runtime }: { runtime: RuntimeStatus | null }) {
     {/* The large-modal surface host (#4955 §3.1) — one shell-level mount, open while
         `surfaceModal` is set. It frames the SAME view the rail would, resolved through the
         same renderSurface / plugin-view path, so Expand ⇄ Dock to rail stays in sync with
-        the right dock. Desktop-only: the phone shows no Expand control (its surfaces live
-        in the mobile shell), so this never opens there. The Dialog uses `size="wide"`
-        (DS gap B3, ds-zb8) — a near-full-screen modal frame for the Work view. */}
-    {!isMobile && surfaceModal ? (
+        the right dock. Phones use a full-screen bottom sheet; desktop keeps the wide
+        Dialog frame and its Dock control. */}
+    {surfaceModal ? (
       <SurfaceHost
-        frame="modal"
+        frame={isMobile ? "sheet" : "modal"}
         view={
           surfaceModal.viewId === "chat"
             ? undefined
