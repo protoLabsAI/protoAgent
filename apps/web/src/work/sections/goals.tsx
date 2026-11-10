@@ -30,6 +30,10 @@ import {
 } from "../../chat/goalForm";
 import type { GoalEvent, GoalState, HitlPayload } from "../../lib/types";
 
+// How many iterations the Extend action grants an active goal at once — matches the base
+// `GoalDetailDrawer` (ADR 0079): the running loop picks up the higher cap.
+const EXTEND_BY = 4;
+
 // §2.3 — every timestamp is local relative time ("10 min ago", "today at 17:14"), with the
 // full stamp in a hover tooltip. Goals store epoch seconds, which `relTime` already expects.
 function when(epoch: number | null | undefined, prefix: string): WorkField["value"] {
@@ -192,6 +196,28 @@ function GoalDetailView({ ctx, item }: { ctx: WorkSectionContext; item: WorkItem
   const title = g.outcome?.trim() || g.condition || g.session_id;
   const active = item.status === "running" || item.status === "waiting";
   const actions: WorkAction[] = [{ id: "edit", label: "Edit", run: async () => void setEditing(true) }];
+
+  // Lifecycle (ADR 0079), restoring the base `GoalDetailDrawer`'s re-arm controls so an exhausted
+  // or unachievable goal can be reached from the Work surface. An ACTIVE goal gets more room
+  // (+N iterations — the running loop picks up the higher cap); a TERMINAL one that fell short
+  // (exhausted / unachievable) is Restarted (the backend resets the loop and kicks a fresh drive
+  // turn). An achieved goal shows neither. Re-arm has no undo, so feedback is a toast + the field
+  // table refresh — not the §4.5 undo flow.
+  const rearm = (body: { add_iterations?: number }) => async () => {
+    try {
+      const res = await api.rearmGoal(g.session_id, body);
+      refresh();
+      toast({ tone: "success", title: "Goal re-armed", message: res.message || "The drive loop will resume." });
+    } catch (e) {
+      toast({ tone: "error", title: "Couldn't re-arm the goal", message: errMsg(e) });
+    }
+  };
+  if (g.status === "active") {
+    actions.push({ id: "extend", label: `Add ${EXTEND_BY} iterations`, run: rearm({ add_iterations: EXTEND_BY }) });
+  } else if (g.status === "exhausted" || g.status === "unachievable") {
+    actions.push({ id: "restart", label: "Restart goal", run: rearm({}) });
+  }
+
   // An active goal can be Stopped (stops the drive loop and closes its tasks, §4.4 confirm);
   // any goal can be Deleted, which hands back an undo token for the §4.5 Undo toast.
   if (active) {

@@ -113,8 +113,9 @@ test("deleting a playbook confirms first, then removes it", async ({ page }) => 
   const dialog = page.getByRole("dialog", { name: "Delete skill?" });
   await expect(dialog).toBeVisible();
 
-  // Cancel keeps it.
-  await page.getByRole("button", { name: "Cancel" }).click();
+  // Cancel keeps it. (Scope to the dialog: the default-open Work surface can render a work-row
+  // whose status badge reads "Cancelled", which an unscoped name:"Cancel" would match.)
+  await dialog.getByRole("button", { name: "Cancel" }).click();
   await expect(surface.getByText("pr-triage-flow")).toBeVisible();
 
   // Confirm removes the row.

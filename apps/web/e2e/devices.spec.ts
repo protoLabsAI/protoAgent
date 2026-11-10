@@ -60,7 +60,10 @@ test("Pair an agent: big code, m:ss countdown, tailnet-first URLs, the hub hint;
   await expect(card).toContainText("Settings ▸ Agents ▸ Pair…");
   await expect(card).toContainText("protoagent fleet pair <url> <code>");
 
-  await page.getByRole("button", { name: "Cancel" }).click();
+  // name:"Cancel" is EXACT: the default-open Work surface can render a work-row whose status badge
+  // reads "Cancelled", which a substring (non-exact) match would also hit. The pairing Cancel
+  // button sits beside the card, not inside it, so it can't be region-scoped.
+  await page.getByRole("button", { name: "Cancel", exact: true }).click();
   await expect(card).toHaveCount(0);
   await expect.poll(() => cancels).toEqual([{ kind: "agent" }]);
 });
@@ -73,7 +76,9 @@ test("Add a device cancels with kind device (it can't drop a pending agent code)
   await openDevices(page);
   await page.getByRole("button", { name: "Add a device" }).click();
   await expect(page.getByRole("region", { name: "Pair a new device" })).toBeVisible();
-  await page.getByRole("button", { name: "Cancel" }).click();
+  // name:"Cancel" is EXACT — see the agent-pairing test above (a "Cancelled" work-row from the
+  // default-open Work surface would otherwise match this substring).
+  await page.getByRole("button", { name: "Cancel", exact: true }).click();
   await expect.poll(() => cancels).toEqual([{ kind: "device" }]);
 });
 

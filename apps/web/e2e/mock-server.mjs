@@ -654,6 +654,20 @@ function handleApiGet(
       return GOALS;
     case "/api/watches":
       return buildWatches(nowMs);
+    // The Work view (#4955) is the default-open right-dock surface, so every `/app/` load
+    // now fetches all eight of its sources — including these two, which no earlier surface
+    // read by default. Serve them empty so the view loads clean: an unmocked source 404s
+    // into a `role="alert"` "Couldn't load …" card (ambiguating `getByRole("alert")` in
+    // unrelated specs like fleet) whose sub-44px "Retry" button also trips the tablet
+    // touch-target sweep. Specs that drive background jobs still override via `page.route`.
+    case "/api/decisions":
+      return { decisions: [], pending: 0 };
+    // `enabled: false` so the UtilityBar background-jobs pill stays hidden exactly as it did
+    // when this route 404'd (BackgroundJobs.tsx shows the pill while `enabled`, even with no
+    // jobs); the Work view reads only `jobs`, so an empty list keeps that section clean too.
+    // The background-job specs still drive `enabled: true` via their own `page.route`.
+    case "/api/background":
+      return { enabled: false, jobs: [] };
     case "/api/verifiers":
       return VERIFIERS;
     case "/api/notes/workspace":

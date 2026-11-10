@@ -16,6 +16,7 @@ const apiMock = vi.hoisted(() => ({
   updateSchedule: vi.fn(async () => ({ job: {} })),
   deleteTask: vi.fn(async () => ({ deleted: "task-3", undo_token: "tok-task" })),
   updateTask: vi.fn(async () => ({ issue: {} })),
+  closeTask: vi.fn(async () => ({ issue: {} })),
   undo: vi.fn(async () => ({ restored: true, kind: "task" })),
 }));
 vi.mock("../../lib/api", () => ({ api: apiMock, currentSlug: () => "test" }));
@@ -279,6 +280,42 @@ describe("Tasks section (§2.7)", () => {
     await mount(h(TasksSection, ctx({ sources: sources({ tasks: src(items) }) })));
     const metas = Array.from(host!.querySelectorAll(".work-row__meta")).map((n) => n.textContent);
     expect(metas).toEqual(["Bug · urgent", "Bug · high", "Bug · normal", "Bug · low"]);
+  });
+
+  it("an in-progress task offers Mark open (→ open) and Close (the close route)", async () => {
+    await mount(h(TasksSection, ctx({
+      sources: sources({ tasks: src([taskItem({ status: "in_progress" })]) }),
+      state: { itemId: "task:task-3" },
+    })));
+    await act(async () => button("Mark open").click());
+    await flush();
+    expect(apiMock.updateTask).toHaveBeenCalledWith("task-3", { status: "open" });
+
+    await act(async () => button("Close").click());
+    await flush();
+    expect(apiMock.closeTask).toHaveBeenCalledWith("task-3");
+  });
+
+  it("an open task offers Start (→ in_progress)", async () => {
+    await mount(h(TasksSection, ctx({
+      sources: sources({ tasks: src([taskItem({ status: "open" })]) }),
+      state: { itemId: "task:task-3" },
+    })));
+    await act(async () => button("Start").click());
+    await flush();
+    expect(apiMock.updateTask).toHaveBeenCalledWith("task-3", { status: "in_progress" });
+  });
+
+  it("a closed task offers Reopen (→ open) and no Start", async () => {
+    await mount(h(TasksSection, ctx({
+      sources: sources({ tasks: src([taskItem({ status: "closed", closed_at: "2026-11-09T10:00:00Z" })]) }),
+      state: { itemId: "task:task-3" },
+    })));
+    expect(() => button("Start")).toThrow();
+    await act(async () => button("Reopen").click());
+    await flush();
+    expect(apiMock.updateTask).toHaveBeenCalledWith("task-3", { status: "open" });
+    expect(apiMock.closeTask).not.toHaveBeenCalled();
   });
 
   it("Delete returns an undo token; Undo redeems it via the undo API (r4)", async () => {
