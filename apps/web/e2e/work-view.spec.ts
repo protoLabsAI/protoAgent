@@ -83,6 +83,7 @@ test("rail → Expand → item → Dock preserves the section, scroll and item",
   await railView(page).getByRole("button", { name: "Back to Tasks", exact: true }).click();
   await expectScroll(railView(page), scroll);
   await expect(row(railView(page))).toBeVisible();
+  await expect(row(railView(page))).toBeFocused();
   await row(railView(page)).click();
   await expandWork(page);
   await expect(modalView(page).getByRole("heading", { name: "Work item 12", exact: true })).toBeFocused();
