@@ -74,3 +74,32 @@ for (const dock of ["left", "right", "bottom"] as const) {
     await expect(page.getByTestId("goal-create-dialog")).toHaveCount(0);
   });
 }
+
+for (const placement of ["left", "right", "bottom", "hidden"] as const) {
+  test(`Dock to rail reveals palette Work when ${placement}`, async ({ page }) => {
+    await page.addInitScript((placement) => {
+      const railOrder: Record<string, string[]> = {
+        left: ["chat"], right: ["knowledge"], bottom: ["memory"], hidden: [],
+      };
+      railOrder[placement].push("work");
+      localStorage.setItem("protoagent.ui", JSON.stringify({
+        version: 14,
+        state: {
+          railOrder, surface: "chat", rightPanel: "knowledge", bottomPanel: "memory",
+          leftCollapsed: false, rightCollapsed: true, bottomCollapsed: true,
+          rightWidth: 0, bottomHeight: 0,
+        },
+      }));
+    }, placement);
+    await page.goto("/app/");
+    await expect(page.getByTestId("header-menu")).toBeVisible();
+    await page.keyboard.press("ControlOrMeta+Shift+k");
+    await page.locator(".pl-cmdk-commands__input").fill("Work: Goals");
+    await page.getByRole("option", { name: "Work: Goals", exact: true }).click();
+    await expect(page.locator('.work-view[data-frame="modal"]')).toBeVisible();
+    await page.getByRole("button", { name: "Dock to rail", exact: true }).click();
+    await expect(page.locator('.work-view[data-frame="modal"]')).toHaveCount(0);
+    await expect(page.locator(".work-view__panes")).toBeVisible();
+    await expect(page.getByRole("button", { name: "Goals Work sections", exact: true })).toBeVisible();
+  });
+}

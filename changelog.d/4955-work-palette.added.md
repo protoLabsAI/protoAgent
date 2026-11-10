@@ -7,3 +7,5 @@
   it clears the request so returning to Work does not reopen it.
   Opening Work from any dock transfers its mounted view to the modal, preventing duplicate
   goal creation dialogs when Work lives in the left or bottom dock.
+  Dock to rail reveals Work in its assigned dock, restores it when hidden, and retains the
+  selected section. Collapsed docks reopen at a usable size.
