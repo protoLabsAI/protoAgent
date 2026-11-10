@@ -3,6 +3,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useUI } from "../../state/uiStore";
 import { applyNavIntent, navigate, openView, setPaletteNavigator } from "./nav";
 import type { NavIntent } from "./nav";
+import { registeredPaletteCommands } from "../../ext/paletteRegistry";
+import "./registry";
 
 // The dock-routing chokepoint (finding 14) had NO test, which is how it silently no-opped
 // EVERY programmatic navigation on mobile until the `setMobileActive` fix: the mobile shell
@@ -123,6 +125,33 @@ describe("applyNavIntent — the serializable intent the launcher forwards", () 
 });
 
 describe("applyNavIntent — surface: opens the large shell MODAL on a section (#4955 §3.6)", () => {
+  it.each([
+    ["work", "Open Work", "overview"],
+    ["work:decisions", "Work: Decisions", "decisions"],
+    ["work:goals", "Work: Goals", "goals"],
+    ["work:watches", "Work: Watches", "watches"],
+    ["work:tasks", "Work: Tasks", "tasks"],
+    ["work:schedules", "Work: Schedules", "schedules"],
+    ["work:background", "Work: Background agents", "background"],
+    ["work:activity", "Work: Activity", "activity"],
+    ["work:directives", "Work: Directives", "directives"],
+    ["work:new-goal", "Work: New goal…", "goals"],
+  ])("registered row %s forwards and replays its modal destination", (id, label, section) => {
+    const rows = registeredPaletteCommands("static").filter((row) => row.id === id);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].label).toBe(label);
+    const sink = vi.fn();
+    const close = vi.fn();
+    setPaletteNavigator(sink);
+    rows[0].run({ close });
+    const state = id === "work:new-goal" ? { section, filters: { create: true } } : { section };
+    expect(sink).toHaveBeenCalledExactlyOnceWith({ kind: "surface", id: "work", state });
+    expect(close).toHaveBeenCalledOnce();
+    expect(useUI.getState().surfaceModal).toBeNull();
+    applyNavIntent(JSON.parse(JSON.stringify(sink.mock.calls[0][0])));
+    expect(useUI.getState().surfaceModal).toEqual({ viewId: "work", state });
+  });
+
   // Every Work palette row (`registry.ts`) opens the modal through this arm. The eight
   // section ids are WorkView's own (`WorkOverview.workSections`).
   const SECTIONS = [

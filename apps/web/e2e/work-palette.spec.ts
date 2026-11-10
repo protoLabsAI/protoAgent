@@ -1,5 +1,37 @@
 import { expect, test } from "@playwright/test";
 
+test("Work search lists one overview entry and opens every section in the modal", async ({ page }) => {
+  await page.goto("/app/");
+  await expect(page.getByTestId("header-menu")).toBeVisible();
+  await page.keyboard.press("ControlOrMeta+Shift+k");
+  await page.locator(".pl-cmdk-commands__input").fill("work");
+  await expect(page.getByRole("option", { name: "Open Work", exact: true })).toHaveCount(1);
+  await expect(page.getByRole("option", { name: "Work", exact: true })).toHaveCount(0);
+  await page.keyboard.press("Escape");
+
+  for (const section of ["Overview", "Decisions", "Goals", "Watches", "Tasks", "Schedules", "Background agents", "Activity", "Directives"]) {
+    const label = section === "Overview" ? "Open Work" : `Work: ${section}`;
+    await page.keyboard.press("ControlOrMeta+Shift+k");
+    await page.locator(".pl-cmdk-commands__input").fill(label);
+    await page.getByRole("option", { name: label, exact: true }).click();
+    await expect(page.getByRole("button", { name: "Dock to rail", exact: true })).toBeVisible();
+    const selected = page.locator('.work-view[data-frame="modal"] .pl-sidenav__item[aria-selected="true"]');
+    await expect(selected.locator(".pl-sidenav__label")).toHaveText(section);
+    await page.keyboard.press("Escape");
+    await expect(page.getByRole("button", { name: "Dock to rail", exact: true })).toHaveCount(0);
+  }
+
+  // The Open picker keeps Work even though root search merges its generated row.
+  await page.keyboard.press("ControlOrMeta+Shift+k");
+  await page.locator(".pl-cmdk-commands__input").fill("Open…");
+  await page.getByRole("option", { name: "Open…" }).click();
+  await expect(page.getByPlaceholder("Open a surface…")).toBeVisible();
+  await expect(page.getByPlaceholder(/Search commands/)).toHaveCount(0);
+  await page.getByRole("option", { name: "Open Work", exact: true }).click();
+  await expect(page.getByRole("button", { name: "Dock to rail", exact: true })).toBeVisible();
+  await expect(page.locator('.work-view[data-frame="modal"] .pl-sidenav__item[aria-selected="true"] .pl-sidenav__label')).toHaveText("Overview");
+});
+
 for (const dock of ["left", "right", "bottom"] as const) {
   test(`New goal has one creation dialog when Work is docked ${dock}`, async ({ page }) => {
     await page.addInitScript((dock) => {

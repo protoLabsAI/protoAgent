@@ -187,10 +187,9 @@ _link(
 // section, every one opening the large shell MODAL (bd-0ia51.2) through the `surface` intent
 // — so they route identically in the console window and the desktop launcher, like every
 // other deep-link here. They wear Work's own rail glyph (LayoutDashboard, `coreSurfaces.tsx`)
-// so the group has no icon step. The generated `open:work` "Go to" surface row still docks
-// Work to the rail; these are the MODAL path and carry the section, so there is no duplicate
-// hand-written Work row. "Open Work" lands on Overview; each section row lands on its own
-// section; "New goal…" lands on Goals with the create form open (Q15), carried in
+// so the group has no icon step. "Open Work" shares its id with the generated surface row
+// below: root search deduplicates them, while the Open picker retains Work. Each section row
+// lands on its own section; "New goal…" lands on Goals with the create form open (Q15), carried in
 // `SurfaceState.filters`. The section ids are WorkView's own (`WorkOverview.workSections`),
 // so a row can't drift onto a section that does not exist.
 _link(
@@ -198,7 +197,7 @@ _link(
     id: "work",
     label: "Open Work",
     icon: glyph(LayoutDashboard),
-    keywords: ["work", "overview", "hub", "decisions", "goals", "tasks", "schedules"],
+    keywords: ["work", "open", "go to", "surface", "overview", "hub", "decisions", "goals", "tasks", "schedules"],
   },
   { kind: "surface", id: "work", state: { section: "overview" } },
 );
@@ -476,15 +475,17 @@ export function usePaletteRegistry(
         views.map((v) => v.id),
         viewFor,
       ).map<Command>((v) => ({
-        id: `open:${v.id}`,
-        label: v.title,
+        id: v.id === "work" ? "work" : `open:${v.id}`,
+        label: v.id === "work" ? "Open Work" : v.title,
         icon: v.icon,
         // "Go to" is a real group header AND part of the DS haystack, so typing "go to"
         // still lists every surface the way the `Open` submorph does.
         group: "Go to",
         keywords: ["open", "go", "surface", v.kind],
         run: (c) => {
-          navigate({ kind: "view", id: v.id });
+          navigate(v.id === "work"
+            ? { kind: "surface", id: "work", state: { section: "overview" } }
+            : { kind: "view", id: v.id });
           c.close();
         },
       })),
