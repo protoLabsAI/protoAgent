@@ -13,6 +13,8 @@ import asyncio
 from types import SimpleNamespace
 from unittest.mock import Mock
 
+import pytest
+
 from operator_api import runtime_routes
 from runtime.state import STATE
 
@@ -204,7 +206,8 @@ def test_initial_occurrence_ledger_migrates_without_losing_quarantine(tmp_path):
             message_id TEXT NOT NULL, state TEXT NOT NULL, created_at TEXT NOT NULL,
             expected_next TEXT NOT NULL, previous_error TEXT,
             PRIMARY KEY (job_id, next_fire))""")
-        db.execute("INSERT INTO occurrences SELECT * FROM occurrences_new")
+        db.execute("INSERT INTO occurrences SELECT job_id, next_fire, message_id, state, created_at, "
+                   "expected_next, previous_error FROM occurrences_new")
         db.execute("DROP TABLE occurrences_new")
     for _ in range(2):
         restarted = LocalScheduler("migration", invoke_url="http://127.0.0.1:7870", db_dir=tmp_path)
@@ -216,3 +219,64 @@ def test_initial_occurrence_ledger_migrates_without_losing_quarantine(tmp_path):
             assert claim["state"] == "claimed"
             keys = {r["name"] for r in db.execute("PRAGMA table_info(occurrences)") if r["pk"]}
             assert keys == {"job_id", "next_fire", "created_at"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("payload", [{"result": {}}, {"result": {"status": {"state": "TASK_STATE_WORKING"}}}])
+async def test_response_without_handle_or_terminal_outcome_stays_quarantined(tmp_path, monkeypatch, payload):
+    from datetime import UTC, datetime, timedelta
+
+    import httpx
+    from scheduler.local import LocalScheduler
+
+    real_client = httpx.AsyncClient
+    sends = []
+
+    def respond(request):
+        sends.append(request)
+        return httpx.Response(200, json=payload)
+
+    monkeypatch.setattr(httpx, "AsyncClient", lambda **kw: real_client(transport=httpx.MockTransport(respond)))
+    scheduler = LocalScheduler("no-handle", invoke_url="http://test", db_dir=tmp_path)
+    job = scheduler.add_job("uncertain", (datetime.now(UTC) - timedelta(seconds=1)).isoformat())
+    assert await scheduler._fire(job) is None
+    restarted = LocalScheduler("no-handle", invoke_url="http://test", db_dir=tmp_path)
+    await restarted._reconcile_occurrences()
+    assert restarted._claim_due_jobs(datetime.now(UTC)) == []
+    assert len(sends) == 1
+    assert restarted.get_job(job.id).last_error == "delivery unknown; not automatically retried"
+    assert restarted.get_job(job.id).last_ok is None
+
+
+def test_terminal_bookkeeping_rolls_back_together_and_reconciles_once(tmp_path, monkeypatch):
+    import sqlite3
+
+    from scheduler.local import LocalScheduler
+
+    scheduler = LocalScheduler("atomic", invoke_url="http://test", db_dir=tmp_path)
+    job = scheduler.add_job("atomic settlement", "* * * * *", max_fires=1)
+    assert scheduler._claim_occurrence(job)
+    scheduler._remember_task(job, "task-atomic")
+    payload = {"result": {"id": "task-atomic", "status": {"state": "TASK_STATE_COMPLETED"}}}
+    expiry = scheduler._settle_cron_expiry
+
+    def interrupted(*args, **kwargs):
+        expiry(*args, **kwargs)  # includes deleting the max_fires=1 job
+        raise sqlite3.OperationalError("interrupted before commit")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(scheduler, "_settle_cron_expiry", interrupted)
+        with pytest.raises(sqlite3.OperationalError, match="before commit"):
+            scheduler._settle_task(job, "task-atomic", payload)
+    stored = scheduler.get_job(job.id)
+    assert stored is not None
+    assert stored.fire_count == 0
+    assert stored.last_ok is None
+    assert stored.last_error == "delivery unknown; not automatically retried"
+    with scheduler._connect() as db:
+        assert db.execute("SELECT state FROM occurrences").fetchone()[0] == "claimed"
+    for _ in range(2):
+        assert scheduler._settle_task(job, "task-atomic", payload)
+    assert scheduler.get_job(job.id) is None
+    with scheduler._connect() as db:
+        assert db.execute("SELECT state FROM occurrences").fetchone()[0] == "settled"

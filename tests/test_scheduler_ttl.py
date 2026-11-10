@@ -39,6 +39,9 @@ class _FakeResponse:
         self.status_code = status_code
         self.text = text
 
+    def json(self):
+        return {"result": {"status": {"state": "TASK_STATE_COMPLETED"}}}
+
 
 class _FakeClient:
     """Stubs ``httpx.AsyncClient`` so a unit test exercises the fire path

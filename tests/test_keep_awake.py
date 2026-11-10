@@ -33,7 +33,7 @@ async def test_fire_releases(monkeypatch, tmp_path, outcome):
     monkeypatch.setattr(keep_awake, "_acquire", acquire)
     scheduler = LocalScheduler("test", invoke_url="http://unused", db_dir=tmp_path)
     scheduler._settle_cron_expiry = Mock()
-    job = SimpleNamespace(id="job")
+    job = SimpleNamespace(id="job", next_fire=None, created_at="test")
     scheduler._inflight_ids.add(job.id)
 
     async def fire(job):
@@ -71,7 +71,7 @@ async def test_overlapping_fires(monkeypatch, tmp_path):
         return True
 
     monkeypatch.setattr(scheduler, "_fire", fire)
-    tasks = [asyncio.create_task(scheduler._fire_and_settle(SimpleNamespace(id=i), True)) for i in range(2)]
+    tasks = [asyncio.create_task(scheduler._fire_and_settle(SimpleNamespace(id=i, next_fire=None, created_at="test"), True)) for i in range(2)]
     try:
         await asyncio.gather(*(event.wait() for event in entered))
         acquire.assert_called_once()
@@ -200,7 +200,7 @@ async def test_backend_failure_does_not_interrupt_fire(monkeypatch, tmp_path):
         return True
 
     monkeypatch.setattr(scheduler, "_fire", fire)
-    job = SimpleNamespace(id="job")
+    job = SimpleNamespace(id="job", next_fire=None, created_at="test")
     await scheduler._fire_and_settle(job, True)
     assert fired == ["job"]
     settled.assert_called_once_with(job)

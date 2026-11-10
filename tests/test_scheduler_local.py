@@ -770,6 +770,9 @@ async def test_due_job_fires(tmp_path, monkeypatch):
         status_code = 200
         text = "ok"
 
+        def json(self):
+            return {"result": {"status": {"state": "TASK_STATE_COMPLETED"}}}
+
     class _FakeClient:
         def __init__(self, *_a, **_kw):
             pass
@@ -866,6 +869,9 @@ async def test_fire_returns_bool(tmp_path, monkeypatch):
         status_code = 200
         text = "ok"
 
+        def json(self):
+            return {"result": {"status": {"state": "TASK_STATE_COMPLETED"}}}
+
     class _ErrResponse:
         status_code = 500
         text = "boom"
@@ -938,7 +944,7 @@ class _CaptureClient:
 
     async def post(self, url, headers=None, json=None):
         self.url, self.headers, self.json = url, headers, json
-        return type("R", (), {"status_code": 200, "text": "ok"})()
+        return _FakeResponse()
 
 
 @pytest.mark.asyncio
@@ -1048,6 +1054,9 @@ async def test_slow_fire_not_refired_while_in_flight(tmp_path, monkeypatch):
                 status_code = 200
                 text = "ok"
 
+                def json(self):
+                    return {"result": {"status": {"state": "TASK_STATE_COMPLETED"}}}
+
             return _R()
 
     import httpx
@@ -1116,6 +1125,9 @@ class _CapClient:
         class _R:
             status_code = 200
             text = "ok"
+
+            def json(self):
+                return {"result": {"status": {"state": "TASK_STATE_COMPLETED"}}}
 
         return _R()
 

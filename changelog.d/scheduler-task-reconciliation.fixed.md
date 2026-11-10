@@ -1,0 +1,1 @@
+- **Scheduled task reconciliation.** Persist early A2A task handles and recover terminal outcomes through durable task lookups after disconnects or restarts. Settle each occurrence atomically, preserve newer same-ID schedules, and keep missing tasks or unknown deliveries quarantined rather than resending them.

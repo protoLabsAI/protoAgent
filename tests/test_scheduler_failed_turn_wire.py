@@ -92,8 +92,9 @@ async def test_a_turn_that_dies_mid_stream_is_a_failed_fire(tmp_path, monkeypatc
 
     # …as a FAILED task, in the 1.0 envelope, carrying the turn's own error text —
     # proof the failure came from the dying stream, not from some earlier guard.
-    (payload,) = responses
-    task = payload["result"]["task"]
+    payload = responses[-1]
+    task = payload["result"].get("task", payload["result"])
+    assert responses[0]["result"]["task"]["id"] == task["id"]
     assert task["status"]["state"] == "TASK_STATE_FAILED"
     failure = _a2a_turn_failure(payload)
     assert failure
@@ -122,8 +123,10 @@ async def test_a_completed_turn_is_still_a_successful_fire(tmp_path, monkeypatch
     job = s.add_job(prompt="daily job report", schedule="0 7 * * *")
 
     assert await s._fire(job) is True
-    (payload,) = responses
-    assert payload["result"]["task"]["status"]["state"] == "TASK_STATE_COMPLETED"
+    payload = responses[-1]
+    task = payload["result"].get("task", payload["result"])
+    assert responses[0]["result"]["task"]["id"] == task["id"]
+    assert task["status"]["state"] == "TASK_STATE_COMPLETED"
     assert _a2a_turn_failure(payload) == ""
     row = _row(s, job.id)
     assert row["consecutive_failures"] == 0
