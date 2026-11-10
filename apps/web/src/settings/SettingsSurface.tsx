@@ -28,6 +28,7 @@ import { SnapshotPanel } from "./SnapshotPanel";
 import { FleetSurface } from "./FleetSurface";
 import { KeybindingsPanel } from "./KeybindingsPanel";
 import { ChatSettingsPanel } from "./ChatSettingsPanel";
+import { StoragePanel } from "./StoragePanel";
 import { DeveloperPanel } from "./DeveloperPanel";
 import { developerPanelVisible, useDeveloperChannel } from "../flags/flags";
 import { OverviewPanel } from "./OverviewPanel";
@@ -134,6 +135,7 @@ const RENDERERS: Record<SettingsSectionId, () => ReactNode> = {
   theme: () => <ThemeSurface />,
   chat: () => <ChatSettingsPanel />,
   keybindings: () => <KeybindingsPanel />,
+  storage: () => <StoragePanel />,
   developer: () => <DeveloperPanel />,
 };
 

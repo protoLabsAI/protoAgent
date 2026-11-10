@@ -4,10 +4,10 @@
 // chat-store's slug-namespacing + try/catch + debounce. `/clear` mints a fresh thread
 // and wipes the old one's checkpoints.
 import type { ChatMessage } from "../lib/types";
-import { listKeys, matchKey, readKey, writeKey } from "../lib/storage";
+import { entryBytes, listKeys, matchKey, readKey, removeKey, writeKey } from "../lib/storage";
 import { persistBlocked } from "../lib/storageReset";
 import type { TranscriptStore } from "../chat/transcriptStore";
-import { withQuotaEviction } from "../chat/chat-store";
+import { transcriptStoreIfOpen, withQuotaEviction } from "../chat/chat-store";
 
 // Per-agent key (ADR 0042 slug routing) — a window on /agent/<slug>/ keeps its own
 // palette thread; host (no slug) uses the bare key. Fixed per page load.
@@ -180,4 +180,35 @@ function hasMessages(raw: string | null): boolean {
 /** Resolves when every queued thread save has committed (tests). */
 export function paletteWritesSettled(): Promise<void> {
   return threadWrites;
+}
+
+/** Clear every quick chat (palette and direct-message threads, every agent's) from THIS browser
+ *  (Settings → Storage). The server's copy is untouched. A thread open right now keeps what it
+ *  shows and is saved again on its next change. Not an automatic clear. Returns what went. */
+export async function clearQuickChats(): Promise<{ threads: number; bytes: number }> {
+  const linkKeys = listKeys("local").filter((key) => matchKey("local", key)?.spec.id === "palette.chat");
+  const store = threads ?? transcriptStoreIfOpen();
+  let count = 0;
+  let bytes = 0;
+  if (store) {
+    await threadWrites; // a queued save must not land after the clear
+    const stored = (await store.usage()).threads;
+    await store.deleteThreads(stored.map((t) => t.key));
+    count = stored.length;
+    bytes = stored.reduce((n, t) => n + t.bytes, 0);
+  } else {
+    count = linkKeys.filter((key) => {
+      try {
+        return ((JSON.parse(readKey("local", key) || "null") as Partial<PaletteThread> | null)?.messages?.length ?? 0) > 0;
+      } catch {
+        return false;
+      }
+    }).length;
+  }
+  for (const key of linkKeys) {
+    bytes += entryBytes(key, readKey("local", key) ?? "");
+    removeKey("local", key);
+  }
+  preloaded.clear();
+  return { threads: count, bytes };
 }

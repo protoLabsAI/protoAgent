@@ -199,7 +199,8 @@ describe("a save that hits the IndexedDB quota", () => {
     setFleetSlugs(null);
 
     expect(heard).toHaveBeenCalledTimes(1);
-    expect(heard.mock.calls[0][0].evicted).toEqual([{ key: "idb:gone-agent/g", slug: "gone-agent", bytes: 0 }]);
+    expect(heard.mock.calls[0][0].evicted).toEqual([{ key: "idb:gone-agent/g", slug: "gone-agent", bytes: expect.any(Number) }]);
+    expect(heard.mock.calls[0][0].freedBytes).toBeGreaterThan(9_000);
     const store = await reopen();
     expect((await store.loadAgent("host")).sessions.map((s) => s.id)).toContain(id); // the retry saved it
     expect((await store.loadAgent("gone-agent")).sessions).toEqual([]);

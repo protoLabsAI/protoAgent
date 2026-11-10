@@ -45,15 +45,19 @@ export const TIER = {
   PREFIX: 2,
   /** A word inside the label starts with one of the terms ("mem" → "Hot Memory"). */
   WORD_PREFIX: 3,
+  /** Every term IS one of the row's keywords, whole ("rag" → Knowledge). A keyword is a word
+   *  the row claims, so it outranks a term that only turns up inside a label word ("rag" in
+   *  "Storage"). */
+  KEYWORD: 4,
   /** Every term appears somewhere inside the label. */
-  SUBSTRING: 4,
+  SUBSTRING: 5,
   /** Every term appears in the metadata — keywords / hint / group / source chip. This is
    *  the DS's existing semantics, and the floor a keyword-only row must never fall below. */
-  META: 5,
+  META: 6,
   /** The query's characters appear in order in the label (fuzzy). */
-  FUZZY: 6,
+  FUZZY: 7,
   /** Matched, but only by spreading terms across label and metadata. */
-  SPLIT: 7,
+  SPLIT: 8,
 } as const;
 
 // Unicode-aware word split: "Settings: Fleet" → ["settings", "fleet"], "plugin:notes:x" →
@@ -87,6 +91,8 @@ export function tierFor(c: Command, q: string): number {
   if (label.startsWith(query)) return TIER.PREFIX;
   const words = label.split(WORD_SPLIT).filter(Boolean);
   if (terms.some((t) => words.some((w) => w.startsWith(t)))) return TIER.WORD_PREFIX;
+  const keywords = (c.keywords ?? []).map((k) => k.toLowerCase());
+  if (terms.every((t) => keywords.includes(t))) return TIER.KEYWORD;
   if (terms.every((t) => label.includes(t))) return TIER.SUBSTRING;
   const meta = [c.hint, c.group, c.source?.label, ...(c.keywords ?? [])]
     .filter(Boolean)

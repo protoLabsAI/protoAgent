@@ -59,12 +59,17 @@ describe("matchCommand — DS parity (a copy, so pin it)", () => {
 describe("tiers", () => {
   const c = (label: string, extra: Partial<Command> = {}) => cmd({ id: label, label, ...extra });
 
-  it("orders exact > prefix > word-prefix > substring > metadata", () => {
+  it("orders exact > prefix > word-prefix > whole keyword > substring > metadata", () => {
     expect(tierFor(c("Memory"), "memory")).toBe(TIER.EXACT);
     expect(tierFor(c("Memory inspector"), "memory")).toBe(TIER.PREFIX);
     expect(tierFor(c("Hot Memory"), "memo")).toBe(TIER.WORD_PREFIX);
     expect(tierFor(c("Remembered"), "ememb")).toBe(TIER.SUBSTRING);
-    expect(tierFor(c("Fleet Room", { keywords: ["ava"] }), "ava")).toBe(TIER.META);
+    // A whole keyword beats a term found inside a label word: "rag" is Knowledge's keyword
+    // and only a fragment of "Storage" (Settings ▸ Storage, #5015).
+    expect(tierFor(c("Knowledge", { keywords: ["rag"] }), "rag")).toBe(TIER.KEYWORD);
+    expect(TIER.KEYWORD).toBeLessThan(tierFor(c("Storage"), "rag"));
+    expect(tierFor(c("Fleet Room", { keywords: ["ava"] }), "ava")).toBe(TIER.KEYWORD);
+    expect(tierFor(c("Fleet Room", { hint: "talk to ava" }), "ava")).toBe(TIER.META);
   });
 
   it("splits ids and punctuation into words, so 'fleet' word-prefixes 'Settings: Fleet'", () => {

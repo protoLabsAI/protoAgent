@@ -162,17 +162,50 @@ describe("eviction under quota pressure (ADR 0114 D5)", () => {
     await store.putThread("protoagent.palette.chat:quiet", longChat(1));
     const opts = { keepSlug: "here", fleet: new Set(["here", "quiet", "busy"]), protect: new Set(["open"]), threadPrefix: "protoagent.palette.chat:here", now: NOW };
 
-    expect(await store.evictStep(opts)).toEqual([{ slug: "gone", id: "g1" }]); // 1. left the fleet
-    expect(await store.evictStep(opts)).toEqual([{ slug: "palette", id: "protoagent.palette.chat:quiet" }]); // 2. other windows' threads
-    expect(await store.evictStep(opts)).toEqual([{ slug: "quiet", id: "q1" }]); // 3. quiet for a day
-    expect(await store.evictStep(opts)).toEqual([{ slug: "here", id: "old" }]); // 4. own oldest, not the open tab
-    expect(await store.evictStep(opts)).toEqual([]); // nothing else may go
+    // Each step also says how much it freed: the JSON length of the records (a chat of ~9K chars).
+    const step = async () =>
+      (await store.evictStep(opts)).map(({ slug, id, bytes }) => {
+        expect(bytes).toBeGreaterThan(9_000);
+        return { slug, id };
+      });
+    expect(await step()).toEqual([{ slug: "gone", id: "g1" }]); // 1. left the fleet
+    expect(await step()).toEqual([{ slug: "palette", id: "protoagent.palette.chat:quiet" }]); // 2. other windows' threads
+    expect(await step()).toEqual([{ slug: "quiet", id: "q1" }]); // 3. quiet for a day
+    expect(await step()).toEqual([{ slug: "here", id: "old" }]); // 4. own oldest, not the open tab
+    expect(await step()).toEqual([]); // nothing else may go
     expect((await store.loadAgent("busy")).sessions).toHaveLength(1);
     expect((await store.loadAgent("here")).sessions.map((s) => s.id)).toEqual(["open"]);
     expect([...(await store.loadThreads("protoagent.palette.chat:here")).keys()].sort()).toEqual([
       "protoagent.palette.chat:here",
       "protoagent.palette.chat:here:dm:x",
     ]);
+  });
+});
+
+describe("usage, for Settings → Storage", () => {
+  it("lists every saved session with its agent, last save and size (record plus chunks), and every thread", async () => {
+    await store.putSessions("a", [session("big", longChat(12), { updatedAt: 30 }), session("small", longChat(1), { updatedAt: 40 })]);
+    await store.putSessions("b", [session("s", longChat(1), { updatedAt: 50 })]);
+    await store.putThread("protoagent.palette.chat:a", longChat(1));
+
+    const { sessions, threads } = await store.usage();
+    const by = new Map(sessions.map((s) => [`${s.slug}/${s.id}`, s]));
+    expect([...by.keys()].sort()).toEqual(["a/big", "a/small", "b/s"]);
+    expect(by.get("a/big")!.updatedAt).toBe(30);
+    // The big chat's settled history sits in chunks; its size counts them.
+    expect(by.get("a/big")!.bytes).toBeGreaterThan(12 * 9_000);
+    expect(by.get("a/small")!.bytes).toBeGreaterThan(9_000);
+    expect(by.get("a/small")!.bytes).toBeLessThan(20_000);
+    expect(threads).toEqual([{ key: "protoagent.palette.chat:a", bytes: expect.any(Number) }]);
+    expect(threads[0].bytes).toBeGreaterThan(9_000);
+  });
+
+  it("deletes threads by key, leaving the others", async () => {
+    await store.putThread("protoagent.palette.chat", longChat(1));
+    await store.putThread("protoagent.palette.chat:a", longChat(1));
+    await store.deleteThreads(["protoagent.palette.chat:a"]);
+    expect([...(await store.loadThreads("protoagent.palette.chat")).keys()]).toEqual(["protoagent.palette.chat"]);
+    await store.deleteThreads([]);
   });
 });
 
