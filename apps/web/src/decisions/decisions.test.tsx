@@ -145,6 +145,32 @@ describe("useDecisions store", () => {
     expect(list).toHaveBeenCalledTimes(3);
   });
 
+  it("reconciles departed cached pending records on reconnect and does not reread unchanged or terminal records", async () => {
+    const list = vi.spyOn(decisionsApi, "listDecisions").mockResolvedValue(listOf([decision("departed"), decision("waiting")]));
+    const get = vi.spyOn(decisionsApi, "getDecision").mockResolvedValue(decision("historical", { state: "answered" }));
+    const store = mountStore();
+    await settle();
+    await store.loadDecision("historical");
+    get.mockClear();
+    bus.connections.forEach((fn) => fn(false));
+    list.mockResolvedValue(listOf([decision("waiting")]));
+    const terminal = decision("departed", { state: "expired" });
+    let resolve!: (row: DecisionRow) => void;
+    get.mockImplementation(() => new Promise((done) => { resolve = done; }));
+    bus.connections.forEach((fn) => fn(true));
+    await settle();
+    expect(get).toHaveBeenCalledExactlyOnceWith("departed");
+    // Keep the old list until its departed record has been reconciled.
+    expect(store.getSnapshot().decisions.map((row) => row.id)).toEqual(["departed", "waiting"]);
+    resolve(terminal);
+    await settle();
+    expect(store.getSnapshot().records.departed).toEqual(terminal);
+    expect(store.getSnapshot().decisions.map((row) => row.id)).toEqual(["waiting"]);
+    expect(store.getSnapshot().pendingCount).toBe(1);
+    await store.refresh();
+    expect(get).toHaveBeenCalledTimes(1);
+  });
+
   it("notifies once per new pending id, with a click that opens the panel", async () => {
     const list = vi.spyOn(decisionsApi, "listDecisions").mockResolvedValue(listOf([]));
     const store = mountStore();

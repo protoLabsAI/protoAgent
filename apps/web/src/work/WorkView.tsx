@@ -37,7 +37,7 @@ export function WorkView({ frame = "rail", sessionId }: { frame?: "rail" | "moda
   const allSources = { ...useWorkItems({ sessionId, thisChatOnly: false }) };
   const selectedDecisionId = state.itemId?.startsWith("decision:") ? state.itemId.slice(9) : undefined;
   const retained = selectedDecisionId ? decisions.records[selectedDecisionId] : undefined;
-  if (retained && !allSources.decisions.items.some((item) => item.id === retained.id)) {
+  if (retained && retained.state !== "pending" && !allSources.decisions.items.some((item) => item.id === retained.id)) {
     // Keep the selected terminal record visible after the pending source refreshes.
     allSources.decisions = { ...allSources.decisions, items: [...allSources.decisions.items, {
       kind: "decision", id: retained.id, raw: retained, title: retained.question,

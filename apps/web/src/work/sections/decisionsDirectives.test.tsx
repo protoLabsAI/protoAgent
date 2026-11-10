@@ -119,6 +119,7 @@ beforeEach(() => {
   vi.restoreAllMocks();
   vi.clearAllMocks();
   connection.online = true;
+  vi.spyOn(decisionsApi, "getDecision").mockRejectedValue(new Error("unavailable"));
   vi.spyOn(decisionsApi, "listDecisions").mockImplementation(async () => {
     const decisions = data.sources.decisions.items.map((item) => item.raw as DecisionRow).filter((row) => row.state === "pending");
     return { decisions, pending: decisions.length };
@@ -304,6 +305,58 @@ describe("Work decision actions", () => {
     });
     expect(host.querySelector(".work-decision-detail")).toBe(detail);
     expect(detail?.textContent).not.toContain("offline");
+  });
+
+  it.each(["answered", "expired", "withdrawn", "cancelled"] as const)("reconciles a selected %s decision after reconnect without a bus event", async (state) => {
+    const id = `reconnect-${state}`;
+    const pending = decisionRow(id);
+    const terminal = decisionRow(id, { state, answer_label: state === "answered" ? "Stop" : null });
+    data.sources.decisions.items = [decisionItem(pending)];
+    const saved = { section: "decisions", itemId: `decision:${id}`, filters: { thisChat: true }, scrollTop: 81 };
+    workState(saved);
+    await render();
+    const detail = host.querySelector(".work-decision-detail")!;
+    expect(detail.querySelector('[role="group"][aria-label="Answer"]')).toBeTruthy();
+    await act(async () => {
+      connection.online = false;
+      connection.listeners.forEach((listener) => listener(false));
+    });
+    const get = vi.mocked(decisionsApi.getDecision).mockImplementation(async (requested) => {
+      if (requested === id) {
+        data.sources.decisions.items = [];
+        return terminal;
+      }
+      throw new Error("unavailable");
+    });
+    vi.mocked(decisionsApi.listDecisions).mockResolvedValue({ decisions: [], pending: 0 });
+    await act(async () => {
+      connection.online = true;
+      connection.listeners.forEach((listener) => listener(true));
+    });
+    expect(get.mock.calls.filter(([requested]) => requested === id)).toEqual([[id]]);
+    expect(decisionsStoreForTest.getSnapshot().records[id]).toEqual(terminal);
+    expect(host.querySelector(".work-decision-detail")).toBe(detail);
+    expect(detail.querySelector('[role="group"][aria-label="Answer"]')).toBeNull();
+    expect(detail.textContent).toContain(state === "answered" ? "Stop" : state === "expired" ? "No answer by" : "doesn't need this any more");
+    expect(useUI.getState().surfaceStates.work).toEqual(saved);
+    expect(host.querySelector(".work-view__list")?.scrollTop).toBe(81);
+  });
+
+  it("does not restore stale answer controls when a departed decision cannot be reloaded", async () => {
+    data.sources.decisions.items = [decisionItem(decisionRow("reconnect-unavailable"))];
+    workState({ section: "decisions", itemId: "decision:reconnect-unavailable", filters: { thisChat: true } });
+    await render();
+    await act(async () => {
+      connection.online = false;
+      connection.listeners.forEach((listener) => listener(false));
+    });
+    await act(async () => {
+      data.sources.decisions.items = [];
+      connection.online = true;
+      connection.listeners.forEach((listener) => listener(true));
+    });
+    expect(host.querySelector('[role="group"][aria-label="Answer"]')).toBeNull();
+    expect(useUI.getState().surfaceStates.work.itemId).toBe("decision:reconnect-unavailable");
   });
 
   it.each(["answered", "expired", "withdrawn", "cancelled"] as const)("shares %s conflicts and retains the selected terminal record", async (state) => {
