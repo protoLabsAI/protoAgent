@@ -47,3 +47,38 @@ test("mobile: the composer model menu is a full-screen sheet, other menus are no
   });
   expect(bareMenuPosition).not.toBe("fixed");
 });
+
+test("mobile: composer model menu retains touch focus, selects, and reopens", async ({ page }) => {
+  await page.goto("/app/", { waitUntil: "load" });
+  const composer = page.getByPlaceholder(/Message protoAgent/i);
+  const trigger = page.getByRole("button", { name: "Model for this chat" });
+  const sheet = page.locator(".pl-menu.composer-model-menu");
+  await composer.tap();
+  await composer.fill("Keep this draft");
+  await expect(composer).toBeFocused();
+  await trigger.tap();
+  await expect(sheet).toBeVisible();
+  // Let the entire touch sequence and any delayed focus/dismissal settle.
+  await page.waitForTimeout(500);
+  await expect(sheet).toBeVisible();
+  await expect(composer).not.toBeFocused();
+  await expect.poll(() => sheet.evaluate((el) => el.contains(document.activeElement))).toBe(true);
+  await sheet.getByRole("menuitem", { name: "protolabs/fast", exact: true }).tap();
+  await expect(sheet).toBeHidden();
+  await expect(trigger).toHaveText("protolabs/fast");
+  await expect(trigger).toBeFocused();
+  await expect(composer).toHaveValue("Keep this draft");
+
+  await trigger.tap();
+  await expect(sheet).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(sheet).toBeHidden();
+  await expect(trigger).toBeFocused();
+  // Keyboard activation must continue to work after the touch path.
+  await trigger.press("ArrowDown");
+  await expect(sheet).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(trigger).toBeFocused();
+  await composer.tap();
+  await expect(composer).toBeFocused();
+});
