@@ -111,9 +111,17 @@ def test_checks_workflow_preserves_stable_gate_and_full_suite_shards() -> None:
     assert "cargo test --locked" in workflow
     assert "\n  windows-tests:\n    name: Windows tests (native)\n" in workflow
     assert "needs: [windows-scope, windows-python-tests, windows-rust-tests]" in workflow
-    # web-e2e is path-scoped but must fail OPEN when classification didn't succeed.
-    web = workflow.split("\n  web-e2e:\n", 1)[1]
-    assert "needs.windows-scope.result != 'success' || needs.windows-scope.outputs.web_tests == 'true'" in web
+    # The web lanes are path-scoped but must fail OPEN when classification didn't succeed.
+    fail_open = "needs.windows-scope.result != 'success' || needs.windows-scope.outputs.web_tests == 'true'"
+    for job in ("web-unit", "web-e2e-shard"):
+        lane = workflow.split(f"\n  {job}:\n", 1)[1].split("\n\n  ", 1)[0]
+        assert fail_open in lane, job
+    assert "--shard=${{ matrix.shard }}/4" in workflow
+    # "Web E2E smoke" is the REQUIRED check: a gate over both lanes that always reports.
+    gate = workflow.split("\n  web-e2e:\n", 1)[1].split("\n\n  ", 1)[0]
+    assert "name: Web E2E smoke" in gate
+    assert "needs: [windows-scope, web-unit, web-e2e-shard]" in gate
+    assert "if: ${{ always() }}" in gate
     assert "web_tests: ${{ steps.scope.outputs.web_tests }}" in workflow
 
 
