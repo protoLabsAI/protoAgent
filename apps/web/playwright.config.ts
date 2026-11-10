@@ -63,12 +63,12 @@ export default defineConfig({
       testMatch: /tablet\.spec\.ts/,
     },
     // WebKit covers the WKWebView plugin-preview harness and the Work handle/pane
-    // layouts. Chromium also discovers these specs; other suites are not duplicated.
+    // layouts, plus terminal decision states. Chromium also discovers these specs; other suites are not duplicated.
     // The Playwright container (checks.yml web-e2e) ships WebKit, so no extra install is needed.
     {
       name: "webkit",
       use: { ...devices["Desktop Safari"] },
-      testMatch: /(?:plugin-preview-.*|work-handle-layout|work-mobile-layout)\.spec\.ts$/,
+      testMatch: /(?:plugin-preview-.*|work-handle-layout|work-mobile-layout|decision-needed)\.spec\.ts$/,
     },
   ],
   webServer: process.env.FLOW_BASE_URL ? undefined : {
