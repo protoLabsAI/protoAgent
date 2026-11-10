@@ -1,0 +1,1 @@
+- **Open Work on your phone (#4955).** Swipe up or tap the handle above chat’s composer, or choose Work from the menu, to open the full-screen Work sheet without losing your place. Decision notifications open its Decisions section.

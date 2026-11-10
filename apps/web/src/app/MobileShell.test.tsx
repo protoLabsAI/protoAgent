@@ -5,13 +5,15 @@
 // chat-store, like the other console UI suites (FleetRoom.test.tsx) — no testing-library dep.
 import { act, createElement as h } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { chatStore, unusedSession } from "../chat/chat-store";
 // Raw stylesheet text — same source-guard pattern as mobileBottomInset.test.ts. `vitest.config.ts`
 // opts src's CSS into processing so `?raw` returns the real text.
 import mobileShellCss from "./mobile-shell.css?raw";
-import { MobileShell } from "./MobileShell";
+import appSource from "./App.tsx?raw";
+import { useUI } from "../state/uiStore";
+import { MobileShell, MobileWorkHandle } from "./MobileShell";
 
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -22,12 +24,13 @@ type ShellProps = Parameters<typeof MobileShell>[0];
 
 function baseProps(over: Partial<ShellProps> = {}): ShellProps {
   return {
-    root: h("div", { "data-testid": "chat-root" }),
+    root: h("div", { "data-testid": "chat-root" }, h(MobileWorkHandle)),
     pushed: null,
     title: "A pushed surface",
     showBack: false,
     onBack: () => {},
     onOpenDrawer: () => {},
+    onOpenWork: () => {},
     sessionSheetOpen: false,
     onSessionSheetChange: () => {},
     ...over,
@@ -137,5 +140,132 @@ describe("mobile-shell.css after the DS Button swap (#551)", () => {
     expect(rule).not.toMatch(/#[0-9a-fA-F]{3,}|rgba?\(/);
     // The only literal px allowed is the shared 44px HIG touch floor (min-width/min-height).
     for (const px of rule.match(/\d+px/g) ?? []) expect(px).toBe("44px");
+  });
+});
+
+
+describe("phone Work entry points", () => {
+  function pointer(target: HTMLElement, type: string, x: number, y: number) {
+    act(() => target.dispatchEvent(new PointerEvent(type, {
+      bubbles: true, pointerId: 1, isPrimary: true, button: 0, clientX: x, clientY: y,
+    })));
+  }
+
+  function swipe(dx: number, dy: number) {
+    const handle = byLabel("Open Work")!;
+    handle.setPointerCapture = vi.fn();
+    pointer(handle, "pointerdown", 100, 200);
+    pointer(handle, "pointerup", 100 + dx, 200 + dy);
+    act(() => handle.dispatchEvent(new MouseEvent("click", { bubbles: true, detail: 1 })));
+  }
+
+  it.each([[0, -60, 1], [0, -48, 1], [0, -30, 0], [60, -60, 0], [0, 60, 0]])(
+    "handles travel (%i, %i) without a duplicate click",
+    (dx, dy, calls) => {
+      const onOpenWork = vi.fn();
+      mount({ onOpenWork });
+      swipe(dx, dy);
+      expect(onOpenWork).toHaveBeenCalledTimes(calls);
+    },
+  );
+
+  it("opens by tap and keyboard-generated click on a DS ghost button", () => {
+    const onOpenWork = vi.fn();
+    mount({ onOpenWork });
+    const handle = byLabel("Open Work")!;
+    expect(handle.classList.contains("pl-btn--ghost")).toBe(true);
+    swipe(0, 0);
+    act(() => handle.click());
+    expect(onOpenWork).toHaveBeenCalledTimes(2);
+  });
+
+  it.each([[1, 0], [0, -1], [-1, 1], [4, -4], [0, 8]])(
+    "opens once for a tap with finger jitter (%i, %i)",
+    (dx, dy) => {
+      const onOpenWork = vi.fn();
+      mount({ onOpenWork });
+      swipe(dx, dy);
+      expect(onOpenWork).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it("allows a jittery tap and keyboard activation after a rejected drag", () => {
+    const onOpenWork = vi.fn();
+    mount({ onOpenWork });
+    swipe(0, -30);
+    expect(onOpenWork).not.toHaveBeenCalled();
+    act(() => byLabel("Open Work")!.click());
+    expect(onOpenWork).toHaveBeenCalledTimes(1);
+    swipe(1, -1);
+    expect(onOpenWork).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not listen on the message root", () => {
+    const onOpenWork = vi.fn();
+    mount({ onOpenWork });
+    const chat = container.querySelector<HTMLElement>('[data-testid="chat-root"]')!;
+    pointer(chat, "pointerdown", 100, 200);
+    pointer(chat, "pointerup", 100, 100);
+    expect(onOpenWork).not.toHaveBeenCalled();
+  });
+
+  it.each([{ sheetOpen: true }, { sessionSheetOpen: true }])("ignores gestures under an open sheet: %o", (props) => {
+    const onOpenWork = vi.fn();
+    mount({ ...props, onOpenWork });
+    swipe(0, -60);
+    expect(onOpenWork).not.toHaveBeenCalled();
+  });
+
+  it("ignores canceled pointers", () => {
+    const onOpenWork = vi.fn();
+    mount({ onOpenWork });
+    const handle = byLabel("Open Work")!;
+    handle.setPointerCapture = vi.fn();
+    pointer(handle, "pointerdown", 100, 200);
+    pointer(handle, "pointercancel", 100, 180);
+    pointer(handle, "pointerup", 100, 100);
+    expect(onOpenWork).not.toHaveBeenCalled();
+  });
+
+  it("omits the handle on pushed and background views and outside the phone shell", () => {
+    mount({ showBack: true, pushed: h("div") });
+    expect(byLabel("Open Work")).toBeNull();
+    mount({ showBack: true });
+    expect(byLabel("Open Work")).toBeNull();
+    act(() => root.render(h(MobileWorkHandle)));
+    expect(byLabel("Open Work")).toBeNull();
+    expect(mobileShellCss).toMatch(/@media \(min-width: 768px\)\s*\{\s*\.mshell-work-handle \{ display: none;/);
+  });
+
+  // Exercise App's actual drawer callback with the real surface store.
+  it("opens Work in place on the phone while other items and desktop retain their navigation", () => {
+    const body = /onSelectSurface=\{\(id\) => \{([\s\S]*?)\n      \}\}/.exec(appSource)![1];
+    const setMobileActive = vi.fn();
+    const select = new Function("isMobile", "useUI", "setMobileActive", "id", body);
+    const saved = useUI.getState();
+    try {
+      useUI.setState({ mobileActive: "chat", surfaceModal: null, surfaceStates: { work: { section: "goals" } } });
+      select(true, useUI, setMobileActive, "work");
+      expect(setMobileActive).not.toHaveBeenCalled();
+      expect(useUI.getState().surfaceModal).toEqual({ viewId: "work", state: { section: "goals" } });
+      expect(useUI.getState().mobileActive).toBe("chat");
+      select(true, useUI, setMobileActive, "knowledge");
+      expect(setMobileActive).toHaveBeenLastCalledWith("knowledge");
+      select(false, useUI, setMobileActive, "work");
+      expect(setMobileActive).toHaveBeenLastCalledWith("work");
+    } finally {
+      useUI.setState(saved);
+    }
+  });
+
+  it("routes phone decision notifications to Work after closing Sessions", () => {
+    const body = /useLayoutEffect\(\(\) => \{\n(    if \(decisions.panelOpen \|\| surfaceModal\)[\s\S]*?)\n  \},/.exec(appSource)![1];
+    const calls: unknown[] = [];
+    new Function("decisions", "surfaceModal", "isMobile", "setSessionSheetRequested", "useUI", body)(
+      { panelOpen: true, closePanel: () => calls.push("close decisions") }, null, true,
+      (open: boolean) => calls.push(["sessions", open]),
+      { getState: () => ({ openSurfaceModal: (...args: unknown[]) => calls.push(args) }) },
+    );
+    expect(calls).toEqual([["sessions", false], "close decisions", ["work", { section: "decisions" }]]);
   });
 });

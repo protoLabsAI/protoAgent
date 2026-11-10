@@ -1,10 +1,60 @@
 import { Button } from "@protolabsai/ui/primitives";
 import { ChevronDown, ChevronLeft, Menu, Plus, Search } from "lucide-react";
-import { useEffect, type ReactNode } from "react";
+import { createContext, useContext, useEffect, useRef, type ReactNode } from "react";
 
 import { chatStore, unusedSession, useChatState } from "../chat/chat-store";
 import { useKbIntents } from "../keybindings/intents";
 import { SessionSheet } from "./SessionSheet";
+
+// The shell owns the action; chat places it above its variable-height composer.
+const WorkHandleContext = createContext<{ onOpen: () => void; blocked: boolean } | null>(null);
+
+export function MobileWorkHandle() {
+  const work = useContext(WorkHandleContext);
+  const start = useRef<{ id: number; x: number; y: number } | null>(null);
+  const suppressClick = useRef(false);
+  if (!work) return null;
+  return (
+    <Button
+      variant="ghost"
+      type="button"
+      className="mshell-work-handle"
+      aria-label="Open Work"
+      disabled={work.blocked}
+      onPointerDown={(event) => {
+        suppressClick.current = false;
+        if (work.blocked || event.button !== 0 || !event.isPrimary) return;
+        start.current = { id: event.pointerId, x: event.clientX, y: event.clientY };
+        event.currentTarget.setPointerCapture(event.pointerId);
+      }}
+      onPointerUp={(event) => {
+        const origin = start.current;
+        if (!origin || origin.id !== event.pointerId) return;
+        start.current = null;
+        const dx = event.clientX - origin.x;
+        const dy = event.clientY - origin.y;
+        // Allow normal finger jitter during a tap; suppress clicks after drags,
+        // including those that miss the upward-swipe threshold.
+        suppressClick.current = Math.hypot(dx, dy) > 8;
+        if (!work.blocked && dy <= -48 && Math.abs(dy) > 2 * Math.abs(dx)) {
+          event.currentTarget.focus();
+          work.onOpen();
+        }
+      }}
+      onPointerCancel={() => { start.current = null; suppressClick.current = true; }}
+      onLostPointerCapture={() => { start.current = null; }}
+      onClick={(event) => {
+        if (work.blocked || (event.detail !== 0 && suppressClick.current)) return;
+        event.currentTarget.focus();
+        work.onOpen();
+      }}
+    >
+      <svg className="mshell-work-glyph" viewBox="0 0 32 4" aria-hidden="true">
+        <path d="M2 2h28" stroke="currentColor" strokeWidth="4" strokeLinecap="round" />
+      </svg>
+    </Button>
+  );
+}
 
 /**
  * The chat-first mobile shell (supersedes ADR 0035 D6).
@@ -37,6 +87,8 @@ export function MobileShell({
   showBack,
   onBack,
   onOpenDrawer,
+  onOpenWork,
+  sheetOpen = false,
   sessionSheetOpen,
   onSessionSheetChange,
   banners,
@@ -50,6 +102,8 @@ export function MobileShell({
   showBack: boolean;
   onBack: () => void;
   onOpenDrawer: () => void;
+  onOpenWork: () => void;
+  sheetOpen?: boolean;
   sessionSheetOpen: boolean;
   onSessionSheetChange: (open: boolean) => void;
   /** Runtime warning / agent-down strips, under the header. */
@@ -161,7 +215,9 @@ export function MobileShell({
             affordance shows. A docked background plugin view is active INSIDE the root
             (display-toggled, no pushed layer), and inerting it would kill its interactivity. */}
         <div className="mshell-root" inert={pushed != null}>
-          {root}
+          <WorkHandleContext.Provider value={showBack || pushed != null ? null : { onOpen: onOpenWork, blocked: sessionSheetOpen || sheetOpen }}>
+            {root}
+          </WorkHandleContext.Provider>
         </div>
 
         {pushed != null ? <div className="mshell-pushed">{pushed}</div> : null}

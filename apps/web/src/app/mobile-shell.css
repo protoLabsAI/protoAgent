@@ -228,3 +228,20 @@
     animation: none;
   }
 }
+
+/* Only the handle owns the swipe; transcript scrolling and the home edge stay native. */
+.mshell-work-handle {
+  display: flex;
+  width: 100%;
+  touch-action: none;
+  margin-bottom: var(--pl-space-1);
+}
+
+.mshell-work-glyph {
+  width: var(--pl-space-8);
+  height: var(--pl-space-1);
+}
+
+@media (min-width: 768px) {
+  .mshell-work-handle { display: none; }
+}

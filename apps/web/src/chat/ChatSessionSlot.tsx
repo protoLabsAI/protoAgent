@@ -4,6 +4,7 @@ import { EyeOff, Users } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 
+import { MobileWorkHandle } from "../app/MobileShell";
 import { useKbIntents } from "../keybindings/intents";
 import { api } from "../lib/api";
 import { CHAT_ATTACH_ACCEPT } from "../lib/attachTypes";
@@ -1935,6 +1936,7 @@ export function ChatSessionSlot({
         onDragOver={onAttachDragOver}
         onDrop={onAttachDrop}
       >
+        <MobileWorkHandle />
         {/* Who is in this chat (#3049) — derived from the transcript, so it can never
             drift from what happened (the tracked-list version grew chips a deleted draft
             left behind). A quiet legend, not presence: nothing here "listens" — an agent
