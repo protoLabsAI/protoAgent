@@ -1,0 +1,1 @@
+- **Unused phone Decisions header button removed (#4725).** Removes the unmounted phone header composite and its obsolete tests. The hamburger alert dot signals pending work, and swipe up or the hamburger Work item opens the Work sheet. Desktop and tablet Decisions widget coverage is preserved.

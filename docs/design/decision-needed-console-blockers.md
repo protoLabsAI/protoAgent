@@ -17,7 +17,7 @@ The checkout includes the merged component slice, PR #4947
 
 | Missing contract | Evidence in the merged implementation | Required correction |
 | --- | --- | --- |
-| DS phone action button | `apps/web/src/decisions/DecisionsHeaderButton.tsx` imports only `Count` from primitives, renders a raw `<button>`, and injects its own chrome and focus-ring stylesheet. `entrypoints.test.tsx` explicitly tests that stylesheet. | Use the DS ghost, md, icon `Button` required by revision 1 §2.2, Q23 and Q24; keep only layout CSS in the shell. Update the composite tests with it. |
+| DS phone action button | The former phone header composite imports only `Count` from primitives, renders a raw `<button>`, and injects its own chrome and focus-ring stylesheet. `entrypoints.test.tsx` explicitly tests that stylesheet. | Use the DS ghost, md, icon `Button` required by revision 1 §2.2, Q23 and Q24; keep only layout CSS in the shell. Update the composite tests with it. |
 | Shared lookup of settled decisions | `apps/web/src/decisions/useDecisions.ts` calls `listDecisions("pending")` and replaces `snapshot.decisions` with that response. `answer()` returns the result to its caller but does not retain the returned row. There is no shared by-id lookup or hydration for a historical transcript. | Provide a shared record lookup that can retain and load answered, expired and withdrawn decisions, while keeping pending count and ordering separate. A chat-local copy would violate the task's shared-store requirement. |
 | Frozen transcript presentation | `apps/web/src/decisions/DecisionCard.tsx` has no transcript presentation prop. An answered row renders the “Already answered” callout; a successful local answer stays in the component's “Sent” phase. Neither renders `You chose "{option}" · {time}`. | Add a transcript mode to the same card, preserving the panel's sent hold and 409 behavior. Test both a newly answered card and an answered record loaded with a historical chat. |
 
@@ -58,7 +58,7 @@ loop retains ownership of commits, pushes and the ready-for-review PR lifecycle.
 ## Mount follow-up (2026-11-09, redo of bd-bqyfs)
 
 The three original composite gaps above are now closed. The phone header is dropped
-by Josh's scope change: `DecisionsHeaderButton` remains unused, and neither
+by Josh's scope change: the unused phone Decisions header button has been removed, and neither
 `MobileShell.tsx` nor `mobile-shell.css` changes. Q13's spacer replacement and
 Q23/Q24's new header button/focus ring are therefore no longer applicable.
 

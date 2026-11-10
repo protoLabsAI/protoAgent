@@ -1,5 +1,7 @@
 # "Decision needed" console item — design spec
 
+> **Phone update (Josh, 2026-11-09):** The phone header button described below was withdrawn and its unused composite removed. Swipe up or the hamburger Work item opens the Work sheet; the hamburger alert dot signals pending work. The earlier phone-button details are historical.
+
 Status: **APPROVED, ready to build** (Josh, 2026-11-08, revision 1: "yeah looks good"). Placement: a Decisions `UtilityWidget` pill in the desktop/tablet bottom utility bar, and a header icon button with a count on mobile (the bottom quick-bar was retired, ADR 0086 D1). Owner: designSystem. Issue: #4725.
 
 - Surface: core console, `apps/web` (issue #4725)
@@ -356,7 +358,7 @@ Every state below is in the preview.
 |---|---|
 | `UtilityWidget` (exists) | The desktop pill and its dialog. Needs a small addition: controlled `open` / `onOpenChange`, so a notification click or a link can open it (Q11), and `aria-haspopup="dialog"` on the pill (Q12). |
 | `DecisionsWidget` (new) | Wraps `UtilityWidget` with the icon, `Count` badge, label and info from §2.1. Mounted in `App.tsx` between `<PaletteButton />` and `<BackgroundJobs />`. |
-| `DecisionsHeaderButton` (new) | The phone entry point: a DS `<Button variant="ghost" size="md" icon>` with an `aria-label` ("Decisions, N waiting") and a `Count` badge beside the icon, wired to `useDecisions()`. `MobileShell` renders it before New chat on the chat root, and in place of the right-hand spacer on pushed views (§2.2). Renders nothing when the count is 0 or during the first load. Opens `DecisionsPanel` in `Drawer side="bottom"`. |
+| Phone Decisions header button (withdrawn) | The phone entry point: a DS `<Button variant="ghost" size="md" icon>` with an `aria-label` ("Decisions, N waiting") and a `Count` badge beside the icon, wired to `useDecisions()`. `MobileShell` renders it before New chat on the chat root, and in place of the right-hand spacer on pushed views (§2.2). Renders nothing when the count is 0 or during the first load. Opens `DecisionsPanel` in `Drawer side="bottom"`. |
 | `DecisionsPanel` | The panel body: intro, ordering, the "nothing" lines. Rendered inside the `UtilityWidget` dialog on desktop and inside `Drawer side="bottom"` on the phone. |
 | `DecisionCard` | One decision and every state in §5. Used in the panel and in the source chat transcript. |
 | `useDecisions()` | Fleet-wide store: load, `decision.changed` push updates, answer, 409 handling, `notifyIfHidden(title, body?)` once per id. Drives the count for both entry points. |
@@ -367,7 +369,7 @@ The composites use tokens only and pass `ds_check`. The header button's only new
 
 - It joins an existing app-owned control family: the `MobileShell` header buttons (DS `<Button variant="ghost" size="md" icon>`, `MobileShell.tsx`). It copies their variant and quiet look, so it ships in the same PR as the desktop pill. Nothing waits on an npm publish.
 - The floating action button considered earlier is dropped. The DS still has no FAB, and none is needed now.
-- Using `<Button variant="ghost" size="md" icon>` gives `DecisionsHeaderButton` the DS focus ring and tap-highlight, matching every existing header button.
+- Using `<Button variant="ghost" size="md" icon>` gives the phone Decisions header button the DS focus ring and tap-highlight, matching every existing header button.
 
 ### 8.4 Possible later contribution (unchanged, not blocking)
 
@@ -404,11 +406,11 @@ The composites use tokens only and pass `ds_check`. The header button's only new
 9. **Toast with action.** Does `useToast` support an action button? (The Knowledge undo toast puts a `Button` in `message`, so probably yes.) If so, a new decision while the window is visible could show a neutral "protoEngineer needs a decision · View" toast.
 11. **Controlled `UtilityWidget`.** `UtilityWidget` keeps its open state internally. A notification click and "Open the panel" from an Activity event need to open it from outside. Add optional `open` / `onOpenChange` props, keeping today's uncontrolled behaviour as the default?
 12. **`aria-haspopup` on the pill.** `UtilityWidget`'s pill doesn't expose `aria-haspopup="dialog"` or `aria-expanded`. Add both to `UtilityWidget` for every widget, not only Decisions?
-13. **Pushed-view spacer.** On pushed views the header's right slot is an `aria-hidden` spacer that centres the title. Is it safe for `MobileShell` to render `DecisionsHeaderButton` there instead while a decision is pending, or do any mobile e2e specs pin that spacer?
+13. **Pushed-view spacer.** On pushed views the header's right slot is an `aria-hidden` spacer that centres the title. Is it safe for `MobileShell` to render the phone Decisions header button there instead while a decision is pending, or do any mobile e2e specs pin that spacer?
 14. **Feed badge.** The feed raises its badge on `inbox.item`. If a parked decision also arrives as an inbox item, the cluster would show two counts for one decision. Can the feed skip decision events for its unread count?
 15. **Two sheets.** The session sheet is already a bottom `Drawer` opened from the header. Opening the Decisions sheet while the session sheet is open (for example from a notification) must close the session sheet first, so two bottom sheets never stack. Is there one UI-store owner for "which mobile sheet is open"?
-23. **Raw button or DS `Button` — resolved.** The existing header buttons are DS `<Button variant="ghost" size="md" icon>` since #551, not raw `<button className="mshell-head-btn">`. `DecisionsHeaderButton` uses the same variant to match them. No choice remains.
-24. **Header focus ring — resolved.** The #551 DS Button swap gave every existing header button the DS focus ring. `DecisionsHeaderButton` inherits it by using `<Button variant="ghost" size="md" icon>`. No separate a11y card is needed for the button this spec adds.
+23. **Raw button or DS `Button` — resolved.** The existing header buttons are DS `<Button variant="ghost" size="md" icon>` since #551, not raw `<button className="mshell-head-btn">`. The phone Decisions header button uses the same variant to match them. No choice remains.
+24. **Header focus ring — resolved.** The #551 DS Button swap gave every existing header button the DS focus ring. The phone Decisions header button inherits it by using `<Button variant="ghost" size="md" icon>`. No separate a11y card is needed for the button this spec adds.
 
 ### For Josh
 
