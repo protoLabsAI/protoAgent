@@ -535,10 +535,11 @@ jobs:
     # @playwright/test version — a guard step below fails loudly on drift.
     container:
       image: mcr.microsoft.com/playwright:v1.61.1-noble
-    # Unit tests now take ~5 min before the build and 800+ browser cases. Run 42833933494
-    # exhausted the old 15-min job budget while E2E was still progressing. Allow the full
-    # sequential gate to finish with two workers; individual test timeouts stay unchanged.
-    timeout-minutes: 30
+    # Unit tests and build+Playwright run sequentially. Run 42831892534 spent five
+    # minutes in vitest, then was cancelled at the 15-minute job limit while the
+    # 796-test browser suite was still progressing. Allow room for the full suite
+    # and artifact upload; individual Playwright test/assertion timeouts stay bounded.
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
