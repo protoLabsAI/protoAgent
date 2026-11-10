@@ -740,6 +740,86 @@ async def _operator_goals_set(body: dict) -> dict:
     return {"ok": True, "message": msg, "kicked": kicked}
 
 
+# The only keys a ``PATCH /api/goals/{sid}`` body may carry (#4955 Q9) — the completion
+# contract (ADR 0073) plus the two per-goal budgets. The condition, verifier, status and
+# per-iteration history are deliberately absent: they're set once (condition/verifier) or
+# owned by the drive loop (status/history), so a body naming any other key is a 400.
+_GOAL_EDITABLE_FIELDS = ("outcome", "constraints", "boundaries", "stop_when", "max_iterations", "no_progress_limit")
+
+
+async def _operator_goals_update(session_id: str, body: dict) -> dict:
+    """Edit a goal in place (#4955 Q9). Loads the goal, applies
+    ONLY the editable fields the body names, and writes it back through ``store.set`` (which
+    re-fires ``goal.changed`` so every open console refreshes). Returns the updated goal.
+
+    The condition, verifier, status and history never change here — a body naming any of them
+    (or any other non-editable key) is a ``ValueError`` → 400, and nothing is written. An
+    unknown session is a ``NotFoundError`` → 404; goal mode switched off is a
+    ``GoalsDisabledError`` → 503. A ``max_iterations`` below the goal's current ``iteration``
+    would strand the drive loop (``iteration >= max_iterations`` is already true), so it's a
+    400 too. ``max_iterations``/``no_progress_limit`` reuse the goal-set bounds (a whole
+    number in ``1..MAX``)."""
+    import asyncio
+
+    from graph.goals.types import goal_budget_problem
+    from operator_api.routes import GoalsDisabledError, NotFoundError
+
+    if STATE.goal_controller is None:
+        raise GoalsDisabledError("goal mode is not enabled")
+    body = body or {}
+    rejected = sorted(k for k in body if k not in _GOAL_EDITABLE_FIELDS)
+    if rejected:
+        raise ValueError(
+            "these goal fields cannot be edited in place: "
+            + ", ".join(rejected)
+            + " (editable: "
+            + ", ".join(_GOAL_EDITABLE_FIELDS)
+            + ")"
+        )
+    # Same bounds as the goal-set request model (1..MAX, a whole number, never a bool).
+    # ``goal_budget_problem`` skips an absent/``None`` value, so only a key the body actually
+    # sent is checked.
+    problem = goal_budget_problem(body.get("max_iterations"), body.get("no_progress_limit"))
+    if problem is not None:
+        raise ValueError(problem)
+
+    store = STATE.goal_controller.store
+
+    def update():
+        with store.transaction():
+            state = store.get(session_id)
+            if state is None:
+                raise NotFoundError(f"no goal for session {session_id!r}")
+
+            max_iterations = body.get("max_iterations")
+            if max_iterations is not None and max_iterations < state.iteration:
+                raise ValueError(
+                    f"max_iterations ({max_iterations}) is below the goal's current iteration "
+                    f"({state.iteration}); it would exhaust the goal immediately."
+                )
+
+            # Apply only the keys present. A string is coerced like the set handler does; a budget
+            # sent as an explicit ``null`` is a no-op (the field stays at its current value).
+            if "outcome" in body:
+                state.outcome = str(body["outcome"] or "")
+            if "constraints" in body:
+                state.constraints = _as_str_list(body["constraints"])
+            if "boundaries" in body:
+                state.boundaries = _as_str_list(body["boundaries"])
+            if "stop_when" in body:
+                state.stop_when = str(body["stop_when"] or "")
+            if max_iterations is not None:
+                state.max_iterations = max_iterations
+            no_progress_limit = body.get("no_progress_limit")
+            if no_progress_limit is not None:
+                state.no_progress_limit = no_progress_limit
+
+            store.set(state)
+            return {"goal": state.to_dict()}
+
+    return await asyncio.to_thread(update)
+
+
 def _safe_kick(session_id: str, prompt: str) -> bool:
     """Best-effort: enqueue a drive turn via ``run_in_session`` without ever crashing the
     caller — the goal is already persisted, so a scheduler hiccup (or a non-dict return) must

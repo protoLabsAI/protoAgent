@@ -50,6 +50,14 @@ class ConflictError(Exception):
     overwrite the newer record and its progress, so the restore refuses instead."""
 
 
+class GoalsDisabledError(Exception):
+    """Goal mode is switched off (no goal controller wired) — ``_http_error`` answers 503.
+
+    Raised by ``_operator_goals_update`` (#4955 Q9): a goal-edit request can't be served when
+    the feature isn't running, and 503 (not 404/409) tells the console the capability is
+    unavailable rather than the goal missing."""
+
+
 class SubagentRunRequest(BaseModel):
     session_id: str = "manual-subagent"
     type: str = "researcher"
@@ -286,7 +294,8 @@ def _http_error(exc: Exception) -> HTTPException:
 
     ``ValueError`` (the caller's input) is a 400 and ``NotFoundError`` a 404, both with the
     handler's own message; a ``ConflictError`` (an undo that would clobber a live record)
-    and a "not loaded" ``RuntimeError`` are each a 409. Anything else is a
+    and a "not loaded" ``RuntimeError`` are each a 409; a ``GoalsDisabledError`` (goal mode
+    off) is a 503. Anything else is a
     fault in our code: it is logged here with its traceback under a short error id, and the
     client gets a generic message carrying that id (#3973) — never ``str(exc)``, which
     leaked file paths and library internals to whoever made the request."""
@@ -296,6 +305,8 @@ def _http_error(exc: Exception) -> HTTPException:
         return HTTPException(status_code=404, detail=str(exc))
     if isinstance(exc, ConflictError):
         return HTTPException(status_code=409, detail=str(exc))
+    if isinstance(exc, GoalsDisabledError):
+        return HTTPException(status_code=503, detail=str(exc))
     if isinstance(exc, RuntimeError) and "not loaded" in str(exc).lower():
         return HTTPException(status_code=409, detail=str(exc))
     error_id = uuid.uuid4().hex[:8]
@@ -872,6 +883,22 @@ def register_operator_routes(
             state = await asyncio.to_thread(store.get, session_id)
             plan = await asyncio.to_thread(store.read_plan, session_id) if state else ""
             return {"enabled": True, "goal": state.to_dict() if state else None, "plan": plan or ""}
+        except Exception as exc:
+            raise _http_error(exc) from exc
+
+    # Edit a goal in place (#4955 Q9) — the Work view's Edit button. A PARTIAL update: only
+    # the completion-contract fields (outcome/constraints/boundaries/stop_when) and the two
+    # per-goal budgets (max_iterations/no_progress_limit) may change; naming the condition,
+    # verifier, status or history (set once, or owned by the drive loop) is a 400. Reads the
+    # controller directly like the GET above, so no injected fn: an unknown session is a 404,
+    # goals-off a 503, a max_iterations below the goal's current iteration a 400. The write
+    # goes through ``store.set``, which re-fires ``goal.changed``.
+    @app.patch("/api/goals/{session_id}")
+    async def _goal_update(session_id: SessionId, body: dict | None = Body(default=None)):
+        from operator_api.console_handlers import _operator_goals_update
+
+        try:
+            return await _operator_goals_update(session_id, body or {})
         except Exception as exc:
             raise _http_error(exc) from exc
 
