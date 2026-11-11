@@ -66,7 +66,7 @@ function expectWork(section: string, itemId?: string) {
     expect(ui.rightWidth).toBeGreaterThanOrEqual(280);
   }
   expect(ui.surfaceModal).toBeNull();
-  expect(ui.surfaceStates.work).toEqual({ section, itemId, scrollTop: 0, filters: { thisChat: true, retained: true } });
+  expect(ui.surfaceStates.work).toEqual({ section, itemId, scrollTop: 0, filters: { thisChat: false, retained: true } }); // strips keep the saved filters (Work has no scope toggle)
   expect(ui.backgroundJobsRequest).toBe(initial.backgroundJobsRequest);
   expect(ui.directivesRequest).toBeNull();
 }

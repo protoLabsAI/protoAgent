@@ -424,8 +424,7 @@ function WorkspaceApp({ runtime }: { runtime: RuntimeStatus | null }) {
     if (decisions.panelOpen || surfaceModal) setSessionSheetRequested(false);
     if (isMobile && decisions.panelOpen) {
       decisions.closePanel();
-      // A notification, like the pills, counts across every chat — open on All (Josh 2026-11-11).
-      useUI.getState().openSurfaceModal("work", { section: "decisions", filters: { thisChat: false } });
+      useUI.getState().openSurfaceModal("work", { section: "decisions" });
     }
   }, [decisions.panelOpen, decisions.closePanel, isMobile, surfaceModal]);
   const setSessionSheetOpen = (open: boolean) => {
@@ -1496,7 +1495,7 @@ function WorkspaceApp({ runtime }: { runtime: RuntimeStatus | null }) {
                 {/* The palette's only visible way in (ADR 0057) — an icon pill, AFTER Settings:
                     that one keeps the far-left slot operators already reach for by position. */}
                 <PaletteButton />
-                <DecisionsWidget onOpen={() => useUI.getState().openSurfaceModal("work", { section: "decisions", filters: { thisChat: false } })} />
+                <DecisionsWidget onOpen={() => useUI.getState().openSurfaceModal("work", { section: "decisions" })} />
                 {/* Widgets (bottom-left): background subagents (ADR 0050 Phase 3) and the
                     unified feed (#3029) — one pill merging the former inbox + read-only
                     Activity feeds. These pills open their own sections in the Work modal. */}

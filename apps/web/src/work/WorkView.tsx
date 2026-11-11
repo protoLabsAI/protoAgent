@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from "react";
 import { Button, Empty } from "@protolabsai/ui/primitives";
-import { SideNav, Tabs } from "@protolabsai/ui/navigation";
+import { SideNav } from "@protolabsai/ui/navigation";
 import { useToast } from "@protolabsai/ui/overlays";
 import { api } from "../lib/api";
 import { sessionFromDurableTurns, SESSION_TURN_LIMIT } from "../chat/sessionHydration";
@@ -49,8 +49,6 @@ export function WorkView({ frame = "rail", sessionId }: { frame?: "rail" | "moda
   useSyncExternalStore(subscribe, getSnapshot);
   const state = useUI((s) => s.surfaceStates.work ?? emptyState);
   const section = state.section ?? "overview";
-  // "This chat" is the default in every frame (Josh 2026-11-11); All is one tap away.
-  const thisChat = typeof state.filters?.thisChat === "boolean" ? state.filters.thisChat : true;
   const toast = useToast();
   const agentOnline = useSyncExternalStore(onConnectionChange, isConnected);
   const decisions = useDecisions();
@@ -66,19 +64,18 @@ export function WorkView({ frame = "rail", sessionId }: { frame?: "rail" | "moda
     // Keep the selected terminal record visible after the pending source refreshes.
     allSources.decisions = { ...allSources.decisions, items: [...allSources.decisions.items, {
       kind: "decision", id: retained.id, raw: retained, title: retained.question,
-      status: fromDecision(retained.state), meta: decisionMeta(retained, !thisChat), sessionId: retained.session_id,
+      status: fromDecision(retained.state), meta: decisionMeta(retained, true), sessionId: retained.session_id,
     }] };
   }
   const sources = Object.fromEntries(Object.entries(allSources).map(([key, source]) => [key, {
     ...source, items: source.items.map((item) => {
       const record = item.kind === "decision" ? sharedOverride(item.raw as DecisionRow | undefined, decisions.records[item.id]) : undefined;
-      return record ? { ...item, raw: record, status: fromDecision(record.state), meta: decisionMeta(record, !thisChat) } : item;
-    }).filter((item) => !thisChat || !sessionId || !item.sessionId || item.sessionId === sessionId),
+      return record ? { ...item, raw: record, status: fromDecision(record.state), meta: decisionMeta(record, true) } : item;
+    }),
   }])) as WorkItems;
   const items = Object.values(sources).flatMap((source) => source.items);
   const selected = items.find((item) => `${item.kind}:${item.id}` === state.itemId || item.id === state.itemId);
   const selectedKey = selected ? `${selected.kind}:${selected.id}` : state.itemId;
-  const otherChatCount = Object.values(allSources).reduce((n, source) => n + source.items.length, 0) - items.length;
   const loading = Object.values(sources).some((source) => source.status === "loading");
   const label = sections.get(section)?.label ?? workSections[section as keyof typeof workSections] ?? section;
   const count = section === "overview" ? items.length : sources[section as keyof WorkItems]?.items.length ?? 0;
@@ -91,9 +88,6 @@ export function WorkView({ frame = "rail", sessionId }: { frame?: "rail" | "moda
     const current = useUI.getState().surfaceStates.work ?? state;
     useUI.getState().setSurfaceState("work", { ...current, ...patch });
   }
-  useEffect(() => {
-    if (state.filters?.thisChat === undefined) update({ filters: { ...state.filters, thisChat } });
-  }, [thisChat, state.filters]);
   useLayoutEffect(() => {
     const list = listRef.current;
     if (!list) return;
@@ -181,17 +175,13 @@ export function WorkView({ frame = "rail", sessionId }: { frame?: "rail" | "moda
         items={Object.entries(workSections).map(([id, defaultLabel]) => ({ id, label: sections.get(id)?.label ?? defaultLabel,
           badge: (id === "overview" ? loading : sources[id as keyof WorkItems]?.status === "loading") ? undefined : (id === "overview" ? items.length : sources[id as keyof WorkItems]?.items.length ?? 0),
         }))} /></div>
-      <div className="work-view__scope"><Tabs variant="segmented" ariaLabel="Work scope"
-        active={thisChat ? "chat" : "all"} items={[{ id: "chat", label: "This chat" }, { id: "all", label: "All" }]}
-        onSelect={(id) => update({ filters: { ...state.filters, thisChat: id === "chat" }, itemId: undefined })} /></div>
     </div>
     <div className="work-view__panes">
       <div className="work-view__list" ref={listRef} onScroll={(event) => {
         // Hiding a scroll container can emit a zero scroll event.
         if (event.currentTarget.getClientRects().length) update({ scrollTop: event.currentTarget.scrollTop });
       }}>
-        {section === "overview" ? <WorkOverview sources={sources} onOpen={onOpen} onSchedules={() => selectSection("schedules")} otherChatCount={otherChatCount}
-          onShowAll={() => update({ filters: { ...state.filters, thisChat: false } })} />
+        {section === "overview" ? <WorkOverview sources={sources} onOpen={onOpen} onSchedules={() => selectSection("schedules")} />
           : sections.get(section)?.render({ ...context, state: { ...state, itemId: undefined } }) ?? <Empty title={`No ${label.toLowerCase()} to show`} />}
       </div>
       <div className="work-view__detail" ref={detailRef}>

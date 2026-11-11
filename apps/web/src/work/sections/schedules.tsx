@@ -117,7 +117,7 @@ function ScheduleDetail({ item, state }: { item: WorkItem; state: WorkSectionCon
       <WorkDetail
         title={firstLine(job.prompt) || "Schedule"}
         status={item.status}
-        fields={scheduleFields(job, item.status, !state.filters?.thisChat)}
+        fields={scheduleFields(job, item.status, true)}
         actions={actions}
         technical={technical}
         type="Schedule"

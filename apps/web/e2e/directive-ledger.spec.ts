@@ -65,7 +65,8 @@ for (const width of [1440, 390]) {
       await strip.getByRole("button", { name: "View" }).click();
       const rail = page.locator('.work-view[data-frame="rail"]');
       await expect(page.getByRole("dialog", { name: "Standing instructions" })).toHaveCount(0);
-      await expect(rail.getByRole("button", { name: "This chat", exact: true })).toHaveAttribute("aria-pressed", "true");
+      // Work has no This chat / All toggle (Josh 2026-11-11): the toggle is gone from the rail.
+      await expect(rail.getByRole("button", { name: "This chat", exact: true })).toHaveCount(0);
       await expect(rail.getByText(QUOTE, { exact: true })).toBeVisible();
       await page.screenshot({ path: info.outputPath("rail.png"), fullPage: true, animations: "disabled" });
       await rail.getByRole("button", { name: "Withdraw…" }).click();

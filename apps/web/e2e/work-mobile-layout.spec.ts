@@ -102,8 +102,6 @@ for (const theme of ["light", "dark"] as const) {
           await expect(item).toHaveAttribute("aria-checked", "true");
           await page.keyboard.press("Escape");
           await expect(picker).toBeFocused();
-          // Switching sections leaves the scope alone (This chat, the default in every frame).
-          await expect(work.getByRole("button", { name: "This chat", exact: true })).toHaveAttribute("aria-pressed", "true");
         }
       });
     }
@@ -117,11 +115,8 @@ for (const theme of ["light", "dark"] as const) {
         const work = page.locator(".work-view:visible");
         await selectTasks(page, work);
         await expect(work.locator(".work-view__detail")).toBeHidden();
-        for (const name of ["This chat", "All"]) {
-          const box = await work.getByRole("button", { name, exact: true }).boundingBox();
-          expect(box!.width).toBeGreaterThanOrEqual(44);
-          expect(box!.height).toBeGreaterThanOrEqual(44);
-        }
+        // No This chat / All toggle (Josh 2026-11-11): Work always lists every chat.
+        await expect(work.getByRole("button", { name: "This chat", exact: true })).toHaveCount(0);
         await expect(work.locator(".pl-count .pl-count")).toHaveCount(0);
         await work.locator(".work-row").nth(25).scrollIntoViewIfNeeded();
         const listScroll = await scrollerTop(work);
@@ -141,8 +136,6 @@ for (const theme of ["light", "dark"] as const) {
         // Back keeps the list where it was: the row is on screen, not just focused off-screen.
         await expect.poll(() => scrollerTop(work)).toBe(listScroll);
         await expect(work.locator(".work-row").nth(25)).toBeInViewport();
-        await work.getByRole("button", { name: "All", exact: true }).click();
-        await expect(work.getByRole("button", { name: "All", exact: true })).toHaveAttribute("aria-pressed", "true");
       });
     }
 

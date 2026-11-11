@@ -27,7 +27,7 @@ export function BackgroundWorkStrip({ sessionId }: { sessionId: string }) {
       section: "background",
       itemId: undefined,
       scrollTop: 0,
-      filters: { ...ui.surfaceStates.work?.filters, thisChat: true },
+      filters: ui.surfaceStates.work?.filters,
     });
     openView("work");
   };

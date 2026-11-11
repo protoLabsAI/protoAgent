@@ -82,8 +82,7 @@ export function ActivityWidget() {
         openRef.current = true;
         setUnread(0);
         setPendingNow(false);
-        // The pill counts across every chat, so it opens on All, not the This-chat default.
-        useUI.getState().openSurfaceModal("work", { section: "activity", filters: { thisChat: false } });
+        useUI.getState().openSurfaceModal("work", { section: "activity" });
       }}
     >
       <ActivitySurface />

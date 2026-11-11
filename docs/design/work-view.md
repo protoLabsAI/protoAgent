@@ -24,7 +24,7 @@ The Overview has **five lanes**. They are listed in this order, and an empty lan
 
 Sections: Overview · Decisions · Goals · Watches · Tasks · Schedules · Background agents · Activity · Directives (Q11).
 
-The rail and the modal both open with the "this chat" filter on (revised 2026-11-11; the modal used to open agent-wide, Q1). The utility-bar pills (Decisions, Background jobs, Activity) and a decision notification are the exception: they count across every chat, so they open their section on All.
+Work always lists every chat's items; there is no "This chat" / "All" filter (revised 2026-11-11 — Josh: a per-chat option felt confusing).
 
 ### 2.2 Shared tone map
 
@@ -185,7 +185,7 @@ This is defined once, at the shell level. Work is the first view to use it, and 
 ### 3.2 The rail (right column)
 
 - It mounts in the `AppShell` right column, inside the existing 280–720 px resize range. The chat stays fully usable beside it.
-- The header is `PanelHeader` with the title **Work** and two actions: the **"This chat" filter** and **Expand**.
+- The header is `PanelHeader` with the title **Work** and one action, **Expand** (the "This chat" filter was removed 2026-11-11).
 - Sections use `SideNav responsive`. The rail is narrow, so the container query collapses the section list into the quiet trigger and `Menu`. Each section item shows its `Count`.
 - The body shows one column: the section list, or the Overview lanes.
 - Opening an item **pushes** its detail view in place of the list. The detail view gets a **Back to {section}** ghost button at the top. The list keeps its scroll position for the return trip.
@@ -194,7 +194,7 @@ This is defined once, at the shell level. Work is the first view to use it, and 
 ### 3.3 The modal (window)
 
 - It uses `Dialog height="fill" padding="none"`. The width is the largest DS-allowed width that leaves the scrim visible (see build note B3).
-- The header has the title **Work**, plus **Dock to rail** and Close. In the modal, the "This chat" filter is **on** by default, like the rail (revised 2026-11-11).
+- The header has the title **Work**, plus **Dock to rail** and Close. There is no "This chat" filter; the modal, like the rail, lists every chat (revised 2026-11-11).
 - Three panes: (1) `SideNav` (expanded) with section counts, (2) the list or the lanes, (3) a detail pane for the selected item.
 - With no item selected, the detail pane shows a quiet `Empty`: "Pick an item to see its details."
 - Below about 900 px of modal width, the detail pane collapses into the rail's push behaviour (container query, not the viewport).
@@ -246,7 +246,6 @@ Plain words only. No raw ids, cron strings, verifier types or API status values 
 | Subagents link | Subagents ↗ |
 | Expand / Dock | Expand / Dock to rail |
 | Back | Back to {section} |
-| Filter on / off | This chat / All chats |
 | No selection | Pick an item to see its details. |
 
 ### 4.2 Overview lanes
@@ -315,7 +314,6 @@ These apply to every section and every Overview lane. A section shows its own st
 - **Whole Overview empty:** `Empty`, title **Nothing going on**, description "When the agent starts a goal, sets a watch, schedules something or asks you a question, it shows up here."
 - **One lane empty:** the lane is hidden. Lanes never show a placeholder.
 - **Section empty:** `Empty` with one line for that type, for example "No watches. The agent sets one when it needs to wait for something." Goals add a **New goal** button (Q15). No other section has an action.
-- **"This chat" filter on, but other chats have items:** "Nothing in this chat. {N} items in other chats." with a **Show all chats** button.
 - **Done empty within 24 h, with older items:** "Nothing finished in the last 24 hours." plus **Show more**.
 
 ### 5.3 Error
@@ -335,7 +333,6 @@ These apply to every section and every Overview lane. A section shows its own st
 - **Structure.** Frame heading = view title; lanes and sections are `h2`, groups `h3`. Each lane is a `list`. Counts are in the heading text ("Doing, 3").
 - **Rows.** Each row is **one** button opening the detail view (raw `<button type="button">` allowed for composite rows per protoContent#551, with the DS focus ring and tokens only). No nested buttons (fixes audit finding 5). Actions live in the detail view.
 - **Section navigation.** `SideNav` gives `aria-current` and keyboard order; the collapsed trigger is a DS `Menu` with radio rows.
-- **Filter.** "This chat" is a toggle button with `aria-pressed`.
 - **Confirm and undo.** The inline confirm is a `role="group"` labelled by its prompt; focus moves to the prompt; Keep it or Escape returns focus to the trigger. The undo toast pauses on hover or focus. Undo is a second safety net after the confirm (WCAG 2.2.1).
 - **Live regions.** One polite region for routine updates; failures assertive. Bus-driven row updates aren't announced one by one; only new "Needs you" items are.
 - **Colour.** Status is a dot **and** a word. Meta text uses `fg-muted`, never `fg-subtle`.
