@@ -34,6 +34,17 @@ function sharedOverride(row: DecisionRow | undefined, shared: DecisionRow | unde
   return row && row.state !== "pending" && shared.state === "pending" ? undefined : shared;
 }
 
+/** The element that actually scrolls the Work list. In the rail and modal that's the list
+ *  itself; in the phone sheet the list grows to its content and the Drawer body scrolls, so
+ *  saving and restoring the list's own scrollTop silently did nothing there. */
+function listScroller(list: HTMLElement): HTMLElement {
+  for (let node: HTMLElement | null = list; node; node = node.parentElement) {
+    const overflow = getComputedStyle(node).overflowY;
+    if ((overflow === "auto" || overflow === "scroll") && node.scrollHeight > node.clientHeight + 1) return node;
+  }
+  return list;
+}
+
 export function WorkView({ frame = "rail", sessionId }: { frame?: "rail" | "modal"; sessionId?: string }) {
   useSyncExternalStore(subscribe, getSnapshot);
   const state = useUI((s) => s.surfaceStates.work ?? emptyState);
@@ -83,13 +94,18 @@ export function WorkView({ frame = "rail", sessionId }: { frame?: "rail" | "moda
     if (state.filters?.thisChat === undefined) update({ filters: { ...state.filters, thisChat } });
   }, [thisChat, state.filters]);
   useLayoutEffect(() => {
-    if (listRef.current) listRef.current.scrollTop = state.scrollTop ?? 0;
+    const list = listRef.current;
+    if (!list) return;
+    const scroller = listScroller(list);
+    // When an ancestor scrolls (the phone sheet), the detail replaces the list inside that same
+    // scroller — restore it only while the list is the thing showing.
+    if (scroller === list || list.getClientRects().length) scroller.scrollTop = state.scrollTop ?? 0;
   }, [section, state.itemId, frame, state.scrollTop]);
   useEffect(() => {
     const list = listRef.current;
     if (!list || typeof ResizeObserver === "undefined") return;
     const observer = new ResizeObserver(() => {
-      if (list.getClientRects().length) list.scrollTop = useUI.getState().surfaceStates.work?.scrollTop ?? 0;
+      if (list.getClientRects().length) listScroller(list).scrollTop = useUI.getState().surfaceStates.work?.scrollTop ?? 0;
     });
     observer.observe(list);
     return () => observer.disconnect();
@@ -120,7 +136,10 @@ export function WorkView({ frame = "rail", sessionId }: { frame?: "rail" | "moda
     returnTo.current = selectedKey;
     update({ itemId: undefined });
   };
-  const onOpen = (item: WorkItem) => update({ itemId: `${item.kind}:${item.id}`, scrollTop: listRef.current?.scrollTop ?? state.scrollTop });
+  const onOpen = (item: WorkItem) => update({
+    itemId: `${item.kind}:${item.id}`,
+    scrollTop: listRef.current ? listScroller(listRef.current).scrollTop : state.scrollTop,
+  });
   const openSourceChat = async (sourceSessionId: string, reply = false) => {
     try {
       if (!chatStore.getSnapshot().sessions.some((session) => session.id === sourceSessionId)) {

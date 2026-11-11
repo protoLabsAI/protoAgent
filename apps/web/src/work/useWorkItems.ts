@@ -48,6 +48,7 @@ import {
   fromWatch,
   type WorkStatus,
 } from "./tone";
+import { scheduleWhen, typeAndPriority, watchKind } from "./rowMeta";
 
 /** The eight work sources, in the order the Work view lays them out (§5). */
 export type WorkSourceKind =
@@ -149,7 +150,7 @@ function mapWatch(row: WatchState): WorkItem {
     id: row.id,
     status: fromWatch(row.status, row.repeat),
     title: row.condition,
-    meta: row.trigger || "",
+    meta: watchKind(row),
     raw: row,
   };
 }
@@ -159,7 +160,7 @@ function mapTask(row: Task): WorkItem {
     id: row.id,
     status: fromTask(row.status || "open"),
     title: row.title,
-    meta: row.type || row.issue_type || "",
+    meta: typeAndPriority(row),
     raw: row,
   };
 }
@@ -169,7 +170,7 @@ function mapSchedule(row: ScheduledJob): WorkItem {
     id: row.id,
     status: fromSchedule(row),
     title: row.prompt,
-    meta: row.schedule,
+    meta: scheduleWhen(row.schedule),
     raw: row,
   };
 }

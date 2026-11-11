@@ -42,6 +42,21 @@ export function SurfaceHost({
   const contentRef = useRef<HTMLDivElement>(null);
   const headingRef = useRef<HTMLSpanElement>(null);
   const prevModal = useRef(modal);
+  // The element that opened a modal or sheet: read during this host's FIRST render, before the
+  // Dialog/Drawer mounts and its focus trap moves focus inside. A plain Close gives focus back
+  // to it (the dialog pattern); without this the unmount dropped focus to <body>.
+  const opener = useRef<Element | null | undefined>(undefined);
+  if (opener.current === undefined && frame !== "rail") opener.current = document.activeElement;
+  const closedPlainly = useRef(false);
+  useEffect(() => () => {
+    const target = opener.current;
+    if (!closedPlainly.current || !(target instanceof HTMLElement) || !target.isConnected) return;
+    // After the overlay finishes unmounting; only if nothing else claimed focus meanwhile.
+    requestAnimationFrame(() => {
+      const active = document.activeElement;
+      if (target.isConnected && (!active || active === document.body)) target.focus({ preventScroll: true });
+    });
+  }, []);
   const [announcement, setAnnouncement] = useState("");
   const viewId = view?.id;
   const title = view?.title;
@@ -154,6 +169,7 @@ export function SurfaceHost({
           title={view.title}
           onClose={() => {
             pendingClose.current = true;
+            closedPlainly.current = true;
             useUI.getState().closeSurfaceModal();
           }}
         >
@@ -175,8 +191,9 @@ export function SurfaceHost({
           padding="none"
           onClose={() => {
             // A plain Close (not Dock) — flag it so the rail host stays silent and doesn't pull
-            // focus into the rail view on this transition.
+            // focus into the rail view on this transition; focus returns to the opener instead.
             pendingClose.current = true;
+            closedPlainly.current = true;
             useUI.getState().closeSurfaceModal();
           }}
           title={

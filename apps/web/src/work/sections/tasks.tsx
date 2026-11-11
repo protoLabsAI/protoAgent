@@ -25,27 +25,11 @@ import type { Task } from "../../lib/types";
 import { TaskCreateDialog } from "../../app/TasksPanel";
 import { issueStatus, issueType, type IssueDraft } from "../../app/tasks";
 import { relTime } from "../tone";
+import { typeAndPriority } from "../rowMeta";
 import { WorkDetail, type WorkAction, type WorkField } from "../WorkDetail";
 import { WorkRow } from "../WorkRow";
 import { registerWorkSection, type WorkSectionContext } from "../sectionRegistry";
 import type { WorkItem, WorkSource } from "../useWorkItems";
-
-/** Numeric priority → word (§2.7 field 3). Only 0–3 are defined; anything else is blank. */
-function priorityWord(priority: Task["priority"]): string {
-  const n = typeof priority === "number" ? priority : parseInt(String(priority ?? ""), 10);
-  return ({ 0: "urgent", 1: "high", 2: "normal", 3: "low" } as Record<number, string>)[n] ?? "";
-}
-
-function capitalize(value: string): string {
-  return value ? value[0].toUpperCase() + value.slice(1) : value;
-}
-
-/** "Bug · high", or just the type when the priority has no word (§2.7 field 3). */
-function typeAndPriority(task: Task): string {
-  const type = capitalize(issueType(task));
-  const word = priorityWord(task.priority);
-  return word ? `${type} · ${word}` : type;
-}
 
 const CLAMP_STYLE: CSSProperties = {
   display: "-webkit-box",
