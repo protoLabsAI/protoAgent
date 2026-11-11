@@ -1036,6 +1036,7 @@ def get_all_tools(
     self_improvement_provenance_required=False,
     reload_callback=None,
     restart_scheduler=None,
+    restart_preflight=None,
 ):
     """Return every LangChain tool the lead agent + subagents can use.
 
@@ -1064,6 +1065,7 @@ def get_all_tools(
       into ``server/``. ``None`` degrades to next-natural-reload semantics.
     - ``restart_scheduler`` enables consent-gated self_restart for the lead agent.
       The server injects the scheduler so tools do not import the operator API.
+    - ``restart_preflight`` checks the current graph's config exclusions before consent.
     - ``skill_edit_enabled`` binds guarded skill update/delete tools. Each mutation
       archives the outgoing skill for rollback before changing the live artifact.
 
@@ -1090,7 +1092,7 @@ def get_all_tools(
         load_skill,
         show_component,
     ]
-    tools.extend(build_restart_tools(restart_scheduler))
+    tools.extend(build_restart_tools(restart_scheduler, restart_preflight))
     # GitHub read tools (PRs/issues/commits) moved to the first-party `github`
     # plugin (opt-in) — not everyone needs them. Enable with plugins.enabled: [github].
     # Notes tools now ship with the first-party `notes` plugin (ADR 0034 S4):

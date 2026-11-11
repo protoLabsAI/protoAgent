@@ -147,6 +147,7 @@ def build_system_prompt(
     context: str = "",
     projects=None,
     bound_tool_names: frozenset[str] | None = None,
+    disabled_tools_notice: str = "",
 ) -> str:
     """Build the complete system prompt for the lead agent.
 
@@ -172,6 +173,7 @@ def build_system_prompt(
             context=context,
             projects=projects,
             bound_tool_names=bound_tool_names,
+            disabled_tools_notice=disabled_tools_notice,
         )
     )
 
@@ -182,6 +184,7 @@ def build_system_prompt_parts(
     context: str = "",
     projects=None,
     bound_tool_names: frozenset[str] | None = None,
+    disabled_tools_notice: str = "",
 ) -> list[tuple[str, str]]:
     """The lead-agent system prompt as labeled ``(label, text)`` sections —
     the segmentation substrate for the prompt viewer's context-budget
@@ -265,6 +268,8 @@ def build_system_prompt_parts(
     op_model = _build_operating_model(bound_tool_names)
     if op_model:
         parts.append(("Operating model", op_model))
+    if disabled_tools_notice:
+        parts.append(("Config-disabled tools", disabled_tools_notice))
 
     # 4. Universal response rules and the single background-work policy.
     guideline_lines = [

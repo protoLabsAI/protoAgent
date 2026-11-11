@@ -2138,6 +2138,15 @@ def create_agent_graph(
     # can never be re-enabled from the console.
     disabled_tools: list = []
 
+    from tools.restart_tools import disabled_restart_reason, disabled_tool_groups, disabled_tools_explanation
+
+    # This closure belongs to one graph build. Populate it after ALL assembly seams;
+    # a reload creates a new snapshot, without consulting process-global tool state.
+    disabled_groups = ()
+
+    def restart_preflight(reason):
+        return disabled_restart_reason(reason, disabled_groups)
+
     all_tools = get_all_tools(
         knowledge_store,
         scheduler=scheduler,
@@ -2168,6 +2177,7 @@ def create_agent_graph(
         self_config_enabled=getattr(config, "tools_self_config_enabled", False),
         reload_callback=reload_callback,
         restart_scheduler=restart_scheduler,
+        restart_preflight=restart_preflight,
     )
 
     if extra_tools:
@@ -2301,10 +2311,14 @@ def create_agent_graph(
     # the same join, pinned by test).
     from graph.prompts import build_system_prompt_parts
 
+    disabled_groups = disabled_tool_groups(
+        disabled_tools, getattr(config, "tools_disabled", []), getattr(config, "tools_hidden", [])
+    )
     prompt_parts = build_system_prompt_parts(
         include_subagents=include_subagents,
         projects=(config.effective_filesystem_projects() if config.filesystem_enabled else None),
         bound_tool_names=frozenset(t.name for t in lead_tools),
+        disabled_tools_notice=disabled_tools_explanation(disabled_groups),
     )
     system_prompt = "\n\n".join(text for _label, text in prompt_parts)
 
