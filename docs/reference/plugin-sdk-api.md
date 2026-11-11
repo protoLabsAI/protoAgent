@@ -25,7 +25,7 @@ the module's own.
 
 **Plugin services (the plugin↔plugin call seam, ADR 0116)** — [`record_friction()`](#sdk-record-friction), [`service()`](#sdk-service)
 
-**Agent + model access (the plugin↔agent channel, ADR 0043)** — [`complete()`](#sdk-complete), [`config()`](#sdk-config), [`gateway_client()`](#sdk-gateway-client), [`renders_ui()`](#sdk-renders-ui), [`run_subagent()`](#sdk-run-subagent), [`subagent_types()`](#sdk-subagent-types), [`turn_stop_reason()`](#sdk-turn-stop-reason)
+**Agent + model access (the plugin↔agent channel, ADR 0043)** — [`capture_tool_receipts()`](#sdk-capture-tool-receipts), [`complete()`](#sdk-complete), [`config()`](#sdk-config), [`gateway_client()`](#sdk-gateway-client), [`renders_ui()`](#sdk-renders-ui), [`run_subagent()`](#sdk-run-subagent), [`subagent_types()`](#sdk-subagent-types), [`turn_stop_reason()`](#sdk-turn-stop-reason)
 
 **Delivering a file with the answer (#4252)** — [`attach_file()`](#sdk-attach-file)
 
@@ -160,6 +160,44 @@ sdk.subagent_types() -> set[str]
 ```
 
 Ids of the configured subagents — for validating/listing recipe steps.
+
+### `sdk.capture_tool_receipts` {#sdk-capture-tool-receipts}
+
+```python
+sdk.capture_tool_receipts()
+```
+
+Collect native tool executions in a fresh, context-local invocation scope.
+
+Use `with sdk.capture_tool_receipts() as capture:` around an awaited
+`sdk.run_subagent(...)`; its text return is unchanged. After exit,
+`capture.snapshot()` returns a detached JSON-compatible envelope with
+`schema_version=1`, `source="native_audit"`, a unique `invocation_id`,
+execution IDs, native tool-call IDs, start sequence, duration, redacted args,
+result state and bounded structured metadata. Result states are `success`,
+`tool_error`, `exception`, `cancelled` or `unknown` (unrecognized result
+objects). Native IDs may repeat on retries. Policy short-circuits produce no
+entries; each handler invocation inside a retry produces its own entry.
+
+`capture_status` is `unsupported` until native receipt middleware participates
+(at agent start, independently of tools), `captured` even with zero calls,
+or `partial` on interruption, pending executions or data loss. Inspect
+`dropped_count`, `partial_count`, `pending_count` and each entry's
+`dropped_fields`. Limits are included: 128 entries, depth 6, 32 fields per
+container, 256 visited value nodes per entry, 512 bytes per string, 8192 bytes
+per entry and 131072 aggregate entry bytes. Oversize entries are dropped. Redaction precedes truncation;
+unknown objects, file bodies and multipart payloads are omitted. Result text
+is never copied or parsed as evidence. Structured result leaves are limited to
+recognized metadata fields (paths, statuses, counts, sizes, line ranges, MIME
+types, exit codes and revisions); unknown leaves are omitted.
+
+Nested scopes replace inherited ownership; tasks and context-propagating
+threads share their scope's locked collector. Exit closes it and restores
+the parent even on cancellation; unfinished executions count as dropped and
+late writes are rejected. Raw threads without context propagation are outside
+capture. Use one scope per workflow step/run and associate its invocation ID
+externally. Receipts prove observed execution, not context isolation or review
+quality. This API adds no telemetry storage or workflow policy.
 
 ### `sdk.run_subagent` {#sdk-run-subagent}
 
