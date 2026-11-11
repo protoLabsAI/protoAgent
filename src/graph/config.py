@@ -89,6 +89,7 @@ _SLOT_ROUTE_PREFIXES = ("gateway:", "anthropic-oauth:", "openai-codex:", "acp:")
 _SCALAR_MODEL_SLOTS = (
     ("routing.aux_model", "aux_model"),
     ("compaction.model", "compaction_model"),
+    ("memory.select_model", "memory_select_model"),
     ("goal.eval_model", "goal_eval_model"),
     ("soul.drift.judge.model", "soul_drift_judge_model"),
 )
@@ -517,6 +518,7 @@ _ROUTED_SCALAR_SLOTS = (
     ("model", "name"),
     ("routing", "aux_model"),
     ("compaction", "model"),
+    ("memory", "select_model"),
     ("goal", "eval_model"),
     ("soul", "drift", "judge", "model"),
 )
@@ -1446,6 +1448,12 @@ class LangGraphConfig:
     # preferences). Off by default — a sandboxed or client-facing agent never opens
     # profile.db. YAML: `memory.shared_profile`. Delivery + the write tool are P2-G2.
     memory_shared_profile: bool = False
+    memory_whole_store_read: bool = False
+    memory_whole_store_max_rows: int = 500
+    # Provisional: #4898 / 2026-11-11 eval attempt could not authenticate;
+    # external fixture export was also denied. No measured optimum yet.
+    memory_whole_store_weak_score: float = 0.5
+    memory_select_model: str = ""
     # Session-summary file retention (the ``memory/*.json`` files behind the prior-session
     # digest and recall_session). Nothing pruned them before. The periodic maintenance
     # sweep deletes files last written more than ``session_retention_days`` ago, then the
@@ -2569,6 +2577,10 @@ class LangGraphConfig:
                 memory.get("max_tokens", cls.memory_max_tokens), cls.memory_max_tokens, "memory.max_tokens"
             ),
             memory_shared_profile=memory.get("shared_profile", cls.memory_shared_profile),
+            memory_whole_store_read=memory.get("whole_store_read", cls.memory_whole_store_read),
+            memory_whole_store_max_rows=int(memory.get("whole_store_max_rows", cls.memory_whole_store_max_rows)),
+            memory_whole_store_weak_score=float(memory.get("whole_store_weak_score", cls.memory_whole_store_weak_score)),
+            memory_select_model=memory.get("select_model", cls.memory_select_model),
             memory_session_retention_days=_coerce_retention(
                 memory.get("session_retention_days"), cls.memory_session_retention_days, "memory.session_retention_days"
             ),

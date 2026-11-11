@@ -29,7 +29,37 @@ def topk(query, store, opts) -> list[dict]:
         STATE.memory_store = previous
 
 
-ARMS = {"topk": topk}
+class SelectedRows(list):
+    """Rows plus per-turn injection provenance, without changing the arm API."""
+
+    selection: dict
+
+
+def whole_store(query, store, opts) -> list[dict]:
+    """Exercise runtime selection, rendering and budget with isolated fixture stores."""
+    from dataclasses import replace
+    from graph.projection import compose_projected_context, _MEMORY_SELECTION, _memory_as_row
+    from runtime.state import STATE
+
+    previous, previous_shared = STATE.memory_store, STATE.shared_profile_store
+    metadata = {}
+    try:
+        STATE.memory_store, STATE.shared_profile_store = store, None
+        def record(*_args):
+            metadata.update(_MEMORY_SELECTION.get() or {})
+        projected = compose_projected_context(
+            query, None, None, {}, options=replace(opts, whole_store_read=True),
+            prior_sessions=lambda **kw: ("", []), record_fn=record,
+        )
+        rows = SelectedRows(_memory_as_row(store.get(int(handle.split(":", 1)[1])))
+                            for handle in projected.rel_memory_ids)
+        rows.selection = metadata
+        return rows
+    finally:
+        STATE.memory_store, STATE.shared_profile_store = previous, previous_shared
+
+
+ARMS = {"topk": topk, "whole_store": whole_store}
 
 
 def load_cases(path: Path) -> list[dict]:
@@ -154,6 +184,8 @@ def evaluate(pv4, changed, fixture_dir, arms, runs, opts, model, embed_fn) -> di
                              else score_changed_fact(case, rows))
                     result = {"case_id": case["id"], "suite": suite, "run": run, "arm": arm,
                               "retrieved": rows, **score}
+                    if hasattr(rows, "selection"):
+                        result["memory_selection"] = rows.selection
                     results.append(result)
                     print(f"{case['id']} run={run} arm={arm}: {'PASS' if score['passed'] else 'FAIL'}")
     return {"runs": runs, "arms": arms, "results": results,
@@ -163,6 +195,9 @@ def evaluate(pv4, changed, fixture_dir, arms, runs, opts, model, embed_fn) -> di
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--arms", default="topk")
+    parser.add_argument("--weak-score", type=float, default=None)
+    parser.add_argument("--select-model", default=None)
+    parser.add_argument("--max-rows", type=int, default=500)
     parser.add_argument("--runs", type=int, default=3)
     parser.add_argument("--model", default=None)
     parser.add_argument("--json", dest="json_out", help="report filename within evals/results/")
@@ -190,13 +225,25 @@ def main(argv=None) -> int:
     from graph.projection import ProjectionOptions
 
     cfg = LangGraphConfig.from_yaml(config_yaml_path())
+    if args.weak_score is not None:
+        cfg.memory_whole_store_weak_score = args.weak_score
+    if args.select_model is not None:
+        cfg.memory_select_model = args.select_model
+    cfg.memory_whole_store_max_rows = args.max_rows
     embed_fn = create_embed_fn(cfg)
     if embed_fn is None:
         parser.error("configure knowledge.embed_model and gateway credentials")
     model = create_llm(cfg, model_name=args.model)
-    opts = ProjectionOptions.from_config(cfg, model_name=args.model)
+    # --model is the answer scorer; selection's main-model guard uses the runtime
+    # main model, allowing the cheap selector and scorer to use the same model.
+    opts = ProjectionOptions.from_config(cfg, model_name=None if "whole_store" in arms else args.model)
+    if "whole_store" in arms and opts.select_model_factory is None:
+        parser.error("whole_store requires a select model different from the configured main model")
     report = evaluate(pv4, changed, FIXTURES / "pv4", arms, args.runs, opts, model, embed_fn)
     report["model"] = args.model or cfg.model_name
+    report["weak_score"] = opts.whole_store_weak_score
+    report["select_model"] = opts.select_model_name
+    report["max_rows"] = opts.whole_store_max_rows
     print("\nA\tB\tA wins\tB wins\tTies")
     for row in report["paired"]:
         print(f"{row['a']}\t{row['b']}\t{row['a_wins']}\t{row['b_wins']}\t{row['ties']}")

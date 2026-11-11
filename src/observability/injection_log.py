@@ -107,6 +107,8 @@ class InjectionLog:
                 db.execute("ALTER TABLE injections ADD COLUMN rag_stage_counts TEXT NOT NULL DEFAULT '{}'")
             if "retrieved_memory_ids" not in have:
                 db.execute("ALTER TABLE injections ADD COLUMN retrieved_memory_ids TEXT NOT NULL DEFAULT '[]'")
+            if "memory_selection" not in have:
+                db.execute("ALTER TABLE injections ADD COLUMN memory_selection TEXT NOT NULL DEFAULT '{}'")
             db.commit()
         finally:
             db.close()
@@ -119,6 +121,7 @@ class InjectionLog:
         hot_chunk_ids: list[int | str] | None = None,
         rag_chunk_ids: list[int] | None = None,
         retrieved_memory_ids: list[int | str] | None = None,
+        memory_selection: dict | None = None,
         approx_tokens: int = 0,
         effective_top_k: int = 0,
         rag_retrieved: int = 0,
@@ -157,8 +160,8 @@ class InjectionLog:
             db.execute(
                 "INSERT INTO injections "
                 "(ts, session_id, digest_session_ids, hot_chunk_ids, rag_chunk_ids, approx_tokens, rag_stage_counts, "
-                "retrieved_memory_ids) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                "retrieved_memory_ids, memory_selection) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     datetime.now(UTC).isoformat(),
                     session_id or "",
@@ -168,6 +171,7 @@ class InjectionLog:
                     int(approx_tokens),
                     json.dumps(stage_counts),
                     json.dumps(list(retrieved_memory_ids or [])),
+                    json.dumps(memory_selection or {"selection": "topk", "candidate_count": 0, "picked_ids": []}),
                 ),
             )
             db.commit()
@@ -205,6 +209,17 @@ class InjectionLog:
         except (json.JSONDecodeError, TypeError):
             parsed = {}
         d["rag_stage_counts"] = {k: _as_int(parsed.get(k), default) for k, default in _STAGE_COUNT_DEFAULTS.items()}
+        try:
+            selection = json.loads(d.get("memory_selection") or "{}")
+        except (json.JSONDecodeError, TypeError):
+            selection = {}
+        if not isinstance(selection, dict):
+            selection = {}
+        d["memory_selection"] = {
+            "selection": "whole_store" if selection.get("selection") == "whole_store" else "topk",
+            "candidate_count": max(0, _as_int(selection.get("candidate_count"), 0)),
+            "picked_ids": selection.get("picked_ids", []) if isinstance(selection.get("picked_ids", []), list) else [],
+        }
         d["layers"] = {
             "memory": list(d["hot_chunk_ids"]) + list(d["retrieved_memory_ids"]),
             "knowledge": list(d["rag_chunk_ids"]),

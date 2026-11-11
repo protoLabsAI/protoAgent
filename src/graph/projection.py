@@ -167,6 +167,8 @@ _RAG_STAGE_COUNTS: contextvars.ContextVar[_RagStageCounts | None] = contextvars.
 # ``record_fn`` contract is a fixed 5-tuple both runtimes and tests depend on, so
 # the NEW memory-layer attribution rides this contextvar instead of widening it.
 # ``record_injection`` reads it to tag the injection-log row's memory layer.
+_MEMORY_SELECTION = contextvars.ContextVar("memory_selection", default=None)
+
 _MEMORY_LAYER_IDS: contextvars.ContextVar[list | None] = contextvars.ContextVar("memory_layer_ids", default=None)
 
 
@@ -226,6 +228,12 @@ class ProjectionOptions:
     # options directly. Inert when ``budget_chars`` is None (unbounded delivery).
     memory_budget_pct: float = 40.0
     knowledge_budget_pct: float = 60.0
+    whole_store_read: bool = False
+    whole_store_max_rows: int = 500
+    whole_store_weak_score: float = 0.5
+    select_model_name: str = ""
+    main_model_name: str = ""
+    select_model_factory: Callable | None = field(default=None, repr=False, compare=False)
 
     def __post_init__(self) -> None:
         # A NEGATIVE top_k is not a smaller cap — it is no cap at all, twice over
@@ -326,7 +334,23 @@ class ProjectionOptions:
                         "window for the model, so delivery is unbounded",
                         budget_pct,
                     )
+        from graph.llm import create_llm, split_slot_target
+
+        main_model = model_name or getattr(config, "model_name", "")
+        select_model = (str(getattr(config, "memory_select_model", "") or "").strip()
+                        or str(getattr(config, "aux_model", "") or "").strip() or main_model)
+        # Provider-qualified and bare spellings of the same model must not
+        # accidentally enable the expensive path. Treat equal bare names
+        # conservatively even when they route through different connections.
+        same_model = (split_slot_target(select_model, config)[1] == split_slot_target(main_model, config)[1]
+                      if hasattr(config, "provider_ids") else select_model == main_model)
         return cls(
+            whole_store_read=bool(getattr(config, "memory_whole_store_read", False)),
+            whole_store_max_rows=int(getattr(config, "memory_whole_store_max_rows", cls.whole_store_max_rows)),
+            whole_store_weak_score=float(getattr(config, "memory_whole_store_weak_score", cls.whole_store_weak_score)),
+            select_model_name=select_model,
+            main_model_name=main_model,
+            select_model_factory=None if same_model else lambda: create_llm(config, model_name=select_model),
             top_k=_int_or_default(getattr(config, "knowledge_top_k", cls.top_k), cls.top_k),
             prior_sessions_policy=_coerce_prior_sessions_policy(
                 getattr(config, "context_prior_sessions", cls.prior_sessions_policy)
@@ -514,6 +538,12 @@ def compose_projected_context(
     if not incognito:
         shared_profile = _shared_profile(query, opts)
 
+    selection = {"selection": "topk", "candidate_count": len(rel_memory) + sum(
+        r.get("delivery") == "retrieved" for r in shared_profile
+    )}
+    if query and not incognito:
+        rel_memory, shared_profile, selection = _select_whole_store(query, opts, rel_memory, shared_profile)
+
     # Always-on skill index (progressive disclosure, ADR 0060) — built before the RAG
     # search, the order the native composer always had (same side effects, same order).
     # The index is read ONCE per compose; the budget re-renders from that list.
@@ -555,7 +585,7 @@ def compose_projected_context(
         skills_index,
         summaries,
     )
-    if delivered.memory_parts and record:
+    if record and (delivered.memory_parts or selection["selection"] == "whole_store"):
         # Bounded RAG-stage provenance (#3259) computed from THIS call, handed to
         # the recorder through the contextvar (set for exactly this synchronous
         # record, reset in the finally). ``final`` is what actually shipped after
@@ -574,6 +604,10 @@ def compose_projected_context(
         # operator-profile ids (``shared_profile:<id>``) join it: both are the memory
         # layer, so the injection-log row carries layer=memory, source=shared_profile
         # for a shared row (ADR 0125 P2-G2).
+        selection_token = _MEMORY_SELECTION.set({**selection, "picked_ids": (
+            list(delivered.rel_memory_ids) + [f"shared_profile:{r['id']}" for r in shared_profile
+                                            if r.get("delivery") == "retrieved"]
+        )})
         mem_token = _MEMORY_LAYER_IDS.set(list(delivered.rel_memory_ids) + list(delivered.shared_profile_ids))
         try:
             (record_fn or record_injection)(
@@ -582,6 +616,7 @@ def compose_projected_context(
         finally:
             _RAG_STAGE_COUNTS.reset(token)
             _MEMORY_LAYER_IDS.reset(mem_token)
+            _MEMORY_SELECTION.reset(selection_token)
     return delivered.projected
 
 
@@ -675,9 +710,11 @@ def _render_memory(results: list[dict]) -> tuple[str, list[str]]:
     parts = ["[Relevant memory:]"]
     ids: list[str] = []
     for r in results:
-        parts.append(f"- {r['preview']}")
+        source = r.get("_memory_source", "memory")
+        label = "[Operator profile (shared)] " if source == "shared_profile" else ""
+        parts.append(f"- {label}{r['preview']}")
         if r.get("id") is not None:
-            ids.append(f"memory:{r['id']}")
+            ids.append(f"{source}:{r['id']}")
     return "\n".join(parts), ids
 
 
@@ -1241,6 +1278,102 @@ def _relevant_memory(query: str, opts: ProjectionOptions) -> list[dict]:
         rows = [r for r in rows if (r.get("namespace") or "") in namespaces]
     rows = [r for r in rows if deliverable_hit(r)]
     return rank_by_trust(rows, opts)
+
+
+def _select_whole_store(query, opts, topk, shared):
+    """Optional replacement after D7 merge; failure preserves both original pools.
+
+    All live eligible rows count toward the size gate. Only retrieved rows are
+    offered to the selector; always-on/on-demand retain their delivery contracts.
+    Namespaced ids distinguish private and shared SQLite row ids.
+    """
+    from runtime.state import STATE
+
+    meta = {"selection": "topk", "candidate_count": len(topk) + sum(
+        r.get("delivery") == "retrieved" for r in shared
+    )}
+    fallback = (topk, shared, meta)
+    if (not opts.whole_store_read or not query or opts.top_k <= 0 or opts.whole_store_max_rows <= 0
+            or not opts.select_model_name or opts.select_model_name == opts.main_model_name
+            or opts.select_model_factory is None):
+        return fallback
+    try:
+        private = getattr(STATE, "memory_store", None)
+        profile = getattr(STATE, "shared_profile_store", None)
+        best = max(
+            private.best_similarity(query, [r["id"] for r in topk]) if private else -1.0,
+            profile.best_similarity(query, [r["id"] for r in shared if r.get("delivery") == "retrieved"])
+            if profile else -1.0,
+        )
+        if best >= opts.whole_store_weak_score:
+            return fallback
+        from knowledge.trust import trust_tier
+        from knowledge.memory_select import select_memories
+
+        pool = []
+        live_count = 0
+        for store, source in ((private, "memory"), (profile, "shared_profile")):
+            if store is None:
+                continue
+            offset = 0
+            while True:
+                entries = store.list(limit=256, offset=offset)
+                rows = [_memory_as_row(e) for e in entries
+                        if e.superseded_by is None and e.invalidated_at is None]
+                if source == "shared_profile":
+                    # Fail closed on private-store read failure: never offer a
+                    # possibly shadowed shared row to the selector.
+                    rows = [r for r in rows if not r.get("subject") or private is None or not any(
+                        e.kind == r["kind"] for e in private.live_on_subject(r["subject"])
+                    )]
+                    rows = _gate_shared_rows(rows, ("always", "retrieved", "on_demand"), opts)
+                else:
+                    rows = [r for r in rows if deliverable_hit(r)
+                            and (not opts.inject_namespaces or r["namespace"] in opts.inject_namespaces)
+                            and trust_tier(r.get("source_type")) >= opts.inject_min_trust]
+                live_count += len(rows)
+                if live_count > opts.whole_store_max_rows:
+                    return fallback
+                pool.extend({**r, "_memory_source": source, "_raw_id": r["id"],
+                             "id": f"{source}:{r['id']}"} for r in rows if r["delivery"] == "retrieved")
+                if len(entries) < 256:
+                    break
+                offset += len(entries)
+        meta["candidate_count"] = len(pool)
+        budget = None if opts.budget_chars is None else int(opts.budget_chars * opts.memory_budget_pct / 100)
+        ids = select_memories(query, pool, model=opts.select_model_factory(), budget=budget)
+        if ids is None:
+            return fallback
+        by_id = {r["id"]: r for r in pool}
+        selected = []
+        for i in ids:
+            if i not in by_id:
+                continue
+            original = by_id[i]
+            source = original["_memory_source"]
+            entry = (private if source == "memory" else profile).get(original["_raw_id"])
+            # A concurrent edit/supersession during the model call must not deliver
+            # stale content or substitute new content the selector never saw.
+            if entry is None or entry.superseded_by is not None or entry.invalidated_at is not None:
+                continue
+            current = _memory_as_row(entry)
+            offered = {k: v for k, v in original.items() if k not in ("_memory_source", "_raw_id")}
+            offered["id"] = original["_raw_id"]
+            if current != offered or not deliverable_hit(current):
+                continue
+            if source == "shared_profile" and private is not None and current.get("subject") and any(
+                e.kind == current["kind"] for e in private.live_on_subject(current["subject"])
+            ):
+                continue
+            selected.append({**current, "_memory_source": source})
+        # Selected shared rows join the shed-able relevant-memory slice and carry
+        # their shared provenance through rendering/logging. Always-on stays put.
+        return selected, [r for r in shared if r.get("delivery") != "retrieved"], {
+            "selection": "whole_store", "candidate_count": len(pool)
+        }
+    except Exception:  # noqa: BLE001 — any store/model failure preserves top-k
+        log.debug("[projection] whole-store selection skipped", exc_info=True)
+        return fallback
 
 
 # How many always-on operator-profile rows the shared store may contribute per turn.
@@ -1859,6 +1992,7 @@ def record_injection(
             hot_chunk_ids=hot_ids,
             rag_chunk_ids=rag_ids,
             retrieved_memory_ids=retrieved_memory_ids,
+            memory_selection=_MEMORY_SELECTION.get(),
             approx_tokens=max(1, len("\n\n".join(memory_parts)) // 4),
             effective_top_k=counts.effective_top_k,
             rag_retrieved=counts.retrieved,

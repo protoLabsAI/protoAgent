@@ -38,6 +38,7 @@ _SLOT_ATTRS = (
     ("routing.aux_model", "aux_model"),
     ("compaction.model", "compaction_model"),
     ("goal.eval_model", "goal_eval_model"),
+    ("memory.select_model", "memory_select_model"),
     ("soul.drift_judge_model", "soul_drift_judge_model"),
 )
 
