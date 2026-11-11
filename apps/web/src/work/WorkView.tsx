@@ -105,7 +105,12 @@ export function WorkView({ frame = "rail", sessionId }: { frame?: "rail" | "moda
     const list = listRef.current;
     if (!list || typeof ResizeObserver === "undefined") return;
     const observer = new ResizeObserver(() => {
-      if (list.getClientRects().length) listScroller(list).scrollTop = useUI.getState().surfaceStates.work?.scrollTop ?? 0;
+      // Only when the list is its own scroller (rail, modal): there the saved position tracks
+      // every scroll. In the phone sheet the Drawer body scrolls and the saved value only moves
+      // on open, so restoring it on a resize would yank the reader back (#5075 review).
+      if (list.getClientRects().length && listScroller(list) === list) {
+        list.scrollTop = useUI.getState().surfaceStates.work?.scrollTop ?? 0;
+      }
     });
     observer.observe(list);
     return () => observer.disconnect();
