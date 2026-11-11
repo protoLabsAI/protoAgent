@@ -64,26 +64,15 @@ it("orders all five lanes and hides empty lanes and help lines", async () => {
   expect(host.textContent).toContain("Work in progress.");
 });
 
-it("defaults the rail filter on, counts other chats, and shows all on request", async () => {
-  data.sources.goals.items = [item("elsewhere", "running", { kind: "goal", sessionId: "there" })];
-  await render();
-  expect(host.querySelector('.work-view__scope [aria-pressed="true"]')?.textContent).toBe("This chat");
-  expect(host.textContent).toContain("Nothing in this chat. 1 items in other chats.");
-  await click("Show all chats");
-  expect(host.querySelector('.work-view__scope [aria-pressed="true"]')?.textContent).toBe("All");
-  expect(host.querySelector(".work-row")?.textContent).toContain("elsewhere");
-  expect(useUI.getState().surfaceStates.work.filters?.thisChat).toBe(false);
-});
-
-it("defaults the modal filter to This chat and preserves session-less items", async () => {
+it("always lists every chat's work, with no This chat / All toggle (Josh 2026-11-11)", async () => {
   data.sources.tasks.items = [item("global", "running"), item("local", "running", { sessionId: "here" }), item("remote", "running", { sessionId: "there" })];
-  await render("modal");
-  // This chat is the default in every frame (Josh 2026-11-11); session-less items stay visible.
-  expect(host.querySelector('.work-view__scope [aria-pressed="true"]')?.textContent).toBe("This chat");
-  expect(host.querySelectorAll(".work-row")).toHaveLength(2);
-  expect(host.textContent).not.toContain("remote");
-  await click("All");
-  expect(host.querySelectorAll(".work-row")).toHaveLength(3);
+  for (const frame of ["rail", "modal"] as const) {
+    await render(frame);
+    expect(host.querySelector(".work-view__scope")).toBeNull();
+    expect([...host.querySelectorAll("button")].some((b) => b.textContent === "This chat")).toBe(false);
+    expect(host.querySelectorAll(".work-row")).toHaveLength(3);
+    expect(host.textContent).toContain("remote");
+  }
 });
 
 it("keeps healthy lanes alongside source errors, retries, and stale callouts", async () => {
@@ -187,7 +176,7 @@ it("the palette New goal intent opens the registered Goals creator in Work", asy
   }
 });
 
-it("passes raw counts including zero to SideNav and clears selection on scope change", async () => {
+it("passes raw counts including zero to SideNav and keeps the selected row current", async () => {
   data.sources.tasks.items = [item("row", "running")];
   useUI.setState({ surfaceStates: { work: { filters: { thisChat: false, retained: true } } } });
   await render("modal");
@@ -199,9 +188,6 @@ it("passes raw counts including zero to SideNav and clears selection on scope ch
   await act(async () => host.querySelector<HTMLButtonElement>(".work-row")!.click());
   expect(document.activeElement).toBe(host.querySelector(".work-view__detail h2"));
   expect(host.querySelector(".work-row")?.getAttribute("aria-current")).toBe("true");
-  await click("This chat");
-  expect(useUI.getState().surfaceStates.work.itemId).toBeUndefined();
-  expect(useUI.getState().surfaceStates.work.filters).toEqual({ thisChat: true, retained: true });
 });
 
 it("omits only loading badges while retaining ready zero counts", async () => {

@@ -61,7 +61,8 @@ function renderDecisions(ctx: WorkSectionContext): ReactNode {
   // server's soonest-expiry-first order.
   const pending = items.filter((item) => item.status === "needs-you");
   const closed = items.filter((item) => item.status !== "needs-you");
-  const allChats = ctx.state.filters?.thisChat === false;
+  // Work always lists every chat's decisions (Josh 2026-11-11), so rows name their agent.
+  const allChats = true;
 
   const rowFor = (item: WorkItem) => {
     const row = item.raw as DecisionRow;

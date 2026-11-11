@@ -14,7 +14,7 @@ function openWorkDirectives() {
     section: "directives",
     itemId: undefined,
     scrollTop: 0,
-    filters: { ...ui.surfaceStates.work?.filters, thisChat: true },
+    filters: ui.surfaceStates.work?.filters,
   });
   openView("work");
 }

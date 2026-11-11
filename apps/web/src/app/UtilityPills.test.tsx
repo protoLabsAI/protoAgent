@@ -59,9 +59,8 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 const pill = (id: string) => container.querySelector<HTMLButtonElement>(`[data-testid="${id}"]`)!;
-// The pills count across every chat, so they open their section on All (Josh 2026-11-11).
 const modal = (section: string) => expect(useUI.getState().surfaceModal).toEqual({
-  viewId: "work", state: { section, filters: { thisChat: false } },
+  viewId: "work", state: { section },
 });
 function emit(topic: string) {
   act(() => mocks.listeners.get(topic)?.({}));
@@ -69,7 +68,7 @@ function emit(topic: string) {
 
 it("routes the Decisions utility entry to Work and preserves pending badges", () => {
   const render = () => root.render(
-    <DecisionsWidget onOpen={() => useUI.getState().openSurfaceModal("work", { section: "decisions", filters: { thisChat: false } })} />,
+    <DecisionsWidget onOpen={() => useUI.getState().openSurfaceModal("work", { section: "decisions" })} />,
   );
   act(render);
   expect(pill("decisions-widget").querySelector(".pl-count")?.textContent).toBe("2");

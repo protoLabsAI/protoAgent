@@ -29,12 +29,10 @@ function finishedAt(item: WorkItem): number {
   return Date.parse(/T/.test(value) && !/(Z|[+-]\d\d:\d\d)$/.test(value) ? `${value}Z` : value);
 }
 
-export function WorkOverview({ sources, onOpen, onSchedules, otherChatCount = 0, onShowAll }: {
+export function WorkOverview({ sources, onOpen, onSchedules }: {
   sources: WorkItems;
   onOpen: (item: WorkItem) => void;
   onSchedules: () => void;
-  otherChatCount?: number;
-  onShowAll: () => void;
 }) {
   const [showMore, setShowMore] = useState(false);
   const entries = Object.entries(sources) as [keyof WorkItems, WorkItems[keyof WorkItems]][];
@@ -52,9 +50,7 @@ export function WorkOverview({ sources, onOpen, onSchedules, otherChatCount = 0,
       <Alert key={kind} status="warning">Couldn&apos;t load {workSections[kind].toLowerCase()}. <Button size="sm" onClick={source.retry}>Retry</Button></Alert>
       : source.status === "stale" ? <Callout key={kind} tone="warning">{workSections[kind]} may be out of date. <Button size="sm" onClick={source.retry}>Retry</Button></Callout> : null)}
     {loading && <div aria-label="Loading work" aria-busy="true"><Skeleton lines={3} /><Skeleton lines={3} /></div>}
-    {!loading && !visible.length && (otherChatCount ?
-      <Empty title={`Nothing in this chat. ${otherChatCount} items in other chats.`} action={<Button onClick={onShowAll}>Show all chats</Button>} />
-      : <Empty title="Nothing going on" />)}
+    {!loading && !visible.length && <Empty title="Nothing going on" />}
     {visible.map((lane) => <section key={lane.id} aria-label={lane.label}>
       <h3>{lane.label}</h3>
       {visible.length === 1 && <p>{lane.help}</p>}

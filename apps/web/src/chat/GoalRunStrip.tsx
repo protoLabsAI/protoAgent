@@ -51,7 +51,7 @@ export function GoalRunStrip({ sessionId }: { sessionId: string }) {
       section: "goals",
       itemId: `goal:${goal.session_id}`,
       scrollTop: 0,
-      filters: { ...ui.surfaceStates.work?.filters, thisChat: true },
+      filters: ui.surfaceStates.work?.filters,
     });
     openView("work");
   };

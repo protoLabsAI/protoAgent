@@ -281,8 +281,7 @@ export function BackgroundJobs() {
           type="button"
           className={`bg-jobs-pill${running > 0 ? " bg-jobs-pill--running" : ""}`}
           onClick={() => {
-            // The pill counts across every chat, so it opens on All, not the This-chat default.
-            useUI.getState().openSurfaceModal("work", { section: "background", filters: { thisChat: false } });
+            useUI.getState().openSurfaceModal("work", { section: "background" });
             // Persist past this session (#2692) — a reload must not re-show a badge
             // for a job the user already reviewed.
             markSeen(unreadIds);

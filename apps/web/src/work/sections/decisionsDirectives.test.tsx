@@ -213,16 +213,13 @@ describe("Decisions section", () => {
     }
   });
 
-  it("shows the agent only in the All chats filter (r1 §2.4 field 5)", async () => {
+  it("names the agent on every decision row, since Work always lists every chat (r1 §2.4 field 5)", async () => {
     data.sources.decisions.items = [decisionItem(decisionRow("p", { session_id: "here" }))];
-
-    workState({ section: "decisions", filters: { thisChat: true } });
-    await render("rail");
-    expect(host.querySelector(".work-row")?.textContent).not.toContain("protoEngineer");
-
-    workState({ section: "decisions", filters: { thisChat: false } });
-    await render("modal");
-    expect(host.querySelector(".work-row")?.textContent).toContain("protoEngineer");
+    for (const frame of ["rail", "modal"] as const) {
+      workState({ section: "decisions" });
+      await render(frame);
+      expect(host.querySelector(".work-row")?.textContent).toContain("protoEngineer");
+    }
   });
 
   it("keeps decision, thread and interrupt ids out of the row and the card (r4)", async () => {
