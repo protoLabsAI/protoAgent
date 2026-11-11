@@ -66,6 +66,18 @@ def test_no_scheduler_no_tool():
     assert "self_restart" not in {tool.name for tool in get_all_tools()}
 
 
+async def test_preflight_refuses_before_interrupt_or_scheduler(monkeypatch):
+    scheduler = Mock()
+    approval = Mock()
+    monkeypatch.setattr("tools.restart_tools.interrupt", approval)
+    preflight = Mock(return_value="Not restarted: enable the tool in Settings > Tools.")
+    restart = build_restart_tools(scheduler, preflight)[0]
+    for _ in range(2):
+        assert await restart.ainvoke({"reason": "load gmail_search"}) == preflight.return_value
+    approval.assert_not_called()
+    scheduler.assert_not_called()
+
+
 def _resumed_parked_request(name: str, fence: list[str]):
     """A tool call for ``name``, parked and now being resumed (non-empty task resume),
     under a turn fence that excludes it."""
