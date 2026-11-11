@@ -96,6 +96,16 @@ def register_decision_routes(app) -> None:
             raise HTTPException(status_code=404, detail=f"no decision {decision_id!r}")
         return rec.to_dict()
 
+    # Answers being delivered right now, by decision id. Two surfaces answering the same
+    # decision at once both used to send a resume: the loser's resume was refused under the
+    # turn lock, but only after its task and chat message existed, and the route still said
+    # 200 "Sent" (release acceptance bd-nfd6g.17, D3). A second answer now waits for the one in
+    # flight to settle instead of racing it. Single-process state: one server owns the ledger.
+    inflight: dict[str, asyncio.Future] = {}
+    # The winner's record closes only when its resumed graph run finishes, so wait out the
+    # resume's own transport timeout (120 s, graph/decision_resume.py) before giving up.
+    settle_wait_s = 130.0
+
     @app.post("/api/decisions/{decision_id}/answer")
     async def _api_answer_decision(decision_id: str, body: AnswerRequest, request: Request):
         """Answer a pending decision and resume its parked turn.
@@ -110,16 +120,42 @@ def register_decision_routes(app) -> None:
         if not rec.pending:
             raise HTTPException(status_code=409, detail=rec.to_dict())
         answer = _resolve_answer(rec, body)
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + settle_wait_s
+        while (other := inflight.get(decision_id)) is not None:
+            # Another answer is mid-delivery. If it closes the decision, ours lost: 409 with the
+            # real record. If it fails delivery (still pending), take our turn to deliver.
+            remaining = deadline - loop.time()
+            if remaining <= 0:
+                raise HTTPException(status_code=409, detail=rec.to_dict())
+            try:
+                await asyncio.wait_for(asyncio.shield(other), timeout=min(remaining, 0.25))
+            except asyncio.TimeoutError:
+                pass
+            rec = await asyncio.to_thread(store.get, decision_id)
+            if rec is None or not rec.pending:
+                raise HTTPException(status_code=409, detail=rec.to_dict() if rec else None)
+        mine = loop.create_future()
+        inflight[decision_id] = mine
         text = f"Operator chose: {rec.option_label(answer)} ({answer})" if body.option_id else answer
         actor = getattr(request.state, "device_id", None) or "operator"
-        delivered = await _resume_parked_turn(rec.session_id, text, decision_id, resolution={
-            "answer": answer, "answered_by": actor,
-            "answered_surface": body.surface, "state": "answered",
-        })
+        try:
+            # Its result isn't needed: the ledger, re-read below, says whose answer landed.
+            await _resume_parked_turn(rec.session_id, text, decision_id, resolution={
+                "answer": answer, "answered_by": actor,
+                "answered_surface": body.surface, "state": "answered",
+            })
+        finally:
+            if inflight.get(decision_id) is mine:
+                del inflight[decision_id]
+            mine.set_result(None)
         updated = await asyncio.to_thread(store.get, decision_id)
-        accepted = (updated.state == "answered" and updated.answer == answer
-                    and updated.answered_by == actor and updated.answered_surface == body.surface)
-        if not delivered and not updated.pending and not accepted:
+        # Ours landed if the record is answered with our answer — or with the exact text we sent,
+        # which is what the turn driver records when no resolution metadata reaches it.
+        accepted = updated.state == "answered" and updated.answer in (answer, text)
+        # Closed by something other than this answer (another surface, expiry, a cancel): ours
+        # lost, whatever the transport said. A still-pending record is failed delivery: retryable.
+        if not updated.pending and not accepted:
             raise HTTPException(status_code=409, detail=updated.to_dict())
         # The checkpoint is authoritative even if the HTTP response was lost or timed out.
         return {"decision": updated.to_dict(), "resumed": updated.state == "answered"}
