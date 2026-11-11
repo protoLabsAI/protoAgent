@@ -39,6 +39,7 @@ const footerRow: CSSProperties = { display: "flex", flexDirection: "column", gap
 
 export type DecisionCardProps = {
   decision: DecisionRow;
+  actionSize?: "sm" | "md";
   /** Send the chosen option. Resolves to the answer result, including a 409 answered-elsewhere. */
   onAnswer: (optionId: string) => Promise<AnswerResult>;
   /** The card entered an interaction (sending); the panel retains it through its "Sent" hold so
@@ -88,6 +89,7 @@ export function DecisionCard({
   agentHoldsOffline = true,
   onStartAgent,
   presentation = "panel",
+  actionSize,
 }: DecisionCardProps) {
   const [phase, setPhase] = useState<Phase>({ kind: "idle" });
   const [expanded, setExpanded] = useState(false);
@@ -249,7 +251,7 @@ export function DecisionCard({
             <Alert
               status="warning"
               action={
-                <Button variant="ghost" size="sm" onClick={() => void choose(phase.optionId)}>
+                <Button variant="ghost" size={actionSize ?? "sm"} onClick={() => void choose(phase.optionId)}>
                   Try again
                 </Button>
               }
@@ -266,7 +268,7 @@ export function DecisionCard({
               <div key={option.id} style={optionWrap}>
                 <Button
                   variant={option.recommended ? "primary" : "default"}
-                  size="md"
+                  size={actionSize ?? "md"}
                   style={optionBtn}
                   disabled={optionsDisabled && !sendingThis}
                   loading={sendingThis}
@@ -284,14 +286,14 @@ export function DecisionCard({
               </div>
             );
           })}
-          <Button variant="ghost" size="md" onClick={() => onReplyInChat?.(decision)}>
+          <Button variant="ghost" size={actionSize ?? "md"} onClick={() => onReplyInChat?.(decision)}>
             Reply in chat instead
           </Button>
         </div>
         {offlineBlocks ? (
           <p style={muted}>
             {`${agent} is offline. Start it to answer.`}{" "}
-            <Button variant="ghost" size="sm" onClick={() => onStartAgent?.(decision)}>
+            <Button variant="ghost" size={actionSize ?? "sm"} onClick={() => onStartAgent?.(decision)}>
               Start
             </Button>
           </p>
@@ -322,7 +324,7 @@ export function DecisionCard({
         {decision.question}
       </p>
       {(clipped || expanded) && (
-        <Button variant="ghost" size="sm" aria-expanded={expanded} onClick={() => setExpanded(!expanded)}>
+        <Button variant="ghost" size={actionSize ?? "sm"} aria-expanded={expanded} onClick={() => setExpanded(!expanded)}>
           {expanded ? "Show less" : "Show full question"}
         </Button>
       )}

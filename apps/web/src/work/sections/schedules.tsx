@@ -15,7 +15,8 @@
 import { useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Alert, Skeleton } from "@protolabsai/ui/data";
-import { Button, Callout, Empty } from "@protolabsai/ui/primitives";
+import { Button, Callout } from "@protolabsai/ui/primitives";
+import { WorkEmpty as Empty } from "../WorkEmpty";
 import { useToast } from "@protolabsai/ui/overlays";
 
 import { api } from "../../lib/api";
@@ -149,7 +150,7 @@ function ScheduleList({ source, onOpen }: { source: WorkSource; onOpen: (item: W
     );
   }
   if (!source.items.length) {
-    return <Empty title="No schedules. The agent sets one when it needs to do something later." />;
+    return <Empty title="No schedules" description="The agent sets one when it needs to do something later." />;
   }
   return (
     <>
@@ -159,16 +160,19 @@ function ScheduleList({ source, onOpen }: { source: WorkSource; onOpen: (item: W
           <Button size="sm" onClick={source.retry}>Retry</Button>
         </Callout>
       )}
-      {source.items.map((item) => (
-        <WorkRow
-          key={`${item.kind}:${item.id}`}
-          status={item.status}
-          title={firstLine((item.raw as ScheduledJob).prompt) || item.title}
-          meta={scheduleWhen((item.raw as ScheduledJob).schedule)}
-          focusKey={`${item.kind}:${item.id}`}
-          onOpen={() => onOpen(item)}
-        />
-      ))}
+      <ul className="work-group">
+        {source.items.map((item) => (
+          <li key={`${item.kind}:${item.id}`}>
+            <WorkRow
+              status={item.status}
+              title={firstLine((item.raw as ScheduledJob).prompt) || item.title}
+              meta={scheduleWhen((item.raw as ScheduledJob).schedule)}
+              focusKey={`${item.kind}:${item.id}`}
+              onOpen={() => onOpen(item)}
+            />
+          </li>
+        ))}
+      </ul>
     </>
   );
 }

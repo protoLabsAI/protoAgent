@@ -38,6 +38,8 @@ async function openSections() {
 }
 async function closeSections(menu: HTMLElement) {
   await act(async () => menu.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
+  // Radix restores menu-trigger focus after its close effect.
+  await act(async () => { await new Promise(resolve => setTimeout(resolve, 0)); });
 }
 beforeEach(() => {
   client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -56,12 +58,12 @@ afterEach(async () => {
 it("orders all five lanes and hides empty lanes and help lines", async () => {
   data.sources.tasks.items = [item("done", "done"), item("next", "scheduled"), item("waiting", "waiting"), item("doing", "running"), item("ask", "needs-you")];
   await render("modal");
-  expect(Array.from(host.querySelectorAll("section h3")).map((n) => n.textContent)).toEqual(["Needs you", "Doing", "Waiting on", "Next", "Done"]);
+  expect(Array.from(host.querySelectorAll("section h2")).map((n) => n.firstChild?.textContent)).toEqual(["Needs you", "Doing", "Waiting on", "Next", "Done"]);
   expect(host.querySelectorAll("section p")).toHaveLength(0);
   data.sources.tasks.items = [item("doing", "running")];
   await render("modal");
   expect(host.querySelectorAll("section")).toHaveLength(1);
-  expect(host.textContent).toContain("Work in progress.");
+  expect(host.textContent).toContain("Running now.");
 });
 
 it("always lists every chat's work, with no This chat / All toggle (Josh 2026-11-11)", async () => {
@@ -114,7 +116,7 @@ it("round-trips selection, scroll and filters across frames and back", async () 
   await click("Back to Overview");
   expect(useUI.getState().surfaceModal?.state.itemId).toBeUndefined();
   expect(host.querySelector<HTMLDivElement>(".work-view__list")!.scrollTop).toBe(120);
-  expect(host.textContent).toContain("Pick an item to see its details.");
+  expect(host.querySelector(".work-view__detail")).toBeNull();
   expect(css).toContain("@container work-view (min-width: 48rem)");
   expect(css).not.toContain(".pl-");
   expect(document.activeElement).toBe(host.querySelector(".work-row"));
@@ -234,4 +236,75 @@ it("focuses a restored detail when its source finishes loading", async () => {
   await render();
   expect(document.activeElement).toBe(host.querySelector(".work-view__detail h2"));
   expect(host.querySelector(".work-row")?.getAttribute("aria-current")).toBe("true");
+});
+
+it("renders detail only on selection and Escape restores the opener without bubbling", async () => {
+  data.sources.tasks.items = [item("row", "running")];
+  await render("modal");
+  expect(host.querySelector(".work-view__detail")).toBeNull();
+  const row = host.querySelector<HTMLButtonElement>(".work-row")!;
+  expect(row.closest("li")?.parentElement?.tagName).toBe("UL");
+  await act(async () => row.click());
+  expect(row.getAttribute("aria-current")).toBe("true");
+  const escape = new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true });
+  const bubble = vi.fn();
+  window.addEventListener("keydown", bubble);
+  await act(async () => host.querySelector(".work-view__detail h2")!.dispatchEvent(escape));
+  window.removeEventListener("keydown", bubble);
+  expect(bubble).not.toHaveBeenCalled();
+  expect(escape.defaultPrevented).toBe(true);
+  expect(host.querySelector(".work-view__detail")).toBeNull();
+  expect(document.activeElement).toBe(row);
+});
+
+it.each([
+  ["needs-you", "Decisions waiting for your answer."],
+  ["running", "Running now."],
+  ["waiting", "Paused until something happens."],
+  ["scheduled", "Scheduled or queued."],
+  ["done", "The last 24 hours."],
+] as const)("shows exact single-lane help for %s", async (status, help) => {
+  data.sources.tasks.items = [item("one", status), item("two", status)];
+  await render();
+  expect(host.querySelector("section p")?.textContent).toBe(help);
+  const heading = host.querySelector("section h2")!;
+  expect(heading.getAttribute("aria-label")).toBe(`${heading.firstChild?.textContent}, 2`);
+  expect(heading.querySelector('[aria-hidden="true"]')?.textContent).toBe("2");
+  expect(heading.querySelector(".work-view__announcement")?.textContent).toBe(", 2");
+  expect(host.querySelectorAll("section ul > li > button.work-row")).toHaveLength(2);
+});
+
+it("ignores resize-reset scroll events until the observer restores the saved position", async () => {
+  const original = globalThis.ResizeObserver;
+  let resize = () => {};
+  class Observer {
+    constructor(private callback: ResizeObserverCallback) {}
+    observe(target: Element) {
+      if (target.classList.contains("work-view__list")) resize = () => this.callback([], this as unknown as ResizeObserver);
+    }
+    unobserve() {}
+    disconnect() {}
+  }
+  vi.stubGlobal("ResizeObserver", Observer);
+  try {
+    data.sources.tasks.items = [item("row", "running")];
+    useUI.setState({ surfaceStates: { work: { scrollTop: 75 } } });
+    await render("modal");
+    const list = host.querySelector<HTMLDivElement>(".work-view__list")!;
+    let width = 1000;
+    Object.defineProperty(list, "clientWidth", { get: () => width });
+    Object.defineProperty(list, "clientHeight", { get: () => 500 });
+    vi.spyOn(list, "getClientRects").mockReturnValue([{}] as unknown as DOMRectList);
+    resize();
+    width = 360;
+    await act(async () => {
+      list.scrollTop = 0;
+      list.dispatchEvent(new Event("scroll", { bubbles: true }));
+    });
+    expect(useUI.getState().surfaceStates.work.scrollTop).toBe(75);
+    resize();
+    expect(list.scrollTop).toBe(75);
+  } finally {
+    vi.stubGlobal("ResizeObserver", original);
+  }
 });

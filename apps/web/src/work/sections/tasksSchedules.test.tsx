@@ -145,6 +145,7 @@ afterEach(async () => {
 describe("Schedules section (§2.8)", () => {
   it("rows show the prompt's first line and plain-words timing — never the job id or cron (r1)", async () => {
     await mount(h(SchedulesSection, ctx({ sources: sources({ schedules: src([scheduleItem()]) }) })));
+    expect(host!.querySelectorAll("ul.work-group > li > button.work-row")).toHaveLength(1);
     const row = host!.querySelector(".work-row")!;
     expect(row.querySelector(".work-row__title")?.textContent).toBe("Post the weekly standup");
     expect(row.textContent).toContain("Weekdays at 09:00");
@@ -279,6 +280,7 @@ describe("Tasks section (§2.7)", () => {
     );
     await mount(h(TasksSection, ctx({ sources: sources({ tasks: src(items) }) })));
     const metas = Array.from(host!.querySelectorAll(".work-row__meta")).map((n) => n.textContent);
+    expect(host!.querySelectorAll("ul.work-group > li > button.work-row")).toHaveLength(4);
     expect(metas).toEqual(["Bug · urgent", "Bug · high", "Bug · normal", "Bug · low"]);
   });
 

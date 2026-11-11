@@ -17,11 +17,12 @@ export function closingSentence(entry: DirectiveRow) {
 }
 
 type Props = {
+  actionSize?: "sm" | "md";
   entry: DirectiveRow;
   revoke: (id: string, reason?: string) => Promise<RevokeResult>;
 };
 
-export function DirectiveEntry({ entry, revoke }: Props) {
+export function DirectiveEntry({ entry, revoke, actionSize }: Props) {
   const [expanded, setExpanded] = useState(false);
   const [clipped, setClipped] = useState(false);
   const [confirm, setConfirm] = useState(false);
@@ -36,7 +37,8 @@ export function DirectiveEntry({ entry, revoke }: Props) {
   const label = useId();
   const quoteId = useId();
   const toast = useToast();
-  const mobile = useIsMobile();
+  const viewportMobile = useIsMobile();
+  const mobile = actionSize ? actionSize === "md" : viewportMobile;
   const history = entry.status !== "in_force";
   useLayoutEffect(() => {
     const node = quote.current;
@@ -71,7 +73,7 @@ export function DirectiveEntry({ entry, revoke }: Props) {
   if (notice) return <div ref={result} tabIndex={-1}><Callout tone="info">{notice}</Callout></div>;
   return <article aria-labelledby={quoteId} className={`chat-directive${history ? " chat-directive--history" : ""}`}>
     <blockquote id={quoteId} ref={quote} tabIndex={-1} className={expanded ? "chat-directive-quote" : `chat-directive-quote chat-directive-quote--clamped${clipped ? " chat-directive-quote--clipped" : ""}`}>{entry.quote}</blockquote>
-    {(clipped || expanded) && <Button variant="ghost" size="sm" aria-expanded={expanded} onClick={() => setExpanded(!expanded)}>{expanded ? "Show less" : "Show full text"}</Button>}
+    {(clipped || expanded) && <Button variant="ghost" size={actionSize ?? "sm"} aria-expanded={expanded} onClick={() => setExpanded(!expanded)}>{expanded ? "Show less" : "Show full text"}</Button>}
     <div className="chat-directive-meta">
       {entry.conditions && <p>Only if: {entry.conditions}</p>}
       {entry.scope && <p>Applies to: {entry.scope}</p>}
@@ -82,17 +84,18 @@ export function DirectiveEntry({ entry, revoke }: Props) {
       </>}
     </div>
     {!history && <>
-      <div ref={action}><Button variant="ghost" size="sm" onClick={() => setConfirm(true)}>Withdraw…</Button></div>
+      <div ref={action}><Button variant="ghost" size={actionSize ?? "sm"} onClick={() => setConfirm(true)}>Withdraw…</Button></div>
       {confirm && <div role="group" aria-labelledby={label} onKeyDown={(e) => {
         if (e.key === "Escape") { e.preventDefault(); if (!busy) cancel(); }
       }}>
         <p id={label} ref={prompt} tabIndex={-1}>Withdraw this instruction?</p>
         <p>The agent will stop treating it as approved from its next turn. Anything it has already scheduled keeps running until you cancel it.</p>
         <FormField label="Reason (optional)"><Textarea value={reason} onChange={(e) => setReason(e.target.value)} maxLength={2000} disabled={busy} placeholder="For example: holding the release until Monday" /></FormField>
-        {error && <Alert status="warning">Couldn't withdraw it. It's still active. <Button variant="ghost" size="sm" onClick={() => void withdraw()} disabled={busy}>Try again</Button></Alert>}
+        {error && <Alert status="warning">Couldn't withdraw it. It's still active. <Button variant="ghost" size={actionSize ?? "sm"} onClick={() => void withdraw()} disabled={busy}>Try again</Button></Alert>}
         <div className={`chat-directive-actions${mobile ? " chat-directive-actions--mobile" : ""}`}>
-          <Button variant="danger" size="md" loading={busy} onClick={() => void withdraw()}>Withdraw</Button>
-          <Button size="md" disabled={busy} onClick={cancel}>Keep it</Button>
+          {actionSize === "md" && <Button size="md" disabled={busy} onClick={cancel}>Keep it</Button>}
+          <Button variant="danger" size={actionSize ?? "md"} loading={busy} onClick={() => void withdraw()}>Withdraw</Button>
+          {actionSize !== "md" && <Button size={actionSize ?? "md"} disabled={busy} onClick={cancel}>Keep it</Button>}
         </div>
       </div>}
     </>}

@@ -15,7 +15,8 @@
  * in the `WorkView` registry exactly once.
  */
 import { useState } from "react";
-import { Badge, Button, Callout, Empty } from "@protolabsai/ui/primitives";
+import { Badge, Button, Callout } from "@protolabsai/ui/primitives";
+import { WorkEmpty as Empty } from "../WorkEmpty";
 import { Alert, Skeleton } from "@protolabsai/ui/data";
 import { registerWorkSection, type WorkSectionContext } from "../sectionRegistry";
 import { ActivitySurface } from "../../activity/ActivitySurface";
@@ -134,12 +135,16 @@ function ActivityList({ ctx }: { ctx: WorkSectionContext }) {
           <Skeleton lines={3} />
         </div>
       ) : source.items.length === 0 && source.status !== "error" ? (
-        <Empty title="No activity yet" />
+        <Empty title="No activity yet" description="Agent activity appears here as work happens." />
       ) : (
         <>
-          {visible.map((item) => (
-            <ActivityRow key={`${item.kind}:${item.id}`} item={item} onOpen={() => ctx.onOpen(item)} />
-          ))}
+          <ul className="work-group">
+            {visible.map((item) => (
+              <li key={`${item.kind}:${item.id}`}>
+                <ActivityRow item={item} onOpen={() => ctx.onOpen(item)} />
+              </li>
+            ))}
+          </ul>
           {!showMore && older.length > 0 ? (
             <Button variant="ghost" size="sm" onClick={() => setShowMore(true)}>
               Show more

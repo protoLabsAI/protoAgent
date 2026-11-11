@@ -1,7 +1,11 @@
 import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from "react";
-import { Button, Empty } from "@protolabsai/ui/primitives";
+import { Button } from "@protolabsai/ui/primitives";
+import { X } from "lucide-react";
+import { WorkEmpty as Empty } from "./WorkEmpty";
+import { WorkHeading } from "./WorkHeading";
+import { useSurfaceFrame } from "../shell/SurfaceFrame";
 import { SideNav } from "@protolabsai/ui/navigation";
-import { useToast } from "@protolabsai/ui/overlays";
+import { useToast, Tooltip } from "@protolabsai/ui/overlays";
 import { api } from "../lib/api";
 import { sessionFromDurableTurns, SESSION_TURN_LIMIT } from "../chat/sessionHydration";
 import { openView } from "../app/palette/nav";
@@ -46,6 +50,7 @@ function listScroller(list: HTMLElement): HTMLElement {
 }
 
 export function WorkView({ frame = "rail", sessionId }: { frame?: "rail" | "modal"; sessionId?: string }) {
+  const hostFrame = useSurfaceFrame() ?? frame;
   useSyncExternalStore(subscribe, getSnapshot);
   const state = useUI((s) => s.surfaceStates.work ?? emptyState);
   const section = state.section ?? "overview";
@@ -81,6 +86,7 @@ export function WorkView({ frame = "rail", sessionId }: { frame?: "rail" | "moda
   const count = section === "overview" ? items.length : sources[section as keyof WorkItems]?.items.length ?? 0;
   const listRef = useRef<HTMLDivElement>(null);
   const detailRef = useRef<HTMLDivElement>(null);
+  const listSize = useRef<{ width: number; height: number } | null>(null);
   const returnTo = useRef<string | undefined>(undefined);
   const previousNeeds = useRef<Set<string> | null>(null);
   const [announcement, setAnnouncement] = useState("");
@@ -95,11 +101,12 @@ export function WorkView({ frame = "rail", sessionId }: { frame?: "rail" | "moda
     // When an ancestor scrolls (the phone sheet), the detail replaces the list inside that same
     // scroller — restore it only while the list is the thing showing.
     if (scroller === list || list.getClientRects().length) scroller.scrollTop = state.scrollTop ?? 0;
-  }, [section, state.itemId, frame, state.scrollTop]);
+  }, [section, state.itemId, hostFrame, state.scrollTop]);
   useEffect(() => {
     const list = listRef.current;
     if (!list || typeof ResizeObserver === "undefined") return;
     const observer = new ResizeObserver(() => {
+      listSize.current = { width: list.clientWidth, height: list.clientHeight };
       // Only when the list is its own scroller (rail, modal): there the saved position tracks
       // every scroll. In the phone sheet the Drawer body scrolls and the saved value only moves
       // on open, so restoring it on a resize would yank the reader back (#5075 review).
@@ -131,11 +138,26 @@ export function WorkView({ frame = "rail", sessionId }: { frame?: "rail" | "moda
       Array.from(rows ?? []).find((node) => node.dataset.surfaceFocus === returnTo.current)?.focus({ preventScroll: true });
       returnTo.current = undefined;
     }
-  }, [state.itemId, selectedKey, selected?.id, frame]);
+  }, [state.itemId, selectedKey, selected?.id, hostFrame]);
   const onBack = () => {
     returnTo.current = selectedKey;
     update({ itemId: undefined });
   };
+  useEffect(() => {
+    if (!state.itemId || hostFrame === "rail") return;
+    // The DS samples Escape in capture and dismisses at window bubble. Document bubble
+    // lets React confirmations consume it first, and also covers the Dialog's header.
+    const onEscape = (event: KeyboardEvent) => {
+      const dialog = listRef.current?.closest('[role="dialog"]');
+      if (event.key !== "Escape" || event.defaultPrevented || !dialog
+        || !(event.target instanceof Element) || event.target.closest('[role="dialog"]') !== dialog) return;
+      event.preventDefault();
+      event.stopPropagation();
+      onBack();
+    };
+    document.addEventListener("keydown", onEscape);
+    return () => document.removeEventListener("keydown", onEscape);
+  }, [state.itemId, selectedKey, hostFrame]);
   const onOpen = (item: WorkItem) => update({
     itemId: `${item.kind}:${item.id}`,
     scrollTop: listRef.current ? listScroller(listRef.current).scrollTop : state.scrollTop,
@@ -168,9 +190,16 @@ export function WorkView({ frame = "rail", sessionId }: { frame?: "rail" | "moda
   const detailRenderer = sections.get(selectedSection ?? section);
   const selectSection = (id: string) => update({ section: id, itemId: undefined, scrollTop: 0 });
 
-  return <div className="work-view" data-frame={frame} data-selected={!!state.itemId}>
+  return <div className="work-view" data-frame={hostFrame} data-selected={!!state.itemId} onKeyDown={(event) => {
+    // Portalled overlays bubble through React too; only handle events inside this view.
+    if (event.key !== "Escape" || event.defaultPrevented || !state.itemId
+      || !event.currentTarget.contains(event.target as Node)) return;
+    event.preventDefault();
+    event.stopPropagation();
+    onBack();
+  }}>
     <div className="work-view__header">
-      {state.itemId && <Button className="work-view__back" variant="ghost" onClick={onBack}>Back to {label}</Button>}
+      {state.itemId && <Button className="work-view__back" size={hostFrame === "sheet" ? "md" : "sm"} variant="ghost" onClick={onBack}>Back to {label}</Button>}
       <div className="work-view__picker"><SideNav collapsed ariaLabel="Work sections" active={section} onSelect={selectSection}
         items={Object.entries(workSections).map(([id, defaultLabel]) => ({ id, label: sections.get(id)?.label ?? defaultLabel,
           badge: (id === "overview" ? loading : sources[id as keyof WorkItems]?.status === "loading") ? undefined : (id === "overview" ? items.length : sources[id as keyof WorkItems]?.items.length ?? 0),
@@ -178,17 +207,24 @@ export function WorkView({ frame = "rail", sessionId }: { frame?: "rail" | "moda
     </div>
     <div className="work-view__panes">
       <div className="work-view__list" ref={listRef} onScroll={(event) => {
-        // Hiding a scroll container can emit a zero scroll event.
-        if (event.currentTarget.getClientRects().length) update({ scrollTop: event.currentTarget.scrollTop });
+        const list = event.currentTarget;
+        const size = listSize.current;
+        // WebKit can deliver the hide/reset scroll event after the list is visible again,
+        // before ResizeObserver restores its saved position. Do not persist that reset.
+        if (list.getClientRects().length && (!size || (size.width === list.clientWidth && size.height === list.clientHeight))) {
+          update({ scrollTop: list.scrollTop });
+        }
       }}>
-        {section === "overview" ? <WorkOverview sources={sources} onOpen={onOpen} onSchedules={() => selectSection("schedules")} />
-          : sections.get(section)?.render({ ...context, state: { ...state, itemId: undefined } }) ?? <Empty title={`No ${label.toLowerCase()} to show`} />}
+        <div className="work-view__content">
+          {section !== "overview" && <WorkHeading label={label} count={count} />}
+          {section === "overview" ? <WorkOverview sources={sources} onOpen={onOpen} onSchedules={() => selectSection("schedules")} />
+            : sections.get(section)?.render({ ...context, state: { ...state, itemId: undefined } }) ?? <Empty title={`No ${label.toLowerCase()} to show`} />}
+        </div>
       </div>
-      <div className="work-view__detail" ref={detailRef}>
-        {state.itemId ? <>
-          {detailRenderer?.render(context) ?? <Empty title={selected?.title ?? "Item unavailable"} description="Details will appear here." />}</>
-          : <Empty title="Pick an item to see its details." />}
-      </div>
+      {state.itemId && <div className="work-view__detail" ref={detailRef}>
+        <div className="work-view__close"><Tooltip label="Close details"><Button icon variant="ghost" size="sm" aria-label="Close details" onClick={onBack}><X aria-hidden="true" /></Button></Tooltip></div>
+        {detailRenderer?.render(context) ?? <Empty title={selected?.title ?? "Item unavailable"} description="Details will appear here." />}
+      </div>}
     </div>
     <div className="work-view__announcement" role="status" aria-live="polite" aria-atomic="true">{announcement}</div>
   </div>;

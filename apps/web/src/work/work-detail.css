@@ -82,3 +82,9 @@
   /* Long ids, cron strings and ISO stamps must wrap, not scroll sideways (§6 reflow). */
   overflow-wrap: anywhere;
 }
+.work-view[data-frame="sheet"] .work-detail__actions,
+.work-view[data-frame="sheet"] .work-detail__confirm-actions { flex-direction: column; }
+.work-view[data-frame="sheet"] .work-detail button { width: 100%; }
+.work-view[data-frame="sheet"] .work-decision-detail button,
+.work-view[data-frame="sheet"] .chat-directive button { width: 100%; }
+.work-view[data-frame="sheet"] .chat-directive-actions { flex-direction: column; }

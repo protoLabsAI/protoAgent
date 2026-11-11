@@ -210,6 +210,7 @@ it("shows only the last 24 h until Show more reveals older rows", async () => {
   expect(host.textContent).not.toContain("a-old-turn");
   await click("Show more");
   expect(host.textContent).toContain("a-old-turn");
+  expect(host.querySelectorAll("ul.work-group > li > button.work-row")).toHaveLength(2);
 });
 
 it("shows Urgent only for the inbox now tier", async () => {

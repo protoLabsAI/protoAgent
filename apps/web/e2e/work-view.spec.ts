@@ -1,3 +1,5 @@
+import { mkdir } from "node:fs/promises";
+import { join } from "node:path";
 import { expect, test, type Locator, type Page } from "@playwright/test";
 
 // Per-browser operator API fixtures, like the other mock-server specs. Mutations
@@ -135,4 +137,92 @@ test("Decisions pill opens Decisions; Open Work resets to Overview", async ({ pa
   await page.getByRole("option", { name: "Open Work", exact: true }).click();
   await expect(modalView(page).getByRole("button", { name: /Work sections/ })).toHaveAccessibleName("Overview Work sections");
   await expect(modalView(page).getByRole("region", { name: "Needs you", exact: true })).toBeVisible();
+});
+
+
+test("selection-only inspector closes before its Dialog and returns focus", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await openWorkWindow(page, "Work: Tasks");
+  const work = modalView(page);
+  const dialog = page.getByRole("dialog", { name: /^Work/ });
+  await expect(work.locator(".work-view__detail")).toHaveCount(0);
+  const opener = row(work);
+  await opener.click();
+  await expect(list(work)).toBeVisible();
+  await expect(opener).toHaveAttribute("aria-current", "true");
+  await expect(work.getByRole("button", { name: "Close details" })).toBeVisible();
+  await work.getByRole("button", { name: /Work sections/ }).click();
+  await page.keyboard.press("Escape");
+  await expect(work.locator(".work-view__detail")).toBeVisible();
+  await expect(page.getByRole("menu", { name: "Work sections" })).toHaveCount(0);
+  await expect(work.getByRole("button", { name: /Work sections/ })).toBeFocused();
+  // Header controls are outside WorkView, but Escape still closes details first.
+  await dialog.locator('button[aria-label="Close"]').focus();
+  await page.keyboard.press("Escape");
+  await expect(dialog).toBeVisible();
+  await expect(work.locator(".work-view__detail")).toHaveCount(0);
+  await expect(opener).toBeFocused();
+  await opener.click();
+  await work.getByRole("button", { name: "Delete…", exact: true }).click();
+  await page.keyboard.press("Escape");
+  await expect(work.locator(".work-view__detail")).toBeVisible();
+  await expect(work.getByRole("button", { name: "Delete…", exact: true })).toBeFocused();
+  await page.keyboard.press("Escape");
+  await expect(opener).toBeFocused();
+  await page.keyboard.press("Escape");
+  await expect(dialog).toHaveCount(0);
+});
+
+
+test("approved layout evidence: rail, window, empty section and phone", async ({ page }, info) => {
+  const directory = process.env.WORK_SCREENSHOT_DIR ?? info.outputPath("work-layout");
+  await mkdir(directory, { recursive: true });
+  const capture = async (name: string) => {
+    // Dismiss mock-backend notification toasts so they do not obscure the Work header.
+    for (const dismiss of await page.getByRole("button", { name: "Dismiss", exact: true }).all()) {
+      await dismiss.click();
+    }
+    const path = join(directory, `${name}.png`);
+    await page.screenshot({ path });
+    await info.attach(name, { path, contentType: "image/png" });
+  };
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await openWorkWindow(page);
+  await expect(modalView(page).getByRole("heading", { name: /^Doing, \d+$/ })).toBeVisible();
+  await expect(modalView(page).locator(".work-view__detail")).toHaveCount(0);
+  await capture("02-window-overview-1440x900");
+  await page.getByRole("button", { name: "Dock to rail" }).click();
+  await expect(railView(page).locator(".work-row").first()).toBeVisible();
+  await capture("01-rail-overview-1440x900");
+  await openWorkWindow(page);
+  await modalView(page).locator(".work-row").filter({ hasText: "Work item 00" }).click();
+  await expect(modalView(page).getByRole("button", { name: "Close details" })).toBeVisible();
+  await capture("03-window-inspector-1440x900");
+  await modalView(page).getByRole("button", { name: "Close details" }).click();
+  await page.route("**/api/decisions?*", route => route.fulfill({ json: { pending: 0, decisions: [] } }));
+  await page.reload();
+  await openWorkWindow(page, "Work: Decisions");
+  await expect(modalView(page).getByText("No decisions to show")).toBeVisible();
+  await expect(modalView(page).locator(".work-empty")).toHaveCSS("align-items", "flex-start");
+  await expect(modalView(page).locator(".work-empty")).toHaveCSS("text-align", "start");
+  await capture("04-window-empty-decisions-1440x900");
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.reload();
+  // Dock above selected Work as the persistent mobile destination. Return to chat.
+  await page.getByRole("button", { name: "Back", exact: true }).click();
+  await page.getByRole("button", { name: "Open Work", exact: true }).click();
+  const phone = page.locator('.work-view[data-frame="sheet"]');
+  await phone.getByRole("button", { name: /Work sections/ }).click();
+  await page.getByRole("menuitemradio", { name: "Tasks", exact: true }).click();
+  await expect(phone.locator(".work-row")).toHaveCount(40);
+  expect(await phone.locator(".work-row").first().evaluate(el => el.getBoundingClientRect().height)).toBeGreaterThanOrEqual(48);
+  await expect.poll(() => phone.evaluate(el => el.scrollWidth <= el.clientWidth)).toBe(true);
+  await capture("05-phone-list-390x844");
+  await phone.locator(".work-row").first().click();
+  await expect(phone.locator(".work-detail__title")).toBeVisible();
+  await expect(phone.locator(".work-detail button.pl-btn--sm")).toHaveCount(0);
+  await capture("06-phone-detail-390x844");
+  // 1440px at 400% zoom has a 360 CSS-pixel layout viewport.
+  await page.setViewportSize({ width: 360, height: 225 });
+  await expect.poll(() => phone.evaluate(el => el.scrollWidth <= el.clientWidth)).toBe(true);
 });

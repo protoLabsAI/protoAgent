@@ -3,6 +3,7 @@ import { PanelRight } from "lucide-react";
 import { Button } from "@protolabsai/ui/primitives";
 import { Dialog, Drawer, Tooltip } from "@protolabsai/ui/overlays";
 
+import { SurfaceFrameContext } from "./SurfaceFrame";
 import { openContextMenu, useContextMenuStore } from "../contextMenu/store";
 import { useUI } from "../state/uiStore";
 
@@ -148,7 +149,7 @@ export function SurfaceHost({
       }}
       style={{ flex: 1, minHeight: 0, overflow: "auto", display: "flex", flexDirection: "column" }}
     >
-      {children}
+      <SurfaceFrameContext.Provider value={frame}>{children}</SurfaceFrameContext.Provider>
     </div>
   );
   const status = (
