@@ -53,6 +53,7 @@ import {
   pauseBubble,
   settleSplitHalves,
   stopBubble,
+  unpauseBubble,
 } from "./turnReducers";
 import { isTaskCanceled, isTaskFailed, isTaskPaused, isTaskStateUnknown, isTaskTerminal } from "./taskState";
 import { applyCanonicalTurnText, resetTurnForSnapshot, settleTurnBubbles } from "./turnText";
@@ -219,7 +220,46 @@ export function settleAnsweredPause(messages: ChatMessage[], messageId: string |
  * reattached and the approval card only appeared after a reload. */
 export function reattachKeyForMessages(messages: ChatMessage[] | undefined, sessionId = ""): string {
   const target = reattachTarget(messages, sessionId);
-  return target ? `${target.id}:${target.taskId}` : "";
+  if (!target) return "";
+  const resumed = parkedResumeCount(sessionId);
+  return `${target.id}:${target.taskId}${resumed ? `:resumed-${resumed}` : ""}`;
+}
+
+// ── a parked turn answered elsewhere ────────────────────────────────────────────────
+//
+// A reattach that finds its turn PAUSED lets go of the stream (step 4 above), and the key
+// above then holds still. Answering in this slot's own form re-streams the task itself, but
+// a decision answered from its card, the API, another device, or by expiry is delivered by
+// the SERVER (decision_resume.py's loopback A2A call), which continues the SAME task id.
+// Nothing moved the key, so the bubble read "waiting for you" and the rest of the turn only
+// appeared after a reload (bd-nfd6g.17). The bus's `turn.resumed` is the signal; a per-session
+// count of those resumes rides the key so the slot re-runs its reattach.
+
+const parkedResumes = new Map<string, number>();
+
+/** How many parked turns in `sessionId` the bus reported resumed server-side. The slot clears
+ *  a pending form when it moves: the question it asked was answered somewhere else. */
+export function parkedResumeCount(sessionId: string): number {
+  return parkedResumes.get(sessionId) ?? 0;
+}
+
+/** The bus says `taskId` is running again in `sessionId` (`turn.resumed`). When this window
+ *  holds that turn's PAUSED bubble as its reattach target, mark it running and move the
+ *  reattach key, so the slot resubscribes and the continued turn streams in (or, if it already
+ *  ended, is replayed and finalized). Anything else — a chat not open here, a turn this slot
+ *  is streaming itself, a bubble already settled — is left alone. Returns whether it applied. */
+export function noteParkedTurnResumed(sessionId: string, taskId: string): boolean {
+  if (!sessionId || !taskId) return false;
+  const cur = chatStore.getSnapshot().sessions.find((s) => s.id === sessionId);
+  const target = reattachTarget(cur?.messages, sessionId);
+  if (!cur || !target || target.taskId !== taskId || !target.paused) return false;
+  // Count first: the store update below re-renders the slot, which reads the key.
+  parkedResumes.set(sessionId, (parkedResumes.get(sessionId) ?? 0) + 1);
+  chatStore.updateMessages(
+    sessionId,
+    cur.messages.map((m) => (m.id === target.id ? unpauseBubble(m) : m)),
+  );
+  return true;
 }
 
 function updateMessage(sessionId: string, assistantId: string, fn: (m: any) => any) {

@@ -83,6 +83,7 @@ import { dispatchLiveComponent } from "../ext/componentRegistry";
 import { applyCanonicalTurnText, markTurnAnsweredByParticipants, settleTurnBubbles } from "./turnText";
 import {
   leadAssistantMessage,
+  parkedResumeCount,
   reattachKeyForMessages,
   reattachOrReconcile,
   settleAnsweredPause,
@@ -656,6 +657,14 @@ export function ChatSessionSlot({
   // Settled-but-stale local transcripts from an agent switch are not reattached;
   // durable boot hydration repairs their rendered answer parts in the store.
   const reattachKey = reattachKeyForMessages(session?.messages, sessionId);
+  // A parked turn this slot shows was continued server-side (noteParkedTurnResumed): its
+  // pending form was answered elsewhere, so drop it before the reattach below follows the turn.
+  // Runs first (declared first); a turn that parks again brings its new form back via onHitl.
+  const parkedResumes = parkedResumeCount(sessionId);
+  useEffect(() => {
+    if (parkedResumes) updateHitl(null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- updateHitl is a per-render closure
+  }, [parkedResumes]);
   useEffect(() => {
     if (abortRef.current) return; // a live turn in this slot owns the stream
     // With nothing to reattach, this reconciles instead, which is what an opened sixth
@@ -671,6 +680,8 @@ export function ChatSessionSlot({
     // fixed-id tab; sessionId alone would strand that recovered HITL/live turn. It also
     // changes when a watched server turn ends with its preview still streaming (a parked
     // approval) — this re-render comes from useServerTurn — and the reattach surfaces the card.
+    // And it changes when the bus reports a PAUSED turn resumed server-side (a decision
+    // answered elsewhere, noteParkedTurnResumed), so the continued turn streams in here.
     // eslint-disable-next-line react-hooks/exhaustive-deps -- callbacks intentionally bind this slot
   }, [sessionId, reattachKey]);
 

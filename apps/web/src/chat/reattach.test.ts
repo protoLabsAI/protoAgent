@@ -20,7 +20,14 @@ import { api } from "../lib/api";
 import { makeA2ADispatcher } from "../lib/api/a2aStream";
 import { foldPlan } from "./parts";
 import { chatStore } from "./chat-store";
-import { reattachKeyForMessages, reattachOrReconcile, reattachTurn, settleAnsweredPause } from "./reattach";
+import {
+  noteParkedTurnResumed,
+  parkedResumeCount,
+  reattachKeyForMessages,
+  reattachOrReconcile,
+  reattachTurn,
+  settleAnsweredPause,
+} from "./reattach";
 import { liveMessageId, noteTurnFinished, noteTurnStarted, resetServerTurns } from "./server-turn-store";
 import { messagesFromDurableTurn } from "./sessionHydration";
 import { beginLocalTurn, reconcileSessionStatus } from "./sessionLiveness";
@@ -850,6 +857,72 @@ describe("settleAnsweredPause (#3930)", () => {
     const other = { id: "a2", role: "assistant" as const, content: "", status: "streaming" as const };
     expect(settleAnsweredPause([done, other], "a1")).toEqual([done, other]);
     expect(settleAnsweredPause([done, other], undefined)).toEqual([done, other]);
+  });
+});
+
+// A parked turn answered ELSEWHERE (bd-nfd6g.17): a decision answered from its card, the API
+// or by expiry is resumed by the server on the SAME task, with no browser stream. The bus's
+// `turn.resumed` must move the slot's reattach key so the continued turn streams in.
+describe("noteParkedTurnResumed (bd-nfd6g.17)", () => {
+  function seedParked(): string {
+    const session = chatStore.createSession();
+    chatStore.updateMessages(session.id, [
+      { id: "u1", role: "user", content: "pick a colour", status: "done" },
+      {
+        id: ASSISTANT_ID,
+        role: "assistant",
+        content: "",
+        status: "streaming",
+        taskId: TASK_ID,
+        paused: true,
+        toolCalls: [{ id: "d-1", name: "request_decision", status: "running", paused: true }],
+      },
+    ]);
+    return session.id;
+  }
+  const lead = (sessionId: string) =>
+    chatStore.getSnapshot().sessions.find((s) => s.id === sessionId)!.messages[1];
+  const keyOf = (sessionId: string) =>
+    reattachKeyForMessages(chatStore.getSnapshot().sessions.find((s) => s.id === sessionId)!.messages, sessionId);
+
+  it("moves the reattach key and marks the paused bubble running when its task resumes", () => {
+    const sessionId = seedParked();
+    const before = keyOf(sessionId);
+    expect(before).toBe(`${ASSISTANT_ID}:${TASK_ID}`);
+    expect(noteParkedTurnResumed(sessionId, TASK_ID)).toBe(true);
+    expect(keyOf(sessionId)).not.toBe(before);
+    expect(parkedResumeCount(sessionId)).toBe(1);
+    expect(lead(sessionId)).toMatchObject({ status: "streaming", paused: undefined });
+    expect(lead(sessionId).toolCalls?.[0]).toMatchObject({ status: "running", paused: undefined });
+  });
+
+  it("the moved key reattaches: the continued turn is replayed and finalized", async () => {
+    const sessionId = seedParked();
+    noteParkedTurnResumed(sessionId, TASK_ID);
+    // The resumed leg already finished: resubscribe is refused, GetTask has the answer.
+    resumeTask.mockRejectedValueOnce(new Error("task is not running"));
+    replayTask.mockResolvedValueOnce("completed");
+    getTask.mockResolvedValue({ state: "completed", text: "Result: blue", supersededBy: undefined, settledAt: undefined });
+    const cancel = reattachOrReconcile(sessionId);
+    expect(cancel).toBeTypeOf("function");
+    await settle();
+    expect(lead(sessionId)).toMatchObject({ status: "done", content: "Result: blue" });
+    cancel?.();
+  });
+
+  it("ignores a resume for another task, a chat not open here, or a bubble that is not parked", () => {
+    const sessionId = seedParked();
+    const before = keyOf(sessionId);
+    expect(noteParkedTurnResumed(sessionId, "some-other-task")).toBe(false);
+    expect(noteParkedTurnResumed("not-open-here", TASK_ID)).toBe(false);
+    expect(keyOf(sessionId)).toBe(before);
+    expect(lead(sessionId).paused).toBe(true);
+
+    // A turn this window is streaming itself (not parked) is not re-attached under it.
+    const live = seedStuckSession();
+    const liveKey = keyOf(live);
+    expect(noteParkedTurnResumed(live, TASK_ID)).toBe(false);
+    expect(keyOf(live)).toBe(liveKey);
   });
 });
 

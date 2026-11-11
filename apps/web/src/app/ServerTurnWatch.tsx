@@ -1,7 +1,7 @@
 import { useEffect } from "react";
 
 import { chatStore, type ServerTurnControlState } from "../chat/chat-store";
-import { isReattaching } from "../chat/reattach";
+import { isReattaching, noteParkedTurnResumed } from "../chat/reattach";
 import {
   effectiveOrigin,
   labelForOrigin,
@@ -145,10 +145,17 @@ export function ServerTurnWatch() {
       emitServerTurnControl(data.control);
       foldProgressEvent(data);
     });
+    // A parked turn continued by the SERVER (a decision answered from its card, the API,
+    // another device, or by expiry): the same task runs again with no browser stream, so the
+    // open chat holding its paused bubble re-attaches to follow it (bd-nfd6g.17).
+    const offResumed = onTopic("turn.resumed", (data) => {
+      noteParkedTurnResumed(String(data.context_id ?? data.session_id ?? ""), String(data.task_id ?? ""));
+    });
     return () => {
       offStarted();
       offFinished();
       offProgress();
+      offResumed();
     };
   }, []);
 
