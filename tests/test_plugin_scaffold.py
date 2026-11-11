@@ -117,6 +117,8 @@ def test_scaffold_with_tests_is_shippable(tmp_path):
     # ci.yml is valid YAML with a test job
     ci = yaml.safe_load((pdir / ".github" / "workflows" / "ci.yml").read_text())
     assert "test" in ci["jobs"]
+    # ...on a GitHub-hosted runner (the org retired Namespace runners).
+    assert ci["jobs"]["test"]["runs-on"] == "ubuntu-latest"
 
 
 @pytest.mark.platform_sensitive

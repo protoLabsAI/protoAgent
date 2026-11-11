@@ -375,8 +375,7 @@ on:
 
 jobs:
   test:
-    # The org's Namespace Linux profile; override NSC_RUNNER on a fork that lacks it.
-    runs-on: ${{ vars.NSC_RUNNER || 'namespace-profile-protolabs-linux' }}
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
