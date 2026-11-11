@@ -35,6 +35,21 @@ for platform requirements and runner overrides.
 `release.yml` creates a non-Latest release. The desktop fan-in promotes it only
 after uploading `latest.json`, which the in-app updater needs.
 
+**Testing a release candidate on your Mac.** Run
+`scripts/desktop-install-candidate.sh`. It takes main's head unless you pass `--sha` or
+`--run`, and does the rest:
+
+- It reuses or dispatches a desktop test build for that commit and waits for it.
+- It verifies the signed DMG with `scripts/verify-macos-desktop.sh` and swaps it into
+  `/Applications`.
+- It keeps the previous app in `~/.protoagent/desktop-backups/` and records the commit in
+  `~/.protoagent/desktop-candidate.json`. A frozen app can't report its own commit.
+- `--restore` puts the previous app back.
+
+A test build carries `pyproject.toml`'s version, which on main equals the latest release, so
+the updater leaves it alone until a newer release ships. Swapping the app restarts every agent
+it hosts.
+
 If one platform fails, the default fan-in withholds the manifest. Fix and rerun
 when possible. For an intentional partial release, dispatch with
 `-f tag=vX.Y.Z -f allow_partial=true`. The manifest then covers available signed
