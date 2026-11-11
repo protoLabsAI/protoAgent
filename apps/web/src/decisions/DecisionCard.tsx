@@ -234,7 +234,9 @@ export function DecisionCard({
         <StatusDot status="success" label={sent} />
       </div>
     );
-  } else if (phase.kind === "idle" && TERMINAL.has(decision.state)) {
+  } else if ((phase.kind === "idle" || phase.kind === "error") && TERMINAL.has(decision.state)) {
+    // A failed send leaves the error phase, but a record that has since settled elsewhere is
+    // final: show it as closed rather than offering "Try again" on a decision nobody can answer.
     body = (
       <div aria-live="polite">{closedCallout(decision)}</div>
     );

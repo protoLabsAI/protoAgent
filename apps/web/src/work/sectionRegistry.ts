@@ -1,3 +1,4 @@
+import type { AnswerResult } from "../lib/api/decisions";
 import type { ReactNode } from "react";
 import type { SurfaceState } from "../shell/surfaceState";
 import type { WorkItem, WorkItems } from "./useWorkItems";
@@ -9,6 +10,11 @@ export type WorkSectionContext = {
   onBack: () => void;
   /** The focused chat, for the per-session sections (the directive ledger). */
   sessionId?: string;
+  decisionActions?: {
+    agentOnline: boolean;
+    openSourceChat: (sessionId: string, reply?: boolean) => void;
+    answerDecision: (id: string, optionId: string) => Promise<AnswerResult>;
+  };
 };
 type WorkSection = { label: string; render: (context: WorkSectionContext) => ReactNode };
 export const sections = new Map<string, WorkSection>();

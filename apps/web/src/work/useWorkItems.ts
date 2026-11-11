@@ -26,7 +26,7 @@ import { api, currentSlug } from "../lib/api";
 import { decisionsApi, type DecisionList, type DecisionRow } from "../lib/api/decisions";
 import type { DirectiveList, DirectiveRow } from "../lib/api/chat";
 import { goalsQuery, queryKeys, schedulesQuery, tasksQuery, watchesQuery } from "../lib/queries";
-import { onTopic } from "../lib/events";
+import { onConnectionChange, onTopic } from "../lib/events";
 import type {
   ActivityEntry,
   ActivityHistory,
@@ -302,6 +302,7 @@ export function useWorkItems({ sessionId, thisChatOnly }: UseWorkItemsParams): W
       void qc.invalidateQueries({ queryKey });
     };
     const onBackground = invalidate(workKey("background"));
+    let wasOffline = false;
     const offs = [
       // `invalidate(workKey("decisions"|"directives"))` is a PREFIX match, so the directives
       // key matches whatever session segment it carries — the effect stays `[qc]`-only and
@@ -321,6 +322,13 @@ export function useWorkItems({ sessionId, thisChatOnly }: UseWorkItemsParams): W
         void qc.invalidateQueries({ queryKey: queryKeys.schedules });
       }),
       onTopic("directive.changed", invalidate(workKey("directives"))),
+      // A decision answered, expired or withdrawn while the bus was down sends no event we'll
+      // ever see, so re-read the list once on reconnect (a one-shot refetch, not a poll).
+      // onConnectionChange fires once on subscribe, so refetch only on an offline → online edge.
+      onConnectionChange((connected) => {
+        if (connected && wasOffline) void qc.invalidateQueries({ queryKey: workKey("decisions") });
+        wasOffline = !connected;
+      }),
     ];
     return () => {
       for (const off of offs) off();

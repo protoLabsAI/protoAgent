@@ -14,7 +14,7 @@ async function setup(page: Page, rows: DecisionRow[], result: "sent" | "answered
   let pending = [...rows];
   const answers: unknown[] = [];
   await page.emulateMedia({ reducedMotion: "reduce" });
-  await page.route("**/api/events**", (route) => route.fulfill({ contentType: "text/event-stream", body: ": idle\n\n" }));
+  // Use the mock server's live SSE stream: a finite response is a disconnect.
   await page.route("**/api/decisions?**", (route) => route.fulfill({ json: { decisions: pending, pending: pending.length } }));
   await page.route("**/api/decisions/*/answer", (route) => {
     answers.push(route.request().postDataJSON());
@@ -194,3 +194,23 @@ test("refreshing the same pending decision does not announce it again", async ({
   await page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
   await expect(announcement).not.toHaveAttribute("data-reannounced", "true");
 });
+
+for (const reply of [false, true]) {
+  test(`Work source chat navigation, reply=${reply}`, async ({ page }) => {
+    await setup(page, [decision()]);
+    await page.route("**/api/chat/sessions/chat-decisions/turns?*", (route) => route.fulfill({ json: {
+      turns: [{ task_id: "demo-source-task", state: "TASK_STATE_COMPLETED", last_updated: "2026-11-09T14:00:00Z",
+        text: "Demo source response", artifacts: [{ parts: [{ text: "Demo source response" }] }],
+        history: [{ role: "ROLE_USER", parts: [{ text: "Demo source question" }] }] }],
+    } }));
+    await page.goto("/app/");
+    await page.getByRole("button", { name: "Decisions, 1 waiting on you" }).click();
+    const work = page.locator('.work-view[data-frame="modal"]');
+    await work.locator(".work-row").click();
+    if (reply) await work.getByRole("button", { name: "Reply in chat instead" }).click();
+    else await work.getByRole("link", { name: "Open chat: protoEngineer" }).click();
+    await expect(work).not.toBeVisible();
+    await expect(page.getByText("Demo source response", { exact: true })).toBeVisible();
+    if (reply) await expect(page.getByPlaceholder(/Message protoAgent/i)).toBeFocused();
+  });
+}

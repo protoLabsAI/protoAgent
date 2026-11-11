@@ -112,8 +112,13 @@ export function createDecisionsStore() {
         try {
           result = await decisionsApi.listDecisions("pending");
           const decisions = result.decisions;
-          // Merge the fresh pending rows into the by-id cache. A row that has LEFT the pending
-          // list is not here to overwrite, so its last known record survives (#4725, Gap 2).
+          // Reconcile pending records that disappeared, including events missed while offline.
+          // Resolve them before publishing the new list so selected details keep their identity
+          // while transitioning to the terminal record. Failed reads can retry on the next refresh.
+          const pendingIds = new Set(decisions.map((d) => d.id));
+          await Promise.all(Object.values(snapshot.records)
+            .filter((row) => row.state === "pending" && !pendingIds.has(row.id))
+            .map((row) => fetchDecision(row.id)));
           const records = { ...snapshot.records };
           for (const d of decisions) records[d.id] = d;
           snapshot = {
@@ -217,18 +222,17 @@ export function createDecisionsStore() {
         }
         if (connected) void refresh();
       });
-      // Fleet-wide: any member's decision.changed refreshes the one store. The pending refresh
-      // re-reads every id that is (or stays) pending, but it only MERGES pending rows and never
-      // removes an id — so a cached id the event names that has just LEFT the pending list
-      // (answered, expired or withdrawn elsewhere) would keep its stale record, INCLUDING one
-      // still cached as pending. Once the refreshed list is in, re-read any such departed cached
-      // id by GET; ids still pending were just refreshed in bulk, so they need no extra read (§7).
+      // Fleet-wide: any member's decision.changed refreshes the one store. The refresh covers
+      // current pending rows and reconciles departed pending records. Also re-read a cached
+      // terminal record named by the event, unless the refresh already replaced it (§7).
       const offTopic = onTopic("decision.changed", (payload) => {
         const id = typeof payload?.id === "string" ? payload.id : null;
-        const wasCached = id != null && snapshot.records[id] != null;
+        const cached = id != null ? snapshot.records[id] : undefined;
         void refresh().then(() => {
-          if (id == null || !wasCached) return;
+          if (id == null || !cached) return;
           if (snapshot.decisions.some((d) => d.id === id)) return;
+          // refresh already reconciled departed pending records; don't read them twice.
+          if (snapshot.records[id] !== cached) return;
           void fetchDecision(id);
         });
       });

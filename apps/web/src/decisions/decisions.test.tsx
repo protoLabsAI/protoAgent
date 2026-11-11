@@ -145,6 +145,32 @@ describe("useDecisions store", () => {
     expect(list).toHaveBeenCalledTimes(3);
   });
 
+  it("reconciles departed cached pending records on reconnect and does not reread unchanged or terminal records", async () => {
+    const list = vi.spyOn(decisionsApi, "listDecisions").mockResolvedValue(listOf([decision("departed"), decision("waiting")]));
+    const get = vi.spyOn(decisionsApi, "getDecision").mockResolvedValue(decision("historical", { state: "answered" }));
+    const store = mountStore();
+    await settle();
+    await store.loadDecision("historical");
+    get.mockClear();
+    bus.connections.forEach((fn) => fn(false));
+    list.mockResolvedValue(listOf([decision("waiting")]));
+    const terminal = decision("departed", { state: "expired" });
+    let resolve!: (row: DecisionRow) => void;
+    get.mockImplementation(() => new Promise((done) => { resolve = done; }));
+    bus.connections.forEach((fn) => fn(true));
+    await settle();
+    expect(get).toHaveBeenCalledExactlyOnceWith("departed");
+    // Keep the old list until its departed record has been reconciled.
+    expect(store.getSnapshot().decisions.map((row) => row.id)).toEqual(["departed", "waiting"]);
+    resolve(terminal);
+    await settle();
+    expect(store.getSnapshot().records.departed).toEqual(terminal);
+    expect(store.getSnapshot().decisions.map((row) => row.id)).toEqual(["waiting"]);
+    expect(store.getSnapshot().pendingCount).toBe(1);
+    await store.refresh();
+    expect(get).toHaveBeenCalledTimes(1);
+  });
+
   it("notifies once per new pending id, with a click that opens the panel", async () => {
     const list = vi.spyOn(decisionsApi, "listDecisions").mockResolvedValue(listOf([]));
     const store = mountStore();
@@ -473,6 +499,18 @@ describe("DecisionCard", () => {
     expect(buttons().some((b) => b.textContent?.trim() === "Try again")).toBe(true);
     expect(buttons().find((b) => b.textContent?.includes("Merge with the WARN"))?.disabled).toBe(false);
     expect(buttons().find((b) => b.textContent?.trim() === "Hold the release")?.disabled).toBe(false);
+  });
+
+  it("drops the options and Try again when a failed send's decision settles elsewhere", async () => {
+    const onAnswer = vi.fn().mockRejectedValue(new Error("network"));
+    await renderNode(<DecisionCard decision={decision("a")} onAnswer={onAnswer} />);
+    await click("Merge with the WARN");
+    expect(document.body.textContent).toContain("Couldn't send your answer");
+    // Same card instance, new record: someone else answered while the error was showing.
+    await renderNode(<DecisionCard decision={{ ...decision("a"), state: "withdrawn" }} onAnswer={onAnswer} />);
+    expect(document.body.textContent).not.toContain("Couldn't send your answer");
+    expect(buttons().some((b) => b.textContent?.trim() === "Try again")).toBe(false);
+    expect(document.querySelector('[role="group"][aria-label="Answer"]')).toBeNull();
   });
 
   it("treats a 200 with resumed=false as a failed send, not a Sent success", async () => {

@@ -17,7 +17,7 @@
 import type { ReactNode } from "react";
 import { Empty } from "@protolabsai/ui/primitives";
 
-import { decisionsApi, type DecisionRow } from "../../lib/api/decisions";
+import { type DecisionRow } from "../../lib/api/decisions";
 import { DecisionCard } from "../../decisions/DecisionCard";
 import { decisionMeta } from "../tone";
 import { WorkRow } from "../WorkRow";
@@ -25,12 +25,15 @@ import type { WorkItem } from "../useWorkItems";
 import { registerWorkSection, type WorkSectionContext } from "../sectionRegistry";
 
 /** The selected decision's detail: the DecisionCard, unchanged. */
-function DecisionDetail({ row }: { row: DecisionRow }): ReactNode {
+function DecisionDetail({ row, context }: { row: DecisionRow; context: NonNullable<WorkSectionContext["decisionActions"]> }): ReactNode {
   return (
     <div className="work-decision-detail">
       <DecisionCard
         decision={row}
-        onAnswer={(optionId) => decisionsApi.answerDecision(row.id, { option_id: optionId })}
+        onAnswer={(optionId) => context.answerDecision(row.id, optionId)}
+        agentOnline={context.agentOnline}
+        onOpenChat={() => context.openSourceChat(row.session_id)}
+        onReplyInChat={() => context.openSourceChat(row.session_id, true)}
       />
     </div>
   );
@@ -42,7 +45,7 @@ function renderDecisions(ctx: WorkSectionContext): ReactNode {
   // Detail: the one decision whose id the host put in state.itemId (§4.1 push navigation).
   if (ctx.state.itemId) {
     const selected = items.find((item) => `${item.kind}:${item.id}` === ctx.state.itemId);
-    if (selected) return <DecisionDetail row={selected.raw as DecisionRow} />;
+    if (selected && ctx.decisionActions) return <DecisionDetail key={selected.id} row={selected.raw as DecisionRow} context={ctx.decisionActions} />;
   }
 
   if (!items.length) {
