@@ -102,7 +102,7 @@ can outlive its full transcript.
 
 | Part of a run | Store | Kept for | Setting |
 |---|---|---|---|
-| Full turn detail: messages, tool calls, the delegate reply timeline | A2A task store | 24 hours. A turn paused for approval is kept until it's answered. | Fixed |
+| Full turn detail: messages, tool calls, the delegate reply timeline | A2A task store | Console chats: until you delete the chat. Everything else (delegations, API calls, Activity): 24 hours. A turn paused for approval is kept until it's answered. | Fixed |
 | Turn outcome, tokens, cost, duration, trace link | `telemetry.db` | 90 days | `telemetry.retention_days` |
 | Delegations and each run's tree | `ledger.db` | Forever | `telemetry.ledger_retention_days` |
 | Workflow runs and their step output | `workflows/.runs/*.json` | The newest 200 finished runs. Running and paused runs are never pruned. | `workflow_runs.max_runs` |
@@ -111,8 +111,9 @@ can outlive its full transcript.
 | Prompt snapshots | `prompt-snapshots.db` | 30 days or 5000 calls, whichever comes first | `prompts.retention_days`, `prompts.max_calls` |
 | Langfuse traces | Your Langfuse instance | Langfuse's own retention | In Langfuse |
 
-The chat transcript in the console browser keeps its own copy after the server's 24-hour
-task window closes.
+Every console (desktop app, phone, browser) rebuilds a chat from the server's copy, so they
+show the same history. Each console also keeps a local copy, which is all that remains of
+chats the server swept before console chats were kept indefinitely (v0.235.x).
 
 ### Count completion-check outcomes
 
