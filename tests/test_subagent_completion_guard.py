@@ -290,6 +290,7 @@ def _arm_finder_like(monkeypatch, probe, script, *, max_turns=8):
             tools=["ping"],
             max_turns=max_turns,
             completion_check=findings_delivered,
+            completion_contract="the fenced JSON findings array",
             completion_prompt_markers=(STATUS,),
         ),
     )
@@ -579,13 +580,15 @@ def _thinking(text: str = "") -> AIMessage:
     return AIMessage(content=text, additional_kwargs={"reasoning_content": "Let me carefully analyze " * 400})
 
 
-async def test_a_reasoning_only_turn_after_one_nudge_ends_the_lane_without_a_second(monkeypatch, probe):
-    # mythxengine-sdk#405: 6.4k then 7.9k output tokens, all reasoning, empty content — the
-    # second nudge never recovered one (0 of 5) and cost ~2 minutes each.
+async def test_reasoning_only_recovery_stops_after_one_salvage(monkeypatch, probe):
+    # Preserve #3584: repeated empty reasoning does not get thinking-on nudges.
     ping, models = _arm_finder_like(monkeypatch, probe, [_thinking(), _thinking(), _thinking()])
     out = await _run_with(ping, "Review the diff.")
     assert out.startswith(f"[{PROBE} ended without its deliverable: lane"), out
-    assert len(models[-1].seen) == 2  # the original turn + ONE nudge; no second
+    assert len(models[-1].seen) == 2  # original + one thinking-off salvage
+
+    assert sum(is_guard_note(m, EMPTY_GUARD) for m in models[-1].seen[-1]) == 1
+    assert _nudges(models[-1].seen[-1]) == 0
 
 
 async def test_a_reasoning_only_intent_sentence_counts_too(monkeypatch, probe):
@@ -597,6 +600,9 @@ async def test_a_reasoning_only_intent_sentence_counts_too(monkeypatch, probe):
     out = await _run_with(ping, "Review the diff.")
     assert out.startswith(f"[{PROBE} ended without its deliverable: lane"), out
     assert len(models[-1].seen) == 2
+
+    assert sum(is_guard_note(m, EMPTY_GUARD) for m in models[-1].seen[-1]) == 1
+    assert _nudges(models[-1].seen[-1]) == 0
 
 
 async def test_a_short_answer_without_reasoning_still_gets_both_nudges(monkeypatch, probe):
@@ -708,11 +714,14 @@ async def test_thinking_comes_back_on_after_the_retry(monkeypatch, probe):
 
 
 async def test_a_retry_that_is_still_reasoning_only_ends_the_lane(monkeypatch, probe):
-    # Bounded: one thinking-off retry per stall, never a loop of them.
+    # A failed thinking-off salvage must not replay its loop with thinking on.
     ping, models = _arm_thinking_finder(monkeypatch, probe, [_looping(), _looping(), _looping()])
     out = await _run_with(ping, "Review the diff.")
     assert out.startswith(f"[{PROBE} ended without its deliverable: lane"), out
     assert len(models[-1].seen) == 2
+
+    assert sum(is_guard_note(m, EMPTY_GUARD) for m in models[-1].seen[-1]) == 1
+    assert _nudges(models[-1].seen[-1]) == 0
 
 
 async def test_a_reasoning_only_stall_after_a_plain_nudge_still_gets_the_thinking_off_retry(monkeypatch, probe):
@@ -885,12 +894,15 @@ def test_a_long_truncated_turn_is_not_retried():
     assert mw._intervene({"messages": [HumanMessage(content="go"), long_capped]}) is None
 
 
-async def test_a_second_empty_turn_is_not_retried_again(monkeypatch, probe):
+async def test_a_second_empty_turn_ends_contract_recovery(monkeypatch, probe):
     # Bounded: one retry per stall, never a loop of them — even when the retry is also capped.
     ping, models = _arm_finder_like(monkeypatch, probe, [_capped(), _capped()])
     out = await _run_with(ping, "Review the diff.")
     assert out.startswith(f"[{PROBE} ended without its deliverable: lane"), out
     assert len(models[-1].seen) == 2
+
+    assert sum(is_guard_note(m, EMPTY_GUARD) for m in models[-1].seen[-1]) == 1
+    assert _nudges(models[-1].seen[-1]) == 0
 
 
 async def test_the_counter_records_reason_and_recovered(monkeypatch, probe, empty_counts):
@@ -941,3 +953,109 @@ def test_the_lead_chat_stack_gets_empty_at_cap_behind_the_flag(monkeypatch):
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
     stack = agent_mod._build_middleware(LangGraphConfig(empty_retry_lead=True))
     assert any(isinstance(m, EmptyAtCapMiddleware) for m in stack)
+
+
+@pytest.mark.parametrize("finish", ["length", "max_tokens", "stop"])
+async def test_short_declared_deliverable_survives_cap_and_reasoning(monkeypatch, probe, empty_counts, finish):
+    answer = _thinking(DELIVERABLE)
+    answer.response_metadata = {"finish_reason": finish}
+    ping, models = _arm_finder_like(monkeypatch, probe, [answer])
+    out = await _run_with(ping, "Review the diff.")
+    assert DELIVERABLE in out and out.startswith(f"[{PROBE} completed: lane]")
+    assert len(models[-1].seen) == 1
+    assert empty_counts == []
+
+
+async def test_nonempty_salvage_restores_contract_then_required_marker(monkeypatch, probe, empty_counts):
+    whole = f"{DELIVERABLE}\n{STATUS} reviewed n=0"
+    ping, models = _arm_thinking_finder(
+        monkeypatch, probe, [_looping(), AIMessage(content=NARRATION), _capped(DELIVERABLE), _capped(whole)]
+    )
+    out = await _run_with(ping, f"Review the diff. End with {STATUS}")
+    assert whole in out and out.startswith(f"[{PROBE} completed: lane]")
+    model = models[-1]
+    assert len(model.seen) == 4
+    assert [_thinking_off(b) for b in model.binds] == [False, True, False, False]
+    assert "findings" in model.seen[2][-1].text.lower()
+    assert is_guard_note(model.seen[2][-1], "completion")
+    assert is_guard_note(model.seen[3][-1], "completion-line")
+    assert empty_counts == [("reasoning_only", False)]
+
+
+async def test_contract_free_failed_salvage_stops_after_two_calls(probe, empty_counts):
+    ping, models = probe([_capped()], marker="")
+    await _run(ping)
+    assert len(models[-1].seen) == 2
+    assert empty_counts == [("length", False)]
+
+
+@pytest.mark.parametrize("async_run", [False, True])
+@pytest.mark.parametrize("recover", [False, True])
+async def test_real_stack_sync_async_recovery_bound(async_run, recover):
+    from langchain.agents import create_agent
+
+    from graph.middleware.completion_guard import CompletionRecovery
+
+    recovery = CompletionRecovery(findings_delivered)
+    script = [_capped(), AIMessage(content=NARRATION), AIMessage(content=NARRATION),
+              _capped(DELIVERABLE) if recover else _capped()]
+    model = _ScriptedModel(script=script, seen=[])
+    stack = create_agent(model=model, tools=[], middleware=[
+        EmptyAtCapMiddleware(recovery=recovery),
+        CompletionGuardMiddleware(delivered=findings_delivered, contract="a findings array", recovery=recovery),
+    ])
+    state = {"messages": [HumanMessage(content="Review this.")]}
+    result = await stack.ainvoke(state) if async_run else stack.invoke(state)
+    assert len(model.seen) == 4
+    assert result["messages"][-1].content == (DELIVERABLE if recover else "")
+    assert sum(is_guard_note(m, EMPTY_GUARD) for m in result["messages"]) == 1
+    assert _nudges(result["messages"]) == 2
+
+
+@pytest.mark.parametrize("async_run", [False, True])
+@pytest.mark.parametrize("empty", [_capped, _looping])
+@pytest.mark.parametrize("plain_progress", [False, True])
+async def test_real_stack_still_empty_after_salvage_never_replays_reasoning(async_run, empty, plain_progress):
+    from langchain.agents import create_agent
+
+    from graph.middleware.completion_guard import CompletionRecovery
+
+    recovery = CompletionRecovery(findings_delivered)
+    script = [empty()]
+    if plain_progress:
+        script.append(AIMessage(content=NARRATION))
+    script.extend([empty(), AIMessage(content=DELIVERABLE)])
+    model = _ThinkingModel(
+        script=script, seen=[], binds=[], extra_body={"thinking": {"type": "enabled"}},
+    )
+    @tool
+    def ping() -> str:
+        """Return pong."""
+        return "pong"
+
+    stack = create_agent(model=model, tools=[ping], middleware=[
+        EmptyAtCapMiddleware(recovery=recovery),
+        CompletionGuardMiddleware(delivered=findings_delivered, contract="a findings array", recovery=recovery),
+    ])
+    state = {"messages": [HumanMessage(content="Review this.")]}
+    result = await stack.ainvoke(state) if async_run else stack.invoke(state)
+    # Even with unused contract nudges, another empty result is terminal. The
+    # deliverable queued after it must never be reached by replaying failed reasoning.
+    assert len(model.seen) == (3 if plain_progress else 2)
+    assert [_thinking_off(b) for b in model.binds] == ([False, True, False] if plain_progress else [False, True])
+    assert result["messages"][-1].content == ""
+    assert sum(is_guard_note(m, EMPTY_GUARD) for m in result["messages"]) == 1
+    assert _nudges(result["messages"]) == int(plain_progress)
+    failed = [m for m in model.seen[1] if isinstance(m, AIMessage)][-1]
+    assert not failed.additional_kwargs.get("reasoning_content")
+
+
+async def test_a_new_user_turn_rearms_contract_free_salvage():
+    from langchain.agents import create_agent
+
+    model = _ScriptedModel(script=[_capped()], seen=[])
+    stack = create_agent(model=model, tools=[], middleware=[EmptyAtCapMiddleware()])
+    first = await stack.ainvoke({"messages": [HumanMessage(content="First request")]})
+    assert len(model.seen) == 2
+    await stack.ainvoke({"messages": [*first["messages"], HumanMessage(content="Second request")]})
+    assert len(model.seen) == 4

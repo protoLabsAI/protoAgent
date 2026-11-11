@@ -59,8 +59,9 @@ with its name in ``step``. Finder steps are those whose name contains ``find``
 
 ``--log`` (optional) — a plain-text protoAgent log. The recovered-after-retry count can
 come from each row's ``recovered`` flag; absent that, this log is scanned for the
-completion-guard's reasoning-only retry line (``graph/middleware/completion_guard.py``)
-minus its give-up line.
+empty-at-cap retry/result events. Historical completion-guard reasoning-only logs
+remain supported using retries minus give-ups (an inferred recovery count). Current
+logs count explicit recovery events, so unfinished retries are not successes.
 
 OUTPUT
 ------
@@ -69,7 +70,7 @@ the share of calls over 8k output tokens and those calls' share of all output to
 cap hits (``finish_reason`` in {length, max_tokens}); empty calls (visible text ≤ 200
 and no tool calls) as N of M; finder-stage hours, panel count and hours per panel; the
 split by turn kind (tool-call vs run-ending) of the over-8k calls and of the empty
-calls; and how many empty calls recovered after a reasoning-only retry.
+calls; and how many empty calls recovered after an empty-at-cap retry.
 """
 
 from __future__ import annotations
@@ -136,6 +137,7 @@ def normalize_ledger(row: dict) -> dict:
         "timestamp": row.get("at") or row.get("timestamp") or row.get("ended_at"),
         "retried": bool(row.get("retried")),
         "recovered": bool(row.get("recovered")),
+        "recovery_reported": row.get("recovered") is not None,
     }
 
 
@@ -168,6 +170,7 @@ def normalize_langfuse(gen: dict) -> dict:
         "timestamp": gen.get("startTime") or gen.get("timestamp") or gen.get("endTime"),
         "retried": bool(meta.get("retried")),
         "recovered": bool(meta.get("recovered")),
+        "recovery_reported": meta.get("recovered") is not None,
     }
 
 
@@ -272,11 +275,19 @@ def is_empty(call: dict) -> bool:
 
 
 def scan_log_recovery(text: str) -> dict:
-    """Completion-guard retry accounting from a raw log: reasoning-only retries, give-ups,
-    and ``recovered = max(0, retries - give-ups)``."""
-    retries = sum(1 for line in text.splitlines() if LOG_RETRY_MARK in line)
-    gave_up = sum(1 for line in text.splitlines() if "reasoning-only turn" in line and LOG_GIVEUP_MARK in line)
-    return {"retries": retries, "gave_up": gave_up, "recovered": max(0, retries - gave_up)}
+    """Count current explicit outcomes plus the historical recovery heuristic."""
+    lines = text.splitlines()
+    old_retries = sum(1 for line in lines if LOG_RETRY_MARK in line)
+    old_failures = sum(1 for line in lines if "reasoning-only turn" in line and LOG_GIVEUP_MARK in line)
+    retries = sum(1 for line in lines if "[empty-at-cap] empty turn (" in line and "retrying once" in line)
+    failure_marks = ("[empty-at-cap] retry still empty-at-cap", "[empty-at-cap] retry unsuccessful")
+    failures = sum(1 for line in lines if any(mark in line for mark in failure_marks))
+    recovered = sum(1 for line in lines if "[empty-at-cap] retry recovered (" in line)
+    return {
+        "retries": old_retries + retries,
+        "gave_up": old_failures + failures,
+        "recovered": max(0, old_retries - old_failures) + recovered,
+    }
 
 
 def summarize_panels(text: str) -> dict:
@@ -319,7 +330,8 @@ def analyze(calls, *, panels=None, log_text=None) -> dict:
     retried_rows = sum(1 for c in empty if c.get("retried") or c.get("recovered"))
     log_recovery = scan_log_recovery(log_text) if log_text is not None else None
     # Rows are authoritative when any carry a recovered flag; else fall back to the log.
-    recovered = recovered_rows if recovered_rows else (log_recovery["recovered"] if log_recovery else 0)
+    recovery_reported = any(c.get("recovery_reported", "recovered" in c) for c in empty)
+    recovered = recovered_rows if recovery_reported else (log_recovery["recovered"] if log_recovery else 0)
 
     report = {
         "calls": total_calls,
@@ -337,7 +349,7 @@ def analyze(calls, *, panels=None, log_text=None) -> dict:
             "calls": len(empty),
             "of": total_calls,
             "by_turn_kind": _split_by_turn_kind(empty),
-            "retried": retried_rows,
+            "retried": retried_rows or (log_recovery["retries"] if log_recovery else 0),
             "recovered": recovered,
         },
     }
@@ -370,7 +382,7 @@ def render_text(report: dict) -> str:
         f"Empty calls (<= {EMPTY_TEXT_MAX} visible chars, no tool calls): {empty['calls']} of {empty['of']}",
         f"  by turn kind: tool-call {empty['by_turn_kind']['tool_call']}, "
         f"run-ending {empty['by_turn_kind']['run_ending']}",
-        f"  recovered after a reasoning-only retry: {empty['recovered']} (retried {empty['retried']})",
+        f"  recovered after an empty-at-cap retry: {empty['recovered']} (retried {empty['retried']})",
     ]
     finder = report.get("finder")
     if finder is not None:

@@ -1329,20 +1329,24 @@ async def _run_subagent_inner(
     # One thinking-off retry when a turn ended the loop with no tool call and almost no
     # text because it hit the output cap or spent itself thinking (ADR 0128 S3, #4875).
     # On EVERY subagent, and BEFORE the completion guard below so the guard's after_model
-    # runs first and defers empty-at-cap turns here — the two never both retry one turn.
+    # runs first and defers salvage-eligible turns here. Both share contract knowledge
+    # and guard-note state, so exhausted salvage resumes bounded contract recovery.
+    from graph.middleware.completion_guard import CompletionRecovery
     from graph.middleware.empty_at_cap import EmptyAtCapMiddleware
 
-    sub_middleware.append(EmptyAtCapMiddleware())
+    delivered = sub_config.delivered() if hasattr(sub_config, "delivered") else None
+    recovery = CompletionRecovery(delivered)
+    sub_middleware.append(EmptyAtCapMiddleware(recovery=recovery))
     # A subagent that owes a recognisable deliverable is continued when a turn ends
     # the loop without it, instead of being reported "completed" on a sentence of
     # intent (#3552). Nothing declared, no middleware — the stack is then unchanged.
-    delivered = sub_config.delivered() if hasattr(sub_config, "delivered") else None
     if delivered is not None:
         from graph.middleware.completion_guard import CompletionGuardMiddleware, missing_markers
 
         sub_middleware.append(
             CompletionGuardMiddleware(
                 delivered=delivered,
+                recovery=recovery,
                 contract=sub_config.nudge_contract(),
                 prompt_markers=getattr(sub_config, "completion_prompt_markers", ()) or (),
                 max_turns=sub_config.max_turns,

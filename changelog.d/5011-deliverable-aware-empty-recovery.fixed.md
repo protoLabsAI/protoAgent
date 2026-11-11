@@ -1,0 +1,1 @@
+- **Deliverable-aware subagent recovery (#5011).** Preserve complete short capped answers and bounded contract recovery for non-empty salvage results. Stop after one thinking-off salvage when the result remains capped or reasoning-only, preserving the #3584 retry bound. Measure current empty-at-cap outcomes while retaining historical log support.
