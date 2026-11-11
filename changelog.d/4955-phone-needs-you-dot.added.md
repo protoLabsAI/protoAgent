@@ -1,1 +1,0 @@
-- **Phone attention indicator (#4955).** The hamburger menu shows a static warning dot when Work items across any chat need you, with the count in its accessible name.

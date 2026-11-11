@@ -1,1 +1,0 @@
-- **Work section picker.** Adopt the public SideNav collapsed mode so the compact section menu stays available at every container width without an app-owned width cap, preserving counts, scope, progressive panes, and keyboard focus.

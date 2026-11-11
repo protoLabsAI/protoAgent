@@ -1,1 +1,0 @@
-- **Decision console integration prerequisites (#4725).** Document the missing shared history, frozen chat-card presentation and design-system phone button needed before mounting the Decisions controls.

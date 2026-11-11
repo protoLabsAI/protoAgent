@@ -1,1 +1,0 @@
-- **Preserve goal edits during Windows file contention (#4955).** Goal readers now serialize with writes, and atomic replacement retries transient Windows access and sharing failures. Failed persistence surfaces an error instead of reporting a successful edit or publishing a change event.

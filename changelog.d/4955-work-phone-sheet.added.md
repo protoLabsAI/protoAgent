@@ -1,1 +1,0 @@
-- **Work on phones (#4955).** Work opened from the palette or utility pills now uses a full-screen bottom sheet with a titled close control, preserving its selected state and returning focus when closed. Desktop rail and modal frames remain unchanged.

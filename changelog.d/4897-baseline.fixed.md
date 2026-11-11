@@ -1,1 +1,0 @@
-- **Make PV4 fixture extraction easier to diagnose (#4897).** Print the resolved extraction model before fetching the dataset and retry transient dataset HTTP failures up to three attempts.

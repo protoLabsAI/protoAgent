@@ -1,1 +1,0 @@
-- **Durable decision pause identity.** Streaming and synchronous decision pauses now carry their ledger decision id, including repeated holds and goal continuations, so stored HITL task payloads retain the identity needed for transcript replay. Ledger failures still park and report the error without inventing an id.

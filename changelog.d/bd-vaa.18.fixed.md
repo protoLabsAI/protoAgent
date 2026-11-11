@@ -1,1 +1,0 @@
-- **Model picker opens on phone WebKit.** Tapping the composer model selector now opens a stable, selectable sheet and returns focus to its trigger when dismissed.

@@ -1,1 +1,0 @@
-- **Cleaner side panels.** Removed duplicate right-panel headers. Open a view in a large window from its background context menu or its right-rail icon menu, including with the keyboard.

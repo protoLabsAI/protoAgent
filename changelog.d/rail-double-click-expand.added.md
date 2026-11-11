@@ -1,1 +1,0 @@
-- **Open right-rail views in a large window.** Double-click a core or plugin view's rail item to expand it, including inactive or collapsed views. Dock restores the saved view state; Chat and phone navigation are unchanged.

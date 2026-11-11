@@ -1,1 +1,0 @@
-- **Collection-scoped document deletion (#4630).** Deleting a document and undoing its deletion now affect only the selected collection, preserving same-named sources in other collections.

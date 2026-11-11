@@ -1,1 +1,0 @@
-- **Resume interrupted A2A replies (#4959).** A model stream stall or transport drop now retries once from the thread checkpoint, preserving completed tool rounds. A failed retry reports the existing failure message; overflow recovery does not trigger an additional retry.

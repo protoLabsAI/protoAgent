@@ -1,1 +1,0 @@
-- **Decision defaults run promptly at their displayed deadline.** Expiry now checks every second independently of the five-minute A2A reaper, including at startup. Detection takes up to one second plus event-loop and delivery time; failed delivery remains retryable and operator answers retain single-consumer arbitration.

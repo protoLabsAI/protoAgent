@@ -1,1 +1,0 @@
-- **Plugin devkit test-pass tracking (#4806).** Plugin tests append static-check findings, including missing skills guidance, and persist passing source fingerprints. Writes explain their untested status; reloads warn about missing or stale passes without blocking. Code-drift detection also covers ordinary directories under devkit roots.

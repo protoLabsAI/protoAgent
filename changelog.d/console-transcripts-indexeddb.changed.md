@@ -1,1 +1,0 @@
-- **Chat history moves to the browser's IndexedDB.** The console stores saved chats in IndexedDB instead of localStorage, so they no longer share a 5 MB limit with everything else, and saving a long chat no longer makes the desktop app's storage log grow by hundreds of MB a day. Existing chats move over automatically the first time you open the updated console.

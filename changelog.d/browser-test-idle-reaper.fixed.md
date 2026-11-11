@@ -1,1 +1,0 @@
-- **Killed test runs no longer leave browsers behind.** Every `agent-browser` daemon a test starts now shuts itself and its Chrome down after 3 idle minutes. Before, a live browser test run that was killed before its teardown left the daemon and Chrome running until reboot.
