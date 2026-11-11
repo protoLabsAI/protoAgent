@@ -825,3 +825,77 @@ async def test_executor_persists_decision_identity_for_replay(store, decision_gr
         assert payloads[0]["decision_id"] == rec.id
     finally:
         await engine.dispose()
+
+
+
+@pytest.mark.asyncio
+async def test_simultaneous_answers_resume_once_and_the_loser_gets_409(store, monkeypatch):
+    """Release acceptance bd-nfd6g.17 D3: two surfaces answering at the same moment both got
+    200 and the loser's resume created a stray failed task. Now the second answer waits for the
+    first to settle, sends no resume of its own, and gets 409 with the winning record."""
+    import asyncio
+
+    import httpx
+
+    rec = store.create("s-race", "Colour?", ["red", "blue"])
+    calls: list[str] = []
+
+    async def slow_resume(session_id, answer, decision_id=None, *, resolution=None):
+        calls.append((resolution or {}).get("answer", answer))
+        await asyncio.sleep(0.3)  # the resumed run takes a moment before the record closes
+        STATE.decision_store.answer(decision_id, (resolution or {}).get("answer", answer))
+        return True
+
+    monkeypatch.setattr(decision_routes, "_resume_parked_turn", slow_resume)
+    app = FastAPI()
+    decision_routes.register_decision_routes(app)
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+        url = f"/api/decisions/{rec.id}/answer"
+        a, b = await asyncio.gather(
+            client.post(url, json={"option_id": "red"}),
+            client.post(url, json={"option_id": "blue"}),
+        )
+    codes = sorted([a.status_code, b.status_code])
+    assert codes == [200, 409]
+    assert len(calls) == 1  # exactly one resume was sent
+    winner = a if a.status_code == 200 else b
+    loser = b if winner is a else a
+    assert loser.json()["detail"]["state"] == STATE_ANSWERED
+    assert loser.json()["detail"]["answer"] == winner.json()["decision"]["answer"] == calls[0]
+
+
+@pytest.mark.asyncio
+async def test_a_waiting_answer_delivers_when_the_first_fails_delivery(store, monkeypatch):
+    """If the answer in flight fails delivery (the record stays pending), the waiting one is
+    not refused: it delivers its own answer."""
+    import asyncio
+
+    import httpx
+
+    rec = store.create("s-retry", "Go?", ["yes", "no"])
+    calls: list[str] = []
+
+    async def flaky_resume(session_id, answer, decision_id=None, *, resolution=None):
+        chosen = (resolution or {}).get("answer", answer)
+        calls.append(chosen)
+        await asyncio.sleep(0.2)
+        if len(calls) == 1:
+            return False  # transport failure: the record stays pending
+        STATE.decision_store.answer(decision_id, chosen)
+        return True
+
+    monkeypatch.setattr(decision_routes, "_resume_parked_turn", flaky_resume)
+    app = FastAPI()
+    decision_routes.register_decision_routes(app)
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+        url = f"/api/decisions/{rec.id}/answer"
+        first, second = await asyncio.gather(
+            client.post(url, json={"option_id": "yes"}),
+            client.post(url, json={"option_id": "no"}),
+        )
+    # Whichever went first failed delivery (still retryable, 200 resumed=false); the waiting
+    # one then delivered its own answer.
+    assert first.status_code == second.status_code == 200
+    assert sorted([first.json()["resumed"], second.json()["resumed"]]) == [False, True]
+    assert len(calls) == 2
+    assert store.get(rec.id).answer == calls[1]
