@@ -261,7 +261,7 @@ def test_check_inbox_tool_returns_and_marks_delivered(tmp_path):
     s = _store(tmp_path)
     s.add("ping one", priority="next", source="webhook")
     s.add("ping two", priority="now")
-    (check_inbox,) = _build_inbox_tools(s)
+    check_inbox = _build_inbox_tools(s)[0]
 
     out = asyncio.run(check_inbox.ainvoke({"priority_floor": "next", "limit": 10}))
     assert "ping one" in out and "ping two" in out
@@ -311,7 +311,7 @@ async def test_accepted_now_item_does_not_require_or_survive_manual_check_inbox(
     monkeypatch.setattr(ch, "_fire_activity_from_inbox", _fire_ok)
 
     res = await ch._operator_inbox_add({"text": "new now page", "priority": "now"})
-    (check_inbox,) = _build_inbox_tools(store)
+    check_inbox = _build_inbox_tools(store)[0]
 
     assert res["fired"] is True
     assert fired == ["new now page"]
@@ -338,7 +338,7 @@ async def test_failed_now_fire_stays_pending(tmp_path, monkeypatch):
 
     from tools.lg_tools import _build_inbox_tools
 
-    (check_inbox,) = _build_inbox_tools(store)
+    check_inbox = _build_inbox_tools(store)[0]
     assert "bg done" in await check_inbox.ainvoke({"priority_floor": "later"})
 
 

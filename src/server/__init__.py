@@ -776,6 +776,7 @@ def _main():
         inbox_authorized=_console._inbox_authorized,
         inbox_list=_console._operator_inbox_list,
         inbox_deliver=_console._operator_inbox_deliver,
+        inbox_get=_console._operator_inbox_get,
     )
 
     # Wire the plugin host (agent invoke + event bus) before any surface starts.

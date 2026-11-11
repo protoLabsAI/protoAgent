@@ -161,7 +161,8 @@ record.
 | Method | Path | Purpose |
 |---|---|---|
 | GET | `/api/activity` | Provenance activity feed |
-| GET · POST | `/api/inbox` | Read / add inbox items |
+| GET · POST | `/api/inbox` | Read / add inbox items. `POST` takes `text`, `priority` (`now` · `next` · `later`), `source`, `dedup_key`, and `deliver`: `"thread"` folds the item into the operator's live chat at the next model call, as information only, instead of firing a turn or waiting for `check_inbox` (what `protoagent dm` sends); with it, `session` (a `chat-…` id) addresses one thread so only that chat reads it |
+| GET | `/api/inbox/{item_id}` | One inbox item with its delivery state (`delivered_at`, `delivered_session`) and the agent's reply to a direct message (`reply_text`, `replied_at`). `?wait=<seconds>` long-polls (capped at 25) and returns as soon as the agent replies; `404` for an unknown id |
 | POST | `/api/inbox/{item_id}/deliver` | Deliver an inbox item to the agent |
 | GET | `/api/events` | Server-sent event stream (console live updates) |
 | POST | `/api/events/publish` | Publish an event to the bus |

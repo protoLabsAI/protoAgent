@@ -216,6 +216,48 @@ Reacting to outside stimuli means **untrusted input can initiate agent turns
    intake, priority tiers, now→Activity fire, dedup + storm guard, `check_inbox`
    tool.
 
+### Amendment (2026-11-11): thread delivery for outside messages
+
+The three tiers answer "how urgently should the agent hear this", but all of them land
+somewhere other than the chat the operator is reading: `now` fires a turn in the Activity
+thread, `next`/`later` wait for a `check_inbox` pull. That left no path for the case this
+inbox was partly built for, a sister session saying "here is what I am doing" to an agent
+that is mid-conversation with its operator. In the incident that prompted this, a Claude
+Code session told to coordinate with a fleet agent found no way to message it and left a
+GitHub comment instead; neither the agent's chat nor the operator had any record.
+
+An inbox item may now carry `deliver: "thread"`:
+
+- **It never starts a turn.** The priority tier is ignored (stored as `next`).
+- **The operator's live chat reads it at the next model call.** `OutsideMessageMiddleware`
+  (`graph/middleware/outside_messages.py`) claims pending thread items in `before_model`
+  on an operator chat session and appends them as one note: mid-turn when a turn is
+  running, at the first model call of the next turn otherwise. Activity, scheduled,
+  background and peer-A2A sessions never read them. Each item goes to exactly one chat,
+  and the row records which.
+- **It is information, not instruction.** The note says so, tells the agent to mention it
+  to the operator, and is tagged as a guard note so nothing treats it as operator input.
+  This is a framing guarantee, not a tool fence: narrowing the toolset for the rest of a
+  running turn would break the operator's own work in progress.
+- **`check_inbox` does not return thread items**, so another turn cannot consume a note
+  meant for the chat. The operator's inbox view (`GET /api/inbox`) does list them.
+- **`protoagent dm <agent> "<note>" --from <name>`** is the front door, using the same
+  hub discovery and credential chain as `protoagent fleet` / `usage`.
+
+- **The agent can answer.** `reply_to_dm(id, text)` stores the reply on the item (a second
+  reply is appended) and publishes `inbox.reply` on the event bus. The sender reads it with
+  `GET /api/inbox/{id}?wait=` (a long-poll that returns as soon as a reply lands), which is
+  what `protoagent dm --wait` and `--check` use. A reply goes to the sender, not the
+  operator, and only a direct message a chat has already read can be answered.
+
+- **A message can be addressed to one thread.** `session` on the item (`--thread` on the
+  CLI) names a `chat-…` id; only that thread claims it, so two tabs on one agent can each
+  work with their own outside sender. `protoagent dm <agent> --threads` lists the agent's
+  recent chat threads and which are mid-turn.
+
+Still open: a marker in the chat transcript at the point the message was read (the
+middleware already dispatches an `outside_message` custom event for it).
+
 ## 7. Related
 
 - [ADR 0001 — Extensibility & Plugin Architecture](/adr/0001-extensibility-and-plugin-architecture)
