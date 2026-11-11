@@ -24,7 +24,7 @@ The Overview has **five lanes**. They are listed in this order, and an empty lan
 
 Sections: Overview · Decisions · Goals · Watches · Tasks · Schedules · Background agents · Activity · Directives (Q11).
 
-The rail opens with the "this chat" filter on. The modal opens agent-wide (Q1).
+The rail and the modal both open with the "this chat" filter on (revised 2026-11-11; the modal used to open agent-wide, Q1). The utility-bar pills (Decisions, Background jobs, Activity) and a decision notification are the exception: they count across every chat, so they open their section on All.
 
 ### 2.2 Shared tone map
 
@@ -194,7 +194,7 @@ This is defined once, at the shell level. Work is the first view to use it, and 
 ### 3.3 The modal (window)
 
 - It uses `Dialog height="fill" padding="none"`. The width is the largest DS-allowed width that leaves the scrim visible (see build note B3).
-- The header has the title **Work**, plus **Dock to rail** and Close. In the modal, the "This chat" filter is **off** by default and the view is agent-wide (Q1).
+- The header has the title **Work**, plus **Dock to rail** and Close. In the modal, the "This chat" filter is **on** by default, like the rail (revised 2026-11-11).
 - Three panes: (1) `SideNav` (expanded) with section counts, (2) the list or the lanes, (3) a detail pane for the selected item.
 - With no item selected, the detail pane shows a quiet `Empty`: "Pick an item to see its details."
 - Below about 900 px of modal width, the detail pane collapses into the rail's push behaviour (container query, not the viewport).

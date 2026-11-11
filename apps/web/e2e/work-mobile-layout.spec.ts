@@ -102,8 +102,8 @@ for (const theme of ["light", "dark"] as const) {
           await expect(item).toHaveAttribute("aria-checked", "true");
           await page.keyboard.press("Escape");
           await expect(picker).toBeFocused();
-          // Switching sections leaves the scope alone (a window opened from the palette is agent-wide).
-          await expect(work.getByRole("button", { name: "All", exact: true })).toHaveAttribute("aria-pressed", "true");
+          // Switching sections leaves the scope alone (This chat, the default in every frame).
+          await expect(work.getByRole("button", { name: "This chat", exact: true })).toHaveAttribute("aria-pressed", "true");
         }
       });
     }

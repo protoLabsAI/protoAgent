@@ -49,7 +49,8 @@ export function WorkView({ frame = "rail", sessionId }: { frame?: "rail" | "moda
   useSyncExternalStore(subscribe, getSnapshot);
   const state = useUI((s) => s.surfaceStates.work ?? emptyState);
   const section = state.section ?? "overview";
-  const thisChat = typeof state.filters?.thisChat === "boolean" ? state.filters.thisChat : frame === "rail";
+  // "This chat" is the default in every frame (Josh 2026-11-11); All is one tap away.
+  const thisChat = typeof state.filters?.thisChat === "boolean" ? state.filters.thisChat : true;
   const toast = useToast();
   const agentOnline = useSyncExternalStore(onConnectionChange, isConnected);
   const decisions = useDecisions();
