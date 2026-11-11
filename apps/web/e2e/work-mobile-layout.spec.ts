@@ -1,9 +1,14 @@
 import { expect, test, type Locator, type Page } from "@playwright/test";
 
-async function expandWork(page: Page) {
-  await page.getByRole("region", { name: "Work view", exact: true }).focus();
-  await page.keyboard.press("Shift+F10");
-  await page.getByRole("menuitem", { name: "Open in large window", exact: true }).click();
+// Opens Work in the window from the palette ("Open in window" is off in the context menu for
+// now — see apps/web/src/contextMenu/registrations.tsx). `label` picks the row: "Open Work"
+// (Overview) or "Work: <Section>".
+async function openWorkWindow(page: Page, label = "Open Work") {
+  await expect(page.getByTestId("header-menu")).toBeVisible();
+  await page.keyboard.press("ControlOrMeta+Shift+k");
+  await page.locator(".pl-cmdk-commands__input").fill(label);
+  await page.getByRole("option", { name: label, exact: true }).click();
+  await expect(page.getByRole("dialog", { name: /^Work/ })).toBeVisible();
 }
 
 async function selectTasks(page: Page, work: Locator) {
@@ -70,7 +75,7 @@ for (const theme of ["light", "dark"] as const) {
       test(`collapsed picker selects every section without a width cap at ${width}px`, async ({ page }) => {
         await page.setViewportSize({ width: 1440, height: 1000 });
         await page.goto("/app/");
-        await expandWork(page);
+        await openWorkWindow(page);
         const work = page.getByRole("dialog", { name: /^Work/ }).locator(".work-view");
         const slot = work.locator(".work-view__picker");
         const picker = slot.getByRole("button", { name: /Work sections/ });
@@ -97,6 +102,7 @@ for (const theme of ["light", "dark"] as const) {
           await expect(item).toHaveAttribute("aria-checked", "true");
           await page.keyboard.press("Escape");
           await expect(picker).toBeFocused();
+          // Switching sections leaves the scope alone (This chat, the default in every frame).
           await expect(work.getByRole("button", { name: "This chat", exact: true })).toHaveAttribute("aria-pressed", "true");
         }
       });
@@ -140,22 +146,15 @@ for (const theme of ["light", "dark"] as const) {
       });
     }
 
-    test("rail, Expand, modal container resize and Dock preserve selection and scroll", async ({ page }, info) => {
+    test("window, container resize and Dock preserve selection and scroll", async ({ page }, info) => {
       await page.setViewportSize({ width: 1440, height: 1000 });
       await page.goto("/app/");
       await expect(page.locator("html")).toHaveAttribute("data-theme", theme);
-      let work = page.locator(".work-view:visible");
-      await selectTasks(page, work);
-      const listScreenshot = info.outputPath(`rail-list-${theme}.png`);
-      await page.screenshot({ path: listScreenshot });
-      await info.attach("Rail list", { path: listScreenshot, contentType: "image/png" });
-      await openRow(work);
-      await expect(work.locator(".work-view__list")).toBeHidden();
-      const railScreenshot = info.outputPath(`rail-${theme}.png`);
-      await page.screenshot({ path: railScreenshot });
-      await info.attach("Rail", { path: railScreenshot, contentType: "image/png" });
-      await expandWork(page);
-      work = page.getByRole("dialog", { name: /^Work/ }).locator(".work-view");
+      await openWorkWindow(page, "Work: Tasks");
+      let work = page.getByRole("dialog", { name: /^Work/ }).locator(".work-view");
+      await expect(work.locator(".work-row")).toHaveCount(35);
+      await work.locator(".work-row").nth(25).click();
+      await expect(work.locator(".work-view__detail h2")).toHaveText("Layout task 25");
       await expect(work.locator(".work-view__list")).toBeVisible();
       await expect(work.locator(".work-view__detail")).toBeVisible();
       await expect(work.locator(".work-row").nth(25)).toHaveAttribute("aria-current", "true");
@@ -170,11 +169,6 @@ for (const theme of ["light", "dark"] as const) {
       await expect(work.locator(".work-view__detail")).toBeVisible();
       await work.evaluate(el => { el.style.width = "768px"; });
       await expect(work.locator(".work-view__list")).toBeVisible();
-      await expect.poll(() => work.locator(".work-view__list").evaluate(el => el.scrollTop)).toBe(scroll);
-      await expect(work.getByRole("button", { name: "This chat", exact: true })).toHaveAttribute("aria-pressed", "true");
-      await page.getByRole("dialog", { name: /^Work/ }).getByLabel("Close", { exact: true }).click();
-      await expandWork(page);
-      await expect(work.locator(".work-view__detail h2")).toHaveText("Layout task 25");
       await expect.poll(() => work.locator(".work-view__list").evaluate(el => el.scrollTop)).toBe(scroll);
       await page.getByRole("button", { name: "Dock to rail" }).click();
       work = page.locator(".work-view:visible");

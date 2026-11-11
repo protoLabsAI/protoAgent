@@ -424,7 +424,8 @@ function WorkspaceApp({ runtime }: { runtime: RuntimeStatus | null }) {
     if (decisions.panelOpen || surfaceModal) setSessionSheetRequested(false);
     if (isMobile && decisions.panelOpen) {
       decisions.closePanel();
-      useUI.getState().openSurfaceModal("work", { section: "decisions" });
+      // A notification, like the pills, counts across every chat — open on All (Josh 2026-11-11).
+      useUI.getState().openSurfaceModal("work", { section: "decisions", filters: { thisChat: false } });
     }
   }, [decisions.panelOpen, decisions.closePanel, isMobile, surfaceModal]);
   const setSessionSheetOpen = (open: boolean) => {
@@ -1325,14 +1326,6 @@ function WorkspaceApp({ runtime }: { runtime: RuntimeStatus | null }) {
           }
         }}
         onRailBackgroundContextMenu={onRailBackgroundContextMenu}
-        onRailDoubleClick={(side, _e, id) => {
-          if (isMobile || side !== "right" || id === "chat") return;
-          // Native double-click follows two selections, which may collapse the dock.
-          // Keep the rail host mounted so it observes Dock and restores focus. Expand
-          // the clicked id, reusing its saved state regardless of the preceding selection.
-          setRightCollapsed(false);
-          useUI.getState().openSurfaceModal(id);
-        }}
         onRailContextMenu={(side, e, id) => {
           // A plugin view's rail id is `plugin:<pluginId>:<viewId>` — resolve the owning
           // plugin's id + display name so the menu can offer "Configure…" (ADR 0036/0059).
@@ -1503,7 +1496,7 @@ function WorkspaceApp({ runtime }: { runtime: RuntimeStatus | null }) {
                 {/* The palette's only visible way in (ADR 0057) — an icon pill, AFTER Settings:
                     that one keeps the far-left slot operators already reach for by position. */}
                 <PaletteButton />
-                <DecisionsWidget onOpen={() => useUI.getState().openSurfaceModal("work", { section: "decisions" })} />
+                <DecisionsWidget onOpen={() => useUI.getState().openSurfaceModal("work", { section: "decisions", filters: { thisChat: false } })} />
                 {/* Widgets (bottom-left): background subagents (ADR 0050 Phase 3) and the
                     unified feed (#3029) — one pill merging the former inbox + read-only
                     Activity feeds. These pills open their own sections in the Work modal. */}

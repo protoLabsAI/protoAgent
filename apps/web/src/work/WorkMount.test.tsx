@@ -15,8 +15,6 @@ import { SurfaceHost, type SurfaceMeta } from "../shell/SurfaceHost";
 import { WorkView } from "./WorkView";
 import { sections } from "./sectionRegistry";
 import "../contextMenu/registrations";
-import { resolveMenu } from "../contextMenu/registry";
-import { useContextMenuStore } from "../contextMenu/store";
 import { useUI } from "../state/uiStore";
 import type { WorkItems, WorkSource, WorkSourceKind } from "./useWorkItems";
 // Importing the production barrel is the whole point of the mount — it must register all eight
@@ -67,15 +65,10 @@ async function render() {
     ),
   );
 }
+// Opens Work in the window. The "Open in window" menu entry is off for now
+// (contextMenu/registrations.tsx); the pills and palette rows use this same store action.
 function expand() {
-  const target = document.querySelector('[role="region"][aria-haspopup="menu"]')!;
-  expect(target).not.toBeNull();
-  act(() => target.dispatchEvent(new KeyboardEvent("keydown", { key: "ContextMenu", bubbles: true, cancelable: true })));
-  const menu = useContextMenuStore.getState();
-  expect(menu.open).toBe(true);
-  const entry = resolveMenu(menu.type, menu.ctx).find((e) => e.id === "open-large-window")!;
-  expect(entry).toBeDefined();
-  act(() => { if ("run" in entry) entry.run(menu.ctx, { close: menu.close }); });
+  act(() => useUI.getState().openSurfaceModal("work"));
 }
 function button(label: string) {
   return [...document.querySelectorAll("button")].find(
@@ -124,9 +117,9 @@ describe("Work surface mount", () => {
     expect(menu.querySelector('[aria-checked="true"]')?.textContent).toContain("Overview");
     await act(async () => menu.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
     expect(host.textContent).toContain("Nothing going on");
-    // Framed by the rail host, so it offers the view menu and no modal is open yet.
+    // Framed by the rail host; its view menu is off for now (see registrations.tsx).
     expect(button("Expand")).toBeUndefined();
-    expect(document.querySelector('[role="region"][aria-haspopup="menu"]')).not.toBeNull();
+    expect(document.querySelector('[role="region"][aria-haspopup="menu"]')).toBeNull();
     expect(document.querySelector('[role="dialog"]')).toBeNull();
   });
 

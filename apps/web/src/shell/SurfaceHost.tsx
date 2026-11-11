@@ -17,6 +17,11 @@ export type SurfaceMeta = { id: string; title: string };
 // apart. This ref-shaped flag carries the one bit that can, with no store field. A fresh modal open clears it (see the effect).
 const pendingClose = { current: false };
 
+// The view background's menu (right-click / Shift+F10 / ContextMenu) held only "Open in window",
+// which is off for now — see the note at the top of contextMenu/registrations.tsx. With nothing
+// to offer, the rail frame neither opens a menu nor advertises one.
+const VIEW_MENU_ENABLED = false;
+
 /**
  * Frame one rail view — in the side rail (`frame="rail"`, wrapping the right dock's own
  * render) or in a large modal (`frame="modal"`, mounted at the shell level while
@@ -62,7 +67,7 @@ export function SurfaceHost({
   const title = view?.title;
 
   // Move focus into the view as it changes frame, and announce the move for a screen
-  // reader. The modal host (a fresh mount) says "opened in a large window"; the rail host
+  // reader. The modal host (a fresh mount) says "opened in a window"; the rail host
   // says "docked to the side rail" when Dock clears the modal back onto this very view.
   // A plain Close clears the modal the same way, so the rail host stays silent only because
   // the modal host flags it via `pendingClose` (see below) — not from store state.
@@ -82,7 +87,7 @@ export function SurfaceHost({
       pendingClose.current = false;
       // Parent effects run after the Dialog's own focus trap has initialized.
       focusView();
-      setAnnouncement(`${title} opened in ${frame === "sheet" ? "a full-screen sheet" : "a large window"}.`);
+      setAnnouncement(`${title} opened in ${frame === "sheet" ? "a full-screen sheet" : "a window"}.`);
     } else if (frame === "rail" && was && !modal && was.viewId === viewId) {
       // The modal just cleared back onto this very rail view. Dock to rail moves focus into the
       // view and announces the move; a plain Close (the Dialog's ✕ / Escape / backdrop) must stay
@@ -114,7 +119,7 @@ export function SurfaceHost({
   // did when they were a direct child of the DS dock column. A block parent leaves that
   // `flex` inert, so the surface collapsed to content height (a 150px-tall artifact iframe)
   // and swallowed clicks. `overflow: auto` still lets a natural-height view scroll.
-  const canExpand = frame === "rail" && !!view && view.id !== "chat";
+  const canExpand = VIEW_MENU_ENABLED && frame === "rail" && !!view && view.id !== "chat";
   const body = (
     <div
       ref={contentRef}
@@ -189,6 +194,7 @@ export function SurfaceHost({
           size="wide"
           height="fill"
           padding="none"
+          className="surface-modal"
           onClose={() => {
             // A plain Close (not Dock) — flag it so the rail host stays silent and doesn't pull
             // focus into the rail view on this transition; focus returns to the opener instead.

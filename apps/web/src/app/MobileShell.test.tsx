@@ -269,7 +269,7 @@ describe("phone Work entry points", () => {
       (open: boolean) => calls.push(["sessions", open]),
       { getState: () => ({ openSurfaceModal: (...args: unknown[]) => calls.push(args) }) },
     );
-    expect(calls).toEqual([["sessions", false], "close decisions", ["work", { section: "decisions" }]]);
+    expect(calls).toEqual([["sessions", false], "close decisions", ["work", { section: "decisions", filters: { thisChat: false } }]]);
   });
 });
 

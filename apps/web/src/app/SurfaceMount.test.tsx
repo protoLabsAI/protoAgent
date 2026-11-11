@@ -11,8 +11,6 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { SurfaceHost, type SurfaceMeta } from "../shell/SurfaceHost";
 import "../contextMenu/registrations";
-import { resolveMenu } from "../contextMenu/registry";
-import { useContextMenuStore } from "../contextMenu/store";
 import { useUI } from "../state/uiStore";
 
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -107,15 +105,11 @@ function Shell({ mobile = false }: { mobile?: boolean }) {
 let container: HTMLDivElement;
 let root: Root;
 
+// Opens the rail's current view in the window. The "Open in window" menu entry that used to
+// do this is off for now (see contextMenu/registrations.tsx); the pills and palette rows reach
+// the same store action, so the shell behavior under test is unchanged.
 function expand() {
-  const target = document.querySelector('[role="region"][aria-haspopup="menu"]')!;
-  expect(target).not.toBeNull();
-  act(() => target.dispatchEvent(new KeyboardEvent("keydown", { key: "ContextMenu", bubbles: true, cancelable: true })));
-  const menu = useContextMenuStore.getState();
-  expect(menu.open).toBe(true);
-  const entry = resolveMenu(menu.type, menu.ctx).find((e) => e.id === "open-large-window")!;
-  expect(entry).toBeDefined();
-  act(() => { if ("run" in entry) entry.run(menu.ctx, { close: menu.close }); });
+  act(() => useUI.getState().openSurfaceModal(useUI.getState().rightPanel));
 }
 function button(label: string) {
   return [...document.querySelectorAll("button")].find(
@@ -152,7 +146,8 @@ describe("SurfaceHost mounted in the shell", () => {
 
     // r1: the view offers a background menu without a duplicate header, with no modal open yet, mounted once.
     expect(button("Expand")).toBeUndefined();
-    expect(document.querySelector('[role="region"][aria-haspopup="menu"]')).not.toBeNull();
+    // The view's background menu is off while "Open in window" is (contextMenu/registrations.tsx).
+    expect(document.querySelector('[role="region"][aria-haspopup="menu"]')).toBeNull();
     expect(document.querySelector('[role="dialog"]')).toBeNull();
     expect(live[id]).toBe(1);
 
@@ -184,7 +179,7 @@ describe("SurfaceHost mounted in the shell", () => {
     act(() => useUI.setState({ rightPanel: "work" }));
     act(() => root.render(<Shell />));
     expect(button("Expand")).toBeUndefined();
-    expect(document.querySelector('[role="region"][aria-haspopup="menu"]')).not.toBeNull(); // a framed view → menu available
+    expect(document.querySelector('[role="region"][aria-haspopup="menu"]')).toBeNull(); // view menu off for now (see registrations.tsx)
     expect(slot.mounts).toBe(1);
 
     // → Chat: the host stays mounted but frames no view, so its view menu goes away…
@@ -197,7 +192,7 @@ describe("SurfaceHost mounted in the shell", () => {
     // → back to a (different) framed view: still one mount, the view menu returns.
     act(() => useUI.setState({ rightPanel: "plugin:stub:main" }));
     expect(button("Expand")).toBeUndefined();
-    expect(document.querySelector('[role="region"][aria-haspopup="menu"]')).not.toBeNull();
+    expect(document.querySelector('[role="region"][aria-haspopup="menu"]')).toBeNull();
     expect(slot.mounts).toBe(1);
     expect(slot.unmounts).toBe(0);
   });

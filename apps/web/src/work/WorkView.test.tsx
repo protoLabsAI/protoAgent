@@ -75,13 +75,15 @@ it("defaults the rail filter on, counts other chats, and shows all on request", 
   expect(useUI.getState().surfaceStates.work.filters?.thisChat).toBe(false);
 });
 
-it("defaults the modal filter off and preserves session-less items when enabled", async () => {
+it("defaults the modal filter to This chat and preserves session-less items", async () => {
   data.sources.tasks.items = [item("global", "running"), item("local", "running", { sessionId: "here" }), item("remote", "running", { sessionId: "there" })];
   await render("modal");
-  expect(host.querySelector('.work-view__scope [aria-pressed="true"]')?.textContent).toBe("All");
-  await click("This chat");
+  // This chat is the default in every frame (Josh 2026-11-11); session-less items stay visible.
+  expect(host.querySelector('.work-view__scope [aria-pressed="true"]')?.textContent).toBe("This chat");
   expect(host.querySelectorAll(".work-row")).toHaveLength(2);
   expect(host.textContent).not.toContain("remote");
+  await click("All");
+  expect(host.querySelectorAll(".work-row")).toHaveLength(3);
 });
 
 it("keeps healthy lanes alongside source errors, retries, and stale callouts", async () => {
