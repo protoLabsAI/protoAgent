@@ -71,3 +71,51 @@ review quality. Missing or wrong arguments remain visible as supplied; a tool
 error remains an observed attempt. Policy short-circuits are not handler calls.
 Consumers must evaluate the arguments and result state against their own review
 requirements and must not infer complete coverage from `captured` alone.
+
+## Review context (schema version 1)
+
+`review_context` accompanies `tool_receipts` in structured results and persisted
+readback. Its `steps` map contains a versioned envelope for each step with
+`run_id`, `step_id`, and the receipts' segment `execution_id`. `status` is
+`observed` only when the native subagent has been constructed and is about to be
+invoked; `unknown` means dispatch occurred without construction evidence, and
+`not_executed` identifies seeded, pending, gated or rejected steps. Legacy records
+return `{"schema_version": 1, "status": "unknown"}`.
+
+An observed envelope records:
+
+- `conversation: fresh` and `parent_history: not_supplied`: this native runner
+  constructs a new graph and supplies only one user message. A shared tracing or
+  ledger session does not imply shared conversation history.
+- `inputs.prompt`: the rendered prompt actually supplied, including prior findings
+  or history interpolated by the recipe. `inputs.history: not_supplied` means no
+  separate message history was supplied; it does **not** mean the prompt contains
+  no prior findings. The engine cannot infer the provenance of arbitrary text.
+- `instruction_sources`: the registered subagent name and assembled system prompt.
+  External instruction sources and later runtime additions remain `unknown`.
+- `tool_restrictions`: bound tool names, the effective inherited fence, and
+  enforcement configuration. An empty fence means no additional inherited fence;
+  bound tools still constrain availability. External policy remains `unknown`.
+
+`workflow_state` is independently `fresh`, `resumed`, or `seeded`. A step in a
+resumed workflow still has a **fresh conversation** when constructed without
+parent messages. Seeded steps get no new construction evidence: `origin` references
+the original `run_id`, `step_id`, and `execution_id` when available in the run's
+history. Bare externally supplied `seed_outputs` strings carry no source identity,
+so their origin is `unknown`. Python workflow callers may also supply
+`seed_run_id` to identify a source record in the same runs store. The engine links
+only steps whose stored output agrees with the supplied seed; a missing source,
+legacy source without evidence, or mismatched output leaves origin unknown.
+Matching text alone is never used to discover an origin.
+Previous envelopes retain their original identities under `previous_executions`,
+with the same eight-segment retention and `dropped_execution_count` convention as
+receipts. A reference can outlive its retained historical envelope.
+
+Prompt and system-prompt text is credential-redacted and limited to 16,384
+characters each; `characters` counts redacted text and `omitted_characters`
+reports truncation. These fields can contain review inputs and share the run
+record's access controls and retention. Construction evidence is persisted before
+invocation, including for subsequently failed or cancelled steps. It establishes
+what the runner supplied, not model comprehension, later context changes, or
+complete review coverage. Consumers must still inspect receipt capability,
+status and loss counters.

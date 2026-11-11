@@ -1,0 +1,1 @@
+- **Workflow review context (#327).** Workflow results and persisted run records now include versioned per-step construction provenance alongside native tool receipts, distinguishing fresh conversations, resumed workflow segments, seeded evidence, and unknown context.
