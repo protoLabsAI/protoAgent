@@ -15,6 +15,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.235.1] - 2026-11-11
+
+### Changed
+- **Your phone and the desktop app now show the same chat history (#5082).** The server used to delete
+  chat turns after 24 hours, so anything older only existed on whichever device had already
+  loaded it. Console chats now stay on the server until you delete the chat. Other traffic
+  (delegations, API calls, Activity) still clears after 24 hours. Chats cleared before this
+  update are still only on the devices that saw them.
+
+- **Work always shows every chat (#5083).** The "This chat" / "All" toggle is gone: the Work panel and
+  window list everything the agent has going on, and decision rows always say which agent asked.
+
+### Fixed
+- **A flaky decisions test no longer fails CI (#5080).** The in-memory decisions store that tests use
+  shares one database connection across threads; two reads at once could raise "bad parameter
+  or other API misuse". Its reads now take the same lock as its writes. Production stores open a
+  connection per call and are unaffected.
+
+- **The Work window clears the app header (#5079).** Work opened from the Decisions, Background jobs or
+  Activity pill (or a Work palette row) used to cover the app's top bar and, in the macOS app,
+  run into the window's close/minimize buttons. It now starts just below the header. Rail items
+  no longer open the window on double-click, and the rail's right-click menu no longer offers
+  it: widen the side panel instead.
+- **Work opens on "This chat" by default (#5079).** The side panel and the Work window both start
+  filtered to the current chat; tap All for everything. The Decisions, Background jobs and
+  Activity pills (and a decision notification) still open on All, since their counts cover every
+  chat.
+
 ## [0.235.0] - 2026-11-11
 
 ### Added

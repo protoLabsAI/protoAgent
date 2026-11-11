@@ -1,5 +1,16 @@
 [
   {
+    "version": "v0.235.1",
+    "date": "2026-11-11",
+    "changes": [
+      "Your phone and the desktop app now show the same chat history (#5082).",
+      "Work always shows every chat (#5083).",
+      "A flaky decisions test no longer fails CI (#5080).",
+      "The Work window clears the app header (#5079).",
+      "Work opens on \"This chat\" by default (#5079)."
+    ]
+  },
+  {
     "version": "v0.235.0",
     "date": "2026-11-11",
     "changes": [
