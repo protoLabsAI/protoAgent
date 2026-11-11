@@ -248,6 +248,17 @@ describe("ServerTurnWatch control payload bridge", () => {
     expect(mocks.updateMessages).toHaveBeenCalledOnce();
     expect(mocks.sessions[0].messages[0].content).toBe("working");
   });
+
+  it("a `turn.resumed` for the open chat's parked bubble marks it running (bd-nfd6g.17)", () => {
+    mocks.sessions[0].messages = [
+      { id: "a1", role: "assistant", content: "", status: "streaming", taskId: "task-parked", paused: true },
+    ];
+    act(() => root?.render(h(ServerTurnWatch)));
+    act(() => mocks.handlers.get("turn.resumed")?.({ task_id: "task-parked", context_id: "s1" }));
+
+    expect(mocks.updateMessages).toHaveBeenCalledOnce();
+    expect(mocks.sessions[0].messages[0]).toMatchObject({ status: "streaming", paused: undefined });
+  });
 });
 
 describe("busMayFold — one producer per bubble, with two exceptions", () => {
