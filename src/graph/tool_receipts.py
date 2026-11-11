@@ -237,11 +237,7 @@ class ToolReceiptCapture:
             state = "cancelled" if isinstance(error, (asyncio.CancelledError, FutureCancelledError)) else "exception"
             metadata = {"error_type": safe.value(type(error).__name__)}
         elif isinstance(result, ToolMessage):
-            state = (
-                "tool_error"
-                if result.status == "error" or (type(result.content) is str and result.content.startswith("Error"))
-                else "success"
-            )
+            state = "tool_error" if result.status == "error" else "success"
             # Content is deliberately never copied, including short file bodies.
             metadata = {
                 "kind": "tool_message",

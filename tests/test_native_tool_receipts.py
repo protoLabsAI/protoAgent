@@ -80,6 +80,32 @@ async def test_each_physical_execution(state, asynchronous):
     assert "private error body" not in json.dumps(envelope)
 
 
+@pytest.mark.parametrize("status", ["success", "error"])
+@pytest.mark.parametrize("content", ["Error handling guide", "actual result"])
+@pytest.mark.parametrize("asynchronous", [False, True])
+async def test_tool_message_native_status_takes_precedence_over_content(status, content, asynchronous):
+    middleware = NativeToolReceiptMiddleware()
+    result = ToolMessage(content=content, tool_call_id="repeated", status=status)
+
+    async def handler(_):
+        return result
+
+    with sdk.capture_tool_receipts() as capture:
+        output = (
+            await middleware.awrap_tool_call(request(), handler)
+            if asynchronous
+            else middleware.wrap_tool_call(request(), lambda _: result)
+        )
+    assert output is result
+    envelope = capture.snapshot()
+    assert envelope["capture_status"] == "captured"
+    assert len(envelope["entries"]) == 1
+    entry = envelope["entries"][0]
+    assert entry["result_state"] == ("tool_error" if status == "error" else "success")
+    assert entry["result_metadata"]["status"] == status
+    assert content not in json.dumps(envelope)
+
+
 @pytest.mark.parametrize("calls", [False, True])
 @pytest.mark.parametrize("asynchronous", [False, True])
 async def test_real_agent_support_without_tools_or_model_claims(calls, asynchronous):
