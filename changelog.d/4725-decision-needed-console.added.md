@@ -1,1 +1,0 @@
-- **Decisions in the console (#4725).** See and answer waiting decisions from the desktop utility bar, or open them from a notification on desktop and phone.

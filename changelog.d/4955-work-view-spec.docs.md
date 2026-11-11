@@ -1,1 +1,0 @@
-- **Work view design spec (#4955).** Added `docs/design/work-view.md`, the approved spec for the console Work view: one surface over decisions, goals, watches, tasks, schedules, background agents, activity and directives, with five Overview lanes, a shared eight-status tone map, and the rail/modal/phone-sheet surface pattern. Documentation only; no code changes.

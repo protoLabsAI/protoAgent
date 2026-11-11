@@ -1,1 +1,0 @@
-- **Explain config-disabled tools (#4952).** The agent now identifies loaded public tools excluded by configuration and directs operators to Settings > Tools. Explicit restart requests to load those tools return that explanation before asking for consent or scheduling an ineffective restart; other restarts retain operator approval.

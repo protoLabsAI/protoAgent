@@ -1,1 +1,0 @@
-- **Phone Decisions header button uses the design-system Button (#4725).** The phone header's Decisions action now renders the `@protolabsai/ui` ghost icon `Button` and takes its focus ring and touch target from the design system, instead of a raw `<button>` injecting its own `:focus-visible` stylesheet.

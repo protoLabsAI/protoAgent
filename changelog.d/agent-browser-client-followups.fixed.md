@@ -1,1 +1,0 @@
-- **Browser client: a "profile in use" error on the agent's own session names the agent's profile.** A `for_agent_session` client launches with the browser plugin's profile, so the error now names that profile and gives the right fix for its `session_scope`.

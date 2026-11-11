@@ -1,1 +1,0 @@
-- **Saving a long chat no longer rewrites its whole history.** The console now stores a long chat's earlier turns once, in pieces that never change, and while a reply streams it saves only the turn in progress. On real chats that's 10–85× less written per save, which keeps the desktop app's browser storage log from ballooning. Short chats are stored exactly as before.

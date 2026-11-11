@@ -1,1 +1,0 @@
-- **A chat no longer spins forever after two scheduled turns overlap.** When a watch reaction closed a task, the follow-up review was queued into the same chat before the reaction had finished; the console then never settled the reaction's live bubble, and it showed "working" until a reload. Each finished turn is now settled on its own.

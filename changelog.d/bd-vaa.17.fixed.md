@@ -1,1 +1,0 @@
-- **Mobile Chats sheet restores focus to its opener.** Closing the session sheet returns focus to the title button even when Safari leaves focus elsewhere after a tap, preserving keyboard navigation on phones.

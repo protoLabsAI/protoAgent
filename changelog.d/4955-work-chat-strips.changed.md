@@ -1,1 +1,0 @@
-- **Chat shortcuts open the Work rail (#4955).** Directive, goal, and background-work strips open their own section with This chat enabled and expand a collapsed dock. Goals open their details, and console `/directives` opens Work › Directives. Shortcuts also navigate on phones, restore hidden Work in its configured dock, and select the requested chat for standing instructions.

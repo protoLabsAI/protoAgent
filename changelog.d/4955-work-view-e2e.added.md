@@ -1,1 +1,0 @@
-- **Work view browser coverage (#4955).** Add Playwright coverage for rail/modal scroll and item continuity, keyboard focus trapping and Escape, inline task deletion and Undo, and Decisions/palette entry points using deterministic operator API fixtures. Wait for tooltip dismissal before testing dialog Escape so tooltip exit animations cannot consume the keypress.

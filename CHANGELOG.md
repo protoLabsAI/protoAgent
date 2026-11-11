@@ -15,6 +15,446 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.235.0] - 2026-11-11
+
+### Added
+- **Browse knowledge by collection (#4630).** The Knowledge surface now opens on a sortable list of collections; open one to inspect its documents and chunks, search within it or across all collections, review pending agent-written entries, and delete a document or a whole collection with an undo window. Backends without collection listings retain chunk browsing, search, editing, and deletion.
+
+- **DecisionCard transcript mode (#4725).** In the source chat an answered decision now freezes as a single line — `You chose "{option}" · {time}` — while expired and withdrawn decisions freeze on their closed sentence instead of the Decisions-panel callout. A successful answer in the transcript holds "Sent" and stays put rather than leaving the list after four seconds. The Decisions panel is unchanged.
+
+- **"Decision needed" console entry points (#4725).** Adds the two unmounted entry-point composites for the Decisions panel: a `DecisionsWidget` desktop/tablet utility-bar pill (`MessageCircleQuestion`, a default `Count` badge — "9+" above 9 — only while something is pending, the §4.1 label and hover preview) that opens `DecisionsPanel` in a `min(520px, 94vw)` dialog driven by the fleet-wide `useDecisions()` store, and a phone Decisions header composite (icon + `Count` beside it) that renders only while something is pending after the first load, opens `DecisionsSheet`, and returns focus to itself or to New chat on close. `UtilityWidget` gains optional controlled `open`/`onOpenChange` props (uncontrolled stays the default) and now exposes `aria-haspopup="dialog"` and `aria-expanded` on every pill. Nothing is mounted yet.
+
+- **Decision expiry and attribution (#4725).** Decisions can specify an expiry and default, recommend one option, and be withdrawn with a reason. Agent withdrawal also resumes the parked turn so later operator messages can proceed. The API orders pending decisions by urgency, records who answered and where, and resumes turns with option labels. Zed also preserves buffered steering output when a turn finishes before the steering response arrives. Part of #4725.
+
+- **"Decision needed" console client and components (#4725).** Adds the console data layer and unmounted composites for the Decisions panel: a typed `/api/decisions` client (list, get, answer with surface, cancel — a 409 resolves to an "answered elsewhere" result instead of throwing), a fleet-wide `useDecisions()` store keyed by decision id that refreshes on the `decision.changed` bus event and on reconnect with no polling, a `DecisionCard` rendering every state (pending, sending, sent, answered elsewhere, no longer needed, expired, couldn't send, agent offline), and a `DecisionsPanel` / `DecisionsSheet` (bottom `Drawer`) body. `notifyIfHidden` gains an optional click handler that focuses the window and opens the panel. Nothing is mounted yet.
+
+- **Decisions in the console (#4725).** See and answer waiting decisions from the desktop utility bar, or open them from a notification on desktop and phone.
+
+- **Decision needed (#4725).** The agent can now stop and ask the operator to make a choice it is not allowed to make on its own with a new `request_decision` tool. Unlike an ordinary question, this parks the turn even on an unattended scheduled/background run instead of guessing, and records a durable pending decision (question, options, the chat it came from) that survives the checkpoint. Operators list and answer pending decisions over `GET`/`POST /api/decisions`; answering resumes the parked turn with the chosen option.
+
+- **Decision notifications (#4725).** New decisions can notify configured chat surfaces with the agent, question, suggested option, expiry action, and console session link; a failed delivery never blocks the decision.
+
+- **Decisions record lookup by id (#4725).** The fleet-wide `useDecisions()` store now keeps a by-id record cache alongside the pending list, so a chat transcript can read a decision that has since been answered, expired, or withdrawn. A pending refresh merges its rows in and a row that leaves the pending list keeps its last known record; `answer()`/`cancel()` store the row the server returns; a new `loadDecision(id)` fetches a historical id over `GET /api/decisions/{id}` (concurrent callers share one request, a 404 latches as missing so there is no retry loop) and serves only a settled (terminal) record from the cache — a record still cached as pending is re-read by id, since it can be answered, expired or withdrawn elsewhere while no consumer is subscribed; and a `decision.changed` event naming a cached id that has left the pending list re-reads it by id too, so the cache never keeps a stale pending record. A new `useDecision(id)` hook returns `{record, state}` (`loading` | `ready` | `missing`). Settled records never count as pending, never notify, and never appear in the panel. Part of #4725.
+
+- **Agent-driven plugin scaffolds (#4806).** Add a bus view template with emit-then-navigate tools, kit subscriptions and replies, a gated size-capped binary upload route, and generated tests. Enable tests and usage skills by default and document view round trips in the devkit. Part of #4806.
+
+- **Plugin devkit test-pass tracking (#4806).** Plugin tests append static-check findings, including missing skills guidance, and persist passing source fingerprints. Writes explain their untested status; reloads warn about missing or stale passes without blocking. Code-drift detection also covers ordinary directories under devkit roots.
+
+- **Plugins can declare a Python runtime (#4807).** A plugin manifest's `requires_runtimes` now accepts a `python` key alongside `node` — a mapping `{version: "3.12", requirements: [PEP 508 specs]}`. When its per-plugin venv at `<plugin_store>/.venv` is missing, built for the wrong version, or stale against the declared requirements, the plugin raises the existing `runtime-missing` setup banner with an Install action that provisions the venv with `uv` (`uv venv` + `uv pip install`) on the operator's click — never on load, keeping install ≠ code exec. A matching venv clears the banner; node parsing is unchanged. Part of #4807.
+
+- **Plugin SDK: `sdk.plugin_python` + `sdk.worker`/`sdk.aworker` (#4807).** A plugin with heavy, host-incompatible Python deps can now resolve its provisioned `<plugin_store>/.venv` interpreter (`sdk.plugin_python(plugin_id)`) and run a short JSON-line worker in it — write a payload to the child's stdin, read a JSON object back from stdout, with structured, never-raising errors for an unprovisioned runtime (carrying the setup-banner remedy), a timeout (the child is killed), a non-zero exit (with the stderr tail), or non-JSON output. `sdk.aworker` is the off-the-event-loop form. The testkit gains `use_fixture_python`, which points a plugin's runtime at a fixture interpreter (`sys.executable` by default) so worker contract tests run in CI without `uv`. Completes #4807 on top of the part 1 runtime provisioning.
+
+- **`protoagent plugin preview <dir>` — a host-free plugin-view harness (#4809).** Serves the built operator console against the e2e mock backend with a plugin's REAL routers (mounted through the testkit's `FakeRegistry`, no protoAgent server), its views and `public_paths`, the #4283 bus tap (publish, and read received frames), and an optional `--layout` seed that mounts a view in the surface and the right panel at once — the cadview freeze shape. Adds a WebKit Playwright project (the desktop app runs WKWebView) scoped to the preview specs, so the existing suites don't double in CI time.
+
+- **Standing instructions in chat (#4861).** View and withdraw standing instructions from the chat strip, /directives, or the chat-tab menu, with withdrawal notes shown quietly in the transcript.
+
+- **Generation profile resolution (#4875).** Resolve a model build's named generation profile (per-call over subagent over role over the global block) and apply it when building the model, so an operator-tuned profile can cap a call's output tokens or turn reasoning off; with no profiles configured, every call is unchanged.
+
+- **Subagent generation-profile plumbing (#4875).** Subagents, SDK calls, and workflow steps now resolve generation profiles, cap their working context budgets, and attribute usage to the resolved profile. Explore-phase middleware prepares the later final-phase switch while preserving requests when no profile is configured. Part of #4875.
+
+- **Empty-turn retry for subagents (#4875).** When a subagent turn ends with no tool call and almost no text because it was cut at the model's output cap or spent itself thinking, it now gets one automatic retry — with the failed reasoning dropped and thinking turned off where the gateway supports it — instead of being lost. This runs on every subagent; the chat lead gets it only when `model.empty_retry_lead` is turned on (off by default).
+
+- **Freeze the PV4 memory baseline (#4914).** Add 40 cases and twelve user stores with the three-run top-k baseline: PV4 36/120 and changed-fact 51/60. Flag all 26 zero-pass cases for harness investigation without changing questions or assertions.
+
+- **Mobile Work attention count (#4955).** The hamburger drawer's Work row now shows how many items need you, with an accessible count label, so the hamburger alert leads to the right destination.
+
+- **Edit a goal in place through the API (#4955).** Adds `PATCH /api/goals/{session_id}`, which
+  takes a partial body and changes only the
+  completion-contract fields (`outcome`, `constraints`, `boundaries`, `stop_when`) and the two
+  per-goal budgets (`max_iterations`, `no_progress_limit`) — a single string is accepted for
+  `constraints`/`boundaries` and coerced to a one-element list, and budgets reuse the goal-set
+  bounds (a whole number in range). The condition, verifier, status and history are set once or
+  owned by the drive loop, so a body naming any of them (or any other key) is a 400 and changes
+  nothing. The edit is written through the goal store's own `set`, which re-fires `goal.changed`
+  so every open console refreshes. An unknown session is a 404, goal mode switched off is a 503,
+  and a `max_iterations` below the goal's current iteration is a 400.
+  Edits and drive-loop updates are serialized, preserving edits made while a verifier runs.
+
+- **Phone attention indicator (#4955).** The hamburger menu shows a static warning dot when Work items across any chat need you, with the count in its accessible name.
+
+- **Open Work on your phone (#4955).** Swipe up or tap the handle above chat’s composer, or choose Work from the menu, to open the full-screen Work sheet without losing your place. Decision notifications open its Decisions section.
+
+- **Pause/resume a schedule from the console, plus live schedule updates (#4955).** Adds
+  `POST /api/scheduler/jobs/{id}/enabled` with body `{"enabled": bool}`: `false` pauses a job,
+  `true` resumes it, and the route returns the job with its new `enabled` value. An unknown id
+  is a 404; a scheduler backend without `set_enabled` is a 501. The console handlers now also
+  publish a best-effort `scheduler.changed` event `{"job_id", "action"}` on the event bus after
+  each add, edit, cancel, pause, resume and undo-restore (`action` is `"added"`, `"updated"`,
+  `"canceled"`, `"enabled"`, `"disabled"` or `"restored"`), so the Work view's Schedules
+  section can refresh live instead of polling. A publish failure is logged and never fails the
+  request.
+
+- **Pause and resume a schedule (#4955).** The scheduler backend can now pause and resume a job via `set_enabled(job_id, enabled)` — the backend call behind the Work view's Pause/Resume buttons. A paused job stays in the store but no due tick fires it; resuming a cron job recomputes its next fire from now, so a job paused across many missed slots fires once at its next slot instead of replaying every skipped run, while a resumed past-due one-shot is kept for the next tick.
+
+- **Reusable rail and modal surface host (#4955).** Adds Expand and Dock to rail controls with per-view state retention, focus handoff, accessible move announcements, and surface deep-link helpers. App integration follows separately.
+
+- **Expand any right-rail view into a large window (#4955).** Every view in the console's right dock — core surfaces and plugin views alike — now carries an Expand button in its header. Expand opens the view in a large modal; Dock to rail closes the modal and makes that view the active panel in the right dock again. The phone is unchanged for now.
+
+- **Server-side undo for goal and watch deletes (#4955).** `DELETE /api/goals/{session_id}` and `DELETE /api/watches/{watch_id}` now return an `undo_token`, and `POST /api/undo/{token}` within a 10 s window restores the record through the store's own `set` — re-firing its `goal.changed`/`watch.changed` event so every open console refreshes. Undo runs on the server, so the Work view's Undo toast still works after the originating tab is closed. A restored watch keeps its id, settings, and status; a goal cleared with `close_tasks=true` restores only the goal, not the tasks it closed. If a new record was created under the same id between the delete and the undo, the restore refuses with a 409 rather than clobbering the newer record and its progress. An expired, unknown, or already-used token is a 404.
+
+- **Undo a task-delete or schedule-cancel from the console (#4955).** The server-side undo
+  ledger now covers two more Work view deletes: deleting a task (`DELETE
+  /api/tasks/issues/{id}`) and cancelling a scheduled job each stash a snapshot and hand back
+  an `undo_token`, and `POST /api/undo/{token}` within the window restores it — a task via the
+  new `TaskStore.restore` (re-firing `task.changed` with `action: "restored"`), a job via
+  `scheduler.add_job` with its original id, prompt, schedule, timezone, tool fence, paused
+  state, timestamps and run history. A one-shot whose
+  time has already passed comes back as-is and fires on the scheduler's next tick. Unknown,
+  expired or already-used tokens stay a 404, and restoring over an id that was recreated in
+  the meantime is refused rather than clobbering the newer record.
+
+- **One data hook behind the Work view (#4955).** `useWorkItems()` folds the agent's eight work sources — decisions, goals, watches, tasks, schedules, background jobs, activity and directives — into one uniform `{ items, status, loadedAt, error, retry }` per source, with every row's status normalized through the shared `tone.ts` mappers. It refreshes live off the bus (each `decision.changed` / `goal.changed` / `watch.changed` / `task.changed` / `background.*` / `scheduler.changed` / `directive.changed` push invalidates only the source it names), falls back to a 60 s schedule poll until the first `scheduler.changed` proves the bus is wired, and isolates failures so one source going `error` (or `stale`, keeping its last rows after a failed refresh) never disturbs the others. Adds `undo(token)` and `setScheduleEnabled(id, enabled)` console clients for the Work view's server-side undo and pause/resume.
+
+- **Work view: Background agents and Activity (#4955).** The Work view gains two more sections. Background agents lists each detached subagent run with its role as a display name, a link to the chat it ran from, its Markdown result clamped to eight lines, and — while it is still running — Cancel job… behind a confirm; a failed or cancelled job shows why it ended, and a Manage subagents link opens the existing subagents panel. Activity shows the agent's own turns from the last 24 hours (Show more reveals older ones), names what triggered each one in plain words (Scheduled, Inbox, Webhook, Another agent, You), and flags an inbox `now` item as Urgent.
+
+- **Work view: Decisions and Directives sections (#4955).** The Work view gains its Decisions and Directives sections, registered automatically whenever the Work view loads. Decisions lists the agent's "decision needed" ledger with pending items pinned first (as in the Needs you lane), each row showing the question, its status (pending → needs you, answered → done, expired/cancelled/withdrawn → cancelled), "Asked {time}" or "Answered: {label}", and the agent name only in the All chats filter; opening a row shows the existing DecisionCard unchanged. Directives renders the standing-instructions ledger — reusing the directive drawer's body — so an in-force instruction keeps the word "Active" under a neutral group, with history in its own collapsed group. No decision, thread or directive id is shown outside Technical details.
+
+- **Work detail view (#4955).** Added `WorkDetail`, the shared detail pane for every Work item type: a focusable heading with a status dot and word, a definition list that hides empty fields, action buttons, and a collapsed "Technical details" accordion whose values are copyable and wrap long ids. Destructive actions confirm inline — a `role="group"` labelled by its prompt, with focus moving to the prompt and Keep it/Escape returning it to the trigger — instead of a stacked dialog. A delete that returns an undo token raises an 8‑second undo toast (pausing on hover or focus) whose Undo restores the item, and a failed action shows an assertive warning alert with Try again.
+
+- **Goals and Watches in the Work view (#4955).** Adds the Goals and Watches sections to the Work view — each self-registers on import, lists its items as rows and opens a detail view with exactly the §2.5/§2.6 fields, order and wording (an unlimited goal reads "Turn 3", never "n/0" or "∞"; a flapping watch reads "Fired 3 times · 3 in a row"). Ids, raw statuses, verifier types and raw evidence stay out of the rows and fields and appear only in the copyable Technical details. A goal can be Stopped (with the §4.4 confirm), Deleted (returning an undo token for the §4.5 Undo toast) or Edited in place via `PATCH /api/goals/{session_id}`; a watch can be Deleted (with undo) or Edited via `PATCH /api/watches/{id}`. The empty Goals section shows a New goal button that opens the shared goal creator. Adds `editGoal`/`editWatch` console clients and surfaces the delete `undo_token`.
+
+- **Work hub in the command palette (#4955).** ⌘⇧K now lists "Open Work" plus a row per
+  Work section (Decisions, Goals, Watches, Tasks, Schedules, Background agents, Activity,
+  Directives) and "Work: New goal…", each opening the Work surface in the large shell modal
+  on the matching section. They route through a serializable NavIntent, so they work from the
+  desktop launcher too.
+  On mobile, these commands navigate to Work. New goal opens the creation form, and closing
+  it clears the request so returning to Work does not reopen it.
+  Opening Work from any dock transfers its mounted view to the modal, preventing duplicate
+  goal creation dialogs when Work lives in the left or bottom dock.
+  Dock to rail reveals Work in its assigned dock, restores it when hidden, and retains the
+  selected section. Collapsed docks reopen at a usable size.
+
+- **Work on phones (#4955).** Work opened from the palette or utility pills now uses a full-screen bottom sheet with a titled close control, preserving its selected state and returning focus when closed. Desktop rail and modal frames remain unchanged.
+
+- **Work view: Tasks and Schedules sections (#4955).** The Work view now renders its Tasks and Schedules sections. A schedule row shows the prompt's first line and its timing in plain words ("Weekdays at 09:00", "Once, 10 Nov at 14:00") — never the job id or the raw cron, which live only in Technical details — and offers Pause, Resume, Edit, and Delete with an undo window. A task shows its type and priority as "Bug · high" (priority 0–3 reads urgent, high, normal, or low), its assignee and timestamps and a clamped description, with Edit and Delete-with-undo. Schedule edits preserve the stored timezone (including implicit UTC) and allow prompt changes to past one-off schedules.
+
+- **Shared Work statuses and rows (#4955).** Add a consistent status vocabulary, source mappings, local timestamp formatting, and an accessible shared row with status dots and badges for the Work view.
+
+- **Work view browser coverage (#4955).** Add Playwright coverage for rail/modal scroll and item continuity, keyboard focus trapping and Escape, inline task deletion and Undo, and Decisions/palette entry points using deterministic operator API fixtures. Wait for tooltip dismissal before testing dialog Escape so tooltip exit animations cannot consume the keypress.
+
+- **Work view shell and Overview (#4955).** Add nine-section navigation, chat filtering, five work lanes, independent source feedback, and rail/modal detail navigation with saved position. The shell is available for the later WorkPanel replacement without changing the current app mount.
+
+- **Plugins can read a form, and the agent's own browser, through the browser client (#4957).**
+  `agent_browser.client` gains `form_read(scope="")`: the same in-page reader `browser_form_read`
+  uses (react-select option probe included), returned as a list of field dicts (label, kind,
+  name, id, required, value, options, options_more) with no content-boundary markers. And
+  `make.for_agent_session(state)` builds a client on the session the agent's `browser_*` tools
+  use for the calling chat (`shared` or `per_session`, resolved the way the tools resolve it),
+  behind the same per-session guard, with the browser plugin's own launch flags and `close()`
+  refused. careercoach's verify step can now read the real page instead of trusting a read-back
+  the model passes in, which an eval caught being cut from 7.3 KB to 3.8 KB.
+
+- **The browser no longer reports a bot check as a page it opened (#4923).** `browser_open` used
+  to return `✓ Just a moment...` — a Cloudflare challenge's title — as a successful
+  navigation. It now checks the landed page and returns `Error: blocked by <wall> at <url>`
+  with "ask the user to clear it in the console Browser panel, then continue" for
+  Cloudflare, "checking your browser", DataDome, PerimeterX, Akamai, Google's
+  unusual-traffic page, CAPTCHA pages, HTTP 403/429, `ERR_BLOCKED_BY_CLIENT`, and sign-in
+  walls. A challenge that clears itself is re-checked for about 5 seconds first. Turn it
+  off with `agent_browser.detect_walls: false`.
+- **Page text reaches the model marked as untrusted (#4923).** Snapshots, page text and HTML,
+  and form reads now arrive inside the agent-browser CLI's `AGENT_BROWSER_PAGE_CONTENT`
+  markers (a random nonce per call), and the `web-browse` skill tells the agent that text
+  inside them is data, never instructions. On by default; `agent_browser.content_boundaries:
+  false` turns it off. `browser_eval` output stays raw — it's the result of the caller's own
+  script (often JSON a caller parses), not page prose, so it's never wrapped.
+- **The bundled browser workflows load, run, and stop at a wall (#4923).** `fill-form` and
+  `browse-and-extract` had an invalid recipe shape; both now load and run on a new
+  workflow-only `browser` subagent, stop and hand a bot check or sign-in wall to you instead
+  of pushing on, and `fill-form` still never submits (it fills by label, reads the form back,
+  and stops). `browse-and-extract` reads the page text with `browser_get_text` rather than
+  the interactive-only snapshot.
+
+- **The `code-review` workflow can take the board card a PR implements (#5069).** A new optional `card`
+  input (title, task, acceptance criteria, starting files) reaches every finder and the
+  synthesizer, fenced as data. A defect in changed code stays in scope whatever the card says.
+  A finding that only asks the PR to do more than the card asks for is a minor `beyond-card`
+  finding, never a blocker. projectBoard's review gate sends it (projectBoard-plugin#721); a run
+  without a card behaves as before.
+
+- **Other plugins can drive a browser through core's hardened path: the `agent_browser.client` service (#4941).**
+  A plugin that needed its own browser (ebay-plugin's price checks) shelled out to `agent-browser`
+  with a bare `subprocess.run`. It had no output cap, no process-group kill, no per-session lock,
+  no CLI resolution and no option guard, and every failure came back as a string. A stuck
+  browser and a bot wall looked the same, so 14% of ebay price checks ran for 60 s or more
+  (p95 126 s). `make = sdk.service("agent_browser.client")` now returns a sync, thread-safe
+  `BrowserClient` on the plugin's own named session (instance-prefixed by default). It shares
+  the tools' subprocess runner (`runner.py`, extracted from `tools.py` unchanged) and their
+  per-session lock. It offers `open` / `wait` / `eval_json` / `get_text` / `snapshot` /
+  `check_wall` / tab helpers, and each returns a typed `Result`: `ok`, `timeout`, `wall`,
+  `cli_error`, `script_error`, `unavailable`, `bad_argument` or `too_large`. `open(url)` sends
+  the plugin's launch options every time and refuses a URL-less `open`, which would relaunch
+  Chrome onto a temp profile. Every wait carries an explicit timeout, so the CLI doesn't re-send
+  a failing 30 s wait five times. A hung navigation is cut off after `nav_timeout_s` and
+  recovered once. An `own_tab` label keeps navigation out of Chrome's Gemini side panel and the
+  operator's tabs. Documented under "For plugin authors" in the browser-automation reference.
+
+- **Open right-rail views in a large window (#5050).** Double-click a core or plugin view's rail item to expand it, including inactive or collapsed views. Dock restores the saved view state; Chat and phone navigation are unchanged.
+
+- **"Edit suggestions" link in the empty chat (#4946).** The empty chat's "Try one of these" starter chips now show a quiet "Edit suggestions" link beneath them that opens Settings ▸ Chat on the Starter prompts editor (and scrolls it into view), so operators can find where those chips are configured. It appears only when starter prompts are shown — an empty list (suggestions turned off) hides it.
+
+### Changed
+- **Plugin views adopt the design-system bus helpers (#4805).** Bumped `@protolabsai/ui`/`ui-css` to 0.71.0, whose no-build plugin-kit now exports `subscribe`, `publish`, `onEvent`, `getState` and `setState`. The org chart view now follows the delegation bus through `kit.subscribe` instead of hand-rolled `postMessage`, and the plugin view bridge reference leads with the kit helpers (topic qualification, `since` resume, echo filtering, coalescing). `getState`/`setState` await host support a follow-up adds. The host retains `topic` and adds the kit-compatible `name` alias for live and replayed events; paired wildcard patterns keep delegation updates flowing through both matchers. Kit publishes using `name` now reach the host’s existing namespace-forced, token-authenticated publish path; legacy `topic` frames remain supported.
+
+- **Faster memory-retrieval eval (#4943).** The on-demand `evals.memory_retrieval` runner now caches each fixture and choice embedding in memory for the duration of a single run, so identical text is sent to the embedding gateway once instead of tens of thousands of times — turning a 2–3 hour sweep into minutes with no change to the scores.
+
+- **Chat shortcuts open the Work rail (#4955).** Directive, goal, and background-work strips open their own section with This chat enabled and expand a collapsed dock. Goals open their details, and console `/directives` opens Work › Directives. Shortcuts also navigate on phones, restore hidden Work in its configured dock, and select the requested chat for standing instructions.
+
+- **The Work modal opens near-full-screen (#4955).** The large-modal surface host now frames its
+  Dialog with the design system's `size="wide"` (DS gap B3, ds-zb8) — a near-full-screen width of
+  `calc(100dvw - 2 * var(--pl-space-4))` from `@protolabsai/ui`/`@protolabsai/ui-css` 0.72.0 —
+  replacing the DS default width the host carried while the wide size was unavailable, with no
+  per-app width override or literal px.
+
+- **Work utility pills (#4955).** Decisions, Background jobs and Activity now open their respective Work sections, preserving pending and unread badges and showing a pulsing indicator with the running-job count. Work Activity retains pending-inbox triage and dismiss controls alongside the live completed-turn feed. Work Background details retain live tool activity and expandable tool outputs, including progress received before opening Work. Completed background results keep their full-text copy control in Work.
+
+- **Work surface is now the unified Work view (#4955).** Opening Work from the rail renders the new Work view — an Overview plus a section per work source (Goals, Watches, Tasks, Schedules, Background agents, Activity, Decisions, Directives) — inside the surface frame, so Expand opens it in a large window and Dock to rail returns it to the same section.
+
+- **Browser snapshots are 5-8x smaller, and over-cap output comes back usable (#4922).**
+  `browser_snapshot` now returns the CLI's interactive, compact view (`snapshot -i -c`) by
+  default. It keeps every field, button, link and heading with its `@eN` ref, and leaves body
+  text to `browser_get_text`. Measured live: a Wikipedia article went from 381 KB, which was
+  over the 200 KB cap and returned nothing usable, to 71 KB. A Greenhouse application went
+  from 23.8 KB to 2.8 KB. `full=true` returns the old tree, and new `scope=` and `depth=`
+  options narrow it. When `browser_snapshot`, `browser_get_text` or `browser_get_html` output
+  passes `max_response_bytes`, the tool now returns the first part, cut on a line break and
+  marked `…[truncated: …]` with how to narrow it, instead of a bare "output exceeded" error.
+  Reading still stops at the cap.
+- **New `browser_wait` tool replaces sleeps and polling loops (#4922).** It waits for one of a CSS
+  selector, page text, a URL substring, a load state, or a JS condition. The timeout is
+  bounded (25 s at most) and always passed to the CLI explicitly. Without one, the daemon's
+  30 s default equals the CLI's IPC timeout, so a wait that never matched was re-sent five
+  times and blocked the session for about 2.5 minutes. `browser_screenshot` gains
+  `full_page=` and `annotate=` (ref labels drawn on the image).
+- **Dotted ids and stale refs no longer dead-end the agent (#4922).** A `#id` with CSS-special
+  characters, such as `#input-candidate.name-3` from `browser_form_read`, used to fail with
+  "Element not found". It now resolves to the element with that exact id when it matches
+  nothing as CSS. A stale or unknown `@eN` ref now returns an error that says to snapshot
+  again or use the field's label, instead of the raw "Unknown ref: e4".
+
+- **Chat history moves to the browser's IndexedDB (#5009).** The console stores saved chats in IndexedDB instead of localStorage, so they no longer share a 5 MB limit with everything else, and saving a long chat no longer makes the desktop app's storage log grow by hundreds of MB a day. Existing chats move over automatically the first time you open the updated console.
+
+- **The browser asks before it submits — whatever the agent called the button (#4924).** Before a
+  click, an Enter/Space press, or typed text with a newline, the Agent Browser plugin now works
+  out what the action will really hit. A `@eN` ref is resolved through the CLI's box for it;
+  a CSS selector or label is looked up in the page. A form submission, or a control named
+  *Submit*, *Send*, *Place order*, *Pay*, *Delete* and the like, raises an approval card in
+  plain words ("Submit the form on boards.greenhouse.io — button “Submit application”") before
+  anything is sent. A job board's *Apply now*, filters, search, sign-in and *Next* are left
+  alone. Previously `browser_click("@e42")` on the real Submit button went straight through,
+  because only text in the tool arguments was ever checked. A subagent, workflow step, or
+  scheduled, inbox or A2A turn can't answer a card, so it gets an immediate refusal instead of
+  a hang. An Enter/Space press whose focus is inside an iframe the gate can't read into is
+  treated as a possible submit and asks too, rather than slipping an embedded form through
+  unseen. `confirm_actions` is now this gate's category list: `submit` (the default when
+  unset), `eval`, `upload`, `download`, `all`, or `""`/`none` for off. Only an explicit off-word
+  turns it off — a value that names no known category (a legacy CLI verb like `click`, or a
+  typo) fails closed to the `submit` default with a warning, so opting in can never silently
+  leave the gate off. It is no longer passed to the CLI as `--confirm-actions`, which waited for
+  a confirmation nothing ever answered. The bundled Fill Form workflow now stops at a filled,
+  verified form and hands it back for the operator to submit — a workflow step is a subagent
+  that can't answer an approval card, so it never clicks Submit itself. Other plugins can layer
+  rules on the gate through the `agent_browser.add_gate_policy` and `agent_browser.describe_target`
+  services.
+
+- **Scaffolded plugins run CI on GitHub-hosted runners (#5070).** The plugin scaffold (`plugin new`) now
+  generates a CI workflow with `runs-on: ubuntu-latest` instead of a Namespace runner
+  profile, the desktop build's runner comments describe GitHub-hosted runners only, and
+  the customize-and-deploy guide states the GitHub-hosted runner policy.
+
+- **Cleaner side panels (#5041).** Removed duplicate right-panel headers. Open a view in a large window from its background context menu or its right-rail icon menu, including with the keyboard.
+
+### Fixed
+- **Collection-scoped document deletion (#4630).** Deleting a document and undoing its deletion now affect only the selected collection, preserving same-named sources in other collections.
+
+- **Phone Decisions header button uses the design-system Button (#4725).** The phone header's Decisions action now renders the `@protolabsai/ui` ghost icon `Button` and takes its focus ring and touch target from the design system, instead of a raw `<button>` injecting its own `:focus-visible` stylesheet.
+
+- **Make PV4 fixture extraction easier to diagnose (#4897).** Print the resolved extraction model before fetching the dataset and retry transient dataset HTTP failures up to three attempts.
+
+- **PV4 fixture extraction resumes instead of restarting (#4897).** `build_pv4` checkpoints each user's store after every chat, outside the checkout (`~/.cache/protoagent/pv4-extract/<model>/`, override with `PV4_WORK_DIR`). An interrupted run, or a board round that recreated its worktree, now pays only for the chats it has not extracted yet, and a finished user re-exports with no model calls.
+
+- **Readable scheduled-task results (#4927).** Result cards now display formatted summaries, while collapsed previews show plain text without markdown markers.
+
+- **Chat input history stays in its tab (#4928).** The composer’s ↑/↓ recall now uses per-session history, with bounded storage, so messages from other chat tabs no longer appear.
+
+- **Windows: isolate the version-snapshot test's subprocess fake (#4935).** Only build_info's exact git queries against the checkout are faked and counted once each. Regression probes verify that non-git commands and unrelated git queries reach the real runner; child-script assertions include diagnostics while preserving the import-time snapshot checks.
+
+- **Explain config-disabled tools (#4952).** The agent now identifies loaded public tools excluded by configuration and directs operators to Settings > Tools. Explicit restart requests to load those tools return that explanation before asking for consent or scheduling an ineffective restart; other restarts retain operator approval.
+
+- **`browser_form_read` no longer returns an empty read when a field's group label was removed (#4963).** The in-page enumerator built every field's descriptor in a single pass, so a helper that reached an element the page had since removed (e.g. an `aria-labelledby` target) could abort the whole read and surface nothing. Each field is now built independently: one that fails degrades to a minimal, still-addressable row — keeping its id and best-effort value, with no label — while every other field reads normally.
+
+- **The agent no longer answers one message twice when you switch agents mid-reply (#4975).** In the desktop app, leaving a chat while a reply was streaming could send the same message again, so the agent ran a second turn and answered it twice. The server now recognises a message it has already taken and shows its first answer instead of starting another turn. The desktop app refuses to send the same message twice, and it no longer re-sends a message over its fallback path once the reply has started.
+
+- **Deliverable-aware subagent recovery (#5011).** Preserve complete short capped answers and bounded contract recovery for non-empty salvage results. Stop after one thinking-off salvage when the result remains capped or reasoning-only, preserving the #3584 retry bound. Measure current empty-at-cap outcomes while retaining historical log support.
+
+- **The console no longer polls for running REST turns every second (#5064).** The server now announces when a chat session's REST/`/v1` turns start, finish or are stopped, and the "Chat request still running" banner refreshes on that (and on reconnect) instead. An idle open chat makes no recurring requests, and WebKit (including the desktop app) no longer logs "access control checks" errors when a reload lands mid-poll.
+
+- **Resume interrupted A2A replies (#4959).** A model stream stall or transport drop now retries once from the thread checkpoint, preserving completed tool rounds. A failed retry reports the existing failure message; overflow recovery does not trigger an additional retry.
+
+- **Browser client: a "profile in use" error on the agent's own session names the agent's profile (#4958).** A `for_agent_session` client launches with the browser plugin's profile, so the error now names that profile and gives the right fix for its `session_scope`.
+
+- **Every agent on a machine now drives its own browser (#4921).** The browser plugin left the
+  `agent-browser` session name to the CLI, which calls it `default`. Every protoAgent
+  instance on a machine is its own server, so every fleet agent drove one Chrome with one
+  cookie jar. One agent saw another's page mid-review, three price checks from one agent
+  returned another's dataset, parallel form fills crossed between agents, and every agent
+  could use every other agent's signed-in sites. The plugin now names the session from the
+  instance (`pa-<instance>-<hash>`) and passes it to every CLI call: the tools, the Browser
+  panel's toolbar, and its live view. `session_scope: per_session` chat browsers are
+  namespaced by instance too. An operator-set `AGENT_BROWSER_SESSION` still wins.
+  **On upgrade**, an agent's open page in the old shared `default` browser isn't carried
+  over. Its first browser call starts its own empty browser, so sign in again there, or point
+  `profile` at a profile directory. The old `default` browser keeps running until it's closed
+  (`agent-browser --session default close`) or the machine restarts. Two agents given the same
+  `profile` directory can no longer both use it at once, because Chrome allows one browser
+  per profile directory.
+- **Idle per-chat browsers shut down (#4921).** With `session_scope: per_session`, each chat's
+  browser now exits after `idle_timeout_min` (default 30) minutes without a browser
+  command. Before, each one kept a Chrome running until the machine restarted. The agent's
+  main browser has its own `main_idle_timeout_min`, off by default, because your signed-in
+  tabs live there and watching the Browser panel doesn't count as activity. Both settings
+  apply to browsers started after a change.
+- **A browser profile held by another browser is now a clear error (#4921).** With a `profile`
+  directory and `per_session`, the second chat's `browser_open` failed with Chrome's raw
+  launch log, and the cause was cut off. The tools and the panel now say the profile
+  directory is in use and how to fix it. The live tests also stop leaving browser daemons
+  behind when a run is killed before teardown.
+
+- **Incremental solver verification (#5057).** Verify bounded candidate pipelines before launching more alternatives, stop launches after a pass, preserve started work, and bound verification independently. Reap verifier process trees on timeout and cancellation.
+
+- **Task IDs survive deletion and restart (#5039).** Persist task numbering so Undo restores the original task beside newly created tasks, and serialize concurrent task writes and reads to prevent races.
+
+- **Concurrent task deletion preserves Undo snapshots (#5042).** Capture each task snapshot in the same transaction as its deletion so Undo restores the row actually removed. Add repeated multi-client coverage for shared SQLite reads, complete Undo tokens, and exactly one successful redemption per token.
+
+- **Decisions show the actual terminal state after an answer conflict (#5045).** Expired decisions display their deadline and default action, and withdrawn or cancelled decisions display their reason instead of claiming an option was chosen.
+
+- **Phone Knowledge navigation (#5047).** Prevent shell rerenders and reloads from duplicating history entries, so browser Back and Forward return between the collection list and detail reliably.
+
+- **WebKit storage QA request diagnostics (#5051).** Capture correlated browser and mock-server request lifecycles, characterize handled unload fetch errors independently of the console, and supply missing attendance and Python runtime mock responses. Exercise real-quota recovery and 2,400-message migration across repeated reloads without filtering console page errors.
+
+- **Preserve goal edits during Windows file contention (#4955).** Goal readers now serialize with writes, and atomic replacement retries transient Windows access and sharing failures. Failed persistence surfaces an error instead of reporting a successful edit or publishing a change event.
+
+- **Mobile Chats sheet restores focus to its opener (#5048).** Closing the session sheet returns focus to the title button even when Safari leaves focus elsewhere after a tap, preserving keyboard navigation on phones.
+
+- **Model picker opens on phone WebKit (#5049).** Tapping the composer model selector now opens a stable, selectable sheet and returns focus to its trigger when dismissed.
+
+- **Decision defaults run promptly at their displayed deadline (#5046).** Expiry now checks every second independently of the five-minute A2A reaper, including at startup. Detection takes up to one second plus event-loop and delivery time; failed delivery remains retryable and operator answers retain single-consumer arbitration.
+
+- **Killed test runs no longer leave browsers behind (#5034).** Every `agent-browser` daemon a test starts now shuts itself and its Chrome down after 3 idle minutes. Before, a live browser test run that was killed before its teardown left the daemon and Chrome running until reboot.
+
+- **Center the mobile Open Work grab line (#5040).** The line now sits in the horizontal and vertical center of its full-width button above the composer.
+
+- **Chats stay in step across devices without a reload (#4970).** A console left open — the desktop app all day — now picks up the turns you send from another device (your phone) when you come back to the window and about once a minute while it's visible; before, it only caught up on a reload. The session index also names each chat's newest turn, so a long-running chat that remembers turns the server has already cleared still notices one it's missing.
+
+- **Old agents' chat history no longer fills up browser storage (#4978).** The console now clears the saved chats of agents you've removed from the fleet, and of agents you haven't opened in over a day, before browser storage runs out. Before, it never cleared anything, and a full browser storage meant new chats silently stopped saving. It never touches the agent you're on or anything from the last day, and it tells you when it frees space.
+
+- **The desktop app no longer piles up hundreds of MB of browser-storage log while you chat (#4971).** A streaming reply now saves the chat history every ~2s instead of every 300ms. Each save rewrote the agent's whole saved history, and in the desktop app those rewrites piled up in a log file that grew until you quit (204 MB after a 9.5-hour day). The reply on screen still streams live, and a crash mid-reply loses nothing the server can't redraw.
+
+- **Saving a long chat no longer rewrites its whole history (#4984).** The console now stores a long chat's earlier turns once, in pieces that never change, and while a reply streams it saves only the turn in progress. On real chats that's 10–85× less written per save, which keeps the desktop app's browser storage log from ballooning. Short chats are stored exactly as before.
+
+- **Answering the same decision from two places at once no longer tells both "Sent" (#5076).** When the
+  console and another surface (or two API calls) answered a pending decision at the same moment,
+  both got a success and the losing one left a stray failed task and an "Operator chose…" bubble
+  in the chat. Now the second answer waits for the first to finish, sends nothing of its own, and
+  gets "Already answered" with the answer that won. If the first fails to deliver, the second
+  goes through.
+
+- **Durable decision pause identity (#5058).** Streaming and synchronous decision pauses now carry their ledger decision id, including repeated holds and goal continuations, so stored HITL task payloads retain the identity needed for transcript replay. Ledger failures still park and report the error without inventing an id.
+
+- **Reactive decision cards in chat (#4725).** Live and restored transcripts now read durable decision IDs through the shared decision cache and answer flow. Answered, expired, and withdrawn decisions update in place, with no duplicate generic decision form; legacy prompts and inert HITL tables retain their existing behavior. Live transcript replies retain the interrupt-answer path, and terminal records clear only their matching pending chat interrupt.
+
+- **Decision identity survives chat replay (#5060).** Assistant messages retain the durable decision ledger ID across live pauses, snapshots, settlement, and restored history, while older transcripts and other input requests remain compatible. Reattaching a task with multiple decision pauses rebuilds each visible continuation boundary, preserving earlier decision handles through repeated snapshots. Replay reuses locally submitted answers without duplicating pauses, keeps later decision IDs off earlier generic pauses, and retains decision-only bubbles when a turn ends without text. Later payloads without an ID preserve the recorded identity during historical hydration. Structured form answers match their durable display text while retaining local JSON content and form cards, preventing duplicate answer bubbles on reattach. Console polling cancels active reads and pauses new reads during navigation, avoiding WebKit access-control errors during repeated history reloads; reads resume after cancelled navigation or a return from the back/forward cache.
+
+- **Emoji, accents and non-Latin text no longer turn into "�" in the desktop app (#4988).** A character that arrived split across two network chunks while a reply streamed was decoded half at a time. The desktop app now waits for the rest of the character.
+
+- **The desktop app gives back the disk space its browser storage log took (#4980).** On macOS, the log WebKit keeps beside the console's saved chats could grow to hundreds of MB during a day and never shrink. At launch, before any window opens, the app now folds an oversized log back into the database and empties it (250 MB → 0 in a quarter of a second, with every saved chat kept).
+
+- **Browser form tools read custom application questions by their question text (#4951).** In a
+  live eval on 13 real job postings, `browser_form_read` lost the question on every Lever and
+  Workable custom question. Fields came back as `cards[<uuid>][field0]`, `QA_12487827` or a UUID.
+  Labels picked up junk such as "SVGs not supported by this browser.", "No location found…Loading"
+  and glued-on descriptions. Palantir's 31 language checkboxes counted as 31 required fields.
+  Fields with no label of their own now take the question from their container: Lever
+  `.application-question`, Ashby's field heading, Workable's `aria-labelledby` radiogroup. Svg,
+  hint and status text is dropped. A "select all that apply" list reads as one `checkbox-group`
+  field with its options and ticked values. Palantir's form went from 62 rows with 19 junk labels
+  to 30 rows with none.
+- **`browser_select` ticks radio and checkbox options and picks autocomplete suggestions (#4951).**
+  `browser_select("How did you hear about us?", "LinkedIn")` ticks that option (it never unticks).
+  On a location box that suggests as you type (Lever, Google Places, an async combobox), it types
+  the text, picks the unique matching suggestion with a real click and reads it back. If nothing
+  appears, it retries once with the part before the first comma. If no suggestion matches, or
+  several do, it lists them and restores the field. `option_text` also takes `|` alternatives
+  (`"Decline to self-identify|I don't wish to answer"`), and the first one that matches wins.
+  Discord had 10 failed selects over decline wording.
+- **`browser_form_read` lists react-select options without committing (#4951).** It opens each
+  unanswered menu, reads it and closes it again, and reads an unanswered one as `""` instead of
+  `"Select..."`. Option lists over 60 entries are cut, with an `options_more` count.
+- **`browser_fill` reads the value back (#4951).** A field that comes back blank or different is now an
+  `Error:` with the actual value. Before, it reported success. A value the page only reformats
+  (phone masks, thousands separators) still passes.
+- **A CSS selector with brackets inside a quoted value is CSS (#4951).** For example,
+  `input[name="cards[x][field0]"][value="Yes"]` used to be treated as a label and fail.
+
+- **An open chat follows a parked turn that is answered elsewhere, without a reload (#5077).**
+  When a `request_decision` turn was answered from its card, from `POST /api/decisions/{id}/answer`,
+  or by expiry, the server resumed the parked task over its own loopback call, so no browser
+  stream carried the rest of the turn. The decision card updated, but the tool row stayed
+  "waiting for you" and the operator's answer and the agent's reply appeared only after a
+  reload. The console now re-attaches to the paused turn when the bus reports `turn.resumed`
+  for it, so the continued turn streams in live, and a stale question form is cleared.
+
+- **Langfuse generations now report prompt-cache reads and writes (#4945).** The fleet generation is fed LangChain `usage_metadata`, which nests cache counts under `input_token_details`, but only the flat telemetry names were read, so every cached prompt showed as fully uncached input. `input` now carries the uncached remainder for that shape, matching `pricing.cost_usd`; flat-name callers such as the ACP coder are unchanged.
+
+- **Two small buttons are easier to tap on phones and tablets (#4985).** "Edit suggestions" under a new chat's starter prompts and the View/Retry button on the standing-instructions strip now have a full-size touch target, like the console's other small controls.
+
+- **A chat no longer spins forever after two scheduled turns overlap (#5061).** When a watch reaction closed a task, the follow-up review was queued into the same chat before the reaction had finished; the console then never settled the reaction's live bubble, and it showed "working" until a reload. Each finished turn is now settled on its own.
+
+- **Scheduled task reconciliation (#5056).** Persist early A2A task handles and recover terminal outcomes through durable task lookups after disconnects or restarts. Settle each occurrence atomically, preserve newer same-ID schedules, and keep missing tasks or unknown deliveries quarantined rather than resending them.
+
+- **Scheduler uncertain-delivery containment (bd-vaa.11) (#5052).** Persist occurrence claims and stable message identities before dispatch, quarantine ambiguous delivery across ticks and restarts, and report delivery uncertainty without fabricating a failed turn. Proven connection refusal remains retryable on POSIX and Windows (including proactor ConnectEx errors), and late settlement preserves newer same-ID schedules. Quarantine survives cron pause/resume, while canceled IDs can be recreated at the same timestamp without inheriting the previous generation’s claim. Cron turns completing after pause/resume still record their outcomes and count toward max_fires.
+
+- **Stream-drop failures name the real cause instead of guessing "rate limit" (#4959).**
+  When a model stream drains after content has already streamed, the turn's error message
+  now reflects why: a `StreamStallTimeout` (the model went silent past
+  `model.request_timeout`) reports that the model stopped sending output and names the
+  timeout window when the exception carries it; any other transport error reports that the
+  connection to the provider dropped mid-reply. Neither mentions rate limiting — a real 429
+  is still classified first and keeps its existing message. The `_fail_turn` warning log
+  likewise drops the "possible rate limit" guess while keeping the exception type and text.
+  The HTTP status (502) and error shape are unchanged.
+
+- **Closing the Work window gives focus back to what opened it (#5075).** A plain Close or Escape on the
+  Work modal or phone sheet used to drop focus to the page; it now returns to the pill, palette
+  entry or button you opened it from. Dock to rail still focuses the docked view.
+- **On the phone, Back keeps the Work list where you left it (#5075).** The sheet's scroll position
+  survives opening an item and coming back, instead of jumping to the top.
+- **Work's Overview rows read in plain words, like their sections (#5075).** Schedules say "Every day at
+  09:00" instead of a raw cron string, watches say "Fires once when met", and tasks show their
+  type and priority.
+
+- **Work section picker (#5059).** Adopt the public SideNav collapsed mode so the compact section menu stays available at every container width without an app-owned width cap, preserving counts, scope, progressive panes, and keyboard focus.
+
+- **Work decision actions and connectivity (#5068).** Connect decision source-chat and reply actions to chat navigation and composer focus, reflect live connectivity, and share answer arbitration and terminal records with the decision store while preserving Work selection and layout.
+- **Work decision reconnect recovery (#5068).** Reload cached pending decisions that leave the pending list while disconnected, so selected Work details show their terminal state without stale answer controls. Work's decision list re-reads once on reconnect, a decision answered or closed elsewhere stays closed in Work even if one re-read fails, and a decision the server no longer has drops out.
+- **Decision card after a failed send (#5068).** A decision answered, expired or withdrawn elsewhere after your answer failed to send now shows as closed, instead of still offering its options and Try again.
+
+- **Compact Work navigation (#5044).** Replace the permanent section column with a compact picker and segmented scope, correct nested count badges, and preserve selection, scroll and focus across progressive panes and wide modal layouts. Keep scope controls touch-sized and update existing Work navigation and rail double-click smoke coverage for the compact picker.
+
+### Removed
+- **Unused phone Decisions header button removed (#4725).** Removes the unmounted phone header composite and its obsolete tests. The hamburger alert dot signals pending work, and swipe up or the hamburger Work item opens the Work sheet. Desktop and tablet Decisions widget coverage is preserved.
+
+- **Retired Work panel removed (#4955).** Remove the old WorkPanel and overview helpers now that WorkView owns all entry points, preserving shared watch lifetime formatting.
+
+### Docs
+- **Decision console integration prerequisites (#4725).** Document the missing shared history, frozen chat-card presentation and design-system phone button needed before mounting the Decisions controls.
+
+- **`docs/design/decision-needed.md` revision 1 stale-reference fixes (#4925).**
+  Corrected the phone Decisions header button to use DS `<Button variant="ghost" size="md" icon>` (not the retired `.mshell-head-btn` class removed in #551); updated the pushed-view spacer class to `mshell-head-spacer`; corrected the centring claim for a variable-width count button; resolved Q23 and Q24 against the actual post-#551 codebase.
+
+- **Work view design spec (#4955).** Added `docs/design/work-view.md`, the approved spec for the console Work view: one surface over decisions, goals, watches, tasks, schedules, background agents, activity and directives, with five Overview lanes, a shared eight-status tone map, and the rail/modal/phone-sheet surface pattern. Documentation only; no code changes.
+
 ## [0.234.0] - 2026-11-09
 
 ### Added
