@@ -899,3 +899,30 @@ async def test_a_waiting_answer_delivers_when_the_first_fails_delivery(store, mo
     assert sorted([first.json()["resumed"], second.json()["resumed"]]) == [False, True]
     assert len(calls) == 2
     assert store.get(rec.id).answer == calls[1]
+
+
+def test_in_memory_store_reads_are_safe_across_threads():
+    """The :memory: store shares one connection across threads (routes read it via
+    asyncio.to_thread). Concurrent unlocked reads raised sqlite3.InterfaceError ("bad parameter
+    or other API misuse") and flaked test_simultaneous_answers_… on CI; reads now take the lock."""
+    import threading
+
+    s = DecisionStore(":memory:", clock=_fixed_clock)
+    rec = s.create("s-threads", "Go?", ["yes", "no"])
+    errors: list[BaseException] = []
+
+    def hammer():
+        try:
+            for _ in range(400):
+                assert s.get(rec.id) is not None
+                s.list(state="pending")
+                s.for_interrupt("t", "i")
+        except BaseException as exc:  # noqa: BLE001 — collected and asserted below
+            errors.append(exc)
+
+    threads = [threading.Thread(target=hammer) for _ in range(6)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert errors == []
