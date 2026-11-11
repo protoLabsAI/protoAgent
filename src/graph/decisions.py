@@ -29,6 +29,7 @@ import json
 import logging
 import secrets
 import sqlite3
+import contextlib
 import threading
 from collections.abc import Callable
 from dataclasses import asdict, dataclass, field
@@ -271,6 +272,13 @@ class DecisionStore:
         db.row_factory = sqlite3.Row
         return db
 
+    def _reading(self):
+        """Guard for a read. The ``:memory:`` store (tests) shares ONE connection across threads,
+        and two reads on it at once raise ``sqlite3.InterfaceError`` — so they take the module
+        lock that the writes already hold. A file-backed store opens a fresh connection per call,
+        so its reads stay lock-free."""
+        return self._lock if self.path == ":memory:" else contextlib.nullcontext()
+
     def _close(self, db: sqlite3.Connection) -> None:
         if db is not self._shared:
             db.close()
@@ -408,23 +416,25 @@ class DecisionStore:
         decision_id = (decision_id or "").strip()
         if not decision_id:
             return None
-        db = self._connect()
-        try:
-            row = db.execute("SELECT * FROM decisions WHERE id = ?", (decision_id,)).fetchone()
-        finally:
-            self._close(db)
+        with self._reading():
+            db = self._connect()
+            try:
+                row = db.execute("SELECT * FROM decisions WHERE id = ?", (decision_id,)).fetchone()
+            finally:
+                self._close(db)
         return Decision.from_row(row) if row is not None else None
 
     def for_interrupt(self, thread_id: str, interrupt_id: str) -> Decision | None:
         """Find the durable handle for one checkpoint interrupt, regardless of state."""
-        db = self._connect()
-        try:
-            row = db.execute(
-                "SELECT * FROM decisions WHERE thread_id = ? AND interrupt_id = ?",
-                (thread_id, interrupt_id),
-            ).fetchone()
-        finally:
-            self._close(db)
+        with self._reading():
+            db = self._connect()
+            try:
+                row = db.execute(
+                    "SELECT * FROM decisions WHERE thread_id = ? AND interrupt_id = ?",
+                    (thread_id, interrupt_id),
+                ).fetchone()
+            finally:
+                self._close(db)
         return Decision.from_row(row) if row is not None else None
 
     def list(self, *, state: str | None = None, session_id: str | None = None, limit: int = 200) -> list[Decision]:
@@ -438,17 +448,18 @@ class DecisionStore:
             where.append("session_id = ?")
             params.append(session_id.strip())
         clause = (" WHERE " + " AND ".join(where)) if where else ""
-        db = self._connect()
-        try:
-            rows = db.execute(
-                f"SELECT * FROM decisions{clause} ORDER BY CASE WHEN state = 'pending' THEN 0 ELSE 1 END, "
-                "CASE WHEN state = 'pending' THEN expires_at IS NULL END, "
-                "CASE WHEN state = 'pending' THEN julianday(expires_at) END, "
-                "CASE WHEN state = 'pending' THEN created_at END, created_at DESC, id DESC LIMIT ?",
-                (*params, max(1, int(limit))),
-            ).fetchall()
-        finally:
-            self._close(db)
+        with self._reading():
+            db = self._connect()
+            try:
+                rows = db.execute(
+                    f"SELECT * FROM decisions{clause} ORDER BY CASE WHEN state = 'pending' THEN 0 ELSE 1 END, "
+                    "CASE WHEN state = 'pending' THEN expires_at IS NULL END, "
+                    "CASE WHEN state = 'pending' THEN julianday(expires_at) END, "
+                    "CASE WHEN state = 'pending' THEN created_at END, created_at DESC, id DESC LIMIT ?",
+                    (*params, max(1, int(limit))),
+                ).fetchall()
+            finally:
+                self._close(db)
         return [Decision.from_row(r) for r in rows]
 
     def answer(self, decision_id: str, answer: str, *, answered_by: str = "operator", answered_surface: str = "chat") -> Decision:
