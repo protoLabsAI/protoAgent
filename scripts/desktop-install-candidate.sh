@@ -122,7 +122,7 @@ echo "Build run: https://github.com/$REPO/actions/runs/$RUN"
 while :; do
   read -r STATUS CONCLUSION < <(gh run view "$RUN" -R "$REPO" --json status,conclusion --jq '"\(.status) \(.conclusion)"')
   [ "$STATUS" = "completed" ] && break
-  echo "  build is $STATUS… (checking again in 60s)"
+  echo "  build is ${STATUS}… (checking again in 60s)"
   sleep 60
 done
 [ "$CONCLUSION" = "success" ] || { echo "Run $RUN finished $CONCLUSION; nothing to install." >&2; exit 1; }
