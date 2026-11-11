@@ -26,9 +26,21 @@
 /* Fixed-height top row for the DS Header (.pl-header is height:100%, so it needs a
    sized wrapper — otherwise it stretches to fill the flex column = full viewport). */
 .app-topbar {
-  flex: 0 0 48px;
-  min-height: 48px;
+  flex: 0 0 var(--app-topbar-h);
+  min-height: var(--app-topbar-h);
   position: relative;
+}
+/* The app's own header row. Shared with .surface-modal below, so an expanded view's dialog
+   always clears it (and, in the macOS app, the traffic lights that float over it). */
+:root { --app-topbar-h: 48px; }
+/* The expanded-view dialog (SurfaceHost frame="modal", size="wide" height="fill") fills the
+   viewport less the DS gutter — which put it over the header and into the macOS traffic
+   lights. Take the header's height off the top: the overlay centres the dialog, so a top
+   margin equal to the height removed lands it just below the header with the usual gutter. */
+.surface-modal.pl-dialog--fill {
+  height: calc(100vh - var(--app-topbar-h) - 2 * var(--pl-space-4));
+  height: calc(100dvh - var(--app-topbar-h) - 2 * var(--pl-space-4));
+  margin-top: var(--app-topbar-h);
 }
 /* The header hamburger, pinned top-right over the DS Header. */
 .app-topbar-menu {

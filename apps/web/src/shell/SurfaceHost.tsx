@@ -189,6 +189,7 @@ export function SurfaceHost({
           size="wide"
           height="fill"
           padding="none"
+          className="surface-modal"
           onClose={() => {
             // A plain Close (not Dock) — flag it so the rail host stays silent and doesn't pull
             // focus into the rail view on this transition; focus returns to the opener instead.
