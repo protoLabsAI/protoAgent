@@ -15,6 +15,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.236.0] - 2026-11-11
+
+### Added
+- **Workflow review context (#327).** Workflow results and persisted run records now include versioned per-step construction provenance alongside native tool receipts, distinguishing fresh conversations, resumed workflow segments, seeded evidence, and unknown context.
+
+- **Whole-store memory selection (#4898).** Add an opt-in small-model selector for weak retrieval matches in stores of up to 500 live memories, preserving private-over-shared precedence, delivery budgets, and top-k fallback. Settings exposes the selection controls, and injection logs record selection mode, candidate count, and delivered picks. The feature remains off by default; live threshold calibration is pending.
+
+- **Native tool receipt capture (#5081).** Add an SDK-scoped, bounded and redacted collector for actual synchronous and asynchronous tool executions, preserving subagent text returns and existing telemetry. Capture runs inside policy and retry middleware so denials produce no receipts and retries retain each physical execution. Native ToolMessage status determines success or failure, including successful output beginning with "Error".
+
+- **Native workflow review receipts (#5081).** Expose and persist bounded, redacted per-step tool evidence for fresh and resumed runs, with explicit capture status, execution provenance, and a compatible `tool_calls` map while preserving text outputs.
+
+- **Native workflow context isolation probes (#327).** Exercise the real SDK and child agent with a model-boundary fake to verify parent history exclusion, explicit review inputs, configured repository guidance, and effective tool restrictions against review-context records.
+
+### Changed
+- **Work list and inspector (#5087).** Work opens with a compact grouped list, counted headings and inline empty states. Wide windows show details only after selection; Escape returns to the list before closing the window. Phone details use larger actions.
+
 ## [0.235.1] - 2026-11-11
 
 ### Changed

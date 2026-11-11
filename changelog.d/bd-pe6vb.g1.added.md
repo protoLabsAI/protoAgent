@@ -1,1 +1,0 @@
-- **Native workflow context isolation probes (#327).** Exercise the real SDK and child agent with a model-boundary fake to verify parent history exclusion, explicit review inputs, configured repository guidance, and effective tool restrictions against review-context records.

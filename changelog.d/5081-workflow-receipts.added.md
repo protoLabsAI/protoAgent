@@ -1,1 +1,0 @@
-- **Native workflow review receipts (#5081).** Expose and persist bounded, redacted per-step tool evidence for fresh and resumed runs, with explicit capture status, execution provenance, and a compatible `tool_calls` map while preserving text outputs.

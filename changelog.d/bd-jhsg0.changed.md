@@ -1,1 +1,0 @@
-- **Work list and inspector.** Work opens with a compact grouped list, counted headings and inline empty states. Wide windows show details only after selection; Escape returns to the list before closing the window. Phone details use larger actions.
