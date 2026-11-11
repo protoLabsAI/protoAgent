@@ -25,7 +25,7 @@ moved to ``EmptyAtCapMiddleware`` (ADR 0128 S3, #4875) so it covers EVERY subage
 only those that declare a deliverable. EmptyAtCap is registered BEFORE this guard, so its
 ``after_model`` runs AFTER this one (LangChain runs after_model in reverse registration
 order); the shared ``CompletionRecovery`` gives it the first failed turn, then
-returns ownership to this guard after salvage. Complete declared deliverables are
+returns ownership to this guard when salvage produces a non-empty turn. Complete declared deliverables are
 never retried just because they are short or capped. The shared helpers the retry needs — ``reasoning_only``,
 ``without_reasoning``, ``thinking_off_settings`` and the #4108 / #2642 lessons — stay
 here and EmptyAtCap imports them.
@@ -338,8 +338,17 @@ class CompletionGuardMiddleware(AgentMiddleware):
             return None
         sent = nudges_sent(messages)
         if self._recovery.should_salvage(messages):
-            # Only the first failed turn belongs to EmptyAtCap. A failed salvage
-            # resumes this guard's unchanged nudge/closing-line budget.
+            # Only the first failed turn belongs to EmptyAtCap.
+            return None
+        if self._recovery.reason(last) is not None:
+            # #3584: the second nudge never recovered one (0 of 5) and cost ~2 minutes each.
+            # Salvage already tried thinking off; another ordinary nudge would replay
+            # its failed reasoning with thinking back on (#4108). Only a non-empty
+            # salvage result may resume the contract/closing-line budget below.
+            log.warning(
+                "[completion-guard] salvage exhausted; letting the run end (%s)",
+                describe_turn(last),
+            )
             return None
         if sent >= self._max_nudges:
             # What the record cannot say otherwise (#3582): a lane that ends on "Let me verify

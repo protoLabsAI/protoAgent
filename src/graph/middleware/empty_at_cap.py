@@ -28,7 +28,8 @@ S0's measurement shows how often it salvaged a reply — ``reason`` is ``length`
 Ordering (the #4875 memo): this middleware is registered BEFORE the completion guard, so
 the guard's ``after_model`` runs FIRST (LangChain runs after_model in reverse registration
 order) and defers only turns eligible for salvage here. Both use the same declared
-contract predicate and note history; failed salvage resumes bounded contract recovery.
+contract predicate and note history; non-empty salvage resumes bounded contract recovery,
+while a still-empty salvage ends the lane.
 """
 
 from __future__ import annotations
