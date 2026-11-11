@@ -178,7 +178,8 @@ reads are ordinary queries.
   compaction requires a future proof that no producer can save those ids again.
 - Recovery reaches only as far back as the A2A task store's current 24-hour
   terminal-task retention. The task store already persists every turn; changing
-  that TTL is therefore also a user-visible history-depth decision.
+  that TTL is therefore also a user-visible history-depth decision. *(Decided — see the
+  2026-11-11 amendment: console chats are kept until deleted.)*
 
 ## Rejected alternatives
 
@@ -190,3 +191,19 @@ reads are ordinary queries.
 - **Replaying via the events bus** — `chat.progress` is origin-gated and
   unretained by design (double-render prevention); the bus is a live channel,
   not a history store.
+
+## Amendment — 2026-11-11: console chat history is kept until the chat is deleted
+
+The history-depth decision this ADR left open is made (Josh). With the 24-hour sweep, a chat
+older than a day existed only in the console caches of the devices that had seen it, so the
+phone and the desktop app showed different histories.
+
+- `sweep_expired_tasks` no longer deletes a console chat's rows (`context_id` starting
+  `chat-`) on the TTL. They stay until the operator deletes the chat: a tombstoned chat's
+  rows leave on the normal TTL, as before.
+- Every other context — delegations, API calls, Activity, palette — keeps the 24-hour TTL,
+  and paused (form/approval) rows are still never swept.
+- Store growth now follows chat volume. `prune_superseded_progress` already keeps each stored
+  turn compact; a cap or archive can follow if a store grows large.
+- Chats swept before this change are gone from the server; each device keeps its own cached
+  copy of them, as before.

@@ -568,13 +568,35 @@ def build_push_sender(
     return ValidatingPushNotificationSender(httpx_client, push_config_store)
 
 
+#: Console chat tabs use this ``context_id`` prefix (``operator_api.chat_routes`` indexes them
+#: by it too). Their turns are the operator's chat history, which every device rebuilds from.
+_CONSOLE_CHAT_PREFIX = "chat-"
+
+
 async def sweep_expired_tasks(engine: AsyncEngine, *, ttl_s: int = _DEFAULT_TTL_S, now: datetime | None = None) -> int:
     """Delete task rows older than ``ttl_s`` (24h default), keyed on the SDK's
     ``last_updated`` column. The SDK DB store has no TTL knob, so this restores
-    the bespoke store's 24h eviction. Returns the number of rows deleted."""
+    the bespoke store's 24h eviction. Returns the number of rows deleted.
+
+    Console chat history is kept until the chat is deleted (Josh, 2026-11-11). Every device
+    rebuilds a chat from these rows (ADR 0104), so sweeping them after 24h left the phone and
+    the desktop each with only what it had cached locally. A ``chat-`` row is swept only once
+    its chat has a tombstone (the operator deleted it); every other context — delegations,
+    API calls, Activity — keeps the 24h TTL."""
     now = now or datetime.now(UTC)
     cutoff = now - timedelta(seconds=ttl_s)
+    from sqlalchemy import Column, MetaData, String, Table, exists, inspect, not_
     from sqlalchemy.ext.asyncio import async_sessionmaker
+
+    async with engine.connect() as conn:
+        has_tombstones = await conn.run_sync(lambda c: inspect(c).has_table(CHAT_TOMBSTONE_TABLE))
+    is_chat = TaskModel.context_id.like(f"{_CONSOLE_CHAT_PREFIX}%")
+    if has_tombstones:
+        # Only the key column is read; operator_api.chat_routes owns the full schema.
+        tombstones = Table(CHAT_TOMBSTONE_TABLE, MetaData(), Column("context_id", String(255)))
+        kept_chat = is_chat & ~exists().where(tombstones.c.context_id == TaskModel.context_id)
+    else:
+        kept_chat = is_chat  # no chat was ever deleted on this instance
 
     session_maker = async_sessionmaker(engine, expire_on_commit=False)
     async with session_maker() as session:
@@ -586,6 +608,7 @@ async def sweep_expired_tasks(engine: AsyncEngine, *, ttl_s: int = _DEFAULT_TTL_
             delete(TaskModel)
             .where(TaskModel.last_updated < cutoff)
             .where(or_(state.is_(None), state.notin_(_PRESERVED_STATES)))
+            .where(not_(kept_chat))
         )
         await session.commit()
         return result.rowcount or 0

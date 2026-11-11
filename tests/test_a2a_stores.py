@@ -146,6 +146,55 @@ async def test_task_ttl_sweep_evicts_old_rows(tmp_path):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("deleted_chats", [[], ["chat-gone"]], ids=["no-tombstone-table", "with-tombstones"])
+async def test_task_ttl_sweep_keeps_console_chats_until_deleted(tmp_path, deleted_chats):
+    """Console chat history stays on the server until the chat is deleted (Josh 2026-11-11):
+    phone and desktop rebuild a chat from these rows, so a 24h sweep made them diverge for
+    anything older than a day. A deleted (tombstoned) chat's rows still leave on the TTL, and
+    every non-chat context (delegations, API, Activity) keeps the 24h sweep."""
+    from datetime import UTC, datetime, timedelta
+
+    from a2a.server.models import TaskModel
+    from a2a.types import a2a_pb2
+    from sqlalchemy import Column, DateTime, MetaData, String, Table, insert, update
+    from sqlalchemy.ext.asyncio import async_sessionmaker
+
+    ctx = _ctx()
+    engine = make_sqlite_engine(str(tmp_path / "a2a-tasks.db"))
+    store = DatabaseTaskStore(engine)
+    await store.initialize()
+    rows = {"old-chat": "chat-kept", "old-gone": "chat-gone", "old-api": "api-ctx", "fresh-chat": "chat-new"}
+    for task_id, context in rows.items():
+        await store.save(a2a_pb2.Task(id=task_id, context_id=context), ctx)
+    old = datetime.now(UTC) - timedelta(days=30)
+    sm = async_sessionmaker(engine, expire_on_commit=False)
+    async with sm() as session:
+        await session.execute(update(TaskModel).where(TaskModel.id != "fresh-chat").values(last_updated=old))
+        await session.commit()
+    if deleted_chats:
+        tomb = Table(
+            "chat_session_tombstones", MetaData(),
+            Column("context_id", String(255), primary_key=True), Column("deleted_at", DateTime, nullable=False),
+        )
+        async with engine.begin() as conn:
+            await conn.run_sync(tomb.metadata.create_all)
+            for cid in deleted_chats:
+                await conn.execute(insert(tomb).values(context_id=cid, deleted_at=datetime.now(UTC)))
+
+    await sweep_expired_tasks(engine)
+
+    assert await store.get("old-chat", ctx) is not None  # a month-old console chat survives
+    assert await store.get("fresh-chat", ctx) is not None
+    assert await store.get("old-api", ctx) is None  # non-chat contexts keep the 24h TTL
+    gone = await store.get("old-gone", ctx)
+    if deleted_chats:
+        assert gone is None  # a deleted chat's rows still leave on the TTL
+    else:
+        assert gone is not None  # no tombstone table: nothing was deleted, so it is a live chat
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
 async def test_task_ttl_sweep_preserves_hitl_pauses(tmp_path):
     """A resumable input_required/auth_required pause must NOT be TTL-swept even
     when stale — its LangGraph checkpoint can still resume (a non-HITL stale task
