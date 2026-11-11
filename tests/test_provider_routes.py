@@ -275,6 +275,44 @@ def test_delete_sees_a_reference_from_favorites(client, monkeypatch):
     assert client.delete("/api/config/providers/local-vllm").status_code == 409
 
 
+def test_memory_selector_reference_is_listed_and_blocks_provider_deletion(client, monkeypatch):
+    _install(monkeypatch, **BASE, memory={"select_model": "local-vllm:selector"})
+    providers = client.get("/api/config/providers").json()["providers"]
+    local = next(p for p in providers if p["id"] == "local-vllm")
+    assert local["in_use_by"] == ["memory.select_model=local-vllm:selector"]
+    assert local["in_use"] == [{
+        "key": "memory.select_model", "value": "local-vllm:selector",
+        "kind": "slot", "clearable": True,
+    }]
+    response = client.delete("/api/config/providers/local-vllm")
+    assert response.status_code == 409
+    assert "memory.select_model=local-vllm:selector" in response.json()["detail"]
+    assert client.written["entries"] is None
+
+
+@pytest.mark.parametrize("target", [None, "prod-gateway:selector"])
+@pytest.mark.parametrize("live_apply", [False, True])
+def test_delete_releases_memory_selector_with_provider(client, monkeypatch, target, live_apply):
+    _install(monkeypatch, **BASE, memory={"select_model": "local-vllm:selector"})
+    seen = _apply_spy(monkeypatch, {}) if live_apply else {}
+    response = client.request(
+        "DELETE", "/api/config/providers/local-vllm",
+        json={"releases": {"memory.select_model": target}},
+    )
+    assert response.status_code == 200
+    assert response.json()["released"] == ["memory.select_model"]
+    if live_apply:
+        assert seen["calls"] == 1
+        updates = seen["updates"]
+        entries = updates["providers"]
+        assert client.written["entries"] is None
+    else:
+        updates = client.written["extra"]
+        entries = client.written["entries"]
+    assert updates["memory"]["select_model"] == (target or "")
+    assert [p["id"] for p in entries] == ["prod-gateway"]
+
+
 # ── structured references + the `releases` DELETE body (bd-neiz) ────────────────
 #
 # The bare/no-body DELETE keeps refusing an in-use connection (above); these cover the
