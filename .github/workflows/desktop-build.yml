@@ -66,16 +66,12 @@ jobs:
     # Fork-friendly (#1534): a fork can dispatch its own (unsigned) build; the repo
     # clause keeps forks from auto-building should a tag trigger ever return.
     if: github.repository == 'protoLabsAI/protoAgent' || github.event_name == 'workflow_dispatch'
-    # Per-leg runner, overridable by repo variable so the expensive macOS/Windows
-    # legs can move off GitHub-hosted runners (10×/2× billing multipliers) onto
-    # Namespace profiles WITHOUT editing this file — the moment the org provisions
-    # `namespace-profile-protolabs-{macos,windows}`, set DESKTOP_{MACOS,WINDOWS}_RUNNER
-    # and the next release builds there. Defaults preserve today's hosted runners
-    # exactly (no behaviour change until a var is set). Same fork-friendly pattern as
-    # RELEASE_ENABLED / NSC_CONTAINER_REGISTRY. NB the Linux leg's default stays
-    # ubuntu-22.04 ON PURPOSE — it links the PyInstaller sidecar against the oldest
-    # glibc for broadest AppImage reach; only point DESKTOP_LINUX_RUNNER at a
-    # Namespace profile whose base image is glibc ≤ 2.35 (Ubuntu 22.04).
+    # Per-leg runner. Every leg runs on a GitHub-hosted runner; a repo variable
+    # (DESKTOP_{MACOS,WINDOWS,LINUX}_RUNNER) can point a leg at a different hosted
+    # label (e.g. a larger runner) without editing this file. NB the Linux leg's
+    # default stays ubuntu-22.04 ON PURPOSE — it links the PyInstaller sidecar
+    # against the oldest glibc for broadest AppImage reach; only point
+    # DESKTOP_LINUX_RUNNER at an image whose glibc is ≤ 2.35 (Ubuntu 22.04).
     runs-on: >-
       ${{ matrix.target == 'aarch64-apple-darwin' && (vars.DESKTOP_MACOS_RUNNER || 'macos-15')
       || matrix.target == 'x86_64-pc-windows-msvc' && (vars.DESKTOP_WINDOWS_RUNNER || 'windows-latest')

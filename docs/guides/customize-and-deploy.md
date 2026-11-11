@@ -87,17 +87,18 @@ free to adopt or diverge from this standard. To enforce it in your own fork anyw
 run the check locally (below) or drop the `startsWith(github.repository, 'protoLabsAI/')`
 guard on that step. The rules that bite most often:
 
-- **Owned runners.** Every workflow `runs-on:` must be
-  `namespace-profile-protolabs-linux`, never a GitHub-hosted label
-  (`ubuntu-*`, `macos-*`, `windows-*`). Hosted runners burn metered minutes
-  and may be disabled org-wide. Legit exceptions (cross-platform binaries,
-  npm provenance) get an inline `# workspace-config: allow-hosted-runner <reason>`.
+- **GitHub-hosted runners.** Every workflow runs on a GitHub-hosted label
+  (`ubuntu-latest`, `ubuntu-22.04`, `macos-*`, `windows-*`); the org no longer
+  uses self-managed or third-party runners. The pinned `verify-workspace-config`
+  still flags hosted labels, so each `runs-on:` carries an inline
+  `# workspace-config: allow-hosted-runner <reason>` annotation — keep it when
+  you add or copy a workflow.
 - **`.beads/issues.jsonl` committed**, `.beads/beads.db` gitignored.
 - **`.automaker/settings.json` committed**; transient `.automaker/` dirs
   (`features/`, `checkpoints/`, `trajectory/`) gitignored.
 
 A fresh template clone already conforms. If you add or copy a workflow,
-keep it on the owned runner. To check (and scaffold) at any time:
+keep its `runs-on:` annotation. To check (and scaffold) at any time:
 
 ```bash
 npx --yes -p @protolabsai/release-tools verify-workspace-config
