@@ -27,7 +27,8 @@ S0's measurement shows how often it salvaged a reply — ``reason`` is ``length`
 
 Ordering (the #4875 memo): this middleware is registered BEFORE the completion guard, so
 the guard's ``after_model`` runs FIRST (LangChain runs after_model in reverse registration
-order) and DEFERS empty-at-cap turns here. The two therefore never both retry one turn.
+order) and defers only turns eligible for salvage here. Both use the same declared
+contract predicate and note history; failed salvage resumes bounded contract recovery.
 """
 
 from __future__ import annotations
@@ -37,8 +38,8 @@ import logging
 from langchain.agents.middleware import AgentMiddleware, hook_config
 
 from graph.middleware.completion_guard import (
+    CompletionRecovery,
     describe_turn,
-    empty_at_cap_reason,
     thinking_off_settings,
     without_reasoning,
 )
@@ -60,30 +61,17 @@ class EmptyAtCapMiddleware(AgentMiddleware):
     """Retry ONCE, thinking off, a turn that ended the loop with no tool call and almost no
     text because it hit the output cap or spent itself thinking (ADR 0128 S3)."""
 
-    def __init__(self):
+    def __init__(self, *, recovery: CompletionRecovery | None = None):
         super().__init__()
         # Latest call's model name, captured in wrap_model_call for the metric label.
         self._model = ""
+        self._recovery = recovery or CompletionRecovery()
 
     def _intervene(self, state) -> dict | None:
         messages = state.get("messages") or []
         last = messages[-1] if messages else None
-        previous = messages[-2] if len(messages) >= 2 else None
-        # The turn right after our own note is the retry's RESULT: count whether it
-        # recovered, and never retry a second time (one retry per turn).
-        if is_guard_note(previous, EMPTY_GUARD):
-            reason = (getattr(previous, "additional_kwargs", None) or {}).get(_REASON_KWARG) or "unknown"
-            recovered = empty_at_cap_reason(last) is None
-            self._record(reason, recovered)
-            if not recovered:
-                log.warning(
-                    "[empty-at-cap] retry still empty-at-cap (%s); letting the run end (%s)",
-                    reason,
-                    describe_turn(last),
-                )
-            return None
-        reason = empty_at_cap_reason(last)
-        if reason is None:
+        reason = self._recovery.reason(last)
+        if not self._recovery.should_salvage(messages):
             return None
         cause = "ran out of output budget" if reason == "length" else "spent itself thinking"
         note = (
@@ -124,11 +112,29 @@ class EmptyAtCapMiddleware(AgentMiddleware):
         settings = thinking_off_settings(request.model, request.model_settings)
         return request if settings is None else request.override(model_settings=settings)
 
+    def _record_result(self, request, response):
+        # Record at the model boundary: a completion-guard jump skips later
+        # after_model hooks, including ours, when salvage still owes a contract.
+        messages = request.messages or []
+        if messages and is_guard_note(messages[-1], EMPTY_GUARD):
+            reason = messages[-1].additional_kwargs.get(_REASON_KWARG) or "unknown"
+            last = response.result[-1] if response.result else None
+            recovered = self._recovery.recovered(last)
+            self._record(reason, recovered)
+            if recovered:
+                log.info("[empty-at-cap] retry recovered (%s)", reason)
+            else:
+                log.warning(
+                    "[empty-at-cap] retry unsuccessful (%s); salvage exhausted (%s)",
+                    reason, describe_turn(last),
+                )
+        return response
+
     def wrap_model_call(self, request, handler):  # type: ignore[override]
-        return handler(self._prepare(request))
+        return self._record_result(request, handler(self._prepare(request)))
 
     async def awrap_model_call(self, request, handler):  # type: ignore[override]
-        return await handler(self._prepare(request))
+        return self._record_result(request, await handler(self._prepare(request)))
 
     @hook_config(can_jump_to=["model"])
     def after_model(self, state, runtime):  # type: ignore[override]

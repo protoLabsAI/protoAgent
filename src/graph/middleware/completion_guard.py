@@ -24,8 +24,9 @@ retry: drop the failed turn's reasoning and make ONE call with thinking off. Tha
 moved to ``EmptyAtCapMiddleware`` (ADR 0128 S3, #4875) so it covers EVERY subagent, not
 only those that declare a deliverable. EmptyAtCap is registered BEFORE this guard, so its
 ``after_model`` runs AFTER this one (LangChain runs after_model in reverse registration
-order); this guard DEFERS empty-at-cap turns to it (``empty_at_cap_reason``), so the two
-never both retry one turn. The shared helpers the retry needs — ``reasoning_only``,
+order); the shared ``CompletionRecovery`` gives it the first failed turn, then
+returns ownership to this guard after salvage. Complete declared deliverables are
+never retried just because they are short or capped. The shared helpers the retry needs — ``reasoning_only``,
 ``without_reasoning``, ``thinking_off_settings`` and the #4108 / #2642 lessons — stay
 here and EmptyAtCap imports them.
 """
@@ -147,6 +148,43 @@ def empty_at_cap_reason(message) -> str | None:
     return None
 
 
+class CompletionRecovery:
+    """Shared salvage ownership, derived from the run's durable guard notes.
+
+    A tool round or a new user turn starts a new failed-turn episode. Contract nudges do not re-arm
+    salvage within an episode; closing-marker repair belongs to the guard.
+    """
+
+    def __init__(self, delivered: Callable[[str], bool] | None = None):
+        self.delivered = delivered
+
+    def reason(self, message) -> str | None:
+        if self.delivered is not None and self.delivered(_text(message)):
+            return None
+        return empty_at_cap_reason(message)
+
+    def recovered(self, message) -> bool:
+        if not isinstance(message, AIMessage):
+            return False
+        if message.tool_calls:
+            return True
+        if self.delivered is not None:
+            return self.delivered(_text(message))
+        return bool(_text(message).strip()) and self.reason(message) is None
+
+    def should_salvage(self, messages) -> bool:
+        if not messages or self.reason(messages[-1]) is None:
+            return False
+        for message in reversed(messages[:-1]):
+            if isinstance(message, AIMessage) and message.tool_calls:
+                break
+            if isinstance(message, HumanMessage) and not is_guard_note(message):
+                break
+            if is_guard_note(message, "empty-at-cap"):
+                return False
+        return True
+
+
 def without_reasoning(message: AIMessage) -> AIMessage:
     """The same turn (same id, so the state reducer REPLACES it) minus its reasoning.
 
@@ -220,9 +258,11 @@ class CompletionGuardMiddleware(AgentMiddleware):
         prompt_markers: tuple[str, ...] = (),
         max_turns: int = 0,
         context_window: int | None = None,
+        recovery: CompletionRecovery | None = None,
     ):
         super().__init__()
-        self._delivered = delivered
+        self._recovery = recovery or CompletionRecovery(delivered)
+        self._delivered = self._recovery.delivered
         self._contract = contract or "the deliverable your instructions require"
         self._max_nudges = max(0, int(max_nudges))
         self._prompt_markers = tuple(prompt_markers or ())
@@ -297,13 +337,9 @@ class CompletionGuardMiddleware(AgentMiddleware):
         if has_deliverable and not owed:
             return None
         sent = nudges_sent(messages)
-        if not has_deliverable and empty_at_cap_reason(last) is not None:
-            # A capped / reasoning-only turn is EmptyAtCapMiddleware's to retry (ADR 0128
-            # S3): it owns the one thinking-off retry, for EVERY subagent, not only those
-            # that declare a deliverable. It is registered before this guard, so its
-            # after_model runs AFTER ours — deferring here is what keeps the two from both
-            # retrying one turn. The guard still nudges a plain stall (a narration, or an
-            # empty turn the provider did NOT cap) exactly as before.
+        if self._recovery.should_salvage(messages):
+            # Only the first failed turn belongs to EmptyAtCap. A failed salvage
+            # resumes this guard's unchanged nudge/closing-line budget.
             return None
         if sent >= self._max_nudges:
             # What the record cannot say otherwise (#3582): a lane that ends on "Let me verify

@@ -300,3 +300,33 @@ def test_recovered_count_from_log_when_rows_lack_flag():
     # Two retries, one give-up -> one recovered.
     assert report["empty"]["log_recovery"] == {"retries": 2, "gave_up": 1, "recovered": 1}
     assert report["empty"]["recovered"] == 1
+
+
+def test_current_log_counts_explicit_success_failure_and_pending():
+    log = "\n".join([
+        "[empty-at-cap] empty turn (length); retrying once with thinking off (finish_reason=length)",
+        "[empty-at-cap] retry recovered (length)",
+        "[empty-at-cap] empty turn (reasoning_only); retrying once with thinking off (finish_reason=stop)",
+        "[empty-at-cap] retry unsuccessful (reasoning_only); salvage exhausted (finish_reason=stop)",
+        "[completion-guard] still no deliverable after 2 nudge(s); letting the run end",
+        "[empty-at-cap] empty turn (length); retrying once with thinking off (finish_reason=length)",
+    ])
+    report = measure.analyze([], log_text=log)
+    assert report["empty"]["log_recovery"] == {"retries": 3, "gave_up": 1, "recovered": 1}
+    assert report["empty"]["retried"] == 3
+    assert report["empty"]["recovered"] == 1
+
+
+def test_previous_empty_at_cap_failure_wording_is_supported():
+    log = ("[empty-at-cap] empty turn (length); retrying once with thinking off\n"
+           "[empty-at-cap] retry still empty-at-cap (length); letting the run end\n")
+    assert measure.scan_log_recovery(log) == {"retries": 1, "gave_up": 1, "recovered": 0}
+
+
+@pytest.mark.parametrize("source", ["ledger", "langfuse"])
+def test_explicit_failed_recovery_rows_take_precedence_over_logs(source):
+    row = {"text_chars": 0, "has_tool_calls": False, "retried": True, "recovered": False}
+    calls, _ = measure.load_calls(_jsonl([row if source == "ledger" else {"metadata": row}]), source)
+    report = measure.analyze(calls, log_text="[empty-at-cap] retry recovered (length)")
+    assert report["empty"]["recovered"] == 0
+    assert report["empty"]["retried"] == 1

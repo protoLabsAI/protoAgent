@@ -1,0 +1,1 @@
+- **Deliverable-aware subagent recovery (#5011).** Preserve complete short capped answers, resume bounded contract recovery after one failed thinking-off salvage, and measure current empty-at-cap outcomes while retaining historical log support.
