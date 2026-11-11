@@ -7,7 +7,7 @@
 
 import { useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { Empty } from "@protolabsai/ui/primitives";
+import { WorkEmpty as Empty } from "../WorkEmpty";
 import { Alert } from "@protolabsai/ui/data";
 import { Button } from "@protolabsai/ui/primitives";
 import { useToast } from "@protolabsai/ui/overlays";
@@ -250,16 +250,19 @@ function WatchesList({ ctx }: { ctx: WorkSectionContext }) {
   }
   return (
     <>
-      {source.items.map((item) => (
-        <WorkRow
-          key={item.id}
-          status={item.status}
-          title={item.title}
-          meta={watchKind(item.raw as WatchState)}
-          focusKey={`${item.kind}:${item.id}`}
-          onOpen={() => ctx.onOpen(item)}
-        />
-      ))}
+      <ul className="work-group">
+        {source.items.map((item) => (
+          <li key={item.id}>
+            <WorkRow
+              status={item.status}
+              title={item.title}
+              meta={watchKind(item.raw as WatchState)}
+              focusKey={`${item.kind}:${item.id}`}
+              onOpen={() => ctx.onOpen(item)}
+            />
+          </li>
+        ))}
+      </ul>
     </>
   );
 }

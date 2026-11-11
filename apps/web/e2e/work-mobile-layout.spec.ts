@@ -81,8 +81,8 @@ for (const theme of ["light", "dark"] as const) {
         const picker = slot.getByRole("button", { name: /Work sections/ });
         const menu = page.getByRole("menu", { name: "Work sections" });
         await work.evaluate((el, value) => { el.style.width = `${value}px`; }, width);
-        await expect(slot).toHaveCSS("max-width", "none");
-        if (width >= 768) expect((await slot.boundingBox())!.width).toBeGreaterThan(240);
+        await expect(slot).toHaveCSS("max-width", "100%");
+        expect((await slot.boundingBox())!.width).toBeLessThan(width);
         await expect(picker).toBeVisible();
         await expect(work.getByRole("tablist", { name: "Work sections" })).toHaveCount(0);
         await expect.poll(() => work.evaluate(el => el.scrollWidth <= el.clientWidth)).toBe(true);
@@ -125,6 +125,9 @@ for (const theme of ["light", "dark"] as const) {
         await page.screenshot({ path: listScreenshot });
         await info.attach("Phone list", { path: listScreenshot, contentType: "image/png" });
         await openRow(work);
+        await expect(work).toHaveAttribute("data-frame", "sheet");
+        await expect(work.locator(".work-detail__actions button.pl-btn--sm")).toHaveCount(0);
+        await expect(work.getByRole("button", { name: "Back to Tasks" })).not.toHaveClass(/pl-btn--sm/);
         await expect(work.locator(".work-view__list")).toBeHidden();
         await expect(work.locator(".work-view__picker")).toBeHidden();
         const screenshot = info.outputPath(`phone-${width}-${theme}.png`);

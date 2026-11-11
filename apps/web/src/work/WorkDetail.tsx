@@ -3,6 +3,7 @@ import { Badge, Button, Callout } from "@protolabsai/ui/primitives";
 import { Accordion, AccordionItem } from "@protolabsai/ui/navigation";
 import { Alert, StatusDot } from "@protolabsai/ui/data";
 import { useToast } from "@protolabsai/ui/overlays";
+import { useWorkActionSize } from "../shell/SurfaceFrame";
 import { copyText } from "../lib/clipboard";
 import { statusTone, statusWord, type WorkStatus } from "./tone";
 import "./work-detail.css";
@@ -58,6 +59,7 @@ export function WorkDetail({
   onRefresh,
   changedNotice,
 }: WorkDetailProps) {
+  const size = useWorkActionSize();
   const toast = useToast();
   const [confirming, setConfirming] = useState<WorkAction | null>(null);
   const [busy, setBusy] = useState(false);
@@ -85,7 +87,7 @@ export function WorkDetail({
   function showUndoToast(token: string) {
     if (onUndo) {
       // duration 0 hands the lifetime to UndoToast, which runs a pausable 8 s timer (§4.5, §6).
-      toast({ tone: "neutral", duration: 0, message: <UndoToast type={type} token={token} onUndo={onUndo} /> });
+      toast({ tone: "neutral", duration: 0, message: <UndoToast type={type} token={token} onUndo={onUndo} size={size} /> });
     } else {
       toast({ tone: "neutral", message: `${type} deleted.` });
     }
@@ -140,7 +142,7 @@ export function WorkDetail({
       {changedNotice && (
         <Callout tone="info">
           {changedNotice}{" "}
-          <Button variant="ghost" size="sm" onClick={() => onRefresh?.()}>
+          <Button variant="ghost" size={size} onClick={() => onRefresh?.()}>
             Refresh
           </Button>
         </Callout>
@@ -176,30 +178,33 @@ export function WorkDetail({
           {error && (
             <Alert status="warning">
               Couldn&apos;t {error.verb} it. Nothing changed.{" "}
-              <Button variant="ghost" size="sm" disabled={busy} onClick={error.retry}>
+              <Button variant="ghost" size={size} disabled={busy} onClick={error.retry}>
                 Try again
               </Button>
             </Alert>
           )}
           <div className="work-detail__confirm-actions">
-            <Button variant="danger" size="sm" loading={busy} onClick={() => void execute(confirming)}>
+            {size === "md" && <Button size={size} disabled={busy} onClick={cancelConfirm}>
+              {confirming.confirm!.keepLabel}
+            </Button>}
+            <Button variant="danger" size={size} loading={busy} onClick={() => void execute(confirming)}>
               {confirming.confirm!.confirmLabel}
             </Button>
-            <Button size="sm" disabled={busy} onClick={cancelConfirm}>
+            {size !== "md" && <Button size={size} disabled={busy} onClick={cancelConfirm}>
               {confirming.confirm!.keepLabel}
-            </Button>
+            </Button>}
           </div>
         </div>
       ) : (
         actions.length > 0 && (
           <>
             <div className="work-detail__actions" ref={actionsRef}>
-              {actions.map((action) => (
+              {(size === "md" ? [...actions].sort((a, b) => Number(!!a.destructive) - Number(!!b.destructive)) : actions).map((action) => (
                 <Button
                   key={action.id}
                   data-action-trigger={action.id}
                   variant={action.destructive ? "danger" : "default"}
-                  size="sm"
+                  size={size}
                   disabled={busy}
                   onClick={() => onTrigger(action)}
                 >
@@ -210,7 +215,7 @@ export function WorkDetail({
             {error && (
               <Alert status="warning">
                 Couldn&apos;t {error.verb} it. Nothing changed.{" "}
-                <Button variant="ghost" size="sm" disabled={busy} onClick={error.retry}>
+                <Button variant="ghost" size={size} disabled={busy} onClick={error.retry}>
                   Try again
                 </Button>
               </Alert>
@@ -239,6 +244,7 @@ export function WorkDetail({
 }
 
 function CopyButton({ label, value }: { label: string; value: string }) {
+  const size = useWorkActionSize();
   const [copied, setCopied] = useState(false);
   const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   useEffect(() => () => clearTimeout(timer.current), []);
@@ -249,7 +255,7 @@ function CopyButton({ label, value }: { label: string; value: string }) {
     timer.current = setTimeout(() => setCopied(false), 1500);
   }
   return (
-    <Button variant="ghost" size="sm" aria-label={`Copy ${label}`} onClick={() => void copy()}>
+    <Button variant="ghost" size={size} aria-label={`Copy ${label}`} onClick={() => void copy()}>
       {copied ? "Copied" : "Copy"}
     </Button>
   );
@@ -258,7 +264,7 @@ function CopyButton({ label, value }: { label: string; value: string }) {
 /** The §4.5 undo toast: "{Type} deleted." + Undo, up to 8 s, pausing on hover or focus. It owns
  *  its own timer (the toast is pushed with `duration: 0`) and clears itself through the DS toast's
  *  public Dismiss affordance (role="status" + aria-label="Dismiss"). */
-function UndoToast({ type, token, onUndo }: { type: string; token: string; onUndo: (token: string) => Promise<void> }) {
+function UndoToast({ type, token, onUndo, size }: { type: string; token: string; onUndo: (token: string) => Promise<void>; size: "sm" | "md" }) {
   const toast = useToast();
   const ref = useRef<HTMLSpanElement>(null);
   const [busy, setBusy] = useState(false);
@@ -309,7 +315,7 @@ function UndoToast({ type, token, onUndo }: { type: string; token: string; onUnd
       onBlurCapture={start}
     >
       {type} deleted.{" "}
-      <Button variant="ghost" size="sm" disabled={busy} onClick={() => void undo()}>
+      <Button variant="ghost" size={size} disabled={busy} onClick={() => void undo()}>
         Undo
       </Button>
     </span>

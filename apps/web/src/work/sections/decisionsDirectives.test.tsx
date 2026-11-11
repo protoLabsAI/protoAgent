@@ -1,3 +1,4 @@
+import { SurfaceFrameContext } from "../../shell/SurfaceFrame";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -106,8 +107,8 @@ function directiveItem(row: DirectiveRow): WorkItem {
 let host: HTMLDivElement;
 let root: Root;
 
-async function render(frame: "rail" | "modal" = "rail", sessionId: string | undefined = "here") {
-  await act(async () => root.render(<ToastProvider><WorkView frame={frame} sessionId={sessionId} /></ToastProvider>));
+async function render(frame: "rail" | "modal" | "sheet" = "rail", sessionId: string | undefined = "here") {
+  await act(async () => root.render(<ToastProvider><SurfaceFrameContext.Provider value={frame}><WorkView frame={frame === "sheet" ? "modal" : frame} sessionId={sessionId} /></SurfaceFrameContext.Provider></ToastProvider>));
 }
 function workState(patch: Record<string, unknown>) {
   useUI.setState({ surfaceStates: { work: patch }, surfaceModal: null });
@@ -177,11 +178,11 @@ describe("Decisions section", () => {
     const lanes = [...host.querySelectorAll("section")];
     // "Needs you" is the first lane, and its first (pinned) row is the pending decision with
     // the §2.4 field-3 pin — "Asked {time}" — not the agent name the old pin carried.
-    expect(lanes[0].querySelector("h3")?.textContent).toBe("Needs you");
+    expect(lanes[0].querySelector("h2")?.firstChild?.textContent).toBe("Needs you");
     const firstRow = lanes[0].querySelector(".work-row");
     expect(firstRow?.textContent).toContain("Question live");
     expect(firstRow?.textContent).toContain("Asked 4 min ago");
-    expect(lanes[1].querySelector("h3")?.textContent).toBe("Doing"); // sits below Needs you
+    expect(lanes[1].querySelector("h2")?.firstChild?.textContent).toBe("Doing"); // sits below Needs you
 
     // Opening the pin straight from the Overview renders the unchanged DecisionCard as its detail.
     await act(async () => (firstRow as HTMLButtonElement).click());
@@ -498,8 +499,24 @@ describe("Directives section", () => {
     ];
     workState({ section: "overview", filters: { thisChat: false } });
     await render("modal");
-    const lanes = [...host.querySelectorAll("section h3")].map((n) => n.textContent);
+    const lanes = [...host.querySelectorAll("section h2")].map((n) => n.firstChild?.textContent);
     expect(lanes).toContain("Waiting on"); // in_force → waiting
     expect(lanes).toContain("Done"); // fulfilled → done, revoked → cancelled
   });
+});
+
+
+it("uses actual phone action sizes in decision and directive custom details", async () => {
+  data.sources.decisions.items = [decisionItem(decisionRow("phone"))];
+  workState({ section: "decisions", itemId: "decision:phone" });
+  await render("sheet");
+  expect(host.querySelectorAll(".work-decision-detail button").length).toBeGreaterThan(0);
+  expect(host.querySelectorAll(".work-decision-detail button.pl-btn--sm")).toHaveLength(0);
+  expect(host.querySelector(".work-view__back")?.classList.contains("pl-btn--sm")).toBe(false);
+  dir.snapshot = { state: "ready", active: [directiveRow("phone")], history: [], loadedAt: 1 };
+  workState({ section: "directives" });
+  await render("sheet");
+  await act(async () => buttons("Withdraw…")[0].click());
+  expect(host.querySelectorAll(".chat-directive button.pl-btn--sm")).toHaveLength(0);
+  expect([...host.querySelectorAll(".chat-directive-actions button")].map(button => button.textContent)).toEqual(["Keep it", "Withdraw"]);
 });

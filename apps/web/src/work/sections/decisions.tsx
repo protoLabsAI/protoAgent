@@ -14,8 +14,9 @@
  * (docs/design/decision-needed.md, revision 1), rendered unchanged; it shows none of the
  * technical ids, so §2.4's "never shown" list holds for free.
  */
+import { useWorkActionSize } from "../../shell/SurfaceFrame";
 import type { ReactNode } from "react";
-import { Empty } from "@protolabsai/ui/primitives";
+import { WorkEmpty as Empty } from "../WorkEmpty";
 
 import { type DecisionRow } from "../../lib/api/decisions";
 import { DecisionCard } from "../../decisions/DecisionCard";
@@ -26,9 +27,11 @@ import { registerWorkSection, type WorkSectionContext } from "../sectionRegistry
 
 /** The selected decision's detail: the DecisionCard, unchanged. */
 function DecisionDetail({ row, context }: { row: DecisionRow; context: NonNullable<WorkSectionContext["decisionActions"]> }): ReactNode {
+  const actionSize = useWorkActionSize();
   return (
     <div className="work-decision-detail">
       <DecisionCard
+        actionSize={actionSize}
         decision={row}
         onAnswer={(optionId) => context.answerDecision(row.id, optionId)}
         agentOnline={context.agentOnline}
@@ -67,18 +70,17 @@ function renderDecisions(ctx: WorkSectionContext): ReactNode {
   const rowFor = (item: WorkItem) => {
     const row = item.raw as DecisionRow;
     return (
-      <WorkRow
-        key={`${item.kind}:${item.id}`}
+      <li key={`${item.kind}:${item.id}`}><WorkRow
         status={item.status}
         title={row.question}
         meta={decisionMeta(row, allChats)}
         focusKey={`${item.kind}:${item.id}`}
         onOpen={() => ctx.onOpen(item)}
-      />
+      /></li>
     );
   };
 
-  return <div className="work-section work-section--decisions">{[...pending, ...closed].map(rowFor)}</div>;
+  return <ul className="work-group">{[...pending, ...closed].map(rowFor)}</ul>;
 }
 
 registerWorkSection("decisions", { label: "Decisions", render: renderDecisions });

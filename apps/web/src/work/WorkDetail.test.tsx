@@ -8,6 +8,7 @@ import { act } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ToastProvider } from "@protolabsai/ui/overlays";
 import { WorkDetail, type WorkAction, type WorkDetailProps } from "./WorkDetail";
+import { SurfaceFrameContext } from "../shell/SurfaceFrame";
 import cssSource from "./work-detail.css?raw";
 import componentSource from "./WorkDetail.tsx?raw";
 
@@ -258,4 +259,17 @@ describe("WorkDetail ▸ tokens and no stacked dialog (r5)", () => {
     expect(/#[0-9a-fA-F]{3,8}\b/.test(cssSource)).toBe(false);
     expect(/\b(rgb|rgba|hsl|hsla)\(/.test(cssSource)).toBe(false);
   });
+});
+
+
+it("uses actual md phone actions, including confirmation and retry, with destructive actions last", async () => {
+  await mount(base());
+  await act(async () => root!.render(h(SurfaceFrameContext.Provider, { value: "sheet" },
+    h(ToastProvider, null, h(WorkDetail, base({ actions: [deleteAction(async () => { throw new Error("offline"); }), { id: "edit", label: "Edit", run: async () => {} }] }))))));
+  expect(buttons().map(b => b.textContent)).toEqual(["Edit", "Delete…"]);
+  expect(buttons().every(b => !b.classList.contains("pl-btn--sm"))).toBe(true);
+  await act(async () => button("Delete…").click());
+  await act(async () => button("Delete").click());
+  expect(button("Try again").classList.contains("pl-btn--sm")).toBe(false);
+  expect(button("Keep it").classList.contains("pl-btn--sm")).toBe(false);
 });

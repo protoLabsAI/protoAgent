@@ -2,13 +2,13 @@
 .work-row {
   display: flex;
   align-items: center;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   gap: var(--pl-space-2);
-  padding: var(--pl-space-3);
+  padding: var(--pl-space-2) var(--pl-space-3);
   width: 100%;
   border: 0;
-  border-radius: var(--pl-radius);
-  background: var(--pl-color-bg-raised);
+  border-radius: 0;
+  background: transparent;
   color: var(--pl-color-fg);
   font: inherit;
   text-align: start;
@@ -27,6 +27,20 @@
 }
 .work-row__meta {
   display: block;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
   color: var(--pl-color-fg-muted);
   font-size: var(--pl-font-size-sm);
 }
+.work-group { list-style: none; margin: 0; padding: 0; background: var(--pl-color-bg-raised); border: var(--pl-border-width) solid var(--pl-color-border); border-radius: var(--pl-radius-lg); overflow: hidden; }
+.work-group > li + li { border-top: var(--pl-border-width) solid var(--pl-color-border); }
+.work-row:hover { background: var(--pl-color-bg-hover); }
+.work-row[aria-current="true"] { background: var(--pl-color-bg-subtle); }
+.work-row[aria-current="true"] .work-row__title { font-weight: var(--pl-font-weight-semibold); }
+@container work-list (min-width: 40rem) {
+  .work-row__body { display: grid; grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); gap: var(--pl-space-3); align-items: center; }
+  .work-row__title { -webkit-line-clamp: 1; }
+}
+/* Keep the DS base ring inside the group's clipped border, without adding a second ring. */
+.work-row:focus-visible { outline-offset: calc(-1 * var(--pl-border-width)); }

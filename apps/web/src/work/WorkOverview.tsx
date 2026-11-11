@@ -1,6 +1,8 @@
 import { useState } from "react";
 import { Alert, Skeleton } from "@protolabsai/ui/data";
-import { Button, Callout, Empty } from "@protolabsai/ui/primitives";
+import { Button, Callout } from "@protolabsai/ui/primitives";
+import { WorkEmpty as Empty } from "./WorkEmpty";
+import { WorkHeading } from "./WorkHeading";
 import { laneFor, type WorkLane } from "./tone";
 import { WorkRow } from "./WorkRow";
 import type { WorkItem, WorkItems } from "./useWorkItems";
@@ -12,11 +14,11 @@ export const workSections = {
 };
 
 const lanes: { id: WorkLane; label: string; help: string }[] = [
-  { id: "needs-you", label: "Needs you", help: "Waiting for your decision." },
-  { id: "doing", label: "Doing", help: "Work in progress." },
-  { id: "waiting", label: "Waiting on", help: "Waiting for a condition or dependency." },
-  { id: "next", label: "Next", help: "Work queued for later." },
-  { id: "done", label: "Done", help: "Finished in the last 24 hours." },
+  { id: "needs-you", label: "Needs you", help: "Decisions waiting for your answer." },
+  { id: "doing", label: "Doing", help: "Running now." },
+  { id: "waiting", label: "Waiting on", help: "Paused until something happens." },
+  { id: "next", label: "Next", help: "Scheduled or queued." },
+  { id: "done", label: "Done", help: "The last 24 hours." },
 ];
 
 // Normalized items retain their wire rows; terminal timestamps differ by source.
@@ -50,11 +52,11 @@ export function WorkOverview({ sources, onOpen, onSchedules }: {
       <Alert key={kind} status="warning">Couldn&apos;t load {workSections[kind].toLowerCase()}. <Button size="sm" onClick={source.retry}>Retry</Button></Alert>
       : source.status === "stale" ? <Callout key={kind} tone="warning">{workSections[kind]} may be out of date. <Button size="sm" onClick={source.retry}>Retry</Button></Callout> : null)}
     {loading && <div aria-label="Loading work" aria-busy="true"><Skeleton lines={3} /><Skeleton lines={3} /></div>}
-    {!loading && !visible.length && <Empty title="Nothing going on" />}
+    {!loading && !visible.length && <Empty title="Nothing going on" description="When the agent starts a goal, sets a watch, schedules something or asks you a question, it shows up here." />}
     {visible.map((lane) => <section key={lane.id} aria-label={lane.label}>
-      <h3>{lane.label}</h3>
+      <WorkHeading label={lane.label} count={lane.items.length} />
       {visible.length === 1 && <p>{lane.help}</p>}
-      {lane.items.map((item) => <WorkRow key={`${item.kind}:${item.id}`} {...item} focusKey={`${item.kind}:${item.id}`} onOpen={() => onOpen(item)} />)}
+      <ul className="work-group">{lane.items.map((item) => <li key={`${item.kind}:${item.id}`}><WorkRow {...item} focusKey={`${item.kind}:${item.id}`} onOpen={() => onOpen(item)} /></li>)}</ul>
       {lane.id === "next" && disabled.length > 0 && <p>{disabled.length} disabled schedules · <Button variant="ghost" size="sm" onClick={onSchedules}>View</Button></p>}
       {lane.id === "done" && !showMore && older.length > 0 && <Button variant="ghost" size="sm" onClick={() => setShowMore(true)}>Show more</Button>}
     </section>)}

@@ -14,11 +14,17 @@
  * source is loaded for exactly one session). With no session in view there is nothing to show,
  * so the ledger's own empty copy stands in.
  */
+import { useWorkActionSize } from "../../shell/SurfaceFrame";
 import type { ReactNode } from "react";
-import { Empty } from "@protolabsai/ui/primitives";
+import { WorkEmpty as Empty } from "../WorkEmpty";
 
 import { DirectiveDrawerBody } from "../../chat/DirectiveDrawer";
 import { registerWorkSection, type WorkSectionContext } from "../sectionRegistry";
+
+function WorkDirectives({ sessionId }: { sessionId: string }) {
+  const actionSize = useWorkActionSize();
+  return <DirectiveDrawerBody sessionId={sessionId} actionSize={actionSize} />;
+}
 
 function renderDirectives(ctx: WorkSectionContext): ReactNode {
   const sessionId = ctx.sessionId || ctx.sources.directives.items[0]?.sessionId;
@@ -33,7 +39,7 @@ function renderDirectives(ctx: WorkSectionContext): ReactNode {
   // Keyed by session so switching chats remounts the ledger against the new session's store.
   return (
     <div className="work-section work-section--directives">
-      <DirectiveDrawerBody key={sessionId} sessionId={sessionId} />
+      <WorkDirectives key={sessionId} sessionId={sessionId} />
     </div>
   );
 }

@@ -53,6 +53,15 @@ test("Work Activity preserves pending triage and live completed turns after clea
   await expect(work.locator(".work-view__detail")).toContainText("Live completed response");
   await expect(work.locator(".work-view__detail")).toContainText("Scheduled");
 
+  // Escape dismisses the selected inspector before closing Work. Activity stays
+  // read while its list is still open, and focus returns to the live row.
+  await page.keyboard.press("Escape");
+  await expect(work).toBeVisible();
+  await expect(work.locator(".work-view__detail")).toHaveCount(0);
+  await expect(live).toBeFocused();
+  await expect(live).toHaveAttribute("aria-current", "false");
+  await expect(page.getByTestId("activity-badge")).toHaveCount(0);
+
   // Leaving the modal resumes unread tracking on the live event bus.
   await page.keyboard.press("Escape");
   await expect(work).toHaveCount(0);

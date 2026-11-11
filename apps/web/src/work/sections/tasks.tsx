@@ -1,3 +1,4 @@
+import { useWorkActionSize } from "../../shell/SurfaceFrame";
 /**
  * Work view ▸ Tasks section (#4955 §2.7).
  *
@@ -16,7 +17,8 @@
 import { useState, type CSSProperties } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Alert, Skeleton } from "@protolabsai/ui/data";
-import { Button, Callout, Empty } from "@protolabsai/ui/primitives";
+import { Button, Callout } from "@protolabsai/ui/primitives";
+import { WorkEmpty as Empty } from "../WorkEmpty";
 import { useToast } from "@protolabsai/ui/overlays";
 
 import { api } from "../../lib/api";
@@ -41,13 +43,14 @@ const CLAMP_STYLE: CSSProperties = {
 
 /** Description, clamped to 8 lines with a Show full text toggle (§2.7 field 7). */
 function Description({ text }: { text: string }) {
+  const size = useWorkActionSize();
   const [open, setOpen] = useState(false);
   const long = text.split("\n").length > 8 || text.length > 400;
   if (!long) return <div className="work-task-desc" style={{ whiteSpace: "pre-wrap" }}>{text}</div>;
   return (
     <div>
       <div className="work-task-desc" style={open ? { whiteSpace: "pre-wrap" } : CLAMP_STYLE}>{text}</div>
-      <Button variant="ghost" size="sm" onClick={() => setOpen(!open)}>
+      <Button variant="ghost" size={size} onClick={() => setOpen(!open)}>
         {open ? "Show less" : "Show full text"}
       </Button>
     </div>
@@ -187,7 +190,7 @@ function TaskList({ source, onOpen }: { source: WorkSource; onOpen: (item: WorkI
     );
   }
   if (!source.items.length) {
-    return <Empty title="No tasks. The agent files one when it has work to track." />;
+    return <Empty title="No tasks" description="The agent files one when it has work to track." />;
   }
   return (
     <>
@@ -197,16 +200,19 @@ function TaskList({ source, onOpen }: { source: WorkSource; onOpen: (item: WorkI
           <Button size="sm" onClick={source.retry}>Retry</Button>
         </Callout>
       )}
-      {source.items.map((item) => (
-        <WorkRow
-          key={`${item.kind}:${item.id}`}
-          status={item.status}
-          title={item.title}
-          meta={typeAndPriority(item.raw as Task)}
-          focusKey={`${item.kind}:${item.id}`}
-          onOpen={() => onOpen(item)}
-        />
-      ))}
+      <ul className="work-group">
+        {source.items.map((item) => (
+          <li key={`${item.kind}:${item.id}`}>
+            <WorkRow
+              status={item.status}
+              title={item.title}
+              meta={typeAndPriority(item.raw as Task)}
+              focusKey={`${item.kind}:${item.id}`}
+              onOpen={() => onOpen(item)}
+            />
+          </li>
+        ))}
+      </ul>
     </>
   );
 }

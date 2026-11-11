@@ -506,7 +506,7 @@ export function BgJobRow({
  * to paste a coder's diff into a review, or keep a research report. Selecting several
  * thousand words out of a scrolling markdown pane by hand is the friction.
  */
-export function CopyResult({ text }: { text: string }) {
+export function CopyResult({ text, size = "sm" }: { text: string; size?: "sm" | "md" }) {
   // "failed" covers both a missing Clipboard API (plain-http access) and a rejected write.
   const [outcome, setOutcome] = useState<"idle" | "copied" | "failed">("idle");
   const copy = () => {
@@ -518,7 +518,7 @@ export function CopyResult({ text }: { text: string }) {
   const icon = outcome === "copied" ? <Check size={12} /> : outcome === "failed" ? <XCircle size={12} /> : <Copy size={12} />;
   const label = outcome === "copied" ? "Copied" : outcome === "failed" ? "Copy failed" : "Copy";
   return (
-    <Button size="sm" variant="ghost" onClick={copy} aria-label="Copy result to clipboard" data-copy-outcome={outcome}>
+    <Button size={size} variant="ghost" onClick={copy} aria-label="Copy result to clipboard" data-copy-outcome={outcome}>
       {icon} {label}
     </Button>
   );

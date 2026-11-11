@@ -9,8 +9,10 @@
  * Registration is a module side effect: importing this file adds the "background" section to
  * the `WorkView` registry, so a renderer is installed exactly once per page.
  */
+import { useWorkActionSize } from "../../shell/SurfaceFrame";
 import { type CSSProperties, useState } from "react";
-import { Button, Callout, Empty } from "@protolabsai/ui/primitives";
+import { Button, Callout } from "@protolabsai/ui/primitives";
+import { WorkEmpty as Empty } from "../WorkEmpty";
 import { Alert, Skeleton } from "@protolabsai/ui/data";
 import { Drawer } from "@protolabsai/ui/overlays";
 import { registerWorkSection, type WorkSectionContext } from "../WorkView";
@@ -44,14 +46,15 @@ const CLAMP_8: CSSProperties = {
 };
 
 function ResultText({ text }: { text: string }) {
+  const size = useWorkActionSize();
   const [expanded, setExpanded] = useState(false);
   return (
     <div className="work-background__result">
-      <CopyResult text={text} />
+      <CopyResult text={text} size={size} />
       <div style={expanded ? undefined : CLAMP_8}>
         <Markdown>{text}</Markdown>
       </div>
-      <Button variant="ghost" size="sm" onClick={() => setExpanded((v) => !v)}>
+      <Button variant="ghost" size={size} onClick={() => setExpanded((v) => !v)}>
         {expanded ? "Show less" : "Show full text"}
       </Button>
     </div>
@@ -62,11 +65,12 @@ function ResultText({ text }: { text: string }) {
  *  plain label. Never the raw session id (§2.9). There's no fetch-and-open path for a chat
  *  that was never opened in this browser (#2692), so an unknown session stays a plain label. */
 function FromChat({ sessionId }: { sessionId: string }) {
+  const size = useWorkActionSize();
   const { sessions } = useChatState();
   const session = sessions.find((s) => s.id === sessionId);
   if (!session) return <span className="work-background__from">another chat</span>;
   return (
-    <Button variant="ghost" size="sm" onClick={() => chatStore.switchSession(sessionId)}>
+    <Button variant="ghost" size={size} onClick={() => chatStore.switchSession(sessionId)}>
       {session.title}
     </Button>
   );
@@ -147,18 +151,21 @@ function BackgroundList({ ctx }: { ctx: WorkSectionContext }) {
           <Skeleton lines={3} />
         </div>
       ) : source.items.length === 0 && source.status !== "error" ? (
-        <Empty title="No background agents" />
+        <Empty title="No background agents" description="Background work appears here when an agent starts it." />
       ) : (
-        source.items.map((item) => (
-          <WorkRow
-            key={`${item.kind}:${item.id}`}
-            status={item.status}
-            title={item.title}
-            meta={roleLabel((item.raw as BackgroundJobDTO).subagent_type)}
-            focusKey={`${item.kind}:${item.id}`}
-            onOpen={() => ctx.onOpen(item)}
-          />
-        ))
+        <ul className="work-group">
+          {source.items.map((item) => (
+            <li key={`${item.kind}:${item.id}`}>
+              <WorkRow
+                status={item.status}
+                title={item.title}
+                meta={roleLabel((item.raw as BackgroundJobDTO).subagent_type)}
+                focusKey={`${item.kind}:${item.id}`}
+                onOpen={() => ctx.onOpen(item)}
+              />
+            </li>
+          ))}
+        </ul>
       )}
       {/* Managing subagents is a SEPARATE surface (Q14) — a link to the existing panel, never
           merged into this list. */}
