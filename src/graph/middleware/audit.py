@@ -180,12 +180,6 @@ class AuditMiddleware(AgentMiddleware):
     def __init__(self):
         super().__init__()
 
-    def before_agent(self, state, runtime):
-        mark_capture_supported()
-
-    async def abefore_agent(self, state, runtime):
-        mark_capture_supported()
-
     def wrap_tool_call(self, request, handler):
         return self._handle_tool_call(request, handler)
 
@@ -205,9 +199,7 @@ class AuditMiddleware(AgentMiddleware):
             result = None
             error_class = None
             try:
-                with observe_tool_execution(request.tool_call) as outcome:
-                    result = handler(request)
-                    outcome[0] = result
+                result = handler(request)
             except BaseException as exc:
                 error_class = type(exc).__name__
                 raise
@@ -298,9 +290,7 @@ class AuditMiddleware(AgentMiddleware):
             result = None
             error_class = None
             try:
-                with observe_tool_execution(request.tool_call) as outcome:
-                    result = await handler(request)
-                    outcome[0] = result
+                result = await handler(request)
             except BaseException as exc:
                 error_class = type(exc).__name__
                 raise
@@ -373,3 +363,30 @@ class AuditMiddleware(AgentMiddleware):
             )
             metrics.record_tool_call(tool_name, False, duration_ms / 1000)
             raise
+
+
+class NativeToolReceiptMiddleware(AgentMiddleware):
+    """Capture handler outcomes inside every policy/retry/result wrapper.
+
+    Install LAST in the middleware list. AuditMiddleware stays in its original
+    position to preserve telemetry and transcript redaction; its downstream
+    result can be a policy denial or a rewritten result, not an execution.
+    """
+
+    def before_agent(self, state, runtime):
+        mark_capture_supported()
+
+    async def abefore_agent(self, state, runtime):
+        mark_capture_supported()
+
+    def wrap_tool_call(self, request, handler):
+        with observe_tool_execution(request.tool_call) as outcome:
+            result = handler(request)
+            outcome[0] = result
+        return result
+
+    async def awrap_tool_call(self, request, handler):
+        with observe_tool_execution(request.tool_call) as outcome:
+            result = await handler(request)
+            outcome[0] = result
+        return result

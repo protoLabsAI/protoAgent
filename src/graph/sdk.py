@@ -180,9 +180,10 @@ def capture_tool_receipts():
     execution IDs, native tool-call IDs, start sequence, duration, redacted args,
     result state and bounded structured metadata. Result states are ``success``,
     ``tool_error``, ``exception``, ``cancelled`` or ``unknown`` (unrecognized result
-    objects). Native IDs may repeat on retries.
+    objects). Native IDs may repeat on retries. Policy short-circuits produce no
+    entries; each handler invocation inside a retry produces its own entry.
 
-    ``capture_status`` is ``unsupported`` until native AuditMiddleware participates
+    ``capture_status`` is ``unsupported`` until native receipt middleware participates
     (at agent start, independently of tools), ``captured`` even with zero calls,
     or ``partial`` on interruption, pending executions or data loss. Inspect
     ``dropped_count``, ``partial_count``, ``pending_count`` and each entry's

@@ -20,7 +20,7 @@ from graph.config import LangGraphConfig
 from graph.llm import create_llm
 from graph.middleware.quota_routing import account_for_model, is_blocked_for_model, quota_429, resolve_account
 from graph.prompts import build_system_prompt, build_subagent_prompt
-from graph.middleware.audit import AuditMiddleware
+from graph.middleware.audit import AuditMiddleware, NativeToolReceiptMiddleware
 from graph.middleware.knowledge import KnowledgeMiddleware
 from graph.middleware.memory import SessionSummaryMiddleware
 from graph.middleware.message_capture import MessageCaptureMiddleware
@@ -583,6 +583,9 @@ def _build_middleware(
 
     middleware.extend(provider_shape_middleware(config))
     middleware.append(MessageCaptureMiddleware())
+    # Innermost tool hook: policy short-circuits must never become receipts.
+    if config.audit_middleware:
+        middleware.append(NativeToolReceiptMiddleware())
 
     return middleware
 
@@ -1359,6 +1362,8 @@ async def _run_subagent_inner(
     # anthropic-oauth refuses a prompt with no identity line, and the Codex
     # backend rejects the system-role item this stack emits.
     sub_middleware.extend(provider_shape_middleware(config))
+    # Keep receipt capture inside subagent fences and result transformations.
+    sub_middleware.append(NativeToolReceiptMiddleware())
 
     subagent = create_agent(
         model=sub_llm,
