@@ -115,6 +115,7 @@
             "guides/rooms.md",
             "guides/subagents.md",
             "guides/workflows.md",
+            "reference/workflow-tool-receipts.md",
             "guides/coder.md",
             "guides/discord-peer-channels.md"
           ]
@@ -430,6 +431,10 @@
     },
     "guides/subagents.md": {
       "title": "Configure subagents",
+      "status": "current"
+    },
+    "reference/workflow-tool-receipts.md": {
+      "title": "Workflow tool receipts",
       "status": "current"
     },
     "guides/workflows.md": {

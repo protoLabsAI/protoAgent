@@ -151,12 +151,13 @@ async def _run_prepared(
     are recorded as seeded and never dispatched, so a caller holding a finished run's
     ``steps`` can re-run one late step (a flaky verifier) without repaying the rest."""
     run_store.seed(seed_outputs or {})
+    run_store.begin_receipts(recipe["steps"])
 
     async def _run_step(subagent_type: str, prompt: str, step_id: str, *, profile: str | None = None) -> str:
         run_store.step_started(step_id, prompt=prompt)
         if on_step:
             await _safe(on_step, {"phase": "start", "step_id": step_id, "subagent": subagent_type})
-        out = await _traced_step(name, subagent_type, prompt, step_id, run_id, **({"profile": profile} if profile else {}))
+        out = await _captured_step(run_store, name, subagent_type, prompt, step_id, run_id, profile=profile)
         run_store.step_done(step_id, out)
         if on_step:
             await _safe(on_step, {"phase": "end", "step_id": step_id, "subagent": subagent_type, "output": out})
@@ -204,6 +205,7 @@ async def _run_prepared(
     except BaseException:  # or its record is left "running" forever
         run_store.finish(STATUS_FAILED)
         raise
+    result.update(run_store.receipt_fields())
     if result.get("paused"):  # parked at a `gate: human` step — durable + resumable, not terminal
         result.setdefault("run_id", run_id)
         result["output"] = _paused_message(name, result)
@@ -284,6 +286,30 @@ def _finish_stopped(run_store: WorkflowRunStore) -> None:
         run_store.finish(STATUS_FAILED, error=stalled)
     else:
         run_store.finish(STATUS_CANCELLED)
+
+
+async def _captured_step(
+    run_store: WorkflowRunStore,
+    name: str,
+    subagent_type: str,
+    prompt: str,
+    step_id: str,
+    run_id: str,
+    *,
+    profile: str | None = None,
+) -> str:
+    # Scope belongs to the engine's step task, including wait_for's timeout task.
+    capture = None
+    try:
+        with sdk.capture_tool_receipts() as capture:
+            run_store.step_receipts(step_id, capture.snapshot())
+            return await _traced_step(
+                name, subagent_type, prompt, step_id, run_id, **({"profile": profile} if profile else {})
+            )
+    finally:
+        # Exit first: interruption and unfinished calls must be accounted for.
+        if capture is not None:
+            run_store.step_receipts(step_id, capture.snapshot())
 
 
 async def _traced_step(
@@ -438,10 +464,11 @@ async def _resume(
 
     # Re-attach the store to this run and flip it back to `running` before dispatching.
     run_store.resume(run_id)
+    run_store.begin_receipts(recipe["steps"])
 
     async def _run_step(subagent_type: str, prompt: str, step_id: str, *, profile: str | None = None) -> str:
         run_store.step_started(step_id, prompt=prompt)
-        out = await _traced_step(name, subagent_type, prompt, step_id, run_id, **({"profile": profile} if profile else {}))
+        out = await _captured_step(run_store, name, subagent_type, prompt, step_id, run_id, profile=profile)
         run_store.step_done(step_id, out)
         return out
 
@@ -480,6 +507,7 @@ async def _resume(
     except BaseException:  # or its record is left "running" forever
         run_store.finish(STATUS_FAILED)
         raise
+    result.update(run_store.receipt_fields())
     if result.get("paused"):  # a DOWNSTREAM gate — durable + resumable again, not terminal
         result.setdefault("run_id", run_id)
         result["output"] = _paused_message(name, result)
