@@ -192,6 +192,11 @@
       "decision": "text",
       "reason": "No first-wave asset justified by the structural screen; retain executable steps and cross-links. Reassess with reader feedback."
     },
+    "reference/workflow-tool-receipts.md": {
+      "journey": "automate",
+      "decision": "text",
+      "reason": "A structured evidence contract: field definitions, status table, limits and retention rules are clearest as searchable text."
+    },
     "guides/workflows.md": {
       "journey": "automate",
       "decision": "media",

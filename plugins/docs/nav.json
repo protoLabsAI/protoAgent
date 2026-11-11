@@ -242,6 +242,10 @@
               "title": "Reusable workflows"
             },
             {
+              "path": "reference/workflow-tool-receipts.md",
+              "title": "Workflow tool receipts"
+            },
+            {
               "path": "guides/coder.md",
               "title": "Verify coding outcomes"
             },

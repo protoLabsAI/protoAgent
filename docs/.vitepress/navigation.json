@@ -379,6 +379,7 @@
         "/guides/rooms",
         "/guides/subagents",
         "/guides/workflows",
+        "/reference/workflow-tool-receipts",
         "/guides/coder",
         "/guides/discord-peer-channels",
         "/guides/portfolio",
@@ -460,6 +461,10 @@
             {
               "text": "Reusable workflows",
               "link": "/guides/workflows"
+            },
+            {
+              "text": "Workflow tool receipts",
+              "link": "/reference/workflow-tool-receipts"
             },
             {
               "text": "Verify coding outcomes",

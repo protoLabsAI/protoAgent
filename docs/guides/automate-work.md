@@ -38,6 +38,7 @@ For coding work, [connect and test a coding delegate](/guides/coding-agents), th
 - [Talk to delegates in a room](/guides/rooms)
 - [Configure subagents](/guides/subagents)
 - [Reusable workflows](/guides/workflows)
+- [Workflow tool receipts](/reference/workflow-tool-receipts)
 - [Verify coding outcomes](/guides/coder)
 - [Coordinate agents in Discord](/guides/discord-peer-channels)
 

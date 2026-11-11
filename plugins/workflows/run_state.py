@@ -30,6 +30,7 @@ console's polling target while it executes, not just a post-mortem):
 
 from __future__ import annotations
 
+import copy
 import hashlib
 import json
 import logging
@@ -91,6 +92,40 @@ def _step_snapshot(steps: list[dict] | None) -> list[dict]:
     return out
 
 
+def _empty_receipt(run_id: str | None, step_id: str, execution_id: str | None, status: str) -> dict:
+    return {
+        "run_id": run_id,
+        "step_id": step_id,
+        "execution_id": execution_id,
+        "capture_status": status,
+        "capture_supported": False,
+        "entries": [],
+        "dropped_count": 0,
+        "partial_count": 0,
+        "pending_count": 0,
+        "truncated_fields_count": 0,
+    }
+
+
+def _legacy_receipts(state: dict) -> dict:
+    ids = dict.fromkeys([s["id"] for s in state.get("steps", [])] + list(state.get("step_outputs", {})))
+    return {
+        "schema_version": 1,
+        "source": "native_audit",
+        "execution_id": None,
+        "steps": {sid: _empty_receipt(state.get("run_id"), sid, None, "unsupported") for sid in ids},
+        "previous_executions": [],
+        "dropped_execution_count": 0,
+    }
+
+
+def _receipt_fields(envelope: dict) -> dict:
+    return {
+        "tool_receipts": copy.deepcopy(envelope),
+        "tool_calls": {sid: copy.deepcopy(receipt["entries"]) for sid, receipt in envelope["steps"].items()},
+    }
+
+
 class WorkflowRunStore:
     """Persists one workflow run's state; scoped to a runs dir, stateful per run.
 
@@ -130,6 +165,61 @@ class WorkflowRunStore:
         }
         self._write()
         return self._state["run_id"]
+
+    def begin_receipts(self, steps: list[dict]) -> None:
+        """Start a physical segment, retaining at most eight earlier segments."""
+        if self._state is None:
+            return
+        old = self._state.get("tool_receipts")
+        history = copy.deepcopy(old.get("previous_executions", [])) if old else []
+        dropped = old.get("dropped_execution_count", 0) if old else 0
+        if old:
+            history.append(
+                {
+                    k: copy.deepcopy(v)
+                    for k, v in old.items()
+                    if k not in ("previous_executions", "dropped_execution_count")
+                }
+            )
+        dropped += max(0, len(history) - 8)
+        execution_id = str(uuid.uuid4())
+        envelope = {
+            "schema_version": 1,
+            "source": "native_audit",
+            "execution_id": execution_id,
+            "steps": {s["id"]: _empty_receipt(self.run_id, s["id"], execution_id, "not_executed") for s in steps},
+            "previous_executions": history[-8:],
+            "dropped_execution_count": dropped,
+        }
+        self._state.update(_receipt_fields(envelope))
+        self._state["updated_at"] = _now()
+        self._write()
+
+    def step_receipts(self, step_id: str, snapshot: dict) -> None:
+        """Persist only SDK bounded/redacted evidence, including on interruption."""
+        if self._state is None:
+            return
+        envelope = self._state["tool_receipts"]
+        receipt = copy.deepcopy(snapshot)
+        receipt.update(
+            run_id=self.run_id,
+            step_id=step_id,
+            execution_id=envelope["execution_id"],
+            capture_supported=snapshot["capture_status"] != "unsupported",
+            truncated_fields_count=sum(e.get("dropped_fields", 0) for e in snapshot["entries"]),
+        )
+        for entry in receipt["entries"]:
+            entry.update(run_id=self.run_id, step_id=step_id, workflow_execution_id=envelope["execution_id"])
+        envelope["steps"][step_id] = receipt
+        self._state.update(_receipt_fields(envelope))
+        self._state["updated_at"] = _now()
+        self._write()
+
+    def receipt_fields(self) -> dict:
+        """Detached public result fields, also retained on paused/terminal records."""
+        if self._state is None:
+            return {}
+        return _receipt_fields(self._state.get("tool_receipts") or _legacy_receipts(self._state))
 
     def seed(self, outputs: dict[str, str]) -> None:
         """Record steps whose outputs were handed in by the caller (#3571): they are on
@@ -236,7 +326,10 @@ class WorkflowRunStore:
             data = json.loads(self.path(run_id).read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
             return None
-        return data if isinstance(data, dict) else None
+        if not isinstance(data, dict):
+            return None
+        data.update(_receipt_fields(data.get("tool_receipts") or _legacy_receipts(data)))
+        return data
 
     def list_runs(self) -> list[str]:
         """Run ids present on disk (unordered beyond filename sort)."""
