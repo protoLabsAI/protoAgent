@@ -191,7 +191,41 @@ class WorkflowRunStore:
             "previous_executions": history[-8:],
             "dropped_execution_count": dropped,
         }
+        old_context = self._state.get("review_context", {})
+        previous = copy.deepcopy(old_context.get("previous_executions", []))
+        if old_context:
+            previous.append({k: copy.deepcopy(v) for k, v in old_context.items()
+                             if k not in ("previous_executions", "dropped_execution_count")})
+        contexts = {}
+        for step in steps:
+            sid = step["id"]
+            prior = old_context.get("steps", {}).get(sid, {})
+            origin = prior.get("origin", self._state.get("seed_origins", {}).get(sid, "unknown"))
+            if prior.get("status") in ("observed", "unknown") and prior.get("execution_id"):
+                origin = {k: prior[k] for k in ("run_id", "step_id", "execution_id")}
+            seeded = sid in self._state["step_outputs"]
+            contexts[sid] = {
+                "schema_version": 1, "run_id": self.run_id, "step_id": sid,
+                "execution_id": execution_id, "status": "not_executed",
+                "workflow_state": "seeded" if seeded else "resumed" if old_context else "fresh",
+                "origin": origin if seeded else "unknown",
+                "conversation": "unknown", "parent_history": "unknown",
+                "inputs": "unknown", "instruction_sources": "unknown", "tool_restrictions": "unknown",
+            }
+        self._state["review_context"] = {
+            "schema_version": 1, "execution_id": execution_id, "steps": contexts,
+            "previous_executions": previous[-8:],
+            "dropped_execution_count": old_context.get("dropped_execution_count", 0) + max(0, len(previous) - 8),
+        }
         self._state.update(_receipt_fields(envelope))
+        self._state["updated_at"] = _now()
+        self._write()
+
+    def step_review_context(self, step_id: str, snapshot: dict) -> None:
+        """Persist construction evidence immediately, before the subagent runs."""
+        if self._state is None:
+            return
+        self._state["review_context"]["steps"][step_id].update(copy.deepcopy(snapshot))
         self._state["updated_at"] = _now()
         self._write()
 
@@ -219,15 +253,32 @@ class WorkflowRunStore:
         """Detached public result fields, also retained on paused/terminal records."""
         if self._state is None:
             return {}
-        return _receipt_fields(self._state.get("tool_receipts") or _legacy_receipts(self._state))
+        fields = _receipt_fields(self._state.get("tool_receipts") or _legacy_receipts(self._state))
+        fields["review_context"] = copy.deepcopy(self._state.get("review_context", {"schema_version": 1, "status": "unknown"}))
+        return fields
 
-    def seed(self, outputs: dict[str, str]) -> None:
+    def seed(self, outputs: dict[str, str], *, source_run_id: str | None = None) -> None:
         """Record steps whose outputs were handed in by the caller (#3571): they are on
         the record as ``seeded``, never ``running``/``done``, so a partial re-run reads
         as what it is — the seeded steps' outputs are what the dispatched ones saw."""
         if self._state is None or not outputs:
             return
+        # A source is explicit, never discovered by matching text or session IDs.
+        # Only refer to it when its persisted output agrees with the supplied seed.
+        try:
+            source_key = str(uuid.UUID(source_run_id)) if source_run_id else None
+        except (ValueError, AttributeError):
+            source_key = None
+        source = self.load(source_key) if source_key else None
+        origins = self._state.setdefault("seed_origins", {})
         for step_id, output in outputs.items():
+            origins[step_id] = "unknown"
+            if source and source.get("step_outputs", {}).get(step_id) == output:
+                prior = source.get("review_context", {}).get("steps", {}).get(step_id, {})
+                if prior.get("status") in ("observed", "unknown") and prior.get("execution_id"):
+                    origins[step_id] = {k: prior[k] for k in ("run_id", "step_id", "execution_id")}
+                elif prior.get("status") == "not_executed":
+                    origins[step_id] = copy.deepcopy(prior.get("origin", "unknown"))
             self._state["step_outputs"][step_id] = output
             self._state["step_meta"][step_id] = {"status": STATUS_SEEDED}
         self._state["updated_at"] = _now()
@@ -329,6 +380,7 @@ class WorkflowRunStore:
         if not isinstance(data, dict):
             return None
         data.update(_receipt_fields(data.get("tool_receipts") or _legacy_receipts(data)))
+        data.setdefault("review_context", {"schema_version": 1, "status": "unknown"})
         return data
 
     def list_runs(self) -> list[str]:

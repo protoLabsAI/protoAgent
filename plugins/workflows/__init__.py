@@ -142,6 +142,7 @@ async def _run_prepared(
     run_id: str,
     on_step=None,
     seed_outputs: dict[str, str] | None = None,
+    seed_run_id: str | None = None,
 ) -> dict:
     """Execute an already-validated recipe against its live run record: the store is
     updated at each step dispatch/completion (the Studio's polling target) and closed
@@ -149,8 +150,10 @@ async def _run_prepared(
 
     ``seed_outputs`` (#3571) hands in outputs for steps already run elsewhere — they
     are recorded as seeded and never dispatched, so a caller holding a finished run's
-    ``steps`` can re-run one late step (a flaky verifier) without repaying the rest."""
-    run_store.seed(seed_outputs or {})
+    ``steps`` can re-run one late step (a flaky verifier) without repaying the rest.
+    ``seed_run_id`` optionally identifies that source run for review-context references;
+    missing records or mismatched outputs leave the provenance unknown."""
+    run_store.seed(seed_outputs or {}, source_run_id=seed_run_id)
     run_store.begin_receipts(recipe["steps"])
 
     async def _run_step(subagent_type: str, prompt: str, step_id: str, *, profile: str | None = None) -> str:
@@ -226,6 +229,7 @@ async def _execute(
     on_step=None,
     run_store=None,
     seed_outputs: dict[str, str] | None = None,
+    seed_run_id: str | None = None,
 ) -> dict:
     """Validate → resolve → run a recipe over subagents (each step via the SDK). Raises
     ValueError on unknown/invalid recipe or missing inputs.
@@ -238,7 +242,10 @@ async def _execute(
         run_store = WorkflowRunStore(_writable_dir() / ".runs")
     run_id = run_store.start(name, resolved, steps=recipe.get("steps"))
     run_store.prune(keep=_MAX_RUNS)
-    return await _run_prepared(recipe, name, resolved, run_store, run_id, on_step, seed_outputs=seed_outputs)
+    return await _run_prepared(
+        recipe, name, resolved, run_store, run_id, on_step,
+        seed_outputs=seed_outputs, seed_run_id=seed_run_id,
+    )
 
 
 async def _start_background(
@@ -302,6 +309,8 @@ async def _captured_step(
     capture = None
     try:
         with sdk.capture_tool_receipts() as capture:
+            run_store.step_review_context(step_id, {"status": "unknown"})
+            capture.review_context_callback = lambda context: run_store.step_review_context(step_id, context)
             run_store.step_receipts(step_id, capture.snapshot())
             return await _traced_step(
                 name, subagent_type, prompt, step_id, run_id, **({"profile": profile} if profile else {})
@@ -566,11 +575,15 @@ def register(registry: Any) -> None:
     # the plugin (the chat `/<recipe>` slash-command) can use workflows WITHOUT importing
     # this plugin — both are None when the plugin is disabled, which gates those paths.
     async def _run(
-        name: str, inputs: dict | None = None, on_step=None, *, seed_outputs: dict[str, str] | None = None
+        name: str, inputs: dict | None = None, on_step=None, *, seed_outputs: dict[str, str] | None = None,
+        seed_run_id: str | None = None,
     ) -> dict:
         # `seed_outputs` (#3571): outputs for steps already run — the engine treats them
         # as done, so only the steps downstream of the missing ones are dispatched.
-        return await _execute(_reg(), name, inputs or {}, on_step, seed_outputs=seed_outputs)
+        return await _execute(
+            _reg(), name, inputs or {}, on_step, seed_outputs=seed_outputs,
+            **({"seed_run_id": seed_run_id} if seed_run_id is not None else {}),
+        )
 
     STATE.workflow_registry = _LiveRegistry()
     STATE.workflow_run = _run

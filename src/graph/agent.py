@@ -1365,11 +1365,12 @@ async def _run_subagent_inner(
     # Keep receipt capture inside subagent fences and result transformations.
     sub_middleware.append(NativeToolReceiptMiddleware())
 
+    sub_system_prompt = build_subagent_prompt(subagent_type)
     subagent = create_agent(
         model=sub_llm,
         tools=sub_tools,
         middleware=sub_middleware,
-        system_prompt=build_subagent_prompt(subagent_type),
+        system_prompt=sub_system_prompt,
         state_schema=ProtoAgentState,
     )
 
@@ -1410,6 +1411,17 @@ async def _run_subagent_inner(
             as_type="agent",
         ):
             try:
+                from graph.tool_receipts import observe_subagent_context
+
+                observe_subagent_context(
+                    prompt=prompt, system_prompt=sub_system_prompt, subagent_type=subagent_type,
+                    tools=sub_tools, fence=sub_fence,
+                    enforcement={
+                        "enabled": bool(getattr(config, "enforcement_enabled", False)),
+                        "disallowed_tools": config.enforcement_disallowed_tools,
+                        "rate_limits": config.enforcement_rate_limits,
+                    },
+                )
                 async for state in subagent.astream(
                     {
                         "messages": [{"role": "user", "content": prompt}],

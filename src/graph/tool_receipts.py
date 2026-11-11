@@ -174,6 +174,8 @@ class ToolReceiptCapture:
         self._dropped = 0
         self._bytes = 0
         self._entries = []
+        self.review_context_callback = None
+        self._context_observed = False
 
     def snapshot(self) -> dict:
         """Return a detached version-1 envelope, including limits and loss counts."""
@@ -332,3 +334,46 @@ def observe_tool_execution(tool_call):
                     if not capture._closed:
                         capture._pending -= 1
                         capture._dropped += 1
+
+
+def observe_subagent_context(*, prompt, system_prompt, subagent_type, tools, fence, enforcement):
+    """Observe construction once per capture, never from a reply or trace identity.
+
+    Nested delegations cannot overwrite the owning workflow step's context.
+    Text is redacted and bounded independently of native tool receipt payloads.
+    """
+    capture = _CURRENT.get()
+    if capture is None:
+        return
+    with capture._lock:
+        if capture._closed or capture._context_observed:
+            return
+        capture._context_observed = True
+        callback = capture.review_context_callback
+    if callback is None:
+        return
+
+    def text_record(value):
+        safe = redact(value)
+        return {"text": safe[:16384], "characters": len(safe), "omitted_characters": max(0, len(safe) - 16384)}
+
+    callback({
+        "status": "observed",
+        "conversation": "fresh",
+        "parent_history": "not_supplied",
+        "inputs": {"prompt": text_record(prompt), "history": "not_supplied"},
+        "instruction_sources": {
+            "status": "observed",
+            "subagent": subagent_type,
+            "system_prompt": text_record(system_prompt),
+            "external_sources": "unknown",
+            "runtime_additions": "unknown",
+        },
+        "tool_restrictions": {
+            "status": "observed",
+            "bound_tools": sorted(t.name for t in tools),
+            "inherited_fence": list(fence),
+            "enforcement": redact(enforcement),
+            "external_policy": "unknown",
+        },
+    })
