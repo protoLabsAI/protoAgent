@@ -15,6 +15,7 @@ from langchain.agents.middleware import AgentMiddleware
 
 
 from graph.middleware.redaction import redact
+from graph.tool_receipts import mark_capture_supported, observe_tool_execution
 
 log = logging.getLogger(__name__)
 
@@ -179,6 +180,12 @@ class AuditMiddleware(AgentMiddleware):
     def __init__(self):
         super().__init__()
 
+    def before_agent(self, state, runtime):
+        mark_capture_supported()
+
+    async def abefore_agent(self, state, runtime):
+        mark_capture_supported()
+
     def wrap_tool_call(self, request, handler):
         return self._handle_tool_call(request, handler)
 
@@ -198,7 +205,9 @@ class AuditMiddleware(AgentMiddleware):
             result = None
             error_class = None
             try:
-                result = handler(request)
+                with observe_tool_execution(request.tool_call) as outcome:
+                    result = handler(request)
+                    outcome[0] = result
             except BaseException as exc:
                 error_class = type(exc).__name__
                 raise
@@ -289,7 +298,9 @@ class AuditMiddleware(AgentMiddleware):
             result = None
             error_class = None
             try:
-                result = await handler(request)
+                with observe_tool_execution(request.tool_call) as outcome:
+                    result = await handler(request)
+                    outcome[0] = result
             except BaseException as exc:
                 error_class = type(exc).__name__
                 raise

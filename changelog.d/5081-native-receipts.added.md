@@ -1,0 +1,1 @@
+- **Native tool receipt capture (#5081).** Add an SDK-scoped, bounded and redacted collector for actual synchronous and asynchronous tool executions, preserving subagent text returns and existing telemetry.
