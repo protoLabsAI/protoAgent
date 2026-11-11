@@ -1,25 +1,32 @@
-import { ArrowLeftRight, ChevronDown, ChevronsLeft, ChevronsRight, ChevronUp, Download, Maximize2, Eye, EyeOff, Pencil, Plus, Puzzle, RefreshCw, SlidersHorizontal, SquareArrowOutUpRight, Trash2, X } from "lucide-react";
+import { ArrowLeftRight, ChevronDown, ChevronsLeft, ChevronsRight, ChevronUp, Download, Eye, EyeOff, Pencil, Plus, Puzzle, RefreshCw, SlidersHorizontal, SquareArrowOutUpRight, Trash2, X } from "lucide-react";
 
 import { openView } from "../app/usePaletteRegistry";
 import { useUI } from "../state/uiStore";
 import { registerContextMenu } from "./registry";
 import type { MenuEntry } from "./types";
 
-// Both host background and rail-icon menus use the existing surface transition.
-function expandSurface(id: string): MenuEntry {
-  return {
-    id: "open-large-window",
-    label: "Open in window",
-    icon: <Maximize2 size={14} />,
-    run: () => useUI.getState().openSurfaceModal(id),
-  };
-}
-
-registerContextMenu({
-  type: "surface-view",
-  items: (ctx: { id?: string }): MenuEntry[] =>
-    ctx?.id && ctx.id !== "chat" ? [expandSurface(ctx.id)] : [],
-});
+// "Open in window" is OFF (Josh, 2026-11-11). Widening the rail panel covers the same need
+// today, so the entry was superfluous. Revisit it together with the planned "open in a new
+// (OS) window" work (its PR was closed): a real separate window likely replaces this in-app
+// one. Until then the window opens only from the Decisions / Background / Activity pills and
+// the Work palette rows. To restore: uncomment expandSurface + its two uses below, and flip
+// VIEW_MENU_ENABLED in shell/SurfaceHost.tsx.
+//
+// // Both host background and rail-icon menus use the existing surface transition.
+// function expandSurface(id: string): MenuEntry {
+//   return {
+//     id: "open-large-window",
+//     label: "Open in window",
+//     icon: <Maximize2 size={14} />,
+//     run: () => useUI.getState().openSurfaceModal(id),
+//   };
+// }
+//
+// registerContextMenu({
+//   type: "surface-view",
+//   items: (ctx: { id?: string }): MenuEntry[] =>
+//     ctx?.id && ctx.id !== "chat" ? [expandSurface(ctx.id)] : [],
+// });
 
 // First customer (ADR 0036 D6 / ADR 0035 D2): right-click a rail icon → reorder it within its
 // rail (Move up/down), move it to another dock, Configure the owning plugin, or Hide it from the
@@ -132,7 +139,8 @@ registerContextMenu({
     // chat to the bottom dock (its slot mounts unconditionally there too). Moving chat across docks
     // remounts it: a brief blip on an in-flight stream; a deliberate action.
     return [
-      ...(ctx.side === "right" && ctx.id !== "chat" ? [expandSurface(ctx.id)] : []),
+      // "Open in window" is off for now — see the note at the top of this file.
+      // ...(ctx.side === "right" && ctx.id !== "chat" ? [expandSurface(ctx.id)] : []),
       {
         id: "move-up",
         label: "Move up",

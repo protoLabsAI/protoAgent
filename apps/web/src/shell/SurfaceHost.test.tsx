@@ -49,7 +49,8 @@ afterEach(() => {
 });
 
 describe("SurfaceHost rail frame", () => {
-  it("keeps only the child heading and actions and opens from its background menu", () => {
+  // Off with "Open in window" (contextMenu/registrations.tsx, Josh 2026-11-11) — re-enable together.
+  it.skip("keeps only the child heading and actions and opens from its background menu", () => {
     act(() => root.render(<SurfaceHost frame="rail" view={work}><h2>Work</h2><button>History</button></SurfaceHost>));
     expect(container.querySelectorAll("h2")).toHaveLength(1);
     expect(button("History")).toBeDefined();
@@ -64,7 +65,8 @@ describe("SurfaceHost rail frame", () => {
     expect(useUI.getState().surfaceModal?.viewId).toBe("work");
   });
 
-  it("opens from nested panel background without replacing a child's custom menu", () => {
+  // Off with "Open in window" (contextMenu/registrations.tsx, Josh 2026-11-11) — re-enable together.
+  it.skip("opens from nested panel background without replacing a child's custom menu", () => {
     act(() => root.render(<SurfaceHost frame="rail" view={work}>
       <div style={{ flex: 1 }}><section data-testid="background" /></div>
       <div onContextMenu={(e) => {
@@ -82,7 +84,8 @@ describe("SurfaceHost rail frame", () => {
     expect(useContextMenuStore.getState().type).toBe("child-menu");
   });
 
-  it.each(["ContextMenu", "F10"])("opens the view menu with %s", (key) => {
+  // Off with "Open in window" (contextMenu/registrations.tsx, Josh 2026-11-11) — re-enable together.
+  it.skip.each(["ContextMenu", "F10"])("opens the view menu with %s", (key) => {
     act(() => root.render(<SurfaceHost frame="rail" view={work}>{content("work")}</SurfaceHost>));
     const host = container.querySelector<HTMLElement>('[role="region"]')!;
     host.focus();
@@ -91,7 +94,8 @@ describe("SurfaceHost rail frame", () => {
     expect(useContextMenuStore.getState()).toMatchObject({ open: true, type: "surface-view", ctx: { id: "work" } });
   });
 
-  it("leaves child editing, custom menus, iframe targets and selected text alone", () => {
+  // Off with "Open in window" (contextMenu/registrations.tsx, Josh 2026-11-11) — re-enable together.
+  it.skip("leaves child editing, custom menus, iframe targets and selected text alone", () => {
     act(() => root.render(<SurfaceHost frame="rail" view={work}>
       <input /><textarea /><select /><a href="#"><span>Link</span></a>
       <div role="button"><span>Action</span></div>
@@ -133,7 +137,8 @@ describe("SurfaceHost rail frame", () => {
     expect(body.tabIndex).toBe(-1);
   });
 
-  it.each(["work", "plugin:notes:main"])("expands inactive collapsed rail id %s and preserves state through Dock", (id) => {
+  // Off with "Open in window" (contextMenu/registrations.tsx, Josh 2026-11-11) — re-enable together.
+  it.skip.each(["work", "plugin:notes:main"])("expands inactive collapsed rail id %s and preserves state through Dock", (id) => {
     const state = { section: "all", itemId: "item-1", scrollTop: 321 };
     useUI.setState({ rightPanel: "knowledge", rightCollapsed: true,
       railOrder: { left: ["chat"], right: ["knowledge", id], bottom: [], hidden: [] },
@@ -148,7 +153,8 @@ describe("SurfaceHost rail frame", () => {
     expect(useUI.getState()).toMatchObject({ rightPanel: id, rightCollapsed: false, surfaceStates: { [id]: state } });
   });
 
-  it("excludes Chat and other docks from rail expansion", () => {
+  // Off with "Open in window" (contextMenu/registrations.tsx, Josh 2026-11-11) — re-enable together.
+  it.skip("excludes Chat and other docks from rail expansion", () => {
     for (const side of ["left", "right", "bottom"] as const) {
       useUI.setState({ railOrder: { left: [], right: [], bottom: [], hidden: [], [side]: ["chat", "work"] } });
       expect(resolveMenu("rail-surface", { id: "chat", side }).some((e) => e.id === "open-large-window")).toBe(false);
@@ -160,7 +166,9 @@ describe("SurfaceHost rail frame", () => {
     act(() => root.render(<SurfaceHost frame="rail" view={work}><div>Panel</div></SurfaceHost>));
     act(() => useUI.getState().openSurfaceModal("work"));
     act(() => useUI.getState().dockSurface("work"));
-    expect(document.activeElement).toBe(container.querySelector('[role="region"]'));
+    // The rail frame's content host (its last child; the first is the live-region status).
+    // It only carries role="region" while the view menu is on, which it isn't for now.
+    expect(document.activeElement).toBe(container.firstElementChild?.lastElementChild);
     expect(container.querySelector("h2")).toBeNull();
   });
 

@@ -1,8 +1,9 @@
 import { expect, test, type Page } from "@playwright/test";
 
-// Josh 2026-11-11: a rail item's double-click no longer opens the window — the rail
-// context menu's "Open in window" is the one way in. And that window must clear the
-// app's own header row (it used to cover it and run into the macOS traffic lights).
+// Josh 2026-11-11: a rail item's double-click no longer opens the window (and "Open in window"
+// is off in the context menu for now). The window still opens from the pills and the Work
+// palette rows, and it must clear the app's own header row (it used to cover it and run into
+// the macOS traffic lights).
 const rail = (page: Page) => page.getByRole("complementary", { name: "Right surfaces", exact: true });
 
 test("double-clicking a rail item does not open the window", async ({ page }) => {
@@ -14,11 +15,13 @@ test("double-clicking a rail item does not open the window", async ({ page }) =>
   await expect(page.locator('.work-view[data-frame="modal"]')).toHaveCount(0);
 });
 
-test("the context menu still opens the window, and it clears the app header", async ({ page }) => {
+test("the Work window clears the app header", async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.goto("/app/", { waitUntil: "load" });
-  await rail(page).getByRole("button", { name: "Work", exact: true }).click({ button: "right" });
-  await page.getByRole("menuitem", { name: "Open in window", exact: true }).click();
+  await expect(page.getByTestId("header-menu")).toBeVisible();
+  await page.keyboard.press("ControlOrMeta+Shift+k");
+  await page.locator(".pl-cmdk-commands__input").fill("Open Work");
+  await page.getByRole("option", { name: "Open Work", exact: true }).click();
   const dialog = page.getByRole("dialog", { name: /^Work/ });
   await expect(dialog).toBeVisible();
   const header = await page.locator(".app-topbar").boundingBox();

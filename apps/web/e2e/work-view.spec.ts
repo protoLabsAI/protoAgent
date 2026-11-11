@@ -42,36 +42,26 @@ const modalView = (page: Page) => page.locator('.work-view[data-frame="modal"]')
 const list = (view: Locator) => view.locator(".work-view__list");
 const row = (view: Locator) => view.locator(".work-row").filter({ hasText: "Work item 12" });
 
-async function expandWork(page: Page) {
-  await page.getByRole("region", { name: "Work view", exact: true }).focus();
-  await page.keyboard.press("Shift+F10");
-  await page.getByRole("menuitem", { name: "Open in window", exact: true }).click();
-}
-
-async function openTasks(page: Page) {
-  await railView(page).getByRole("button", { name: "Overview Work sections", exact: true }).click();
-  await page.getByRole("menuitemradio", { name: "Tasks", exact: true }).click();
-  await expect(railView(page).locator(".work-row")).toHaveCount(40);
+// Opens Work in the window from the palette ("Open in window" is off in the context menu for
+// now — see apps/web/src/contextMenu/registrations.tsx). `label` picks the row: "Open Work"
+// (Overview) or "Work: <Section>".
+async function openWorkWindow(page: Page, label = "Open Work") {
+  await expect(page.getByTestId("header-menu")).toBeVisible();
+  await page.keyboard.press("ControlOrMeta+Shift+k");
+  await page.locator(".pl-cmdk-commands__input").fill(label);
+  await page.getByRole("option", { name: label, exact: true }).click();
+  await expect(page.getByRole("dialog", { name: /^Work/ })).toBeVisible();
 }
 
 async function expectScroll(view: Locator, value: number) {
   await expect.poll(() => list(view).evaluate((el) => el.scrollTop)).toBe(value);
 }
 
-test("rail → Expand → item → Dock preserves the section, scroll and item", async ({ page }) => {
-  // Work starts open; close it first to exercise opening it through the rail.
-  const work = page.locator(".pl-rail--right").getByRole("button", { name: "Work", exact: true });
-  await work.click();
-  await expect(railView(page)).not.toBeVisible();
-  await work.click();
-  for (const lane of ["Needs you", "Doing", "Waiting on", "Next", "Done"]) {
-    await expect(railView(page).getByRole("region", { name: lane, exact: true })).toBeVisible();
-  }
-  await openTasks(page);
-  await list(railView(page)).evaluate((el) => { el.scrollTop = 300; });
-  await expectScroll(railView(page), 300);
-  await expandWork(page);
+test("window → item → Dock preserves the section, scroll and item", async ({ page }) => {
+  await openWorkWindow(page, "Work: Tasks");
   await expect(modalView(page).getByRole("button", { name: /Work sections/ })).toHaveAccessibleName("Tasks Work sections");
+  await expect(modalView(page).locator(".work-row")).toHaveCount(40);
+  await list(modalView(page)).evaluate((el) => { el.scrollTop = 300; });
   await expectScroll(modalView(page), 300);
   await row(modalView(page)).click();
   await expect(modalView(page).getByRole("heading", { name: "Work item 12", exact: true })).toBeVisible();
@@ -84,14 +74,10 @@ test("rail → Expand → item → Dock preserves the section, scroll and item",
   await expectScroll(railView(page), scroll);
   await expect(row(railView(page))).toBeVisible();
   await expect(row(railView(page))).toBeFocused();
-  await row(railView(page)).click();
-  await expandWork(page);
-  await expect(modalView(page).getByRole("heading", { name: "Work item 12", exact: true })).toBeFocused();
-  await expect(modalView(page).getByRole("button", { name: /Work sections/ })).toHaveAccessibleName("Tasks Work sections");
 });
 
 test("modal traps keyboard focus in both directions and Escape closes it", async ({ page }) => {
-  await expandWork(page);
+  await openWorkWindow(page);
   const dialog = page.getByRole("dialog").filter({ has: modalView(page) });
   const first = dialog.getByRole("button", { name: "Dock to rail", exact: true });
   await first.focus();
@@ -122,8 +108,7 @@ test("modal traps keyboard focus in both directions and Escape closes it", async
 });
 
 test("task delete confirms inline and Undo restores the row", async ({ page }) => {
-  await openTasks(page);
-  await expandWork(page);
+  await openWorkWindow(page, "Work: Tasks");
   await row(modalView(page)).click();
   await modalView(page).getByRole("button", { name: "Delete…", exact: true }).click();
   const confirm = modalView(page).getByRole("group", { name: "Delete this task?" });

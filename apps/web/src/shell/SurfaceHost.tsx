@@ -17,6 +17,11 @@ export type SurfaceMeta = { id: string; title: string };
 // apart. This ref-shaped flag carries the one bit that can, with no store field. A fresh modal open clears it (see the effect).
 const pendingClose = { current: false };
 
+// The view background's menu (right-click / Shift+F10 / ContextMenu) held only "Open in window",
+// which is off for now — see the note at the top of contextMenu/registrations.tsx. With nothing
+// to offer, the rail frame neither opens a menu nor advertises one.
+const VIEW_MENU_ENABLED = false;
+
 /**
  * Frame one rail view — in the side rail (`frame="rail"`, wrapping the right dock's own
  * render) or in a large modal (`frame="modal"`, mounted at the shell level while
@@ -114,7 +119,7 @@ export function SurfaceHost({
   // did when they were a direct child of the DS dock column. A block parent leaves that
   // `flex` inert, so the surface collapsed to content height (a 150px-tall artifact iframe)
   // and swallowed clicks. `overflow: auto` still lets a natural-height view scroll.
-  const canExpand = frame === "rail" && !!view && view.id !== "chat";
+  const canExpand = VIEW_MENU_ENABLED && frame === "rail" && !!view && view.id !== "chat";
   const body = (
     <div
       ref={contentRef}

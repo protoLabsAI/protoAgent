@@ -1,4 +1,5 @@
-- **The window clears the app header.** A view opened with "Open in window" used to
-  cover the app's top bar and, in the macOS app, run into the window's close/minimize buttons.
-  It now starts just below the header. Double-clicking a rail item no longer opens the large
-  window; use the right-click menu.
+- **The Work window clears the app header.** Work opened from the Decisions, Background jobs or
+  Activity pill (or a Work palette row) used to cover the app's top bar and, in the macOS app,
+  run into the window's close/minimize buttons. It now starts just below the header. Rail items
+  no longer open the window on double-click, and the rail's right-click menu no longer offers
+  it: widen the side panel instead.
