@@ -610,10 +610,15 @@ def test_version_snapshot_precedes_first_query():
                 return subprocess.CompletedProcess(args, 0, stdout="")
             return real_run(args, *popenargs, **kwargs)
 
+        # An exactly representable monotonic anchor (#5036): with a real one, `anchor + 7200`
+        # minus `anchor` can land at 7199.99…, which int() truncates to 7199. Pinning the
+        # clock only while `server` imports keeps the proof that the anchor is import-time.
+        IMPORT_MONOTONIC = 4096.0
+
         before = datetime.now(timezone.utc)
         with patch("subprocess.run", side_effect=startup_git), patch(
             "infra.paths.app_root", return_value=Path.cwd()
-        ):
+        ), patch("time.monotonic", return_value=IMPORT_MONOTONIC):
             # Exercise passthrough on every host, even when its imports do not
             # happen to spawn a process. A different rev-parse must stay real too.
             for command, expected in [
@@ -633,6 +638,9 @@ def test_version_snapshot_precedes_first_query():
             "server startup must capture build identity (infra.build_info not imported)"
         )
         from infra import build_info as bi
+        assert bi._STARTED_MONOTONIC == IMPORT_MONOTONIC, (
+            f"the uptime anchor must be taken at import; got {bi._STARTED_MONOTONIC!r}"
+        )
 
         rev_parse = [c for c in git_calls if c == sha_command]
         status = [c for c in git_calls if c == status_command]
