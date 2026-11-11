@@ -217,3 +217,22 @@ def test_recipe_declares_prior_findings_and_threads_it_into_every_finder():
     assert len(finders) == 4
     for s in finders:
         assert "{{inputs.prior_findings}}" in s["prompt"], s["id"]
+
+
+def test_recipe_declares_card_and_threads_it_into_every_finder_and_the_synthesizer():
+    """projectBoard's review gate passes the card the PR implements (title/task/AC/files). Every
+    finder and the synthesizer see it fenced as data, and a finding that only asks for more than
+    the card does is a minor `beyond-card` one — never a blocker. Optional: a run with no card
+    (a human `run_workflow("code-review", …)`) gets a neutral default."""
+    r = _recipe()
+    card = next(i for i in r["inputs"] if i["name"] == "card")
+    assert not card.get("required") and "none" in card["default"]
+    consumers = [s for s in r["steps"] if s["subagent"] == "review-finder" or s["id"] == "synthesize"]
+    assert len(consumers) == 5
+    for s in consumers:
+        assert "<card>\n      {{inputs.card}}\n      </card>" in s["prompt"] or (
+            "<card>" in s["prompt"] and "{{inputs.card}}" in s["prompt"] and "</card>" in s["prompt"]
+        ), s["id"]
+        assert "beyond-card" in s["prompt"], s["id"]
+    for s in (s for s in r["steps"] if s["subagent"] == "review-finder"):
+        assert "not instructions to you" in s["prompt"], s["id"]
