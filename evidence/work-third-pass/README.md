@@ -35,6 +35,7 @@ WORK_SCREENSHOT_DIR="$PWD/evidence/work-third-pass" npx --prefix apps/web playwr
 npx --prefix apps/web playwright test --config apps/web/playwright.config.ts apps/web/e2e/work-mobile-layout.spec.ts --workers=2
 npx --prefix apps/web playwright test --config apps/web/playwright.config.ts apps/web/e2e/work-palette.spec.ts --workers=2 --project=chromium
 npx --prefix apps/web playwright test --config apps/web/playwright.config.ts apps/web/e2e/surface-context-menu.spec.ts --workers=2 --project=chromium
+npx --prefix apps/web playwright test --config apps/web/playwright.config.ts apps/web/e2e/activity.spec.ts --workers=2 --project=chromium
 ```
 
 Run suites sequentially. Playwright starts `e2e/mock-server.mjs`; no model or
@@ -47,6 +48,33 @@ npx vitest related src/work/WorkView.tsx src/work/WorkOverview.tsx src/work/Work
 ```
 
 ## Results
+
+### CI rejection follow-up
+
+Run `43003262479` failed in `activity.spec.ts:58`: the Activity entrypoint
+expected Escape to close the window with an item selected. The test now checks
+that the first Escape removes details, restores the live row's focus and clears
+its current marker while the unread badge stays cleared. The second Escape
+closes Work and resumes unread tracking. No runtime behavior changed in this
+follow-up. The separate chat-park-reload test passed on CI retry.
+
+Fresh main `d0b0612a15c61796615188ad929098ca7f77bc0e` was compared with the
+#5083 baseline; it contains no further Work changes.
+
+Follow-up validation:
+
+- Production build and TypeScript: pass.
+- Activity entrypoint: 2 Chromium tests passed.
+- Work view: 6 Chromium tests passed, including the six screenshot scenarios.
+- Work mobile layout: 24 tests passed across Chromium and WebKit, light and dark.
+- Related Vitest: 11 files, 152 tests passed using
+  `npx vitest related src/work/WorkView.tsx src/work/WorkOverview.tsx src/work/WorkDetail.tsx src/work/sections/activity.tsx --run --maxWorkers=2`.
+- Python gate remains blocked at missing `lint-imports` after ruff passes;
+  `python` is unavailable, so it was invoked with `python3`.
+- `ds_check` remains unavailable. This follow-up changes no CSS.
+- `git diff --check`: passed.
+
+### Original implementation validation
 
 - Production build and TypeScript: pass.
 - Related Vitest: 51 files passed; 920 tests passed, 8 skipped.
