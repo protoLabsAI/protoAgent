@@ -1,11 +1,11 @@
 import { expect, test, type Page } from "@playwright/test";
 
-// Josh 2026-11-11: a rail item's double-click no longer opens the large window — the rail
-// context menu's "Open in large window" is the one way in. And that window must clear the
+// Josh 2026-11-11: a rail item's double-click no longer opens the window — the rail
+// context menu's "Open in window" is the one way in. And that window must clear the
 // app's own header row (it used to cover it and run into the macOS traffic lights).
 const rail = (page: Page) => page.getByRole("complementary", { name: "Right surfaces", exact: true });
 
-test("double-clicking a rail item does not open the large window", async ({ page }) => {
+test("double-clicking a rail item does not open the window", async ({ page }) => {
   await page.goto("/app/", { waitUntil: "load" });
   const work = rail(page).getByRole("button", { name: "Work", exact: true });
   await expect(work).toBeVisible();
@@ -14,11 +14,11 @@ test("double-clicking a rail item does not open the large window", async ({ page
   await expect(page.locator('.work-view[data-frame="modal"]')).toHaveCount(0);
 });
 
-test("the context menu still opens the large window, and it clears the app header", async ({ page }) => {
+test("the context menu still opens the window, and it clears the app header", async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.goto("/app/", { waitUntil: "load" });
   await rail(page).getByRole("button", { name: "Work", exact: true }).click({ button: "right" });
-  await page.getByRole("menuitem", { name: "Open in large window", exact: true }).click();
+  await page.getByRole("menuitem", { name: "Open in window", exact: true }).click();
   const dialog = page.getByRole("dialog", { name: /^Work/ });
   await expect(dialog).toBeVisible();
   const header = await page.locator(".app-topbar").boundingBox();

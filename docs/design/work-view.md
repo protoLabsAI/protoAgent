@@ -191,7 +191,7 @@ This is defined once, at the shell level. Work is the first view to use it, and 
 - Opening an item **pushes** its detail view in place of the list. The detail view gets a **Back to {section}** ghost button at the top. The list keeps its scroll position for the return trip.
 - Chat strips open the rail on their section: DirectiveStrip goes to Directives, GoalRunStrip to Goals, and BackgroundWorkStrip to Background agents.
 
-### 3.3 The modal (large window)
+### 3.3 The modal (window)
 
 - It uses `Dialog height="fill" padding="none"`. The width is the largest DS-allowed width that leaves the scrim visible (see build note B3).
 - The header has the title **Work**, plus **Dock to rail** and Close. In the modal, the "This chat" filter is **off** by default and the view is agent-wide (Q1).
@@ -296,7 +296,7 @@ Destructive actions confirm **inline in the detail view**, not with `ConfirmDial
 | Undo too late | Couldn't restore it. The undo window has closed. | Toast (warning) | same |
 | Paused / resumed | Paused. / Resumed. | Status line in the detail view | polite |
 | Action failed | Couldn't {verb} it. Nothing changed. · Try again | Inline `Alert status="warning"` | assertive |
-| Expanded | — | — | "Work opened in a large window." |
+| Expanded | — | — | "Work opened in a window." |
 | Docked | — | — | "Work docked to the side rail." |
 | Section change | — | — | "{Section}, {N} items." |
 | New "Needs you" item while open | — | — | "New decision: {title}." (polite, once) |

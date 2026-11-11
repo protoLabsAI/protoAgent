@@ -3,7 +3,7 @@ import { expect, test, type Locator, type Page } from "@playwright/test";
 async function expandWork(page: Page) {
   await page.getByRole("region", { name: "Work view", exact: true }).focus();
   await page.keyboard.press("Shift+F10");
-  await page.getByRole("menuitem", { name: "Open in large window", exact: true }).click();
+  await page.getByRole("menuitem", { name: "Open in window", exact: true }).click();
 }
 
 async function selectTasks(page: Page, work: Locator) {

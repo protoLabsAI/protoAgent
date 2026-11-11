@@ -194,7 +194,7 @@ describe("SurfaceHost modal frame", () => {
     expect(dialog!.classList.contains("pl-dialog--wide")).toBe(true);
     expect(document.querySelector(".pl-dialog--fill .pl-dialog__body--flush")).not.toBeNull();
     expect(document.activeElement).toBe(dialog!.querySelector("[data-surface-focus]"));
-    expect(container.querySelector('[role="status"]')?.textContent).toBe("Work opened in a large window.");
+    expect(container.querySelector('[role="status"]')?.textContent).toBe("Work opened in a window.");
   });
 
   it.each(["left", "right", "bottom", "hidden"] as const)(

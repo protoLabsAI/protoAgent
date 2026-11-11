@@ -9,7 +9,7 @@ import type { MenuEntry } from "./types";
 function expandSurface(id: string): MenuEntry {
   return {
     id: "open-large-window",
-    label: "Open in large window",
+    label: "Open in window",
     icon: <Maximize2 size={14} />,
     run: () => useUI.getState().openSurfaceModal(id),
   };

@@ -62,7 +62,7 @@ export function SurfaceHost({
   const title = view?.title;
 
   // Move focus into the view as it changes frame, and announce the move for a screen
-  // reader. The modal host (a fresh mount) says "opened in a large window"; the rail host
+  // reader. The modal host (a fresh mount) says "opened in a window"; the rail host
   // says "docked to the side rail" when Dock clears the modal back onto this very view.
   // A plain Close clears the modal the same way, so the rail host stays silent only because
   // the modal host flags it via `pendingClose` (see below) — not from store state.
@@ -82,7 +82,7 @@ export function SurfaceHost({
       pendingClose.current = false;
       // Parent effects run after the Dialog's own focus trap has initialized.
       focusView();
-      setAnnouncement(`${title} opened in ${frame === "sheet" ? "a full-screen sheet" : "a large window"}.`);
+      setAnnouncement(`${title} opened in ${frame === "sheet" ? "a full-screen sheet" : "a window"}.`);
     } else if (frame === "rail" && was && !modal && was.viewId === viewId) {
       // The modal just cleared back onto this very rail view. Dock to rail moves focus into the
       // view and announces the move; a plain Close (the Dialog's ✕ / Escape / backdrop) must stay

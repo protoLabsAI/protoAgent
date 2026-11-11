@@ -45,7 +45,7 @@ const row = (view: Locator) => view.locator(".work-row").filter({ hasText: "Work
 async function expandWork(page: Page) {
   await page.getByRole("region", { name: "Work view", exact: true }).focus();
   await page.keyboard.press("Shift+F10");
-  await page.getByRole("menuitem", { name: "Open in large window", exact: true }).click();
+  await page.getByRole("menuitem", { name: "Open in window", exact: true }).click();
 }
 
 async function openTasks(page: Page) {
