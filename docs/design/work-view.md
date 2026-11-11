@@ -2,6 +2,8 @@
 
 Status: approved by Josh, 2026-11-09. Tracking: #4955.
 
+Third pass (layout) approved by Josh 2026-11-11. Preview: designSystem artifact a-1794389235320-cdc47b.
+
 ## 1. What this view answers
 
 This view answers one question at a glance: **what is this agent doing, what is it waiting on, what will it do next, and what did it just do?**
@@ -24,7 +26,7 @@ The Overview has **five lanes**. They are listed in this order, and an empty lan
 
 Sections: Overview · Decisions · Goals · Watches · Tasks · Schedules · Background agents · Activity · Directives (Q11).
 
-Work always lists every chat's items; there is no "This chat" / "All" filter (revised 2026-11-11 — Josh: a per-chat option felt confusing).
+Work always shows every chat. There is no This chat / All filter (Josh, 2026-11-11, #5083). Where the source chat matters, the row meta names it.
 
 ### 2.2 Shared tone map
 
@@ -64,7 +66,7 @@ The card design is unchanged (decision-needed.md, revision 1). This table lists 
 | 2 | Status | `state` | pending → **needs you**; answered → **done**; expired, cancelled, withdrawn → **cancelled** |
 | 3 | Asked | `created_at` | "Asked 4 min ago" |
 | 4 | Expiry and default | `expires_at`, `default_action_text` | "If no answer by 18:00: {default_action_text}". Hidden when there is no expiry. |
-| 5 | Agent | `agent` | Shown only in the agent-wide filter, for example "protoEngineer" |
+| 5 | Agent | `agent` | Shown across all chats, for example "protoEngineer" |
 | 6 | Outcome (closed) | `answer_label`, `answered_by`, `answered_at`, `withdraw_reason` | "Answered: {answer_label} · by you · 17:20", or "Withdrawn: {reason}" |
 
 **Never shown:** `id`, `session_id`, `thread_id`, `interrupt_id`, `default_option` (as an id), `answered_surface`, the raw `state` string. Technical details: `id`, `session_id`, `thread_id`.
@@ -128,7 +130,7 @@ The card design is unchanged (decision-needed.md, revision 1). This table lists 
 | 3 | When | `schedule`, `timezone` | Plain words: "Weekdays at 09:00", "Once, 10 Nov at 14:00". The timezone is shown only when it differs from local time. |
 | 4 | Next run | `next_fire` | "Next: in 2 h (today at 17:00)" |
 | 5 | Last run | `last_fire` | "Last ran yesterday at 09:00". Links to that turn in Activity when it exists. |
-| 6 | Agent | `agent_name` | Shown only in the agent-wide filter |
+| 6 | Agent | `agent_name` | Shown across all chats |
 | 7 | Created (detail) | `created_at` | "Created 7 Nov" |
 
 **Never shown:** `id`, the raw cron `schedule`, ISO timestamps, the backend name, the IANA timezone string. Technical details: `id`, cron string, IANA timezone, backend.
@@ -145,7 +147,7 @@ Disabled schedules show only in the Schedules section. The Overview shows "{N} p
 | 4 | Time | `created_at`, `completed_at` | "Started 3 min ago" · "Took 4 min" |
 | 5 | Why it ended | `error` | "Stopped: the server restarted before the job finished". Not shown for a completed job. |
 | 6 | Result (detail) | `result` | Markdown, clamped to 8 lines with **Show full text** |
-| 7 | From chat (agent-wide filter) | `origin_session` | "From {chat title}", as a link. Never the raw id. |
+| 7 | From chat | `origin_session` | "From {chat title}", as a link. Never the raw id. |
 
 Below the list, a link reads **Manage subagents**. It opens `SubagentsPanel` (Q14).
 
@@ -177,36 +179,42 @@ This section keeps the approved ledger design. Its fields, "Never shown" list an
 This is defined once, at the shell level. Work is the first view to use it, and any other rail view can adopt it the same way.
 
 - **One host, two frames.** A shell surface host renders any registered view in the **rail** (right dock) or the **modal** (large dialog). On the phone, both frames become a full-screen sheet (Q6), so the controls are hidden there.
-- **Controls.** The rail header has **Expand**, which opens the same view in the modal. The modal header has **Dock to rail**. Every view gets both, even a view with no state to keep.
+- **Controls.** The rail header has **Expand**, which opens the same view in the modal. The modal header has **Dock to rail**. Every view gets both, even a view with no state to keep. Double-click does not expand the rail, and its menu has no **Open in window** action.
 - **Keeping your place.** The host moves a view's `SurfaceState` between frames: `section`, `itemId`, `scrollTop` and `filters`. Each view decides what goes in it. The host stores and restores it, and never reads it.
 - **Deep link.** The deep link is `<view>/<section>[/<item-id>]` (here `work/…`). It opens in whichever frame the entry point asks for. Utility-bar pills and palette commands open the modal. Chat-strip "View" buttons open the rail.
 - **Focus.** After a move, focus lands on the same item, or on the section heading if no item is open. A screen reader hears "Expanded" or "Docked to rail".
 
-### 3.2 The rail (right column)
+### 3.2 Shared layout (every frame)
 
-- It mounts in the `AppShell` right column, inside the existing 280–720 px resize range. The chat stays fully usable beside it.
-- The header is `PanelHeader` with the title **Work** and one action, **Expand** (the "This chat" filter was removed 2026-11-11).
-- Sections use `SideNav responsive`. The rail is narrow, so the container query collapses the section list into the quiet trigger and `Menu`. Each section item shows its `Count`.
-- The body shows one column: the section list, or the Overview lanes.
-- Opening an item **pushes** its detail view in place of the list. The detail view gets a **Back to {section}** ghost button at the top. The list keeps its scroll position for the return trip.
-- Chat strips open the rail on their section: DirectiveStrip goes to Directives, GoalRunStrip to Goals, and BackgroundWorkStrip to Background agents.
+The list is the page. The detail opens only when you pick an item; no pane exists for nothing.
 
-### 3.3 The modal (window)
+- **Section picker:** `SideNav collapsed ariaLabel="Work sections"` with raw number `badge` counts. It is the first line of the list, left-aligned and sized to its label (`flex: 0 1 auto`), never a full-width bar. (DS follow-up: protoContent#674 adds `fit="content"`.)
+- **Lane and section headings:** `h2`, label plus `Count` ("Doing 2"), `--pl-font-size-sm`, `--pl-font-weight-semibold`, smaller than the frame title. The accessible name includes the count ("Doing, 2").
+- **Help line:** only while one lane is visible; copy from §4.2; `--pl-color-fg-muted`, `--pl-font-size-sm`.
+- **Lane list:** one `ul` per lane as a single bordered group (`--pl-color-bg-raised`, `--pl-border-width` solid `--pl-color-border`, `--pl-radius-lg`, `overflow: hidden`). Rows are separated by a hairline border, with no gap between rows. Lanes are `--pl-space-4` apart.
+- **Row (`WorkRow`):** one button; padding `--pl-space-2` × `--pl-space-3`; title clamps at 2 lines; meta one line with ellipsis; hover `--pl-color-bg-hover`; the open item has `aria-current="true"` and `--pl-color-bg-subtle`. When the list is at least 40rem wide (container query on the list), the title and meta sit side by side on one line (3fr / 2fr, both truncated, title clamps to 1 line). Target: about 44px for a one-line row.
+- **Empty:** `Empty` with title and description, placed inline in the list flow under the picker and left-aligned. It never floats in the middle of a pane. Goals keep **New goal**. (DS follow-up: protoContent#673 adds `Empty align="start"`.)
 
-- It uses `Dialog height="fill" padding="none"`. The width is the largest DS-allowed width that leaves the scrim visible (see build note B3).
-- The header has the title **Work**, plus **Dock to rail** and Close. There is no "This chat" filter; the modal, like the rail, lists every chat (revised 2026-11-11).
-- Three panes: (1) `SideNav` (expanded) with section counts, (2) the list or the lanes, (3) a detail pane for the selected item.
-- With no item selected, the detail pane shows a quiet `Empty`: "Pick an item to see its details."
-- Below about 900 px of modal width, the detail pane collapses into the rail's push behaviour (container query, not the viewport).
+### 3.3 The rail (right column)
 
-### 3.4 The phone sheet (390 px)
+- It mounts in the `AppShell` right column, inside the 280–720 px resize range. Single column.
+- Opening a row pushes its detail view in place of the list, with a **Back to {section}** ghost button. The list keeps its scroll position.
+- Chat strips open the rail on their section (DirectiveStrip → Directives, GoalRunStrip → Goals, BackgroundWorkStrip → Background agents).
 
-- Every entry point opens one **full-screen sheet** (Q6), with **no Expand or Dock to rail**.
-- The header has the title **Work**, the section trigger (`SideNav responsive`, always collapsed) and Close.
-- It behaves like the rail: the list fills the screen, and an item pushes its detail view with **Back to {section}**.
-- Detail-view actions are `size="md"` and full width.
+### 3.4 The window
 
-### 3.5 Utility-bar pills
+- `Dialog size="wide" height="fill" padding="none"`, clearing the app header (#5079). Header: title **Work**, **Dock to rail**, Close.
+- **Nothing selected:** one column that fills the window. The list content is capped at `64rem` and left-aligned. There is no detail pane and no "Pick an item" placeholder.
+- **Item open:** an inspector pane appears on the right at `clamp(24rem, 38%, 34rem)` with a start border (`--pl-border-width` `--pl-color-border`). The list stays visible with the open row marked current. The inspector has a ghost icon button **Close details** (✕, `aria-label` + `Tooltip`) instead of Back. Escape closes the inspector first, then the dialog. Focus returns to the row that opened it.
+- **Below 48rem of dialog width** (container query, not viewport) it behaves like the rail: push and Back.
+
+### 3.5 The phone sheet (390 px)
+
+- `Drawer side="bottom" fullScreen` titled **Work**, with no Expand or Dock to rail. The body is the rail layout (§3.3).
+- Rows are at least `--pl-space-12` tall.
+- Detail actions are `size="md"`, full width and stacked, destructive last. Back to {section} is `size="md"`.
+
+### 3.6 Utility-bar pills
 
 All pills stay (Q12). Each opens the **modal** on its section and keeps its badge.
 
@@ -221,7 +229,7 @@ All pills stay (Q12). Each opens the **modal** on its section and keeps its badg
 
 Work gets **no new pill**. You reach it from the right-rail icon, the palette, and the three pills above.
 
-### 3.6 Palette entries
+### 3.7 Palette entries
 
 Every palette entry opens the **modal**.
 
@@ -246,17 +254,19 @@ Plain words only. No raw ids, cron strings, verifier types or API status values 
 | Subagents link | Subagents ↗ |
 | Expand / Dock | Expand / Dock to rail |
 | Back | Back to {section} |
-| No selection | Pick an item to see its details. |
+| Close inspector (window) | Close details |
 
 ### 4.2 Overview lanes
 
+Headings use label plus `Count`, for example "Doing 2", with accessible name "Doing, 2" (§3.2).
+
 | Lane heading | Help line (only while it is the only visible lane) |
 |---|---|
-| Needs you ({N}) | Decisions waiting for your answer. |
-| Doing ({N}) | Running now. |
-| Waiting on ({N}) | Paused until something happens. |
-| Next ({N}) | Scheduled or queued. |
-| Done ({N}) | The last 24 hours. |
+| Needs you {N} | Decisions waiting for your answer. |
+| Doing {N} | Running now. |
+| Waiting on {N} | Paused until something happens. |
+| Next {N} | Scheduled or queued. |
+| Done {N} | The last 24 hours. |
 | Disabled schedules (Next lane foot) | {N} disabled schedules · View |
 | Older items | Show more |
 
@@ -311,10 +321,10 @@ These apply to every section and every Overview lane. A section shows its own st
 - Show more: a `Spinner` in the button, which is `aria-busy` and disabled. The rows already shown stay.
 
 ### 5.2 Empty
-- **Whole Overview empty:** `Empty`, title **Nothing going on**, description "When the agent starts a goal, sets a watch, schedules something or asks you a question, it shows up here."
+- **Whole Overview empty:** `Empty`, inline and left-aligned in the list flow under the picker (§3.2), title **Nothing going on**, description "When the agent starts a goal, sets a watch, schedules something or asks you a question, it shows up here."
 - **One lane empty:** the lane is hidden. Lanes never show a placeholder.
-- **Section empty:** `Empty` with one line for that type, for example "No watches. The agent sets one when it needs to wait for something." Goals add a **New goal** button (Q15). No other section has an action.
-- **Done empty within 24 h, with older items:** "Nothing finished in the last 24 hours." plus **Show more**.
+- **Section empty:** `Empty`, inline and left-aligned in the list flow under the picker (§3.2), with one line for that type, for example "No watches. The agent sets one when it needs to wait for something." Goals add a **New goal** button (Q15). No other section has an action.
+- **Done empty within 24 h, with older items:** inline and left-aligned in the list flow (§3.2), "Nothing finished in the last 24 hours." plus **Show more**.
 
 ### 5.3 Error
 - **Section failed, never loaded:** `Alert status="warning"`, "Couldn't load {watches}. The agent still has them. Only this view failed." with a **Retry** button. The section never shows Empty when it doesn't know.
@@ -328,7 +338,7 @@ These apply to every section and every Overview lane. A section shows its own st
 
 ## 6. Accessibility
 
-- **Frames.** Modal = `Dialog`, phone sheet = `Drawer`: focus trap, Escape, focus return. The rail is a labelled non-modal `region` ("Work"); Escape there only closes an open detail view.
+- **Frames.** Modal = `Dialog`, phone sheet = `Drawer`: focus trap, Escape, focus return. The rail is a labelled non-modal `region` ("Work"); Escape there only closes an open detail view. In the window, Escape closes the inspector before the dialog.
 - **Moving between frames.** Focus moves to **the same element** in the new frame (the open item's heading, or the active section item), and the move is announced (§4.5). Focus never drops to `<body>`.
 - **Structure.** Frame heading = view title; lanes and sections are `h2`, groups `h3`. Each lane is a `list`. Counts are in the heading text ("Doing, 3").
 - **Rows.** Each row is **one** button opening the detail view (raw `<button type="button">` allowed for composite rows per protoContent#551, with the DS focus ring and tokens only). No nested buttons (fixes audit finding 5). Actions live in the detail view.
@@ -344,7 +354,7 @@ These apply to every section and every Overview lane. A section shows its own st
 
 ### 7.1 Design-system components (all exist today)
 
-`AppShell`, `SurfaceRail` (`@protolabsai/ui/app-shell`) · `Dialog` (`height="fill"`, `padding="none"`), `Drawer` (`side="bottom"`, see B4), `Tooltip`, `useToast` (`/overlays`) · `PanelHeader`, `SideNav`, `Accordion`/`AccordionItem` (`/navigation`) · `Menu` (`/menu`) · `Button`, `Badge`, `Count`, `Empty`, `Callout`, `Divider`, `Kbd` (`/primitives`) · `StatusDot`, `Skeleton`/`SkeletonGroup`, `Alert`, `ScrollArea` (`/data`) · `FormField`, `Textarea`, `Switch` (`/forms`) · `CommandPalette` (`/command-palette`).
+`AppShell`, `SurfaceRail` (`@protolabsai/ui/app-shell`) · `Dialog` (`height="fill"`, `padding="none"`), `Drawer` (`side="bottom"`, `fullScreen`), `Tooltip`, `useToast` (`/overlays`) · `PanelHeader`, `SideNav`, `Accordion`/`AccordionItem` (`/navigation`) · `Menu` (`/menu`) · `Button`, `Badge`, `Count`, `Empty`, `Callout`, `Divider`, `Kbd` (`/primitives`) · `StatusDot`, `Skeleton`/`SkeletonGroup`, `Alert`, `ScrollArea` (`/data`) · `FormField`, `Textarea`, `Switch` (`/forms`) · `CommandPalette` (`/command-palette`).
 
 Decision cards keep their approved design; A1 changes placement only.
 
@@ -363,8 +373,16 @@ Tokens only; the build runs `ds_check` over them.
 ### 7.3 Possible DS contributions (optional, not blocking)
 
 - No new DS component is required.
-- `ListRow` in `@protolabsai/ui/data`, only once `WorkRow` has a second consumer.
+- `ListGroup` / `ListRow` in `@protolabsai/ui/data` (protoContent#675, optional; adopt once it publishes).
 - `SurfaceFrame` in `@protolabsai/ui/app-shell`, only if plugin views need the frame header outside the console host.
+
+### 7.4 Open DS follow-ups
+
+- protoContent#673: `Empty align="start"`, tokenized font sizes.
+- protoContent#674: collapsed `SideNav fit="content"`.
+- protoContent#675: `ListGroup`/`ListRow`.
+
+None blocks build.
 
 ## 8. Out of scope
 
@@ -380,8 +398,8 @@ All 16 are answered (Josh, 2026-11-09: "All as recommended", and the spec and pr
 
 - **B1:** confirm the raw goal and Activity status lists (`types.ts` types them as `string`).
 - **B2:** confirm the neutral tone of `StatusDot`/`Badge` resolves to `--pl-color-fg-subtle`.
-- **B3:** no DS dialog-width token. Find a width without literal px in app CSS, or file a DS gap for `Dialog size="wide"`.
-- **B4:** `Drawer side="bottom"` caps at 85dvh. Confirm `size="100dvh"` gives a true full-screen sheet, or use `Dialog height="fill"` at the phone breakpoint, or file a DS gap.
+- **B3:** the approved window uses `Dialog size="wide"` (§3.4).
+- **B4:** the approved phone sheet uses `Drawer side="bottom" fullScreen` (§3.5).
 
 ## Preview
 
