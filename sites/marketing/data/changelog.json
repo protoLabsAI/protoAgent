@@ -1,5 +1,17 @@
 [
   {
+    "version": "v0.236.0",
+    "date": "2026-11-11",
+    "changes": [
+      "Workflow review context (#327).",
+      "Whole-store memory selection (#4898).",
+      "Native tool receipt capture (#5081).",
+      "Native workflow review receipts (#5081).",
+      "Native workflow context isolation probes (#327).",
+      "Work list and inspector (#5087)."
+    ]
+  },
+  {
     "version": "v0.235.1",
     "date": "2026-11-11",
     "changes": [
