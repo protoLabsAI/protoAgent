@@ -16,6 +16,7 @@ import { registerWorkSection, type WorkSectionContext } from "../WorkView";
 import { WorkRow } from "../WorkRow";
 import { WorkDetail, type WorkAction, type WorkField } from "../WorkDetail";
 import { relTime } from "../tone";
+import { watchKind } from "../rowMeta";
 import type { WorkItem } from "../useWorkItems";
 import { api } from "../../lib/api";
 import { queryKeys } from "../../lib/queries";
@@ -54,12 +55,6 @@ function compactDuration(s: number): string {
 }
 
 // §2.6 field 3 — the operator-facing collapse of trigger × repeat.
-function watchKind(w: WatchState): string {
-  if (w.trigger === "change") return "Fires when the value changes";
-  if (w.repeat) return "Fires every time it's met";
-  return "Fires once when met";
-}
-
 function firedText(w: WatchState): string {
   const fired = w.fire_count ?? 0;
   if (fired <= 0) return "";

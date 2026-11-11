@@ -134,6 +134,11 @@ describe("useWorkItems — load, map, filter", () => {
     expect(w.watches.items[0]).toMatchObject({ kind: "watch", id: "w1", status: "waiting" });
     expect(w.tasks.items[0]).toMatchObject({ kind: "task", id: "t1", status: "running" });
     expect(w.schedules.items[0]).toMatchObject({ kind: "schedule", id: "j1", status: "scheduled" });
+    // Overview rows read in plain words, like their sections: never a raw cron, a bare type
+    // or a trigger keyword (work-view spec §4; release acceptance bd-nfd6g.17).
+    expect(w.schedules.items[0].meta).toBe("Every day at 09:00");
+    expect(w.watches.items[0].meta).toBe("Fires once when met");
+    expect(w.tasks.items[0].meta).toBe("Task");
     expect(w.background.items[0]).toMatchObject({ kind: "background", id: "b1", status: "running", sessionId: "s1" });
     expect(w.activity.items[0]).toMatchObject({ kind: "activity", id: "1", status: "done" });
     expect(w.directives.items[0]).toMatchObject({ kind: "directive", id: "x1", status: "waiting", sessionId: "s1" });

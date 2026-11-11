@@ -22,8 +22,9 @@ import { api } from "../../lib/api";
 import { queryKeys } from "../../lib/queries";
 import type { ScheduledJob } from "../../lib/types";
 import { ScheduleModal } from "../../schedule/SchedulePanel";
-import { WEEKDAYS, localZone, parseSchedule } from "../../schedule/schedule-builder";
+import { localZone, parseSchedule } from "../../schedule/schedule-builder";
 import { relTime } from "../tone";
+import { scheduleWhen } from "../rowMeta";
 import { WorkDetail, type WorkAction, type WorkField } from "../WorkDetail";
 import { WorkRow } from "../WorkRow";
 import { registerWorkSection, type WorkSectionContext } from "../sectionRegistry";
@@ -32,34 +33,6 @@ import type { WorkItem, WorkSource } from "../useWorkItems";
 /** The prompt's first line — the row/detail title. Never the job id (§2.8 field 1). */
 function firstLine(text: string): string {
   return (text || "").split("\n")[0].trim();
-}
-
-/** Plain-words timing for a schedule string — reuses the builder's `parseSchedule` so the
- *  raw cron is never surfaced (§2.8 field 3). A custom cron that matches no friendly preset
- *  reads "Custom schedule"; the cron itself stays in Technical details. */
-function scheduleWhen(schedule: string): string {
-  const parsed = parseSchedule(schedule);
-  if (parsed.mode === "once") {
-    const d = new Date((schedule || "").trim());
-    if (Number.isNaN(d.getTime())) return "Once";
-    const day = d.toLocaleDateString("en-GB", { day: "numeric", month: "short" });
-    const time = d.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" });
-    return `Once, ${day} at ${time}`;
-  }
-  if (parsed.mode === "repeat") {
-    const minute = parsed.time.split(":")[1] ?? "00";
-    switch (parsed.freq) {
-      case "hourly":
-        return `Every hour at :${minute}`;
-      case "daily":
-        return `Every day at ${parsed.time}`;
-      case "weekdays":
-        return `Weekdays at ${parsed.time}`;
-      case "weekly":
-        return `${WEEKDAYS[parsed.dow]}s at ${parsed.time}`;
-    }
-  }
-  return "Custom schedule";
 }
 
 /** Forward-relative phrase for a future fire ("in 2 h"), paired with `relTime` for the clock. */

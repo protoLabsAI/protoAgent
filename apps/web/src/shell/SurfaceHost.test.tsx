@@ -235,6 +235,41 @@ describe("SurfaceHost modal frame", () => {
   });
 });
 
+describe("SurfaceHost modal focus return", () => {
+  const frame = () => new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+
+  it.each(["modal", "sheet"] as const)("a plain Close of the %s returns focus to the element that opened it", async (kind) => {
+    const opener = document.createElement("button");
+    opener.textContent = "Decisions";
+    document.body.appendChild(opener);
+    opener.focus();
+    act(() => useUI.getState().openSurfaceModal("work"));
+    act(() => root.render(<SurfaceHost frame={kind} view={work}>{content("work")}</SurfaceHost>));
+    expect(document.activeElement).not.toBe(opener); // the overlay took focus
+    if (kind === "modal") click("Close");
+    else act(() => (document.querySelector(".pl-drawer [aria-label='Close']") as HTMLElement | null)?.click());
+    expect(useUI.getState().surfaceModal).toBeNull();
+    // The shell unmounts the overlay host once surfaceModal clears.
+    act(() => root.render(<></>));
+    await act(frame);
+    expect(document.activeElement).toBe(opener);
+    opener.remove();
+  });
+
+  it("Dock to rail does not pull focus back to the opener", async () => {
+    const opener = document.createElement("button");
+    document.body.appendChild(opener);
+    opener.focus();
+    act(() => useUI.getState().openSurfaceModal("work"));
+    act(() => root.render(<SurfaceHost frame="modal" view={work}>{content("work")}</SurfaceHost>));
+    click("Dock to rail");
+    act(() => root.render(<></>));
+    await act(frame);
+    expect(document.activeElement).not.toBe(opener);
+    opener.remove();
+  });
+});
+
 describe("surface modal state is never persisted", () => {
   it("omits surfaceModal / surfaceStates from storage and hydrates the modal closed", async () => {
     act(() => useUI.getState().openSurfaceModal("work", { section: "goals" }));

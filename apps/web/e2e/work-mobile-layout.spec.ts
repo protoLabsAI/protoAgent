@@ -33,6 +33,18 @@ async function selectTasks(page: Page, work: Locator) {
   await expect(picker).toBeFocused();
 }
 
+/** scrollTop of whatever actually scrolls the Work list: the list in the rail and modal, the
+ *  Drawer body in the phone sheet (where the list grows to its content). */
+function scrollerTop(work: Locator) {
+  return work.locator(".work-row").nth(25).evaluate((row) => {
+    for (let n: HTMLElement | null = row.parentElement; n; n = n.parentElement) {
+      const o = getComputedStyle(n).overflowY;
+      if ((o === "auto" || o === "scroll") && n.scrollHeight > n.clientHeight + 1) return n.scrollTop;
+    }
+    return 0;
+  });
+}
+
 async function openRow(work: Locator) {
   const row = work.locator(".work-row").nth(25);
   await row.click();
@@ -105,6 +117,9 @@ for (const theme of ["light", "dark"] as const) {
           expect(box!.height).toBeGreaterThanOrEqual(44);
         }
         await expect(work.locator(".pl-count .pl-count")).toHaveCount(0);
+        await work.locator(".work-row").nth(25).scrollIntoViewIfNeeded();
+        const listScroll = await scrollerTop(work);
+        expect(listScroll).toBeGreaterThan(0);
         const listScreenshot = info.outputPath(`phone-list-${width}-${theme}.png`);
         await page.screenshot({ path: listScreenshot });
         await info.attach("Phone list", { path: listScreenshot, contentType: "image/png" });
@@ -117,6 +132,9 @@ for (const theme of ["light", "dark"] as const) {
         await work.getByRole("button", { name: "Back to Tasks" }).click();
         await expect(work.locator(".work-row").nth(25)).toBeFocused();
         await expect(work.locator(".work-view__list")).toBeVisible();
+        // Back keeps the list where it was: the row is on screen, not just focused off-screen.
+        await expect.poll(() => scrollerTop(work)).toBe(listScroll);
+        await expect(work.locator(".work-row").nth(25)).toBeInViewport();
         await work.getByRole("button", { name: "All", exact: true }).click();
         await expect(work.getByRole("button", { name: "All", exact: true })).toHaveAttribute("aria-pressed", "true");
       });
