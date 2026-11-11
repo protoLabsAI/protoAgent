@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import re
 import sqlite3
 import threading
@@ -491,6 +492,31 @@ class MemoryStore:
                 by_id[row["id"]] = MemoryEntry(**data)
             return [by_id[id] for id in sorted(scores, key=scores.get, reverse=True)[:k]]
 
+    def best_similarity(self, query: str, ids: list[int]) -> float:
+        """Best cosine among top-k hits; missing vectors count as weak (-1).
+
+        Separate from hybrid ranking so existing search ordering stays unchanged.
+        Re-read the vectors each turn; failures propagate to the caller's fallback.
+        """
+        if not ids:
+            return -1.0
+        vector = self._embed(query)
+        if vector is None:
+            return -1.0
+        norm = math.sqrt(sum(x * x for x in vector)) or 1.0
+        best = -1.0
+        with closing(self._connect()) as db:
+            rows = db.execute(
+                "SELECT vec FROM memory_vectors WHERE memory_id IN (" + ",".join("?" for _ in ids) + ")", ids
+            )
+            for row in rows:
+                other = json.loads(row["vec"])
+                if len(other) != len(vector):
+                    continue
+                denom = norm * (math.sqrt(sum(x * x for x in other)) or 1.0)
+                best = max(best, sum(a * b for a, b in zip(vector, other)) / denom)
+        return best
+
     def list(
         self,
         *,
@@ -498,6 +524,7 @@ class MemoryStore:
         delivery=None,
         review_state=None,
         limit: int = 100,
+        offset: int = 0,
         include_superseded: bool = False,
         scope=None,
         provenance=None,
@@ -516,8 +543,8 @@ class MemoryStore:
             return [
                 MemoryEntry(**dict(row))
                 for row in db.execute(
-                    f"SELECT m.* FROM memories m WHERE {where} ORDER BY created_at DESC, id DESC LIMIT ?",
-                    [*params, limit],
+                    f"SELECT m.* FROM memories m WHERE {where} ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?",
+                    [*params, limit, max(0, offset)],
                 )
             ]
 

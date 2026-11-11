@@ -843,6 +843,44 @@ FIELDS: list[Field] = [
         "Share the operator profile (name, timezone, standing preferences) with this "
         "agent. Off for sandboxed or client-facing agents.",
     ),
+    Field(
+        "memory.whole_store_read",
+        "memory_whole_store_read",
+        "Whole-store memory selection",
+        "bool",
+        "Memory",
+        "On weak similarity matches, let a small model select relevant memories from a small store. "
+        "Off by default. Stays off while the select model resolves to the main model.",
+    ),
+    Field(
+        "memory.whole_store_max_rows",
+        "memory_whole_store_max_rows",
+        "Whole-store row limit",
+        "number",
+        "Memory",
+        "Maximum live memories for whole-store selection.",
+        minimum=1,
+    ),
+    Field(
+        "memory.whole_store_weak_score",
+        "memory_whole_store_weak_score",
+        "Weak similarity threshold",
+        "number",
+        "Memory",
+        "Select from the whole store only when the best top-k cosine similarity is below this value.",
+        minimum=-1,
+        maximum=1,
+    ),
+    Field(
+        "memory.select_model",
+        "memory_select_model",
+        "Memory selection model",
+        "string",
+        "Memory",
+        "Model for memory selection. Falls back to routing.aux_model, then the main model. "
+        "Whole-store selection stays off when this resolves to the main model.",
+        options_source="slot_models",
+    ),
     # Hot-memory write confirm gate (ADR 0069 D8).
     Field(
         "knowledge.hot_write_confirm",
