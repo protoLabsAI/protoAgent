@@ -24,6 +24,15 @@ DEFAULT_STARTER_PROMPTS: list[dict[str, str]] = [
 ]
 
 
+def _public_url() -> str:
+    try:
+        from infra.media import configured_public_url
+
+        return configured_public_url()
+    except Exception:  # noqa: BLE001 — status must never raise
+        return ""
+
+
 def _resolve_starter_prompts(config: Any) -> list[dict[str, str]]:
     """The starter chips to serve (#4570), resolved from config.
 
@@ -191,6 +200,9 @@ def build_runtime_status(
             "top_k": getattr(config, "skills_top_k", None),
         },
         "mcp": mcp_block,
+        # Where this agent's absolute media links point (A2A_PUBLIC_URL) — the console shows
+        # images from here inline and treats any other host's as a link.
+        "public_url": _public_url(),
         "plugins": plugins_block,
         "scheduler": {
             "enabled": bool(getattr(config, "scheduler_enabled", False)),

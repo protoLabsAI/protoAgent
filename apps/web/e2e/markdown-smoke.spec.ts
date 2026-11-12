@@ -121,12 +121,13 @@ test("full markdown surface renders (structure + chrome)", async ({ page }, test
 
   // ── Image chrome (#1960): the DS MarkdownImage action cluster + Lightbox ─────
   // Two fixture images: the loadable /media/ one (mock-served PNG) carries the live
-  // chrome; the unreachable example.com one exercises the broken-image fallback.
+  // chrome; the example.com one is on another host, so it shows as a link.
   const imgWrap = md
     .locator('[data-streamdown="image-wrapper"]')
     .filter({ has: page.locator('[data-streamdown="image"][src*="/media/"]') });
   await expect(imgWrap.locator('[data-streamdown="image"]')).toBeVisible();
-  await expect(md.locator('[data-streamdown="image-fallback"]')).toBeVisible();
+  // An image on another host is never loaded on sight — it renders as a link to it.
+  await expect(md.getByRole("link", { name: "alt text — image from example.com" })).toBeVisible();
   const cluster = imgWrap.locator(".pl-md-img-actions");
   await expect(cluster.getByRole("button", { name: "Download image" })).toBeAttached();
   await expect(cluster.getByRole("button", { name: "Open in new tab" })).toBeAttached();

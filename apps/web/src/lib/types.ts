@@ -1,5 +1,7 @@
 export type RuntimeStatus = {
   setup_complete: boolean;
+  /** The agent's public URL (`A2A_PUBLIC_URL`), or "" — where its absolute media links point. */
+  public_url?: string;
   graph_loaded: boolean;
   /** Signed-out native OAuth provider (#2458 → #2513): setup is complete but the
    *  graph can't build until the operator reconnects. The console treats this as a

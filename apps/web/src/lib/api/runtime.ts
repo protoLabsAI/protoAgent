@@ -8,6 +8,7 @@
  * (cross-domain orchestration stays in `lib/api.ts`, where it goes through `api.`).
  */
 import type { NodeRuntimePayload, PythonRuntimePayload, RuntimeStatus } from "../types";
+import { noteAgentPublicUrl } from "../ownOrigins";
 import { cancelBody, type PairKind } from "../agentPairing";
 import { apiUrl, applyAuth } from "./routing";
 import { deviceScopeMessage, request } from "./http";
@@ -125,7 +126,10 @@ export type PairingStart =
 
 export const runtimeApi = {
   runtimeStatus() {
-    return request<RuntimeStatus>("/api/runtime/status");
+    return request<RuntimeStatus>("/api/runtime/status").then((status) => {
+      noteAgentPublicUrl(status?.public_url);
+      return status;
+    });
   },
 
   // ── Device pairing (ADR 0087) ──
