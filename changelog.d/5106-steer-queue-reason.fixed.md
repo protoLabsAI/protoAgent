@@ -1,0 +1,1 @@
+- **A message typed into a busy thread says why it is waiting (#5106).** A queued message now reads "Queued behind a running step. It will be read at the next model call." and, while a form is open on the thread, "Held until the open form is answered." instead of a bare queued state.

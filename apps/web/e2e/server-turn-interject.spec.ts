@@ -386,7 +386,8 @@ async function interject(page: Page, h: Harness) {
   const queued = page.locator(`${SLOT} .pl-message--queued`);
   await expect(queued).toHaveCount(1);
   await expect(queued).toContainText(INTERJECTION);
-  await expect(queued).toContainText(/queued interjection/i);
+  // #5106: the bubble says why it is waiting and when it will be read.
+  await expect(queued).toContainText("Queued behind a running step. It will be read at the next model call.");
   await expect.poll(() => h.interjected()?.text).toBe(INTERJECTION);
   return h.interjected()!;
 }
