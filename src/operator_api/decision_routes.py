@@ -102,9 +102,14 @@ def register_decision_routes(app) -> None:
     # 200 "Sent" (release acceptance bd-nfd6g.17, D3). A second answer now waits for the one in
     # flight to settle instead of racing it. Single-process state: one server owns the ledger.
     inflight: dict[str, asyncio.Future] = {}
-    # The winner's record closes only when its resumed graph run finishes, so wait out the
-    # resume's own transport timeout (120 s, graph/decision_resume.py) before giving up.
+    # Delivery may wait for the session lock; bound arbitration by the transport timeout.
     settle_wait_s = 130.0
+    deliveries: set[asyncio.Task] = set()
+
+    def delivery_done(task):
+        deliveries.discard(task)
+        if not task.cancelled():
+            task.exception()  # Retrieve errors even after the request has returned.
 
     @app.post("/api/decisions/{decision_id}/answer")
     async def _api_answer_decision(decision_id: str, body: AnswerRequest, request: Request):
@@ -139,17 +144,39 @@ def register_decision_routes(app) -> None:
         inflight[decision_id] = mine
         text = f"Operator chose: {rec.option_label(answer)} ({answer})" if body.option_id else answer
         actor = getattr(request.state, "device_id", None) or "operator"
-        try:
-            # Its result isn't needed: the ledger, re-read below, says whose answer landed.
-            await _resume_parked_turn(rec.session_id, text, decision_id, resolution={
-                "answer": answer, "answered_by": actor,
-                "answered_surface": body.surface, "state": "answered",
-            })
-        finally:
-            if inflight.get(decision_id) is mine:
-                del inflight[decision_id]
-            mine.set_result(None)
+
+        async def deliver_answer():
+            try:
+                current = await asyncio.to_thread(store.get, decision_id)
+                if current is None or not current.pending:
+                    raise HTTPException(status_code=409, detail=current.to_dict() if current else None)
+                # Its result isn't needed: the ledger, re-read below, says whose answer landed.
+                delivery = asyncio.create_task(_resume_parked_turn(rec.session_id, text, decision_id, resolution={
+                    "answer": answer, "answered_by": actor,
+                    "answered_surface": body.surface, "state": "answered",
+                }))
+                deliveries.add(delivery)
+                delivery.add_done_callback(delivery_done)
+                # Keep delivery alive while returning as soon as consumption is durable.
+                while not delivery.done():
+                    current = await asyncio.to_thread(store.get, decision_id)
+                    if current is not None and not current.pending:
+                        break
+                    await asyncio.wait({delivery}, timeout=0.02)
+                if delivery.done():
+                    await delivery
+            finally:
+                if inflight.get(decision_id) is mine:
+                    del inflight[decision_id]
+                mine.set_result(None)
+        # A disconnected request must not release arbitration while delivery is live.
+        accepted_delivery = asyncio.create_task(deliver_answer())
+        deliveries.add(accepted_delivery)
+        accepted_delivery.add_done_callback(delivery_done)
+        await asyncio.shield(accepted_delivery)
         updated = await asyncio.to_thread(store.get, decision_id)
+        if updated is None:
+            raise HTTPException(status_code=404, detail=f"no decision {decision_id!r}")
         # Ours landed if the record is answered with our answer — or with the exact text we sent,
         # which is what the turn driver records when no resolution metadata reaches it.
         accepted = updated.state == "answered" and updated.answer in (answer, text)

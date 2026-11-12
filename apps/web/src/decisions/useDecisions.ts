@@ -75,13 +75,18 @@ export function createDecisionsStore() {
   // Store one record by id and drop any stale "missing" flag. Settled rows land here via
   // answer/cancel/loadDecision; pending rows are merged in bulk by refresh().
   function storeRecord(row: DecisionRow) {
+    if (row.state === "pending" && snapshot.records[row.id]
+      && snapshot.records[row.id].state !== "pending") return;
     const records = { ...snapshot.records, [row.id]: row };
     let missing = snapshot.missing;
     if (missing[row.id]) {
       missing = { ...missing };
       delete missing[row.id];
     }
-    snapshot = { ...snapshot, records, missing };
+    const decisions = row.state === "pending"
+      ? snapshot.decisions : snapshot.decisions.filter((d) => d.id !== row.id);
+    snapshot = { ...snapshot, records, missing, decisions,
+      pendingCount: decisions.length, top: decisions[0] ?? null };
     emit();
   }
 
@@ -111,7 +116,7 @@ export function createDecisionsStore() {
         dirty = false;
         try {
           result = await decisionsApi.listDecisions("pending");
-          const decisions = result.decisions;
+          let decisions = result.decisions;
           // Reconcile pending records that disappeared, including events missed while offline.
           // Resolve them before publishing the new list so selected details keep their identity
           // while transitioning to the terminal record. Failed reads can retry on the next refresh.
@@ -119,6 +124,9 @@ export function createDecisionsStore() {
           await Promise.all(Object.values(snapshot.records)
             .filter((row) => row.state === "pending" && !pendingIds.has(row.id))
             .map((row) => fetchDecision(row.id)));
+          // An answer can settle while reconciliation awaits another record.
+          decisions = decisions.filter((d) =>
+            !snapshot.records[d.id] || snapshot.records[d.id].state === "pending");
           const records = { ...snapshot.records };
           for (const d of decisions) records[d.id] = d;
           snapshot = {
@@ -156,7 +164,7 @@ export function createDecisionsStore() {
     // Both result shapes carry `decision` (a 409 may carry null when the record is unavailable).
     if (result.decision) storeRecord(result.decision);
     // The server also publishes decision.changed, but refresh now so the count drops promptly.
-    await refresh();
+    void refresh();
     return result;
   }
 
