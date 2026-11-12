@@ -434,6 +434,36 @@ describe("live group adapters", () => {
     expect(r.current.directives.items[0].raw).toMatchObject({ status: "revoked" });
   });
 
+  it.each(["rejection", "reason"])("loads the focused ledger despite initial discovery %s", async (failure) => {
+    const focused = `discovery-${failure}`;
+    const error = new Error("Session index unavailable");
+    if (failure === "rejection") spies.sessions.mockRejectedValue(error);
+    else spies.sessions.mockResolvedValue({ sessions: [], reason: error.message });
+    spies.directives.mockImplementation(async (id: string) => ({ directives: [dir(id, "in_force", id)], in_force: 1 }));
+    const r = mount({ sessionId: focused, thisChatOnly: false });
+    await flush();
+    expect(spies.directives).toHaveBeenCalledWith(focused);
+    expect(r.current.directives.status).toBe("stale");
+    expect(r.current.directives.error).toEqual(error);
+    expect(r.current.directives.loadedAt).toEqual(expect.any(Number));
+    expect(workGroups(r.current)[3].items.map((i) => i.id)).toEqual([focused]);
+
+    // Bus refreshes still reconcile the focused ledger while discovery is down.
+    spies.directives.mockResolvedValue({ directives: [], in_force: 0 });
+    emit("directive.changed", { session_id: focused });
+    await flush();
+    expect(r.current.directives.items).toEqual([]);
+    expect(r.current.directives.status).toBe("stale");
+
+    spies.sessions.mockResolvedValue({ sessions: [{ session_id: `${focused}-other`, turn_count: 1, last_updated: null }] });
+    spies.directives.mockImplementation(async (id: string) => ({ directives: [dir(id, "in_force", id)], in_force: 1 }));
+    r.current.directives.retry();
+    await flush();
+    expect(r.current.directives.status).toBe("ready");
+    expect(r.current.directives.error).toBeNull();
+    expect(r.current.directives.items.map((i) => i.id)).toEqual([focused, `${focused}-other`]);
+  });
+
   it("retains inventory when discovery returns a read-failure reason and recovers on retry", async () => {
     spies.sessions.mockResolvedValue({ sessions: [{ session_id: "reason-other", turn_count: 1, last_updated: null }] });
     spies.directives.mockImplementation(async (id: string) => ({ directives: [dir(id, "in_force", id)], in_force: 1 }));
@@ -444,7 +474,7 @@ describe("live group adapters", () => {
     emit("directive.changed");
     await flush();
     expect(r.current.directives.status).toBe("stale");
-    expect(r.current.directives.loadedAt).toBe(loadedAt);
+    expect(r.current.directives.loadedAt).toBeGreaterThanOrEqual(loadedAt!);
     expect(r.current.directives.error).toEqual(new Error("Session index read failed"));
     expect(r.current.directives.items.map((i) => i.id)).toEqual(["reason-focused", "reason-other"]);
     spies.sessions.mockResolvedValue({ sessions: [] });

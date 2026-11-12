@@ -235,15 +235,24 @@ export function useWorkItems({ sessionId, thisChatOnly }: UseWorkItemsParams): W
       {
         queryKey: workKey("directive-inventory", sessionId ?? ""),
         queryFn: async () => {
-          const inventory = await api.chatSessions(200);
-          // A successful HTTP response can still report a session-index read failure.
-          // Reject it so the last discovered inventory survives as stale data.
-          if (inventory.reason) throw new Error(inventory.reason);
+          // The focused ledger remains available even if session discovery fails.
+          const focused = sessionId ? directiveStore(sessionId).refresh() : Promise.resolve();
+          let inventory;
+          try {
+            inventory = await api.chatSessions(200);
+            // Preserve the last discovered inventory on a session-index read failure.
+            if (inventory.reason) throw new Error(inventory.reason);
+          } catch (error) {
+            await focused;
+            throw error;
+          }
+          await focused;
           const ids = [...new Set([...(sessionId ? [sessionId] : []), ...inventory.sessions.map((s) => s.session_id)])];
           // Bound fan-out and reuse each ledger's retained rows and failure state.
           // One failed ledger must not hide successes or skip subsequent batches.
-          for (let i = 0; i < ids.length; i += 4) {
-            await Promise.allSettled(ids.slice(i, i + 4).map((id) => directiveStore(id).refresh()));
+          const remaining = ids.filter((id) => id !== sessionId);
+          for (let i = 0; i < remaining.length; i += 4) {
+            await Promise.allSettled(remaining.slice(i, i + 4).map((id) => directiveStore(id).refresh()));
           }
           return { sessionIds: ids };
         },
@@ -261,12 +270,15 @@ export function useWorkItems({ sessionId, thisChatOnly }: UseWorkItemsParams): W
     UseQueryResult<{ sessionIds: string[] }>,
   ];
 
+  const directiveSessionIds = useMemo(() => [...new Set([
+    ...(sessionId ? [sessionId] : []), ...(dirRes.data?.sessionIds ?? []),
+  ])], [sessionId, dirRes.data?.sessionIds]);
   const [directiveVersion, setDirectiveVersion] = useState(0);
   useEffect(() => {
-    const offs = (dirRes.data?.sessionIds ?? []).map((id) =>
+    const offs = directiveSessionIds.map((id) =>
       directiveStore(id).observe(() => setDirectiveVersion((v) => v + 1)));
     return () => offs.forEach((off) => off());
-  }, [dirRes.data?.sessionIds]);
+  }, [directiveSessionIds]);
 
   const keep = useMemo(() => (item: WorkItem) =>
     inWorkScope(item, { thisChatOnly, sessionId }), [thisChatOnly, sessionId]);
@@ -280,10 +292,10 @@ export function useWorkItems({ sessionId, thisChatOnly }: UseWorkItemsParams): W
       schedules: (schedRes.data?.jobs ?? []).map(mapSchedule).filter(keep),
       background: (bgRes.data?.jobs ?? []).map(mapBackground).filter(keep),
       activity: [],
-      directives: (dirRes.data?.sessionIds.flatMap((id) => {
+      directives: directiveSessionIds.flatMap((id) => {
         const snapshot = directiveStore(id).getSnapshot();
         return [...snapshot.active, ...snapshot.history];
-      }) ?? []).map(mapDirective).filter(keep),
+      }).map(mapDirective).filter(keep),
     };
   }, [
     decRes.data,
@@ -293,7 +305,7 @@ export function useWorkItems({ sessionId, thisChatOnly }: UseWorkItemsParams): W
     schedRes.data,
     bgRes.data,
     actRes.data,
-    dirRes.data,
+    directiveSessionIds,
     directiveVersion,
     keep,
   ]);
@@ -345,11 +357,14 @@ export function useWorkItems({ sessionId, thisChatOnly }: UseWorkItemsParams): W
   const directiveSource = stateOf(dirRes, items.directives);
   // Inventory discovery can succeed while every ledger refresh fails. Keep the
   // timestamp tied to successful ledger reads, including retained cache data.
-  if (dirRes.data?.sessionIds.length) {
-    directiveSource.loadedAt = Math.max(...dirRes.data.sessionIds.map((id) =>
+  if (directiveSessionIds.length) {
+    directiveSource.loadedAt = Math.max(...directiveSessionIds.map((id) =>
       directiveStore(id).getSnapshot().loadedAt ?? 0)) || null;
   }
-  if (directiveSource.status === "ready" && dirRes.data?.sessionIds.some((id) =>
+  if (directiveSource.status === "error" && directiveSource.loadedAt !== null) {
+    directiveSource.status = "stale";
+  }
+  if (directiveSource.status === "ready" && directiveSessionIds.some((id) =>
     ["failed", "stale"].includes(directiveStore(id).getSnapshot().state))) {
     directiveSource.status = directiveSource.loadedAt === null ? "error" : "stale";
     directiveSource.error = new Error("A directive ledger could not be refreshed");
