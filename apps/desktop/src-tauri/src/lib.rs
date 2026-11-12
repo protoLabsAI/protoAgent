@@ -425,6 +425,20 @@ impl SentMessages {
 /// The error prefix of a refused replay. Shared with the console (chat.ts), which must not
 /// fall back to re-sending a message the shell refused because it was already sent.
 const DUPLICATE_SEND_REFUSAL: &str = "chat_stream: already sent";
+/// Prefix of the error `chat_stream` returns when the server answered with a plain body
+/// instead of an SSE stream. A JSON-RPC rejection (e.g. SubscribeToTask on a task that has
+/// already ended) rides HTTP 200, so the status check alone passed it through as "stream
+/// data" the page could not parse and silently dropped. The page matches this prefix
+/// (chat.ts NOT_A_STREAM) and takes the same path the browser does on a non-SSE reply.
+const NOT_A_STREAM: &str = "chat_stream: not a stream";
+
+/// The JSON-RPC `error.message` of a non-stream body, else the body itself (bounded).
+fn non_stream_reason(body: &str) -> String {
+    serde_json::from_str::<serde_json::Value>(body)
+        .ok()
+        .and_then(|v| v.get("error")?.get("message")?.as_str().map(str::to_owned))
+        .unwrap_or_else(|| body.chars().take(300).collect())
+}
 
 fn sent_message_id(body: &serde_json::Value) -> Option<&str> {
     let method = body.get("method")?.as_str()?;
@@ -481,6 +495,15 @@ async fn chat_stream(
     if !resp.status().is_success() {
         return Err(format!("HTTP {}", resp.status().as_u16()));
     }
+    let is_sse = resp
+        .headers()
+        .get(reqwest::header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|v| v.contains("text/event-stream"));
+    if !is_sse {
+        let body = resp.text().await.unwrap_or_default();
+        return Err(format!("{NOT_A_STREAM}: {}", non_stream_reason(&body)));
+    }
     let mut stream = resp.bytes_stream();
     let mut pending: Vec<u8> = Vec::new();
     while let Some(chunk) = stream.next().await {
@@ -536,6 +559,19 @@ fn take_utf8(pending: &mut Vec<u8>) -> String {
     }
     pending.drain(..start);
     out
+}
+
+#[cfg(test)]
+mod non_stream_tests {
+    use super::non_stream_reason;
+
+    #[test]
+    fn non_stream_reason_prefers_the_jsonrpc_error_message() {
+        let body = r#"{"jsonrpc":"2.0","id":"resub-1","error":{"code":-32004,"message":"Task 07aa is in terminal state: 3"}}"#;
+        assert_eq!(non_stream_reason(body), "Task 07aa is in terminal state: 3");
+        assert_eq!(non_stream_reason("plain text"), "plain text");
+        assert_eq!(non_stream_reason(&"x".repeat(500)).len(), 300);
+    }
 }
 
 #[cfg(test)]
