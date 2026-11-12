@@ -249,6 +249,22 @@ describe("ActivitySurface — pending feed", () => {
     expect(row.querySelector(".inbox-queued-flag")!.getAttribute("title")).toContain("2 delivery attempts");
   });
 
+  it("stops promising a retry once the budget is spent (retries_exhausted)", async () => {
+    vi.spyOn(api, "inbox").mockResolvedValue({
+      items: [{ ...QUEUED_PAGE, attempts: 5, retries_exhausted: true }],
+    });
+    vi.spyOn(api, "activity").mockResolvedValue(NO_ACTIVITY);
+
+    act(() => root.render(h(ActivitySurface)));
+    await flush();
+
+    // Still a calm queued row (a spent budget never pages anyone), but the copy no
+    // longer claims a retry is coming — the failure itself is in the feed below.
+    const row = container.querySelector('[data-testid="inbox-queued-now"]')!;
+    expect(row.textContent).toContain("Queued — automatic retries used up");
+    expect(row.textContent).not.toContain("runs when the agent is free");
+  });
+
   it("keeps ordinary next/later queued items rendering unchanged (no blocked page)", async () => {
     vi.spyOn(api, "inbox").mockResolvedValue({
       items: [inboxItem({ id: 1, priority: "next" }), inboxItem({ id: 2, priority: "later" })],

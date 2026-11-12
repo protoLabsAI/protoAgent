@@ -34,6 +34,7 @@ import os
 import re
 from pathlib import Path
 
+from inbox.store import RECOVERY_MAX_ATTEMPTS
 from infra.paths import instance_paths
 from runtime.state import STATE
 from server import agent_name
@@ -51,7 +52,9 @@ _INBOX_NOW_RECOVERY_RETRY_AFTER_S = 60 * 60
 # Bounded retries for a page that keeps refusing delivery. A COUNT, not a clock:
 # recoverability after a crash must not wait on wall-time (a stale claim is released
 # at startup), while a genuinely undeliverable page still stops replaying.
-_INBOX_NOW_RECOVERY_MAX_ATTEMPTS = 5
+# Single-sourced in ``inbox.store`` so /api/inbox's ``retries_exhausted`` decoration
+# (operator_api may not import server) agrees with the budget enforced here.
+_INBOX_NOW_RECOVERY_MAX_ATTEMPTS = RECOVERY_MAX_ATTEMPTS
 # Retry-when-free (undelivered pages must not wait for the next restart): a pending now
 # item is retried right after the last in-flight turn settles (the turn_control bracket
 # kicks ``kick_inbox_now_retry``) PLUS by a bounded periodic sweep — every minute, only
@@ -59,9 +62,13 @@ _INBOX_NOW_RECOVERY_MAX_ATTEMPTS = 5
 _INBOX_NOW_RETRY_INTERVAL_S = 60
 _INBOX_NOW_RETRY_SWEEP_LIMIT = 4
 _INBOX_NOW_RETRY_LOOP_STARTED = False
-# Keeps the fire-and-forget retry tasks (and the sweep loop) from being GC'd mid-flight;
-# the done callback discards each. Tests await these to observe a settle kick land.
+# Keeps the fire-and-forget settle-kick tasks from being GC'd mid-flight; the done
+# callback discards each. Tests await these to observe a settle kick land — so the
+# NEVER-finishing sweep loop lives in its own slot below, not in this set.
 _INBOX_NOW_RETRY_TASKS: set = set()
+# The periodic sweep task (one per process). Held so it isn't GC'd; kept out of
+# _INBOX_NOW_RETRY_TASKS so draining that set can never await an infinite loop.
+_INBOX_NOW_RETRY_LOOP_TASK = None
 # Single-flight: one retry pass at a time. Two passes can't claim the same item (the
 # claim is atomic), but a second pass racing the first could reclaim an item the first
 # just restored — burning attempts on an already-answered failure.
@@ -290,18 +297,20 @@ async def recover_pending_now_inbox_items(
             return False
         return bool(await delivery(item))
 
-    async def _restore(item_id: int, reason: str, claimed_at: str | None) -> None:
+    async def _restore(item_id: int, reason: str, claimed_at: str | None, *, refund_attempt: bool = False) -> None:
         """Best-effort: hand a claimed-but-unfired item back to pending with evidence.
 
         ``claimed_at`` scopes the restore to THIS recovery's claim. If a concurrent
         owner already delivered the page, the restore is a no-op: a late failure never
-        un-delivers a delivered item."""
+        un-delivers a delivered item. ``refund_attempt`` hands back the attempt the
+        claim charged, for a skip where nothing was actually tried (the busy bail)."""
         try:
             await asyncio.to_thread(
                 store.restore_recovery_failure,
                 item_id,
                 reason,
                 claimed_at=claimed_at,
+                refund_attempt=refund_attempt,
             )
         except Exception:  # noqa: BLE001 — restore is best-effort; never break the batch
             log.warning("[inbox] now-recovery could not restore item %s to pending (%s)", item_id, reason)
@@ -340,16 +349,7 @@ async def recover_pending_now_inbox_items(
         delivered is left untouched. ``refund_attempt`` (the busy skip) hands each
         item's charged attempt back: nothing was actually tried."""
         for it in remaining:
-            try:
-                await asyncio.to_thread(
-                    store.restore_recovery_failure,
-                    int(it["id"]),
-                    reason,
-                    claimed_at=it.get("recovery_claimed_at"),
-                    refund_attempt=refund_attempt,
-                )
-            except Exception:  # noqa: BLE001 — restore is best-effort; never break the batch
-                log.warning("[inbox] now-recovery could not restore item %s to pending (%s)", it.get("id"), reason)
+            await _restore(int(it["id"]), reason, it.get("recovery_claimed_at"), refund_attempt=refund_attempt)
 
     def _record_exhausted(item: dict, reason: str) -> None:
         """The attempt budget is spent on genuine (non-busy) failures: leave durable,
@@ -550,16 +550,20 @@ async def retry_pending_now_inbox_items_when_free(
         return none
     if _INBOX_NOW_RETRY_ACTIVE or _agent_is_busy():
         return none
-    try:
-        # Cheap in-memory hint first (the common sweep tick costs nothing); the table
-        # check both confirms it and clears a stale hint.
-        if not store.maybe_pending_now() or not await asyncio.to_thread(store.has_pending_now):
-            return none
-    except Exception:  # noqa: BLE001 — a hint failure must not kill the sweep
-        log.exception("[inbox] pending-now check failed")
-        return none
+    # Claim the single-flight latch BEFORE the first await: the check above and this set
+    # are only atomic while no await separates them (one event-loop thread). Setting it
+    # after the pending-now lookup let a settle kick and a sweep tick both pass the check
+    # during that await and run two passes at once.
     _INBOX_NOW_RETRY_ACTIVE = True
     try:
+        try:
+            # Cheap in-memory hint first (the common sweep tick costs nothing); the table
+            # check both confirms it and clears a stale hint.
+            if not store.maybe_pending_now() or not await asyncio.to_thread(store.has_pending_now):
+                return none
+        except Exception:  # noqa: BLE001 — a hint failure must not kill the sweep
+            log.exception("[inbox] pending-now check failed")
+            return none
         # reconcile=False: the boot-only lease releases would undo a claim a concurrent
         # in-process owner (the boot pass, a live POST's fire) still legitimately holds.
         return await recover_pending_now_inbox_items(
@@ -626,13 +630,11 @@ async def _inbox_now_retry_loop() -> None:
 def _start_inbox_now_retry_loop(loop) -> None:
     """Start the periodic sweep once per process, on the startup loop (same seam as the
     boot recovery pass: the delivery hook and self-A2A route exist by then)."""
-    global _INBOX_NOW_RETRY_LOOP_STARTED
+    global _INBOX_NOW_RETRY_LOOP_STARTED, _INBOX_NOW_RETRY_LOOP_TASK
     if _INBOX_NOW_RETRY_LOOP_STARTED:
         return
     _INBOX_NOW_RETRY_LOOP_STARTED = True
-    task = loop.create_task(_inbox_now_retry_loop())
-    _INBOX_NOW_RETRY_TASKS.add(task)
-    task.add_done_callback(_INBOX_NOW_RETRY_TASKS.discard)
+    _INBOX_NOW_RETRY_LOOP_TASK = loop.create_task(_inbox_now_retry_loop())
 
 
 def _on_work_terminal(job) -> None:

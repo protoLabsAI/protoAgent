@@ -22,7 +22,7 @@ import pytest
 
 import operator_api.console_handlers as ch
 import runtime.state as rs
-from inbox.store import InboxStore
+from inbox.store import RECOVERY_MAX_ATTEMPTS, InboxStore
 from server import stores, turn_control
 
 
@@ -206,6 +206,87 @@ async def test_exhausted_non_busy_failures_record_visible_activity_failure(tmp_p
     [row] = inbox.list(priority_floor="now")  # still visible to check_inbox — never dropped
     assert row["id"] == item["id"]
     assert row["recovery_attempts"] == 2
+
+
+@pytest.mark.asyncio
+async def test_operator_class_source_still_pages_without_the_flag(inbox, monkeypatch):
+    """A projectBoard block page calls ``InboxStore.add`` with no ``needs_human`` (the
+    plugin is pinned against a host that predates the flag) — it must still read as
+    operator-class. Derived at read time (``needs_operator_attention``), so a row such a
+    producer wrote BEFORE the flag existed alerts too."""
+
+    async def _refuse(_it):
+        return False
+
+    monkeypatch.setattr(rs.STATE, "inbox_now_delivery", _refuse, raising=False)
+    events: list[tuple[str, dict]] = []
+    monkeypatch.setattr(ch._event_bus, "publish", lambda kind, data: events.append((kind, data)))
+
+    # The pinned plugin's exact call shape (loop/drive.py): no needs_human anywhere.
+    legacy = inbox.add("bd-1 blocked — operator must unblock", priority="now", source="project_board")
+    res = await ch._operator_inbox_add({"text": "bd-2 blocked", "priority": "now", "source": "project_board"})
+
+    assert res["item"]["needs_human"] is True
+    rows = {r["id"]: r for r in (await ch._operator_inbox_list("now", False))["items"]}
+    assert rows[legacy["id"]]["needs_human"] is True  # pre-flag row, no migration needed
+    assert [d["needs_human"] for k, d in events if k == "inbox.item"] == [True]
+
+
+@pytest.mark.asyncio
+async def test_api_row_flags_a_page_whose_retry_budget_is_spent(inbox, monkeypatch):
+    """A page past the retry budget is never reclaimed, so its row must say so
+    (``retries_exhausted``) instead of promising "runs when the agent is free" forever
+    — and a spent budget still never pages anyone."""
+
+    async def _refuse(_it):
+        return False
+
+    monkeypatch.setattr(rs.STATE, "inbox_now_delivery", _refuse, raising=False)
+    item = inbox.add("always refused", priority="now")
+
+    for _ in range(RECOVERY_MAX_ATTEMPTS):
+        assert (await stores.retry_pending_now_inbox_items_when_free())["failed"] == 1
+    assert await stores.retry_pending_now_inbox_items_when_free() == NONE  # budget spent
+
+    row = (await ch._operator_inbox_get(item["id"]))["item"]
+    assert row["attempts"] == RECOVERY_MAX_ATTEMPTS
+    assert row["retries_exhausted"] is True
+    assert row["needs_human"] is False
+
+
+@pytest.mark.asyncio
+async def test_retry_pass_is_single_flight_across_the_pending_check(inbox, monkeypatch):
+    """A settle kick racing a sweep tick must not run two passes at once: the latch is
+    claimed before the pending-now lookup awaits (the check/await/set gap)."""
+    inbox.add("raced page", priority="now")
+    monkeypatch.setattr(rs.STATE, "inbox_now_delivery", lambda _it: True, raising=False)
+    passes = 0
+
+    async def _recover(**_kw):
+        nonlocal passes
+        passes += 1
+        await asyncio.sleep(0)
+        return {"claimed": 1, "accepted": 1, "failed": 0}
+
+    monkeypatch.setattr(stores, "recover_pending_now_inbox_items", _recover)
+    results = await asyncio.gather(
+        stores.retry_pending_now_inbox_items_when_free(),
+        stores.retry_pending_now_inbox_items_when_free(),
+    )
+
+    assert passes == 1
+    assert NONE in results
+
+
+@pytest.mark.asyncio
+async def test_sweep_loop_task_is_held_outside_the_kick_task_set(monkeypatch):
+    """The never-finishing sweep loop lives in its own slot: parking it in
+    ``_INBOX_NOW_RETRY_TASKS`` would make any drain of that set await forever."""
+    monkeypatch.setattr(stores, "_INBOX_NOW_RETRY_LOOP_STARTED", False)
+    stores._start_inbox_now_retry_loop(asyncio.get_running_loop())
+    task = stores._INBOX_NOW_RETRY_LOOP_TASK
+    assert task is not None and task not in stores._INBOX_NOW_RETRY_TASKS
+    task.cancel()
 
 
 def test_turn_ended_kick_is_safe_without_a_running_loop(inbox, monkeypatch):

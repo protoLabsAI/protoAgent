@@ -27,6 +27,7 @@ from a2a_impl.wire import task_id_from_response
 from events import ACTIVITY_CONTEXT, JOB_CONTEXT_PREFIX
 from graph.conversation_harvest import _DEFAULT_HISTORY_STORE, resolve_history_store
 from graph.output_format import extract_output
+from inbox.store import needs_operator_attention
 from runtime.state import STATE
 from server import _event_bus, agent_name
 
@@ -383,8 +384,9 @@ def _badge_restored(item: dict, state: str) -> None:
                 "delivery": item.get("delivery") or "",
                 "session": item.get("target_session") or "",
                 # A restored page is queued for retry-when-free, not an operator alert —
-                # only an operator-class page (needs_human) may raise Needs-you.
-                "needs_human": bool(item.get("needs_human")),
+                # only an operator-class page (a declared needs_human, or a known
+                # operator-class source like a board block page) may raise Needs-you.
+                "needs_human": needs_operator_attention(item),
             },
         )
     except Exception:  # noqa: BLE001

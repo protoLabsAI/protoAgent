@@ -101,6 +101,34 @@ def _reset_model_list_cache():
 
 
 @pytest.fixture(autouse=True)
+def _reset_inbox_now_retry_state():
+    """Reset the inbox now-recovery/retry process globals (server.stores) after each test.
+
+    Any test that drives ``_start_inbox_now_recovery_once`` (server startup, the
+    lifecycle tests) flips the boot latch and the sweep-loop latch and parks the
+    never-finishing sweep task on THAT test's event loop. Left behind, the sweep
+    silently never starts again in this worker, a later test's task drain would
+    await a loop bound to a closed event loop, and a stuck single-flight latch
+    would turn every later retry pass into a no-op. Lazy via ``sys.modules`` so
+    tests that never import the server pay nothing."""
+    yield
+    stores = sys.modules.get("server.stores")
+    if stores is None:
+        return
+    stores._INBOX_NOW_RECOVERY_STARTED = False
+    stores._INBOX_NOW_RETRY_LOOP_STARTED = False
+    stores._INBOX_NOW_RETRY_ACTIVE = False
+    task = stores._INBOX_NOW_RETRY_LOOP_TASK
+    stores._INBOX_NOW_RETRY_LOOP_TASK = None
+    if task is not None:
+        try:
+            task.cancel()
+        except Exception:
+            pass  # its event loop may already be closed; dropping the ref is enough
+    stores._INBOX_NOW_RETRY_TASKS.clear()
+
+
+@pytest.fixture(autouse=True)
 def _isolate_injection_log(tmp_path, monkeypatch):
     """Point the per-turn injection log (ADR 0069 D6) at a per-test temp DB.
 

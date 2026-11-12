@@ -237,9 +237,16 @@ export function ActivitySurface() {
                 <span className="inbox-pri inbox-pri-now">{item.priority}</span>
                 <span
                   className="inbox-queued-flag"
-                  title={`Queued since ${item.queued_since || item.created_at}${item.attempts ? ` · ${item.attempts} delivery attempt${item.attempts === 1 ? "" : "s"} so far` : ""}`}
+                  title={
+                    item.retries_exhausted
+                      ? `Automatic delivery stopped after ${item.attempts} attempt${item.attempts === 1 ? "" : "s"} — the failure is recorded in the feed below. Deliver it into a turn or dismiss it.`
+                      : `Queued since ${item.queued_since || item.created_at}${item.attempts ? ` · ${item.attempts} delivery attempt${item.attempts === 1 ? "" : "s"} so far` : ""}`
+                  }
                 >
-                  <Clock size={12} aria-hidden /> Queued — runs when the agent is free
+                  <Clock size={12} aria-hidden />{" "}
+                  {item.retries_exhausted
+                    ? "Queued — automatic retries used up"
+                    : "Queued — runs when the agent is free"}
                 </span>
                 {item.source ? <span className="inbox-source">{item.source}</span> : null}
                 <Button

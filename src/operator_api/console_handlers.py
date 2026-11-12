@@ -26,6 +26,7 @@ from graph.config_io import is_setup_complete as _operator_setup_complete
 from graph.goals.types import GoalState
 from graph.output_format import extract_output
 from graph.watches.types import Watch
+from inbox.store import RECOVERY_MAX_ATTEMPTS, needs_operator_attention
 from operator_api.runtime import build_runtime_status as _build_operator_status
 from operator_api.subagents import (
     list_subagents as _operator_list_subagents,
@@ -1147,7 +1148,7 @@ async def _operator_inbox_add(payload: dict) -> dict:
                 "session": item.get("target_session") or "",
                 # Only an operator-class page may raise the console's Needs-you alert;
                 # an undelivered page that is merely waiting its retry stays "queued".
-                "needs_human": bool(item.get("needs_human")),
+                "needs_human": needs_operator_attention(item),
             },
         )
     return {"ok": True, "item": _inbox_row(item), "fired": fired}
@@ -1156,12 +1157,22 @@ async def _operator_inbox_add(payload: dict) -> dict:
 def _inbox_row(item: dict) -> dict:
     """Decorate a raw store row for the /api/inbox surfaces: ``queued_since`` +
     ``attempts`` let the feed say "Queued — runs when <agent> is free · n retries"
-    for an undelivered page awaiting its retry, and ``needs_human`` (a clean bool)
-    is the ONLY thing allowed to raise a Needs-you alert for it."""
+    for an undelivered page awaiting its retry, and ``needs_human`` (a clean bool,
+    derived — a declared flag OR a known operator-class source such as a projectBoard
+    block page) is the ONLY thing allowed to raise a Needs-you alert for it.
+    ``retries_exhausted`` marks a pending now page whose automatic retry budget is
+    spent (and that no completion pass will pick up), so the feed stops promising
+    "runs when the agent is free" for it."""
     row = dict(item)
     row["queued_since"] = None if item.get("delivered_at") else item.get("created_at")
     row["attempts"] = int(item.get("recovery_attempts") or 0)
-    row["needs_human"] = bool(item.get("needs_human"))
+    row["needs_human"] = needs_operator_attention(item)
+    row["retries_exhausted"] = bool(
+        not item.get("delivered_at")
+        and item.get("priority") == "now"
+        and not item.get("recovery_accepted_at")  # accepted pages are completed regardless
+        and row["attempts"] >= RECOVERY_MAX_ATTEMPTS
+    )
     return row
 
 

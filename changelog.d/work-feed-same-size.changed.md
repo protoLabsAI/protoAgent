@@ -1,0 +1,1 @@
+- **Work and Feed open at the same size.** Both utility-bar windows are now 800px wide (or 94% of a narrow screen) and share one height, instead of Work filling the whole screen around a short list. Work still shows its list and the selected item side by side.

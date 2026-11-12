@@ -197,10 +197,11 @@ describe("SurfaceHost modal frame", () => {
     const dialog = document.querySelector('[role="dialog"]');
     expect(dialog).not.toBeNull();
     expect(dialog!.querySelector('[data-testid="content-work"]')).not.toBeNull();
-    // The modal frame passes `size="wide"` (DS ds-zb8), so the DS Dialog rides the
-    // `pl-dialog--wide` class — the near-full-screen width, no per-app width override.
-    expect(dialog!.classList.contains("pl-dialog--wide")).toBe(true);
-    expect(document.querySelector(".pl-dialog--fill .pl-dialog__body--flush")).not.toBeNull();
+    // Work opens at Feed's utility-dialog size, not the wide full-height window.
+    expect(dialog!.classList.contains("pl-dialog--wide")).toBe(false);
+    expect(document.querySelector(".pl-dialog--fill")).toBeNull();
+    expect(dialog!.classList.contains("surface-modal--util")).toBe(true);
+    expect(document.querySelector(".pl-dialog__body--flush")).not.toBeNull();
     expect(document.activeElement).toBe(dialog!.querySelector("[data-surface-focus]"));
     expect(container.querySelector('[role="status"]')?.textContent).toBe("Work opened in a window.");
   });

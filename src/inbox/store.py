@@ -33,6 +33,32 @@ DELIVERY_THREAD = "thread"
 DELIVERIES = ("", DELIVERY_THREAD)
 _RANK = {"now": 0, "next": 1, "later": 2}
 
+#: Default bound on automatic delivery retries for a priority-now page
+#: (:meth:`InboxStore.claim_now_recovery_batch`). Single-sourced here so the server's
+#: recovery passes and the /api/inbox row decoration (``retries_exhausted``) agree on
+#: when a page's budget is spent.
+RECOVERY_MAX_ATTEMPTS = 5
+
+#: Producers whose priority-now pages are OPERATOR-CLASS by construction: the page asks a
+#: human to unblock something (a projectBoard block page about a stuck card), but the
+#: producer is an external plugin pinned against a host that predates ``needs_human`` and
+#: so never passes the flag (it instantiates this store directly and calls
+#: ``add(text, priority="now", source="project_board", ...)``).
+#: :func:`needs_operator_attention` treats their pages as ``needs_human`` at read time, so
+#: they keep raising Needs-you — and rows such producers wrote BEFORE the flag existed are
+#: covered too, with no migration.
+OPERATOR_ATTENTION_SOURCES = frozenset({"project_board"})
+
+
+def needs_operator_attention(item: dict) -> bool:
+    """Whether an inbox item genuinely needs the OPERATOR (may raise a Needs-you alert).
+
+    True when the producer declared ``needs_human`` on the row, or when the item comes
+    from a known operator-class source (``OPERATOR_ATTENTION_SOURCES``). Anything else —
+    notably a priority-now page that is merely awaiting its retry-when-free delivery —
+    stays a calm queued row and never pages anyone."""
+    return bool(item.get("needs_human")) or (item.get("source") or "") in OPERATOR_ATTENTION_SOURCES
+
 
 def _floor_set(priority_floor: str) -> tuple[str, ...]:
     """Tiers visible at a given floor: now→{now}, next→{now,next}, later→all."""
@@ -183,7 +209,9 @@ class InboxStore:
 
         ``needs_human`` marks an item the OPERATOR must handle (an operator-class block
         page); only such items may surface as Needs-you alerts in the console — a merely
-        late delivery never does.
+        late delivery never does. A producer that cannot pass the flag but is
+        operator-class by construction is covered at read time instead
+        (:func:`needs_operator_attention` on ``OPERATOR_ATTENTION_SOURCES``).
 
         Raises ``ValueError`` on empty text, an unknown priority or an unknown delivery.
         """
@@ -684,7 +712,7 @@ class InboxStore:
         *,
         limit: int = 8,
         retry_after_s: int = 3600,
-        max_attempts: int = 5,
+        max_attempts: int = RECOVERY_MAX_ATTEMPTS,
         now: datetime | None = None,
     ) -> list[dict]:
         """Atomically claim a bounded batch of pre-existing pending ``now`` items for
