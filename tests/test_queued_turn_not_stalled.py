@@ -290,3 +290,64 @@ async def test_a_fire_into_a_busy_thread_runs_exactly_once_after_it_frees(env, t
     assert states == ["completed", "completed"], [o.error for o in outcomes]
     assert "fired but the turn FAILED" not in caplog.text
     await drain_handlers()
+
+
+# ── the window restarts when the queued turn takes the thread (#5117 review) ──────
+#
+# The holder lets go 0.8 of a window into the queued turn's first window. Before the fix
+# that window then ran out 0.2 windows after the queued turn took the thread, and it was
+# failed "while starting up" — the false stall #5106 reports, just shorter. A wider window
+# here than above keeps the 0.3-window margins clear of CI scheduling noise.
+_WIDE = 1.0
+
+
+def _wide_executor() -> ProtoAgentExecutor:
+    return ProtoAgentExecutor(chat_mod._chat_langgraph_stream, stall_timeout_provider=lambda: _WIDE)
+
+
+def _holder_releasing_after(fraction: float, signal: asyncio.Event) -> list:
+    steps = 4
+    script = [_Signal(signal)]
+    for i in range(steps):
+        script += [_Sleep(_WIDE * fraction / steps), text("r1", f"step {i} ")]
+    return script
+
+
+@pytest.mark.asyncio
+async def test_a_turn_that_gets_the_thread_late_in_a_window_gets_a_full_window(env):
+    install, outcomes = env
+    holding = asyncio.Event()
+    # Its first frame comes 0.5 window after it takes the thread: past what was left of
+    # the window it was queued in (0.2), well inside a fresh one.
+    install(_holder_releasing_after(0.8, holding), [_Sleep(_WIDE * 0.5), text("r2", "the queued turn ran")])
+
+    first = asyncio.ensure_future(_wide_executor().execute(_ctx("t-running"), EventQueue()))
+    await asyncio.wait_for(holding.wait(), 5)
+    queued = asyncio.ensure_future(_wide_executor().execute(_ctx("t-queued"), EventQueue()))
+    await asyncio.wait_for(asyncio.gather(first, queued), 30)
+
+    got = _by_task(outcomes)
+    assert got["t-running"].state == "completed"
+    assert got["t-queued"].state == "completed", got["t-queued"].error
+
+
+@pytest.mark.asyncio
+async def test_a_turn_that_gets_the_thread_and_then_says_nothing_still_stalls(env):
+    install, outcomes = env
+    holding = asyncio.Event()
+    install(_holder_releasing_after(0.8, holding), [_Sleep(3600)])
+
+    loop = asyncio.get_running_loop()
+    first = asyncio.ensure_future(_wide_executor().execute(_ctx("t-running"), EventQueue()))
+    await asyncio.wait_for(holding.wait(), 5)
+    started = loop.time()
+    queued = asyncio.ensure_future(_wide_executor().execute(_ctx("t-silent"), EventQueue()))
+    await asyncio.wait_for(asyncio.gather(first, queued), 30)
+    elapsed = loop.time() - started
+
+    got = _by_task(outcomes)
+    assert got["t-silent"].state == "failed"
+    assert "while starting up" in got["t-silent"].error
+    # Failed a full window after it took the thread (~0.8 + 1.0), not when its first
+    # queued window ran out (1.0).
+    assert elapsed >= _WIDE * 1.6, elapsed

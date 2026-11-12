@@ -207,6 +207,7 @@ async def _stall_guarded(
     last_activity: list[str],
     step_context: list | None = None,
     queued_behind: Callable[[], str | None] | None = None,
+    owned_since: Callable[[], float | None] | None = None,
 ):
     """Yield from ``stream``, raising :class:`TurnStalled` if no event arrives
     for ``seconds``.
@@ -248,8 +249,10 @@ async def _stall_guarded(
     a stall: the wait goes on, and the step is named so a later failure says so. That
     holder is itself an A2A turn under this same guard, so a head-of-line turn that
     really is dead is still failed — by its own guard — and the queue moves. Once this
-    turn holds the thread (or something unguarded does), silence counts again: a turn
-    that wedges right after it gets the thread is caught within one extra window.
+    turn holds the thread (or something unguarded does), silence counts again, measured
+    from when this turn TOOK the thread (``owned_since()``, a ``time.monotonic()`` stamp)
+    — never from a window that opened while it was still queued — so a turn that got
+    the thread part-way through a window still gets a full window for its first frame.
     """
     closed = False
     try:
@@ -280,11 +283,20 @@ async def _stall_guarded(
                 step.cancel()
                 await asyncio.wait({step})
                 raise
-            # Still waiting for the thread's running turn: keep waiting on the SAME step.
-            while not finished and queued_behind is not None and (holder := _holder_or_none(queued_behind)):
-                last_activity[0] = f"queued behind task {holder}, which holds this thread"
+            # The window ran out with no frame. Keep waiting on the SAME step while the
+            # turn is queued behind the thread's running turn; once it owns the thread,
+            # for the rest of a full window measured from when it took it.
+            while not finished:
+                holder = _holder_or_none(queued_behind) if queued_behind is not None else None
+                if holder:
+                    last_activity[0] = f"queued behind task {holder}, which holds this thread"
+                    wait_s = seconds
+                else:
+                    wait_s = _rest_of_window_since_owned(owned_since, seconds)
+                    if wait_s <= 0:
+                        break
                 try:
-                    finished = await _frame_within(step, seconds)
+                    finished = await _frame_within(step, wait_s)
                 except asyncio.CancelledError:
                     step.cancel()
                     await asyncio.wait({step})
@@ -337,6 +349,29 @@ def _holder_or_none(queued_behind: Callable[[], str | None]) -> str | None:
     except Exception:  # noqa: BLE001
         logger.debug("[a2a] queued-behind probe failed; treating the turn as not queued", exc_info=True)
         return None
+
+
+def _rest_of_window_since_owned(owned_since: Callable[[], float | None] | None, seconds: float) -> float:
+    """Seconds left of a stall window that STARTS when this turn took its thread; 0 when
+    that is unknown (no probe, never queued) or the window has already run out."""
+    if owned_since is None:
+        return 0.0
+    try:
+        since = owned_since()
+    except Exception:  # noqa: BLE001 — liveness bookkeeping never wedges a turn
+        return 0.0
+    if since is None:
+        return 0.0
+    return max(0.0, seconds - (time.monotonic() - since))
+
+
+def _thread_owned_since(context_id: str, task_id: str) -> Callable[[], float | None]:
+    """The ``owned_since`` probe: when ``task_id`` took ``context_id``'s thread, or None."""
+
+    def probe() -> float | None:
+        return turn_activity.held_since(context_id, task_id) if context_id and task_id else None
+
+    return probe
 
 
 def _thread_holder(context_id: str, task_id: str) -> Callable[[], str | None]:
@@ -1254,6 +1289,7 @@ class ProtoAgentExecutor(AgentExecutor):
                 last_activity,
                 stream_ctx,
                 queued_behind=_thread_holder(str(context.context_id or ""), str(context.task_id or "")),
+                owned_since=_thread_owned_since(str(context.context_id or ""), str(context.task_id or "")),
             )
             async for event_type, payload in guarded:
                 _capture_trace_id()
