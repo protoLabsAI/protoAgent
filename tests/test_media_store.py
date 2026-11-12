@@ -219,6 +219,13 @@ def test_route_serves_saved_file_with_mime():
     assert r.status_code == 200
     assert r.content == b"png-payload"
     assert r.headers["content-type"] == "image/png"
+    assert r.headers["x-content-type-options"] == "nosniff"
+    assert "content-security-policy" not in r.headers  # a plain image needs no sandbox
+    # A type the browser would run as a document is sandboxed away from this origin.
+    from server.media import _serve_headers
+
+    for active in ("text/html", "image/svg+xml", "TEXT/HTML; charset=utf-8", "application/rss+xml", "text/xsl"):
+        assert _serve_headers(active)["Content-Security-Policy"] == "sandbox allow-scripts", active
 
 
 def test_route_survives_restart_simulation():
