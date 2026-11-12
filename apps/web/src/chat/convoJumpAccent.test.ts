@@ -16,7 +16,7 @@ import { describe, expect, it } from "vitest";
 // the accent fill is a forward change present in every 0.68.1+ ui-css. package.json is read as a
 // JSON module and src stylesheets as `?raw` text via a compile-time glob rather than node:fs: this
 // tsconfig has no node types and under vitest+jsdom `import.meta.url` is an http: URL, so filesystem
-// access is a trap (mirrors uiDependencyFloor.test.ts / dsStaleFallbackDrop1b.test.ts).
+// access is a trap (mirrors uiDependencyFloor.test.ts).
 import pkg from "../../package.json";
 
 const deps = (pkg as { dependencies: Record<string, string> }).dependencies;
