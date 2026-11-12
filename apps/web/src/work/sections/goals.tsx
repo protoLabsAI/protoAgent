@@ -11,7 +11,7 @@ import { WorkEmpty as Empty } from "../WorkEmpty";
 import { Alert } from "@protolabsai/ui/data";
 import { useToast } from "@protolabsai/ui/overlays";
 
-import { registerWorkSection, type WorkSectionContext } from "../sectionRegistry";
+import { registerWorkSection, type WorkSection, type WorkSectionContext } from "../sectionRegistry";
 import { WorkRow } from "../WorkRow";
 import { WorkDetail, type WorkAction, type WorkField } from "../WorkDetail";
 import { relTime } from "../tone";
@@ -365,6 +365,6 @@ export function GoalsSection({ ctx }: { ctx: WorkSectionContext }) {
   return <GoalsList ctx={ctx} />;
 }
 
-export const goalsSection = { label: "Goals", render: (ctx: WorkSectionContext) => <GoalsSection ctx={ctx} /> };
+export const goalsSection = { label: "Goals", group: "doing-now", render: (ctx: WorkSectionContext) => <GoalsSection ctx={ctx} /> } satisfies WorkSection;
 
 registerWorkSection("goals", goalsSection);
