@@ -175,6 +175,9 @@ jobs:
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v7
+        with:
+          # Full history: the test-policy change budget diffs the PR against its merge base.
+          fetch-depth: 0
       - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
@@ -212,7 +215,21 @@ jobs:
         #     pyproject — the #1998 rot guard; fix: `uv lock`)
         #   python scripts/check_test_policy.py             (test-suite budgets and
         #     burndowns; rules in docs/dev/testing.md)
-        run: python scripts/gate.py --lint-only
+        # The test-policy change budget measures this PR's own diff against its base
+        # branch (main or an epic). The `test-budget` label turns an over-budget result
+        # into a report — read LIVE, like skip-changelog above, so the escape hatch is
+        # "apply the label, press Re-run failed jobs".
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [ "${GITHUB_EVENT_NAME}" = "pull_request" ]; then
+            export TEST_POLICY_BASE="origin/${GITHUB_BASE_REF}"
+            if gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}" --jq '.labels[].name' | grep -qx 'test-budget'; then
+              export TEST_POLICY_ALLOW=1
+            fi
+          fi
+          python scripts/gate.py --lint-only
 
   tests:
     name: Python tests
