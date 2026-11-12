@@ -233,7 +233,7 @@
           "collapsed": false,
           "items": [
             {
-              "text": "Work with files and documents",
+              "text": "Create and work with files and documents",
               "link": "/guides/documents-and-files"
             },
             {
@@ -565,7 +565,8 @@
         "/explanation/plugin-architecture",
         "/explanation/architecture",
         "/explanation/prompt-contracts",
-        "/explanation/output-protocol"
+        "/explanation/output-protocol",
+        "/design/work-consolidation"
       ],
       "groups": [
         {
@@ -699,6 +700,10 @@
             {
               "text": "Output protocol",
               "link": "/explanation/output-protocol"
+            },
+            {
+              "text": "Work consolidation: four groups",
+              "link": "/design/work-consolidation"
             }
           ]
         },

@@ -73,7 +73,7 @@
           "items": [
             {
               "path": "guides/documents-and-files.md",
-              "title": "Work with files and documents"
+              "title": "Create and work with files and documents"
             },
             {
               "path": "guides/python-runtime.md",
@@ -413,6 +413,10 @@
             {
               "path": "explanation/output-protocol.md",
               "title": "Output protocol"
+            },
+            {
+              "path": "design/work-consolidation.md",
+              "title": "Work consolidation: four groups"
             }
           ]
         }

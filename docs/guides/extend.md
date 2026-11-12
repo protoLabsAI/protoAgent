@@ -50,3 +50,4 @@ Choose [First plugin](/tutorials/first-plugin) for a minimal extension, or [Firs
 - [Architecture](/explanation/architecture)
 - [Prompt contracts](/explanation/prompt-contracts)
 - [Output protocol](/explanation/output-protocol)
+- [Work consolidation: four groups](/design/work-consolidation)

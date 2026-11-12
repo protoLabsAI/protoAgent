@@ -1,8 +1,8 @@
 """The docs corpus — resolve the `docs/` tree and enumerate the indexed markdown.
 
 The agent indexes + reads the SAME `docs/` the VitePress site publishes. We index the
-four Diátaxis sections plus the ADRs, and deliberately EXCLUDE `docs/dev/**` (internal
-handoffs — mirrors the site's `srcExclude: ["dev/**"]`) and `.vitepress/` (build config).
+four Diátaxis sections, the ADRs, and the published Work specs. Internal `docs/dev/**`,
+unpublished design drafts, and `.vitepress/` build config remain excluded.
 
 Resolution works in every deployment: in dev/Docker the tree is the repo's `docs/`; in the
 frozen desktop sidecar the PyInstaller build bundles the doc dirs, so `docs/` sits beside
@@ -18,7 +18,11 @@ from pathlib import Path
 # Indexed/served sections. docs/dev (internal) + .vitepress (build) are intentionally out.
 SECTIONS: tuple[str, ...] = ("tutorials", "guides", "reference", "explanation", "adr")
 
+# Only these published design specs are public; other design drafts stay excluded.
+PUBLISHED_DESIGN_DOCS = ("design/work-view.md", "design/work-consolidation.md")
+
 _SECTION_LABELS = {
+    "design": "Design",
     "tutorials": "Tutorials",
     "guides": "Guides",
     "reference": "Reference",
@@ -84,6 +88,11 @@ def iter_docs(root: Path | None = None):
         for p in sorted(base.rglob("*.md")):
             yield p.relative_to(root).as_posix(), p
 
+    for rel in PUBLISHED_DESIGN_DOCS:
+        p = root / rel
+        if p.is_file():
+            yield rel, p
+
 
 def valid_paths(root: Path | None = None) -> set[str]:
     """The set of readable doc rel-paths — exact membership is the security gate."""
@@ -119,19 +128,19 @@ def doc_tree(root: Path | None = None) -> list[dict]:
     """Ordered sections → items (`{path, title}`) for the reader's nav.
 
     Bundled corpus: section order follows `SECTIONS` (the Diátaxis arc, then
-    ADRs). Custom root: sections are the DISCOVERED top-level directories
+    ADRs and published design specs). Custom root: sections are the DISCOVERED top-level directories
     (sorted), with root-level files first under a plain "Docs" section — an
     arbitrary md tree has no Diátaxis to assume. Items sorted by title."""
     root = root or docs_root()
     custom = is_custom_root() and root == _CUSTOM_ROOT
-    by_section: dict[str, list[dict]] = {} if custom else {s: [] for s in SECTIONS}
+    by_section: dict[str, list[dict]] = {} if custom else {s: [] for s in (*SECTIONS, "design")}
     for rel, abs_path in iter_docs(root):
         section = rel.split("/", 1)[0] if "/" in rel else ("" if custom else rel.split("/", 1)[0])
         if custom:
             by_section.setdefault(section, []).append({"path": rel, "title": doc_title(abs_path)})
         elif section in by_section:
             by_section[section].append({"path": rel, "title": doc_title(abs_path)})
-    order = ((["" ] if "" in by_section else []) + sorted(k for k in by_section if k)) if custom else list(SECTIONS)
+    order = ((["" ] if "" in by_section else []) + sorted(k for k in by_section if k)) if custom else [*SECTIONS, "design"]
     out: list[dict] = []
     for section in order:
         items = sorted(by_section.get(section, []), key=lambda x: x["title"].lower())

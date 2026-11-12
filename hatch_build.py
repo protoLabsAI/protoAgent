@@ -63,6 +63,9 @@ _SEEDS: dict[str, str] = {
     "docs/reference": "docs/reference",
     "docs/explanation": "docs/explanation",
     "docs/adr": "docs/adr",
+    # Published Work specs only; other design drafts remain unbundled.
+    "docs/design/work-view.md": "docs/design/work-view.md",
+    "docs/design/work-consolidation.md": "docs/design/work-consolidation.md",
     "docs/public/media": "docs/public/media",  # reviewed docs assets only
 }
 

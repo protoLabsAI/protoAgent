@@ -185,7 +185,8 @@
             "explanation/plugin-architecture.md",
             "explanation/architecture.md",
             "explanation/prompt-contracts.md",
-            "explanation/output-protocol.md"
+            "explanation/output-protocol.md",
+            "design/work-consolidation.md"
           ]
         }
       ]
@@ -318,7 +319,7 @@
       "status": "current"
     },
     "guides/documents-and-files.md": {
-      "title": "Work with files and documents",
+      "title": "Create and work with files and documents",
       "status": "current"
     },
     "guides/python-runtime.md": {
@@ -788,6 +789,10 @@
     },
     "reference/plugin-settings.md": {
       "title": "Plugin settings and setup contracts",
+      "status": "current"
+    },
+    "design/work-consolidation.md": {
+      "title": "Work consolidation: four groups",
       "status": "current"
     }
   },
