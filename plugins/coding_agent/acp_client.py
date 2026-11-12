@@ -880,6 +880,12 @@ class AcpClient:
                 task.cancel()
         proc = self._proc
         if proc and proc.returncode is None:
+            # EOF on stdin is the portable "you are done" for a stdio agent. On Windows the
+            # graceful taskkill below cannot stop a console-less child, so without the EOF
+            # every close waited out the full five seconds before the hard kill.
+            if proc.stdin and not proc.stdin.is_closing():
+                with contextlib.suppress(Exception):
+                    proc.stdin.close()
             self._signal_group(proc, force=False)
             try:
                 await asyncio.wait_for(proc.wait(), timeout=5.0)
