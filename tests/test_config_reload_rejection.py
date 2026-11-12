@@ -322,3 +322,23 @@ def test_secret_sync_outcomes(config_file, monkeypatch, outcome, status_code):
     assert response.status_code == status_code
     if outcome == "success":
         assert response.json() == {"ok": True, "names": ["EXAMPLE_KEY"]}
+
+
+def test_reload_refuses_to_clear_the_token_on_a_non_loopback_bind(config_file, monkeypatch):
+    """The boot gate's rule (``evaluate_open_bind``), applied when a reload clears ``auth.token``."""
+    import server.agent_init as ai
+
+    config_file.write_text("auth:\n  token: ''\n")
+    monkeypatch.delenv("A2A_AUTH_TOKEN", raising=False)
+    monkeypatch.delenv("PROTOAGENT_ALLOW_OPEN", raising=False)
+    monkeypatch.setattr(STATE, "bind_host", "0.0.0.0")
+    graph = object()
+    monkeypatch.setattr(STATE, "graph", graph)
+    ok, message = ai._reload_langgraph_agent()
+    assert not ok and "refusing to bind 0.0.0.0" in message and STATE.graph is graph
+    cfg = LangGraphConfig.from_yaml(str(config_file))
+    monkeypatch.setenv("PROTOAGENT_ALLOW_OPEN", "1")  # the boot gate's opt-in, and loopback, both pass
+    assert ai._open_bind_reload_refusal(cfg) is None
+    monkeypatch.delenv("PROTOAGENT_ALLOW_OPEN")
+    monkeypatch.setattr(STATE, "bind_host", "127.0.0.1")
+    assert ai._open_bind_reload_refusal(cfg) is None
