@@ -1,5 +1,6 @@
+import type { DecisionRow } from "../lib/api/decisions";
 import type { WorkItems } from "./useWorkItems";
-import { groupFor, type GroupableWorkItem, type WorkGroupId, type WorkJobRef } from "./tone";
+import { decisionMeta, fromDecision, groupFor, type GroupableWorkItem, type WorkGroupId, type WorkJobRef } from "./tone";
 
 export type WorkGroup = {
   id: WorkGroupId;
@@ -25,6 +26,37 @@ export const jobKey = (job: WorkJobRef) => JSON.stringify([job.kind, job.id]);
  *  counts actually took. */
 export function flattenWorkItems(input: readonly GroupableWorkItem[] | WorkItems): readonly GroupableWorkItem[] {
   return Array.isArray(input) ? input : Object.values(input).flatMap((source) => source.groupItems ?? source.items);
+}
+
+/** The shared record to show over a source row, if any: a settled state is one-way, so a row
+ *  the source already has as settled keeps it over a shared record still cached as pending. */
+function sharedOverride(row: DecisionRow | undefined, shared: DecisionRow | undefined): DecisionRow | undefined {
+  if (!shared) return undefined;
+  return row && row.state !== "pending" && shared.state === "pending" ? undefined : shared;
+}
+
+/** Overlay the shared decisions store (useDecisions) onto the Work sources, so every
+ *  consumer of the selector — the Work view AND the chat rail — counts an answer the moment
+ *  it lands instead of waiting for the list refetch. Decision rows the store resolved as
+ *  gone (404) are dropped; every other decision row shows its freshest record (a settled
+ *  record always wins over a stale pending copy, see {@link sharedOverride}). */
+export function withSharedDecisions(sources: WorkItems, shared: {
+  records: Record<string, DecisionRow>;
+  missing: Record<string, true>;
+}): WorkItems {
+  const keep = (item: { kind: string; id: string }) => item.kind !== "decision" || !shared.missing[item.id];
+  const overlay = <T extends GroupableWorkItem>(item: T): T => {
+    if (item.kind !== "decision") return item;
+    const record = sharedOverride(item.raw as DecisionRow | undefined, shared.records[item.id]);
+    return record
+      ? ({ ...item, raw: record, status: fromDecision(record.state), meta: decisionMeta(record, true) } as T)
+      : item;
+  };
+  return Object.fromEntries(Object.entries(sources).map(([key, source]) => [key, {
+    ...source,
+    items: source.items.filter(keep).map(overlay),
+    ...(source.groupItems ? { groupItems: source.groupItems.filter(keep).map(overlay) } : {}),
+  }])) as WorkItems;
 }
 
 export function inWorkScope(item: GroupableWorkItem, { thisChatOnly = false, sessionId }: {

@@ -18,6 +18,16 @@
   flex: none;
 }
 
+/* The S7 Needs-you marker — FIRST on the row and NEVER folded: flex none, so however
+   narrow the row gets the people (who collapse behind +K) give way, not the marker. */
+.chat-status-rail .chat-status-needs-you {
+  flex: none;
+  gap: var(--pl-space-1);
+}
+.chat-status-needs-you .chat-status-chip__count {
+  font-variant-numeric: tabular-nums;
+}
+
 /* The rail owns the row's spacing; the roster keeps its own chip styles. It takes the
    row's remaining width (that is what the fit is measured against) and clips SIDEWAYS
    ONLY — containing the max-content measure row below, and any not-yet-refitted chips
@@ -200,6 +210,49 @@
   gap: var(--pl-space-2);
 }
 
+/* ── Needs you (S7): decision cards, one-line rows, neutral delivery/goal rows ───────── */
+
+.chat-needs-you__card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--pl-space-1);
+  padding: var(--pl-space-1) 0;
+}
+/* A collapsed decision: one full-width line — agent · question, then the age. */
+.chat-needs-you__row {
+  display: flex;
+  align-items: baseline;
+  gap: var(--pl-space-2);
+  width: 100%;
+  min-width: 0;
+  padding: var(--pl-space-1) 0;
+  font: inherit;
+  text-align: left;
+  color: inherit;
+  background: none;
+  border: 0;
+  border-bottom: 1px solid var(--pl-color-border);
+  cursor: pointer;
+}
+.chat-needs-you__row:hover .chat-status-details__title,
+.chat-needs-you__row:focus-visible .chat-status-details__title {
+  color: var(--pl-color-fg);
+}
+/* The ≥30-minute hint: muted information, never a warning callout. */
+.chat-needs-you__stale {
+  margin: 0;
+  font-size: var(--pl-font-size-xs);
+  color: var(--pl-color-fg-muted);
+}
+.chat-needs-you__goal {
+  flex-wrap: wrap;
+}
+.chat-needs-you__goal-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--pl-space-2);
+}
+
 /* ── Phone (§5/§6): numbers-only chips, ≥48px rows, md full-width stacked actions ──── */
 @media (max-width: 767px) {
   .chat-status-chip__text {
@@ -222,6 +275,20 @@
   .chat-status-details__actions .pl-btn {
     width: 100%;
   }
+  /* Needs you on the phone: collapsed decision rows keep the 48px floor, and the goal's
+     md actions stack full width like every other action row in the sheet. */
+  .chat-needs-you__row {
+    min-height: 48px;
+    align-items: center;
+  }
+  .chat-needs-you__goal-actions {
+    flex-direction: column;
+    align-items: stretch;
+    width: 100%;
+  }
+  .chat-needs-you__goal-actions .pl-btn {
+    width: 100%;
+  }
 }
 
 /* Touch devices above the phone breakpoint (the tablet band): grow each chip's hit area to
@@ -229,10 +296,12 @@
    row keeps its height. */
 @media (hover: none) and (pointer: coarse) {
   .chat-status-chip,
+  .chat-status-rail .chat-status-needs-you,
   .chat-roster-chip {
     position: relative;
   }
   .chat-status-chip::after,
+  .chat-status-rail .chat-status-needs-you::after,
   .chat-roster-chip::after {
     content: "";
     position: absolute;

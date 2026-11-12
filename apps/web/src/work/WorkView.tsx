@@ -6,20 +6,15 @@ import { WorkHeading } from "./WorkHeading";
 import { useSurfaceFrame } from "../shell/SurfaceFrame";
 import { SideNav } from "@protolabsai/ui/navigation";
 import { useToast, Tooltip } from "@protolabsai/ui/overlays";
-import { api } from "../lib/api";
-import { sessionFromDurableTurns, SESSION_TURN_LIMIT } from "../chat/sessionHydration";
-import { openView } from "../app/palette/nav";
-import { chatStore } from "../chat/chat-store";
-import { useKbIntents } from "../keybindings/intents";
 import { isConnected, onConnectionChange } from "../lib/events";
 import { useDecisions } from "../decisions/useDecisions";
 import { decisionMeta, fromDecision, relTime, type GroupableWorkItem, type WorkGroupId } from "./tone";
-import type { DecisionRow } from "../lib/api/decisions";
 import type { InboxItem } from "../lib/types";
 import { useUI } from "../state/uiStore";
 import type { SurfaceState } from "../shell/surfaceState";
-import { useWorkItems, type WorkItems } from "./useWorkItems";
-import { workGroups } from "./workGroups";
+import { useWorkItems } from "./useWorkItems";
+import { openSourceChat as openSourceChatShared } from "./openSourceChat";
+import { withSharedDecisions, workGroups } from "./workGroups";
 import { WorkDetail } from "./WorkDetail";
 import { WorkOverview, WorkGroupSection, groupSources, itemKey, workSections } from "./WorkOverview";
 import { endThisChatVisit, isThisChatVisit, subscribeThisChatVisit, trackWorkViewMount } from "./visitScope";
@@ -51,13 +46,6 @@ const LEGACY_GROUPS: Record<string, WorkGroupId> = {
 export function canonicalSection(section: string): "overview" | WorkGroupId {
   if (section === "overview" || (GROUP_IDS as readonly string[]).includes(section)) return section as "overview" | WorkGroupId;
   return sections.get(section)?.group ?? LEGACY_GROUPS[section] ?? "overview";
-}
-
-/** The shared record to show over Work's row, if any: a settled state is one-way, so a row Work
- *  already has as settled keeps it over a shared record still cached as pending. */
-function sharedOverride(row: DecisionRow | undefined, shared: DecisionRow | undefined): DecisionRow | undefined {
-  if (!shared) return undefined;
-  return row && row.state !== "pending" && shared.state === "pending" ? undefined : shared;
 }
 
 /** The element that actually scrolls the Work list. In the rail and modal that's the list
@@ -112,27 +100,22 @@ export function WorkView({ frame = "rail", sessionId }: { frame?: "rail" | "moda
   const toast = useToast();
   const agentOnline = useSyncExternalStore(onConnectionChange, isConnected);
   const decisions = useDecisions();
-  const allSources = { ...useWorkItems({ sessionId, thisChatOnly: false }) };
   // Work lists every decision (history too); the shared store holds the answer path's records.
   // A settled state is final, so whichever copy has settled wins; otherwise the shared record
   // wins. A row the server reported gone (404) is dropped. Work's own list catches up on
-  // reconnect (useWorkItems), so neither copy needs to be authoritative over the other.
-  allSources.decisions = { ...allSources.decisions, items: allSources.decisions.items.filter((item) => !decisions.missing[item.id]) };
+  // reconnect (useWorkItems), so neither copy needs to be authoritative over the other. The
+  // overlay is the SHARED one (workGroups.withSharedDecisions) — the chat rail applies the
+  // same, so the two surfaces' Needs-you counts cannot drift.
+  const sources = { ...withSharedDecisions(useWorkItems({ sessionId, thisChatOnly: false }), decisions) };
   const selectedDecisionId = state.itemId?.startsWith("decision:") ? state.itemId.slice(9) : undefined;
   const retained = selectedDecisionId ? decisions.records[selectedDecisionId] : undefined;
-  if (retained && retained.state !== "pending" && !allSources.decisions.items.some((item) => item.id === retained.id)) {
+  if (retained && retained.state !== "pending" && !sources.decisions.items.some((item) => item.id === retained.id)) {
     // Keep the selected terminal record visible after the pending source refreshes.
-    allSources.decisions = { ...allSources.decisions, items: [...allSources.decisions.items, {
+    sources.decisions = { ...sources.decisions, items: [...sources.decisions.items, {
       kind: "decision", id: retained.id, raw: retained, title: retained.question,
       status: fromDecision(retained.state), meta: decisionMeta(retained, true), sessionId: retained.session_id,
     }] };
   }
-  const sources = Object.fromEntries(Object.entries(allSources).map(([key, source]) => [key, {
-    ...source, items: source.items.map((item) => {
-      const record = item.kind === "decision" ? sharedOverride(item.raw as DecisionRow | undefined, decisions.records[item.id]) : undefined;
-      return record ? { ...item, raw: record, status: fromDecision(record.state), meta: decisionMeta(record, true) } : item;
-    }),
-  }])) as WorkItems;
   // The shared selector is the ONLY row/count projection (spec §7.1): the Overview, a picked
   // group and the picker badges all read it, with Needs you never chat-filtered.
   const groups = workGroups(sources, { thisChatOnly, sessionId });
@@ -228,27 +211,9 @@ export function WorkView({ frame = "rail", sessionId }: { frame?: "rail" | "moda
     scrollTop: listRef.current ? listScroller(listRef.current).scrollTop : state.scrollTop,
   });
   const openSourceChat = async (sourceSessionId: string, reply = false) => {
-    try {
-      if (!chatStore.getSnapshot().sessions.some((session) => session.id === sourceSessionId)) {
-        const { turns, live_task_id } = await api.chatSessionTurns(sourceSessionId, SESSION_TURN_LIMIT);
-        const session = sessionFromDurableTurns({ session_id: sourceSessionId,
-          last_updated: turns[0]?.last_updated ?? null, turn_count: turns.length }, turns, live_task_id);
-        if (!session) throw new Error("The source chat is unavailable.");
-        chatStore.restoreDismissedSession(sourceSessionId);
-        const token = chatStore.captureHydrationEligibility(sourceSessionId);
-        if (token) chatStore.hydrateSessions([session], [token]);
-      }
-      if (!chatStore.getSnapshot().sessions.some((session) => session.id === sourceSessionId)) {
-        throw new Error("The source chat is unavailable.");
-      }
-    } catch {
+    if (!(await openSourceChatShared(sourceSessionId, reply))) {
       toast({ tone: "error", title: "Couldn't open source chat", message: "Try again when the agent is connected." });
-      return;
     }
-    chatStore.switchSession(sourceSessionId);
-    useUI.getState().closeSurfaceModal();
-    openView("chat");
-    if (reply) useKbIntents.getState().focusComposer();
   };
   const context = { sources, state: { ...viewState, itemId: selectedKey ?? state.itemId }, onOpen, onBack, sessionId,
     decisionActions: { agentOnline, openSourceChat, answerDecision: decisions.answer } };
