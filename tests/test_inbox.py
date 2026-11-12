@@ -1491,6 +1491,9 @@ async def test_a_now_item_whose_accepted_turn_fails_is_restored_to_pending(tmp_p
         gate.set()
         assert await _until(lambda: [i["id"] for i in inbox.list(priority_floor="later")] == [body["item"]["id"]])
         assert len(calls) == 1
+        # The restore and its badge event are separate steps: wait for the event too, or a
+        # loaded xdist worker reads the list between them (CI flake on #5146).
+        assert await _until(lambda: published.count("inbox.item") >= 1)
         assert published.count("inbox.item") == 1  # restored once, badged once
         await asyncio.sleep(0.1)
         assert published.count("inbox.item") == 1
