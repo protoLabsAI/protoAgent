@@ -2,6 +2,7 @@ import type { AnswerResult } from "../lib/api/decisions";
 import type { ReactNode } from "react";
 import type { SurfaceState } from "../shell/surfaceState";
 import type { WorkItem, WorkItems } from "./useWorkItems";
+import type { WorkGroupId } from "./tone";
 
 export type WorkSectionContext = {
   sources: WorkItems;
@@ -16,7 +17,13 @@ export type WorkSectionContext = {
     answerDecision: (id: string, optionId: string) => Promise<AnswerResult>;
   };
 };
-type WorkSection = { label: string; render: (context: WorkSectionContext) => ReactNode };
+export type WorkSection = {
+  label: string;
+  /** Default placement for extensions, never an override of workGroups/groupFor's
+   * per-row classification. Optional during migration; required in S4c. */
+  group?: WorkGroupId;
+  render: (context: WorkSectionContext) => ReactNode;
+};
 export const sections = new Map<string, WorkSection>();
 const listeners = new Set<() => void>();
 let version = 0;

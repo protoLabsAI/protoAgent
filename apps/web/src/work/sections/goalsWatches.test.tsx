@@ -138,6 +138,8 @@ describe("registration (import side-effect)", () => {
     expect(ids).toContain("watches");
     expect(goalsSection.label).toBe("Goals");
     expect(watchesSection.label).toBe("Watches");
+    expect(registrations.find(([id]) => id === "goals")?.[1]).toMatchObject({ group: "doing-now" });
+    expect(registrations.find(([id]) => id === "watches")?.[1]).toMatchObject({ group: "coming-up" });
   });
 });
 

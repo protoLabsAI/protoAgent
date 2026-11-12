@@ -177,7 +177,13 @@ export function ActivitySurface({ pendingOnly = false }: { pendingOnly?: boolean
     items.length === 0 && chronological.length === 0 && !activityLoading && !inboxLoading;
 
   return (
-    <div className="unified-feed util-dialog-fill" data-testid="unified-feed">
+    // The utility-bar dialog gives the feed a fixed height and splits it between the two
+    // sections. Embedded in Work (`pendingOnly`), the pending cards sit in the Work list's
+    // flow instead: no fixed height and no inner scroller (#5094).
+    <div
+      className={pendingOnly ? "unified-feed unified-feed--inline" : "unified-feed util-dialog-fill"}
+      data-testid="unified-feed"
+    >
       {/* PENDING (top): inbound stimuli awaiting processing (ADR 0003). */}
       {inboxError ? (
         <div className="activity-error" role="alert">
