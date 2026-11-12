@@ -23,6 +23,7 @@ export type RevokeResult =
 function createStore(sessionId: string) {
   let snapshot: DirectivesSnapshot = { state: "loading", active: [], history: [], loadedAt: null };
   const listeners = new Set<() => void>();
+  const observers = new Set<() => void>();
   let stop: (() => void) | null = null;
   let pending: Promise<DirectiveList | null> | null = null;
   let dirty = false;
@@ -51,6 +52,7 @@ function createStore(sessionId: string) {
           snapshot = { ...snapshot, state: snapshot.loadedAt === null ? "failed" : "stale" };
         }
         for (const listener of listeners) listener();
+        for (const observer of observers) observer();
       } while (dirty);
       pending = null;
       return result;
@@ -117,13 +119,18 @@ function createStore(sessionId: string) {
     };
   }
 
-  return { subscribe, getSnapshot: () => snapshot, refresh, revoke };
+  // Inventory consumers observe cache changes without starting unbounded per-chat fetches.
+  function observe(listener: () => void) {
+    observers.add(listener);
+    return () => { observers.delete(listener); };
+  }
+  return { subscribe, observe, getSnapshot: () => snapshot, refresh, revoke };
 }
 
 // Shared across consumers; only sessions with subscribers have live bus subscriptions.
 // Like backgroundJobStore, snapshots survive a consumer unmount/remount.
 const stores = new Map<string, ReturnType<typeof createStore>>();
-function storeFor(sessionId: string) {
+export function directiveStore(sessionId: string) {
   let store = stores.get(sessionId);
   if (!store) {
     store = createStore(sessionId);
@@ -133,10 +140,10 @@ function storeFor(sessionId: string) {
 }
 
 export function useDirectives(sessionId: string) {
-  const store = useMemo(() => storeFor(sessionId), [sessionId]);
+  const store = useMemo(() => directiveStore(sessionId), [sessionId]);
   const snapshot = useSyncExternalStore(store.subscribe, store.getSnapshot, store.getSnapshot);
   return { ...snapshot, refresh: store.refresh, revoke: store.revoke };
 }
 
 /** Test seam: exercise the same shared subscriptions and actions without React. */
-export const directivesStoreForTest = storeFor;
+export const directivesStoreForTest = directiveStore;

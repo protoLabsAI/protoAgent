@@ -127,17 +127,37 @@ def _hysteresis_mw(ceiling: int = 30_000) -> CountingSummarizationMiddleware:
 
 def test_system_thread_does_not_recompact_when_the_kept_tail_already_clears_the_ceiling():
     """Regression for the round-1 no-hysteresis finding. The post-compaction shape is
-    ``[summary, *kept tail]``; here the tail alone is ~40k, so the whole thread is well
-    over the 30k ceiling — yet the only summarisable head is the ~1k leftover summary, so
-    a second ``before_model`` must NOT compact again."""
+    ``[summary, *kept tail]``; here the tail — one message the cutoff can never remove —
+    is ~40k alone, so the whole thread is well over the 30k ceiling. The only thing ahead
+    of it is the leftover summary, which is not new history (#5106), so a second
+    ``before_model`` must NOT compact again.
+
+    (Before #5106 this used a two-message tail of 20k each under ``keep=2``. A system
+    thread now keeps at most ``ceiling // 2`` tokens, so the older of those two IS
+    removable and that shape compacts once — see the next test.)"""
+    from graph.compaction_engine import summary_message
+
     mw = _hysteresis_mw(30_000)
-    summary = HumanMessage(content="x" * 4_000)  # ~1k tokens — a leftover summary
-    tail_a = HumanMessage(content="y" * 80_000)  # ~20k tokens — a kept tail message
-    tail_b = AIMessage(content="z" * 80_000)  # ~20k tokens — a kept tail message
-    state = {"messages": [summary, tail_a, tail_b], "session_id": "system:activity"}
-    # Over the ceiling (≈41k ≥ 30k), but keep=2 leaves only the ~1k summary to remove.
+    summary = summary_message("x" * 4_000, source="summarization")  # ~1k — a leftover summary
+    tail = AIMessage(content="z" * 160_000)  # ~40k — the newest message, always kept
+    state = {"messages": [summary, tail], "session_id": "system:activity"}
     assert _len_counter(state["messages"]) >= 30_000
     assert mw.before_model(state, None) is None
+
+
+def test_an_oversized_kept_tail_compacts_once_then_settles():
+    """#5106: a tail of several messages over the ceiling is trimmed to the system keep
+    budget in ONE compaction, after which the thread does not re-fire."""
+    from langchain_core.messages import RemoveMessage
+
+    mw = _hysteresis_mw(30_000)
+    tail_a = HumanMessage(content="y" * 80_000)  # ~20k
+    tail_b = AIMessage(content="z" * 80_000)  # ~20k — over the 15k keep budget alone
+    first = mw.before_model({"messages": [tail_a, tail_b], "session_id": "system:activity"}, None)
+    assert _compacted(first)
+    after = [m for m in first["messages"] if not isinstance(m, RemoveMessage)]
+    assert after[-1].content == tail_b.content and len(after) == 2  # [summary, tail_b]
+    assert mw.before_model({"messages": after, "session_id": "system:activity"}, None) is None
 
 
 def test_system_thread_recompacts_once_enough_new_history_accrues():
@@ -159,9 +179,8 @@ def test_a_small_head_over_the_ceiling_does_not_compact():
     (≈7.5k for a 30k ceiling), no compaction fires."""
     mw = _hysteresis_mw(30_000)
     small_head = HumanMessage(content="x" * 8_000)  # ~2k — below the ~7.5k margin
-    tail_a = HumanMessage(content="y" * 80_000)  # ~20k
-    tail_b = AIMessage(content="z" * 80_000)  # ~20k
-    state = {"messages": [small_head, tail_a, tail_b], "session_id": "system:activity"}
+    tail = AIMessage(content="z" * 160_000)  # ~40k — the newest message, always kept
+    state = {"messages": [small_head, tail], "session_id": "system:activity"}
     assert _len_counter(state["messages"]) >= 30_000
     assert mw.before_model(state, None) is None
 
@@ -197,3 +216,65 @@ def test_is_system_thread_falls_back_to_the_prefixed_thread_id(monkeypatch):
     # A non-system a2a thread must not be mistaken for one.
     monkeypatch.setattr(langgraph.config, "get_config", lambda: {"configurable": {"thread_id": "a2a:sess-chat-123"}})
     assert not _is_system_thread({})
+
+
+# ── steady tool-result inflow (#5106) ─────────────────────────────────────────
+#
+# Production: a five-hour job on ``system:activity`` with default config (keep 20
+# messages, 30k system ceiling) compacted 107 times in ~3.5h — nearly every model step,
+# each one rewriting the cached prefix. The thread was fed one 2–5k-token tool result per
+# step. The kept tail of 20 messages (~10 results) was itself over the ceiling, so right
+# after each compaction the thread was over the ceiling again, and the hysteresis margin
+# counted the previous summary as "removable" — one or two new results on top of it
+# cleared the margin. This drives that shape through the real hooks, applying each
+# compaction's update, and counts.
+
+
+def _steady_inflow_run(steps: int = 60, ceiling: int = 30_000, summary_tokens: int = 2_000):
+    from langchain_core.messages import RemoveMessage, ToolMessage
+
+    mw = CountingSummarizationMiddleware(
+        model=FakeMessagesListChatModel(responses=[AIMessage(content="noop")]),
+        trigger=("tokens", 200_000),  # the chat trigger (compaction.max_tokens) — out of reach
+        keep=("messages", 20),  # compaction.keep_messages default
+        system_thread_max_tokens=ceiling,
+        history_store=None,
+    )
+    # A summariser's notes of a realistic size (the engine's required sections).
+    mw._create_summary = lambda _msgs: "notes " * (summary_tokens * 4 // 6)
+    sizes = [2_000, 3_500, 5_000, 2_500, 4_000]  # tokens per tool result, cycling
+    messages: list = [HumanMessage(content="[Autonomous wake — scheduled run.] Run the merge queue.")]
+    compacted_at: list[int] = []
+    peak = 0
+    from langchain_core.messages.utils import count_tokens_approximately
+
+    for step in range(steps):
+        call_id = f"call-{step}"
+        messages.append(
+            AIMessage(content=f"checking PR {step}", tool_calls=[{"id": call_id, "name": "gh", "args": {"pr": step}}])
+        )
+        messages.append(ToolMessage(content="x" * (sizes[step % len(sizes)] * 4), tool_call_id=call_id))
+        result = mw.before_model({"messages": messages, "session_id": "system:activity"}, None)
+        if result is not None:
+            compacted_at.append(step)
+            messages = [m for m in result["messages"] if not isinstance(m, RemoveMessage)]
+        peak = max(peak, count_tokens_approximately(messages))
+    return compacted_at, peak
+
+
+def test_a_steady_inflow_of_tool_results_compacts_at_most_once_per_several_steps():
+    compacted_at, peak = _steady_inflow_run()
+    assert compacted_at, "the system ceiling must still bound the thread"
+    gaps = [b - a for a, b in zip(compacted_at, compacted_at[1:], strict=False)]
+    assert min(gaps) >= 3, f"compacted at steps {compacted_at}"
+    assert len(compacted_at) <= 60 // 3
+    # Bounded: never far past the ceiling (one step's inflow over it, at most).
+    assert peak <= 30_000 + 6_000, peak
+
+
+def test_a_large_previous_summary_does_not_count_as_new_history():
+    """The previous compaction's notes sit ahead of the kept tail; re-summarising them is
+    not progress, so they must not clear the margin on their own."""
+    compacted_at, _ = _steady_inflow_run(summary_tokens=6_000)
+    gaps = [b - a for a, b in zip(compacted_at, compacted_at[1:], strict=False)]
+    assert compacted_at and min(gaps) >= 3, f"compacted at steps {compacted_at}"

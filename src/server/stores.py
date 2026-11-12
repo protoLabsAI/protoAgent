@@ -342,6 +342,14 @@ async def recover_pending_now_inbox_items(
                     claimed_at,
                 )
                 continue
+            # The fired turn may already have failed, before this mark landed (#5106): its
+            # restore was owed to this write — settle it now, after it, so the failure wins.
+            try:
+                from server.a2a import settle_owed_inbox_restore
+
+                await asyncio.to_thread(settle_owed_inbox_restore, item_id)
+            except Exception:  # noqa: BLE001 — best-effort; never break the batch
+                log.exception("[inbox] now-recovery could not settle item %s's failed turn", item_id)
             accepted += 1
             continue
 

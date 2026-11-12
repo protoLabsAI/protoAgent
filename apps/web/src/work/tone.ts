@@ -1,5 +1,6 @@
+import { isPendingNowInboxPage } from "../lib/queries";
 import type { Status } from "@protolabsai/ui/primitives";
-import type { ScheduledJob, WatchState } from "../lib/types";
+import type { InboxItem, ScheduledJob, WatchState } from "../lib/types";
 import type { DecisionRow } from "../lib/api/decisions";
 import type { WorkItem } from "./useWorkItems";
 
@@ -12,8 +13,8 @@ export type GroupableWorkItem = (WorkItem & {
   started?: boolean;
   tiedJob?: WorkJobRef;
 }) | (Omit<WorkItem, "kind" | "raw"> & (
-  | { kind: "delivery"; raw: { delivered: boolean; needsHuman: boolean } }
-  | { kind: "wait"; raw: { state: "pending" | "completed" | "cancelled" } }
+  | { kind: "delivery"; raw: InboxItem | { delivered: boolean; needsHuman: boolean } }
+  | { kind: "wait"; raw: ScheduledJob | { state: "pending" | "completed" | "cancelled" } }
 ));
 
 /** Pure classification on source state: WorkStatus deliberately loses task detail. */
@@ -21,7 +22,7 @@ export function groupFor(item: GroupableWorkItem): WorkGroupId | null {
   const raw = item.raw as Record<string, unknown> | null;
   switch (item.kind) {
     case "decision": return raw?.state === "pending" ? "needs-you" : null;
-    case "delivery": return !item.raw.delivered && item.raw.needsHuman ? "needs-you" : null;
+    case "delivery": return ("priority" in item.raw ? isPendingNowInboxPage(item.raw) : !item.raw.delivered && item.raw.needsHuman) ? "needs-you" : null;
     case "goal":
       if (raw?.status === "active") return "doing-now";
       return raw?.status === "exhausted" || raw?.status === "unachievable" ? "needs-you" : null;
@@ -36,7 +37,7 @@ export function groupFor(item: GroupableWorkItem): WorkGroupId | null {
       return raw?.status === "active" || (raw?.status === "met" && raw.repeat === true) ? "coming-up" : null;
     case "schedule":
       return ["scheduled", "paused", "waiting"].includes(item.status) ? "coming-up" : null;
-    case "wait": return item.raw.state === "pending" ? "coming-up" : null;
+    case "wait": return ("state" in item.raw ? item.raw.state === "pending" : ["scheduled", "paused", "waiting"].includes(item.status)) ? "coming-up" : null;
     case "directive": return raw?.status === "in_force" ? "instructions" : null;
     case "activity": return null;
   }

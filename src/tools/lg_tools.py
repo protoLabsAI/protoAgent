@@ -210,7 +210,7 @@ def request_decision(question: str, options: list[str | dict], context: str = ""
 @tool
 async def withdraw_decision(decision_id: str, reason: str = "", state: Annotated[Any, InjectedState] = None) -> str:
     """Withdraw your own pending decision when it is no longer needed, with a reason."""
-    from graph.decision_resume import CANCELLED_RESUME, resume_parked_turn
+    from graph.decision_resume import CANCELLED_RESUME, ResumeOutcome, resume_parked_turn
     from graph.decisions import DecisionError, decision_store
     from runtime.state import STATE
 
@@ -232,8 +232,14 @@ async def withdraw_decision(decision_id: str, reason: str = "", state: Annotated
         return f"Error: {exc}"
     # Like operator dismissal, clear the checkpoint after closing the ledger record.
     # Omit decision_id: the answer gate rejects this now-withdrawn record.
-    resumed = await resume_parked_turn(updated.session_id, CANCELLED_RESUME)
-    if not resumed:
+    outcome = await resume_parked_turn(updated.session_id, CANCELLED_RESUME)
+    if outcome is ResumeOutcome.TURN_FAILED:
+        return (f"Decision {decision_id} withdrawn: {reason}. The parked turn was resumed to clear it, "
+                "but that turn then ended with an error.")
+    if outcome is ResumeOutcome.UNKNOWN:
+        return (f"Decision {decision_id} withdrawn: {reason}. Clearing the parked turn timed out; "
+                "it may still be finishing.")
+    if not outcome:
         return f"Decision {decision_id} withdrawn: {reason}. Warning: could not resume the parked turn."
     return f"Decision {decision_id} withdrawn: {reason}"
 

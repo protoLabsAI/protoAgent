@@ -1256,3 +1256,342 @@ def test_delivery_is_at_least_once_across_an_unrecorded_crash(tmp_path):
     # recovery_accepted_at, so the row is indistinguishable from one that never fired.
     store.reset_stale_recovery_claims()
     assert len(store.claim_now_recovery_batch(limit=8)) == 1  # fired again: at-least-once
+
+
+# ── a now-item returns while the Activity thread is busy (#5106) ──────────────
+
+
+@pytest.mark.asyncio
+async def test_now_inbox_post_returns_while_a_turn_holds_the_activity_thread(tmp_path, monkeypatch):
+    """``POST /api/inbox {priority: "now"}`` answers as soon as the Activity turn is
+    ACCEPTED, not when it finishes (#5106).
+
+    The self-A2A send used to omit ``returnImmediately``, so the SDK held the response
+    until the fired turn reached a terminal state — and that turn first queues behind
+    whatever turn already holds the Activity thread. A caller with a 25 s timeout saw
+    no answer while a long job ran, and a retry on timeout stored a duplicate.
+
+    Real a2a-sdk app + ``ProtoAgentExecutor`` + the real per-thread lock; only the turn
+    body (the model) is a fake. The thread is held by a "running turn" for the whole
+    POST, so the old blocking send cannot answer until the lock is released.
+    """
+    import httpx
+
+    import operator_api.console_handlers as ch
+    import runtime.state as rs
+    import server.a2a as a2a
+    from events import ACTIVITY_CONTEXT
+    from server import turn_control
+    from tests._a2a_app import A2A_HEADERS, drain_handlers, poll_terminal
+    from tests._a2a_app import build_app as build_a2a_app
+
+    ran: list[str] = []
+
+    async def stream(text, ctx, *, resume=False, caller_trace=None, **kwargs):
+        # Mirrors the chat driver: a turn takes the thread's lock before it yields.
+        async with turn_control._thread_lock(f"a2a:{ctx}"):
+            ran.append(text)
+            yield ("text", "<output>handled</output>")
+
+    import weakref
+
+    # Locks bind to the loop that first contends them; never share one across tests.
+    monkeypatch.setattr(turn_control, "_THREAD_LOCKS", weakref.WeakValueDictionary())
+    a2a_app = build_a2a_app(stream)
+    inbox = _store(tmp_path)
+    monkeypatch.setattr(rs.STATE, "inbox_store", inbox, raising=False)
+    monkeypatch.setattr(rs.STATE, "storm_guard", None, raising=False)
+    monkeypatch.setattr(rs.STATE, "fastapi_app", a2a_app, raising=False)
+    monkeypatch.setattr(rs.STATE, "active_port", 9, raising=False)
+    monkeypatch.setattr(rs.STATE, "inbox_now_delivery", a2a._fire_activity_from_inbox, raising=False)
+    published: list = []
+    monkeypatch.setattr(ch._event_bus, "publish", lambda topic, payload: published.append(topic))
+
+    operator = FastAPI()
+    register_operator_routes(
+        operator,
+        runtime_status=lambda: {},
+        subagent_list=lambda: [],
+        subagent_run=_unused,
+        subagent_batch=_unused,
+        inbox_add=ch._operator_inbox_add,
+    )
+
+    running_turn = turn_control._thread_lock(f"a2a:{ACTIVITY_CONTEXT}")
+    await running_turn.acquire()  # a long job is running on the Activity thread
+    try:
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=operator), base_url="http://test") as c:
+            post = asyncio.ensure_future(
+                c.post("/api/inbox", json={"text": "deploy done", "priority": "now", "source": "ci"})
+            )
+            # Wait WITHOUT cancelling: the SDK answers a cancelled blocking send with the
+            # task as it stands, so a `wait_for` here would pass on the blocking code too.
+            done, _ = await asyncio.wait({post}, timeout=5.0)
+            if not done:
+                running_turn.release()  # let the blocked send finish before failing
+                await post
+                pytest.fail("POST /api/inbox (now) did not answer while the Activity thread was busy")
+            r = post.result()
+        assert r.status_code == 200
+        body = r.json()
+        assert body["ok"] is True and body["fired"] is True
+        assert isinstance(body["item"]["id"], int)
+        assert ran == []  # answered while the turn is still queued behind the running one
+        # Accepted means owned: nothing is left for check_inbox to process a second time.
+        assert inbox.list(priority_floor="later") == []
+        assert "inbox.item" not in published
+    finally:
+        if running_turn.locked():
+            running_turn.release()
+
+    # The queued turn still runs — once — after the running turn lets go of the thread.
+    for _ in range(200):
+        if ran:
+            break
+        await asyncio.sleep(0.01)
+    assert len(ran) == 1 and "deploy done" in ran[0]
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=a2a_app), base_url="http://test") as c:
+        tasks = await c.post(
+            "/a2a",
+            headers=A2A_HEADERS,
+            json={"jsonrpc": "2.0", "id": "l", "method": "ListTasks", "params": {"contextId": ACTIVITY_CONTEXT}},
+        )
+        listed = tasks.json()["result"]["tasks"]
+        assert len(listed) == 1
+        final = await poll_terminal(c, listed[0]["id"])
+    assert final["status"]["state"] == "TASK_STATE_COMPLETED"
+    await drain_handlers()
+
+
+def test_now_inbox_fire_asks_the_a2a_layer_to_return_on_acceptance(monkeypatch):
+    """The self-send's ``returnImmediately`` is what keeps ``POST /api/inbox`` prompt (#5106)."""
+    import server.a2a as a2a
+    from runtime.state import STATE
+
+    app = FastAPI()
+    captured: dict = {}
+
+    @app.post("/a2a")
+    async def _a2a(body: dict):
+        captured.update(body)
+        return {"result": {"task": {"status": {"state": "TASK_STATE_SUBMITTED"}}}}
+
+    monkeypatch.setattr(STATE, "fastapi_app", app, raising=False)
+    assert asyncio.run(a2a._fire_activity_from_inbox({"id": 21, "text": "x", "priority": "now"})) is True
+    assert captured["params"]["configuration"] == {"returnImmediately": True}
+
+
+async def _now_post_with_turn(tmp_path, monkeypatch, stream, *, hold_thread: bool):
+    """POST a now-item through the real route into a real a2a-sdk app whose turn is
+    ``stream``; the executor's terminal hook is the real ``server.a2a._a2a_terminal``.
+    Returns (response body, inbox store, published topics, release-thread callable)."""
+    import httpx
+
+    import operator_api.console_handlers as ch
+    import runtime.state as rs
+    import server.a2a as a2a
+    from a2a_impl.executor import set_terminal_hook
+    from events import ACTIVITY_CONTEXT
+    from server import turn_control
+    from tests._a2a_app import build_app as build_a2a_app
+
+    import weakref
+
+    # Locks bind to the loop that first contends them; never share one across tests.
+    monkeypatch.setattr(turn_control, "_THREAD_LOCKS", weakref.WeakValueDictionary())
+    a2a_app = build_a2a_app(stream)
+    inbox = _store(tmp_path)
+    for attr, val in {
+        "inbox_store": inbox,
+        "storm_guard": None,
+        "fastapi_app": a2a_app,
+        "active_port": 9,
+        "inbox_now_delivery": a2a._fire_activity_from_inbox,
+        "telemetry_store": None,
+        "activity_log": None,
+        "scheduler": None,
+        "background_mgr": None,
+    }.items():
+        monkeypatch.setattr(rs.STATE, attr, val, raising=False)
+    published: list = []
+    monkeypatch.setattr(ch._event_bus, "publish", lambda topic, payload: published.append(topic))
+    monkeypatch.setattr(a2a._event_bus, "publish", lambda topic, payload: published.append(topic))
+    set_terminal_hook(a2a._a2a_terminal)
+
+    operator = FastAPI()
+    register_operator_routes(
+        operator,
+        runtime_status=lambda: {},
+        subagent_list=lambda: [],
+        subagent_run=_unused,
+        subagent_batch=_unused,
+        inbox_add=ch._operator_inbox_add,
+    )
+    lock = turn_control._thread_lock(f"a2a:{ACTIVITY_CONTEXT}")
+    if hold_thread:
+        await lock.acquire()
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=operator), base_url="http://test") as c:
+        post = asyncio.ensure_future(c.post("/api/inbox", json={"text": "deploy done", "priority": "now", "source": "ci"}))
+        done, _ = await asyncio.wait({post}, timeout=5.0)
+        if not done:
+            if lock.locked():
+                lock.release()
+            await post
+            set_terminal_hook(None)
+            pytest.fail("POST /api/inbox (now) did not answer promptly")
+        body = post.result().json()
+
+    def release():
+        if lock.locked():
+            lock.release()
+
+    return body, inbox, published, release
+
+
+async def _until(pred, timeout=5.0):
+    for _ in range(int(timeout / 0.01)):
+        if pred():
+            return True
+        await asyncio.sleep(0.01)
+    return pred()
+
+
+@pytest.mark.asyncio
+async def test_a_now_item_whose_accepted_turn_fails_is_restored_to_pending(tmp_path, monkeypatch):
+    """Returning on acceptance must not lose the old recovery (#5106 review): the fired
+    turn fails at the model boundary AFTER the route answered, and the item goes back to
+    the pending queue — once — for check_inbox, badged like an unfired item."""
+    from a2a_impl.executor import set_terminal_hook
+    from tests._a2a_app import drain_handlers
+
+    calls: list[str] = []
+
+    from server import turn_control
+
+    async def stream(text, ctx, *, resume=False, caller_trace=None, **kwargs):
+        # Mirrors the chat driver: the turn takes the thread's lock, then the model fails.
+        async with turn_control._thread_lock(f"a2a:{ctx}"):
+            calls.append(text)
+            yield ("text", "looking…")
+            raise RuntimeError("gateway 502: upstream model unavailable")
+
+    try:
+        body, inbox, published, release = await _now_post_with_turn(tmp_path, monkeypatch, stream, hold_thread=True)
+        assert body["fired"] is True
+        assert inbox.list(priority_floor="later") == []  # delivered while the turn is queued
+        release()
+        assert await _until(lambda: [i["id"] for i in inbox.list(priority_floor="later")] == [body["item"]["id"]])
+        assert len(calls) == 1
+        assert published.count("inbox.item") == 1  # restored once, badged once
+        await asyncio.sleep(0.1)
+        assert published.count("inbox.item") == 1
+    finally:
+        set_terminal_hook(None)
+        await drain_handlers()
+
+
+@pytest.mark.asyncio
+async def test_a_now_item_whose_accepted_turn_completes_stays_delivered(tmp_path, monkeypatch):
+    from a2a_impl.executor import set_terminal_hook
+    from tests._a2a_app import drain_handlers
+
+    ended = asyncio.Event()
+
+    async def stream(text, ctx, *, resume=False, caller_trace=None, **kwargs):
+        yield ("text", "<output>done</output>")
+        ended.set()
+
+    try:
+        body, inbox, published, _ = await _now_post_with_turn(tmp_path, monkeypatch, stream, hold_thread=False)
+        assert body["fired"] is True
+        await asyncio.wait_for(ended.wait(), 5)
+        await asyncio.sleep(0.2)
+        assert inbox.list(priority_floor="later") == []
+        assert "inbox.item" not in published
+    finally:
+        set_terminal_hook(None)
+        await drain_handlers()
+
+
+def test_a_terminal_that_beats_the_watch_registration_still_restores(tmp_path, monkeypatch):
+    """A turn that fails before the send's answer is read: its terminal is remembered
+    and settled when the watch registers — and only once."""
+    from types import SimpleNamespace
+
+    import runtime.state as rs
+    import server.a2a as a2a
+
+    inbox = _store(tmp_path)
+    monkeypatch.setattr(rs.STATE, "inbox_store", inbox, raising=False)
+    monkeypatch.setattr(a2a._event_bus, "publish", lambda *_a: None)
+    item = inbox.add("x", priority="now", source="t")
+    inbox.mark_delivered([item["id"]])
+    a2a._inbox_turn_ended(SimpleNamespace(origin="inbox", task_id="t-fast", state="failed"))
+    a2a._watch_inbox_turn("t-fast", item)
+    assert [i["id"] for i in inbox.list(priority_floor="later")] == [item["id"]]
+    inbox.mark_delivered([item["id"]])
+    a2a._watch_inbox_turn("t-fast", item)  # consumed: no second restore
+    assert inbox.list(priority_floor="later") == []
+
+
+@pytest.mark.asyncio
+async def test_startup_recovery_restores_a_page_whose_turn_fails_before_it_is_marked_delivered(tmp_path, monkeypatch):
+    """#5116 review: recovery marks a page delivered only AFTER its fire is accepted. A turn
+    that fails instantly settles first — its restore finds nothing delivered — and the later
+    delivered mark used to bury the failure, losing the page. The restore is now owed to that
+    mark and settled right after it. Real a2a-sdk app + executor + ``_a2a_terminal``; the
+    turn fails at the model boundary before saying anything."""
+    import weakref
+
+    import runtime.state as rs
+    import server.a2a as a2a
+    from a2a_impl.executor import set_terminal_hook
+    from server import turn_control
+    from server.agent_init import recover_pending_now_inbox_items
+    from tests._a2a_app import build_app as build_a2a_app
+    from tests._a2a_app import drain_handlers
+
+    monkeypatch.setattr(turn_control, "_THREAD_LOCKS", weakref.WeakValueDictionary())
+
+    async def stream(text, ctx, *, resume=False, caller_trace=None, **kwargs):
+        raise RuntimeError("gateway 401: key revoked")
+        yield  # pragma: no cover — an async generator that fails on its first step
+
+    store = _store(tmp_path)
+    page = store.add("prod is down", priority="now", source="pager")
+    for attr, val in {
+        "inbox_store": store,
+        "storm_guard": None,
+        "fastapi_app": build_a2a_app(stream),
+        "active_port": 9,
+        "telemetry_store": None,
+        "activity_log": None,
+        "scheduler": None,
+        "background_mgr": None,
+    }.items():
+        monkeypatch.setattr(rs.STATE, attr, val, raising=False)
+    published: list = []
+    monkeypatch.setattr(a2a._event_bus, "publish", lambda topic, payload: published.append(topic))
+
+    ended = asyncio.Event()
+
+    def terminal(outcome):
+        a2a._a2a_terminal(outcome)
+        ended.set()
+
+    async def fire_then_lose_the_race(item):
+        ok = await a2a._fire_activity_from_inbox(item)
+        await asyncio.wait_for(ended.wait(), 5)  # the turn has already failed…
+        await asyncio.sleep(0.1)  # …and its restore ran, finding nothing delivered yet
+        return ok
+
+    monkeypatch.setattr(rs.STATE, "inbox_now_delivery", fire_then_lose_the_race, raising=False)
+    set_terminal_hook(terminal)
+    try:
+        result = await recover_pending_now_inbox_items(limit=8)
+        assert result["accepted"] == 1
+        assert [i["id"] for i in store.list(priority_floor="later")] == [page["id"]]
+        assert published.count("inbox.item") == 1
+    finally:
+        set_terminal_hook(None)
+        await drain_handlers()

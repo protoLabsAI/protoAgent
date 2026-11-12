@@ -6,6 +6,7 @@ import { Tooltip } from "@protolabsai/ui/overlays";
 
 import type { AnswerResult, DecisionRow } from "../lib/api/decisions";
 import { formatGivenAt, localStampTitle } from "../lib/format";
+import { recheckDecision } from "./useDecisions";
 
 // Tokens only (§5.10): question = --pl-color-fg; meta, option explanations and the "if nobody
 // answers" line = --pl-color-fg-muted (7.24:1 dark / 7.73:1 light on --pl-color-bg-raised).
@@ -42,6 +43,11 @@ export type DecisionCardProps = {
   actionSize?: "sm" | "md";
   /** Send the chosen option. Resolves to the answer result, including a 409 answered-elsewhere. */
   onAnswer: (optionId: string) => Promise<AnswerResult>;
+  /** Re-read this decision from the server (bypassing any cache) — how the card finds out
+   *  whether an answer landed when the send's outcome is unknown: the request failed in
+   *  transit, or the server said it is on its way. Resolves null when the decision is gone;
+   *  rejects when the server can't be reached. Defaults to the shared decisions store. */
+  onCheck?: (id: string) => Promise<DecisionRow | null>;
   /** The card entered an interaction (sending); the panel retains it through its "Sent" hold so
    *  it never vanishes under the pointer (§5.5). */
   onHold?: (decision: DecisionRow) => void;
@@ -73,13 +79,21 @@ type Phase =
   | { kind: "sending"; optionId: string }
   | { kind: "sent"; label: string }
   | { kind: "answeredElsewhere"; record: DecisionRow | null }
-  | { kind: "error"; optionId: string };
+  | { kind: "error"; optionId: string }
+  // The send's outcome is unknown (#5099): the request failed in transit, or the server said
+  // the answer is on its way (`delivering`). The card re-reads the decision until it knows —
+  // it never offers the options again while an answer may still land. `note` picks the line.
+  | { kind: "checking"; optionId: string; note: "checking" | "onItsWay" | "unreachable"; attempt: number };
+
+/** Re-check delays while an answer's outcome is unknown: quick at first, then every 5s. */
+const CHECK_DELAYS_MS = [1000, 2000, 3000, 5000];
 
 const TERMINAL: ReadonlySet<DecisionRow["state"]> = new Set(["answered", "expired", "cancelled", "withdrawn"]);
 
 export function DecisionCard({
   decision,
   onAnswer,
+  onCheck = recheckDecision,
   onHold,
   onResolved,
   onOpenChat,
@@ -102,7 +116,7 @@ export function DecisionCard({
   const agent = decision.agent || "An agent";
   const isTranscript = presentation === "transcript";
   const offlineBlocks = !agentOnline && !agentHoldsOffline;
-  const optionsDisabled = phase.kind === "sending" || offlineBlocks;
+  const optionsDisabled = phase.kind === "sending" || phase.kind === "checking" || offlineBlocks;
 
   const optionLabel = (optionId: string) =>
     decision.options.find((o) => o.id === optionId)?.label ?? optionId;
@@ -119,18 +133,34 @@ export function DecisionCard({
 
   // Move focus to the result/alert when it appears (§5.5, §5.8).
   useLayoutEffect(() => {
-    if (phase.kind === "sent" || phase.kind === "error" || phase.kind === "answeredElsewhere") {
+    if (phase.kind === "sent" || phase.kind === "error" || phase.kind === "answeredElsewhere" || phase.kind === "checking") {
       result.current?.focus();
     }
   }, [phase.kind]);
 
   // The 4-second "Sent" hold, then the card leaves (§5.5). Only in the panel — in a chat
   // transcript the answered card freezes on "Sent" and never leaves (§5.5.4), so no hold.
+  // onResolved is read through a ref: hosts pass a fresh closure every render, and a dep on it
+  // restarted the 4s hold on each panel re-render, so the card never left.
+  const onResolvedRef = useRef(onResolved);
+  onResolvedRef.current = onResolved;
   useEffect(() => {
     if (isTranscript || phase.kind !== "sent") return;
-    const timer = setTimeout(() => onResolved?.(decision.id), 4000);
+    const timer = setTimeout(() => onResolvedRef.current?.(decision.id), 4000);
     return () => clearTimeout(timer);
-  }, [isTranscript, phase, decision.id, onResolved]);
+  }, [isTranscript, phase.kind, decision.id]);
+
+  // What a (re-)read record says about an answer we sent for `optionId`. "unknown" keeps the
+  // card checking: still pending while an answer is on its way.
+  function settle(record: DecisionRow | null, optionId: string): Phase | "unknown" {
+    if (record === null) return { kind: "answeredElsewhere", record: null };
+    if (record.state === "answered" && record.answer === optionId) {
+      return { kind: "sent", label: optionLabel(optionId) };
+    }
+    if (TERMINAL.has(record.state)) return { kind: "answeredElsewhere", record };
+    // Pending with nothing on its way: the server confirms the answer never reached the agent.
+    return record.delivering ? "unknown" : { kind: "error", optionId };
+  }
 
   async function choose(optionId: string) {
     onHold?.(decision);
@@ -139,20 +169,61 @@ export function DecisionCard({
       const outcome = await onAnswer(optionId);
       if (outcome.answered_elsewhere) {
         setPhase({ kind: "answeredElsewhere", record: outcome.decision });
+      } else if (outcome.delivering) {
+        // 202: accepted, but the agent hasn't taken it yet (its session is busy). Not sent,
+        // not failed — watch for it to land (#5099).
+        setPhase({ kind: "checking", optionId, note: "onItsWay", attempt: 0 });
       } else if (!outcome.resumed) {
-        // 200 but the parked turn was NOT resumed: delivery to the agent failed and the
-        // decision is still pending (operator_api/decision_routes.py returns resumed=false
-        // when updated.state != "answered"). Nothing durable happened, so surface it as a
-        // failed send — never claim success — and keep the options enabled to retry (§4.4).
+        // 200 but the parked turn was NOT resumed: the server confirmed delivery failed and
+        // the decision is still pending (operator_api/decision_routes.py). Never claim
+        // success; keep the options enabled to retry (§4.4).
         setPhase({ kind: "error", optionId });
       } else {
         setPhase({ kind: "sent", label: optionLabel(optionId) });
       }
     } catch {
-      // Nothing changed server-side; keep the options enabled so Josh can retry or pick another.
-      setPhase({ kind: "error", optionId });
+      // The request failed in transit (or the server errored): the answer may or may not
+      // have reached the agent. Find out before saying anything, and offer no retry until the
+      // server confirms the decision is still waiting (#5099).
+      setPhase({ kind: "checking", optionId, note: "checking", attempt: 0 });
     }
   }
+
+  // While an answer's outcome is unknown, re-read the decision on a backoff until it says.
+  const checking = phase.kind === "checking" ? phase : null;
+  useEffect(() => {
+    if (!checking) return;
+    let live = true;
+    const delay = checking.attempt === 0 && checking.note === "checking"
+      ? 0 : CHECK_DELAYS_MS[Math.min(checking.attempt, CHECK_DELAYS_MS.length - 1)];
+    const timer = setTimeout(() => {
+      onCheck(decision.id).then(
+        (record) => {
+          if (!live) return;
+          const next = settle(record, checking.optionId);
+          setPhase(next === "unknown"
+            ? { kind: "checking", optionId: checking.optionId, note: "onItsWay", attempt: checking.attempt + 1 }
+            : next);
+        },
+        () => {
+          if (live) setPhase({ kind: "checking", optionId: checking.optionId, note: "unreachable", attempt: checking.attempt + 1 });
+        },
+      );
+    }, delay);
+    return () => {
+      live = false;
+      clearTimeout(timer);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- re-armed per attempt only
+  }, [checking?.attempt, checking?.note, checking?.optionId, decision.id]);
+
+  // A live record update (decision.changed) can settle it before the next check.
+  useEffect(() => {
+    if (!checking || !TERMINAL.has(decision.state)) return;
+    const next = settle(decision, checking.optionId);
+    if (next !== "unknown") setPhase(next);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- reacts to the record only
+  }, [decision.state, decision.answer]);
 
   const firstWords = decision.question.replace(/\s+/g, " ").trim().slice(0, 80);
 
@@ -225,6 +296,19 @@ export function DecisionCard({
         {TERMINAL.has(record.state)
           ? closedCallout(record)
           : answeredElsewhereCallout(record)}
+      </div>
+    );
+  } else if (phase.kind === "checking") {
+    // Information, not a problem: neutral, no options, no retry (#5099).
+    const label = optionLabel(phase.optionId);
+    const line = phase.note === "onItsWay"
+      ? `Sent: "${label}". Waiting for ${agent} to pick it up…`
+      : phase.note === "unreachable"
+        ? `Can't confirm yet whether ${agent} got "${label}". Still checking…`
+        : `Checking whether ${agent} got "${label}"…`;
+    body = (
+      <div ref={result} tabIndex={-1} aria-live="polite">
+        <StatusDot status="neutral" pulse label={line} />
       </div>
     );
   } else if (phase.kind === "sent") {
