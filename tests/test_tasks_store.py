@@ -274,6 +274,55 @@ def test_multiple_connections_serialize_task_operations(store, monkeypatch):
         other._conn.close()
 
 
+@pytest.mark.platform_sensitive
+def test_second_connection_waits_for_writer_instead_of_raising_locked(store, monkeypatch):
+    """A writer that outlasts another store's busy_timeout must not make it raise.
+
+    SQLite's busy handler only sleeps and retries, so a waiting connection can miss
+    every gap between another connection's back-to-back transactions and raise
+    "database is locked" (seen on Windows CI). Stores on one file in one process
+    queue on a shared lock instead, which wakes the waiter on release. A 1 ms
+    busy_timeout against a 300 ms transaction makes the old failure deterministic."""
+    import threading
+
+    monkeypatch.setattr("tasks.store._publish", lambda *args: None)
+    other = TaskStore(db_path=str(store.path))
+    other._conn.execute("PRAGMA busy_timeout=1")
+    holding, release = threading.Event(), threading.Event()
+    outcome: dict = {}
+
+    def hold_write_transaction():
+        with store._write():
+            store._conn.execute("UPDATE task_sequence SET high_water = high_water WHERE singleton = 1")
+            holding.set()
+            release.wait(timeout=10)
+
+    def create_on_other():
+        try:
+            outcome["row"] = other.create("waits its turn")
+        except Exception as exc:  # noqa: BLE001
+            outcome["error"] = exc
+
+    holder = threading.Thread(target=hold_write_transaction)
+    holder.start()
+    try:
+        assert holding.wait(timeout=10)
+        waiter = threading.Thread(target=create_on_other)
+        waiter.start()
+        waiter.join(timeout=0.3)
+        # Still queued behind the open transaction, not failed after 1 ms.
+        assert waiter.is_alive(), outcome
+    finally:
+        release.set()
+        holder.join(timeout=10)
+    waiter.join(timeout=10)
+    try:
+        assert "error" not in outcome, outcome
+        assert outcome["row"]["id"] == "task-1"
+    finally:
+        other._conn.close()
+
+
 @pytest.mark.asyncio
 async def test_eight_http_clients_create_update_delete_undo(store, monkeypatch):
     import asyncio
