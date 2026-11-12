@@ -135,14 +135,17 @@ function zonedInstant(stamp: string, zone: string): Date | null {
  *  `draft.timezone` while a Once save reads it as the VIEWER'S clock, so crossing that
  *  boundary must carry the zone with it: Once → recurring pins the viewer's zone (else the
  *  server reads the kept local hour as UTC), and recurring → Once re-reads the zone's wall
- *  clock into the viewer's before `buildOnce` treats it as local. Staying on one side
- *  changes nothing but the choice. */
+ *  clock into the viewer's before `buildOnce` treats it as local. An EMPTY zone on a
+ *  recurring draft still names a clock — the scheduler evaluates a no-timezone cron in UTC
+ *  (a stored job whose timezone is null) — so "" converts from UTC exactly like any other
+ *  non-viewer zone. Staying on one side changes nothing but the choice. */
 export function withRepeat(
   draft: Extract<WorkDraft, { kind: "time" }>, repeat: RepeatChoice,
 ): Extract<WorkDraft, { kind: "time" }> {
   if (repeat === draft.repeat) return draft;
   if (repeat === "once") {
-    const instant = draft.timezone && draft.timezone !== localZone() ? zonedInstant(draft.firstRun, draft.timezone) : null;
+    const zone = draft.timezone || "UTC";
+    const instant = zone !== localZone() ? zonedInstant(draft.firstRun, zone) : null;
     return { ...draft, repeat, firstRun: instant ? localStamp(instant) : draft.firstRun, timezone: "" };
   }
   return draft.repeat === "once" ? { ...draft, repeat, timezone: localZone() } : { ...draft, repeat };
@@ -356,7 +359,9 @@ export async function saveWork(draft: WorkDraft, sessionId: string, nonce: strin
 }
 
 export type WorkEditTarget =
-  | { kind: "time"; id: string }
+  /** `schedule`/`timezone` are the STORED strings — an untouched schedule saves them back
+   *  verbatim instead of a re-derived rebuild (see {@link saveEdit}). */
+  | { kind: "time"; id: string; schedule: string; timezone: string | null }
   | { kind: "condition"; id: string }
   | { kind: "instruction"; id: string; sessionId: string };
 
@@ -368,11 +373,18 @@ export type WorkEditTarget =
  */
 export async function saveEdit(draft: WorkDraft, base: WorkDraft, target: WorkEditTarget): Promise<void> {
   if (draft.kind === "time" && target.kind === "time") {
+    // An untouched schedule saves the STORED string and zone back verbatim (the rule the
+    // Activity detail dialog follows): rebuilding would re-read a naive one-shot ISO —
+    // which the server holds as UTC — through the viewer's clock and drop its seconds.
+    // Only a schedule the operator actually touched is rebuilt from the draft.
+    const untouched = base.kind === "time"
+      && draft.firstRun === base.firstRun && draft.repeat === base.repeat
+      && draft.cron === base.cron && draft.timezone === base.timezone;
     await api.updateSchedule(target.id, {
       prompt: draft.then,
-      schedule: scheduleFromDraft(draft),
+      schedule: untouched ? target.schedule : scheduleFromDraft(draft),
       // The console always sends timezone: null means "back to UTC", not "unchanged".
-      timezone: draft.repeat === "once" ? null : draft.timezone || null,
+      timezone: untouched ? target.timezone : draft.repeat === "once" ? null : draft.timezone || null,
     });
     return;
   }

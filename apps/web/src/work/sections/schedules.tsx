@@ -121,7 +121,7 @@ function ScheduleDetail({ item, state }: { item: WorkItem; state: WorkSectionCon
       {editOpen && (
         <WorkEditDialog
           draft={draftFromSchedule(job)}
-          target={{ kind: "time", id: job.id }}
+          target={{ kind: "time", id: job.id, schedule: job.schedule, timezone: job.timezone ?? null }}
           onClose={() => setEditOpen(false)}
           onSaved={() => {
             refresh();

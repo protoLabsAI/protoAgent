@@ -23,6 +23,7 @@ vi.mock("../../lib/api", () => ({ api: apiMock, currentSlug: () => "test" }));
 
 import { SchedulesSection } from "./schedules";
 import { TasksSection } from "./tasks";
+import { buildOnce } from "../../schedule/schedule-builder";
 import type { WorkItem, WorkItems, WorkSource } from "../useWorkItems";
 import type { WorkSectionContext } from "../WorkView";
 import { sections } from "../sectionRegistry";
@@ -238,6 +239,31 @@ describe("Schedules section (§2.8)", () => {
     expect(apiMock.updateSchedule).toHaveBeenCalledWith("job-7", {
       prompt: "Updated prompt", schedule, timezone: null,
     });
+  });
+
+  it("a prompt-only edit of a naive one-shot sends the STORED string back — no viewer-clock re-read, seconds kept", async () => {
+    // The scheduler holds a naive ISO as UTC; a rebuild would re-read it as browser-local
+    // (shifting it by the viewer's UTC offset) and drop the :45. Untouched schedules go
+    // back verbatim — only a schedule the operator actually changed is rebuilt.
+    const schedule = "2099-01-05T09:30:45";
+    await mount(h(SchedulesSection, ctx({
+      sources: sources({ schedules: src([scheduleItem({ schedule })]) }),
+      state: { itemId: "schedule:job-7" },
+    })));
+    await act(async () => button("Edit").click());
+    await changeValue(document.querySelector<HTMLTextAreaElement>(".work-create textarea")!, "Updated prompt");
+    await act(async () => button("Save changes").click());
+    expect(apiMock.updateSchedule).toHaveBeenCalledWith("job-7", {
+      prompt: "Updated prompt", schedule, timezone: null,
+    });
+
+    // …but a First run the operator actually touched IS rebuilt from the draft.
+    await act(async () => button("Edit").click());
+    await changeValue(document.querySelector<HTMLInputElement>(".work-create input[type=datetime-local]")!, "2099-02-01T10:00");
+    await act(async () => button("Save changes").click());
+    expect(apiMock.updateSchedule).toHaveBeenLastCalledWith("job-7", expect.objectContaining({
+      schedule: buildOnce("2099-02-01T10:00"), timezone: null,
+    }));
   });
 
   it("Pause calls the enabled route with false (r2)", async () => {

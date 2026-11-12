@@ -195,6 +195,21 @@ it("switching Repeat across the Once boundary carries the timezone with the wall
   const body = mocks.addSchedule.mock.calls[0][0] as { schedule: string; timezone?: string };
   expect(new Date(body.schedule).getTime()).toBe(Date.UTC(today.getFullYear(), today.getMonth(), today.getDate(), 9, 0));
   expect(body.timezone).toBeUndefined();
+
+  // Weekdays with NO zone → Once: a missing timezone on a recurring reading still means the
+  // scheduler's UTC clock (a stored null), so 09:00 is a UTC hour — the empty zone must not
+  // skip the conversion and let buildOnce read it as the viewer's 09:00.
+  mocks.addSchedule.mockClear();
+  await act(async () => root.unmount());
+  root = createRoot(host);
+  const noZone = time("0 9 * * 1-5");
+  noZone.followup!.time!.timezone = "";
+  await confirm(noZone);
+  await setValue(field("Repeat").querySelector("select")!, "once");
+  await act(async () => button("Save").click());
+  const bare = mocks.addSchedule.mock.calls[0][0] as { schedule: string; timezone?: string };
+  expect(new Date(bare.schedule).getTime()).toBe(Date.UTC(today.getFullYear(), today.getMonth(), today.getDate(), 9, 0));
+  expect(bare.timezone).toBeUndefined();
 });
 
 it("a Time retry after a create that LANDED recovers from the duplicate-id rejection", async () => {

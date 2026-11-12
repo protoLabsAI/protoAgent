@@ -177,8 +177,10 @@ function DraftFields({ draft, onChange, mode, original }: {
   }
   if (draft.kind === "time") {
     // A recurring first run is a wall clock in the draft's timezone (workPersistence); say
-    // so whenever that zone isn't the viewer's own.
-    const zone = draft.timezone && draft.timezone !== localZone() ? `Times are in ${draft.timezone}.` : undefined;
+    // so whenever that zone isn't the viewer's own. An empty zone on a recurring draft
+    // means UTC — the scheduler evaluates a no-timezone cron there (withRepeat).
+    const zoneName = draft.repeat === "once" ? "" : draft.timezone || "UTC";
+    const zone = zoneName && zoneName !== localZone() ? `Times are in ${zoneName}.` : undefined;
     return <>
       <FormField label="First run" hint={zone}>
         <Input type="datetime-local" value={draft.firstRun}
