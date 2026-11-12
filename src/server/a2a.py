@@ -18,6 +18,7 @@ import asyncio
 import hashlib
 import logging
 import os
+import threading
 from datetime import UTC, datetime
 from typing import Any
 
@@ -200,6 +201,13 @@ async def _fire_activity_from_inbox(item: dict) -> bool:
 # instantly) is remembered briefly in `_INBOX_EARLY_TERMINALS` and settled at registration.
 
 _INBOX_TURN_WATCH: dict[str, dict] = {}
+# Items whose turn failed before their delivered mark was written (the startup-recovery
+# path marks delivered only AFTER the fire is accepted, so an instantly failing turn can
+# settle first). The restore is OWED: the caller settles it right after its mark lands
+# (``settle_owed_inbox_restore``), so a later "delivered" write can never bury a failure.
+# Every restore runs under ``_INBOX_RESTORE_LOCK`` so the two orders cannot interleave.
+_INBOX_RESTORE_OWED: dict[int, tuple[dict, str]] = {}
+_INBOX_RESTORE_LOCK = threading.Lock()
 _INBOX_EARLY_TERMINALS: dict[str, str] = {}
 _INBOX_WATCH_MAX = 1024
 _INBOX_RESTORE_STATES = {"failed", "canceled", "rejected"}
@@ -254,13 +262,44 @@ def _restore_inbox_item(item: dict, state: str) -> None:
     store = getattr(STATE, "inbox_store", None)
     if store is None:
         return
-    try:
-        restored = store.mark_pending([item["id"]])
-    except Exception:  # noqa: BLE001
-        log.exception("[inbox] could not restore now-item %s after its turn %s", item.get("id"), state)
-        return
-    if not restored:
-        return
+    with _INBOX_RESTORE_LOCK:
+        try:
+            restored = store.mark_pending([item["id"]])
+        except Exception:  # noqa: BLE001
+            log.exception("[inbox] could not restore now-item %s after its turn %s", item.get("id"), state)
+            return
+        if not restored:
+            # Not delivered (yet): owe the restore to the delivered mark that follows.
+            _INBOX_RESTORE_OWED[int(item["id"])] = (item, state)
+            while len(_INBOX_RESTORE_OWED) > _INBOX_WATCH_MAX:
+                _INBOX_RESTORE_OWED.pop(next(iter(_INBOX_RESTORE_OWED)))
+            return
+        _INBOX_RESTORE_OWED.pop(int(item["id"]), None)
+    _badge_restored(item, state)
+
+
+def settle_owed_inbox_restore(item_id: int) -> bool:
+    """Call right after marking a fired now-item delivered: if its turn already failed,
+    un-deliver it now. Returns whether it was restored. Sync (sqlite); never raises."""
+    store = getattr(STATE, "inbox_store", None)
+    if store is None:
+        return False
+    with _INBOX_RESTORE_LOCK:
+        owed = _INBOX_RESTORE_OWED.pop(int(item_id), None)
+        if owed is None:
+            return False
+        item, state = owed
+        try:
+            restored = store.mark_pending([item["id"]])
+        except Exception:  # noqa: BLE001
+            log.exception("[inbox] could not restore now-item %s after its turn %s", item_id, state)
+            return False
+    if restored:
+        _badge_restored(item, state)
+    return bool(restored)
+
+
+def _badge_restored(item: dict, state: str) -> None:
     log.warning("[inbox] now-item %s: its Activity turn %s — restored to the pending queue", item.get("id"), state)
     try:
         _event_bus.publish(

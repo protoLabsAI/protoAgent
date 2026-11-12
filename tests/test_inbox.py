@@ -1532,3 +1532,66 @@ def test_a_terminal_that_beats_the_watch_registration_still_restores(tmp_path, m
     inbox.mark_delivered([item["id"]])
     a2a._watch_inbox_turn("t-fast", item)  # consumed: no second restore
     assert inbox.list(priority_floor="later") == []
+
+
+@pytest.mark.asyncio
+async def test_startup_recovery_restores_a_page_whose_turn_fails_before_it_is_marked_delivered(tmp_path, monkeypatch):
+    """#5116 review: recovery marks a page delivered only AFTER its fire is accepted. A turn
+    that fails instantly settles first — its restore finds nothing delivered — and the later
+    delivered mark used to bury the failure, losing the page. The restore is now owed to that
+    mark and settled right after it. Real a2a-sdk app + executor + ``_a2a_terminal``; the
+    turn fails at the model boundary before saying anything."""
+    import weakref
+
+    import runtime.state as rs
+    import server.a2a as a2a
+    from a2a_impl.executor import set_terminal_hook
+    from server import turn_control
+    from server.agent_init import recover_pending_now_inbox_items
+    from tests._a2a_app import build_app as build_a2a_app
+    from tests._a2a_app import drain_handlers
+
+    monkeypatch.setattr(turn_control, "_THREAD_LOCKS", weakref.WeakValueDictionary())
+
+    async def stream(text, ctx, *, resume=False, caller_trace=None, **kwargs):
+        raise RuntimeError("gateway 401: key revoked")
+        yield  # pragma: no cover — an async generator that fails on its first step
+
+    store = _store(tmp_path)
+    page = store.add("prod is down", priority="now", source="pager")
+    for attr, val in {
+        "inbox_store": store,
+        "storm_guard": None,
+        "fastapi_app": build_a2a_app(stream),
+        "active_port": 9,
+        "telemetry_store": None,
+        "activity_log": None,
+        "scheduler": None,
+        "background_mgr": None,
+    }.items():
+        monkeypatch.setattr(rs.STATE, attr, val, raising=False)
+    published: list = []
+    monkeypatch.setattr(a2a._event_bus, "publish", lambda topic, payload: published.append(topic))
+
+    ended = asyncio.Event()
+
+    def terminal(outcome):
+        a2a._a2a_terminal(outcome)
+        ended.set()
+
+    async def fire_then_lose_the_race(item):
+        ok = await a2a._fire_activity_from_inbox(item)
+        await asyncio.wait_for(ended.wait(), 5)  # the turn has already failed…
+        await asyncio.sleep(0.1)  # …and its restore ran, finding nothing delivered yet
+        return ok
+
+    monkeypatch.setattr(rs.STATE, "inbox_now_delivery", fire_then_lose_the_race, raising=False)
+    set_terminal_hook(terminal)
+    try:
+        result = await recover_pending_now_inbox_items(limit=8)
+        assert result["accepted"] == 1
+        assert [i["id"] for i in store.list(priority_floor="later")] == [page["id"]]
+        assert published.count("inbox.item") == 1
+    finally:
+        set_terminal_hook(None)
+        await drain_handlers()
