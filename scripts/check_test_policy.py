@@ -43,7 +43,9 @@ WEB_SRC = "apps/web/src"
 WEB_E2E = "apps/web/e2e"
 
 _WEB_TEST = re.compile(r"\.(test|spec)\.tsx?$")
-_WEB_CASE = re.compile(r"^\s*(?:it|test)(?:\.each\([^)]*\))?\s*\(", re.M)
+# The opening of a case: `test(`, `it(`, or a modifier chain such as `test.each(` / `test.skip(`.
+# Counted at the opening paren, so `.each` arguments with their own parentheses do not matter.
+_WEB_CASE = re.compile(r"^\s*(?:it|test)(?:\.(?:each|only|skip|fixme|fail|concurrent))*\s*\(", re.M)
 _SOURCE_PIN = re.compile(r"""\?raw["']|readFileSync\(""")
 _TOMBSTONE = re.compile(r"(Removed|Retired|Deleted)\.(test|spec)\.tsx?$")
 _ISSUE_NUMBERED = re.compile(r"(^test_.*_\d{3,5}\.py$)|(\d{4}.*\.(test|spec)\.tsx?$)")
