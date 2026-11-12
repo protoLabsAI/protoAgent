@@ -480,3 +480,63 @@ async def test_amendment_names_the_request_it_amends_to_the_peer(tmp_path, peer_
     assert "ORIGINAL brief: design the Work view." in sent
     assert sent.rstrip().endswith("AMENDMENT: fold this in if you've started.")
     assert mgr.store.get(amendment).amends == original
+
+
+async def test_amending_an_amendment_quotes_real_requests_and_names_the_original_brief(
+    tmp_path, peer_wire, monkeypatch
+):
+    """An amendment's job row records the request the agent wrote, not the preamble that
+    was sent with it. So amending an amendment quotes that amendment's real words, and it
+    also names the ROOT brief (ids and its opening line) so the peer can find what the
+    whole chain is about. The note never quotes a preamble."""
+    import runtime.state as rs
+    from plugins.delegates import _build_delegate_to
+    from plugins.delegates.registry import DelegateRegistry
+
+    # Most specific marker first: later sends quote earlier requests in their preamble.
+    peer = FakePeer({
+        "SECOND-AMEND": (0.0, "TASK_STATE_COMPLETED", "ok"),
+        "FIRST-AMEND": (0.0, "TASK_STATE_COMPLETED", "ok"),
+        "ORIGINAL": (0.0, "TASK_STATE_FAILED", STREAM_CLOSED),
+    })
+    peer_wire(peer)
+    mgr = _manager(tmp_path, [])
+    monkeypatch.setattr(rs.STATE, "background_mgr", mgr, raising=False)
+    delegate_to = _build_delegate_to(
+        DelegateRegistry([{"name": "designSystem", "type": "a2a", "url": URL, "poll_timeout_s": 30}])
+    )
+    state = {"session_id": "s-pm"}
+
+    async def send(query: str, amends: str = "") -> str:
+        out = await delegate_to.coroutine(target="designSystem", query=query, background=True, amends=amends,
+                                          state=state)
+        job_id = out.split("job `", 1)[1].split("`", 1)[0]
+        await _settled(mgr.store, job_id)
+        return job_id
+
+    root = await send("ORIGINAL brief: design the Work view.")
+    first = await send("FIRST-AMEND: add a Doing now group.", amends=root)
+    second = await send("SECOND-AMEND: drop the Coming up group.", amends=first)
+
+    # The rows hold the agent's own words: no preamble in the request or the title.
+    for job_id, request in ((first, "FIRST-AMEND: add a Doing now group."),
+                            (second, "SECOND-AMEND: drop the Coming up group.")):
+        row = mgr.store.get(job_id)
+        assert row.prompt == request
+        assert "[Amendment" not in row.description
+
+    sent = peer.received[-1]["message"]["parts"][0]["text"]
+    assert sent.count("[Amendment:") == 1, "an earlier preamble was quoted"
+    preamble, request = sent.split("]\n\n", 1)
+    assert request == "SECOND-AMEND: drop the Coming up group."
+    # The immediate parent, quoted by its real request.
+    assert f"job {first}" in preamble and 'it began: "FIRST-AMEND: add a Doing now group."' in preamble
+    # And the root brief the chain amends, with its peer identity and opening line.
+    root_row = mgr.store.get(root)
+    assert "the original brief was" in preamble
+    assert f"job {root}" in preamble and f"your task {root_row.peer_task_id}" in preamble
+    assert 'it began: "ORIGINAL brief: design the Work view."' in preamble
+    # A one-step amendment names only its parent.
+    first_sent = next(p["message"]["parts"][0]["text"] for p in peer.received
+                      if p["message"]["parts"][0]["text"].endswith("FIRST-AMEND: add a Doing now group."))
+    assert "the original brief was" not in first_sent
