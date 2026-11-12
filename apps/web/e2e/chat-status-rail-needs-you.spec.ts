@@ -54,7 +54,7 @@ for (const width of [1440, 390] as const) {
         verifier: { type: "command", command: "pytest -q" }, iteration: 8, max_iterations: 8,
         started_at: 1751000000, finished_at: Math.floor(Date.now() / 1000) - 600 }];
       let inbox = [{ id: 9, created_at: "2026-05-30T09:00:00+00:00", priority: "now", source: "ci",
-        text: "build failed on main", dedup_key: null, delivered_at: null }];
+        text: "build failed on main", dedup_key: null, delivered_at: null, needs_human: true }];
       await page.route("**/api/theme", (route) => route.fulfill({ json: { theme: { mode, overrides: {} } } }));
       await page.route(/\/api\/chat\/sessions\?/, (route) =>
         route.fulfill({ json: { sessions: [{ session_id: SESSION, last_updated: "2026-11-07T17:00:00Z", turn_count: 1 }] } }));

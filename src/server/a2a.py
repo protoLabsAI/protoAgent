@@ -382,6 +382,9 @@ def _badge_restored(item: dict, state: str) -> None:
                 "text": item.get("text") or "",
                 "delivery": item.get("delivery") or "",
                 "session": item.get("target_session") or "",
+                # A restored page is queued for retry-when-free, not an operator alert —
+                # only an operator-class page (needs_human) may raise Needs-you.
+                "needs_human": bool(item.get("needs_human")),
             },
         )
     except Exception:  # noqa: BLE001

@@ -1102,6 +1102,7 @@ async def _operator_inbox_add(payload: dict) -> dict:
         dedup_key=payload.get("dedup_key", "") or "",
         delivery=delivery,
         target_session=target,
+        needs_human=bool(payload.get("needs_human")),
     )
     if item is None:
         return {"ok": True, "deduped": True}
@@ -1144,9 +1145,24 @@ async def _operator_inbox_add(payload: dict) -> dict:
                 "text": item["text"],
                 "delivery": item.get("delivery") or "",
                 "session": item.get("target_session") or "",
+                # Only an operator-class page may raise the console's Needs-you alert;
+                # an undelivered page that is merely waiting its retry stays "queued".
+                "needs_human": bool(item.get("needs_human")),
             },
         )
-    return {"ok": True, "item": item, "fired": fired}
+    return {"ok": True, "item": _inbox_row(item), "fired": fired}
+
+
+def _inbox_row(item: dict) -> dict:
+    """Decorate a raw store row for the /api/inbox surfaces: ``queued_since`` +
+    ``attempts`` let the feed say "Queued — runs when <agent> is free · n retries"
+    for an undelivered page awaiting its retry, and ``needs_human`` (a clean bool)
+    is the ONLY thing allowed to raise a Needs-you alert for it."""
+    row = dict(item)
+    row["queued_since"] = None if item.get("delivered_at") else item.get("created_at")
+    row["attempts"] = int(item.get("recovery_attempts") or 0)
+    row["needs_human"] = bool(item.get("needs_human"))
+    return row
 
 
 async def _operator_inbox_list(floor: str, include_delivered: bool) -> dict:
@@ -1163,7 +1179,7 @@ async def _operator_inbox_list(floor: str, include_delivered: bool) -> dict:
         include_thread=True,  # the operator's view shows outside messages too
         limit=200,
     )
-    return {"items": items}
+    return {"items": [_inbox_row(i) for i in items]}
 
 
 #: Longest a single `GET /api/inbox/{id}?wait=` holds the connection. Kept under the fleet
@@ -1191,7 +1207,7 @@ async def _operator_inbox_get(item_id: int, wait: float = 0.0) -> dict:
         if item is None:
             raise NotFoundError(f"No inbox item {item_id}.")
         if item.get("reply_text") or time.monotonic() >= deadline:
-            return {"item": item}
+            return {"item": _inbox_row(item)}
         await asyncio.sleep(0.5)
 
 
