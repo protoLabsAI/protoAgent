@@ -10,6 +10,9 @@ const SESSION = "chat-status-rail-e2e";
 function routes(page: import("@playwright/test").Page, mode: string, opts: { failDirectives?: boolean } = {}) {
   return Promise.all([
     page.route("**/api/theme", (route) => route.fulfill({ json: { theme: { mode, overrides: {} } } })),
+    // No undelivered pages: the mock default would put the fleet Needs-you marker (S7) on
+    // every rail here; this spec exercises the group chips and people row alone.
+    page.route("**/api/inbox**", (route) => route.fulfill({ json: { items: [] } })),
     // The durable session index (the directive-inventory discovery) — the mock server has no
     // default for it, and a 404 would downgrade a clean ledger read to "stale".
     page.route(/\/api\/chat\/sessions\?/, (route) =>

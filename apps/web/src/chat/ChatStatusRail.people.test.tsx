@@ -20,6 +20,10 @@ vi.mock("../work/useWorkItems", () => ({ useWorkItems: () => state.sources }));
 vi.mock("./useDirectives", () => ({
   useDirectives: () => ({ state: "ready", loadedAt: 1, refresh: vi.fn(), active: [], history: [], revoke: vi.fn() }),
 }));
+// Inert shared decisions store: no pending rows, so the marker-free fallback caps apply.
+vi.mock("../decisions/useDecisions", () => ({
+  useDecisions: () => ({ records: {}, missing: {}, answer: vi.fn() }), recheckDecision: vi.fn(), dismissDecision: vi.fn(),
+}));
 
 /** `running` jobs for this chat: 1 → the "Doing now 1" status chip, 0 → a chip-less rail. */
 function mkSources(running: number): WorkItems {

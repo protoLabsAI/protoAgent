@@ -46,6 +46,13 @@ vi.mock("./useDirectives", () => ({
     return { ...state.ledger, active: [], history: [], revoke: vi.fn() };
   },
 }));
+// The shared decisions store: inert here (the S7 answer flows live in
+// ChatStatusRail.decisions.test.tsx); mocked so the singleton never opens bus subscriptions.
+vi.mock("../decisions/useDecisions", () => ({
+  useDecisions: () => ({ records: {}, missing: {}, answer: vi.fn() }),
+  recheckDecision: vi.fn(),
+  dismissDecision: vi.fn(),
+}));
 
 const SESSION = "s1";
 
@@ -88,8 +95,12 @@ const directive = (id: string, sessionId?: string, extra: { tiedJob?: { kind: "t
   kind: "directive", id, status: "waiting", title: `Quote ${id}`, meta: `scope ${id}`,
   sessionId, raw: { status: "in_force" }, ...extra,
 });
+// Enough of the wire row for the Needs-you section's shared DecisionCard to render `raw`.
 const decision = (id: string): GroupableWorkItem => ({
-  kind: "decision", id, status: "needs-you", title: `Decide ${id}`, meta: "", raw: { state: "pending" },
+  kind: "decision", id, status: "needs-you", title: `Decide ${id}`, meta: "", raw: {
+    id, session_id: "other-chat", agent: "scout", question: `Decide ${id}`, state: "pending",
+    options: [{ id: "a", label: "Go" }], created_at: new Date().toISOString(),
+  },
 });
 
 let host: HTMLDivElement;
@@ -148,7 +159,7 @@ const MIXED: GroupableWorkItem[] = [
   schedule("sch1", SESSION),
   directive("d1", SESSION),
   directive("d-elsewhere", "other-chat"),
-  decision("q1"), // Needs you is S7-gated: no chip
+  decision("q1"), // another chat's pending decision: Needs you is fleet-wide (S7)
 ];
 
 describe("chips", () => {
@@ -175,9 +186,13 @@ describe("chips", () => {
       expect(chip(id)!.querySelector(".chat-status-chip__count")!.textContent)
         .toBe(String(groups.find((g) => g.id === id)!.count));
     }
-    // Needs you is S7-gated; the rail reads ALL chats' rows (scoping happens in the selector)
-    // and THIS chat's instructions ledger from the per-session store.
-    expect(host.querySelector('[data-testid="chat-status-chip-needs-you"]')).toBeNull();
+    // The S7 marker leads the row, counting the fleet-wide Needs-you group (q1 lives in
+    // another chat); its own states live in ChatStatusRail.decisions.test.tsx. The rail reads
+    // ALL chats' rows (scoping happens in the selector) and THIS chat's ledger per session.
+    const marker = host.querySelector<HTMLButtonElement>('[data-testid="chat-status-chip-needs-you"]')!;
+    expect(marker).toBe(host.querySelector('[data-testid="chat-status-rail"]')!.firstElementChild);
+    expect(marker.querySelector(".chat-status-chip__count")!.textContent)
+      .toBe(String(groups.find((g) => g.id === "needs-you")!.count));
     expect(state.hookArgs[0]).toEqual({ sessionId: SESSION, thisChatOnly: false });
     expect(state.ledgerSessions[0]).toBe(SESSION);
   });
@@ -197,7 +212,7 @@ describe("chips", () => {
   });
 
   it("hides zero-count chips and renders no rail at all when there is nothing to show", async () => {
-    await render(rail([bg("bg-done", "completed", SESSION), decision("q1")]));
+    await render(rail([bg("bg-done", "completed", SESSION)]));
     expect(host.querySelector('[data-testid="chat-status-rail"]')).toBeNull();
   });
 });
@@ -211,18 +226,21 @@ describe("details panel", () => {
     expect(chip("instructions")!.getAttribute("aria-haspopup")).toBe("dialog");
     expect(chip("instructions")!.getAttribute("aria-expanded")).toBe("true");
 
-    // Work's own names — "Your instructions · N", never "Told it" — count in the accessible name.
+    // Work's own names — "Your instructions · N", never "Told it" — count in the accessible
+    // name. Needs you (S7) is the FIRST section whichever chip opened the panel.
     expect([...panel!.querySelectorAll("h2")].map((h) => [h.textContent, h.getAttribute("aria-label")])).toEqual([
+      ["Needs you · 1", "Needs you, 1"],
       ["Doing now · 2", "Doing now, 2"], ["Coming up · 3", "Coming up, 3"],
       ["Your instructions · 1", "Your instructions, 1"],
     ]);
-    // Rows carry the shared title/meta projection; other chats' rows never appear.
-    for (const text of ["Goal s1", "Quote d1", "scope d1"]) expect(panel!.textContent).toContain(text);
+    // Rows carry the shared title/meta projection; other chats' rows never appear — except
+    // Needs you, which is never chat-scoped (q1 is another chat's decision).
+    for (const text of ["Goal s1", "Quote d1", "scope d1", "Decide q1"]) expect(panel!.textContent).toContain(text);
     expect(panel!.textContent).not.toContain("Quote d-elsewhere");
 
     const open = [...panel!.querySelectorAll("button")].filter((b) => b.textContent === "Open in Work");
-    expect(open).toHaveLength(3);
-    await click(open[2]); // Your instructions
+    expect(open).toHaveLength(4);
+    await click(open[3]); // Your instructions
     const ui = useUI.getState();
     // The thisChat scope rides the VISIT: the saved surface state keeps the user's own
     // filters untouched, so every other Work entry still restores what they left behind.

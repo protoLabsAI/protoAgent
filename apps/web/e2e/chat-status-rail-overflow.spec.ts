@@ -35,6 +35,9 @@ test("a long background-job label stays inside the details panel instead of wide
     }),
   );
   await page.route("**/api/background/bg-*", (route) => route.fulfill({ status: 404, json: { detail: "no job" } }));
+  // No undelivered pages: the mock default would prepend a Needs-you section (S7) whose
+  // short delivery title would be the panel's first __title — this spec measures the job's.
+  await page.route("**/api/inbox**", (route) => route.fulfill({ json: { items: [] } }));
   await page.route("**/api/events**", (route) =>
     route.fulfill({ contentType: "text/event-stream", body: ": idle\n\n" }),
   );

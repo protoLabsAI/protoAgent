@@ -43,10 +43,13 @@ export function orderPeople(cast: string[], draft: string, latestPick?: string |
 /** How many names to show before the row has ever been measured (first paint, and any
  *  environment without layout). Deliberately conservative so the unmeasured row cannot
  *  overflow: with status chips sharing the row the people get less room (desktop 3,
- *  phone 1); with no statuses the people own the row (desktop 5, phone 3). The first
- *  ResizeObserver delivery replaces the cap with the measured fit. */
-export function fallbackCap(mobile: boolean, hasStatusChips: boolean): number {
-  if (mobile) return hasStatusChips ? 1 : 3;
+ *  phone 1); with no statuses the people own the row (desktop 5, phone 3). The Needs you
+ *  marker (S7) never folds, so while it is on the row the people give up more: desktop 2
+ *  beside statuses / 4 without, and the phone keeps `+K` alone. The first ResizeObserver
+ *  delivery replaces the cap with the measured fit. */
+export function fallbackCap(mobile: boolean, hasStatusChips: boolean, hasNeedsYou = false): number {
+  if (mobile) return hasNeedsYou ? 0 : hasStatusChips ? 1 : 3;
+  if (hasNeedsYou) return hasStatusChips ? 2 : 4;
   return hasStatusChips ? 3 : 5;
 }
 
