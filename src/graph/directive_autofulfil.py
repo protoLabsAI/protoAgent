@@ -7,16 +7,19 @@ carries ``links`` to the work its approval covers (``graph.directives``), and th
 watches the places the system already learns that work finished — the same event paths
 the task auto-close (bd-4272u) rides:
 
-* **Board card terminal** — a board plugin (or any other owner of a linked item)
-  publishes :data:`LINK_CLOSED_TOPIC` with ``{"ref": "bd-…", "reason": "merged (#5146)"}``
-  when a card reaches done/cancelled. The topic is the generic inbound contract:
-  anything able to say "this ref is finished" can fulfil the directives that link it.
+* **Board card terminal** — :data:`LINK_CLOSED_TOPIC` with ``{"ref": "bd-…", "reason":
+  "merged (#5146)"}`` is the generic inbound contract: anything able to say "this ref is
+  finished" (a board plugin when a card goes done/cancelled, once it publishes it) fulfils
+  the directives that link that ref. Nothing in core publishes it; it is the seam.
 * **Task close** — ``task.changed`` with ``action: "closed"`` (the ``tasks.store``
   publish off ``task_close``/the console) resolves its ``task-…`` ref.
-* **Scheduler settlement** — ``turn.finished`` (origin ``scheduler``) marks a fire
-  settled; the job row is read back, and a job that no longer exists (one-shot settled,
-  cron expired) resolves its ref. ``scheduler.changed`` with ``action: "canceled"``
-  (console cancel, ``cancel_schedule`` tool) resolves it as canceled.
+* **Scheduler settlement** — ``scheduler.changed``: the scheduler itself publishes
+  ``finished`` (one-shot fired and removed) and ``expired`` (cron hit max_fires/TTL)
+  strictly AFTER the job row is deleted (``LocalScheduler._publish_job_settled``), and
+  ``canceled`` comes from the console cancel and the ``cancel_schedule`` tool. These are
+  the only trustworthy "job gone" signals: ``turn.finished`` leaves ``_fire`` BEFORE
+  ``_fire_and_settle`` deletes the row, so reading the job table off that event raced
+  settlement and saw the finished job as still live.
 * **GitHub refs** — GitHub publishes nothing here, so a cheap periodic sweep
   (:func:`sweep_directive_links`, driven by ``server.maintenance_loops``) asks ``gh``
   for the state of each ``owner/repo#N`` an in-force directive still links, and
@@ -25,7 +28,7 @@ the task auto-close (bd-4272u) rides:
 Everything funnels into ``DirectiveStore.resolve_link``, which owns the all-links-done
 auto-fulfil (``closed_by: "system"``, attributed reason) and the ``directive.changed``
 publish the console's Work view and "Told it" rail already refresh on. Handlers are
-best-effort: a lookup or store failure is logged and never breaks the publisher
+best-effort: a store failure is logged and never breaks the publisher
 (EventBus isolates handler errors too). Directives without links never match a ref, so
 they are untouched.
 """
@@ -40,8 +43,8 @@ log = logging.getLogger(__name__)
 #: Generic inbound contract (shared with the task auto-close, bd-4272u): publish
 #: ``{"ref": <linked id/ref>, "reason": <why>}`` here when a linked item reaches a
 #: terminal state, and every in-force directive linking that ref resolves it
-#: (fulfilling once all its links are done). Board plugins publish it when a card
-#: goes done/cancelled.
+#: (fulfilling once all its links are done). Nothing in core publishes it — it is the
+#: seam a board plugin uses when a card goes done/cancelled.
 LINK_CLOSED_TOPIC = "task.link.closed"
 
 #: GitHub Issues API states (covers PRs too; merged PRs read ``closed``); ``open`` is
@@ -60,28 +63,21 @@ def _store_of(store_or_getter: Any):
     return store_or_getter() if callable(store_or_getter) else store_or_getter
 
 
-def _default_get_job(job_id: str):
-    """The scheduler's job row, or raise when no scheduler is wired — "can't know"
-    must never read as "job gone" (that would fulfil a directive on a boot race)."""
-    from runtime.state import STATE
-
-    getter = getattr(getattr(STATE, "scheduler", None), "get_job", None)
-    if not callable(getter):
-        raise LookupError("no scheduler wired")
-    return getter(job_id)
+#: ``scheduler.changed`` actions that mean the job row no longer exists. ``finished``/
+#: ``expired`` are published by the scheduler itself after the delete commits
+#: (``LocalScheduler._publish_job_settled``); ``canceled`` by the console cancel route and
+#: the ``cancel_schedule`` tool. Non-terminal actions (added/updated/enabled/disabled/
+#: restored) say nothing about the linked work and never resolve a ref.
+_JOB_TERMINAL_ACTIONS = ("finished", "expired", "canceled")
 
 
 def wire_directive_autofulfil(
     subscribe: Callable[[str, Callable[[dict], Any]], Callable[[], None]],
     store: Any = None,
-    *,
-    get_job: Callable[[str], Any] | None = None,
 ) -> list[Callable[[], None]]:
     """Subscribe the auto-fulfil handlers on the event bus (``EventBus.subscribe_handler``
     shape). Returns the unsubscribe callables. ``store`` may be a DirectiveStore, a
-    zero-arg getter, or ``None`` for the live ledger; ``get_job`` defaults to the live
-    scheduler and exists as a seam for tests."""
-    get_job = get_job or _default_get_job
+    zero-arg getter, or ``None`` for the live ledger."""
 
     def _resolve(ref: str, reason: str) -> None:
         store_now = _store_of(store)
@@ -104,32 +100,19 @@ def wire_directive_autofulfil(
 
     def on_scheduler_changed(payload: dict) -> None:
         data = payload.get("data") or {}
-        if str(data.get("action") or "") != "canceled":
+        if str(data.get("action") or "") not in _JOB_TERMINAL_ACTIONS:
             return
-        _resolve(str(data.get("job_id") or "").strip(), "canceled")
-
-    def on_turn_finished(payload: dict) -> None:
-        data = payload.get("data") or {}
-        if data.get("origin") != "scheduler":
-            return
-        job_id = str(data.get("trigger") or "").strip()
+        job_id = str(data.get("job_id") or "").strip()
         # `wait:` ids are reused per chat (a new wait supersedes the old) — never a
-        # meaningful link target, so a settled one says nothing durable.
+        # meaningful link target, so a settled or superseded one says nothing durable.
         if not job_id or job_id.startswith("wait:"):
             return
-        try:
-            job = get_job(job_id)
-        except Exception:  # noqa: BLE001 — "can't know" must never become "job gone"
-            return
-        if job is not None:
-            return  # recurring job still live — this fire settled, the job didn't
-        _resolve(job_id, "failed" if data.get("ok") is False else "finished")
+        _resolve(job_id, str(data.get("action")))
 
     return [
         subscribe(LINK_CLOSED_TOPIC, on_link_closed),
         subscribe("task.changed", on_task_changed),
         subscribe("scheduler.changed", on_scheduler_changed),
-        subscribe("turn.finished", on_turn_finished),
     ]
 
 

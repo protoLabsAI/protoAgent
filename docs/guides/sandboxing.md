@@ -213,7 +213,9 @@ from the validation run); the k8s CRD wiring is still a starting template
 ## Recommended posture
 
 - **Trusted model, no code execution:** native egress allowlist is a sensible
-  baseline; `execute_code`/write-`fs_tools` off.
+  baseline; `execute_code`/write-`fs_tools` off. `execute_code` is **on in a default
+  install** (the bundled Cowork plugin enables it), so "off" here is something you set:
+  `plugins.disabled: [execute_code]`.
 - **Any `execute_code` / write-enabled / multi-project deployment (incl. Roxy):**
   run **under OpenShell** with the generated policy. The native egress allowlist
   still applies inside as defense-in-depth.

@@ -106,46 +106,135 @@ def test_task_close_through_the_real_task_store_fulfils(store, bus, tmp_path):
     assert got.close_reason == f"{row['id']} closed"
 
 
-def test_job_settles_only_when_the_job_is_gone(store, bus):
-    jobs = {"cron-b": object()}  # still-live recurring job
-    wire_directive_autofulfil(bus.subscribe_handler, store, get_job=jobs.get)
-    one_shot = store.record("s1", "run the sweep once", links=["agent-job1"])
-    recurring = store.record("s1", "keep the cron until I say", links=["cron-b"])
+def _make_scheduler(tmp_path, bus):
+    """A real sqlite-backed LocalScheduler publishing on the real bus — the production
+    ``event_publish`` wiring (``server.agent_init``)."""
+    from scheduler.local import LocalScheduler
 
-    bus.publish("turn.finished", {"origin": "scheduler", "trigger": "agent-job1", "ok": True})
-    bus.publish("turn.finished", {"origin": "scheduler", "trigger": "cron-b", "ok": True})
-    assert store.get("s1", one_shot.id).close_reason == "agent-job1 finished"
-    assert store.get("s1", recurring.id).in_force  # the fire settled, the job didn't
+    return LocalScheduler(
+        agent_name="dir-test",
+        invoke_url="http://127.0.0.1:7870",
+        api_key="k",
+        bearer_token="b",
+        db_dir=tmp_path / "sched",
+        event_publish=bus.publish,
+    )
 
-    # Cancel settles it — the same scheduler.changed the console/cancel tool publish.
-    bus.publish("scheduler.changed", {"job_id": "cron-b", "action": "canceled"})
-    assert store.get("s1", recurring.id).close_reason == "cron-b canceled"
+
+def _stub_a2a_delivery(monkeypatch):
+    """Stub ONLY the network (``httpx.AsyncClient``) so the real ``_fire`` runs — including
+    the ``turn.finished`` publish its ``finally`` makes BEFORE ``_fire_and_settle`` deletes
+    the job row (the round-1 race) — against a completed, task-id-less A2A response."""
+    import httpx
+
+    class _Resp:
+        status_code = 200
+        text = ""
+
+        def json(self):
+            return {"result": {"status": {"state": "TASK_STATE_COMPLETED"}}}
+
+    class _Client:
+        def __init__(self, **_kw):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_a):
+            return False
+
+        async def post(self, url, headers=None, json=None):
+            return _Resp()
+
+    monkeypatch.setattr(httpx, "AsyncClient", lambda **kw: _Client())
 
 
-def test_no_scheduler_wired_never_reads_as_job_gone(store, bus, monkeypatch):
-    import runtime.state as rs
+async def test_one_shot_job_settle_fulfils_over_the_real_scheduler(store, bus, tmp_path, monkeypatch):
+    """The REAL fire→settle path: ``turn.finished`` leaves ``_fire`` while the job row
+    still exists, and only the scheduler's post-delete ``scheduler.changed`` publish
+    resolves the link — the round-1 race, exercised end to end."""
+    s = _make_scheduler(tmp_path, bus)
+    _stub_a2a_delivery(monkeypatch)
+    wire_directive_autofulfil(bus.subscribe_handler, store)
+    job = s.add_job("run the sweep once", "2099-05-01T15:00:00+00:00", job_id="agent-job1")
+    d = store.record("s1", "run the sweep once", links=["agent-job1"])
 
-    monkeypatch.setattr(rs.STATE, "scheduler", None, raising=False)
-    wire_directive_autofulfil(bus.subscribe_handler, store)  # default get_job: no scheduler → raises
-    d = store.record("s1", "careful", links=["job-x"])
-    bus.publish("turn.finished", {"origin": "scheduler", "trigger": "job-x", "ok": True})
-    assert store.get("s1", d.id).in_force
+    live_at_turn_finished: list[bool] = []
+    bus.subscribe_handler(
+        "turn.finished",
+        lambda p: live_at_turn_finished.append(store.get("s1", d.id).in_force)
+        if p["data"].get("trigger") == "agent-job1" else None,
+    )
+
+    await s._fire_and_settle(job, cron=False)
+
+    # turn.finished fired pre-delete — the directive was still in force then — and the
+    # settle publish (not a job-table read racing it) is what fulfilled it after.
+    assert live_at_turn_finished == [True]
+    assert s.get_job("agent-job1") is None
+    got = store.get("s1", d.id)
+    assert got.status == STATUS_FULFILLED and got.closed_by == CLOSED_BY_SYSTEM
+    assert got.close_reason == "agent-job1 finished"
+
+
+async def test_cron_job_stays_linked_until_it_expires(store, bus, tmp_path, monkeypatch):
+    s = _make_scheduler(tmp_path, bus)
+    _stub_a2a_delivery(monkeypatch)
+    wire_directive_autofulfil(bus.subscribe_handler, store)
+    s.add_job("hourly check", "0 * * * *", job_id="cron-b", max_fires=2)
+    d = store.record("s1", "keep the cron until it runs out", links=["cron-b"])
+
+    await s._fire_and_settle(s.list_jobs()[0], cron=True)
+    assert store.get("s1", d.id).in_force  # fire 1 of 2 — the fire settled, the job didn't
+
+    await s._fire_and_settle(s.list_jobs()[0], cron=True)  # max_fires reached → row deleted
+    assert s.list_jobs() == []
+    got = store.get("s1", d.id)
+    assert got.status == STATUS_FULFILLED and got.closed_by == CLOSED_BY_SYSTEM
+    assert got.close_reason == "cron-b expired"
+
+
+async def test_cancel_schedule_tool_fulfils_the_linked_directive(store, bus, tmp_path):
+    """The agent-side cancel: the REAL ``cancel_schedule`` tool over the real scheduler
+    publishes the same ``scheduler.changed`` the console does (round-1 gap — it used to
+    publish nothing, so a canceled job's link stayed open forever)."""
+    from tools.scheduler_tools import _build_scheduler_tools
+
+    s = _make_scheduler(tmp_path, bus)
+    wire_directive_autofulfil(bus.subscribe_handler, store)
+    s.add_job("recurring report", "0 * * * *", job_id="cron-c")
+    d = store.record("s1", "keep the cron until I say", links=["cron-c"])
+
+    cancel = next(t for t in _build_scheduler_tools(s) if t.name == "cancel_schedule")
+    assert await cancel.ainvoke({"job_id": "nope"}) != "Canceled nope."
+    assert store.get("s1", d.id).in_force  # a failed cancel publishes nothing
+    assert await cancel.ainvoke({"job_id": "cron-c"}) == "Canceled cron-c."
+
+    got = store.get("s1", d.id)
+    assert got.status == STATUS_FULFILLED and got.closed_by == CLOSED_BY_SYSTEM
+    assert got.close_reason == "cron-c canceled"
 
 
 def test_unlinked_directives_are_untouched_by_every_event(store, bus):
-    wire_directive_autofulfil(bus.subscribe_handler, store, get_job=lambda job_id: None)
+    wire_directive_autofulfil(bus.subscribe_handler, store)
     plain = store.record("s1", "don't touch prod until I say so")
     manual = store.record("s1", "hold", links=["bd-1x"])
+    waitish = store.record("s1", "odd link", links=["wait:s1"])
     store.close("s1", manual.id, status=STATUS_FULFILLED, reason="done by hand", closed_by="agent")
 
     bus.publish(LINK_CLOSED_TOPIC, {"ref": "bd-1x", "reason": "merged"})
     bus.publish("task.changed", {"id": "task-1", "action": "closed"})
     bus.publish("task.changed", {"id": "task-1", "action": "deleted"})
-    bus.publish("turn.finished", {"origin": "scheduler", "trigger": "job-a", "ok": True})
     bus.publish("scheduler.changed", {"job_id": "job-a", "action": "canceled"})
+    # Non-terminal job actions and reused `wait:` ids never resolve a link.
+    bus.publish("scheduler.changed", {"job_id": "wait:s1", "action": "finished"})
+    for action in ("added", "updated", "enabled", "disabled", "restored"):
+        bus.publish("scheduler.changed", {"job_id": "wait:s1", "action": action})
 
     got = store.get("s1", plain.id)
     assert got.in_force and got.links == [] and got.closed_at is None
+    assert store.get("s1", waitish.id).in_force
     # A directive the agent already closed stays the agent's close — never re-written.
     assert store.get("s1", manual.id).closed_by == "agent"
     assert store.resolve_link("bd-nothing", "merged") == []
