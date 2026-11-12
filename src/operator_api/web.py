@@ -68,9 +68,15 @@ def mount_react_app(app, dist_dir: str | Path, *, app_path: str = "/app") -> boo
             name="operator_assets",
         )
 
+    # The console page may only be framed by its own origin: on an instance with no token an
+    # outside page could otherwise overlay it and borrow the operator's clicks. Nothing of
+    # ours frames it — member windows are routes of the same app, the desktop app loads its
+    # bundle in its own windows, and plugin pages are framed BY the console, not the reverse.
+    page_headers = {"Content-Security-Policy": "frame-ancestors 'self'", "X-Frame-Options": "SAMEORIGIN"}
+
     @app.get(app_path, include_in_schema=False)
     async def _operator_index() -> FileResponse:
-        return FileResponse(str(index_path))
+        return FileResponse(str(index_path), headers=page_headers)
 
     @app.get(f"{app_path}/{{path:path}}", include_in_schema=False)
     async def _operator_fallback(path: str) -> FileResponse:
@@ -81,6 +87,6 @@ def mount_react_app(app, dist_dir: str | Path, *, app_path: str = "/app") -> boo
             candidate = index_path
         if candidate.is_file():
             return FileResponse(str(candidate))
-        return FileResponse(str(index_path))
+        return FileResponse(str(index_path), headers=page_headers)
 
     return True
