@@ -6,6 +6,7 @@ import { Dialog, Drawer, Tooltip } from "@protolabsai/ui/overlays";
 import { SurfaceFrameContext } from "./SurfaceFrame";
 import { openContextMenu, useContextMenuStore } from "../contextMenu/store";
 import { useUI } from "../state/uiStore";
+import { UTIL_DIALOG_WIDTH } from "./utilDialogSize";
 
 /** Identity of the view a host frames. The shell resolves the view's content itself and
  *  passes it as `children`, so a plugin view is framed exactly like a core one. */
@@ -22,6 +23,12 @@ const pendingClose = { current: false };
 // which is off for now — see the note at the top of contextMenu/registrations.tsx. With nothing
 // to offer, the rail frame neither opens a menu nor advertises one.
 const VIEW_MENU_ENABLED = false;
+
+// Views whose window is the utility-bar dialog size rather than the wide, full-height one.
+// Work opens from the utility bar beside Feed, so it matches Feed's dialog exactly
+// (UTIL_DIALOG_WIDTH, and the body height min(60dvh, 560px) via `.surface-modal--util`); a full-height window around a short list was mostly empty space
+// (Josh, 2026-11-12).
+const UTIL_MODAL_WIDTH: Record<string, string> = { work: UTIL_DIALOG_WIDTH };
 
 /**
  * Frame one rail view — in the side rail (`frame="rail"`, wrapping the right dock's own
@@ -192,10 +199,11 @@ export function SurfaceHost({
         {status}
         <Dialog
           open
-          size="wide"
-          height="fill"
+          {...(UTIL_MODAL_WIDTH[view.id]
+            ? { width: UTIL_MODAL_WIDTH[view.id] }
+            : { size: "wide" as const, height: "fill" as const })}
           padding="none"
-          className="surface-modal"
+          className={UTIL_MODAL_WIDTH[view.id] ? "surface-modal surface-modal--util" : "surface-modal"}
           onClose={() => {
             // A plain Close (not Dock) — flag it so the rail host stays silent and doesn't pull
             // focus into the rail view on this transition; focus returns to the opener instead.

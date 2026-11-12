@@ -96,6 +96,21 @@
   height: min(60dvh, 560px);
 }
 
+/* A surface opened from the utility bar in a window (Work) matches Feed's utility dialog:
+   same width (set on the Dialog) and the same body height as `.util-dialog-fill`. */
+.surface-modal--util .pl-dialog__body {
+  /* Feed's body is min(60dvh, 560px) inside the "roomy" padding; Work's view brings its own
+     padding (padding="none"), so its body takes that padding's height too, less the 6px its
+     header's Dock icon button adds over Feed's header — same outer size. */
+  height: calc(min(60vh, 560px) + 2 * var(--pl-space-6) - 6px);
+  height: calc(min(60dvh, 560px) + 2 * var(--pl-space-6) - 6px);
+  min-height: 0;
+  /* A flex column, like the fill variant's body, so the view stretches to this height and its
+     own list scrolls inside it instead of growing the body. */
+  display: flex;
+  flex-direction: column;
+}
+
 /* Background subagents (ADR 0050 Phase 3) — UtilityBar pill + jobs dialog. */
 .bg-jobs-pill {
   position: relative;
