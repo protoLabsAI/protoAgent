@@ -155,7 +155,7 @@ function mapSchedule(row: ScheduledJob): WorkItem {
     status: fromSchedule(row),
     title: row.prompt,
     meta: scheduleWhen(row.schedule),
-    sessionId: row.context_id || undefined,
+    sessionId: row.origin_session || row.context_id || undefined,
     raw: row,
   };
 }

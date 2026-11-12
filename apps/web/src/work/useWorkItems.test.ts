@@ -381,22 +381,28 @@ describe("live group adapters", () => {
     expect(workGroups(r.current, { thisChatOnly: true, sessionId: "s2" })[2].items.map((i) => i.id)).toEqual(["owned", "wait:s2"]);
   });
 
-  it("preserves explicit ownership for ordinary schedules in source and group filtering", async () => {
+  it("preserves origin and legacy context ownership in source and group filtering", async () => {
     const owned = { id: "one-shot", prompt: "Run", schedule: "2026-12-01T00:00:00Z", context_id: "s1", enabled: true };
+    const recurring = { ...owned, id: "recurring", schedule: "0 9 * * *", context_id: null, origin_session: "s1" };
     spies.schedules.mockResolvedValue({ jobs: [
       owned,
+      recurring,
+      { ...recurring, id: "separate-runner", context_id: "runner" },
+      { ...recurring, id: "other-origin", origin_session: "s2", context_id: "s1" },
       { ...owned, id: "other", context_id: "s2" },
       { ...owned, id: "global", context_id: null },
     ], backend: "local" });
     const scoped = mount({ sessionId: "s1", thisChatOnly: true });
     const all = mount({ sessionId: "s1", thisChatOnly: false });
     await flush();
-    expect(scoped.current.schedules.items.map((i) => i.id)).toEqual(["one-shot"]);
+    const expected = ["one-shot", "recurring", "separate-runner"];
+    expect(scoped.current.schedules.items.map((i) => i.id)).toEqual(expected);
     expect(scoped.current.schedules.items[0]).toMatchObject({ sessionId: "s1", raw: owned });
-    expect(scoped.current.schedules.groupItems?.map((i) => i.id)).toEqual(["one-shot"]);
+    expect(scoped.current.schedules.items[1]).toMatchObject({ sessionId: "s1", raw: recurring });
+    expect(scoped.current.schedules.groupItems?.map((i) => i.id)).toEqual(expected);
     expect(workGroups(all.current, { thisChatOnly: true, sessionId: "s1" })[2].items
-      .filter((i) => i.kind === "schedule").map((i) => i.id)).toEqual(["one-shot"]);
-    expect(all.current.schedules.items.map((i) => i.id)).toEqual(["one-shot", "other", "global"]);
+      .filter((i) => i.kind === "schedule").map((i) => i.id)).toEqual(expected);
+    expect(all.current.schedules.items.map((i) => i.id)).toEqual([...expected, "other-origin", "other", "global"]);
   });
 
   it("reconciles missed delivery, wait removal and new chats on reconnect", async () => {

@@ -807,6 +807,7 @@ export type WatchState = {
 
 export type ScheduledJob = {
   context_id?: string | null;
+  origin_session?: string | null;
   id: string;
   prompt: string;
   schedule: string;

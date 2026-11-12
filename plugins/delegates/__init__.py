@@ -121,6 +121,50 @@ def _duplicate_delegation_refusal(target: str, job) -> str:
     )
 
 
+_AMENDMENT_CHAIN_MAX = 16
+
+
+def _request_ref(job) -> str:
+    """How an earlier delegation is named to the peer: its ids, when it was sent, how it
+    stands on this side, and the opening of its REQUEST. ``job.prompt`` is the request the
+    agent wrote, never an amendment preamble (``_spawn_background_delegation`` stores it
+    apart from the text actually sent), so an amended amendment quotes real words."""
+    from infra.text import first_sentence
+
+    ids = ", ".join(x for x in (
+        f"job {job.id}",
+        f"your task {job.peer_task_id}" if job.peer_task_id else "",
+        f"message {job.peer_message_id}" if job.peer_message_id else "",
+    ) if x)
+    if job.status == "running":
+        where = "still in flight with you" if job.peer_task_id else "sent but not yet acknowledged (it may never have reached you)"
+    elif job.status == "completed":
+        where = "answered"
+    else:
+        cause = " ".join(str(job.error or job.result or "").split())[:240]
+        where = f"ended {job.status} before you answered it" + (f" ({cause})" if cause else "")
+    return f"{ids}, sent {job.created_at}, {where}; it began: \"{first_sentence(job.prompt)}\""
+
+
+def _amendment_root(store, job):
+    """The first request of an amendment chain ``job`` belongs to, or None when ``job`` is
+    not itself an amendment. Follows ``amends`` links, bounded and cycle-safe; a link to a
+    pruned row stops at the last job still on record."""
+    seen = {job.id}
+    root = None
+    current = job
+    for _ in range(_AMENDMENT_CHAIN_MAX):
+        parent_id = getattr(current, "amends", "") or ""
+        if not parent_id or parent_id in seen:
+            break
+        parent = store.get(parent_id)
+        if parent is None:
+            break
+        seen.add(parent_id)
+        root = current = parent
+    return root
+
+
 def _amendment_preamble(target: str, amends: str) -> tuple[str, str]:
     """``(error, preamble)`` for ``delegate_to(amends=<job id>)`` (#5053).
 
@@ -141,25 +185,13 @@ def _amendment_preamble(target: str, amends: str) -> tuple[str, str]:
                 "job id the earlier delegate_to(background=True) returned.", "")
     if job.result_author and job.result_author != target:
         return (f"Error: job {amends!r} was sent to {job.result_author!r}, not {target!r}.", "")
-    from infra.text import first_sentence
-
-    ids = ", ".join(x for x in (
-        f"job {job.id}",
-        f"your task {job.peer_task_id}" if job.peer_task_id else "",
-        f"message {job.peer_message_id}" if job.peer_message_id else "",
-    ) if x)
-    if job.status == "running":
-        where = "is still in flight with you" if job.peer_task_id else "was sent but not yet acknowledged (it may never have reached you)"
-    elif job.status == "completed":
-        where = "was answered"
-    else:
-        cause = " ".join(str(job.error or job.result or "").split())[:240]
-        where = f"ended {job.status} before you answered it" + (f" ({cause})" if cause else "")
-    preamble = (
-        f"[Amendment: this amends my earlier request to you ({ids}, sent {job.created_at}), which "
-        f"{where}. It began: \"{first_sentence(job.prompt)}\". If you have no record of that "
-        "request, say so plainly rather than guessing.]\n\n"
-    )
+    root = _amendment_root(store, job)
+    preamble = f"[Amendment: this amends my earlier request to you ({_request_ref(job)}). "
+    if root is not None:
+        # A chain (#5053 follow-up): the parent is what this changes, but it was itself an
+        # amendment — the brief the peer must find is the ROOT, so name both.
+        preamble += f"That request was itself an amendment; the original brief was {_request_ref(root)}. "
+    preamble += "If you have no record of these requests, say so plainly rather than guessing.]\n\n"
     return "", preamble
 
 
@@ -267,11 +299,14 @@ def _build_delegate_to(registry: DelegateRegistry):
         item_id = str(item_id or "").strip()
         resume_task_id = str(resume_task_id or "").strip()
         amends = str(amends or "").strip()
+        # The request the agent wrote, kept apart from any amendment preamble: it is what the
+        # job records and titles, so a later amendment quotes real words (#5053 follow-up).
+        request = str(query)
         if amends:
             error, preamble = _amendment_preamble(target, amends)
             if error:
                 return error
-            query = preamble + str(query)
+            query = preamble + request
         # 0 (or anything ≤ 0) ⇒ use the delegate's configured timeout; a positive value
         # is a per-call override (seconds) threaded down to the adapter's dispatch.
         try:
@@ -312,6 +347,7 @@ def _build_delegate_to(registry: DelegateRegistry):
                 fresh_session=fresh_session,
                 force=force,
                 amends=amends,
+                request=request,
             )
         from graph.delegate_progress import progress_sink
 
@@ -632,6 +668,7 @@ async def _spawn_background_delegation(
     fresh_session: bool | None = None,
     force: bool = False,
     amends: str = "",
+    request: str = "",
 ) -> str:
     """Run a delegation as a detached background job (ADR 0050): return a handle now and
     drain the delegate's reply back into the spawning session on completion — the same
@@ -725,12 +762,15 @@ async def _spawn_background_delegation(
     # the SAME fallback the chat row uses, so a title and its row can't read differently.
     from infra.text import first_sentence
 
-    label = " ".join(str(summary or "").split())[:120] or first_sentence(query)
+    # ``request`` is the agent's own words without an amendment preamble: the row records
+    # and titles THAT, so neither the panel nor a later amendment shows a preamble.
+    request = request or query
+    label = " ".join(str(summary or "").split())[:120] or first_sentence(request)
     job_id = await mgr.spawn_work(
         origin_session=session,
         kind="delegate",
         description=f"delegate → {target}{f' [{project.name}]' if project is not None else ''}: {label}",
-        detail=query,
+        detail=request,
         work=_work,
         result_author=target,
         **({"amends": amends} if amends else {}),
