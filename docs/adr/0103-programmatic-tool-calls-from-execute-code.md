@@ -17,6 +17,19 @@ names tools in `execute_code.tools`. A third global flag would be a second
 switch for the same door. The GA surface is therefore: plugin enablement +
 the plugin section's `tools` / `timeout` / `output_truncate` keys.
 
+**Correction (2026-11-12): `execute_code` is on by default.** The paragraph above was
+true when written. Since #3450 the bundled Cowork plugin — enabled by default — turns
+`execute_code` on (`plugins/cowork/protoagent.plugin.yaml`, `enables: [execute_code]`), so
+a default install has it without the operator opting in. That was a deliberate product
+call (the document skills need it), not an oversight, but it means "opt-in, twice" no
+longer describes the default and the security reasoning here should not be read as
+resting on it. What still holds: the bridge exposes only the curated set until tools are
+named in `execute_code.tools`, HITL tools are never bridged, and the script runs in a
+subprocess with a scrubbed environment and a timeout. What that is not: a sandbox. The
+script runs as the server user with that user's file and network access, and
+`egress.allowed_hosts` does not fence it. An explicit `plugins.disabled: [execute_code]`
+turns it off; disabling Cowork returns it to its own default (off).
+
 **S4 (binding-path parity), as shipped:** late-tool factories now receive the
 **denylist-final** toolset (and their outputs meet the sweep themselves), so
 the bridge's tool_map is exactly the model's bound set; every bridged call is
