@@ -94,8 +94,11 @@ def _app(auth, monkeypatch, *, pairing: bool):
 
     @app.api_route("/{path:path}", methods=["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE"])
     async def _echo(path: str, request: Request):
+        from graph.middleware.request_context import caller_may_approve
+
         return {
             "path": path,
+            "may_approve": caller_may_approve(),
             "trust_tier": getattr(request.state, "trust_tier", None),
             "scope": getattr(request.state, "credential_scope", None),
             "device_id": getattr(request.state, "device_id", None),
@@ -1381,6 +1384,24 @@ def test_the_scope_header_never_widens(echo, devices):
     _, token = _phone(devices)
     for value in ("full", "FULL", "", "operator"):
         assert echo.post("/api/settings", headers={**_hdr(token), SCOPE_HEADER: value}).json()["scope"] == "device"
+
+
+def test_a_delegated_turn_that_cant_approve_stays_that_way_on_the_member(echo, auth, monkeypatch):
+    """The delegating side names a caller that may not approve; the member binds it under the
+    operator-tier credential the hop presents. Narrow-only."""
+    from types import SimpleNamespace
+
+    from a2a_impl.credential_scope import APPROVAL_HEADER
+    from graph.middleware.request_context import request_metadata_scope
+    from plugins.delegates.a2a import _a2a_headers
+
+    peer = SimpleNamespace(auth_token=_SECRET, auth_scheme="bearer", url="https://peer.example/a2a", name="peer")
+    assert APPROVAL_HEADER not in _a2a_headers(peer)
+    with request_metadata_scope({}, may_approve=False):
+        sent = _a2a_headers(peer)
+    assert echo.post("/a2a", headers=sent).json()["may_approve"] is False
+    for value in ("yes", "", "true"):
+        assert echo.post("/a2a", headers={**_hdr(_SECRET), APPROVAL_HEADER: value}).json()["may_approve"] is True
 
 
 def test_a_device_cannot_create_or_import_an_agent(echo, devices):

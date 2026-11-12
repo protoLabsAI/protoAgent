@@ -50,6 +50,15 @@ DEVICE_SCOPE_MESSAGE = "This device can't change pairing or credentials — use 
 #: this header is ``device``; nothing a caller sends here ever widens anything.
 SCOPE_HEADER = "x-protoagent-credential-scope"
 
+#: Carries "this turn's caller may not approve" across a delegation hop. A hub delegating a
+#: federation-tier turn (``@member`` / ``delegate_to``) presents the member with the fleet
+#: service token or the delegate's own bearer — OPERATOR there — so the member would let that
+#: turn answer or skip approvals (ADR 0123 / 0124). The delegating side sets this header and the
+#: receiving middleware binds "may not approve" for the request. Narrow-only, like
+#: ``SCOPE_HEADER``: no value of it ever grants approval.
+APPROVAL_HEADER = "x-protoagent-caller-may-approve"
+APPROVAL_DENIED = "no"
+
 #: Config-write routes whose credential-plane check is per KEY, inside the route (see
 #: ``operator_api.scope_guard``), so the URL ceiling below can't refuse them. The fleet proxy
 #: refuses these for a ``device``-scope caller aimed at a REMOTE member: a remote on an older
@@ -133,6 +142,11 @@ def narrowed_by_header(scope: str, header_value: str | None) -> str:
     """``scope`` after applying a ``SCOPE_HEADER`` value — ``device`` if the header asks for
     it, else unchanged. Never widens."""
     return SCOPE_DEVICE if (header_value or "").strip().lower() == SCOPE_DEVICE else scope
+
+
+def approval_narrowed(header_value: str | None) -> bool:
+    """Whether an ``APPROVAL_HEADER`` value says the caller may not approve."""
+    return (header_value or "").strip().lower() == APPROVAL_DENIED
 
 
 def is_key_checked_config_write(method: str | None, path: str) -> bool:
