@@ -337,15 +337,18 @@ export function DecisionCard({
             {`If nobody answers by ${formatGivenAt(decision.expires_at)}, ${agent} will ${decision.default_action_text}.`}
           </p>
         )}
-        <TextLink
-          href="#"
-          onClick={(e) => {
-            e.preventDefault();
-            onOpenChat?.(decision);
-          }}
-        >
-          Open chat: {chatTitle || agent}
-        </TextLink>
+        {/* In the source chat's transcript the card is already in that chat: no link to it. */}
+        {!isTranscript && (
+          <TextLink
+            href="#"
+            onClick={(e) => {
+              e.preventDefault();
+              onOpenChat?.(decision);
+            }}
+          >
+            Open chat: {chatTitle || agent}
+          </TextLink>
+        )}
       </div>
     </article>
   );
