@@ -412,9 +412,16 @@ def register_provider_routes(app) -> None:
         if cfg.provider_by_id(pid) is None:
             raise HTTPException(status_code=404, detail=f"no provider named {pid!r}")
 
+        rekeyed = bool((req.api_key or "").strip())
+
         def _patched(current) -> list[dict]:
             if current.provider_by_id(pid) is None:  # deleted in another tab meanwhile
                 raise ValueError(f"no provider named {pid!r}")
+            if not rekeyed and req.base_url is not None and _moves_a_keyed_connection(current, pid, req.base_url):
+                raise ValueError(
+                    "This connection would point at a different server. Enter its API key again to save — "
+                    "the saved key is only used with the server it was saved for."
+                )
             entries = _entries_from_config(current)
             for entry in entries:
                 if entry["id"] != pid:
@@ -431,18 +438,12 @@ def register_provider_routes(app) -> None:
 
         # A blank/absent api_key leaves the stored one in place — the console is never
         # shown a key, so it cannot echo one back.
-        secret = {pid: req.api_key} if (req.api_key or "").strip() else {}
         # …unless the edit points the connection at a DIFFERENT server. The stored key was
         # issued for the old one; keeping it would send it to the new address on the next
         # model list or chat turn. Moving a connection means saying its key again.
-        if not secret and req.base_url is not None and _moves_a_keyed_connection(cfg, pid, req.base_url):
-            raise HTTPException(
-                status_code=400,
-                detail=(
-                    "This connection would point at a different server. Enter its API key again to save — "
-                    "the saved key is only used with the server it was saved for."
-                ),
-            )
+        secret = {pid: req.api_key} if rekeyed else {}
+        # Checked inside `_patched`, against the config the write lock holds — not the copy
+        # read above, which a concurrent edit may already have moved.
         await _apply_providers(_patched, secret)
         return {"ok": True, "id": pid}
 
