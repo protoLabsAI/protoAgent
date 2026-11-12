@@ -6,6 +6,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { WorkView, canonicalSection } from "./WorkView";
 import { beginThisChatVisit, endThisChatVisit, isThisChatVisit } from "./visitScope";
 import { api } from "../lib/api";
+import { decisionsApi, type DecisionList, type DecisionRow } from "../lib/api/decisions";
 import { applyNavIntent } from "../app/palette/nav";
 import { useUI } from "../state/uiStore";
 import type { WorkItem, WorkItems, WorkSource, WorkSourceKind } from "./useWorkItems";
@@ -163,15 +164,21 @@ it("tags every row with its kind and icon per the approved table", async () => {
   data.sources.decisions.items = [decision("ask")];
   data.sources.activity.groupItems = [{ kind: "delivery", id: "77", status: "needs-you", title: "Deploy failed page", meta: "ops",
     raw: { id: 77, priority: "now", delivered_at: null, source: "ops", text: "Deploy failed page", created_at: new Date().toISOString(), dedup_key: null } } as GroupableWorkItem];
-  data.sources.goals.items = [goal("stuck", "exhausted"), goal("drive")];
+  data.sources.goals.items = [
+    { ...goal("stuck", "exhausted"), raw: { session_id: "stuck", condition: "stuck", status: "exhausted", iteration: 5, max_iterations: 9 } },
+    { ...goal("drive"), raw: { session_id: "drive", condition: "drive", status: "active", iteration: 3, max_iterations: 8 } },
+  ];
   data.sources.background.items = [{ kind: "background", id: "b1", status: "running", title: "Crunching", meta: "delegate", raw: { id: "b1", status: "running" } }];
   data.sources.watches.items = [{ kind: "watch", id: "w1", status: "waiting", title: "CI goes green", meta: "", raw: { id: "w1", status: "active" } }];
-  data.sources.schedules.items = [{ kind: "schedule", id: "s1", status: "scheduled", title: "Daily digest", meta: "Every day at 09:00", raw: { id: "s1", prompt: "Daily digest", schedule: "0 9 * * *" } }];
-  data.sources.tasks.items = [task("queued", "open")];
+  data.sources.schedules.items = [
+    { kind: "schedule", id: "s1", status: "scheduled", title: "Daily digest", meta: "Every day at 09:00", raw: { id: "s1", prompt: "Daily digest", schedule: "0 9 * * *" } },
+    { kind: "schedule", id: "s2", status: "paused", title: "Weekly digest", meta: "Weekdays at 09:00", raw: { id: "s2", prompt: "Weekly digest", schedule: "0 9 * * 1-5", enabled: false } },
+  ];
+  data.sources.tasks.items = [task("queued", "open"), { ...task("stuck-job", "blocked"), status: "waiting" }];
   data.sources.directives.items = [{ kind: "directive", id: "d1", status: "waiting", title: "Hold main", meta: "", raw: { id: "d1", status: "in_force", quote: "Hold main" } }];
   await render("modal");
   const badges = Array.from(host.querySelectorAll(".work-row .pl-badge")).map((node) => node.textContent);
-  expect(badges).toEqual(["Decision", "Goal stopped", "Delivery", "Goal", "Job", "Condition", "Job", "Time", "Instruction"]);
+  expect(badges).toEqual(["Decision", "Goal stopped", "Delivery", "Goal", "Job", "Job", "Condition", "Job", "Time", "Time", "Instruction"]);
   // A stopped goal is neutral — never the error fill (§2, §6) — while the decision keeps info
   // and the delivery warning; the not-started job wears the dashed circle, the running one the
   // spinner, and time/condition their clock/eye glyphs.
@@ -185,6 +192,52 @@ it("tags every row with its kind and icon per the approved table", async () => {
   expect(row("Daily digest").querySelector(".lucide-clock")).toBeTruthy();
   expect(row("CI goes green").querySelector(".lucide-eye")).toBeTruthy();
   expect(row("drive").querySelector(".lucide-target")).toBeTruthy();
+  // Goal rows read the shared progress line — "step N of M", never the verifier type —
+  // with the active goal's "checking after each turn" and the stopped one bare (§2).
+  expect(row("drive").textContent).toContain("step 3 of 8 · checking after each turn");
+  expect(row("stuck").textContent).toContain("step 5 of 9");
+  expect(row("stuck").textContent).not.toContain("checking after each turn");
+  // A blocked started job stays in Doing now but is NOT running: the word "blocked" leads
+  // its meta and the pause glyph replaces the spinner (§1).
+  expect(row("stuck-job").textContent).toContain("blocked · Task");
+  expect(row("stuck-job").querySelector(".lucide-circle-pause")).toBeTruthy();
+  expect(row("stuck-job").querySelector(".pl-spinner")).toBeNull();
+  // A disabled schedule keeps its Time row but says "paused" and trades the clock for the
+  // pause glyph, so it never passes for an active one.
+  expect(row("Weekly digest").textContent).toContain("paused · Weekdays at 09:00");
+  expect(row("Weekly digest").querySelector(".lucide-circle-pause")).toBeTruthy();
+  expect(row("Weekly digest").querySelector(".lucide-clock")).toBeNull();
+});
+
+it("Overview instruction rows share the §3 presentation: Approval link, scope headline, You-said meta", async () => {
+  // The answered ledger the §3.1 link reads — the same loadAnswered top-up the picked
+  // group's directives renderer performs, now also fired by the Overview's rows.
+  const answeredRow = { id: "apr-dec", question: "Merge to main?", state: "answered", session_id: "s-appr",
+    agent: "protoAgent", created_at: "2026-11-12T10:00:00Z", answered_at: "2026-11-12T10:00:30Z",
+    answer: "yes", answer_label: "Yes, merge it", answered_by: "operator", options: [] } as unknown as DecisionRow;
+  const listDecisions = vi.spyOn(decisionsApi, "listDecisions").mockResolvedValue({ decisions: [answeredRow] } as unknown as DecisionList);
+  try {
+    data.sources.directives.items = [
+      { kind: "directive", id: "ap1", status: "waiting", title: "Yes, merge it", meta: "", sessionId: "s-appr",
+        raw: { id: "ap1", status: "in_force", quote: "Yes, merge it", scope: "Merges to protoAgent main", session_id: "s-appr", created_at: "2026-11-12T10:01:00Z" } },
+      { kind: "directive", id: "in1", status: "waiting", title: "Hold the release", meta: "",
+        raw: { id: "in1", status: "in_force", quote: "Hold the release" } },
+    ];
+    await render("modal");
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
+    expect(listDecisions).toHaveBeenCalledWith("answered");
+    const row = (text: string) => Array.from(host.querySelectorAll<HTMLElement>(".work-row")).find((node) => node.textContent?.includes(text))!;
+    // The linked directive reads as the SAME row its picked group shows: Approval tag, the
+    // scope as the headline, and the "You chose …" meta — never a bare Instruction.
+    const approval = row("Merges to protoAgent main");
+    expect(approval.querySelector(".pl-badge")?.textContent).toBe("Approval");
+    expect(approval.textContent).toContain('You chose "Yes, merge it"');
+    const instruction = row("Hold the release");
+    expect(instruction.querySelector(".pl-badge")?.textContent).toBe("Instruction");
+    expect(instruction.textContent).toContain('You said "Hold the release"');
+  } finally {
+    listDecisions.mockRestore();
+  }
 });
 
 it("achieved goals disappear and not-started jobs count only in Coming up", async () => {

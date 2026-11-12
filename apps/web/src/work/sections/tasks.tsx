@@ -96,7 +96,7 @@ function jobNotStarted(item: WorkItem): boolean {
 }
 
 // Finished jobs leave Work (§1): a closed former task falls out of every group
-// (`groupFor` → null). The list and WorkView's counts share this one rule.
+// (`groupFor` → null) — the same rule the shared `workGroups` counts apply.
 function jobShowsInWork(item: WorkItem): boolean {
   return groupFor(item as GroupableWorkItem) !== null;
 }
@@ -250,7 +250,8 @@ function TaskList({ source, onOpen }: { source: WorkSource; onOpen: (item: WorkI
       </Alert>
     );
   }
-  // Close job visibly removes the row (jobShowsInWork, shared with WorkView's counts).
+  // Close job visibly removes the row (jobShowsInWork — the groupFor rule the shared
+  // workGroups counts apply).
   const items = source.items.filter(jobShowsInWork);
   if (!items.length) {
     return <Empty title="No jobs" description="The agent files one when it has work to track." />;
@@ -294,4 +295,4 @@ export function TasksSection({ sources, state, onOpen }: WorkSectionContext) {
   return <TaskList source={source} onOpen={onOpen} />;
 }
 
-registerWorkSection("tasks", { label: "Tasks", group: "doing-now", listFilter: jobShowsInWork, render: (ctx) => <TasksSection {...ctx} /> });
+registerWorkSection("tasks", { label: "Tasks", group: "doing-now", render: (ctx) => <TasksSection {...ctx} /> });

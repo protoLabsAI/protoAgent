@@ -9,4 +9,8 @@
   section is gone from Work — the Feed pill opens its own Feed dialog for pending-page triage
   and the completed-turn timeline. The mobile shell's "Menu, N need you" badge counts the same
   Needs you group through the shared selector, so stopped goals and undelivered priority-now
-  pages raise it too.
+  pages raise it too. A row that isn't moving still says so: a blocked started job keeps the
+  word "blocked" in its Doing now meta and a disabled schedule reads "paused" in Coming up,
+  both with a pause glyph instead of the spinner or clock; goal rows show their "step N of M"
+  progress; and the Overview's Your instructions rows carry the same Approval/Instruction tag,
+  scope headline and "You said/You chose" meta as the picked group.

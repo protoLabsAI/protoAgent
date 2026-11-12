@@ -302,8 +302,8 @@ export function WorkView({ frame = "rail", sessionId }: { frame?: "rail" | "moda
         <div className="work-view__content">
           {section !== "overview" && group && <WorkHeading label={group.label} count={group.count} />}
           {section === "overview" || !group
-            ? <WorkOverview groups={groups} sources={sources} onOpen={onOpen} />
-            : <WorkGroupSection group={group} sources={sources} onOpen={onOpen}
+            ? <WorkOverview groups={groups} sources={sources} onOpen={onOpen} sessionId={sessionId} />
+            : <WorkGroupSection group={group} sources={sources} onOpen={onOpen} sessionId={sessionId}
               // The Your instructions list delegates to the registered directives renderer
               // (itemId stripped — the detail pane owns selection) so the §3 presentation —
               // Approval tags, "You said…" provenance, tied-job meta and the ledger's own
