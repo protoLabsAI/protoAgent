@@ -83,4 +83,4 @@ function renderDecisions(ctx: WorkSectionContext): ReactNode {
   return <ul className="work-group">{[...pending, ...closed].map(rowFor)}</ul>;
 }
 
-registerWorkSection("decisions", { label: "Decisions", render: renderDecisions });
+registerWorkSection("decisions", { label: "Decisions", group: "needs-you", render: renderDecisions });
