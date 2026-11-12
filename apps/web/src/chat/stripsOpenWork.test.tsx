@@ -84,8 +84,15 @@ it("retries a failed directive load without navigating", async () => {
   await render(<DirectiveStrip sessionId="here" />); await click("Retry");
   expect(data.refresh).toHaveBeenCalledOnce(); expect(useUI.getState().rightPanel).toBe("context");
 });
-it.each(["active", "achieved", "exhausted"] as const)("opens the chat's %s goal details", async (status) => {
-  data.goals[0] = { ...data.goals[0], status, finished_at: status === "active" ? null : 999 };
+// S7: the strip is the achieved payoff line only — a driving goal rides the rail's Doing now
+// chip and a stopped one its Needs-you section, so neither renders a strip any more.
+it("opens the chat's achieved goal details, and renders nothing for driving/stopped goals", async () => {
+  for (const status of ["active", "exhausted"] as const) {
+    data.goals[0] = { ...data.goals[0], status, finished_at: status === "active" ? null : 999 };
+    await render(<GoalRunStrip sessionId="here" />);
+    expect(host.childElementCount).toBe(0);
+  }
+  data.goals[0] = { ...data.goals[0], status: "achieved", finished_at: 999 };
   data.goals.unshift({ session_id: "other", condition: "Elsewhere", status: "active" } as GoalState);
   await render(<GoalRunStrip sessionId="here" />); await click("View"); expectWork("goals", "goal:here");
 });
@@ -127,6 +134,8 @@ for (const dock of ["left", "right", "bottom", "hidden"] as const) {
         await render(<DirectiveWorkRequest sessionId="here" />);
         await act(async () => useUI.getState().openDirectives("here"));
       } else {
+        // The goal strip renders only for an ACHIEVED goal now (S7).
+        if (entry === "goals") data.goals[0] = { ...data.goals[0], status: "achieved", finished_at: 999 };
         const Strip = entry === "directives" ? DirectiveStrip : entry === "goals" ? GoalRunStrip : BackgroundWorkStrip;
         await render(<Strip sessionId="here" />);
         await click("View");

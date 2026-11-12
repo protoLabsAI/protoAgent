@@ -23,6 +23,9 @@ test("an idle rail is absent; a running job brings up the Doing now chip", async
     },
     [SESSION],
   );
+  // No undelivered pages: the mock default would put the fleet Needs-you marker (S7) on the
+  // idle rail; this spec pins the chip-less rail being ABSENT.
+  await page.route("**/api/inbox**", (route) => route.fulfill({ json: { items: [] } }));
   // The REST list follows the bus: empty until the job starts, then the running row — the
   // rail reads the Work sources (GET /api/background), refetched on `background.started`.
   let running = false;

@@ -58,7 +58,7 @@ def _reset_module_globals():
     set_terminal_hook(None)
     set_progress_hook(None)
     hitl_routing._ROUTER[0] = None
-    steering._QUEUES.clear()
+    steering._reset()
     for store in (a2a._INBOX_TURN_WATCH, a2a._INBOX_EARLY_TERMINALS, a2a._INBOX_RESTORE_OWED):
         store.clear()
 
