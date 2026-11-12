@@ -210,6 +210,8 @@ jobs:
         #     python scripts/gen_attribution.py`)
         #   uv lock --check                           (lockfile in sync with
         #     pyproject — the #1998 rot guard; fix: `uv lock`)
+        #   python scripts/check_test_policy.py             (test-suite budgets and
+        #     burndowns; rules in docs/dev/testing.md)
         run: python scripts/gate.py --lint-only
 
   tests:
