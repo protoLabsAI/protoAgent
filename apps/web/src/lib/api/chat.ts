@@ -48,6 +48,29 @@ export function isDuplicateSendRefusal(err: unknown): boolean {
   return text.startsWith(DUPLICATE_SEND_REFUSAL);
 }
 
+/** The desktop shell's error when the server answered with a plain body instead of an SSE
+ *  stream (lib.rs NOT_A_STREAM) — a JSON-RPC rejection, which rides HTTP 200. The server
+ *  answered, so this is never "the native command failed": nothing may re-send over /api/chat. */
+export const NOT_A_STREAM = "chat_stream: not a stream";
+
+export function isNotAStream(err: unknown): boolean {
+  const text = typeof err === "string" ? err : err instanceof Error ? err.message : String(err ?? "");
+  return text.startsWith(NOT_A_STREAM);
+}
+
+/** A JSON-RPC rejection left whole in a relayed buffer (an older shell relays a non-SSE body
+ *  as if it were stream text, and the SSE parser drops it): its error message, or null. */
+function jsonRpcRejection(leftover: string): string | null {
+  const text = leftover.trim();
+  if (!text.startsWith("{")) return null;
+  try {
+    const payload = JSON.parse(text) as { error?: { message?: string } };
+    return payload.error ? payload.error.message || "resubscribe rejected" : null;
+  } catch {
+    return null;
+  }
+}
+
 export type ChatImagePart = { b64: string; mime: string; name: string };
 
 /** The Task a unary `GetTask` answered with, or undefined (#3957).
@@ -455,7 +478,7 @@ export const chatApi = {
         // A refusal from the shell means this exact message was already sent (a replayed
         // request, #4975): the server has it, so a re-send over /api/chat, which carries no
         // messageId the server could dedupe, would run the turn a second time.
-        if (streamed || isDuplicateSendRefusal(err)) throw err;
+        if (streamed || isDuplicateSendRefusal(err) || isNotAStream(err)) throw err;
         console.warn("[desktop] native chat stream failed; falling back to /api/chat:", err);
       }
       try {
@@ -722,12 +745,18 @@ export const chatApi = {
         buf = drainSseBuffer(buf, dispatchFrame);
       };
       const tok = authToken();
+      // A rejection (resubscribing a task that already ENDED) must throw here exactly as the
+      // browser path's non-SSE check does, or the caller never takes its snapshot-replay
+      // fallback and the turn finalizes without its components (board cards, artifacts).
+      // The shell reports it as NOT_A_STREAM; an older shell relays the JSON body instead.
       await core.invoke("chat_stream", {
         url: apiUrl("/a2a"),
         body,
         auth: tok ? `Bearer ${tok}` : null,
         onEvent: channel,
       });
+      const rejection = jsonRpcRejection(buf);
+      if (rejection !== null) throw new Error(rejection);
       handlers.onDone?.();
       return;
     }
