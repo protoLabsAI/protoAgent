@@ -1,1 +1,1 @@
-- **Work consolidation v2 design spec (#5100).** Preserve the approved four-group specification verbatim and link it from the prior Work view spec and generated documentation navigation. Include both linked Work specs in the in-app docs corpus and packaged builds.
+- **Work consolidation v2 design spec (#5100).** Preserve the approved four-group specification verbatim, including on Windows checkouts, and link it from the prior Work view spec and generated documentation navigation. Include both linked Work specs in the in-app docs corpus and packaged builds.

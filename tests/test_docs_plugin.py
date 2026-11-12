@@ -193,7 +193,6 @@ def test_generated_navigation_and_landings_are_in_sync() -> None:
         assert path.read_text(encoding="utf-8") == expected, f"{path} is stale — run scripts/gen_docs_nav.py"
 
 
-
 def test_approved_work_consolidation_spec_and_navigation() -> None:
     """Keep the approved v2 artifact intact and reachable from its predecessor."""
     import hashlib
@@ -215,6 +214,14 @@ def test_approved_work_consolidation_spec_and_navigation() -> None:
     paths = [item["path"] for section in nav["sections"] for group in section["groups"] for item in group["items"]]
     assert "design/work-consolidation.md" in paths
     assert all((ROOT / "docs" / path).is_file() for path in paths)
+
+
+def test_approved_work_spec_is_checked_out_byte_exact() -> None:
+    """Windows autocrlf must not rewrite the approved, hash-pinned artifact."""
+    import re
+
+    attrs = (ROOT / ".gitattributes").read_text(encoding="utf-8")
+    assert re.search(r"^docs/design/work-consolidation\.md\s+-text\s*$", attrs, re.M)
 
 
 @pytest.mark.parametrize("path", ["design/work-consolidation.md", "design/work-view.md"])
