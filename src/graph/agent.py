@@ -253,6 +253,7 @@ def _build_middleware(
     stable_sections=None,
     bound_tool_names: frozenset[str] | None = None,
     subagent_only: frozenset[str] = frozenset(),
+    inbox_store=None,
 ):
     middleware = []
 
@@ -301,6 +302,14 @@ def _build_middleware(
     from graph.middleware.steering import SteeringMiddleware
 
     middleware.append(SteeringMiddleware())
+
+    # Outside messages (ADR 0003 amendment) — a note another session left with
+    # `protoagent dm` is folded into the operator's live chat at the next model
+    # call, as information only. No-op (no SQLite touch) when nothing is pending.
+    if inbox_store is not None:
+        from graph.middleware.outside_messages import OutsideMessageMiddleware
+
+        middleware.append(OutsideMessageMiddleware(inbox_store))
 
     # Per-turn model override (per chat tab). Outermost wrap_model_call so the
     # PromptCache below sees the ACTUAL model when deciding caching. No-op unless
@@ -2352,6 +2361,7 @@ def create_agent_graph(
         stable_sections=[{"label": label, "chars": len(text)} for label, text in prompt_parts],
         # Held tools aren't missing for a skill: the lead delegates them (ADR 0117 D6).
         bound_tool_names=frozenset(t.name for t in all_tools),
+        inbox_store=inbox_store,
     )
 
     agent = create_agent(

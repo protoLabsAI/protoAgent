@@ -242,6 +242,7 @@ CLI_FORWARD_MODULES = [
     "graph.skills.cli",
     "graph.fleet.cli",
     "graph.usage_cli",
+    "graph.dm_cli",
     "graph.config_explain",
     "graph.model_cli",
     "runtime.cli",

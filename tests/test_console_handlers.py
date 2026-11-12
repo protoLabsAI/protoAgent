@@ -48,6 +48,26 @@ def test_inbox_authorized_requires_match(monkeypatch):
     assert ch._inbox_authorized(None) is False
 
 
+def test_inbox_accepts_the_fleet_service_token_on_a_member_with_its_own_bearer(monkeypatch):
+    """A hub-proxied `protoagent dm` reaches a member carrying the fleet service token
+    (ADR 0089), not the member's own bearer. The inbox used to compare only against the
+    member's token, so the note was refused on any member that had one."""
+    import a2a_impl.auth as auth
+    import runtime.state as rs
+
+    class _Cfg:
+        auth_token = "member-own-bearer"
+
+    monkeypatch.setattr(rs.STATE, "graph_config", _Cfg(), raising=False)
+    monkeypatch.setattr(auth, "_BEARER", ["member-own-bearer"])
+    monkeypatch.setattr(auth, "_FLEET", ["fleet-service-token"])
+    assert ch._inbox_authorized("fleet-service-token") is True
+    assert ch._inbox_authorized("member-own-bearer") is True
+    assert ch._inbox_authorized("some-other-string") is False
+    assert ch._inbox_authorized("") is False
+    assert ch._inbox_authorized(None) is False
+
+
 async def test_scheduler_list_disabled():
     assert await ch._operator_scheduler_list() == {"jobs": [], "backend": "disabled"}
 

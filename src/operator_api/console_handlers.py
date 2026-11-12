@@ -1032,7 +1032,20 @@ def _inbox_authorized(token: str | None) -> bool:
     ).strip()
     if not active:
         return True
-    return hmac.compare_digest(token or "", active)
+    if hmac.compare_digest(token or "", active):
+        return True
+    # A fleet member sits behind its hub (ADR 0089): a caller the hub already authenticated
+    # arrives carrying the fleet service token, not this member's own bearer. Comparing only
+    # against the member's token turned every proxied `protoagent dm` into a 401 on a
+    # member that has one. Accept what the auth middleware itself rates operator at full
+    # scope; `credential_tier` has no open-mode shortcut, so an unknown string stays refused.
+    try:
+        from a2a_impl.auth import SCOPE_FULL, bearer_scope, credential_tier
+
+        return bool(token) and credential_tier(token) == "operator" and bearer_scope(token) == SCOPE_FULL
+    except Exception:  # noqa: BLE001 — an auth lookup that fails must refuse, never admit
+        log.exception("[inbox] could not classify the presented bearer")
+        return False
 
 
 async def _fire_activity_from_inbox(item: dict) -> bool:
@@ -1066,15 +1079,29 @@ async def _operator_inbox_add(payload: dict) -> dict:
     if STATE.inbox_store is None:
         raise RuntimeError("inbox not loaded; finish setup first")
     # add() is sync sqlite — offload it off the loop (#875).
+    # ``deliver: "thread"`` — an outside message for the operator's live chat. It never
+    # fires a turn of its own (so the priority tier is moot: stored as ``next``); the chat
+    # folds it in at its next model call (graph/middleware/outside_messages.py).
+    delivery = (payload.get("deliver", "") or "").strip()
+    to_thread = delivery == "thread"
+    # `session` addresses the message to ONE chat thread (two tabs, two senders). Only an
+    # operator chat can be named: that is the only kind of session that reads these.
+    target = (payload.get("session", "") or "").strip()
+    if target and not target.startswith("chat-"):
+        raise ValueError(f"{target!r} is not a chat thread id (they start with 'chat-')")
     item = await asyncio.to_thread(
         STATE.inbox_store.add,
         payload.get("text", ""),
-        priority=payload.get("priority", "next") or "next",
+        priority="next" if to_thread else (payload.get("priority", "next") or "next"),
         source=payload.get("source", "") or "",
         dedup_key=payload.get("dedup_key", "") or "",
+        delivery=delivery,
+        target_session=target,
     )
     if item is None:
         return {"ok": True, "deduped": True}
+    if to_thread:
+        log.info("[inbox] outside message %s queued for the live chat (from %s)", item["id"], item.get("source") or "?")
 
     fired = False
     if item["priority"] == "now":
@@ -1110,6 +1137,8 @@ async def _operator_inbox_add(payload: dict) -> dict:
                 "priority": item["priority"],
                 "source": item.get("source") or "",
                 "text": item["text"],
+                "delivery": item.get("delivery") or "",
+                "session": item.get("target_session") or "",
             },
         )
     return {"ok": True, "item": item, "fired": fired}
@@ -1126,9 +1155,39 @@ async def _operator_inbox_list(floor: str, include_delivered: bool) -> dict:
         priority_floor=floor or "later",
         include_delivered=include_delivered,
         include_recovery_claimed=True,
+        include_thread=True,  # the operator's view shows outside messages too
         limit=200,
     )
     return {"items": items}
+
+
+#: Longest a single `GET /api/inbox/{id}?wait=` holds the connection. Kept under the fleet
+#: proxy / CLI read timeouts; a sender that wants to wait longer just asks again.
+_INBOX_WAIT_CAP_S = 25.0
+
+
+async def _operator_inbox_get(item_id: int, wait: float = 0.0) -> dict:
+    """One inbox item, with its delivery state and the agent's reply if there is one.
+
+    ``wait`` long-polls for a reply: the call returns as soon as the agent answers
+    (``reply_to_dm``), or after ``wait`` seconds (capped) with the item as it stands.
+    This is what ``protoagent dm --wait`` sits on.
+    """
+    import asyncio
+    import time
+
+    from operator_api.routes import NotFoundError
+
+    if STATE.inbox_store is None:
+        raise RuntimeError("inbox not loaded; finish setup first")
+    deadline = time.monotonic() + max(0.0, min(float(wait or 0.0), _INBOX_WAIT_CAP_S))
+    while True:
+        item = await asyncio.to_thread(STATE.inbox_store.get, item_id)
+        if item is None:
+            raise NotFoundError(f"No inbox item {item_id}.")
+        if item.get("reply_text") or time.monotonic() >= deadline:
+            return {"item": item}
+        await asyncio.sleep(0.5)
 
 
 async def _operator_inbox_deliver(item_id: int) -> dict:

@@ -805,7 +805,18 @@ MEMORY_TOOL_NAMES: tuple[str, ...] = (
     "memory_list",
     "memory_forget",
 )
-INBOX_TOOL_NAMES: tuple[str, ...] = ("check_inbox",)
+INBOX_TOOL_NAMES: tuple[str, ...] = ("check_inbox", "reply_to_dm")
+
+
+def _publish(topic: str, data: dict) -> None:
+    """Best-effort bus push (the `/api/events` SSE stream). A bus hiccup never fails a tool."""
+    try:
+        from graph.plugins.host import HOST
+
+        if HOST.publish:
+            HOST.publish(topic, data)
+    except Exception:  # noqa: BLE001
+        pass
 
 
 def _build_inbox_tools(inbox_store) -> list:
@@ -831,7 +842,34 @@ def _build_inbox_tools(inbox_store) -> list:
             lines.append(f"[{i['priority']}]{src} {i['text']}")
         return "\n".join(lines)
 
-    return [check_inbox]
+    @tool
+    async def reply_to_dm(id: int, text: str) -> str:
+        # The sender is another session, not the operator: it reads this with
+        # `protoagent dm --wait` / `--check`, and `inbox.reply` goes out on the event stream.
+        """Answer a direct message that arrived from outside this chat (an ``[outside-message]`` note).
+
+        ``id`` is the message number shown in the note. Use it when the sender needs an answer
+        or an acknowledgement; say what you did or will do, briefly. Optional: not every
+        message needs a reply. The sender is another session, not the operator.
+        """
+        import asyncio
+
+        try:
+            item = await asyncio.to_thread(inbox_store.reply, int(id), text)
+        except ValueError as exc:
+            return f"Error: {exc}."
+        _publish(
+            "inbox.reply",
+            {
+                "id": item["id"],
+                "source": item.get("source") or "",
+                "text": item["reply_text"],
+                "replied_at": item["replied_at"],
+            },
+        )
+        return f"Reply recorded for direct message #{item['id']} (from {item.get('source') or 'an unnamed sender'})."
+
+    return [check_inbox, reply_to_dm]
 
 
 # ── registry ─────────────────────────────────────────────────────────────────

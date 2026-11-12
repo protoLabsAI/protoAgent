@@ -144,6 +144,7 @@ Built by default (absent only if the store fails to open).
 | Tool | What it does |
 |---|---|
 | [`check_inbox(priority_floor="next", limit=10)`](#check_inbox) | Pull pending inbound messages posted to `POST /api/inbox` and mark them delivered. |
+| [`reply_to_dm(id, text)`](#reply_to_dm) | Answer a direct message another session sent with `protoagent dm`; the sender reads it with `--wait` / `--check`. |
 
 ### Goals — `goal.enabled` **and** at least one plugin verifier
 
@@ -807,6 +808,19 @@ delivered.
 (everything pending). `now`-priority items have already fired an Activity turn on arrival;
 `next` and `later` wait for this call, so the agent decides when to surface them. Returns the
 items one per line, or `"Inbox empty."`.
+
+### `reply_to_dm` {#reply_to_dm}
+
+```python
+async def reply_to_dm(id: int, text: str) -> str
+```
+
+Answer a **direct message** that reached the chat from outside it (an `[outside-message]`
+note, sent with `protoagent dm` or `POST /api/inbox` with `deliver: "thread"`). `id` is the
+message number shown in the note. The reply is stored on the message, published as
+`inbox.reply` on the event stream, and read by the sender with `protoagent dm --wait` or
+`--check`. Optional: a message that needs no answer needs no reply. Only a direct message a
+chat has already read can be answered; anything else returns an `Error:` line.
 
 ## Goals & watches
 

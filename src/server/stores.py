@@ -189,6 +189,18 @@ async def recover_pending_now_inbox_items(
     if store is None:
         return {"claimed": 0, "accepted": 0, "failed": 0}
 
+    # Direct messages (thread delivery): a claim nobody acked belongs to a process that died
+    # between claiming it and getting the note into chat state. Hand those out again. This
+    # runs HERE, once at startup, and not in the store's constructor: the store is rebuilt on
+    # a settings reload and by the MCP sidecar, and releasing there would undo a claim whose
+    # model call is still running.
+    try:
+        orphaned = await asyncio.to_thread(store.release_orphaned_thread_claims)
+        if orphaned:
+            log.warning("[inbox] re-offering %d direct message(s) claimed but never shown before the last exit", orphaned)
+    except Exception:  # noqa: BLE001 — recovery is best-effort; the messages stay claimed
+        log.exception("[inbox] could not release orphaned direct-message claims")
+
     # Any recovery claim still set at startup was taken by a process that is gone: the
     # claim is an in-process lease. Left in place it hides the page from recovery AND
     # from the pull fallback until the lease ages out, so a crash between claim and

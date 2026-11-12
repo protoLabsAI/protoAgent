@@ -40,6 +40,9 @@ _FORWARD: dict[str, tuple[str, str]] = {
     # `usage` — subscription usage for the native-OAuth providers: this instance's
     # /api/usage (ADR 0122 U2b), or every member's through the hub with `--fleet`.
     "usage": ("graph.usage_cli", "run_usage_cli"),
+    # `dm` — direct-message a running agent from outside its chat (ADR 0003 amendment):
+    # folded into the operator's live thread at the next model call, information only.
+    "dm": ("graph.dm_cli", "run_dm_cli"),
     # `top` = the fleet deck straight away (same as bare `fleet`); the TUI over the running hub.
     "top": ("graph.fleet.cli", "run_deck_cli"),
     # `pair` = the remote half of agent pairing (ADR 0113 D7): a one-time code a hub claims.
@@ -74,6 +77,7 @@ _FORWARD_HELP = {
     "skills": "Inspect and curate the SKILL.md library (ADR 0041)",
     "fleet": "The fleet deck: bare = interactive TUI over the running hub; ls/up/down = non-interactive (ADR 0042)",
     "usage": "Subscription usage for the native-OAuth providers — this instance, or --fleet for every member (ADR 0122)",
+    "dm": "Direct-message a running agent from another session; its chat reads it at the next model call",
     "top": "Open the fleet deck (alias for bare `protoagent fleet`)",
     "pair": "Print a one-time code another agent's hub (or, with --device, a phone) can use to pair with this one",
     "config": "Explain / get / set this instance's config (ADR 0047)",

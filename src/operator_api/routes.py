@@ -181,6 +181,8 @@ class InboxAddRequest(BaseModel):
     priority: str = "next"  # now | next | later
     source: str = ""
     dedup_key: str = ""
+    deliver: str = ""  # "" (tiered, above) | "thread" (fold into the operator's live chat)
+    session: str = ""  # with deliver="thread": the one chat thread that should read it
 
 
 class TaskInitRequest(BaseModel):
@@ -546,6 +548,7 @@ def register_operator_routes(
     inbox_authorized: Callable[[str | None], bool] | None = None,
     inbox_list: Callable[[str, bool], Awaitable[dict[str, Any]]] | None = None,
     inbox_deliver: Callable[[int], Awaitable[dict[str, Any]]] | None = None,
+    inbox_get: Callable[[int, float], Awaitable[dict[str, Any]]] | None = None,
 ) -> None:
     """Register React operator-console routes on a FastAPI app.
 
@@ -1137,6 +1140,16 @@ def register_operator_routes(
         async def _inbox_get(floor: str = "later", include_delivered: bool = False):
             try:
                 return await inbox_list(floor, include_delivered)
+            except Exception as exc:
+                raise _http_error(exc) from exc
+
+    # One item, with the agent's reply to a direct message. `?wait=` long-polls for it.
+    if inbox_get is not None:
+
+        @app.get("/api/inbox/{item_id}")
+        async def _inbox_get_one(item_id: int, wait: float = 0.0):
+            try:
+                return await inbox_get(item_id, wait)
             except Exception as exc:
                 raise _http_error(exc) from exc
 
