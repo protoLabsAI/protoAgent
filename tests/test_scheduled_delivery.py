@@ -6,7 +6,7 @@ the schedule as a ``scheduler.completed`` event (the console renders a Scheduled
 
 * which fires deliver (a cron with an origin chat) vs which don't (no origin, a `wait`
   resume, a one-shot that already ran in its chat, an Activity-origin schedule);
-* the recurring-collapse flag (first fire → full card; re-fires → chip);
+* the recurring-collapse flag (first DELIVERED card → full; later cards → chip);
 * the stale-session guard (skip delivery to a chat idle > 24h).
 """
 
@@ -58,6 +58,13 @@ def _sched(monkeypatch):
         monkeypatch.setattr(server.STATE, "scheduler", _Scheduler(job))
 
     return _set
+
+
+@pytest.fixture(autouse=True)
+def _fresh_card_memory(monkeypatch):
+    # The delivered-card memory feeding the repeat guard and the collapse flag
+    # (bd-x66jt) is module state — isolate it per test.
+    monkeypatch.setattr(a2a, "_SCHEDULED_CARD_HASHES", {})
 
 
 # ── payload shaping + guards (pure, sync) ────────────────────────────────────
@@ -141,17 +148,19 @@ def test_a_fire_that_failed_before_saying_anything_carries_why(_sched):
 # ── recurring collapse (r4) ───────────────────────────────────────────────────
 
 
-def test_first_fire_is_a_full_card(_sched):
-    # fire_count 0 (pre-fire value) → first fire → full card (collapse False).
-    _sched(_Job(fire_count=0))
+def test_first_delivered_card_is_full(_sched):
+    # No card delivered yet for this job → full card (collapse False), even on a re-fire:
+    # earlier fires may have been suppressed as quiet/repeat runs (bd-x66jt).
+    _sched(_Job(fire_count=3))
     payload = a2a._scheduled_delivery_payload(_Outcome())
     assert payload is not None
     assert payload["collapse"] is False
 
 
-def test_subsequent_fire_collapses_to_chip(_sched):
-    # fire_count >= 1 → a recurring re-fire into the same session → compact chip.
+def test_card_after_a_delivered_one_collapses_to_chip(_sched):
+    # A card already delivered for this job generation → the next one is a compact chip.
     _sched(_Job(fire_count=1))
+    a2a._SCHEDULED_CARD_HASHES["job-1"] = ("", "digest-of-an-earlier-card")
     payload = a2a._scheduled_delivery_payload(_Outcome())
     assert payload is not None
     assert payload["collapse"] is True
@@ -176,26 +185,9 @@ async def test_recently_active_defaults_true_without_task_store(monkeypatch):
     assert await a2a._session_recently_active("chat-42") is True
 
 
-@pytest.mark.asyncio
-async def test_deliver_publishes_when_session_active(monkeypatch):
-    # r2: an active origin session gets the card.
-    published: list = []
-    monkeypatch.setattr(server._event_bus, "publish", lambda ev, data: published.append((ev, data)))
-    monkeypatch.setattr(a2a, "_session_recently_active", _async_return(True))
-    ok = await a2a._deliver_scheduled({"job_id": "job-1", "origin_session": "chat-42", "summary": "s"})
-    assert ok is True
-    assert [ev for ev, _ in published] == ["scheduler.completed"]
-
-
-@pytest.mark.asyncio
-async def test_deliver_skips_when_session_stale(monkeypatch):
-    # r3: a chat idle > 24h is skipped — no ghost session, the result stays in Activity.
-    published: list = []
-    monkeypatch.setattr(server._event_bus, "publish", lambda ev, data: published.append((ev, data)))
-    monkeypatch.setattr(a2a, "_session_recently_active", _async_return(False))
-    ok = await a2a._deliver_scheduled({"job_id": "job-1", "origin_session": "chat-old", "summary": "s"})
-    assert ok is False
-    assert published == []
+# _deliver_scheduled's publish-when-active / skip-when-stale legs (r2/r3) are covered in
+# tests/test_scheduled_result_cards.py via REAL payloads, together with the fingerprint
+# bookkeeping that rides them (bd-x66jt).
 
 
 # ── end-to-end wiring through the terminal hook (sync, no loop) ───────────────
@@ -234,13 +226,6 @@ def test_terminal_hook_no_card_for_plain_operator_turn(_sched, monkeypatch):
         TurnOutcome(task_id="t", context_id="chat-42", state="completed", text="hi", origin="operator")
     )
     assert not any(ev == "scheduler.completed" for ev, _ in published)
-
-
-def _async_return(value):
-    async def _f(*_a, **_kw):
-        return value
-
-    return _f
 
 
 @pytest.mark.asyncio

@@ -1,5 +1,6 @@
 """Scheduled result cards: no card when a run has nothing new to report (bd-x66jt) — the
-quiet-reply guard (empty / ``NO_UPDATE``) and the per-job-generation repeat guard."""
+quiet-reply guard (empty / ``NO_UPDATE``), the per-job-generation repeat guard, the
+delivered-cards collapse flag, and the async delivery path's fingerprint bookkeeping."""
 
 from __future__ import annotations
 
@@ -38,6 +39,13 @@ def _cards(events):
     return [d for ev, d in events if ev == "scheduler.completed"]
 
 
+def _liveness(value):
+    async def _f(*_a, **_kw):
+        return value
+
+    return _f
+
+
 @pytest.mark.parametrize("text", ["", "   ", "NO_UPDATE", "Checked CI — still running, nothing merged.\n\nNO_UPDATE"])
 def test_quiet_completed_run_posts_no_card(_sched, text):
     # r1: a completed answer that is empty, exactly NO_UPDATE, or ends with one → no card.
@@ -72,6 +80,8 @@ def test_repeat_cards_suppressed_until_the_answer_changes(_sched, _events):
     _fire(text="As of 11:58: CI green, nothing merged.")
     _fire(text="One new review landed on #88.")
     assert ["CI green" in c["summary"] for c in _cards(_events)] == [True, False]
+    # The delivery bookkeeping never rides the event (sync no-loop path).
+    assert all("card_fingerprint" not in c for c in _cards(_events))
 
 
 def test_a_new_job_generation_posts_the_same_text_again(_sched, _events):
@@ -84,13 +94,32 @@ def test_a_new_job_generation_posts_the_same_text_again(_sched, _events):
     assert len(_cards(_events)) == 2
 
 
-def test_only_delivered_cards_feed_the_guard_and_the_event_stays_clean(_sched, _events):
-    # An unpublished payload (stale-session skip) records nothing; events carry no bookkeeping.
+async def test_delivery_bookkeeping_feeds_the_guard_only_after_a_publish(_sched, _events, monkeypatch):
+    # The production async path (_deliver_scheduled): a stale-session skip delivers and
+    # records nothing, so the same result still posts once the chat wakes; a publish pops
+    # the bookkeeping fingerprint off the event and records it AFTER the publish, so only
+    # then does the next identical run read as a repeat.
     _sched(_Job())
-    assert a2a._scheduled_delivery_payload(_Outcome()) is not None  # built, not delivered
-    _fire()
+    monkeypatch.setattr(a2a, "_session_recently_active", _liveness(False))
+    assert await a2a._deliver_scheduled(a2a._scheduled_delivery_payload(_Outcome(text="All green."))) is False
+    assert _cards(_events) == []
+    monkeypatch.setattr(a2a, "_session_recently_active", _liveness(True))
+    payload = a2a._scheduled_delivery_payload(_Outcome(text="All green."))
+    assert payload is not None  # not a repeat — the skipped card was never delivered
+    assert await a2a._deliver_scheduled(payload) is True
     (card,) = _cards(_events)
     assert "card_fingerprint" not in card
+    assert a2a._scheduled_delivery_payload(_Outcome(text="All green.")) is None  # a repeat now
+
+
+def test_first_delivered_card_is_full_even_after_quiet_fires(_sched, _events):
+    # The collapse flag counts DELIVERED cards, not fires: quiet early runs leave the
+    # first visible card full; the next delivered card collapses to a chip.
+    _sched(_Job(fire_count=5))
+    _fire(text="NO_UPDATE")
+    _fire(text="One review landed on #88.")
+    _fire(text="Two reviews landed on #88.")
+    assert [c["collapse"] for c in _cards(_events)] == [False, True]
 
 
 def test_failed_runs_always_post_and_reset_the_repeat_guard(_sched, _events):
@@ -110,9 +139,14 @@ def test_wait_resume_and_same_chat_suppression_unchanged(_sched):
 
 
 def test_tool_docstrings_mention_no_update():
-    # r5: both tool docstrings say to end with NO_UPDATE when nothing changed.
+    # r5: schedule_task tells a recurring run to end with NO_UPDATE — its fires post
+    # result cards this guard can suppress. A watch reaction replies as a visible turn
+    # in its own chat (origin `watch`; nothing strips the sentinel), so create_watch
+    # documents the convention the other way around: it warns NOT to use it there.
     from tools.scheduler_tools import _build_scheduler_tools, _build_watch_tools
 
     tools = {t.name: t for t in _build_scheduler_tools(object()) + _build_watch_tools()}
     assert "NO_UPDATE" in tools["schedule_task"].description
-    assert "NO_UPDATE" in tools["create_watch"].description
+    watch_doc = tools["create_watch"].description
+    assert "NO_UPDATE" in watch_doc
+    assert "do NOT tell" in watch_doc  # warns against the sentinel; never instructs it

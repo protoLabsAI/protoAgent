@@ -415,9 +415,10 @@ def _build_watch_tools():
         true); ``on_change`` fires whenever the checked value moves and always repeats. A repeating watch runs until its
         deadline or until cleared — set ``expires_in_s`` (seconds from now) unless you mean forever.
         ``interval_s``: seconds between checks (raise for slow things). ``stall_after``: signal after
-        N checks with unchanged evidence (watch stays active). Tell ``run_prompt`` to end its reply
-        with a final line ``NO_UPDATE`` when nothing changed — a quiet scheduled run posts no result
-        card (the run is still recorded).
+        N checks with unchanged evidence (watch stays active). A reaction replies as a visible turn
+        in THIS chat — not a result card — so do NOT tell ``run_prompt`` to end with the
+        ``NO_UPDATE`` quiet-reply line: nothing strips it here, and it would land verbatim in the
+        chat. That convention is for recurring ``schedule_task`` runs, whose results post as cards.
         """
         from runtime.state import STATE
 

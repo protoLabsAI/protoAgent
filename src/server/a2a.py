@@ -1438,8 +1438,10 @@ _SCHEDULED_STALE_WINDOW_S = 24 * 60 * 60  # 24h
 
 # Quiet-reply sentinel (bd-x66jt): a scheduled run that has nothing new to report ends
 # its answer with this line — the run is still recorded (scheduler occurrence, Activity
-# entry) but no result card is posted to the origin chat. The schedule_task /
-# create_watch docstrings tell the model to end with it when nothing changed.
+# entry) but no result card is posted to the origin chat. The schedule_task docstring
+# tells the model to end a recurring run's reply with it. create_watch warns the model
+# OFF it instead: a watch reaction runs IN its chat (origin ``watch``, context == the
+# chat), never reaches this guard, and nothing strips the sentinel from a chat turn.
 _NO_UPDATE = "NO_UPDATE"
 
 # Last result card actually DELIVERED per job (bd-x66jt): job id → (generation, digest
@@ -1575,10 +1577,13 @@ def _scheduled_delivery_payload(outcome) -> dict | None:
             return None
     if len(summary) > _SCHEDULED_SUMMARY_CAP:
         summary = summary[:_SCHEDULED_SUMMARY_CAP].rstrip() + "…"
-    # Recurring collapse (r4): the FIRST fire renders a full card; subsequent fires into
-    # the same session collapse to a compact chip. ``fire_count`` is the PRE-fire value at
-    # terminal time — the scheduler bumps it only after the fire lands — so 0 == first fire.
-    collapse = bool(getattr(job, "fire_count", 0))
+    # Recurring collapse (r4): the first card DELIVERED for this job generation renders
+    # full; later ones collapse to a compact chip. Keyed off the repeat guard's
+    # delivered-card memory, NOT ``fire_count`` (bd-x66jt): quiet or repeated runs fire
+    # without posting, so counting fires would shrink a job's very first visible card
+    # to a chip no one had seen in full.
+    last_delivered = _SCHEDULED_CARD_HASHES.get(job_id)
+    collapse = bool(last_delivered and last_delivered[0] == generation)
     return {
         "job_id": job_id,
         "origin_session": origin,
