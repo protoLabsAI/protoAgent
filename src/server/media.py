@@ -27,7 +27,9 @@ def _serve_headers(mime: str) -> dict[str, str]:
     an image, but opened on its own it gets an opaque origin — no cookies, no storage, no
     same-origin requests to this server."""
     headers = {"X-Content-Type-Options": "nosniff"}
-    if (mime or "").split(";", 1)[0].strip().lower() in _ACTIVE_TYPES:
+    base = (mime or "").split(";", 1)[0].strip().lower()
+    # Any XML flavour can carry XHTML-namespace script, and XSLT is itself a program.
+    if base in _ACTIVE_TYPES or base.endswith(("+xml", "/xml", "/xsl", "/xslt")):
         headers["Content-Security-Policy"] = "sandbox allow-scripts"
     return headers
 

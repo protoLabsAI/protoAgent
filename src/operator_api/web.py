@@ -86,7 +86,9 @@ def mount_react_app(app, dist_dir: str | Path, *, app_path: str = "/app") -> boo
         except ValueError:
             candidate = index_path
         if candidate.is_file():
-            return FileResponse(str(candidate))
+            # Every file under the app path, not just the fallback: `/app/index.html` is the
+            # same document as `/app`. The header means nothing on a script or an icon.
+            return FileResponse(str(candidate), headers=page_headers)
         return FileResponse(str(index_path), headers=page_headers)
 
     return True

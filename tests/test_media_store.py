@@ -224,7 +224,7 @@ def test_route_serves_saved_file_with_mime():
     # A type the browser would run as a document is sandboxed away from this origin.
     from server.media import _serve_headers
 
-    for active in ("text/html", "image/svg+xml", "TEXT/HTML; charset=utf-8", "application/xhtml+xml"):
+    for active in ("text/html", "image/svg+xml", "TEXT/HTML; charset=utf-8", "application/rss+xml", "text/xsl"):
         assert _serve_headers(active)["Content-Security-Policy"] == "sandbox allow-scripts", active
 
 
