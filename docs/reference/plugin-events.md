@@ -50,7 +50,7 @@ of what the emitting call sites pass; a key may be absent on a given event.
 | `goal.achieved / goal.failed` | `condition`, `evidence`, `reason`, `session_id`, `status` | `src/graph/goals/controller.py` |
 | `goal.changed` | `session_id` | `src/graph/goals/store.py` |
 | `goal.iteration` | `condition`, `iteration`, `max_iterations`, `reason`, `session_id` | `src/graph/goals/controller.py` |
-| `inbox.item` | `delivery`, `id`, `priority`, `session`, `source`, `text` | `src/operator_api/console_handlers.py` |
+| `inbox.item` | `delivery`, `id`, `priority`, `session`, `source`, `text` | `src/operator_api/console_handlers.py`, `src/server/a2a.py` |
 | `inbox.reply` | `id`, `replied_at`, `source`, `text` | `src/tools/lg_tools.py` |
 | `media.saved` | `id`, `mime`, `plugin`, `url` | `src/graph/plugins/registry.py` |
 | `memory.hot_written` | `chunk_id`, `preview`, `source`, `source_type` | `src/knowledge/store.py` |
