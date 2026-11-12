@@ -738,8 +738,41 @@ def test_a_claim_the_process_died_holding_is_handed_out_again_at_boot(tmp_path):
     mid = s.add("note", source="x", delivery="thread")["id"]
     assert len(s.claim_thread_items(CHAT)) == 1  # committed, then the process dies: no ack
     reborn = _store(tmp_path)
+    assert reborn.release_orphaned_thread_claims() == 1  # what startup recovery runs, once
     assert reborn.get(mid)["delivered_at"] is None and reborn.thread_maybe_pending(CHAT) is True
     assert [c["id"] for c in reborn.claim_thread_items(CHAT)] == [mid]
+
+
+def test_rebuilding_the_store_mid_turn_does_not_undo_a_claim_in_flight(tmp_path):
+    """The store is rebuilt on a settings hot-reload and by the MCP sidecar. Construction
+    must not release a live claim (its model call is still running), and the rebuilt
+    instance must still know there is a claim to ack."""
+    s = _store(tmp_path)
+    mid = s.add("note", source="x", delivery="thread")["id"]
+    mw = OutsideMessageMiddleware(s)
+    assert mw.before_model({"session_id": CHAT, "messages": []}, None) is not None  # model call in flight
+
+    swapped = _store(tmp_path)  # hot-reload: a new instance over the same table
+    row = swapped.get(mid)
+    assert row["delivered_session"] == CHAT and row["delivered_at"] is not None  # not released
+    assert swapped.thread_maybe_pending(CHAT) is False  # so no duplicate note
+    # The graph is rebuilt around the new store; its middleware finishes the ack.
+    OutsideMessageMiddleware(swapped).after_model({"session_id": CHAT, "messages": []}, None)
+    assert swapped.get(mid)["acked_at"] is not None and swapped.has_unacked_claim(CHAT) is False
+
+
+@pytest.mark.asyncio
+async def test_startup_recovery_reoffers_orphaned_direct_messages(tmp_path, monkeypatch):
+    import runtime.state as rs
+    from server import stores
+
+    s = _store(tmp_path)
+    mid = s.add("note", source="x", delivery="thread")["id"]
+    s.claim_thread_items(CHAT)
+    reborn = _store(tmp_path)
+    monkeypatch.setattr(rs.STATE, "inbox_store", reborn, raising=False)
+    await stores.recover_pending_now_inbox_items()
+    assert reborn.get(mid)["delivered_at"] is None
 
 
 @pytest.mark.asyncio

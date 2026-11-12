@@ -56,6 +56,10 @@ class InboxStore:
         self._hint_lock = threading.Lock()
         self._hint_gen = 0
         self._thread_targets: set[str] = self._pending_thread_targets()
+        # Chats holding a claim that is not acked yet, so the per-hook ack is free when
+        # there is nothing to ack. Read from the table, so a store rebuilt mid-turn (a
+        # settings hot-reload swaps the instance) still knows about a claim in flight.
+        self._unacked_sessions: set[str] = self._sessions_with_unacked_claims()
 
     def _connect(self) -> sqlite3.Connection:
         db = sqlite3.connect(self.path)
@@ -123,14 +127,6 @@ class InboxStore:
             db.execute("CREATE INDEX IF NOT EXISTS ix_inbox_undelivered ON inbox(delivered_at, priority)")
             # add() looks a dedup_key up inside its write transaction; keep that a seek.
             db.execute("CREATE INDEX IF NOT EXISTS ix_inbox_dedup ON inbox(dedup_key, delivered_at)")
-            # A thread claim that never reached the chat (the process died between the
-            # claim's commit and the note landing in state) is released here, once, at
-            # boot: delivery is at-least-once, never silently lost.
-            db.execute(
-                "UPDATE inbox SET delivered_at = NULL, delivered_session = NULL "
-                "WHERE delivery = 'thread' AND delivered_at IS NOT NULL AND acked_at IS NULL "
-                "AND delivered_session IS NOT NULL AND reply_text IS NULL"
-            )
             db.execute(
                 "CREATE INDEX IF NOT EXISTS ix_inbox_now_recovery "
                 "ON inbox(priority, delivered_at, recovery_claimed_at, recovery_attempted_at)"
@@ -262,21 +258,64 @@ class InboxStore:
             return bool(targets)
         return "" in targets or session_id in targets
 
-    def ack_thread_items(self, ids: list[int], *, now: datetime | None = None) -> int:
-        """Make a thread claim final: the note is in the chat's state. Idempotent."""
-        if not ids:
-            return 0
+    def _sessions_with_unacked_claims(self) -> set[str]:
+        db = self._connect()
+        try:
+            rows = db.execute(
+                "SELECT DISTINCT delivered_session AS s FROM inbox WHERE delivery = ? "
+                "AND delivered_at IS NOT NULL AND acked_at IS NULL AND delivered_session IS NOT NULL",
+                (DELIVERY_THREAD,),
+            ).fetchall()
+            return {r["s"] for r in rows}
+        finally:
+            db.close()
+
+    def has_unacked_claim(self, session_id: str | None) -> bool:
+        """SQLite-free: does this chat hold a thread claim that is not final yet?"""
+        return bool(session_id) and session_id in self._unacked_sessions
+
+    def ack_session_claims(self, session_id: str, *, now: datetime | None = None) -> int:
+        """Make this chat's thread claims final: its notes are in its state. Idempotent."""
         stamp = (now or datetime.now(UTC)).isoformat()
         db = self._connect()
         try:
-            placeholders = ",".join("?" for _ in ids)
             cur = db.execute(
-                f"UPDATE inbox SET acked_at = ? WHERE id IN ({placeholders}) AND acked_at IS NULL "
-                "AND delivered_at IS NOT NULL",
-                (stamp, *ids),
+                "UPDATE inbox SET acked_at = ? WHERE delivery = ? AND delivered_session = ? "
+                "AND delivered_at IS NOT NULL AND acked_at IS NULL",
+                (stamp, DELIVERY_THREAD, session_id),
             )
             db.commit()
+            with self._hint_lock:
+                self._unacked_sessions.discard(session_id)
             return cur.rowcount
+        finally:
+            db.close()
+
+    def release_orphaned_thread_claims(self) -> int:
+        """Hand out again every thread claim that was never acked. BOOT ONLY: call it once,
+        before the server takes traffic. A claim with no ack at boot belongs to a process
+        that died between the claim's commit and the note landing in chat state. Running
+        this in a live process would release a claim whose model call is still in flight.
+        """
+        db = self._connect()
+        try:
+            db.execute("BEGIN IMMEDIATE")
+            cur = db.execute(
+                "UPDATE inbox SET delivered_at = NULL, delivered_session = NULL "
+                "WHERE delivery = ? AND delivered_at IS NOT NULL AND acked_at IS NULL "
+                "AND delivered_session IS NOT NULL AND reply_text IS NULL",
+                (DELIVERY_THREAD,),
+            )
+            snapshot = self._targets_in(db)
+            db.commit()
+            with self._hint_lock:
+                self._hint_gen += 1
+                self._thread_targets = self._thread_targets | snapshot
+                self._unacked_sessions = set()
+            return cur.rowcount
+        except Exception:
+            db.rollback()
+            raise
         finally:
             db.close()
 
@@ -296,9 +335,11 @@ class InboxStore:
             )
             snapshot = self._targets_in(db)
             db.commit()
+            still = self._sessions_with_unacked_claims()
             with self._hint_lock:
                 self._hint_gen += 1
                 self._thread_targets = self._thread_targets | snapshot
+                self._unacked_sessions = still
             return cur.rowcount
         except Exception:
             db.rollback()
@@ -316,7 +357,7 @@ class InboxStore:
         one ``BEGIN IMMEDIATE`` transaction, so two chats reaching a model call together
         cannot both read the same note. The claimed rows record which chat read them.
 
-        A claim is provisional until ``ack_thread_items``: the caller acks once the note is
+        A claim is provisional until ``ack_session_claims``: the caller acks once the note is
         in the chat's state, or ``release_thread_items`` if it could not inject it.
         """
         stamp = (now or datetime.now(UTC)).isoformat()
@@ -342,6 +383,8 @@ class InboxStore:
             snapshot = self._targets_in(db)
             db.commit()
             with self._hint_lock:
+                if rows:
+                    self._unacked_sessions.add(session_id)
                 if self._hint_gen == gen:
                     self._thread_targets = snapshot
                 else:

@@ -84,25 +84,21 @@ class OutsideMessageMiddleware(AgentMiddleware):
     def __init__(self, inbox_store=None):
         super().__init__()
         self._store = inbox_store
-        # Claims whose note has been handed to the graph but not yet confirmed in the
-        # chat's state, by session. Acked at that chat's next hook (after the model call
-        # that read the note, or its next model call), which is the proof it landed.
-        self._awaiting_ack: dict[str, list[int]] = {}
 
     def _ack(self, state) -> None:
         """Finalize the claims this chat was handed earlier: reaching another hook means the
-        note made it into the thread. Never fails the turn; an unacked claim is simply
-        handed out again at the next boot (at-least-once)."""
-        if not self._awaiting_ack:
-            return
+        note made it into the thread. The "is there anything to ack" answer lives on the
+        store (rebuilt from the table), so it survives the store being swapped by a settings
+        reload mid-turn. Never fails the turn; a claim left unacked is handed out again at
+        the next boot (at-least-once)."""
+        store = self._store
         session_id = state.get("session_id") if isinstance(state, dict) else getattr(state, "session_id", None)
-        ids = self._awaiting_ack.pop(session_id, None) if session_id else None
-        if not ids:
+        if store is None or not store.has_unacked_claim(session_id):
             return
         try:
-            self._store.ack_thread_items(ids)
+            store.ack_session_claims(session_id)
         except Exception:  # noqa: BLE001
-            logger.exception("[outside-message] could not ack %s for %s", ids, session_id)
+            logger.exception("[outside-message] could not ack the claims of %s", session_id)
 
     def _release(self, session_id: str, items: list[dict]) -> None:
         ids = [i["id"] for i in items if i.get("id") is not None]
@@ -117,9 +113,13 @@ class OutsideMessageMiddleware(AgentMiddleware):
         return None
 
     async def aafter_model(self, state, runtime):  # type: ignore[override]
-        if self._awaiting_ack:
-            await asyncio.to_thread(self._ack, state)
+        await self._aack(state)
         return None
+
+    async def _aack(self, state) -> None:
+        session_id = state.get("session_id") if isinstance(state, dict) else getattr(state, "session_id", None)
+        if self._store is not None and self._store.has_unacked_claim(session_id):
+            await asyncio.to_thread(self._ack, state)
 
     def _due(self, state) -> str | None:
         """The session to claim for, or ``None`` when there is nothing to do."""
@@ -139,10 +139,10 @@ class OutsideMessageMiddleware(AgentMiddleware):
             logger.exception("[outside-message] could not claim pending items for %s", session_id)
             return []
 
-    def _update(self, session_id: str, items: list[dict]) -> tuple[dict | None, list[dict]]:
+    @staticmethod
+    def _update(session_id: str, items: list[dict]) -> tuple[dict | None, list[dict]]:
         if not items:
             return None, []
-        self._awaiting_ack.setdefault(session_id, []).extend(i["id"] for i in items if i.get("id") is not None)
         logger.info(
             "[outside-message] folded %d item(s) into %s (ids %s, from %s)",
             len(items),
@@ -172,8 +172,7 @@ class OutsideMessageMiddleware(AgentMiddleware):
         return update
 
     async def abefore_model(self, state, runtime):  # type: ignore[override]
-        if self._awaiting_ack:
-            await asyncio.to_thread(self._ack, state)
+        await self._aack(state)
         session_id = self._due(state)
         if session_id is None:
             return None
