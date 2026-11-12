@@ -1,6 +1,6 @@
-# ADR 0129 — Work consolidation: five things a person tracks, and an agent tool surface to match
+# ADR 0129 — Work consolidation: four things a person tracks, and an agent tool surface to match
 
-- Status: Proposed (2026-11-11). Josh approved the direction ("hold and fold into the redesign"). The open questions below are his to answer.
+- Status: Accepted (2026-11-11). Josh approved the direction ("hold and fold into the redesign") and answered Q1–Q3 the same day (see "Decisions taken").
 - Date: 2026-11-11
 - Deciders: Josh Mabry; protoAgent maintainers
 - Implementation: not started. The console redesign is a designSystem spec (pending approval); slices follow below.
@@ -35,17 +35,17 @@ Evidence from the same day:
 
 ## Decision
 
-### D1 — Five groups, for the operator and the agent alike
+### D1 — Four groups in Work, for the operator and the agent alike
 
-Everything the agent is tracking falls into one of five groups:
+Everything the agent is tracking falls into one of four groups. A fifth concern, history, lives outside Work:
 
 1. **Needs me**: decisions, and items that need a human (for example, a stuck delivery). This is the only group that asks for attention.
-2. **Doing now**: background jobs, tasks in progress, the active goal.
+2. **Doing now**: jobs. Background jobs, the active goal and what used to be tasks are all jobs (Q1).
 3. **Coming up**: anything that will run later, whether set off by a time (schedule, `wait`) or by a condition (watch).
 4. **What I told it**: the operator's standing instructions and approvals.
-5. **What happened**: the activity timeline.
+5. **What happened** is **not** a Work group (Q3). History is already recorded by telemetry, traces and the activity log, and is read there.
 
-The console's Work panel renders these five groups with one row primitive, using the kind (schedule, watch, goal, job…) as a tag. The in-chat status rail summarizes groups 1–4 with the same vocabulary and the same counts. The visual design is a designSystem spec that Josh approves before any build.
+The console's Work panel renders the four groups with one row primitive, using the kind (schedule, watch, goal, job…) as a tag. The in-chat status rail summarizes groups 1–4 with the same vocabulary and the same counts. The visual design is a designSystem spec that Josh approves before any build.
 
 ### D2 — One "follow up later" primitive
 
@@ -60,11 +60,11 @@ A goal stops being a separate subsystem from the operator's point of view. It sh
 - **An answered decision is a standing approval, recorded by the server.** Its headline is the decision's question and the chosen option, and it links to the decision. The agent does not call `record_directive` for a decision answer.
 - **`record_directive` stays for free-text instructions.** The server rejects a `quote` that does not appear verbatim in the operator's messages for that turn.
 - **The display leads with what is approved.** The headline is the scope. The operator's words show beneath as provenance ("You said 'go for it' · 16:07").
-- **A directive tied to a bounded job closes itself** when the agent marks the job done (open question Q2).
+- **A directive tied to a bounded job closes itself** when the job finishes (Q2). It is recorded as fulfilled with the job as the reason. A directive with no job attached stays in force until it is fulfilled or withdrawn.
 
 ### D5 — Fewer, clearer tools for the agent
 
-The prompt's capability map groups the tools under the same five headings, and each heading gets one paragraph on when to use it. The target is a third fewer tools in the always-bound set. Aliases do not count toward the target.
+The prompt's capability map groups the tools under the same four headings, and each heading gets one paragraph on when to use it. The target is a third fewer tools in the always-bound set. Aliases do not count toward the target.
 
 ## Consequences
 
@@ -74,17 +74,18 @@ The prompt's capability map groups the tools under the same five headings, and e
 
 ## Slices
 
-- **S0:** the designSystem spec and preview for the five-group Work panel plus the rail. Josh approves. The held Activity cards (bd-ek2ye, bd-tn5g6, bd-0ohpa, bd-50ejc) are replaced by S0's build cards.
+- **S0:** the designSystem spec and preview for the four-group Work panel plus the rail. Josh approves. The held Activity cards (bd-ek2ye, bd-tn5g6, bd-0ohpa, bd-50ejc) are replaced by S0's build cards.
 - **S1:** audit schedule, watch and `wait` (fields, triggers, delivery, persistence). Write the follow-up record shape and the migration.
-- **S2:** console. Five groups on today's data, mapped client-side, with no backend dependency.
+- **S2:** console. Four groups on today's data, mapped client-side, with no backend dependency. Remove the activity section from Work.
+- **S2b:** fold tasks into jobs. Migrate `task_*` records to jobs and keep `task_*` as aliases for one release.
 - **S3:** D4 approvals. Server-recorded directives from decision answers, quote verification, and the scope-first display.
 - **S4:** D2 follow-up primitive, plus aliases and the migration.
 - **S5:** D5 prompt capability map and tool-count reduction. Remove the aliases one release after S4.
 
 Independent fixes in flight that this ADR keeps: #5099 (a decision answer returns as soon as it is consumed) and projectBoard-plugin#735 (human page text, and pages retire when their card does).
 
-## Open questions (Josh)
+## Decisions taken (Josh, 2026-11-11)
 
-- **Q1:** Do tasks (`task_create`…) stay as a separate kind in **Doing now**, or fold into jobs? They overlap with board cards on agents that run a board.
-- **Q2:** Should approvals tied to a bounded job close themselves when the job is done, or stay in force until withdrawn?
-- **Q3:** Should **What happened** (activity) live in Work at all, or only as its own view?
+- **Q1, tasks:** folded into jobs. "tasks get folded into jobs."
+- **Q2, approvals tied to a job:** close themselves when the job finishes. "anything tied to a finished job should close itself."
+- **Q3, What happened:** not in Work. "what happened doesnt need to be in work at all, thats what we have telemetry and such for and that should already be tracked elsewhere."
