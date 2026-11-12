@@ -89,8 +89,10 @@ def _build_parser() -> argparse.ArgumentParser:
 
 def resolve_slug(roster: list[dict], wanted: str) -> tuple[str | None, list[str]]:
     """``(slug, candidates)`` for ``wanted``. Exact id first, then a case-insensitive match
-    on name or label. ``slug`` is ``None`` when nothing or more than one row matches; the
-    candidates are then the names worth showing the caller."""
+    on name or label, then a case-insensitive id prefix (``protoEngineer`` finds the agent
+    whose id is ``protoEngineer-ba4c`` even when its label is ``projectManager``). ``slug``
+    is ``None`` when nothing or more than one row matches; the candidates are then the
+    names worth showing the caller."""
     want = wanted.strip()
     if want.lower() == "host":
         return "host", []
@@ -105,6 +107,11 @@ def resolve_slug(roster: list[dict], wanted: str) -> tuple[str | None, list[str]
     ]
     if len(hits) == 1:
         return slug_of(hits[0]), []
+    if not hits:
+        # A workspace id is `<name>-<suffix>`, so the name an operator remembers is its prefix.
+        hits = [row for row in roster if slug_of(row).lower().startswith(low)]
+        if len(hits) == 1:
+            return slug_of(hits[0]), []
     pool = hits or roster
     return None, sorted({display_name(r) for r in pool if display_name(r)})
 
