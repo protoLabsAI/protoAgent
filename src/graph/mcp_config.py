@@ -185,3 +185,63 @@ def resolve_bundle_mcp_item(
         resolved[key] = str(val)
     entry = clean_mcp_entry(_sub_placeholders(template, resolved))
     return entry, unresolved
+
+
+# ── Secrets in an entry's ``env`` / ``headers`` ───────────────────────────────────────────
+# Both maps are free-form and routinely hold a token (a GitHub PAT, an ``Authorization``
+# header). An API response shows that a value is SET, never what it is.
+
+#: What a set ``env`` / ``headers`` value reads as in an API response.
+REDACTED_VALUE = "«redacted»"
+_SECRET_MAPS = ("env", "headers")
+
+
+def redact_server_secrets(servers: object) -> list:
+    """``mcp.servers`` with every non-empty ``env`` / ``headers`` value masked. Keys stay, so
+    a reader can still see which variables a server is given."""
+    out: list = []
+    for entry in servers if isinstance(servers, (list, tuple)) else []:
+        if not isinstance(entry, dict):
+            out.append(entry)
+            continue
+        clean = dict(entry)
+        for field in _SECRET_MAPS:
+            values = clean.get(field)
+            if isinstance(values, dict):
+                clean[field] = {k: (REDACTED_VALUE if v not in (None, "") else v) for k, v in values.items()}
+        out.append(clean)
+    return out
+
+
+def restore_server_secrets(incoming: object, stored: object) -> object:
+    """Undo ``redact_server_secrets`` on a list a client read and is now writing back: a value
+    that still reads ``REDACTED_VALUE`` becomes the STORED value for the same server name and
+    key. A masked value with nothing stored behind it is dropped — the mask is never written
+    to disk as if it were a credential. Anything the client actually changed passes through."""
+    if not isinstance(incoming, (list, tuple)):
+        return incoming
+    by_name = {
+        str(e.get("name", "")): e for e in (stored if isinstance(stored, (list, tuple)) else []) if isinstance(e, dict)
+    }
+    out: list = []
+    for entry in incoming:
+        if not isinstance(entry, dict):
+            out.append(entry)
+            continue
+        clean = dict(entry)
+        prior = by_name.get(str(entry.get("name", "")), {})
+        for field in _SECRET_MAPS:
+            values = clean.get(field)
+            if not isinstance(values, dict):
+                continue
+            kept = prior.get(field) if isinstance(prior.get(field), dict) else {}
+            restored = {}
+            for k, v in values.items():
+                if v == REDACTED_VALUE:
+                    if k in kept:
+                        restored[k] = kept[k]
+                    continue
+                restored[k] = v
+            clean[field] = restored
+        out.append(clean)
+    return out
