@@ -126,10 +126,10 @@ it("renders quiet unregistered sections and uses registered renderers", async ()
   useUI.setState({ surfaceStates: { work: { section: "watches" } } });
   await render("modal");
   expect(host.textContent).toContain("No watches to show");
-  await act(async () => { dispose = registerWorkSection("watches", { label: "Watches", render: () => <p>Watch list</p> }); });
+  await act(async () => { dispose = registerWorkSection("watches", { label: "Watches", group: "coming-up", render: () => <p>Watch list</p> }); });
   expect(host.textContent).toContain("Watch list");
   const menu = await openSections();
-  expect(menu.querySelectorAll('[role="menuitemradio"]')).toHaveLength(9);
+  expect(menu.querySelectorAll('[role="menuitemradio"]')).toHaveLength(8);
   await closeSections(menu);
 });
 
@@ -183,7 +183,7 @@ it("passes raw counts including zero to SideNav and keeps the selected row curre
   useUI.setState({ surfaceStates: { work: { filters: { thisChat: false, retained: true } } } });
   await render("modal");
   const nav = await openSections();
-  expect(nav.querySelectorAll(".pl-menu__badge")).toHaveLength(9);
+  expect(nav.querySelectorAll(".pl-menu__badge")).toHaveLength(8);
   expect(nav.querySelector(".pl-menu__badge .pl-count")).toBeNull();
   expect(Array.from(nav.querySelectorAll(".pl-menu__badge")).map((node) => node.textContent)).toContain("0");
   await closeSections(nav);
@@ -199,7 +199,7 @@ it("omits only loading badges while retaining ready zero counts", async () => {
   const tabs = Array.from(nav.querySelectorAll('[role="menuitemradio"]'));
   expect(tabs.find((node) => node.textContent === "Tasks")?.querySelector(".pl-menu__badge")).toBeNull();
   expect(tabs.find((node) => node.textContent === "Overview")?.querySelector(".pl-menu__badge")).toBeNull();
-  expect(nav.querySelectorAll(".pl-menu__badge")).toHaveLength(7);
+  expect(nav.querySelectorAll(".pl-menu__badge")).toHaveLength(6);
   expect(Array.from(nav.querySelectorAll(".pl-menu__badge")).every((node) => node.textContent === "0")).toBe(true);
   await closeSections(nav);
 });
