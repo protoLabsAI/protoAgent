@@ -79,7 +79,23 @@ def test_an_explicit_endpoint_in_the_form_is_probed_as_typed(probe, monkeypatch)
     client, calls, _ = probe
     resp = client.post("/api/config/models", json={"api_base": "http://typed/v1", "api_key": "k"})
     assert resp.json()["models"] == ["gw/a"]
-    assert calls == [("gateway", "http://typed/v1", "k", True, True)]
+    # allow_env_key False: a typed endpoint never borrows OPENAI_API_KEY either.
+    assert calls == [("gateway", "http://typed/v1", "k", False, True)]
+
+
+def test_a_typed_endpoint_never_gets_the_stored_key(probe, monkeypatch):
+    """Naming a base URL with a blank key used to fall back to the live route's stored key
+    (and the env key) and probe the typed address with it — the fix `/api/config/test-model`
+    got in #3128."""
+    client, calls, _ = probe
+    monkeypatch.setattr(config_routes, "_qualified_live_target", lambda m: None)
+    import graph.config as gc
+
+    monkeypatch.setattr(
+        gc, "resolve_model_route", lambda cfg, *a: SimpleNamespace(base_url="http://dflt/v1", api_key="stored")
+    )
+    client.post("/api/config/models", json={"api_base": "https://elsewhere.example/v1"})
+    assert calls == [("gateway", "https://elsewhere.example/v1", "", False, True)]
 
 
 def test_a_blank_form_on_an_unqualified_lead_probes_the_default_route(probe, monkeypatch):
