@@ -8,12 +8,13 @@
  * A row's title is the prompt's first line, never the job id; "When" is plain words built
  * from the schedule-builder's `parseSchedule`, never raw cron. Everything on §2.8's
  * "Never shown" list — the id, the cron string and the IANA timezone — lives only in
- * Technical details. Actions: Pause / Resume (the bd-0ia51.8 enabled route), Edit (the
- * existing PUT, reusing `ScheduleModal`) and Delete…, which hands back an `undo_token`
- * (bd-0ia51.5) that drives the §4.5 undo toast. Run now is omitted: no run-now API exists.
+ * Technical details. Actions: Edit first (§10.7 — the shared step-2 form, prefilled, saved
+ * over the existing PUT), Pause / Resume (the bd-0ia51.8 enabled route) and Delete…, which
+ * hands back an `undo_token` (bd-0ia51.5) that drives the §4.5 undo toast. Run now is
+ * omitted: no run-now API exists.
  */
 import { useState } from "react";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useQueryClient } from "@tanstack/react-query";
 import { Alert, Skeleton } from "@protolabsai/ui/data";
 import { Button, Callout } from "@protolabsai/ui/primitives";
 import { WorkEmpty as Empty } from "../WorkEmpty";
@@ -22,11 +23,12 @@ import { useToast } from "@protolabsai/ui/overlays";
 import { api } from "../../lib/api";
 import { queryKeys } from "../../lib/queries";
 import type { ScheduledJob } from "../../lib/types";
-import { ScheduleModal } from "../../schedule/SchedulePanel";
-import { localZone, parseSchedule } from "../../schedule/schedule-builder";
+import { localZone } from "../../schedule/schedule-builder";
 import { relTime } from "../tone";
 import { scheduleWhen } from "../rowMeta";
 import { WorkDetail, type WorkAction, type WorkField } from "../WorkDetail";
+import { WorkEditDialog } from "../WorkCreateDialog";
+import { draftFromSchedule } from "../workPersistence";
 import { WorkRow } from "../WorkRow";
 import { registerWorkSection, type WorkSectionContext } from "../sectionRegistry";
 import type { WorkItem, WorkSource } from "../useWorkItems";
@@ -74,22 +76,14 @@ function ScheduleDetail({ item, state }: { item: WorkItem; state: WorkSectionCon
   const [editOpen, setEditOpen] = useState(false);
   const refresh = () => qc.invalidateQueries({ queryKey: queryKeys.schedules });
 
-  const edit = useMutation({
-    mutationFn: (body: { prompt: string; schedule: string; timezone: string | null }) =>
-      api.updateSchedule(job.id, body),
-    onSuccess: () => {
-      refresh();
-      setEditOpen(false);
-    },
-    onError: () => toast({ tone: "warning", message: "Couldn't save the schedule." }),
-  });
-
   const paused = item.status === "paused";
+  // Edit FIRST (§10.7): the same prefilled step-2 form the New flow confirms with — human
+  // Repeat choices, never raw cron, no model call. Saving PUTs this job id in place.
   const actions: WorkAction[] = [
+    { id: "edit", label: "Edit", run: async () => setEditOpen(true) },
     paused
       ? { id: "resume", label: "Resume", run: async () => { await api.setScheduleEnabled(job.id, true); refresh(); } }
       : { id: "pause", label: "Pause", run: async () => { await api.setScheduleEnabled(job.id, false); refresh(); } },
-    { id: "edit", label: "Edit", run: async () => setEditOpen(true) },
     {
       id: "delete",
       label: "Delete…",
@@ -124,15 +118,17 @@ function ScheduleDetail({ item, state }: { item: WorkItem; state: WorkSectionCon
         type="Schedule"
         onUndo={async (token) => { await api.undo(token); refresh(); }}
       />
-      <ScheduleModal
-        open={editOpen}
-        onClose={() => setEditOpen(false)}
-        busy={edit.isPending}
-        title="Edit schedule"
-        submitLabel="Save changes"
-        initial={{ prompt: job.prompt, schedule: job.schedule, parsed: parseSchedule(job.schedule), timezone: job.timezone ?? "" }}
-        onAdd={(body) => edit.mutate({ prompt: body.prompt, schedule: body.schedule, timezone: body.timezone ?? null })}
-      />
+      {editOpen && (
+        <WorkEditDialog
+          draft={draftFromSchedule(job)}
+          target={{ kind: "time", id: job.id }}
+          onClose={() => setEditOpen(false)}
+          onSaved={() => {
+            refresh();
+            toast({ tone: "success", message: "Schedule updated." });
+          }}
+        />
+      )}
     </>
   );
 }

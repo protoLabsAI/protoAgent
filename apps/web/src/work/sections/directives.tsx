@@ -42,6 +42,8 @@ import { closingSentence } from "../../chat/DirectiveEntry";
 import { localStampTitle, parseInstant } from "../../lib/format";
 import { linkDecision } from "../linkDecision";
 import { workGroups } from "../workGroups";
+import { WorkEditDialog } from "../WorkCreateDialog";
+import { draftFromDirective } from "../workPersistence";
 import { WorkRow } from "../WorkRow";
 import { fromDecision, statusTone } from "../tone";
 import type { WorkItem } from "../useWorkItems";
@@ -149,6 +151,7 @@ function InstructionDetail({ ctx, item, decision }: {
   const { revoke } = useDirectives(row.session_id);
   const toast = useToast();
   const [confirm, setConfirm] = useState(false);
+  const [editing, setEditing] = useState(false);
   const [reason, setReason] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(false);
@@ -251,10 +254,19 @@ function InstructionDetail({ ctx, item, decision }: {
         {size !== "md" && <Button size={size} disabled={busy} onClick={cancel}>Keep it</Button>}
       </div>
     </div> : <div className="work-detail__actions" ref={actionRef}>
+      {/* Edit FIRST (§10.7): the shared step-2 form, prefilled — scope and conditions only.
+          The quote is immutable; changing the words means withdraw + add a new one. */}
+      {inForce && <Button size={size} onClick={() => setEditing(true)}>Edit</Button>}
       {decision && <Button size={size} onClick={openDecision}>Open decision</Button>}
       {jobItem && <Button size={size} onClick={() => ctx.onOpen(jobItem)}>Open the job</Button>}
       {inForce && <Button variant="danger" size={size} onClick={() => { setError(false); setConfirm(true); }}>Withdraw…</Button>}
     </div>}
+    {editing && <WorkEditDialog
+      draft={draftFromDirective(row)}
+      target={{ kind: "instruction", id: row.id, sessionId: row.session_id }}
+      onClose={() => setEditing(false)}
+      onSaved={() => toast({ tone: "success", message: "Instruction updated." })}
+    />}
   </div>;
 }
 

@@ -101,6 +101,12 @@ class ScheduleAddRequest(BaseModel):
     schedule: str  # 5-field cron expression OR an ISO-8601 datetime
     job_id: str | None = None
     timezone: str | None = None  # IANA tz for cron eval (None = UTC)
+    # The chat a console-created job belongs to (work-consolidation §10.3). `origin_session`
+    # is the OWNER the Work view's this-chat scope reads; `context_id` additionally runs the
+    # job in that chat's context — the console sends it only for a one-shot, mirroring the
+    # agent's own `schedule_task` (a recurring job runs job-scoped, ADR 0129).
+    context_id: str | None = None
+    origin_session: str | None = None
 
 
 def _schedule_problem(schedule: str | None, timezone: str | None) -> str | None:

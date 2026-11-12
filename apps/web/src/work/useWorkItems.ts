@@ -135,6 +135,9 @@ function mapWatch(row: WatchState): WorkItem {
     status: fromWatch(row.status, row.repeat),
     title: row.condition,
     meta: watchKind(row),
+    // The chat a trip reacts into IS the watch's owner (§10.3): a condition saved from the
+    // Work confirm step carries the current chat here, so the this-chat scope keeps it.
+    sessionId: row.run_session || undefined,
     raw: row,
   };
 }

@@ -5,7 +5,13 @@ import { WorkCreateDialog, type WorkCreateHandoff } from "./WorkCreateDialog";
 import type { WorkInterpretation } from "../lib/api/chat";
 
 const interpretWork = vi.hoisted(() => vi.fn());
-vi.mock("../lib/api", () => ({ api: { interpretWork } }));
+// Step 2's field pickers read the live registries lazily; empty lists keep the current
+// values as the only offers, which is all these step-1/step-2 presentation tests need.
+vi.mock("../lib/api", () => ({ api: {
+  interpretWork,
+  verifiers: vi.fn(async () => ({ types: [], plugin_checks: [] })),
+  chatMentions: vi.fn(async () => ({ mentions: [] })),
+} }));
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 let root: Root;

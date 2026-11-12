@@ -25,7 +25,8 @@ describe("newGoalTab", () => {
     expect(takeGoalKickoff(body.session_id)).toBeNull();
     onSet();
     const kickoff = takeGoalKickoff(body.session_id);
-    expect(kickoff).toContain("do it");
+    expect(kickoff?.prompt).toContain("do it");
+    expect(kickoff?.hidden).toBe(true); // a goal kickoff stays a hidden turn
     // takeGoalKickoff is idempotent — the slot fires the kickoff exactly once.
     expect(takeGoalKickoff(body.session_id)).toBeNull();
   });

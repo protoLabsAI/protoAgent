@@ -203,14 +203,20 @@ describe("Schedules section (§2.8)", () => {
   });
 
   it.each([null, "Asia/Tokyo"])("Edit preserves stored timezone %s on a prompt-only save", async (timezone) => {
+    // Edit is the S8d shared step-2 form (WorkEditDialog): "Then" carries the prompt, the
+    // Repeat select shows the human choice ("0 9 * * 1-5" → Weekdays), and a save PUTs the
+    // SAME job id with the equivalent schedule — no raw cron anywhere in the form.
     await mount(h(SchedulesSection, ctx({
       sources: sources({ schedules: src([scheduleItem({ timezone })]) }),
       state: { itemId: "schedule:job-7" },
     })));
     await act(async () => button("Edit").click());
-    const prompt = document.querySelector<HTMLTextAreaElement>('[data-testid="schedule-prompt"]')!;
+    expect(document.querySelector(".pl-dialog__title")?.textContent).toBe("Edit follow-up");
+    const prompt = document.querySelector<HTMLTextAreaElement>(".work-create textarea")!;
     expect(prompt.value).toBe("Post the weekly standup\nand @-mention the team");
+    expect(document.querySelector<HTMLSelectElement>(".work-create select")!.value).toBe("weekdays");
     expect(allText()).not.toContain("Job id (optional)");
+    expect(document.querySelector(".work-create")!.textContent).not.toContain("0 9 * * 1-5");
     await changeValue(prompt, "Updated prompt");
     expect(button("Save changes").disabled).toBe(false);
     await act(async () => button("Save changes").click());
@@ -226,7 +232,7 @@ describe("Schedules section (§2.8)", () => {
       state: { itemId: "schedule:job-7" },
     })));
     await act(async () => button("Edit").click());
-    await changeValue(document.querySelector<HTMLTextAreaElement>('[data-testid="schedule-prompt"]')!, "Updated prompt");
+    await changeValue(document.querySelector<HTMLTextAreaElement>(".work-create textarea")!, "Updated prompt");
     expect(button("Save changes").disabled).toBe(false);
     await act(async () => button("Save changes").click());
     expect(apiMock.updateSchedule).toHaveBeenCalledWith("job-7", {

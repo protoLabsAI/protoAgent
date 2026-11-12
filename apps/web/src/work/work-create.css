@@ -17,6 +17,22 @@
 .work-create__status { display: flex; align-items: center; gap: var(--pl-space-2); color: var(--pl-color-fg-muted); font-size: var(--pl-font-size-sm); }
 .work-create__dest { margin: 0; color: var(--pl-color-fg-muted); font-size: var(--pl-font-size-sm); }
 
+/* Step 2 (§10.3–§10.6): the read-only lines and the instruction's "Your words" blockquote.
+   Long unbroken words (a pasted URL in the quote) wrap rather than widen the sheet. */
+.work-create__readonly { margin: 0; color: var(--pl-color-fg-muted); }
+.work-create__quote {
+  margin: 0;
+  padding: var(--pl-space-2) var(--pl-space-3);
+  border-inline-start: var(--pl-space-1) solid var(--pl-color-border);
+  background: var(--pl-color-bg-subtle);
+  border-radius: var(--pl-radius-md);
+  color: var(--pl-color-fg);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  min-width: 0;
+}
+.work-create__incomplete { margin: 0; color: var(--pl-color-fg-muted); font-size: var(--pl-font-size-sm); }
+
 /* The footer flex row and its children also yield min-width: 0 (§10.2). */
 .work-create .pl-dialog__foot, .work-create .pl-drawer__foot { min-width: 0; }
 .work-create .pl-dialog__foot > *, .work-create .pl-drawer__foot > * { min-width: 0; }

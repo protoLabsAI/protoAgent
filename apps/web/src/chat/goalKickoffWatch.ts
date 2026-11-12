@@ -25,6 +25,7 @@ import {
   isParkedSession,
   subscribeGoalKickoff,
   takeGoalKickoff,
+  type ChatKickoff,
 } from "./chat-store";
 import { localTurnInFlight } from "./sessionLiveness";
 
@@ -46,7 +47,7 @@ export function sessionFreeForKickoff(sessionId: string): boolean {
 
 export function watchGoalKickoff(
   sessionId: string,
-  run: (prompt: string) => void,
+  run: (kickoff: ChatKickoff) => void,
   blocked: () => boolean = () => false,
 ): GoalKickoffWatch {
   let timer: ReturnType<typeof setTimeout> | null = null;
@@ -55,8 +56,8 @@ export function watchGoalKickoff(
     timer = null;
     if (stopped || !hasGoalKickoff(sessionId)) return;
     if (!sessionFreeForKickoff(sessionId) || blocked()) return; // a later trigger re-checks
-    const prompt = takeGoalKickoff(sessionId);
-    if (prompt) run(prompt);
+    const kickoff = takeGoalKickoff(sessionId);
+    if (kickoff) run(kickoff);
   };
   const poke = () => {
     if (stopped || timer !== null || !hasGoalKickoff(sessionId)) return;

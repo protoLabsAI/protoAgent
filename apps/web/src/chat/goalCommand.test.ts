@@ -74,7 +74,7 @@ describe("/goal new submit drives in this tab", () => {
     await vi.waitFor(() => expect(noteToThread).toHaveBeenCalled());
 
     expect(setGoal.mock.calls[0][0]).toMatchObject({ session_id: "tab-7", condition: "tests pass", kick: false });
-    expect(takeGoalKickoff("tab-7")).toContain("tests pass");
+    expect(takeGoalKickoff("tab-7")?.prompt).toContain("tests pass");
     vi.restoreAllMocks();
   });
 });
@@ -99,7 +99,7 @@ describe("/goal new kickoff while the tab turned busy mid-request", () => {
     // The slot's consumer, with a runTurn that records overlap the way the real one would
     // collide: it flips the tab to streaming for the turn's duration.
     let concurrent = 0;
-    const run = vi.fn((_prompt: string) => {
+    const run = vi.fn((_kickoff: { prompt: string; hidden: boolean }) => {
       if (chatStore.getSnapshot().sessionStatusMap[sid] === "streaming") concurrent += 1;
       chatStore.setSessionStatus(sid, "streaming");
     });
@@ -131,7 +131,7 @@ describe("/goal new kickoff while the tab turned busy mid-request", () => {
     // The operator's turn ends → the kickoff runs once, on an idle tab.
     chatStore.setSessionStatus(sid, "idle");
     await vi.waitFor(() => expect(run).toHaveBeenCalledTimes(1));
-    expect(run.mock.calls[0][0]).toContain("tests pass");
+    expect(run.mock.calls[0][0].prompt).toContain("tests pass");
     expect(concurrent).toBe(0);
 
     // More store churn (the kickoff's own turn ending, other updates) never re-fires it.
@@ -174,7 +174,7 @@ describe("goal kickoff waits for every owner of the next turn", () => {
       if (snap.sessionStatusMap[sid] === "streaming" || localTurnInFlight(sid)) concurrent += 1;
       chatStore.setSessionStatus(sid, "streaming");
     };
-    const run = vi.fn((_prompt: string) => turn());
+    const run = vi.fn((_kickoff: { prompt: string; hidden: boolean }) => turn());
     return { chatStore, registerGoalKickoff, watchGoalKickoff, beginLocalTurn, sid, run, turn, concurrent: () => concurrent };
   }
 
