@@ -12,6 +12,8 @@ what a real client timeout does.
 import asyncio
 import importlib
 import logging
+import threading
+import uuid
 from typing import TypedDict
 
 import httpx
@@ -28,6 +30,10 @@ from runtime.state import STATE
 turn_control = importlib.import_module("server.turn_control")
 
 RealAsyncClient = httpx.AsyncClient
+# Each test parks on its own thread id. The per-thread turn lock registry is process-global
+# and its locks bind to the first event loop that contends on them, so a lock still alive from
+# an earlier test's loop must never be handed to the next test (CI saw exactly that: "Lock …
+# is bound to a different event loop" → failed delivery → 200 instead of 202).
 THREAD = "test:delivery"
 SESSION = "session-delivery"
 
@@ -59,7 +65,7 @@ class _ShrunkTimeoutASGI(httpx.AsyncBaseTransport):
 class Turn:
     """The parked graph plus the knobs a test turns: hold the slow step, fail after consuming."""
 
-    def __init__(self, fail_after_consume: bool = False):
+    def __init__(self, fail_after_consume: bool = False, thread: str = THREAD):
         self.release = asyncio.Event()
         self.running = asyncio.Event()
         self.finished = asyncio.Event()
@@ -86,7 +92,8 @@ class Turn:
         builder.add_edge("choose", "slow")
         builder.add_edge("slow", END)
         self.graph = builder.compile(checkpointer=InMemorySaver())
-        self.config = {"configurable": {"thread_id": THREAD}}
+        self.thread = thread
+        self.config = {"configurable": {"thread_id": thread}}
 
     def a2a_app(self) -> FastAPI:
         app = FastAPI()
@@ -99,11 +106,13 @@ class Turn:
             self.a2a_calls.append(meta.get("decision_id"))
             answer = message["parts"][0]["text"]
             try:
-                async with turn_control._thread_lock(THREAD):
-                    cfg = await turn_control.validate_decision_resume(
-                        self.config, meta["decision_id"], message["contextId"])
-                    resolution = {**(meta.get("decision_resolution") or {}), "id": meta["decision_id"]}
-                    cfg = {**cfg, "configurable": {**cfg["configurable"], "decision_resolution": resolution}}
+                async with turn_control._thread_lock(self.thread):
+                    cfg = self.config
+                    if meta.get("decision_id"):  # the answer path; a dismissal only clears
+                        cfg = await turn_control.validate_decision_resume(
+                            self.config, meta["decision_id"], message["contextId"])
+                        resolution = {**(meta.get("decision_resolution") or {}), "id": meta["decision_id"]}
+                        cfg = {**cfg, "configurable": {**cfg["configurable"], "decision_resolution": resolution}}
                     async with turn_control.decision_resume(cfg, answer):
                         await self.graph.ainvoke(Command(resume=answer), cfg)
                 state, text = "TASK_STATE_COMPLETED", "done"
@@ -126,11 +135,11 @@ async def harness(monkeypatch):
     monkeypatch.setattr(STATE, "active_port", 7871)
 
     async def build(*, fail_after_consume=False, scale=0.001):
-        turn = Turn(fail_after_consume)
+        turn = Turn(fail_after_consume, thread=f"{THREAD}:{uuid.uuid4().hex}")
         monkeypatch.setattr(STATE, "graph", turn.graph)
         await turn.graph.ainvoke({}, turn.config)
         snapshot = await turn.graph.aget_state(turn.config)
-        rec = store.create(SESSION, "Merge?", ["yes", "no"], thread_id=THREAD,
+        rec = store.create(SESSION, "Merge?", ["yes", "no"], thread_id=turn.thread,
                            interrupt_id=snapshot.tasks[0].interrupts[0].id)
         transport = _ShrunkTimeoutASGI(turn.a2a_app(), scale)
         monkeypatch.setattr(httpx, "AsyncClient", lambda **kw: RealAsyncClient(transport=transport, **kw))
@@ -202,7 +211,7 @@ async def test_answer_queued_behind_a_busy_session_is_on_its_way_not_failed(harn
     store, build = harness
     turn, rec, client = await build()
     monkeypatch.setattr(decision_routes, "ACCEPT_WAIT_S", 0.3, raising=False)
-    lock = turn_control._thread_lock(THREAD)
+    lock = turn_control._thread_lock(turn.thread)
     await lock.acquire()
     url = f"/api/decisions/{rec.id}/answer"
     try:
@@ -267,7 +276,7 @@ async def test_cancel_waits_out_an_answer_in_flight(harness, monkeypatch):
     store, build = harness
     turn, rec, client = await build()
     monkeypatch.setattr(decision_routes, "ACCEPT_WAIT_S", 0.2)
-    lock = turn_control._thread_lock(THREAD)
+    lock = turn_control._thread_lock(turn.thread)
     await lock.acquire()  # the session is busy: the answer queues
     try:
         async with client:
@@ -287,3 +296,54 @@ async def test_cancel_waits_out_an_answer_in_flight(harness, monkeypatch):
             lock.release()
     assert store.get(rec.id).answer == "yes"
     assert turn.a2a_calls == [rec.id]
+
+
+@pytest.mark.asyncio
+async def test_an_answer_arriving_mid_withdraw_waits_and_loses(harness, monkeypatch):
+    """Interleave at the cancel route's one yield point: the withdraw is parked in its worker
+    thread while an answer arrives and gets as far as it can. The answer must not claim and
+    deliver to a decision being withdrawn; it waits for the dismissal and gets 409.
+
+    Deterministic either way: the withdraw stays parked until the answer has either sent a
+    resume to the agent (the bug) or come back to re-read the record while still waiting on
+    the dismissal's claim (the fix) — never on a timer."""
+    store, build = harness
+    turn, rec, client = await build()
+    loop = asyncio.get_running_loop()
+    in_withdraw, progressed, go = asyncio.Event(), asyncio.Event(), threading.Event()
+    reads = {"n": 0, "counting": False}
+    real_withdraw, real_get = store.withdraw, store.get
+
+    def paused_withdraw(*args, **kwargs):  # runs in asyncio.to_thread's worker
+        loop.call_soon_threadsafe(in_withdraw.set)
+        assert go.wait(5)
+        return real_withdraw(*args, **kwargs)
+
+    def counted_get(*args, **kwargs):
+        row = real_get(*args, **kwargs)
+        if reads["counting"]:
+            reads["n"] += 1
+            # 1: the answer route's first read. 2: the post-claim re-read (bug) or the first
+            # re-read while waiting (fix). 3: only the waiting answer reads again.
+            if reads["n"] >= 3:
+                loop.call_soon_threadsafe(progressed.set)
+        return row
+
+    monkeypatch.setattr(store, "withdraw", paused_withdraw)
+    monkeypatch.setattr(store, "get", counted_get)
+    async with client:
+        cancel = asyncio.create_task(client.post(f"/api/decisions/{rec.id}/cancel"))
+        await asyncio.wait_for(in_withdraw.wait(), 2)
+        reads["counting"] = True
+        answer = asyncio.create_task(client.post(f"/api/decisions/{rec.id}/answer", json={"option_id": "yes"}))
+        await _until(lambda: progressed.is_set() or rec.id in turn.a2a_calls)
+        turn.release.set()  # let the dismissal's clearing turn run to its end once it starts
+        go.set()
+        cancelled, answered = await asyncio.wait_for(asyncio.gather(cancel, answer), 3)
+        await asyncio.wait_for(turn.finished.wait(), 2)
+    assert rec.id not in turn.a2a_calls  # no answer was delivered to a decision being withdrawn
+    assert cancelled.status_code == 200
+    assert answered.status_code == 409, answered.text
+    assert answered.json()["detail"]["state"] == "withdrawn"
+    assert store.get(rec.id).state == "withdrawn"
+    assert turn.a2a_calls == [None]  # only the dismissal's clearing resume reached the agent
