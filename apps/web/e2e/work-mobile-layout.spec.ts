@@ -11,28 +11,29 @@ async function openWorkWindow(page: Page, label = "Open Work") {
   await expect(page.getByRole("dialog", { name: /^Work/ })).toBeVisible();
 }
 
-async function selectTasks(page: Page, work: Locator) {
+async function selectDoingNow(page: Page, work: Locator) {
   const picker = work.getByRole("button", { name: /Work sections/ });
   await picker.focus();
   await page.keyboard.press("Enter");
   const menu = page.getByRole("menu", { name: "Work sections" });
-  await expect(menu.getByRole("menuitemradio")).toHaveCount(8);
+  // Overview plus the four approved groups (v2 §4).
+  await expect(menu.getByRole("menuitemradio")).toHaveCount(5);
   await page.keyboard.press("Escape");
   await expect(picker).toBeFocused();
   await page.keyboard.press("Enter");
   await expect(menu).toBeVisible();
   await page.keyboard.press("Home");
   await expect(menu.getByRole("menuitemradio").first()).toBeFocused();
-  for (let i = 1; i <= 4; i++) {
+  for (let i = 1; i <= 2; i++) {
     await page.keyboard.press("ArrowDown");
     await expect(menu.getByRole("menuitemradio").nth(i)).toBeFocused();
   }
-  await expect(menu.getByRole("menuitemradio", { name: /Tasks/ })).toBeFocused();
+  await expect(menu.getByRole("menuitemradio", { name: /Doing now/ })).toBeFocused();
   await page.keyboard.press("Enter");
-  await expect(picker).toContainText("Tasks");
+  await expect(picker).toContainText("Doing now");
   await expect(picker).toBeFocused();
   await picker.click();
-  await expect(menu.getByRole("menuitemradio", { name: "Tasks", exact: true })).toHaveAttribute("aria-checked", "true");
+  await expect(menu.getByRole("menuitemradio", { name: "Doing now", exact: true })).toHaveAttribute("aria-checked", "true");
   await expect(menu.locator(".pl-count .pl-count")).toHaveCount(0);
   await page.keyboard.press("Escape");
   await expect(picker).toBeFocused();
@@ -67,6 +68,9 @@ for (const theme of ["light", "dark"] as const) {
           priority: 1, issue_type: "task", created_at: "2026-06-02T09:00:00Z",
         })),
       } }));
+      // Pin the other Doing now feeders so its badge is exactly the 35 started tasks.
+      await page.route("**/api/goals", route => route.fulfill({ json: { enabled: true, goals: [] } }));
+      await page.route("**/api/background", route => route.fulfill({ json: { enabled: false, jobs: [] } }));
     });
 
     // One test per width: as a single test the three widths x eight sections ran ~300 keyboard
@@ -86,14 +90,14 @@ for (const theme of ["light", "dark"] as const) {
         await expect(picker).toBeVisible();
         await expect(work.getByRole("tablist", { name: "Work sections" })).toHaveCount(0);
         await expect.poll(() => work.evaluate(el => el.scrollWidth <= el.clientWidth)).toBe(true);
-        await selectTasks(page, work);
-        for (const label of ["Overview", "Decisions", "Goals", "Watches", "Tasks", "Schedules", "Background agents", "Your instructions"]) {
+        await selectDoingNow(page, work);
+        for (const label of ["Overview", "Needs you", "Doing now", "Coming up", "Your instructions"]) {
           await picker.press("Space");
           const item = menu.getByRole("menuitemradio", { name: label, exact: true });
           await expect(item.locator(".pl-menu__badge")).toHaveCount(1);
           await expect(item.locator(".pl-menu__badge .pl-count")).toHaveCount(0);
           await expect(item.locator(".pl-menu__badge")).toHaveText(/^\d+$/);
-          if (label === "Tasks") await expect(item.locator(".pl-menu__badge")).toHaveText("35");
+          if (label === "Doing now") await expect(item.locator(".pl-menu__badge")).toHaveText("35");
           await item.focus();
           await page.keyboard.press("Enter");
           await expect(picker).toHaveAccessibleName(`${label} Work sections`);
@@ -113,7 +117,7 @@ for (const theme of ["light", "dark"] as const) {
         await expect(page.locator("html")).toHaveAttribute("data-theme", theme);
         await page.getByRole("button", { name: "Open Work", exact: true }).click();
         const work = page.locator(".work-view:visible");
-        await selectTasks(page, work);
+        await selectDoingNow(page, work);
         await expect(work.locator(".work-view__detail")).toBeHidden();
         // No This chat / All toggle (Josh 2026-11-11): Work always lists every chat.
         await expect(work.getByRole("button", { name: "This chat", exact: true })).toHaveCount(0);
@@ -127,13 +131,13 @@ for (const theme of ["light", "dark"] as const) {
         await openRow(work);
         await expect(work).toHaveAttribute("data-frame", "sheet");
         await expect(work.locator(".work-detail__actions button.pl-btn--sm")).toHaveCount(0);
-        await expect(work.getByRole("button", { name: "Back to Tasks" })).not.toHaveClass(/pl-btn--sm/);
+        await expect(work.getByRole("button", { name: "Back to Doing now" })).not.toHaveClass(/pl-btn--sm/);
         await expect(work.locator(".work-view__list")).toBeHidden();
         await expect(work.locator(".work-view__picker")).toBeHidden();
         const screenshot = info.outputPath(`phone-${width}-${theme}.png`);
         await page.screenshot({ path: screenshot });
         await info.attach("Phone", { path: screenshot, contentType: "image/png" });
-        await work.getByRole("button", { name: "Back to Tasks" }).click();
+        await work.getByRole("button", { name: "Back to Doing now" }).click();
         await expect(work.locator(".work-row").nth(25)).toBeFocused();
         await expect(work.locator(".work-view__list")).toBeVisible();
         // Back keeps the list where it was: the row is on screen, not just focused off-screen.
@@ -170,7 +174,7 @@ for (const theme of ["light", "dark"] as const) {
       work = page.locator(".work-view:visible");
       await expect(work.locator(".work-view__detail h2")).toBeFocused();
       await expect(work.locator(".work-view__list")).toBeHidden();
-      await work.getByRole("button", { name: "Back to Tasks" }).click();
+      await work.getByRole("button", { name: "Back to Doing now" }).click();
       await expect(work.locator(".work-row").nth(25)).toBeFocused();
       await expect.poll(() => work.locator(".work-view__list").evaluate(el => el.scrollTop)).toBe(scroll);
     });

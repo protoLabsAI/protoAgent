@@ -4,8 +4,20 @@
  * bare "task", a watch's trigger keyword) never reach a row (work-view spec §2, §4).
  */
 import { issueType } from "../app/tasks";
-import type { ScheduledJob, Task, WatchState } from "../lib/types";
+import type { GoalState, ScheduledJob, Task, WatchState } from "../lib/types";
 import { WEEKDAYS, parseSchedule } from "../schedule/schedule-builder";
+
+/** A goal is a job with a finish line (ADR D3, work-consolidation §2). Progress reads "step N
+ *  of M" — with no limit, just "step N", NEVER "n/0" or "∞". An active goal re-checks its
+ *  finish line after each turn, so its progress line says so; a stopped one shows only how far
+ *  it got. The group rows and the goal detail share this one line, so both read the same
+ *  "step N" — never the verifier type, which stays in Technical details (§2.5). */
+export function goalProgress(g: GoalState): string {
+  const iter = g.iteration ?? 0;
+  const max = g.max_iterations;
+  const steps = max && max > 0 ? `step ${iter} of ${max}` : `step ${iter}`;
+  return g.status === "active" ? `${steps} · checking after each turn` : steps;
+}
 
 /** "Fires once when met" / "Fires every time it's met" / "Fires when the value changes". */
 export function watchKind(w: WatchState): string {

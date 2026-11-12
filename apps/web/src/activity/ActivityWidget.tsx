@@ -12,9 +12,10 @@ import { ActivitySurface } from "./ActivitySurface";
  * Activity and Inbox pills. Its unread badge tracks BOTH bus events: `inbox.item`
  * (pending inbound stimuli, ADR 0003) and `activity.message` (completed agent turns,
  * ADR 0022) — incrementing only while the Feed dialog is closed; opening it clears
- * the badge. The dialog is the feed's own home: Work no longer has an Activity
- * section (S4c), so the pill opens the full `ActivitySurface` (pending triage +
- * completed provenance timeline) right here instead of routing into the Work modal.
+ * the badge. The dialog is the feed's own home: history left Work with the four-group
+ * consolidation (ADR 0129 Q3, S4c removed the Activity section), so the pill opens the
+ * full `ActivitySurface` (pending triage + completed provenance timeline) right here
+ * instead of routing into the Work modal.
  */
 export function ActivityWidget() {
   const [unread, setUnread] = useState(0);

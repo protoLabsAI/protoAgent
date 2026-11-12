@@ -6,7 +6,9 @@ import { expect, test } from "@playwright/test";
 // reading experience: it fetches the FULL report BY ID (GET /api/background/{id}),
 // never via the legacy list-and-filter. Dismissing hides the chip from the transcript
 // (persisted per jobId in localStorage, so a reload doesn't resurrect it); the report
-// stays reviewable in the Background agents panel.
+// stays in the durable registry (GET /api/background) — dismissal never writes to the
+// backend. Under the four-group Work consolidation (v2 §1) a finished job has no Work
+// row, so the registry guarantee is asserted on the wire, not on a panel row.
 //
 // Harness: seed an open chat session, replace the mock SSE stream with one that emits
 // `background.completed` frames for that session (BackgroundWatch injects display-only
@@ -111,9 +113,9 @@ async function setup(page: import("@playwright/test").Page): Promise<string[]> {
       },
     });
   });
-  // The LIST route feeds the Background agents panel (a dismissed chip must still be
-  // reviewable there) — but it carries only the PREVIEW, so the viewer showing the full
-  // text still proves the chip's Open path fetches by id, not from the list.
+  // The LIST route feeds the Work sources (the durable registry) — but it carries only
+  // the PREVIEW, so the viewer showing the full text still proves the chip's Open path
+  // fetches by id, not from the list.
   await page.route("**/api/background", (route) =>
     route.fulfill({
       json: {
@@ -175,8 +177,16 @@ test("report chip: one compact row, no excerpt, Open → docviewer fetched by id
   expect(byIdHits.length).toBeGreaterThan(0);
 });
 
-test("dismiss ✕ removes the chip, survives reload, and the report stays in the panel", async ({ page }) => {
+test("dismiss ✕ removes the chip, survives reload, and never touches the registry", async ({ page }) => {
   await setup(page);
+  // The durable-registry guarantee: dismissing is chat-rendering state only, so no
+  // DELETE/POST may ever reach the background API on account of a dismissal.
+  const writes: string[] = [];
+  page.on("request", (request) => {
+    if (request.url().includes("/api/background") && request.method() !== "GET") {
+      writes.push(`${request.method()} ${request.url()}`);
+    }
+  });
   await page.goto("/app/", { waitUntil: "load" });
 
   const chip = page.locator(".chat-report-chip").filter({ hasText: TITLE });
@@ -196,8 +206,7 @@ test("dismiss ✕ removes the chip, survives reload, and the report stays in the
   await expect(otherChip).toBeVisible({ timeout: 15_000 });
   await expect(chip).toHaveCount(0);
 
-  // The dismissed report is still reviewable in the Background agents panel — the
-  // dismiss affects chat rendering only, never the durable registry.
-  await page.getByTestId("background-jobs-pill").click();
-  await expect(page.locator(".work-row").filter({ hasText: TITLE })).toBeVisible();
+  // The dismiss affects chat rendering only, never the durable registry: the whole
+  // flow — two chips, a dismissal, a reload — made no write to the background API.
+  expect(writes).toEqual([]);
 });

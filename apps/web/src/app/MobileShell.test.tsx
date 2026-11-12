@@ -294,27 +294,33 @@ describe("phone Needs you indicator", () => {
     expect(byLabel("Menu")!.querySelector(".pl-dot")).toBeNull();
   });
 
-  it("counts the lane across chats and sources, ignoring error and loading data", () => {
-    const item = (status: WorkItem["status"], sessionId: string): WorkItem => ({
-      id: sessionId, kind: "decision", title: "Question", meta: "", raw: {}, status, sessionId,
+  it("counts Work's Needs you group via workGroups: pending decisions, stopped goals and undelivered pages", () => {
+    const decision = (id: string, state: string): WorkItem => ({
+      id, kind: "decision", title: "Question", meta: "", raw: { state }, status: state === "pending" ? "needs-you" : "done", sessionId: id,
     });
     const source = (status: WorkSource["status"], items: WorkItem[] = []): WorkSource => ({
       status, items, loadedAt: null, error: null, retry: () => {},
     });
     const sources: WorkItems = {
-      decisions: source("ready", [item("needs-you", "current"), item("needs-you", "other")]),
-      goals: source("stale", [item("needs-you", "third")]),
-      watches: source("error", [item("needs-you", "error")]),
-      tasks: source("loading", [item("needs-you", "loading")]),
-      schedules: source("ready", [item("scheduled", "scheduled")]),
-      background: source("ready", [item("running", "running")]),
-      activity: source("ready", [item("failed", "failed"), item("done", "done")]),
-      directives: source("ready", [item("waiting", "waiting")]),
+      decisions: source("ready", [decision("current", "pending"), decision("answered", "answered")]),
+      // A stopped goal shows in Work's Needs you even though its display status maps to a
+      // "done" lane — the badge must count it (the review's drift case).
+      goals: source("stale", [{ id: "g1", kind: "goal", title: "Stuck goal", meta: "", status: "failed", sessionId: "g1", raw: { session_id: "g1", status: "exhausted" } }]),
+      watches: source("error"),
+      tasks: source("loading"),
+      schedules: source("ready", [{ id: "s1", kind: "schedule", title: "Digest", meta: "", status: "scheduled", raw: { id: "s1", schedule: "0 9 * * *", enabled: true, next_fire: "soon" } }]),
+      background: source("ready", [{ id: "b1", kind: "background", title: "Crunching", meta: "", status: "running", raw: { id: "b1", status: "running" } }]),
+      // Undelivered priority-now pages ride the activity source's groupItems only; the
+      // items list stays empty in production (useWorkItems).
+      activity: { ...source("ready"), groupItems: [{ kind: "delivery", id: "77", title: "Blocked page", meta: "ops",
+        status: "needs-you", raw: { id: 77, priority: "now", delivered_at: null } } as never] },
+      directives: source("ready", [{ id: "d1", kind: "directive", title: "Hold main", meta: "", status: "waiting", raw: { id: "d1", status: "in_force" } }]),
     };
-    expect(needsYouCount(sources)).toBe(3);
-    sources.decisions.items = [];
-    expect(needsYouCount(sources)).toBe(1);
+    expect(needsYouCount(sources)).toBe(3); // pending decision + stopped goal + undelivered page
+    sources.decisions.items = [decision("answered", "answered")];
+    expect(needsYouCount(sources)).toBe(2);
     sources.goals.items = [];
+    sources.activity.groupItems = [];
     expect(needsYouCount(sources)).toBe(0);
   });
 });

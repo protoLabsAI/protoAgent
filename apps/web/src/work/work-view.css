@@ -14,6 +14,8 @@
 .work-overview section { display: grid; gap: var(--pl-space-2); }
 .work-heading { display: flex; align-items: center; gap: var(--pl-space-2); margin: 0 0 var(--pl-space-2); font-size: var(--pl-font-size-sm); font-weight: var(--pl-font-weight-semibold); }
 .work-overview p { margin: 0; color: var(--pl-color-fg-muted); font-size: var(--pl-font-size-sm); }
+.work-view__help { margin: 0; color: var(--pl-color-fg-muted); font-size: var(--pl-font-size-sm); }
+.work-row__icon { display: inline-flex; flex: none; align-items: center; color: var(--pl-color-fg-muted); }
 .work-view .work-empty { align-items: flex-start; text-align: start; padding: var(--pl-space-2) 0; gap: var(--pl-space-2); font-size: var(--pl-font-size-sm); }
 .work-view__announcement { position: absolute; clip-path: inset(50%); overflow: hidden; width: 0; height: 0; }
 .work-view[data-frame="sheet"] .work-row { min-height: var(--pl-space-12); }

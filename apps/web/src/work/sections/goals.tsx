@@ -1,19 +1,18 @@
-// The Goals section of the Work view (#4955 §2.5, §5). Registered on import — the side effect
-// is the whole wiring; WorkView mounts it in a later card. ONE `render(ctx)` serves both panes:
-// a falsy `ctx.state.itemId` lists the goals as `WorkRow`s, a set one finds the goal and shows
-// its `WorkDetail`. Every field, its order and its wording come from the §2.5 table; ids, the
-// raw status, the verifier and the per-turn evidence live only in Technical details.
+// The Goals detail of the Work view (#4955 §2.5, work-consolidation v2). Registered on import —
+// the side effect is the whole wiring. The four-group consolidation moved the LIST to the shared
+// group rows (workGroups + WorkOverview), so `render(ctx)` serves only the detail pane: it finds
+// the goal `ctx.state.itemId` names and shows its `WorkDetail`. Every field, its order and its
+// wording come from the §2.5 table; ids, the raw status, the verifier and the per-turn evidence
+// live only in Technical details.
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { Button } from "@protolabsai/ui/primitives";
 import { WorkEmpty as Empty } from "../WorkEmpty";
-import { Alert } from "@protolabsai/ui/data";
 import { useToast } from "@protolabsai/ui/overlays";
 
 import { registerWorkSection, type WorkSection, type WorkSectionContext } from "../sectionRegistry";
-import { WorkRow } from "../WorkRow";
 import { WorkDetail, type WorkAction, type WorkField } from "../WorkDetail";
+import { goalProgress } from "../rowMeta";
 import { groupFor, relTime, type GroupableWorkItem } from "../tone";
 import type { WorkItem } from "../useWorkItems";
 import { useUI } from "../../state/uiStore";
@@ -96,24 +95,6 @@ function history(events: GoalEvent[] | undefined): WorkField["value"] {
 // where the row actually sits.
 function goalStopped(item: WorkItem): boolean {
   return groupFor(item as GroupableWorkItem) === "needs-you";
-}
-
-// An achieved (or cleared) goal has met its finish line and leaves Work — `groupFor` drops it
-// from every group (§2). The list and WorkView's counts share this one rule.
-function goalShowsInWork(item: WorkItem): boolean {
-  return groupFor(item as GroupableWorkItem) !== null;
-}
-
-// A goal is a job with a finish line (ADR D3, work-consolidation §2). Progress reads "step N of
-// M" — with no limit, just "step N", NEVER "n/0" or "∞". An active goal re-checks its finish
-// line after each turn, so its progress line says so; a stopped one shows only how far it got.
-function goalSteps(g: GoalState): string {
-  const iter = g.iteration ?? 0;
-  const max = g.max_iterations;
-  return max && max > 0 ? `step ${iter} of ${max}` : `step ${iter}`;
-}
-function goalProgress(g: GoalState): string {
-  return g.status === "active" ? `${goalSteps(g)} · checking after each turn` : goalSteps(g);
 }
 
 // The §2.5 table, fields 3–11 (1 = Goal is the title, 2 = Status is the badge), led by the
@@ -302,38 +283,30 @@ function GoalDetailView({ ctx, item }: { ctx: WorkSectionContext; item: WorkItem
   );
 }
 
-function GoalsList({ ctx }: { ctx: WorkSectionContext }) {
-  const source = ctx.sources.goals;
+/** The shared goal creator: the palette's New goal intent opens it through `filters.create`.
+ *  Its one live host is WorkView's `GoalCreatorHost` — the group rows offer no create control
+ *  (WorkMount's v2 §4 contract); goal creation stays on the palette intent and the `/goal new`
+ *  chat command. Closing clears the filter. */
+export function useGoalCreator(state: WorkSectionContext["state"]): { creator: ReactNode } {
   const qc = useQueryClient();
   const toast = useToast();
   const [creating, setCreating] = useState(false);
   const [busy, setBusy] = useState(false);
   // Open after the containing Work modal mounts, so this dialog's portal sits above it.
   useEffect(() => {
-    if (ctx.state.filters?.create === true) setCreating(true);
-  }, [ctx.state.filters?.create]);
+    if (state.filters?.create === true) setCreating(true);
+  }, [state.filters?.create]);
 
   const closeCreator = () => {
     setCreating(false);
     const ui = useUI.getState();
-    const state = ui.surfaceStates.work ?? ctx.state;
-    if (state.filters?.create === true) {
-      const filters = { ...state.filters };
+    const current = ui.surfaceStates.work ?? state;
+    if (current.filters?.create === true) {
+      const filters = { ...current.filters };
       delete filters.create;
-      ui.setSurfaceState("work", { ...state, filters });
+      ui.setSurfaceState("work", { ...current, filters });
     }
   };
-
-  if (source.status === "error") {
-    return (
-      <Alert status="warning">
-        Couldn&apos;t load goals. The agent still has them. Only this view failed.{" "}
-        <Button variant="ghost" size="sm" onClick={() => source.retry()}>
-          Retry
-        </Button>
-      </Alert>
-    );
-  }
 
   const createGoal = (body: GoalSetBody) => {
     setBusy(true);
@@ -348,59 +321,23 @@ function GoalsList({ ctx }: { ctx: WorkSectionContext }) {
       .finally(() => setBusy(false));
   };
 
-  // Active and stopped goals stay; achieved/cleared leave (goalShowsInWork, shared with
-  // WorkView's counts).
-  const items = source.items.filter(goalShowsInWork);
-
-  return (
-    <>
-      {items.length === 0 ? (
-        // §5.2 — the one section with an empty-state action: New goal opens the shared creator.
-        <Empty title="No goals" description="The agent sets one when it has a testable outcome to drive toward.">
-          <Button variant="primary" onClick={() => setCreating(true)}>
-            New goal
-          </Button>
-        </Empty>
-      ) : (
-        <ul className="work-group">
-          {items.map((item) => {
-            const g = item.raw as GoalState;
-            const stopped = goalStopped(item);
-            return (
-              <li key={item.id}>
-                <WorkRow
-                  status={stopped ? "paused" : item.status}
-                  tag={stopped ? "Goal stopped" : "Goal"}
-                  title={item.title}
-                  meta={goalRowMeta(g)}
-                  focusKey={`${item.kind}:${item.id}`}
-                  onOpen={() => ctx.onOpen(item)}
-                />
-              </li>
-            );
-          })}
-        </ul>
-      )}
-      <GoalCreateDialog open={creating} onClose={closeCreator} onCreate={createGoal} busy={busy} />
-    </>
-  );
+  return {
+    creator: <GoalCreateDialog open={creating} onClose={closeCreator} onCreate={createGoal} busy={busy} />,
+  };
 }
 
-// Row meta: the progress line, so the list reads the same "step N" the detail does.
-function goalRowMeta(g: GoalState): string {
-  return goalProgress(g);
-}
-
+/** Detail-only since the v2 consolidation: the group rows list goals (WorkOverview reads
+ *  `workGroups` and shows the shared `goalProgress` meta), so an unresolved id — gone, or a
+ *  source still loading behind a restored deep link — keeps this kind's own copy. */
 export function GoalsSection({ ctx }: { ctx: WorkSectionContext }) {
   const itemId = ctx.state.itemId;
-  if (itemId) {
-    const item = ctx.sources.goals.items.find((i) => `${i.kind}:${i.id}` === itemId || i.id === itemId);
-    if (!item) return <Empty title="This goal is no longer here." />;
-    return <GoalDetailView ctx={ctx} item={item} />;
-  }
-  return <GoalsList ctx={ctx} />;
+  const item = itemId
+    ? ctx.sources.goals.items.find((i) => `${i.kind}:${i.id}` === itemId || i.id === itemId)
+    : undefined;
+  if (!item) return <Empty title="This goal is no longer here." />;
+  return <GoalDetailView ctx={ctx} item={item} />;
 }
 
-export const goalsSection = { label: "Goals", group: "doing-now", listFilter: goalShowsInWork, render: (ctx: WorkSectionContext) => <GoalsSection ctx={ctx} /> } satisfies WorkSection;
+export const goalsSection = { label: "Goals", group: "doing-now", render: (ctx: WorkSectionContext) => <GoalsSection ctx={ctx} /> } satisfies WorkSection;
 
 registerWorkSection("goals", goalsSection);

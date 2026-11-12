@@ -1,8 +1,8 @@
 import { expect, test } from "@playwright/test";
 
-// S4c: the Feed pill is the activity feed's own home — it opens the full ActivitySurface
-// (pending triage + completed provenance timeline) in its own dialog. Work has no Activity
-// section any more, so none of this routes through the Work modal.
+// S4c / ADR 0129 Q3: history left Work — the Feed pill is the activity feed's own home. It
+// opens the full ActivitySurface (pending triage + completed provenance timeline) in its own
+// dialog; Work shows an undelivered page only as a Needs you "Delivery" row.
 test("Feed pill opens its own dialog with pending triage and live completed turns", async ({ page }) => {
   let includeNewTurn = false;
   let historyReads = 0;
@@ -84,10 +84,10 @@ test("Feed pill opens its own dialog with pending triage and live completed turn
   await expect(page.getByTestId("activity-badge")).toBeVisible();
 });
 
-test("Decisions pill opens the Work Decisions section", async ({ page }) => {
+test("Decisions pill opens the Work Needs you group", async ({ page }) => {
   await page.goto("/app/", { waitUntil: "load" });
   await page.getByTestId("decisions-widget").click();
   const work = page.locator('.work-view[data-frame="modal"]');
   await expect(work).toBeVisible();
-  await expect(work.getByRole("button", { name: /Work sections/ })).toContainText("Decisions");
+  await expect(work.getByRole("button", { name: /Work sections/ })).toContainText("Needs you");
 });

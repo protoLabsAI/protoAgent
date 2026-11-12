@@ -155,7 +155,7 @@ afterEach(async () => {
 });
 
 describe("Decisions section", () => {
-  it("pins pending first with 'Asked {time}' and opens the DecisionCard as its detail (r1)", async () => {
+  it("lists only pending decisions in Needs you with 'Asked {time}' and opens the DecisionCard as its detail (r1)", async () => {
     data.sources.decisions.items = [
       decisionItem(decisionRow("closed", { state: "answered", answer_label: "Go ahead", answered_by: "operator", answered_at: "2026-11-08T15:00:00+00:00" })),
       decisionItem(decisionRow("live", { created_at: new Date(Date.now() - 4 * 60_000).toISOString() })),
@@ -163,10 +163,12 @@ describe("Decisions section", () => {
     workState({ section: "decisions", filters: { thisChat: true } });
     await render("rail");
 
-    // Pending sorts ahead of the already-answered one, even though it came second in the list.
+    // Finished items leave Work (v2 §1): only the pending question renders, tagged by kind.
+    expect(rows()).toHaveLength(1);
     expect(rows()[0].textContent).toContain("Question live");
     expect(rows()[0].textContent).toContain("Asked 4 min ago");
-    expect(rows()[1].textContent).toContain("Question closed");
+    expect(rows()[0].querySelector(".pl-badge")?.textContent).toBe("Decision");
+    expect(host.textContent).not.toContain("Question closed");
 
     // Opening it pushes the unchanged DecisionCard into the detail pane.
     workState({ section: "decisions", itemId: "decision:live", filters: { thisChat: true } });
@@ -180,19 +182,19 @@ describe("Decisions section", () => {
 
   it("pins a pending decision first in the Overview Needs you lane with 'Asked {time}', opening the DecisionCard (r1 §2.1)", async () => {
     data.sources.decisions.items = [decisionItem(decisionRow("live", { created_at: new Date(Date.now() - 4 * 60_000).toISOString() }))];
-    // A running task fills the Doing lane; the pending decision must still sit above it (§1).
-    data.sources.tasks.items = [{ kind: "task", id: "t1", status: "running", title: "Build the thing", meta: "", raw: {} }];
+    // A running task fills the Doing now group; the pending decision must still sit above it (§1).
+    data.sources.tasks.items = [{ kind: "task", id: "t1", status: "running", title: "Build the thing", meta: "", raw: { status: "in_progress" } }];
     workState({ section: "overview", filters: { thisChat: false } });
     await render("modal");
 
     const lanes = [...host.querySelectorAll("section")];
-    // "Needs you" is the first lane, and its first (pinned) row is the pending decision with
-    // the §2.4 field-3 pin — "Asked {time}" — not the agent name the old pin carried.
+    // "Needs you" is the first group, and its first (pinned) row is the pending decision with
+    // the §2.4 field-3 pin — "Asked {time}".
     expect(lanes[0].querySelector("h2")?.firstChild?.textContent).toBe("Needs you");
     const firstRow = lanes[0].querySelector(".work-row");
     expect(firstRow?.textContent).toContain("Question live");
     expect(firstRow?.textContent).toContain("Asked 4 min ago");
-    expect(lanes[1].querySelector("h2")?.firstChild?.textContent).toBe("Doing"); // sits below Needs you
+    expect(lanes[1].querySelector("h2")?.firstChild?.textContent).toBe("Doing now"); // sits below Needs you
 
     // Opening the pin straight from the Overview renders the unchanged DecisionCard as its detail.
     await act(async () => (firstRow as HTMLButtonElement).click());
@@ -203,24 +205,21 @@ describe("Decisions section", () => {
     expect(detail?.querySelector('[role="group"][aria-label="Answer"]')).toBeTruthy();
   });
 
-  it("maps closed states to cancelled and shows 'Answered: {label}' for answered ones (r2)", async () => {
+  it("closed decisions are history and leave Work entirely (v2 §1, ADR Q3)", async () => {
     data.sources.decisions.items = [
       decisionItem(decisionRow("ans", { state: "answered", answer_label: "Merge it", answered_by: "operator", answered_at: "2026-11-08T15:00:00+00:00" })),
       decisionItem(decisionRow("exp", { state: "expired" })),
       decisionItem(decisionRow("wd", { state: "withdrawn", withdraw_reason: "No longer needed" })),
       decisionItem(decisionRow("can", { state: "cancelled" })),
+      decisionItem(decisionRow("live")),
     ];
     workState({ section: "decisions", filters: { thisChat: true } });
     await render("rail");
 
-    const answered = rowFor("Question ans")!;
-    expect(answered.textContent).toContain("Answered: Merge it · by you");
-    expect(answered.querySelector(".pl-badge")?.textContent).toBe("done");
-
-    for (const [title, meta] of [["Question exp", null], ["Question wd", "Withdrawn: No longer needed"], ["Question can", null]] as const) {
-      const row = rowFor(title)!;
-      expect(row.querySelector(".pl-badge")?.textContent).toBe("cancelled");
-      if (meta) expect(row.textContent).toContain(meta);
+    expect(rows()).toHaveLength(1);
+    expect(rows()[0].textContent).toContain("Question live");
+    for (const gone of ["Question ans", "Question exp", "Question wd", "Question can"]) {
+      expect(host.textContent).not.toContain(gone);
     }
   });
 
@@ -608,7 +607,7 @@ describe("Directives section (Your instructions, ADR 0129 §3)", () => {
     expect(host.textContent).not.toContain("Freeze protoAgent main");
   });
 
-  it("routes closed directives to Done and in-force to Waiting on in the Overview counts only (r3 §2.11)", async () => {
+  it("shows in-force directives under Your instructions and drops closed ones from Work (v2 §1)", async () => {
     data.sources.directives.items = [
       directiveItem(directiveRow("inforce")),
       directiveItem(directiveRow("fulfilled", { status: "fulfilled", closed_at: new Date().toISOString() })),
@@ -617,8 +616,10 @@ describe("Directives section (Your instructions, ADR 0129 §3)", () => {
     workState({ section: "overview", filters: { thisChat: false } });
     await render("modal");
     const lanes = [...host.querySelectorAll("section h2")].map((n) => n.firstChild?.textContent);
-    expect(lanes).toContain("Waiting on"); // in_force → waiting
-    expect(lanes).toContain("Done"); // fulfilled → done, revoked → cancelled
+    expect(lanes).toEqual(["Your instructions"]);
+    expect(host.textContent).toContain("Instruction inforce");
+    expect(host.textContent).not.toContain("Instruction fulfilled");
+    expect(host.textContent).not.toContain("Instruction revoked");
   });
 
   it("shows a skeleton while loading and a Retry alert when loading failed — never 'No standing instructions' (r1)", async () => {
@@ -662,16 +663,19 @@ describe("Directives section (Your instructions, ADR 0129 §3)", () => {
     expect(data.sources.directives.retry).toHaveBeenCalled();
   });
 
-  it("opens a closed directive from the Overview's Done lane as a read-only detail (r1)", async () => {
+  it("resolves a closed directive deep link read-only — terminal history has no Overview row (v2 §1)", async () => {
     data.sources.directives.items = [directiveItem(directiveRow("done-dir", {
       session_id: "here", quote: "Cut the patch release", status: "fulfilled",
       closed_at: new Date().toISOString(), closed_by: "agent",
     }))];
     workState({ section: "overview", filters: { thisChat: false } });
     await render("modal", "here");
-    const row = rowFor("Cut the patch release")!;
-    await act(async () => row.click());
-    expect(useUI.getState().surfaceStates.work.itemId).toBe("directive:done-dir");
+    // Finished items leave Work entirely — no Done lane, no row (ADR Q3).
+    expect(rowFor("Cut the patch release")).toBeUndefined();
+    // A retained selection (the row closed while open, or a saved deep link) still resolves
+    // to the read-only detail with its closing sentence.
+    workState({ section: "overview", itemId: "directive:done-dir", filters: { thisChat: false } });
+    await render("modal", "here");
     const detail = host.querySelector(".work-view__detail")!;
     expect(detail.textContent).toContain("Cut the patch release");
     expect(detail.textContent).toContain("the agent marked it complete"); // closingSentence
