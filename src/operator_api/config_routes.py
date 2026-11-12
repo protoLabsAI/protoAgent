@@ -176,6 +176,19 @@ async def _rebuild_graph_after_reconnect(result: dict, provider: str = "") -> di
     return {**result, "graph_reloaded": True}
 
 
+def _unmask_mcp_servers(config: dict | None) -> None:
+    """A client that read `GET /api/config` and writes the whole document back sends the
+    masked `mcp.servers` values with it. Put the stored values back (in place) so a save
+    never replaces a real token with the mask."""
+    mcp = (config or {}).get("mcp") if isinstance(config, dict) else None
+    if not isinstance(mcp, dict) or "servers" not in mcp:
+        return
+    from graph.mcp_config import restore_server_secrets
+
+    stored = getattr(STATE.graph_config, "mcp_servers", None) or []
+    mcp["servers"] = restore_server_secrets(mcp["servers"], stored)
+
+
 def register_config_routes(app) -> None:
     """Register the ``/api/config*`` + ``/api/settings*`` routes on ``app``."""
 
@@ -188,8 +201,17 @@ def register_config_routes(app) -> None:
     async def _api_get_config():
         from graph.config_io import config_to_dict, read_soul
 
+        from graph.mcp_config import redact_server_secrets
+
+        config = config_to_dict(STATE.graph_config)
+        # An MCP server's `env` / `headers` routinely hold a token. Every other secret in
+        # this response is already blank; these were returned as stored. Masked HERE (the
+        # HTTP response), not in `config_to_dict`, whose other callers need the real entry.
+        mcp = config.get("mcp")
+        if isinstance(mcp, dict) and mcp.get("servers"):
+            config["mcp"] = {**mcp, "servers": redact_server_secrets(mcp["servers"])}
         return {
-            "config": config_to_dict(STATE.graph_config),
+            "config": config,
             "soul": read_soul(),
         }
 
@@ -209,6 +231,7 @@ def register_config_routes(app) -> None:
         # ADR 0121 D4: a device-scope caller can't write credential-plane keys this way either.
         if (denied := credential_plane_refusal(request, req.config, nested=True)) is not None:
             return denied
+        _unmask_mcp_servers(req.config)
         # Offload off the event loop (#497) — the reload's graph compile is heavy
         # and would otherwise freeze the server for its duration.
         from server.agent_init import _apply_settings_changes
@@ -556,6 +579,7 @@ def register_config_routes(app) -> None:
         """
         if (denied := credential_plane_refusal(request, req.config, nested=True)) is not None:
             return denied  # ADR 0121 D4 — the wizard writes auth/network too
+        _unmask_mcp_servers(req.config)
         callbacks = _build_settings_callbacks()
         # Offload off the event loop (#497) — finish-setup validates the model +
         # compiles the graph, both heavy; running inline froze the server ~30s.
