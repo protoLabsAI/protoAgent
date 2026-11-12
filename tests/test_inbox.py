@@ -191,7 +191,10 @@ async def test_now_inbox_fire_uses_mounted_a2a_app_without_loopback_port(monkeyp
     assert ok is True
     assert captured["method"] == "SendMessage"
     msg = captured["params"]["message"]
-    assert msg["contextId"] == ACTIVITY_CONTEXT
+    # ADR 0129: the item executes on its own isolated job session, never the shared
+    # Activity thread (which is a summary/feed surface). Item provenance is unchanged.
+    assert msg["contextId"].startswith("job:")
+    assert msg["contextId"] != ACTIVITY_CONTEXT
     assert msg["parts"] == [{"text": "ship the priority page"}]
     assert msg["metadata"]["origin"] == "inbox"
     assert msg["metadata"]["inbox_id"] == 17
@@ -1258,22 +1261,23 @@ def test_delivery_is_at_least_once_across_an_unrecorded_crash(tmp_path):
     assert len(store.claim_now_recovery_batch(limit=8)) == 1  # fired again: at-least-once
 
 
-# ── a now-item returns while the Activity thread is busy (#5106) ──────────────
+# ── a now-item returns while the Activity thread is busy (#5106 / ADR 0129) ───
 
 
 @pytest.mark.asyncio
 async def test_now_inbox_post_returns_while_a_turn_holds_the_activity_thread(tmp_path, monkeypatch):
-    """``POST /api/inbox {priority: "now"}`` answers as soon as the Activity turn is
-    ACCEPTED, not when it finishes (#5106).
+    """``POST /api/inbox {priority: "now"}`` answers as soon as the fired turn is
+    ACCEPTED (#5106) — and the turn itself runs on the item's own isolated ``job:``
+    session (ADR 0129), so a busy Activity thread no longer even delays it.
 
-    The self-A2A send used to omit ``returnImmediately``, so the SDK held the response
-    until the fired turn reached a terminal state — and that turn first queues behind
-    whatever turn already holds the Activity thread. A caller with a 25 s timeout saw
-    no answer while a long job ran, and a retry on timeout stored a duplicate.
+    The pre-ADR-0129 fire targeted the shared Activity context, so the fired turn
+    queued behind whatever turn held that thread (a decision raised there once sat
+    unseen for 70 minutes). Now the fire's context is the item's durable execution
+    session: the turn runs and COMPLETES while the Activity thread stays held, and
+    the Activity context gains no task — it is a summary/feed surface.
 
     Real a2a-sdk app + ``ProtoAgentExecutor`` + the real per-thread lock; only the turn
-    body (the model) is a fake. The thread is held by a "running turn" for the whole
-    POST, so the old blocking send cannot answer until the lock is released.
+    body (the model) is a fake. The Activity lock is held for the whole test.
     """
     import httpx
 
@@ -1285,12 +1289,12 @@ async def test_now_inbox_post_returns_while_a_turn_holds_the_activity_thread(tmp
     from tests._a2a_app import A2A_HEADERS, drain_handlers, poll_terminal
     from tests._a2a_app import build_app as build_a2a_app
 
-    ran: list[str] = []
+    ran: list[tuple[str, str]] = []
 
     async def stream(text, ctx, *, resume=False, caller_trace=None, **kwargs):
-        # Mirrors the chat driver: a turn takes the thread's lock before it yields.
+        # Mirrors the chat driver: a turn takes ITS OWN thread's lock before it yields.
         async with turn_control._thread_lock(f"a2a:{ctx}"):
-            ran.append(text)
+            ran.append((text, ctx))
             yield ("text", "<output>handled</output>")
 
     import weakref
@@ -1336,30 +1340,41 @@ async def test_now_inbox_post_returns_while_a_turn_holds_the_activity_thread(tmp
         body = r.json()
         assert body["ok"] is True and body["fired"] is True
         assert isinstance(body["item"]["id"], int)
-        assert ran == []  # answered while the turn is still queued behind the running one
         # Accepted means owned: nothing is left for check_inbox to process a second time.
         assert inbox.list(priority_floor="later") == []
         assert "inbox.item" not in published
+
+        # The turn runs — once — WHILE the Activity thread stays held (ADR 0129
+        # isolation; it used to queue behind that lock), on the item's own session.
+        for _ in range(200):
+            if ran:
+                break
+            await asyncio.sleep(0.01)
+        assert len(ran) == 1 and "deploy done" in ran[0][0]
+        fired_ctx = ran[0][1]
+        assert fired_ctx.startswith("job:") and fired_ctx != ACTIVITY_CONTEXT
+        # The durable identity the store assigned is the context the fire used.
+        assert inbox.execution_identity(body["item"]["id"])["context_id"] == fired_ctx
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=a2a_app), base_url="http://test") as c:
+            tasks = await c.post(
+                "/a2a",
+                headers=A2A_HEADERS,
+                json={"jsonrpc": "2.0", "id": "l", "method": "ListTasks", "params": {"contextId": fired_ctx}},
+            )
+            listed = tasks.json()["result"]["tasks"]
+            assert len(listed) == 1
+            final = await poll_terminal(c, listed[0]["id"])
+            # The work never executed on the shared Activity context.
+            on_activity = await c.post(
+                "/a2a",
+                headers=A2A_HEADERS,
+                json={"jsonrpc": "2.0", "id": "l2", "method": "ListTasks", "params": {"contextId": ACTIVITY_CONTEXT}},
+            )
+            assert on_activity.json()["result"].get("tasks") in (None, [])
+        assert final["status"]["state"] == "TASK_STATE_COMPLETED"
     finally:
         if running_turn.locked():
             running_turn.release()
-
-    # The queued turn still runs — once — after the running turn lets go of the thread.
-    for _ in range(200):
-        if ran:
-            break
-        await asyncio.sleep(0.01)
-    assert len(ran) == 1 and "deploy done" in ran[0]
-    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=a2a_app), base_url="http://test") as c:
-        tasks = await c.post(
-            "/a2a",
-            headers=A2A_HEADERS,
-            json={"jsonrpc": "2.0", "id": "l", "method": "ListTasks", "params": {"contextId": ACTIVITY_CONTEXT}},
-        )
-        listed = tasks.json()["result"]["tasks"]
-        assert len(listed) == 1
-        final = await poll_terminal(c, listed[0]["id"])
-    assert final["status"]["state"] == "TASK_STATE_COMPLETED"
     await drain_handlers()
 
 
@@ -1381,17 +1396,18 @@ def test_now_inbox_fire_asks_the_a2a_layer_to_return_on_acceptance(monkeypatch):
     assert captured["params"]["configuration"] == {"returnImmediately": True}
 
 
-async def _now_post_with_turn(tmp_path, monkeypatch, stream, *, hold_thread: bool):
+async def _now_post_with_turn(tmp_path, monkeypatch, stream):
     """POST a now-item through the real route into a real a2a-sdk app whose turn is
     ``stream``; the executor's terminal hook is the real ``server.a2a._a2a_terminal``.
-    Returns (response body, inbox store, published topics, release-thread callable)."""
+    Returns (response body, inbox store, published topics). The fired turn runs on the
+    item's own ``job:`` session (ADR 0129), so a test that needs to hold it mid-turn
+    gates inside its own ``stream`` (the Activity lock no longer delays it)."""
     import httpx
 
     import operator_api.console_handlers as ch
     import runtime.state as rs
     import server.a2a as a2a
     from a2a_impl.executor import set_terminal_hook
-    from events import ACTIVITY_CONTEXT
     from server import turn_control
     from tests._a2a_app import build_app as build_a2a_app
 
@@ -1427,25 +1443,15 @@ async def _now_post_with_turn(tmp_path, monkeypatch, stream, *, hold_thread: boo
         subagent_batch=_unused,
         inbox_add=ch._operator_inbox_add,
     )
-    lock = turn_control._thread_lock(f"a2a:{ACTIVITY_CONTEXT}")
-    if hold_thread:
-        await lock.acquire()
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=operator), base_url="http://test") as c:
         post = asyncio.ensure_future(c.post("/api/inbox", json={"text": "deploy done", "priority": "now", "source": "ci"}))
         done, _ = await asyncio.wait({post}, timeout=5.0)
         if not done:
-            if lock.locked():
-                lock.release()
             await post
             set_terminal_hook(None)
             pytest.fail("POST /api/inbox (now) did not answer promptly")
         body = post.result().json()
-
-    def release():
-        if lock.locked():
-            lock.release()
-
-    return body, inbox, published, release
+    return body, inbox, published
 
 
 async def _until(pred, timeout=5.0):
@@ -1460,32 +1466,36 @@ async def _until(pred, timeout=5.0):
 async def test_a_now_item_whose_accepted_turn_fails_is_restored_to_pending(tmp_path, monkeypatch):
     """Returning on acceptance must not lose the old recovery (#5106 review): the fired
     turn fails at the model boundary AFTER the route answered, and the item goes back to
-    the pending queue — once — for check_inbox, badged like an unfired item."""
+    the pending queue — once — for check_inbox, badged like an unfired item. The turn
+    runs on the item's own ``job:`` session (ADR 0129), held open by the gate so the
+    accepted-then-failed order is deterministic."""
     from a2a_impl.executor import set_terminal_hook
+    from server import turn_control
     from tests._a2a_app import drain_handlers
 
     calls: list[str] = []
-
-    from server import turn_control
+    gate = asyncio.Event()
 
     async def stream(text, ctx, *, resume=False, caller_trace=None, **kwargs):
-        # Mirrors the chat driver: the turn takes the thread's lock, then the model fails.
+        # Mirrors the chat driver: the turn takes its thread's lock, then the model fails.
         async with turn_control._thread_lock(f"a2a:{ctx}"):
             calls.append(text)
+            await gate.wait()
             yield ("text", "looking…")
             raise RuntimeError("gateway 502: upstream model unavailable")
 
     try:
-        body, inbox, published, release = await _now_post_with_turn(tmp_path, monkeypatch, stream, hold_thread=True)
+        body, inbox, published = await _now_post_with_turn(tmp_path, monkeypatch, stream)
         assert body["fired"] is True
-        assert inbox.list(priority_floor="later") == []  # delivered while the turn is queued
-        release()
+        assert inbox.list(priority_floor="later") == []  # delivered while the turn still runs
+        gate.set()
         assert await _until(lambda: [i["id"] for i in inbox.list(priority_floor="later")] == [body["item"]["id"]])
         assert len(calls) == 1
         assert published.count("inbox.item") == 1  # restored once, badged once
         await asyncio.sleep(0.1)
         assert published.count("inbox.item") == 1
     finally:
+        gate.set()
         set_terminal_hook(None)
         await drain_handlers()
 
@@ -1502,7 +1512,7 @@ async def test_a_now_item_whose_accepted_turn_completes_stays_delivered(tmp_path
         ended.set()
 
     try:
-        body, inbox, published, _ = await _now_post_with_turn(tmp_path, monkeypatch, stream, hold_thread=False)
+        body, inbox, published = await _now_post_with_turn(tmp_path, monkeypatch, stream)
         assert body["fired"] is True
         await asyncio.wait_for(ended.wait(), 5)
         await asyncio.sleep(0.2)
