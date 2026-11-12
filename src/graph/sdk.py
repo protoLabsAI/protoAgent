@@ -776,6 +776,7 @@ def run_in_session(
     *,
     delay_seconds: float = 0.0,
     job_id: str | None = None,
+    enqueue_key: str | None = None,
 ) -> dict:
     """Enqueue ``prompt`` as a one-shot agent turn in ``session_id`` — non-blocking.
 
@@ -804,6 +805,8 @@ def run_in_session(
         prompt: the message the agent processes as a turn.
         delay_seconds: fire at now + this delay (default 0 → the next poll tick, ~1s).
         job_id: a stable id so a re-call REPLACES the pending one-shot (idempotent).
+        enqueue_key: optional durable enqueue receipt key. Reusing it acknowledges
+            the original enqueue, even after completion; it never replaces or replays it.
 
     Returns ``{"ok", "job_id", "fires_at", "message"}``; ``ok=False`` with a readable
     message when the scheduler is unavailable or the inputs are bad.
@@ -820,16 +823,17 @@ def run_in_session(
     fires_at = (datetime.now(UTC) + timedelta(seconds=max(0.0, delay_seconds))).isoformat()
     # Idempotent replace: add_job RAISES on a duplicate id (it never overwrites), so drop
     # any pending one-shot with this id first — a re-call re-arms rather than colliding.
-    if job_id:
+    if job_id and enqueue_key is None:
         scheduler.cancel_job(job_id)
     try:
-        job = scheduler.add_job(prompt, fires_at, job_id=job_id, context_id=session_id)
+        options = {"enqueue_key": enqueue_key} if enqueue_key is not None else {}
+        job = scheduler.add_job(prompt, fires_at, job_id=job_id, context_id=session_id, **options)
     except ValueError as e:
         return {"ok": False, "message": f"could not enqueue turn: {e}"}
     return {
         "ok": True,
         "job_id": job.id,
-        "fires_at": fires_at,
+        "fires_at": job.next_fire if enqueue_key is not None else fires_at,
         "message": f"turn enqueued in session {session_id!r} (fires {'now' if delay_seconds <= 0 else f'+{delay_seconds:g}s'})",
     }
 

@@ -262,6 +262,21 @@ def test_agent_wide_jobs_are_a_compact_list(clear_state, monkeypatch):
     assert "- standup next=" in block and "OTHER CHATS" not in block
 
 
+def test_a_job_owned_one_shot_with_no_origin_is_agent_wide(clear_state, monkeypatch):
+    # Every background job now runs in its own job: execution session (ADR 0129);
+    # with no origin chat that session is not a chat membership, so the one-shot
+    # must stay on the agent-wide compact list (its pre-isolation visibility)
+    # instead of vanishing into every chat's count-only OTHER CHATS bucket.
+    job = _sjob("orphan", "x" * 400, context_id="job:e3b0c442-aaaa-bbbb-cccc-000000000000")
+    monkeypatch.setattr(rs.STATE, "scheduler", _Sched([job]), raising=False)
+
+    block = _mw()._working_state_block({"session_id": "chat-a"})
+
+    assert "AGENT-WIDE SCHEDULES (not tied to a chat):" in block
+    assert "- orphan next=" in block and "x" * 121 not in block  # compact preview
+    assert "OTHER CHATS" not in block
+
+
 def test_a_recurring_schedule_made_in_this_chat_shows_in_full(clear_state, monkeypatch):
     job = _sjob("weekly", _RELEASE_RESUME, origin_session="chat-a", schedule="0 9 * * 1")
     monkeypatch.setattr(rs.STATE, "scheduler", _Sched([job]), raising=False)
@@ -312,3 +327,20 @@ def test_more_in_chat_entries_than_the_cap_point_at_the_list_tool(clear_state, m
     monkeypatch.setattr(rs.STATE, "scheduler", _Sched(jobs), raising=False)
     block = _mw()._working_state_block({"session_id": "chat-a"})
     assert "…+2 more (list_schedules shows them all)" in block
+
+
+@pytest.mark.platform_sensitive
+@pytest.mark.parametrize("schedule", ["0 9 * * 1", "2027-01-01T00:00:00+00:00"])
+def test_isolated_schedule_full_in_origin_and_execution(clear_state, monkeypatch, tmp_path, schedule):
+    from scheduler.local import LocalScheduler
+
+    scheduler = LocalScheduler("projection", invoke_url="http://test", db_dir=tmp_path)
+    job = scheduler.add_job(_RELEASE_RESUME, schedule, origin_session="chat-a")
+    scheduler = LocalScheduler("projection", invoke_url="http://test", db_dir=tmp_path)
+    monkeypatch.setattr(rs.STATE, "scheduler", scheduler)
+    for session in ("chat-a", job.context_id):
+        block = _mw()._working_state_block({"session_id": session})
+        assert all(line in block for line in _RELEASE_RESUME.splitlines())
+        assert f'cancel_schedule("{job.id}")' in block
+    sibling = _mw()._working_state_block({"session_id": "job:sibling"})
+    assert "squash-merge #4847" not in sibling

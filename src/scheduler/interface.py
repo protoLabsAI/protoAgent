@@ -35,18 +35,11 @@ class Job:
     # IANA timezone the cron expression is evaluated in (e.g. "America/Chicago").
     # None = UTC. Ignored for one-shot ISO schedules (those carry their own offset).
     timezone: str | None = None
-    # A2A contextId to fire the job INTO (None → the durable Activity thread, the
-    # default for scheduled work). The `wait` tool sets this to the originating
-    # chat session so a yield-and-resume continues that conversation's thread
-    # rather than landing in Activity (ADR 0053 same-session resume).
+    # Execution context, distinct from provenance. Null/system:activity requests
+    # a durable job:<uuid> owner (ADR 0129); explicit non-Activity targets retain
+    # interactive wait, same-chat schedule and run_in_session continuity.
     context_id: str | None = None
-    # The chat session that CREATED this schedule (#2990). DISTINCT from
-    # ``context_id``: ``context_id`` controls WHERE a fire runs (a normal cron runs in
-    # Activity; a `wait`/resume runs back in its chat), whereas ``origin_session`` is
-    # WHERE the RESULT is delivered — the host injects a ScheduledReportCard into this
-    # session after the fire completes so the chat that asked for the schedule sees the
-    # outcome without digging through Activity. None → the schedule wasn't created from
-    # a chat (e.g. an Activity-origin turn) → no result delivery (backward compatible).
+    # Nullable result destination, never an implicit execution target.
     origin_session: str | None = None
     enabled: bool = True
     # Auto-expiry (#2992): a recurring schedule shouldn't run forever by default.
@@ -66,6 +59,8 @@ class Job:
     # calling tool's scope (``graph.fence_scope``) — a fire is a server-fired turn and
     # runs under it, so work a fenced turn scheduled never runs unfenced. ``[]`` = none.
     fence: list[str] = field(default_factory=list)
+    # Unresolved legacy continuation ownership; visible but not dispatchable.
+    execution_hold: str | None = None
 
     def as_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -92,9 +87,15 @@ class SchedulerBackend(Protocol):
         ttl: str | None = None,
         max_fires: int | None = None,
         restore_state: Job | None = None,
+        enqueue_key: str | None = None,
     ) -> Job:
         """Persist a new job. Returns the stored ``Job`` (with
         backend-assigned id and next_fire if the caller didn't set them).
+
+        ``enqueue_key`` atomically deduplicates enqueue across retries, even after
+        the job is deleted or completes. Reuse returns the original enqueue snapshot.
+        A new key replaces a pending job on the supplied id in the same transaction.
+        Backends must reject unsupported durable enqueue rather than silently replay.
 
         ``restore_state`` is a trusted undo snapshot: persist its fence, enabled
         state, timestamps and run history atomically with the new row. Without
@@ -103,9 +104,10 @@ class SchedulerBackend(Protocol):
         ``timezone`` is an IANA name the cron expression is evaluated in
         (None = UTC). Raises ``ValueError`` for malformed schedule/timezone.
 
-        ``context_id`` is the A2A contextId to fire into (None → the durable
-        Activity thread). Used for same-session resume (ADR 0053); backends that
-        can't target a context (remote schedulers) may ignore it.
+        ``context_id`` is the A2A contextId to fire into (None or system:activity → a
+        persisted isolated job owner). Explicit other targets continue that session.
+        Backends unable to honor isolation must report it rather than silently
+        route to Activity.
 
         ``origin_session`` is the chat session that created the schedule (#2990) —
         distinct from ``context_id`` (where the fire runs): the host delivers the
