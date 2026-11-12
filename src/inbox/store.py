@@ -111,12 +111,26 @@ class InboxStore:
             # A direct message may name ONE chat thread; only that thread reads it.
             if "target_session" not in existing:
                 db.execute("ALTER TABLE inbox ADD COLUMN target_session TEXT")
+            # A thread claim is only FINAL once the note is known to be in the chat's state
+            # (acked_at). A claim with no ack is handed out again at the next boot.
+            if "acked_at" not in existing:
+                db.execute("ALTER TABLE inbox ADD COLUMN acked_at TEXT")
             # The agent's answer to a direct message (reply_to_dm), for the sender to read.
             if "reply_text" not in existing:
                 db.execute("ALTER TABLE inbox ADD COLUMN reply_text TEXT")
             if "replied_at" not in existing:
                 db.execute("ALTER TABLE inbox ADD COLUMN replied_at TEXT")
             db.execute("CREATE INDEX IF NOT EXISTS ix_inbox_undelivered ON inbox(delivered_at, priority)")
+            # add() looks a dedup_key up inside its write transaction; keep that a seek.
+            db.execute("CREATE INDEX IF NOT EXISTS ix_inbox_dedup ON inbox(dedup_key, delivered_at)")
+            # A thread claim that never reached the chat (the process died between the
+            # claim's commit and the note landing in state) is released here, once, at
+            # boot: delivery is at-least-once, never silently lost.
+            db.execute(
+                "UPDATE inbox SET delivered_at = NULL, delivered_session = NULL "
+                "WHERE delivery = 'thread' AND delivered_at IS NOT NULL AND acked_at IS NULL "
+                "AND delivered_session IS NOT NULL AND reply_text IS NULL"
+            )
             db.execute(
                 "CREATE INDEX IF NOT EXISTS ix_inbox_now_recovery "
                 "ON inbox(priority, delivered_at, recovery_claimed_at, recovery_attempted_at)"
@@ -212,7 +226,9 @@ class InboxStore:
             if row["delivery"] != DELIVERY_THREAD:
                 db.rollback()
                 raise ValueError(f"inbox item {item_id} is not a direct message, so nobody is waiting on a reply")
-            if row["delivered_at"] is None:
+            # A chat's claim is what counts as "read": the console's dismiss control also
+            # sets delivered_at, with no session, and nobody read the message then.
+            if row["delivered_at"] is None or not row["delivered_session"]:
                 db.rollback()
                 raise ValueError(f"direct message {item_id} has not been read by a chat yet")
             combined = f"{row['reply_text']}\n\n{text}" if row["reply_text"] else text
@@ -246,6 +262,50 @@ class InboxStore:
             return bool(targets)
         return "" in targets or session_id in targets
 
+    def ack_thread_items(self, ids: list[int], *, now: datetime | None = None) -> int:
+        """Make a thread claim final: the note is in the chat's state. Idempotent."""
+        if not ids:
+            return 0
+        stamp = (now or datetime.now(UTC)).isoformat()
+        db = self._connect()
+        try:
+            placeholders = ",".join("?" for _ in ids)
+            cur = db.execute(
+                f"UPDATE inbox SET acked_at = ? WHERE id IN ({placeholders}) AND acked_at IS NULL "
+                "AND delivered_at IS NOT NULL",
+                (stamp, *ids),
+            )
+            db.commit()
+            return cur.rowcount
+        finally:
+            db.close()
+
+    def release_thread_items(self, ids: list[int]) -> int:
+        """Undo a thread claim whose note never reached the chat (the turn was cancelled or
+        failed between the claim and the injection), so a later model call reads it."""
+        if not ids:
+            return 0
+        db = self._connect()
+        try:
+            db.execute("BEGIN IMMEDIATE")
+            placeholders = ",".join("?" for _ in ids)
+            cur = db.execute(
+                "UPDATE inbox SET delivered_at = NULL, delivered_session = NULL "
+                f"WHERE id IN ({placeholders}) AND delivery = ? AND acked_at IS NULL AND delivered_at IS NOT NULL",
+                (*ids, DELIVERY_THREAD),
+            )
+            snapshot = self._targets_in(db)
+            db.commit()
+            with self._hint_lock:
+                self._hint_gen += 1
+                self._thread_targets = self._thread_targets | snapshot
+            return cur.rowcount
+        except Exception:
+            db.rollback()
+            raise
+        finally:
+            db.close()
+
     def claim_thread_items(self, session_id: str, *, limit: int = 20, now: datetime | None = None) -> list[dict]:
         """Atomically take the undelivered thread items for ``session_id``, oldest first.
 
@@ -255,6 +315,9 @@ class InboxStore:
         Each item is handed to exactly one chat: the select and the mark-delivered run in
         one ``BEGIN IMMEDIATE`` transaction, so two chats reaching a model call together
         cannot both read the same note. The claimed rows record which chat read them.
+
+        A claim is provisional until ``ack_thread_items``: the caller acks once the note is
+        in the chat's state, or ``release_thread_items`` if it could not inject it.
         """
         stamp = (now or datetime.now(UTC)).isoformat()
         with self._hint_lock:

@@ -11,6 +11,11 @@ thread items from the durable inbox and appends them as ONE tagged note, so the 
 them at its very next step: mid-turn when a turn is running, otherwise at the first model
 call of the next turn. Each item goes to exactly one chat (the store claims atomically).
 
+Delivery is at-least-once. A claim is provisional until this chat reaches its next hook
+(proof the note is in its state), when it is acked. A claim orphaned by a cancelled turn is
+released at once; one orphaned by a process death is released at the next boot. The rare
+cost is a note read twice, never one silently lost.
+
 Trust: an outside message is INFORMATION, never instruction. The note says so, and it is
 written with ``guard_note`` rather than as a plain ``HumanMessage`` so nothing downstream
 mistakes it for something the operator typed (the round governor's "last real operator
@@ -79,6 +84,42 @@ class OutsideMessageMiddleware(AgentMiddleware):
     def __init__(self, inbox_store=None):
         super().__init__()
         self._store = inbox_store
+        # Claims whose note has been handed to the graph but not yet confirmed in the
+        # chat's state, by session. Acked at that chat's next hook (after the model call
+        # that read the note, or its next model call), which is the proof it landed.
+        self._awaiting_ack: dict[str, list[int]] = {}
+
+    def _ack(self, state) -> None:
+        """Finalize the claims this chat was handed earlier: reaching another hook means the
+        note made it into the thread. Never fails the turn; an unacked claim is simply
+        handed out again at the next boot (at-least-once)."""
+        if not self._awaiting_ack:
+            return
+        session_id = state.get("session_id") if isinstance(state, dict) else getattr(state, "session_id", None)
+        ids = self._awaiting_ack.pop(session_id, None) if session_id else None
+        if not ids:
+            return
+        try:
+            self._store.ack_thread_items(ids)
+        except Exception:  # noqa: BLE001
+            logger.exception("[outside-message] could not ack %s for %s", ids, session_id)
+
+    def _release(self, session_id: str, items: list[dict]) -> None:
+        ids = [i["id"] for i in items if i.get("id") is not None]
+        try:
+            self._store.release_thread_items(ids)
+            logger.warning("[outside-message] turn ended before %s reached %s; released for redelivery", ids, session_id)
+        except Exception:  # noqa: BLE001
+            logger.exception("[outside-message] could not release %s for %s", ids, session_id)
+
+    def after_model(self, state, runtime):  # type: ignore[override]
+        self._ack(state)
+        return None
+
+    async def aafter_model(self, state, runtime):  # type: ignore[override]
+        if self._awaiting_ack:
+            await asyncio.to_thread(self._ack, state)
+        return None
 
     def _due(self, state) -> str | None:
         """The session to claim for, or ``None`` when there is nothing to do."""
@@ -98,10 +139,10 @@ class OutsideMessageMiddleware(AgentMiddleware):
             logger.exception("[outside-message] could not claim pending items for %s", session_id)
             return []
 
-    @staticmethod
-    def _update(session_id: str, items: list[dict]) -> tuple[dict | None, list[dict]]:
+    def _update(self, session_id: str, items: list[dict]) -> tuple[dict | None, list[dict]]:
         if not items:
             return None, []
+        self._awaiting_ack.setdefault(session_id, []).extend(i["id"] for i in items if i.get("id") is not None)
         logger.info(
             "[outside-message] folded %d item(s) into %s (ids %s, from %s)",
             len(items),
@@ -116,6 +157,7 @@ class OutsideMessageMiddleware(AgentMiddleware):
         return {"messages": [guard_note(GUARD, render_note(items))]}, marker
 
     def before_model(self, state, runtime):  # type: ignore[override]
+        self._ack(state)
         session_id = self._due(state)
         if session_id is None:
             return None
@@ -130,11 +172,27 @@ class OutsideMessageMiddleware(AgentMiddleware):
         return update
 
     async def abefore_model(self, state, runtime):  # type: ignore[override]
+        if self._awaiting_ack:
+            await asyncio.to_thread(self._ack, state)
         session_id = self._due(state)
         if session_id is None:
             return None
-        # The claim is sync sqlite — keep it off the event loop (#875).
-        update, marker = self._update(session_id, await asyncio.to_thread(self._claim, session_id))
+        # The claim is sync sqlite — keep it off the event loop (#875). A worker thread
+        # keeps running when this task is cancelled (the operator pressed stop), and its
+        # claim would then commit with nobody left to inject the note. So on cancellation
+        # wait for the claim to finish and hand the rows back before letting it propagate.
+        claim = asyncio.ensure_future(asyncio.to_thread(self._claim, session_id))
+        try:
+            items = await asyncio.shield(claim)
+        except asyncio.CancelledError:
+            try:
+                orphaned = await asyncio.shield(claim)
+            except BaseException:  # noqa: BLE001 — cancelled again, or the claim itself failed
+                orphaned = claim.result() if claim.done() and not claim.cancelled() and not claim.exception() else []
+            if orphaned:
+                await asyncio.shield(asyncio.to_thread(self._release, session_id, orphaned))
+            raise
+        update, marker = self._update(session_id, items)
         if marker:
             try:
                 from langchain_core.callbacks import adispatch_custom_event

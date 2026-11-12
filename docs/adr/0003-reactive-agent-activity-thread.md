@@ -235,6 +235,10 @@ An inbox item may now carry `deliver: "thread"`:
   running, at the first model call of the next turn otherwise. Activity, scheduled,
   background and peer-A2A sessions never read them. Each item goes to exactly one chat,
   and the row records which.
+- **Delivery is at-least-once.** A claim is provisional until the chat reaches its next
+  hook, which acks it. A claim orphaned by a cancelled turn is released immediately, one
+  orphaned by a process death at the next boot. A message may rarely be read twice; it is
+  never silently dropped.
 - **It is information, not instruction.** The note says so, tells the agent to mention it
   to the operator, and is tagged as a guard note so nothing treats it as operator input.
   This is a framing guarantee, not a tool fence: narrowing the toolset for the rest of a

@@ -808,7 +808,7 @@ MEMORY_TOOL_NAMES: tuple[str, ...] = (
 INBOX_TOOL_NAMES: tuple[str, ...] = ("check_inbox", "reply_to_dm")
 
 
-def _publish_inbox_event(topic: str, data: dict) -> None:
+def _publish(topic: str, data: dict) -> None:
     """Best-effort bus push (the `/api/events` SSE stream). A bus hiccup never fails a tool."""
     try:
         from graph.plugins.host import HOST
@@ -858,7 +858,7 @@ def _build_inbox_tools(inbox_store) -> list:
             item = await asyncio.to_thread(inbox_store.reply, int(id), text)
         except ValueError as exc:
             return f"Error: {exc}."
-        _publish_inbox_event(
+        _publish(
             "inbox.reply",
             {
                 "id": item["id"],

@@ -716,3 +716,97 @@ def test_un_delivering_a_thread_item_puts_it_back_in_front_of_its_chat(tmp_path)
     assert s.thread_maybe_pending(CHAT) is False
     assert s.mark_pending([mid]) == 1
     assert s.thread_maybe_pending(CHAT) is True and len(s.claim_thread_items(CHAT)) == 1
+
+
+# ── at-least-once delivery (second review round on PR #5096) ─────────────────
+
+
+def test_a_claim_is_acked_once_the_chat_reaches_its_next_hook(tmp_path):
+    s = _store(tmp_path)
+    mid = s.add("note", source="x", delivery="thread")["id"]
+    mw = OutsideMessageMiddleware(s)
+    assert mw.before_model({"session_id": CHAT, "messages": []}, None) is not None
+    assert s.get(mid)["acked_at"] is None  # handed over, not yet proven in state
+    mw.after_model({"session_id": CHAT, "messages": []}, None)
+    assert s.get(mid)["acked_at"] is not None
+    # A restart now leaves it alone.
+    assert _store(tmp_path).get(mid)["delivered_session"] == CHAT
+
+
+def test_a_claim_the_process_died_holding_is_handed_out_again_at_boot(tmp_path):
+    s = _store(tmp_path)
+    mid = s.add("note", source="x", delivery="thread")["id"]
+    assert len(s.claim_thread_items(CHAT)) == 1  # committed, then the process dies: no ack
+    reborn = _store(tmp_path)
+    assert reborn.get(mid)["delivered_at"] is None and reborn.thread_maybe_pending(CHAT) is True
+    assert [c["id"] for c in reborn.claim_thread_items(CHAT)] == [mid]
+
+
+@pytest.mark.asyncio
+async def test_a_turn_cancelled_during_the_claim_does_not_lose_the_message(tmp_path):
+    """`asyncio.to_thread` keeps the claim running after the task is cancelled. The claim
+    then commits with nobody left to inject the note; it must be released."""
+    s = _store(tmp_path)
+    mid = s.add("note", source="x", delivery="thread")["id"]
+    real = s.claim_thread_items
+    started, go = threading.Event(), threading.Event()
+
+    def _slow_claim(session_id, **kw):
+        started.set()
+        go.wait(5)
+        return real(session_id, **kw)
+
+    s.claim_thread_items = _slow_claim
+    mw = OutsideMessageMiddleware(s)
+    task = asyncio.ensure_future(mw.abefore_model({"session_id": CHAT, "messages": []}, None))
+    await asyncio.to_thread(started.wait, 5)
+    task.cancel()  # the operator pressed stop while the claim was in flight
+    await asyncio.sleep(0.05)
+    go.set()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    row = s.get(mid)
+    assert row["delivered_at"] is None and row["acked_at"] is None
+    s.claim_thread_items = real
+    out = await mw.abefore_model({"session_id": CHAT, "messages": []}, None)
+    assert "note" in out["messages"][0].content  # the next model call reads it
+
+
+def test_a_message_the_operator_dismissed_was_not_read_by_a_chat(tmp_path):
+    """The console's dismiss sets delivered_at with no session. That is not a chat reading
+    the message, so there is nothing to reply to."""
+    s = _store(tmp_path)
+    mid = s.add("note", source="x", delivery="thread")["id"]
+    assert s.mark_delivered([mid]) == 1
+    with pytest.raises(ValueError, match="has not been read by a chat"):
+        s.reply(mid, "hi")
+
+
+def test_a_real_add_landing_between_a_claims_commit_and_its_hint_update_is_kept(tmp_path):
+    """Drives InboxStore.add itself (not the hint fields) into the window after the claim
+    commits and before it writes the hint. Without add's generation bump the claim would
+    overwrite the hint with its older snapshot and strand the new row."""
+    s = _store(tmp_path)
+    s.add("first", source="x", delivery="thread")
+    real_lock = s._hint_lock
+
+    class _AddOnSecondAcquire:
+        def __init__(self):
+            self.enters = 0
+            self.injecting = False
+
+        def __enter__(self):
+            self.enters += 1
+            if self.enters == 2 and not self.injecting:  # the claim's post-commit acquire
+                self.injecting = True
+                s.add("second", source="y", delivery="thread")
+            return real_lock.__enter__()
+
+        def __exit__(self, *exc):
+            return real_lock.__exit__(*exc)
+
+    s._hint_lock = _AddOnSecondAcquire()
+    assert [c["text"] for c in s.claim_thread_items(CHAT)] == ["first"]
+    s._hint_lock = real_lock
+    assert s.thread_maybe_pending(CHAT) is True
+    assert [c["text"] for c in s.claim_thread_items(CHAT)] == ["second"]  # same store, no reopen
