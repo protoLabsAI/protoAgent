@@ -10,8 +10,9 @@
  *  people row is measured (ResizeObserver on the roster, which flexes into whatever the
  *  group chips leave), and whoever doesn't fit collapses behind a `+K` chip that opens the
  *  picker ("In this chat · N") in the same desktop Popover / phone Drawer the group chips
- *  use. Draft-addressed names sort first, so picking a hidden name gives it a visible slot.
- *  Until the first measurement lands the conservative fallback caps apply (peopleFit).
+ *  use. Draft-addressed names sort first with the picker's latest add leading them, so
+ *  picking a hidden name gives it a visible slot even on a row already full of addressed
+ *  names. Until the first measurement lands the conservative fallback caps apply (peopleFit).
  *
  *  Needs you is S7-gated: the selector computes it, the rail doesn't render it yet. */
 import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
@@ -314,9 +315,26 @@ export function ChatStatusRail({ sessionId, cast, draft, onToggleMention }: {
   }
 
   // ── People fit (S6b, the v7 behavior): one row, measured, `+K` for the rest ─────────
-  // Draft-addressed names first, then the original cast order — so a name picked in the
-  // picker (it joins the run) takes a visible slot at once.
-  const ordered = useMemo(() => orderPeople(cast, draft), [cast, draft]);
+  // Draft-addressed names first, then the original cast order. Run order alone is not
+  // enough for the card's "newly picked name takes a visible slot": toggleMention appends
+  // the pick to the run's END, so with the visible slots already full of addressed names
+  // the pick would stay behind `+K`. Track the picker's latest add and orderPeople leads
+  // the addressed group with it. A rail-chip add never needs that: the chip it lands on is
+  // visible already and joining the addressed group cannot push it out of the window. A
+  // removal of the promoted name (either host) ends its promotion; so does anything that
+  // drops it from the run (orderPeople ignores a pick the run no longer addresses).
+  const [latestPick, setLatestPick] = useState<string | null>(null);
+  const toggleMentionTracked = (name: string, source?: "picker") => {
+    if (runHas(draft, name)) {
+      setLatestPick((prev) => (prev && prev.toLowerCase() === name.toLowerCase() ? null : prev));
+    } else if (source === "picker") {
+      setLatestPick(name);
+    }
+    // Forward the exact call shape the hosts always made (the rail passes no source).
+    if (source) onToggleMention(name, source);
+    else onToggleMention(name);
+  };
+  const ordered = useMemo(() => orderPeople(cast, draft, latestPick), [cast, draft, latestPick]);
   const rosterRef = useRef<HTMLDivElement | null>(null);
   const measureRef = useRef<HTMLDivElement | null>(null);
   // The roster's content width (what the group chips leave on the row), from ResizeObserver —
@@ -432,7 +450,7 @@ export function ChatStatusRail({ sessionId, cast, draft, onToggleMention }: {
   );
 
   const peopleSection = (
-    <PeopleSection cast={cast} draft={draft} onToggleMention={onToggleMention} />
+    <PeopleSection cast={cast} draft={draft} onToggleMention={toggleMentionTracked} />
   );
   // The grouped details gain the People section ONLY while the rail hides names — with
   // everyone visible on the row there is nothing the panel would add.
@@ -524,7 +542,7 @@ export function ChatStatusRail({ sessionId, cast, draft, onToggleMention }: {
                     className={`chat-roster-chip${active ? " chat-roster-chip--active" : ""}`}
                     aria-pressed={active}
                     title={active ? `Remove @${name} from this message` : `Address @${name}`}
-                    onClick={() => onToggleMention(name)}
+                    onClick={() => toggleMentionTracked(name)}
                   >
                     <span className="chat-roster-name">@{name}</span>
                   </button>

@@ -128,7 +128,8 @@ describe("the one-row fit", () => {
       offsetLeft: { configurable: true, get(this: HTMLElement) { return [...this.parentElement!.children].indexOf(this) * 60; } },
       offsetWidth: { configurable: true, get: () => 50 },
     };
-    const plain = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "offsetLeft");
+    const plain = Object.fromEntries(Object.keys(offsets).map(
+      (key) => [key, Object.getOwnPropertyDescriptor(HTMLElement.prototype, key)]));
     Object.defineProperties(HTMLElement.prototype, offsets);
     try {
       await render(<Harness cast={CAST.slice(0, 4)} />);
@@ -138,9 +139,11 @@ describe("the one-row fit", () => {
       await act(async () => ro.fire(400)); // everyone fits: no +K
       expect([names(), more()]).toEqual([["@ana", "@bo", "@cy", "@dee"], null]);
     } finally {
-      Reflect.deleteProperty(HTMLElement.prototype, "offsetWidth");
-      if (plain) Object.defineProperty(HTMLElement.prototype, "offsetLeft", plain);
-      else Reflect.deleteProperty(HTMLElement.prototype, "offsetLeft");
+      // Restore jsdom's OWN descriptors (not bare deletes — jsdom defines both getters).
+      for (const [key, desc] of Object.entries(plain)) {
+        if (desc) Object.defineProperty(HTMLElement.prototype, key, desc);
+        else Reflect.deleteProperty(HTMLElement.prototype, key);
+      }
     }
   });
 });
@@ -160,9 +163,10 @@ describe("the +K picker", () => {
       .toEqual(CAST.map((n) => [`@${n}`, String(n === "bo")]));
     await click(chips.find((c) => c.textContent === "@fay"));
     // Toggled from the picker (never the composer-focusing rail path), body untouched,
-    // panel still open, the pick addressed + visible on the rail, +K count unmoved.
+    // panel still open, +K count unmoved — and the pick LEADS the rail (it joins the
+    // run's end, where a full row would hide it; the recipients line keeps run order).
     expect(calls).toEqual([["fay", "picker"]]);
-    expect(names()).toEqual(["@bo", "@fay", "@ana"]);
+    expect(names()).toEqual(["@fay", "@bo", "@ana"]);
     const fay = document.querySelector<HTMLElement>('.chat-people button[title="Remove @fay from this message"]')!;
     expect([fay.getAttribute("aria-pressed"), more()!.textContent]).toEqual(["true", "+3"]);
     expect(document.querySelector(".chat-people__line")!.textContent)
@@ -186,13 +190,19 @@ describe("the +K picker", () => {
     expect(document.querySelector('[role="dialog"] .chat-people')).toBeNull();
   });
 
-  it("phone: +K opens the bottom sheet picker and close returns focus to +K", async () => {
+  it("phone: a pick takes the ONE visible slot, and close returns focus to +K", async () => {
     Object.assign(state, { mobile: true, sources: mkSources(1) });
-    await render(<Harness cast={CAST} />);
+    await render(<Harness cast={CAST} initial="@bo hi" />);
+    expect(names()).toEqual(["@bo"]); // cap 1 beside the status chip: addressed names fill the row
     await click(more());
     const sheet = document.querySelector<HTMLElement>(".pl-drawer--bottom")!;
     expect(sheet.querySelectorAll(".chat-people button.chat-roster-chip")).toHaveLength(6);
     expect(sheet.querySelector(".chat-status-details__section h2")!.textContent).toBe("In this chat · 6");
+    // The pick joins the run's END — only its promotion wins it the one visible slot.
+    await click([...sheet.querySelectorAll("button.chat-roster-chip")].find((b) => b.textContent === "@fay"));
+    expect([names(), more()!.textContent]).toEqual([["@fay"], "+5"]);
+    await click(sheet.querySelector('button[title="Remove @fay from this message"]'));
+    expect(names()).toEqual(["@bo"]); // unpicking ends the promotion: back to run order
     await click(sheet.querySelector('[aria-label="Close"]'));
     expect([document.querySelector(".pl-drawer--bottom"), document.activeElement]).toEqual([null, more()]);
   });

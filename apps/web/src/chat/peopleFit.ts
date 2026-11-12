@@ -17,15 +17,25 @@ function castSpelling(cast: string[], name: string): string | undefined {
 }
 
 /** Display order: draft-addressed names first (in the order the leading run addresses
- *  them), then everyone else in the original cast order. A name picked in the picker
- *  joins the draft's run, so it moves into the addressed front group — that is how a
- *  newly picked name takes a visible slot. Run mentions that name nobody in the cast
- *  don't reorder anything. */
-export function orderPeople(cast: string[], draft: string): string[] {
+ *  them), then everyone else in the original cast order. Run mentions that name nobody
+ *  in the cast don't reorder anything.
+ *
+ *  `latestPick` is the name the picker most recently ADDED. toggleMention appends a pick
+ *  to the run's END, so run order alone leaves it hidden behind `+K` whenever the names
+ *  already addressed fill every visible slot (phone beside a status chip: ONE slot) —
+ *  leading the addressed group is what actually gives the pick a visible slot. It is
+ *  ignored unless the run still addresses it, so unpicking, sending, or clearing the
+ *  draft ends the promotion on its own. */
+export function orderPeople(cast: string[], draft: string, latestPick?: string | null): string[] {
   const addressed: string[] = [];
   for (const name of leadingRun(draft).names) {
     const match = castSpelling(cast, name);
     if (match && !addressed.includes(match)) addressed.push(match);
+  }
+  const pick = latestPick ? castSpelling(cast, latestPick) : undefined;
+  if (pick && addressed.includes(pick)) {
+    addressed.splice(addressed.indexOf(pick), 1);
+    addressed.unshift(pick);
   }
   return [...addressed, ...cast.filter((name) => !addressed.includes(name))];
 }
