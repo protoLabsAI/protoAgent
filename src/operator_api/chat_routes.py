@@ -27,7 +27,7 @@ from typing import Any
 
 from fastapi import HTTPException, Request
 from fastapi.responses import JSONResponse, StreamingResponse
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, ConfigDict, field_validator
 
 from a2a_impl.stores import CHAT_TOMBSTONE_TABLE, task_newest_first
 from infra.paths import package_version
@@ -40,6 +40,22 @@ _PROCESS_STARTED_AT = time.monotonic()
 # Per-session delete locks (see _api_delete_session). An entry lives only while a delete of
 # that session is running or queued, so the map never grows with deleted chats.
 _DELETE_LOCKS: dict[str, tuple[asyncio.Lock, int]] = {}
+
+
+class DirectiveCreateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    session_id: SessionId
+    quote: str
+    scope: str = ""
+    conditions: str = ""
+
+
+class DirectiveUpdateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    scope: str = ""
+    conditions: str = ""
 
 
 class _delete_lock:
@@ -1474,8 +1490,37 @@ def register_chat_routes(app, ui: str) -> None:
 
     # --- Directive ledger (ADR 0127 D6) ------------------------------------
     # The operator's view of what the agent holds as standing approval in a chat, and the
-    # way to withdraw one. The agent writes the ledger (record_directive); the operator
-    # reads and revokes it here and with the `/directives` chat command.
+    # way to create, edit or withdraw one. Agent tools and the `/directives` chat
+    # command share the same ledger; legacy scoped GET/DELETE remain available.
+    @app.post("/api/directives", status_code=201)
+    async def _api_create_directive(body: DirectiveCreateRequest):
+        from graph.directives import DirectiveError, directive_store
+
+        try:
+            d = await asyncio.to_thread(directive_store().record, **body.model_dump(), author="operator")
+        except DirectiveError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"directive": d.to_dict()}
+
+    @app.patch("/api/directives/{directive_id}")
+    async def _api_update_directive(directive_id: str, session_id: SessionId, body: DirectiveUpdateRequest):
+        """The session query parameter scopes the id; the body only edits scope/conditions."""
+        from graph.directives import DirectiveClosed, DirectiveNotFound, directive_store
+
+        try:
+            d = await asyncio.to_thread(
+                directive_store().update, session_id, directive_id, **body.model_dump(exclude_unset=True)
+            )
+        except DirectiveNotFound as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except DirectiveClosed as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        return {"directive": d.to_dict()}
+
+    @app.post("/api/directives/{directive_id}/withdraw")
+    async def _api_withdraw_directive(directive_id: str, session_id: SessionId, reason: str | None = None):
+        return await _api_revoke_directive(session_id, directive_id, reason)
+
     @app.get("/api/chat/sessions/{session_id}/directives")
     async def _api_directives(session_id: SessionId, status: str | None = None):
         """This chat's directives, oldest first — ``{"directives": [...], "in_force": N}``.

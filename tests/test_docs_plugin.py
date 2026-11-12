@@ -194,14 +194,14 @@ def test_generated_navigation_and_landings_are_in_sync() -> None:
 
 
 def test_approved_work_consolidation_spec_and_navigation() -> None:
-    """Keep the approved v2 artifact intact and reachable from its predecessor."""
+    """Keep the approved base plus v8 §10 intact and reachable from its predecessor."""
     import hashlib
     import json
 
     spec = ROOT / "docs/design/work-consolidation.md"
-    # SHA256 of the designSystem artifact approved by Josh on 2026-11-12.
+    # Approved base with the three authorized edits and verbatim v8 §10.
     assert hashlib.sha256(spec.read_bytes()).hexdigest() == (
-        "4a4a2ce143f69e3506b29a5076f74a61e4be239d3af2e12ba32bf9fb968675af"
+        "3aa4630830649e6a133fe9e91156610568d5dd324478c10a11f04959b038c93a"
     )
     previous = (ROOT / "docs/design/work-view.md").read_text(encoding="utf-8")
     assert previous.splitlines()[2] == (
