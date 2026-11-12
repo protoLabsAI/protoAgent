@@ -402,7 +402,8 @@ def register_provider_routes(app) -> None:
                 raise ValueError(f"a provider named {pid!r} already exists")
             return _entries_from_config(current) + [entry]
 
-        await _apply_providers(_with_new, {pid: req.api_key} if req.api_key.strip() else {})
+        # Trimmed like the label and base_url: a key pasted with a stray newline is still the key.
+        await _apply_providers(_with_new, {pid: req.api_key.strip()} if req.api_key.strip() else {})
         return {"ok": True, "id": pid, "restart_required": False}
 
     @app.patch("/api/config/providers/{pid}")
@@ -441,7 +442,7 @@ def register_provider_routes(app) -> None:
         # …unless the edit points the connection at a DIFFERENT server. The stored key was
         # issued for the old one; keeping it would send it to the new address on the next
         # model list or chat turn. Moving a connection means saying its key again.
-        secret = {pid: req.api_key} if rekeyed else {}
+        secret = {pid: (req.api_key or "").strip()} if rekeyed else {}
         # Checked inside `_patched`, against the config the write lock holds — not the copy
         # read above, which a concurrent edit may already have moved.
         await _apply_providers(_patched, secret)

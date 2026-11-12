@@ -202,7 +202,8 @@ def test_patch_moves_a_keyed_connection_when_the_key_is_given_again(client, monk
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
     _install(monkeypatch, **KEYED)
-    r = client.patch("/api/config/providers/gateway", json={"base_url": "https://elsewhere.example/v1", "api_key": "new"})
+    # …and the key is stored trimmed: a paste with a stray newline is still the key.
+    r = client.patch("/api/config/providers/gateway", json={"base_url": "https://elsewhere.example/v1", "api_key": " new\n"})
     assert r.status_code == 200
     assert client.written["secrets"] == {"gateway": "new"}
 
