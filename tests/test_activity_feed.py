@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import sqlite3
+
 import server
 from a2a_impl.executor import TurnOutcome
 from activity.store import ActivityLog
@@ -26,6 +28,50 @@ def test_log_empty_origin_becomes_operator(tmp_path):
     log = ActivityLog(str(tmp_path / "a.db"))
     log.add(context_id="c", origin="", text="a reply")
     assert log.recent()[0]["origin"] == "operator"
+
+
+def test_log_inbox_id_round_trips_and_defaults_none(tmp_path):
+    # docs/design/feed.md §3: the inbox item id rides the entry so the Feed can
+    # join a queued item to its result.
+    log = ActivityLog(str(tmp_path / "a.db"))
+    log.add(context_id="c", origin="inbox", text="paged", inbox_id=42)
+    log.add(context_id="c", origin="scheduler", text="unprompted")
+    rows = log.recent()
+    assert rows[0]["text"] == "unprompted" and rows[0]["inbox_id"] is None
+    assert rows[1]["text"] == "paged" and rows[1]["inbox_id"] == 42
+
+
+def test_log_coerces_inbox_id_and_never_raises(tmp_path):
+    # Turn metadata is untyped: a numeric string round-trips as an int, anything
+    # else (non-numeric, wrong type) stores as NULL instead of raising.
+    log = ActivityLog(str(tmp_path / "a.db"))
+    log.add(context_id="c", origin="inbox", text="numeric string", inbox_id="7")
+    log.add(context_id="c", origin="inbox", text="non-numeric", inbox_id="later")
+    rows = log.recent()
+    assert rows[0]["inbox_id"] is None
+    assert rows[1]["inbox_id"] == 7
+
+
+def test_log_migration_adds_inbox_id_to_an_existing_db(tmp_path):
+    # A DB from before the column: opening ActivityLog ALTERs it in; the old row
+    # reads back with inbox_id None and a new add round-trips.
+    path = str(tmp_path / "old.db")
+    db = sqlite3.connect(path)
+    db.execute(
+        "CREATE TABLE activity (id INTEGER PRIMARY KEY AUTOINCREMENT, created_at TEXT NOT NULL, "
+        "context_id TEXT NOT NULL, origin TEXT NOT NULL DEFAULT '', trigger TEXT, priority TEXT, "
+        "state TEXT, text TEXT NOT NULL, task_id TEXT, stimulus TEXT, origin_session TEXT)"
+    )
+    db.execute("INSERT INTO activity (created_at, context_id, text) VALUES ('2026-01-01T00:00:00+00:00', 'c', 'old')")
+    db.commit()
+    db.close()
+
+    log = ActivityLog(path)
+    assert "inbox_id" in {r[1] for r in sqlite3.connect(path).execute("PRAGMA table_info(activity)")}
+    log.add(context_id="c", origin="inbox", text="new", inbox_id=7)
+    rows = log.recent()
+    assert rows[0]["inbox_id"] == 7
+    assert rows[1]["text"] == "old" and rows[1]["inbox_id"] is None
 
 
 def test_terminal_hook_logs_provenance_and_tags_event(tmp_path, monkeypatch):
