@@ -192,27 +192,28 @@ it("links From {chat title} to an open chat without showing the session id", asy
   expect(mocks.switchSession).toHaveBeenCalledWith("sess-123");
 });
 
-it("opens the existing SubagentsPanel from the Manage subagents link", async () => {
-  mocks.sources.background.items = [bgItem("c1", "done", { id: "c1", status: "completed", subagent_type: "delegate", description: "Summarize" })];
+it("a background deep link lands on Doing now and the row opens the preserved §2.9 detail", async () => {
+  // The old Background agents list (and its Manage subagents footer) is gone with the
+  // four-group consolidation (v2 §7.2); the per-kind DETAIL renderer is what survives.
+  mocks.sources.background.items = [bgItem("r1", "running", { id: "r1", status: "running", subagent_type: "research-assistant", description: "Dig the logs" })];
   await render("background");
-  expect(document.querySelector('[data-testid="subagents-panel"]')).toBeNull();
-  await click("Manage subagents");
-  expect(document.querySelector('[data-testid="subagents-panel"]')).toBeTruthy();
+  expect(host.querySelector(".work-view__picker button")?.textContent).toContain("Doing now");
+  expect(button("Manage subagents")).toBeUndefined();
+  const row = host.querySelector<HTMLButtonElement>(".work-row")!;
+  expect(row.querySelector(".pl-badge")?.textContent).toBe("Job");
+  await act(async () => row.click());
+  expect(fieldValue("Role")).toBe("Research Assistant");
 });
 
-// ── Activity (§2.10) ────────────────────────────────────────────────────────────
-it("shows only the last 24 h until Show more reveals older rows", async () => {
+// ── Activity (v2 §1: history is not Work) ───────────────────────────────────────
+it("keeps activity history out of Work: the old section deep link lands on the Overview", async () => {
   const recent = new Date(Date.now() - 1000).toISOString();
   mocks.sources.activity.items = [
     actItem("a-new", "done", "a-new-turn", { id: 1, origin: "scheduler", state: "completed", created_at: recent }),
-    actItem("a-old", "done", "a-old-turn", { id: 2, origin: "scheduler", state: "completed", created_at: "2020-01-01T00:00:00Z" }),
   ];
   await render("activity");
-  expect(host.textContent).toContain("a-new-turn");
-  expect(host.textContent).not.toContain("a-old-turn");
-  await click("Show more");
-  expect(host.textContent).toContain("a-old-turn");
-  expect(host.querySelectorAll("ul.work-group > li > button.work-row")).toHaveLength(2);
+  expect(host.querySelector(".work-view__picker button")?.textContent).toContain("Overview");
+  expect(host.textContent).not.toContain("a-new-turn");
 });
 
 it("shows Urgent only for the inbox now tier", async () => {

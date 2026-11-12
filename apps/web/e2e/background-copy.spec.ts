@@ -1,12 +1,16 @@
 import { expect, test } from "@playwright/test";
 
-// Copy a finished background job's FULL result out of the Work Background section (#2352).
+// Copy a background job's FULL result out of its Work detail (#2352).
 //
 // The reported friction: a delegate's reply landed in the panel and the operator had to
 // select several thousand words out of a scrolling markdown pane by hand. The panel
 // hydrates from GET /api/background (which carries the full result), so the button copies
 // what is already in the row — the assertion that matters is that the clipboard holds the
 // WHOLE report, tail included, not a preview.
+//
+// With the four-group consolidation (v2 §1) finished jobs leave Work, so the fixture keeps
+// the job RUNNING with its result so a Doing now row still reaches the §2.9 detail; a
+// finished job's report is read from the Feed/notifications instead.
 
 const JOB_ID = "bg-copyable0001";
 // Long enough that the result is clamped — i.e. the case where hand-selecting is painful
@@ -17,7 +21,7 @@ const FULL = `# Delegate reply\n\n${BODY}\n\n${TAIL_MARKER}`;
 
 test.use({ permissions: ["clipboard-read", "clipboard-write"] });
 
-test("copies a finished job's full result, tail included", async ({ page }) => {
+test("copies a job's full result, tail included", async ({ page }) => {
   await page.route("**/api/background", (route) =>
     route.fulfill({
       json: {
@@ -29,11 +33,10 @@ test("copies a finished job's full result, tail included", async ({ page }) => {
             origin_session: "chat-x",
             subagent_type: "delegate",
             description: "delegate → andrew",
-            status: "completed",
+            status: "running",
             result: FULL,
             notified: true,
             created_at: "2026-08-01T10:00:00+00:00",
-            completed_at: "2026-08-01T10:04:00+00:00",
             a2a_task_id: "",
             origin_incognito: false,
             batch_id: null,
@@ -49,8 +52,8 @@ test("copies a finished job's full result, tail included", async ({ page }) => {
 
   await page.getByRole("button", { name: /^Background agents/ }).click();
   const work = page.locator('.work-view[data-frame="modal"]');
-  await expect(work.getByRole("button", { name: /Work sections/ })).toContainText("Background agents");
-  await work.locator(".work-row").click();
+  await expect(work.getByRole("button", { name: /Work sections/ })).toContainText("Doing now");
+  await work.locator(".work-row", { hasText: "delegate → andrew" }).click();
   await expect(work.locator(".work-background__result")).toBeVisible();
 
   const copyBtn = work.getByRole("button", { name: "Copy result to clipboard" });
@@ -79,10 +82,9 @@ test("a job with no result and no tools has no result controls", async ({ page }
             origin_session: "chat-not-open",
             subagent_type: "delegate",
             description: "finished with an empty reply",
-            status: "completed",
+            status: "running",
             result: "",
             created_at: "2026-08-01T10:00:00+00:00",
-            completed_at: "2026-08-01T10:04:00+00:00",
           },
         ],
       },
@@ -93,7 +95,7 @@ test("a job with no result and no tools has no result controls", async ({ page }
   await page.getByRole("button", { name: /^Background agents/ }).click();
 
   const work = page.locator('.work-view[data-frame="modal"]');
-  await work.locator(".work-row").click();
+  await work.locator(".work-row", { hasText: "finished with an empty reply" }).click();
   await expect(work.locator(".work-view__detail")).toContainText("finished with an empty reply");
   await expect(work.locator(".work-background__result")).toHaveCount(0);
   await expect(work.getByRole("button", { name: "Show full text" })).toHaveCount(0);

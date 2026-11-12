@@ -4,7 +4,7 @@
 // its `WorkDetail`. Every field, its order and its wording come from the §2.5 table; ids, the
 // raw status, the verifier and the per-turn evidence live only in Technical details.
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { Button } from "@protolabsai/ui/primitives";
 import { WorkEmpty as Empty } from "../WorkEmpty";
@@ -273,38 +273,29 @@ function GoalDetailView({ ctx, item }: { ctx: WorkSectionContext; item: WorkItem
   );
 }
 
-function GoalsList({ ctx }: { ctx: WorkSectionContext }) {
-  const source = ctx.sources.goals;
+/** The shared goal creator (§5.2): the palette's New goal intent opens it through
+ *  `filters.create`, whichever pane hosts it — the Goals section list or the Work view
+ *  itself now that groups replaced the per-source sections. Closing clears the filter. */
+export function useGoalCreator(state: WorkSectionContext["state"]): { openCreator: () => void; creator: ReactNode } {
   const qc = useQueryClient();
   const toast = useToast();
   const [creating, setCreating] = useState(false);
   const [busy, setBusy] = useState(false);
   // Open after the containing Work modal mounts, so this dialog's portal sits above it.
   useEffect(() => {
-    if (ctx.state.filters?.create === true) setCreating(true);
-  }, [ctx.state.filters?.create]);
+    if (state.filters?.create === true) setCreating(true);
+  }, [state.filters?.create]);
 
   const closeCreator = () => {
     setCreating(false);
     const ui = useUI.getState();
-    const state = ui.surfaceStates.work ?? ctx.state;
-    if (state.filters?.create === true) {
-      const filters = { ...state.filters };
+    const current = ui.surfaceStates.work ?? state;
+    if (current.filters?.create === true) {
+      const filters = { ...current.filters };
       delete filters.create;
-      ui.setSurfaceState("work", { ...state, filters });
+      ui.setSurfaceState("work", { ...current, filters });
     }
   };
-
-  if (source.status === "error") {
-    return (
-      <Alert status="warning">
-        Couldn&apos;t load goals. The agent still has them. Only this view failed.{" "}
-        <Button variant="ghost" size="sm" onClick={() => source.retry()}>
-          Retry
-        </Button>
-      </Alert>
-    );
-  }
 
   const createGoal = (body: GoalSetBody) => {
     setBusy(true);
@@ -319,12 +310,33 @@ function GoalsList({ ctx }: { ctx: WorkSectionContext }) {
       .finally(() => setBusy(false));
   };
 
+  return {
+    openCreator: () => setCreating(true),
+    creator: <GoalCreateDialog open={creating} onClose={closeCreator} onCreate={createGoal} busy={busy} />,
+  };
+}
+
+function GoalsList({ ctx }: { ctx: WorkSectionContext }) {
+  const source = ctx.sources.goals;
+  const { openCreator, creator } = useGoalCreator(ctx.state);
+
+  if (source.status === "error") {
+    return (
+      <Alert status="warning">
+        Couldn&apos;t load goals. The agent still has them. Only this view failed.{" "}
+        <Button variant="ghost" size="sm" onClick={() => source.retry()}>
+          Retry
+        </Button>
+      </Alert>
+    );
+  }
+
   return (
     <>
       {source.items.length === 0 ? (
         // §5.2 — the one section with an empty-state action: New goal opens the shared creator.
         <Empty title="No goals" description="The agent sets one when it has a testable outcome to drive toward.">
-          <Button variant="primary" onClick={() => setCreating(true)}>
+          <Button variant="primary" onClick={openCreator}>
             New goal
           </Button>
         </Empty>
@@ -343,7 +355,7 @@ function GoalsList({ ctx }: { ctx: WorkSectionContext }) {
           ))}
         </ul>
       )}
-      <GoalCreateDialog open={creating} onClose={closeCreator} onCreate={createGoal} busy={busy} />
+      {creator}
     </>
   );
 }

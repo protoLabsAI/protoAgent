@@ -12,8 +12,10 @@ import { ActivitySurface } from "./ActivitySurface";
  * The unified feed widget (#3029) — one utility-bar pill that replaced the two former
  * Activity and Inbox pills. Its unread badge tracks BOTH bus events: `inbox.item`
  * (pending inbound stimuli, ADR 0003) and `activity.message` (completed agent turns,
- * ADR 0022) — incrementing only while the Work Activity section is closed. Opening
- * that section, from the pill or another Work entry point, clears the badge.
+ * ADR 0022) — incrementing only while the feed is closed. The pill opens the widget's
+ * own Feed dialog: history left Work with the four-group consolidation (ADR 0129 Q3),
+ * so this dialog is where pending pages are triaged and completed turns are read. A
+ * legacy saved Work `activity` section still clears the badge if something opens it.
  */
 export function ActivityWidget() {
   const [unread, setUnread] = useState(0);
@@ -77,12 +79,12 @@ export function ActivityWidget() {
       }
       dialogTitle="Feed"
       dialogWidth="min(720px, 94vw)"
-      open={false}
-      onOpen={() => {
-        openRef.current = true;
-        setUnread(0);
-        setPendingNow(false);
-        useUI.getState().openSurfaceModal("work", { section: "activity" });
+      onOpenChange={(open) => {
+        openRef.current = open;
+        if (open) {
+          setUnread(0);
+          setPendingNow(false);
+        }
       }}
     >
       <ActivitySurface />

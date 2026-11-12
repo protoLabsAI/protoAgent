@@ -6,9 +6,11 @@ import { expect, test, type Locator, type Page } from "@playwright/test";
 // change the next GET, so the Undo assertion requires a real query refresh.
 test.beforeEach(async ({ page }) => {
   const now = new Date().toISOString();
+  // Started (in_progress) tasks land in Doing now (v2 §1); closed ones leave Work. Three of
+  // four started keeps the Doing now list long enough to scroll.
   const tasks = Array.from({ length: 40 }, (_, i) => ({
     id: `work-${i}`, title: `Work item ${String(i).padStart(2, "0")}`,
-    status: ["in_progress", "blocked", "open", "closed"][i % 4],
+    status: ["in_progress", "in_progress", "in_progress", "closed"][i % 4],
     issue_type: "task", priority: 2, created_at: now, closed_at: now,
   }));
   let deleted: (typeof tasks)[number] | undefined;
@@ -61,8 +63,9 @@ async function expectScroll(view: Locator, value: number) {
 
 test("window → item → Dock preserves the section, scroll and item", async ({ page }) => {
   await openWorkWindow(page, "Work: Tasks");
-  await expect(modalView(page).getByRole("button", { name: /Work sections/ })).toHaveAccessibleName("Tasks Work sections");
-  await expect(modalView(page).locator(".work-row")).toHaveCount(40);
+  // The legacy Tasks deep link resolves into its group: 30 started tasks + the active goal.
+  await expect(modalView(page).getByRole("button", { name: /Work sections/ })).toHaveAccessibleName("Doing now Work sections");
+  await expect(modalView(page).locator(".work-row")).toHaveCount(31);
   await list(modalView(page)).evaluate((el) => { el.scrollTop = 300; });
   await expectScroll(modalView(page), 300);
   await row(modalView(page)).click();
@@ -72,7 +75,7 @@ test("window → item → Dock preserves the section, scroll and item", async ({
   await page.getByRole("button", { name: "Dock to rail", exact: true }).click();
   await expect(modalView(page)).toHaveCount(0);
   await expect(railView(page).getByRole("heading", { name: "Work item 12", exact: true })).toBeFocused();
-  await railView(page).getByRole("button", { name: "Back to Tasks", exact: true }).click();
+  await railView(page).getByRole("button", { name: "Back to Doing now", exact: true }).click();
   await expectScroll(railView(page), scroll);
   await expect(row(railView(page))).toBeVisible();
   await expect(row(railView(page))).toBeFocused();
@@ -127,9 +130,9 @@ test("task delete confirms inline and Undo restores the row", async ({ page }) =
   await expect(modalView(page).getByRole("heading", { name: "Work item 12", exact: true })).toBeVisible();
 });
 
-test("Decisions pill opens Decisions; Open Work resets to Overview", async ({ page }) => {
+test("Decisions pill opens Needs you; Open Work resets to Overview", async ({ page }) => {
   await page.getByTestId("decisions-widget").click();
-  await expect(modalView(page).getByRole("button", { name: /Work sections/ })).toHaveAccessibleName("Decisions Work sections");
+  await expect(modalView(page).getByRole("button", { name: /Work sections/ })).toHaveAccessibleName("Needs you Work sections");
   await expect(modalView(page).locator(".work-row", { hasText: "Ship the Work view?" })).toBeVisible();
   await page.keyboard.press("Escape");
   await page.keyboard.press("ControlOrMeta+Shift+k");
@@ -188,7 +191,7 @@ test("approved layout evidence: rail, window, empty section and phone", async ({
   };
   await page.setViewportSize({ width: 1440, height: 900 });
   await openWorkWindow(page);
-  await expect(modalView(page).getByRole("heading", { name: /^Doing, \d+$/ })).toBeVisible();
+  await expect(modalView(page).getByRole("heading", { name: /^Doing now, \d+$/ })).toBeVisible();
   await expect(modalView(page).locator(".work-view__detail")).toHaveCount(0);
   await capture("02-window-overview-1440x900");
   await page.getByRole("button", { name: "Dock to rail" }).click();
@@ -199,13 +202,17 @@ test("approved layout evidence: rail, window, empty section and phone", async ({
   await expect(modalView(page).getByRole("button", { name: "Close details" })).toBeVisible();
   await capture("03-window-inspector-1440x900");
   await modalView(page).getByRole("button", { name: "Close details" }).click();
+  // Empty every Needs you source (the mock inbox serves a pending-now delivery by default)
+  // so the picked group shows its inline empty text (v2 §4).
   await page.route("**/api/decisions?*", route => route.fulfill({ json: { pending: 0, decisions: [] } }));
+  await page.route("**/api/inbox?*", route => route.fulfill({ json: { items: [] } }));
   await page.reload();
   await openWorkWindow(page, "Work: Decisions");
-  await expect(modalView(page).getByText("No decisions to show")).toBeVisible();
+  await expect(modalView(page).getByText("Nothing needs you.")).toBeVisible();
+  await expect(modalView(page).getByText("Waiting on you. Nothing else in Work asks for your attention.")).toBeVisible();
   await expect(modalView(page).locator(".work-empty")).toHaveCSS("align-items", "flex-start");
   await expect(modalView(page).locator(".work-empty")).toHaveCSS("text-align", "start");
-  await capture("04-window-empty-decisions-1440x900");
+  await capture("04-window-empty-needs-you-1440x900");
   await page.setViewportSize({ width: 390, height: 844 });
   await page.reload();
   // Dock above selected Work as the persistent mobile destination. Return to chat.
@@ -213,8 +220,8 @@ test("approved layout evidence: rail, window, empty section and phone", async ({
   await page.getByRole("button", { name: "Open Work", exact: true }).click();
   const phone = page.locator('.work-view[data-frame="sheet"]');
   await phone.getByRole("button", { name: /Work sections/ }).click();
-  await page.getByRole("menuitemradio", { name: "Tasks", exact: true }).click();
-  await expect(phone.locator(".work-row")).toHaveCount(40);
+  await page.getByRole("menuitemradio", { name: /^Doing now/ }).click();
+  await expect(phone.locator(".work-row")).toHaveCount(31);
   expect(await phone.locator(".work-row").first().evaluate(el => el.getBoundingClientRect().height)).toBeGreaterThanOrEqual(48);
   await expect.poll(() => phone.evaluate(el => el.scrollWidth <= el.clientWidth)).toBe(true);
   await capture("05-phone-list-390x844");

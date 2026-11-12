@@ -151,7 +151,7 @@ afterEach(async () => {
 });
 
 describe("Decisions section", () => {
-  it("pins pending first with 'Asked {time}' and opens the DecisionCard as its detail (r1)", async () => {
+  it("lists only pending decisions in Needs you with 'Asked {time}' and opens the DecisionCard as its detail (r1)", async () => {
     data.sources.decisions.items = [
       decisionItem(decisionRow("closed", { state: "answered", answer_label: "Go ahead", answered_by: "operator", answered_at: "2026-11-08T15:00:00+00:00" })),
       decisionItem(decisionRow("live", { created_at: new Date(Date.now() - 4 * 60_000).toISOString() })),
@@ -159,10 +159,12 @@ describe("Decisions section", () => {
     workState({ section: "decisions", filters: { thisChat: true } });
     await render("rail");
 
-    // Pending sorts ahead of the already-answered one, even though it came second in the list.
+    // Finished items leave Work (v2 §1): only the pending question renders, tagged by kind.
+    expect(rows()).toHaveLength(1);
     expect(rows()[0].textContent).toContain("Question live");
     expect(rows()[0].textContent).toContain("Asked 4 min ago");
-    expect(rows()[1].textContent).toContain("Question closed");
+    expect(rows()[0].querySelector(".pl-badge")?.textContent).toBe("Decision");
+    expect(host.textContent).not.toContain("Question closed");
 
     // Opening it pushes the unchanged DecisionCard into the detail pane.
     workState({ section: "decisions", itemId: "decision:live", filters: { thisChat: true } });
@@ -176,19 +178,19 @@ describe("Decisions section", () => {
 
   it("pins a pending decision first in the Overview Needs you lane with 'Asked {time}', opening the DecisionCard (r1 §2.1)", async () => {
     data.sources.decisions.items = [decisionItem(decisionRow("live", { created_at: new Date(Date.now() - 4 * 60_000).toISOString() }))];
-    // A running task fills the Doing lane; the pending decision must still sit above it (§1).
-    data.sources.tasks.items = [{ kind: "task", id: "t1", status: "running", title: "Build the thing", meta: "", raw: {} }];
+    // A running task fills the Doing now group; the pending decision must still sit above it (§1).
+    data.sources.tasks.items = [{ kind: "task", id: "t1", status: "running", title: "Build the thing", meta: "", raw: { status: "in_progress" } }];
     workState({ section: "overview", filters: { thisChat: false } });
     await render("modal");
 
     const lanes = [...host.querySelectorAll("section")];
-    // "Needs you" is the first lane, and its first (pinned) row is the pending decision with
-    // the §2.4 field-3 pin — "Asked {time}" — not the agent name the old pin carried.
+    // "Needs you" is the first group, and its first (pinned) row is the pending decision with
+    // the §2.4 field-3 pin — "Asked {time}".
     expect(lanes[0].querySelector("h2")?.firstChild?.textContent).toBe("Needs you");
     const firstRow = lanes[0].querySelector(".work-row");
     expect(firstRow?.textContent).toContain("Question live");
     expect(firstRow?.textContent).toContain("Asked 4 min ago");
-    expect(lanes[1].querySelector("h2")?.firstChild?.textContent).toBe("Doing"); // sits below Needs you
+    expect(lanes[1].querySelector("h2")?.firstChild?.textContent).toBe("Doing now"); // sits below Needs you
 
     // Opening the pin straight from the Overview renders the unchanged DecisionCard as its detail.
     await act(async () => (firstRow as HTMLButtonElement).click());
@@ -199,24 +201,21 @@ describe("Decisions section", () => {
     expect(detail?.querySelector('[role="group"][aria-label="Answer"]')).toBeTruthy();
   });
 
-  it("maps closed states to cancelled and shows 'Answered: {label}' for answered ones (r2)", async () => {
+  it("closed decisions are history and leave Work entirely (v2 §1, ADR Q3)", async () => {
     data.sources.decisions.items = [
       decisionItem(decisionRow("ans", { state: "answered", answer_label: "Merge it", answered_by: "operator", answered_at: "2026-11-08T15:00:00+00:00" })),
       decisionItem(decisionRow("exp", { state: "expired" })),
       decisionItem(decisionRow("wd", { state: "withdrawn", withdraw_reason: "No longer needed" })),
       decisionItem(decisionRow("can", { state: "cancelled" })),
+      decisionItem(decisionRow("live")),
     ];
     workState({ section: "decisions", filters: { thisChat: true } });
     await render("rail");
 
-    const answered = rowFor("Question ans")!;
-    expect(answered.textContent).toContain("Answered: Merge it · by you");
-    expect(answered.querySelector(".pl-badge")?.textContent).toBe("done");
-
-    for (const [title, meta] of [["Question exp", null], ["Question wd", "Withdrawn: No longer needed"], ["Question can", null]] as const) {
-      const row = rowFor(title)!;
-      expect(row.querySelector(".pl-badge")?.textContent).toBe("cancelled");
-      if (meta) expect(row.textContent).toContain(meta);
+    expect(rows()).toHaveLength(1);
+    expect(rows()[0].textContent).toContain("Question live");
+    for (const gone of ["Question ans", "Question exp", "Question wd", "Question can"]) {
+      expect(host.textContent).not.toContain(gone);
     }
   });
 
@@ -460,8 +459,8 @@ describe("Directives section", () => {
     expect(dir.revoke).toHaveBeenCalledWith("elsewhere", "other", "");
   });
 
-  it("renders the ledger with in-force entries under a neutral 'Active' group (r3)", async () => {
-    data.sources.directives.items = [directiveItem(directiveRow("a1", { session_id: "here" }))];
+  it("lists instruction rows, and the opened detail keeps the ledger's neutral 'Active' group (r3)", async () => {
+    data.sources.directives.items = [directiveItem(directiveRow("a1", { session_id: "here", quote: "Hold the release until Monday" }))];
     dir.snapshot = {
       state: "ready",
       active: [directiveRow("a1", { quote: "Hold the release until Monday" })],
@@ -471,20 +470,24 @@ describe("Directives section", () => {
     workState({ section: "directives", filters: { thisChat: true } });
     await render("rail");
 
-    // In-force keeps the ledger's word "Active" (the §2.11 exception), never the running/waiting word.
-    expect(host.textContent).toContain("Active");
-    expect(host.textContent).toContain("Hold the release until Monday");
+    // The Your instructions group row carries the kind tag — never the running/waiting word.
+    const row = rowFor("Hold the release until Monday")!;
+    expect(row.querySelector(".pl-badge")?.textContent).toBe("Instruction");
     expect(host.textContent).not.toMatch(/\brunning\b/);
     expect(host.textContent).not.toMatch(/\bwaiting\b/);
 
-    // History sits in the ledger's own collapsed group with its own done/withdrawn badges.
+    // Opening the row keeps the preserved ledger detail: in-force stays the ledger's word
+    // "Active" (the §2.11 exception) with history in its own collapsed group.
+    workState({ section: "directives", itemId: "directive:a1", filters: { thisChat: true } });
+    await render("rail");
+    const detail = host.querySelector(".work-view__detail")!;
+    expect(detail.textContent).toContain("Active");
+    expect(detail.textContent).toContain("Hold the release until Monday");
     const historyTrigger = buttons("History (1)")[0];
     expect(historyTrigger).toBeTruthy();
     await act(async () => historyTrigger.click());
-    const done = rows().length; // no WorkRows in the ledger view
-    expect(done).toBe(0);
-    expect(host.textContent).toContain("Cut the patch release");
-    expect([...host.querySelectorAll(".pl-badge")].some((b) => b.textContent === "done")).toBe(true);
+    expect(detail.textContent).toContain("Cut the patch release");
+    expect([...detail.querySelectorAll(".pl-badge")].some((b) => b.textContent === "done")).toBe(true);
   });
 
   it("shows the ledger's own empty state for a session with nothing recorded", async () => {
@@ -502,8 +505,8 @@ describe("Directives section", () => {
     expect(host.textContent).toContain("No standing instructions");
   });
 
-  it("never shows a directive id in the ledger (r4)", async () => {
-    data.sources.directives.items = [directiveItem(directiveRow("secret-dir-id", { session_id: "here" }))];
+  it("never shows a directive id in the rows or the ledger detail (r4)", async () => {
+    data.sources.directives.items = [directiveItem(directiveRow("secret-dir-id", { session_id: "here", quote: "Approve dependency bumps" }))];
     dir.snapshot = {
       state: "ready",
       active: [directiveRow("secret-dir-id", { quote: "Approve dependency bumps" })],
@@ -514,9 +517,13 @@ describe("Directives section", () => {
     await render("rail");
     expect(host.textContent).toContain("Approve dependency bumps");
     expect(host.textContent).not.toContain("secret-dir-id");
+    workState({ section: "directives", itemId: "directive:secret-dir-id", filters: { thisChat: true } });
+    await render("rail");
+    expect(host.querySelector(".work-view__detail")?.textContent).toContain("Approve dependency bumps");
+    expect(host.textContent).not.toContain("secret-dir-id");
   });
 
-  it("routes closed directives to Done and in-force to Waiting on in the Overview counts only (r3 §2.11)", async () => {
+  it("shows in-force directives under Your instructions and drops closed ones from Work (v2 §1)", async () => {
     data.sources.directives.items = [
       directiveItem(directiveRow("inforce")),
       directiveItem(directiveRow("fulfilled", { status: "fulfilled", closed_at: new Date().toISOString() })),
@@ -525,8 +532,10 @@ describe("Directives section", () => {
     workState({ section: "overview", filters: { thisChat: false } });
     await render("modal");
     const lanes = [...host.querySelectorAll("section h2")].map((n) => n.firstChild?.textContent);
-    expect(lanes).toContain("Waiting on"); // in_force → waiting
-    expect(lanes).toContain("Done"); // fulfilled → done, revoked → cancelled
+    expect(lanes).toEqual(["Your instructions"]);
+    expect(host.textContent).toContain("Instruction inforce");
+    expect(host.textContent).not.toContain("Instruction fulfilled");
+    expect(host.textContent).not.toContain("Instruction revoked");
   });
 });
 
@@ -539,7 +548,8 @@ it("uses actual phone action sizes in decision and directive custom details", as
   expect(host.querySelectorAll(".work-decision-detail button.pl-btn--sm")).toHaveLength(0);
   expect(host.querySelector(".work-view__back")?.classList.contains("pl-btn--sm")).toBe(false);
   dir.snapshot = { state: "ready", active: [directiveRow("phone")], history: [], loadedAt: 1 };
-  workState({ section: "directives" });
+  data.sources.directives.items = [directiveItem(directiveRow("phone"))];
+  workState({ section: "directives", itemId: "directive:phone" });
   await render("sheet");
   await act(async () => buttons("Withdraw…")[0].click());
   expect(host.querySelectorAll(".chat-directive button.pl-btn--sm")).toHaveLength(0);

@@ -3,21 +3,25 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
-  listeners: new Map<string, (data: Record<string, unknown>) => void>(),
+  // Multiple subscribers share a topic (the Feed pill AND its dialog's ActivitySurface),
+  // so each topic fans out to a Set — one unmount must not silence the others.
+  listeners: new Map<string, Set<(data: Record<string, unknown>) => void>>(),
   pendingCount: 2,
   openPanel: vi.fn(),
 }));
-vi.mock("../lib/events", () => ({
-  onServerEvent: (topic: string, fn: (data: Record<string, unknown>) => void) => {
-    mocks.listeners.set(topic, fn);
-    return () => mocks.listeners.delete(topic);
-  },
-  onTopic: (topic: string, fn: (data: Record<string, unknown>) => void) => {
-    mocks.listeners.set(topic, fn);
-    return () => mocks.listeners.delete(topic);
-  },
-  onConnectionChange: () => () => {},
-}));
+vi.mock("../lib/events", () => {
+  const subscribe = (topic: string, fn: (data: Record<string, unknown>) => void) => {
+    const set = mocks.listeners.get(topic) ?? new Set<(data: Record<string, unknown>) => void>();
+    set.add(fn);
+    mocks.listeners.set(topic, set);
+    return () => set.delete(fn);
+  };
+  return {
+    onServerEvent: subscribe,
+    onTopic: subscribe,
+    onConnectionChange: () => () => {},
+  };
+});
 vi.mock("../decisions/useDecisions", () => ({
   useDecisions: () => ({
     decisions: [], pendingCount: mocks.pendingCount, top: null, loaded: true,
@@ -40,6 +44,8 @@ import type { WorkItems } from "../work/useWorkItems";
 import "../work/sections/background";
 
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+// jsdom has no Element.scrollTo; the Feed dialog pins its newest entry into view with it.
+Element.prototype.scrollTo ??= () => {};
 let root: Root;
 let container: HTMLDivElement;
 beforeEach(() => {
@@ -63,7 +69,7 @@ const modal = (section: string) => expect(useUI.getState().surfaceModal).toEqual
   viewId: "work", state: { section },
 });
 function emit(topic: string) {
-  act(() => mocks.listeners.get(topic)?.({}));
+  act(() => mocks.listeners.get(topic)?.forEach((fn) => fn({})));
 }
 
 it("routes the Decisions utility entry to Work and preserves pending badges", () => {
@@ -97,22 +103,30 @@ it.each([0, 2])("routes background jobs to Work with %i running jobs", async (ru
   expect(document.querySelector('[role="dialog"]')).toBeNull();
 });
 
-it("counts unseen Activity items, clears on opening, and resumes after leaving the section", () => {
-  act(() => root.render(<ActivityWidget />));
+it("counts unseen Activity items, clears in its own Feed dialog, and resumes after closing", async () => {
+  // History left Work with the four-group consolidation (ADR 0129 Q3): the pill opens the
+  // widget's own Feed dialog now, never the Work modal.
+  vi.spyOn(api, "activity").mockResolvedValue({ context_id: "activity", messages: [], entries: [] });
+  vi.spyOn(api, "inbox").mockResolvedValue({ items: [] });
+  await act(async () => root.render(<ActivityWidget />));
   expect(pill("activity-badge")).toBeNull();
   emit("activity.message");
   emit("inbox.item");
   expect(pill("activity-badge").textContent).toBe("2");
-  act(() => pill("activity-widget").click());
-  modal("activity");
+  await act(async () => pill("activity-widget").click());
+  expect(useUI.getState().surfaceModal).toBeNull();
+  expect(document.querySelector('[role="dialog"]')?.textContent).toContain("Feed");
+  expect(document.querySelector('[data-testid="unified-feed"]')).not.toBeNull();
   expect(pill("activity-badge")).toBeNull();
-  expect(document.querySelector('[role="dialog"]')).toBeNull();
   emit("activity.message");
-  expect(pill("activity-badge")).toBeNull();
-  act(() => useUI.getState().openSurfaceModal("work", { section: "background" }));
+  expect(pill("activity-badge")).toBeNull(); // read while the feed is open
+  const close = [...document.querySelectorAll<HTMLButtonElement>('[role="dialog"] button')]
+    .find((node) => node.getAttribute("aria-label") === "Close");
+  expect(close).toBeTruthy();
+  await act(async () => close!.click());
   emit("activity.message");
   expect(pill("activity-badge").textContent).toBe("1");
-  // Opening from another Work entry point also marks the section read.
+  // A legacy saved Work `activity` section still marks the feed read when something opens it.
   act(() => useUI.getState().openSurfaceModal("work", { section: "activity" }));
   expect(pill("activity-badge")).toBeNull();
   act(() => useUI.getState().closeSurfaceModal());
@@ -154,7 +168,7 @@ it("keeps earlier tool outputs and live progress in the background detail opened
     </>;
   }
   const progress = (data: Record<string, unknown>) => act(() => {
-    mocks.listeners.get("background.progress")?.({ job_id: job.id, ...data });
+    mocks.listeners.get("background.progress")?.forEach((fn) => fn({ job_id: job.id, ...data }));
   });
   await act(async () => root.render(<Harness />));
   progress({ phase: "tool_end", tool: "read_file", tool_call_id: "read", output: "Earlier file contents" });

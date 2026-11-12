@@ -13,23 +13,44 @@ import { chatStore } from "../chat/chat-store";
 import { useKbIntents } from "../keybindings/intents";
 import { isConnected, onConnectionChange } from "../lib/events";
 import { useDecisions } from "../decisions/useDecisions";
-import { decisionMeta, fromDecision } from "./tone";
+import { decisionMeta, fromDecision, relTime, type GroupableWorkItem, type WorkGroupId } from "./tone";
 import type { DecisionRow } from "../lib/api/decisions";
+import type { InboxItem } from "../lib/types";
 import { useUI } from "../state/uiStore";
 import type { SurfaceState } from "../shell/surfaceState";
-import { useWorkItems, type WorkItem, type WorkItems } from "./useWorkItems";
-import { WorkOverview, workSections } from "./WorkOverview";
+import { useWorkItems, type WorkItems } from "./useWorkItems";
+import { workGroups } from "./workGroups";
+import { WorkDetail } from "./WorkDetail";
+import { WorkOverview, WorkGroupSection, groupSources, itemKey, workSections } from "./WorkOverview";
 import { sections, subscribe, getSnapshot } from "./sectionRegistry";
+import { useGoalCreator } from "./sections/goals";
 import "./sections/decisions";
 import "./sections/goals";
 import "./sections/directives";
 import "./sections/tasks";
 import "./sections/schedules";
-import "./sections/activity";
 import "./work-view.css";
 
 export { registerWorkSection, type WorkSectionContext } from "./sectionRegistry";
+export { workSections };
 const emptyState: SurfaceState = {};
+
+const GROUP_IDS: readonly WorkGroupId[] = ["needs-you", "doing-now", "coming-up", "instructions"];
+
+/** Legacy per-source section ids land on the group that shows their rows, mirroring the
+ *  built-in registry annotations so the map can't drift while both exist (S4c removes it). */
+const LEGACY_GROUPS: Record<string, WorkGroupId> = {
+  decisions: "needs-you", goals: "doing-now", watches: "coming-up", tasks: "doing-now",
+  schedules: "coming-up", background: "doing-now", directives: "instructions",
+};
+
+/** The canonical place a saved or deep-linked section opens: a group id passes through; a
+ *  legacy or extension section resolves to its registered group; history (activity) and
+ *  anything unknown land on the Overview. */
+export function canonicalSection(section: string): "overview" | WorkGroupId {
+  if (section === "overview" || (GROUP_IDS as readonly string[]).includes(section)) return section as "overview" | WorkGroupId;
+  return sections.get(section)?.group ?? LEGACY_GROUPS[section] ?? "overview";
+}
 
 /** The shared record to show over Work's row, if any: a settled state is one-way, so a row Work
  *  already has as settled keeps it over a shared record still cached as pending. */
@@ -49,11 +70,36 @@ function listScroller(list: HTMLElement): HTMLElement {
   return list;
 }
 
+/** Hosts the shared goal creator where the palette's New goal intent now lands: the intent's
+ *  legacy `goals` section resolves to Doing now, and `filters.create` opens the dialog. A
+ *  child component keeps the creator's queries out of panes that never need them. */
+function GoalCreatorHost({ state }: { state: SurfaceState }) {
+  return <>{useGoalCreator(state).creator}</>;
+}
+
+/** An undelivered page (§2 "Delivery") — no section renderer owns the inbox, so the
+ *  detail renders here from the normalized row. */
+function DeliveryDetail({ item }: { item: GroupableWorkItem }) {
+  const row = item.raw as InboxItem;
+  return <WorkDetail
+    title={item.title || "Delivery"}
+    status="needs-you"
+    fields={[
+      { label: "From", value: row.source || null },
+      { label: "Waiting since", value: row.created_at ? relTime(row.created_at).text : null },
+    ]}
+    actions={[]}
+    technical={{ Id: String(row.id), "Dedup key": row.dedup_key ?? "" }}
+    type="Delivery"
+  />;
+}
+
 export function WorkView({ frame = "rail", sessionId }: { frame?: "rail" | "modal"; sessionId?: string }) {
   const hostFrame = useSurfaceFrame() ?? frame;
   useSyncExternalStore(subscribe, getSnapshot);
   const state = useUI((s) => s.surfaceStates.work ?? emptyState);
-  const section = state.section ?? "overview";
+  const section = canonicalSection(state.section ?? "overview");
+  const thisChatOnly = state.filters?.thisChat === true;
   const toast = useToast();
   const agentOnline = useSyncExternalStore(onConnectionChange, isConnected);
   const decisions = useDecisions();
@@ -78,12 +124,19 @@ export function WorkView({ frame = "rail", sessionId }: { frame?: "rail" | "moda
       return record ? { ...item, raw: record, status: fromDecision(record.state), meta: decisionMeta(record, true) } : item;
     }),
   }])) as WorkItems;
-  const items = Object.values(sources).flatMap((source) => source.items);
-  const selected = items.find((item) => `${item.kind}:${item.id}` === state.itemId || item.id === state.itemId);
-  const selectedKey = selected ? `${selected.kind}:${selected.id}` : state.itemId;
+  // The shared selector is the ONLY row/count projection (spec §7.1): the Overview, a picked
+  // group and the picker badges all read it, with Needs you never chat-filtered.
+  const groups = workGroups(sources, { thisChatOnly, sessionId });
+  const group = groups.find((candidate) => candidate.id === section);
+  const total = groups.reduce((sum, candidate) => sum + candidate.count, 0);
+  const items = [...groups.flatMap((candidate) => candidate.items),
+    ...Object.values(sources).flatMap((source) => source.items)];
+  const selected = items.find((item) => itemKey(item) === state.itemId || item.id === state.itemId);
+  const selectedKey = selected ? itemKey(selected) : state.itemId;
   const loading = Object.values(sources).some((source) => source.status === "loading");
-  const label = sections.get(section)?.label ?? workSections[section as keyof typeof workSections] ?? section;
-  const count = section === "overview" ? items.length : sources[section as keyof WorkItems]?.items.length ?? 0;
+  const groupLoading = (id: WorkGroupId) => groupSources[id].some((kind) => sources[kind].status === "loading");
+  const label = group?.label ?? "Overview";
+  const count = group ? group.count : total;
   const listRef = useRef<HTMLDivElement>(null);
   const detailRef = useRef<HTMLDivElement>(null);
   const listSize = useRef<{ width: number; height: number } | null>(null);
@@ -117,7 +170,7 @@ export function WorkView({ frame = "rail", sessionId }: { frame?: "rail" | "moda
     observer.observe(list);
     return () => observer.disconnect();
   }, []);
-  const needs = items.filter((item) => item.status === "needs-you").map((item) => `${item.kind}:${item.id}`).sort().join("\n");
+  const needs = groups.find((candidate) => candidate.id === "needs-you")!.items.map(itemKey).sort().join("\n");
   useEffect(() => {
     if (loading) return;
     const next = new Set(needs ? needs.split("\n") : []);
@@ -158,8 +211,8 @@ export function WorkView({ frame = "rail", sessionId }: { frame?: "rail" | "moda
     document.addEventListener("keydown", onEscape);
     return () => document.removeEventListener("keydown", onEscape);
   }, [state.itemId, selectedKey, hostFrame]);
-  const onOpen = (item: WorkItem) => update({
-    itemId: `${item.kind}:${item.id}`,
+  const onOpen = (item: GroupableWorkItem) => update({
+    itemId: itemKey(item),
     scrollTop: listRef.current ? listScroller(listRef.current).scrollTop : state.scrollTop,
   });
   const openSourceChat = async (sourceSessionId: string, reply = false) => {
@@ -185,9 +238,11 @@ export function WorkView({ frame = "rail", sessionId }: { frame?: "rail" | "moda
     openView("chat");
     if (reply) useKbIntents.getState().focusComposer();
   };
-  const context = { sources, state, onOpen, onBack, sessionId, decisionActions: { agentOnline, openSourceChat, answerDecision: decisions.answer } };
-  const selectedSection = selected && ({ decision: "decisions", goal: "goals", watch: "watches", task: "tasks", schedule: "schedules", background: "background", activity: "activity", directive: "directives" } as const)[selected.kind];
-  const detailRenderer = sections.get(selectedSection ?? section);
+  const context = { sources, state: { ...state, itemId: selectedKey ?? state.itemId }, onOpen, onBack, sessionId,
+    decisionActions: { agentOnline, openSourceChat, answerDecision: decisions.answer } };
+  const selectedSection = selected && ({ decision: "decisions", goal: "goals", watch: "watches", task: "tasks",
+    schedule: "schedules", background: "background", directive: "directives", wait: "schedules", delivery: "delivery", activity: "activity" } as const)[selected.kind];
+  const detailRenderer = selectedSection ? sections.get(selectedSection) : undefined;
   const selectSection = (id: string) => update({ section: id, itemId: undefined, scrollTop: 0 });
 
   return <div className="work-view" data-frame={hostFrame} data-selected={!!state.itemId} onKeyDown={(event) => {
@@ -201,9 +256,11 @@ export function WorkView({ frame = "rail", sessionId }: { frame?: "rail" | "moda
     <div className="work-view__header">
       {state.itemId && <Button className="work-view__back" size={hostFrame === "sheet" ? "md" : "sm"} variant="ghost" onClick={onBack}>Back to {label}</Button>}
       <div className="work-view__picker"><SideNav collapsed ariaLabel="Work sections" active={section} onSelect={selectSection}
-        items={Object.entries(workSections).map(([id, defaultLabel]) => ({ id, label: sections.get(id)?.label ?? defaultLabel,
-          badge: (id === "overview" ? loading : sources[id as keyof WorkItems]?.status === "loading") ? undefined : (id === "overview" ? items.length : sources[id as keyof WorkItems]?.items.length ?? 0),
-        }))} /></div>
+        items={[
+          { id: "overview", label: "Overview", badge: loading ? undefined : total },
+          ...groups.map((candidate) => ({ id: candidate.id, label: candidate.label,
+            badge: groupLoading(candidate.id) ? undefined : candidate.count })),
+        ]} /></div>
     </div>
     <div className="work-view__panes">
       <div className="work-view__list" ref={listRef} onScroll={(event) => {
@@ -216,16 +273,19 @@ export function WorkView({ frame = "rail", sessionId }: { frame?: "rail" | "moda
         }
       }}>
         <div className="work-view__content">
-          {section !== "overview" && <WorkHeading label={label} count={count} />}
-          {section === "overview" ? <WorkOverview sources={sources} onOpen={onOpen} onSchedules={() => selectSection("schedules")} />
-            : sections.get(section)?.render({ ...context, state: { ...state, itemId: undefined } }) ?? <Empty title={`No ${label.toLowerCase()} to show`} />}
+          {section !== "overview" && group && <WorkHeading label={group.label} count={group.count} />}
+          {section === "overview" || !group
+            ? <WorkOverview groups={groups} sources={sources} onOpen={onOpen} />
+            : <WorkGroupSection group={group} sources={sources} onOpen={onOpen} />}
         </div>
       </div>
       {state.itemId && <div className="work-view__detail" ref={detailRef}>
         <div className="work-view__close"><Tooltip label="Close details"><Button icon variant="ghost" size="sm" aria-label="Close details" onClick={onBack}><X aria-hidden="true" /></Button></Tooltip></div>
-        {detailRenderer?.render(context) ?? <Empty title={selected?.title ?? "Item unavailable"} description="Details will appear here." />}
+        {selected?.kind === "delivery" ? <DeliveryDetail item={selected} />
+          : detailRenderer?.render(context) ?? <Empty title={selected?.title ?? "Item unavailable"} description="Details will appear here." />}
       </div>}
     </div>
+    {state.filters?.create === true && <GoalCreatorHost state={state} />}
     <div className="work-view__announcement" role="status" aria-live="polite" aria-atomic="true">{announcement}</div>
   </div>;
 }
