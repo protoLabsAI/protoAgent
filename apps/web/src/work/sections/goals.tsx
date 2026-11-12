@@ -14,7 +14,7 @@ import { useToast } from "@protolabsai/ui/overlays";
 import { registerWorkSection, type WorkSection, type WorkSectionContext } from "../sectionRegistry";
 import { WorkRow } from "../WorkRow";
 import { WorkDetail, type WorkAction, type WorkField } from "../WorkDetail";
-import { relTime } from "../tone";
+import { groupFor, relTime, type GroupableWorkItem } from "../tone";
 import type { WorkItem } from "../useWorkItems";
 import { useUI } from "../../state/uiStore";
 import { api } from "../../lib/api";
@@ -90,20 +90,43 @@ function history(events: GoalEvent[] | undefined): WorkField["value"] {
   );
 }
 
-// The §2.5 table, fields 3–11 (1 = Goal is the title, 2 = Status is the badge). An empty value
-// hides its line (WorkDetail drops it — never a dash). Progress NEVER reads "n/0" or "∞": with
-// no limit it is just "Turn 3".
-function goalFields(g: GoalState): WorkField[] {
+// A goal that stopped short of its finish line (exhausted / unachievable) is exactly the goal
+// `groupFor` sends to Needs you — deriving the "Goal stopped" tag, its NEUTRAL tone (§2, §6)
+// and the Keep going / Drop the goal pair from the shared selector keeps them in step with
+// where the row actually sits.
+function goalStopped(item: WorkItem): boolean {
+  return groupFor(item as GroupableWorkItem) === "needs-you";
+}
+
+// An achieved (or cleared) goal has met its finish line and leaves Work — `groupFor` drops it
+// from every group (§2). The list and WorkView's counts share this one rule.
+function goalShowsInWork(item: WorkItem): boolean {
+  return groupFor(item as GroupableWorkItem) !== null;
+}
+
+// A goal is a job with a finish line (ADR D3, work-consolidation §2). Progress reads "step N of
+// M" — with no limit, just "step N", NEVER "n/0" or "∞". An active goal re-checks its finish
+// line after each turn, so its progress line says so; a stopped one shows only how far it got.
+function goalSteps(g: GoalState): string {
   const iter = g.iteration ?? 0;
   const max = g.max_iterations;
-  const progress = max && max > 0 ? `Turn ${iter} of ${max}` : `Turn ${iter}`;
+  return max && max > 0 ? `step ${iter} of ${max}` : `step ${iter}`;
+}
+function goalProgress(g: GoalState): string {
+  return g.status === "active" ? `${goalSteps(g)} · checking after each turn` : goalSteps(g);
+}
+
+// The §2.5 table, fields 3–11 (1 = Goal is the title, 2 = Status is the badge), led by the
+// finish line (§2). An empty value hides its line (WorkDetail drops it — never a dash).
+function goalFields(g: GoalState): WorkField[] {
   const streak = g.no_progress_streak ?? 0;
   const stalled =
     streak > 0
       ? `No progress for ${streak}${g.no_progress_limit ? ` of ${g.no_progress_limit}` : ""} checks`
       : "";
   return [
-    { label: "Progress", value: progress },
+    { label: "Finish line", value: g.outcome?.trim() || g.condition || "" },
+    { label: "Progress", value: goalProgress(g) },
     { label: "Stalled", value: stalled },
     { label: "Latest check", value: g.last_reason ? `Last check: ${g.last_reason}` : "" },
     { label: "Started", value: when(g.started_at, "Started ") },
@@ -197,14 +220,15 @@ function GoalDetailView({ ctx, item }: { ctx: WorkSectionContext; item: WorkItem
 
   const title = g.outcome?.trim() || g.condition || g.session_id;
   const active = item.status === "running" || item.status === "waiting";
+  const stopped = goalStopped(item);
   const actions: WorkAction[] = [{ id: "edit", label: "Edit", run: async () => void setEditing(true) }];
 
-  // Lifecycle (ADR 0079), restoring the base `GoalDetailDrawer`'s re-arm controls so an exhausted
-  // or unachievable goal can be reached from the Work surface. An ACTIVE goal gets more room
-  // (+N iterations — the running loop picks up the higher cap); a TERMINAL one that fell short
-  // (exhausted / unachievable) is Restarted (the backend resets the loop and kicks a fresh drive
-  // turn). An achieved goal shows neither. Re-arm has no undo, so feedback is a toast + the field
-  // table refresh — not the §4.5 undo flow.
+  // Lifecycle (ADR 0079), restoring the base `GoalDetailDrawer`'s re-arm controls so a stopped
+  // goal can be reached from the Work surface. An ACTIVE goal gets more room (+N iterations — the
+  // running loop picks up the higher cap); a STOPPED one (exhausted / unachievable) is told to
+  // Keep going (the backend resets the loop and kicks a fresh drive turn, so the shared refresh
+  // re-groups it into Doing now). An achieved goal shows neither — it has left Work. Re-arm has
+  // no undo, so feedback is a toast + the field table refresh — not the §4.5 undo flow.
   const rearm = (body: { add_iterations?: number }) => async () => {
     try {
       const res = await api.rearmGoal(g.session_id, body);
@@ -216,8 +240,8 @@ function GoalDetailView({ ctx, item }: { ctx: WorkSectionContext; item: WorkItem
   };
   if (g.status === "active") {
     actions.push({ id: "extend", label: `Add ${EXTEND_BY} iterations`, run: rearm({ add_iterations: EXTEND_BY }) });
-  } else if (g.status === "exhausted" || g.status === "unachievable") {
-    actions.push({ id: "restart", label: "Restart goal", run: rearm({}) });
+  } else if (stopped) {
+    actions.push({ id: "restart", label: "Keep going", run: rearm({}) });
   }
 
   // An active goal can be Stopped (stops the drive loop and closes its tasks, §4.4 confirm);
@@ -240,14 +264,18 @@ function GoalDetailView({ ctx, item }: { ctx: WorkSectionContext; item: WorkItem
       },
     });
   }
+  // Any goal can be dropped, handing back an undo token for the §4.5 Undo toast. A stopped goal
+  // frames it as Drop the goal (its Needs-you partner to Keep going) — the undo toast says
+  // "dropped" to match — otherwise Delete….
   actions.push({
     id: "delete",
-    label: "Delete…",
+    label: stopped ? "Drop the goal" : "Delete…",
     destructive: true,
+    undoMessage: stopped ? "Goal dropped." : undefined,
     confirm: {
-      prompt: "Delete this goal?",
+      prompt: stopped ? "Drop this goal?" : "Delete this goal?",
       explanation: "The agent stops working toward it. Work it has already done stays.",
-      confirmLabel: "Delete",
+      confirmLabel: stopped ? "Drop the goal" : "Delete",
       keepLabel: "Keep it",
     },
     run: async () => {
@@ -260,7 +288,8 @@ function GoalDetailView({ ctx, item }: { ctx: WorkSectionContext; item: WorkItem
   return (
     <WorkDetail
       title={title}
-      status={item.status}
+      status={stopped ? "paused" : item.status}
+      statusLabel={stopped ? "Goal stopped" : undefined}
       fields={goalFields(g)}
       actions={actions}
       technical={goalTechnical(g)}
@@ -319,9 +348,13 @@ function GoalsList({ ctx }: { ctx: WorkSectionContext }) {
       .finally(() => setBusy(false));
   };
 
+  // Active and stopped goals stay; achieved/cleared leave (goalShowsInWork, shared with
+  // WorkView's counts).
+  const items = source.items.filter(goalShowsInWork);
+
   return (
     <>
-      {source.items.length === 0 ? (
+      {items.length === 0 ? (
         // §5.2 — the one section with an empty-state action: New goal opens the shared creator.
         <Empty title="No goals" description="The agent sets one when it has a testable outcome to drive toward.">
           <Button variant="primary" onClick={() => setCreating(true)}>
@@ -330,17 +363,22 @@ function GoalsList({ ctx }: { ctx: WorkSectionContext }) {
         </Empty>
       ) : (
         <ul className="work-group">
-          {source.items.map((item) => (
-            <li key={item.id}>
-              <WorkRow
-                status={item.status}
-                title={item.title}
-                meta={goalRowMeta(item.raw as GoalState)}
-                focusKey={`${item.kind}:${item.id}`}
-                onOpen={() => ctx.onOpen(item)}
-              />
-            </li>
-          ))}
+          {items.map((item) => {
+            const g = item.raw as GoalState;
+            const stopped = goalStopped(item);
+            return (
+              <li key={item.id}>
+                <WorkRow
+                  status={stopped ? "paused" : item.status}
+                  tag={stopped ? "Goal stopped" : "Goal"}
+                  title={item.title}
+                  meta={goalRowMeta(g)}
+                  focusKey={`${item.kind}:${item.id}`}
+                  onOpen={() => ctx.onOpen(item)}
+                />
+              </li>
+            );
+          })}
         </ul>
       )}
       <GoalCreateDialog open={creating} onClose={closeCreator} onCreate={createGoal} busy={busy} />
@@ -348,11 +386,9 @@ function GoalsList({ ctx }: { ctx: WorkSectionContext }) {
   );
 }
 
-// Row meta: the progress line, so the list reads the same "Turn N" the detail does.
+// Row meta: the progress line, so the list reads the same "step N" the detail does.
 function goalRowMeta(g: GoalState): string {
-  const iter = g.iteration ?? 0;
-  const max = g.max_iterations;
-  return max && max > 0 ? `Turn ${iter} of ${max}` : `Turn ${iter}`;
+  return goalProgress(g);
 }
 
 export function GoalsSection({ ctx }: { ctx: WorkSectionContext }) {
@@ -365,6 +401,6 @@ export function GoalsSection({ ctx }: { ctx: WorkSectionContext }) {
   return <GoalsList ctx={ctx} />;
 }
 
-export const goalsSection = { label: "Goals", group: "doing-now", render: (ctx: WorkSectionContext) => <GoalsSection ctx={ctx} /> } satisfies WorkSection;
+export const goalsSection = { label: "Goals", group: "doing-now", listFilter: goalShowsInWork, render: (ctx: WorkSectionContext) => <GoalsSection ctx={ctx} /> } satisfies WorkSection;
 
 registerWorkSection("goals", goalsSection);

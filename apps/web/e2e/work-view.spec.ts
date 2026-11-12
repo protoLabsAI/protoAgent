@@ -62,7 +62,10 @@ async function expectScroll(view: Locator, value: number) {
 test("window → item → Dock preserves the section, scroll and item", async ({ page }) => {
   await openWorkWindow(page, "Work: Tasks");
   await expect(modalView(page).getByRole("button", { name: /Work sections/ })).toHaveAccessibleName("Tasks Work sections");
-  await expect(modalView(page).locator(".work-row")).toHaveCount(40);
+  // 30 of the 40: the 10 closed jobs (i % 4 === 3) have left Work (work-consolidation §1),
+  // and the heading count agrees with the rows the list shows.
+  await expect(modalView(page).locator(".work-row")).toHaveCount(30);
+  await expect(modalView(page).getByRole("heading", { name: "Tasks, 30", exact: true })).toBeVisible();
   await list(modalView(page)).evaluate((el) => { el.scrollTop = 300; });
   await expectScroll(modalView(page), 300);
   await row(modalView(page)).click();
@@ -113,14 +116,14 @@ test("task delete confirms inline and Undo restores the row", async ({ page }) =
   await openWorkWindow(page, "Work: Tasks");
   await row(modalView(page)).click();
   await modalView(page).getByRole("button", { name: "Delete…", exact: true }).click();
-  const confirm = modalView(page).getByRole("group", { name: "Delete this task?" });
+  const confirm = modalView(page).getByRole("group", { name: "Delete this job?" });
   await expect(confirm).toBeVisible();
   await expect(confirm.getByRole("button", { name: "Keep it" })).toBeVisible();
   await expect(page.getByRole("dialog")).toHaveCount(1);
   await expect(row(modalView(page))).toHaveCount(1);
   await confirm.getByRole("button", { name: "Delete", exact: true }).click();
   await expect(row(modalView(page))).toHaveCount(0);
-  const toast = page.locator(".pl-toast", { hasText: "Task deleted." });
+  const toast = page.locator(".pl-toast", { hasText: "Job deleted." });
   await expect(toast).toBeVisible();
   await toast.getByRole("button", { name: "Undo", exact: true }).click();
   await expect(row(modalView(page))).toHaveCount(1);
@@ -214,7 +217,7 @@ test("approved layout evidence: rail, window, empty section and phone", async ({
   const phone = page.locator('.work-view[data-frame="sheet"]');
   await phone.getByRole("button", { name: /Work sections/ }).click();
   await page.getByRole("menuitemradio", { name: "Tasks", exact: true }).click();
-  await expect(phone.locator(".work-row")).toHaveCount(40);
+  await expect(phone.locator(".work-row")).toHaveCount(30); // the 10 closed jobs have left Work
   expect(await phone.locator(".work-row").first().evaluate(el => el.getBoundingClientRect().height)).toBeGreaterThanOrEqual(48);
   await expect.poll(() => phone.evaluate(el => el.scrollWidth <= el.clientWidth)).toBe(true);
   await capture("05-phone-list-390x844");
