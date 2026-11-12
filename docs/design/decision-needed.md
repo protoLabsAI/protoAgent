@@ -205,7 +205,10 @@ The default action is written by the agent as a verb phrase ("keep holding the r
 | Answered somewhere else (409) | Already answered: you chose "{option}" in the chat at {time}. Nothing else changed. | `Callout tone="info"` in place of the options, then the card leaves when the panel closes. |
 | No longer needed | {Agent} doesn't need this any more. {reason from the agent, if any} | `Callout tone="neutral"` in place of the options. Leaves when the panel closes. |
 | Expired | No answer by {time}, so {Agent} went ahead and {default action, past tense}. | `Callout tone="neutral"` in place of the options. Leaves when the panel closes. |
-| Couldn't send | Couldn't send your answer. Nothing changed, and {Agent} is still waiting. | `Alert status="warning"` on the card with **Try again**, which resends the same option. The options stay enabled. |
+| On its way (202: the agent's session is busy) | Sent: "{option}". Waiting for {Agent} to pick it up… | Neutral pulsing `StatusDot` in place of the options. No retry. The card re-reads the decision until it is answered (then **Sent**) or confirmed undelivered (then **Couldn't send**). |
+| Checking (the request failed in transit, outcome unknown) | Checking whether {Agent} got "{option}"… | Neutral pulsing `StatusDot` in place of the options. No retry: the answer may have landed. Re-reads the decision right away, then on a 1s/2s/3s/5s backoff. |
+| Can't confirm (the re-read failed too) | Can't confirm yet whether {Agent} got "{option}". Still checking… | Same as Checking. Never claims that nothing happened. |
+| Couldn't send (the server confirms it is still waiting) | Couldn't send your answer. Nothing changed, and {Agent} is still waiting. | `Alert status="warning"` on the card with **Try again**, which resends the same option. The options stay enabled. Shown only after the server confirms the decision is pending with nothing on its way (#5099). |
 
 "Expired" never says "missed" or "failed". The agent did the stated thing, which is the system working as designed.
 

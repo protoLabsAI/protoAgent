@@ -1,5 +1,6 @@
 """Shared loopback delivery for decision answers and dismissals."""
 
+import enum
 import logging
 
 log = logging.getLogger("protoagent.decisions")
@@ -15,7 +16,57 @@ CANCELLED_RESUME = (
 )
 
 
-async def resume_parked_turn(session_id: str, answer: str, decision_id: str | None = None, *, resolution: dict | None = None) -> bool:
+#: Transport deadline for a resume whose caller waits for the reply (dismissals, the expiry
+#: sweep). An operator ANSWER does not use it: the answer route acknowledges on checkpoint
+#: consumption, so its loopback call carries no read deadline and ends when the resumed turn
+#: ends (#5099) — a turn longer than this is not a failed delivery.
+RESUME_TIMEOUT_S = 120.0
+
+_FAILED_TASK_STATES = frozenset({"TASK_STATE_FAILED", "TASK_STATE_CANCELED", "TASK_STATE_REJECTED",
+                                 "failed", "canceled", "rejected"})
+
+
+class ResumeOutcome(enum.Enum):
+    """What a loopback resume achieved. Truthy when the resume reached the parked turn.
+
+    - ``DELIVERED``: the resumed turn completed (or paused again).
+    - ``TURN_FAILED``: the resume reached the agent, but its turn ended failed/cancelled/
+      rejected. For a dismissal the interrupt was still taken; for an answer, the ledger
+      (closed on consumption) says whether the answer landed.
+    - ``NOT_DELIVERED``: refused or never sent (no port, HTTP error, JSON-RPC error,
+      transport error). The interrupt is still parked.
+    - ``UNKNOWN``: the transport timed out; the turn may still be running.
+    """
+
+    DELIVERED = "delivered"
+    TURN_FAILED = "turn_failed"
+    NOT_DELIVERED = "not_delivered"
+    UNKNOWN = "unknown"
+
+    def __bool__(self) -> bool:
+        return self in (ResumeOutcome.DELIVERED, ResumeOutcome.TURN_FAILED)
+
+
+def _task_outcome(payload: dict) -> tuple[str, str]:
+    """``(state, first status text)`` from a SendMessage reply; empty strings when absent."""
+    def obj(value) -> dict:
+        return value if isinstance(value, dict) else {}
+
+    result = obj(obj(payload).get("result"))
+    status = obj(obj(result.get("task") or result).get("status"))
+    parts = obj(status.get("message")).get("parts") or []
+    text = next((str(p["text"]) for p in parts if isinstance(p, dict) and p.get("text")), "")
+    return str(status.get("state") or ""), text
+
+
+async def resume_parked_turn(
+    session_id: str,
+    answer: str,
+    decision_id: str | None = None,
+    *,
+    resolution: dict | None = None,
+    wait_for_turn: bool | None = None,
+) -> ResumeOutcome:
     """Resume the turn parked on this decision with ``answer``, over the loopback A2A
     endpoint — the SAME HITL-resume entry point the console uses.
 
@@ -24,7 +75,14 @@ async def resume_parked_turn(session_id: str, answer: str, decision_id: str | No
     checkpoint consumes the answer. WITHOUT one (the cancel path, which has already closed
     the record) the check is skipped — the resume only has to CLEAR the lingering checkpoint
     interrupt so the session isn't wedged for later autonomous turns. Delivery failure
-    leaves the interrupt in place and returns False so callers can report failed delivery.
+    leaves the interrupt in place and returns a falsy :class:`ResumeOutcome` so callers can
+    report failed delivery.
+
+    ``wait_for_turn`` drops the read deadline: the call returns when the resumed turn ends,
+    however long that is. It defaults on for an operator answer (a ``resolution`` in state
+    ``answered``, which only the answer route sends) and off for dismissals and expiry
+    defaults. Either way a turn that ends failed is a WARNING naming the decision, never
+    silent — including one that fails after consuming the answer (``TURN_FAILED``).
     """
     import uuid
 
@@ -36,7 +94,7 @@ async def resume_parked_turn(session_id: str, answer: str, decision_id: str | No
     port = getattr(STATE, "active_port", None)
     if not port:
         log.warning("[decision] no active port — cannot resume parked turn for %s", session_id)
-        return False
+        return ResumeOutcome.NOT_DELIVERED
     headers = {"Content-Type": "application/json", "A2A-Version": "1.0"}
     headers.update(self_invocation_headers())
     message_id = str(uuid.uuid4())
@@ -63,14 +121,32 @@ async def resume_parked_turn(session_id: str, answer: str, decision_id: str | No
             },
         },
     }
+    if wait_for_turn is None:
+        wait_for_turn = bool(decision_id and resolution and resolution.get("state") == "answered")
+    timeout = httpx.Timeout(RESUME_TIMEOUT_S, read=None) if wait_for_turn else RESUME_TIMEOUT_S
+    label = f"decision {decision_id}" if decision_id else "dismissal"
     try:
-        async with httpx.AsyncClient(timeout=120) as client:
+        async with httpx.AsyncClient(timeout=timeout) as client:
             r = await client.post(f"http://127.0.0.1:{port}/a2a", headers=headers, json=body)
         if r.status_code >= 400:
             log.warning("[decision] resume for %s failed: HTTP %d %s", session_id, r.status_code, r.text[:200])
-            return False
-        return not bool(r.json().get("error"))
+            return ResumeOutcome.NOT_DELIVERED
+        payload = r.json()
+        if payload.get("error"):
+            log.warning("[decision] resume for %s (%s) refused: %s", session_id, label, str(payload["error"])[:200])
+            return ResumeOutcome.NOT_DELIVERED
+        state, text = _task_outcome(payload)
+        if state in _FAILED_TASK_STATES:
+            log.warning("[decision] resumed turn for %s (%s) ended %s: %s", session_id, label, state, text[:300])
+            return ResumeOutcome.TURN_FAILED
+        if wait_for_turn:
+            log.info("[decision] resumed turn for %s (%s) finished: %s", session_id, label, state or "ok")
+        return ResumeOutcome.DELIVERED
+    except httpx.TimeoutException:
+        # The turn may still be running server-side: delivery is unknown, not refused.
+        log.warning("[decision] resume for %s (%s) timed out after %ss; the turn may still be running",
+                    session_id, label, RESUME_TIMEOUT_S)
+        return ResumeOutcome.UNKNOWN
     except Exception:  # noqa: BLE001 — a resume transport error must not 500 the answer route
         log.exception("[decision] resume POST failed for %s", session_id)
-        return False
-
+        return ResumeOutcome.NOT_DELIVERED
