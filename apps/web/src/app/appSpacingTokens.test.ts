@@ -14,7 +14,7 @@ import { PL_TOKEN_VARS } from "./PluginView";
 //    original px as the literal fallback. That is why it is the one file tokenNameGuard's
 //    literal-fallback sweep exempts.
 //
-// Source-level (Vite ?raw), same approach and reason as phantomTokenRename.test.ts /
+// Source-level (Vite ?raw), same approach and reason as
 // tokenNameGuard.test.ts: the DS is absent from node_modules under jsdom, so the tokens
 // resolve to nothing at runtime and a rendered getComputedStyle could never observe them.
 // The tokenization IS the change, so the source is what we pin. Every var()/--pl- literal is
