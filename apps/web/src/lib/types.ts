@@ -806,6 +806,8 @@ export type WatchState = {
 };
 
 export type ScheduledJob = {
+  context_id?: string | null;
+  origin_session?: string | null;
   id: string;
   prompt: string;
   schedule: string;
@@ -1413,6 +1415,7 @@ export type HitlPayload = {
 
 
 export type Task = {
+  session_id?: string | null;
   id: string;
   title: string;
   status?: string;

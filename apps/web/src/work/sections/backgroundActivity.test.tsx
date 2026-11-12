@@ -27,6 +27,7 @@ const mocks = vi.hoisted(() => ({
 }));
 
 // The one data hook — fed directly, so no queries run (mirrors WorkView.test.tsx).
+vi.mock("../../activity/useActivityHistory", () => ({ useActivityHistory: () => mocks.sources.activity }));
 vi.mock("../useWorkItems", () => ({ useWorkItems: () => mocks.sources }));
 vi.mock("../../lib/api", () => ({ api: { stopBackground: mocks.stopBackground, inbox: async () => ({ items: [] }) } }));
 vi.mock("../../lib/events", () => ({
