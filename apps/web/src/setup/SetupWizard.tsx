@@ -1382,6 +1382,11 @@ export function SetupWizard({
                 )}
                 <StatusLine icon={<Sparkles size={15} />} label={`Persona · ${personaLabel}`} />
               </div>
+              <p className="setup-hint">
+                Your agent can write and run Python scripts on this computer — that’s how it makes documents and
+                spreadsheets. The scripts run as you, with your files and your network. You can turn this off any
+                time in Tools (<code>execute_code</code>).
+              </p>
               {postInstall ? (
                 <div className="setup-postinstall">
                   <p className="setup-hint">

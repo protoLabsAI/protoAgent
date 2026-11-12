@@ -7,7 +7,7 @@ import { useEffect, useState } from "react";
 import { AlertTriangle, FolderTree, TerminalSquare } from "lucide-react";
 
 import { Accordion, AccordionItem, PanelHeader } from "@protolabsai/ui/navigation";
-import { Dialog, useToast } from "@protolabsai/ui/overlays";
+import { ConfirmDialog, Dialog, useToast } from "@protolabsai/ui/overlays";
 import { Badge, Button } from "@protolabsai/ui/primitives";
 import { api } from "../lib/api";
 import { errMsg } from "../lib/format";
@@ -108,6 +108,18 @@ function ToolsBody() {
       void queryClient.invalidateQueries({ queryKey: queryKeys.settings });
     },
   });
+
+  // Turning execute_code on is the one switch here that lets the agent run code it wrote
+  // itself. Say so once, in plain words, before it takes effect (per browser — a reminder,
+  // not a lock; the setting itself is the control).
+  const [confirmRunCode, setConfirmRunCode] = useState(false);
+  const requestToggle = (name: string, enabled: boolean) => {
+    if (shouldConfirmRunCode(name, enabled)) {
+      setConfirmRunCode(true);
+      return;
+    }
+    onToggle(name, enabled);
+  };
 
   const onToggle = (name: string, enabled: boolean) => {
     // Edit the RAW denylist the backend echoes (freshest cache copy, so rapid toggles
@@ -238,7 +250,7 @@ function ToolsBody() {
                         </div>
                         <Switch
                           checked={t.enabled}
-                          onCheckedChange={(v) => onToggle(t.name, v)}
+                          onCheckedChange={(v) => requestToggle(t.name, v)}
                           aria-label={`Toggle ${t.name}`}
                         />
                       </div>
@@ -251,8 +263,52 @@ function ToolsBody() {
         ) : null}
         {tools.length === 0 ? <p className="muted">No tools match.</p> : null}
       </div>
+      <ConfirmDialog
+        open={confirmRunCode}
+        title="Let the agent run code?"
+        confirmLabel="Turn on"
+        onClose={() => setConfirmRunCode(false)}
+        onConfirm={() => {
+          acknowledgeRunCode();
+          setConfirmRunCode(false);
+          onToggle(RUN_CODE_TOOL, true);
+        }}
+      >
+        <p>
+          With this on, the agent can write Python scripts and run them on this computer. The scripts run as you: they
+          can read and change your files and use the network, and nothing asks you first.
+        </p>
+        <p>The allowed-sites list in Settings doesn’t apply to them. Leave this off if the agent reads web pages or files you don’t trust.</p>
+      </ConfirmDialog>
     </>
   );
+}
+
+const RUN_CODE_TOOL = "execute_code";
+const RUN_CODE_ACK_KEY = "protoagent.runCodeAcknowledged";
+
+// A per-browser "you've been told" flag. Storage can be unavailable (private window, blocked
+// site data): then the reminder simply shows again, which is the safe way to fail.
+export function runCodeAcknowledged(): boolean {
+  try {
+    return window.localStorage.getItem(RUN_CODE_ACK_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
+/** Whether flipping `name` to `enabled` should stop for the run-code reminder first: only
+ *  turning execute_code ON, and only until this browser has been told once. */
+export function shouldConfirmRunCode(name: string, enabled: boolean): boolean {
+  return name === RUN_CODE_TOOL && enabled && !runCodeAcknowledged();
+}
+
+export function acknowledgeRunCode(): void {
+  try {
+    window.localStorage.setItem(RUN_CODE_ACK_KEY, "1");
+  } catch {
+    /* shown again next time */
+  }
 }
 
 export function ToolsPanel() {
