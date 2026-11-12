@@ -19,7 +19,9 @@ What it runs, in order, stopping at the first failure:
   4. ``uv lock --check``                           — lockfile in sync with pyproject
                                                      (skipped with a warning if ``uv``
                                                      isn't on PATH — secondary check)
-  5. ``python -m pytest tests/ -q``                — the unit suite (unless --lint-only)
+  5. ``python scripts/check_test_policy.py``       — test-suite budgets and burndowns
+                                                     (docs/dev/testing.md)
+  6. ``python -m pytest tests/ -q``                — the unit suite (unless --lint-only)
 
 What it deliberately does NOT run (heavyweight / CI-only / network-dependent):
 fleet integration (``PA_RUN_INTEGRATION=1``), the live smoke
@@ -96,6 +98,10 @@ def build_checks(lint_only: bool) -> list[Check]:
             [uv, "lock", "--check"] if uv else None,
             missing_hint="install uv (https://docs.astral.sh/uv/) to enable this check",
             optional=True,
+        ),
+        Check(
+            "test policy (scripts/check_test_policy.py)",
+            [sys.executable, str(REPO / "scripts" / "check_test_policy.py")],
         ),
     ]
     if not lint_only:

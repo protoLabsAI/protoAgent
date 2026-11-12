@@ -60,13 +60,14 @@ def gate(monkeypatch):
 def test_full_gate_runs_all_checks_in_order(gate, capsys):
     assert gate.run_gate() == 0
     calls = gate._runner.calls
-    assert len(calls) == 5
+    assert len(calls) == 6
     assert calls[0] == ["/fake/bin/ruff", "check", "."]
     assert calls[1] == ["/fake/bin/lint-imports"]
     assert calls[2][0] == sys.executable
     assert calls[2][1].endswith("gen_attribution.py") and calls[2][2] == "--check"
     assert calls[3] == ["/fake/bin/uv", "lock", "--check"]
-    assert calls[4] == [sys.executable, "-m", "pytest", "tests/", "-q"]
+    assert calls[4][1].endswith("check_test_policy.py")
+    assert calls[5] == [sys.executable, "-m", "pytest", "tests/", "-q"]
     assert "gate: OK" in capsys.readouterr().out
 
 
@@ -88,7 +89,7 @@ def test_all_argv_are_lists_not_shell_strings(gate):
 def test_lint_only_skips_pytest(gate):
     assert gate.run_gate(lint_only=True) == 0
     calls = gate._runner.calls
-    assert len(calls) == 4
+    assert len(calls) == 5
     assert not any("pytest" in " ".join(c) for c in calls)
 
 
@@ -103,7 +104,7 @@ def test_fail_fast_stops_at_first_red_check(gate, capsys):
 def test_test_failure_fails_the_full_gate(gate, capsys):
     gate._runner.fail_on = "pytest"
     assert gate.run_gate() == 1
-    assert len(gate._runner.calls) == 5  # lint checks all passed first
+    assert len(gate._runner.calls) == 6  # lint checks all passed first
     out = capsys.readouterr().out
     assert "gate: FAIL" in out and "unit tests (pytest)" in out
 
@@ -145,7 +146,7 @@ def test_stale_tool_interpreter_is_an_actionable_hard_failure(gate, monkeypatch,
 
 def test_cli_flag_parsing_maps_to_lint_only(gate):
     assert gate.main(["--lint-only"]) == 0
-    assert len(gate._runner.calls) == 4
+    assert len(gate._runner.calls) == 5
     gate._runner.calls.clear()
     assert gate.main([]) == 0
-    assert len(gate._runner.calls) == 5
+    assert len(gate._runner.calls) == 6
