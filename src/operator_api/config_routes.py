@@ -203,6 +203,8 @@ def register_config_routes(app) -> None:
 
         from graph.mcp_config import redact_server_secrets
 
+        if STATE.graph_config is None:  # asked before the config has loaded — nothing to show yet
+            return {"config": {}, "soul": read_soul()}
         config = config_to_dict(STATE.graph_config)
         # An MCP server's `env` / `headers` routinely hold a token. Every other secret in
         # this response is already blank; these were returned as stored. Masked HERE (the

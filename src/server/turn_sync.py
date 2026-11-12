@@ -446,7 +446,7 @@ async def _chat_langgraph_impl(
         # No request metadata on this driver, but approval authority is bound all the same
         # (as the streaming driver does): a federation caller on `/v1` can't answer an
         # approval card either.
-        approval_authority_scope(tracing.current_trust_tier() != "federation"),
+        approval_authority_scope(_turn_control.turn_caller_may_approve()),
     ):
         if _telemetry_sink is not None:
             # The trace id, read HERE while the scope is open (#3945): the wrapper writes

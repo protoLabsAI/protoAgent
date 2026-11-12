@@ -784,9 +784,9 @@ async def _forward_member(slug: str, request, path: str, raw_path: str, target):
         # These routes check credential-plane keys INSIDE the route, against the credential
         # the remote sees — its own stored bearer, lent below. A remote on an older build
         # doesn't read ``SCOPE_HEADER``, so the hub can't rely on it to refuse; it refuses here.
-        from a2a_impl.credential_scope import refusal_body
+        from a2a_impl.credential_scope import DEVICE_REMOTE_SETTINGS_MESSAGE, refusal_body
 
-        return JSONResponse(refusal_body(), status_code=403)
+        return JSONResponse(refusal_body(message=DEVICE_REMOTE_SETTINGS_MESSAGE), status_code=403)
     drop_params: frozenset[str] = frozenset()
     if is_remote:
         # A REMOTE is off this box and outside the hub's trust boundary: nothing the hub holds

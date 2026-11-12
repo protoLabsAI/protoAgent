@@ -1346,6 +1346,7 @@ async def test_the_proxy_refuses_a_device_key_checked_config_write_to_a_remote(m
     resp = await proxy._forward_member("r", _proxy_req(), path, path, ("https://r", {"authorization": "Bearer stored"}))
     assert resp.status_code == 403
     assert json.loads(resp.body)["error"] == "device_scope"
+    assert "settings on a remote agent" in json.loads(resp.body)["detail"]["reason"]  # says what it refuses
 
 
 @pytest.mark.asyncio
