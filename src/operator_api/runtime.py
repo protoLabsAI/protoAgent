@@ -127,6 +127,7 @@ def build_runtime_status(
             "knowledge": {"enabled": False, "status": "initializing", "configured_path": None, "resolved_path": None},
             "skills": {"enabled": False, "count": skill_count, "configured_path": None},
             "mcp": mcp_block,
+            "public_url": _public_url(),
             "plugins": plugins_block,
             "scheduler": {"enabled": False, "backend": "disabled"},
             "cache_warmer": {"enabled": False, "loaded": False},

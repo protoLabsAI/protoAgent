@@ -401,6 +401,15 @@ def is_interactive_origin(origin: object) -> bool:
     return str(origin or "").strip().lower() in _INTERACTIVE_ORIGINS
 
 
+def turn_caller_may_approve() -> bool:
+    """Whether the caller driving this turn may answer an approval card or ask to skip one —
+    from the tier the auth middleware classified, never from request metadata. One place, so
+    both turn drivers bind the same answer. False only for the federation tier (ADR 0066)."""
+    from observability.tracing import current_trust_tier
+
+    return current_trust_tier() != "federation"
+
+
 def operator_chat_turn(origin: object) -> bool:
     """Authenticate and classify a turn before carrying its provenance into tool state.
 
