@@ -788,6 +788,10 @@ def test_the_server_route_mints_through_sse_token_for():
         "lifecycle_hooks",
         "acp.agents",
         "filesystem.editor_command",
+        # Where prompts and traces are sent.
+        "model.api_base",
+        "tracing.host",
+        "providers",
     ],
 )
 def test_credential_plane_keys_are_flagged(key):
@@ -890,6 +894,9 @@ def test_full_scope_can_write_plane_keys(config_client):
 def test_device_scope_reset_of_a_plane_key_is_403(config_client):
     resp = config_client.post("/api/settings/reset", headers={"x-test-scope": "device"}, json={"keys": ["auth.token"]})
     assert resp.status_code == 403 and resp.json()["keys"] == ["auth.token"]
+    # model.name's reset pulls in model.api_base, which only falls back to the inherited value.
+    resp = config_client.post("/api/settings/reset", headers={"x-test-scope": "device"}, json={"keys": ["model.name"]})
+    assert resp.status_code != 403
 
 
 def test_device_scope_nested_config_write_is_checked(config_client):

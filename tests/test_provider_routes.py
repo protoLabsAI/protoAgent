@@ -666,6 +666,16 @@ def test_delete_release_no_host_writes_providers_and_slots_in_one_save(monkeypat
     assert saved["doc"]["routing"]["aux_model"] == ""  # cleared
 
 
+def test_a_device_scope_caller_cannot_choose_a_connection_endpoint(client, monkeypatch):
+    """ADR 0121 D4: the endpoint is where every prompt goes. Echoing the stored one is fine."""
+    _install(monkeypatch, **BASE)
+    monkeypatch.setattr("a2a_impl.auth.open_mode", lambda: False)  # unstamped ⇒ device scope
+    assert client.patch("/api/config/providers/local-vllm", json={"base_url": "https://x/v1"}).status_code == 403
+    assert client.post("/api/config/providers", json={"id": "x", "base_url": "https://x/v1"}).status_code == 403
+    r = client.patch("/api/config/providers/local-vllm", json={"label": "L", "base_url": "http://localhost:8000/v1"})
+    assert r.status_code == 200 and client.written["entries"]
+
+
 def test_unknown_ids_are_404_not_500(client, monkeypatch):
     _install(monkeypatch, **BASE)
     assert client.patch("/api/config/providers/nope", json={"label": "x"}).status_code == 404

@@ -24,9 +24,10 @@ import asyncio
 import logging
 from functools import partial
 
-from fastapi import HTTPException
+from fastapi import HTTPException, Request
 from pydantic import BaseModel
 
+from operator_api.scope_guard import credential_plane_refusal
 from runtime.state import STATE
 
 log = logging.getLogger("protoagent.operator_api.providers")
@@ -372,11 +373,16 @@ def register_provider_routes(app) -> None:
         return {"providers": out}
 
     @app.post("/api/config/providers")
-    async def _add_provider(req: ProviderCreate):
+    async def _add_provider(req: ProviderCreate, request: Request):
         from graph.config import PROVIDER_TYPES, valid_provider_id
 
         cfg = _config()
         pid = (req.id or "").strip().lower()
+        # ADR 0121 D4: a connection's endpoint is where every prompt goes, so a device-scope
+        # caller can't choose one (``providers`` is a credential-plane section).
+        if req.base_url.strip():
+            if (denied := credential_plane_refusal(request, [f"providers.{pid}.base_url"])) is not None:
+                return denied
         if not valid_provider_id(pid):
             raise HTTPException(
                 status_code=400,
@@ -407,11 +413,17 @@ def register_provider_routes(app) -> None:
         return {"ok": True, "id": pid, "restart_required": False}
 
     @app.patch("/api/config/providers/{pid}")
-    async def _patch_provider(pid: str, req: ProviderPatch):
+    async def _patch_provider(pid: str, req: ProviderPatch, request: Request):
         cfg = _config()
         pid = (pid or "").strip().lower()
         if cfg.provider_by_id(pid) is None:
             raise HTTPException(status_code=404, detail=f"no provider named {pid!r}")
+        # ADR 0121 D4, as for add: re-aiming a connection is full-scope only. The console echoes
+        # the stored value back on a relabel or rekey, which changes nothing.
+        stored = str(cfg.provider_by_id(pid).as_dict().get("base_url") or "").strip()
+        if req.base_url is not None and req.base_url.strip() != stored:
+            if (denied := credential_plane_refusal(request, [f"providers.{pid}.base_url"])) is not None:
+                return denied
 
         rekeyed = bool((req.api_key or "").strip())
 
