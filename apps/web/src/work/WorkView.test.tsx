@@ -1,9 +1,10 @@
-import { act } from "react";
+import { act, StrictMode, type ReactNode } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { ToastProvider } from "@protolabsai/ui/overlays";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { WorkView, registerWorkSection } from "./WorkView";
+import { beginThisChatVisit, endThisChatVisit, isThisChatVisit } from "./visitScope";
 import { api } from "../lib/api";
 import { applyNavIntent } from "../app/palette/nav";
 import { useUI } from "../state/uiStore";
@@ -53,6 +54,7 @@ afterEach(async () => {
   await act(async () => { root.unmount(); dispose?.(); });
   dispose = undefined;
   host.remove();
+  endThisChatVisit();
 });
 
 it("orders all five lanes and hides empty lanes and help lines", async () => {
@@ -131,6 +133,37 @@ it("renders quiet unregistered sections and uses registered renderers", async ()
   const menu = await openSections();
   expect(menu.querySelectorAll('[role="menuitemradio"]')).toHaveLength(8);
   await closeSections(menu);
+});
+
+it("the reader picking a section ends a rail deep link's visit scope; the saved filters survive", async () => {
+  data.sources.schedules.items = [item("disabled", "paused", { kind: "schedule" })];
+  useUI.setState({ surfaceStates: { work: { section: "overview", filters: { retained: true } } } });
+  beginThisChatVisit();
+  await render("modal");
+  expect(isThisChatVisit()).toBe(true);
+  await click("View"); // the Overview's schedules summary → selectSection("schedules")
+  expect(isThisChatVisit()).toBe(false);
+  expect(useUI.getState().surfaceStates.work.section).toBe("schedules");
+  expect(useUI.getState().surfaceStates.work.filters).toEqual({ retained: true });
+});
+
+it("the visit scope survives an Expand/Dock mount overlap and StrictMode, ending only when Work leaves the screen", async () => {
+  const wrap = (children: ReactNode) =>
+    <QueryClientProvider client={client}><ToastProvider>{children}</ToastProvider></QueryClientProvider>;
+  beginThisChatVisit();
+  // StrictMode's dev mount → cleanup → mount must not end the visit.
+  await act(async () => root.render(<StrictMode>{wrap(<WorkView frame="rail" sessionId="here" />)}</StrictMode>));
+  await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
+  expect(isThisChatVisit()).toBe(true);
+  // Expand: the modal copy mounts beside the rail copy; the rail copy leaving changes nothing.
+  await act(async () => root.render(wrap(<><WorkView frame="rail" sessionId="here" /><WorkView frame="modal" sessionId="here" /></>)));
+  await act(async () => root.render(wrap(<WorkView frame="modal" sessionId="here" />)));
+  await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
+  expect(isThisChatVisit()).toBe(true);
+  // The LAST Work view leaves the screen: the visit ends on the next tick.
+  await act(async () => root.render(wrap(<div />)));
+  await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
+  expect(isThisChatVisit()).toBe(false);
 });
 
 it("summarizes disabled schedules and reveals older Done items with Show more", async () => {

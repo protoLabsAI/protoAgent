@@ -8,7 +8,7 @@ export type WorkGroup = {
   count: number;
 };
 
-function jobEnded(item: GroupableWorkItem): boolean {
+export function jobEnded(item: GroupableWorkItem): boolean {
   const raw = item.raw as { status?: string } | null;
   switch (item.kind) {
     case "task": return raw?.status === "closed";
@@ -18,7 +18,14 @@ function jobEnded(item: GroupableWorkItem): boolean {
   }
 }
 
-const jobKey = (job: WorkJobRef) => JSON.stringify([job.kind, job.id]);
+export const jobKey = (job: WorkJobRef) => JSON.stringify([job.kind, job.id]);
+
+/** The selector's row universe for a `WorkItems` map — the one flatten the rail's live
+ *  region shares with `workGroups`, so a transition it announces is a transition the
+ *  counts actually took. */
+export function flattenWorkItems(input: readonly GroupableWorkItem[] | WorkItems): readonly GroupableWorkItem[] {
+  return Array.isArray(input) ? input : Object.values(input).flatMap((source) => source.groupItems ?? source.items);
+}
 
 export function inWorkScope(item: GroupableWorkItem, { thisChatOnly = false, sessionId }: {
   thisChatOnly?: boolean; sessionId?: string;
@@ -34,7 +41,7 @@ export function workGroups(input: readonly GroupableWorkItem[] | WorkItems, {
   thisChatOnly = false,
   sessionId,
 }: { thisChatOnly?: boolean; sessionId?: string } = {}): WorkGroup[] {
-  const items: readonly GroupableWorkItem[] = Array.isArray(input) ? input : Object.values(input).flatMap((source) => source.groupItems ?? source.items);
+  const items = flattenWorkItems(input);
   const groups: WorkGroup[] = [
     { id: "needs-you", label: "Needs you", items: [], count: 0 },
     { id: "doing-now", label: "Doing now", items: [], count: 0 },
