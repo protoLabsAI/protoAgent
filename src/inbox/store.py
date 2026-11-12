@@ -3,7 +3,8 @@
 External systems (webhooks, cron, scripts, sister agents) push messages here via
 ``POST /api/inbox``. Each item carries a priority tier that governs delivery:
 
-- ``now``   — surfaced immediately (the server fires an Activity turn).
+- ``now``   — surfaced immediately (the server fires a turn on the item's own
+  isolated ``job:`` execution session, ADR 0129; the Activity feed gets the summary).
 - ``next``  — queued; the agent pulls it on its next ``check_inbox`` call.
 - ``later`` — background; only returned on an explicit ``later`` floor.
 
@@ -130,6 +131,24 @@ class InboxStore:
             db.execute(
                 "CREATE INDEX IF NOT EXISTS ix_inbox_now_recovery "
                 "ON inbox(priority, delivered_at, recovery_claimed_at, recovery_attempted_at)"
+            )
+            # Durable execution identity for independently fired items (ADR 0129):
+            # ``inbox:<item-id>`` → one isolated ``job:<uuid>`` execution context and one
+            # A2A message id, assigned before the first send and reused by every retry so
+            # a re-delivery joins the accepted turn instead of running the item twice.
+            # No foreign key: the identity is a dedup/replay tombstone that must outlive
+            # the item row (prune clears it only alongside the item).
+            db.execute(
+                """
+                CREATE TABLE IF NOT EXISTS inbox_executions (
+                    item_id     INTEGER PRIMARY KEY,
+                    context_id  TEXT NOT NULL,
+                    message_id  TEXT NOT NULL,
+                    task_id     TEXT,
+                    accepted_at TEXT,
+                    created_at  TEXT NOT NULL
+                )
+                """
             )
             db.commit()
         finally:
@@ -483,6 +502,82 @@ class InboxStore:
         finally:
             db.close()
 
+    def execution_identity(self, item_id: int, *, now: datetime | None = None) -> dict:
+        """The durable execution identity an independently fired item runs under (ADR 0129).
+
+        Assigned once per item — an isolated ``job:<uuid>`` A2A context plus a stable
+        message id — and returned verbatim on every later call, so the first ``now``
+        delivery and every retry (the startup recovery drain, a restored item re-fired)
+        present the same ``(contextId, messageId)`` and the A2A layer joins the already
+        accepted turn instead of starting a second one. ``task_id``/``accepted_at`` ride
+        along once ``record_execution_acceptance`` stored the accepted handle. Distinct
+        items always get distinct sessions; the source name is never the identity.
+        """
+        from uuid import uuid4
+
+        stamp = (now or datetime.now(UTC)).isoformat()
+        db = self._connect()
+        try:
+            # Allocate-once under a write transaction: two concurrent delivery attempts
+            # for one item must agree on a single identity.
+            db.execute("BEGIN IMMEDIATE")
+            row = db.execute(
+                "SELECT context_id, message_id, task_id, accepted_at FROM inbox_executions WHERE item_id = ?",
+                (int(item_id),),
+            ).fetchone()
+            if row is None:
+                identity = (f"job:{uuid4()}", str(uuid4()))
+                db.execute(
+                    "INSERT INTO inbox_executions (item_id, context_id, message_id, created_at) VALUES (?, ?, ?, ?)",
+                    (int(item_id), *identity, stamp),
+                )
+                db.commit()
+                return {"context_id": identity[0], "message_id": identity[1], "task_id": "", "accepted_at": ""}
+            db.rollback()
+            return {
+                "context_id": row["context_id"],
+                "message_id": row["message_id"],
+                "task_id": row["task_id"] or "",
+                "accepted_at": row["accepted_at"] or "",
+            }
+        finally:
+            db.close()
+
+    def record_execution_acceptance(self, item_id: int, task_id: str, *, now: datetime | None = None) -> None:
+        """Persist the accepted task handle for an item's execution identity (ADR 0129).
+
+        Written right after the A2A layer accepts the send, so a retry can see that the
+        item already owns a turn. First acceptance wins: the identity is stable, so a
+        re-sent message joins the same task and a differing late handle never rewrites
+        the recorded one."""
+        stamp = (now or datetime.now(UTC)).isoformat()
+        db = self._connect()
+        try:
+            db.execute(
+                "UPDATE inbox_executions SET task_id = ?, accepted_at = ? WHERE item_id = ? AND task_id IS NULL",
+                (str(task_id or ""), stamp, int(item_id)),
+            )
+            db.commit()
+        finally:
+            db.close()
+
+    def retire_execution(self, item_id: int) -> None:
+        """Retire an item's execution identity once its invocation PROVABLY settled
+        terminally (its turn failed/was canceled) and the item went back to pending.
+
+        The restored item is new pending work: holding the old identity would make every
+        re-delivery join the dead task (the A2A layer dedups on message id) and the retry
+        could never actually run. The next delivery allocates a fresh session + message id
+        — a retired execution UUID is never reused (ADR 0129). Identity for an UNCERTAIN
+        send is deliberately NOT retired; the reuse there is what folds a lost response
+        back into its accepted turn."""
+        db = self._connect()
+        try:
+            db.execute("DELETE FROM inbox_executions WHERE item_id = ?", (int(item_id),))
+            db.commit()
+        finally:
+            db.close()
+
     def reset_stale_recovery_claims(
         self,
         *,
@@ -722,6 +817,10 @@ class InboxStore:
                 "DELETE FROM inbox WHERE delivered_at IS NOT NULL AND created_at < ?",
                 (cutoff,),
             )
+            # Execution identities (ADR 0129) are replay/dedup tombstones: keep each one
+            # as long as its item can still be referenced, drop it only once the item
+            # row itself is gone.
+            db.execute("DELETE FROM inbox_executions WHERE item_id NOT IN (SELECT id FROM inbox)")
             db.commit()
             return cur.rowcount
         finally:

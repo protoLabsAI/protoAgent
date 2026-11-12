@@ -573,10 +573,10 @@ blocking it.
 
 **Args:**
 
-- `session_id` — the A2A contextId to run the turn in (e.g. `goal.session_id`).
+- `session_id` — the A2A contextId to run the turn in (e.g. `goal.session_id`). An explicit chat/goal/job session is a deliberate continuation and keeps its context; passing the Activity context requests an isolated background job session instead ([ADR 0129](/adr/0129-work-consolidation)) — the scheduler assigns the turn a durable `job:` execution owner of its own, never the shared Activity thread.
 - `prompt` — the message the agent processes as a turn.
 - `delay_seconds` — fire at now + this delay (default 0 → the next poll tick, ~1s).
-- `job_id` — a stable id so a re-call REPLACES the pending one-shot (idempotent).
+- `job_id` — a stable id so a re-call REPLACES the pending one-shot (idempotent). Replacement is pending-only ([ADR 0129](/adr/0129-work-consolidation)): a fire already accepted or parked keeps its occurrence and execution owner, and the re-added turn queues behind it under the same owner instead of superseding it.
 - `enqueue_key` — optional durable enqueue receipt key. Reusing it acknowledges the original enqueue, even after completion; it never replaces or replays it.
 
 Returns `{"ok", "job_id", "fires_at", "message"}`; `ok=False` with a readable
@@ -789,7 +789,7 @@ never duplicated)::
 - `topic` — bus topic pattern (`*` = one segment, `#` = tail — any namespace; subscribing is read-only, like `registry.on`).
 - `prompt` — `(payload) -> str | None` — the prompt builder / filter.
 - `job_id` — stable id for the enqueued turn (`run_in_session`'s idempotent-replace key). Required — it's what keeps a chatty rule from stacking turns.
-- `session` — the session the turn runs in; defaults to the durable Activity thread (`ACTIVITY_CONTEXT`).
+- `session` — the session the turn runs in. An explicit chat/goal session is a deliberate continuation; the default (`ACTIVITY_CONTEXT`) requests an isolated background job session ([ADR 0129](/adr/0129-work-consolidation)) — the enqueued turn gets a durable `job:` execution owner of its own and never executes on the shared Activity thread, which receives only the result summary on its feed.
 - `debounce_s` — > 0 coalesces a burst into ONE turn — trailing-edge: the timer re-arms on every qualifying event, fires `debounce_s` after the LAST one, and that last event's prompt text wins. Skipped events (`prompt` returned `None`/empty) neither fire nor extend the window. Note a sustained stream arriving faster than `debounce_s` keeps deferring the turn (classic debounce). Thread-safe — the bus may deliver from worker threads.
 
 Returns an **unsubscribe** callable (mirroring `registry.on`'s seam): it stops
@@ -834,7 +834,7 @@ is wired on both boot and hot-reload.
 - `cron` — a 5-field cron expression (e.g. `"0 9 * * *"`). One-shot turns belong to `run_in_session`, so an ISO datetime is rejected here.
 - `plugin_id` — the owning plugin's id (`registry.plugin_id`).
 - `job_id` — a stable plugin-local id for this cadence (e.g. `"strategist-tick"`).
-- `session` — the A2A contextId to fire into; empty → the durable Activity thread (the default for scheduled work).
+- `session` — the A2A contextId to fire into; empty → an isolated background job session of its own ([ADR 0129](/adr/0129-work-consolidation); the Activity feed carries each fire's result summary).
 - `timezone` — IANA name the cron is evaluated in (None = UTC).
 
 Returns `{"ok", "job_id", "next_fire", "message"}` — `job_id` is the full
