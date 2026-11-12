@@ -733,6 +733,15 @@ def test_sse_query_token_is_no_way_past_an_api_key(monkeypatch):
     assert c.get("/api/events", headers={"x-api-key": "k"}).status_code == 200
 
 
+def test_a_non_ascii_credential_is_a_401_not_a_500(monkeypatch):
+    monkeypatch.delenv("A2A_AUTH_TOKEN", raising=False)
+    auth.configure(bearer_token="secret", api_key="k", allowed_origins_raw="")
+    c = _client_multi()
+    for headers in ({"Authorization": "Bearer caf\xe9".encode("latin-1")}, {"x-api-key": "caf\xe9".encode("latin-1")}):
+        assert c.get("/a2a", headers=headers).status_code == 401
+    assert auth.bearer_tier("caf\u00e9") is None
+
+
 def test_sse_bearer_header_still_works_for_events(monkeypatch):
     """Server-to-server callers with Authorization header pass /api/events."""
     monkeypatch.delenv("A2A_AUTH_TOKEN", raising=False)

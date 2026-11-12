@@ -466,6 +466,14 @@ def _bearer_tier_for(token: str) -> str | None:
     return cred.tier if cred else None
 
 
+def _same_secret(presented: str, expected: str) -> bool:
+    """Constant-time equality of a presented credential and a configured one, as UTF-8 bytes.
+    ``hmac.compare_digest`` raises ``TypeError`` for a non-ASCII ``str``, and a header Starlette
+    decoded as latin-1 (or a WebSocket ``?token=``) can be one — a stray byte in a credential was
+    a 500 instead of a 401."""
+    return hmac.compare_digest(presented.encode("utf-8", "surrogatepass"), expected.encode("utf-8", "surrogatepass"))
+
+
 def _classify_token(token: str) -> Credential | None:
     """The tier + scope a raw bearer earns, or None. Open mode is the CALLER's concern.
 
@@ -481,12 +489,12 @@ def _classify_token(token: str) -> Credential | None:
     active, fed, fleet = _BEARER[0], _FEDERATION[0], _FLEET[0]
     if not token:
         return None
-    if active is not None and hmac.compare_digest(token, active):
+    if active is not None and _same_secret(token, active):
         return Credential("operator", SCOPE_FULL)
-    if fed is not None and hmac.compare_digest(token, fed):
+    if fed is not None and _same_secret(token, fed):
         # Scope is moot here — the ADR 0066 ceiling already denies federation all of /api.
         return Credential("federation", SCOPE_FULL)
-    if fleet is not None and hmac.compare_digest(token, fleet):
+    if fleet is not None and _same_secret(token, fleet):
         # Fleet service token (ADR 0089): the hub already authenticated the external caller
         # (and applied ITS credential-plane ceiling) and presents members with this internal,
         # loopback-only credential.
@@ -1097,7 +1105,7 @@ def _classify_request_credential(request) -> Credential | None:
     api_key = _API_KEY[0]
     if api_key:
         presented = request.headers.get("x-api-key", "") or ""
-        if presented and hmac.compare_digest(presented, api_key):
+        if presented and _same_secret(presented, api_key):
             return Credential("operator", SCOPE_FULL)
 
     active = _BEARER[0]
