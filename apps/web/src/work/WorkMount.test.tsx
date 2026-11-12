@@ -17,9 +17,10 @@ import { sections } from "./sectionRegistry";
 import "../contextMenu/registrations";
 import { useUI } from "../state/uiStore";
 import type { WorkItems, WorkSource, WorkSourceKind } from "./useWorkItems";
-// Importing the production barrel is the whole point of the mount — it must register all eight
-// built-in sections. Do NOT import the individual section modules here, or a missing entry in
-// the barrel would be masked by a direct import (the same guard WorkView.test.tsx keeps).
+// Importing the production barrel is the whole point of the mount — it must register all seven
+// built-in sections (activity is a source, not a section, since S4c). Do NOT import the
+// individual section modules here, or a missing entry in the barrel would be masked by a
+// direct import (the same guard WorkView.test.tsx keeps).
 import "./sections";
 
 const data = vi.hoisted(() => ({ sources: {} as WorkItems }));
@@ -27,6 +28,8 @@ vi.mock("./useWorkItems", () => ({ useWorkItems: () => data.sources }));
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 const KINDS: WorkSourceKind[] = ["decisions", "goals", "watches", "tasks", "schedules", "background", "activity", "directives"];
+// The registered sections are the sources minus activity — its feed lives outside Work (S4c).
+const SECTIONS = KINDS.filter((kind) => kind !== "activity");
 const WORK: SurfaceMeta = { id: "work", title: "Work" };
 
 let client: QueryClient;
@@ -100,8 +103,9 @@ afterEach(async () => {
 });
 
 describe("Work surface mount", () => {
-  it("registers all eight built-in sections through the barrel import", () => {
-    for (const kind of KINDS) expect(sections.has(kind), kind).toBe(true);
+  it("registers all seven built-in sections through the barrel import, and never activity", () => {
+    for (const kind of SECTIONS) expect(sections.has(kind), kind).toBe(true);
+    expect(sections.has("activity")).toBe(false);
   });
 
   it("frames WorkView — not WorkPanel — in the right dock, with the Overview and four group menu items", async () => {
@@ -151,7 +155,8 @@ describe("Work surface mount", () => {
       ["needs-you", "Nothing needs you."],
       ["doing-now", "Nothing running."],
       ["coming-up", "Nothing planned."],
-      ["instructions", "No standing instructions."],
+      // The delegated directives renderer owns this group's empty copy (§3).
+      ["instructions", "No standing instructions"],
     ] as const) {
       useUI.setState({ surfaceStates: { work: { section } } });
       await render();

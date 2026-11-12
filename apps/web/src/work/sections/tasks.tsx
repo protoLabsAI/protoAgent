@@ -6,18 +6,24 @@ import { useWorkActionSize } from "../../shell/SurfaceFrame";
  * of `WorkRow`s (when no item is open) and the `WorkDetail` for the open item — told apart
  * by `state.itemId`, the way the shell drives them (WorkView §3.1).
  *
+ * Tasks fold into jobs (work-consolidation §1): every row's tag is "Job", never "Task". A
+ * not-started job (open/deferred, `groupFor` → Coming up) gets a dashed-circle icon, the meta
+ * "not started · added <when>", and Start now / Close job; a started one keeps the base
+ * board moves. Closed jobs leave the list — finished work leaves Work.
+ *
  * The detail shows §2.7's fields: type and priority as "Bug · high" (numeric priority 0–3
  * reads urgent / high / normal / low), assignee, updated/closed times, a clamped
  * description and the created date. The only "Never shown" field, the id, lives in
- * Technical details. Actions mirror the base `TasksPanel` board controls: the Start /
- * Mark open and Close / Reopen status transitions (the PATCH/close routes), Edit (the
- * existing PATCH, reusing `TaskCreateDialog`) and Delete…, which hands back an
+ * Technical details. Actions go through the base `TasksPanel` board controls: the Start now /
+ * Start / Mark open and Close job / Close / Reopen status transitions (the PATCH/close routes),
+ * Edit (the existing PATCH, reusing `TaskCreateDialog`) and Delete…, which hands back an
  * `undo_token` (bd-0ia51.5) driving the §4.5 undo toast.
  */
 import { useState, type CSSProperties } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Alert, Skeleton } from "@protolabsai/ui/data";
 import { Button, Callout } from "@protolabsai/ui/primitives";
+import { CircleDashed } from "lucide-react";
 import { WorkEmpty as Empty } from "../WorkEmpty";
 import { useToast } from "@protolabsai/ui/overlays";
 
@@ -26,7 +32,7 @@ import { queryKeys } from "../../lib/queries";
 import type { Task } from "../../lib/types";
 import { TaskCreateDialog } from "../../app/TasksPanel";
 import { issueStatus, issueType, type IssueDraft } from "../../app/tasks";
-import { relTime } from "../tone";
+import { groupFor, relTime, type GroupableWorkItem } from "../tone";
 import { typeAndPriority } from "../rowMeta";
 import { WorkDetail, type WorkAction, type WorkField } from "../WorkDetail";
 import { WorkRow } from "../WorkRow";
@@ -79,6 +85,34 @@ function taskDraft(task: Task): IssueDraft {
   };
 }
 
+// Tasks fold into jobs (work-consolidation §1, ADR Q1): there is no Task tag. A job that
+// hasn't started — an open or deferred former task, which `groupFor` places in Coming up —
+// reads as not-started. A started one lands in Doing now: in_progress, or blocked, which
+// `groupFor` counts as started work (the task API has no start history, and a task only
+// reaches blocked by being acted on). Mirroring the shared selector keeps a row in the
+// same group wherever it shows.
+function jobNotStarted(item: WorkItem): boolean {
+  return groupFor(item as GroupableWorkItem) === "coming-up";
+}
+
+// Finished jobs leave Work (§1): a closed former task falls out of every group
+// (`groupFor` → null). The list and WorkView's counts share this one rule.
+function jobShowsInWork(item: WorkItem): boolean {
+  return groupFor(item as GroupableWorkItem) !== null;
+}
+
+// Row meta (§2): a not-started job says "not started · added <when>"; a blocked (started)
+// job says "blocked"; any other started job keeps its type and priority.
+function jobMeta(item: WorkItem): string {
+  const task = item.raw as Task;
+  if (jobNotStarted(item)) {
+    const added = task.created_at ? relTime(task.created_at).text : "";
+    return added ? `not started · added ${added}` : "not started";
+  }
+  if (issueStatus(task) === "blocked") return "blocked";
+  return typeAndPriority(task);
+}
+
 function TaskDetail({ item }: { item: WorkItem }) {
   const task = item.raw as Task;
   const qc = useQueryClient();
@@ -98,22 +132,41 @@ function TaskDetail({ item }: { item: WorkItem }) {
       refresh();
       setEditOpen(false);
     },
-    onError: () => toast({ tone: "warning", message: "Couldn't save the task." }),
+    onError: () => toast({ tone: "warning", message: "Couldn't save the job." }),
   });
 
-  // Status transitions, mirroring the base `TasksPanel` board buttons so the same moves are
-  // reachable from the Work surface: an open/blocked task can be Started (→ in_progress) and an
-  // in-progress one Marked open (→ open); any non-closed task Closed (the close route), and a
-  // closed one Reopened (→ open). The PATCH/close succeed silently — the field table refreshes
-  // to the new status; a failure surfaces WorkDetail's inline "Couldn't …" Alert (no undo).
+  // Status transitions through the existing task PATCH/close routes. A not-started job (§2)
+  // offers Start now — PATCH to in_progress, which the shared source refresh re-groups from
+  // Coming up into Doing now — and Close job, which closes it out of Work. A started job keeps
+  // the base `TasksPanel` board moves (Mark open / Start, and Close); a closed one Reopens.
+  // The routes succeed silently — the field table refreshes; a failure surfaces WorkDetail's
+  // inline "Couldn't …" Alert, keeping the actions in reach (no undo for a start/close).
   const status = issueStatus(task);
   const isClosed = status === "closed";
   const isActive = status === "in_progress";
+  const notStarted = jobNotStarted(item);
 
   const actions: WorkAction[] = [
     { id: "edit", label: "Edit", run: async () => setEditOpen(true) },
   ];
-  if (!isClosed) {
+  if (notStarted) {
+    actions.push({
+      id: "start",
+      label: "Start now",
+      run: async () => {
+        await api.updateTask(task.id, { status: "in_progress" });
+        refresh();
+      },
+    });
+    actions.push({
+      id: "close",
+      label: "Close job",
+      run: async () => {
+        await api.closeTask(task.id);
+        refresh();
+      },
+    });
+  } else if (!isClosed) {
     actions.push({
       id: "start",
       label: isActive ? "Mark open" : "Start",
@@ -122,23 +175,31 @@ function TaskDetail({ item }: { item: WorkItem }) {
         refresh();
       },
     });
+    actions.push({
+      id: "close",
+      label: "Close",
+      run: async () => {
+        await api.closeTask(task.id);
+        refresh();
+      },
+    });
+  } else {
+    actions.push({
+      id: "reopen",
+      label: "Reopen",
+      run: async () => {
+        await api.updateTask(task.id, { status: "open" });
+        refresh();
+      },
+    });
   }
-  actions.push({
-    id: isClosed ? "reopen" : "close",
-    label: isClosed ? "Reopen" : "Close",
-    run: async () => {
-      if (isClosed) await api.updateTask(task.id, { status: "open" });
-      else await api.closeTask(task.id);
-      refresh();
-    },
-  });
   actions.push(
     {
       id: "delete",
       label: "Delete…",
       destructive: true,
       confirm: {
-        prompt: "Delete this task?",
+        prompt: "Delete this job?",
         explanation: "It's removed from the board. You can undo this for a few seconds.",
         confirmLabel: "Delete",
         keepLabel: "Keep it",
@@ -161,14 +222,14 @@ function TaskDetail({ item }: { item: WorkItem }) {
         fields={taskFields(task)}
         actions={actions}
         technical={{ Id: task.id }}
-        type="Task"
+        type="Job"
         onUndo={async (token) => { await api.undo(token); refresh(); }}
       />
       <TaskCreateDialog
         open={editOpen}
         onClose={() => setEditOpen(false)}
         busy={edit.isPending}
-        title="Edit task"
+        title="Edit job"
         submitLabel="Save changes"
         initial={taskDraft(task)}
         onCreate={(draft) => edit.mutate(draft)}
@@ -179,18 +240,20 @@ function TaskDetail({ item }: { item: WorkItem }) {
 
 function TaskList({ source, onOpen }: { source: WorkSource; onOpen: (item: WorkItem) => void }) {
   if (source.status === "loading") {
-    return <div aria-busy="true" aria-label="Loading tasks"><Skeleton lines={3} /></div>;
+    return <div aria-busy="true" aria-label="Loading jobs"><Skeleton lines={3} /></div>;
   }
   if (source.status === "error") {
     return (
       <Alert status="warning">
-        Couldn&apos;t load tasks. The agent still has them. Only this view failed.{" "}
+        Couldn&apos;t load jobs. The agent still has them. Only this view failed.{" "}
         <Button size="sm" onClick={source.retry}>Retry</Button>
       </Alert>
     );
   }
-  if (!source.items.length) {
-    return <Empty title="No tasks" description="The agent files one when it has work to track." />;
+  // Close job visibly removes the row (jobShowsInWork, shared with WorkView's counts).
+  const items = source.items.filter(jobShowsInWork);
+  if (!items.length) {
+    return <Empty title="No jobs" description="The agent files one when it has work to track." />;
   }
   return (
     <>
@@ -201,12 +264,14 @@ function TaskList({ source, onOpen }: { source: WorkSource; onOpen: (item: WorkI
         </Callout>
       )}
       <ul className="work-group">
-        {source.items.map((item) => (
+        {items.map((item) => (
           <li key={`${item.kind}:${item.id}`}>
             <WorkRow
               status={item.status}
+              tag="Job"
+              icon={jobNotStarted(item) ? <CircleDashed size={16} className="work-row__icon" aria-hidden /> : undefined}
               title={item.title}
-              meta={typeAndPriority(item.raw as Task)}
+              meta={jobMeta(item)}
               focusKey={`${item.kind}:${item.id}`}
               onOpen={() => onOpen(item)}
             />
@@ -229,4 +294,4 @@ export function TasksSection({ sources, state, onOpen }: WorkSectionContext) {
   return <TaskList source={source} onOpen={onOpen} />;
 }
 
-registerWorkSection("tasks", { label: "Tasks", group: "doing-now", render: (ctx) => <TasksSection {...ctx} /> });
+registerWorkSection("tasks", { label: "Tasks", group: "doing-now", listFilter: jobShowsInWork, render: (ctx) => <TasksSection {...ctx} /> });

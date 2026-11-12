@@ -104,7 +104,8 @@ it("a picked group shows its help line and rows, or its inline empty text", asyn
   useUI.setState({ surfaceStates: { work: { section: "instructions" } } });
   await render("modal");
   expect(host.querySelector(".work-view__help")?.textContent).toBe("Your standing instructions and approvals, in force now.");
-  expect(host.textContent).toContain("No standing instructions.");
+  // The delegated directives renderer owns this group's body, so its §3 empty copy shows.
+  expect(host.textContent).toContain("No standing instructions");
 });
 
 it("the picker offers Overview plus the four groups, with raw single badges", async () => {
@@ -135,7 +136,9 @@ it.each([
   useUI.setState({ surfaceStates: { work: { section } } });
   await render("modal");
   expect(host.querySelector(".work-view__picker button")?.textContent).toContain(label);
-  expect(canonicalSection(section)).toBe(label === "Overview" ? "overview" : canonicalSection(section));
+  const groupIds = { Overview: "overview", "Needs you": "needs-you", "Doing now": "doing-now",
+    "Coming up": "coming-up", "Your instructions": "instructions" } as const;
+  expect(canonicalSection(section)).toBe(groupIds[label]);
 });
 
 it("tags every row with its kind and icon per the approved table", async () => {
@@ -265,6 +268,15 @@ it("keeps healthy groups alongside source errors, retries, and stale callouts", 
   useUI.setState({ surfaceStates: { work: { section: "needs-you" } } });
   await render();
   expect(host.querySelector('[role="alert"]')?.textContent).toContain("Couldn't load decisions");
+  // A failed source never reads as "nothing here": the empty copy yields to the alert.
+  expect(host.textContent).not.toContain("Nothing needs you.");
+});
+
+it("failed loads never claim there is no work to track", async () => {
+  Object.values(data.sources).forEach((source) => { source.status = "error"; });
+  await render("modal");
+  expect(host.textContent).not.toContain("Nothing to track.");
+  expect(host.querySelectorAll('[role="alert"]').length).toBeGreaterThan(0);
 });
 
 it("shows skeletons without a zero-count flash or empty announcement", async () => {
@@ -335,6 +347,34 @@ it("keeps the selected row current and focuses the detail heading", async () => 
   await act(async () => host.querySelector<HTMLButtonElement>(".work-row")!.click());
   expect(document.activeElement).toBe(host.querySelector(".work-view__detail h2"));
   expect(host.querySelector(".work-row")?.getAttribute("aria-current")).toBe("true");
+});
+
+it("badges Your instructions through the shared projection — closed and job-tied rows drop", async () => {
+  data.sources.tasks.items = [
+    task("open-job", "open"),
+    { ...task("closed-job"), status: "done", raw: { id: "closed-job", title: "closed-job", status: "closed", closed_at: "2026-11-01T00:00:00Z" } },
+  ];
+  data.sources.background.items = [{ kind: "background", id: "deploy", status: "done", title: "deploy", meta: "", raw: { id: "deploy", status: "completed" } }];
+  const directive = (id: string, status: WorkItem["status"], rowStatus: string): WorkItem =>
+    ({ kind: "directive", id, status, title: id, meta: "", raw: { id, status: rowStatus, quote: id } });
+  data.sources.directives.items = [
+    directive("standing", "waiting", "in_force"),
+    directive("tied", "waiting", "in_force"),
+    directive("kept", "done", "fulfilled"),
+  ];
+  data.sources.directives.groupItems = [
+    directive("standing", "waiting", "in_force"),
+    { ...directive("tied", "waiting", "in_force"), tiedJob: { kind: "background", id: "deploy" } } as GroupableWorkItem,
+    directive("kept", "done", "fulfilled"),
+  ];
+  await render();
+  const nav = await openSections();
+  const badge = (label: string) => Array.from(nav.querySelectorAll('[role="menuitemradio"]'))
+    .find((node) => node.textContent?.startsWith(label))?.querySelector(".pl-menu__badge")?.textContent;
+  // Not the raw 3: the fulfilled directive left the projection, the tied one ended with its job.
+  expect(badge("Your instructions")).toBe("1");
+  expect(badge("Coming up")).toBe("1"); // the closed job left Work; the open one awaits its start
+  await closeSections(nav);
 });
 
 it("restores the originating row for legacy unqualified item ids", async () => {

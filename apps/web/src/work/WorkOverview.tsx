@@ -21,8 +21,12 @@ import type { WorkItems, WorkSourceKind } from "./useWorkItems";
 export const workSections = {
   overview: "Overview", decisions: "Decisions", goals: "Goals", watches: "Watches",
   tasks: "Tasks", schedules: "Schedules", background: "Background agents",
-  activity: "Activity", directives: "Directives",
+  directives: "Directives",
 };
+
+/** Load-alert labels — one per SOURCE, not per section: the activity/inbox delivery source
+ *  feeds the Needs-you group but has no section of its own since S4c removed Activity. */
+const sourceLabels: Record<string, string> = { ...workSections, activity: "Activity" };
 
 /** The group help lines, verbatim from the approved spec (§1). Shown on a picked group. */
 export const groupHelp: Record<WorkGroupId, string> = {
@@ -121,25 +125,33 @@ function SourceNotices({ sources, kinds }: { sources: WorkItems; kinds?: readonl
     .filter(([kind]) => !kinds || kinds.includes(kind));
   return <>
     {entries.map(([kind, source]) => source.status === "error" ?
-      <Alert key={kind} status="warning">Couldn&apos;t load {workSections[kind].toLowerCase()}. <Button size="sm" onClick={source.retry}>Retry</Button></Alert>
-      : source.status === "stale" ? <Callout key={kind} tone="warning">{workSections[kind]} may be out of date. <Button size="sm" onClick={source.retry}>Retry</Button></Callout> : null)}
+      <Alert key={kind} status="warning">Couldn&apos;t load {sourceLabels[kind].toLowerCase()}. <Button size="sm" onClick={source.retry}>Retry</Button></Alert>
+      : source.status === "stale" ? <Callout key={kind} tone="warning">{sourceLabels[kind]} may be out of date. <Button size="sm" onClick={source.retry}>Retry</Button></Callout> : null)}
   </>;
 }
 
-/** A picked group: its help line, then its rows or its inline empty text (§4). */
-export function WorkGroupSection({ group, sources, onOpen }: {
+/** A picked group: its help line, then its rows or its inline empty text (§4). The Your
+ *  instructions group passes `body` — the registered directives renderer — so the §3
+ *  presentation (Approval tags, provenance, its own load/error copy) rides the group. */
+export function WorkGroupSection({ group, sources, onOpen, body }: {
   group: WorkGroup;
   sources: WorkItems;
   onOpen: (item: GroupableWorkItem) => void;
+  body?: ReactNode;
 }) {
   const kinds = groupSources[group.id];
   const loading = kinds.some((kind) => sources[kind].status === "loading");
+  // A failed source already explains itself in the notice above — don't also claim
+  // "nothing here" when the rows may simply not have loaded.
+  const failed = kinds.some((kind) => sources[kind].status === "error");
   return <div className="work-overview">
     <p className="work-view__help">{groupHelp[group.id]}</p>
-    <SourceNotices sources={sources} kinds={kinds} />
-    {loading ? <div aria-label="Loading work" aria-busy="true"><Skeleton lines={3} /></div>
-      : group.items.length ? <WorkGroupRows group={group} onOpen={onOpen} />
-        : <Empty title={groupEmpty[group.id]} />}
+    {body ?? <>
+      <SourceNotices sources={sources} kinds={kinds} />
+      {loading ? <div aria-label="Loading work" aria-busy="true"><Skeleton lines={3} /></div>
+        : group.items.length ? <WorkGroupRows group={group} onOpen={onOpen} />
+          : failed ? null : <Empty title={groupEmpty[group.id]} />}
+    </>}
   </div>;
 }
 
@@ -150,11 +162,12 @@ export function WorkOverview({ groups, sources, onOpen }: {
   onOpen: (item: GroupableWorkItem) => void;
 }) {
   const loading = Object.values(sources).some((source) => source.status === "loading");
+  const failed = Object.values(sources).some((source) => source.status === "error");
   const visible = groups.filter((group) => group.items.length > 0);
   return <div className="work-overview">
     <SourceNotices sources={sources} />
     {loading && <div aria-label="Loading work" aria-busy="true"><Skeleton lines={3} /><Skeleton lines={3} /></div>}
-    {!loading && !visible.length && <Empty title="Nothing to track."
+    {!loading && !visible.length && !failed && <Empty title="Nothing to track."
       description="Nothing needs you, nothing is running or planned, and you haven't given standing instructions." />}
     {visible.map((group) => <section key={group.id} aria-label={group.label}>
       <WorkHeading label={group.label} count={group.count} />

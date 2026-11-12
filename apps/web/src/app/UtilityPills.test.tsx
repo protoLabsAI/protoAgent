@@ -2,26 +2,24 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
-const mocks = vi.hoisted(() => ({
-  // Multiple subscribers share a topic (the Feed pill AND its dialog's ActivitySurface),
-  // so each topic fans out to a Set — one unmount must not silence the others.
-  listeners: new Map<string, Set<(data: Record<string, unknown>) => void>>(),
-  pendingCount: 2,
-  openPanel: vi.fn(),
-}));
-vi.mock("../lib/events", () => {
+const mocks = vi.hoisted(() => {
+  // Several subscribers share a topic now that the Feed dialog (ActivitySurface) and its
+  // pill both listen to `inbox.item`/`activity.message` — a single-slot map would let the
+  // dialog's subscription overwrite (and on close, delete) the pill's.
+  const listeners = new Map<string, Array<(data: Record<string, unknown>) => void>>();
   const subscribe = (topic: string, fn: (data: Record<string, unknown>) => void) => {
-    const set = mocks.listeners.get(topic) ?? new Set<(data: Record<string, unknown>) => void>();
-    set.add(fn);
-    mocks.listeners.set(topic, set);
-    return () => set.delete(fn);
+    listeners.set(topic, [...(listeners.get(topic) ?? []), fn]);
+    return () => {
+      listeners.set(topic, (listeners.get(topic) ?? []).filter((f) => f !== fn));
+    };
   };
-  return {
-    onServerEvent: subscribe,
-    onTopic: subscribe,
-    onConnectionChange: () => () => {},
-  };
+  return { listeners, subscribe, pendingCount: 2, openPanel: vi.fn() };
 });
+vi.mock("../lib/events", () => ({
+  onServerEvent: mocks.subscribe,
+  onTopic: mocks.subscribe,
+  onConnectionChange: () => () => {},
+}));
 vi.mock("../decisions/useDecisions", () => ({
   useDecisions: () => ({
     decisions: [], pendingCount: mocks.pendingCount, top: null, loaded: true,
@@ -31,6 +29,12 @@ vi.mock("../decisions/useDecisions", () => ({
 vi.mock("@protolabsai/ui/overlays", async (original) => ({
   ...(await original<object>()), useToast: () => vi.fn(),
 }));
+// The Feed dialog body (ActivitySurface) pulls the heavy markdown pipeline + the
+// full-screen reader — stub both so this suite stays fast and deterministic.
+vi.mock("../chat/LazyMarkdown", () => ({
+  Markdown: ({ children }: { children: string }) => <div className="md">{children}</div>,
+}));
+vi.mock("../docviewer", () => ({ openDocument: vi.fn() }));
 
 import { api } from "../lib/api";
 import { useUI } from "../state/uiStore";
@@ -69,7 +73,7 @@ const modal = (section: string) => expect(useUI.getState().surfaceModal).toEqual
   viewId: "work", state: { section },
 });
 function emit(topic: string) {
-  act(() => mocks.listeners.get(topic)?.forEach((fn) => fn({})));
+  act(() => (mocks.listeners.get(topic) ?? []).forEach((fn) => fn({})));
 }
 
 it("routes the Decisions utility entry to Work and preserves pending badges", () => {
@@ -103,33 +107,37 @@ it.each([0, 2])("routes background jobs to Work with %i running jobs", async (ru
   expect(document.querySelector('[role="dialog"]')).toBeNull();
 });
 
-it("counts unseen Activity items, clears in its own Feed dialog, and resumes after closing", async () => {
-  // History left Work with the four-group consolidation (ADR 0129 Q3): the pill opens the
-  // widget's own Feed dialog now, never the Work modal.
-  vi.spyOn(api, "activity").mockResolvedValue({ context_id: "activity", messages: [], entries: [] });
+it("counts unseen Feed items, clears on opening its OWN dialog, and resumes after close", async () => {
+  // ActivitySurface auto-scrolls its feed; jsdom doesn't implement element scrolling.
+  if (!HTMLElement.prototype.scrollTo) {
+    (HTMLElement.prototype as unknown as { scrollTo: () => void }).scrollTo = () => {};
+  }
   vi.spyOn(api, "inbox").mockResolvedValue({ items: [] });
-  await act(async () => root.render(<ActivityWidget />));
+  vi.spyOn(api, "activity").mockResolvedValue({ context_id: "s1", entries: [], messages: [] });
+  act(() => root.render(<ActivityWidget />));
   expect(pill("activity-badge")).toBeNull();
   emit("activity.message");
   emit("inbox.item");
   expect(pill("activity-badge").textContent).toBe("2");
   await act(async () => pill("activity-widget").click());
+  // The Feed is its own home since S4c removed Work's Activity section: the pill opens
+  // the full ActivitySurface in its own dialog and never touches the Work modal.
   expect(useUI.getState().surfaceModal).toBeNull();
-  expect(document.querySelector('[role="dialog"]')?.textContent).toContain("Feed");
-  expect(document.querySelector('[data-testid="unified-feed"]')).not.toBeNull();
+  const dialog = document.querySelector('[role="dialog"]')!;
+  expect(dialog.textContent).toContain("Feed");
+  expect(dialog.querySelector('[data-testid="unified-feed"]')).toBeTruthy();
+  expect(dialog.querySelector('[data-testid="feed-completed"]')).toBeTruthy();
   expect(pill("activity-badge")).toBeNull();
+  // Events arriving while the dialog is open stay read.
   emit("activity.message");
-  expect(pill("activity-badge")).toBeNull(); // read while the feed is open
-  const close = [...document.querySelectorAll<HTMLButtonElement>('[role="dialog"] button')]
-    .find((node) => node.getAttribute("aria-label") === "Close");
-  expect(close).toBeTruthy();
-  await act(async () => close!.click());
-  emit("activity.message");
-  expect(pill("activity-badge").textContent).toBe("1");
-  // A legacy saved Work `activity` section still marks the feed read when something opens it.
-  act(() => useUI.getState().openSurfaceModal("work", { section: "activity" }));
   expect(pill("activity-badge")).toBeNull();
+  // Opening the Work modal neither opens nor clears the feed — they are independent now.
+  act(() => useUI.getState().openSurfaceModal("work", { section: "background" }));
+  expect(document.querySelector('[role="dialog"] [data-testid="unified-feed"]')).toBeTruthy();
   act(() => useUI.getState().closeSurfaceModal());
+  // Closing the dialog resumes unread tracking.
+  await act(async () => document.querySelector<HTMLButtonElement>(".pl-dialog__close")!.click());
+  expect(document.querySelector('[data-testid="unified-feed"]')).toBeNull();
   emit("inbox.item");
   expect(pill("activity-badge").textContent).toBe("1");
 });
@@ -168,7 +176,7 @@ it("keeps earlier tool outputs and live progress in the background detail opened
     </>;
   }
   const progress = (data: Record<string, unknown>) => act(() => {
-    mocks.listeners.get("background.progress")?.forEach((fn) => fn({ job_id: job.id, ...data }));
+    (mocks.listeners.get("background.progress") ?? []).forEach((fn) => fn({ job_id: job.id, ...data }));
   });
   await act(async () => root.render(<Harness />));
   progress({ phase: "tool_end", tool: "read_file", tool_call_id: "read", output: "Earlier file contents" });

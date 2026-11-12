@@ -16,6 +16,11 @@ from the published docs site** (`srcExclude: ["dev/**"]` in
 | `HANDOFF.md` (repo root, **gitignored**) | Live local scratchpad for the *current* session. | Just you, this machine |
 | `~/.claude/.../memory/` | The agent's cross-session memory (private, auto-loaded). | The agent |
 
+## Testing
+
+[Test policy](testing.md) — what gets a test, what does not, and the budget gate
+(`scripts/check_test_policy.py`).
+
 ## Documentation media
 
 [Media inventory](media-audit.md) tracks proposed visuals across the docs.

@@ -40,9 +40,9 @@ vi.mock("../docviewer", () => ({ openDocument: vi.fn() }));
 
 import { api } from "../lib/api";
 import { isPendingNowInboxPage } from "../lib/queries";
-import { ActivitySurface } from "./ActivitySurface";
+import { openDocument } from "../docviewer";
+import { ActivitySurface, stripWakeHeader } from "./ActivitySurface";
 import { ActivityWidget } from "./ActivityWidget";
-import activityCss from "./activity.css?raw";
 
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -245,32 +245,77 @@ describe("ActivitySurface — pending feed", () => {
   });
 });
 
-// #5094: Work embeds the pending section (`pendingOnly`) in its own scrolling list. The
-// dialog's fixed height (`util-dialog-fill`) and the 45% inner scroller left a blank gap
-// and nested scrollbars there; the utility-bar dialog keeps both.
-describe("ActivitySurface — embedded in Work (pendingOnly)", () => {
-  it("drops the dialog sizing in pendingOnly mode and keeps it for the dialog", async () => {
-    vi.spyOn(api, "inbox").mockResolvedValue({ items: [NOW_PAGE] });
-    vi.spyOn(api, "activity").mockResolvedValue(NO_ACTIVITY);
+// #5094: the scheduler prepends its internal "[Autonomous wake — …]" header to a
+// scheduled/watch/wait/goal prompt. The Work Activity row title used to strip it; the
+// feed dialog is the timeline's only home since S4c, so the stripping lives here now —
+// in the stimulus row, its hover text and the full-screen reader content.
+describe("ActivitySurface — wake-header stripping (#5094)", () => {
+  const WAKE = "[Autonomous wake — scheduled run. Orient from <working_state>, then:]";
+  const entry = (over: Partial<ActivityHistory["entries"][number]>) => ({
+    id: 1, created_at: "2026-09-03T10:00:00Z", origin: "scheduler", trigger: "heartbeat",
+    priority: "", state: "completed", task_id: "", text: "done", stimulus: "", ...over,
+  });
 
-    act(() => root.render(h(ActivitySurface, { pendingOnly: true })));
-    await flush();
-    const inline = testid("unified-feed")!;
-    expect(inline.classList.contains("util-dialog-fill")).toBe(false);
-    expect(inline.classList.contains("unified-feed--inline")).toBe(true);
-    expect(testid("feed-completed")).toBeNull();
+  it("drops every scheduler wake-header variant, keeps an ordinary stimulus verbatim", () => {
+    for (const header of [
+      WAKE,
+      "[Autonomous wake — a watch you set has tripped. Orient from <working_state>, then:]",
+      "[Autonomous wake — a wait you scheduled has elapsed. Continue:]",
+      "[Autonomous wake — driving your active goal. Orient from <working_state>, then:]",
+    ]) {
+      expect(stripWakeHeader(`${header}\n\nCheck the board for blocked cards.`))
+        .toBe("Check the board for blocked cards.");
+    }
+    expect(stripWakeHeader("CI webhook: build #4821 failed")).toBe("CI webhook: build #4821 failed");
+    expect(stripWakeHeader(WAKE)).toBe("");
+    expect(stripWakeHeader(undefined)).toBe("");
+  });
+
+  it("renders a persisted scheduled turn's stimulus (row + hover) without the header", async () => {
+    vi.spyOn(api, "inbox").mockResolvedValue({ items: [] });
+    vi.spyOn(api, "activity").mockResolvedValue({
+      context_id: "s1", messages: [],
+      entries: [entry({ stimulus: `${WAKE}\n\nCheck the board for blocked cards.` })],
+    });
 
     act(() => root.render(h(ActivitySurface)));
     await flush();
-    const dialog = testid("unified-feed")!;
-    expect(dialog.classList.contains("util-dialog-fill")).toBe(true);
-    expect(dialog.classList.contains("unified-feed--inline")).toBe(false);
+
+    const row = container.querySelector(".activity-stimulus")!;
+    expect(row.querySelector(".activity-stimulus-text")!.textContent).toBe("Check the board for blocked cards.");
+    expect(row.getAttribute("title")).toBe("Check the board for blocked cards.");
+    expect(container.textContent).not.toContain("Autonomous wake");
   });
 
-  it("lets the inline pending list size to its content with no inner scroller", () => {
-    const rule = activityCss.match(/\.unified-feed--inline \.inbox-list\s*\{([^}]*)\}/);
-    expect(rule).not.toBeNull();
-    expect(rule![1]).toMatch(/max-height:\s*none/);
-    expect(rule![1]).toMatch(/overflow:\s*visible/);
+  it("strips a live bus turn's header too, including the reader content", async () => {
+    vi.spyOn(api, "inbox").mockResolvedValue({ items: [] });
+    vi.spyOn(api, "activity").mockResolvedValue(NO_ACTIVITY);
+
+    act(() => root.render(h(ActivitySurface)));
+    await flush();
+    emit("activity.message", {
+      text: "done", origin: "scheduler", trigger: "heartbeat",
+      stimulus: `${WAKE}\n\nHourly heartbeat check.`,
+    });
+
+    expect(container.querySelector(".activity-stimulus-text")!.textContent).toBe("Hourly heartbeat check.");
+    act(() => container.querySelector<HTMLButtonElement>(".activity-entry-open")!.click());
+    const doc = vi.mocked(openDocument).mock.lastCall![0];
+    expect(doc.content).toContain("Hourly heartbeat check.");
+    expect(doc.content).not.toContain("Autonomous wake");
+  });
+
+  it("omits the stimulus row when the stimulus was nothing but the header", async () => {
+    vi.spyOn(api, "inbox").mockResolvedValue({ items: [] });
+    vi.spyOn(api, "activity").mockResolvedValue({
+      context_id: "s1", messages: [], entries: [entry({ stimulus: WAKE })],
+    });
+
+    act(() => root.render(h(ActivitySurface)));
+    await flush();
+
+    expect(container.querySelector(".activity-stimulus")).toBeNull();
+    // The response itself still renders — only the framing is dropped.
+    expect(testid("feed-completed")!.textContent).toContain("done");
   });
 });

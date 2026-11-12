@@ -208,7 +208,6 @@ const WORK_SECTIONS: Array<[string, string]> = [
   ["tasks", "Tasks"],
   ["schedules", "Schedules"],
   ["background", "Background agents"],
-  ["activity", "Activity"],
   ["directives", "Directives"],
 ];
 for (const [section, label] of WORK_SECTIONS) {

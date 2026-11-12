@@ -133,7 +133,6 @@ describe("applyNavIntent — surface: opens the large shell MODAL on a section (
     ["work:tasks", "Work: Tasks", "tasks"],
     ["work:schedules", "Work: Schedules", "schedules"],
     ["work:background", "Work: Background agents", "background"],
-    ["work:activity", "Work: Activity", "activity"],
     ["work:directives", "Work: Directives", "directives"],
     ["work:new-goal", "Work: New goal…", "goals"],
   ])("registered row %s forwards and replays its modal destination", (id, label, section) => {
@@ -152,10 +151,11 @@ describe("applyNavIntent — surface: opens the large shell MODAL on a section (
     expect(useUI.getState().surfaceModal).toEqual({ viewId: "work", state });
   });
 
-  // Every Work palette row (`registry.ts`) opens the modal through this arm. The eight
-  // section ids are WorkView's own (`WorkOverview.workSections`).
+  // Every Work palette row (`registry.ts`) opens the modal through this arm. The seven
+  // section ids are WorkView's own (`WorkOverview.workSections`) — Activity left in S4c
+  // (the feed lives on the utility-bar Feed pill's own dialog, not in Work).
   const SECTIONS = [
-    "decisions", "goals", "watches", "tasks", "schedules", "background", "activity", "directives",
+    "decisions", "goals", "watches", "tasks", "schedules", "background", "directives",
   ];
 
   it.each(["overview", ...SECTIONS, "new-goal"])("routes %s from another mobile surface", (section) => {

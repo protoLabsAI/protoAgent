@@ -11,7 +11,7 @@ describe("groupFor raw state classification", () => {
   const cases: [GroupableWorkItem["kind"], Record<string, WorkGroupId | null>][] = [
     ["decision", { pending: "needs-you", answered: null, expired: null, cancelled: null, withdrawn: null }],
     ["goal", { active: "doing-now", exhausted: "needs-you", unachievable: "needs-you", achieved: null, cleared: null }],
-    ["task", { in_progress: "doing-now", blocked: "coming-up", open: "coming-up", deferred: "coming-up", closed: null }],
+    ["task", { in_progress: "doing-now", blocked: "doing-now", open: "coming-up", deferred: "coming-up", closed: null }],
     ["background", { running: "doing-now", open: "coming-up", deferred: "coming-up", completed: null, failed: null, canceled: null }],
     ["watch", { active: "coming-up", met: null, expired: null, cleared: null }],
     ["directive", { in_force: "instructions", fulfilled: null, revoked: null }],
@@ -23,8 +23,12 @@ describe("groupFor raw state classification", () => {
       expect(groupFor(item)).toBe(expected);
     });
   }
-  it("requires explicit evidence that a blocked task started", () => {
+  it("counts a blocked task as started unless the adapter says otherwise", () => {
+    // The task API carries no start history, so `blocked` (someone acted on it) is the
+    // evidence of a started job — the production shape, with no `started` flag, stays in
+    // Doing now. Only an adapter that KNOWS it never started (`started: false`) demotes it.
     const task: GroupableWorkItem = { kind: "task", id: "t", title: "t", meta: "", status: "waiting", raw: { status: "blocked" } };
+    expect(groupFor(task)).toBe("doing-now");
     expect(groupFor({ ...task, started: true })).toBe("doing-now");
     expect(groupFor({ ...task, started: false })).toBe("coming-up");
     expect(groupFor({ ...task, raw: { status: "open" }, started: true })).toBe("coming-up");

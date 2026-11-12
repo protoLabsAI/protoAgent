@@ -62,7 +62,9 @@ test("mobile: drawer and handle share the Work sheet and preserve its section", 
 
   await page.getByTestId("header-menu").tap();
   const drawer = page.getByTestId("app-drawer");
-  await drawer.getByRole("button", { name: "Work", exact: true }).tap();
+  // The drawer entry reads "Work, N need you" while anything needs attention — the mock's
+  // undelivered priority-now page counts through the shared workGroups selector.
+  await drawer.getByRole("button", { name: /^Work(,|$)/ }).tap();
   await expect(drawer).toHaveCount(0);
   await expect(sheet).toBeVisible();
   await expect(sheet.getByRole("button", { name: /Work sections/ })).toContainText("Doing now");

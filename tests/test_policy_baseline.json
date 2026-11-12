@@ -1,0 +1,10 @@
+{
+  "py_test_lines_per_source_line": 1.36,
+  "web_unit_test_lines_per_source_line": 0.81,
+  "web_e2e_tests": 700,
+  "web_source_pin_files": 41,
+  "tombstone_test_files": 0,
+  "issue_numbered_test_files": 35,
+  "py_real_sleeps": 64,
+  "e2e_fixed_waits": 60
+}

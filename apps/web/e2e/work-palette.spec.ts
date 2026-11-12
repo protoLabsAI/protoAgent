@@ -7,14 +7,17 @@ test("Work search lists one overview entry and opens every section in the modal"
   await page.locator(".pl-cmdk-commands__input").fill("work");
   await expect(page.getByRole("option", { name: "Open Work", exact: true })).toHaveCount(1);
   await expect(page.getByRole("option", { name: "Work", exact: true })).toHaveCount(0);
+  // Activity is not a Work section any more (S4c) — no palette row can navigate to it.
+  await page.locator(".pl-cmdk-commands__input").fill("Work: Activity");
+  await expect(page.getByRole("option", { name: "Work: Activity", exact: true })).toHaveCount(0);
   await page.keyboard.press("Escape");
 
   // Legacy palette commands survive as deep links: each resolves into its canonical group
-  // (work-consolidation.md v2 §7.2); Activity has no group, so it lands on the Overview.
+  // (work-consolidation.md v2 §7.2). The Activity row itself is gone (S4c, asserted above).
   for (const [section, groupLabel] of [
     ["Overview", "Overview"], ["Decisions", "Needs you"], ["Goals", "Doing now"], ["Watches", "Coming up"],
     ["Tasks", "Doing now"], ["Schedules", "Coming up"], ["Background agents", "Doing now"],
-    ["Activity", "Overview"], ["Directives", "Your instructions"],
+    ["Directives", "Your instructions"],
   ] as const) {
     const label = section === "Overview" ? "Open Work" : `Work: ${section}`;
     await page.keyboard.press("ControlOrMeta+Shift+k");

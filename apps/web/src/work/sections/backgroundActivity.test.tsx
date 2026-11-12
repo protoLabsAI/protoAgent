@@ -27,7 +27,6 @@ const mocks = vi.hoisted(() => ({
 }));
 
 // The one data hook — fed directly, so no queries run (mirrors WorkView.test.tsx).
-vi.mock("../../activity/useActivityHistory", () => ({ useActivityHistory: () => mocks.sources.activity }));
 vi.mock("../useWorkItems", () => ({ useWorkItems: () => mocks.sources }));
 vi.mock("../../lib/api", () => ({ api: { stopBackground: mocks.stopBackground, inbox: async () => ({ items: [] }) } }));
 vi.mock("../../lib/events", () => ({
@@ -51,12 +50,13 @@ vi.mock("../../app/SubagentsPanel", () => ({
 
 import { ToastProvider } from "@protolabsai/ui/overlays";
 import { WorkView } from "../WorkView";
-import { sections } from "../sectionRegistry";
+import { registerWorkSection, sections, type WorkSection } from "../sectionRegistry";
 import { useUI } from "../../state/uiStore";
 import type { WorkItem, WorkItems, WorkSource, WorkSourceKind } from "../useWorkItems";
-// Importing the sections registers them in the WorkView registry (module side effect).
+// The production barrel (S4c): importing it registers every built-in section — and
+// proves Activity is NOT among them (its renderer is deleted, not merely unimported).
+import "./index";
 import { roleLabel } from "./background";
-import { triggeredByLabel, isUrgent } from "./activity";
 
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 const kinds: WorkSourceKind[] = ["decisions", "goals", "watches", "tasks", "schedules", "background", "activity", "directives"];
@@ -70,9 +70,6 @@ function emptySources(): WorkItems {
 }
 function bgItem(id: string, status: WorkItem["status"], raw: Record<string, unknown>): WorkItem {
   return { kind: "background", id, status, title: String(raw.description || id), meta: String(raw.subagent_type || ""), raw };
-}
-function actItem(id: string, status: WorkItem["status"], title: string, raw: Record<string, unknown>): WorkItem {
-  return { kind: "activity", id, status, title, meta: "", raw };
 }
 async function render(section: string, itemId?: string) {
   useUI.setState({ surfaceStates: { work: { section, itemId, filters: { thisChat: false } } }, surfaceModal: null });
@@ -114,19 +111,6 @@ it("maps a subagent slug to a display name, never the raw slug", () => {
   expect(roleLabel("research-assistant")).toBe("Research Assistant");
   expect(roleLabel("delegate")).toBe("Delegate");
   expect(roleLabel("")).toBe("Subagent");
-});
-
-it("labels every activity trigger in plain words and flags only the inbox now tier", () => {
-  expect(triggeredByLabel("scheduler")).toBe("Scheduled");
-  expect(triggeredByLabel("watch")).toBe("Scheduled");
-  expect(triggeredByLabel("inbox")).toBe("Inbox");
-  expect(triggeredByLabel("webhook")).toBe("Webhook");
-  expect(triggeredByLabel("a2a")).toBe("Another agent");
-  expect(triggeredByLabel("operator")).toBe("You");
-  expect(triggeredByLabel("")).toBe("You");
-  expect(isUrgent({ priority: "now" })).toBe(true);
-  expect(isUrgent({ priority: "next" })).toBe(false);
-  expect(isUrgent({ priority: "" })).toBe(false);
 });
 
 // ── Background agents (§2.9) ────────────────────────────────────────────────────
@@ -205,31 +189,37 @@ it("a background deep link lands on Doing now and the row opens the preserved §
   expect(fieldValue("Role")).toBe("Research Assistant");
 });
 
-// ── Activity (v2 §1: history is not Work) ───────────────────────────────────────
-it("keeps activity history out of Work: the old section deep link lands on the Overview", async () => {
-  const recent = new Date(Date.now() - 1000).toISOString();
-  mocks.sources.activity.items = [
-    actItem("a-new", "done", "a-new-turn", { id: 1, origin: "scheduler", state: "completed", created_at: recent }),
-  ];
+// ── Activity is no longer a Work section (S4c; history is not Work, v2 §1) ──────
+it("registers every built-in with its canonical group and leaves Activity out of the registry", () => {
+  expect(sections.get("background")?.group).toBe("doing-now");
+  for (const [id, section] of sections) {
+    expect(section.group, id).toMatch(/^(needs-you|doing-now|coming-up|instructions)$/);
+  }
+  expect(sections.has("activity")).toBe(false);
+});
+
+it("lands an old Activity deep-link on the Overview, never a feed — history rows stay out of Work", async () => {
+  // A history row in the activity source (its production items stay empty) must not render.
+  mocks.sources.activity.items = [{ kind: "activity", id: "a-new", status: "done", title: "a-new-turn",
+    meta: "", raw: { id: 1, origin: "scheduler", state: "completed", created_at: new Date().toISOString() } }];
   await render("activity");
   expect(host.querySelector(".work-view__picker button")?.textContent).toContain("Overview");
+  expect(host.textContent).toContain("Nothing to track.");
   expect(host.textContent).not.toContain("a-new-turn");
+  expect(document.querySelector('[data-testid="unified-feed"]')).toBeNull();
+  // The picker offers no Activity destination either — Overview plus the four groups (v2 §4).
+  const trigger = host.querySelector<HTMLButtonElement>(".work-view__picker button")!;
+  await act(async () => trigger.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })));
+  const menu = document.querySelector<HTMLElement>('[role="menu"][aria-label="Work sections"]')!;
+  const labels = Array.from(menu.querySelectorAll('[role="menuitemradio"]')).map((n) => n.textContent ?? "");
+  expect(labels).toHaveLength(5);
+  expect(labels.some((label) => label.includes("Activity"))).toBe(false);
+  await act(async () => menu.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
 });
 
-it("shows Urgent only for the inbox now tier", async () => {
-  mocks.sources.activity.items = [
-    actItem("u1", "done", "urgent-turn", { id: 1, origin: "inbox", priority: "now", state: "completed", created_at: new Date().toISOString() }),
-    actItem("u2", "done", "calm-turn", { id: 2, origin: "inbox", priority: "later", state: "completed", created_at: new Date().toISOString() }),
-  ];
-  await render("activity", "activity:u1");
-  expect(fieldValue("Triggered by")).toBe("Inbox");
-  expect(host.textContent).toContain("Urgent");
-  await render("activity", "activity:u2");
-  expect(host.textContent).not.toContain("Urgent");
-});
-
-it("places background adapters in Doing now without giving activity a Work group", () => {
-  expect(sections.get("background")?.group).toBe("doing-now");
-  expect(sections.get("activity")).toBeDefined();
-  expect(sections.get("activity")?.group).toBeUndefined();
+it("rejects re-registering Activity as an ungrouped Work section", () => {
+  expect(() =>
+    registerWorkSection("activity", { label: "Activity", render: () => null } as unknown as WorkSection),
+  ).toThrow(/group/);
+  expect(sections.has("activity")).toBe(false);
 });

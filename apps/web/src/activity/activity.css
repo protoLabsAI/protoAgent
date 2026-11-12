@@ -172,18 +172,6 @@
   border-bottom: 1px solid var(--pl-color-border);
 }
 
-/* Work embeds the pending section on its own (#5094): it sizes to its content inside
-   the Work list, which is the only scroller. */
-.unified-feed--inline {
-  min-width: 0;
-  margin-bottom: var(--pl-space-3);
-}
-.unified-feed--inline .inbox-list {
-  max-height: none;
-  overflow: visible;
-  padding: 0 0 var(--pl-space-3);
-}
-
 .inbox-item {
   min-width: 0;
   border: 1px solid var(--pl-color-border);

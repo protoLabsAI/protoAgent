@@ -188,7 +188,10 @@ export function WorkView({ frame = "rail", sessionId }: { frame?: "rail" | "moda
         heading.focus({ preventScroll: true });
       }
     } else if (returnTo.current) {
-      Array.from(rows ?? []).find((node) => node.dataset.surfaceFocus === returnTo.current)?.focus({ preventScroll: true });
+      // The opened item can finish while its detail shows (an answered decision, a completed
+      // job) and leave every group — fall back to the first row so focus never drops to body.
+      const nodes = Array.from(rows ?? []);
+      (nodes.find((node) => node.dataset.surfaceFocus === returnTo.current) ?? nodes[0])?.focus({ preventScroll: true });
       returnTo.current = undefined;
     }
   }, [state.itemId, selectedKey, selected?.id, hostFrame]);
@@ -240,9 +243,19 @@ export function WorkView({ frame = "rail", sessionId }: { frame?: "rail" | "moda
   };
   const context = { sources, state: { ...state, itemId: selectedKey ?? state.itemId }, onOpen, onBack, sessionId,
     decisionActions: { agentOnline, openSourceChat, answerDecision: decisions.answer } };
-  const selectedSection = selected && ({ decision: "decisions", goal: "goals", watch: "watches", task: "tasks",
-    schedule: "schedules", background: "background", directive: "directives", wait: "schedules", delivery: "delivery", activity: "activity" } as const)[selected.kind];
-  const detailRenderer = selectedSection ? sections.get(selectedSection) : undefined;
+  // The activity kind maps to no section (S4c removed it): an activity row can never be
+  // selected (`useWorkItems` keeps that source rows-empty for the delivery group), and a
+  // stale selection falls to the unregistered Empty below.
+  const kindSections = { decision: "decisions", goal: "goals", watch: "watches", task: "tasks",
+    schedule: "schedules", background: "background", directive: "directives", wait: "schedules", delivery: "delivery", activity: "activity" } as const;
+  const selectedSection = selected && kindSections[selected.kind];
+  // A selection whose row is gone or still loading falls back to its kind's own renderer —
+  // resolved from the itemId's kind prefix, else the saved legacy section — so each kind keeps
+  // its honest loading/error/"no longer here" copy instead of the generic "Item unavailable".
+  const savedKind = state.itemId?.split(":", 1)[0] as keyof typeof kindSections | undefined;
+  const fallbackSection = (savedKind && kindSections[savedKind])
+    ?? (state.section && sections.has(state.section) ? state.section : undefined);
+  const detailRenderer = selectedSection ? sections.get(selectedSection) : sections.get(fallbackSection ?? "");
   const selectSection = (id: string) => update({ section: id, itemId: undefined, scrollTop: 0 });
 
   return <div className="work-view" data-frame={hostFrame} data-selected={!!state.itemId} onKeyDown={(event) => {
@@ -276,7 +289,15 @@ export function WorkView({ frame = "rail", sessionId }: { frame?: "rail" | "moda
           {section !== "overview" && group && <WorkHeading label={group.label} count={group.count} />}
           {section === "overview" || !group
             ? <WorkOverview groups={groups} sources={sources} onOpen={onOpen} />
-            : <WorkGroupSection group={group} sources={sources} onOpen={onOpen} />}
+            : <WorkGroupSection group={group} sources={sources} onOpen={onOpen}
+              // The Your instructions list delegates to the registered directives renderer
+              // (itemId stripped — the detail pane owns selection) so the §3 presentation —
+              // Approval tags, "You said…" provenance, tied-job meta and the ledger's own
+              // load/error copy — survives the four-group consolidation. Its rows and count
+              // still come from the same shared workGroups projection.
+              body={group.id === "instructions"
+                ? sections.get("directives")?.render({ ...context, state: { ...context.state, itemId: undefined } })
+                : undefined} />}
         </div>
       </div>
       {state.itemId && <div className="work-view__detail" ref={detailRef}>

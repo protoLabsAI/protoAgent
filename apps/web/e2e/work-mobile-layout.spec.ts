@@ -73,7 +73,7 @@ for (const theme of ["light", "dark"] as const) {
       await page.route("**/api/background", route => route.fulfill({ json: { enabled: false, jobs: [] } }));
     });
 
-    // One test per width: as a single test the three widths x nine sections ran ~300 keyboard
+    // One test per width: as a single test the three widths x eight sections ran ~300 keyboard
     // steps and blew the 30 s timeout under WebKit about half the time.
     for (const width of [390, 768, 1000]) {
       test(`collapsed picker selects every section without a width cap at ${width}px`, async ({ page }) => {
