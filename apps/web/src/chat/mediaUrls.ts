@@ -1,4 +1,5 @@
 import { apiUrl } from "../lib/api";
+import { agentPublicOrigin } from "../lib/ownOrigins";
 import { request } from "../lib/api/http";
 
 // Server-relative URL rewriting for markdown replies (#1946). Replies embed core-served
@@ -79,6 +80,9 @@ export function isOwnImageSrc(src: string): boolean {
   }
   if (url.protocol === "data:" || url.protocol === "blob:") return true;
   if (url.origin === window.location.origin) return true;
+  // The agent's public URL: signed media links handed to clients outside the box are minted
+  // against it, and the console may be open on a different origin (LAN, tailnet, a proxy).
+  if (agentPublicOrigin() && url.origin === agentPublicOrigin()) return true;
   try {
     return url.origin === new URL(apiUrl("/media/"), window.location.href).origin;
   } catch {
@@ -89,7 +93,8 @@ export function isOwnImageSrc(src: string): boolean {
 function remoteImageLabel(src: string, alt: unknown): string {
   let host = "another site";
   try {
-    host = new URL(src, window.location.href).host || host;
+    // An empty src would resolve to this page — that is not where the image is from.
+    if (src) host = new URL(src, window.location.href).host || host;
   } catch {
     /* keep the generic label */
   }
@@ -100,22 +105,27 @@ function remoteImageLabel(src: string, alt: unknown): string {
 /** rehype plugin: turn every `img` the agent's server doesn't serve into a link to it. */
 export function rehypeLinkRemoteImages() {
   return (tree: unknown) => {
-    const walk = (node: HastNode) => {
+    // `inLink`: an image that is itself a link's content (a badge, `[![alt](img)](site)`)
+    // becomes plain text inside that link — an <a> in an <a> is invalid, and the link the
+    // author wrote is the one to keep.
+    const walk = (node: HastNode, inLink: boolean) => {
       if (!node || typeof node !== "object") return;
       if (node.type === "element" && node.tagName === "img" && node.properties) {
         const src = node.properties.src;
         if (typeof src !== "string" || !isOwnImageSrc(src)) {
           const href = typeof src === "string" ? src : "";
           const alt = (node.properties as { alt?: unknown }).alt;
-          node.tagName = href ? "a" : "span";
-          node.properties = href ? { href } : {};
+          const asLink = Boolean(href) && !inLink;
+          node.tagName = asLink ? "a" : "span";
+          node.properties = asLink ? { href } : {};
           node.children = [{ type: "text", value: remoteImageLabel(href, alt) }];
           return;
         }
       }
-      if (Array.isArray(node.children)) node.children.forEach((c) => walk(c as HastNode));
+      const within = inLink || (node.type === "element" && node.tagName === "a");
+      if (Array.isArray(node.children)) node.children.forEach((c) => walk(c as HastNode, within));
     };
-    walk(tree as HastNode);
+    walk(tree as HastNode, false);
   };
 }
 

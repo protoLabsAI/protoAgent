@@ -8,6 +8,7 @@ import {
   rehypeLinkRemoteImages,
   remintEndpoint,
 } from "./mediaUrls";
+import { noteAgentPublicUrl } from "../lib/ownOrigins";
 
 // absolutizeServerUrl rides apiUrl(): the slug comes from the URL (/app/agent/<slug>/)
 // and the desktop base from ?__apiPort= — drive both via history, like api.test.ts.
@@ -283,6 +284,31 @@ describe("rehypeLinkRemoteImages — a reply never loads an image from another h
     focus("/app/");
     const [node] = run(img(undefined));
     expect(node.tagName).toBe("span");
+    expect(node.children![0].value).toBe("image from another site");
     expect(isOwnImageSrc("http://[bad")).toBe(false);
+  });
+
+  it("keeps media on the agent's public URL, and only while that agent reports it", () => {
+    focus("/app/");
+    const src = "https://agent.example/media/f.png?sig=s";
+    expect(run(img(src))[0].tagName).toBe("a");
+    noteAgentPublicUrl("https://agent.example/agents/ava");
+    expect(run(img(src))[0].tagName).toBe("img");
+    expect(run(img("https://evil.example/media/f.png?sig=s"))[0].tagName).toBe("a");
+    noteAgentPublicUrl("");
+    expect(run(img(src))[0].tagName).toBe("a");
+  });
+
+  it("a remote image inside a link becomes text in that link, not a nested link", () => {
+    focus("/app/");
+    const badge: N = {
+      type: "element",
+      tagName: "a",
+      properties: { href: "https://site.example" },
+      children: [img("https://evil.example/b.svg", "build")],
+    };
+    const [link] = run(badge);
+    expect(link.properties).toEqual({ href: "https://site.example" });
+    expect(link.children![0]).toMatchObject({ tagName: "span", properties: {} });
   });
 });
