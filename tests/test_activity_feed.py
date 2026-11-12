@@ -101,6 +101,38 @@ def test_terminal_hook_logs_provenance_and_tags_event(tmp_path, monkeypatch):
     assert activity["origin"] == "scheduler" and activity["trigger"] == "daily-brief"
 
 
+def test_terminal_hook_carries_inbox_id_to_event_and_row(tmp_path, monkeypatch):
+    # docs/design/feed.md §3: an inbox-fired turn's feed entry and live event carry the
+    # inbox item id so the Feed can join the queued item to its result; a turn that no
+    # inbox item caused publishes (and stores) None.
+    log = ActivityLog(str(tmp_path / "a.db"))
+    monkeypatch.setattr(server.STATE, "activity_log", log)
+    published: list = []
+    monkeypatch.setattr(server._event_bus, "publish", lambda ev, data: published.append((ev, data)))
+
+    common = dict(context_id=server.ACTIVITY_CONTEXT, state="completed", origin="inbox")
+    server._a2a_terminal(TurnOutcome(task_id="t-ib", text="handled the page", trigger="ci", inbox_id=5, **common))
+    server._a2a_terminal(TurnOutcome(task_id="t-plain", text="unprompted", **common))
+
+    rows = log.recent()
+    assert rows[1]["inbox_id"] == 5 and rows[0]["inbox_id"] is None
+    events = [d for ev, d in published if ev == "activity.message"]
+    assert [d["inbox_id"] for d in events] == [5, None]
+
+
+def test_executor_coerces_inbox_id_from_untyped_metadata():
+    # The executor-side twin of the store's coercion: ``metadata.inbox_id`` comes from
+    # an A2A caller, so junk must become None on the TurnOutcome, never raise.
+    from a2a_impl.executor import _coerce_inbox_id
+
+    assert _coerce_inbox_id(5) == 5
+    assert _coerce_inbox_id(5.0) == 5  # the protobuf Struct layer floats every number
+    assert _coerce_inbox_id("7") == 7
+    assert _coerce_inbox_id("later") is None
+    assert _coerce_inbox_id(None) is None
+    assert _coerce_inbox_id(True) is None
+
+
 def test_terminal_hook_ignores_non_activity_context(tmp_path, monkeypatch):
     log = ActivityLog(str(tmp_path / "a.db"))
     monkeypatch.setattr(server.STATE, "activity_log", log)

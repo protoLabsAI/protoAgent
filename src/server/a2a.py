@@ -1838,6 +1838,10 @@ def _a2a_terminal(outcome) -> None:
     trigger = getattr(outcome, "trigger", "") or ""
     priority = getattr(outcome, "priority", "") or ""
     stimulus = getattr(outcome, "stimulus", "") or ""
+    # The inbox item this turn drains (docs/design/feed.md §3) — rides the entry and the
+    # live event so the Feed can join a queued item to its result. None when the turn
+    # wasn't inbox-fired.
+    inbox_id = getattr(outcome, "inbox_id", None)
     # Peer and job turns keep their REAL execution context on the feed entry (ADR 0129:
     # the feed deep-links to the actual execution/result); legacy Activity-thread turns
     # keep ``system:activity``, preserving the existing feed history either way.
@@ -1859,6 +1863,7 @@ def _a2a_terminal(outcome) -> None:
             task_id=getattr(outcome, "task_id", "") or "",
             stimulus=stimulus,
             origin_session=origin_session,
+            inbox_id=inbox_id,
         )
     _event_bus.publish(
         "activity.message",
@@ -1874,5 +1879,6 @@ def _a2a_terminal(outcome) -> None:
             "task_id": getattr(outcome, "task_id", "") or "",
             "error": error,
             "origin_session": origin_session,
+            "inbox_id": inbox_id,
         },
     )
