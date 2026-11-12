@@ -1060,7 +1060,8 @@ class LocalScheduler:
                     # the delete to the `next_fire` we actually claimed so we only ever
                     # remove the row we fired, never a fresher reschedule that landed
                     # mid-turn (#2751).
-                    self._delete_job(job.id, next_fire=job.next_fire, created_at=job.created_at)
+                    if self._delete_job(job.id, next_fire=job.next_fire, created_at=job.created_at):
+                        self._publish_job_settled(job.id, "finished")
                 else:
                     log.warning(
                         "[scheduler] one-shot fire failed for job %s; leaving for retry",
@@ -1070,7 +1071,8 @@ class LocalScheduler:
                 # Auto-expiry (#2992): bump fire_count, then cancel the job once it
                 # hits max_fires or outlives its TTL. One-shots don't need this —
                 # they fire once and are removed above.
-                self._settle_cron_expiry(job)
+                if self._settle_cron_expiry(job):
+                    self._publish_job_settled(job.id, "expired")
             else:
                 log.warning(
                     "[scheduler] cron fire failed for job %s; will fire next slot",
@@ -1167,17 +1169,19 @@ class LocalScheduler:
             if own_db:
                 db.close()
 
-    def _settle_cron_expiry(self, job: Job, *, db: sqlite3.Connection | None = None) -> None:
+    def _settle_cron_expiry(self, job: Job, *, db: sqlite3.Connection | None = None) -> bool:
         """Post-fire bookkeeping for a recurring job (#2992): increment its
         ``fire_count`` and auto-cancel it once it reaches ``max_fires`` or its
-        TTL (measured from ``created_at``) has elapsed."""
+        TTL (measured from ``created_at``) has elapsed. True only when the job
+        was expired and its row deleted — with a caller-supplied ``db`` the
+        delete commits with the caller's transaction, so publish after that."""
         own_db = db is None
         db = db or self._connect()
         try:
             if own_db:
                 db.execute("BEGIN IMMEDIATE")
             if not self._owns_occurrence(db, job):
-                return
+                return False
             db.execute("UPDATE jobs SET fire_count = fire_count + 1 WHERE id = ?", (job.id,))
             row = db.execute("SELECT fire_count FROM jobs WHERE id = ?", (job.id,)).fetchone()
             expired = job.max_fires is not None and row["fire_count"] >= job.max_fires
@@ -1197,10 +1201,12 @@ class LocalScheduler:
                 log.info("[scheduler] Job %s expired: reached %s", job.id, reason)
             if own_db:
                 db.commit()
+            return expired
         except sqlite3.DatabaseError:
             if not own_db:
                 raise
             log.exception("[scheduler] expiry settlement failed for job %s", job.id)
+            return False
         finally:
             if own_db:
                 db.close()
@@ -1228,20 +1234,24 @@ class LocalScheduler:
 
     def _delete_job(
         self, job_id: str, *, next_fire: str | None = None, created_at: str | None = None
-    ) -> None:
+    ) -> bool:
+        """True only when a row was actually removed — a scoped delete that missed (a
+        wait-chain resume rescheduled the job mid-turn, #2751) must not read as settled."""
         db = self._connect()
         try:
             if next_fire is not None:
-                db.execute(
+                cur = db.execute(
                     "DELETE FROM jobs WHERE id = ? AND agent_name = ? AND next_fire = ? "
                     "AND (? IS NULL OR created_at = ?)",
                     (job_id, self.agent_name, next_fire, created_at, created_at),
                 )
             else:
-                db.execute("DELETE FROM jobs WHERE id = ? AND agent_name = ?", (job_id, self.agent_name))
+                cur = db.execute("DELETE FROM jobs WHERE id = ? AND agent_name = ?", (job_id, self.agent_name))
             db.commit()
+            return cur.rowcount > 0
         except sqlite3.DatabaseError:
             log.exception("[scheduler] delete failed for job %s", job_id)
+            return False
         finally:
             db.close()
 
@@ -1568,6 +1578,21 @@ class LocalScheduler:
         except Exception:  # noqa: BLE001 — the event is best-effort
             log.exception("[scheduler] %s publish failed for %s", topic, trigger)
 
+    def _publish_job_settled(self, job_id: str, action: str) -> None:
+        """``scheduler.changed`` once a job's ROW is really gone — ``finished`` (one-shot
+        fired and removed) or ``expired`` (cron hit ``max_fires``/TTL). Published strictly
+        AFTER the delete commits, never from the fire itself: ``turn.finished`` leaves
+        ``_fire`` before ``_fire_and_settle`` touches the row, so only this event is a
+        trustworthy "the job no longer exists" signal (``graph.directive_autofulfil``
+        resolves directive links on it; the console drops the row from Schedules live).
+        Same payload shape as the console's cancel/update publishes. Best-effort."""
+        if self._publish is None:
+            return
+        try:
+            self._publish("scheduler.changed", {"job_id": job_id, "action": action})
+        except Exception:  # noqa: BLE001 — the event is best-effort
+            log.exception("[scheduler] scheduler.changed publish failed for %s", job_id)
+
     def _auth_headers(self) -> dict[str, str]:
         """Credentials for a self-invocation — see ``auth.self_invocation_headers``."""
         from a2a_impl.auth import self_invocation_headers
@@ -1604,6 +1629,7 @@ class LocalScheduler:
                       f"task {task_id} missing or unavailable; not automatically resent")
         failure = _a2a_turn_failure(payload) if terminal else ""
         canceled = state in {"canceled", "cancelled"}
+        settled_action = ""  # the job ROW was removed — published only after the commit below
         with closing(self._connect()) as db, db:
             db.execute("BEGIN IMMEDIATE")
             claim = db.execute(
@@ -1619,9 +1645,11 @@ class LocalScheduler:
                 else:
                     self._record_fire_outcome(job, failure=failure, db=db)
                 if is_cron(job.schedule):
-                    self._settle_cron_expiry(job, db=db)
+                    if self._settle_cron_expiry(job, db=db):
+                        settled_action = "expired"
                 else:
-                    db.execute("DELETE FROM jobs WHERE id = ?", (job.id,))
+                    if db.execute("DELETE FROM jobs WHERE id = ?", (job.id,)).rowcount > 0:
+                        settled_action = "finished"
             elif owns:
                 db.execute("UPDATE jobs SET last_error = ? WHERE id = ?", (diagnostic, job.id))
             db.execute(
@@ -1641,6 +1669,8 @@ class LocalScheduler:
                 trigger=job.id, ok=None if canceled else not failure, task_id=task_id,
                 origin_session=job.origin_session or "",
             )
+            if settled_action:
+                self._publish_job_settled(job.id, settled_action)
         return terminal
 
     def _pending_reconciliation(self) -> list[sqlite3.Row]:

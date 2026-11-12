@@ -46,6 +46,7 @@ def build_directive_tools() -> list:
         quote: str,
         conditions: str = "",
         scope: str = "",
+        links: list[str] | None = None,
         state: Annotated[Any, InjectedState] = None,
     ) -> str:
         """Record a standing directive or approval the operator gave in THIS chat.
@@ -54,9 +55,13 @@ def build_directive_tools() -> list:
         turn ("cut the release once #A and #B merge", "don't touch prod until I say so").
         `quote` is the operator's exact words — copy them, never paraphrase. `conditions`
         holds any trigger or stop rule ("only after both merge; on WARN/FAIL come back
-        instead of merging"); `scope` notes what it covers. Recorded directives appear under
-        STANDING DIRECTIVES in <working_state> every turn, even after the chat is compacted.
-        Returns the new directive id.
+        instead of merging"); `scope` notes what it covers. In `links`, link the issues,
+        PRs, cards or jobs the approval covers — GitHub refs as `owner/repo#N`, board card
+        ids (`bd-…`), scheduler job ids, task ids — so it closes itself: once every linked
+        item is terminal (issue/PR closed or merged, card done or cancelled, job finished,
+        task closed), the directive is fulfilled automatically with the work as the reason.
+        Recorded directives appear under STANDING DIRECTIVES in <working_state> every turn,
+        even after the chat is compacted. Returns the new directive id.
         """
         from graph.directives import DirectiveError, directive_store
 
@@ -71,9 +76,15 @@ def build_directive_tools() -> list:
                 "this turn did not come from the operator"
             )
         try:
-            d = directive_store().record(session_id, quote, conditions=conditions, scope=scope)
+            d = directive_store().record(session_id, quote, conditions=conditions, scope=scope, links=links)
         except DirectiveError as exc:
             return f"Error: {exc}"
+        if d.links:
+            refs = ", ".join(e["ref"] for e in d.links)
+            return (
+                f"Recorded directive {d.id}, linked to {refs}. It fulfils itself once every "
+                "linked item finishes; fulfil_directive/revoke_directive still close it sooner."
+            )
         return (
             f"Recorded directive {d.id}. It stays in force until you call fulfil_directive or "
             "revoke_directive, or the operator revokes it."
