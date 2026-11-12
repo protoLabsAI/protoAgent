@@ -395,7 +395,9 @@ class LocalScheduler:
         db_dir: str | Path | None = None,
         event_publish=None,
         adopt_existing_jobs: bool = True,
+        watch_store=None,
     ):
+        self._watch_store = watch_store
         self.agent_name = agent_name
         self._invoke_url = invoke_url.rstrip("/")
         self._api_key = api_key or ""
@@ -1119,6 +1121,19 @@ class LocalScheduler:
         finally:
             db.close()
 
+    def _watch_holds_execution(self, job: Job) -> bool:
+        if not (job.context_id or "").startswith("job:"):
+            return False
+        try:
+            if self._watch_store is None:
+                from graph.watches.store import WatchStore
+
+                self._watch_store = WatchStore()
+            return self._watch_store.holds_execution(job.context_id)
+        except Exception:  # noqa: BLE001 — failed reads cannot release an owner
+            log.exception("[scheduler] watch ownership unavailable; holding %s", job.id)
+            return True
+
     def _claim_occurrence(self, job: Job, *, advance_at: datetime | None = None) -> str | None:
         """Commit intent BEFORE any send. A crash after commit is deliberately unknown."""
         db = self._connect()
@@ -1144,7 +1159,8 @@ class LocalScheduler:
                 "SELECT 1 FROM jobs WHERE context_id = ? AND id != ? "
                 "AND (id LIKE 'wait:%' OR id LIKE 'watch-%') LIMIT 1", (job.context_id, job.id)
             ).fetchone()
-            if busy or (waiting and not job.id.startswith(("wait:", "watch-"))):
+            continuation = not is_cron(job.schedule) and job.id.startswith(("wait:", "watch-"))
+            if busy or ((waiting or self._watch_holds_execution(job)) and not continuation):
                 return None
             old = db.execute("SELECT * FROM occurrences WHERE job_id = ? AND next_fire = ? AND created_at = ?",
                              (job.id, job.next_fire, job.created_at)).fetchone()
@@ -1286,7 +1302,7 @@ class LocalScheduler:
                     "AND id != ? AND (id LIKE 'wait:%' OR id LIKE 'watch-%') LIMIT 1",
                     (job.context_id, job.context_id, job.id),
                 ).fetchone()
-                if held:
+                if held or self._watch_holds_execution(job):
                     continue
                 if is_cron(job.schedule):
                     next_iso = _compute_next_fire(job.schedule, tz=job.timezone)

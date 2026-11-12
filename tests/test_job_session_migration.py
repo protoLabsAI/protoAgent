@@ -351,3 +351,108 @@ def test_proven_unaccepted_wait_keeps_legacy_alias_and_occurrence(tmp_path):
     assert migrated.next_fire == wait.next_fire
     assert rows(s, "occurrences") == original
     assert s._claim_occurrence(migrated) == "wait-message"
+
+
+@pytest.mark.asyncio
+@pytest.mark.platform_sensitive
+@pytest.mark.parametrize("ending", ["reaction", "clear", "expired", "enqueue_failure"])
+async def test_durable_watch_holds_root_until_continuation_finishes(tmp_path, monkeypatch, ending):
+    from types import SimpleNamespace
+
+    from graph.watches.controller import WatchController
+    from graph.watches.store import WatchStore
+    from runtime.state import STATE
+
+    watch_path = tmp_path / "watches"
+    watch_path.mkdir()
+    monkeypatch.setenv("WATCH_PATH", str(watch_path))
+    controller = WatchController(SimpleNamespace(), WatchStore(watch_path))
+    s = scheduler(tmp_path)
+    root = s.add_job("root", "* * * * *")
+    assert s._claim_occurrence(root)
+    ok, _, watch = controller.create(
+        condition="deployment finished", verifier={"type": "plugin", "check": "test:ready"},
+        run_session=root.context_id, run_prompt="verify deployment",
+    )
+    assert ok
+    s._remember_task(root, "root-task")
+    s._settle_task(root, "root-task", {"result": {
+        "id": "root-task", "status": {"state": "completed"},
+    }})
+    with s._connect() as db:
+        db.execute("UPDATE jobs SET next_fire = ? WHERE id = ?", (PAST, root.id))
+    s = scheduler(tmp_path)
+    controller = WatchController(SimpleNamespace(), WatchStore(watch_path))
+    s._recover_missed_fires()
+    root = s.get_job(root.id)
+    assert root.next_fire == PAST
+    assert s._claim_occurrence(root) is None
+    other = s.add_job("independent", "* * * * *")
+    assert s._claim_occurrence(other)
+    if ending == "clear":
+        controller.clear(watch.id)
+    elif ending == "expired":
+        await controller._finish(watch, "expired", "deadline")
+    else:
+        monkeypatch.setattr(STATE, "scheduler", s if ending == "reaction" else None)
+        # At terminal persistence, before enqueue, even a reopened scheduler holds.
+        react = controller._react
+
+        async def check_gap(watch, reason):
+            assert WatchStore(watch_path).get(watch.id).reaction_pending
+            assert scheduler(tmp_path)._claim_occurrence(root) is None
+            await react(watch, reason)
+
+        monkeypatch.setattr(controller, "_react", check_gap)
+        await controller._finish(watch, "met", "ready")
+        s = scheduler(tmp_path)
+        assert s._claim_occurrence(root) is None
+        if ending == "enqueue_failure":
+            assert controller.store.get(watch.id).reaction_pending
+            assert controller.prune_terminal(now=10**12) == 0
+            return
+        reaction = s.get_job(f"watch-{watch.id}")
+        assert not controller.store.get(watch.id).reaction_pending
+        assert s._claim_occurrence(reaction)
+        s._remember_task(reaction, "reaction-task")
+        s._settle_task(reaction, "reaction-task", {"result": {
+            "id": "reaction-task", "status": {"state": "completed"},
+        }})
+    assert s._claim_occurrence(root)
+
+
+@pytest.mark.platform_sensitive
+def test_unreadable_watch_does_not_release_owner(tmp_path, monkeypatch):
+    watch_path = tmp_path / "watches"
+    watch_path.mkdir()
+    monkeypatch.setenv("WATCH_PATH", str(watch_path))
+    (watch_path / "broken.json").write_text("{")
+    s = scheduler(tmp_path)
+    root = s.add_job("root", "* * * * *")
+    assert s._claim_occurrence(root) is None
+    (watch_path / "broken.json").unlink()
+    assert s._claim_occurrence(root)
+
+
+@pytest.mark.platform_sensitive
+@pytest.mark.parametrize("repeat", [False, True])
+def test_watch_ownership_excludes_hooks_and_other_sessions(tmp_path, monkeypatch, repeat):
+    from graph.watches.store import WatchStore
+    from graph.watches.types import Watch
+
+    watch_path = tmp_path / "watches"
+    watch_path.mkdir()
+    monkeypatch.setenv("WATCH_PATH", str(watch_path))
+    store = WatchStore(watch_path)
+    s = scheduler(tmp_path)
+    root = s.add_job("root", "* * * * *", job_id="watch-recurring-root")
+    store.set(Watch(id="hooks", condition="ready", run_session=root.context_id))
+    store.set(Watch(id="other", condition="ready", run_session="job:other", run_prompt="react"))
+    assert not store.holds_execution(root.context_id)
+    watch = Watch(id="owned", condition="ready", run_session=root.context_id,
+                  run_prompt="react", repeat=repeat)
+    store.set(watch)
+    assert s._claim_occurrence(root) is None
+    watch.status = "expired"
+    store.set(watch)
+    assert s._claim_occurrence(root)

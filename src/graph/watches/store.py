@@ -117,6 +117,23 @@ class WatchStore:
             log.warning("[watch] clear failed for %s: %s", watch_id, exc)
             return False
 
+    def holds_execution(self, context_id: str) -> bool:
+        """Read durable continuation ownership, including an unqueued reaction.
+
+        Unlike display listing, unreadable records raise: uncertainty must not
+        release an execution owner for another independent fire.
+        """
+        for path in self._base.glob("*.json"):
+            try:
+                with open(path, encoding="utf-8") as fh:
+                    watch = Watch.from_dict(json.load(fh))
+            except FileNotFoundError:
+                continue  # concurrently cleared
+            if (watch.run_session == context_id and watch.run_prompt.strip()
+                    and (watch.active or watch.reaction_pending)):
+                return True
+        return False
+
     def all(self) -> list[Watch]:
         """Every persisted watch, newest-created first. Unreadable files are skipped+logged."""
         watches: list[Watch] = []

@@ -503,7 +503,7 @@ class WatchController:
             # `finished_at` is set by _finish; fall back to created_at for a file written by
             # hand or by an older build. Neither → leave it alone.
             stamp = watch.finished_at or watch.created_at
-            if not stamp or stamp > cutoff:
+            if watch.reaction_pending or not stamp or stamp > cutoff:
                 continue
             if self.clear(watch.id):
                 pruned += 1
@@ -568,6 +568,7 @@ class WatchController:
             await self._react_in_scope(watch, reason, flapping=flapping)
 
     async def _react_in_scope(self, watch: Watch, reason: str, *, flapping: bool) -> None:
+        gen = self._gen(watch.id)
         if (watch.run_prompt or "").strip() and (watch.run_session or "").strip():
             try:
                 from graph.sdk import run_in_session
@@ -579,7 +580,10 @@ class WatchController:
                 if (watch.last_evidence or "").strip():
                     context += f"\nEvidence: {watch.last_evidence.strip()}"
                 reaction_prompt = f"{context}\n\n{watch.run_prompt}"
-                run_in_session(watch.run_session, reaction_prompt, job_id=f"watch-{watch.id}")
+                result = run_in_session(watch.run_session, reaction_prompt, job_id=f"watch-{watch.id}")
+                if watch.reaction_pending and result.get("ok"):
+                    watch.reaction_pending = False
+                    self._write_if_current(watch, gen)
             except Exception:  # noqa: BLE001 — a reaction failure must not break the tick
                 log.exception("[watch] run_in_session reaction failed for %s", watch.id)
 
@@ -609,6 +613,9 @@ class WatchController:
         from graph.fence_scope import fence_scope
         from graph.watches.hooks import fire_watch_hook
 
+        watch.reaction_pending = bool(
+            status == "met" and watch.run_prompt.strip() and watch.run_session.strip()
+        )
         watch.status = status
         watch.last_reason = reason
         if evidence:

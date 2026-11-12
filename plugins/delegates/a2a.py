@@ -1132,6 +1132,15 @@ class A2aAdapter(Adapter):
                 from graph import ledger
 
                 ledger.note_task_id(ledger.current_edge_id() or "", str(task_id))
+                # And on the background job running this dispatch, if any (#5053): a job
+                # the peer has accepted is a known request — in flight, or failed later —
+                # never a silent loss, and an amendment can name the task it amends.
+                try:
+                    from background.manager import note_peer_dispatch
+                except ImportError:  # a host without the background subsystem
+                    pass
+                else:
+                    note_peer_dispatch(str(task_id), "" if collecting else send_params["message"]["messageId"])
             state = (task.get("status") or {}).get("state")
             # Answer eligibility is decided by STATE, not by "is there text" (#3362). A
             # synchronous peer answers SendMessage INLINE, and its result can be a terminal

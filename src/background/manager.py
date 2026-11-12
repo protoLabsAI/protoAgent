@@ -17,6 +17,7 @@ marks the row ``failed`` so it can never stick on ``running``.
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import logging
 import os
 import uuid
@@ -31,6 +32,27 @@ _DEFAULT_MAX_CONCURRENCY = 3  # cap on concurrent background turns so a fan-out 
 # seconds (a member hung), force a PARTIAL push-resume so the finished reports still land.
 _DEFAULT_BATCH_JOIN_TIMEOUT_S = 900.0
 _TERMINAL_STATUSES = ("completed", "failed", "canceled")
+
+# The ``spawn_work`` job whose coroutine is running in this context, as ``(store, job_id)``
+# — set by ``_run_work`` so code deep inside the work (an A2A delegate adapter) can record
+# what the peer called the request without the job id being threaded through it (#5053).
+_CURRENT_WORK_JOB: contextvars.ContextVar[tuple | None] = contextvars.ContextVar(
+    "protoagent_background_work_job", default=None
+)
+
+
+def note_peer_dispatch(peer_task_id: str, peer_message_id: str = "") -> None:
+    """Record, on the running background job, the task id a peer gave the message this
+    job sent it, and that message's id (#5053). A no-op outside a ``spawn_work`` job, so
+    foreground callers can call it unconditionally. Never raises."""
+    current = _CURRENT_WORK_JOB.get()
+    if current is None or not peer_task_id:
+        return
+    store, job_id = current
+    try:
+        store.set_peer_identity(job_id, str(peer_task_id), str(peer_message_id or ""))
+    except Exception:  # noqa: BLE001 — bookkeeping must never fail a delegation
+        log.exception("[background] could not record peer identity for %s", job_id)
 
 
 class BackgroundManager:
@@ -249,6 +271,7 @@ class BackgroundManager:
         batch_id: str | None = None,
         result_author: str = "",
         origin_fence: list[str] | None = None,
+        amends: str = "",
     ) -> str:
         """Register and run a deterministic background job — a plain coroutine, NOT an
         LLM subagent turn — through the same durable store + concurrency cap + event
@@ -265,7 +288,9 @@ class BackgroundManager:
         The row is stamped ``deterministic`` (#2363): what comes back is the DELIVERABLE
         the caller dispatched and is waiting on, not a report an autonomous worker wrote,
         so the drain hands it to the origin turn whole instead of applying ADR 0070 D2's
-        excerpt-plus-pointer treatment."""
+        excerpt-plus-pointer treatment.
+
+        ``amends`` is the id of an earlier job this one amends, recorded on the row (#5053)."""
         job_id = self.store.create(
             agent_name=self.agent_name,
             origin_session=origin_session or "",
@@ -279,6 +304,7 @@ class BackgroundManager:
             # The spawning turn's fence (from the calling tool's scope unless given): the
             # push-resume nudge that delivers the result runs under it — see ``spawn``.
             origin_fence=_origin_fence(origin_fence),
+            amends=amends,
         )
         t = asyncio.create_task(
             self._run_work(job_id, kind, description, origin_session or "", work),
@@ -298,6 +324,8 @@ class BackgroundManager:
         (idle-wake). Mirrors what the A2A terminal hook does for subagent-turn jobs."""
         from graph.delegate_progress import progress_sink
 
+        # This task's own context (a copy made by create_task), so the binding never leaks.
+        _CURRENT_WORK_JOB.set((self.store, job_id))
         async with self._sem:  # same cap as background turns — one fan-out can't swamp the gateway
             try:
                 # A coding delegate this job dispatches reports its live progress onto the
@@ -687,6 +715,67 @@ class BackgroundManager:
                 session_id=session_id,
                 origin="background-resume",
                 trigger=job.id,
+                ok=ok,
+                task_id=task_id,
+            )
+
+    async def resume_origin_session(self, origin_session: str, jobs: list) -> bool:
+        """Push-resume ONE turn into ``origin_session`` for several outcomes that are all
+        waiting to drain there (#5053 — the boot redelivery of a restart's strands). The
+        turn's drain attaches every pending outcome of the session, so one nudge per
+        session is the whole delivery; a nudge per job would leave every turn after the
+        first with nothing attached. A single job keeps the ordinary ``resume_origin``.
+
+        No Activity-wake fallback, deliberately: a wake never drains, so replaying one on
+        every restart would brief the same outcome again each time. On failure the
+        outcomes stay pending and drain on the session's next turn. Never raises."""
+        if not jobs:
+            return False
+        if len(jobs) == 1:
+            return await self.resume_origin(jobs[0])
+        from graph.middleware.subagent_fence import intersect_fences
+
+        fence: list[str] = []
+        for job in jobs:
+            fence = intersect_fences(fence, list(getattr(job, "origin_fence", None) or []))
+        ids = ", ".join(j.id for j in jobs)
+        text = (
+            f"[{len(jobs)} background jobs ({ids}) finished without reaching this conversation before a "
+            "restart — their completion messages are attached to this turn; review them and brief the operator]"
+        )
+        attended = self._session_attended(origin_session)
+        trigger = f"redelivery:{jobs[0].id}"
+        self._publish_turn("turn.started", session_id=origin_session, origin="background-resume", trigger=trigger)
+        ok = False
+        task_id = ""
+        try:
+            task_id = await self._send_a2a_message(
+                context_id=origin_session,
+                text=text,
+                metadata={
+                    "origin": "background-resume",
+                    "trigger": trigger,
+                    "attended": attended,
+                    "operator_controllable": attended,
+                    **_fence_metadata(fence),
+                },
+            )
+            ok = True
+            return True
+        except Exception as exc:  # noqa: BLE001 — best-effort by contract
+            log.warning(
+                "[background] redelivery push-resume into %s failed (%s) — the outcomes will drain on "
+                "that session's next turn",
+                origin_session,
+                exc,
+            )
+            return False
+        finally:
+            self._publish_turn(
+                "turn.finished",
+                session_id=origin_session,
+                origin="background-resume",
+                trigger=trigger,
                 ok=ok,
                 task_id=task_id,
             )

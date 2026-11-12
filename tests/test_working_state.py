@@ -312,3 +312,20 @@ def test_more_in_chat_entries_than_the_cap_point_at_the_list_tool(clear_state, m
     monkeypatch.setattr(rs.STATE, "scheduler", _Sched(jobs), raising=False)
     block = _mw()._working_state_block({"session_id": "chat-a"})
     assert "…+2 more (list_schedules shows them all)" in block
+
+
+@pytest.mark.platform_sensitive
+@pytest.mark.parametrize("schedule", ["0 9 * * 1", "2027-01-01T00:00:00+00:00"])
+def test_isolated_schedule_full_in_origin_and_execution(clear_state, monkeypatch, tmp_path, schedule):
+    from scheduler.local import LocalScheduler
+
+    scheduler = LocalScheduler("projection", invoke_url="http://test", db_dir=tmp_path)
+    job = scheduler.add_job(_RELEASE_RESUME, schedule, origin_session="chat-a")
+    scheduler = LocalScheduler("projection", invoke_url="http://test", db_dir=tmp_path)
+    monkeypatch.setattr(rs.STATE, "scheduler", scheduler)
+    for session in ("chat-a", job.context_id):
+        block = _mw()._working_state_block({"session_id": session})
+        assert all(line in block for line in _RELEASE_RESUME.splitlines())
+        assert f'cancel_schedule("{job.id}")' in block
+    sibling = _mw()._working_state_block({"session_id": "job:sibling"})
+    assert "squash-merge #4847" not in sibling

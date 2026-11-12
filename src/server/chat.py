@@ -282,7 +282,11 @@ def _drain_background(session_id: str) -> tuple[list, list[dict]]:
             from graph.mention_op import _envelope
 
             ok = j.status == "completed"
-            _note = f"({j.status}: {_err})" if _err else f"({j.status})"
+            # The peer's task id (#5053): a failure the peer accepted is a KNOWN failed
+            # request, never to be mistaken for a message that silently went missing.
+            _peer = str(getattr(j, "peer_task_id", "") or "")
+            _why = "; ".join(x for x in (_err, f"{author} task {_peer}" if _peer and not ok else "") if x)
+            _note = f"({j.status}: {_why})" if _why else f"({j.status})"
             if ok:
                 text = result.strip() or "(replied with nothing)"
             else:
