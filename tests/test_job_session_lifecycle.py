@@ -28,7 +28,7 @@ from graph.checkpoint_prune import prune_checkpoints
 from graph.middleware.compaction import CountingSummarizationMiddleware, _is_system_thread
 from graph.projection import working_state_block
 from scheduler.local import LocalScheduler
-from server.maintenance_loops import _job_session_pins, _job_thread_protected
+from server.maintenance_loops import _harvest_eligible, _job_session_pins, _job_thread_protected
 
 JOB_A = "job:aaaaaaaa-0000-0000-0000-00000000000a"
 JOB_B = "job:bbbbbbbb-0000-0000-0000-00000000000b"
@@ -412,7 +412,7 @@ def test_maintenance_pins_compose_decisions_watches_and_the_ledger(clear_state, 
     monkeypatch.setattr(
         rs.STATE,
         "decision_store",
-        SimpleNamespace(list=lambda *, state=None: [SimpleNamespace(session_id=JOB_A)]),
+        SimpleNamespace(pending_session_ids=lambda: {JOB_A, "chat-1"}),
         raising=False,
     )
     monkeypatch.setattr(
@@ -423,11 +423,44 @@ def test_maintenance_pins_compose_decisions_watches_and_the_ledger(clear_state, 
     )
     assert _job_session_pins() == {JOB_A, JOB_B}
 
+    # A decision store with only the CAPPED ``list`` read (no unbounded
+    # ``pending_session_ids``) is indeterminable: a 200-row cap would silently unpin
+    # whatever sorted past it, so the sweep must protect every job session instead.
+    monkeypatch.setattr(
+        rs.STATE,
+        "decision_store",
+        SimpleNamespace(list=lambda *, state=None, limit=200: [SimpleNamespace(session_id=JOB_A)]),
+        raising=False,
+    )
+    assert _job_session_pins() is None
+
     # No execution ledger (no scheduler, or a backend without one) → indeterminable.
     monkeypatch.setattr(rs.STATE, "scheduler", None, raising=False)
     assert _job_session_pins() is None
     monkeypatch.setattr(rs.STATE, "scheduler", SimpleNamespace(), raising=False)
     assert _job_session_pins() is None
+
+
+def test_every_pending_decision_pins_even_past_the_list_cap(clear_state, monkeypatch, tmp_path):
+    """The sweep's decision read is UNBOUNDED. ``DecisionStore.list`` caps at 200 rows,
+    and the pending rows sorted past the cap are the newest undated decisions — with the
+    old capped read their job sessions silently went unpinned and the TTL could delete
+    the checkpoint the decision's answer needs to resume (ADR 0129)."""
+    from graph.decisions import DecisionStore
+    import graph.decisions as decisions_mod
+
+    monkeypatch.setattr(decisions_mod, "_notify_created", lambda rec: None)
+    store = DecisionStore(tmp_path / "decisions.db")
+    sessions = {f"job:dec-{i:04d}" for i in range(201)}
+    for sid in sorted(sessions):
+        store.create(sid, f"proceed with {sid}?", ["yes", "no"])
+
+    assert len(store.list(state="pending")) == 200  # the capped read drops a decision…
+    assert store.pending_session_ids() == sessions  # …the unbounded read does not
+
+    monkeypatch.setattr(rs.STATE, "scheduler", SimpleNamespace(execution_session_pins=lambda: set()), raising=False)
+    monkeypatch.setattr(rs.STATE, "decision_store", store, raising=False)
+    assert _job_session_pins() == sessions
 
 
 def test_job_thread_protection_rules():
@@ -513,6 +546,27 @@ def test_age_ttl_retires_only_unpinned_job_sessions(tmp_path):
         protected=lambda tid: _job_thread_protected(tid, pins),
     )
     assert _thread_count(db, f"a2a:{JOB_A}") == 0
+
+
+def test_harvest_retirement_path_honors_the_same_pins(tmp_path):
+    """Harvest is the DEFAULT retirement path whenever a knowledge store exists, and
+    summarize-and-delete is still a delete: its aged-thread selection must skip a pinned
+    job session exactly as the SQL age TTL does, and must fail closed on ``pins=None``."""
+    now = time.time()
+    db = str(tmp_path / "c.db")
+    old = now - 40 * 86400
+    _seed_checkpoints(
+        db,
+        {f"a2a:{JOB_A}": old, f"a2a:{JOB_B}": old, "a2a:chat-old": old, "a2a:chat-live": now - 60},
+    )
+
+    aged = _harvest_eligible(db, 30 * 86400, {JOB_A}, now=now)
+    assert f"a2a:{JOB_A}" not in aged  # pinned — the answer/resume still needs it
+    assert set(aged) == {f"a2a:{JOB_B}", "a2a:chat-old"}  # unpinned job + aged chat retire
+
+    # Indeterminable pins: NO job session is harvest-eligible; chats still age out.
+    aged_unknown = _harvest_eligible(db, 30 * 86400, None, now=now)
+    assert set(aged_unknown) == {"a2a:chat-old"}
 
 
 def test_indeterminable_pins_protect_every_job_session(tmp_path):

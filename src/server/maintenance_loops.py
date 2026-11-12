@@ -132,16 +132,38 @@ def _job_session_pins() -> set[str] | None:
         return None
     try:
         ds = STATE.decision_store
-        for d in ds.list(state="pending") if ds is not None else ():
+        if ds is not None:
             # An unconsumed decision resolution pins its execution session: the answer
             # resumes THAT checkpoint (ADR 0129) — archival never authorizes a resume.
-            sid = str(getattr(d, "session_id", "") or "")
-            if sid.startswith("job:"):
-                pins.add(sid)
+            # ``pending_session_ids`` is the UNBOUNDED read: ``DecisionStore.list`` caps
+            # at its default limit, and for pending rows whatever sorts past the cap is
+            # the newest undated decisions — exactly the ones a capped read would
+            # silently unpin. A store without the unbounded read is indeterminable.
+            read_pending = getattr(ds, "pending_session_ids", None)
+            if not callable(read_pending):
+                log.error(
+                    "[checkpoint-prune] decision store has no unbounded pending read — "
+                    "protecting every job session this sweep"
+                )
+                return None
+            for raw in read_pending():
+                sid = str(raw or "")
+                if sid.startswith("job:"):
+                    pins.add(sid)
     except Exception:
         log.exception("[checkpoint-prune] decision pins unreadable — protecting every job session this sweep")
         return None
     return pins
+
+
+def _harvest_eligible(path: str, max_age_seconds: float, pins: set[str] | None, *, now: float | None = None) -> list[str]:
+    """The aged threads the harvest retirement path may summarize-and-delete: everything
+    :func:`graph.checkpoint_prune.find_aged_threads` dates past the TTL EXCEPT a protected
+    job execution session. Harvest is a delete path too (ADR 0129), so it honors the same
+    pins as the SQL age TTL — and the same fail-closed rule when ``pins`` is ``None``."""
+    from graph.checkpoint_prune import find_aged_threads
+
+    return [tid for tid in find_aged_threads(path, max_age_seconds, now=now) if not _job_thread_protected(tid, pins)]
 
 
 def _job_thread_protected(thread_id: str, pins: set[str] | None) -> bool:
@@ -165,7 +187,7 @@ async def _checkpoint_prune_loop() -> None:
     """
     import asyncio
 
-    from graph.checkpoint_prune import find_aged_threads, prune_checkpoints
+    from graph.checkpoint_prune import prune_checkpoints
 
     await asyncio.sleep(60)  # let boot settle before the first sweep
     while True:
@@ -209,11 +231,7 @@ async def _checkpoint_prune_loop() -> None:
                     # the conversation its knowledge forever.
                     import random as _random
 
-                    aged = [
-                        tid
-                        for tid in await asyncio.to_thread(find_aged_threads, path, max_age)
-                        if not _job_thread_protected(tid, pins)
-                    ]
+                    aged = await asyncio.to_thread(_harvest_eligible, path, max_age, pins)
                     for i, thread_id in enumerate(aged):
                         if i:
                             await asyncio.sleep(_random.uniform(2.0, 5.0))
