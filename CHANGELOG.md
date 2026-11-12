@@ -15,6 +15,204 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.237.0] - 2026-11-12
+
+### Added
+- **Background job sessions are proven end to end (#5110).** Execution-grounded acceptance
+  tests drive the production scheduler, inbox, A2A, session-lock and decision paths over
+  temporary persistent stores: a job parked on a real decision interrupt and another mid
+  long multi-step turn never delay an unrelated scheduled fire or inbox now-item past the
+  documented one-poll-tick dispatch bound; legacy null/`system:activity` stores migrate
+  idempotently and restart to exactly one invocation per intended fire across queued,
+  accepted and orphaned occurrence states; a parked job is never superseded and background
+  waits stay isolated per execution session. A new real-backend Playwright spec
+  (`background-job-decisions-live.spec.ts`) boots `python -m server` on an isolated
+  instance and proves a job-session decision is listed fleet-wide and answerable from Work
+  without opening its session, the Needs-you marker stays visible from another chat, and
+  only the owning job resumes — with a reproducible pre-release checklist in
+  `docs/dev/background-job-session-verification.md`.
+
+- **Work's New flow now confirms, edits and saves — directly (bd-c8r5h) (#5146).** The step-2
+  "Check this before saving" form shows the agent's plain reading, where it lands
+  ("Goes in *group* as *tag*"), and the approved editable fields for its kind: a Job's
+  What/Who (this agent or a delegate) starting now; a Time follow-up's First run, human
+  Repeat choices (never cron — an unmapped repeat shows a sentence plus ← Change the
+  words) and Then; a Condition's When, registered check, cadence, reaction, once/each
+  and stop-after; an Instruction's read-only "Your words" (always the operator's typed
+  bytes, never the model's copy), scope and conditions. Save calls each primitive's
+  existing API in the current chat's context with no second agent turn; a Job starts as
+  one normal chat turn ("Start: …", or `@delegate Start: …` for a delegation). Every
+  Time/Condition/Instruction/Approval inspector now opens the same prefilled form as its
+  first action, Edit — a condition edit PATCHes the original watch in place, keeping its
+  id, history and check count. A successful save opens the new item in its group and
+  announces "Saved to *group*." exactly once; a failed save keeps the input, and a retry
+  or double click can never create a duplicate. At phone width the confirm and Edit steps
+  are the same bottom sheet as step 1, with no horizontal overflow at 390 px.
+
+- **Operator instruction editing (#5127).** Add chat-scoped create, edit and withdraw APIs with immutable exact operator quotes, atomic ledger updates and existing withdrawal transcript events; record the approved Work creation design.
+
+- **The chat shows its live work as one status rail above the composer (work consolidation
+  v2 §5, S6a) (#5136).** The loose goal / background-job / standing-instruction strips are replaced
+  by shared-count chips — `Doing now · goal 3/8 · N`, `Coming up N`, `Told it N` (numbers
+  only on the phone, with complete spoken labels) — counted by the same `workGroups`
+  selector the Work view reads, scoped to this chat, so the chip numbers and the Work group
+  rows cannot drift. Not-started jobs count in Coming up, never Doing now; zero-count chips
+  hide and an empty rail takes no space. Each chip opens one grouped details panel (a
+  popover on desktop, a bottom sheet on the phone) with one section per Work group and an
+  "Open in Work" deep link that scopes Work to this chat for that visit only — Work's saved
+  filters are never rewritten, and every other entry (the dock, the palette, `/directives`)
+  still restores them; the instructions ledger keeps its failure state with a "Load
+  again" retry, judged against this chat's own ledger — another chat's failed ledger never
+  marks this chat's instructions out of date, and this chat's failure is never hidden by
+  other chats having loaded. One polite live region announces a tied job's completion once ("<job>
+  finished. 1 approval it carried is now fulfilled."). The people chips keep their
+  mention-toggle behavior unchanged.
+
+- **Work can add work: New entry points and the step-one dialog (#5143).** Work's header gets a
+  New button on every surface and state, the Doing now / Coming up / Your instructions
+  headings get a "+" (Needs you has none), and the all-empty state invites a first item.
+  All open one step-1 dialog — "What should the agent do, and when?" with example chips —
+  that sends one marked, read-only interpret turn into the current chat and shows the
+  agent's reading before anything can be saved (saving lands with the confirm step, S8d).
+  At any viewport ≤40rem the flow is a bottom sheet with stacked full-width actions and no
+  horizontal overflow, never a centered dialog.
+
+- **Read-only Work interpretation (#5125).** Marked chat turns can inspect current context and approved read tools, returning a validated proposal without creating work or advancing goals.
+
+- **The chat rail leads with a fleet-wide "Needs you" marker (work consolidation v2 §5,
+  S7) (#5144).** A primary `Needs you N` button (numbers only on the phone) sits FIRST on the chat
+  status rail, counting the shared Work selector's Needs-you group — pending decisions from
+  every chat, undelivered human-needed pages and stopped goals — never chat-filtered, hidden
+  at zero and never folded behind `+K` (the people give way instead). It opens the grouped
+  details panel at a "Needs you · N" first section: the first decision expanded as the
+  shared DecisionCard (recommended option primary + "suggested", "Reply in chat instead",
+  source-chat link), the rest one-line agent/question/age rows that expand on select.
+  Answers ride the shared decisions store (#5099): a consumed answer reads `Sent: "<option>".
+  Continuing…` immediately; a 409 shows the informative already-answered record; a failed
+  delivery (`resumed: false`) warns with Try again and keeps the options; expiry and
+  withdrawal read neutral — results hold in the open panel until it closes while the marker
+  counts pending only. A decision waiting ≥30 minutes gets a muted stale hint, every age
+  carries an exact-time tooltip, and notifications keep the store's one-per-decision latch.
+  Stopped (exhausted/unachievable) goals now surface here as neutral "Goal stopped" rows
+  with their existing Keep going / Drop the goal controls, the goal strip narrows to the
+  dismissible "Goal achieved" payoff line, and Work's shared-record overlay moved into the
+  shared selector module so both surfaces count one projection.
+
+- **`protoagent dm <agent> "<message>" --from <name>` sends a running agent a direct message from another session, and the agent's live chat reads it (#5096).**
+  A Claude Code session asked to coordinate with a fleet agent had no sanctioned way to say anything to it, so it left a GitHub comment the agent never saw, and neither the agent nor the operator had a record. A message sent with `dm` (or `POST /api/inbox` with `deliver: "thread"`) is now folded into the operator's chat at the agent's next model call: mid-turn when it is working, otherwise at the start of its next turn. It arrives as information only. It cannot authorise an edit, push or merge, it is never counted as operator input, and the agent is told to mention it to the operator. The message also shows in the console inbox, and `check_inbox` cannot swallow it first.
+- **The agent can answer a direct message, and the sender can wait for it (#5096).**
+  A new `reply_to_dm(id, text)` tool records the agent's answer on the message and publishes `inbox.reply` on the event stream. `protoagent dm ... --wait 120` blocks until the reply lands and prints it (exit `4` if none arrives in time, saying whether the message was read); `protoagent dm <agent> --check <id>` reads it later. `GET /api/inbox/{id}?wait=` is the long-poll both sit on.
+- **A direct message can be addressed to one chat thread, and `protoagent dm <agent> --threads` lists them (#5096).**
+  With two tabs open on one agent, each working with its own outside session, `--thread <id>` (or `session` on `POST /api/inbox`) sends a message that only that thread reads; an unaddressed message still goes to whichever chat reaches a model call first. `--threads` shows the agent's recent chat threads, newest first, with last activity, turn count and whether each is working right now.
+
+- **The chat rail keeps people on one measured row, with a `+K` picker for the rest (#5140).** The status chips and the "in this chat" people now share a single row that never wraps or scrolls sideways: the rail measures the room the group chips leave (ResizeObserver against a hidden mirror of the people row) and shows whoever fits — draft-addressed names first, then the original cast order — with the overflow collapsed behind a `+K` chip (conservative caps before the first measurement: desktop 3 beside statuses / 5 alone, phone 1 / 3; no `+K` when everyone fits; long names ellipsize with the full name kept in the tooltip and accessible name). `+K` opens the same desktop popover / phone bottom sheet the group chips use, at **In this chat · N**: every person is a toggle chip over the draft's leading mention run (the message body is never touched), the picker stays open across several picks, a picked name takes a visible slot at once, and a dynamic line reads "Your message goes to @…, @…. Choose a name again to take it out." The grouped details panel carries the same People section only while names are hidden. Spoken label "K more people in this chat. Show everyone", `aria-haspopup`/`aria-expanded`, focus returning to the (possibly reordered) opener, and 44px phone targets round out the a11y contract; the group chips' names and counts are untouched.
+
+### Changed
+- **Shared Work grouping (#5100).** Add a pure four-group row/count selector with raw task-state handling, unfiltered Needs you, neutral stopped goals, and explicit tied-directive projection. Existing lane callers remain compatible pending the UI migration.
+- **Live Work source adapters (#5100).** Supply pending delivery pages and scheduled wait resumptions to the shared Work groups, load directives across the bounded chat inventory, preserve source retries and reconnect freshness, and stop fetching Activity history from Work.
+- **Work ownership fixes (#5100).** Open selected directives against their owning chat ledger and preserve explicit chat ownership for ordinary schedules as well as waits.
+- **Preserve available Work directives (#5100).** Retain chat inventory when discovery reports a read failure and keep successful ledgers visible when another chat fails.
+
+- **Durable scheduler execution sessions (#5110).** Background jobs now persist isolated execution owners across restarts. Legacy routing migrates without replaying accepted work; ambiguous legacy Activity waits remain held while newly created Activity waits receive live isolated owners and fire, and overlapping work is serialized per execution owner — never on a shared chat or Activity context.
+- **Pending job continuations (#5110).** Armed watches retain their execution owner through reaction enqueueing and restart, and originating chats retain full scheduled instructions alongside isolated execution sessions.
+- **Watch recovery and chat schedules (#5110).** Terminal watch reactions retry durable enqueue after failures or restart without replaying accepted work; future interactive waits no longer delay unrelated same-chat schedules.
+- **Redeploy-overlap enqueue (#5110).** While a draining pre-upgrade process still owns the job store, only the identity migration waits for the owner-lock: the additive schema applies immediately, so schedules, waits and watch reactions created during the overlap keep working (and resolve live isolated owners) instead of failing after superseding the job they replace.
+
+- **Job sessions get job-scoped context and guarded retirement (Refs #5110).** A `job:` execution session now observes only its OWN working state — goal + plan, tasks, directives, watches and scheduled waits — with other jobs' work reduced to bounded counts, while deliberately agent-wide schedules/tasks and origin-chat visibility stay exactly as documented. Job sessions classify as background for compaction (the existing bounded `system:*` ceiling, hysteresis untouched) and for session summaries, which persist under the cross-platform `%3A`-encoded keys and list in the prior-sessions digest. The checkpoint retention sweep retires a finished or cancelled job's session through the existing harvest/TTL paths only once nothing references it: a pending decision, a scheduled resume or continuation, an armed watch, or a claimed/unknown occurrence pins the thread past normal retention (an unreadable ledger protects every job session), a recurring job's session lives as long as its scheduling row, and owner-mapping tombstones keep Activity/history attribution intact.
+
+- **Producers route to job sessions; Activity is a feed (Refs #5110).** Inbox now-items execute on a durable per-item `job:` execution session with a stable retry identity — the first delivery and every retry (including the startup recovery drain) present the same context and message id, so a re-delivery joins the already-accepted turn instead of processing the item twice, and an identity is retired only once its turn provably settled so a restored item can retry fresh. The A2A terminal hook now routes by job provenance instead of context equality: job-session turns (cron fires, watch reactions, inbox items, background wait resumes) append attributed Activity feed entries — real execution context, job identity, origin chat — and still deliver origin-chat report cards, instead of being misclassified as resumed chat turns; scheduler lifecycle events and the feed carry `origin_session` attribution, and a schedule created by another background job no longer emits a ghost report card.
+
+- **Work section group metadata (#5108).** Add optional canonical group metadata to the registry and annotate goals, tasks and watches for the Work consolidation migration, preserving per-row classification and existing details and actions.
+
+- **Jobs and stopped-goal recovery in Work (#5100).** Former tasks now read as a **Job**: a not-started one (open or deferred) shows a dashed-circle icon, the meta "not started · added <when>", and **Start now** / **Close job** — Start now moves it from Coming up to Doing now through the shared source refresh, Close job closes it out of Work, and a failed action keeps the row actionable with a warning. A blocked job counts as started — it stays in Doing now and says "blocked", never not-started; a closed job leaves the list, and the section's heading count and side-nav badge now count only the rows the list shows. A goal that stops short of its finish line reads neutral **Goal stopped** in Needs you (never an error) with **Keep going** and **Drop the goal**; keeping it going returns it to Doing now, dropping it or meeting the finish line removes it from Work. Goal details lead with the finish line and read "step N of M · checking after each turn".
+
+- **Test policy with a budget gate (#5130).** `docs/dev/testing.md` now says what gets a test and what does not, and `python scripts/check_test_policy.py` (part of `scripts/gate.py`, so CI's Lint job) fails when tests grow faster than the code or when a banned test shape is added: source-text pins, tombstones, issue-numbered test files, real sleeps, `waitForTimeout`. Existing cases are grandfathered in `tests/test_policy_baseline.json` and only count down.
+- **Seam guards scan the suite in a third of the time (#5130).** The shared scanner behind the 18 `test_*_seam.py` guards walks each test file once and skips files that never name the module, with identical findings.
+
+- **Work shows the four approved groups (#5100).** The Work view's Overview and picker now
+  follow the approved consolidation: Needs you, Doing now, Coming up and Your instructions,
+  with one count each, help lines and inline empty copy per the spec. Rows and counts come
+  from the shared `workGroups` selector, rows carry kind tags and icons (Decision / Delivery /
+  Goal stopped; Goal / Job; Time / Condition / Job; Instruction / Approval), a stopped goal reads neutral,
+  finished items leave Work, and not-started jobs sit only in Coming up. Legacy section deep
+  links (palette rows, chat strips, pills) resolve into their canonical group; the per-kind
+  detail renderers and the third-pass responsive layout are unchanged. The activity history
+  section is gone from Work — the Feed pill opens its own Feed dialog for pending-page triage
+  and the completed-turn timeline. The mobile shell's "Menu, N need you" badge counts the same
+  Needs you group through the shared selector, so stopped goals and undelivered priority-now
+  pages raise it too. A row that isn't moving still says so: a blocked started job keeps the
+  word "blocked" in its Doing now meta and a disabled schedule reads "paused" in Coming up,
+  both with a pause glyph instead of the spinner or clock; goal rows show their "step N of M"
+  progress; and the Overview's Your instructions rows carry the same Approval/Instruction tag,
+  scope headline and "You said/You chose" meta as the picked group.
+
+- **Work adapters declare their canonical groups (#5114).** Decisions, background agents, schedules and directives now carry group metadata for Work consolidation; the directive section is labeled “Your instructions”. Existing details and actions are preserved, including navigation from the existing “Work: Directives” palette command.
+
+- **Work sections require their canonical group; Activity leaves Work (#5131).** `registerWorkSection` now rejects an ungrouped registration at the type contract and at runtime, the built-in Activity section (and its palette row) is removed, and the utility-bar Feed pill opens the full feed — pending triage plus the completed provenance timeline — in its own dialog. The feed keeps hiding the scheduler's internal "[Autonomous wake — …]" header from scheduled, watch, wait and goal turns, as the Work row titles did. Background-job details and actions in Work are unchanged.
+
+- **Your instructions shows approvals, linked to their decision (#5128).** The Work "Your instructions" section now lists each in-force directive as its own row: the headline is what was approved (the directive's scope, falling back to its quote), with the operator's words below in muted "You said …" provenance. A directive the console can tie to a decision answered within two minutes before it (an interim heuristic in one pure `linkDecision`, pending the server-recorded link) is tagged **Approval** and reads `You chose "…"`; its detail shows what was asked, what was chosen, your words, and **Open decision**. An explicitly job-tied instruction reads `ends with <job>`, explains it lasts until that job finishes, and offers **Open the job**; when the job ends it leaves the list and its count in the same render, through the shared Work grouping selector the chat rail also reads, so neither shows a phantom instruction. Only in-force entries appear in the list — finished ones leave Work — and withdrawal keeps the existing confirm-and-revoke path. The linker reads the server's answered ledger through the shared decisions store, so approvals survive a reload or an answer given on another surface; the section shows its loading, failed-with-Retry and stale states instead of claiming there are no instructions; and a directive opened from the Overview still resolves a detail when it belongs to another chat (full detail, withdrawable) or has already closed (read-only, with its closing sentence) — **Open decision** opens the linked decision in place, inside Work.
+
+### Fixed
+- **A failed background delegation is no longer mistaken for a lost message (#5115).** Each
+  background delegation now records the task id the peer gave it and the message id that
+  was sent, and the job reports a `delivery` state (`in_flight` / `undelivered` /
+  `delivered`) in `GET /api/background/{id}` and `sdk.background_status`. The failure
+  notice for a failed delegate names the peer task. A new `delegate_to(amends="bg-…")`
+  tells the peer which of its tasks an amendment amends and how that request stands, and
+  records the link on the job. The completion drain is now exactly-once under a
+  concurrent settle: before, a job that finished while a drain was running was marked
+  delivered without being delivered. Outcomes a restart stranded are now pushed at boot, one
+  turn per session: jobs reconciled as interrupted, and jobs whose push-resume died with
+  the process. Before, they waited for someone to type into that session.
+
+- **Work ▸ Activity shows pending inbox pages in the list's normal flow, with readable titles (#5109).**
+  The pending block reused the utility dialog's fixed height and a 45% inner scroller, so Work
+  showed a clipped card, a large blank gap and nested scrollbars, in the window and in the rail.
+  Pending pages now size to their content above the activity rows, the Work list is the only
+  scroller, and long page text wraps. Scheduled-turn rows no longer lead with the scheduler's
+  internal `[Autonomous wake — …]` header; they show the job's own prompt.
+
+- **Decision answers acknowledge consumption (#5099).** Close decisions when their checkpoint consumes the answer and return promptly while the resumed turn continues. Console cards immediately show the sent answer and leave the pending list.
+
+- **Keep focused Work directives available (#5100).** Load the focused chat ledger independently of session discovery, retaining its rows and reporting incomplete inventory as stale when discovery fails.
+- **Preserve Activity history (#5100).** Load completed turns in the Activity section independently of the live Work inventory, retaining bus refresh, reconnect recovery, retry, and row details.
+- **Include recurring schedules in their creating chat (#5100).** Use schedule origin ownership for Work filtering, retaining context ownership for waits and legacy schedules.
+
+- **`POST /api/inbox` with `priority: "now"` answers as soon as the turn is accepted (#5106).** The call no longer hangs while a running job holds the Activity thread; the fired turn runs in the background once the thread frees. If that turn then fails or is canceled, the item goes back to the pending queue (once) so `check_inbox` still delivers it. A caller that retries should send a `dedup_key` so a retry is deduplicated rather than stored twice.
+
+- **A turn waiting for its thread is no longer failed as stalled (#5106).** Scheduled fires, inbox items and other turns that land on a thread busy with a long job used to be killed with "The turn stalled: no progress for 900s while starting up" while they were only queued. The stall guard now waits while another turn holds the thread (that turn is still bound by its own guard, so a wedged one is still stopped and the queue moves). A fire whose own wait runs out is shown as queued or running and settles once when its turn ends, instead of logging "delivery unknown", and a fire that fails before saying anything now delivers its result card with the reason.
+
+- **A message typed into a busy thread says why it is waiting (#5106).** A queued message now reads "Queued behind a running step. It will be read at the next model call." and, while a form is open on the thread, "Held until the open form is answered." instead of a bare queued state.
+
+- **The Activity thread no longer compacts on nearly every step of a long job (#5106).** A background `system:*` thread fed one 2–5k-token tool result per step kept its newest 20 messages verbatim, which were themselves over the 30k system ceiling, so it re-compacted every step or two and rewrote its cached prompt each time. A system-thread compaction now keeps at most half the ceiling verbatim, and the previous summary no longer counts as new history, so such a thread compacts about once every four to five steps.
+
+- **Closing a coding agent on Windows no longer waits five seconds (#5133).** A graceful `taskkill` cannot stop a console-less child, so every coder shutdown sat out the full grace period before the hard kill. The client now closes the agent's stdin first, which a stdio agent treats as its cue to exit.
+
+- **Amending an amendment quotes the real request and names the original brief (#5118).**
+  `delegate_to(amends=…)` stored the text it sent, preamble included, as the job's
+  request. Amending that amendment then told the peer the earlier request "began" with the
+  previous preamble instead of the agent's words, and the background panel titled the job
+  with the preamble. The job now records the request the agent wrote. An amendment of an
+  amendment names both its immediate parent and the root brief of the chain, each with
+  its ids, its state and its opening line.
+
+- **A decision answer is never reported as failed while it is still on its way (#5099).** An answer to an agent whose session is busy no longer times out after 120 seconds and offers "Try again" (which queued the same answer again behind the running turn). The server now says the answer is on its way, a second answer joins that delivery instead of starting another turn, and a resumed turn that fails after taking the answer is logged against the decision. When a send fails in transit, the console checks whether the answer landed before saying anything, and offers a retry only once the server confirms the decision is still waiting.
+
+- **Decision cards in a chat no longer link to that same chat (#5102).** A decision answered in its own chat showed "Open chat: <agent>" pointing at the chat you were already in. The link now appears only in the Decisions panel and Work.
+
+- **Task writes no longer fail with "database is locked" under contention (#5121).** Every task store on the same database file in one process now waits its turn on a shared lock. Before, a store waiting on SQLite's busy handler could sleep through every gap between another store's back-to-back writes and give up after 5 seconds.
+
+- **A decision the agent already moved past no longer sticks in the console (#5107).** A pending decision whose checkpoint no longer holds its question can't be answered. This happens when the agent restarted after taking the answer but before the record closed. The server now closes such a record on boot, and also when someone tries to answer it: the answer gets a 409 and the card says the agent had already moved past the question. Every pending decision card also has a Dismiss button, and Dismiss returns at once instead of waiting for the agent's turn.
+
+### Security
+- **A failed agent import no longer returns the raw exception text (#5105).**
+  When applying a snapshot hit an unexpected error, `POST /api/agent/import` answered `500` with the exception's own message, which can include file paths and library internals. It now returns the exception type and a short error id, and logs the traceback under that id. Validation failures (a malformed or unsafe archive) still answer `400` with their explanation.
+
+### Docs
+- **Background execution isolation contract (#5110).** Amend ADR 0129 with per-job sessions, safe legacy migration and retention, continuation ownership, and follow-on tests while preserving interactive waits and the approved Work design.
+
+- **Work consolidation v2 design spec (#5100).** Preserve the approved four-group specification verbatim, including on Windows checkouts, and link it from the prior Work view spec and generated documentation navigation. Include both linked Work specs in the in-app docs corpus and packaged builds.
+
 ## [0.236.0] - 2026-11-11
 
 ### Added

@@ -1,1 +1,0 @@
-- **Read-only Work interpretation.** Marked chat turns can inspect current context and approved read tools, returning a validated proposal without creating work or advancing goals.
