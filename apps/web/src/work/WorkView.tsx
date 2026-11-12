@@ -83,13 +83,21 @@ export function WorkView({ frame = "rail", sessionId }: { frame?: "rail" | "moda
   const selectedKey = selected ? `${selected.kind}:${selected.id}` : state.itemId;
   const loading = Object.values(sources).some((source) => source.status === "loading");
   const label = sections.get(section)?.label ?? workSections[section as keyof typeof workSections] ?? section;
+  // The heading count, the live announcement and the side-nav badges count the rows the
+  // section actually lists: a section hiding finished work (a closed job, an achieved goal)
+  // registers that rule as its `listFilter`, so its badge never exceeds its rows.
+  const visibleCount = (id: string): number => {
+    const sourceItems = sources[id as keyof WorkItems]?.items ?? [];
+    const filter = sections.get(id)?.listFilter;
+    return (filter ? sourceItems.filter(filter) : sourceItems).length;
+  };
   // "Your instructions" counts its shown rows via the shared projection — in-force only, with a
   // tied directive dropped the instant its job ends — so a terminal job never leaves a phantom
-  // count (the rail reads the same selector). Other sections keep their raw source count.
+  // count (the rail reads the same selector). Other sections count through their `listFilter`.
   const instructionsCount = workGroups(sources, { thisChatOnly: state.filters?.thisChat === true, sessionId }).find((group) => group.id === "instructions")?.count ?? 0;
   const countOf = (id: string) => id === "overview" ? items.length
     : id === "directives" ? instructionsCount
-      : sources[id as keyof WorkItems]?.items.length ?? 0;
+      : visibleCount(id);
   const count = countOf(section);
   const listRef = useRef<HTMLDivElement>(null);
   const detailRef = useRef<HTMLDivElement>(null);
