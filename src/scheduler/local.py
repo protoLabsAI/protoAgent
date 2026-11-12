@@ -314,6 +314,12 @@ def _compute_next_fire(
 
 _DELIVERY_UNKNOWN = "delivery unknown; not automatically retried"
 
+# ADR 0129 D7: occurrence dispositions for a dispatch a restart interrupted. Neither is
+# 'settled' — 'interrupted' records a skipped recurring occurrence (the next slot runs
+# normally); 'interrupted_needs_operator' holds the row for the S7 Needs-you decision
+# (Resume / Re-run / Drop). Both unblock the owner for NEW work but are never resent.
+_D7_DISPOSED_STATES = ("interrupted", "interrupted_needs_operator")
+
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS jobs (
@@ -417,6 +423,12 @@ class LocalScheduler:
         self._inflight_ids: set[str] = set()
         self._fire_tasks: set[asyncio.Task] = set()
         self._reconcile_task: asyncio.Task | None = None
+        # ADR 0129 D7: accepted task handles a restart interrupted (noted by the
+        # server after boot reconciliation spared them) + the duck-typed recovery
+        # seam that owns checkpoint classification/resume (the scheduler must not
+        # import server, so it only ever calls through this object).
+        self._interrupted_task_ids: set[str] = set()
+        self._interrupted_recovery = None
         # Fire timeout must comfortably exceed a real turn (web research + subagents
         # can run minutes); too-short here false-fails long turns into a re-fire loop.
         try:
@@ -591,6 +603,10 @@ class LocalScheduler:
         add_missing_columns(db, "occurrences", (
             ("task_id", "TEXT"), ("job_snapshot", "TEXT"),
             ("task_state", "TEXT"), ("diagnostic", "TEXT"),
+            # ADR 0129 D7: automatic restart-resumes taken for this occurrence,
+            # counted in the same transaction that claims the resume. At most one —
+            # a second interruption goes to the operator instead of looping.
+            ("auto_resumes", "INTEGER NOT NULL DEFAULT 0"),
         ))
         # Additive migrations for stores created before each column existed. Only the
         # missing ones are ALTERed, and a failed ALTER raises: a lock timeout used to
@@ -889,6 +905,34 @@ class LocalScheduler:
         finally:
             db.close()
 
+    def unresolved_task_handles(self) -> set[str]:
+        """Task handles of unsettled accepted dispatch claims (ADR 0129 D7): the a2a
+        tasks this store still owns work for. Boot reconciliation spares these from
+        blanket restart failure so :meth:`note_interrupted_tasks` +
+        ``_recover_interrupted_turns`` can classify each from its checkpoint instead.
+        A read failure returns the empty set — nothing is then spared, which is
+        exactly today's fail-on-boot behavior (fail closed, never resume blind)."""
+        db = self._connect()
+        try:
+            rows = db.execute(
+                "SELECT DISTINCT task_id FROM occurrences "
+                "WHERE state IN ('claimed', 'unknown') AND task_id IS NOT NULL"
+            ).fetchall()
+            return {r["task_id"] for r in rows}
+        except sqlite3.DatabaseError as exc:
+            log.warning("[scheduler] unresolved_task_handles failed: %s", exc)
+            return set()
+        finally:
+            db.close()
+
+    def note_interrupted_tasks(self, task_ids, *, recovery=None) -> None:
+        """Record which spared accepted tasks a restart actually interrupted (ADR 0129
+        D7), plus the server-owned recovery seam (classify / resume / seal_dangling /
+        fail_task). ``start()`` disposes them — under each occurrence's existing
+        claim, before the owner admits a new independent fire (D6)."""
+        self._interrupted_task_ids = {str(t) for t in task_ids if t}
+        self._interrupted_recovery = recovery
+
     def get_job(self, job_id: str) -> Job | None:
         """Fetch a single job by id (namespaced by agent), or ``None`` if absent.
 
@@ -935,6 +979,7 @@ class LocalScheduler:
             return
         self._stopping = False
         self._complete_deferred_migration()
+        self._start_interrupted_recovery()
         self._recover_missed_fires()
         self._task = asyncio.create_task(self._poll_loop(), name="scheduler.local.poll")
         log.info(
@@ -959,6 +1004,7 @@ class LocalScheduler:
                     self.path,
                 )
                 self._complete_deferred_migration()
+                self._start_interrupted_recovery()
                 self._recover_missed_fires()
                 await self._poll_loop()
                 return
@@ -1610,7 +1656,10 @@ class LocalScheduler:
                 "SELECT state, previous_error FROM occurrences WHERE job_id = ? AND next_fire = ? AND created_at = ?",
                 (job.id, job.next_fire, job.created_at),
             ).fetchone()
-            if claim is None or claim["state"] == "settled":
+            # A restart-disposed occurrence (ADR 0129 D7) is the operator's to resolve:
+            # a racing reconciliation pass that read the claim list before the
+            # disposition must not settle it into ordinary terminal bookkeeping.
+            if claim is None or claim["state"] in ("settled", *_D7_DISPOSED_STATES):
                 return True
             owns = self._owns_occurrence(db, job)
             if terminal and owns:
@@ -1672,6 +1721,148 @@ class LocalScheduler:
                 self._settle_task(job, claim["task_id"], payload)
             except Exception:  # noqa: BLE001 — transport loss cannot authorize a resend
                 log.warning("[scheduler] task %s reconciliation unavailable; not resending", claim["task_id"])
+
+    # ── restart-interrupted turns (ADR 0129 D7, S6) ─────────────────────────
+
+    def _start_interrupted_recovery(self) -> None:
+        """Dispose the claims a restart interrupted, off the start() path (a resume is
+        a whole turn). The claims stay 'claimed'/'unknown' until disposed, so the
+        existing serialization holds meanwhile: no owner admits a new independent fire
+        while its interrupted occurrence is undecided (D6)."""
+        if not self._interrupted_task_ids:
+            return
+        t = asyncio.create_task(self._recover_interrupted_turns(), name="scheduler.interrupted")
+        self._fire_tasks.add(t)
+        t.add_done_callback(self._fire_tasks.discard)
+
+    async def _recover_interrupted_turns(self) -> None:
+        """Classify every restart-interrupted claim from its checkpoint and apply the
+        D7 policy: (a) between steps / during a model call → resume automatically from
+        the checkpoint; (b) during a tool call on a wait:/watch continuation → resume
+        with the dangling call reported as interrupted; (b) on any other job and (c)
+        no/unreadable checkpoint → ``interrupted_needs_operator`` (the S7 Needs-you
+        item), except a recurring job's occurrence, which is skipped as
+        ``interrupted`` so its next slot runs normally. At most one automatic resume
+        per occurrence, counted on the row in the claim transaction."""
+        interrupted, self._interrupted_task_ids = self._interrupted_task_ids, set()
+        recovery, self._interrupted_recovery = self._interrupted_recovery, None
+        claims = [c for c in self._pending_reconciliation() if c["task_id"] in interrupted]
+        for claim in claims:
+            try:
+                await self._dispose_interrupted_claim(claim, recovery)
+            except Exception:  # noqa: BLE001 — an undecided claim stays quarantined, never resent
+                log.exception(
+                    "[scheduler] interrupted-turn recovery failed for task %s; claim stays held",
+                    claim["task_id"],
+                )
+
+    async def _dispose_interrupted_claim(self, claim: sqlite3.Row, recovery) -> None:
+        job = Job(**json.loads(claim["job_snapshot"]))
+        task_id = claim["task_id"]
+        recurring = is_cron(job.schedule)
+        continuation = job.id.startswith("wait:") or job.id.startswith("watch-")
+        resumed_before = int(claim["auto_resumes"] or 0) if "auto_resumes" in claim.keys() else 0
+
+        if resumed_before == 0 and recovery is not None:
+            kind = await recovery.classify(job.context_id)
+            resumable = kind == "clean" or (kind == "mid_tool_call" and continuation)
+            if resumable and self._claim_auto_resume(claim):
+                log.warning(
+                    "[scheduler] resuming job %s from its checkpoint after a restart (task %s, %s)",
+                    job.id, task_id, kind,
+                )
+                if await recovery.resume(job.context_id, task_id, report_dangling=kind == "mid_tool_call"):
+                    # The task handle is now where the turn actually ended; normal
+                    # reconciliation settles the occurrence through it, exactly once.
+                    return
+                # The resume could not act at all — fall through to the operator.
+        else:
+            # No seam (degraded boot), or the one automatic resume is spent: never
+            # read or resume anything — the card for this occurrence is the operator's.
+            kind = "no_checkpoint" if recovery is None else "resume_capped"
+
+        if recurring and recovery is not None and kind in ("mid_tool_call", "resume_capped"):
+            # The next slot fires either way (neither D7 state blocks the owner) and
+            # reuses this execution session's thread: answer any dangling call with the
+            # interruption report so the provider never sees a call without its result.
+            await recovery.seal_dangling(job.context_id)
+        if recurring and resumed_before == 0:
+            state = "interrupted"
+            diagnostic = (
+                "occurrence interrupted by a restart; skipped — the next scheduled run "
+                "fires normally (ADR 0129 D7)"
+            )
+        else:
+            state = "interrupted_needs_operator"
+            diagnostic = (
+                "interrupted by a restart again after one automatic resume; waiting for "
+                "an operator decision (ADR 0129 D7)"
+                if resumed_before
+                else "interrupted by a restart; waiting for an operator decision — not resent (ADR 0129 D7)"
+            )
+        if self._mark_interrupted_occurrence(claim, state, diagnostic) and recovery is not None:
+            # The dead handle must not read as alive forever; the occurrence keeps
+            # its D7 state either way (never settled-failed, never resent).
+            await recovery.fail_task(task_id)
+        log.warning(
+            "[scheduler] job %s occurrence interrupted by a restart → %s (task %s)",
+            job.id, state, task_id,
+        )
+
+    def _claim_auto_resume(self, claim: sqlite3.Row) -> bool:
+        """Count the automatic resume on the occurrence row BEFORE driving it, in its
+        own claim transaction (D7): a crash during the resume still counts, so the
+        next boot goes to the operator instead of looping. False when the row moved on
+        or already spent its one resume."""
+        db = self._connect()
+        try:
+            db.execute("BEGIN IMMEDIATE")
+            row = db.execute(
+                "SELECT auto_resumes FROM occurrences WHERE job_id = ? AND next_fire = ? "
+                "AND created_at = ? AND state IN ('claimed', 'unknown')",
+                (claim["job_id"], claim["next_fire"], claim["created_at"]),
+            ).fetchone()
+            if row is None or int(row["auto_resumes"] or 0) >= 1:
+                return False
+            db.execute(
+                "UPDATE occurrences SET auto_resumes = auto_resumes + 1 "
+                "WHERE job_id = ? AND next_fire = ? AND created_at = ?",
+                (claim["job_id"], claim["next_fire"], claim["created_at"]),
+            )
+            db.commit()
+            return True
+        except sqlite3.DatabaseError:
+            log.exception("[scheduler] could not claim the automatic resume for %s", claim["job_id"])
+            return False
+        finally:
+            db.close()
+
+    def _mark_interrupted_occurrence(self, claim: sqlite3.Row, state: str, diagnostic: str) -> bool:
+        """Move an interrupted claim to its D7 disposition — never 'settled', never
+        'failed', never resent. CAS on the unresolved states so a claim something else
+        settled meanwhile is left alone. The job row's ``last_error`` gets the same
+        diagnostic so the operator surface says why nothing ran."""
+        db = self._connect()
+        try:
+            db.execute("BEGIN IMMEDIATE")
+            cur = db.execute(
+                "UPDATE occurrences SET state = ?, diagnostic = ? "
+                "WHERE job_id = ? AND next_fire = ? AND created_at = ? "
+                "AND state IN ('claimed', 'unknown')",
+                (state, diagnostic, claim["job_id"], claim["next_fire"], claim["created_at"]),
+            )
+            if cur.rowcount:
+                db.execute(
+                    "UPDATE jobs SET last_error = ? WHERE id = ? AND created_at = ?",
+                    (diagnostic, claim["job_id"], claim["created_at"]),
+                )
+            db.commit()
+            return cur.rowcount > 0
+        except sqlite3.DatabaseError:
+            log.exception("[scheduler] could not mark interrupted occurrence for %s", claim["job_id"])
+            return False
+        finally:
+            db.close()
 
     async def _fire(self, job: Job) -> bool | None:
         """Deliver a job by POSTing to the agent's own A2A endpoint.
