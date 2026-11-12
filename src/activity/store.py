@@ -30,7 +30,8 @@ CREATE TABLE IF NOT EXISTS activity (
     state       TEXT,
     text        TEXT NOT NULL,
     task_id     TEXT,
-    stimulus    TEXT
+    stimulus    TEXT,
+    origin_session TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_activity_created_at ON activity(created_at);
 """
@@ -52,10 +53,12 @@ class ActivityLog:
         try:
             db = self._connect()
             db.executescript(_SCHEMA)
-            # Additive migration: `stimulus` (the triggering input text, so a response can be
-            # shown as "in response to X") was added after the table shipped. Only ALTERed
-            # when missing, and a failed ALTER raises instead of passing as done.
-            add_missing_columns(db, "activity", (("stimulus", "TEXT"),))
+            # Additive migrations: `stimulus` (the triggering input text, so a response can
+            # be shown as "in response to X") and `origin_session` (ADR 0129 — the chat a
+            # job-session turn's schedule was created from, when there is one) were added
+            # after the table shipped. Only ALTERed when missing, and a failed ALTER raises
+            # instead of passing as done.
+            add_missing_columns(db, "activity", (("stimulus", "TEXT"), ("origin_session", "TEXT")))
             db.commit()
             db.close()
         except sqlite3.DatabaseError:
@@ -82,19 +85,25 @@ class ActivityLog:
         state: str = "completed",
         task_id: str = "",
         stimulus: str = "",
+        origin_session: str = "",
     ) -> int | None:
         """Append a feed entry. ``origin`` empty ⇒ "operator" (a reply/live turn).
         ``stimulus`` is the triggering input text (the scheduled prompt / inbound message),
-        so the feed can show the response as an explicit reply to it."""
+        so the feed can show the response as an explicit reply to it. ``origin_session``
+        (ADR 0129) is the chat a job-session turn's work was created from, when known —
+        ``context_id`` stays the turn's real execution context."""
         if not text or not text.strip():
             return None
         try:
             db = self._connect()
             cur = db.execute(
                 "INSERT INTO activity "
-                "(created_at, context_id, origin, trigger, priority, state, text, task_id, stimulus) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                (_now_iso(), context_id, origin or "operator", trigger, priority, state, text, task_id, stimulus),
+                "(created_at, context_id, origin, trigger, priority, state, text, task_id, stimulus, origin_session) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    _now_iso(), context_id, origin or "operator", trigger, priority, state,
+                    text, task_id, stimulus, origin_session,
+                ),
             )
             db.commit()
             return int(cur.lastrowid)
@@ -132,8 +141,8 @@ class ActivityLog:
         try:
             db = self._connect()
             rows = db.execute(
-                "SELECT id, created_at, context_id, origin, trigger, priority, state, text, task_id, stimulus "
-                "FROM activity ORDER BY id DESC LIMIT ?",
+                "SELECT id, created_at, context_id, origin, trigger, priority, state, text, task_id, stimulus, "
+                "origin_session FROM activity ORDER BY id DESC LIMIT ?",
                 (limit,),
             ).fetchall()
             db.close()
