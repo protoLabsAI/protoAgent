@@ -1,3 +1,4 @@
+// @vitest-environment node
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { api, type DurableChatSession, type DurableChatTurn } from "../lib/api";

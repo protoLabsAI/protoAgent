@@ -1,3 +1,4 @@
+// @vitest-environment node
 // #2463 — subscription-backed turns must never present the pricing-table
 // estimate as a charge; API-key turns keep the plain cost wording.
 import { describe, expect, it } from "vitest";

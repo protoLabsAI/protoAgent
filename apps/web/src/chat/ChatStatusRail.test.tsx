@@ -13,11 +13,12 @@ import type { WorkItems, WorkSource } from "../work/useWorkItems";
 import { flattenWorkItems, workGroups } from "../work/workGroups";
 import { registerWorkSection } from "../work/sectionRegistry";
 import type { GroupableWorkItem } from "../work/tone";
+import { beginThisChatVisit, endThisChatVisit, isThisChatVisit } from "../work/visitScope";
 import {
   ChatStatusRail,
+  openWorkGroup,
   railChips,
   spokenLabel,
-  trapTab,
   workSectionForGroup,
 } from "./ChatStatusRail";
 
@@ -125,6 +126,7 @@ afterEach(async () => {
   document.body.replaceChildren();
   vi.unstubAllGlobals();
   useUI.setState(initialUI);
+  endThisChatVisit();
 });
 
 async function render(node: ReactElement) {
@@ -248,13 +250,26 @@ describe("details panel", () => {
     expect(open).toHaveLength(3);
     await click(open[2]); // Your instructions
     const ui = useUI.getState();
+    // The thisChat scope rides the VISIT: the saved surface state keeps the user's own
+    // filters untouched, so every other Work entry still restores what they left behind.
     expect(ui.surfaceStates.work).toEqual({
-      section: "directives", itemId: undefined, scrollTop: 0, filters: { retained: true, thisChat: true },
+      section: "directives", itemId: undefined, scrollTop: 0, filters: { retained: true },
     });
+    expect(isThisChatVisit()).toBe(true);
     expect(ui.rightPanel).toBe("work");
     expect(ui.rightCollapsed).toBe(false);
     expect(ui.mobileActive).toBe("work");
     expect(dialog()).toBeNull(); // navigation closes the panel
+  });
+
+  it("the Needs you deep link (S7) never scopes — it even ends a live visit scope", async () => {
+    beginThisChatVisit();
+    openWorkGroup("needs-you");
+    const ui = useUI.getState();
+    expect(isThisChatVisit()).toBe(false);
+    expect(ui.surfaceStates.work).toEqual({
+      section: "decisions", itemId: undefined, scrollTop: 0, filters: { retained: true },
+    });
   });
 
   it("routes running/planned groups to the Overview until their group sections register", async () => {
@@ -298,15 +313,17 @@ describe("details panel", () => {
     const first = buttons[0];
     const last = buttons[buttons.length - 1];
 
+    // Real keydowns through the rendered panel, so the test fails if the panel's own
+    // onKeyDown trap wiring is removed — not just if the helper's logic breaks.
     last.focus();
-    const forward = { key: "Tab", shiftKey: false, currentTarget: panel, preventDefault: vi.fn() };
-    trapTab(forward as never);
-    expect(forward.preventDefault).toHaveBeenCalledOnce();
+    const forward = new KeyboardEvent("keydown", { key: "Tab", bubbles: true, cancelable: true });
+    await act(async () => last.dispatchEvent(forward));
+    expect(forward.defaultPrevented).toBe(true);
     expect(document.activeElement).toBe(first);
 
-    const backward = { key: "Tab", shiftKey: true, currentTarget: panel, preventDefault: vi.fn() };
-    trapTab(backward as never);
-    expect(backward.preventDefault).toHaveBeenCalledOnce();
+    const backward = new KeyboardEvent("keydown", { key: "Tab", shiftKey: true, bubbles: true, cancelable: true });
+    await act(async () => first.dispatchEvent(backward));
+    expect(backward.defaultPrevented).toBe(true);
     expect(document.activeElement).toBe(last);
 
     await act(async () => {
@@ -358,6 +375,12 @@ describe("instructions failure (preserved from the ledger strip, scoped to THIS 
     await click(told);
     const panel = dialog()!;
     expect(panel.textContent).toContain("Couldn't check your instructions.");
+    // A never-loaded ledger has no knowable count: the heading names the group alone — it
+    // never claims "Your instructions · 0" while the chip calls the count unknown.
+    const heading = [...panel.querySelectorAll(".chat-status-details__heading")]
+      .find((h) => h.textContent!.startsWith("Your instructions"))!;
+    expect(heading.textContent).toBe("Your instructions");
+    expect(heading.getAttribute("aria-label")).toBe("Your instructions");
     const retry = [...panel.querySelectorAll("button")].find((b) => b.textContent === "Load again");
     await click(retry);
     // Load again refreshes THIS chat's ledger, not the whole cross-chat inventory.

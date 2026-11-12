@@ -1,3 +1,4 @@
+// @vitest-environment node
 import { describe, expect, it } from "vitest";
 
 // ds-5j6 (#4250) — the design system restyled the Conversation "jump to latest" button

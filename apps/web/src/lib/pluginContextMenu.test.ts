@@ -1,3 +1,4 @@
+// @vitest-environment node
 // The trust rules of the plugin context-menu bridge (#3030). The parser is where a
 // sandboxed page's claim becomes host state, so these pin the same guarantees the
 // keybinding bridge makes: ids forced into the plugin's namespace, malformed entries

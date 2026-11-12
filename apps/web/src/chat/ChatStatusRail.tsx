@@ -21,6 +21,7 @@ import type { GoalState } from "../lib/types";
 import { sections } from "../work/sectionRegistry";
 import { useWorkItems, type WorkSource } from "../work/useWorkItems";
 import { flattenWorkItems, inWorkScope, jobEnded, jobKey, workGroups, type WorkGroup } from "../work/workGroups";
+import { beginThisChatVisit, endThisChatVisit } from "../work/visitScope";
 import type { WorkGroupId } from "../work/tone";
 import { useDirectives } from "./useDirectives";
 import { runHas } from "./mentionRun";
@@ -86,8 +87,10 @@ export function workSectionForGroup(group: WorkGroupId): string {
   return group === "instructions" ? "directives" : group === "needs-you" ? "decisions" : "overview";
 }
 
-/** Deep link to a Work group under the `thisChat` scope the chip counted with.
- *  (Needs you, when S7 adds it, deliberately won't set the filter — it is never scoped.) */
+/** Deep link to a Work group under the `thisChat` scope the chip counted with. The scope
+ *  rides the VISIT (work/visitScope), never the saved surface state: the saved filters are
+ *  what every other Work entry restores, and one rail click must not rewrite them.
+ *  (Needs you, when S7 adds it, deliberately won't scope — it is never filtered.) */
 export function openWorkGroup(group: WorkGroupId) {
   const ui = useUI.getState();
   const prior = ui.surfaceStates.work;
@@ -96,8 +99,10 @@ export function openWorkGroup(group: WorkGroupId) {
     section: workSectionForGroup(group),
     itemId: undefined,
     scrollTop: 0,
-    filters: group === "needs-you" ? prior?.filters : { ...prior?.filters, thisChat: true },
+    filters: prior?.filters,
   });
+  if (group === "needs-you") endThisChatVisit();
+  else beginThisChatVisit();
   openView("work");
 }
 
@@ -147,12 +152,16 @@ function GroupSection({ group, directives, mobile, onNavigate }: {
   const failed = directives?.status === "error";
   const stale = directives?.status === "stale";
   if (!group.count && !failed) return null;
+  // THIS chat's ledger never loaded: the count is unknowable, so the heading carries the
+  // name alone — never a claimed "0" (the chip hides its count the same way).
+  const unknownCount = failed && group.count === 0;
+  const name = unknownCount ? group.label : `${group.label}, ${group.count}`;
   const size = mobile ? "md" : "sm";
   return (
-    <section className="chat-status-details__section" aria-label={`${group.label}, ${group.count}`}>
-      <h2 className="chat-status-details__heading" aria-label={`${group.label}, ${group.count}`}>
+    <section className="chat-status-details__section" aria-label={name}>
+      <h2 className="chat-status-details__heading" aria-label={name}>
         {group.label}
-        <span aria-hidden="true"> · {group.count}</span>
+        {!unknownCount && <span aria-hidden="true"> · {group.count}</span>}
       </h2>
       {failed ? (
         <p className="chat-status-details__problem">Couldn&apos;t check your instructions.</p>

@@ -1,3 +1,4 @@
+// @vitest-environment node
 // The unary GetTask readers all unwrap one result shape (#3957). A2A 1.0 serves the task
 // flat and untagged, 0.3 tags it `kind: "task"`, and a `{task}` wrapper is read too. Each
 // reader used to spell the unwrap `result.task ?? (result.kind === "task" ? result : result)`

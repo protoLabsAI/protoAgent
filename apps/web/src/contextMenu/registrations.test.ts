@@ -1,3 +1,4 @@
+// @vitest-environment node
 import { beforeEach, describe, expect, it } from "vitest";
 
 import "./registrations"; // side-effect: registers the core menus (rail-surface, …)

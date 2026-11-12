@@ -1,3 +1,4 @@
+// @vitest-environment node
 import { describe, expect, it } from "vitest";
 import type { BackgroundJobDTO, GoalState, Task } from "../lib/types";
 import type { DirectiveRow } from "../lib/api/chat";

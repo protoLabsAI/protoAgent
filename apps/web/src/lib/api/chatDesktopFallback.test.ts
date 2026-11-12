@@ -1,3 +1,4 @@
+// @vitest-environment node
 // The desktop shell streams a turn through the native `chat_stream` command and falls back
 // to the non-streaming /api/chat path when that command is unavailable or fails (#4975).
 // The fallback re-sends the message, so it is only safe while the server has not taken the

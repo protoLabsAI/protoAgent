@@ -93,11 +93,7 @@ for (const width of [1440, 390]) {
       await expect(doing).toHaveText(width === 390 ? "2" : "Doing now · goal 3/8 · 2", { useInnerText: true });
       await expect(coming).toHaveText(width === 390 ? "1" : "Coming up 1", { useInnerText: true });
       await expect(told).toHaveText(width === 390 ? "2" : "Told it 2", { useInnerText: true });
-      await expect(doing).toHaveAttribute(
-        "aria-label",
-        "Doing now, 2 running in this chat, including the goal at step 3 of 8. Show details",
-      );
-      await expect(told).toHaveAttribute("aria-label", "Told it: 2 instructions in force in this chat. Show details");
+      // (The exact spoken labels are pinned once, in ChatStatusRail.test.tsx — not re-checked here.)
 
       // Nothing scrolls sideways (§6, the 390px / 400%-zoom rule).
       const overflow = await page.evaluate(() => ({
@@ -161,12 +157,10 @@ for (const width of [1440, 390]) {
       await page.goto("/app/", { waitUntil: "load" });
       await expect(page.locator("html")).toHaveAttribute("data-theme", mode);
 
-      // The ledger failed: the Told it chip renders without a count and names the problem.
+      // The ledger failed: the Told it chip renders in its problem state without a count.
+      // (Its exact spoken label is pinned once, in ChatStatusRail.test.tsx.)
       const told = page.getByTestId("chat-status-chip-instructions");
-      await expect(told).toHaveAttribute(
-        "aria-label",
-        "Told it: couldn't check instructions in this chat. Show details",
-      );
+      await expect(told).toHaveClass(/chat-status-chip--problem/);
       await expect(told.locator(".chat-status-chip__count")).toHaveCount(0);
       await page.screenshot({ path: info.outputPath("rail-instruction-failure.png"), fullPage: true, animations: "disabled" });
 

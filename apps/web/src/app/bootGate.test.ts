@@ -1,3 +1,4 @@
+// @vitest-environment node
 import { describe, it, expect } from "vitest";
 
 import { bootGatePhase, bootGateReady, BOOT_STUCK_MS, BOOT_FAILED_MS } from "./bootGate";

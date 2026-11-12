@@ -4,6 +4,11 @@ import { defineConfig } from "vitest/config";
 // frame parser, the uiStore persist migration). jsdom because the modules under
 // test touch `window`/`localStorage` at import time, even though the functions
 // themselves are pure. E2E (Playwright) lives separately under e2e/.
+//
+// A test file that needs no DOM — it renders nothing and its imports never touch `window` or Web
+// Storage — opts out with `// @vitest-environment node` on its first line. jsdom startup plus the
+// DOM half of vitest.setup.ts cost more per file than the tests do, so opt out whenever the file
+// passes without it.
 export default defineConfig({
   test: {
     environment: "jsdom",

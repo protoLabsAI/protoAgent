@@ -1,3 +1,4 @@
+// @vitest-environment node
 // Unit coverage for the scheduler.completed → chat-message mapping (#2990). Pure, so it
 // needs no DOM/React mount — it proves the event carries into the ScheduledReportCard /
 // ScheduledChip payload correctly, including the recurring-collapse flag and the guards.

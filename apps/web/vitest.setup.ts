@@ -26,7 +26,11 @@
 // named-property access). It has to come from a fresh JSDOM: once the environment is populated,
 // `document.defaultView` IS `globalThis`, so there is no intact jsdom window left to borrow from.
 
-import { JSDOM } from "jsdom";
+// A test file that opts out of the DOM (`// @vitest-environment node`) needs none of this: it
+// has no window to give storage to and renders no markdown. Skipping the work there is what makes
+// the opt-out worth having — building a JSDOM and importing the markdown renderer per file cost
+// more than the tests themselves. Such a file must not touch Web Storage, even at import time.
+const HAS_DOM = typeof document !== "undefined";
 
 /** Can this global actually store and return a value? Node's Storage passes; a missing or
  *  throwing one doesn't. Deliberately behavioral — realm identity says nothing about usability. */
@@ -47,7 +51,8 @@ function isUsableStorage(name: "localStorage" | "sessionStorage"): boolean {
 // Repair BOTH when either is broken: a half-repaired pair (jsdom localStorage beside Node's
 // sessionStorage) is its own confusing state, and one fresh window gives both the same realm
 // and the same per-file lifetime.
-if (!isUsableStorage("localStorage") || !isUsableStorage("sessionStorage")) {
+if (HAS_DOM && (!isUsableStorage("localStorage") || !isUsableStorage("sessionStorage"))) {
+  const { JSDOM } = await import("jsdom");
   // A real origin — jsdom refuses Storage on an opaque one (about:blank throws SecurityError).
   const { window } = new JSDOM("", { url: "http://localhost" });
   // The `Storage` CONSTRUCTOR has to come across with the instances, not just the instances.
@@ -69,4 +74,4 @@ if (!isUsableStorage("localStorage") || !isUsableStorage("sessionStorage")) {
 // mounts `<Markdown>` and reads text synchronously would otherwise race the module load — green
 // on a warm local run, red on a cold CI worker. Once resolved, LazyMarkdown's lazy factory takes
 // its synchronous path and every mount renders on its first commit, as it does in the app.
-await (await import("./src/chat/LazyMarkdown")).preloadMarkdown();
+if (HAS_DOM) await (await import("./src/chat/LazyMarkdown")).preloadMarkdown();

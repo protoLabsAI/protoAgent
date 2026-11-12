@@ -1,3 +1,4 @@
+// @vitest-environment node
 import { describe, expect, it } from "vitest";
 
 // Assert on the raw stylesheet text (same source-guard pattern as ../hitl-accent.test.ts,
