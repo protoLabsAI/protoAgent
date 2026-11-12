@@ -258,19 +258,42 @@ def test_a_job_settling_mid_drain_is_delivered_by_the_next_drain(tmp_path, monke
 # ── across a restart ─────────────────────────────────────────────────────────────
 
 
-async def test_restart_pushes_undelivered_terminals_to_their_sessions_once(tmp_path, monkeypatch):
-    """A job interrupted by a restart (or one that settled just before it, its push-resume
-    lost with the process) must reach its session at boot — not wait, possibly forever,
-    for an operator to type into that session."""
+def _restart(server_stores, db, monkeypatch):
+    """One boot: build the manager the way startup does (reconcile first), install it,
+    and re-arm the once-per-process latch."""
     import runtime.state as rs
+
+    monkeypatch.setattr(server_stores, "_agent_store_db", lambda _name: db)
+    monkeypatch.setattr(server_stores, "_BACKGROUND_REDELIVERY_DONE", False)
+    mgr = server_stores._build_background_manager(None)
+    assert mgr is not None
+    monkeypatch.setattr(rs.STATE, "background_mgr", mgr, raising=False)
+    return mgr
+
+
+@pytest.fixture
+def no_wakes(monkeypatch):
+    """Any Activity wake fired from redelivery is a failure: a wake never drains."""
+    from server import a2a as server_a2a
+
+    wakes: list[str] = []
+    monkeypatch.setattr(server_a2a, "_spawn_background_wake", lambda j: wakes.append(j.id))
+    monkeypatch.setattr(server_a2a, "_spawn_background_resume", lambda _m, j: wakes.append(f"resume:{j.id}"))
+    return wakes
+
+
+async def test_restart_pushes_undelivered_terminals_once_per_session(tmp_path, monkeypatch, no_wakes):
+    """A job interrupted by a restart (or one that settled just before it, its push-resume
+    lost with the process) reaches its session at boot — one turn per session, whose drain
+    hands every pending outcome over — not after an operator happens to type there."""
     from server import stores as server_stores
 
     db = tmp_path / "background" / "jobs.db"
     store = BackgroundStore(str(db))
 
-    def job(desc: str) -> str:
-        return store.create(agent_name="a", origin_session="s-pm", subagent_type="delegate", description=desc,
-                            prompt="")
+    def job(desc: str, session: str = "s-pm", **kw) -> str:
+        return store.create(agent_name="a", origin_session=session, subagent_type="delegate", description=desc,
+                            prompt="", **kw)
 
     delivered = job("seen before the restart")
     store.mark_complete(delivered, "completed", "seen")
@@ -282,27 +305,88 @@ async def test_restart_pushes_undelivered_terminals_to_their_sessions_once(tmp_p
     settled = job("settled, push-resume lost with the process")
     store.mark_complete(settled, "failed", STREAM_CLOSED)
     interrupted = job("in flight at the restart")
+    other = job("another session's outcome", session="s-design")
+    store.mark_complete(other, "completed", "done")
+    # Outcomes no push-resume can drain: their Activity wake fired at settle; a replay is
+    # a fresh LLM turn that delivers nothing.
+    orphan = job("no origin session", session="")
+    store.mark_complete(orphan, "failed", STREAM_CLOSED)
+    hidden = job("incognito origin", origin_incognito=True)
+    store.mark_complete(hidden, "failed", STREAM_CLOSED)
 
-    resumed: list[str] = []
-    monkeypatch.setattr(server_stores, "_on_work_terminal", lambda j: resumed.append(j.id))
-    monkeypatch.setattr(server_stores, "_agent_store_db", lambda _name: db)
-    monkeypatch.setattr(server_stores, "_BACKGROUND_REDELIVERY_DONE", False)
+    pushes: list[tuple[str, list[str]]] = []
 
-    mgr = server_stores._build_background_manager(None)  # the boot path: reconciles first
-    assert mgr is not None
-    monkeypatch.setattr(rs.STATE, "background_mgr", mgr, raising=False)
+    async def fake_resume(self, session, jobs):
+        pushes.append((session, [j.id for j in jobs]))
+        self.store.drain_pending(session)  # the pushed turn's drain
+        return True
+
+    monkeypatch.setattr(BackgroundManager, "resume_origin_session", fake_resume)
+
+    mgr = _restart(server_stores, db, monkeypatch)
     assert mgr.store.get(interrupted).status == "failed"
     assert mgr.store.get(interrupted).error == INTERRUPTED_ERROR
-    assert resumed == [], "the boot build itself delivers nothing; the startup pass does"
+    assert pushes == [], "the boot build itself delivers nothing; the startup pass does"
 
     assert await server_stores.redeliver_undelivered_background() == 2
-    assert resumed == [settled, interrupted]
-    # Once per process: a second pass does not re-push.
+    assert sorted(pushes) == [("s-design", [other]), ("s-pm", [settled, interrupted])]
+    assert no_wakes == []
+    # Once per process.
     assert await server_stores.redeliver_undelivered_background() == 0
-    assert resumed == [settled, interrupted]
-    # Still exactly-once to the model: the pushed turn's drain hands each over a single time.
-    assert [j.id for j in mgr.store.drain_pending("s-pm")] == [stale, canceled, settled, interrupted]
-    assert mgr.store.drain_pending("s-pm") == []
+
+    # A second restart: everything pushable drained, the rest is never replayed.
+    pushes.clear()
+    _restart(server_stores, db, monkeypatch)
+    assert await server_stores.redeliver_undelivered_background() == 0
+    assert pushes == [] and no_wakes == []
+
+
+async def test_a_failed_redelivery_push_retries_on_the_next_boot_without_a_wake(tmp_path, monkeypatch, no_wakes):
+    from server import stores as server_stores
+
+    db = tmp_path / "background" / "jobs.db"
+    store = BackgroundStore(str(db))
+    first = store.create(agent_name="a", origin_session="s-pm", subagent_type="delegate", description="one",
+                         prompt="")
+    second = store.create(agent_name="a", origin_session="s-pm", subagent_type="delegate", description="two",
+                          prompt="")
+    attempts: list[list[str]] = []
+
+    async def failing_resume(self, session, jobs):
+        attempts.append([j.id for j in jobs])
+        return False  # the self-POST did not land: nothing drained
+
+    monkeypatch.setattr(BackgroundManager, "resume_origin_session", failing_resume)
+    _restart(server_stores, db, monkeypatch)  # both reconciled as interrupted
+    assert await server_stores.redeliver_undelivered_background() == 1
+    _restart(server_stores, db, monkeypatch)
+    assert await server_stores.redeliver_undelivered_background() == 1
+    assert attempts == [[first, second], [first, second]]
+    assert no_wakes == [], "a failed push never falls back to a wake that cannot drain"
+    # Still pending: the session's next turn drains both, once.
+    assert [j.id for j in store.drain_pending("s-pm")] == [first, second]
+
+
+async def test_resume_origin_session_sends_one_nudge_for_many_jobs(tmp_path, monkeypatch):
+    mgr = _manager(tmp_path, [])
+    a = mgr.store.create(agent_name="a", origin_session="s", subagent_type="delegate", description="a", prompt="",
+                         origin_fence=["read_file", "web_search"])
+    b = mgr.store.create(agent_name="a", origin_session="s", subagent_type="delegate", description="b", prompt="",
+                         origin_fence=["read_file"])
+    sent: list[dict] = []
+
+    async def fake_send(*, context_id, text, metadata):
+        sent.append({"context_id": context_id, "text": text, "metadata": metadata})
+        return "task-1"
+
+    monkeypatch.setattr(mgr, "_send_a2a_message", fake_send)
+    jobs = [mgr.store.get(a), mgr.store.get(b)]
+    assert await mgr.resume_origin_session("s", jobs) is True
+    assert len(sent) == 1
+    assert sent[0]["context_id"] == "s"
+    assert a in sent[0]["text"] and b in sent[0]["text"]
+    assert sent[0]["metadata"]["origin"] == "background-resume"
+    assert sent[0]["metadata"]["subagent_fence"] == ["read_file"]  # narrowest wins
 
 
 # ── identity, delivery state, amendment linkage ─────────────────────────────────

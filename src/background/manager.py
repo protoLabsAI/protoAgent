@@ -719,6 +719,67 @@ class BackgroundManager:
                 task_id=task_id,
             )
 
+    async def resume_origin_session(self, origin_session: str, jobs: list) -> bool:
+        """Push-resume ONE turn into ``origin_session`` for several outcomes that are all
+        waiting to drain there (#5053 — the boot redelivery of a restart's strands). The
+        turn's drain attaches every pending outcome of the session, so one nudge per
+        session is the whole delivery; a nudge per job would leave every turn after the
+        first with nothing attached. A single job keeps the ordinary ``resume_origin``.
+
+        No Activity-wake fallback, deliberately: a wake never drains, so replaying one on
+        every restart would brief the same outcome again each time. On failure the
+        outcomes stay pending and drain on the session's next turn. Never raises."""
+        if not jobs:
+            return False
+        if len(jobs) == 1:
+            return await self.resume_origin(jobs[0])
+        from graph.middleware.subagent_fence import intersect_fences
+
+        fence: list[str] = []
+        for job in jobs:
+            fence = intersect_fences(fence, list(getattr(job, "origin_fence", None) or []))
+        ids = ", ".join(j.id for j in jobs)
+        text = (
+            f"[{len(jobs)} background jobs ({ids}) finished without reaching this conversation before a "
+            "restart — their completion messages are attached to this turn; review them and brief the operator]"
+        )
+        attended = self._session_attended(origin_session)
+        trigger = f"redelivery:{jobs[0].id}"
+        self._publish_turn("turn.started", session_id=origin_session, origin="background-resume", trigger=trigger)
+        ok = False
+        task_id = ""
+        try:
+            task_id = await self._send_a2a_message(
+                context_id=origin_session,
+                text=text,
+                metadata={
+                    "origin": "background-resume",
+                    "trigger": trigger,
+                    "attended": attended,
+                    "operator_controllable": attended,
+                    **_fence_metadata(fence),
+                },
+            )
+            ok = True
+            return True
+        except Exception as exc:  # noqa: BLE001 — best-effort by contract
+            log.warning(
+                "[background] redelivery push-resume into %s failed (%s) — the outcomes will drain on "
+                "that session's next turn",
+                origin_session,
+                exc,
+            )
+            return False
+        finally:
+            self._publish_turn(
+                "turn.finished",
+                session_id=origin_session,
+                origin="background-resume",
+                trigger=trigger,
+                ok=ok,
+                task_id=task_id,
+            )
+
     # ── fan-out batch-join (#1766) ────────────────────────────────────────────
 
     def _batch_fence(self, batch_id: str) -> list[str]:

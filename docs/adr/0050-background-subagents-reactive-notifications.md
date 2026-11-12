@@ -243,11 +243,16 @@ live path was already prompt and in order. These were the gaps:
 - **Exactly-once drain under a concurrent settle.** `drain_pending` reads and flips inside one
   `BEGIN IMMEDIATE` transaction, and flips only the rows it read. Before, a job that settled
   between the read and the flip was marked `notified` without being delivered.
-- **Restart redelivery.** Once per process, at startup (after the self-A2A route is mounted), every
-  `completed`/`failed` job from the last 24 h with `notified = 0` goes through the live settle's
-  delivery (`_on_work_terminal`). That covers jobs reconciled as interrupted and jobs whose
-  in-memory push-resume died with the process. The drain stays the only hand-over, so a redundant
-  push cannot deliver an outcome twice.
+- **Restart redelivery.** Once per process, at startup (after the self-A2A route is mounted), the
+  `completed`/`failed` jobs from the last 24 h with `notified = 0` get one push-resume turn per origin
+  session (`BackgroundManager.resume_origin_session`). That turn's drain hands over every pending
+  outcome of the session. This covers jobs reconciled as interrupted and jobs whose in-memory
+  push-resume died with the process. Only jobs a push-resume can drain are pushed
+  (`_should_auto_resume`). A job with no origin session, an incognito or `background:` origin, or
+  auto-resume off got its Activity wake when it settled. A wake never sets `notified`, so replaying it
+  would re-brief the same outcome on every restart. For the same reason a failed push has no wake
+  fallback: the outcomes stay pending for the session's next turn and the next boot. The drain stays
+  the only hand-over, so a redundant push cannot deliver an outcome twice.
 - **Peer identity and delivery state.** A background A2A delegation records the peer's task id and
   the `messageId` it sent (`peer_task_id`, `peer_message_id`) once the peer accepts the message.
   Each job reports `delivery`: `in_flight`, `undelivered` or `delivered`. A failed job with a peer
