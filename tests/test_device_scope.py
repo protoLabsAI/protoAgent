@@ -1105,6 +1105,7 @@ def test_a_device_cannot_leave_a_watch_that_runs_host_commands(monkeypatch, scop
     assert c.post("/api/watches", json=shell).status_code == status
     assert c.patch("/api/watches/w", json=shell).status_code == status
     assert c.post("/api/watches", json={"condition": "c", "verifier": {"type": "llm"}}).status_code == 200
+    assert c.post("/api/watches", json={"condition": "c", "verifier": {"type": ["ci"]}}).status_code != 500  # not ours to judge
 
 
 # ── Direct device minting (#4683) ─────────────────────────────────────────────────────────

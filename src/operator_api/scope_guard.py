@@ -46,7 +46,9 @@ def host_command_refusal(request: Any, body: Any) -> JSONResponse | None:
     watch field, stay open to a device."""
     verifier = body.get("verifier") if isinstance(body, dict) else None
     vtype = verifier.get("type") if isinstance(verifier, dict) else None
-    if vtype not in HOST_COMMAND_VERIFIERS or _is_full(request):
+    # A non-string type is not one of ours (and may be unhashable): leave it to the route's own
+    # validation rather than fail here.
+    if not isinstance(vtype, str) or vtype not in HOST_COMMAND_VERIFIERS or _is_full(request):
         return None
     return _refusal(
         f"This device can't set a {vtype!r} check, which runs on this computer — use a full-access device.", []
