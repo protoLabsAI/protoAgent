@@ -1756,10 +1756,12 @@ class LocalScheduler:
         D7 policy: (a) between steps / during a model call → resume automatically from
         the checkpoint; (b) during a tool call on a wait:/watch continuation → resume
         with the dangling call reported as interrupted; (b) on any other job and (c)
-        no/unreadable checkpoint → ``interrupted_needs_operator`` (the S7 Needs-you
-        item), except a recurring job's occurrence, which is skipped as
-        ``interrupted`` so its next slot runs normally. At most one automatic resume
-        per occurrence, counted on the row in the claim transaction."""
+        no/unreadable checkpoint — including a STALE one, where the kill landed before
+        the graph checkpointed this fire's prompt and the thread holds only an earlier
+        turn's messages → ``interrupted_needs_operator`` (the S7 Needs-you item),
+        except a recurring job's occurrence, which is skipped as ``interrupted`` so
+        its next slot runs normally. At most one automatic resume per occurrence,
+        counted on the row in the claim transaction."""
         interrupted, self._interrupted_task_ids = self._interrupted_task_ids, set()
         recovery, self._interrupted_recovery = self._interrupted_recovery, None
         claims = [c for c in self._pending_reconciliation() if c["task_id"] in interrupted]
@@ -1778,16 +1780,35 @@ class LocalScheduler:
         recurring = is_cron(job.schedule)
         continuation = job.id.startswith("wait:") or job.id.startswith("watch-")
         resumed_before = int(claim["auto_resumes"] or 0) if "auto_resumes" in claim.keys() else 0
+        # When THIS occurrence fired: the anchor that tells its wake prompt apart from
+        # an earlier turn's on the same reused thread (a recurring job's prompt text is
+        # identical slot to slot). A kill after the task handle was saved but before
+        # the graph checkpointed the prompt classifies as stale, not clean.
+        try:
+            fired_after = parse_iso_to_utc(claim["next_fire"])
+        except (TypeError, ValueError):
+            fired_after = None
 
         if resumed_before == 0 and recovery is not None:
-            kind = await recovery.classify(job.context_id)
+            kind = await recovery.classify(job.context_id, fired_after=fired_after, prompt=job.prompt or "")
             resumable = kind == "clean" or (kind == "mid_tool_call" and continuation)
             if resumable and self._claim_auto_resume(claim):
                 log.warning(
                     "[scheduler] resuming job %s from its checkpoint after a restart (task %s, %s)",
                     job.id, task_id, kind,
                 )
-                if await recovery.resume(job.context_id, task_id, report_dangling=kind == "mid_tool_call"):
+                if await recovery.resume(
+                    job.context_id,
+                    task_id,
+                    report_dangling=kind == "mid_tool_call",
+                    fired_after=fired_after,
+                    prompt=job.prompt or "",
+                    # The live fire's turn context (_fire's A2A metadata) — the resumed
+                    # turn must see ITSELF as the firing job, not as a pending schedule.
+                    job_id=job.id,
+                    origin="watch" if job.id.startswith("watch-") else "scheduler",
+                    fence=list(job.fence) if job.fence else None,
+                ):
                     # The task handle is now where the turn actually ended; normal
                     # reconciliation settles the occurrence through it, exactly once.
                     return
@@ -1797,7 +1818,7 @@ class LocalScheduler:
             # read or resume anything — the card for this occurrence is the operator's.
             kind = "no_checkpoint" if recovery is None else "resume_capped"
 
-        if recurring and recovery is not None and kind in ("mid_tool_call", "resume_capped"):
+        if recurring and recovery is not None and kind in ("mid_tool_call", "resume_capped", "stale_checkpoint"):
             # The next slot fires either way (neither D7 state blocks the owner) and
             # reuses this execution session's thread: answer any dangling call with the
             # interruption report so the provider never sees a call without its result.

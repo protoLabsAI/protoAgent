@@ -165,6 +165,7 @@ class _Coordinator:
         self.die = asyncio.Event()  # armed per generation; set ⇒ blocked nodes die
         self.tool_runs: dict[str, int] = {}
         self.views: dict[str, list[list[tuple]]] = {}  # marker -> every model pass's input view
+        self.meta: dict[str, list[dict]] = {}  # marker -> every model pass's request metadata
 
     def rearm(self):
         self.die = asyncio.Event()
@@ -221,6 +222,8 @@ def _build_graph(coord: _Coordinator, saver):
     from langgraph.graph import END, START, StateGraph
     from langgraph.types import interrupt
 
+    from graph.middleware.request_context import current_request_metadata
+
     class S(TypedDict):
         messages: Annotated[list, add_messages]
         session_id: str
@@ -242,6 +245,9 @@ def _build_graph(coord: _Coordinator, saver):
         msgs = state["messages"]
         marker = marker_of(msgs)
         coord.views.setdefault(marker, []).append([describe(m) for m in msgs])
+        # What the production projection/prompt-capture middleware would read on this
+        # pass — the live fire's turn context, which a D7 resume must rebuild.
+        coord.meta.setdefault(marker, []).append(dict(current_request_metadata()))
         if marker == "CHAT-HOLD":
             await coord.killed()
         last = msgs[-1]
@@ -371,13 +377,23 @@ async def _restart(tmp_path, monkeypatch, coord: _Coordinator, saver, agent: str
     return gen
 
 
-async def _accepted_unresolved_claim(sched, job_id: str) -> sqlite3.Row:
+async def _accepted_unresolved_claim(sched, job_id: str, next_fire: str | None = None) -> sqlite3.Row:
     return await _wait_until(
         lambda: (lambda row: row if row and row["task_id"] and row["state"] in ("claimed", "unknown") else None)(
-            _occurrence(sched.path, job_id)
+            _occurrence(sched.path, job_id, next_fire)
         ),
         message=f"{job_id}: fire accepted (task handle committed) and unresolved",
     )
+
+
+def _stamp_prompts_old(monkeypatch, iso: str = "2026-01-01T00:00:00Z") -> None:
+    """Every prompt written from here on carries ``protoagent_sent_at`` = ``iso`` — the
+    production spacing, where the PREVIOUS slot's turn ran minutes-to-hours before this
+    occurrence's due time. The stale-checkpoint anchor is second-resolution, and a test
+    would otherwise pack both slots into the same wall-clock second."""
+    from graph import compaction_engine
+
+    monkeypatch.setattr(compaction_engine, "sent_at_kwargs", lambda: {compaction_engine.SENT_AT_KWARG: iso})
 
 
 async def _interrupted_first_fire(tmp_path, monkeypatch, agent, *, prompt, job_id, ready, context_id=None):
@@ -496,6 +512,17 @@ async def test_sigterm_during_slow_model_call_resumes_job_from_checkpoint_once(t
         ]
         assert len(coord.views["SLOW-MODEL"]) == 3  # start, slow pass (killed), resumed pass
         assert coord.tool_runs["step_one"] == 1
+
+        # The resume rebuilt the fire's turn context: the resumed pass reads the SAME
+        # request metadata the live fire's passes carried, so projection's
+        # ``_is_firing_now`` still recognises the job as THIS turn's own fire (not a
+        # pending schedule) and prompt capture keeps its ``a2a.task_id`` link.
+        keys = ("scheduler_job_id", "scheduler_kind", "origin", "a2a.task_id")
+        live_meta, resumed_meta = coord.meta["SLOW-MODEL"][0], coord.meta["SLOW-MODEL"][-1]
+        assert {k: resumed_meta.get(k) for k in keys} == {k: live_meta.get(k) for k in keys}
+        assert resumed_meta["scheduler_job_id"] == "job-slow"
+        assert resumed_meta["a2a.task_id"] == task_id
+        assert resumed_meta["origin"] == "scheduler"
     finally:
         await _shutdown(coord, gen2)
 
@@ -540,6 +567,7 @@ async def test_sigterm_during_tool_call_in_wait_continuation_resumes_with_report
         final_view = coord.views["WAIT-TOOL"][-1]
         assert sum(1 for entry in final_view if entry[0] == "human") == 1  # never a new prompt
         assert ("tool", "verify_state", "verify_state ok") in final_view
+        assert coord.meta["WAIT-TOOL"][1]["scheduler_job_id"] == f"wait:{ctx}"  # the resumed pass's turn context
     finally:
         await _shutdown(coord, gen2)
 
@@ -642,6 +670,131 @@ async def test_recurring_job_interrupted_occurrence_is_skipped_and_next_slot_fir
         next_fire_view = coord.views["CRON-TOOL"][1]
         assert ("tool", "cron_step", INTERRUPTED_TOOL_RESULT[:60]) in next_fire_view
         assert gen2.sched.get_job("job-cron") is not None  # the recurring job lives on
+    finally:
+        await _shutdown(coord, gen2)
+
+
+# ── a kill before the fire's prompt checkpointed: the stale thread is never "clean" ──
+
+
+@pytest.mark.asyncio
+async def test_kill_before_prompt_checkpointed_never_completes_with_previous_reply(tmp_path, monkeypatch):
+    """A fire killed after its task handle committed (``returnImmediately``) but BEFORE
+    the graph checkpointed its prompt leaves the reused ``job:`` thread holding the
+    PREVIOUS slot's finished turn — identical prompt text, older timestamp. That
+    checkpoint is stale (case c), never clean: the occurrence is skipped, the task
+    fails with the restart diagnosis — NOT completed with the prior slot's reply —
+    and the next slot fires normally."""
+    monkeypatch.setattr(scheduler_local, "_POLL_INTERVAL_S", _TEST_POLL_S)
+    _stamp_prompts_old(monkeypatch)
+    coord = _Coordinator()
+    saver = _KillableSaver()
+    agent = "d7-stale"
+
+    gen1 = _boot_generation(tmp_path, monkeypatch, coord, saver, agent)
+    await gen1.sched.start()
+    coord.release = True  # slot 1 runs to completion: the durable thread ends in a finished turn
+    gen1.sched.add_job("CRON-TOOL sweep the queue", "* * * * *", job_id="job-stale")
+    _execute(gen1.sched.path, "UPDATE jobs SET next_fire = ? WHERE id = 'job-stale'", (_past_iso(9),))
+    await _wait_until(
+        lambda: (_occurrence(gen1.sched.path, "job-stale") or {"state": ""})["state"] == "settled",
+        message="slot 1 completed",
+    )
+
+    # Slot 2: the handle commits, but NOTHING of the new turn reaches the checkpointer —
+    # the kill window between the task save and the graph's first checkpoint write.
+    saver.dead = True
+    coord.release = False
+    slot2 = _past_iso(2)
+    _execute(gen1.sched.path, "UPDATE jobs SET next_fire = ? WHERE id = 'job-stale'", (slot2,))
+    await _wait_until(lambda: coord.tool_runs.get("cron_step") == 2, message="slot 2's zombie turn blocked")
+    claim = await _accepted_unresolved_claim(gen1.sched, "job-stale", slot2)
+    task_id = claim["task_id"]
+    # Park the root far out: a minute boundary must not fire a fresh slot mid-assert
+    # after the restart — slot 3 is made due explicitly below.
+    far = (datetime.now(UTC) + timedelta(hours=1)).isoformat()
+    _execute(gen1.sched.path, "UPDATE jobs SET next_fire = ? WHERE id = 'job-stale'", (far,))
+    await _sigterm(coord, saver, gen1)
+
+    gen2 = await _restart(tmp_path, monkeypatch, coord, saver, agent, release=True)
+    try:
+        assert gen2.interrupted == {task_id}
+        await _wait_until(
+            lambda: (_occurrence(gen2.sched.path, "job-stale", slot2) or {"state": ""})["state"] == "interrupted",
+            message="the stale occurrence was skipped, never resumed",
+        )
+        assert _occurrence(gen2.sched.path, "job-stale", slot2)["auto_resumes"] == 0  # never auto-resumed
+        assert coord.tool_runs["cron_step"] == 2  # slot 1 + the zombie — the resume never drove the model
+        # THE regression: the prior slot's reply must never settle this fire's task.
+        state, text = _task_status(tmp_path, task_id)
+        assert state == "TASK_STATE_FAILED"
+        assert RESTART_INTERRUPTED_TEXT in text
+        assert "done CRON-TOOL" not in text
+
+        # The next slot fires and completes normally on the same execution session.
+        slot3 = _past_iso(1)
+        _execute(gen2.sched.path, "UPDATE jobs SET next_fire = ? WHERE id = 'job-stale'", (slot3,))
+        await _wait_until(
+            lambda: (_occurrence(gen2.sched.path, "job-stale", slot3) or {"state": ""})["state"] == "settled",
+            message="the next slot fired and settled",
+        )
+        assert _occurrence(gen2.sched.path, "job-stale", slot3)["task_state"] == "completed"
+    finally:
+        await _shutdown(coord, gen2)
+
+
+@pytest.mark.asyncio
+async def test_stale_wait_continuation_goes_to_operator_not_completed(tmp_path, monkeypatch):
+    """The same pre-checkpoint kill window on a ``wait:`` continuation (a one-shot):
+    the reused session thread still ends in the previous loop turn, so nothing of this
+    fire is recoverable — ``interrupted_needs_operator``, never auto-resumed, never
+    completed with the previous turn's reply."""
+    monkeypatch.setattr(scheduler_local, "_POLL_INTERVAL_S", _TEST_POLL_S)
+    _stamp_prompts_old(monkeypatch)
+    coord = _Coordinator()
+    saver = _KillableSaver()
+    agent = "d7-stale-wait"
+    ctx = f"job:{uuid.uuid4()}"
+
+    gen1 = _boot_generation(tmp_path, monkeypatch, coord, saver, agent)
+    await gen1.sched.start()
+    coord.release = True  # loop turn 1 completes; its spent one-shot row is removed
+    gen1.sched.add_job("WAIT-TOOL drive the merge queue loop", _past_iso(), job_id=f"wait:{ctx}", context_id=ctx)
+    await _wait_until(lambda: gen1.sched.get_job(f"wait:{ctx}") is None, message="loop turn 1 settled")
+
+    saver.dead = True  # turn 2's prompt will never reach the checkpointer
+    coord.release = False
+    gen1.sched.add_job("WAIT-TOOL drive the merge queue loop", _past_iso(), job_id=f"wait:{ctx}", context_id=ctx)
+    await _wait_until(lambda: coord.tool_runs.get("merge_pr") == 2, message="turn 2's zombie blocked")
+    claim = await _wait_until(
+        lambda: next(
+            (
+                r
+                for r in _query(gen1.sched.path, "SELECT * FROM occurrences WHERE job_id = ?", (f"wait:{ctx}",))
+                if r["task_id"] and r["state"] in ("claimed", "unknown")
+            ),
+            None,
+        ),
+        message="turn 2 accepted (task handle committed) and unresolved",
+    )
+    task_id = claim["task_id"]
+    await _sigterm(coord, saver, gen1)
+
+    gen2 = await _restart(tmp_path, monkeypatch, coord, saver, agent, release=True)
+    try:
+        assert gen2.interrupted == {task_id}
+        await _wait_until(
+            lambda: (_occurrence(gen2.sched.path, f"wait:{ctx}", claim["next_fire"]) or {"state": ""})["state"]
+            == "interrupted_needs_operator",
+            message="the stale continuation went to the operator",
+        )
+        held = _occurrence(gen2.sched.path, f"wait:{ctx}", claim["next_fire"])
+        assert held["auto_resumes"] == 0  # a stale checkpoint is never auto-resumed
+        state, text = _task_status(tmp_path, task_id)
+        assert state == "TASK_STATE_FAILED"
+        assert RESTART_INTERRUPTED_TEXT in text
+        assert "done WAIT-TOOL" not in text  # the previous loop turn's reply never settles this fire
+        assert coord.tool_runs["merge_pr"] == 2  # turn 1 + the zombie — the resume never drove the model
     finally:
         await _shutdown(coord, gen2)
 

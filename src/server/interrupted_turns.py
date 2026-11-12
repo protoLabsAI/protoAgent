@@ -16,6 +16,12 @@ Classification, from the checkpoint's messages:
   message has its ToolMessage. Resuming repeats nothing that completed.
 - **mid_tool_call** — an AI message has tool calls without results. The call's effect
   is unknown; resuming reports it as interrupted rather than re-running it.
+- **stale_checkpoint** — the thread never received THIS fire's prompt: the kill landed
+  after the fire's task handle was saved (``returnImmediately``) but before the graph
+  checkpointed the new turn, so a reused thread (a recurring ``job:`` session, a
+  ``wait:``/watch continuation) still holds only the PREVIOUS turn's messages. However
+  finished that tail looks, nothing of this fire is recoverable — resuming it would
+  complete the task with another turn's reply.
 - **no_checkpoint** — nothing readable to resume from.
 
 The POLICY (what resumes, what waits for an operator, the one-resume cap counted on
@@ -39,6 +45,7 @@ log = logging.getLogger(__name__)
 CLEAN = "clean"
 MID_TOOL_CALL = "mid_tool_call"
 NO_CHECKPOINT = "no_checkpoint"
+STALE_CHECKPOINT = "stale_checkpoint"
 
 #: The uncertainty report appended as the ToolMessage for each tool call a restart
 #: left dangling (D7): the tool may or may not have run; only the model can decide
@@ -65,6 +72,52 @@ def _dangling_tool_calls(messages) -> list[dict]:
     if last_ai is None:
         return []
     return [c for c in (getattr(last_ai, "tool_calls", None) or []) if c.get("id") and c["id"] not in answered]
+
+
+def _fire_reached_checkpoint(messages, *, fired_after, prompt: str) -> bool:
+    """Did THIS fire's prompt land in the checkpoint?
+
+    The fire's task handle is saved (``returnImmediately``) before the graph
+    checkpoints the wake prompt, so a kill in that window leaves a reused thread
+    holding only the previous turn's finished messages — a tail that reads ``clean``
+    and whose resume would finalize the task with the PRIOR turn's reply. Every
+    HumanMessage the turn drivers write is stamped ``protoagent_sent_at`` at write
+    time (``server/chat.py::_vision_human_message``), so the fire reached the
+    checkpoint iff some HumanMessage stamped at/after the fire's due time carries the
+    fire's prompt text. Both signals matter: a recurring job's prompt is IDENTICAL
+    across slots (only the timestamp tells slot N from slot N-1), and a timestamp
+    alone can't tell this fire's prompt from an unrelated message that landed on the
+    thread after boot. The stamp truncates to whole seconds, so the anchor is floored
+    before comparing. An unstamped or unparseable message proves nothing and is
+    skipped (fail closed). No anchor and no prompt to check against → assume reached
+    (a degraded caller keeps the pre-check behavior)."""
+    from datetime import UTC, datetime
+
+    from langchain_core.messages import HumanMessage
+
+    from graph.compaction_engine import SENT_AT_KWARG, message_text
+
+    want = (prompt or "").strip()
+    if fired_after is None and not want:
+        return True
+    floor = fired_after.replace(microsecond=0) if fired_after is not None else None
+    for m in messages:
+        if not isinstance(m, HumanMessage):
+            continue
+        if want and want not in message_text(m):
+            continue
+        if floor is not None:
+            raw = (getattr(m, "additional_kwargs", None) or {}).get(SENT_AT_KWARG)
+            try:
+                sent = datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
+            except (TypeError, ValueError):
+                continue
+            if sent.tzinfo is None:
+                sent = sent.replace(tzinfo=UTC)
+            if sent < floor:
+                continue
+        return True
+    return False
 
 
 def _final_text(messages) -> str:
@@ -111,8 +164,31 @@ class InterruptedTurnRecovery:
             "recursion_limit": getattr(STATE.graph_config, "max_iterations", 200) or 200,
         }
 
-    async def classify(self, context_id: str) -> str:
-        """``clean`` / ``mid_tool_call`` / ``no_checkpoint`` for the session's thread."""
+    def _resume_metadata(self, task_id: str, *, job_id: str, origin: str, fence) -> dict:
+        """The per-turn request metadata the interrupted turn originally ran under: the
+        scheduler's fire metadata (``scheduler/local.py::_fire``) merged with the
+        executor's ``a2a.task_id`` stamp (``a2a_impl/executor.py``). The fence key is
+        wire parity only — enforcement rides the graph state the original pass already
+        stamped (``graph/middleware/subagent_fence.py``), which the resume continues."""
+        md = {
+            "scheduler_kind": "local",
+            "origin": origin or "scheduler",
+            "a2a.task_id": task_id,
+        }
+        if job_id:
+            md["scheduler_job_id"] = job_id
+        if fence:
+            md["subagent_fence"] = list(fence)
+        return md
+
+    async def classify(self, context_id: str, *, fired_after=None, prompt: str = "") -> str:
+        """``clean`` / ``mid_tool_call`` / ``stale_checkpoint`` / ``no_checkpoint`` for
+        the session's thread. ``fired_after`` (the occurrence's due time, a datetime)
+        and ``prompt`` (the job's prompt text) identify THIS fire's wake prompt in the
+        thread (:func:`_fire_reached_checkpoint`): a checkpoint that never received it
+        is stale — the kill landed between the task-handle save and the graph's first
+        checkpoint of the new turn — and is checked BEFORE the dangling-call shape,
+        which would otherwise be read off another turn's tail."""
         graph = STATE.graph
         if graph is None or not context_id:
             return NO_CHECKPOINT
@@ -124,9 +200,22 @@ class InterruptedTurnRecovery:
         messages = (getattr(snap, "values", None) or {}).get("messages") or []
         if not messages:
             return NO_CHECKPOINT
+        if not _fire_reached_checkpoint(messages, fired_after=fired_after, prompt=prompt):
+            return STALE_CHECKPOINT
         return MID_TOOL_CALL if _dangling_tool_calls(messages) else CLEAN
 
-    async def resume(self, context_id: str, task_id: str, *, report_dangling: bool = False) -> bool:
+    async def resume(
+        self,
+        context_id: str,
+        task_id: str,
+        *,
+        report_dangling: bool = False,
+        fired_after=None,
+        prompt: str = "",
+        job_id: str = "",
+        origin: str = "scheduler",
+        fence=None,
+    ) -> bool:
         """Drive the thread from its checkpoint to its end — never a new prompt.
 
         ``report_dangling`` (the wait:/watch mid-tool-call case) first records one
@@ -135,6 +224,22 @@ class InterruptedTurnRecovery:
         graph re-running it. The original task handle is then moved to the state the
         turn actually ended in (completed / failed / an ``input_required`` pause), so
         the scheduler's normal reconciliation settles the occurrence exactly once.
+
+        ``fired_after`` + ``prompt`` re-prove UNDER THE LOCK that the checkpoint holds
+        this fire's own prompt (:func:`_fire_reached_checkpoint`, same check as
+        :meth:`classify`): a stale thread — the kill predated the graph's first
+        checkpoint of the turn — returns False, because both the "drive to the end"
+        and the "turn had actually finished" paths below would otherwise finish
+        ANOTHER turn and record its reply as this task's outcome.
+
+        ``job_id`` / ``origin`` / ``fence`` rebuild the per-turn request metadata the
+        live fire's turn ran under (the scheduler's A2A metadata plus the executor's
+        ``a2a.task_id``), bound via ``request_metadata_scope`` for the drive: without
+        it ``graph/projection.py::_is_firing_now`` can't recognise the job being
+        resumed — its still-listed row reads as ANOTHER pending schedule ("runs
+        automatically unless you cancel it", the documented watch-loop bait),
+        ``chat._is_spent_firing_job`` misreads it the same way, and PromptCapture
+        loses the ``a2a.task_id`` link for its snapshots.
 
         A D7 resume is a scheduler-owned turn (a scheduler / watch / inbox fire), so it
         follows the same HITL rule the live turn drivers apply to those origins
@@ -155,6 +260,8 @@ class InterruptedTurnRecovery:
             return False
         import importlib
 
+        from graph.middleware.request_context import request_metadata_scope
+
         from server import goal_loop, turn_control
 
         # By path, not ``from server import chat``: the ``server`` package re-exports
@@ -171,6 +278,11 @@ class InterruptedTurnRecovery:
                 messages = (getattr(snap, "values", None) or {}).get("messages") or []
                 if not messages:
                     return False
+                if not _fire_reached_checkpoint(messages, fired_after=fired_after, prompt=prompt):
+                    # The checkpoint predates this fire (classification raced, or was
+                    # skipped): nothing of this fire is recoverable — leave it for the
+                    # operator rather than finish another turn under this handle.
+                    return False
                 dangling = _dangling_tool_calls(messages)
                 if dangling:
                     if not report_dangling:
@@ -179,13 +291,18 @@ class InterruptedTurnRecovery:
                         return False
                     await self._seal_dangling_calls(graph, config, dangling)
                 if dangling or getattr(snap, "next", None):
-                    result = await graph.ainvoke(None, config)
-                    # The shared autonomous policy (one copy with the live drivers):
-                    # answer each HITL pause with the sentinel and re-run; a decision
-                    # stays pending; past the cap, clear the pause and complete.
-                    auto = goal_loop.HitlAutoAnswer(True)
-                    result = await auto.settle(config, result, lambda value: graph.ainvoke(value, config))
-                    pending = await chat_mod._pending_interrupt_value(config)
+                    # The drive runs under the SAME per-turn request metadata the live
+                    # fire's turn carried (see the docstring) — the resumed turn's
+                    # projection, goal pause and prompt snapshots behave as if the fire
+                    # had never been cut down.
+                    with request_metadata_scope(self._resume_metadata(task_id, job_id=job_id, origin=origin, fence=fence)):
+                        result = await graph.ainvoke(None, config)
+                        # The shared autonomous policy (one copy with the live drivers):
+                        # answer each HITL pause with the sentinel and re-run; a decision
+                        # stays pending; past the cap, clear the pause and complete.
+                        auto = goal_loop.HitlAutoAnswer(True)
+                        result = await auto.settle(config, result, lambda value: graph.ainvoke(value, config))
+                        pending = await chat_mod._pending_interrupt_value(config)
                     if pending is not None and turn_control.is_decision_interrupt(pending):
                         # The resumed turn stopped at a choice it may not make on its
                         # own (#4725): record the durable ledger entry (inbox card,
