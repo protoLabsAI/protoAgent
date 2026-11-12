@@ -98,7 +98,7 @@ test("phone 390: the condition confirm step is the bottom sheet with the editabl
   await info.attach("Condition confirm at 390", { path: shot, contentType: "image/png" });
 });
 
-test("phone 390: step 2 opens as the sheet for all four readings — job, time, condition, instruction — without overflow", async ({ page }) => {
+test("phone 390: step 2 and an inspector Edit open as the sheet for all four readings — job, time, condition, instruction — without overflow", async ({ page }) => {
   const work = await openWorkSheet(page);
   const cases = [
     { words: "Re-run the design-system audit on protoContent", tag: "Goes in Doing now as Job.", primary: "Start", field: "Who" },
@@ -121,19 +121,19 @@ test("phone 390: step 2 opens as the sheet for all four readings — job, time, 
   const sheet = await toConfirmStep(page, work, "Merge only when the review says PASS");
   await expect(sheet.locator(".work-create__quote")).toHaveText("Merge only when the review says PASS");
   await sheet.getByRole("button", { name: "Cancel", exact: true }).click();
-});
+  await expect(sheet).toHaveCount(0);
 
-test("phone 390: an inspector Edit opens the same prefilled bottom sheet — Edit follow-up, no overflow, stacked footer", async ({ page }) => {
-  const work = await openWorkSheet(page);
+  // An inspector Edit opens the SAME prefilled bottom sheet — "Edit follow-up", no
+  // model call, the same geometry/overflow/footer rules as step 2.
   await work.locator(".work-row").filter({ hasText: "CI is green on main" }).first().click();
   await work.getByRole("button", { name: "Edit", exact: true }).click();
-  const sheet = page.locator(".pl-drawer.work-create--sheet");
-  await expect(sheet.locator(".pl-drawer__title")).toHaveText("Edit follow-up");
-  await assertSheetGeometry(page, sheet);
-  await expect(sheet.locator(".pl-field").filter({ hasText: "When" }).locator("input").first())
+  const edit = page.locator(".pl-drawer.work-create--sheet");
+  await expect(edit.locator(".pl-drawer__title")).toHaveText("Edit follow-up");
+  await assertSheetGeometry(page, edit);
+  await expect(edit.locator(".pl-field").filter({ hasText: "When" }).locator("input").first())
     .toHaveValue("CI is green on main");
-  await assertNoOverflow(sheet);
-  await assertStackedFooter(sheet, "Save changes");
+  await assertNoOverflow(edit);
+  await assertStackedFooter(edit, "Save changes");
 });
 
 test("window 1200: the condition confirm step stays a centered dialog with the same fields", async ({ page }) => {

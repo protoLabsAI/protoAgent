@@ -117,20 +117,11 @@ def test_put_missing_scheduler_job_is_404(real_scheduler_client):
 
 
 def test_add_scheduler_job_carries_the_chat_context(real_scheduler_client):
-    """A Work confirm-step save (work-consolidation §10.3) stamps the owning chat on the
-    POST: ``origin_session`` always, ``context_id`` for a one-shot — the same fields the
-    agent's ``schedule_task`` sets. Callers that omit them are byte-for-byte unchanged."""
+    """A Work confirm-step save (§10.3) stamps the owning chat on the POST — the same fields
+    the agent's ``schedule_task`` sets; callers that omit them are byte-for-byte unchanged."""
     client, _ = real_scheduler_client
-    resp = client.post(
-        "/api/scheduler/jobs",
-        json={
-            "prompt": "p",
-            "schedule": "2099-01-01T09:00:00Z",
-            "job_id": "work-ctx",
-            "context_id": "chat-9",
-            "origin_session": "chat-9",
-        },
-    )
+    stamped = {"prompt": "p", "schedule": "2099-01-01T09:00:00Z", "job_id": "work-ctx"}
+    resp = client.post("/api/scheduler/jobs", json={**stamped, "context_id": "chat-9", "origin_session": "chat-9"})
     assert resp.status_code == 200, resp.text
     job = resp.json()["job"]
     assert job["context_id"] == "chat-9" and job["origin_session"] == "chat-9"
@@ -138,8 +129,7 @@ def test_add_scheduler_job_carries_the_chat_context(real_scheduler_client):
     resp = client.post("/api/scheduler/jobs", json={"prompt": "p", "schedule": "0 9 * * *", "job_id": "work-bare"})
     assert resp.status_code == 200, resp.text
     job = resp.json()["job"]
-    # No explicit context → the scheduler mints the durable job-scoped owner (ADR 0129),
-    # exactly as before this route learned the two fields; no chat is ever implied.
+    # No explicit context → the scheduler mints the durable job-scoped owner (ADR 0129); no chat is implied.
     assert (job.get("context_id") or "").startswith("job:") and job.get("origin_session") is None
 
 
