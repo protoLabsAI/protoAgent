@@ -90,6 +90,39 @@ test("phone 390: New is the bottom sheet and nothing overflows with the longest 
   await info.attach("New sheet at 390", { path: shot, contentType: "image/png" });
 });
 
+test("phone 390: the window route (palette Open Work) also gets the bottom sheet, never a centered Dialog", async ({ page }) => {
+  // The rail/window split only exists on desktop — at 390 BOTH Work routes resolve to the
+  // full-screen sheet host, and §10.2 says the New flow is the bottom Drawer on every one
+  // of them. The first test drives the chat-root handle; this one drives the `surface`
+  // intent (the palette's Open Work), the same route the desktop window uses.
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto("/app/");
+  await page.getByRole("button", { name: "Search commands" }).click();
+  await page.locator(".pl-cmdk-commands__input").fill("Open Work");
+  await page.getByRole("option", { name: "Open Work", exact: true }).click();
+  const work = page.locator(".work-view:visible");
+  await expect(work).toHaveAttribute("data-frame", "sheet");
+  await work.getByRole("button", { name: "New", exact: true }).click();
+
+  const sheet = page.locator(".pl-drawer.work-create--sheet");
+  await expect(sheet).toBeVisible();
+  await expect(sheet).toHaveClass(/pl-drawer--bottom/);
+  await expect(page.locator(".pl-dialog.work-create")).toHaveCount(0);
+  const geo = () => sheet.evaluate((el) => {
+    const edge = el.getBoundingClientRect();
+    return { left: edge.left, width: edge.width, bottom: edge.bottom };
+  });
+  await expect.poll(async () => Math.round((await geo()).bottom)).toBe(844);
+  const placed = await geo();
+  expect(placed.left).toBe(0);
+  expect(placed.width).toBe(390);
+  // The longest chip must not widen this host either.
+  await sheet.getByRole("button", { name: LONGEST }).click();
+  await expect(sheet.locator("textarea")).toHaveValue(LONGEST);
+  const shape = await sheet.evaluate((el) => ({ scrollW: el.scrollWidth, clientW: el.clientWidth }));
+  expect(shape.scrollW).toBe(shape.clientW);
+});
+
 test("window: New opens the centered step-1 dialog; Escape returns focus to its opener", async ({ page }) => {
   await page.setViewportSize({ width: 1200, height: 900 });
   await page.goto("/app/");
