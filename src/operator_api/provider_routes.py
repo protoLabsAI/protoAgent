@@ -282,6 +282,35 @@ async def _apply_providers(
         raise HTTPException(status_code=400, detail=" · ".join(messages or ["connection update failed"]))
 
 
+def _server_of(base_url: str | None) -> tuple[str, str, int | None]:
+    """(scheme, host, port) of a base URL — what a key is bound to. A path edit keeps it."""
+    from urllib.parse import urlparse
+
+    try:
+        u = urlparse((base_url or "").strip())
+        return (u.scheme.lower(), (u.hostname or "").lower(), u.port)
+    except ValueError:
+        return ("", (base_url or "").strip().lower(), None)
+
+
+def _moves_a_keyed_connection(cfg, pid: str, new_base_url: str) -> bool:
+    """Whether setting ``new_base_url`` on connection ``pid`` re-aims a STORED key at another
+    server. False when the connection holds no key, or the scheme/host/port are unchanged."""
+    from graph.config import resolve_model_route
+
+    provider = cfg.provider_by_id(pid)
+    if provider is None:
+        return False
+    route = resolve_model_route(cfg, provider)
+    if not route.api_key:
+        return False
+    # The console echoes the declared value back on an unrelated edit (a relabel) — including
+    # the `sdk-default` sentinel a migrated connection serializes to. That is not a move.
+    if (new_base_url or "").strip() == str(provider.as_dict().get("base_url") or "").strip():
+        return False
+    return _server_of(route.base_url) != _server_of(new_base_url)
+
+
 def _entries_from_config(cfg) -> list[dict]:
     return [p.as_dict() for p in cfg.providers]
 
@@ -373,7 +402,8 @@ def register_provider_routes(app) -> None:
                 raise ValueError(f"a provider named {pid!r} already exists")
             return _entries_from_config(current) + [entry]
 
-        await _apply_providers(_with_new, {pid: req.api_key} if req.api_key.strip() else {})
+        # Trimmed like the label and base_url: a key pasted with a stray newline is still the key.
+        await _apply_providers(_with_new, {pid: req.api_key.strip()} if req.api_key.strip() else {})
         return {"ok": True, "id": pid, "restart_required": False}
 
     @app.patch("/api/config/providers/{pid}")
@@ -383,9 +413,16 @@ def register_provider_routes(app) -> None:
         if cfg.provider_by_id(pid) is None:
             raise HTTPException(status_code=404, detail=f"no provider named {pid!r}")
 
+        rekeyed = bool((req.api_key or "").strip())
+
         def _patched(current) -> list[dict]:
             if current.provider_by_id(pid) is None:  # deleted in another tab meanwhile
                 raise ValueError(f"no provider named {pid!r}")
+            if not rekeyed and req.base_url is not None and _moves_a_keyed_connection(current, pid, req.base_url):
+                raise ValueError(
+                    "This connection would point at a different server. Enter its API key again to save — "
+                    "the saved key is only used with the server it was saved for."
+                )
             entries = _entries_from_config(current)
             for entry in entries:
                 if entry["id"] != pid:
@@ -402,7 +439,12 @@ def register_provider_routes(app) -> None:
 
         # A blank/absent api_key leaves the stored one in place — the console is never
         # shown a key, so it cannot echo one back.
-        secret = {pid: req.api_key} if (req.api_key or "").strip() else {}
+        # …unless the edit points the connection at a DIFFERENT server. The stored key was
+        # issued for the old one; keeping it would send it to the new address on the next
+        # model list or chat turn. Moving a connection means saying its key again.
+        secret = {pid: (req.api_key or "").strip()} if rekeyed else {}
+        # Checked inside `_patched`, against the config the write lock holds — not the copy
+        # read above, which a concurrent edit may already have moved.
         await _apply_providers(_patched, secret)
         return {"ok": True, "id": pid}
 
