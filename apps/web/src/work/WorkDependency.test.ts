@@ -1,3 +1,4 @@
+// @vitest-environment node
 import { expect, it } from "vitest";
 import manifest from "../../package.json";
 import lock from "../../../../package-lock.json";

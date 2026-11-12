@@ -1,3 +1,4 @@
+// @vitest-environment node
 // Review pass (ADR 0125 P3) api-client contract: the filter chips must become the right
 // query string, and keep / edit / forget / reject / revert / promote must each hit their
 // route with the right method + body. These are the wire shapes the P3-D1 routes expect, so

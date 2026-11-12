@@ -1,3 +1,4 @@
+// @vitest-environment node
 import { describe, expect, it } from "vitest";
 
 import { createRevealQueue, REVEAL_MS_PER_WORD } from "./revealQueue";

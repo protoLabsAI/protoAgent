@@ -1,3 +1,4 @@
+// @vitest-environment node
 import { describe, expect, it } from "vitest";
 
 // Repo-wide source guard for #2224: the design package ships --pl-color-status-{info,

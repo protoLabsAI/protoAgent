@@ -1,3 +1,4 @@
+// @vitest-environment node
 // One producer per bubble for a server-fired turn.
 //
 // A background push-resume (ADR 0070), scheduled fire or watch reaction runs by

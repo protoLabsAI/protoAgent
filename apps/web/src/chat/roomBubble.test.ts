@@ -1,3 +1,4 @@
+// @vitest-environment node
 import { describe, expect, it } from "vitest";
 
 import { insertConversationBubbles, insertRoomBubble, isEmptyPlaceholder } from "./roomBubble";

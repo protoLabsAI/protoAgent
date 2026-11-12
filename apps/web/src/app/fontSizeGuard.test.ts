@@ -1,3 +1,4 @@
+// @vitest-environment node
 import { describe, expect, it } from "vitest";
 
 // #3688 (type-scale, final GUARD): the regression guard that closes the literal-`font-size`

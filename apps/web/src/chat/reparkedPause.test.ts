@@ -1,3 +1,4 @@
+// @vitest-environment node
 // A pause moved to a new task by a plain message must stay the chat's LIVE turn (#3963).
 //
 // A session parked on `ask_human`; a plain message (no hitl_resume) was held and re-parked

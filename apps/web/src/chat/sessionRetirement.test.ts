@@ -1,3 +1,4 @@
+// @vitest-environment node
 import { describe, expect, it, vi } from "vitest";
 
 import { NO_MEMORY_CHANGE, canClearSession, defaultMemoryChoice, retireChatSession } from "./sessionRetirement";

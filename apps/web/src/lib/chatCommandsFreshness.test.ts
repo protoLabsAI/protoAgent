@@ -1,3 +1,4 @@
+// @vitest-environment node
 import { QueryClient, QueryObserver } from "@tanstack/react-query";
 import { afterEach, describe, expect, it, vi } from "vitest";
 

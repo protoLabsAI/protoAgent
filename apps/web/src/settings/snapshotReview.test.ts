@@ -1,3 +1,4 @@
+// @vitest-environment node
 import { describe, expect, it } from "vitest";
 import snapshotOp from "../../../../src/graph/snapshot_op.py?raw";
 
