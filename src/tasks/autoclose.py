@@ -13,8 +13,12 @@ system already learns that work finished:
   that link it.
 * **Scheduler settlement** — ``turn.finished`` (origin ``scheduler``) marks a fire
   settled; the job row is read back, and a job that no longer exists (one-shot
-  settled, cron expired) resolves its ref. ``scheduler.changed`` with ``action:
-  "canceled"`` (console cancel, ``cancel_schedule`` tool) resolves it as canceled.
+  settled, cron expired) resolves its ref. The scheduler publishes it only after
+  the row settles — ``_settle_task`` orders it so on the task-id path, and
+  ``_fire_and_settle`` emits the no-task-id fallback event after the one-shot
+  delete / cron expiry — so this inline read-back is race-free. ``scheduler.changed``
+  with ``action: "canceled"`` (console cancel, ``cancel_schedule`` tool) resolves it
+  as canceled.
 * **Directive close** — ``directive.changed`` is read back against the directive
   ledger; a directive now ``fulfilled``/``revoked`` resolves its ``dir-…`` ref.
 * **PR links** — GitHub publishes nothing here, so a cheap periodic sweep

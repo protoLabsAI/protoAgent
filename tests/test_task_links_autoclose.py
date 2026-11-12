@@ -143,6 +143,61 @@ def test_job_settles_only_when_the_job_is_gone(store, bus):
     assert store.get(recurring["id"])["close_reason"] == "cron-b canceled"
 
 
+async def test_real_fire_settlement_closes_linked_tasks(store, bus, tmp_path, monkeypatch):
+    """Through the REAL scheduler path, not a hand-published event: ``_fire_and_settle``
+    over a live jobs.db, the stubbed transport answering a completed turn WITHOUT a
+    durable task id (the fallback path). Its ``turn.finished`` must land only after the
+    one-shot row is deleted / the max_fires cron expires — sync handlers run inline, so
+    published any earlier the auto-close handler reads the row still live and the
+    linked task never closes."""
+    from datetime import UTC, datetime, timedelta
+    from types import SimpleNamespace
+
+    import httpx
+
+    from scheduler.local import LocalScheduler
+
+    class _Client:
+        def __init__(self, **_kw):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_a):
+            return False
+
+        async def post(self, _url, headers=None, json=None):
+            return SimpleNamespace(
+                status_code=200, text="",
+                json=lambda: {"result": {"status": {"state": "TASK_STATE_COMPLETED"}}},
+            )
+
+    monkeypatch.setattr(httpx, "AsyncClient", lambda **kw: _Client())
+    s = LocalScheduler(
+        agent_name="autoclose-fire", invoke_url="http://127.0.0.1:7870",
+        db_dir=tmp_path, event_publish=bus.publish,
+    )
+    wire_task_autoclose(bus.subscribe_handler, store, get_job=s.get_job)
+    live_at_finish: list[bool] = []
+    bus.subscribe_handler(
+        "turn.finished", lambda p: live_at_finish.append(s.get_job(p["data"]["trigger"]) is not None)
+    )
+    once = s.add_job("ship the digest", (datetime.now(UTC) + timedelta(hours=1)).isoformat(),
+                     job_id="agent-once", context_id="chat-1")
+    cron = s.add_job("hourly sweep", "0 * * * *", job_id="agent-cron", max_fires=1, context_id="chat-2")
+    one_shot_task = store.create("one-shot delivery", links=["agent-once"])
+    cron_task = store.create("bounded cron", links=["agent-cron"])
+
+    await s._fire_and_settle(once, cron=False)
+    await s._fire_and_settle(cron, cron=True)
+
+    assert live_at_finish == [False, False]  # both rows already settled when the event landed
+    for linked, ref in ((one_shot_task, "agent-once"), (cron_task, "agent-cron")):
+        row = store.get(linked["id"])
+        assert row["status"] == "closed" and row["close_reason"] == f"{ref} finished"
+
+
 async def test_cancel_schedule_tool_publish_closes_linked_task(store, bus):
     """Through the TOOL itself, not a hand-built event: ``cancel_schedule``'s own
     ``scheduler.changed`` publish is what closes a task linked to the canceled job."""

@@ -39,7 +39,7 @@ import uuid
 from contextlib import closing, suppress
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from croniter import croniter
 
@@ -1040,9 +1040,17 @@ class LocalScheduler:
         Cron jobs were already advanced at claim time; here we only resolve
         one-shots (delete on success, retry proven delivery failure). Clearing
         the in-memory guard never releases a durable unresolved claim."""
+        # A fallback fire (turn outcome read from the initial response, no durable
+        # task id) defers its `turn.finished` here so it publishes only AFTER the
+        # row settles below — the task-id path (`_settle_task`) already orders it
+        # that way. Sync bus handlers run inline, and the task auto-close handler
+        # (tasks.autoclose, ADR 0129 Q1) reads the job row back on `turn.finished`:
+        # published from inside `_fire`, a settled one-shot (or an expiring
+        # max_fires/TTL cron) still looked live, so its linked task never closed.
+        finished: list[Callable[[], None]] = []
         try:
             with keep_awake.hold(f"scheduled run {job.id}"):
-                ok = await self._fire(job)
+                ok = await self._fire(job, defer_finish=finished.append)
             with closing(self._connect()) as db, db:
                 reconciled = db.execute(
                     "SELECT task_state FROM occurrences WHERE job_id = ? AND next_fire = ? AND created_at = ?",
@@ -1079,6 +1087,8 @@ class LocalScheduler:
         finally:
             self._claimed_messages.pop(job.id, None)
             self._inflight_ids.discard(job.id)
+            for emit in finished:
+                emit()
 
     def _record_fire_outcome(self, job: Job, *, failure: str, db: sqlite3.Connection | None = None) -> None:
         """Record whether the turn worked, and back a failing job off (#3376).
@@ -1673,11 +1683,18 @@ class LocalScheduler:
             except Exception:  # noqa: BLE001 — transport loss cannot authorize a resend
                 log.warning("[scheduler] task %s reconciliation unavailable; not resending", claim["task_id"])
 
-    async def _fire(self, job: Job) -> bool | None:
+    async def _fire(
+        self, job: Job, *, defer_finish: Callable[[Callable[[], None]], None] | None = None
+    ) -> bool | None:
         """Deliver a job by POSTing to the agent's own A2A endpoint.
 
         True means delivered, False means retryable delivery failure, and None
         means delivery is unknown and must not be automatically retried.
+
+        ``defer_finish`` (passed by ``_fire_and_settle``) receives the fallback
+        no-task-id ``turn.finished`` publish instead of it firing here, so the
+        caller can emit it after the job row settles. Without it (direct calls),
+        the event publishes inline as before.
         """
         import httpx
 
@@ -1919,15 +1936,28 @@ class LocalScheduler:
             self._finish_dispatch(job, dispatch_state)
             # Timeout/cancellation is not evidence that the receiver's turn ended.
             if dispatch_state != "unknown" and not task_id:
-                self._publish_turn(
-                    "turn.finished",
-                    session_id=session_id,
-                    origin=fire_origin,
-                    trigger=job.id,
-                    ok=ok,
-                    task_id=task_id,
-                    origin_session=job.origin_session or "",
-                )
+
+                def _emit_finished(ok: bool | None = ok) -> None:
+                    self._publish_turn(
+                        "turn.finished",
+                        session_id=session_id,
+                        origin=fire_origin,
+                        trigger=job.id,
+                        ok=ok,
+                        task_id=task_id,
+                        origin_session=job.origin_session or "",
+                    )
+
+                if dispatch_state == "settled" and defer_finish is not None:
+                    # The TURN ended, but the job row only settles back in
+                    # `_fire_and_settle` (one-shot delete, cron expiry) — hand the
+                    # publish there so inline `turn.finished` consumers that read
+                    # the row back (tasks.autoclose) see a settled job as gone.
+                    # Retryable failures keep publishing here: their row genuinely
+                    # stays live for the retry.
+                    defer_finish(_emit_finished)
+                else:
+                    _emit_finished()
 
     def _generate_id(self) -> str:
         # Agent-name prefix keeps cross-agent IDs distinct in shared
