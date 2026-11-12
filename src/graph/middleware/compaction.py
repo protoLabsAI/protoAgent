@@ -138,22 +138,27 @@ def _thread_id() -> str | None:
 
 
 def _is_system_thread(state) -> bool:
-    """Whether this turn runs on a background ``system:*`` thread (#4625).
+    """Whether this turn runs on a background ``system:*`` thread (#4625) or a ``job:``
+    execution session (ADR 0129).
 
     ADR 0003's reactive producers — the scheduler's wakes, the inbox — route their turns
     into the single durable Activity context ``system:activity`` (``events.ACTIVITY_CONTEXT``);
-    any future ``system:*`` context is treated the same. These accumulate and resend the
-    whole thread every wake, so they get a much lower compaction ceiling than a chat thread.
+    any future ``system:*`` context is treated the same. ADR 0129 moves independent
+    background work onto per-job ``job:<execution_uuid>`` sessions, which accumulate wake
+    turns exactly as Activity did — same bounded ceiling, same #5106 hysteresis/keep
+    behaviour, applied per job thread. These accumulate and resend the whole thread every
+    wake, so they get a much lower compaction ceiling than a chat thread.
 
-    Keyed off the state's ``session_id`` (the clean ``system:activity``) as the reliable
-    signal, with the checkpointer ``thread_id`` as a fallback — that carries a transport
-    prefix (``a2a:system:activity``, see ``server/maintenance_loops.py``), so match the
-    ``system:`` segment either at the start or right after one ``<transport>:`` prefix."""
+    Keyed off the state's ``session_id`` (the clean ``system:activity`` / ``job:<uuid>``)
+    as the reliable signal, with the checkpointer ``thread_id`` as a fallback — that
+    carries a transport prefix (``a2a:system:activity`` / ``a2a:job:<uuid>``, see
+    ``server/maintenance_loops.py``), so match the ``system:`` / ``job:`` segment either
+    at the start or right after one ``<transport>:`` prefix."""
     session_id = str((state or {}).get("session_id") or "")
-    if session_id.startswith("system:"):
+    if session_id.startswith(("system:", "job:")):
         return True
     tid = _thread_id() or ""
-    return tid.startswith("system:") or ":system:" in tid
+    return tid.startswith(("system:", "job:")) or ":system:" in tid or ":job:" in tid
 
 
 def _count() -> None:

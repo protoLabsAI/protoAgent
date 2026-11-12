@@ -305,6 +305,7 @@ def prune_checkpoints(
     max_age_seconds: float | None = None,
     now: float | None = None,
     background_keep: int | None = None,
+    protected=None,
 ) -> dict[str, int]:
     """Trim the checkpoint DB. Returns counts of what was removed.
 
@@ -312,6 +313,11 @@ def prune_checkpoints(
     ``now`` is injectable for tests.
     ``background_keep`` overrides the per-thread cap for ``a2a:background:*`` threads
     (resume-from-latest only — no time-travel, so retaining extras is waste).
+    ``protected`` — optional ``(thread_id) -> bool``; a True thread is exempt from the
+    whole-thread age TTL (ADR 0129: a job execution session with a pending decision,
+    scheduled resume or unresolved occurrence is pinned past normal retention). The
+    per-thread cap still trims it — that keeps the newest resumable checkpoints and
+    never deletes an active one.
     """
     conn = sqlite3.connect(db_path, timeout=10)
     conn.execute("PRAGMA busy_timeout=5000")
@@ -330,7 +336,11 @@ def prune_checkpoints(
             # writers wait on their busy_timeout, readers (WAL) aren't blocked.
             conn.execute("BEGIN IMMEDIATE")
             # Only TTL threads we can date *and* that are entirely old.
-            aged = [(tid,) for tid, ts in _newest_stamps(conn).items() if ts is not None and ts < cutoff]
+            aged = [
+                (tid,)
+                for tid, ts in _newest_stamps(conn).items()
+                if ts is not None and ts < cutoff and not (protected is not None and protected(tid))
+            ]
             conn.executemany("DELETE FROM checkpoints WHERE thread_id=?", aged)
             conn.executemany("DELETE FROM writes WHERE thread_id=?", aged)
             conn.commit()

@@ -96,6 +96,67 @@ async def _forget_sweep_once() -> None:
         log.exception("[forget] orphan sweep failed")
 
 
+def _job_session_pins() -> set[str] | None:
+    """The ``job:`` execution sessions pinned past normal retention (ADR 0129): a live
+    scheduling row or a claimed/unknown occurrence (the scheduler's durable ledger), an
+    armed watch continuation, or an unconsumed pending decision. A recurring job's
+    session therefore lives as long as the job does (its scheduling row persists between
+    fires); a finished or cancelled job's session unpins once nothing references it, and
+    existing retention retires it like any idle thread.
+
+    ``None`` means the pin set could not be established (no scheduler, a backend without
+    an execution ledger, a read failure) — the sweep must then retire NO job session,
+    rather than one whose pin it merely failed to see (ADR 0129: no retention policy may
+    drop unresolved work)."""
+    sched = STATE.scheduler
+    read_pins = getattr(sched, "execution_session_pins", None)
+    if not callable(read_pins):
+        return None
+    pins = read_pins()
+    if pins is None:
+        return None
+    pins = set(pins)
+    try:
+        wc = STATE.watch_controller
+        for w in wc.list_watches() if wc is not None else ():
+            # Mirrors WatchStore.holds_execution: an armed (or persisted-but-unqueued)
+            # reaction is an outstanding continuation of its owner session.
+            run_session = str(getattr(w, "run_session", "") or "")
+            if not run_session.startswith("job:"):
+                continue
+            armed = getattr(w, "status", "") == "active" or getattr(w, "reaction_pending", False)
+            if armed and str(getattr(w, "run_prompt", "") or "").strip():
+                pins.add(run_session)
+    except Exception:
+        log.exception("[checkpoint-prune] watch pins unreadable — protecting every job session this sweep")
+        return None
+    try:
+        ds = STATE.decision_store
+        for d in ds.list(state="pending") if ds is not None else ():
+            # An unconsumed decision resolution pins its execution session: the answer
+            # resumes THAT checkpoint (ADR 0129) — archival never authorizes a resume.
+            sid = str(getattr(d, "session_id", "") or "")
+            if sid.startswith("job:"):
+                pins.add(sid)
+    except Exception:
+        log.exception("[checkpoint-prune] decision pins unreadable — protecting every job session this sweep")
+        return None
+    return pins
+
+
+def _job_thread_protected(thread_id: str, pins: set[str] | None) -> bool:
+    """Is ``thread_id`` a job execution session's checkpoint thread that must not retire
+    yet (ADR 0129)? Non-job threads are never protected here — chats, Activity and
+    legacy ``system:*`` threads keep their existing retention exactly. ``pins=None``
+    (indeterminable) protects every job thread: deleting an active execution session is
+    the one irreversible outcome, so unknown fails closed."""
+    sid = str(thread_id or "")
+    sid = sid.removeprefix("a2a:")
+    if not sid.startswith("job:"):
+        return False
+    return pins is None or sid in pins
+
+
 async def _checkpoint_prune_loop() -> None:
     """Periodically trim the SQLite checkpoint DB (per-thread cap + age TTL).
 
@@ -134,6 +195,11 @@ async def _checkpoint_prune_loop() -> None:
                     and STATE.knowledge_store is not None
                     and STATE.checkpointer is not None
                 )
+                # ADR 0129: a job execution session with unresolved work — a pending
+                # decision, a scheduled resume/continuation, a claimed/unknown
+                # occurrence — is pinned past the age TTL on BOTH retirement paths.
+                # Read once per sweep so harvest and TTL agree on what is pinned.
+                pins = await asyncio.to_thread(_job_session_pins) if max_age else None
                 if harvest:
                     # Summarize each aged thread into knowledge, then drop it —
                     # past conversations stay searchable, raw checkpoints freed.
@@ -143,7 +209,12 @@ async def _checkpoint_prune_loop() -> None:
                     # the conversation its knowledge forever.
                     import random as _random
 
-                    for i, thread_id in enumerate(await asyncio.to_thread(find_aged_threads, path, max_age)):
+                    aged = [
+                        tid
+                        for tid in await asyncio.to_thread(find_aged_threads, path, max_age)
+                        if not _job_thread_protected(tid, pins)
+                    ]
+                    for i, thread_id in enumerate(aged):
                         if i:
                             await asyncio.sleep(_random.uniform(2.0, 5.0))
                         await _retire_thread(thread_id)
@@ -155,6 +226,7 @@ async def _checkpoint_prune_loop() -> None:
                     keep_per_thread=cfg.checkpoint_keep_per_thread,
                     max_age_seconds=(None if harvest else max_age),
                     background_keep=cfg.checkpoint_background_keep,
+                    protected=lambda tid: _job_thread_protected(tid, pins),
                 )
                 # Offloaded media no surviving row references (ADR 0120).
                 from graph.checkpoint_prune import gc_media
