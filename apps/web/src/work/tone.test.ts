@@ -5,6 +5,54 @@ import { WorkRow } from "./WorkRow";
 import type { WatchState } from "../lib/types";
 import { formatWatchDuration, watchLifetime, fromActivity, fromBackgroundJob, fromDecision, fromDirective, fromGoal, fromSchedule, fromTask, fromWatch, laneFor, relTime, statusTone, statusWord, type WorkStatus } from "./tone";
 import rowCss from "./work-row.css?raw";
+import { groupFor, type GroupableWorkItem, type WorkGroupId } from "./tone";
+
+describe("groupFor raw state classification", () => {
+  const cases: [GroupableWorkItem["kind"], Record<string, WorkGroupId | null>][] = [
+    ["decision", { pending: "needs-you", answered: null, expired: null, cancelled: null, withdrawn: null }],
+    ["goal", { active: "doing-now", exhausted: "needs-you", unachievable: "needs-you", achieved: null, cleared: null }],
+    ["task", { in_progress: "doing-now", blocked: "coming-up", open: "coming-up", deferred: "coming-up", closed: null }],
+    ["background", { running: "doing-now", open: "coming-up", deferred: "coming-up", completed: null, failed: null, canceled: null }],
+    ["watch", { active: "coming-up", met: null, expired: null, cleared: null }],
+    ["directive", { in_force: "instructions", fulfilled: null, revoked: null }],
+    ["activity", { completed: null, failed: null, canceled: null, running: null }],
+  ];
+  for (const [kind, states] of cases) {
+    it.each(Object.entries(states))(`${kind} %s → %s regardless of lossy status`, (state, expected) => {
+      const item = { kind, id: "x", title: "x", meta: "", status: "running", raw: { status: state, state } } as GroupableWorkItem;
+      expect(groupFor(item)).toBe(expected);
+    });
+  }
+  it("requires explicit evidence that a blocked task started", () => {
+    const task: GroupableWorkItem = { kind: "task", id: "t", title: "t", meta: "", status: "waiting", raw: { status: "blocked" } };
+    expect(groupFor({ ...task, started: true })).toBe("doing-now");
+    expect(groupFor({ ...task, started: false })).toBe("coming-up");
+    expect(groupFor({ ...task, raw: { status: "open" }, started: true })).toBe("coming-up");
+    expect(groupFor({ ...task, raw: {} })).toBe("coming-up");
+    expect(groupFor({ ...task, raw: { status: "future-status" } })).toBeNull();
+  });
+  it("keeps repeat watches armed and excludes completed one-shot schedules", () => {
+    const item = { id: "x", title: "x", meta: "", status: "waiting" as const };
+    expect(groupFor({ ...item, kind: "watch", raw: { status: "met", repeat: true } })).toBe("coming-up");
+    for (const job of [
+      { schedule: "0 9 * * *", enabled: true, next_fire: "2026-11-15T09:00:00Z" },
+      { schedule: "0 9 * * *", enabled: false },
+      { schedule: "2026-11-07T09:00:00Z", last_fire: "2026-11-07T09:00:00Z" },
+    ]) {
+      const status = fromSchedule(job);
+      expect(groupFor({ ...item, kind: "schedule", raw: job, status })).toBe(status === "done" ? null : "coming-up");
+    }
+  });
+  it("accepts typed delivery and wait adapters", () => {
+    const item = { id: "x", title: "x", meta: "", status: "waiting" as const };
+    for (const delivered of [true, false]) for (const needsHuman of [true, false]) {
+      expect(groupFor({ ...item, kind: "delivery", raw: { delivered, needsHuman } })).toBe(!delivered && needsHuman ? "needs-you" : null);
+    }
+    for (const state of ["pending", "completed", "cancelled"] as const) {
+      expect(groupFor({ ...item, kind: "wait", raw: { state } })).toBe(state === "pending" ? "coming-up" : null);
+    }
+  });
+});
 
 const mappings: [string, (raw: string) => WorkStatus, Record<string, WorkStatus>][] = [
   ["goal", fromGoal, { active: "running", achieved: "done", exhausted: "failed", unachievable: "failed", cleared: "cancelled" }],

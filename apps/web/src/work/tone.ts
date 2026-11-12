@@ -1,6 +1,46 @@
 import type { Status } from "@protolabsai/ui/primitives";
 import type { ScheduledJob, WatchState } from "../lib/types";
 import type { DecisionRow } from "../lib/api/decisions";
+import type { WorkItem } from "./useWorkItems";
+
+export type WorkGroupId = "needs-you" | "doing-now" | "coming-up" | "instructions";
+export type WorkJobRef = { kind: "task" | "background" | "goal"; id: string };
+
+/** Adapter facts, not inferred associations. Today's Task/DirectiveRow APIs do not
+ * carry start history or job links; future adapters can supply them explicitly. */
+export type GroupableWorkItem = (WorkItem & {
+  started?: boolean;
+  tiedJob?: WorkJobRef;
+}) | (Omit<WorkItem, "kind" | "raw"> & (
+  | { kind: "delivery"; raw: { delivered: boolean; needsHuman: boolean } }
+  | { kind: "wait"; raw: { state: "pending" | "completed" | "cancelled" } }
+));
+
+/** Pure classification on source state: WorkStatus deliberately loses task detail. */
+export function groupFor(item: GroupableWorkItem): WorkGroupId | null {
+  const raw = item.raw as Record<string, unknown> | null;
+  switch (item.kind) {
+    case "decision": return raw?.state === "pending" ? "needs-you" : null;
+    case "delivery": return !item.raw.delivered && item.raw.needsHuman ? "needs-you" : null;
+    case "goal":
+      if (raw?.status === "active") return "doing-now";
+      return raw?.status === "exhausted" || raw?.status === "unachievable" ? "needs-you" : null;
+    case "background":
+      if (raw?.status === "running") return "doing-now";
+      return raw?.status === "open" || raw?.status === "deferred" ? "coming-up" : null;
+    case "task":
+      if (raw?.status === "in_progress") return "doing-now";
+      if (raw?.status === "blocked") return item.started === true ? "doing-now" : "coming-up";
+      return !raw?.status || raw.status === "open" || raw.status === "deferred" ? "coming-up" : null;
+    case "watch":
+      return raw?.status === "active" || (raw?.status === "met" && raw.repeat === true) ? "coming-up" : null;
+    case "schedule":
+      return ["scheduled", "paused", "waiting"].includes(item.status) ? "coming-up" : null;
+    case "wait": return item.raw.state === "pending" ? "coming-up" : null;
+    case "directive": return raw?.status === "in_force" ? "instructions" : null;
+    case "activity": return null;
+  }
+}
 
 export type WorkStatus = "needs-you" | "running" | "waiting" | "scheduled" | "paused" | "done" | "failed" | "cancelled";
 export type WorkLane = "needs-you" | "doing" | "waiting" | "next" | "done";
