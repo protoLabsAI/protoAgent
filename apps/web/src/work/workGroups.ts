@@ -1,6 +1,6 @@
 import type { DecisionRow } from "../lib/api/decisions";
 import type { WorkItems } from "./useWorkItems";
-import { decisionMeta, fromDecision, groupFor, type GroupableWorkItem, type WorkGroupId, type WorkJobRef } from "./tone";
+import { decisionMeta, fromDecision, groupFor, WORK_GROUP_IDS, WORK_GROUP_LABELS, type GroupableWorkItem, type WorkGroupId, type WorkJobRef } from "./tone";
 
 export type WorkGroup = {
   id: WorkGroupId;
@@ -74,12 +74,7 @@ export function workGroups(input: readonly GroupableWorkItem[] | WorkItems, {
   sessionId,
 }: { thisChatOnly?: boolean; sessionId?: string } = {}): WorkGroup[] {
   const items = flattenWorkItems(input);
-  const groups: WorkGroup[] = [
-    { id: "needs-you", label: "Needs you", items: [], count: 0 },
-    { id: "doing-now", label: "Doing now", items: [], count: 0 },
-    { id: "coming-up", label: "Coming up", items: [], count: 0 },
-    { id: "instructions", label: "Your instructions", items: [], count: 0 },
-  ];
+  const groups: WorkGroup[] = WORK_GROUP_IDS.map((id) => ({ id, label: WORK_GROUP_LABELS[id], items: [], count: 0 }));
   const ended = new Set(items.filter(jobEnded).map((item) => jobKey(item as WorkJobRef)));
   for (const item of items) {
     const id = groupFor(item);

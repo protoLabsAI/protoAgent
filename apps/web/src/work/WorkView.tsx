@@ -16,6 +16,7 @@ import { useWorkItems, type WorkItems } from "./useWorkItems";
 import { openSourceChat as openSourceChatShared } from "./openSourceChat";
 import { withSharedDecisions, workGroups } from "./workGroups";
 import { WorkCreateDialog } from "./WorkCreateDialog";
+import type { SavedWork } from "./workPersistence";
 import { WorkDetail } from "./WorkDetail";
 import { WorkOverview, WorkGroupNew, WorkGroupSection, groupSources, itemKey, workSections } from "./WorkOverview";
 import { endThisChatVisit, isThisChatVisit, subscribeThisChatVisit, trackWorkViewMount } from "./visitScope";
@@ -136,10 +137,24 @@ export function WorkView({ frame = "rail", sessionId }: { frame?: "rail" | "moda
   const returnTo = useRef<string | undefined>(undefined);
   const previousNeeds = useRef<Set<string> | null>(null);
   const [announcement, setAnnouncement] = useState("");
+  // The §10.5 save announcement — its OWN polite region, set once per successful save, so
+  // "Saved to <group>." is spoken exactly once and the list region's routine "<group>, N
+  // items." churn can never replace it mid-read.
+  const [savedAnnouncement, setSavedAnnouncement] = useState("");
   // The §10.1 New flow: header New and the all-empty primary open it bare; a group "+"
   // seeds its placeholder. Per-mount state — an open step 1 is never worth persisting.
   const [create, setCreate] = useState<{ group?: WorkGroupId } | null>(null);
   const onNew = (newGroup?: WorkGroupId) => setCreate({ group: newGroup });
+  // A successful save (§10.5): close the form, open the new item in its group (the detail
+  // when the save knows the id — a Job starts a chat turn instead, so its group opens
+  // bare), and announce the destination once. `saveWork` already refetched the saved
+  // source, so the opened id is listed.
+  const onSaved = (saved: SavedWork) => {
+    setCreate(null);
+    endThisChatVisit();
+    setSavedAnnouncement(`Saved to ${saved.label}.`);
+    update({ section: saved.group, itemId: saved.itemId, scrollTop: 0 });
+  };
   function update(patch: Partial<SurfaceState>) {
     const current = useUI.getState().surfaceStates.work ?? state;
     useUI.getState().setSurfaceState("work", { ...current, ...patch });
@@ -293,7 +308,8 @@ export function WorkView({ frame = "rail", sessionId }: { frame?: "rail" | "moda
       </div>}
     </div>
     {state.filters?.create === true && <GoalCreatorHost state={state} />}
-    {create && <WorkCreateDialog group={create.group} sessionId={sessionId} onClose={() => setCreate(null)} />}
+    {create && <WorkCreateDialog group={create.group} sessionId={sessionId} onClose={() => setCreate(null)} onSaved={onSaved} />}
     <div className="work-view__announcement" role="status" aria-live="polite" aria-atomic="true">{announcement}</div>
+    <div className="work-view__announcement" role="status" aria-live="polite" aria-atomic="true">{savedAnnouncement}</div>
   </div>;
 }

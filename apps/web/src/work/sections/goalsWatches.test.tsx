@@ -447,15 +447,41 @@ describe("Edit (PATCH)", () => {
     expect(editGoal).toHaveBeenCalledWith("sess-edit", expect.objectContaining({ outcome: "Edited outcome" }));
   });
 
-  it("Edit opens the cadence form and PATCHes the watch", async () => {
+  it("Edit opens the prefilled step-2 form and PATCHes the SAME watch id with only the changed keys", async () => {
     const editWatch = vi.spyOn(api, "editWatch").mockResolvedValue({ ok: true });
+    vi.spyOn(api, "verifiers").mockRejectedValue(new Error("offline"));
+    const clearWatch = vi.spyOn(api, "clearWatch");
+    const createWatch = vi.spyOn(api, "createWatch");
     const watch: WatchState = { id: "watch-edit", condition: "edit me", status: "active", trigger: "met", repeat: false };
     await mount(watchesSection.render(ctx({ sources: sources({ watches: withItems([watchItem(watch)]) }), itemId: "watch:watch-edit" })));
 
+    // The S8d shared step-2 form, prefilled — "Edit follow-up", no model call, no HitlForm.
+    // The dialog portals to document.body, so everything inside queries from `document`.
     await act(async () => button("Edit").click());
-    await act(async () => button("save-edit").click());
+    const dialogButton = (label: string) =>
+      Array.from(document.querySelectorAll<HTMLButtonElement>(".work-create button"))
+        .find((b) => b.textContent?.trim() === label)!;
+    expect(document.querySelector(".pl-dialog__title")?.textContent).toBe("Edit follow-up");
+    const inputs = Array.from(document.querySelectorAll<HTMLInputElement>(".work-create input"));
+    expect(inputs[0].value).toBe("edit me"); // When, prefilled from the live watch
+    const setValue = async (el: HTMLInputElement | HTMLSelectElement, value: string) => {
+      const proto = el instanceof HTMLSelectElement ? HTMLSelectElement.prototype : HTMLInputElement.prototype;
+      await act(async () => {
+        Object.getOwnPropertyDescriptor(proto, "value")!.set!.call(el, value);
+        el.dispatchEvent(new Event(el instanceof HTMLSelectElement ? "change" : "input", { bubbles: true }));
+      });
+    };
+    await setValue(inputs[1], "2h"); // Check every
+    const runs = Array.from(document.querySelectorAll<HTMLSelectElement>(".work-create select"))
+      .find((el) => Array.from(el.options).some((option) => option.value === "each"))!;
+    await setValue(runs, "each");
+    await act(async () => dialogButton("Save changes").click());
     await flush();
 
-    expect(editWatch).toHaveBeenCalledWith("watch-edit", expect.objectContaining({ repeat: true, interval_s: 7200 }));
+    // The ORIGINAL id, changed keys only — never a clear + recreate (merge-watch-874):
+    // the history and check count live on the row the PATCH preserves.
+    expect(editWatch).toHaveBeenCalledWith("watch-edit", { repeat: true, interval_s: 7200 });
+    expect(clearWatch).not.toHaveBeenCalled();
+    expect(createWatch).not.toHaveBeenCalled();
   });
 });

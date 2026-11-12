@@ -8,6 +8,11 @@ import type { WorkItem } from "./useWorkItems";
  *  extension registrations against this list (S4c). */
 export const WORK_GROUP_IDS = ["needs-you", "doing-now", "coming-up", "instructions"] as const;
 export type WorkGroupId = (typeof WORK_GROUP_IDS)[number];
+/** The groups' public labels — ONE copy, shared by the group headings (workGroups) and the
+ *  confirm step's "Saved to <group>." announcement (workPersistence), so they can't drift. */
+export const WORK_GROUP_LABELS: Record<WorkGroupId, string> = {
+  "needs-you": "Needs you", "doing-now": "Doing now", "coming-up": "Coming up", instructions: "Your instructions",
+};
 export type WorkJobRef = { kind: "task" | "background" | "goal"; id: string };
 
 /** Adapter facts, not inferred associations. Today's Task/DirectiveRow APIs do not

@@ -74,7 +74,7 @@ describe("/goal new submit drives in this tab", () => {
     await vi.waitFor(() => expect(noteToThread).toHaveBeenCalled());
 
     expect(setGoal.mock.calls[0][0]).toMatchObject({ session_id: "tab-7", condition: "tests pass", kick: false });
-    expect(takeGoalKickoff("tab-7")).toContain("tests pass");
+    expect(takeGoalKickoff("tab-7")?.prompt).toContain("tests pass");
     vi.restoreAllMocks();
   });
 });
@@ -99,7 +99,7 @@ describe("/goal new kickoff while the tab turned busy mid-request", () => {
     // The slot's consumer, with a runTurn that records overlap the way the real one would
     // collide: it flips the tab to streaming for the turn's duration.
     let concurrent = 0;
-    const run = vi.fn((_prompt: string) => {
+    const run = vi.fn((_kickoff: { prompt: string; hidden: boolean }) => {
       if (chatStore.getSnapshot().sessionStatusMap[sid] === "streaming") concurrent += 1;
       chatStore.setSessionStatus(sid, "streaming");
     });
@@ -131,7 +131,7 @@ describe("/goal new kickoff while the tab turned busy mid-request", () => {
     // The operator's turn ends → the kickoff runs once, on an idle tab.
     chatStore.setSessionStatus(sid, "idle");
     await vi.waitFor(() => expect(run).toHaveBeenCalledTimes(1));
-    expect(run.mock.calls[0][0]).toContain("tests pass");
+    expect(run.mock.calls[0][0].prompt).toContain("tests pass");
     expect(concurrent).toBe(0);
 
     // More store churn (the kickoff's own turn ending, other updates) never re-fires it.
@@ -174,7 +174,7 @@ describe("goal kickoff waits for every owner of the next turn", () => {
       if (snap.sessionStatusMap[sid] === "streaming" || localTurnInFlight(sid)) concurrent += 1;
       chatStore.setSessionStatus(sid, "streaming");
     };
-    const run = vi.fn((_prompt: string) => turn());
+    const run = vi.fn((_kickoff: { prompt: string; hidden: boolean }) => turn());
     return { chatStore, registerGoalKickoff, watchGoalKickoff, beginLocalTurn, sid, run, turn, concurrent: () => concurrent };
   }
 
@@ -211,6 +211,26 @@ describe("goal kickoff waits for every owner of the next turn", () => {
     // The operator answers; the resumed turn settles the bubble → the kickoff runs once.
     t.chatStore.updateMessages(t.sid, [...base, { ...parked, status: "done" as const, paused: false }]);
     await vi.waitFor(() => expect(t.run).toHaveBeenCalledTimes(1));
+    expect(t.concurrent()).toBe(0);
+    w.stop();
+  });
+
+  it("a second kickoff registered while the chat is busy queues BEHIND the first — both run, in order, never concurrently", async () => {
+    // S8d regression: Work's Job Start shares this seam with /goal kickoffs. A single-slot
+    // store let the second registration silently replace a Start already announced as saved.
+    const t = await setup();
+    const w = t.watchGoalKickoff(t.sid, t.run);
+    t.chatStore.setSessionStatus(t.sid, "streaming");
+    t.registerGoalKickoff(t.sid, "Start working toward the goal: tests pass");
+    t.registerGoalKickoff(t.sid, "Start: rebase #874", { hidden: false });
+    t.chatStore.setSessionStatus(t.sid, "idle"); // the operator's turn ends
+    await vi.waitFor(() => expect(t.run).toHaveBeenCalledTimes(1));
+    expect(t.run.mock.calls[0][0]).toEqual({ prompt: "Start working toward the goal: tests pass", hidden: true });
+    await tick();
+    expect(t.run).toHaveBeenCalledTimes(1); // the second waits out the first kickoff's turn
+    t.chatStore.setSessionStatus(t.sid, "idle"); // that turn ends
+    await vi.waitFor(() => expect(t.run).toHaveBeenCalledTimes(2));
+    expect(t.run.mock.calls[1][0]).toEqual({ prompt: "Start: rebase #874", hidden: false });
     expect(t.concurrent()).toBe(0);
     w.stop();
   });

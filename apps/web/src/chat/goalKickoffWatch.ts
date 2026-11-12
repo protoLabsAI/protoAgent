@@ -17,7 +17,9 @@
 // Otherwise it stays queued and is re-checked on every kickoff registration, every store
 // change, and every `poke()` (the slot pokes after a turn's `finally` and after its steer
 // reconcile settles). Each check is posted to a macrotask and re-evaluated there.
-// `takeGoalKickoff` removes it as it fires, so it runs exactly once.
+// `takeGoalKickoff` removes one kickoff as it fires, so each runs exactly once; several
+// queued kickoffs (a Work Job Start registered behind a waiting goal kickoff) drain one
+// per free window — firing one starts a turn, and that turn's end triggers the next check.
 
 import {
   chatStore,
@@ -25,6 +27,7 @@ import {
   isParkedSession,
   subscribeGoalKickoff,
   takeGoalKickoff,
+  type ChatKickoff,
 } from "./chat-store";
 import { localTurnInFlight } from "./sessionLiveness";
 
@@ -46,7 +49,7 @@ export function sessionFreeForKickoff(sessionId: string): boolean {
 
 export function watchGoalKickoff(
   sessionId: string,
-  run: (prompt: string) => void,
+  run: (kickoff: ChatKickoff) => void,
   blocked: () => boolean = () => false,
 ): GoalKickoffWatch {
   let timer: ReturnType<typeof setTimeout> | null = null;
@@ -55,8 +58,8 @@ export function watchGoalKickoff(
     timer = null;
     if (stopped || !hasGoalKickoff(sessionId)) return;
     if (!sessionFreeForKickoff(sessionId) || blocked()) return; // a later trigger re-checks
-    const prompt = takeGoalKickoff(sessionId);
-    if (prompt) run(prompt);
+    const kickoff = takeGoalKickoff(sessionId);
+    if (kickoff) run(kickoff);
   };
   const poke = () => {
     if (stopped || timer !== null || !hasGoalKickoff(sessionId)) return;

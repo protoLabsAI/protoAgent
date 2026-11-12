@@ -248,7 +248,7 @@ export function ChatSessionSlot({
   useEffect(() => {
     const watch = watchGoalKickoff(
       sessionId,
-      (kickoff) => void runTurnRef.current(kickoff, { hidden: true }),
+      (kickoff) => void runTurnRef.current(kickoff.prompt, { hidden: kickoff.hidden }),
       () => Boolean(hitlRef.current) || steerQueueRef.current.some((q) => !q.serverTaskId),
     );
     kickoffWatchRef.current = watch;

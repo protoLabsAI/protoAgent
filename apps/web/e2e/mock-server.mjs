@@ -1461,8 +1461,86 @@ const server = createServer(async (req, res) => {
     return sendJson(res, { turns: [] });
   }
 
+  // The Work confirm step's direct saves (S8d §10.3–§10.6). STATELESS on purpose: each
+  // response derives from the request body alone, so parallel workers can never race a
+  // shared module global (the e2e-mock cross-file lesson). The created rows don't join the
+  // GET fixtures; the S8d specs assert the form/save wire shapes, not list membership.
+  if (pathname === "/api/watches" && req.method === "POST") {
+    const body = await readBody(req);
+    if (!body?.condition) return sendJson(res, { detail: "a watch condition is required." }, 400);
+    return sendJson(res, { ok: true, message: `watch ${body.watch_id || "derived"} set` });
+  }
+  if (/^\/api\/watches\/[^/]+$/.test(pathname) && req.method === "PATCH") {
+    return sendJson(res, { ok: true, watch: null });
+  }
+  if (pathname === "/api/scheduler/jobs" && req.method === "POST") {
+    const body = await readBody(req);
+    return sendJson(res, { job: {
+      id: body?.job_id || "job-new", prompt: body?.prompt ?? "", schedule: body?.schedule ?? "",
+      timezone: body?.timezone ?? null, enabled: true, next_fire: "2099-01-01T09:00:00Z",
+      origin_session: body?.origin_session ?? null, context_id: body?.context_id ?? null,
+    } });
+  }
+  if (/^\/api\/scheduler\/jobs\/[^/]+$/.test(pathname) && req.method === "PUT") {
+    const body = await readBody(req);
+    return sendJson(res, { job: {
+      id: decodeURIComponent(pathname.split("/").pop()), prompt: body?.prompt ?? "",
+      schedule: body?.schedule ?? "", timezone: body?.timezone ?? null, enabled: true,
+      next_fire: "2099-01-01T09:00:00Z",
+    } });
+  }
+  if (pathname === "/api/directives" && req.method === "POST") {
+    const body = await readBody(req);
+    return sendJson(res, { directive: {
+      id: "d-new", session_id: body?.session_id ?? "", quote: body?.quote ?? "",
+      scope: body?.scope ?? "", conditions: body?.conditions ?? "", status: "in_force",
+      created_at: "2026-11-12T09:00:00+00:00", closed_by: null, closed_at: null, close_reason: null,
+    } });
+  }
+  if (/^\/api\/directives\/[^/]+$/.test(pathname) && req.method === "PATCH") {
+    const body = await readBody(req);
+    return sendJson(res, { directive: {
+      id: decodeURIComponent(pathname.split("/").pop()), session_id: url.searchParams.get("session_id") ?? "",
+      quote: "", scope: body?.scope ?? "", conditions: body?.conditions ?? "", status: "in_force",
+      created_at: "2026-11-12T09:00:00+00:00", closed_by: null, closed_at: null, close_reason: null,
+    } });
+  }
+
   if (pathname === "/api/chat" && req.method === "POST") {
     const body = await readBody(req);
+    // A marked interpret turn (S8b/§10.6): read-only, answered with the structured reading.
+    // Derived from the MESSAGE text alone (stateless — see above): each §10.2 example maps
+    // to its kind, anything else is a plain job. The instruction branch deliberately
+    // paraphrases the quote — the console must overwrite it with the typed bytes.
+    if (body?.interpret) {
+      const msg = String(body?.message ?? "");
+      let reading;
+      if (/every 30 min/i.test(msg) && /\bwhen\b/i.test(msg)) {
+        reading = { says: "I'll check PR #874 every 30 minutes and rebase it once #868 has merged.",
+          kind: "followup", group: "coming", job: null, instruction: null, problem: null,
+          followup: { trigger: "condition", time: null, then: "Rebase #874 on the updated base",
+            condition: { condition: "PR #868 merges", check: "github:pr-merged", check_args: { pr: 868 },
+              interval_s: 1800, repeat: false, expires_in_s: null } } };
+      } else if (/^every weekday/i.test(msg)) {
+        reading = { says: "Every weekday at 9 I'll summarise what merged overnight.",
+          kind: "followup", group: "coming", job: null, instruction: null, problem: null,
+          followup: { trigger: "time", condition: null, then: "Summarise what merged overnight",
+            time: { first_run: "2099-01-05T09:00:00+00:00", repeat: "0 9 * * 1-5",
+              repeat_label: "Weekdays at 9", timezone: "UTC" } } };
+      } else if (/merge only when/i.test(msg)) {
+        reading = { says: "I'll treat this as a standing instruction about merging.",
+          kind: "instruction", group: "told", job: null, followup: null, problem: null,
+          instruction: { quote: `${msg.trim()} (as the agent read it)`, scope: "merges", conditions: "" } };
+      } else {
+        reading = { says: "I'll do that now.", kind: "job", group: "doing", followup: null,
+          instruction: null, problem: null, job: { what: msg.trim() || "the work you described", who: "agent" } };
+      }
+      return sendJson(res, {
+        response: JSON.stringify(reading),
+        messages: [{ role: "system", content: "", interpretation: reading }],
+        session_id: body?.session_id ?? "",
+      });
+    }
     return sendJson(res, { response: `ack: ${String(body?.message ?? "").slice(0, 40)}` });
   }
 

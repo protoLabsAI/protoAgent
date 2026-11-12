@@ -103,7 +103,18 @@ export const automationApi = {
     return request<{ jobs: ScheduledJob[]; backend: string }>("/api/scheduler/jobs");
   },
 
-  addSchedule(body: { prompt: string; schedule: string; job_id?: string; timezone?: string }) {
+  // `origin_session`/`context_id` (S8d §10.3): a schedule saved from the Work confirm step
+  // belongs to the chat it was written in — `origin_session` is the owner the Work view's
+  // this-chat scope reads; `context_id` additionally runs a ONE-SHOT in that chat's context
+  // (mirrors the agent's own `schedule_task`, which sets it only for non-cron jobs).
+  addSchedule(body: {
+    prompt: string;
+    schedule: string;
+    job_id?: string;
+    timezone?: string;
+    context_id?: string;
+    origin_session?: string;
+  }) {
     return request<{ job: ScheduledJob }>("/api/scheduler/jobs", {
       method: "POST",
       body,

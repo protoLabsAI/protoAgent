@@ -290,16 +290,34 @@ function repairHydratedMessages(local: ChatMessage[], recovered: ChatMessage[]):
 // ChatSessionSlot for that session fires the first (hidden) turn — but it mounts BEFORE the
 // goal is set on the server (the POST is in flight), so a plain mount-effect would race
 // ahead. This tiny pub/sub lets the caller register the kickoff AFTER the goal POST resolves;
-// the slot (subscribed) then fires it exactly once (takeGoalKickoff is idempotent).
-const pendingGoalKickoffs = new Map<string, string>();
+// the slot (subscribed) then fires each exactly once (takeGoalKickoff removes as it hands out).
+export type ChatKickoff = { prompt: string; hidden: boolean };
+
+// A FIFO QUEUE per chat, not one slot: the seam is shared by /goal kickoffs and the Work
+// confirm step's Job Start (S8d §10.3), and a second registration while the chat is busy
+// (streaming, a parked interrupt) must wait its turn — never silently replace a kickoff the
+// UI already announced. The slot drains it one turn at a time as the chat frees up.
+const pendingGoalKickoffs = new Map<string, ChatKickoff[]>();
 const kickoffListeners = new Set<() => void>();
 
 /** Queue a one-shot kickoff turn for `sessionId` (call after the goal is set) and notify the
  *  slot to consume it. `prompt` seeds the turn; the server's iteration-0 kickoff injection
- *  re-states the goal, so it drives from there. */
-export function registerGoalKickoff(sessionId: string, prompt: string) {
-  pendingGoalKickoffs.set(sessionId, prompt);
+ *  re-states the goal, so it drives from there. Goal kickoffs stay HIDDEN (the default) —
+ *  the drive loop's streaming is the visible half; the Work confirm step's Job start (S8d
+ *  §10.3) passes `hidden: false` so its "Start: …" turn shows as a normal user bubble. */
+export function registerGoalKickoff(sessionId: string, prompt: string, opts: { hidden?: boolean } = {}) {
+  const queue = pendingGoalKickoffs.get(sessionId) ?? [];
+  queue.push({ prompt, hidden: opts.hidden ?? true });
+  pendingGoalKickoffs.set(sessionId, queue);
   kickoffListeners.forEach((l) => l());
+}
+
+/** Consume `sessionId`'s OLDEST pending kickoff (removing it), or null if none. */
+export function takeGoalKickoff(sessionId: string): ChatKickoff | null {
+  const queue = pendingGoalKickoffs.get(sessionId);
+  const kickoff = queue?.shift() ?? null;
+  if (queue && queue.length === 0) pendingGoalKickoffs.delete(sessionId);
+  return kickoff;
 }
 
 /** Subscribe to kickoff registrations (the ChatSessionSlot). Returns an unsubscribe fn. */
@@ -308,16 +326,9 @@ export function subscribeGoalKickoff(listener: () => void): () => void {
   return () => kickoffListeners.delete(listener);
 }
 
-/** Consume `sessionId`'s pending kickoff prompt (removing it), or null if none. */
-export function takeGoalKickoff(sessionId: string): string | null {
-  const prompt = pendingGoalKickoffs.get(sessionId);
-  if (prompt != null) pendingGoalKickoffs.delete(sessionId);
-  return prompt ?? null;
-}
-
 /** Whether `sessionId` has a kickoff queued (the slot's gate reads it before deciding). */
 export function hasGoalKickoff(sessionId: string): boolean {
-  return pendingGoalKickoffs.has(sessionId);
+  return (pendingGoalKickoffs.get(sessionId)?.length ?? 0) > 0;
 }
 
 function id(prefix: string) {

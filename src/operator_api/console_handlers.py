@@ -474,6 +474,11 @@ async def _operator_scheduler_add(req: dict) -> dict:
         schedule,
         job_id=req.get("job_id") or None,
         timezone=req.get("timezone") or None,
+        # Chat ownership for a console-created job (work-consolidation §10.3): the same
+        # fields the agent's `schedule_task` stamps — optional, so older callers are
+        # unchanged. The route model already type-checked both as str | None.
+        context_id=req.get("context_id") or None,
+        origin_session=req.get("origin_session") or None,
     )
     _publish_scheduler_changed(job.id, "added")
     return job.as_dict()

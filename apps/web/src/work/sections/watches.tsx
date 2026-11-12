@@ -16,15 +16,14 @@ import { registerWorkSection, type WorkSectionContext } from "../WorkView";
 import type { WorkSection } from "../sectionRegistry";
 import { WorkRow } from "../WorkRow";
 import { WorkDetail, type WorkAction, type WorkField } from "../WorkDetail";
+import { WorkEditDialog } from "../WorkCreateDialog";
+import { draftFromWatch } from "../workPersistence";
 import { relTime } from "../tone";
 import { watchKind } from "../rowMeta";
 import type { WorkItem } from "../useWorkItems";
 import { api } from "../../lib/api";
 import { queryKeys } from "../../lib/queries";
-import { errMsg } from "../../lib/format";
-import { HitlForm } from "../../chat/HitlForm";
-import { parseDuration, watchFormPayload } from "../../chat/watchForm";
-import type { HitlPayload, WatchState } from "../../lib/types";
+import type { WatchState } from "../../lib/types";
 
 // §2.3 — a timestamp as local relative time, full stamp in a hover tooltip. Watches store
 // epoch seconds, which `relTime` already expects.
@@ -40,19 +39,12 @@ function when(epoch: number | null | undefined, prefix: string): WorkField["valu
   );
 }
 
-// "5 min" / "2 h" / "7 d" for display; the compact "5m"/"2h"/"7d" form is what the edit form's
-// duration parser reads back.
+// "5 min" / "2 h" / "7 d" for display.
 function humanizeDuration(s: number): string {
   if (s % 86400 === 0) return `${s / 86400} d`;
   if (s % 3600 === 0) return `${s / 3600} h`;
   if (s % 60 === 0) return `${s / 60} min`;
   return `${s} s`;
-}
-function compactDuration(s: number): string {
-  if (s % 86400 === 0) return `${s / 86400}d`;
-  if (s % 3600 === 0) return `${s / 3600}h`;
-  if (s % 60 === 0) return `${s / 60}m`;
-  return `${s}s`;
 }
 
 // §2.6 field 3 — the operator-facing collapse of trigger × repeat.
@@ -123,81 +115,17 @@ function watchTechnical(w: WatchState): Record<string, string> {
   return tech;
 }
 
-// Edit reuses the watch creator's cadence & reaction fields (watchForm step 2), pre-filled
-// with the watch's current settings, and PATCHes only what the operator changed.
-function editWatchPayload(w: WatchState): HitlPayload {
-  const cadence = watchFormPayload().steps![1];
-  const props = (cadence.schema as { properties: Record<string, Record<string, unknown>> }).properties;
-  const mode = w.trigger === "change" ? "change" : w.repeat ? "repeat" : "once";
-  const withDefault = (key: string, value: unknown) => ({ ...props[key], default: value });
-  return {
-    kind: "form",
-    title: "Edit watch",
-    description: cadence.description,
-    steps: [
-      {
-        title: "Edit watch",
-        schema: {
-          type: "object",
-          properties: {
-            mode: withDefault("mode", mode),
-            run_prompt: withDefault("run_prompt", w.run_prompt ?? ""),
-            interval: withDefault("interval", w.interval_s ? compactDuration(w.interval_s) : ""),
-            expires_in: withDefault("expires_in", ""),
-            stall_after: withDefault("stall_after", w.stall_after ?? 0),
-          },
-        },
-      },
-    ],
-  };
-}
-
 function WatchDetailView({ ctx, item }: { ctx: WorkSectionContext; item: WorkItem }) {
   void ctx;
   const qc = useQueryClient();
   const toast = useToast();
   const [editing, setEditing] = useState(false);
-  const [saving, setSaving] = useState(false);
   const w = item.raw as WatchState;
   const refresh = () => void qc.invalidateQueries({ queryKey: queryKeys.watches });
 
-  if (editing) {
-    return (
-      <div className="work-detail" data-testid="watch-edit">
-        <HitlForm
-          payload={editWatchPayload(w)}
-          busy={saving}
-          onCancel={() => setEditing(false)}
-          onSubmit={(answers) => {
-            const a = typeof answers === "object" && answers ? (answers as Record<string, unknown>) : {};
-            const mode = String(a.mode ?? "once");
-            const body: Record<string, unknown> = {
-              trigger: mode === "change" ? "change" : "met",
-              repeat: mode !== "once",
-              run_prompt: String(a.run_prompt ?? "").trim(),
-            };
-            const interval = parseDuration(a.interval);
-            if (interval) body.interval_s = interval;
-            const expires = parseDuration(a.expires_in);
-            if (expires) body.deadline = Math.round(Date.now() / 1000) + expires;
-            const stall = Number(a.stall_after);
-            body.stall_after = Number.isFinite(stall) && stall > 0 ? Math.round(stall) : null;
-            setSaving(true);
-            api
-              .editWatch(w.id, body)
-              .then(() => {
-                refresh();
-                toast({ tone: "success", message: "Watch updated." });
-                setEditing(false);
-              })
-              .catch((e) => toast({ tone: "error", title: "Couldn't update the watch", message: errMsg(e) }))
-              .finally(() => setSaving(false));
-          }}
-        />
-      </div>
-    );
-  }
-
+  // Edit FIRST (§10.7): the same prefilled step-2 form the New flow confirms with — no
+  // model call. Saving PATCHes THIS watch id in place, so its history and check count
+  // survive; the watch is never cleared and recreated (the merge-watch-874 regression).
   const actions: WorkAction[] = [
     { id: "edit", label: "Edit", run: async () => void setEditing(true) },
     {
@@ -219,18 +147,31 @@ function WatchDetailView({ ctx, item }: { ctx: WorkSectionContext; item: WorkIte
   ];
 
   return (
-    <WorkDetail
-      title={w.condition || w.id}
-      status={item.status}
-      fields={watchFields(w)}
-      actions={actions}
-      technical={watchTechnical(w)}
-      type="Watch"
-      onUndo={async (token) => {
-        await api.undo(token);
-        refresh();
-      }}
-    />
+    <>
+      <WorkDetail
+        title={w.condition || w.id}
+        status={item.status}
+        fields={watchFields(w)}
+        actions={actions}
+        technical={watchTechnical(w)}
+        type="Watch"
+        onUndo={async (token) => {
+          await api.undo(token);
+          refresh();
+        }}
+      />
+      {editing && (
+        <WorkEditDialog
+          draft={draftFromWatch(w)}
+          target={{ kind: "condition", id: w.id }}
+          onClose={() => setEditing(false)}
+          onSaved={() => {
+            refresh();
+            toast({ tone: "success", message: "Watch updated." });
+          }}
+        />
+      )}
+    </>
   );
 }
 

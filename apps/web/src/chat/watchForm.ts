@@ -187,10 +187,15 @@ export function watchFormPayload(catalog: VerifierCatalog = FALLBACK_VERIFIER_TY
   };
 }
 
-/** The `POST /api/watches` body (operator watch-create, ADR 0067 D4 — trusted, any verifier). */
+/** The `POST /api/watches` body (operator watch-create, ADR 0067 D4 — trusted, any verifier).
+ *  `watch_id` lets the caller name the watch up front (the server derives one from the
+ *  condition when blank) — the Work confirm step (S8d) uses it so a save can open the new
+ *  watch's detail, and so a retry of the same form re-uses the same id instead of creating
+ *  a second watch. */
 export type WatchCreateBody = {
   condition: string;
   verifier: Record<string, unknown>;
+  watch_id?: string;
   trigger?: string;
   repeat?: boolean;
   interval_s?: number;

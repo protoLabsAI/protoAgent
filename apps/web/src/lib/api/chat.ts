@@ -110,6 +110,22 @@ export const chatApi = {
     return request<DirectiveList>(`/api/chat/sessions/${encodeURIComponent(sessionId)}/directives`);
   },
 
+  // Record a standing instruction as the operator (ADR 0127 D6; the Work confirm step's
+  // direct save, §10.6). The quote is the operator's TYPED words, byte for byte — callers
+  // must never pass a model paraphrase.
+  createDirective(body: { session_id: string; quote: string; scope?: string; conditions?: string }) {
+    return request<{ directive: DirectiveRow }>("/api/directives", { method: "POST", body });
+  },
+
+  // Edit one directive's scope/conditions in place. The quote is immutable by design —
+  // there is deliberately no route that rewrites the operator's recorded words.
+  updateDirective(sessionId: string, id: string, body: { scope: string; conditions: string }) {
+    return request<{ directive: DirectiveRow }>(
+      `/api/directives/${encodeURIComponent(id)}?session_id=${encodeURIComponent(sessionId)}`,
+      { method: "PATCH", body },
+    );
+  },
+
   revokeDirective(sessionId: string, id: string, reason?: string) {
     // The server trims the reason and stores its first 2,000 characters.
     const query = reason?.trim() ? `?reason=${encodeURIComponent(reason)}` : "";
