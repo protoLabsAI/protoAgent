@@ -119,6 +119,9 @@ BUNDLED_DATA: list[tuple[str, str]] = [
     ("docs/reference", "docs/reference"),
     ("docs/explanation", "docs/explanation"),
     ("docs/adr", "docs/adr"),
+    # PyInstaller file destinations are directories, unlike wheel seed destinations.
+    ("docs/design/work-view.md", "docs/design"),
+    ("docs/design/work-consolidation.md", "docs/design"),
     ("docs/public/media", "docs/public/media"),
 ]
 
@@ -242,6 +245,7 @@ CLI_FORWARD_MODULES = [
     "graph.skills.cli",
     "graph.fleet.cli",
     "graph.usage_cli",
+    "graph.dm_cli",
     "graph.config_explain",
     "graph.model_cli",
     "runtime.cli",

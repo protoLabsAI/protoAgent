@@ -112,9 +112,9 @@ def _docs_seed_sources() -> set[str]:
     derived from `plugins/docs/corpus.py::SECTIONS` — single-sourced so a section added
     there is covered here without anyone remembering this file exists (same reasoning as
     the catalog glob above)."""
-    from plugins.docs.corpus import SECTIONS
+    from plugins.docs.corpus import PUBLISHED_DESIGN_DOCS, SECTIONS
 
-    return {f"docs/{section}" for section in SECTIONS}
+    return {f"docs/{section}" for section in SECTIONS} | {f"docs/{path}" for path in PUBLISHED_DESIGN_DOCS}
 
 
 def test_there_is_at_least_one_docs_section() -> None:
@@ -156,6 +156,7 @@ def test_docs_seeds_exclude_dev_and_vitepress() -> None:
     five sections the corpus actually reads."""
     docs_sources = {s for s in _wheel_seed_sources() if s == "docs" or s.startswith("docs/")}
     offenders = {s for s in docs_sources if s == "docs" or s.startswith(("docs/dev", "docs/.vitepress"))}
+    assert "docs/design" not in _wheel_seed_sources() | _sidecar_bundled_sources()
     assert not offenders, (
         f"hatch_build.py::_SEEDS bundles {sorted(offenders)} — this sweeps internal docs "
         f"and/or the (gitignored, potentially large) built VitePress site into every wheel. "

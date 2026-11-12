@@ -593,6 +593,13 @@ describe("DecisionCard", () => {
     expect(onOpenChat).toHaveBeenCalled();
   });
 
+  it("has no Open chat link in the source chat's own transcript", async () => {
+    await renderNode(
+      <DecisionCard decision={decision("a")} presentation="transcript" onAnswer={vi.fn()} onOpenChat={vi.fn()} chatTitle="mythx" />,
+    );
+    expect([...document.querySelectorAll("a")].some((a) => a.textContent?.includes("Open chat"))).toBe(false);
+  });
+
   it("hides the fallback-action line when there is no expiry", async () => {
     await renderNode(<DecisionCard decision={decision("a")} onAnswer={vi.fn()} />);
     expect(document.body.textContent).not.toContain("If nobody answers");

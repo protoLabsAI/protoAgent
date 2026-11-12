@@ -217,6 +217,45 @@ def test_approved_work_consolidation_spec_and_navigation() -> None:
     assert all((ROOT / "docs" / path).is_file() for path in paths)
 
 
+@pytest.mark.parametrize("path", ["design/work-consolidation.md", "design/work-view.md"])
+def test_published_work_specs_are_readable_and_searchable(path) -> None:
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    docs = _load_docs()
+    app = FastAPI()
+    app.include_router(docs._build_data_router(), prefix="/api/plugins/docs")
+    with TestClient(app) as client:
+        response = client.get("/api/plugins/docs/doc", params={"path": path, "raw": 1})
+        assert response.status_code == 200
+        assert response.json()["md"] == (ROOT / "docs" / path).read_text(encoding="utf-8")
+        tree = client.get("/api/plugins/docs/tree").json()["sections"]
+        paths = {item["path"] for section in tree for group in section["groups"] for item in group["items"]}
+        assert "design/work-consolidation.md" in paths
+    index = docs.DocsIndex(root=ROOT / "docs")
+    index.seed()
+    assert index.has(path)
+    assert any(hit.path == path for hit in index.search("Work", k=100))
+
+
+def test_unpublished_design_docs_stay_excluded(tmp_path) -> None:
+    docs = _load_docs()
+    corpus = sys.modules["docs_plugin_under_test.corpus"]
+    design = tmp_path / "design"
+    design.mkdir()
+    (design / "private-draft.md").write_text("# Private draft", encoding="utf-8")
+    (design / "work-consolidation.md").write_text("# Work consolidation", encoding="utf-8")
+    assert corpus.read_doc("design/private-draft.md", root=tmp_path) is None
+    assert corpus.read_doc("design/work-view.md", root=tmp_path) is None
+    tree = corpus.doc_tree(root=tmp_path)
+    assert tree == [{"id": "design", "label": "Design", "items": [
+        {"path": "design/work-consolidation.md", "title": "Work consolidation"},
+    ]}]
+    index = docs.DocsIndex(root=tmp_path)
+    assert index.seed() == 1
+    assert not index.has("design/private-draft.md")
+
+
 def test_grouped_tree_falls_back_to_sections(tmp_path) -> None:
     """With docs whose paths aren't in nav.json, the tree degrades to flat (unlabeled)
     section groups rather than going empty."""
