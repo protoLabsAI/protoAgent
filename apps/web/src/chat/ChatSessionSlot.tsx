@@ -1951,6 +1951,7 @@ export function ChatSessionSlot({
                 starterPrompts={runtime?.starter_prompts}
                 onEditStarterPrompts={editStarterPrompts}
                 followSignal={followSignal}
+                formOpen={Boolean(hitl)}
               />
             </DecisionTranscriptContext.Provider>
           </ComponentFrameRegistryContext.Provider>

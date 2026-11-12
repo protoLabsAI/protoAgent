@@ -437,6 +437,7 @@ async def chat(
     message: str,
     session_id: str,
     *,
+    interpret: bool = False,
     model: str | None = None,
     incognito: bool = False,
     hitl_resume: bool = False,
@@ -470,7 +471,14 @@ async def chat(
     this" is the question those rows exist to answer. It also decides autonomy (#3891
     F2): a server-fired origin (``server.turn_control._AUTONOMOUS_ORIGINS``) auto-answers
     a HITL pause instead of echoing it, as the streaming driver does for that origin.
+    ``interpret`` selects a read-only, schema-validated Work proposal before
+    command dispatch, goal continuation, or extraction can mutate state. Its
+    reply and transcript entry are tagged as system work.
     """
+    if interpret and STATE.graph is not None:
+        from server.work_interpret import interpret_turn
+
+        return await interpret_turn(message, session_id, model=model, tool_fence=tool_fence, origin=origin)
     if STATE.graph is None:
         return _setup_required_message()
     return await _chat_langgraph(

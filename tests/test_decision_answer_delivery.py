@@ -347,3 +347,139 @@ async def test_an_answer_arriving_mid_withdraw_waits_and_loses(harness, monkeypa
     assert answered.json()["detail"]["state"] == "withdrawn"
     assert store.get(rec.id).state == "withdrawn"
     assert turn.a2a_calls == [None]  # only the dismissal's clearing resume reached the agent
+
+
+# ── stranded records (#5107) ─────────────────────────────────────────────────────────────
+# A record still `pending` whose checkpoint no longer holds its interrupt (the answer was
+# consumed, then the process died before the record closed) must close itself, never sit
+# answerable-but-dead in the console.
+
+
+async def _strand(turn):
+    """Consume the parked interrupt behind the ledger's back: the state a restart left."""
+    turn.release.set()
+    await turn.graph.ainvoke(Command(resume="Operator chose: yes (yes)"), turn.config)
+    turn.finished.clear()
+    turn.release.clear()
+
+
+@pytest.mark.asyncio
+async def test_answering_a_stranded_record_closes_it_and_returns_409(harness):
+    store, build = harness
+    turn, rec, client = await build()
+    await _strand(turn)
+    url = f"/api/decisions/{rec.id}/answer"
+    async with client:
+        r = await asyncio.wait_for(client.post(url, json={"option_id": "yes"}), 2)
+        assert r.status_code == 409, r.text
+        detail = r.json()["detail"]
+        assert detail["state"] == "withdrawn"
+        assert "already moved past this question" in detail["withdraw_reason"]
+        assert store.get(rec.id).state == "withdrawn"
+        assert (await client.get("/api/decisions?state=pending")).json()["decisions"] == []
+        again = await client.post(url, json={"option_id": "yes"})
+        assert again.status_code == 409
+    assert turn.a2a_calls == [rec.id]  # the retry never reached the agent
+
+
+@pytest.mark.asyncio
+async def test_dismiss_returns_without_waiting_for_the_clearing_turn(harness):
+    """#5099's freeze must not come back through Dismiss: the clearing resume runs a turn
+    (here it blocks in the slow step), and the cancel route answers before it ends."""
+    store, build = harness
+    turn, rec, client = await build()
+    async with client:
+        r = await asyncio.wait_for(client.post(f"/api/decisions/{rec.id}/cancel", json={"reason": ""}), 1)
+        assert r.status_code == 200, r.text
+        assert r.json()["decision"]["state"] == "withdrawn"
+        await asyncio.wait_for(turn.running.wait(), 2)  # the clearing turn is under way
+        assert not turn.finished.is_set()
+        turn.release.set()
+        await asyncio.wait_for(turn.finished.wait(), 2)
+        again = await client.post(f"/api/decisions/{rec.id}/cancel")
+        assert again.status_code == 409
+        assert again.json()["detail"]["state"] == "withdrawn"
+    assert len(turn.a2a_calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_dismissing_a_stranded_record_sends_no_resume(harness):
+    store, build = harness
+    turn, rec, client = await build()
+    await _strand(turn)
+    async with client:
+        r = await client.post(f"/api/decisions/{rec.id}/cancel")
+        assert r.status_code == 200 and r.json()["decision"]["state"] == "withdrawn"
+        await asyncio.sleep(0.05)
+    assert turn.a2a_calls == []  # nothing parked → nothing to clear, no stray fresh turn
+
+
+@pytest.mark.asyncio
+async def test_boot_reconcile_closes_stranded_and_keeps_parked(tmp_path, monkeypatch):
+    """Restart mid-resumed-turn: process A consumed one decision's answer and died before the
+    record closed; another decision is genuinely still parked. Process B boots on the same
+    durable checkpoint + ledger files: the maintenance loop's boot reconcile closes the first,
+    leaves the second answerable."""
+    from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
+
+    maintenance = importlib.import_module("server.maintenance_loops")
+    ckpt, ledger = str(tmp_path / "checkpoints.db"), tmp_path / "decisions.db"
+
+    class State(TypedDict):
+        answer: str
+
+    def choose(state):
+        return {"answer": interrupt({"kind": "decision", "question": "Merge?", "options": ["yes", "no"]})}
+
+    def compile_graph(saver):
+        builder = StateGraph(State)
+        builder.add_node("choose", choose)
+        builder.add_edge(START, "choose")
+        builder.add_edge("choose", END)
+        return builder.compile(checkpointer=saver)
+
+    # ── process A ──
+    async with AsyncSqliteSaver.from_conn_string(ckpt) as saver:
+        graph = compile_graph(saver)
+        store = DecisionStore(ledger)
+        recs = {}
+        for name in ("stranded", "parked"):
+            cfg = {"configurable": {"thread_id": f"t-{name}"}}
+            await graph.ainvoke({}, cfg)
+            iid = (await graph.aget_state(cfg)).tasks[0].interrupts[0].id
+            recs[name] = store.create(f"s-{name}", "Merge?", ["yes", "no"], thread_id=f"t-{name}", interrupt_id=iid)
+        # The answer is consumed... and the process dies before the ledger hears of it.
+        await graph.ainvoke(Command(resume="yes"), {"configurable": {"thread_id": "t-stranded"}})
+    assert store.get(recs["stranded"].id).pending
+
+    # ── process B ──
+    async with AsyncSqliteSaver.from_conn_string(ckpt) as saver:
+        monkeypatch.setattr(STATE, "graph", compile_graph(saver))
+        monkeypatch.setattr(STATE, "decision_store", DecisionStore(ledger))
+        loop_task = asyncio.create_task(maintenance._decision_expiry_loop())
+        try:
+            await _until(lambda: not STATE.decision_store.get(recs["stranded"].id).pending)
+        finally:
+            loop_task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await loop_task
+        assert STATE.decision_store.get(recs["stranded"].id).state == "withdrawn"
+        assert STATE.decision_store.get(recs["parked"].id).pending
+        assert [d.id for d in STATE.decision_store.list(state="pending")] == [recs["parked"].id]
+
+
+@pytest.mark.asyncio
+async def test_unreadable_checkpoint_closes_nothing():
+    from graph.decision_reconcile import interrupt_parked, reconcile_pending_decisions
+
+    class Broken:
+        async def aget_state(self, config):
+            raise RuntimeError("checkpointer offline")
+
+    store = DecisionStore(":memory:")
+    rec = store.create("s", "Merge?", ["yes", "no"], thread_id="t", interrupt_id="i-1")
+    legacy = store.create("s", "Old?", ["yes", "no"])  # no interrupt id: can't be judged
+    assert await interrupt_parked(Broken(), rec) is None
+    assert await reconcile_pending_decisions(store, Broken()) == 0
+    assert await reconcile_pending_decisions(store, None) == 0
+    assert store.get(rec.id).pending and store.get(legacy.id).pending

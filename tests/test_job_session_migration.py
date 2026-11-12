@@ -472,6 +472,147 @@ def test_future_interactive_continuation_does_not_hold_unrelated_schedule(tmp_pa
     assert s._claim_occurrence(s.get_job(pending.id)) is None
 
 
+@pytest.mark.platform_sensitive
+def test_stale_interactive_one_shot_follows_stale_policy_despite_unrelated_wait(tmp_path):
+    """An unrelated future wait in the same chat exempts nothing from stale-fire
+    recovery (ADR 0129 D6); only the job's OWN unresolved work is preserved."""
+    s = scheduler(tmp_path)
+    future = (datetime.now(UTC) + timedelta(days=1)).isoformat()
+    s.add_job("later continuation", future, job_id="wait:chat", context_id="chat")
+    stale = s.add_job("forgotten reminder", PAST, context_id="chat")
+    quarantined = s.add_job("sent but unresolved", PAST, context_id="chat")
+    assert s._claim_occurrence(quarantined)
+    s = scheduler(tmp_path)
+    s._recover_missed_fires()
+    # The stale one-shot is dropped — it never fires days late into the chat.
+    assert s.get_job(stale.id) is None
+    # Its neighbor's own unresolved send stays quarantined, never dropped or resent.
+    assert s.get_job(quarantined.id) is not None
+    assert s._claim_occurrence(s.get_job(quarantined.id)) is None
+    assert s.get_job("wait:chat").next_fire == future
+
+
+@pytest.mark.platform_sensitive
+def test_replacement_queues_behind_predecessors_outstanding_wait(tmp_path):
+    """Replacing a job whose fire settled with a wait still outstanding reuses the
+    SAME owner and queues behind the continuation (ADR 0129 D6) — a fresh owner
+    would let the replacement walk past the predecessor's pending resume."""
+    s = scheduler(tmp_path)
+    job = s.add_job("deploy report", PAST, job_id="deploy")
+    message = s._claim_occurrence(job)
+    assert message
+    # The fire's turn parks a wait continuation in the owner, then settles.
+    wait = s.add_job("resume deploy report", PAST,
+                     job_id=f"wait:{job.context_id}", context_id=job.context_id)
+    s._remember_task(job, "first-task")
+    assert s._settle_task(job, "first-task", {"result": {
+        "id": "first-task", "status": {"state": "completed"},
+    }})
+    assert s.get_job(job.id) is None  # the settled one-shot is retired
+    replacement = s.add_job("deploy report again", PAST, job_id="deploy")
+    assert replacement.context_id == job.context_id
+    assert replacement.created_at != job.created_at
+    assert s._claim_occurrence(replacement) is None
+    # Restart: recovery keeps both the queued replacement and its owner's wait.
+    s = scheduler(tmp_path)
+    s._recover_missed_fires()
+    assert s.get_job("deploy") is not None
+    assert s._claim_occurrence(s.get_job("deploy")) is None
+    # The continuation enters first; once it settles, the replacement runs.
+    wait = s.get_job(wait.id)
+    assert s._claim_occurrence(wait)
+    s._remember_task(wait, "wait-task")
+    assert s._settle_task(wait, "wait-task", {"result": {
+        "id": "wait-task", "status": {"state": "completed"},
+    }})
+    assert s._claim_occurrence(s.get_job("deploy"))
+
+
+@pytest.mark.platform_sensitive
+def test_replacement_with_armed_watch_retains_owner_until_cleared(tmp_path, monkeypatch):
+    from graph.watches.store import WatchStore
+    from graph.watches.types import Watch
+
+    watch_path = tmp_path / "watches"
+    watch_path.mkdir()
+    monkeypatch.setenv("WATCH_PATH", str(watch_path))
+    store = WatchStore(watch_path)
+    s = scheduler(tmp_path)
+    job = s.add_job("deploy", PAST, job_id="deploy")
+    assert s._claim_occurrence(job)
+    # The fire's turn arms a watch on the owner, then the occurrence settles.
+    store.set(Watch(id="deployed", condition="deployment done",
+                    run_session=job.context_id, run_prompt="verify deployment"))
+    s._remember_task(job, "task")
+    assert s._settle_task(job, "task", {"result": {
+        "id": "task", "status": {"state": "completed"},
+    }})
+    replacement = s.add_job("deploy again", PAST, job_id="deploy")
+    assert replacement.context_id == job.context_id
+    assert s._claim_occurrence(replacement) is None
+    store.clear("deployed")
+    replacement = s.get_job("deploy")
+    assert s._claim_occurrence(replacement)
+    s._remember_task(replacement, "task-2")
+    assert s._settle_task(replacement, "task-2", {"result": {
+        "id": "task-2", "status": {"state": "completed"},
+    }})
+    # With nothing of the predecessor left unresolved, a re-add mints a new owner.
+    fresh = s.add_job("deploy fresh", PAST, job_id="deploy")
+    assert fresh.context_id != job.context_id
+
+
+@pytest.mark.asyncio
+@pytest.mark.platform_sensitive
+async def test_repeating_watch_second_reaction_waits_for_first_continuation(tmp_path, monkeypatch):
+    """A later reaction of a repeating watch is a NEW independent occurrence: it
+    waits for an earlier reaction's outstanding wait, while that wait — the live
+    continuation the owner actually yielded for — does enter (ADR 0129 D6)."""
+    from types import SimpleNamespace
+
+    from graph.watches.controller import WatchController
+    from graph.watches.store import WatchStore
+    from runtime.state import STATE
+
+    watch_path = tmp_path / "watches"
+    watch_path.mkdir()
+    monkeypatch.setenv("WATCH_PATH", str(watch_path))
+    s = scheduler(tmp_path)
+    monkeypatch.setattr(STATE, "scheduler", s)
+    controller = WatchController(SimpleNamespace(), WatchStore(watch_path))
+    root = s.add_job("root", "* * * * *")
+    ok, _, watch = controller.create(
+        condition="ready", verifier={"type": "plugin", "check": "test:ready"},
+        run_session=root.context_id, run_prompt="react", repeat=True,
+    )
+    assert ok
+    await controller._react(watch, "first fire")
+    reaction = s.get_job(f"watch-{watch.id}")
+    # The watch stays armed (repeating) but never holds its OWN reaction out.
+    assert s._claim_occurrence(reaction)
+    # Reaction 1's turn parks a wait continuation, then settles.
+    wait = s.add_job("resume reaction", PAST,
+                     job_id=f"wait:{root.context_id}", context_id=root.context_id)
+    s._remember_task(reaction, "reaction-1")
+    assert s._settle_task(reaction, "reaction-1", {"result": {
+        "id": "reaction-1", "status": {"state": "completed"},
+    }})
+    await controller._react(watch, "second fire")
+    second = s.get_job(f"watch-{watch.id}")
+    assert second.created_at != reaction.created_at
+    assert second.context_id == root.context_id
+    # The new independent occurrence waits behind reaction 1's pending wait...
+    assert s._claim_occurrence(second) is None
+    # ...while reaction 1's own continuation enters.
+    wait = s.get_job(wait.id)
+    assert s._claim_occurrence(wait)
+    s._remember_task(wait, "wait-task")
+    assert s._settle_task(wait, "wait-task", {"result": {
+        "id": "wait-task", "status": {"state": "completed"},
+    }})
+    assert s._claim_occurrence(s.get_job(f"watch-{watch.id}"))
+
+
 @pytest.mark.asyncio
 @pytest.mark.platform_sensitive
 @pytest.mark.parametrize("boundary", ["before_enqueue", "enqueue_failure", "queued", "accepted", "completed"])

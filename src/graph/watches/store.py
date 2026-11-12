@@ -117,8 +117,12 @@ class WatchStore:
             log.warning("[watch] clear failed for %s: %s", watch_id, exc)
             return False
 
-    def holds_execution(self, context_id: str) -> bool:
+    def holds_execution(self, context_id: str, *, exclude_watch_id: str | None = None) -> bool:
         """Read durable continuation ownership, including an unqueued reaction.
+
+        ``exclude_watch_id`` skips one watch — the one whose own reaction is being
+        claimed — so a (possibly repeating) watch never holds its OWN continuation
+        out of its owner. Any OTHER armed watch on the owner still holds.
 
         Unlike display listing, unreadable records raise: uncertainty must not
         release an execution owner for another independent fire.
@@ -129,6 +133,8 @@ class WatchStore:
                     watch = Watch.from_dict(json.load(fh))
             except FileNotFoundError:
                 continue  # concurrently cleared
+            if exclude_watch_id is not None and watch.id == exclude_watch_id:
+                continue
             if (watch.run_session == context_id and watch.run_prompt.strip()
                     and (watch.active or watch.reaction_pending)):
                 return True

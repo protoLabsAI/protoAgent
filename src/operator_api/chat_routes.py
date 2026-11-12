@@ -344,6 +344,7 @@ class ChatRequest(BaseModel):
     # The old literal "api-default" pooled every anonymous caller into ONE
     # checkpointer thread and ONE session-memory file.
     message: str
+    interpret: bool = False  # read-only system work within the current chat
     session_id: str = ""
     model: str | None = None  # per-tab model override; None → configured default
     # Incognito thread (ADR 0069 D3b): no session-memory persistence and no
@@ -781,6 +782,7 @@ def register_chat_routes(app, ui: str) -> None:
                         model=req.model,
                         incognito=req.incognito,
                         hitl_resume=req.hitl_resume,
+                        **({"interpret": True} if req.interpret else {}),
                         origin="api-chat",
                     ),
                     session_id=session_id,
@@ -815,6 +817,7 @@ def register_chat_routes(app, ui: str) -> None:
                     model=req.model,
                     incognito=req.incognito,
                     hitl_resume=req.hitl_resume,
+                    **({"interpret": True} if req.interpret else {}),
                     origin="api-chat",
                 ),
             )
@@ -823,7 +826,12 @@ def register_chat_routes(app, ui: str) -> None:
         turn_err = next((m["error"] for m in result if isinstance(m.get("error"), dict)), None)
         if turn_err:
             raise _api_chat_error(turn_err, session_id)
-        parts = [m["content"] for m in result if m.get("role") == "assistant" and m.get("content")]
+        parts = [
+            m["content"]
+            for m in result
+            if m.get("content")
+            and (m.get("role") == "assistant" or (req.interpret and m.get("metadata", {}).get("interpret")))
+        ]
         return {"response": "\n\n".join(parts), "messages": result, "session_id": session_id}
 
     @app.delete("/api/chat/sessions/{session_id}")

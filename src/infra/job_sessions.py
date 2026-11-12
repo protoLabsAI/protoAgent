@@ -32,8 +32,12 @@ def ensure_schema(db: sqlite3.Connection) -> None:
     db.execute("CREATE INDEX IF NOT EXISTS idx_job_sessions_context ON job_sessions(context_id)")
 
 
-def resolve(db: sqlite3.Connection, job: dict) -> tuple[str | None, str | None]:
-    """Assign once per generation, retaining unresolved replacement ownership."""
+def resolve(db: sqlite3.Connection, job: dict, *, context_held=None) -> tuple[str | None, str | None]:
+    """Assign once per generation, retaining unresolved replacement ownership.
+
+    ``context_held(context_id) -> bool`` optionally reports continuations that
+    live outside this database (an armed watch in the host's watch store).
+    """
     key = (job["id"], job["created_at"])
     existing = db.execute(
         "SELECT context_id, hold_reason FROM job_sessions WHERE job_id = ? AND created_at = ?", key
@@ -56,6 +60,8 @@ def resolve(db: sqlite3.Connection, job: dict) -> tuple[str | None, str | None]:
                 "WHERE s.job_id = ? AND o.state IN ('claimed', 'unknown') "
                 "AND s.hold_reason IS NULL LIMIT 1", (job["id"],)
             ).fetchone()
+            if predecessor is None:
+                predecessor = _held_predecessor(db, job["id"], context_held)
             context = predecessor[0] if predecessor else f"job:{uuid.uuid4()}"
             if predecessor:
                 root = (predecessor[1], predecessor[2])
@@ -80,6 +86,37 @@ def resolve(db: sqlite3.Connection, job: dict) -> tuple[str | None, str | None]:
         (*key, context, hold, *root, parent_message),
     )
     return context, hold
+
+
+def _held_predecessor(db: sqlite3.Connection, job_id: str, context_held):
+    """A settled predecessor generation whose owner still has outstanding work.
+
+    While any continuation of the predecessor's owner is outstanding — a pending
+    wait/watch continuation job here, or (via ``context_held``) an armed watch
+    outside this database — a replacement reuses the SAME owner and queues behind
+    that work with a distinct generation and claim (ADR 0129 D6). A fresh owner
+    would let the replacement bypass the continuation's ownership hold. A new
+    owner is minted only when nothing of the predecessor is unresolved.
+    """
+    seen: set[str] = set()
+    for candidate in db.execute(
+        "SELECT context_id, root_job_id, root_created_at FROM job_sessions "
+        "WHERE job_id = ? AND hold_reason IS NULL AND context_id LIKE 'job:%' "
+        "ORDER BY created_at DESC",
+        (job_id,),
+    ).fetchall():
+        if candidate[0] in seen:
+            continue
+        seen.add(candidate[0])
+        outstanding = db.execute(
+            "SELECT 1 FROM jobs j JOIN job_sessions cs "
+            "ON j.id = cs.job_id AND j.created_at = cs.created_at "
+            "WHERE cs.context_id = ? AND cs.root_job_id != j.id LIMIT 1",
+            (candidate[0],),
+        ).fetchone()
+        if outstanding or (context_held is not None and context_held(candidate[0])):
+            return candidate
+    return None
 
 
 def migrate(db: sqlite3.Connection) -> None:

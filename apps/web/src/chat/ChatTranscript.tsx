@@ -34,7 +34,15 @@ type ChatTranscriptProps = {
   onEditStarterPrompts?: () => void;
   /** Bumped on every send: re-pins the transcript to the bottom (it always follows a send). */
   followSignal?: number;
+  /** A form/question/approval is open on this thread: a queued message is held until it is
+   *  answered (the parked turn makes no model call, so the queue cannot drain, #5106). */
+  formOpen?: boolean;
 };
+
+/** Why a queued message is waiting (#5106). Informational, never an error: the message is
+ *  safe, and these say when the agent will read it. */
+export const QUEUED_STEER_LABEL = "Queued behind a running step. It will be read at the next model call.";
+export const HELD_STEER_LABEL = "Held until the open form is answered.";
 
 type TranscriptMessageRowProps = {
   message: ChatMessage;
@@ -100,6 +108,7 @@ export const ChatTranscript = memo(function ChatTranscript({
   starterPrompts = STARTER_PROMPTS,
   onEditStarterPrompts,
   followSignal = 0,
+  formOpen = false,
 }: ChatTranscriptProps) {
   const feedback = useSessionFeedback(sessionId, messages, actions.incognito);
   const feedbackActions = useMemo(() => feedback.available ? { ...actions, feedback } : actions, [actions, feedback]);
@@ -175,16 +184,13 @@ export const ChatTranscript = memo(function ChatTranscript({
         /* Optimistic queued bubble: cancellation either removes it before consumption or
            lets the server's consumed marker settle it into the transcript. A server-turn
            interjection is the same thing sent to a turn this browser isn't streaming — the
-           server drains both from one steering queue — so it gets the same ✕. */
+           server drains both from one steering queue at the next model call — so it gets
+           the same ✕ and the same reason. */
         <Message
           key={queued.id}
           role="user"
           queued
-          queuedLabel={
-            queued.serverTaskId
-              ? "queued interjection — sent to this server turn"
-              : "queued — folds into the agent's work at its next step"
-          }
+          queuedLabel={formOpen ? HELD_STEER_LABEL : QUEUED_STEER_LABEL}
           onCancel={() => onCancelSteer(queued.id)}
         >
           <span className="chat-user-text">{queued.text}</span>

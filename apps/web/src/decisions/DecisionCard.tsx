@@ -6,7 +6,7 @@ import { Tooltip } from "@protolabsai/ui/overlays";
 
 import type { AnswerResult, DecisionRow } from "../lib/api/decisions";
 import { formatGivenAt, localStampTitle } from "../lib/format";
-import { recheckDecision } from "./useDecisions";
+import { dismissDecision, recheckDecision } from "./useDecisions";
 
 // Tokens only (§5.10): question = --pl-color-fg; meta, option explanations and the "if nobody
 // answers" line = --pl-color-fg-muted (7.24:1 dark / 7.73:1 light on --pl-color-bg-raised).
@@ -48,6 +48,11 @@ export type DecisionCardProps = {
    *  transit, or the server said it is on its way. Resolves null when the decision is gone;
    *  rejects when the server can't be reached. Defaults to the shared decisions store. */
   onCheck?: (id: string) => Promise<DecisionRow | null>;
+  /** Dismiss this decision (the cancel route): the agent stops waiting and the card closes.
+   *  Resolves to the withdrawn record. Always available on a pending card, so a decision can
+   *  never be stuck in the console (#5107). Optional: omitted, it defaults to the shared
+   *  decisions store; `null` hides the action for a host that offers dismissal elsewhere. */
+  onDismiss?: ((id: string) => Promise<DecisionRow>) | null;
   /** The card entered an interaction (sending); the panel retains it through its "Sent" hold so
    *  it never vanishes under the pointer (§5.5). */
   onHold?: (decision: DecisionRow) => void;
@@ -83,7 +88,11 @@ type Phase =
   // The send's outcome is unknown (#5099): the request failed in transit, or the server said
   // the answer is on its way (`delivering`). The card re-reads the decision until it knows —
   // it never offers the options again while an answer may still land. `note` picks the line.
-  | { kind: "checking"; optionId: string; note: "checking" | "onItsWay" | "unreachable"; attempt: number };
+  | { kind: "checking"; optionId: string; note: "checking" | "onItsWay" | "unreachable"; attempt: number }
+  // Dismiss (#5107): in flight, done, or not confirmed (the card stays, Dismiss stays enabled).
+  | { kind: "dismissing" }
+  | { kind: "dismissed" }
+  | { kind: "dismissFailed"; why: "stillWaiting" | "answerOnItsWay" | "unconfirmed" };
 
 /** Re-check delays while an answer's outcome is unknown: quick at first, then every 5s. */
 const CHECK_DELAYS_MS = [1000, 2000, 3000, 5000];
@@ -94,6 +103,7 @@ export function DecisionCard({
   decision,
   onAnswer,
   onCheck = recheckDecision,
+  onDismiss = dismissDecision,
   onHold,
   onResolved,
   onOpenChat,
@@ -116,7 +126,7 @@ export function DecisionCard({
   const agent = decision.agent || "An agent";
   const isTranscript = presentation === "transcript";
   const offlineBlocks = !agentOnline && !agentHoldsOffline;
-  const optionsDisabled = phase.kind === "sending" || phase.kind === "checking" || offlineBlocks;
+  const optionsDisabled = phase.kind === "sending" || phase.kind === "checking" || phase.kind === "dismissing" || offlineBlocks;
 
   const optionLabel = (optionId: string) =>
     decision.options.find((o) => o.id === optionId)?.label ?? optionId;
@@ -133,7 +143,8 @@ export function DecisionCard({
 
   // Move focus to the result/alert when it appears (§5.5, §5.8).
   useLayoutEffect(() => {
-    if (phase.kind === "sent" || phase.kind === "error" || phase.kind === "answeredElsewhere" || phase.kind === "checking") {
+    if (phase.kind === "sent" || phase.kind === "error" || phase.kind === "answeredElsewhere" || phase.kind === "checking"
+      || phase.kind === "dismissed" || phase.kind === "dismissFailed") {
       result.current?.focus();
     }
   }, [phase.kind]);
@@ -145,10 +156,31 @@ export function DecisionCard({
   const onResolvedRef = useRef(onResolved);
   onResolvedRef.current = onResolved;
   useEffect(() => {
-    if (isTranscript || phase.kind !== "sent") return;
+    if (isTranscript || (phase.kind !== "sent" && phase.kind !== "dismissed")) return;
     const timer = setTimeout(() => onResolvedRef.current?.(decision.id), 4000);
     return () => clearTimeout(timer);
   }, [isTranscript, phase.kind, decision.id]);
+
+  async function dismiss() {
+    if (!onDismiss) return;
+    onHold?.(decision);
+    setPhase({ kind: "dismissing" });
+    try {
+      await onDismiss(decision.id);
+      setPhase({ kind: "dismissed" });
+    } catch {
+      // A 409 (it closed under us) or a lost request: re-read before saying anything.
+      try {
+        const record = await onCheck(decision.id);
+        if (record === null) setPhase({ kind: "answeredElsewhere", record: null });
+        else if (record.state === "withdrawn" || record.state === "cancelled") setPhase({ kind: "dismissed" });
+        else if (TERMINAL.has(record.state)) setPhase({ kind: "answeredElsewhere", record });
+        else setPhase({ kind: "dismissFailed", why: record.delivering ? "answerOnItsWay" : "stillWaiting" });
+      } catch {
+        setPhase({ kind: "dismissFailed", why: "unconfirmed" });
+      }
+    }
+  }
 
   // What a (re-)read record says about an answer we sent for `optionId`. "unknown" keeps the
   // card checking: still pending while an answer is on its way.
@@ -274,7 +306,13 @@ export function DecisionCard({
   }
 
   let body: ReactNode;
-  if (isTranscript && TERMINAL.has(decision.state) && !(phase.kind === "sent" && decision.state === "answered")) {
+  if (phase.kind === "dismissed") {
+    body = (
+      <div ref={result} tabIndex={-1} aria-live="polite">
+        <StatusDot status="neutral" label={`Dismissed. ${agent} won't wait on this any more.`} />
+      </div>
+    );
+  } else if (isTranscript && TERMINAL.has(decision.state) && !(phase.kind === "sent" && decision.state === "answered")) {
     // Settled record in a chat transcript: one frozen line, no options, no callout (§5.5.4, §5.6).
     // Keep the local successful send visible; historical and externally closed cards use the record.
     body = (
@@ -330,6 +368,15 @@ export function DecisionCard({
     // pending (idle / sending / error): show the options
     body = (
       <>
+        {phase.kind === "dismissFailed" && (
+          <p ref={result} tabIndex={-1} style={muted} aria-live="polite">
+            {phase.why === "stillWaiting"
+              ? `Couldn't dismiss it just now. ${agent} is still waiting, and you can try again.`
+              : phase.why === "answerOnItsWay"
+                ? `An answer to this is already on its way to ${agent}, so it can't be dismissed now.`
+                : "Couldn't confirm the dismissal yet. You can try again in a moment."}
+          </p>
+        )}
         {phase.kind === "error" && (
           <div ref={result} tabIndex={-1} aria-live="polite">
             <Alert
@@ -373,6 +420,17 @@ export function DecisionCard({
           <Button variant="ghost" size={actionSize ?? "md"} onClick={() => onReplyInChat?.(decision)}>
             Reply in chat instead
           </Button>
+          {onDismiss && (
+            <Button
+              variant="ghost"
+              size={actionSize ?? "md"}
+              disabled={phase.kind === "sending"}
+              loading={phase.kind === "dismissing"}
+              onClick={() => void dismiss()}
+            >
+              Dismiss
+            </Button>
+          )}
         </div>
         {offlineBlocks ? (
           <p style={muted}>

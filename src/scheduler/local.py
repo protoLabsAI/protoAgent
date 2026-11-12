@@ -633,7 +633,9 @@ class LocalScheduler:
                 if job_id:
                     db.execute("DELETE FROM jobs WHERE id = ? AND agent_name = ?",
                                (job_id, self.agent_name))
-            job.context_id, job.execution_hold = job_sessions.resolve(db, job.as_dict())
+            job.context_id, job.execution_hold = job_sessions.resolve(
+                db, job.as_dict(), context_held=self._context_execution_held
+            )
             db.execute(
                 "INSERT INTO jobs (id, prompt, schedule, agent_name, next_fire, "
                 "last_fire, enabled, created_at, timezone, context_id, origin_session, "
@@ -1139,15 +1141,35 @@ class LocalScheduler:
         finally:
             db.close()
 
-    def _watch_holds_execution(self, job: Job) -> bool:
-        if not (job.context_id or "").startswith("job:"):
-            return False
+    def _context_execution_held(self, context_id: str) -> bool:
+        """Armed-watch continuations live in the watch store, not jobs.db. Consulted by
+        ``job_sessions.resolve`` when a replacement decides whether its settled
+        predecessor's owner still has outstanding work it must queue behind."""
         try:
             if self._watch_store is None:
                 from graph.watches.store import WatchStore
 
                 self._watch_store = WatchStore()
-            return self._watch_store.holds_execution(job.context_id)
+            return self._watch_store.holds_execution(context_id)
+        except Exception:  # noqa: BLE001 — uncertainty must not mint a fresh owner
+            log.exception("[scheduler] watch ownership unavailable for %s; retaining owner", context_id)
+            return True
+
+    def _watch_holds_execution(self, job: Job) -> bool:
+        if not (job.context_id or "").startswith("job:"):
+            return False
+        # A watch reaction fires INTO its owner while its own watch may still be
+        # armed (a repeating watch stays active between fires). Exclude that one
+        # watch so it cannot hold its own reaction out — any OTHER armed watch on
+        # the owner still holds. This identifies the reaction's watch by id; it does
+        # NOT infer continuation authorization from the prefix.
+        own_watch_id = job.id[len("watch-"):] if job.id.startswith("watch-") else None
+        try:
+            if self._watch_store is None:
+                from graph.watches.store import WatchStore
+
+                self._watch_store = WatchStore()
+            return self._watch_store.holds_execution(job.context_id, exclude_watch_id=own_watch_id)
         except Exception:  # noqa: BLE001 — failed reads cannot release an owner
             log.exception("[scheduler] watch ownership unavailable; holding %s", job.id)
             return True
@@ -1166,6 +1188,8 @@ class LocalScheduler:
             job.context_id = row["context_id"]
             job.execution_hold = row["execution_hold"]
             # Serialize by execution owner, including canceled/replaced generations.
+            # An actively accepted/in-flight occurrence anywhere in the owner holds
+            # EVERYTHING, including continuations — at most one active invocation.
             busy = db.execute(
                 "SELECT 1 FROM occurrences o LEFT JOIN job_sessions s "
                 "ON s.job_id = o.job_id AND s.created_at = o.created_at "
@@ -1173,14 +1197,31 @@ class LocalScheduler:
                 "AND (o.job_id = ? OR s.context_id = ?) LIMIT 1",
                 (job.id, job.context_id),
             ).fetchone()
+            # Another outstanding continuation of this owner (its session's root is a
+            # DIFFERENT generation) — identified from persisted ownership, not the id
+            # prefix. A root cron/one-shot fire waits behind it; so does an unrelated
+            # independent reaction of a repeating watch.
             waiting = db.execute(
-                "SELECT 1 FROM jobs WHERE context_id = ? AND id != ? "
-                "AND (id LIKE 'wait:%' OR id LIKE 'watch-%') LIMIT 1", (job.context_id, job.id)
+                "SELECT 1 FROM jobs j JOIN job_sessions s "
+                "ON j.id = s.job_id AND j.created_at = s.created_at "
+                "WHERE j.context_id = ? AND j.id != ? AND s.root_job_id != j.id LIMIT 1",
+                (job.context_id, job.id),
             ).fetchone()
-            continuation = not is_cron(job.schedule) and job.id.startswith(("wait:", "watch-"))
+            # Entry past that hold is authorized ONLY for the live continuation the
+            # owner actually yielded for — the one whose persisted parent occurrence
+            # exists. A fresh cron tick or a NEW reaction of a repeating watch has no
+            # such parent and waits like any other new independent occurrence.
+            session = db.execute(
+                "SELECT parent_message_id FROM job_sessions WHERE job_id = ? AND created_at = ?",
+                (job.id, job.created_at),
+            ).fetchone()
+            parent = session["parent_message_id"] if session else None
+            live_continuation = bool(parent) and db.execute(
+                "SELECT 1 FROM occurrences WHERE message_id = ? LIMIT 1", (parent,)
+            ).fetchone() is not None
             if busy or (
                 (job.context_id or "").startswith("job:")
-                and (waiting or self._watch_holds_execution(job)) and not continuation
+                and (waiting or self._watch_holds_execution(job)) and not live_continuation
             ):
                 return None
             old = db.execute("SELECT * FROM occurrences WHERE job_id = ? AND next_fire = ? AND created_at = ?",
@@ -1311,20 +1352,34 @@ class LocalScheduler:
             ).fetchall()
             for row in rows:
                 job = _row_to_job(row)
-                # A job-owned continuation pins its original due slot across
-                # downtime. The ordinary stale-fire policy still covers roots.
-                if (job.context_id or "").startswith("job:") and job.id.startswith(("wait:", "watch-")):
-                    continue
-                held = db.execute(
-                    "SELECT 1 FROM occurrences o JOIN job_sessions s "
-                    "ON o.job_id = s.job_id AND o.created_at = s.created_at "
-                    "WHERE s.context_id = ? AND o.state IN ('claimed', 'unknown') "
-                    "UNION ALL SELECT 1 FROM jobs WHERE context_id = ? "
-                    "AND id != ? AND (id LIKE 'wait:%' OR id LIKE 'watch-%') LIMIT 1",
-                    (job.context_id, job.context_id, job.id),
-                ).fetchone()
-                if held or self._watch_holds_execution(job):
-                    continue
+                # The stale-fire exemption is PER IDENTITY: only this job's own
+                # execution owner can preserve it. An unrelated wait/watch sharing a
+                # shared interactive chat (ADR 0053 one-pending-wait-per-chat applies
+                # only at claim time) exempts nothing here.
+                if (job.context_id or "").startswith("job:"):
+                    session = db.execute(
+                        "SELECT root_job_id FROM job_sessions WHERE job_id = ? AND created_at = ?",
+                        (job.id, job.created_at),
+                    ).fetchone()
+                    # A job-owned continuation (its session's root is a DIFFERENT
+                    # generation) pins its original due slot across downtime.
+                    if session and session["root_job_id"] != job.id:
+                        continue
+                    # A root fire waits behind the SAME owner's unresolved occurrences
+                    # or its own outstanding continuations — never another context's
+                    # pending work. Continuation membership is read from persisted
+                    # ownership, not the job-id prefix.
+                    held = db.execute(
+                        "SELECT 1 FROM occurrences o JOIN job_sessions s "
+                        "ON o.job_id = s.job_id AND o.created_at = s.created_at "
+                        "WHERE s.context_id = ? AND o.state IN ('claimed', 'unknown') "
+                        "UNION ALL SELECT 1 FROM jobs j JOIN job_sessions cs "
+                        "ON j.id = cs.job_id AND j.created_at = cs.created_at "
+                        "WHERE j.context_id = ? AND j.id != ? AND cs.root_job_id != j.id LIMIT 1",
+                        (job.context_id, job.context_id, job.id),
+                    ).fetchone()
+                    if held or self._watch_holds_execution(job):
+                        continue
                 if is_cron(job.schedule):
                     next_iso = _compute_next_fire(job.schedule, tz=job.timezone)
                     db.execute(
@@ -1406,7 +1461,8 @@ class LocalScheduler:
         state = str((task.get("status") or {}).get("state", "")).lower().removeprefix("task_state_")
         valid = not payload.get("error") and task.get("id") == task_id
         terminal = valid and state in {"completed", "failed", "rejected", "canceled", "cancelled"}
-        diagnostic = (f"task {task_id} pending ({state or 'unknown'}); not automatically resent" if valid else
+        diagnostic = (f"task {task_id} pending ({state or 'unknown'}): queued or running; "
+                      "recorded when it ends, not automatically resent" if valid else
                       f"task {task_id} missing or unavailable; not automatically resent")
         failure = _a2a_turn_failure(payload) if terminal else ""
         canceled = state in {"canceled", "cancelled"}
@@ -1591,11 +1647,27 @@ class LocalScheduler:
                     if task_id:
                         self._remember_task(job, task_id)
                         # Bound this wait; subsequent ticks use the same durable handle.
-                        async with asyncio.timeout(self._fire_timeout_s):
-                            payload = initial
-                            while not self._settle_task(job, task_id, payload):
-                                await asyncio.sleep(_POLL_INTERVAL_S)
-                                payload = await self._get_task(client, task_id)
+                        try:
+                            async with asyncio.timeout(self._fire_timeout_s):
+                                payload = initial
+                                while not self._settle_task(job, task_id, payload):
+                                    await asyncio.sleep(_POLL_INTERVAL_S)
+                                    payload = await self._get_task(client, task_id)
+                        except TimeoutError:
+                            # Accepted and still going (#5106): typically queued behind a
+                            # long turn on the same thread, or a long turn itself. Nothing
+                            # was lost and nothing is resent — the claim stays unresolved
+                            # (so the job cannot fire again meanwhile) and every tick reads
+                            # the task until it ends, then settles it exactly once.
+                            dispatch_state = "unknown"
+                            log.info(
+                                "[scheduler] job %s: task %s still queued or running after %gs; "
+                                "it settles when the task ends",
+                                job.id,
+                                task_id,
+                                self._fire_timeout_s,
+                            )
+                            return None
                         dispatch_state = "settled"
                         return True
             dispatch_state = "retryable"
