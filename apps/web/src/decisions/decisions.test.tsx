@@ -635,6 +635,75 @@ describe("DecisionCard", () => {
     expect(resolved).toHaveBeenCalledExactlyOnceWith("a");
   });
 
+  // ── Dismiss (#5107): every pending card can be cleared from the console ──
+  it("dismisses a pending card from the card itself", async () => {
+    vi.useFakeTimers();
+    const onDismiss = vi.fn().mockResolvedValue(decision("a", { state: "withdrawn" }));
+    const onResolved = vi.fn();
+    await renderNode(<DecisionCard decision={decision("a")} onAnswer={vi.fn()} onDismiss={onDismiss} onResolved={onResolved} />);
+    await click("Dismiss");
+    expect(onDismiss).toHaveBeenCalledExactlyOnceWith("a");
+    const result = host.querySelector('[aria-live="polite"][tabindex="-1"]');
+    expect(result?.textContent).toBe("Dismissed. protoEngineer won't wait on this any more.");
+    expect(document.activeElement).toBe(result);
+    expect(host.querySelector(".pl-alert, .pl-callout--warning")).toBeNull();
+    expect(host.querySelector('[role="group"][aria-label="Answer"]')).toBeNull();
+    await act(async () => { vi.advanceTimersByTime(4000); });
+    expect(onResolved).toHaveBeenCalledExactlyOnceWith("a");
+  });
+
+  it("says a dismissed card was already acted on when the server closed it first", async () => {
+    const onDismiss = vi.fn().mockRejectedValue(new Error("409"));
+    const onCheck = vi.fn().mockResolvedValue(decision("a", {
+      state: "withdrawn", withdraw_reason: "It had already moved past this question, so there's nothing left to answer.",
+    }));
+    await renderNode(<DecisionCard decision={decision("a")} onAnswer={vi.fn()} onDismiss={onDismiss} onCheck={onCheck} />);
+    await click("Dismiss");
+    expect(host.textContent).toContain("Dismissed. protoEngineer won't wait on this any more.");
+    // A record that closed as answered meanwhile keeps the real outcome instead.
+    onCheck.mockResolvedValue(decision("a", { state: "answered", answer: "hold", answer_label: "Hold the release" }));
+    await renderNode(<DecisionCard key="b" decision={decision("a")} onAnswer={vi.fn()} onDismiss={onDismiss} onCheck={onCheck} />);
+    await click("Dismiss");
+    expect(host.textContent).toContain('Already answered: you chose "Hold the release"');
+  });
+
+  it("hides Dismiss only when the host passes onDismiss={null}", async () => {
+    await renderNode(<DecisionCard decision={decision("a")} onAnswer={vi.fn()} />);
+    expect(buttons().some((b) => b.textContent?.trim() === "Dismiss")).toBe(true);
+    await renderNode(<DecisionCard decision={decision("a")} onAnswer={vi.fn()} onDismiss={null} />);
+    expect(buttons().some((b) => b.textContent?.trim() === "Dismiss")).toBe(false);
+  });
+
+  it("keeps Dismiss available, without an error alert, when it can't be confirmed", async () => {
+    const onDismiss = vi.fn().mockRejectedValue(new Error("network"));
+    const onCheck = vi.fn().mockResolvedValue(decision("a"));
+    await renderNode(<DecisionCard decision={decision("a")} onAnswer={vi.fn()} onDismiss={onDismiss} onCheck={onCheck} />);
+    await click("Dismiss");
+    expect(host.textContent).toContain("Couldn't dismiss it just now. protoEngineer is still waiting, and you can try again.");
+    expect(host.querySelector(".pl-alert")).toBeNull();
+    expect(buttons().find((b) => b.textContent?.trim() === "Dismiss")?.disabled).toBe(false);
+    onCheck.mockRejectedValue(new Error("offline"));
+    await click("Dismiss");
+    expect(host.textContent).toContain("Couldn't confirm the dismissal yet. You can try again in a moment.");
+    // A 409 because an answer is mid-delivery says so, rather than inviting a retry.
+    onCheck.mockResolvedValue(decision("a", { delivering: true }));
+    await click("Dismiss");
+    expect(host.textContent).toContain("An answer to this is already on its way to protoEngineer, so it can't be dismissed now.");
+    expect(onDismiss).toHaveBeenCalledTimes(3);
+  });
+
+  it("closes a stranded card the server withdrew on answer (409) with the reason", async () => {
+    const onAnswer = vi.fn().mockResolvedValue({ answered_elsewhere: true, decision: decision("a", {
+      state: "withdrawn", withdraw_reason: "It had already moved past this question, so there's nothing left to answer.",
+    }) });
+    await renderNode(<DecisionCard decision={decision("a")} onAnswer={onAnswer} />);
+    await click("Merge with the WARN");
+    expect(host.textContent).toContain(
+      "protoEngineer doesn't need this any more. It had already moved past this question, so there's nothing left to answer.");
+    expect(host.querySelector(".pl-alert")).toBeNull();
+    expect(buttons().some((b) => b.textContent?.trim() === "Try again")).toBe(false);
+  });
+
   it("drops the options and Try again when a failed send's decision settles elsewhere", async () => {
     const onAnswer = vi.fn().mockResolvedValue({ answered_elsewhere: false, decision: decision("a"), resumed: false });
     await renderNode(<DecisionCard decision={decision("a")} onAnswer={onAnswer} />);

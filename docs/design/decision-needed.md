@@ -195,6 +195,7 @@ The default action is written by the agent as a verb phrase ("keep holding the r
 - No option is ever `danger`. Choosing is not an error. If an option is destructive or outward-facing, the agent says so in the option's explanation.
 - Layout: a vertical stack, full width, in the panel and on the phone. Labels wrap; they are never cut off.
 - A ghost button after the options: **Reply in chat instead**. It opens the chat with the composer focused, for an answer that isn't one of the options.
+- A second ghost button after it: **Dismiss** (#5107). It withdraws the decision so the agent stops waiting, and is on every pending card, so a decision can never be stuck in the console. It is a secondary action, never `danger`.
 
 ### 4.4 Results
 
@@ -208,6 +209,9 @@ The default action is written by the agent as a verb phrase ("keep holding the r
 | On its way (202: the agent's session is busy) | Sent: "{option}". Waiting for {Agent} to pick it up… | Neutral pulsing `StatusDot` in place of the options. No retry. The card re-reads the decision until it is answered (then **Sent**) or confirmed undelivered (then **Couldn't send**). |
 | Checking (the request failed in transit, outcome unknown) | Checking whether {Agent} got "{option}"… | Neutral pulsing `StatusDot` in place of the options. No retry: the answer may have landed. Re-reads the decision right away, then on a 1s/2s/3s/5s backoff. |
 | Can't confirm (the re-read failed too) | Can't confirm yet whether {Agent} got "{option}". Still checking… | Same as Checking. Never claims that nothing happened. |
+| Dismissed | Dismissed. {Agent} won't wait on this any more. | Neutral `StatusDot` in place of the options; leaves after 4 seconds like **Sent**. |
+| Couldn't dismiss | Couldn't dismiss it just now. {Agent} is still waiting, and you can try again. (If the server can't be reached: "Couldn't confirm the dismissal yet. You can try again in a moment." If an answer is mid-delivery: "An answer to this is already on its way to {Agent}, so it can't be dismissed now.") | Plain muted line above the options. **Dismiss** stays enabled. Not an alert. |
+| Already acted on (the agent moved past the question before the record closed) | {Agent} doesn't need this any more. It had already moved past this question, so there's nothing left to answer. | The "No longer needed" callout. The server closes such a record itself, on boot or when it is answered (#5107). |
 | Couldn't send (the server confirms it is still waiting) | Couldn't send your answer. Nothing changed, and {Agent} is still waiting. | `Alert status="warning"` on the card with **Try again**, which resends the same option. The options stay enabled. Shown only after the server confirms the decision is pending with nothing on its way (#5099). |
 
 "Expired" never says "missed" or "failed". The agent did the stated thing, which is the system working as designed.
