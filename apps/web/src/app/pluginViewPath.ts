@@ -17,6 +17,10 @@ const NON_SAME_ORIGIN = /https?:\/\/|^\/\/|\\|localhost|:\d/i;
 /** Whether `path` can only ever resolve to the focused agent's own server. */
 export function isSameOriginViewPath(path: unknown): path is string {
   if (typeof path !== "string" || !path.trim()) return false;
+  // Surrounding whitespace is refused, not trimmed: the URL parser strips it, so " //host"
+  // is "//host" to the fetch that follows while reading as a harmless path to a check
+  // anchored at the first character. No manifest has a reason to pad a path.
+  if (path !== path.trim()) return false;
   if (URL_RESHAPING_CHARS.test(path)) return false;
   // Judge the path itself, not a query a deep link appended to it.
   const bare = path.split(/[?#]/, 1)[0];
