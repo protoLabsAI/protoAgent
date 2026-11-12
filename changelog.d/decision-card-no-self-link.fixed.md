@@ -1,0 +1,1 @@
+- **Decision cards in a chat no longer link to that same chat.** A decision answered in its own chat showed "Open chat: <agent>" pointing at the chat you were already in. The link now appears only in the Decisions panel and Work.
