@@ -62,6 +62,21 @@ def _normalize_pattern(pat: str) -> str:
     return norm
 
 
+def has_dot_segment(norm: str) -> bool:
+    """A ``.``/``..``/empty path segment (raw or percent-encoded), or an encoded
+    ``/``. ``fnmatch``'s ``*`` crosses ``/`` and ``..``, so ``…/protoLabsAI/../evil``
+    would match ``…/protoLabsAI/*`` while naming another owner's repo. A leading
+    ``/`` (a local absolute path, ``file:///…`` included) is not an empty segment."""
+    from urllib.parse import unquote
+
+    path = norm[len("file//") :] if norm.startswith("file//") else norm
+    for seg in path.lstrip("/").split("/"):
+        dec = unquote(seg)
+        if dec == "" or "/" in dec or {".", ".."} & set(dec.split("\\")):
+            return True
+    return False
+
+
 def source_matches(url: str, globs: list[str] | None) -> bool:
     """THE match predicate — shared by the trust matcher and the installer
     allowlist so the two can never drift (they did, byte-for-byte, twice).
@@ -72,8 +87,11 @@ def source_matches(url: str, globs: list[str] | None) -> bool:
     bypass). The boundary form still gives the org shorthand: an entry
     ``github.com/org`` matches ``github.com/org/repo``. Both sides normalize —
     exact entries fully (spelling-insensitive), glob entries without the
-    ``.git`` trim (see ``_normalize_pattern``)."""
+    ``.git`` trim (see ``_normalize_pattern``). A source with a dot/empty path
+    segment matches nothing (``has_dot_segment``)."""
     norm = normalize_source(url)
+    if has_dot_segment(norm):
+        return False
     pats = [_normalize_pattern(p) for p in globs or []]
     return any(fnmatch.fnmatch(norm, pat) or fnmatch.fnmatch(norm, pat + "/*") for pat in pats if pat)
 

@@ -69,9 +69,15 @@ def test_github_owner_repo_parsing(url, owner, repo):
     assert installer._github_owner_repo(url) == (owner, repo)
 
 
-def test_github_owner_repo_rejects_non_github():
+@pytest.mark.parametrize(
+    "url", ["https://gitlab.com/x/y", "https://github.com/ok/x/github.com/evil/y", "https://github.com/a/.."]
+)
+def test_github_owner_repo_rejects_non_github(url):
     with pytest.raises(installer.InstallError, match="github.com URL"):
-        installer._github_owner_repo("https://gitlab.com/x/y")
+        installer._github_owner_repo(url)
+    if "evil" in url:  # …and the install entry refuses a remote `..` path outright
+        with pytest.raises(installer.InstallError, match="segment"):
+            installer._validate_url("https://github.com/ok/../evil/y")
 
 
 @pytest.mark.parametrize(

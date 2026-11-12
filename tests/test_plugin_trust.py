@@ -69,6 +69,16 @@ def test_official_org_glob_matches_every_repo_in_the_org():
     assert source_official("https://github.com/protoLabsAI/social-stack", OFFICIAL)
     assert source_official("git@github.com:protoLabsAI/anything.git", OFFICIAL)
     assert not source_official("https://github.com/evil/social-stack", OFFICIAL)
+    # `*` crosses `/` and `..`: a dot/empty/encoded segment must not ride the org glob
+    for url in (
+        "https://github.com/protoLabsAI/../evil/x",
+        "https://github.com/protoLabsAI/%2e%2e/evil/x",
+        "https://github.com/protoLabsAI/./x",
+        "https://github.com/protoLabsAI//x",
+        "github.com/protoLabsAI/a%2Fb",
+    ):
+        assert not source_official(url, OFFICIAL), url
+    assert source_trusted("file:///opt/plugins/x", official=[], acked=["file:///opt/plugins/*"])
 
 
 def test_trusted_via_official_ack_or_global_switch():
