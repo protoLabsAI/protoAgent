@@ -140,11 +140,15 @@ export function DecisionCard({
 
   // The 4-second "Sent" hold, then the card leaves (§5.5). Only in the panel — in a chat
   // transcript the answered card freezes on "Sent" and never leaves (§5.5.4), so no hold.
+  // onResolved is read through a ref: hosts pass a fresh closure every render, and a dep on it
+  // restarted the 4s hold on each panel re-render, so the card never left.
+  const onResolvedRef = useRef(onResolved);
+  onResolvedRef.current = onResolved;
   useEffect(() => {
     if (isTranscript || phase.kind !== "sent") return;
-    const timer = setTimeout(() => onResolved?.(decision.id), 4000);
+    const timer = setTimeout(() => onResolvedRef.current?.(decision.id), 4000);
     return () => clearTimeout(timer);
-  }, [isTranscript, phase, decision.id, onResolved]);
+  }, [isTranscript, phase.kind, decision.id]);
 
   // What a (re-)read record says about an answer we sent for `optionId`. "unknown" keeps the
   // card checking: still pending while an answer is on its way.

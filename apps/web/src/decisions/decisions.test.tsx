@@ -617,6 +617,24 @@ describe("DecisionCard", () => {
     vi.useRealTimers();
   });
 
+  it("re-renders with a fresh onResolved do not extend the 4s Sent hold", async () => {
+    vi.useFakeTimers();
+    const onAnswer = vi.fn().mockResolvedValue({ answered_elsewhere: false, decision: decision("a"), resumed: true });
+    const resolved = vi.fn();
+    // Each render passes a NEW closure, as DecisionsPanel does.
+    const render = () => renderNode(<DecisionCard decision={decision("a")} onAnswer={onAnswer} onResolved={(id) => resolved(id)} />);
+    await render();
+    await click("Merge with the WARN");
+    expect(host.textContent).toContain("Sent:");
+    for (let i = 0; i < 3; i++) {
+      await act(async () => { vi.advanceTimersByTime(1000); });
+      await render();
+    }
+    expect(resolved).not.toHaveBeenCalled();
+    await act(async () => { vi.advanceTimersByTime(1000); });
+    expect(resolved).toHaveBeenCalledExactlyOnceWith("a");
+  });
+
   it("drops the options and Try again when a failed send's decision settles elsewhere", async () => {
     const onAnswer = vi.fn().mockResolvedValue({ answered_elsewhere: false, decision: decision("a"), resumed: false });
     await renderNode(<DecisionCard decision={decision("a")} onAnswer={onAnswer} />);

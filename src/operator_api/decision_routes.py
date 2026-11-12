@@ -58,6 +58,9 @@ def _resolve_answer(rec, body: AnswerRequest) -> str:
 
     option_id = (body.option_id or "").strip()
     text = (body.text or "").strip()
+    if body.option_id is not None and not option_id:
+        # A blank option id is a malformed request, not a free-text answer in disguise.
+        raise HTTPException(status_code=400, detail="option_id is blank")
     if option_id:
         by_id = {str(o.get("id")): str(o.get("id")) for o in rec.options if isinstance(o, dict) and o.get("id")}
         by_label = {str(o.get("label")): str(o.get("id")) for o in rec.options if isinstance(o, dict) and o.get("id")}
@@ -178,7 +181,8 @@ def register_decision_routes(app) -> None:
                 raise HTTPException(status_code=409, detail=with_delivery(rec) if rec else None)
         mine = loop.create_future()
         inflight[decision_id] = mine
-        text = f"Operator chose: {rec.option_label(answer)} ({answer})" if body.option_id else answer
+        # _resolve_answer rejects a blank option_id, so a non-None one here names an option.
+        text = f"Operator chose: {rec.option_label(answer)} ({answer})" if body.option_id is not None else answer
         actor = getattr(request.state, "device_id", None) or "operator"
 
         async def deliver_answer():
@@ -245,6 +249,12 @@ def register_decision_routes(app) -> None:
         sentinel — so the session is NOT left blocked for later autonomous (scheduler /
         inbox / webhook) turns. Clearing is best-effort: the autonomous hold also refuses to
         park on a non-pending decision, so a failed clear can never wedge the session."""
+        if delivering(decision_id):
+            # An answer is mid-delivery: withdrawing now would pull the record out from under a
+            # resume that may already be consuming it. The answer decides; report the state.
+            rec = await asyncio.to_thread(decision_store().get, decision_id)
+            if rec is not None:
+                raise HTTPException(status_code=409, detail=with_delivery(rec))
         try:
             updated = await asyncio.to_thread(decision_store().withdraw, decision_id, body.reason if body else "")
         except DecisionNotFound as exc:

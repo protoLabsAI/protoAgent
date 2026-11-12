@@ -247,3 +247,43 @@ async def test_retry_after_consumption_returns_the_record_and_starts_no_turn(har
         turn.release.set()
         await asyncio.wait_for(turn.finished.wait(), 2)
     assert turn.a2a_calls == [rec.id]
+
+
+@pytest.mark.asyncio
+async def test_blank_option_id_is_rejected_not_sent(harness):
+    store, build = harness
+    turn, rec, client = await build()
+    async with client:
+        for body in ({"option_id": "   "}, {"option_id": "  ", "text": "ship it"}):
+            r = await client.post(f"/api/decisions/{rec.id}/answer", json=body)
+            assert r.status_code == 400, r.text
+    assert turn.a2a_calls == []
+    assert store.get(rec.id).pending
+
+
+@pytest.mark.asyncio
+async def test_cancel_waits_out_an_answer_in_flight(harness, monkeypatch):
+    """A cancel arriving while an answer is mid-delivery must not withdraw the record under it."""
+    store, build = harness
+    turn, rec, client = await build()
+    monkeypatch.setattr(decision_routes, "ACCEPT_WAIT_S", 0.2)
+    lock = turn_control._thread_lock(THREAD)
+    await lock.acquire()  # the session is busy: the answer queues
+    try:
+        async with client:
+            first = await client.post(f"/api/decisions/{rec.id}/answer", json={"option_id": "yes"})
+            assert first.status_code == 202
+            cancel = await client.post(f"/api/decisions/{rec.id}/cancel")
+            assert cancel.status_code == 409, cancel.text
+            assert cancel.json()["detail"]["state"] == "pending"
+            assert cancel.json()["detail"]["delivering"] is True
+            assert store.get(rec.id).pending
+            lock.release()
+            await _until(lambda: store.get(rec.id).state == "answered")
+            turn.release.set()
+            await asyncio.wait_for(turn.finished.wait(), 2)
+    finally:
+        if lock.locked():
+            lock.release()
+    assert store.get(rec.id).answer == "yes"
+    assert turn.a2a_calls == [rec.id]

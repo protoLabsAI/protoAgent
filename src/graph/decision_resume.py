@@ -1,5 +1,6 @@
 """Shared loopback delivery for decision answers and dismissals."""
 
+import enum
 import logging
 
 log = logging.getLogger("protoagent.decisions")
@@ -25,6 +26,27 @@ _FAILED_TASK_STATES = frozenset({"TASK_STATE_FAILED", "TASK_STATE_CANCELED", "TA
                                  "failed", "canceled", "rejected"})
 
 
+class ResumeOutcome(enum.Enum):
+    """What a loopback resume achieved. Truthy when the resume reached the parked turn.
+
+    - ``DELIVERED``: the resumed turn completed (or paused again).
+    - ``TURN_FAILED``: the resume reached the agent, but its turn ended failed/cancelled/
+      rejected. For a dismissal the interrupt was still taken; for an answer, the ledger
+      (closed on consumption) says whether the answer landed.
+    - ``NOT_DELIVERED``: refused or never sent (no port, HTTP error, JSON-RPC error,
+      transport error). The interrupt is still parked.
+    - ``UNKNOWN``: the transport timed out; the turn may still be running.
+    """
+
+    DELIVERED = "delivered"
+    TURN_FAILED = "turn_failed"
+    NOT_DELIVERED = "not_delivered"
+    UNKNOWN = "unknown"
+
+    def __bool__(self) -> bool:
+        return self in (ResumeOutcome.DELIVERED, ResumeOutcome.TURN_FAILED)
+
+
 def _task_outcome(payload: dict) -> tuple[str, str]:
     """``(state, first status text)`` from a SendMessage reply; empty strings when absent."""
     def obj(value) -> dict:
@@ -44,7 +66,7 @@ async def resume_parked_turn(
     *,
     resolution: dict | None = None,
     wait_for_turn: bool | None = None,
-) -> bool:
+) -> ResumeOutcome:
     """Resume the turn parked on this decision with ``answer``, over the loopback A2A
     endpoint — the SAME HITL-resume entry point the console uses.
 
@@ -53,14 +75,14 @@ async def resume_parked_turn(
     checkpoint consumes the answer. WITHOUT one (the cancel path, which has already closed
     the record) the check is skipped — the resume only has to CLEAR the lingering checkpoint
     interrupt so the session isn't wedged for later autonomous turns. Delivery failure
-    leaves the interrupt in place and returns False so callers can report failed delivery.
+    leaves the interrupt in place and returns a falsy :class:`ResumeOutcome` so callers can
+    report failed delivery.
 
     ``wait_for_turn`` drops the read deadline: the call returns when the resumed turn ends,
     however long that is. It defaults on for an operator answer (a ``resolution`` in state
     ``answered``, which only the answer route sends) and off for dismissals and expiry
     defaults. Either way a turn that ends failed is a WARNING naming the decision, never
-    silent — including one that fails after consuming the answer. True only when the turn
-    completed (or paused again) without failing.
+    silent — including one that fails after consuming the answer (``TURN_FAILED``).
     """
     import uuid
 
@@ -72,7 +94,7 @@ async def resume_parked_turn(
     port = getattr(STATE, "active_port", None)
     if not port:
         log.warning("[decision] no active port — cannot resume parked turn for %s", session_id)
-        return False
+        return ResumeOutcome.NOT_DELIVERED
     headers = {"Content-Type": "application/json", "A2A-Version": "1.0"}
     headers.update(self_invocation_headers())
     message_id = str(uuid.uuid4())
@@ -108,23 +130,23 @@ async def resume_parked_turn(
             r = await client.post(f"http://127.0.0.1:{port}/a2a", headers=headers, json=body)
         if r.status_code >= 400:
             log.warning("[decision] resume for %s failed: HTTP %d %s", session_id, r.status_code, r.text[:200])
-            return False
+            return ResumeOutcome.NOT_DELIVERED
         payload = r.json()
         if payload.get("error"):
             log.warning("[decision] resume for %s (%s) refused: %s", session_id, label, str(payload["error"])[:200])
-            return False
+            return ResumeOutcome.NOT_DELIVERED
         state, text = _task_outcome(payload)
         if state in _FAILED_TASK_STATES:
             log.warning("[decision] resumed turn for %s (%s) ended %s: %s", session_id, label, state, text[:300])
-            return False
+            return ResumeOutcome.TURN_FAILED
         if wait_for_turn:
             log.info("[decision] resumed turn for %s (%s) finished: %s", session_id, label, state or "ok")
-        return True
+        return ResumeOutcome.DELIVERED
     except httpx.TimeoutException:
         # The turn may still be running server-side: delivery is unknown, not refused.
         log.warning("[decision] resume for %s (%s) timed out after %ss; the turn may still be running",
                     session_id, label, RESUME_TIMEOUT_S)
-        return False
+        return ResumeOutcome.UNKNOWN
     except Exception:  # noqa: BLE001 — a resume transport error must not 500 the answer route
         log.exception("[decision] resume POST failed for %s", session_id)
-        return False
+        return ResumeOutcome.NOT_DELIVERED

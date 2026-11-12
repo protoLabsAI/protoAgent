@@ -596,7 +596,7 @@ async def test_resume_transport_failure_does_not_close_record(store, monkeypatch
         return httpx.Response(200, json={"error": {"code": -32602, "message": "stale"}})
 
     monkeypatch.setattr(httpx.AsyncClient, "post", post)
-    assert await decision_routes._resume_parked_turn(rec.session_id, "yes", rec.id) is False
+    assert not await decision_routes._resume_parked_turn(rec.session_id, "yes", rec.id)
     assert store.get(rec.id).pending
 
 
