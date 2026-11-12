@@ -461,11 +461,17 @@ def register_provider_routes(app) -> None:
         return {"ok": True, "id": pid}
 
     @app.delete("/api/config/providers/{pid}")
-    async def _delete_provider(pid: str, confirm_last: bool = False, body: ProviderDelete | None = None):
+    async def _delete_provider(
+        pid: str, request: Request, confirm_last: bool = False, body: ProviderDelete | None = None
+    ):
         from graph.llm import split_slot_target
 
         cfg = _config()
         pid = (pid or "").strip().lower()
+        # ADR 0121 D4, as for add and edit: removing a connection (and re-pointing whatever
+        # used it at another one) decides where prompts go — full scope only.
+        if (denied := credential_plane_refusal(request, [f"providers.{pid}"])) is not None:
+            return denied
         if cfg.provider_by_id(pid) is None:
             raise HTTPException(status_code=404, detail=f"no provider named {pid!r}")
 

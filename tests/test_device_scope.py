@@ -1061,6 +1061,7 @@ def test_device_scope_cannot_add_commands_through_config(config_client):
         ({"delegates": [{"name": "d", "command": "sh"}]}, "delegates"),
         ({"lifecycle_hooks": [{"event": "turn_end", "command": "sh"}]}, "lifecycle_hooks"),
         ({"acp": {"agents": {"evil": {"command": "sh"}}}}, "acp.agents.evil.command"),
+        ({"providers": [{"id": "p", "type": "openai-compat", "base_url": "https://elsewhere.example/v1"}]}, "providers"),
     ]:
         resp = config_client.post("/api/config", headers={"x-test-scope": "device"}, json={"config": config})
         assert resp.status_code == 403 and resp.json()["keys"] == [key], config
