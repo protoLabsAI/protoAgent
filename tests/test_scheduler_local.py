@@ -622,10 +622,8 @@ class TestFireTurnEvents:
         assert msg["parts"][0]["text"].startswith("[Autonomous wake — driving your active goal.")
 
     @pytest.mark.asyncio
-    async def test_fire_without_context_defaults_to_activity_thread(self, tmp_path, monkeypatch):
+    async def test_fire_without_context_uses_job_session(self, tmp_path, monkeypatch):
         import httpx
-
-        from events import ACTIVITY_CONTEXT
 
         monkeypatch.setattr(httpx, "AsyncClient", lambda **kw: _FakeClient(_FakeResponse(200)))
         events: list = []
@@ -635,7 +633,8 @@ class TestFireTurnEvents:
         await s._fire(job)
 
         started = next(d for (t, d) in events if t == "turn.started")
-        assert started["session_id"] == ACTIVITY_CONTEXT
+        assert started["session_id"] == job.context_id
+        assert job.context_id.startswith("job:")
 
     @pytest.mark.asyncio
     async def test_fire_finishes_even_on_http_error(self, tmp_path, monkeypatch):
@@ -799,12 +798,11 @@ async def test_due_job_fires(tmp_path, monkeypatch):
     # One-shot was deleted after firing
     assert s.list_jobs() == []
 
-    # Fires route into the durable Activity thread (ADR 0003) so the response
-    # surfaces, with an origin tag for the activity surface. A2A 1.0: contextId +
+    # Fires route into a durable job session (ADR 0129), with provenance. A2A 1.0: contextId +
     # metadata live on the message (#477).
     call = next(c for c in fired if "FIRED-ME" in str(c["json"]))
     msg = call["json"]["params"]["message"]
-    assert msg["contextId"] == "system:activity"
+    assert msg["contextId"].startswith("job:")
     assert msg["metadata"]["origin"] == "scheduler"
 
     bus = [d for (t, d) in events if t == "scheduler.fired"]
@@ -954,8 +952,6 @@ async def test_fire_emits_a2a_1_0_wire_shape(tmp_path, monkeypatch):
     contextId + metadata ON the message. Regresses #477."""
     import httpx
 
-    from events import ACTIVITY_CONTEXT
-
     cap = _CaptureClient()
     monkeypatch.setattr(httpx, "AsyncClient", lambda *a, **k: cap)
 
@@ -976,7 +972,7 @@ async def test_fire_emits_a2a_1_0_wire_shape(tmp_path, monkeypatch):
     assert len(msg["parts"]) == 1 and set(msg["parts"][0]) == {"text"}
     assert msg["parts"][0]["text"].endswith("do the thing")
     assert "Autonomous wake — scheduled run" in msg["parts"][0]["text"]
-    assert msg["contextId"] == ACTIVITY_CONTEXT
+    assert msg["contextId"] == job.context_id
     assert msg["metadata"]["scheduler_job_id"] == job.id
     assert msg["metadata"]["origin"] == "scheduler"
 
@@ -1138,10 +1134,10 @@ class TestContextId:
         s.add_job("resume", "2099-01-01T00:00:00+00:00", job_id="j", context_id="chat-abc")
         assert s.list_jobs()[0].context_id == "chat-abc"
 
-    def test_context_id_defaults_to_none(self, tmp_path):
+    def test_context_id_defaults_to_job_owner(self, tmp_path):
         s = _make_scheduler(tmp_path)
         s.add_job("plain", "2099-01-01T00:00:00+00:00", job_id="j")
-        assert s.list_jobs()[0].context_id is None
+        assert s.list_jobs()[0].context_id.startswith("job:")
 
     def test_migrates_pre_context_id_db(self, tmp_path):
         # Simulate a store created before the context_id column existed: rebuild
@@ -1167,7 +1163,7 @@ class TestContextId:
 
         s2 = _make_scheduler(tmp_path)
         jobs = s2.list_jobs()
-        assert len(jobs) == 1 and jobs[0].context_id is None  # old row → no context
+        assert len(jobs) == 1 and jobs[0].context_id.startswith("job:")
         s2.add_job("new", "2099-01-02T00:00:00+00:00", job_id="new", context_id="chat-x")
         got = {j.id: j for j in s2.list_jobs()}
         assert got["new"].context_id == "chat-x"
@@ -1175,8 +1171,6 @@ class TestContextId:
     @pytest.mark.asyncio
     async def test_fire_routes_to_job_context_id(self, tmp_path, monkeypatch):
         import httpx
-
-        from events import ACTIVITY_CONTEXT
 
         s = _make_scheduler(tmp_path)
         monkeypatch.setattr(httpx, "AsyncClient", lambda **kw: _CapClient())
@@ -1188,7 +1182,7 @@ class TestContextId:
 
         plain = s.add_job("plain", soon, job_id="plain")
         await s._fire(plain)
-        assert _CapClient.posted["params"]["message"]["contextId"] == ACTIVITY_CONTEXT
+        assert _CapClient.posted["params"]["message"]["contextId"] == plain.context_id
 
 
 class TestRenameDoesNotOrphanJobs:
@@ -1983,6 +1977,16 @@ async def test_recreated_same_slot_has_independent_claim_and_settlement(tmp_path
                 assert claim["state"] == "claimed"
             return _FakeResponse()
 
+    if state in ("claimed", "unknown"):
+        # The predecessor's claim carries no task handle, so it can never be
+        # reconciled: it stays quarantined in its own, now orphaned, owner while
+        # the replacement runs under a FRESH owner (ADR 0129 D6) — inheriting the
+        # stuck owner would park every cancel-and-recreate behind it forever. An
+        # ACCEPTED predecessor (persisted handle) DOES capture the replacement
+        # behind the same owner until reconciliation settles it — covered by
+        # test_job_session_migration.test_accepted_predecessor_captures_replacement_behind_same_owner.
+        assert replacement.context_id != old.context_id
+        assert replacement.context_id.startswith("job:")
     monkeypatch.setattr(httpx, "AsyncClient", lambda **kw: ReplacementClient(None))
     await s._tick()
     await asyncio.gather(*s._fire_tasks)

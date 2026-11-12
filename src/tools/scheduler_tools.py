@@ -151,11 +151,13 @@ def _build_scheduler_tools(scheduler) -> list:
             pass
         # Two DISTINCT session stamps derive from the same turn session id:
         #  - ``context_id`` controls WHERE the fire RUNS (ADR 0053). A one-shot resumes
-        #    the ORIGINATING chat; a cron deliberately stays context-free so recurring
-        #    work lands in Activity, not a chat the operator closed days ago.
+        #    the ORIGINATING chat; a cron deliberately passes none, and the scheduler's
+        #    ``job_sessions`` assigns it a durable isolated ``job:`` execution owner
+        #    (ADR 0129) — recurring work runs neither in a chat the operator closed
+        #    days ago nor on the shared Activity session.
         #  - ``origin_session`` is WHERE the RESULT is DELIVERED (#2990): the chat that
         #    created the schedule. Stamped for BOTH crons and one-shots so even a cron
-        #    firing into Activity reports back to that conversation as a
+        #    running in its own job session reports back to that conversation as a
         #    ScheduledReportCard. Read from the injected graph state, not the tracing
         #    contextvar (which reads empty in a tool body under LangGraph).
         # A schedule created outside a chat (Activity-origin turn) has ctx=None → no
@@ -243,13 +245,14 @@ def _build_scheduler_tools(scheduler) -> list:
             return "Error: seconds is outside the supported wake-up date range."
         # Resume in the SAME conversation: stamp the originating chat session
         # (== the turn's A2A contextId) onto the job so the scheduler fires the
-        # resume into this thread, not the Activity thread — the agent wakes up
-        # with the conversation history intact (ADR 0053). Same contextvar the
-        # background-subagent path reads. Empty (e.g. an Activity-origin turn) →
-        # the scheduler falls back to the Activity thread.
+        # resume into this thread — the agent wakes up with the conversation
+        # history intact (ADR 0053). Empty (e.g. an Activity/background-origin
+        # turn) → the scheduler's ``job_sessions`` assigns the wait its own
+        # isolated ``job:`` execution owner (ADR 0129); it never lands on the
+        # shared Activity session.
         # Read the originating session from the injected graph state, NOT the
         # tracing contextvar — the contextvar reads empty in a tool body under
-        # LangGraph, which silently dropped this resume to the Activity thread.
+        # LangGraph, which silently dropped this resume out of its chat.
         ctx = _session_id_from(state) or None
         # ONE pending wait per thread. A stable per-session job id means a new wait
         # SUPERSEDES a still-pending one instead of stacking beside it — the bug behind

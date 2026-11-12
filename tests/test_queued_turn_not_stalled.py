@@ -254,7 +254,7 @@ async def test_a_fire_into_a_busy_thread_runs_exactly_once_after_it_frees(env, t
                         "messageId": "long-job",
                         "role": "ROLE_USER",
                         "parts": [{"text": "run the merge queue"}],
-                        "contextId": "system:activity",
+                        "contextId": "chat-thread",
                     },
                 },
             },
@@ -265,7 +265,11 @@ async def test_a_fire_into_a_busy_thread_runs_exactly_once_after_it_frees(env, t
     monkeypatch.setattr(httpx, "AsyncClient", client)
     s = LocalScheduler(agent_name="t", invoke_url="http://agent", api_key="", bearer_token="", db_dir=tmp_path)
     s._fire_timeout_s = _STALL  # the fire's own wait runs out long before the job ends
-    job = s.add_job("check the queue", (datetime.now(UTC) - timedelta(seconds=1)).isoformat(), job_id="wait:system:activity")
+    # An explicit interactive continuation into the busy thread (ADR 0129 keeps chat
+    # targets; a context-less wait would get its own isolated `job:` owner instead,
+    # and a MIGRATED legacy `wait:system:activity` row is held).
+    job = s.add_job("check the queue", (datetime.now(UTC) - timedelta(seconds=1)).isoformat(),
+                    job_id="wait:chat-thread", context_id="chat-thread")
 
     with caplog.at_level(logging.INFO, logger="scheduler.local"):
         await s._tick()

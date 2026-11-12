@@ -500,9 +500,9 @@ class _Sched:
     def __init__(self):
         self.added: list[dict] = []
 
-    def add_job(self, prompt, schedule, *, job_id=None, timezone=None, context_id=None):
+    def add_job(self, prompt, schedule, *, job_id=None, timezone=None, context_id=None, enqueue_key=None):
         self.added.append({"prompt": prompt, "context_id": context_id, "fence": current_fence()})
-        return SimpleNamespace(id=job_id or "j")
+        return SimpleNamespace(id=job_id or "j", next_fire=schedule)
 
     def cancel_job(self, job_id):
         return True

@@ -36,7 +36,7 @@ import logging
 import os
 import sqlite3
 import uuid
-from contextlib import closing
+from contextlib import closing, suppress
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -45,7 +45,7 @@ from croniter import croniter
 
 from a2a_impl.wire import task_id_from_response
 from events import ACTIVITY_CONTEXT
-from infra import keep_awake
+from infra import keep_awake, job_sessions
 from scheduler.interface import Job, is_cron, parse_iso_to_utc, parse_ttl
 from observability.sqlite_migrate import add_missing_columns
 
@@ -395,7 +395,9 @@ class LocalScheduler:
         db_dir: str | Path | None = None,
         event_publish=None,
         adopt_existing_jobs: bool = True,
+        watch_store=None,
     ):
+        self._watch_store = watch_store
         self.agent_name = agent_name
         self._invoke_url = invoke_url.rstrip("/")
         self._api_key = api_key or ""
@@ -432,7 +434,9 @@ class LocalScheduler:
         db.execute("PRAGMA busy_timeout=5000")  # wait (don't error) on lock contention
         try:
             db.execute("PRAGMA journal_mode=WAL")
-        except sqlite3.OperationalError as exc:
+        except sqlite3.DatabaseError as exc:
+            # Best-effort: an unwritable or corrupt file skips WAL here and fails
+            # where the caller actually reads/writes, inside its own error handling.
             log.debug("[scheduler] WAL skipped: %s", exc)
         return db
 
@@ -454,6 +458,61 @@ class LocalScheduler:
             raise ValueError("scheduler store belongs to a different agent; check target identity")
 
     def _init_db(self, *, adopt_existing_jobs: bool = True) -> None:
+        self._migration_pending = False
+        self._schema_ready = False
+        if not adopt_existing_jobs:
+            # Producers never run DDL (below): mark the schema settled so add_job's
+            # self-heal doesn't try to initialize someone else's store.
+            self._schema_ready = True
+            self._initialize_db(adopt_existing_jobs=False)
+            return
+        migration_lock = _acquire_jobs_lock(self.path)
+        if migration_lock is None:
+            # A live old scheduler must drain before routing can change — but a
+            # held lock at construction is the normal restart/redeploy overlap,
+            # not an error. Raising here made `agent_init` (which wraps the
+            # constructor in `except Exception`) run scheduler-less until the
+            # NEXT restart, bypassing start()'s designed background lock-retry
+            # (`_await_lock_then_poll`). Defer the IDENTITY migration to the
+            # moment this process wins the owner-lock instead; until then the
+            # live owner's routing stays exactly as it left it. The ADDITIVE
+            # schema (new tables/columns) still applies now — the pre-ADR-0129
+            # constructor always ran schema setup during this overlap too — so
+            # every enqueue (schedule_task / wait / run_in_session / a watch
+            # reaction) keeps working while the lock is contended instead of
+            # failing against a missing job_sessions table after its caller
+            # already cancelled the job it was replacing.
+            self._migration_pending = True
+            log.warning(
+                "[scheduler] jobs.db at %s is owned by another live instance — deferring "
+                "the identity migration until the owner-lock is acquired (enqueue stays "
+                "available)",
+                self.path,
+            )
+            self._ensure_additive_schema()
+            return
+        try:
+            self._initialize_db(adopt_existing_jobs=True)
+        finally:
+            _release_jobs_lock(self.path, migration_lock)
+
+    def _complete_deferred_migration(self) -> None:
+        """Run the identity migration a lock-contended constructor deferred.
+
+        Called with the owner-lock HELD (the old dispatch writer has drained),
+        before any polling or missed-fire recovery touches the store. Database
+        errors log and leave the scheduler polling — claims against a store that
+        somehow still isn't migrated fail closed per query, which beats running
+        the whole agent scheduler-less."""
+        if not self._migration_pending:
+            return
+        try:
+            self._initialize_db(adopt_existing_jobs=True)
+            self._migration_pending = False
+        except Exception:  # noqa: BLE001 — unrouted rows stay held; polling must not die
+            log.exception("[scheduler] deferred schema/identity migration failed at %s", self.path)
+
+    def _initialize_db(self, *, adopt_existing_jobs: bool) -> None:
         if not adopt_existing_jobs:
             # Producers never initialize or migrate a store. A wrong name can
             # resolve to a separate, empty database under SCHEDULER_DB_DIR.
@@ -465,42 +524,12 @@ class LocalScheduler:
             finally:
                 db.close()
             return
+        db = self._connect()
         try:
-            db = self._connect()
-            db.executescript(_SCHEMA)
-            # Preserve canceled generations when a replacement uses the same slot.
-            keys = {r["name"] for r in db.execute("PRAGMA table_info(occurrences)") if r["pk"]}
-            if "created_at" not in keys:
-                db.execute("BEGIN IMMEDIATE")
-                db.execute("ALTER TABLE occurrences RENAME TO occurrences_previous")
-                ledger_schema = _SCHEMA.split("CREATE TABLE IF NOT EXISTS occurrences", 1)[1].split(";", 1)[0]
-                db.execute("CREATE TABLE occurrences" + ledger_schema)
-                db.execute("INSERT INTO occurrences SELECT * FROM occurrences_previous")
-                db.execute("DROP TABLE occurrences_previous")
-                db.commit()
-            add_missing_columns(db, "occurrences", (
-                ("task_id", "TEXT"), ("job_snapshot", "TEXT"),
-                ("task_state", "TEXT"), ("diagnostic", "TEXT"),
-            ))
-            # Additive migrations for stores created before each column existed. Only the
-            # missing ones are ALTERed, and a failed ALTER raises: a lock timeout used to
-            # pass as "column already present" and leave the store without it.
-            add_missing_columns(
-                db,
-                "jobs",
-                (
-                    ("timezone", "TEXT"),  # per-job timezone
-                    ("context_id", "TEXT"),  # ADR 0053 same-session resume
-                    ("origin_session", "TEXT"),  # #2990 deliver-result-to-origin-chat
-                    ("ttl", "TEXT"),  # #2992 auto-expiry
-                    ("max_fires", "INTEGER"),
-                    ("fire_count", "INTEGER NOT NULL DEFAULT 0"),
-                    ("consecutive_failures", "INTEGER NOT NULL DEFAULT 0"),  # #3376 outcomes
-                    ("last_error", "TEXT"),
-                    ("last_ok", "TEXT"),
-                    ("fence", "TEXT"),  # the creating turn's tool fence (existing rows → unfenced)
-                ),
-            )
+            self._apply_additive_schema(db)
+            self._schema_ready = True
+            db.execute("BEGIN IMMEDIATE")
+            job_sessions.migrate(db)
             # Re-key rows written under a previous display name (#2382). Every jobs.db is
             # single-agent by construction — the path carries either the constant segment or
             # the agent's own name segment — so every row in THIS file is ours, whatever name
@@ -522,9 +551,88 @@ class LocalScheduler:
                 (self.agent_name,),
             )
             db.commit()
-            db.close()
         except sqlite3.DatabaseError:
+            # Non-fatal, as before ADR 0129: an unreadable/locked store logs and
+            # leaves the scheduler constructed (later reads/claims fail closed per
+            # query) instead of bubbling out of the constructor, which agent_init
+            # converts into running scheduler-less until the next restart.
+            with suppress(sqlite3.DatabaseError):
+                db.rollback()
             log.exception("[scheduler] schema init failed at %s", self.path)
+        except BaseException:
+            # A crash mid-migration must roll back routing and owner assignment as
+            # one transaction before propagating (idempotent recovery re-runs it).
+            with suppress(sqlite3.DatabaseError):
+                db.rollback()
+            raise
+        finally:
+            db.close()
+
+    def _apply_additive_schema(self, db: sqlite3.Connection) -> None:
+        """Create missing tables/columns — DDL only, no routing rewrite.
+
+        Safe while another live instance owns dispatch: it changes nothing the old
+        process reads or writes (explicit-column INSERTs and ``SELECT *`` are
+        unaffected by added columns/tables), which is exactly the schema setup the
+        pre-ADR-0129 constructor always ran during a restart/redeploy overlap. The
+        identity migration (``job_sessions.migrate``) is the part that must wait
+        for the owner-lock."""
+        db.executescript(_SCHEMA)
+        # Preserve canceled generations when a replacement uses the same slot.
+        keys = {r["name"] for r in db.execute("PRAGMA table_info(occurrences)") if r["pk"]}
+        if "created_at" not in keys:
+            db.execute("BEGIN IMMEDIATE")
+            db.execute("ALTER TABLE occurrences RENAME TO occurrences_previous")
+            ledger_schema = _SCHEMA.split("CREATE TABLE IF NOT EXISTS occurrences", 1)[1].split(";", 1)[0]
+            db.execute("CREATE TABLE occurrences" + ledger_schema)
+            db.execute("INSERT INTO occurrences SELECT * FROM occurrences_previous")
+            db.execute("DROP TABLE occurrences_previous")
+            db.commit()
+        add_missing_columns(db, "occurrences", (
+            ("task_id", "TEXT"), ("job_snapshot", "TEXT"),
+            ("task_state", "TEXT"), ("diagnostic", "TEXT"),
+        ))
+        # Additive migrations for stores created before each column existed. Only the
+        # missing ones are ALTERed, and a failed ALTER raises: a lock timeout used to
+        # pass as "column already present" and leave the store without it.
+        add_missing_columns(
+            db,
+            "jobs",
+            (
+                ("timezone", "TEXT"),  # per-job timezone
+                ("context_id", "TEXT"),  # ADR 0053 same-session resume
+                ("origin_session", "TEXT"),  # #2990 deliver-result-to-origin-chat
+                ("ttl", "TEXT"),  # #2992 auto-expiry
+                ("max_fires", "INTEGER"),
+                ("fire_count", "INTEGER NOT NULL DEFAULT 0"),
+                ("consecutive_failures", "INTEGER NOT NULL DEFAULT 0"),  # #3376 outcomes
+                ("last_error", "TEXT"),
+                ("last_ok", "TEXT"),
+                ("execution_hold", "TEXT"),
+                ("fence", "TEXT"),  # the creating turn's tool fence (existing rows → unfenced)
+            ),
+        )
+        job_sessions.ensure_schema(db)
+        db.commit()
+
+    def _ensure_additive_schema(self) -> None:
+        """Best-effort additive DDL outside ``_initialize_db`` — for a constructor
+        that deferred to a live owner, or a store that was briefly unreadable.
+        Enqueue must not depend on migration timing: the wait tool and
+        ``run_in_session`` cancel the job they replace BEFORE calling ``add_job``,
+        so an add_job that fails on a missing ``job_sessions`` table loses the
+        superseded job. Failure logs and leaves ``_schema_ready`` unset, so the
+        next enqueue retries (fail closed per query, as before ADR 0129)."""
+        if self._schema_ready:
+            return
+        db = self._connect()
+        try:
+            self._apply_additive_schema(db)
+            self._schema_ready = True
+        except sqlite3.DatabaseError:
+            log.exception("[scheduler] additive schema setup failed at %s", self.path)
+        finally:
+            db.close()
 
     # ── public API (matches SchedulerBackend) ───────────────────────────────
 
@@ -540,6 +648,7 @@ class LocalScheduler:
         ttl: str | None = None,
         max_fires: int | None = None,
         restore_state: Job | None = None,
+        enqueue_key: str | None = None,
     ) -> Job:
         if not prompt or not prompt.strip():
             raise ValueError("scheduler: prompt is required")
@@ -579,17 +688,38 @@ class LocalScheduler:
                 "fire_count", "consecutive_failures", "last_error", "last_ok",
             ):
                 setattr(job, field, getattr(restore_state, field))
+        if not self._schema_ready:
+            # The constructor deferred to a live owner (or the store was briefly
+            # unreadable): make sure job_sessions/execution_hold exist before
+            # resolve touches them — the identity migration itself still waits
+            # for the owner-lock.
+            self._ensure_additive_schema()
         db = self._connect()
         try:
+            db.execute("BEGIN IMMEDIATE")
             if not self._adopt_existing_jobs:
                 # Serialize verification and insertion against owner changes.
-                db.execute("BEGIN IMMEDIATE")
                 self._check_owner(db)
+            if enqueue_key is not None:
+                receipt = db.execute(
+                    "SELECT job_snapshot FROM job_enqueue_receipts WHERE enqueue_key = ?",
+                    (enqueue_key,),
+                ).fetchone()
+                if receipt:
+                    return Job(**json.loads(receipt[0]))
+                # Preserve run_in_session's pending replacement semantics, atomically
+                # with the receipt. Accepted occurrences remain in their own ledger.
+                if job_id:
+                    db.execute("DELETE FROM jobs WHERE id = ? AND agent_name = ?",
+                               (job_id, self.agent_name))
+            job.context_id, job.execution_hold = job_sessions.resolve(
+                db, job.as_dict(), context_held=self._context_execution_held
+            )
             db.execute(
                 "INSERT INTO jobs (id, prompt, schedule, agent_name, next_fire, "
                 "last_fire, enabled, created_at, timezone, context_id, origin_session, "
-                "ttl, max_fires, fire_count, fence, consecutive_failures, last_error, last_ok) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "ttl, max_fires, fire_count, fence, consecutive_failures, last_error, last_ok, execution_hold) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     job.id,
                     job.prompt,
@@ -609,11 +739,23 @@ class LocalScheduler:
                     job.consecutive_failures,
                     job.last_error,
                     job.last_ok,
+                    job.execution_hold,
                 ),
             )
+            if enqueue_key is not None:
+                db.execute(
+                    "INSERT INTO job_enqueue_receipts (enqueue_key, job_snapshot) VALUES (?, ?)",
+                    (enqueue_key, json.dumps(job.as_dict())),
+                )
             db.commit()
         except sqlite3.IntegrityError as exc:
             raise ValueError(f"job id {job.id!r} already exists") from exc
+        except sqlite3.DatabaseError as exc:
+            # Keep the documented ValueError contract (#3943) even for a store-level
+            # failure: every caller — the schedule/wait tools, the REST routes, the
+            # SDK's run_in_session — handles ValueError; a raw OperationalError
+            # escaped them (and run_in_session's hook callers) uncaught.
+            raise ValueError(f"scheduler store unavailable: {exc}") from exc
         finally:
             db.close()
         return job
@@ -775,6 +917,7 @@ class LocalScheduler:
             self._task = asyncio.create_task(self._await_lock_then_poll(), name="scheduler.local.lockwait")
             return
         self._stopping = False
+        self._complete_deferred_migration()
         self._recover_missed_fires()
         self._task = asyncio.create_task(self._poll_loop(), name="scheduler.local.poll")
         log.info(
@@ -798,6 +941,7 @@ class LocalScheduler:
                     self.agent_name,
                     self.path,
                 )
+                self._complete_deferred_migration()
                 self._recover_missed_fires()
                 await self._poll_loop()
                 return
@@ -1084,6 +1228,39 @@ class LocalScheduler:
         finally:
             db.close()
 
+    def _context_execution_held(self, context_id: str) -> bool:
+        """Armed-watch continuations live in the watch store, not jobs.db. Consulted by
+        ``job_sessions.resolve`` when a replacement decides whether its settled
+        predecessor's owner still has outstanding work it must queue behind."""
+        try:
+            if self._watch_store is None:
+                from graph.watches.store import WatchStore
+
+                self._watch_store = WatchStore()
+            return self._watch_store.holds_execution(context_id)
+        except Exception:  # noqa: BLE001 — uncertainty must not mint a fresh owner
+            log.exception("[scheduler] watch ownership unavailable for %s; retaining owner", context_id)
+            return True
+
+    def _watch_holds_execution(self, job: Job) -> bool:
+        if not (job.context_id or "").startswith("job:"):
+            return False
+        # A watch reaction fires INTO its owner while its own watch may still be
+        # armed (a repeating watch stays active between fires). Exclude that one
+        # watch so it cannot hold its own reaction out — any OTHER armed watch on
+        # the owner still holds. This identifies the reaction's watch by id; it does
+        # NOT infer continuation authorization from the prefix.
+        own_watch_id = job.id[len("watch-"):] if job.id.startswith("watch-") else None
+        try:
+            if self._watch_store is None:
+                from graph.watches.store import WatchStore
+
+                self._watch_store = WatchStore()
+            return self._watch_store.holds_execution(job.context_id, exclude_watch_id=own_watch_id)
+        except Exception:  # noqa: BLE001 — failed reads cannot release an owner
+            log.exception("[scheduler] watch ownership unavailable; holding %s", job.id)
+            return True
+
     def _claim_occurrence(self, job: Job, *, advance_at: datetime | None = None) -> str | None:
         """Commit intent BEFORE any send. A crash after commit is deliberately unknown."""
         db = self._connect()
@@ -1093,6 +1270,57 @@ class LocalScheduler:
                              (job.id, self.agent_name)).fetchone()
             if row is None or row["created_at"] != job.created_at:
                 return None
+            if row["execution_hold"]:
+                return None
+            job.context_id = row["context_id"]
+            job.execution_hold = row["execution_hold"]
+            if (job.context_id or "").startswith("job:"):
+                # Serialize by execution owner, including canceled/replaced
+                # generations. An actively accepted/in-flight occurrence anywhere in
+                # the owner holds EVERYTHING, including continuations — at most one
+                # active invocation. Membership is the PERSISTED session identity,
+                # never the job-id prefix or a shared interactive/Activity context:
+                # a handle-less orphaned claim quarantines only its own owner, not
+                # every later generation of the id or every job aimed at a chat.
+                busy = db.execute(
+                    "SELECT 1 FROM occurrences o JOIN job_sessions s "
+                    "ON s.job_id = o.job_id AND s.created_at = o.created_at "
+                    "WHERE o.state IN ('claimed', 'unknown') AND s.context_id = ? LIMIT 1",
+                    (job.context_id,),
+                ).fetchone()
+                # Outstanding continuations of this owner (a session's root is a
+                # DIFFERENT generation) — identified from persisted ownership, not the id
+                # prefix. A root cron/one-shot fire waits behind every one of them; so
+                # does an unrelated independent reaction of a repeating watch.
+                continuations = db.execute(
+                    "SELECT j.id, j.created_at, EXISTS (SELECT 1 FROM occurrences o "
+                    "WHERE o.message_id = s.parent_message_id) AS parent_live "
+                    "FROM jobs j JOIN job_sessions s "
+                    "ON j.id = s.job_id AND j.created_at = s.created_at "
+                    "WHERE j.context_id = ? AND s.root_job_id != j.id",
+                    (job.context_id,),
+                ).fetchall()
+                self_key = (job.id, job.created_at)
+                waiting = [c for c in continuations if (c["id"], c["created_at"]) != self_key]
+                # Entry past that hold is authorized for the live continuation the
+                # owner actually yielded for — the one whose persisted parent occurrence
+                # exists. A fresh cron tick or a NEW reaction of a repeating watch has no
+                # such parent and waits like any other new independent occurrence.
+                mine = next((c for c in continuations if (c["id"], c["created_at"]) == self_key), None)
+                authorized = bool(mine and mine["parent_live"])
+                if not authorized and mine is not None and not any(c["parent_live"] for c in waiting):
+                    # Continuations enqueued after the owner's turn settled carry no
+                    # parent occurrence (resolve found nothing in flight), so none is
+                    # "the" yielded-for one. They drain oldest generation first instead
+                    # of each refusing on the other forever — which would also park the
+                    # root cron behind the stuck pair, with recovery (which deliberately
+                    # skips continuations) never releasing the owner.
+                    head = min(continuations, key=lambda c: (c["created_at"], c["id"]))
+                    authorized = (head["id"], head["created_at"]) == self_key
+                if busy or (
+                    (waiting or self._watch_holds_execution(job)) and not authorized
+                ):
+                    return None
             old = db.execute("SELECT * FROM occurrences WHERE job_id = ? AND next_fire = ? AND created_at = ?",
                              (job.id, job.next_fire, job.created_at)).fetchone()
             unresolved = db.execute(
@@ -1165,7 +1393,7 @@ class LocalScheduler:
         db = self._connect()
         try:
             rows = db.execute(
-                "SELECT * FROM jobs WHERE agent_name = ? AND enabled = 1 AND next_fire <= ? "
+                "SELECT * FROM jobs WHERE agent_name = ? AND enabled = 1 AND execution_hold IS NULL AND next_fire <= ? "
                 "AND NOT EXISTS (SELECT 1 FROM occurrences o WHERE o.job_id = jobs.id "
                 "AND o.created_at = jobs.created_at AND "
                 "(o.next_fire = jobs.next_fire AND o.state != 'retryable' "
@@ -1213,14 +1441,58 @@ class LocalScheduler:
         cutoff_recent = datetime.now(UTC) - timedelta(seconds=_MISSED_FIRE_WINDOW_S)
         db = self._connect()
         try:
+            # Make permanent quarantine loud: a claim with no task handle can never be
+            # reconciled or resent, so an operator should see WHICH jobs carry one.
+            orphans = db.execute(
+                "SELECT DISTINCT job_id FROM occurrences "
+                "WHERE state IN ('claimed', 'unknown') AND task_id IS NULL"
+            ).fetchall()
+            if orphans:
+                log.warning(
+                    "[scheduler] %d dispatch claim(s) have no task handle and stay quarantined, "
+                    "never resent (%s); a replacement of such a job runs under a fresh execution owner",
+                    len(orphans), ", ".join(sorted(o["job_id"] for o in orphans)),
+                )
             rows = db.execute(
-                "SELECT * FROM jobs WHERE agent_name = ? AND enabled = 1 AND next_fire <= ? "
+                # The unresolved-work exemption is per GENERATION: only this row's own
+                # claimed/unknown occurrence keeps it out of stale-fire policy. An
+                # orphaned claim from a replaced generation must not keep a newer
+                # version alive past the recovery window (it would then run late).
+                "SELECT * FROM jobs WHERE agent_name = ? AND enabled = 1 AND execution_hold IS NULL AND next_fire <= ? "
                 "AND NOT EXISTS (SELECT 1 FROM occurrences o WHERE o.job_id = jobs.id "
                 "AND o.created_at = jobs.created_at AND o.state IN ('claimed', 'unknown'))",
                 (self.agent_name, cutoff_recent.isoformat()),
             ).fetchall()
             for row in rows:
                 job = _row_to_job(row)
+                # The stale-fire exemption is PER IDENTITY: only this job's own
+                # execution owner can preserve it. An unrelated wait/watch sharing a
+                # shared interactive chat (ADR 0053 one-pending-wait-per-chat applies
+                # only at claim time) exempts nothing here.
+                if (job.context_id or "").startswith("job:"):
+                    session = db.execute(
+                        "SELECT root_job_id FROM job_sessions WHERE job_id = ? AND created_at = ?",
+                        (job.id, job.created_at),
+                    ).fetchone()
+                    # A job-owned continuation (its session's root is a DIFFERENT
+                    # generation) pins its original due slot across downtime.
+                    if session and session["root_job_id"] != job.id:
+                        continue
+                    # A root fire waits behind the SAME owner's unresolved occurrences
+                    # or its own outstanding continuations — never another context's
+                    # pending work. Continuation membership is read from persisted
+                    # ownership, not the job-id prefix.
+                    held = db.execute(
+                        "SELECT 1 FROM occurrences o JOIN job_sessions s "
+                        "ON o.job_id = s.job_id AND o.created_at = s.created_at "
+                        "WHERE s.context_id = ? AND o.state IN ('claimed', 'unknown') "
+                        "UNION ALL SELECT 1 FROM jobs j JOIN job_sessions cs "
+                        "ON j.id = cs.job_id AND j.created_at = cs.created_at "
+                        "WHERE j.context_id = ? AND j.id != ? AND cs.root_job_id != j.id LIMIT 1",
+                        (job.context_id, job.context_id, job.id),
+                    ).fetchone()
+                    if held or self._watch_holds_execution(job):
+                        continue
                 if is_cron(job.schedule):
                     next_iso = _compute_next_fire(job.schedule, tz=job.timezone)
                     db.execute(
@@ -1336,6 +1608,8 @@ class LocalScheduler:
         if terminal:
             if failure:
                 log.error("[scheduler] job %s fired but the turn FAILED: %s", job.id, failure)
+            # Legacy accepted snapshots retain their ORIGINAL Activity context;
+            # future routing in job_sessions must never rename their completion.
             self._publish_turn(
                 "turn.finished", session_id=job.context_id or ACTIVITY_CONTEXT,
                 origin="watch" if job.id.startswith("watch-") else "scheduler",
@@ -1344,6 +1618,13 @@ class LocalScheduler:
         return terminal
 
     def _pending_reconciliation(self) -> list[sqlite3.Row]:
+        """Unsettled claims a durable GetTask can still decide: only ACCEPTED sends
+        carry a persisted task handle to read. A handle-less claim (a crash between
+        claim and send, or a lost POST) is deliberately absent — there is nothing to
+        query and a resend is never authorized (ADR 0129 D6: claims without
+        recoverable handles stay quarantined). It holds only its own generation and
+        its own, eventually orphaned, owner: ``job_sessions.resolve`` never hands
+        that owner to a replacement generation, so cancel-and-recreate escapes it."""
         with closing(self._connect()) as db, db:
             claims = db.execute(
                 "SELECT * FROM occurrences WHERE state IN ('claimed', 'unknown') "
@@ -1424,8 +1705,31 @@ class LocalScheduler:
         # `turn.finished` only after a terminal snapshot is durably settled so
         # the console renders its typing indicator, labelled by trigger. The session id is
         # the fire's context (a `wait`/`run_in_session` resume lands in a chat session; a
-        # plain cron lands in the Activity thread).
-        session_id = job.context_id or ACTIVITY_CONTEXT
+        # plain cron lands in its durable job session).
+        session_id = job.context_id
+        if not session_id or session_id == ACTIVITY_CONTEXT:
+            # Dispatch invariant (ADR 0129 D6): a fire never runs on the shared
+            # Activity session. Enforced explicitly rather than by `assert` —
+            # ``python -O`` strips asserts, which would silently route the fire
+            # there, and a tripped assert would escape ``_fire`` untyped after the
+            # claim. Refuse the send and hold the row (``_claim_due_jobs`` skips
+            # held rows) so an unrouted job stalls loudly until it is re-owned;
+            # nothing was sent, so the occurrence stays retryable under the same
+            # message identity.
+            log.error(
+                "[scheduler] refusing to fire job %s: no isolated execution owner "
+                "(context %r); holding the job", job.id, session_id,
+            )
+            try:
+                with closing(self._connect()) as db, db:
+                    db.execute(
+                        "UPDATE jobs SET execution_hold = ? WHERE id = ? AND created_at = ?",
+                        ("missing execution owner; fire refused, not sent", job.id, job.created_at),
+                    )
+            except sqlite3.DatabaseError:
+                log.exception("[scheduler] could not hold unrouted job %s", job.id)
+            self._finish_dispatch(job, "retryable")
+            return False
         self._publish_turn("turn.started", session_id=session_id, origin=fire_origin, trigger=job.id)
 
         # Wake-framing (ADR 0079): a scheduled/watch fire delivered a bare prompt, so the agent
@@ -1456,11 +1760,7 @@ class LocalScheduler:
                     "role": "ROLE_USER",
                     "parts": [{"text": wake_prompt}],
                     "messageId": message_id,
-                    # Fire into the job's own context when set (ADR 0053 — the
-                    # `wait` tool stamps the originating chat session so a resume
-                    # continues that conversation's thread), else the durable
-                    # Activity thread (ADR 0003) so a normal scheduled fire lands
-                    # somewhere visible/continuable instead of a throwaway context.
+                    # Persisted execution owner, also used by lifecycle events.
                     "contextId": session_id,
                     # Scheduler bookkeeping for this fire (origin + job id) —
                     # informational; the handler doesn't require these keys. `origin`
@@ -1619,6 +1919,7 @@ def _row_to_job(row: Any) -> Job:
         created_at=row["created_at"],
         timezone=row["timezone"] if "timezone" in keys else None,
         context_id=row["context_id"] if "context_id" in keys else None,
+        execution_hold=row["execution_hold"] if "execution_hold" in keys else None,
         origin_session=row["origin_session"] if "origin_session" in keys else None,
         ttl=row["ttl"] if "ttl" in keys else None,
         max_fires=row["max_fires"] if "max_fires" in keys else None,
