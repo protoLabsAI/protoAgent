@@ -1581,7 +1581,13 @@ class ProtoAgentExecutor(AgentExecutor):
 
         except Exception as exc:  # noqa: BLE001 — surface to the task, fail loud
             logger.exception("[a2a] execute crashed for task %s", context.task_id)
-            await updater.failed(message=updater.new_agent_message([_text_part(str(exc))]))
+            from observability import tracing
+            from observability.error_text import safe_error_text
+
+            # Raw exception text can carry a provider's error body or a keyed URL: whole
+            # for the operator (the console), redacted for a federation peer.
+            shown = str(exc) if tracing.current_trust_tier() == "operator" else safe_error_text(exc)
+            await updater.failed(message=updater.new_agent_message([_text_part(shown)]))
             _notify_terminal(_outcome("failed", accumulated, error=str(exc)))
 
         finally:

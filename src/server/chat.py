@@ -41,6 +41,7 @@ from graph.image_limits import fit_data_uri
 from graph.middleware.redaction import redact as _redact
 from graph.middleware.wait_yield import schedule_turn_reply, wait_turn_reply
 from graph.output_format import extract_output
+from observability.error_text import safe_error_text
 from runtime import turn_activity as _turn_activity
 from runtime.state import STATE
 from runtime import local_turns
@@ -1503,6 +1504,10 @@ async def _fail_turn(exc: BaseException, session_id: str, *, tag: str, thread_id
     else:
         log.error("[%s] unhandled exception for session=%s: %s", tag, session_id, exc, exc_info=exc)
         msg = str(exc)
+        await record_failed_turn(session_id, f"**Error:** {msg}", thread_id=thread_id)
+        # Raw exception text can carry a provider's error body or a keyed URL: the
+        # operator sees it whole, any other caller (/v1, a federation peer) redacted.
+        return msg if _operator_caller() else safe_error_text(msg)
     await record_failed_turn(session_id, f"**Error:** {msg}", thread_id=thread_id)
     return msg
 

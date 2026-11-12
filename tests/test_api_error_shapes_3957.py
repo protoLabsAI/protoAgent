@@ -295,6 +295,19 @@ async def test_the_fix_it_hint_reaches_operator_callers_only(monkeypatch):
     assert peer_msg == str(exc) and "codex login" not in peer_msg
     assert chat_mod.turn_error(exc, operator_msg)["message"] == str(exc)  # /v1 stays short
 
+    # An unclassified crash's raw text can carry a key: whole for the operator, redacted for anyone else.
+    crash = RuntimeError("Error code: 401 - Incorrect API key provided: sk-proj-abcdefghijklmnopqrstuvwxyz0123456789")
+    token = tracing.set_trust_tier("federation")
+    try:
+        assert "sk-proj" not in await chat_mod._fail_turn(crash, "s1", tag="t")
+    finally:
+        tracing._trust_tier_ctx.reset(token)
+    token = tracing.set_trust_tier("operator")
+    try:
+        assert await chat_mod._fail_turn(crash, "s1", tag="t") == str(crash)
+    finally:
+        tracing._trust_tier_ctx.reset(token)
+
 
 def test_an_effort_only_failure_still_degrades_to_the_current_model(monkeypatch):
     monkeypatch.setattr("graph.llm.create_llm", _missing_credentials)
