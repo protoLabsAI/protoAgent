@@ -1,1 +1,0 @@
-- **Operator instruction editing.** Add chat-scoped create, edit and withdraw APIs with immutable exact operator quotes, atomic ledger updates and existing withdrawal transcript events; record the approved Work creation design.

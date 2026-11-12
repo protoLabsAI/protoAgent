@@ -1,1 +1,0 @@
-- **Work section group metadata.** Add optional canonical group metadata to the registry and annotate goals, tasks and watches for the Work consolidation migration, preserving per-row classification and existing details and actions.
