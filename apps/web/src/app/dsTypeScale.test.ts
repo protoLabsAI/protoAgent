@@ -1,3 +1,4 @@
+// @vitest-environment node
 // Pins the DS type scale (#3688) at its source: the @protolabsai/design bump to ^0.10.0 is
 // the FOUNDATION every downstream font-size migration card depends on, so this guard fails
 // loudly if the design package is ever downgraded below the minor that ships the scale, or if

@@ -1,3 +1,4 @@
+// @vitest-environment node
 // The shared A2A frame dispatcher's task-identity + task-state surface (#3930).
 import { describe, expect, it, vi } from "vitest";
 

@@ -1,3 +1,4 @@
+// @vitest-environment node
 // #3450 — the report has to see BUNDLED plugins, which have no /api/plugins/installed
 // row. The Cowork archetype's pack is exactly that shape, and a report that can't see it
 // let a fresh server finish setup "ready" with no document libraries installed.

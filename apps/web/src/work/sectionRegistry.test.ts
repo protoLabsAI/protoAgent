@@ -1,3 +1,4 @@
+// @vitest-environment node
 import { expect, expectTypeOf, it } from "vitest";
 import { registerWorkSection, sections, type WorkSection } from "./sectionRegistry";
 import { workGroups } from "./workGroups";

@@ -1,3 +1,4 @@
+// @vitest-environment node
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // The component-v1 catalog slice (ADR 0118 D5, S11b `GET /api/components`): fetch-once caching,

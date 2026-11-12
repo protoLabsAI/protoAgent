@@ -1,3 +1,4 @@
+// @vitest-environment node
 // One task-state classification for every surface that settles a turn (#3957). The
 // surfaces had drifted: TERMINAL included `rejected` while the failure check read
 // `/fail|cancel/`, so a REJECTED turn settled as done.

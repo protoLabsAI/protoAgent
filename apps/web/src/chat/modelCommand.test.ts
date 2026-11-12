@@ -1,3 +1,4 @@
+// @vitest-environment node
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { findSlashCommand, type ComposerFormSpec, type SlashContext } from "../ext/slashRegistry";

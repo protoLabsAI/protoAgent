@@ -1,3 +1,4 @@
+// @vitest-environment node
 // copyText reports whether the clipboard write landed, and never rejects (#4733 QA).
 import { afterEach, describe, expect, it, vi } from "vitest";
 

@@ -1,3 +1,4 @@
+// @vitest-environment node
 import { describe, expect, it } from "vitest";
 
 import { CHARS_PER_TOKEN, MIN_SHOWN_TOKENS, approxTokens, toolCostTokens } from "./toolCost";

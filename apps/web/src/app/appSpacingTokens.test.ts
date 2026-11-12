@@ -1,3 +1,4 @@
+// @vitest-environment node
 import { describe, expect, it } from "vitest";
 
 import { PL_TOKEN_VARS } from "./PluginView";

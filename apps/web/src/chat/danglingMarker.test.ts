@@ -1,3 +1,4 @@
+// @vitest-environment node
 // A trailing markdown marker with nothing after it yet must never paint while a message streams
 // (the launch-demo `**` flash): streamdown's remend repairs `**bo` but leaves a bare `**` alone.
 import { describe, expect, it } from "vitest";
