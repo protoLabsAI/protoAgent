@@ -251,8 +251,10 @@ def test_allow_private_permits_lan_but_blocks_metadata():
 
 def test_default_mode_still_blocks_all_private():
     # The model-probe path keeps the strict default — private + loopback blocked too.
-    for bad in ("http://10.0.0.5/", "http://127.0.0.1/", "http://[::1]/", "http://169.254.169.254/"):
+    # …and shared address space (100.64.0.0/10, what Tailscale assigns): neither private nor global.
+    for bad in ("http://10.0.0.5/", "http://127.0.0.1/", "http://[::1]/", "http://169.254.169.254/", "http://100.100.100.100/", "http://100.64.0.1/"):
         assert egress.check_url(bad) is not None, bad
+    assert egress.check_url("http://100.128.0.1/") is None  # just past that range: public
 
 
 def test_policy_expands_tilde_to_match_the_enforced_fence(tmp_path, monkeypatch):

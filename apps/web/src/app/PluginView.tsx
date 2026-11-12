@@ -6,6 +6,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { apiUrl, authToken } from "../lib/api";
 import { withViewQuery } from "../lib/viewDeepLink";
 import { PLUGIN_FRAME_ALLOW, postInit, scheduleInitReposts, usePluginFrameThemeSync } from "./pluginFrameHandshake";
+import { viewPathsAreSameOrigin } from "./pluginViewPath";
 import { registerContextMenu } from "../contextMenu/registry";
 import { useContextMenuStore } from "../contextMenu/store";
 import type { MenuEntry } from "../contextMenu/types";
@@ -124,7 +125,23 @@ export { consoleTheme, PL_TOKEN_VARS } from "./pluginFrameHandshake";
 // host-owned container such as the per-plugin Configure dialog: it keeps the same iframe
 // isolation/bridge but does not let the page opt into App's rail background-mount policy
 // or offer the redundant Configure context-menu action from inside Configure itself.
-export function PluginView({
+/** The view frame — or, for a view whose path leaves the agent's own server, a refusal.
+ *  The check sits in front of the whole component so no hook of it (the probe, the frame,
+ *  the token handshake) ever runs for such a path. */
+export function PluginView(props: Parameters<typeof PluginViewFrame>[0]) {
+  if (!viewPathsAreSameOrigin(props.view)) {
+    return (
+      <div className="plugin-view-body">
+        <div className="plugin-view-state" role="alert">
+          This view isn’t shown: it points outside this agent’s own server.
+        </div>
+      </div>
+    );
+  }
+  return <PluginViewFrame {...props} />;
+}
+
+function PluginViewFrame({
   view,
   embedded = false,
   onRestartPending,
