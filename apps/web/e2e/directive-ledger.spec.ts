@@ -79,6 +79,9 @@ for (const width of [1440, 390]) {
         const state = url.searchParams.get("state") ?? "pending";
         return route.fulfill({ json: { decisions: state === "answered" ? [decided] : [], pending: 0 } });
       });
+      // No undelivered pages: the mock default would put a Needs-you marker (S7) on the rail
+      // and a second "Open in Work" in the grouped details; this spec exercises the ledger.
+      await page.route("**/api/inbox**", (route) => route.fulfill({ json: { items: [] } }));
       await page.route("**/api/events**", (route) => route.fulfill({
         contentType: "text/event-stream", body: ": idle\n\n",
       }));

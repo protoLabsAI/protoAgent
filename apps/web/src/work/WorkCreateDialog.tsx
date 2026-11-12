@@ -28,6 +28,7 @@ import {
   repeatSentence,
   saveEdit,
   saveWork,
+  withRepeat,
   REPEAT_CHOICES,
   type RepeatChoice,
   type SavedWork,
@@ -144,11 +145,14 @@ function useDelegates(enabled: boolean): string[] {
 }
 
 /** The approved editable fields for one reading (§10.3–§10.6). One component serves the
- *  confirm step and every inspector Edit, so the two can never drift. */
-function DraftFields({ draft, onChange, mode }: {
+ *  confirm step and every inspector Edit, so the two can never drift. `original` is the
+ *  form's opening draft (the reading / the live item) — the baseline a re-picked check's
+ *  args are restored from. */
+function DraftFields({ draft, onChange, mode, original }: {
   draft: WorkDraft;
   onChange: (draft: WorkDraft) => void;
   mode: "create" | "edit";
+  original?: WorkDraft;
 }) {
   const checks = useConditionChecks(draft.kind === "condition");
   const delegates = useDelegates(draft.kind === "job");
@@ -190,7 +194,9 @@ function DraftFields({ draft, onChange, mode }: {
         </FormField>
       ) : (
         <FormField label="Repeat">
-          <Select value={draft.repeat} onChange={(e) => onChange({ ...draft, repeat: e.target.value as RepeatChoice })}>
+          {/* withRepeat carries the timezone across the Once/recurring boundary — a kept
+              local hour must not silently become a UTC hour, or the reverse (§10.4). */}
+          <Select value={draft.repeat} onChange={(e) => onChange(withRepeat(draft, e.target.value as RepeatChoice))}>
             {REPEAT_CHOICES.map((choice) => <option key={choice.value} value={choice.value}>{choice.label}</option>)}
           </Select>
         </FormField>
@@ -198,7 +204,7 @@ function DraftFields({ draft, onChange, mode }: {
       {draft.repeat === "custom" && mode === "edit" && (
         <FormField label="Replace repeat with">
           <Select value="" onChange={(e) => {
-            if (e.target.value) onChange({ ...draft, repeat: e.target.value as RepeatChoice, cron: "" });
+            if (e.target.value) onChange({ ...withRepeat(draft, e.target.value as RepeatChoice), cron: "" });
           }}>
             <option value="">Keep as is</option>
             {REPEAT_CHOICES.map((choice) => <option key={choice.value} value={choice.value}>{choice.label}</option>)}
@@ -219,8 +225,11 @@ function DraftFields({ draft, onChange, mode }: {
       <FormField label="Check with">
         <Select value={draft.check} onChange={(e) => {
           const check = e.target.value;
-          // Args belong to their check: re-picking drops them; picking the original back keeps them.
-          onChange({ ...draft, check, checkArgs: check === draft.check ? draft.checkArgs : {} });
+          // Args belong to their check: picking a different one drops them, and picking the
+          // ORIGINAL back restores its args — compared against the form's opening draft,
+          // not the already-changed current one, so A→B→A round-trips.
+          const keep = original?.kind === "condition" ? original : draft;
+          onChange({ ...draft, check, checkArgs: check === keep.check ? keep.checkArgs : {} });
         }}>
           {draft.checkKeep && <option value="">Keep the current check ({draft.checkKeep})</option>}
           {offered.map((name) => <option key={name} value={name}>{name}</option>)}
@@ -281,6 +290,9 @@ export function WorkCreateDialog({ group, sessionId, onClose, onReady, onSaved }
   const [error, setError] = useState<string | null>(null);
   const [handoff, setHandoff] = useState<WorkCreateHandoff | null>(null);
   const [draft, setDraft] = useState<WorkDraft | null>(null);
+  // The reading's own draft, per confirmed reading — the `original` a re-picked check's
+  // args restore from (a ref: it must swap with `nonce` on every new reading, not per render).
+  const openingDraft = useRef<WorkDraft | null>(null);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   // One nonce per confirmed reading: a retried Save re-uses the same schedule/watch id, so
@@ -319,8 +331,10 @@ export function WorkCreateDialog({ group, sessionId, onClose, onReady, onSaved }
       if (interpretation.instruction) interpretation.instruction.quote = typed;
       const next = { typed, interpretation, sessionId: chat };
       nonce.current = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
+      const first = draftFromInterpretation(typed, interpretation);
+      openingDraft.current = first;
       setHandoff(next);
-      setDraft(draftFromInterpretation(typed, interpretation));
+      setDraft(first);
       setSaveError(null);
       setPhase("ready");
       onReady?.(next);
@@ -395,7 +409,7 @@ export function WorkCreateDialog({ group, sessionId, onClose, onReady, onSaved }
       {!problem && <p className="work-create__dest">
         Goes in <strong>{DESTINATIONS[handoff!.interpretation.group]}</strong> as {tagFor(handoff!.interpretation)}.
       </p>}
-      {!problem && draft && <DraftFields draft={draft} onChange={setDraft} mode="create" />}
+      {!problem && draft && <DraftFields draft={draft} onChange={setDraft} mode="create" original={openingDraft.current ?? undefined} />}
       {!problem && incomplete && <p className="work-create__incomplete" role="status">{incomplete}</p>}
       {saveError != null && <Callout tone="error" title="Couldn't save it">
         {saveError} Everything you entered is kept — Save tries again without creating a duplicate.
@@ -478,7 +492,7 @@ export function WorkEditDialog({ draft: initial, target, onClose, onSaved }: {
   return (
     <WorkOverlay sheet={sheet} title={title} onClose={onClose} footer={footer}>
       <div className="work-create__body">
-        <DraftFields draft={draft} onChange={setDraft} mode="edit" />
+        <DraftFields draft={draft} onChange={setDraft} mode="edit" original={base} />
         {incomplete && <p className="work-create__incomplete" role="status">{incomplete}</p>}
         {saveError != null && <Callout tone="error" title="Couldn't save the changes">
           {saveError} Nothing changed yet — Save changes tries again.

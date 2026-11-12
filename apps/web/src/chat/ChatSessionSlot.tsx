@@ -46,6 +46,7 @@ import {
   useServerTurnsEnded,
 } from "./server-turn-store";
 import { ChatStatusRail } from "./ChatStatusRail";
+import { GoalRunStrip } from "./GoalRunStrip";
 import { DirectiveWorkRequest } from "./DirectiveStrip";
 import { messageId } from "./messageId";
 import { sentAttachments } from "./imageThumbnails";
@@ -1984,6 +1985,10 @@ export function ChatSessionSlot({
             only position where a mention routes. Click to add, click again to remove;
             the message body is preserved either way. Mounted only while this slot is
             visible so hidden tabs don't each fan out the Work source queries. */}
+        {/* The dismissible "Goal achieved" payoff line (S7): the rail's groups carry a
+            driving goal (Doing now) and a stopped one (Needs you), but an achieved goal
+            leaves Work entirely — this line is what keeps it from vanishing silently. */}
+        {visible ? <GoalRunStrip sessionId={sessionId} /> : null}
         {visible ? (
           <ChatStatusRail
             sessionId={sessionId}

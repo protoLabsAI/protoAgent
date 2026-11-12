@@ -215,6 +215,26 @@ describe("goal kickoff waits for every owner of the next turn", () => {
     w.stop();
   });
 
+  it("a second kickoff registered while the chat is busy queues BEHIND the first — both run, in order, never concurrently", async () => {
+    // S8d regression: Work's Job Start shares this seam with /goal kickoffs. A single-slot
+    // store let the second registration silently replace a Start already announced as saved.
+    const t = await setup();
+    const w = t.watchGoalKickoff(t.sid, t.run);
+    t.chatStore.setSessionStatus(t.sid, "streaming");
+    t.registerGoalKickoff(t.sid, "Start working toward the goal: tests pass");
+    t.registerGoalKickoff(t.sid, "Start: rebase #874", { hidden: false });
+    t.chatStore.setSessionStatus(t.sid, "idle"); // the operator's turn ends
+    await vi.waitFor(() => expect(t.run).toHaveBeenCalledTimes(1));
+    expect(t.run.mock.calls[0][0]).toEqual({ prompt: "Start working toward the goal: tests pass", hidden: true });
+    await tick();
+    expect(t.run).toHaveBeenCalledTimes(1); // the second waits out the first kickoff's turn
+    t.chatStore.setSessionStatus(t.sid, "idle"); // that turn ends
+    await vi.waitFor(() => expect(t.run).toHaveBeenCalledTimes(2));
+    expect(t.run.mock.calls[1][0]).toEqual({ prompt: "Start: rebase #874", hidden: false });
+    expect(t.concurrent()).toBe(0);
+    w.stop();
+  });
+
   it("idle set inside a still-unwinding local turn waits for its finally", async () => {
     const t = await setup();
     const w = t.watchGoalKickoff(t.sid, t.run);

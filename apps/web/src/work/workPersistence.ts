@@ -18,11 +18,11 @@ import { queryKeys } from "../lib/queries";
 import { registerGoalKickoff } from "../chat/chat-store";
 import { directiveStore } from "../chat/useDirectives";
 import { parseDuration } from "../chat/watchForm";
-import { buildOnce, buildRepeat, parseSchedule } from "../schedule/schedule-builder";
+import { buildOnce, buildRepeat, localZone, parseSchedule } from "../schedule/schedule-builder";
 import { scheduleWhen } from "./rowMeta";
 import type { DirectiveRow, WorkInterpretation } from "../lib/api/chat";
 import type { ScheduledJob, WatchState } from "../lib/types";
-import type { WorkGroupId } from "./tone";
+import { WORK_GROUP_LABELS, type WorkGroupId } from "./tone";
 
 /** The human Repeat choices (§10.4) — the form never exposes cron. */
 export const REPEAT_CHOICES = [
@@ -56,10 +56,6 @@ export type WorkDraft =
   | { kind: "instruction"; quote: string; scope: string; lasts: string };
 
 export type SavedWork = { group: WorkGroupId; label: string; itemId?: string };
-
-const GROUP_LABELS: Record<WorkGroupId, string> = {
-  "needs-you": "Needs you", "doing-now": "Doing now", "coming-up": "Coming up", instructions: "Your instructions",
-};
 
 /** "YYYY-MM-DDTHH:mm" (a `datetime-local` value) for a Date, in the viewer's zone. */
 function localStamp(date: Date): string {
@@ -112,6 +108,44 @@ export function scheduleFromDraft(draft: Extract<WorkDraft, { kind: "time" }>): 
 /** The plain-words sentence for a custom repeat (§10.4 — shown instead of the select). */
 export function repeatSentence(draft: Extract<WorkDraft, { kind: "time" }>): string {
   return scheduleWhen(draft.cron);
+}
+
+/** The instant whose wall clock in `zone` reads `stamp` ("YYYY-MM-DDTHH:mm"), or null when
+ *  either part is unreadable (the caller then keeps the stamp as typed). Two passes over
+ *  the zone's UTC offset settle a stamp near a DST boundary. */
+function zonedInstant(stamp: string, zone: string): Date | null {
+  const m = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})/.exec(stamp);
+  if (!m) return null;
+  const asUtc = Date.UTC(+m[1], +m[2] - 1, +m[3], +m[4], +m[5]);
+  try {
+    const fmt = new Intl.DateTimeFormat("en-US", { timeZone: zone, hour12: false,
+      year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" });
+    const wallAsUtc = (t: number) => {
+      const p = Object.fromEntries(fmt.formatToParts(new Date(t)).map((part) => [part.type, part.value]));
+      return Date.UTC(+p.year, +p.month - 1, +p.day, +p.hour % 24, +p.minute);
+    };
+    const guess = asUtc - (wallAsUtc(asUtc) - asUtc);
+    return new Date(guess - (wallAsUtc(guess) - asUtc));
+  } catch {
+    return null;
+  }
+}
+
+/** The draft after a Repeat change. A recurring save reads `firstRun` as a wall clock in
+ *  `draft.timezone` while a Once save reads it as the VIEWER'S clock, so crossing that
+ *  boundary must carry the zone with it: Once → recurring pins the viewer's zone (else the
+ *  server reads the kept local hour as UTC), and recurring → Once re-reads the zone's wall
+ *  clock into the viewer's before `buildOnce` treats it as local. Staying on one side
+ *  changes nothing but the choice. */
+export function withRepeat(
+  draft: Extract<WorkDraft, { kind: "time" }>, repeat: RepeatChoice,
+): Extract<WorkDraft, { kind: "time" }> {
+  if (repeat === draft.repeat) return draft;
+  if (repeat === "once") {
+    const instant = draft.timezone && draft.timezone !== localZone() ? zonedInstant(draft.firstRun, draft.timezone) : null;
+    return { ...draft, repeat, firstRun: instant ? localStamp(instant) : draft.firstRun, timezone: "" };
+  }
+  return draft.repeat === "once" ? { ...draft, repeat, timezone: localZone() } : { ...draft, repeat };
 }
 
 /** Build the confirm step's initial draft from a validated reading. The instruction quote
@@ -254,24 +288,35 @@ export async function saveWork(draft: WorkDraft, sessionId: string, nonce: strin
       // runs it as a background delegation. No new primitive, no second interpret turn.
       const prompt = draft.who === "agent" ? `Start: ${draft.what}` : `@${draft.who} Start: ${draft.what}`;
       registerGoalKickoff(sessionId, prompt, { hidden: false });
-      return { group: "doing-now", label: GROUP_LABELS["doing-now"] };
+      return { group: "doing-now", label: WORK_GROUP_LABELS["doing-now"] };
     }
     case "time": {
+      const id = `work-${nonce}`;
       const once = draft.repeat === "once" || (draft.repeat === "custom" && parseSchedule(draft.cron).mode === "once");
-      const res = await api.addSchedule({
-        prompt: draft.then,
-        schedule: scheduleFromDraft(draft),
-        job_id: `work-${nonce}`,
-        // Mirrors the agent's schedule_task: the owner chat always, the run context only
-        // for a one-shot (a recurring job runs in its own job-scoped session, ADR 0129).
-        origin_session: sessionId,
-        ...(once ? { context_id: sessionId } : {}),
-        ...(draft.repeat !== "once" && draft.timezone ? { timezone: draft.timezone } : {}),
-      });
+      let job: ScheduledJob;
+      try {
+        job = (await api.addSchedule({
+          prompt: draft.then,
+          schedule: scheduleFromDraft(draft),
+          job_id: id,
+          // Mirrors the agent's schedule_task: the owner chat always, the run context only
+          // for a one-shot (a recurring job runs in its own job-scoped session, ADR 0129).
+          origin_session: sessionId,
+          ...(once ? { context_id: sessionId } : {}),
+          ...(draft.repeat !== "once" && draft.timezone ? { timezone: draft.timezone } : {}),
+        })).job;
+      } catch (e) {
+        // A retry after a create that LANDED (a timeout, a dropped response) re-POSTs the
+        // same job_id, which the scheduler's plain insert rejects — the row existing IS the
+        // earlier success. Anything else keeps the original error for the form to show.
+        const prior = (await api.schedules().catch(() => null))?.jobs.find((row) => row.id === id);
+        if (!prior) throw e;
+        job = prior;
+      }
       // Refetch BEFORE the caller opens the detail: the `scheduler.changed` push usually
       // beats this, but a dropped event must not make the new row read as "gone".
       await queryClient.invalidateQueries({ queryKey: queryKeys.schedules });
-      return { group: "coming-up", label: GROUP_LABELS["coming-up"], itemId: `schedule:${res.job.id}` };
+      return { group: "coming-up", label: WORK_GROUP_LABELS["coming-up"], itemId: `schedule:${job.id}` };
     }
     case "condition": {
       const id = `work-${nonce}`;
@@ -289,20 +334,23 @@ export async function saveWork(draft: WorkDraft, sessionId: string, nonce: strin
         run_session: sessionId,
       });
       await queryClient.invalidateQueries({ queryKey: queryKeys.watches });
-      return { group: "coming-up", label: GROUP_LABELS["coming-up"], itemId: `watch:${id}` };
+      return { group: "coming-up", label: WORK_GROUP_LABELS["coming-up"], itemId: `watch:${id}` };
     }
     case "instruction": {
       // The ledger mints ids server-side, so a retry can't re-use one — instead an in-force
-      // row with the SAME bytes (quote, scope, conditions) is the earlier create landing.
+      // row with the SAME content is the earlier create landing. The ledger stores an
+      // operator quote byte for byte but TRIMS AND CAPS scope/conditions (MAX_NOTE_CHARS),
+      // so those two compare against what the store would have kept, not the raw draft.
+      const kept = (s: string) => s.trim().slice(0, 2000);
       const existing = await api.listDirectives(sessionId).catch(() => null);
       const match = existing?.directives.find(
-        (row) => row.status === "in_force" && row.quote === draft.quote && row.scope === draft.scope && row.conditions === draft.lasts,
+        (row) => row.status === "in_force" && row.quote === draft.quote && row.scope === kept(draft.scope) && row.conditions === kept(draft.lasts),
       );
       const row = match
         ?? (await api.createDirective({ session_id: sessionId, quote: draft.quote, scope: draft.scope, conditions: draft.lasts })).directive;
       // Await the ledger refresh so the caller opens a detail whose row is already listed.
       await directiveStore(sessionId).refresh();
-      return { group: "instructions", label: GROUP_LABELS.instructions, itemId: `directive:${row.id}` };
+      return { group: "instructions", label: WORK_GROUP_LABELS.instructions, itemId: `directive:${row.id}` };
     }
   }
 }

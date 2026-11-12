@@ -109,7 +109,8 @@ it("Continue sends one marked interpret turn to the current chat, pends read-onl
   expect(handoff.typed).toBe("Watch the thing");
   expect(handoff.sessionId).toBe("chat-1");
   expect(handoff.interpretation.instruction?.quote).toBe("Watch the thing");
-  // Step 2 isn't built yet (S8d): the reading shows where it lands, with no Start/Save path.
+  // Step 2 (S8d): the reading shows where it lands. An INSTRUCTION's primary is "Save" —
+  // "Start" belongs to a Job reading only (WorkCreateSave.test.tsx owns the save paths).
   expect(document.querySelector(".pl-dialog__title")?.textContent).toBe("Check this before saving");
   expect(document.querySelector(".pl-callout__body")?.textContent).toBe("I'll check #874 every 30 min.");
   expect(document.querySelector(".work-create__dest")?.textContent).toBe("Goes in Your instructions as Instruction.");

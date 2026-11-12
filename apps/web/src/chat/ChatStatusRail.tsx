@@ -14,10 +14,16 @@
  *  picking a hidden name gives it a visible slot even on a row already full of addressed
  *  names. Until the first measurement lands the conservative fallback caps apply (peopleFit).
  *
- *  Needs you is S7-gated: the selector computes it, the rail doesn't render it yet. */
+ *  S7 (fleet Needs you): the FIRST thing on the row is the Needs you marker — a primary DS
+ *  Button (xs) fed by the SAME shared selector group, fleet-wide (Needs you is never chat
+ *  scoped), hidden at zero and never folded behind `+K`. It opens the same grouped details,
+ *  whose first section is "Needs you · N": the shared DecisionCard (answer logic and the
+ *  shared decisions store, not a fork) for the first decision, one-line rows for the rest,
+ *  neutral rows for undelivered human-needed pages and stopped goals (Keep going / Drop the
+ *  goal). Results hold in the OPEN panel until it closes; the count stays pending-only. */
 import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import type { KeyboardEvent as ReactKeyboardEvent, ReactNode } from "react";
-import { Button } from "@protolabsai/ui/primitives";
+import type { KeyboardEvent as ReactKeyboardEvent, ReactNode, RefAttributes } from "react";
+import { Button, type ButtonProps } from "@protolabsai/ui/primitives";
 import { Spinner, StatusDot } from "@protolabsai/ui/data";
 import { Drawer, Popover } from "@protolabsai/ui/overlays";
 import { Clock, Target, Users } from "lucide-react";
@@ -26,11 +32,14 @@ import { openView } from "../app/palette/nav";
 import { useUI } from "../state/uiStore";
 import { useIsMobile } from "../lib/useIsMobile";
 import type { GoalState } from "../lib/types";
+import type { DecisionRow } from "../lib/api/decisions";
+import { useDecisions } from "../decisions/useDecisions";
 import { sections } from "../work/sectionRegistry";
 import { useWorkItems, type WorkSource } from "../work/useWorkItems";
-import { flattenWorkItems, inWorkScope, jobEnded, jobKey, workGroups, type WorkGroup } from "../work/workGroups";
+import { flattenWorkItems, inWorkScope, jobEnded, jobKey, withSharedDecisions, workGroups, type WorkGroup } from "../work/workGroups";
 import { beginThisChatVisit, endThisChatVisit } from "../work/visitScope";
 import type { WorkGroupId } from "../work/tone";
+import { NeedsYouSection } from "./NeedsYouSection";
 import { useDirectives } from "./useDirectives";
 import { runHas } from "./mentionRun";
 import { fallbackCap, fitCount, orderPeople, recipientLine, spokenMoreLabel } from "./peopleFit";
@@ -47,7 +56,8 @@ export type RailChip = {
   problem?: boolean;
 };
 
-/** The §5 chips from the shared selector's groups: Needs you is S7-gated, zero counts hide. */
+/** The §5 chips from the shared selector's groups: zero counts hide. Needs you is not a
+ *  chip — it rides the S7 marker, first on the row, so it is excluded here. */
 export function railChips(groups: WorkGroup[]): RailChip[] {
   const chips: RailChip[] = [];
   for (const group of groups) {
@@ -86,6 +96,15 @@ export function spokenLabel(chip: RailChip): string {
   }
 }
 
+/** DS Button spreads every DOM prop (React 19 ref-as-prop included) onto its `<button>`,
+ *  but its props type predates ref-as-prop — widened here for the marker's focus-return ref. */
+const RefButton = Button as unknown as (props: ButtonProps & RefAttributes<HTMLButtonElement>) => ReactNode;
+
+/** The marker's complete spoken label (S7) — the phone marker shows the number alone. */
+export function needsYouSpokenLabel(count: number): string {
+  return count === 1 ? "1 thing needs you. Show it" : `${count} things need you. Show them`;
+}
+
 /** Where "Open in Work" lands for a group. The four-group Work sections are their own slice:
  *  once a section registers under the group id itself, the deep link targets it directly.
  *  Until then, Your instructions maps to its registered section ("directives", which already
@@ -99,7 +118,7 @@ export function workSectionForGroup(group: WorkGroupId): string {
 /** Deep link to a Work group under the `thisChat` scope the chip counted with. The scope
  *  rides the VISIT (work/visitScope), never the saved surface state: the saved filters are
  *  what every other Work entry restores, and one rail click must not rewrite them.
- *  (Needs you, when S7 adds it, deliberately won't scope — it is never filtered.) */
+ *  (Needs you deliberately doesn't scope — it is never filtered.) */
 export function openWorkGroup(group: WorkGroupId) {
   const ui = useUI.getState();
   const prior = ui.surfaceStates.work;
@@ -249,7 +268,7 @@ function PeopleSection({ cast, draft, onToggleMention }: {
   );
 }
 
-function DetailsPanel({ groups, directives, mobile, onNavigate, people }: {
+function DetailsPanel({ groups, directives, mobile, onNavigate, people, needsYou }: {
   groups: WorkGroup[];
   /** THIS chat's instructions source — status and retry scoped to its own ledger. */
   directives: WorkSource;
@@ -257,9 +276,12 @@ function DetailsPanel({ groups, directives, mobile, onNavigate, people }: {
   onNavigate: () => void;
   /** The People section — present ONLY while the rail hides names behind `+K`. */
   people?: ReactNode;
+  /** The Needs-you section (S7) — the FIRST section whenever something needs the operator. */
+  needsYou?: ReactNode;
 }) {
   return (
     <div className="chat-status-details" onKeyDown={trapTab}>
+      {needsYou}
       {groups.filter((group) => group.id !== "needs-you").map((group) => (
         <GroupSection
           key={group.id}
@@ -286,9 +308,24 @@ export function ChatStatusRail({ sessionId, cast, draft, onToggleMention }: {
 }) {
   const mobile = useIsMobile();
   const sources = useWorkItems({ sessionId, thisChatOnly: false });
-  const flat = useMemo(() => flattenWorkItems(sources), [sources]);
+  // The shared decisions store (useDecisions) overlays the Work rows exactly like the Work
+  // view does, so an answer drops the marker's count the moment it lands — the two surfaces
+  // read ONE projection and cannot drift. No second answer cache: the store owns the records.
+  const decisionsShared = useDecisions();
+  const merged = useMemo(
+    () => withSharedDecisions(sources, { records: decisionsShared.records, missing: decisionsShared.missing }),
+    [sources, decisionsShared.records, decisionsShared.missing],
+  );
+  const flat = useMemo(() => flattenWorkItems(merged), [merged]);
   const groups = useMemo(() => workGroups(flat, { thisChatOnly: true, sessionId }), [flat, sessionId]);
   const chips = railChips(groups);
+  // Fleet-wide Needs you (S7): the selector never chat-scopes this group, so the marker's
+  // count is every pending decision, undelivered human-needed page and stopped goal anywhere.
+  const needsYou = groups.find((group) => group.id === "needs-you")!;
+  // Interacted decision cards the OPEN panel retains (§5.5 hold): a result stays readable
+  // until the panel closes, while the marker itself counts pending rows only.
+  const [held, setHeld] = useState<Map<string, DecisionRow>>(() => new Map());
+  const holdDecision = (row: DecisionRow) => setHeld((prev) => new Map(prev).set(row.id, row));
   // THIS chat's ledger, from the same per-session store the old DirectiveStrip read. The
   // aggregated `sources.directives` sums every chat's ledgers — its `loadedAt` is the max
   // across sessions, so a failure HERE reads as merely "stale" there the moment any other
@@ -369,23 +406,31 @@ export function ChatStatusRail({ sessionId, cast, draft, onToggleMention }: {
     const boxes = children.slice(1, -1).map((el) => ({ left: el.offsetLeft, width: el.offsetWidth }));
     setMeasured(fitCount(boxes, more.offsetWidth, available));
   }, [available, orderedKey]);
-  const visibleCount = Math.min(measured ?? fallbackCap(mobile, chips.length > 0), ordered.length);
+  const visibleCount = Math.min(measured ?? fallbackCap(mobile, chips.length > 0, needsYou.count > 0), ordered.length);
   const visible = ordered.slice(0, visibleCount);
   const hiddenCount = ordered.length - visibleCount;
 
-  const [open, setOpen] = useState<RailChip["id"] | "people" | null>(null);
-  const chipRefs = useRef(new Map<RailChip["id"], HTMLButtonElement>());
+  type OpenId = RailChip["id"] | "people" | "needs-you" | null;
+  const [open, setOpen] = useState<OpenId>(null);
+  const chipRefs = useRef(new Map<Exclude<OpenId, "people" | null>, HTMLButtonElement>());
   const moreRef = useRef<HTMLButtonElement | null>(null);
-  const lastOpen = useRef<RailChip["id"] | "people" | null>(null);
+  const lastOpen = useRef<OpenId>(null);
   if (open !== null) lastOpen.current = open;
   // The open chip can leave the rail under the reader (its last job ends, its count hits
   // zero; for the picker, a resize lets everyone fit and `+K` goes). Clear the state too,
-  // or the panel would reopen by itself when the chip returns.
+  // or the panel would reopen by itself when the chip returns. The Needs-you marker with
+  // results HELD stays open at zero — the hold is the §5.5 contract — until the panel closes.
   const openGone = open !== null
-    && (open === "people" ? hiddenCount === 0 : !chips.some((chip) => chip.id === open));
+    && (open === "people" ? hiddenCount === 0
+      : open === "needs-you" ? needsYou.count === 0 && held.size === 0
+        : !chips.some((chip) => chip.id === open));
   useEffect(() => {
     if (openGone) setOpen(null);
   }, [openGone]);
+  // The hold lives exactly as long as a panel is open: closing any panel releases it.
+  useEffect(() => {
+    if (open === null) setHeld((prev) => (prev.size ? new Map() : prev));
+  }, [open]);
 
   // One polite, change-only live region (§6): empty on mount, written ONLY when a job with
   // tied approvals ends — "<job> finished. 1 approval it carried is now fulfilled." (§3). No
@@ -435,7 +480,8 @@ export function ChatStatusRail({ sessionId, cast, draft, onToggleMention }: {
     else if (lastOpen.current) chipRefs.current.get(lastOpen.current)?.focus();
   };
 
-  const hasContent = chips.length > 0 || cast.length > 0;
+  const hasContent = chips.length > 0 || cast.length > 0 || needsYou.count > 0
+    || (open === "needs-you" && held.size > 0);
   // The ONE polite live region (§6) — mounted for the component's whole life, OUTSIDE the
   // conditional rail, at a fixed child position so React never recreates the node. A screen
   // reader announces text that CHANGES inside a region that already existed; a region that
@@ -472,6 +518,71 @@ export function ChatStatusRail({ sessionId, cast, draft, onToggleMention }: {
       +{hiddenCount}
     </button>
   );
+
+  // The Needs-you section — the panel's FIRST section wherever the panel opens from. Present
+  // while anything is pending, and while an interacted result is held in the open panel.
+  const needsYouSectionFor = (onNavigate: () => void) =>
+    needsYou.count > 0 || held.size > 0 ? (
+      <NeedsYouSection
+        items={needsYou.items}
+        held={held}
+        onHold={holdDecision}
+        records={decisionsShared.records}
+        answer={decisionsShared.answer}
+        mobile={mobile}
+        onNavigate={onNavigate}
+        openWork={() => openWorkGroup("needs-you")}
+        goalsRetry={() => sources.goals.retry()}
+      />
+    ) : undefined;
+
+  // The S7 marker: FIRST on the row, primary DS Button (xs), fleet-wide count, hidden at
+  // zero, never folded. The phone hides the wordy span (numbers only); the spoken label says
+  // it all. It survives a count of zero ONLY while its open panel holds a result (§5.5).
+  const needsYouExpanded = open === "needs-you";
+  const needsYouButton = (
+    <RefButton
+      size="xs"
+      variant="primary"
+      className="chat-status-needs-you"
+      data-testid="chat-status-chip-needs-you"
+      ref={(node: HTMLButtonElement | null) => {
+        if (node) chipRefs.current.set("needs-you", node);
+        else chipRefs.current.delete("needs-you");
+      }}
+      aria-haspopup="dialog"
+      aria-expanded={needsYouExpanded}
+      aria-label={needsYouSpokenLabel(needsYou.count)}
+      onClick={mobile ? () => setOpen(needsYouExpanded ? null : "needs-you") : undefined}
+    >
+      <span className="chat-status-chip__text">Needs you</span>
+      {needsYou.count > 0 && <span className="chat-status-chip__count">{needsYou.count}</span>}
+    </RefButton>
+  );
+  const needsYouMarker = needsYou.count === 0 && !(needsYouExpanded && held.size > 0)
+    ? null
+    : mobile ? needsYouButton : (
+      <Popover
+        side="top"
+        align="start"
+        className="chat-status-popover"
+        open={needsYouExpanded}
+        onOpenChange={(next) => {
+          setOpen(next ? "needs-you" : null);
+          if (!next) chipRefs.current.get("needs-you")?.focus();
+        }}
+        trigger={needsYouButton}
+      >
+        <DetailsPanel
+          groups={groups}
+          directives={instructionsSource}
+          mobile={false}
+          onNavigate={close}
+          people={peopleWhenHidden}
+          needsYou={needsYouSectionFor(close)}
+        />
+      </Popover>
+    );
 
   const renderChip = (chip: RailChip) => {
     const expanded = open === chip.id;
@@ -519,6 +630,7 @@ export function ChatStatusRail({ sessionId, cast, draft, onToggleMention }: {
           mobile={false}
           onNavigate={close}
           people={peopleWhenHidden}
+          needsYou={needsYouSectionFor(close)}
         />
       </Popover>
     );
@@ -529,6 +641,7 @@ export function ChatStatusRail({ sessionId, cast, draft, onToggleMention }: {
       {liveRegion}
       {hasContent && (
         <div className="chat-status-rail" role="group" aria-label="Chat status" data-testid="chat-status-rail">
+          {needsYouMarker}
           {chips.map(renderChip)}
           {cast.length ? (
             <div className="chat-roster" aria-label="In this chat" ref={rosterRef}>
@@ -596,6 +709,7 @@ export function ChatStatusRail({ sessionId, cast, draft, onToggleMention }: {
                   mobile
                   onNavigate={closeAndRestore}
                   people={peopleWhenHidden}
+                  needsYou={needsYouSectionFor(closeAndRestore)}
                 />
               ) : null}
             </Drawer>

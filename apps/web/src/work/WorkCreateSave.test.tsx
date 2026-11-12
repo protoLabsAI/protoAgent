@@ -16,6 +16,7 @@ const mocks = vi.hoisted(() => ({
   createWatch: vi.fn(async (_body: Record<string, unknown>) => ({ ok: true })),
   editWatch: vi.fn(async (_id: string, _body: Record<string, unknown>) => ({ ok: true })),
   addSchedule: vi.fn(async (_body: Record<string, unknown>) => ({ job: { id: "work-j1", prompt: "", schedule: "" } })),
+  schedules: vi.fn(async () => ({ jobs: [] as { id: string }[], backend: "memory" })),
   createDirective: vi.fn(async (_body: Record<string, unknown>) => ({ directive: { id: "d-9", session_id: "chat-1", quote: "q", scope: "s", conditions: "", status: "in_force" } })),
   updateDirective: vi.fn(async (_sid: string, _id: string, _body: Record<string, unknown>) => ({ directive: {} })),
   listDirectives: vi.fn(async (_sid: string) => ({ directives: [] as Record<string, unknown>[], in_force: 0 })),
@@ -133,9 +134,25 @@ it("an instruction retry re-uses an in-force byte-identical row instead of creat
     { id: "d-prior", session_id: "chat-1", quote: typed, scope: "merges to main", conditions: "", status: "in_force" },
   ] } as never);
   await confirm(instruction(typed), typed);
+  // The ledger trims scope/conditions on record, so the earlier create's row holds the
+  // TRIMMED copy — a retry with stray whitespace must still recognize it, not mint a sibling.
+  await setValue(field("What it covers").querySelector("input")!, "  merges to main ");
   await act(async () => button("Save").click());
   expect(mocks.createDirective).not.toHaveBeenCalled();
   expect(onSaved).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ itemId: "directive:d-prior" }));
+});
+
+it("re-picking the ORIGINAL check restores its args; a different check never inherits them", async () => {
+  mocks.verifiers.mockResolvedValueOnce({ types: [], plugin_checks: [
+    { name: "gh:pr-merged", description: "", plugin_id: "gh" }, { name: "ci:green", description: "", plugin_id: "ci" },
+  ] } as never);
+  await confirm(condition());
+  const pick = field("Check with").querySelector("select")!;
+  await setValue(pick, "ci:green");
+  await setValue(pick, "gh:pr-merged"); // A→B→A — the reading's args survive the round trip
+  await act(async () => button("Save").click());
+  expect((mocks.createWatch.mock.calls[0][0] as { verifier: unknown }).verifier)
+    .toEqual({ type: "plugin", check: "gh:pr-merged", args: { pr: 868 } });
 });
 
 it("a time confirm shows human Repeat choices — never cron — and saves through the scheduler with the chat as owner", async () => {
@@ -153,6 +170,45 @@ it("a time confirm shows human Repeat choices — never cron — and saves throu
     origin_session: "chat-1", timezone: "UTC",
   });
   expect(onSaved).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ itemId: "schedule:work-j1" }));
+});
+
+it("switching Repeat across the Once boundary carries the timezone with the wall clock", async () => {
+  // Once → Daily: the kept local hour must mean the VIEWER'S hour, not UTC (§10.4).
+  await confirm(time("once", "once"));
+  const at = new Date("2099-01-05T09:00:00+00:00"); // the once instant, on the viewer's clock
+  await setValue(field("Repeat").querySelector("select")!, "daily");
+  await act(async () => button("Save").click());
+  expect(mocks.addSchedule.mock.calls[0][0]).toMatchObject({
+    schedule: `${at.getMinutes()} ${at.getHours()} * * *`,
+    timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+  });
+
+  // Weekdays in UTC → Once: 09:00 is a UTC wall clock, so the one-shot fires at 09:00 UTC —
+  // never the viewer's 09:00 read as local.
+  mocks.addSchedule.mockClear();
+  await act(async () => root.unmount());
+  root = createRoot(host);
+  const today = new Date(); // the prefill anchors the weekday wall clock on the viewer's today
+  await confirm(time("0 9 * * 1-5"));
+  await setValue(field("Repeat").querySelector("select")!, "once");
+  await act(async () => button("Save").click());
+  const body = mocks.addSchedule.mock.calls[0][0] as { schedule: string; timezone?: string };
+  expect(new Date(body.schedule).getTime()).toBe(Date.UTC(today.getFullYear(), today.getMonth(), today.getDate(), 9, 0));
+  expect(body.timezone).toBeUndefined();
+});
+
+it("a Time retry after a create that LANDED recovers from the duplicate-id rejection", async () => {
+  mocks.addSchedule.mockRejectedValueOnce(new Error("job id already exists"));
+  mocks.schedules.mockImplementationOnce(async () => ({
+    jobs: [{ id: (mocks.addSchedule.mock.calls[0][0] as { job_id: string }).job_id }], backend: "memory",
+  }));
+  await confirm(time("0 9 * * 1-5"));
+  await act(async () => button("Save").click());
+  // The row existing IS the earlier success: no error, no second job, the detail opens on it.
+  expect(mocks.addSchedule).toHaveBeenCalledTimes(1);
+  expect(onSaved).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+    itemId: `schedule:${(mocks.addSchedule.mock.calls[0][0] as { job_id: string }).job_id}`,
+  }));
 });
 
 it("an unmapped repeat shows a sentence instead of the select; the words — not cron — are the way to change it", async () => {
