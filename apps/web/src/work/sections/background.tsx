@@ -183,6 +183,7 @@ function BackgroundList({ ctx }: { ctx: WorkSectionContext }) {
 
 registerWorkSection("background", {
   label: "Background agents",
+  group: "doing-now",
   render(ctx) {
     const itemId = ctx.state.itemId;
     if (!itemId) return <BackgroundList ctx={ctx} />;

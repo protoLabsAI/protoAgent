@@ -11,6 +11,7 @@ import { decisionsApi } from "../../lib/api/decisions";
 import { ApiError } from "../../lib/api/http";
 import { decisionsStoreForTest } from "../../decisions/useDecisions";
 import { WorkView } from "../WorkView";
+import { sections } from "../sectionRegistry";
 import { decisionMeta, fromDecision, fromDirective } from "../tone";
 import { useUI } from "../../state/uiStore";
 import type { WorkItem, WorkItems, WorkSource, WorkSourceKind } from "../useWorkItems";
@@ -543,4 +544,9 @@ it("uses actual phone action sizes in decision and directive custom details", as
   await act(async () => buttons("Withdraw…")[0].click());
   expect(host.querySelectorAll(".chat-directive button.pl-btn--sm")).toHaveLength(0);
   expect([...host.querySelectorAll(".chat-directive-actions button")].map(button => button.textContent)).toEqual(["Keep it", "Withdraw"]);
+});
+
+it("registers decisions and instructions with canonical group metadata", () => {
+  expect(sections.get("decisions")).toMatchObject({ label: "Decisions", group: "needs-you" });
+  expect(sections.get("directives")).toMatchObject({ label: "Your instructions", group: "instructions" });
 });

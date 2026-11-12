@@ -44,4 +44,4 @@ function renderDirectives(ctx: WorkSectionContext): ReactNode {
   );
 }
 
-registerWorkSection("directives", { label: "Directives", render: renderDirectives });
+registerWorkSection("directives", { label: "Your instructions", group: "instructions", render: renderDirectives });

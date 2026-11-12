@@ -37,6 +37,7 @@ vi.mock("../../schedule/schedule-builder", async (importOriginal) => ({
 
 it("annotates tasks without overriding per-row goal/task/watch classification", () => {
   expect(sections.get("tasks")?.group).toBe("doing-now");
+  expect(sections.get("schedules")?.group).toBe("coming-up");
   const base = { id: "item", title: "Item", meta: "", status: "waiting" as const };
   const groups = workGroups([
     { ...base, id: "active", kind: "goal", raw: { status: "active" } },
