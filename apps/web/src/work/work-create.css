@@ -1,0 +1,28 @@
+/* New-work dialog/sheet (work-consolidation §10.2). The sheet layout rules exist to make
+   horizontal overflow impossible at 390px and 400% zoom: a bare 1fr grid track grows to its
+   widest nowrap child (the longest example chip widened the whole sheet), so every track is
+   minmax(0, 1fr) and every child yields min-width: 0. */
+.work-create { max-width: 100%; }
+.work-create__body { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--pl-space-3); }
+.work-create__body > * { min-width: 0; }
+.work-create .pl-field { min-width: 0; }
+.work-create .pl-textarea, .work-create .pl-input, .work-create .pl-select { width: 100%; max-width: 100%; box-sizing: border-box; }
+
+.work-create__examples { display: flex; flex-wrap: wrap; gap: var(--pl-space-2); min-width: 0; }
+/* Chip has no wrap prop yet (DS gap filed alongside §10.2): wrap the label locally so the
+   longest example can never widen the sheet, and let the chip grow past its one-line box. */
+.work-create__examples .pl-chip { max-width: 100%; height: auto; text-align: start; }
+.work-create__examples .pl-chip-label { white-space: normal; overflow-wrap: anywhere; }
+
+.work-create__status { display: flex; align-items: center; gap: var(--pl-space-2); color: var(--pl-color-fg-muted); font-size: var(--pl-font-size-sm); }
+.work-create__dest { margin: 0; color: var(--pl-color-fg-muted); font-size: var(--pl-font-size-sm); }
+
+/* The footer flex row and its children also yield min-width: 0 (§10.2). */
+.work-create .pl-dialog__foot, .work-create .pl-drawer__foot { min-width: 0; }
+.work-create .pl-dialog__foot > *, .work-create .pl-drawer__foot > * { min-width: 0; }
+
+/* Phone sheet actions (§10.2/§10.7): full width, stacked, primary on top (the sheet's DOM
+   order already puts it first, so visual and reading order match), each at least 44px tall
+   (the HIG floor, same raw value as tablet.css — there is no 44px space token). */
+.work-create--sheet .pl-drawer__foot { flex-direction: column; }
+.work-create--sheet .pl-drawer__foot .pl-btn { width: 100%; min-height: 44px; }

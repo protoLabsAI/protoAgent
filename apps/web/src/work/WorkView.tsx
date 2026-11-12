@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from "react";
 import { Button } from "@protolabsai/ui/primitives";
-import { X } from "lucide-react";
+import { Plus, X } from "lucide-react";
 import { WorkEmpty as Empty } from "./WorkEmpty";
 import { WorkHeading } from "./WorkHeading";
 import { useSurfaceFrame } from "../shell/SurfaceFrame";
@@ -20,8 +20,9 @@ import { useUI } from "../state/uiStore";
 import type { SurfaceState } from "../shell/surfaceState";
 import { useWorkItems, type WorkItems } from "./useWorkItems";
 import { workGroups } from "./workGroups";
+import { WorkCreateDialog } from "./WorkCreateDialog";
 import { WorkDetail } from "./WorkDetail";
-import { WorkOverview, WorkGroupSection, groupSources, itemKey, workSections } from "./WorkOverview";
+import { WorkOverview, WorkGroupNew, WorkGroupSection, groupSources, itemKey, workSections } from "./WorkOverview";
 import { endThisChatVisit, isThisChatVisit, subscribeThisChatVisit, trackWorkViewMount } from "./visitScope";
 import { sections, subscribe, getSnapshot } from "./sectionRegistry";
 import { useGoalCreator } from "./sections/goals";
@@ -152,6 +153,10 @@ export function WorkView({ frame = "rail", sessionId }: { frame?: "rail" | "moda
   const returnTo = useRef<string | undefined>(undefined);
   const previousNeeds = useRef<Set<string> | null>(null);
   const [announcement, setAnnouncement] = useState("");
+  // The §10.1 New flow: header New and the all-empty primary open it bare; a group "+"
+  // seeds its placeholder. Per-mount state — an open step 1 is never worth persisting.
+  const [create, setCreate] = useState<{ group?: WorkGroupId } | null>(null);
+  const onNew = (newGroup?: WorkGroupId) => setCreate({ group: newGroup });
   function update(patch: Partial<SurfaceState>) {
     const current = useUI.getState().surfaceStates.work ?? state;
     useUI.getState().setSurfaceState("work", { ...current, ...patch });
@@ -288,6 +293,7 @@ export function WorkView({ frame = "rail", sessionId }: { frame?: "rail" | "moda
           ...groups.map((candidate) => ({ id: candidate.id, label: candidate.label,
             badge: groupLoading(candidate.id) ? undefined : candidate.count })),
         ]} /></div>
+      <Button className="work-view__new" size="sm" variant="ghost" onClick={() => onNew()}><Plus aria-hidden="true" size={14} /> New</Button>
     </div>
     <div className="work-view__panes">
       <div className="work-view__list" ref={listRef} onScroll={(event) => {
@@ -300,9 +306,10 @@ export function WorkView({ frame = "rail", sessionId }: { frame?: "rail" | "moda
         }
       }}>
         <div className="work-view__content">
-          {section !== "overview" && group && <WorkHeading label={group.label} count={group.count} />}
+          {section !== "overview" && group && <WorkHeading label={group.label} count={group.count}
+            action={<WorkGroupNew group={group} onNew={(id) => onNew(id)} />} />}
           {section === "overview" || !group
-            ? <WorkOverview groups={groups} sources={sources} onOpen={onOpen} sessionId={sessionId} />
+            ? <WorkOverview groups={groups} sources={sources} onOpen={onOpen} sessionId={sessionId} onNew={onNew} />
             : <WorkGroupSection group={group} sources={sources} onOpen={onOpen} sessionId={sessionId}
               // The Your instructions list delegates to the registered directives renderer
               // (itemId stripped — the detail pane owns selection) so the §3 presentation —
@@ -321,6 +328,7 @@ export function WorkView({ frame = "rail", sessionId }: { frame?: "rail" | "moda
       </div>}
     </div>
     {state.filters?.create === true && <GoalCreatorHost state={state} />}
+    {create && <WorkCreateDialog group={create.group} sessionId={sessionId} onClose={() => setCreate(null)} />}
     <div className="work-view__announcement" role="status" aria-live="polite" aria-atomic="true">{announcement}</div>
   </div>;
 }

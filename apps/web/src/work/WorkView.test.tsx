@@ -238,6 +238,43 @@ it("Overview instruction rows share the §3 presentation: Approval link, scope h
   }
 });
 
+it("§10.1 entry points: header New on every state, a + on the three eligible groups, the all-empty invitation", async () => {
+  data.sources.decisions.items = [decision("ask")];
+  data.sources.goals.items = [goal("drive")];
+  data.sources.tasks.items = [task("queued", "open")];
+  data.sources.directives.items = [{ kind: "directive", id: "d1", status: "waiting", title: "Hold main", meta: "", raw: { id: "d1", status: "in_force", quote: "Hold main" } }];
+  await render("modal");
+  expect(host.querySelector(".work-view__header .work-view__new")?.textContent?.trim()).toBe("New");
+  // Only the groups the operator may add to get a "+" — Needs you never does (§10.1).
+  expect(Array.from(host.querySelectorAll('button[aria-label^="New in"]')).map((node) => node.getAttribute("aria-label")))
+    .toEqual(["New in Doing now", "New in Coming up", "New in Your instructions"]);
+  // A group "+" opens the SAME step-1 dialog, seeded with a placeholder, never a kind.
+  await act(async () => host.querySelector<HTMLButtonElement>('button[aria-label="New in Coming up"]')!.click());
+  expect(document.querySelector(".work-create .pl-dialog__title")?.textContent).toBe("New");
+  expect(document.querySelector<HTMLTextAreaElement>(".work-create textarea")?.placeholder)
+    .toBe("What should happen, and when — or on what condition?");
+  // The dialog portals to body, so the host-scoped click helper can't reach its Cancel.
+  const cancel = () => Array.from(document.querySelectorAll<HTMLButtonElement>(".work-create ~ * button, .pl-overlay button"))
+    .find((node) => node.textContent?.trim() === "Cancel")!;
+  await act(async () => cancel().click());
+  expect(document.querySelector(".work-create")).toBeNull();
+  // A picked group's heading carries the same "+"; header New stays in every state.
+  useUI.setState({ surfaceStates: { work: { section: "coming-up" } } });
+  await render("modal");
+  expect(host.querySelector('.work-heading button[aria-label="New in Coming up"]')).toBeTruthy();
+  expect(host.querySelector(".work-view__new")).toBeTruthy();
+  // The all-empty state adds the §10.1 invitation line and a primary New.
+  Object.values(data.sources).forEach((source) => { source.items = []; });
+  useUI.setState({ surfaceStates: { work: {} } });
+  await render("modal");
+  expect(host.textContent).toContain("Tell the agent what to do, and when: now, later, when something happens, or as a standing rule.");
+  const primary = host.querySelector<HTMLButtonElement>(".pl-empty__action .pl-btn--primary")!;
+  expect(primary.textContent?.trim()).toBe("New");
+  await act(async () => primary.click());
+  expect(document.querySelector<HTMLTextAreaElement>(".work-create textarea")?.placeholder).toBe("");
+  await act(async () => cancel().click());
+});
+
 it("achieved goals disappear and not-started jobs count only in Coming up", async () => {
   data.sources.goals.items = [goal("done", "achieved")];
   data.sources.tasks.items = [task("queued", "open")];

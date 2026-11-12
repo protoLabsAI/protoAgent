@@ -1,5 +1,7 @@
 .work-view { container: work-view / inline-size; display: flex; flex-direction: column; flex: 1; min-height: 0; min-width: 0; }
 .work-view__header { display: flex; align-items: center; flex-wrap: wrap; gap: var(--pl-space-2); padding: var(--pl-space-3); }
+/* §10.1: New sits at the end of the header, on every surface and in every state. */
+.work-view__new { margin-inline-start: auto; flex: none; }
 .work-view__picker { flex: 0 1 auto; max-width: 100%; min-width: 0; }
 .work-view__panes { display: flex; flex: 1; min-height: 0; min-width: 0; }
 .work-view__list, .work-view__detail { flex: 1 1 0; min-width: 0; overflow: auto; padding: var(--pl-space-3); }

@@ -80,6 +80,31 @@ export type DirectiveRow = {
 
 export type DirectiveList = { directives: DirectiveRow[]; in_force: number };
 
+/** The structured reply of a marked interpret turn (work-consolidation §10.6, server
+ *  `server/work_interpret.py`): exactly one branch is active unless `problem` explains
+ *  why none could be. Inactive branches arrive as null. */
+export type WorkInterpretation = {
+  says: string;
+  kind: "job" | "followup" | "instruction";
+  group: "doing" | "coming" | "told";
+  job?: { what: string; who: string } | null;
+  followup?: {
+    trigger: "time" | "condition";
+    time?: { first_run: string; repeat: string; repeat_label: string; timezone: string } | null;
+    condition?: {
+      condition: string;
+      check: string;
+      check_args: Record<string, unknown>;
+      interval_s: number;
+      repeat: boolean;
+      expires_in_s: number | null;
+    } | null;
+    then: string;
+  } | null;
+  instruction?: { quote: string; scope: string; conditions: string } | null;
+  problem: string | null;
+};
+
 export const chatApi = {
   listDirectives(sessionId: string) {
     return request<DirectiveList>(`/api/chat/sessions/${encodeURIComponent(sessionId)}/directives`);
@@ -145,6 +170,21 @@ export const chatApi = {
     return request<{ response: string; messages: ChatMessage[] }>("/api/chat", {
       method: "POST",
       body: { message, session_id: sessionId, ...(model ? { model } : {}) },
+    });
+  },
+
+  // One marked, read-only interpret turn into the CURRENT chat (S8b/S8c, §10.6): the
+  // `interpret` flag routes the message to the server's work_interpret mode, which may
+  // read but never creates, schedules or records anything. The structured reading rides
+  // the system entry's `interpretation` field; its transcript copy is tagged and folded.
+  interpretWork(message: string, sessionId: string) {
+    return request<{
+      response: string;
+      messages: (ChatMessage & { interpretation?: WorkInterpretation })[];
+      session_id: string;
+    }>("/api/chat", {
+      method: "POST",
+      body: { message, session_id: sessionId, interpret: true },
     });
   },
 
