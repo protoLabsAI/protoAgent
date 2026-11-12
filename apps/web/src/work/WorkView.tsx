@@ -20,6 +20,7 @@ import type { SurfaceState } from "../shell/surfaceState";
 import { useWorkItems, type WorkItem, type WorkItems } from "./useWorkItems";
 import { WorkOverview, workSections } from "./WorkOverview";
 import { workGroups } from "./workGroups";
+import { endThisChatVisit, isThisChatVisit, subscribeThisChatVisit, trackWorkViewMount } from "./visitScope";
 import { sections, subscribe, getSnapshot } from "./sectionRegistry";
 import "./sections/decisions";
 import "./sections/goals";
@@ -53,6 +54,14 @@ export function WorkView({ frame = "rail", sessionId }: { frame?: "rail" | "moda
   const hostFrame = useSurfaceFrame() ?? frame;
   useSyncExternalStore(subscribe, getSnapshot);
   const state = useUI((s) => s.surfaceStates.work ?? emptyState);
+  // A rail deep link's this-chat scope rides the VISIT (visitScope.ts), never the saved
+  // state: it overlays the filters the sections read, so the saved filters — what every
+  // other entry restores — survive the visit untouched. It ends with the visit: the last
+  // mount leaving the screen, or the reader picking a section themselves (selectSection).
+  const thisChatVisit = useSyncExternalStore(subscribeThisChatVisit, isThisChatVisit);
+  useEffect(() => trackWorkViewMount(), []);
+  const viewState = thisChatVisit && state.filters?.thisChat !== true
+    ? { ...state, filters: { ...state.filters, thisChat: true } } : state;
   const section = state.section ?? "overview";
   const toast = useToast();
   const agentOnline = useSyncExternalStore(onConnectionChange, isConnected);
@@ -94,7 +103,7 @@ export function WorkView({ frame = "rail", sessionId }: { frame?: "rail" | "moda
   // "Your instructions" counts its shown rows via the shared projection — in-force only, with a
   // tied directive dropped the instant its job ends — so a terminal job never leaves a phantom
   // count (the rail reads the same selector). Other sections count through their `listFilter`.
-  const instructionsCount = workGroups(sources, { thisChatOnly: state.filters?.thisChat === true, sessionId }).find((group) => group.id === "instructions")?.count ?? 0;
+  const instructionsCount = workGroups(sources, { thisChatOnly: viewState.filters?.thisChat === true, sessionId }).find((group) => group.id === "instructions")?.count ?? 0;
   const countOf = (id: string) => id === "overview" ? items.length
     : id === "directives" ? instructionsCount
       : visibleCount(id);
@@ -200,12 +209,17 @@ export function WorkView({ frame = "rail", sessionId }: { frame?: "rail" | "moda
     openView("chat");
     if (reply) useKbIntents.getState().focusComposer();
   };
-  const context = { sources, state, onOpen, onBack, sessionId, decisionActions: { agentOnline, openSourceChat, answerDecision: decisions.answer } };
+  const context = { sources, state: viewState, onOpen, onBack, sessionId, decisionActions: { agentOnline, openSourceChat, answerDecision: decisions.answer } };
   // No entry for the activity kind: its Work section is gone (S4c) and the activity source
   // never yields selectable items (`useWorkItems` keeps it rows-empty for the delivery group).
   const selectedSection = selected && ({ decision: "decisions", goal: "goals", watch: "watches", task: "tasks", schedule: "schedules", background: "background", directive: "directives" } as const as Partial<Record<WorkItem["kind"], string>>)[selected.kind];
   const detailRenderer = sections.get(selectedSection ?? section);
-  const selectSection = (id: string) => update({ section: id, itemId: undefined, scrollTop: 0 });
+  const selectSection = (id: string) => {
+    // Picking a section is the reader's own navigation: a rail deep link's visit scope ends
+    // here, and Work is back on its saved (unscoped) filters.
+    endThisChatVisit();
+    update({ section: id, itemId: undefined, scrollTop: 0 });
+  };
 
   return <div className="work-view" data-frame={hostFrame} data-selected={!!state.itemId} onKeyDown={(event) => {
     // Portalled overlays bubble through React too; only handle events inside this view.
@@ -235,7 +249,7 @@ export function WorkView({ frame = "rail", sessionId }: { frame?: "rail" | "moda
         <div className="work-view__content">
           {section !== "overview" && <WorkHeading label={label} count={count} />}
           {section === "overview" ? <WorkOverview sources={sources} onOpen={onOpen} onSchedules={() => selectSection("schedules")} />
-            : sections.get(section)?.render({ ...context, state: { ...state, itemId: undefined } }) ?? <Empty title={`No ${label.toLowerCase()} to show`} />}
+            : sections.get(section)?.render({ ...context, state: { ...viewState, itemId: undefined } }) ?? <Empty title={`No ${label.toLowerCase()} to show`} />}
         </div>
       </div>
       {state.itemId && <div className="work-view__detail" ref={detailRef}>

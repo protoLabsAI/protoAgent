@@ -3,6 +3,7 @@ import { Spinner } from "@protolabsai/ui/data";
 
 import { openView } from "../app/palette/nav";
 import { useUI } from "../state/uiStore";
+import { endThisChatVisit } from "../work/visitScope";
 import { useRunningBackgroundJobs, type JobLite } from "./backgroundJobStore";
 
 /** "delegate → sonnet: Land PR #13…" → "sonnet: Land PR #13…"; anything else as it is. */
@@ -29,6 +30,8 @@ export function BackgroundWorkStrip({ sessionId }: { sessionId: string }) {
       scrollTop: 0,
       filters: ui.surfaceStates.work?.filters,
     });
+    // This entry keeps the saved filters — a live rail deep-link visit scope must not leak in.
+    endThisChatVisit();
     openView("work");
   };
   if (running.length === 0) {

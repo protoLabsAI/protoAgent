@@ -5,6 +5,7 @@ import { useIsMobile } from "../lib/useIsMobile";
 import { openView } from "../app/palette/nav";
 import { useUI } from "../state/uiStore";
 import { chatStore } from "./chat-store";
+import { endThisChatVisit } from "../work/visitScope";
 import { useDirectives } from "./useDirectives";
 
 function openWorkDirectives() {
@@ -16,6 +17,8 @@ function openWorkDirectives() {
     scrollTop: 0,
     filters: ui.surfaceStates.work?.filters,
   });
+  // This entry keeps the saved filters — a live rail deep-link visit scope must not leak in.
+  endThisChatVisit();
   openView("work");
 }
 
