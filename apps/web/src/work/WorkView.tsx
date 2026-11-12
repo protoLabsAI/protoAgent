@@ -19,6 +19,7 @@ import { useUI } from "../state/uiStore";
 import type { SurfaceState } from "../shell/surfaceState";
 import { useWorkItems, type WorkItem, type WorkItems } from "./useWorkItems";
 import { WorkOverview, workSections } from "./WorkOverview";
+import { workGroups } from "./workGroups";
 import { sections, subscribe, getSnapshot } from "./sectionRegistry";
 import "./sections/decisions";
 import "./sections/goals";
@@ -90,7 +91,14 @@ export function WorkView({ frame = "rail", sessionId }: { frame?: "rail" | "moda
     const filter = sections.get(id)?.listFilter;
     return (filter ? sourceItems.filter(filter) : sourceItems).length;
   };
-  const count = section === "overview" ? items.length : visibleCount(section);
+  // "Your instructions" counts its shown rows via the shared projection — in-force only, with a
+  // tied directive dropped the instant its job ends — so a terminal job never leaves a phantom
+  // count (the rail reads the same selector). Other sections count through their `listFilter`.
+  const instructionsCount = workGroups(sources, { thisChatOnly: state.filters?.thisChat === true, sessionId }).find((group) => group.id === "instructions")?.count ?? 0;
+  const countOf = (id: string) => id === "overview" ? items.length
+    : id === "directives" ? instructionsCount
+      : visibleCount(id);
+  const count = countOf(section);
   const listRef = useRef<HTMLDivElement>(null);
   const detailRef = useRef<HTMLDivElement>(null);
   const listSize = useRef<{ width: number; height: number } | null>(null);
@@ -211,7 +219,7 @@ export function WorkView({ frame = "rail", sessionId }: { frame?: "rail" | "moda
       {state.itemId && <Button className="work-view__back" size={hostFrame === "sheet" ? "md" : "sm"} variant="ghost" onClick={onBack}>Back to {label}</Button>}
       <div className="work-view__picker"><SideNav collapsed ariaLabel="Work sections" active={section} onSelect={selectSection}
         items={Object.entries(workSections).map(([id, defaultLabel]) => ({ id, label: sections.get(id)?.label ?? defaultLabel,
-          badge: (id === "overview" ? loading : sources[id as keyof WorkItems]?.status === "loading") ? undefined : (id === "overview" ? items.length : visibleCount(id)),
+          badge: (id === "overview" ? loading : sources[id as keyof WorkItems]?.status === "loading") ? undefined : countOf(id),
         }))} /></div>
     </div>
     <div className="work-view__panes">

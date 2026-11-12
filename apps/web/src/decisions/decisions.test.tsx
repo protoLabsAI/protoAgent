@@ -264,6 +264,51 @@ describe("useDecisions store", () => {
     expect(store.getSnapshot().records["a"].answer_label).toBe("Merge with the WARN");
   });
 
+  it("loadAnswered merges the answered ledger into records, settling matching pending rows and clearing a 404 latch", async () => {
+    const answeredA = decision("a", { state: "answered", answer_label: "Merge with the WARN" });
+    const answeredH = decision("h", { state: "answered", answer_label: "Hold the release" });
+    const list = vi.spyOn(decisionsApi, "listDecisions").mockImplementation(async (state = "pending") =>
+      state === "answered" ? listOf([answeredA, answeredH, decision("ignored")]) : listOf([decision("a")]));
+    vi.spyOn(decisionsApi, "getDecision").mockRejectedValue(new ApiError(404, "gone"));
+    const store = mountStore();
+    await settle();
+    await store.loadDecision("h"); // latches h as missing via the 404
+    expect(store.getSnapshot().missing["h"]).toBe(true);
+    expect(store.getSnapshot().records["a"].state).toBe("pending");
+
+    const first = store.loadAnswered();
+    const second = store.loadAnswered(); // coalesces with the in-flight read
+    await expect(first).resolves.toBe(true);
+    await expect(second).resolves.toBe(true);
+    expect(list.mock.calls.filter(([state]) => state === "answered")).toHaveLength(1);
+
+    // Answered rows land in the cache; the one that was pending here leaves the pending list.
+    expect(store.getSnapshot().records["a"].state).toBe("answered");
+    expect(store.getSnapshot().pendingCount).toBe(0);
+    expect(store.getSnapshot().decisions).toEqual([]);
+    // The server re-listing h as answered clears the 404 latch.
+    expect(store.getSnapshot().records["h"].state).toBe("answered");
+    expect(store.getSnapshot().missing["h"]).toBeUndefined();
+    // A non-answered row in the payload never lands — a stray pending copy must not clobber.
+    expect(store.getSnapshot().records["ignored"]).toBeUndefined();
+  });
+
+  it("a failed answered-ledger read leaves the cache unchanged and the next call retries", async () => {
+    const list = vi.spyOn(decisionsApi, "listDecisions").mockImplementation(async (state = "pending") => {
+      if (state === "answered") throw new Error("down");
+      return listOf([]);
+    });
+    const store = mountStore();
+    await settle();
+    await expect(store.loadAnswered()).resolves.toBe(false);
+    expect(store.getSnapshot().records).toEqual({});
+
+    const answered = decision("a", { state: "answered" });
+    list.mockImplementation(async (state = "pending") => listOf(state === "answered" ? [answered] : []));
+    await expect(store.loadAnswered()).resolves.toBe(true);
+    expect(store.getSnapshot().records["a"].state).toBe("answered");
+  });
+
   it("re-reads a cached id that left the pending list on decision.changed, even one still cached as pending", async () => {
     // "a" starts pending and is cached by the first list. Another member then answers it: it
     // leaves the pending list (so the refresh can't update it) and the event names it. A cached

@@ -224,6 +224,34 @@ it("counts only the rows the section lists — finished jobs and achieved goals 
   await closeSections(nav);
 });
 
+it("badges Your instructions through the shared projection, beside the listFilter counts", async () => {
+  data.sources.tasks.items = [
+    item("open-job", "scheduled", { raw: { status: "open", created_at: "2026-11-01T00:00:00Z" } }),
+    item("closed-job", "done", { raw: { status: "closed", closed_at: "2026-11-01T00:00:00Z" } }),
+  ];
+  data.sources.background.items = [item("deploy", "done", { kind: "background", raw: { status: "completed" } })];
+  const directive = (id: string, status: WorkItem["status"], rowStatus: string) =>
+    item(id, status, { kind: "directive", raw: { status: rowStatus } });
+  data.sources.directives.items = [
+    directive("standing", "waiting", "in_force"),
+    directive("tied", "waiting", "in_force"),
+    directive("kept", "done", "fulfilled"),
+  ];
+  data.sources.directives.groupItems = [
+    directive("standing", "waiting", "in_force"),
+    { ...directive("tied", "waiting", "in_force"), tiedJob: { kind: "background", id: "deploy" } },
+    directive("kept", "done", "fulfilled"),
+  ];
+  await render();
+  const nav = await openSections();
+  const badge = (label: string) => Array.from(nav.querySelectorAll('[role="menuitemradio"]'))
+    .find((node) => node.textContent?.startsWith(label))?.querySelector(".pl-menu__badge")?.textContent;
+  // Not the raw 3: the fulfilled directive left the projection, the tied one ended with its job.
+  expect(badge("Your instructions")).toBe("1");
+  expect(badge("Tasks")).toBe("1"); // the other sections still count what their list shows
+  await closeSections(nav);
+});
+
 it("restores the originating row for legacy unqualified item ids", async () => {
   data.sources.tasks.items = [item("legacy", "running")];
   useUI.setState({ surfaceStates: { work: { section: "tasks", itemId: "legacy" } } });
