@@ -253,7 +253,7 @@ async def test_forward_to_member_public_drops_stored_remote_bearer(monkeypatch):
     req.state = SimpleNamespace(member_public=True)
     assert await proxy.forward_to("matt", req, "plugins/content/view") == "OK"
     # ``None`` DROPS the caller's header too — an empty dict would let it ride through.
-    assert seen["extra"] == {"authorization": None}
+    assert seen["extra"] == {"authorization": None, "x-api-key": None}
 
 
 async def test_forward_to_authed_request_keeps_stored_remote_bearer(monkeypatch):
@@ -272,7 +272,7 @@ async def test_forward_to_authed_request_keeps_stored_remote_bearer(monkeypatch)
     req = FakeRequest()
     req.state = SimpleNamespace(trust_tier="operator")  # no member_public stamp — normal authed traffic
     assert await proxy.forward_to("matt", req, "api/chat") == "OK"
-    assert seen["extra"] == {"authorization": "Bearer sekrit"}
+    assert seen["extra"] == {"authorization": "Bearer sekrit", "x-api-key": None}  # never the hub's key
 
 
 def _remote(monkeypatch, token="sek"):
@@ -295,10 +295,11 @@ async def test_member_public_to_remote_drops_the_callers_own_hub_bearer(monkeypa
     _remote(monkeypatch)
     client = FakeClient(upstream=FakeUpstream(headers={"content-type": "text/html"}))
     monkeypatch.setattr(proxy, "_get_client", lambda: client)
-    req = FakeRequest(headers={"authorization": "Bearer HUB-OPERATOR"})
+    req = FakeRequest(headers={"authorization": "Bearer HUB-OPERATOR", "x-api-key": "HUB-KEY"})
     req.state = SimpleNamespace(member_public=True, trust_tier="operator")
     await proxy.forward_to("r1", req, "plugins/content/view")
     assert _sent_auth(client) == []
+    assert "HUB-KEY" not in client.built["headers"].values()  # nor the hub's X-API-Key
 
 
 async def test_member_public_to_local_member_keeps_callers_header(monkeypatch):
