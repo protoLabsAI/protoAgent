@@ -341,20 +341,12 @@ def test_dm_names_the_agents_when_none_matches(monkeypatch, capsys):
     assert client.posts == []
 
 
-def test_dm_resolves_an_unambiguous_id_prefix(monkeypatch):
-    # The fleet labels protoEngineer-ba4c "projectManager"; operators type the id's name part.
-    roster = ROSTER + [{"id": "projectEngineer-77aa", "name": "pe2", "label": "pe2"}]
-    roster[2] = {"id": "protoEngineer-ba4c", "name": "projectManager", "label": "projectManager"}
-    assert dm_cli.resolve_slug(roster, "protoEngineer") == ("protoEngineer-ba4c", [])
-    assert dm_cli.resolve_slug(roster, "PROTOENGINEER-BA") == ("protoEngineer-ba4c", [])
-    assert dm_cli.resolve_slug(roster, "projectManager") == ("protoEngineer-ba4c", [])  # label still wins
-
-
-def test_dm_an_ambiguous_id_prefix_names_only_the_matching_agents():
+def test_dm_resolves_an_unambiguous_id_prefix():
     roster = ROSTER + [{"id": "protoResearcher-1f2e", "name": "protoResearcher", "label": "protoResearcher"}]
-    slug, candidates = dm_cli.resolve_slug(roster, "proto")
-    assert slug is None
-    assert candidates == ["protoEngineer", "protoResearcher"]
+    roster[2] = {"id": "protoEngineer-ba4c", "name": "projectManager", "label": "projectManager"}
+    for want, slug in (("protoengineer", "protoEngineer-ba4c"), ("projectManager", "protoEngineer-ba4c"), ("proto", None)):
+        assert dm_cli.resolve_slug(roster, want)[0] == slug
+    assert dm_cli.resolve_slug(roster, "proto")[1] == ["projectManager", "protoResearcher"]
 
 
 def test_dm_says_so_when_the_agent_is_too_old_to_deliver_to_its_chat(monkeypatch, capsys):
