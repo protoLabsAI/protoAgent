@@ -224,6 +224,48 @@ export function createDecisionsStore() {
     return p;
   }
 
+  // In-flight answered-ledger read, so concurrent loadAnswered callers share one request.
+  let answeredInFlight: Promise<boolean> | null = null;
+
+  /** Merge the server's ANSWERED ledger into the by-id record cache. The pending-only
+   *  `refresh` never carries an answer that predates this tab (a reload) or one that settled
+   *  on another surface without ever being seen pending here — but Work's instruction linking
+   *  (ADR 0129 §3.1) must read exactly those. Each answered row also leaves the pending list,
+   *  mirroring `storeRecord`. Resolves false when the read failed: the cache is unchanged and
+   *  the next call retries (callers invoke it per mount, so a transient failure heals). */
+  function loadAnswered(): Promise<boolean> {
+    if (answeredInFlight) return answeredInFlight;
+    answeredInFlight = (async () => {
+      try {
+        const result = await decisionsApi.listDecisions("answered");
+        const records = { ...snapshot.records };
+        let missing = snapshot.missing;
+        const ids = new Set<string>();
+        for (const row of result.decisions) {
+          // Defensive: only genuinely answered rows may overwrite the cache — a stray
+          // pending copy must never clobber a terminal record.
+          if (row.state !== "answered") continue;
+          ids.add(row.id);
+          records[row.id] = row;
+          if (missing[row.id]) {
+            missing = { ...missing };
+            delete missing[row.id];
+          }
+        }
+        const decisions = snapshot.decisions.filter((row) => !ids.has(row.id));
+        snapshot = { ...snapshot, records, missing, decisions,
+          pendingCount: decisions.length, top: decisions[0] ?? null };
+        emit();
+        return true;
+      } catch {
+        return false;
+      } finally {
+        answeredInFlight = null;
+      }
+    })();
+    return answeredInFlight;
+  }
+
   /** Load a decision by id on demand — a chat showing a decision that already left the pending
    *  list. A SETTLED cached record (answered/expired/cancelled/withdrawn) is terminal, so it
    *  resolves from the cache with no request; a known 404 resolves null the same way. A record
@@ -278,7 +320,7 @@ export function createDecisionsStore() {
     };
   }
 
-  return { subscribe, getSnapshot: () => snapshot, refresh, answer, recheck, cancel, loadDecision, openPanel, closePanel };
+  return { subscribe, getSnapshot: () => snapshot, refresh, answer, recheck, cancel, loadDecision, loadAnswered, openPanel, closePanel };
 }
 
 // One store for the whole app: snapshots survive a consumer unmount/remount, and only while a
@@ -305,6 +347,7 @@ export function useDecisions() {
     answer: store.answer,
     cancel: store.cancel,
     loadDecision: store.loadDecision,
+    loadAnswered: store.loadAnswered,
     openPanel: store.openPanel,
     closePanel: store.closePanel,
   };
