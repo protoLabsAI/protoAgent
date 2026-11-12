@@ -472,6 +472,7 @@ from server.maintenance_loops import (  # noqa: E402,F401 — re-export of the e
     _plugin_autoupdate_loop,
     _retire_thread,
     _secrets_refresh_loop,
+    _task_link_sweep_loop,
     _watch_loop,
 )
 
@@ -741,6 +742,14 @@ def _main():
 
         STATE.tasks_store = TaskStore()
 
+    # Linked tasks close themselves when the linked work finishes (ADR 0129 Q1): the
+    # handlers watch directive closes, scheduler settlement and the generic
+    # ``task.link.closed`` contract on the bus. They read ``STATE.tasks_store`` at
+    # event time, so the agent-init path that may rebuild the store stays covered.
+    from tasks.autoclose import wire_task_autoclose
+
+    wire_task_autoclose(_event_bus.subscribe_handler, lambda: STATE.tasks_store)
+
     # Console handler bodies live in operator_api/console_handlers.py (ADR 0023
     # phase 3); _main just wires them to their routes.
     register_operator_routes(
@@ -859,6 +868,10 @@ def _main():
         # and the executor stall guard — a producer that vanished without either firing —
         # so a WORKING task can't leave the console spinner permanent.
         STATE.a2a_reaper_task = asyncio.create_task(_a2a_reaper_loop())
+
+        # Task PR-link sweep (ADR 0129 Q1). Started unconditionally like the loops
+        # above; idles when no open task links an unresolved PR.
+        STATE.task_link_sweep_task = asyncio.create_task(_task_link_sweep_loop())
 
         # Opt-in plugin auto-update (#1720) — only sweeps plugins the operator lists
         # in ``plugins.update_policy``; the loop self-guards each pass (empty policy
@@ -1101,6 +1114,8 @@ def _main():
             STATE.plugin_autoupdate_task.cancel()
         if STATE.a2a_reaper_task is not None:
             STATE.a2a_reaper_task.cancel()
+        if STATE.task_link_sweep_task is not None:
+            STATE.task_link_sweep_task.cancel()
         # (memory_guard_task was cancelled at the top — it can os._exit.)
         # Close the long-lived A2A push-notification client (created below in
         # _main) so its connection pool doesn't leak on shutdown/reload — matters

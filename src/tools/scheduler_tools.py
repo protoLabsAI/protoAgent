@@ -220,6 +220,17 @@ def _build_scheduler_tools(scheduler) -> list:
             ok = await asyncio.to_thread(scheduler.cancel_job, job_id)
         except Exception as exc:  # noqa: BLE001
             return f"Error: scheduler cancel_job failed: {exc}"
+        if ok:
+            # Best-effort ``scheduler.changed`` — the same event the console cancel
+            # publishes — so the Work view refreshes and a task linked to this job
+            # auto-closes (ADR 0129 Q1). Never blocks the cancel result.
+            try:
+                from graph.plugins.host import HOST
+
+                if HOST.publish:
+                    HOST.publish("scheduler.changed", {"job_id": job_id, "action": "canceled"})
+            except Exception:  # noqa: BLE001 — the event is best-effort
+                pass
         return f"Canceled {job_id}." if ok else f"Error: cancel failed or no such job {job_id}."
 
     @tool
@@ -307,18 +318,30 @@ def _build_task_tools(tasks_store) -> list:
         description: str = "",
         priority: int = 2,
         issue_type: str = "task",
+        links: list[str] | None = None,
         state: Annotated[Any, InjectedState] = None,
     ) -> str:
         """Track a task/issue on your tasks board — your planning surface for
         multi-step work. ``priority`` 0=highest…3=low; ``issue_type`` is one of
-        task|bug|feature|chore|epic. Returns the new issue id."""
+        task|bug|feature|chore|epic. Returns the new issue id.
+
+        ``links``: ids/URLs of the work that delivers this task — board card ids
+        (``bd-…``), scheduler job ids, a directive id, PR URLs. Link the cards/jobs
+        that do the work so the task closes itself when every linked item finishes
+        (with an attributed reason, e.g. "bd-c8r5h merged (#5146)"). When the next
+        step is the operator's call, set status ``waiting`` via ``task_update``."""
         # Attribute the task to the session/goal that motivated it (ADR 0079) so a goal's
         # backlog is queryable; from injected graph state (current_session_id() is empty in a
         # tool body). Empty when there's no session context — an instance-global task, as before.
         session_id = _session_id_from(state) or ""
         try:
             i = tasks_store.create(
-                title, description=description, priority=priority, issue_type=issue_type, session_id=session_id
+                title,
+                description=description,
+                priority=priority,
+                issue_type=issue_type,
+                session_id=session_id,
+                links=links,
             )
         except ValueError as exc:
             return f"Error: {exc}"
@@ -328,10 +351,20 @@ def _build_task_tools(tasks_store) -> list:
     def task_list(include_closed: bool = False) -> str:
         """List issues on your tasks board (open ones by default). Use it to see
         and track outstanding work."""
+        from tasks.store import parse_links
+
         items = tasks_store.list(include_closed=include_closed)
         if not items:
             return "No issues on the board."
-        return "\n".join(f"[{i['status']}] {i['id']} (p{i['priority']}, {i['issue_type']}) {i['title']}" for i in items)
+        lines = []
+        for i in items:
+            line = f"[{i['status']}] {i['id']} (p{i['priority']}, {i['issue_type']}) {i['title']}"
+            # Linked work (ADR 0129 Q1), with the already-finished refs ticked.
+            refs = [f"{e['ref']}✓" if e.get("state") == "done" else e["ref"] for e in parse_links(i)]
+            if refs:
+                line += f"  links={','.join(refs)}"
+            lines.append(line)
+        return "\n".join(lines)
 
     @tool
     def task_update(
@@ -341,9 +374,16 @@ def _build_task_tools(tasks_store) -> list:
         description: str = "",
         priority: int = -1,
         issue_type: str = "",
+        links: list[str] | None = None,
     ) -> str:
-        """Update an issue. ``status`` is open|in_progress|blocked|deferred|closed.
-        Leave a field empty (``priority`` -1) to keep it unchanged."""
+        """Update an issue. ``status`` is open|in_progress|blocked|waiting|deferred|closed.
+        Leave a field empty (``priority`` -1, ``links`` omitted) to keep it unchanged.
+
+        Set ``waiting`` when the next step is the operator's call — don't leave a task
+        ``in_progress`` while you wait on them. ``links`` REPLACES the task's linked
+        work items (board card ids ``bd-…``, scheduler job ids, a directive id, PR
+        URLs): link the cards/jobs that do the work so the task closes itself when
+        they all finish."""
         fields: dict = {}
         if status:
             fields["status"] = status
@@ -355,6 +395,8 @@ def _build_task_tools(tasks_store) -> list:
             fields["priority"] = priority
         if issue_type:
             fields["issue_type"] = issue_type
+        if links is not None:
+            fields["links"] = links
         try:
             i = tasks_store.update(issue_id, **fields)
         except (KeyError, ValueError) as exc:

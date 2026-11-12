@@ -431,6 +431,32 @@ async def _watch_loop() -> None:
         await asyncio.sleep(max(MIN_WATCH_INTERVAL_S, float(interval or DEFAULT_WATCH_INTERVAL_S)))
 
 
+# Task PR-link sweep cadence (ADR 0129 Q1). GitHub publishes nothing onto the in-process
+# bus, so merged/closed PRs are the one linked-work kind the event handlers can't see;
+# five minutes keeps a linked task from sitting "in progress" long after its PR merged
+# while staying far below gh's rate budget (one `gh pr view` per distinct linked PR).
+TASK_LINK_SWEEP_INTERVAL_S = 300.0
+
+
+async def _task_link_sweep_loop() -> None:
+    """Periodic PR-link sweep for linked tasks (ADR 0129 Q1): close tasks whose linked
+    PRs merged/closed. Started unconditionally like ``_watch_loop``; self-guards on
+    ``STATE.tasks_store`` and is cheap when no open task holds an unresolved PR link
+    (``sweep_task_links`` returns before any ``gh`` call)."""
+    from tasks.autoclose import sweep_task_links
+
+    await asyncio.sleep(60)  # let boot settle before the first sweep
+    while True:
+        if STATE.tasks_store is not None:
+            try:
+                n = await sweep_task_links(STATE.tasks_store)
+                if n:
+                    log.info("[tasks] PR sweep resolved links on %d task(s)", n)
+            except Exception:
+                log.exception("[tasks] PR link sweep failed")
+        await asyncio.sleep(TASK_LINK_SWEEP_INTERVAL_S)
+
+
 # A2A orphaned-WORKING-task reaper cadence (#3418). Deliberately far shorter than the
 # checkpoint-prune hour, and finite (the console waits INDEFINITELY on a WORKING durable
 # record): a producer that vanished without tripping boot reconciliation or the executor

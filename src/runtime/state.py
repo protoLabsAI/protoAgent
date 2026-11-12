@@ -33,6 +33,7 @@ class AppState:
     plugin_autoupdate_task: Any = None  # #1720 opt-in plugin auto-update loop
     secrets_refresh_task: Any = None  # ADR 0080 external secrets-manager refresh loop
     a2a_reaper_task: Any = None  # #3418 orphaned-WORKING A2A task reaper loop
+    task_link_sweep_task: Any = None  # ADR 0129 Q1 — periodic PR-link sweep for linked tasks
     # Stores / registries bound into the active graph.
     knowledge_store: Any = None
     memory_store: Any = None  # Core SQLite, independent of plugin knowledge backends.

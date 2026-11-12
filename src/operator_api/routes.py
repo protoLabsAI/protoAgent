@@ -203,6 +203,7 @@ class TaskCreateRequest(BaseModel):
     priority: int = 2
     description: str | None = None
     assignee: str | None = None
+    links: list[str] | None = None  # linked work refs (ADR 0129 Q1) — cards/jobs/directive/PR URLs
 
 
 class TaskUpdateRequest(BaseModel):
@@ -213,6 +214,7 @@ class TaskUpdateRequest(BaseModel):
     priority: int | None = None
     type: str | None = None
     assignee: str | None = None
+    links: list[str] | None = None  # replaces the linked work refs (ADR 0129 Q1); None keeps
 
 
 class TaskCloseRequest(BaseModel):
@@ -415,19 +417,24 @@ class _TaskStoreAdapter:
         return self._s.list()
 
     def create(self, project_path: str, issue: dict[str, Any]) -> dict[str, Any]:
+        # ``links`` (ADR 0129 Q1) rides only when given, so a legacy store double
+        # without the parameter keeps working.
+        extra = {"links": issue["links"]} if issue.get("links") is not None else {}
         return self._s.create(
             str(issue.get("title", "")),
             description=issue.get("description") or "",
             priority=issue.get("priority") if issue.get("priority") is not None else 2,
             issue_type=issue.get("type") or issue.get("issue_type") or "task",
             assignee=issue.get("assignee") or "",
+            **extra,
         )
 
     def update(self, project_path: str, issue_id: str, update: dict[str, Any]) -> dict[str, Any]:
         fields = {
             k: v
             for k, v in update.items()
-            if k in ("title", "description", "status", "priority", "issue_type", "type", "assignee") and v is not None
+            if k in ("title", "description", "status", "priority", "issue_type", "type", "assignee", "links")
+            and v is not None
         }
         try:
             return self._s.update(issue_id, **fields)
