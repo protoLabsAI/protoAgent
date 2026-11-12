@@ -37,6 +37,12 @@ type Unreachable = { error: string; available: PairAddress[]; authConfigured: bo
 /** A `tailscale serve` attempt that didn't work, with where to fix it when there's a place. */
 type ServeProblem = { error: string; enableUrl?: string };
 
+/** The pairing QR as an image source. An SVG loaded through `<img>` is inert: no script, no
+ *  event handlers, no access to this document. */
+export function qrImageSrc(svg: string): string {
+  return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
+}
+
 /**
  * Settings ▸ Devices — paired devices and the QR that adds one (ADR 0087), plus "Pair an
  * agent" (ADR 0113): a typeable code another agent's hub redeems to join this agent as a
@@ -786,9 +792,12 @@ export function DevicesPanel() {
       {pairing?.kind !== "agent" && pairing && host && (
         <section className="devices-pair" aria-label="Pair a new device">
           {host.qr ? (
-            // Server-rendered SVG. Injected as markup because it IS the payload — same
-            // origin, generated from a URL we just built ourselves.
-            <div className="devices-qr" dangerouslySetInnerHTML={{ __html: host.qr }} />
+            // Server-rendered SVG, shown as an IMAGE — never injected as markup. In a remote
+            // member's window this response comes from that member's server, and an image
+            // can't run script or reach the page it sits in.
+            <div className="devices-qr">
+              <img src={qrImageSrc(host.qr)} alt="Pairing QR code" />
+            </div>
           ) : (
             <p className="setting-desc">Scan unavailable — type the code below instead.</p>
           )}
