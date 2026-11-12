@@ -565,7 +565,8 @@
         "/explanation/plugin-architecture",
         "/explanation/architecture",
         "/explanation/prompt-contracts",
-        "/explanation/output-protocol"
+        "/explanation/output-protocol",
+        "/design/work-consolidation"
       ],
       "groups": [
         {
@@ -699,6 +700,10 @@
             {
               "text": "Output protocol",
               "link": "/explanation/output-protocol"
+            },
+            {
+              "text": "Work consolidation: four groups",
+              "link": "/design/work-consolidation"
             }
           ]
         },

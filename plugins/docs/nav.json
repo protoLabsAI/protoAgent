@@ -413,6 +413,10 @@
             {
               "path": "explanation/output-protocol.md",
               "title": "Output protocol"
+            },
+            {
+              "path": "design/work-consolidation.md",
+              "title": "Work consolidation: four groups"
             }
           ]
         }

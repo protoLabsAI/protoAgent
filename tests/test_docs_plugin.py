@@ -193,6 +193,30 @@ def test_generated_navigation_and_landings_are_in_sync() -> None:
         assert path.read_text(encoding="utf-8") == expected, f"{path} is stale — run scripts/gen_docs_nav.py"
 
 
+
+def test_approved_work_consolidation_spec_and_navigation() -> None:
+    """Keep the approved v2 artifact intact and reachable from its predecessor."""
+    import hashlib
+    import json
+
+    spec = ROOT / "docs/design/work-consolidation.md"
+    # SHA256 of the designSystem artifact approved by Josh on 2026-11-12.
+    assert hashlib.sha256(spec.read_bytes()).hexdigest() == (
+        "4a4a2ce143f69e3506b29a5076f74a61e4be239d3af2e12ba32bf9fb968675af"
+    )
+    previous = (ROOT / "docs/design/work-view.md").read_text(encoding="utf-8")
+    assert previous.splitlines()[2] == (
+        "> **Superseded in part (2026-11-12):** the group structure here "
+        "(§2.1 Overview lanes and the eight sections) is replaced by "
+        "[work-consolidation.md](./work-consolidation.md). "
+        "Row, tone, inspector, confirm and undo rules still apply."
+    )
+    nav = json.loads((ROOT / "plugins/docs/nav.json").read_text(encoding="utf-8"))
+    paths = [item["path"] for section in nav["sections"] for group in section["groups"] for item in group["items"]]
+    assert "design/work-consolidation.md" in paths
+    assert all((ROOT / "docs" / path).is_file() for path in paths)
+
+
 def test_grouped_tree_falls_back_to_sections(tmp_path) -> None:
     """With docs whose paths aren't in nav.json, the tree degrades to flat (unlabeled)
     section groups rather than going empty."""
