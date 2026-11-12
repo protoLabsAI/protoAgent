@@ -2,11 +2,12 @@ import { useEffect, useRef } from "react";
 
 import { Markdown as DSMarkdown } from "@protolabsai/ui/markdown";
 
-import { handleMediaImageError, rehypeAbsolutizeServerUrls } from "./mediaUrls";
+import { handleMediaImageError, rehypeAbsolutizeServerUrls, rehypeLinkRemoteImages } from "./mediaUrls";
 
 // Module-level for a stable array identity across renders. The DS appends these AFTER its
 // own defaults (GFM/sanitize/harden/KaTeX), so the URL rewrite sees the final tree.
-const REHYPE_PLUGINS = [rehypeAbsolutizeServerUrls];
+// Order matters: absolutize first, so the remote-image check sees where each image really loads from.
+const REHYPE_PLUGINS = [rehypeAbsolutizeServerUrls, rehypeLinkRemoteImages];
 
 export type MarkdownProps = { children: string; streaming?: boolean };
 
@@ -35,6 +36,10 @@ export type MarkdownProps = { children: string; streaming?: boolean };
  * longer parses the span between two amounts as KaTeX math while real math (`$x^2$`, `$$…$$`)
  * survives. This replaces the console's old `escapeCurrencyDollars` pre-processing (#1983) —
  * the DS ported that exact guard on-by-default. Opt out per the DS `math` prop if ever needed.
+ *
+ * `rehypeLinkRemoteImages` shows an image from any OTHER host as a link instead of loading it:
+ * a reply can be steered by content the model read, and an auto-loading image URL is a way to
+ * send data out with no click (see `mediaUrls.ts`).
  *
  * Only growing text needs repair; settled code markers must never synthesize closing tokens.
  *

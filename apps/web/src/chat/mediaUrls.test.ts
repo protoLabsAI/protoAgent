@@ -3,7 +3,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   absolutizeServerUrl,
   handleMediaImageError,
+  isOwnImageSrc,
   rehypeAbsolutizeServerUrls,
+  rehypeLinkRemoteImages,
   remintEndpoint,
 } from "./mediaUrls";
 
@@ -223,5 +225,64 @@ describe("handleMediaImageError — re-mint an expired link on load error (#4274
     await flush();
     expect(fetchMock).not.toHaveBeenCalled();
     expect(el.dataset.remintTried).toBeUndefined();
+  });
+});
+
+describe("rehypeLinkRemoteImages — a reply never loads an image from another host on sight", () => {
+  type N = { type: string; tagName?: string; properties?: Record<string, unknown>; children?: N[]; value?: string };
+  const img = (src: unknown, alt?: string): N => ({
+    type: "element",
+    tagName: "img",
+    properties: { src, ...(alt ? { alt } : {}) },
+    children: [],
+  });
+  const run = (...nodes: N[]) => {
+    const tree: N = { type: "root", children: [{ type: "element", tagName: "p", properties: {}, children: nodes }] };
+    rehypeAbsolutizeServerUrls()(tree);
+    rehypeLinkRemoteImages()(tree);
+    return tree.children![0].children!;
+  };
+
+  it("keeps the agent's own images: media, plugin assets, same-origin, data: and blob:", () => {
+    focus("/app/");
+    for (const src of [
+      "/media/chart.png?sig=abc",
+      "/plugins/banana/out.png",
+      `${window.location.origin}/media/x.png`,
+      "data:image/png;base64,AAAA",
+      "blob:http://localhost/1234",
+    ]) {
+      const [node] = run(img(src));
+      expect(node.tagName, src).toBe("img");
+    }
+  });
+
+  it("keeps media served from the desktop sidecar and through a member's proxy", () => {
+    focus("/app/?__apiPort=54321");
+    expect(run(img("/media/chart.png?sig=abc"))[0].properties!.src).toBe(
+      "http://127.0.0.1:54321/media/chart.png?sig=abc",
+    );
+    expect(run(img("/media/chart.png"))[0].tagName).toBe("img");
+    focus("/app/agent/ava/");
+    expect(run(img("/media/chart.png"))[0].tagName).toBe("img");
+  });
+
+  it("turns an image on another host into a link and requests nothing", () => {
+    focus("/app/");
+    const src = "https://evil.example/p.png?d=c2VjcmV0";
+    const [node] = run(img(src, "chart"));
+    expect(node.tagName).toBe("a");
+    expect(node.properties).toEqual({ href: src });
+    expect(node.children).toEqual([{ type: "text", value: "chart — image from evil.example" }]);
+    for (const other of ["//evil.example/p.png", "http://127.0.0.1:9/x.png", "http://100.100.100.100/x"]) {
+      expect(run(img(other))[0].tagName, other).toBe("a");
+    }
+  });
+
+  it("an image with no usable src becomes plain text, never a request", () => {
+    focus("/app/");
+    const [node] = run(img(undefined));
+    expect(node.tagName).toBe("span");
+    expect(isOwnImageSrc("http://[bad")).toBe(false);
   });
 });

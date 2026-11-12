@@ -58,6 +58,67 @@ export function rehypeAbsolutizeServerUrls() {
   };
 }
 
+// Remote images in a reply are NOT loaded on sight. A reply is text the model wrote, and the
+// model reads untrusted pages, files and tool results: one injected line — an image whose URL
+// carries whatever the model just saw — would send that to another host the moment the bubble
+// paints, with no click and no approval. So an image the agent's own server doesn't serve is
+// shown as a link: nothing is requested until the operator opens it (and the link goes
+// through the DS's open-link confirmation like any other).
+//
+// "Own" = this page's origin, or the focused agent's API origin (the desktop shell's sidecar
+// port), plus inline `data:` / `blob:` images, which fetch nothing. Run AFTER
+// `rehypeAbsolutizeServerUrls`, so `/media/` + `/plugins/` are already aimed at that server.
+
+/** Whether loading `src` as an image only ever talks to the agent's own server (or nothing). */
+export function isOwnImageSrc(src: string): boolean {
+  let url: URL;
+  try {
+    url = new URL(src, window.location.href);
+  } catch {
+    return false;
+  }
+  if (url.protocol === "data:" || url.protocol === "blob:") return true;
+  if (url.origin === window.location.origin) return true;
+  try {
+    return url.origin === new URL(apiUrl("/media/"), window.location.href).origin;
+  } catch {
+    return false;
+  }
+}
+
+function remoteImageLabel(src: string, alt: unknown): string {
+  let host = "another site";
+  try {
+    host = new URL(src, window.location.href).host || host;
+  } catch {
+    /* keep the generic label */
+  }
+  const name = typeof alt === "string" && alt.trim() ? `${alt.trim()} — ` : "";
+  return `${name}image from ${host}`;
+}
+
+/** rehype plugin: turn every `img` the agent's server doesn't serve into a link to it. */
+export function rehypeLinkRemoteImages() {
+  return (tree: unknown) => {
+    const walk = (node: HastNode) => {
+      if (!node || typeof node !== "object") return;
+      if (node.type === "element" && node.tagName === "img" && node.properties) {
+        const src = node.properties.src;
+        if (typeof src !== "string" || !isOwnImageSrc(src)) {
+          const href = typeof src === "string" ? src : "";
+          const alt = (node.properties as { alt?: unknown }).alt;
+          node.tagName = href ? "a" : "span";
+          node.properties = href ? { href } : {};
+          node.children = [{ type: "text", value: remoteImageLabel(href, alt) }];
+          return;
+        }
+      }
+      if (Array.isArray(node.children)) node.children.forEach((c) => walk(c as HastNode));
+    };
+    walk(tree as HastNode);
+  };
+}
+
 // Re-mint of an EXPIRED media link in chat history (#4274 item 4). A member's inline images
 // carry expiring signed links (`…/media/<file>?exp=…&sig=…`, `media.remote_link_ttl_s`, default
 // 7 days); once they lapse the `<img>` 403s and old history loses its images. The server half
