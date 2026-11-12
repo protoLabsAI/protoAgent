@@ -1754,13 +1754,22 @@ def _schedule_scope(job, session_id: str) -> str:
     line in every chat, as before isolation) instead of dropping to the count-only
     "other" bucket. Recurring jobs remain visible agent-wide, and the current fire
     always renders in full.
+
+    A ``job:`` execution session viewing OTHER jobs is the exception (ADR 0129):
+    another job's pending one-shot — its wait resume, its follow-up — is never this
+    job's commitment, so it lands in the count-only bucket rather than the agent-wide
+    list. Agent-wide recurring schedules stay visible to every session, as documented.
     """
     context = str(getattr(job, "context_id", None) or "")
     origin = str(getattr(job, "origin_session", None) or "")
     if (session_id and session_id in (context, origin)) or _is_firing_now(job):
         return "chat"
+    if _is_recurring(job):
+        return "agent"
     home = origin or ("" if context.startswith("job:") else context)
-    if home and not _is_recurring(job):
+    if home:
+        return "other"
+    if session_id.startswith("job:") and context.startswith("job:"):
         return "other"
     return "agent"
 
@@ -1872,10 +1881,19 @@ def working_state_block(state: dict | None) -> str:
         log.debug("[working_state] goal read failed: %s", exc)
 
     # Open tasks — the goal's backlog / multi-step decomposition.
+    other_tasks = 0
     try:
         ts = STATE.tasks_store
         if ts is not None:
-            items = list(ts.list(include_closed=False))[:_WS_TASK_CAP]
+            items = list(ts.list(include_closed=False))
+            if session_id.startswith("job:"):
+                # A job execution session sees its OWN tasks plus deliberately agent-wide
+                # (sessionless) ones; other sessions' tasks are a count, never adopted as
+                # this job's commitments (ADR 0129). Chats keep the full shared list.
+                visible = [i for i in items if not i.get("session_id") or i.get("session_id") == session_id]
+                other_tasks = len(items) - len(visible)
+                items = visible
+            items = items[:_WS_TASK_CAP]
             if items:
                 lines = "\n".join(
                     f"- [{i['status']}] {i['id']} (p{i['priority']}) {i['title']}"
@@ -1947,13 +1965,20 @@ def working_state_block(state: dict | None) -> str:
     except Exception as exc:  # noqa: BLE001
         log.debug("[working_state] schedule read failed: %s", exc)
 
-    if other_jobs or other_watches:
+    if other_jobs or other_watches or other_tasks:
         counts = []
         if other_jobs:
             counts.append(f"{other_jobs} pending schedule{'s' if other_jobs != 1 else ''}")
         if other_watches:
             counts.append(f"{other_watches} active watch{'es' if other_watches != 1 else ''}")
-        sections.append(f"OTHER CHATS: {', '.join(counts)} (not shown here — they run in their own chats).")
+        if other_tasks:
+            counts.append(f"{other_tasks} open task{'s' if other_tasks != 1 else ''}")
+        if session_id.startswith("job:"):
+            # A job session's "elsewhere" is other executions and chats, not "other
+            # chats" (ADR 0129) — bounded counts, never adopted commitments.
+            sections.append(f"OTHER SESSIONS: {', '.join(counts)} (not shown here — they belong to other sessions).")
+        else:
+            sections.append(f"OTHER CHATS: {', '.join(counts)} (not shown here — they run in their own chats).")
 
     if not sections:
         return ""

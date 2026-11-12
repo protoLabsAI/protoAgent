@@ -462,6 +462,24 @@ class DecisionStore:
                 self._close(db)
         return [Decision.from_row(r) for r in rows]
 
+    def pending_session_ids(self) -> set[str]:
+        """Every session with at least one pending decision — UNBOUNDED, unlike :meth:`list`.
+
+        The retention sweep (``server/maintenance_loops.py``) pins ``job:`` execution
+        sessions on this read. ``list``'s default cap would silently drop whatever sorts
+        past it — for pending rows that is the newest undated decisions — and an unpinned
+        session's checkpoint could then age out while the decision's answer still needs it
+        (ADR 0129: no retention policy may drop unresolved work)."""
+        with self._reading():
+            db = self._connect()
+            try:
+                rows = db.execute(
+                    "SELECT DISTINCT session_id FROM decisions WHERE state = ?", (STATE_PENDING,)
+                ).fetchall()
+            finally:
+                self._close(db)
+        return {str(r["session_id"]) for r in rows if r["session_id"]}
+
     def answer(self, decision_id: str, answer: str, *, answered_by: str = "operator", answered_surface: str = "chat") -> Decision:
         """Mark a pending decision answered with the operator's choice. Raises
         :class:`DecisionNotFound` for an unknown id and :class:`DecisionClosed` when it is
