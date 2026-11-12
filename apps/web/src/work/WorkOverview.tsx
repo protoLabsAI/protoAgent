@@ -7,7 +7,7 @@
 import { useEffect, useMemo, type ReactNode } from "react";
 import { Alert, Skeleton, Spinner, StatusDot } from "@protolabsai/ui/data";
 import { Button, Callout, type Status } from "@protolabsai/ui/primitives";
-import { CircleDashed, CirclePause, Clock, Eye, Target } from "lucide-react";
+import { CircleDashed, CirclePause, Clock, Eye, Plus, Target } from "lucide-react";
 import { WorkEmpty as Empty } from "./WorkEmpty";
 import { WorkHeading } from "./WorkHeading";
 import { useDecisions } from "../decisions/useDecisions";
@@ -55,6 +55,18 @@ export const groupSources: Record<WorkGroupId, WorkSourceKind[]> = {
   "coming-up": ["background", "tasks", "watches", "schedules"],
   instructions: ["directives"],
 };
+
+/** A group heading's "+" (§10.1): ghost xs icon named "New in <group>", opening the SAME
+ *  step-1 dialog with only a group placeholder — it never fixes the kind. Needs you gets
+ *  none (only the agent puts things there), and nothing renders without an opener. */
+export function WorkGroupNew({ group, onNew }: { group: WorkGroup; onNew?: (group: WorkGroupId) => void }) {
+  if (!onNew || group.id === "needs-you") return null;
+  return (
+    <Button icon size="xs" variant="ghost" aria-label={`New in ${group.label}`} onClick={() => onNew(group.id)}>
+      <Plus aria-hidden="true" />
+    </Button>
+  );
+}
 
 /** The selection/focus key for a row. A `wait` rides the schedules source, so it keys as
  *  that schedule — opening it lands on the existing schedule detail renderer. */
@@ -197,12 +209,15 @@ export function WorkGroupSection({ group, sources, onOpen, body, sessionId }: {
   </div>;
 }
 
-/** The Overview: the four groups in spec order, empty groups hidden (§4). */
-export function WorkOverview({ groups, sources, onOpen, sessionId }: {
+/** The Overview: the four groups in spec order, empty groups hidden (§4). `onNew` wires
+ *  the §10.1 entry points — the eligible group headings' "+" and the all-empty state's
+ *  invitation line and primary New. */
+export function WorkOverview({ groups, sources, onOpen, sessionId, onNew }: {
   groups: WorkGroup[];
   sources: WorkItems;
   onOpen: (item: GroupableWorkItem) => void;
   sessionId?: string;
+  onNew?: (group?: WorkGroupId) => void;
 }) {
   const loading = Object.values(sources).some((source) => source.status === "loading");
   const failed = Object.values(sources).some((source) => source.status === "error");
@@ -211,9 +226,13 @@ export function WorkOverview({ groups, sources, onOpen, sessionId }: {
     <SourceNotices sources={sources} />
     {loading && <div aria-label="Loading work" aria-busy="true"><Skeleton lines={3} /><Skeleton lines={3} /></div>}
     {!loading && !visible.length && !failed && <Empty title="Nothing to track."
-      description="Nothing needs you, nothing is running or planned, and you haven't given standing instructions." />}
+      description={onNew ? <>
+        Nothing needs you, nothing is running or planned, and you haven&apos;t given standing instructions.<br />
+        Tell the agent what to do, and when: now, later, when something happens, or as a standing rule.
+      </> : "Nothing needs you, nothing is running or planned, and you haven't given standing instructions."}
+      action={onNew && <Button variant="primary" onClick={() => onNew()}><Plus aria-hidden="true" size={14} /> New</Button>} />}
     {visible.map((group) => <section key={group.id} aria-label={group.label}>
-      <WorkHeading label={group.label} count={group.count} />
+      <WorkHeading label={group.label} count={group.count} action={<WorkGroupNew group={group} onNew={onNew} />} />
       <WorkGroupRows group={group} sources={sources} onOpen={onOpen} sessionId={sessionId} />
     </section>)}
   </div>;
