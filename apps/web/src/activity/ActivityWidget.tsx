@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { UTIL_DIALOG_WIDTH } from "../shell/utilDialogSize";
 import { Activity } from "lucide-react";
 import { Count } from "@protolabsai/ui/primitives";
 
@@ -68,7 +69,7 @@ export function ActivityWidget() {
             : "Feed — pending inbox items + what the agent did on its own"
       }
       dialogTitle="Feed"
-      dialogWidth="min(720px, 94vw)"
+      dialogWidth={UTIL_DIALOG_WIDTH}
       onOpen={() => {
         openRef.current = true;
         setUnread(0);
