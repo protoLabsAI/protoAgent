@@ -1,3 +1,4 @@
+// @vitest-environment node
 import { describe, expect, it } from "vitest";
 
 // #4534 (protoContent ds-tc6) — the touch-tap fix for DropdownSelect/Menu ships purely in the

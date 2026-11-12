@@ -1,3 +1,4 @@
+// @vitest-environment node
 // The imperative seam a client slash command is dispatched through from OUTSIDE the chat
 // composer (ADR 0061). Same contract as escapeStop's handler seam — last-write-wins,
 // guarded unregister, inert when nothing is registered — plus the two facts a caller needs

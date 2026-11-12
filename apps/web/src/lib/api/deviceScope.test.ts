@@ -1,3 +1,4 @@
+// @vitest-environment node
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { ApiError, DEVICE_SCOPE_MESSAGE, deviceScopeMessage, isDeviceScopeError, request } from "./http";

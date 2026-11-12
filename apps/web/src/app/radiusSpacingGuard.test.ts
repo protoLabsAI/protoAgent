@@ -1,3 +1,4 @@
+// @vitest-environment node
 import { describe, expect, it } from "vitest";
 
 // DS audit (rules corner-radius + off-scale-length), step 3 FINAL of protoContent#525/#547: the

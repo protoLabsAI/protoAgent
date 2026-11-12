@@ -1,3 +1,4 @@
+// @vitest-environment node
 import { describe, expect, it } from "vitest";
 
 // #3412 — the console renders markdown tables through @protolabsai/ui, whose bundled

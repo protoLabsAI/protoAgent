@@ -1,3 +1,4 @@
+// @vitest-environment node
 // #4645 console half: a steer carries the tray's images in the request body — as the
 // `[mime, data-URI]` pairs the steer route's `_coerce_attachment_images` takes — but only
 // when there are any, so a text-only steer still sends exactly `{id, text}` as before.

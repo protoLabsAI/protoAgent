@@ -1,3 +1,4 @@
+// @vitest-environment node
 import { describe, expect, it } from "vitest";
 
 import { countCutLines, LINE_CUT_MARKER, pageAfter, pageBefore, windowFor, WINDOW_SIZE } from "./fileWindow";

@@ -1,3 +1,4 @@
+// @vitest-environment node
 import { describe, expect, it } from "vitest";
 
 import { completeTime, from12h, joinLocal, monthGrid, nowTime, splitLocal, to12h, todayISO } from "./dateParts";

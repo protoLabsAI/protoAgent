@@ -1,3 +1,4 @@
+// @vitest-environment node
 // #4300 — a tool row kept spinning after its result came back when it shared a step with
 // background `delegate_to` calls. The step's three parallel starts land on the live bubble;
 // the first delegation's room bubble SPLITS the turn (freezing those cards in a `splitOf`

@@ -1,3 +1,4 @@
+// @vitest-environment node
 // /perf (#2677) — chat-native performance snapshot. Mocks only api.telemetrySummary
 // and api.telemetryInsights (importOriginal keeps the rest of the api real — this file
 // registers every core command at import).

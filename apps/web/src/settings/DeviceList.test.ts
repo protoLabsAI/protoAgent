@@ -1,3 +1,4 @@
+// @vitest-environment node
 import { describe, expect, it } from "vitest";
 
 import { ACTIVE_WINDOW_SECONDS, canManage, expiryLabel, isActive, lastSeenLabel, scopeAction, scopeBadge } from "./DeviceList";

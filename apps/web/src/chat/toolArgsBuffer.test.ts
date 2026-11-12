@@ -1,3 +1,4 @@
+// @vitest-environment node
 // The per-tool-call-id streamed-argument buffer (ADR 0118 D3, S3 console decode). The buffer
 // reassembles `tool-args-v1` slices into each tool call's decoded argument text, tolerating
 // out-of-order and duplicated/overlapping frames, and is LIVE-ONLY — cleared at turn end and

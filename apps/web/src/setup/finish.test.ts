@@ -1,3 +1,4 @@
+// @vitest-environment node
 // #2462 — pins the post-Finish convergence contract: a BLANKET invalidation
 // (no query-key filter). A scoped invalidation is exactly the regression that
 // left the composer chip and Settings ▸ Model on pre-setup values.
