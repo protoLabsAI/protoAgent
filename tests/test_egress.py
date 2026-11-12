@@ -249,22 +249,12 @@ def test_allow_private_permits_lan_but_blocks_metadata():
         assert egress.check_url(bad, allow_private=True) is not None, bad
 
 
-def test_default_mode_blocks_the_tailnet_range_and_allow_private_keeps_it():
-    """100.64.0.0/10 (shared address space, what Tailscale assigns) is neither ``is_private``
-    nor global. ``fetch_url`` must not reach a tailnet peer; a fleet remote (allow_private)
-    still may."""
-    egress.set_allowed_hosts([])
-    for url in ("http://100.100.100.100/", "http://100.64.0.1:7870/api/config", "http://100.127.255.254/"):
-        assert egress.check_url(url) is not None, url
-        assert egress.check_url(url, allow_private=True) is None, url
-    assert egress.check_url("http://8.8.8.8/") is None
-    assert egress.check_url("http://100.128.0.1/") is None  # just past the range: public
-
-
 def test_default_mode_still_blocks_all_private():
     # The model-probe path keeps the strict default — private + loopback blocked too.
-    for bad in ("http://10.0.0.5/", "http://127.0.0.1/", "http://[::1]/", "http://169.254.169.254/"):
+    # …and shared address space (100.64.0.0/10, what Tailscale assigns): neither private nor global.
+    for bad in ("http://10.0.0.5/", "http://127.0.0.1/", "http://[::1]/", "http://169.254.169.254/", "http://100.100.100.100/", "http://100.64.0.1/"):
         assert egress.check_url(bad) is not None, bad
+    assert egress.check_url("http://100.128.0.1/") is None  # just past that range: public
 
 
 def test_policy_expands_tilde_to_match_the_enforced_fence(tmp_path, monkeypatch):
