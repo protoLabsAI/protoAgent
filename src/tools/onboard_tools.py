@@ -1344,6 +1344,11 @@ def build_onboard_tools(config) -> list:
                 f"it, not the whole root ({root_raw})."
             )
         refusal = _hard_refusal(target, system=False)
+        # A reason that already holds for the ROOT is the operator's own choice of root (one
+        # under ~/AppData, say — where Windows keeps its temp directory), not something this
+        # folder adds. Only what the folder itself brings in is refused.
+        if refusal and refusal == _hard_refusal(root_resolved, system=False):
+            refusal = None
         if refusal:
             log.warning("[onboard] inside-root registration hard-refused (%s): %s", refusal, target)
             return (

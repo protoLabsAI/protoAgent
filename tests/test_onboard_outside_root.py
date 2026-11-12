@@ -313,6 +313,11 @@ async def test_the_floor_holds_inside_the_root_too(fake_home, applied, park, mak
     target.mkdir(parents=True, exist_ok=True)
     out = await _tool(_cfg(fake_home, onboarding_write_default=True)).ainvoke({"path": str(target)})
     assert out.startswith("Refused:") and park.payloads == [] and applied == []
+    # …but a reason the root itself already carries is the operator's choice, not the folder's.
+    inner = fake_home / ".config" / "proj"
+    inner.mkdir(parents=True, exist_ok=True)
+    cfg = _cfg(fake_home / ".config", onboarding_write_default=True)
+    assert not (await _tool(cfg).ainvoke({"path": str(inner)})).startswith("Refused:")
 
 
 @posix_only
