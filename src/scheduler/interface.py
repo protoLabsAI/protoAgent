@@ -87,9 +87,15 @@ class SchedulerBackend(Protocol):
         ttl: str | None = None,
         max_fires: int | None = None,
         restore_state: Job | None = None,
+        enqueue_key: str | None = None,
     ) -> Job:
         """Persist a new job. Returns the stored ``Job`` (with
         backend-assigned id and next_fire if the caller didn't set them).
+
+        ``enqueue_key`` atomically deduplicates enqueue across retries, even after
+        the job is deleted or completes. Reuse returns the original enqueue snapshot.
+        A new key replaces a pending job on the supplied id in the same transaction.
+        Backends must reject unsupported durable enqueue rather than silently replay.
 
         ``restore_state`` is a trusted undo snapshot: persist its fence, enabled
         state, timestamps and run history atomically with the new row. Without

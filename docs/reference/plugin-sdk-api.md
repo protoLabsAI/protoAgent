@@ -546,7 +546,7 @@ document use `knowledge_add` instead.
 ### `sdk.run_in_session` {#sdk-run-in-session}
 
 ```python
-sdk.run_in_session(session_id: str, prompt: str, *, delay_seconds: float = 0.0, job_id: str | None = None) -> dict
+sdk.run_in_session(session_id: str, prompt: str, *, delay_seconds: float = 0.0, job_id: str | None = None, enqueue_key: str | None = None) -> dict
 ```
 
 Enqueue `prompt` as a one-shot agent turn in `session_id` — non-blocking.
@@ -577,6 +577,7 @@ blocking it.
 - `prompt` — the message the agent processes as a turn.
 - `delay_seconds` — fire at now + this delay (default 0 → the next poll tick, ~1s).
 - `job_id` — a stable id so a re-call REPLACES the pending one-shot (idempotent).
+- `enqueue_key` — optional durable enqueue receipt key. Reusing it acknowledges the original enqueue, even after completion; it never replaces or replays it.
 
 Returns `{"ok", "job_id", "fires_at", "message"}`; `ok=False` with a readable
 message when the scheduler is unavailable or the inputs are bad.

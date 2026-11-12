@@ -159,11 +159,12 @@ async def test_met_enqueues_followup_turn_in_session(tmp_path, monkeypatch):
     added: list[dict] = []
 
     class _Sched:
-        def add_job(self, prompt, schedule, *, job_id=None, timezone=None, context_id=None):
+        def add_job(self, prompt, schedule, *, job_id=None, timezone=None, context_id=None, enqueue_key=None):
             added.append({"prompt": prompt, "context_id": context_id, "job_id": job_id})
 
             class _J:
                 id = job_id or "j"
+                next_fire = schedule
 
             return _J()
 
@@ -224,11 +225,12 @@ async def test_concurrent_evaluate_finishes_once(tmp_path, monkeypatch):
     calls: list[str] = []
 
     class _Sched:
-        def add_job(self, prompt, schedule, *, job_id=None, timezone=None, context_id=None):
+        def add_job(self, prompt, schedule, *, job_id=None, timezone=None, context_id=None, enqueue_key=None):
             calls.append(job_id)
 
             class _J:
                 id = job_id or "j"
+                next_fire = schedule
 
             return _J()
 

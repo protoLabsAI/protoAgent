@@ -456,3 +456,125 @@ def test_watch_ownership_excludes_hooks_and_other_sessions(tmp_path, monkeypatch
     watch.status = "expired"
     store.set(watch)
     assert s._claim_occurrence(root)
+
+
+@pytest.mark.platform_sensitive
+@pytest.mark.parametrize("pending_id", ["wait:chat", "watch-chat"])
+def test_future_interactive_continuation_does_not_hold_unrelated_schedule(tmp_path, pending_id):
+    s = scheduler(tmp_path)
+    future = (datetime.now(UTC) + timedelta(days=1)).isoformat()
+    pending = s.add_job("later continuation", future, job_id=pending_id, context_id="chat")
+    due = s.add_job("independent reminder", PAST, context_id="chat")
+    s = scheduler(tmp_path)
+    assert s._claim_occurrence(s.get_job(due.id))
+    assert s.get_job(pending.id).next_fire == future
+    # An actual unresolved invocation still serializes the shared chat context.
+    assert s._claim_occurrence(s.get_job(pending.id)) is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.platform_sensitive
+@pytest.mark.parametrize("boundary", ["before_enqueue", "enqueue_failure", "queued", "accepted", "completed"])
+async def test_terminal_watch_recovery_deduplicates_durable_enqueue(tmp_path, monkeypatch, boundary):
+    from types import SimpleNamespace
+
+    from graph.fence_scope import fence_scope
+    from graph.watches.controller import WatchController
+    from graph.watches.store import WatchStore
+    from runtime.state import STATE
+
+    watch_path = tmp_path / "watches"
+    watch_path.mkdir()
+    monkeypatch.setenv("WATCH_PATH", str(watch_path))
+    s = scheduler(tmp_path)
+    monkeypatch.setattr(STATE, "scheduler", s)
+    c = WatchController(SimpleNamespace(), WatchStore(watch_path))
+    root = s.add_job("root", "* * * * *")
+    with fence_scope(["read_file"]):
+        _, _, watch = c.create(
+            condition="ready", verifier={"type": "plugin", "check": "test:ready"},
+            run_prompt="inspect result", run_session=root.context_id,
+        )
+    if boundary == "before_enqueue":
+        async def crash(*args, **kwargs):
+            raise RuntimeError("crash before enqueue")
+        monkeypatch.setattr(c, "_react", crash)
+        with pytest.raises(RuntimeError, match="crash before enqueue"):
+            await c._finish(watch, "met", "ready")
+    elif boundary == "enqueue_failure":
+        monkeypatch.setattr(STATE, "scheduler", None)
+        await c._finish(watch, "met", "ready")
+    else:
+        # Commit the enqueue, then lose the acknowledgement in the watch file.
+        real_write = c._write_if_current
+
+        def lose_ack(watch, gen):
+            if not watch.reaction_pending:
+                raise OSError("crash after enqueue commit")
+            return real_write(watch, gen)
+
+        monkeypatch.setattr(c, "_write_if_current", lose_ack)
+        await c._finish(watch, "met", "ready")
+    assert WatchStore(watch_path).get(watch.id).reaction_pending
+    assert s._claim_occurrence(root) is None
+    reaction_id = f"watch-{watch.id}"
+    reaction = s.get_job(reaction_id)
+    if boundary in ("accepted", "completed"):
+        assert s._claim_occurrence(reaction)
+        s._remember_task(reaction, "reaction-task")
+        if boundary == "completed":
+            assert s._settle_task(reaction, "reaction-task", {"result": {
+                "id": "reaction-task", "status": {"state": "completed"},
+            }})
+            assert s.get_job(reaction_id) is None
+    before = rows(s, "occurrences")
+    s = scheduler(tmp_path)
+    monkeypatch.setattr(STATE, "scheduler", s)
+    c = WatchController(SimpleNamespace(), WatchStore(watch_path))
+    # Recovery retries only the durable enqueue, not the verifier or reaction hooks.
+    async def forbidden(*args, **kwargs):
+        raise AssertionError("terminal recovery replayed verifier/hooks")
+    monkeypatch.setattr("graph.watches.controller.run_verifier", forbidden)
+    monkeypatch.setattr("graph.watches.hooks.fire_watch_hook", forbidden)
+    await c.tick_all()
+    await c.evaluate_now(watch.id)
+    await c.tick_all()
+    assert not c.store.get(watch.id).reaction_pending
+    assert rows(s, "occurrences") == before
+    assert len(rows(s, "job_enqueue_receipts")) == 1
+    if boundary == "completed":
+        assert s.get_job(reaction_id) is None
+        assert s._claim_occurrence(root)
+    else:
+        restored = s.get_job(reaction_id)
+        assert restored.context_id == root.context_id
+        assert restored.fence == ["read_file"]
+        if reaction:
+            assert restored.created_at == reaction.created_at
+            if boundary == "queued":
+                assert restored.as_dict() == reaction.as_dict()
+        assert s._claim_occurrence(root) is None
+
+
+@pytest.mark.platform_sensitive
+def test_enqueue_receipt_and_replacement_commit_atomically(tmp_path):
+    import sqlite3
+
+    s = scheduler(tmp_path)
+    original = s.add_job("old reaction", PAST, job_id="watch-reused", enqueue_key="first")
+    with s._connect() as db:
+        db.execute("CREATE TRIGGER fail_receipt BEFORE INSERT ON job_enqueue_receipts "
+                   "BEGIN SELECT RAISE(ABORT, 'receipt unavailable'); END")
+    with pytest.raises(ValueError) as error:
+        s.add_job("new reaction", PAST, job_id=original.id, enqueue_key="second")
+    assert isinstance(error.value.__cause__, sqlite3.IntegrityError)
+    s = scheduler(tmp_path)
+    assert s.get_job(original.id).as_dict() == original.as_dict()
+    assert len(rows(s, "job_enqueue_receipts")) == 1
+    with s._connect() as db:
+        db.execute("DROP TRIGGER fail_receipt")
+    replacement = s.add_job("new reaction", PAST, job_id=original.id, enqueue_key="second")
+    assert replacement.created_at != original.created_at
+    # A late retry of the first reaction cannot replace the newer watch's turn.
+    assert s.add_job("old reaction", PAST, job_id=original.id, enqueue_key="first") == original
+    assert s.get_job(original.id) == replacement

@@ -25,6 +25,10 @@ def ensure_schema(db: sqlite3.Connection) -> None:
         version INTEGER NOT NULL DEFAULT 1,
         PRIMARY KEY (job_id, created_at)
     )""")
+    db.execute("""CREATE TABLE IF NOT EXISTS job_enqueue_receipts (
+        enqueue_key TEXT PRIMARY KEY,
+        job_snapshot TEXT NOT NULL
+    )""")
     db.execute("CREATE INDEX IF NOT EXISTS idx_job_sessions_context ON job_sessions(context_id)")
 
 

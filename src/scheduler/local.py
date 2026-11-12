@@ -575,6 +575,7 @@ class LocalScheduler:
         ttl: str | None = None,
         max_fires: int | None = None,
         restore_state: Job | None = None,
+        enqueue_key: str | None = None,
     ) -> Job:
         if not prompt or not prompt.strip():
             raise ValueError("scheduler: prompt is required")
@@ -620,6 +621,18 @@ class LocalScheduler:
             if not self._adopt_existing_jobs:
                 # Serialize verification and insertion against owner changes.
                 self._check_owner(db)
+            if enqueue_key is not None:
+                receipt = db.execute(
+                    "SELECT job_snapshot FROM job_enqueue_receipts WHERE enqueue_key = ?",
+                    (enqueue_key,),
+                ).fetchone()
+                if receipt:
+                    return Job(**json.loads(receipt[0]))
+                # Preserve run_in_session's pending replacement semantics, atomically
+                # with the receipt. Accepted occurrences remain in their own ledger.
+                if job_id:
+                    db.execute("DELETE FROM jobs WHERE id = ? AND agent_name = ?",
+                               (job_id, self.agent_name))
             job.context_id, job.execution_hold = job_sessions.resolve(db, job.as_dict())
             db.execute(
                 "INSERT INTO jobs (id, prompt, schedule, agent_name, next_fire, "
@@ -648,6 +661,11 @@ class LocalScheduler:
                     job.execution_hold,
                 ),
             )
+            if enqueue_key is not None:
+                db.execute(
+                    "INSERT INTO job_enqueue_receipts (enqueue_key, job_snapshot) VALUES (?, ?)",
+                    (enqueue_key, json.dumps(job.as_dict())),
+                )
             db.commit()
         except sqlite3.IntegrityError as exc:
             raise ValueError(f"job id {job.id!r} already exists") from exc
@@ -1160,7 +1178,10 @@ class LocalScheduler:
                 "AND (id LIKE 'wait:%' OR id LIKE 'watch-%') LIMIT 1", (job.context_id, job.id)
             ).fetchone()
             continuation = not is_cron(job.schedule) and job.id.startswith(("wait:", "watch-"))
-            if busy or ((waiting or self._watch_holds_execution(job)) and not continuation):
+            if busy or (
+                (job.context_id or "").startswith("job:")
+                and (waiting or self._watch_holds_execution(job)) and not continuation
+            ):
                 return None
             old = db.execute("SELECT * FROM occurrences WHERE job_id = ? AND next_fire = ? AND created_at = ?",
                              (job.id, job.next_fire, job.created_at)).fetchone()

@@ -330,6 +330,9 @@ class WatchController:
         ``expired``; ``stall_after`` unchanged checks → ``on_stalled`` (stays active). Returns
         the terminal status, or ``None`` while still active.
 
+        Terminal watches with a pending reaction retry only the durable enqueue;
+        they do not rerun the verifier, hooks, or fire telemetry.
+
         Serialized per watch id (an ``asyncio.Lock``) so the cadence ``tick_all`` and an
         event-driven ``evaluate_now`` can't interleave a read-mutate-write on the SAME watch —
         which would drop a stall increment or re-activate a just-finished watch. Distinct watch
@@ -342,7 +345,14 @@ class WatchController:
         # `clear` landing in that window must make every write-back here a no-op.
         gen = self._gen(watch_id)
         watch = self._store.get(watch_id)
-        if watch is None or not watch.active:
+        if watch is None:
+            return None
+        if not watch.active:
+            if watch.reaction_pending:
+                from graph.fence_scope import fence_scope
+
+                with fence_scope(watch.fence):
+                    self._enqueue_reaction(watch)
             return None
         # Effective cadence: the per-watch override, else the configured global cadence
         # the server's _watch_loop ticks at (mirrors its fallback).
@@ -446,7 +456,8 @@ class WatchController:
         calls on state change bypasses this gate by design. Returns how many reached a terminal
         state this tick.
 
-        The tick also retires watches that finished longer than ``watches.keep_terminal_h``
+        The tick also retries terminal pending reaction enqueues and retires watches
+        that finished longer than ``watches.keep_terminal_h``
         ago — see :meth:`prune_terminal`."""
         from time import time
 
@@ -462,8 +473,8 @@ class WatchController:
         now = time()
         await asyncio.to_thread(self.prune_terminal, [w for w in stored if not w.active], now)
         finished = 0
-        for watch in (w for w in stored if w.active):
-            if not self._due(watch, now):
+        for watch in (w for w in stored if w.active or w.reaction_pending):
+            if watch.active and not self._due(watch, now):
                 continue
             try:
                 status = await self.evaluate(watch.id)
@@ -567,7 +578,7 @@ class WatchController:
         with fence_scope(watch.fence):
             await self._react_in_scope(watch, reason, flapping=flapping)
 
-    async def _react_in_scope(self, watch: Watch, reason: str, *, flapping: bool) -> None:
+    def _enqueue_reaction(self, watch: Watch) -> None:
         gen = self._gen(watch.id)
         if (watch.run_prompt or "").strip() and (watch.run_session or "").strip():
             try:
@@ -580,13 +591,22 @@ class WatchController:
                 if (watch.last_evidence or "").strip():
                     context += f"\nEvidence: {watch.last_evidence.strip()}"
                 reaction_prompt = f"{context}\n\n{watch.run_prompt}"
-                result = run_in_session(watch.run_session, reaction_prompt, job_id=f"watch-{watch.id}")
+                # Terminal retries must not replace a queued or already completed turn.
+                # The generation + finish timestamp distinguish re-created watches.
+                options = {}
+                if watch.reaction_pending:
+                    options["enqueue_key"] = f"watch:{watch.id}:{watch.created_at}:{watch.finished_at}"
+                result = run_in_session(
+                    watch.run_session, reaction_prompt, job_id=f"watch-{watch.id}", **options
+                )
                 if watch.reaction_pending and result.get("ok"):
                     watch.reaction_pending = False
                     self._write_if_current(watch, gen)
             except Exception:  # noqa: BLE001 — a reaction failure must not break the tick
                 log.exception("[watch] run_in_session reaction failed for %s", watch.id)
 
+    async def _react_in_scope(self, watch: Watch, reason: str, *, flapping: bool) -> None:
+        self._enqueue_reaction(watch)
         try:
             from observability import metrics
 
