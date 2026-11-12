@@ -6,21 +6,28 @@
  * scope is empty (§3). Provenance rides below in muted "you" wording: `You said "…" in this chat ·
  * today HH:mm`. A directive the console can tie to an answered decision (the interim heuristic in
  * {@link linkDecision}, §3.1) is tagged **Approval** and reads `You chose "…" · HH:mm`; its detail
- * shows **You were asked** / **You chose** / **Your words** / **Open decision**. Everything else is
- * a plain **Instruction**. Withdrawal lives in the detail and goes through the directive ledger's
- * existing `revoke` path (`useDirectives`). History is NOT shown here — finished items leave Work
- * (§1); the ledger's own History accordion stays in the chat drawer.
+ * shows **You were asked** / **You chose** / **Your words** / **Open decision** (which opens the
+ * decision in place, through the Work detail). Everything else is a plain **Instruction**.
+ * Withdrawal lives in the detail and goes through the directive ledger's existing `revoke` path
+ * (`useDirectives`). The LIST stays in-force only — finished items leave Work (§1) and the
+ * ledger's own History accordion stays in the chat drawer — but the Overview still lists closed
+ * and other-chat directives, so the DETAIL resolves those too: an in-force row from another chat
+ * keeps its full detail (withdraw included); a fulfilled/revoked row renders read-only with its
+ * closing sentence. The decisions the linker reads come from the shared decisions store, topped
+ * up with the server's answered ledger on mount so an answer that predates this tab (a reload,
+ * another surface) still links.
  *
  * In-force membership, the all-chats scope and the tied-job hiding ALL come from the shared
  * `workGroups` projection, so Work and the chat rail (which read the same selector) can't drift:
  * when a tied job ends, its instruction leaves the list and the count in the SAME render, with no
- * server fulfil claim. The wire `DirectiveRow` carries no decision id and no job-link field, so a
- * tied job is rendered only when a projection supplies it explicitly (`tiedJob`) — never parsed
- * from prose. See the PR for the schema gap this interim stands in for.
+ * server fulfil claim — and the detail fallback never resurrects it (closed rows only). The wire
+ * `DirectiveRow` carries no decision id and no job-link field, so a tied job is rendered only when
+ * a projection supplies it explicitly (`tiedJob`) — never parsed from prose. See the PR for the
+ * schema gap this interim stands in for.
  */
-import { useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Badge, Button, Callout } from "@protolabsai/ui/primitives";
-import { Alert, StatusDot } from "@protolabsai/ui/data";
+import { Alert, Skeleton, StatusDot } from "@protolabsai/ui/data";
 import { FormField, Textarea } from "@protolabsai/ui/forms";
 import { useToast } from "@protolabsai/ui/overlays";
 import { useWorkActionSize } from "../../shell/SurfaceFrame";
@@ -36,6 +43,7 @@ import { localStampTitle, parseInstant } from "../../lib/format";
 import { linkDecision } from "../linkDecision";
 import { workGroups } from "../workGroups";
 import { WorkRow } from "../WorkRow";
+import { fromDecision, statusTone } from "../tone";
 import type { WorkItem } from "../useWorkItems";
 import type { WorkJobRef } from "../tone";
 import { registerWorkSection, type WorkSectionContext } from "../sectionRegistry";
@@ -110,7 +118,9 @@ function rowMeta(
 }
 
 /** The selected instruction's detail: the approval fields when linked, the provenance, any tied
- *  job's lifetime, and the withdraw confirm through the ledger's existing revoke path. */
+ *  job's lifetime, and — while in force — the withdraw confirm through the ledger's existing
+ *  revoke path. A closed row (opened from the Overview's Done lane, or one that closed under
+ *  this very view) renders read-only with its closing sentence instead of the withdraw action. */
 function InstructionDetail({ ctx, item, decision }: {
   ctx: WorkSectionContext; item: InstructionItem; decision: DecisionRow | null;
 }): ReactNode {
@@ -127,9 +137,15 @@ function InstructionDetail({ ctx, item, decision }: {
   const noticeRef = useRef<HTMLDivElement>(null);
   const actionRef = useRef<HTMLDivElement>(null);
 
+  const inForce = row.status === "in_force";
   const tiedJob = item.tiedJob;
   const name = jobName(ctx.sources, tiedJob);
+  // The tied job's own Work item, when the sources carry it — "Open the job" renders only then,
+  // never as a dead button.
+  const jobItem = tiedJob && Object.values(ctx.sources).flatMap((source) => source.items)
+    .find((candidate) => candidate.kind === tiedJob.kind && candidate.id === tiedJob.id);
   const title = row.scope.trim() || row.quote;
+  const tone = inForce ? "info" : statusTone(item.status);
 
   useLayoutEffect(() => { if (confirm) promptRef.current?.focus(); }, [confirm]);
   useLayoutEffect(() => { if (notice) noticeRef.current?.focus(); }, [notice]);
@@ -147,15 +163,18 @@ function InstructionDetail({ ctx, item, decision }: {
       setConfirm(false);
       toast({ tone: "neutral", message: "Withdrawn. The agent won't treat it as approved from its next turn." });
     } else if ("conflict" in result) {
+      // The refreshed ledger re-lists the row as closed, so this same detail (keyed by id)
+      // stays mounted, now read-only, and the notice shows in place.
       setNotice(result.conflict
         ? `This was already closed: ${closingSentence(result.conflict)}. Nothing changed.`
         : "This was already closed. Nothing changed.");
     } else if ("gone" in result) {
-      setNotice("This instruction is no longer in the list. The list has been refreshed.");
+      // A 404 removes the row from the ledger entirely, so this detail is about to unmount —
+      // the feedback must outlive it.
+      toast({ tone: "neutral", message: "This instruction is no longer in the list. The list has been refreshed." });
     } else setError(true);
   }
 
-  // A refresh can remove the row before the result lands; keep the notice in place for this view.
   if (notice) {
     return <div className="work-instruction-detail" ref={noticeRef} tabIndex={-1}>
       <h2 className="work-detail__title" data-surface-focus tabIndex={-1}>{title}</h2>
@@ -163,17 +182,19 @@ function InstructionDetail({ ctx, item, decision }: {
     </div>;
   }
 
-  function openJob() {
-    const jobItem = tiedJob && Object.values(ctx.sources).flatMap((source) => source.items)
-      .find((candidate) => candidate.kind === tiedJob.kind && candidate.id === tiedJob.id);
-    if (jobItem) ctx.onOpen(jobItem);
+  /** The linked decision, opened IN PLACE through the Work detail — WorkView's retained-records
+   *  path keeps the settled record visible even though the pending source no longer lists it. */
+  function openDecision() {
+    if (!decision) return;
+    ctx.onOpen({ kind: "decision", id: decision.id, status: fromDecision(decision.state),
+      title: decision.question, meta: "", sessionId: decision.session_id, raw: decision });
   }
 
   return <div className="work-instruction-detail">
     <header className="work-detail__header">
-      <StatusDot status="info" />
+      <StatusDot status={tone} />
       <h2 className="work-detail__title" data-surface-focus tabIndex={-1}>{title}</h2>
-      <Badge status="info">{decision ? "Approval" : "Instruction"}</Badge>
+      <Badge status={tone}>{decision ? "Approval" : "Instruction"}</Badge>
     </header>
     <dl className="work-detail__fields">
       {decision && <>
@@ -184,12 +205,18 @@ function InstructionDetail({ ctx, item, decision }: {
         <dt>Your words</dt>
         <dd><span title={localStampTitle(row.created_at)}>{provenance(row, ctx.sessionId)}</span></dd>
       </div>
-      {tiedJob && <div className="work-detail__field">
+      {inForce && tiedJob && <div className="work-detail__field">
         <dt>Lasts</dt>
         <dd>{`until "${name}" finishes. Then it closes itself.`}</dd>
       </div>}
+      {!inForce && <div className="work-detail__field">
+        <dt>Closed</dt>
+        <dd><span title={localStampTitle(row.closed_at)}>{closingSentence(row)}</span></dd>
+      </div>}
+      {!inForce && row.close_reason && !(row.closed_by === "operator" && row.close_reason === "revoked by the operator")
+        && <div className="work-detail__field"><dt>Note</dt><dd>{row.close_reason}</dd></div>}
     </dl>
-    {confirm ? <div className="work-detail__confirm" role="group" aria-label="Withdraw this instruction" onKeyDown={(e) => {
+    {confirm && inForce ? <div className="work-detail__confirm" role="group" aria-label="Withdraw this instruction" onKeyDown={(e) => {
       if (e.key === "Escape") { e.preventDefault(); if (!busy) cancel(); }
     }}>
       <p ref={promptRef} tabIndex={-1} className="work-detail__confirm-prompt">Withdraw this instruction?</p>
@@ -204,54 +231,90 @@ function InstructionDetail({ ctx, item, decision }: {
         {size !== "md" && <Button size={size} disabled={busy} onClick={cancel}>Keep it</Button>}
       </div>
     </div> : <div className="work-detail__actions" ref={actionRef}>
-      {decision && <Button size={size} onClick={() => ctx.decisionActions?.openSourceChat(decision.session_id)}>Open decision</Button>}
-      {tiedJob && <Button size={size} onClick={openJob}>Open the job</Button>}
-      <Button variant="danger" size={size} onClick={() => { setError(false); setConfirm(true); }}>Withdraw…</Button>
+      {decision && <Button size={size} onClick={openDecision}>Open decision</Button>}
+      {jobItem && <Button size={size} onClick={() => ctx.onOpen(jobItem)}>Open the job</Button>}
+      {inForce && <Button variant="danger" size={size} onClick={() => { setError(false); setConfirm(true); }}>Withdraw…</Button>}
     </div>}
   </div>;
 }
 
 function DirectivesSection({ ctx }: { ctx: WorkSectionContext }): ReactNode {
+  const size = useWorkActionSize();
   const decisions = useDecisions();
-  // The link heuristic reads ANSWERED decisions from the shared store's by-id record cache (a
-  // decision that produced a directive has just settled there, having left the pending list).
+  // The link heuristic reads ANSWERED decisions from the shared store's by-id record cache. The
+  // pending-only refresh never carries an answer that predates this tab (a reload) or one that
+  // settled on another surface without being seen pending here, so top the cache up with the
+  // server's answered ledger once per mount (coalesced + retried in the store).
+  useEffect(() => { void decisions.loadAnswered(); }, [decisions.loadAnswered]);
   const answered = useMemo(
     () => Object.values(decisions.records).filter((row) => row.state === "answered"),
     [decisions.records],
   );
+  const source = ctx.sources.directives;
   const thisChatOnly = ctx.state.filters?.thisChat === true;
   // In-force only, tied-job hiding and scope all come from the shared selector, so the rail agrees.
   const group = workGroups(ctx.sources, { thisChatOnly, sessionId: ctx.sessionId }).find((g) => g.id === "instructions")!;
   const items = group.items as InstructionItem[];
 
+  const retry = <Button size={size} onClick={source.retry}>Retry</Button>;
+  const loadingView = <div aria-busy="true" aria-label="Loading your instructions"><Skeleton lines={3} /><Skeleton lines={3} /></div>;
+  const failedView = <Alert status="warning">
+    Couldn&apos;t load standing instructions. The agent still has them. Only this view failed to load. {retry}
+  </Alert>;
+  const staleNote = <Callout tone="warning">Showing the last load. Couldn&apos;t refresh. {retry}</Callout>;
+
   if (ctx.state.itemId) {
-    const selected = items.find((item) => `${item.kind}:${item.id}` === ctx.state.itemId || item.id === ctx.state.itemId);
-    // A tied job that ended (or a withdrawal) drops the row; the detail follows it out.
-    if (!selected) return <Empty title="This instruction is no longer here." />;
+    const matches = (item: InstructionItem) => `${item.kind}:${item.id}` === ctx.state.itemId || item.id === ctx.state.itemId;
+    // The Overview lists directives this in-force, this-chat-scoped group doesn't: an in-force
+    // one from another chat (under the thisChat filter), and fulfilled/revoked ones in its Done
+    // lane. Resolve those here too — first through the UNSCOPED projection (which keeps the
+    // tied-job hiding, so an instruction whose job just ended is never resurrected), then from
+    // the raw source for CLOSED rows only.
+    const selected = items.find(matches)
+      ?? (workGroups(ctx.sources, { thisChatOnly: false }).find((g) => g.id === "instructions")!.items as InstructionItem[]).find(matches)
+      ?? source.items.filter((item) => (item.raw as DirectiveRow).status !== "in_force").find(matches);
+    if (!selected) {
+      // While the source hasn't loaded, the row's absence proves nothing — don't claim it's gone.
+      if (source.status === "loading") return loadingView;
+      if (source.status === "error") return failedView;
+      return <>
+        {source.status === "stale" && staleNote}
+        <Empty title="This instruction is no longer here." />
+      </>;
+    }
     return <InstructionDetail key={selected.id} ctx={ctx} item={selected} decision={linkDecision(selected.raw as DirectiveRow, answered)} />;
   }
 
+  if (source.status === "loading") return loadingView;
+  if (source.status === "error") return failedView;
+
   if (!items.length) {
-    return <Empty
-      title="No standing instructions"
-      description="When you give this agent an instruction or approval that lasts beyond one reply, it records your words here. You can withdraw any of them at any time."
-    />;
+    return <>
+      {source.status === "stale" && staleNote}
+      <Empty
+        title="No standing instructions"
+        description="When you give this agent an instruction or approval that lasts beyond one reply, it records your words here. You can withdraw any of them at any time."
+      />
+    </>;
   }
 
-  return <ul className="work-group">{items.map((item) => {
-    const row = item.raw as DirectiveRow;
-    const decision = linkDecision(row, answered);
-    const name = jobName(ctx.sources, item.tiedJob);
-    return <li key={`${item.kind}:${item.id}`}><WorkRow
-      status={item.status}
-      tone="info"
-      badge={decision ? "Approval" : "Instruction"}
-      title={row.scope.trim() || row.quote}
-      meta={rowMeta(row, decision, item.tiedJob, name, ctx.sessionId)}
-      focusKey={`${item.kind}:${item.id}`}
-      onOpen={() => ctx.onOpen(item)}
-    /></li>;
-  })}</ul>;
+  return <>
+    {source.status === "stale" && staleNote}
+    <ul className="work-group">{items.map((item) => {
+      const row = item.raw as DirectiveRow;
+      const decision = linkDecision(row, answered);
+      const name = jobName(ctx.sources, item.tiedJob);
+      return <li key={`${item.kind}:${item.id}`}><WorkRow
+        status={item.status}
+        tone="info"
+        badge={decision ? "Approval" : "Instruction"}
+        title={row.scope.trim() || row.quote}
+        meta={rowMeta(row, decision, item.tiedJob, name, ctx.sessionId)}
+        focusKey={`${item.kind}:${item.id}`}
+        onOpen={() => ctx.onOpen(item)}
+      /></li>;
+    })}</ul>
+  </>;
 }
 
 function renderDirectives(ctx: WorkSectionContext): ReactNode {
