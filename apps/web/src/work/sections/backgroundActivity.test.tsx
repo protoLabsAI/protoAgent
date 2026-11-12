@@ -176,15 +176,20 @@ it("links From {chat title} to an open chat without showing the session id", asy
   expect(mocks.switchSession).toHaveBeenCalledWith("sess-123");
 });
 
-it("opens the existing SubagentsPanel from the Manage subagents link", async () => {
-  mocks.sources.background.items = [bgItem("c1", "done", { id: "c1", status: "completed", subagent_type: "delegate", description: "Summarize" })];
+it("a background deep link lands on Doing now and the row opens the preserved §2.9 detail", async () => {
+  // The old Background agents list (and its Manage subagents footer) is gone with the
+  // four-group consolidation (v2 §7.2); the per-kind DETAIL renderer is what survives.
+  mocks.sources.background.items = [bgItem("r1", "running", { id: "r1", status: "running", subagent_type: "research-assistant", description: "Dig the logs" })];
   await render("background");
-  expect(document.querySelector('[data-testid="subagents-panel"]')).toBeNull();
-  await click("Manage subagents");
-  expect(document.querySelector('[data-testid="subagents-panel"]')).toBeTruthy();
+  expect(host.querySelector(".work-view__picker button")?.textContent).toContain("Doing now");
+  expect(button("Manage subagents")).toBeUndefined();
+  const row = host.querySelector<HTMLButtonElement>(".work-row")!;
+  expect(row.querySelector(".pl-badge")?.textContent).toBe("Job");
+  await act(async () => row.click());
+  expect(fieldValue("Role")).toBe("Research Assistant");
 });
 
-// ── Activity is no longer a Work section (S4c) ──────────────────────────────────
+// ── Activity is no longer a Work section (S4c; history is not Work, v2 §1) ──────
 it("registers every built-in with its canonical group and leaves Activity out of the registry", () => {
   expect(sections.get("background")?.group).toBe("doing-now");
   for (const [id, section] of sections) {
@@ -193,16 +198,21 @@ it("registers every built-in with its canonical group and leaves Activity out of
   expect(sections.has("activity")).toBe(false);
 });
 
-it("lands an old Activity deep-link on the quiet empty state, never a feed", async () => {
+it("lands an old Activity deep-link on the Overview, never a feed — history rows stay out of Work", async () => {
+  // A history row in the activity source (its production items stay empty) must not render.
+  mocks.sources.activity.items = [{ kind: "activity", id: "a-new", status: "done", title: "a-new-turn",
+    meta: "", raw: { id: 1, origin: "scheduler", state: "completed", created_at: new Date().toISOString() } }];
   await render("activity");
-  expect(host.textContent).toContain("No activity to show");
+  expect(host.querySelector(".work-view__picker button")?.textContent).toContain("Overview");
+  expect(host.textContent).toContain("Nothing to track.");
+  expect(host.textContent).not.toContain("a-new-turn");
   expect(document.querySelector('[data-testid="unified-feed"]')).toBeNull();
-  // The picker offers no Activity destination either — Overview plus the seven sections.
+  // The picker offers no Activity destination either — Overview plus the four groups (v2 §4).
   const trigger = host.querySelector<HTMLButtonElement>(".work-view__picker button")!;
   await act(async () => trigger.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })));
   const menu = document.querySelector<HTMLElement>('[role="menu"][aria-label="Work sections"]')!;
   const labels = Array.from(menu.querySelectorAll('[role="menuitemradio"]')).map((n) => n.textContent ?? "");
-  expect(labels).toHaveLength(8);
+  expect(labels).toHaveLength(5);
   expect(labels.some((label) => label.includes("Activity"))).toBe(false);
   await act(async () => menu.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
 });

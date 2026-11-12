@@ -26,7 +26,7 @@
  * schema gap this interim stands in for.
  */
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { Badge, Button, Callout } from "@protolabsai/ui/primitives";
+import { Badge, Button, Callout, type Status } from "@protolabsai/ui/primitives";
 import { Alert, Skeleton, StatusDot } from "@protolabsai/ui/data";
 import { FormField, Textarea } from "@protolabsai/ui/forms";
 import { useToast } from "@protolabsai/ui/overlays";
@@ -115,6 +115,26 @@ function rowMeta(
 ): string {
   const base = decision ? `You chose "${chosenLabel(decision)}" · ${clock(decision.answered_at)}` : provenance(row, focused);
   return tiedJob ? `${base} · ends with ${name}` : base;
+}
+
+/** One §3 row, wherever it renders: this section's own list and the Overview's instructions
+ *  group share this single presentation, so a directive can never show one kind on the
+ *  Overview ("Instruction") and another ("Approval") in its picked group. Headline = what is
+ *  approved — the scope, falling back to the quote (§3); meta = "You chose …" when the §3.1
+ *  link holds, else the "You said …" provenance, with a tied job's "ends with <job>" suffix. */
+export function instructionRowPresentation(
+  item: Pick<InstructionItem, "raw" | "tiedJob">, answered: readonly DecisionRow[],
+  sources: WorkSectionContext["sources"], focused: string | undefined,
+): { tag: string; tone: Status; icon: ReactNode; title: string; meta: string } {
+  const row = item.raw as DirectiveRow;
+  const decision = linkDecision(row, answered);
+  return {
+    tag: decision ? "Approval" : "Instruction",
+    tone: "neutral",
+    icon: <StatusDot status="info" />,
+    title: row.scope?.trim() || row.quote,
+    meta: rowMeta(row, decision, item.tiedJob, jobName(sources, item.tiedJob), focused),
+  };
 }
 
 /** The selected instruction's detail: the approval fields when linked, the provenance, any tied
@@ -301,15 +321,13 @@ function DirectivesSection({ ctx }: { ctx: WorkSectionContext }): ReactNode {
   return <>
     {source.status === "stale" && staleNote}
     <ul className="work-group">{items.map((item) => {
-      const row = item.raw as DirectiveRow;
-      const decision = linkDecision(row, answered);
-      const name = jobName(ctx.sources, item.tiedJob);
+      const row = instructionRowPresentation(item, answered, ctx.sources, ctx.sessionId);
       return <li key={`${item.kind}:${item.id}`}><WorkRow
         status={item.status}
         tone="info"
-        badge={decision ? "Approval" : "Instruction"}
-        title={row.scope.trim() || row.quote}
-        meta={rowMeta(row, decision, item.tiedJob, name, ctx.sessionId)}
+        badge={row.tag}
+        title={row.title}
+        meta={row.meta}
         focusKey={`${item.kind}:${item.id}`}
         onOpen={() => ctx.onOpen(item)}
       /></li>;

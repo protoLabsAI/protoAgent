@@ -48,6 +48,8 @@ import type { WorkItems } from "../work/useWorkItems";
 import "../work/sections/background";
 
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+// jsdom has no Element.scrollTo; the Feed dialog pins its newest entry into view with it.
+Element.prototype.scrollTo ??= () => {};
 let root: Root;
 let container: HTMLDivElement;
 beforeEach(() => {

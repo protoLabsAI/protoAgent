@@ -57,12 +57,8 @@ it("annotates tasks without overriding per-row goal/task/watch classification", 
   ]);
 });
 
-it("registers the finished-work rule as the section's listFilter, for WorkView's counts", () => {
-  const filter = sections.get("tasks")?.listFilter;
-  expect(filter?.(taskItem({ status: "closed", closed_at: "2026-11-09T10:00:00Z" }))).toBe(false);
-  expect(filter?.(taskItem({ status: "open" }))).toBe(true);
-  expect(filter?.(taskItem({ status: "blocked" }))).toBe(true);
-});
+// WorkView's heading counts, badges and announcement come from the shared workGroups
+// selector alone (the test above) — sections no longer register a listFilter for them.
 
 let root: Root | null = null;
 let host: HTMLDivElement | null = null;

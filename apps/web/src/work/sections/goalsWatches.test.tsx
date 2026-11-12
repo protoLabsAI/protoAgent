@@ -46,7 +46,7 @@ vi.mock("../../chat/HitlForm", () => ({
 import { useUI } from "../../state/uiStore";
 import { applyNavIntent } from "../../app/palette/nav";
 import { api } from "../../lib/api";
-import { goalsSection } from "./goals";
+import { goalsSection, useGoalCreator } from "./goals";
 import { watchesSection } from "./watches";
 import type { WorkItem, WorkItems, WorkSource } from "../useWorkItems";
 import type { GoalState, WatchState } from "../../lib/types";
@@ -404,28 +404,20 @@ describe("Stopped-short goal recovery (§2, r1)", () => {
     expect(undo).toHaveBeenCalledWith("tok-stop");
   });
 
-  it("a stopped goal row is neutral 'Goal stopped'; an achieved goal has left Work", async () => {
-    const stopped: GoalState = { session_id: "sess-s", condition: "x", status: "exhausted", outcome: "almost", iteration: 5, max_iterations: 9 };
-    const achieved: GoalState = { session_id: "sess-a", condition: "y", status: "achieved", outcome: "done", iteration: 9, max_iterations: 9 };
-    await mount(goalsSection.render(ctx({ sources: sources({ goals: withItems([goalItem(stopped, "failed"), goalItem(achieved, "done")]) }) })));
-
-    expect(host!.querySelectorAll("ul.work-group > li")).toHaveLength(1); // achieved dropped
-    expect(host!.querySelector(".work-row .pl-badge")?.textContent).toBe("Goal stopped");
-    expect(host!.querySelector(".work-row .pl-badge--error")).toBeNull();
-    expect(host!.querySelector(".work-row__meta")?.textContent).toBe("step 5 of 9");
-
-    // WorkView's counts share the list's finished-work rule through the section's listFilter.
-    expect(goalsSection.listFilter?.(goalItem(achieved, "done"))).toBe(false);
-    expect(goalsSection.listFilter?.(goalItem(stopped, "failed"))).toBe(true);
-  });
+  // The stopped-goal ROW ("Goal stopped", neutral, "step N of M" meta) and the achieved
+  // goal's disappearance are group-row behavior now — WorkView.test's approved-table test
+  // covers them through the shared workGroups selector; this section only renders details.
 });
 
 describe("New goal (r4)", () => {
+  // The creator's one live host is WorkView's GoalCreatorHost (`useGoalCreator(state).creator`,
+  // the palette's "Work: New goal…" intent) — the v2 group rows offer no create control, so
+  // this exercises the hook through that same seam.
   it("opens on mount and on repeated palette requests, clearing the flag on cancel", async () => {
     const openCreator = () => applyNavIntent({ kind: "surface", id: "work", state: { section: "goals", filters: { create: true, thisChat: false } } });
     function LiveGoals() {
       const state = useUI((s) => s.surfaceStates.work!);
-      return goalsSection.render({ sources: sources({}), state, onOpen: vi.fn(), onBack: vi.fn() });
+      return useGoalCreator(state).creator;
     }
     openCreator();
     await mount(h(LiveGoals));
@@ -439,15 +431,6 @@ describe("New goal (r4)", () => {
     await act(async () => button("Cancel creation").click());
     await act(async () => useUI.getState().openSurfaceModal("work"));
     expect(host!.querySelector('[data-testid="goal-create-dialog"]')).toBeNull();
-  });
-
-  it("the empty Goals section shows New goal, which opens GoalCreateDialog", async () => {
-    await mount(goalsSection.render(ctx({ sources: sources({ goals: emptySrc() }) })));
-    expect(buttons().some((b) => b.textContent?.trim() === "New goal")).toBe(true);
-    expect(host!.querySelector('[data-testid="goal-create-dialog"]')).toBeNull();
-
-    await act(async () => button("New goal").click());
-    expect(host!.querySelector('[data-testid="goal-create-dialog"]')).not.toBeNull();
   });
 });
 

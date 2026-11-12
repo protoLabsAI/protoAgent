@@ -12,18 +12,22 @@ test("Work search lists one overview entry and opens every section in the modal"
   await expect(page.getByRole("option", { name: "Work: Activity", exact: true })).toHaveCount(0);
   await page.keyboard.press("Escape");
 
-  for (const section of ["Overview", "Decisions", "Goals", "Watches", "Tasks", "Schedules", "Background agents", "Directives"]) {
+  // Legacy palette commands survive as deep links: each resolves into its canonical group
+  // (work-consolidation.md v2 §7.2). The Activity row itself is gone (S4c, asserted above).
+  for (const [section, groupLabel] of [
+    ["Overview", "Overview"], ["Decisions", "Needs you"], ["Goals", "Doing now"], ["Watches", "Coming up"],
+    ["Tasks", "Doing now"], ["Schedules", "Coming up"], ["Background agents", "Doing now"],
+    ["Directives", "Your instructions"],
+  ] as const) {
     const label = section === "Overview" ? "Open Work" : `Work: ${section}`;
-    // Legacy palette commands still route to the adapter's current display label.
-    const sectionLabel = section === "Directives" ? "Your instructions" : section;
     await page.keyboard.press("ControlOrMeta+Shift+k");
     await page.locator(".pl-cmdk-commands__input").fill(label);
     await page.getByRole("option", { name: label, exact: true }).click();
     await expect(page.getByRole("button", { name: "Dock to rail", exact: true })).toBeVisible();
     const picker = page.locator('.work-view[data-frame="modal"]').getByRole("button", { name: /Work sections/ });
-    await expect(picker).toHaveAccessibleName(`${sectionLabel} Work sections`);
+    await expect(picker).toHaveAccessibleName(`${groupLabel} Work sections`);
     await picker.click();
-    await expect(page.getByRole("menuitemradio", { name: sectionLabel, exact: true })).toHaveAttribute("aria-checked", "true");
+    await expect(page.getByRole("menuitemradio", { name: groupLabel, exact: true })).toHaveAttribute("aria-checked", "true");
     await page.keyboard.press("Escape");
     await expect(picker).toBeFocused();
     await page.keyboard.press("Escape");
@@ -79,7 +83,7 @@ for (const dock of ["left", "right", "bottom"] as const) {
     await expect(page.getByRole("button", { name: "Dock to rail", exact: true })).toHaveCount(0);
     // Closing restores the original dock and saved section without reopening creation.
     await expect(page.locator(".work-view__panes")).toBeVisible();
-    await expect(page.getByRole("button", { name: "Goals Work sections", exact: true })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Doing now Work sections", exact: true })).toBeVisible();
     await expect(page.getByTestId("goal-create-dialog")).toHaveCount(0);
   });
 }
@@ -109,6 +113,6 @@ for (const placement of ["left", "right", "bottom", "hidden"] as const) {
     await page.getByRole("button", { name: "Dock to rail", exact: true }).click();
     await expect(page.locator('.work-view[data-frame="modal"]')).toHaveCount(0);
     await expect(page.locator(".work-view__panes")).toBeVisible();
-    await expect(page.getByRole("button", { name: "Goals Work sections", exact: true })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Doing now Work sections", exact: true })).toBeVisible();
   });
 }

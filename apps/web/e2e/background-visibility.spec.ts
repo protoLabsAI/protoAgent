@@ -46,9 +46,13 @@ test("the unread badge is durable across reload once the panel has been opened",
   await expect(page.locator(".bg-jobs-unread")).toBeVisible();
 
   // Opening the panel marks the job "seen" — persisted to localStorage, not volatile
-  // React state, so it must survive a reload.
+  // React state, so it must survive a reload. Under the four-group Work consolidation
+  // (v2 §1) a FINISHED job has no Work row — the pill opens Work at Doing now and the
+  // seen-marking rides the click itself, not the rendering.
   await pill.click();
-  await expect(page.locator(".work-background .work-row", { hasText: DESC })).toBeVisible();
+  const work = page.locator('.work-view[data-frame="modal"]');
+  await expect(work).toBeVisible();
+  await expect(work.getByRole("button", { name: /Work sections/ })).toContainText("Doing now");
   await page.keyboard.press("Escape");
 
   await page.reload({ waitUntil: "load" });
@@ -101,8 +105,10 @@ test("Work background detail shows tool progress captured before opening the pil
   }));
   await page.goto("/app/", { waitUntil: "load" });
   await page.getByTestId("background-jobs-pill").click();
-  await page.locator(".work-background .work-row", { hasText: DESC }).click();
-  const feed = page.locator(".work-detail .bg-jobs-feed");
+  // The running job is a Doing now row (v2 §1); opening it lands on the §2.9 detail.
+  const work = page.locator('.work-view[data-frame="modal"]');
+  await work.locator(".work-row", { hasText: DESC }).click();
+  const feed = work.locator(".work-detail .bg-jobs-feed");
   await expect(feed).toContainText("run_tests");
   await feed.getByRole("button", { name: /read_file/ }).click();
   await expect(feed).toContainText("Captured tool output");

@@ -108,58 +108,55 @@ describe("Work surface mount", () => {
     expect(sections.has("activity")).toBe(false);
   });
 
-  it("frames WorkView — not WorkPanel — in the right dock, with the Overview and eight section menu items", async () => {
+  it("frames WorkView — not WorkPanel — in the right dock, with the Overview and four group menu items", async () => {
     await render();
     // It's WorkView: its two-pane shell and section nav, never a WorkPanel overview card.
     expect(host.querySelector(".work-view__panes")).not.toBeNull();
     expect(host.querySelector('[data-testid^="work-card-"]')).toBeNull();
-    // Overview plus the seven sections = eight entries in the nav.
+    // Overview plus the four approved groups = five entries in the nav (v2 §4).
     const trigger = host.querySelector<HTMLButtonElement>(".work-view__picker button")!;
     await act(async () => trigger.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })));
     const menu = document.querySelector<HTMLElement>('[role="menu"][aria-label="Work sections"]')!;
-    expect(menu.querySelectorAll('[role="menuitemradio"]')).toHaveLength(8);
+    expect([...menu.querySelectorAll('[role="menuitemradio"]')].map((el) => el.textContent?.replace(/\d+$/, "")))
+      .toEqual(["Overview", "Needs you", "Doing now", "Coming up", "Your instructions"]);
     expect(menu.querySelector('[aria-checked="true"]')?.textContent).toContain("Overview");
     await act(async () => menu.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
-    expect(host.textContent).toContain("Nothing going on");
+    expect(host.textContent).toContain("Nothing to track.");
     // Framed by the rail host; its view menu is off for now (see registrations.tsx).
     expect(button("Expand")).toBeUndefined();
     expect(document.querySelector('[role="region"][aria-haspopup="menu"]')).toBeNull();
     expect(document.querySelector('[role="dialog"]')).toBeNull();
   });
 
-  it("renders a section the barrel alone registers (Background agents), never the unregistered Empty", async () => {
+  it("renders a detail the barrel alone registers (Background agents), never the unregistered Empty", async () => {
     // `background` is registered ONLY via the barrel — WorkView does not import it itself — so
-    // its own body (the Manage subagents link) appearing proves the barrel wiring took effect.
-    useUI.setState({ surfaceStates: { work: { section: "background" } } });
+    // its §2.9 detail appearing for an opened job proves the barrel wiring took effect.
+    data.sources.background.items = [{ kind: "background", id: "b1", status: "running", title: "Crunching",
+      meta: "delegate", raw: { id: "b1", status: "running", subagent_type: "delegate", description: "Crunching" } }];
+    useUI.setState({ surfaceStates: { work: { section: "background", itemId: "background:b1" } } });
     await render();
-    expect(activeSection()).toContain("Background agents");
-    expect(host.querySelector(".work-background")).not.toBeNull();
-    expect(button("Manage subagents")).toBeDefined();
-    expect(host.textContent).not.toContain("to show"); // the "No … to show" unregistered fallback
+    expect(activeSection()).toContain("Doing now");
+    expect(host.querySelector(".work-view__detail")?.textContent).toContain("Delegate");
+    expect(host.textContent).not.toContain("Details will appear here."); // the unregistered fallback
   });
 
-  it("keeps §5.2's empty-state contract once mounted: only Goals offers a create control", async () => {
-    // The mount is where the Work view replaces WorkPanel, so it's where WorkPanel's per-section
-    // quick-adds (work-add-watch / work-add-task / work-add-schedule) stop being reachable. That
-    // removal is by design: work-view.md §5.2 says the section empty state is a bare `Empty` and
-    // "No other section has an action" — only Goals adds a button (Q15). Watches, tasks and
-    // schedules are agent-created (goal/watch creation also stays on the /goal new & /watch new
-    // chat commands). This locks that contract at the mounted surface so a quick-add can't creep
-    // back in unnoticed. The persistent "This chat" filter button shares the list pane, so drop it.
+  it("keeps the quick-add removal contract: no group empty state offers a create control", async () => {
+    // WorkPanel's per-section quick-adds (work-add-watch / work-add-task / work-add-schedule)
+    // stay unreachable, and the four-group consolidation also leaves the group empty states as
+    // bare `Empty` copy (v2 §4) — goal creation stays on the palette's "Work: New goal…" intent
+    // and the /goal new chat command. This locks that contract at the mounted surface so a
+    // quick-add can't creep back in unnoticed.
     const listActions = () =>
       [...host.querySelectorAll(".work-view__list button")]
         .map((el) => el.textContent?.trim() ?? "")
         .filter((text) => text && text !== "This chat");
 
-    useUI.setState({ surfaceStates: { work: { section: "goals" } } });
-    await render();
-    expect(host.querySelector(".work-view__list")?.textContent).toContain("No goals");
-    expect(listActions()).toContain("New goal");
-
     for (const [section, emptyCopy] of [
-      ["watches", "No watches"],
-      ["tasks", "No jobs"], // tasks fold into jobs (work-consolidation §1)
-      ["schedules", "No schedules"],
+      ["needs-you", "Nothing needs you."],
+      ["doing-now", "Nothing running."],
+      ["coming-up", "Nothing planned."],
+      // The delegated directives renderer owns this group's empty copy (§3).
+      ["instructions", "No standing instructions"],
     ] as const) {
       useUI.setState({ surfaceStates: { work: { section } } });
       await render();
@@ -169,17 +166,19 @@ describe("Work surface mount", () => {
   });
 
   it("Expand opens Work in the modal and Dock to rail brings it back with the same section", async () => {
+    data.sources.background.items = [{ kind: "background", id: "b1", status: "running", title: "Crunching",
+      meta: "delegate", raw: { id: "b1", status: "running", subagent_type: "delegate", description: "Crunching" } }];
     useUI.setState({ surfaceStates: { work: { section: "background" } } });
     await render();
-    expect(activeSection()).toContain("Background agents");
+    expect(activeSection()).toContain("Doing now");
 
-    // Expand → the SAME view opens in the shell modal, still on the Background section.
+    // Expand → the SAME view opens in the shell modal, still on the saved (translated) section.
     expand();
     const dialog = document.querySelector('[role="dialog"]');
     expect(dialog).not.toBeNull();
     expect(useUI.getState().surfaceModal?.viewId).toBe("work");
     expect(dialog!.querySelector(".work-view__panes")).not.toBeNull();
-    expect(dialog!.querySelector(".work-background")).not.toBeNull();
+    expect(dialog!.querySelector(".work-row")?.textContent).toContain("Crunching");
 
     // Dock to rail → modal clears, Work is the active right panel, and the section is preserved.
     await click("Dock to rail");
@@ -187,7 +186,7 @@ describe("Work surface mount", () => {
     expect(useUI.getState().surfaceModal).toBeNull();
     expect(useUI.getState().rightPanel).toBe("work");
     expect(useUI.getState().surfaceStates.work.section).toBe("background");
-    expect(host.querySelector(".work-background")).not.toBeNull();
-    expect(activeSection()).toContain("Background agents");
+    expect(host.querySelector(".work-row")?.textContent).toContain("Crunching");
+    expect(activeSection()).toContain("Doing now");
   });
 });

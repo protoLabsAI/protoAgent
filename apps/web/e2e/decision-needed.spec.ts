@@ -17,6 +17,9 @@ async function setup(page: Page, rows: DecisionRow[], result: "sent" | "answered
   let pending = [...rows];
   const answers: unknown[] = [];
   await page.emulateMedia({ reducedMotion: "reduce" });
+  // Needs you also lists undelivered pages; pin the inbox empty so these specs
+  // exercise decisions alone (v2 §1).
+  await page.route("**/api/inbox?*", (route) => route.fulfill({ json: { items: [] } }));
   // Use the mock server's live SSE stream: a finite response is a disconnect.
   await page.route("**/api/decisions?**", (route) => route.fulfill({ json: { decisions: pending, pending: pending.length } }));
   await page.route(/\/api\/decisions\/[^/?]+$/, (route) => {
@@ -65,7 +68,7 @@ for (const mode of ["light", "dark"] as const) {
       await page.route("**/api/theme", (route) => route.fulfill({ json: { theme: { mode, overrides: {} } } }));
     });
 
-    test("quiet pill and empty Work Decisions section", async ({ page }) => {
+    test("quiet pill and empty Work Needs you group", async ({ page }) => {
       await setup(page, []);
       await page.goto("/app/");
       const pill = page.getByRole("button", { name: "Decisions, nothing waiting", exact: true });
@@ -74,8 +77,8 @@ for (const mode of ["light", "dark"] as const) {
       await screenshot(page, `${mode}-quiet`);
       await pill.click();
       const work = page.locator('.work-view[data-frame="modal"]');
-      await expect(work.getByRole("button", { name: /Work sections/ })).toContainText("Decisions");
-      await expect(work).toContainText("No decisions to show");
+      await expect(work.getByRole("button", { name: /Work sections/ })).toContainText("Needs you");
+      await expect(work).toContainText("Nothing needs you.");
       await screenshot(page, `${mode}-empty`);
     });
 
@@ -87,7 +90,7 @@ for (const mode of ["light", "dark"] as const) {
       await expect(page.getByRole("tooltip")).toContainText("and 2 more");
       await pill.click();
       const work = page.locator('.work-view[data-frame="modal"]');
-      await expect(work.getByRole("button", { name: /Work sections/ })).toContainText("Decisions");
+      await expect(work.getByRole("button", { name: /Work sections/ })).toContainText("Needs you");
       await expect(work.locator(".work-row")).toHaveCount(3);
       await work.locator(".work-row").first().click();
       await expect(work.getByRole("article")).toHaveCount(1);
@@ -105,7 +108,7 @@ for (const mode of ["light", "dark"] as const) {
         if (result === "sent") await screenshot(page, `${mode}-pending-hover`);
         await pill.click();
         const dialog = page.locator('.work-view[data-frame="modal"]');
-        await expect(dialog.getByRole("button", { name: /Work sections/ })).toContainText("Decisions");
+        await expect(dialog.getByRole("button", { name: /Work sections/ })).toContainText("Needs you");
         await dialog.locator(".work-row").click();
         await dialog.getByRole("button", { name: "Ship the release", exact: true }).click();
         const copy = { sent: 'Sent: "Ship the release".', answered: 'Already answered:',
@@ -181,7 +184,7 @@ for (const width of [1440, 768, 390]) {
       const work = page.getByRole("dialog", { name: "Work", exact: true });
       await expect(work).toBeVisible();
       await expect(work).toHaveClass(/pl-drawer--full/);
-      await expect(work.getByRole("button", { name: /Work sections/ })).toContainText("Decisions");
+      await expect(work.getByRole("button", { name: /Work sections/ })).toContainText("Needs you");
       await expect(work.locator(".work-row")).toContainText("Ship the release after the checks pass?");
       await expect(page.getByRole("dialog", { name: "Chats", exact: true })).toHaveCount(0);
     } else {

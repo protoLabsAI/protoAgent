@@ -115,7 +115,7 @@ import { useToast } from "@protolabsai/ui/overlays";
 import { StatusPill } from "./StatusPill";
 import { WorkView } from "../work/WorkView";
 import { useWorkItems, type WorkItems } from "../work/useWorkItems";
-import { laneFor } from "../work/tone";
+import { workGroups } from "../work/workGroups";
 // Load the seven built-in Work sections for their registration side-effect (#4955 §5), so
 // the Work surface mounts with every section live — none falls back to the unregistered Empty.
 import "../work/sections";
@@ -154,12 +154,11 @@ import { readKey, writeKey } from "../lib/storage";
 // The agent's persistent working memory, grouped in the right sidebar:
 // its notebook, its task board, and its goals.
 
-/** Count the same lane as Work, across every successfully loaded source. */
+/** The same rows Work's Needs you group shows, via the shared selector (work-consolidation
+ *  §5): stopped goals and undelivered priority-now pages count here too, and the group is
+ *  never chat-filtered — so the mobile menu badge can't drift from the Work list. */
 export function needsYouCount(sources: WorkItems): number {
-  return Object.values(sources).reduce((count, source) => {
-    if (source.status === "error" || source.status === "loading") return count;
-    return count + source.items.filter((item) => laneFor(item.status) === "needs-you").length;
-  }, 0);
+  return workGroups(sources).find((group) => group.id === "needs-you")!.count;
 }
 
 function useLocalStorageState(key: string, fallback: string) {
