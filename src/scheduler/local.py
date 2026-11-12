@@ -45,7 +45,7 @@ from croniter import croniter
 
 from a2a_impl.wire import task_id_from_response
 from events import ACTIVITY_CONTEXT
-from infra import keep_awake
+from infra import keep_awake, job_sessions
 from scheduler.interface import Job, is_cron, parse_iso_to_utc, parse_ttl
 from observability.sqlite_migrate import add_missing_columns
 
@@ -455,6 +455,32 @@ class LocalScheduler:
 
     def _init_db(self, *, adopt_existing_jobs: bool = True) -> None:
         if not adopt_existing_jobs:
+            self._initialize_db(adopt_existing_jobs=False)
+            return
+        migration_lock = _acquire_jobs_lock(self.path)
+        if migration_lock is None:
+            # A live old scheduler must drain before routing can change. Already
+            # migrated stores can still be opened by read/producer clients.
+            with closing(self._connect()) as db:
+                self._check_owner(db)
+                try:
+                    missing = db.execute(
+                        "SELECT 1 FROM jobs j LEFT JOIN job_sessions s "
+                        "ON j.id = s.job_id AND j.created_at = s.created_at "
+                        "WHERE s.job_id IS NULL LIMIT 1"
+                    ).fetchone()
+                except sqlite3.DatabaseError as exc:
+                    raise RuntimeError("stop the scheduler before migrating execution identities") from exc
+                if missing:
+                    raise RuntimeError("stop the scheduler before migrating execution identities")
+            return
+        try:
+            self._initialize_db(adopt_existing_jobs=True)
+        finally:
+            _release_jobs_lock(self.path, migration_lock)
+
+    def _initialize_db(self, *, adopt_existing_jobs: bool) -> None:
+        if not adopt_existing_jobs:
             # Producers never initialize or migrate a store. A wrong name can
             # resolve to a separate, empty database under SCHEDULER_DB_DIR.
             if not self.path.is_file():
@@ -465,8 +491,8 @@ class LocalScheduler:
             finally:
                 db.close()
             return
+        db = self._connect()
         try:
-            db = self._connect()
             db.executescript(_SCHEMA)
             # Preserve canceled generations when a replacement uses the same slot.
             keys = {r["name"] for r in db.execute("PRAGMA table_info(occurrences)") if r["pk"]}
@@ -498,9 +524,13 @@ class LocalScheduler:
                     ("consecutive_failures", "INTEGER NOT NULL DEFAULT 0"),  # #3376 outcomes
                     ("last_error", "TEXT"),
                     ("last_ok", "TEXT"),
+                    ("execution_hold", "TEXT"),
                     ("fence", "TEXT"),  # the creating turn's tool fence (existing rows → unfenced)
                 ),
             )
+            db.commit()
+            db.execute("BEGIN IMMEDIATE")
+            job_sessions.migrate(db)
             # Re-key rows written under a previous display name (#2382). Every jobs.db is
             # single-agent by construction — the path carries either the constant segment or
             # the agent's own name segment — so every row in THIS file is ours, whatever name
@@ -523,8 +553,11 @@ class LocalScheduler:
             )
             db.commit()
             db.close()
-        except sqlite3.DatabaseError:
+        except BaseException:
+            db.rollback()
+            db.close()
             log.exception("[scheduler] schema init failed at %s", self.path)
+            raise
 
     # ── public API (matches SchedulerBackend) ───────────────────────────────
 
@@ -581,15 +614,16 @@ class LocalScheduler:
                 setattr(job, field, getattr(restore_state, field))
         db = self._connect()
         try:
+            db.execute("BEGIN IMMEDIATE")
             if not self._adopt_existing_jobs:
                 # Serialize verification and insertion against owner changes.
-                db.execute("BEGIN IMMEDIATE")
                 self._check_owner(db)
+            job.context_id, job.execution_hold = job_sessions.resolve(db, job.as_dict())
             db.execute(
                 "INSERT INTO jobs (id, prompt, schedule, agent_name, next_fire, "
                 "last_fire, enabled, created_at, timezone, context_id, origin_session, "
-                "ttl, max_fires, fire_count, fence, consecutive_failures, last_error, last_ok) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "ttl, max_fires, fire_count, fence, consecutive_failures, last_error, last_ok, execution_hold) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     job.id,
                     job.prompt,
@@ -609,6 +643,7 @@ class LocalScheduler:
                     job.consecutive_failures,
                     job.last_error,
                     job.last_ok,
+                    job.execution_hold,
                 ),
             )
             db.commit()
@@ -1093,6 +1128,24 @@ class LocalScheduler:
                              (job.id, self.agent_name)).fetchone()
             if row is None or row["created_at"] != job.created_at:
                 return None
+            if row["execution_hold"]:
+                return None
+            job.context_id = row["context_id"]
+            job.execution_hold = row["execution_hold"]
+            # Serialize by execution owner, including canceled/replaced generations.
+            busy = db.execute(
+                "SELECT 1 FROM occurrences o LEFT JOIN job_sessions s "
+                "ON s.job_id = o.job_id AND s.created_at = o.created_at "
+                "WHERE o.state IN ('claimed', 'unknown') "
+                "AND (o.job_id = ? OR s.context_id = ?) LIMIT 1",
+                (job.id, job.context_id),
+            ).fetchone()
+            waiting = db.execute(
+                "SELECT 1 FROM jobs WHERE context_id = ? AND id != ? "
+                "AND (id LIKE 'wait:%' OR id LIKE 'watch-%') LIMIT 1", (job.context_id, job.id)
+            ).fetchone()
+            if busy or (waiting and not job.id.startswith(("wait:", "watch-"))):
+                return None
             old = db.execute("SELECT * FROM occurrences WHERE job_id = ? AND next_fire = ? AND created_at = ?",
                              (job.id, job.next_fire, job.created_at)).fetchone()
             unresolved = db.execute(
@@ -1165,7 +1218,7 @@ class LocalScheduler:
         db = self._connect()
         try:
             rows = db.execute(
-                "SELECT * FROM jobs WHERE agent_name = ? AND enabled = 1 AND next_fire <= ? "
+                "SELECT * FROM jobs WHERE agent_name = ? AND enabled = 1 AND execution_hold IS NULL AND next_fire <= ? "
                 "AND NOT EXISTS (SELECT 1 FROM occurrences o WHERE o.job_id = jobs.id "
                 "AND o.created_at = jobs.created_at AND "
                 "(o.next_fire = jobs.next_fire AND o.state != 'retryable' "
@@ -1214,13 +1267,27 @@ class LocalScheduler:
         db = self._connect()
         try:
             rows = db.execute(
-                "SELECT * FROM jobs WHERE agent_name = ? AND enabled = 1 AND next_fire <= ? "
+                "SELECT * FROM jobs WHERE agent_name = ? AND enabled = 1 AND execution_hold IS NULL AND next_fire <= ? "
                 "AND NOT EXISTS (SELECT 1 FROM occurrences o WHERE o.job_id = jobs.id "
-                "AND o.created_at = jobs.created_at AND o.state IN ('claimed', 'unknown'))",
+                "AND o.state IN ('claimed', 'unknown'))",
                 (self.agent_name, cutoff_recent.isoformat()),
             ).fetchall()
             for row in rows:
                 job = _row_to_job(row)
+                # A job-owned continuation pins its original due slot across
+                # downtime. The ordinary stale-fire policy still covers roots.
+                if (job.context_id or "").startswith("job:") and job.id.startswith(("wait:", "watch-")):
+                    continue
+                held = db.execute(
+                    "SELECT 1 FROM occurrences o JOIN job_sessions s "
+                    "ON o.job_id = s.job_id AND o.created_at = s.created_at "
+                    "WHERE s.context_id = ? AND o.state IN ('claimed', 'unknown') "
+                    "UNION ALL SELECT 1 FROM jobs WHERE context_id = ? "
+                    "AND id != ? AND (id LIKE 'wait:%' OR id LIKE 'watch-%') LIMIT 1",
+                    (job.context_id, job.context_id, job.id),
+                ).fetchone()
+                if held:
+                    continue
                 if is_cron(job.schedule):
                     next_iso = _compute_next_fire(job.schedule, tz=job.timezone)
                     db.execute(
@@ -1335,6 +1402,8 @@ class LocalScheduler:
         if terminal:
             if failure:
                 log.error("[scheduler] job %s fired but the turn FAILED: %s", job.id, failure)
+            # Legacy accepted snapshots retain their ORIGINAL Activity context;
+            # future routing in job_sessions must never rename their completion.
             self._publish_turn(
                 "turn.finished", session_id=job.context_id or ACTIVITY_CONTEXT,
                 origin="watch" if job.id.startswith("watch-") else "scheduler",
@@ -1423,8 +1492,9 @@ class LocalScheduler:
         # `turn.finished` only after a terminal snapshot is durably settled so
         # the console renders its typing indicator, labelled by trigger. The session id is
         # the fire's context (a `wait`/`run_in_session` resume lands in a chat session; a
-        # plain cron lands in the Activity thread).
-        session_id = job.context_id or ACTIVITY_CONTEXT
+        # plain cron lands in its durable job session).
+        session_id = job.context_id
+        assert session_id and session_id != ACTIVITY_CONTEXT
         self._publish_turn("turn.started", session_id=session_id, origin=fire_origin, trigger=job.id)
 
         # Wake-framing (ADR 0079): a scheduled/watch fire delivered a bare prompt, so the agent
@@ -1455,11 +1525,7 @@ class LocalScheduler:
                     "role": "ROLE_USER",
                     "parts": [{"text": wake_prompt}],
                     "messageId": message_id,
-                    # Fire into the job's own context when set (ADR 0053 — the
-                    # `wait` tool stamps the originating chat session so a resume
-                    # continues that conversation's thread), else the durable
-                    # Activity thread (ADR 0003) so a normal scheduled fire lands
-                    # somewhere visible/continuable instead of a throwaway context.
+                    # Persisted execution owner, also used by lifecycle events.
                     "contextId": session_id,
                     # Scheduler bookkeeping for this fire (origin + job id) —
                     # informational; the handler doesn't require these keys. `origin`
@@ -1602,6 +1668,7 @@ def _row_to_job(row: Any) -> Job:
         created_at=row["created_at"],
         timezone=row["timezone"] if "timezone" in keys else None,
         context_id=row["context_id"] if "context_id" in keys else None,
+        execution_hold=row["execution_hold"] if "execution_hold" in keys else None,
         origin_session=row["origin_session"] if "origin_session" in keys else None,
         ttl=row["ttl"] if "ttl" in keys else None,
         max_fires=row["max_fires"] if "max_fires" in keys else None,

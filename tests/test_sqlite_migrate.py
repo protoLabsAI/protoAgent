@@ -109,8 +109,8 @@ def test_store_open_raises_when_migration_fails(tmp_path, monkeypatch, store_cls
         store_cls(str(path))
 
 
-# The scheduler and activity stores catch a schema-init failure and log it, so a failed
-# migration surfaces as that error log instead of passing silently as "already present".
+# Schema-init failures remain logged. The scheduler also refuses startup: an
+# incomplete execution-identity migration must never admit dispatch (ADR 0129).
 
 
 def _drop_and_lock(monkeypatch, cls, path, table, column):
@@ -126,12 +126,12 @@ def _drop_and_lock(monkeypatch, cls, path, table, column):
     monkeypatch.setattr(cls, "_connect", _locked_connect)
 
 
-def test_scheduler_store_logs_a_failed_migration(tmp_path, monkeypatch, caplog):
+def test_scheduler_store_logs_and_rejects_a_failed_migration(tmp_path, monkeypatch, caplog):
     from scheduler.local import LocalScheduler
 
     s = LocalScheduler("mig-test", invoke_url="", db_dir=tmp_path)
     _drop_and_lock(monkeypatch, LocalScheduler, s.path, "jobs", "fence")
-    with caplog.at_level("ERROR"):
+    with caplog.at_level("ERROR"), pytest.raises(sqlite3.OperationalError, match="database is locked"):
         LocalScheduler("mig-test", invoke_url="", db_dir=tmp_path)
     assert "schema init failed" in caplog.text and "database is locked" in caplog.text
 
