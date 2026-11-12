@@ -193,6 +193,76 @@ def test_generated_navigation_and_landings_are_in_sync() -> None:
         assert path.read_text(encoding="utf-8") == expected, f"{path} is stale — run scripts/gen_docs_nav.py"
 
 
+def test_approved_work_consolidation_spec_and_navigation() -> None:
+    """Keep the approved v2 artifact intact and reachable from its predecessor."""
+    import hashlib
+    import json
+
+    spec = ROOT / "docs/design/work-consolidation.md"
+    # SHA256 of the designSystem artifact approved by Josh on 2026-11-12.
+    assert hashlib.sha256(spec.read_bytes()).hexdigest() == (
+        "4a4a2ce143f69e3506b29a5076f74a61e4be239d3af2e12ba32bf9fb968675af"
+    )
+    previous = (ROOT / "docs/design/work-view.md").read_text(encoding="utf-8")
+    assert previous.splitlines()[2] == (
+        "> **Superseded in part (2026-11-12):** the group structure here "
+        "(§2.1 Overview lanes and the eight sections) is replaced by "
+        "[work-consolidation.md](./work-consolidation.md). "
+        "Row, tone, inspector, confirm and undo rules still apply."
+    )
+    nav = json.loads((ROOT / "plugins/docs/nav.json").read_text(encoding="utf-8"))
+    paths = [item["path"] for section in nav["sections"] for group in section["groups"] for item in group["items"]]
+    assert "design/work-consolidation.md" in paths
+    assert all((ROOT / "docs" / path).is_file() for path in paths)
+
+
+def test_approved_work_spec_is_checked_out_byte_exact() -> None:
+    """Windows autocrlf must not rewrite the approved, hash-pinned artifact."""
+    import re
+
+    attrs = (ROOT / ".gitattributes").read_text(encoding="utf-8")
+    assert re.search(r"^docs/design/work-consolidation\.md\s+-text\s*$", attrs, re.M)
+
+
+@pytest.mark.parametrize("path", ["design/work-consolidation.md", "design/work-view.md"])
+def test_published_work_specs_are_readable_and_searchable(path) -> None:
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    docs = _load_docs()
+    app = FastAPI()
+    app.include_router(docs._build_data_router(), prefix="/api/plugins/docs")
+    with TestClient(app) as client:
+        response = client.get("/api/plugins/docs/doc", params={"path": path, "raw": 1})
+        assert response.status_code == 200
+        assert response.json()["md"] == (ROOT / "docs" / path).read_text(encoding="utf-8")
+        tree = client.get("/api/plugins/docs/tree").json()["sections"]
+        paths = {item["path"] for section in tree for group in section["groups"] for item in group["items"]}
+        assert "design/work-consolidation.md" in paths
+    index = docs.DocsIndex(root=ROOT / "docs")
+    index.seed()
+    assert index.has(path)
+    assert any(hit.path == path for hit in index.search("Work", k=100))
+
+
+def test_unpublished_design_docs_stay_excluded(tmp_path) -> None:
+    docs = _load_docs()
+    corpus = sys.modules["docs_plugin_under_test.corpus"]
+    design = tmp_path / "design"
+    design.mkdir()
+    (design / "private-draft.md").write_text("# Private draft", encoding="utf-8")
+    (design / "work-consolidation.md").write_text("# Work consolidation", encoding="utf-8")
+    assert corpus.read_doc("design/private-draft.md", root=tmp_path) is None
+    assert corpus.read_doc("design/work-view.md", root=tmp_path) is None
+    tree = corpus.doc_tree(root=tmp_path)
+    assert tree == [{"id": "design", "label": "Design", "items": [
+        {"path": "design/work-consolidation.md", "title": "Work consolidation"},
+    ]}]
+    index = docs.DocsIndex(root=tmp_path)
+    assert index.seed() == 1
+    assert not index.has("design/private-draft.md")
+
+
 def test_grouped_tree_falls_back_to_sections(tmp_path) -> None:
     """With docs whose paths aren't in nav.json, the tree degrades to flat (unlabeled)
     section groups rather than going empty."""

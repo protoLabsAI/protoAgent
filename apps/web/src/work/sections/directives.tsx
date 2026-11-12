@@ -9,10 +9,8 @@
  * History keeps the ledger's own "done"/"withdrawn" badges; the done/cancelled mapping for
  * closed entries is used only for Overview counts, which the shared tone map already drives.
  *
- * The ledger is per-chat, so the body needs the focused session: the Work view passes it on
- * the section context. We fall back to the session carried by the first directive item (the
- * source is loaded for exactly one session). With no session in view there is nothing to show,
- * so the ledger's own empty copy stands in.
+ * The ledger is per-chat. Selected rows supply their own owner; section-only navigation
+ * uses the focused chat, falling back to the first available directive's owner.
  */
 import { useWorkActionSize } from "../../shell/SurfaceFrame";
 import type { ReactNode } from "react";
@@ -27,7 +25,9 @@ function WorkDirectives({ sessionId }: { sessionId: string }) {
 }
 
 function renderDirectives(ctx: WorkSectionContext): ReactNode {
-  const sessionId = ctx.sessionId || ctx.sources.directives.items[0]?.sessionId;
+  const selected = ctx.sources.directives.items.find((item) =>
+    ctx.state.itemId === `directive:${item.id}` || ctx.state.itemId === item.id);
+  const sessionId = selected?.sessionId || ctx.sessionId || ctx.sources.directives.items[0]?.sessionId;
   if (!sessionId) {
     return (
       <Empty

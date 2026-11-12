@@ -21,6 +21,19 @@ export default defineConfig({
 
   markdown: {
     config(md) {
+      // The approved spec must remain byte-for-byte intact; its placeholders
+      // are prose, not Vue elements.
+      const renderInlineHtml = md.renderer.rules.html_inline!;
+      md.renderer.rules.html_inline = (tokens, idx, options, env, self) => {
+        if (
+          env.relativePath === "design/work-consolidation.md" &&
+          /^<(job|when)>$/.test(tokens[idx].content)
+        ) {
+          return md.utils.escapeHtml(tokens[idx].content);
+        }
+        return renderInlineHtml(tokens, idx, options, env, self);
+      };
+
       // VitePress handles img URLs, but raw video/source/track/download URLs
       // also need the deployment base. Keep generated media plain HTML so the
       // offline Markdown reader can serve the same block without Vue.
@@ -48,7 +61,8 @@ export default defineConfig({
 
   // docs/dev/ is the team's internal engineering area (handoffs + notes) — it
   // lives in the repo (committed, shared) but is NOT part of the published site.
-  srcExclude: ["dev/**", "design/**"],
+  // Publish the approved Work specs linked from the task navigation.
+  srcExclude: ["dev/**", "design/!(work-view.md|work-consolidation.md)"],
 
   head: [
     ["link", { rel: "icon", type: "image/svg+xml", href: `${base}favicon.svg` }],

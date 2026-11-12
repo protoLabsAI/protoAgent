@@ -1,5 +1,7 @@
 # Work view — design spec
 
+> **Superseded in part (2026-11-12):** the group structure here (§2.1 Overview lanes and the eight sections) is replaced by [work-consolidation.md](./work-consolidation.md). Row, tone, inspector, confirm and undo rules still apply.
+
 Status: approved by Josh, 2026-11-09. Tracking: #4955.
 
 Third pass (layout) approved by Josh 2026-11-11. Preview: designSystem artifact a-1794389235320-cdc47b.

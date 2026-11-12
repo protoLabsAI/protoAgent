@@ -8,7 +8,9 @@ test("Work Activity preserves pending triage and live completed turns after clea
       entries: includeNewTurn ? [{
         id: 100, created_at: new Date().toISOString(), origin: "scheduler",
         trigger: "heartbeat", priority: "", state: "completed", task_id: "",
-        text: "Live completed response", stimulus: "Hourly heartbeat check.",
+        text: "Live completed response",
+        // The scheduler prepends its wake header; the row title must not show it (#5094).
+        stimulus: "[Autonomous wake — scheduled run. Orient from <working_state>, then:]\n\nHourly heartbeat check.",
       }] : [],
     } });
   });
@@ -22,6 +24,12 @@ test("Work Activity preserves pending triage and live completed turns after clea
   const feed = work.getByTestId("unified-feed");
   await expect(feed).toBeVisible();
   const pending = feed.getByTestId("feed-pending");
+  // In Work the pending cards sit in the list's flow (#5094): no dialog-height box, no
+  // inner scroller, and the Work list is the only scroller, with no horizontal overflow.
+  await expect(pending).toHaveCSS("overflow-y", "visible");
+  await expect(feed).not.toHaveClass(/util-dialog-fill/);
+  const workList = work.locator(".work-view__list");
+  await expect.poll(() => workList.evaluate((el) => el.scrollWidth <= el.clientWidth)).toBe(true);
   const blockedPage = pending.getByTestId("inbox-now-page");
   await expect(blockedPage).toContainText("build failed on main");
   await expect(blockedPage).toContainText("undelivered page");
@@ -48,6 +56,7 @@ test("Work Activity preserves pending triage and live completed turns after clea
   includeNewTurn = true;
   const live = work.locator(".work-row", { hasText: "Hourly heartbeat check." });
   await expect(live).toBeVisible();
+  await expect(live.locator(".work-row__title")).toHaveText("Hourly heartbeat check.");
   await expect(page.getByTestId("activity-badge")).toHaveCount(0);
   await live.click();
   await expect(work.locator(".work-view__detail")).toContainText("Live completed response");

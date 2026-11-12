@@ -13,6 +13,7 @@ import { Button } from "@protolabsai/ui/primitives";
 import { useToast } from "@protolabsai/ui/overlays";
 
 import { registerWorkSection, type WorkSectionContext } from "../WorkView";
+import type { WorkSection } from "../sectionRegistry";
 import { WorkRow } from "../WorkRow";
 import { WorkDetail, type WorkAction, type WorkField } from "../WorkDetail";
 import { relTime } from "../tone";
@@ -277,6 +278,6 @@ export function WatchesSection({ ctx }: { ctx: WorkSectionContext }) {
   return <WatchesList ctx={ctx} />;
 }
 
-export const watchesSection = { label: "Watches", render: (ctx: WorkSectionContext) => <WatchesSection ctx={ctx} /> };
+export const watchesSection = { label: "Watches", group: "coming-up", render: (ctx: WorkSectionContext) => <WatchesSection ctx={ctx} /> } satisfies WorkSection;
 
 registerWorkSection("watches", watchesSection);

@@ -357,6 +357,11 @@
       "decision": "text",
       "reason": "Retain the current explanation for this pass; add a diagram only for a specific relationship that remains hard to follow."
     },
+    "design/work-consolidation.md": {
+      "journey": "build",
+      "decision": "text",
+      "reason": "Preserve the approved design specification verbatim; its tables and rules define the four groups without screenshots."
+    },
     "guides/deploy-and-operate.md": {
       "journey": "operate",
       "decision": "reuse",

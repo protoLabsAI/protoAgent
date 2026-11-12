@@ -35,7 +35,7 @@ import { api } from "../lib/api";
 import { decisionsApi, type DecisionRow } from "../lib/api/decisions";
 import type { DirectiveRow } from "../lib/api/chat";
 import type { ActivityEntry, ActivityHistory } from "../lib/types";
-import { SCHEDULE_POLL_MS, useWorkItems, type UseWorkItemsParams, type WorkItems, type WorkSourceKind } from "./useWorkItems";
+import { SCHEDULE_POLL_MS, activityTitle, useWorkItems, type UseWorkItemsParams, type WorkItems, type WorkSourceKind } from "./useWorkItems";
 
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -381,6 +381,24 @@ describe("live group adapters", () => {
     expect(workGroups(r.current, { thisChatOnly: true, sessionId: "s2" })[2].items.map((i) => i.id)).toEqual(["owned", "wait:s2"]);
   });
 
+  it("preserves explicit ownership for ordinary schedules in source and group filtering", async () => {
+    const owned = { id: "one-shot", prompt: "Run", schedule: "2026-12-01T00:00:00Z", context_id: "s1", enabled: true };
+    spies.schedules.mockResolvedValue({ jobs: [
+      owned,
+      { ...owned, id: "other", context_id: "s2" },
+      { ...owned, id: "global", context_id: null },
+    ], backend: "local" });
+    const scoped = mount({ sessionId: "s1", thisChatOnly: true });
+    const all = mount({ sessionId: "s1", thisChatOnly: false });
+    await flush();
+    expect(scoped.current.schedules.items.map((i) => i.id)).toEqual(["one-shot"]);
+    expect(scoped.current.schedules.items[0]).toMatchObject({ sessionId: "s1", raw: owned });
+    expect(scoped.current.schedules.groupItems?.map((i) => i.id)).toEqual(["one-shot"]);
+    expect(workGroups(all.current, { thisChatOnly: true, sessionId: "s1" })[2].items
+      .filter((i) => i.kind === "schedule").map((i) => i.id)).toEqual(["one-shot"]);
+    expect(all.current.schedules.items.map((i) => i.id)).toEqual(["one-shot", "other", "global"]);
+  });
+
   it("reconciles missed delivery, wait removal and new chats on reconnect", async () => {
     spies.inbox.mockResolvedValue({ items: [page(1, "now")] });
     spies.schedules.mockResolvedValue({ jobs: [{ id: "wait:old", prompt: "Resume", schedule: "2026-12-01T00:00:00Z" }], backend: "local" });
@@ -442,5 +460,30 @@ describe("live group adapters", () => {
     r.current.directives.retry();
     await flush();
     expect(r.current.directives.items.map((i) => i.id)).toEqual(["focused"]);
+  });
+});
+
+// #5094: a scheduled turn's stimulus is the scheduler's wake prompt. Its bracketed header
+// is runtime framing, so the row title leads with the job's own prompt instead.
+describe("activityTitle", () => {
+  const entry = (over: Partial<ActivityEntry>): ActivityEntry => ({ ...actEntry(1, "completed"), ...over });
+
+  it("drops the scheduler's wake header from the stimulus", () => {
+    for (const header of [
+      "[Autonomous wake — scheduled run. Orient from <working_state>, then:]",
+      "[Autonomous wake — a watch you set has tripped. Orient from <working_state>, then:]",
+      "[Autonomous wake — a wait you scheduled has elapsed. Continue:]",
+      "[Autonomous wake — driving your active goal. Orient from <working_state>, then:]",
+    ]) {
+      expect(activityTitle(entry({ stimulus: `${header}\n\nCheck the board for blocked cards.` })))
+        .toBe("Check the board for blocked cards.");
+    }
+  });
+
+  it("keeps an ordinary stimulus and falls back past an empty one", () => {
+    expect(activityTitle(entry({ stimulus: "CI webhook: build #4821 failed" }))).toBe("CI webhook: build #4821 failed");
+    expect(activityTitle(entry({ stimulus: "[Autonomous wake — scheduled run. Orient from <working_state>, then:]" })))
+      .toBe("activity 1");
+    expect(activityTitle(entry({ stimulus: "", text: "" }))).toBe("job-1");
   });
 });

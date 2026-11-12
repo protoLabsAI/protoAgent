@@ -42,6 +42,7 @@ import { api } from "../lib/api";
 import { isPendingNowInboxPage } from "../lib/queries";
 import { ActivitySurface } from "./ActivitySurface";
 import { ActivityWidget } from "./ActivityWidget";
+import activityCss from "./activity.css?raw";
 
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -241,5 +242,35 @@ describe("ActivitySurface — pending feed", () => {
 
     expect(deliver).toHaveBeenCalledWith(7);
     expect(container.querySelector('[data-testid="inbox-now-page"]')).toBeNull();
+  });
+});
+
+// #5094: Work embeds the pending section (`pendingOnly`) in its own scrolling list. The
+// dialog's fixed height (`util-dialog-fill`) and the 45% inner scroller left a blank gap
+// and nested scrollbars there; the utility-bar dialog keeps both.
+describe("ActivitySurface — embedded in Work (pendingOnly)", () => {
+  it("drops the dialog sizing in pendingOnly mode and keeps it for the dialog", async () => {
+    vi.spyOn(api, "inbox").mockResolvedValue({ items: [NOW_PAGE] });
+    vi.spyOn(api, "activity").mockResolvedValue(NO_ACTIVITY);
+
+    act(() => root.render(h(ActivitySurface, { pendingOnly: true })));
+    await flush();
+    const inline = testid("unified-feed")!;
+    expect(inline.classList.contains("util-dialog-fill")).toBe(false);
+    expect(inline.classList.contains("unified-feed--inline")).toBe(true);
+    expect(testid("feed-completed")).toBeNull();
+
+    act(() => root.render(h(ActivitySurface)));
+    await flush();
+    const dialog = testid("unified-feed")!;
+    expect(dialog.classList.contains("util-dialog-fill")).toBe(true);
+    expect(dialog.classList.contains("unified-feed--inline")).toBe(false);
+  });
+
+  it("lets the inline pending list size to its content with no inner scroller", () => {
+    const rule = activityCss.match(/\.unified-feed--inline \.inbox-list\s*\{([^}]*)\}/);
+    expect(rule).not.toBeNull();
+    expect(rule![1]).toMatch(/max-height:\s*none/);
+    expect(rule![1]).toMatch(/overflow:\s*visible/);
   });
 });
