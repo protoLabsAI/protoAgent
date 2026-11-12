@@ -44,7 +44,7 @@ vi.mock("./ChatMessageView", () => ({
   },
 }));
 
-import { ChatTranscript } from "./ChatTranscript";
+import { ChatTranscript, HELD_STEER_LABEL, QUEUED_STEER_LABEL } from "./ChatTranscript";
 import { STARTER_PROMPTS } from "./starterPrompts";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -322,7 +322,7 @@ describe("ChatTranscript render isolation", () => {
     ]);
   });
 
-  it("labels queued server-turn interjections distinctly from normal steers — and gives them the same ✕", async () => {
+  it("labels queued server-turn interjections with when they will be read — and gives them the same ✕", async () => {
     const onCancelSteer = vi.fn();
     await act(async () =>
       root.render(
@@ -342,10 +342,55 @@ describe("ChatTranscript render isolation", () => {
     );
 
     expect(host.textContent).toContain("Use the newest inbox item");
-    expect(host.textContent).toContain("queued interjection");
+    // #5106: the queue state AND the reason, verbatim.
+    expect(host.textContent).toContain("Queued behind a running step. It will be read at the next model call.");
     // The live bug: a server-turn interjection rendered with no cancel affordance at all.
     await act(async () => host.querySelector<HTMLButtonElement>('[aria-label="Cancel queued message"]')!.click());
     expect(onCancelSteer).toHaveBeenCalledWith("i1");
+  });
+
+  it("gives a steer into this browser's own running turn the same reason (#5106)", async () => {
+    await act(async () =>
+      root.render(
+        createElement(ChatTranscript, {
+          sessionId: "chat-session",
+          messages: [],
+          dismissedToolCalls,
+          actions,
+          steerQueue: [{ id: "s1", text: "also check the docs" }],
+          serverTurnLabel: null,
+          status: "streaming",
+          onCancelDelegation: noop,
+          onDismissToolCall: noop,
+          onCancelSteer: noop,
+        }),
+      ),
+    );
+    expect(host.textContent).toContain(QUEUED_STEER_LABEL);
+    expect(host.textContent).not.toContain(HELD_STEER_LABEL);
+  });
+
+  it("says a queued message is held while a form is open on the thread (#5106)", async () => {
+    // A parked turn makes no model call, so nothing drains the queue until the form is answered.
+    await act(async () =>
+      root.render(
+        createElement(ChatTranscript, {
+          sessionId: "server-session",
+          messages: [],
+          dismissedToolCalls,
+          actions,
+          steerQueue: [{ id: "i1", text: "skip the flaky one", serverTaskId: "task-9" }],
+          serverTurnLabel: null,
+          status: "idle",
+          onCancelDelegation: noop,
+          onDismissToolCall: noop,
+          onCancelSteer: noop,
+          formOpen: true,
+        }),
+      ),
+    );
+    expect(host.textContent).toContain("Held until the open form is answered.");
+    expect(host.textContent).not.toContain(QUEUED_STEER_LABEL);
   });
 
   it("never renders a message as queued once its id is settled in the transcript", async () => {
