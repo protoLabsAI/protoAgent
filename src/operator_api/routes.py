@@ -18,6 +18,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field, field_validator
 
 from graph.goals.types import MAX_GOAL_ITERATIONS, MAX_GOAL_NO_PROGRESS_LIMIT
+from operator_api.scope_guard import host_command_refusal
 from runtime.session_ids import SessionId, optional_session_id
 
 log = logging.getLogger(__name__)
@@ -991,7 +992,10 @@ def register_operator_routes(
     if watch_set is not None:
 
         @app.post("/api/watches")
-        async def _watch_set(body: dict):
+        async def _watch_set(body: dict, request: Request):
+            # ADR 0121 D4: a host-command check re-runs for the watch's life — not from a device.
+            if (denied := host_command_refusal(request, body)) is not None:
+                return denied
             try:
                 res = await watch_set(body or {})
             except Exception as exc:
@@ -1003,9 +1007,11 @@ def register_operator_routes(
     if watch_update is not None:
 
         @app.patch("/api/watches/{watch_id}")
-        async def _watch_update(watch_id: str, body: dict):
+        async def _watch_update(watch_id: str, body: dict, request: Request):
             # PATCH, not PUT: only the keys present in the body change. An explicit `null`
             # clears a field (drop the deadline); an absent key leaves it alone.
+            if (denied := host_command_refusal(request, body)) is not None:
+                return denied  # ADR 0121 D4, as for create
             try:
                 res = await watch_update(watch_id, body or {})
             except Exception as exc:
