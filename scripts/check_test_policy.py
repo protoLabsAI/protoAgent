@@ -1,35 +1,39 @@
 #!/usr/bin/env python3
 """Test-suite policy gate — keeps the suites from growing faster than the code.
 
-The rules live in ``docs/dev/testing.md``. This script measures the ones a machine can
-count and compares each to a ceiling in ``tests/test_policy_baseline.json``. A metric
-over its ceiling fails the gate (``scripts/gate.py`` runs this with the lint checks, so
-CI's Lint job enforces it).
+The rules live in ``docs/dev/testing.md``. ``scripts/gate.py`` runs this with the lint
+checks, so CI's Lint job enforces it.
 
-    python scripts/check_test_policy.py            # check; exit 1 when a metric is over
-    python scripts/check_test_policy.py --tighten  # lower every ceiling to today's value
+    python scripts/check_test_policy.py            # check; exit 1 on a violation
+    python scripts/check_test_policy.py --tighten  # lower every burndown to today's count
 
-Two kinds of metric:
+Two kinds of check, both with limits in ``tests/test_policy_baseline.json``:
 
-* **Budgets** — test lines per source line (Python, console unit) and the Playwright
-  test count. Tests may grow with the code, not faster than it.
-* **Burndowns** — counts of test shapes the policy bans (source-text pins, tombstones,
-  issue-numbered files, real sleeps, fixed browser waits). The existing ones are
-  grandfathered; the count only goes down.
+* **Change budget** — measured on THIS change only (the diff against its merge base):
+  net test lines it adds per net source line it adds, with a free allowance so a small
+  fix and its regression test always pass, and a cap on new Playwright tests. A change
+  is only ever asked to fix its own diff. The first version compared repo-wide totals
+  to a ceiling, which blocked whichever PR arrived after the headroom was spent — an
+  8-line fix paid for another epic's tests.
+* **Burndowns** — repo-wide counts of test shapes the policy bans (source-text pins,
+  tombstones, issue-numbered files, real sleeps, fixed browser waits). The existing
+  ones are grandfathered; the count only goes down.
 
-Raising a ceiling is a one-line diff in the baseline file, which is the point: it is
-visible in review and needs a reason in the PR description. Never raise a burndown.
+A change that genuinely needs more tests than its budget (a hardening or coverage PR)
+takes the ``test-budget`` label and says why in the PR description; CI then reports
+the numbers without failing. Locally: ``TEST_POLICY_ALLOW=1``.
 
-Stdlib only, no subprocess, fixed roots — the numbers are the same on every machine.
+Stdlib only. The one subprocess is ``git diff`` for the change budget; with no git or
+no base it is skipped with a notice, never failed.
 """
 
 from __future__ import annotations
 
 import argparse
 import json
-import math
 import os
 import re
+import subprocess
 import sys
 from collections.abc import Callable, Iterator
 from pathlib import Path
@@ -56,15 +60,14 @@ _FIXED_WAIT = re.compile(r"\bwaitForTimeout\(")
 _HANG_STUB_SECONDS = 60.0
 _REAL_SLEEP_SECONDS = 0.2
 
-BUDGETS = ("py_test_lines_per_source_line", "web_unit_test_lines_per_source_line", "web_e2e_tests")
+# Repo-wide trends: printed for the record, never a failure.
+REPORTED = ("py_test_lines_per_source_line", "web_unit_test_lines_per_source_line", "web_e2e_tests")
 
 FIXES = {
-    "py_test_lines_per_source_line": "Python tests are growing faster than Python source — fold cases into a "
-    "table, drop a layer that repeats another, or delete tests the change made redundant",
-    "web_unit_test_lines_per_source_line": "console unit tests are growing faster than console source — same "
-    "remedy: tables, one layer per behavior",
-    "web_e2e_tests": "Playwright is for what needs a real browser (layout, focus, scroll, drag, touch, "
-    "iframes, storage, WebKit) — put logic and render checks in vitest, or replace a spec",
+    "py": "fold cases into a table, drop a layer that repeats another, or delete tests this change made redundant",
+    "web_unit": "fold cases into a table (it.each) and keep one layer per behavior",
+    "e2e": "Playwright is for what needs a real browser (layout, focus, scroll, drag, touch, iframes, "
+    "storage, WebKit) — put logic and render checks in vitest",
     "web_source_pin_files": "a test that reads a source file and matches text in it pins the spelling, not "
     "the behavior — assert on rendered output, or write a lint rule",
     "tombstone_test_files": "do not add a test that asserts deleted code stays deleted",
@@ -125,9 +128,11 @@ def measure(repo: Path = REPO) -> dict[str, float]:
 
 
 def violations(actual: dict[str, float], ceilings: dict[str, float]) -> list[str]:
-    """One message per metric over its ceiling (a metric with no ceiling is over)."""
+    """One message per burndown over its ceiling (a burndown with no ceiling is over)."""
     out = []
     for name, value in actual.items():
+        if name in REPORTED:
+            continue
         ceiling = ceilings.get(name)
         if ceiling is None:
             out.append(f"{name}: no ceiling in {BASELINE.name} — add one")
@@ -136,35 +141,115 @@ def violations(actual: dict[str, float], ceilings: dict[str, float]) -> list[str
     return out
 
 
-def tightened(actual: dict[str, float], ceilings: dict[str, float]) -> dict[str, float]:
-    """Ceilings lowered to today's values — never raised. Ratios keep two decimals of room."""
-    out = {}
-    for name, value in actual.items():
-        target = math.ceil(value * 100) / 100 if isinstance(value, float) else value
-        out[name] = min(target, ceilings.get(name, target))
+def _git(*args: str) -> str | None:
+    try:
+        done = subprocess.run(["git", *args], cwd=REPO, capture_output=True, text=True, check=False)
+    except OSError:
+        return None
+    return done.stdout if done.returncode == 0 else None
+
+
+def change_delta(base: str | None = None) -> dict[str, int] | None:
+    """Net lines this change adds per category, and net Playwright tests — the working
+    tree against its merge base with ``base`` (``$TEST_POLICY_BASE``, else origin/main).
+    None when git or the base is unavailable."""
+    base = base or os.environ.get("TEST_POLICY_BASE") or "origin/main"
+    fork = (_git("merge-base", "HEAD", base) or "").strip()
+    numstat = _git("diff", "--numstat", fork) if fork else None
+    if numstat is None:
+        return None
+    delta = {"py_test": 0, "py_source": 0, "web_test": 0, "web_source": 0, "e2e_tests": 0}
+    for line in numstat.splitlines():
+        added, removed, path = (line.split("\t") + ["", ""])[:3]
+        if not added.isdigit():  # binary
+            continue
+        net, name = int(added) - int(removed), path.rsplit("/", 1)[-1]
+        if path.startswith("tests/") and path.endswith(".py"):
+            delta["py_test"] += net
+        elif path.startswith(tuple(r + "/" for r in PY_SOURCE_ROOTS)) and path.endswith(".py"):
+            delta["py_source"] += net
+        elif path.startswith(WEB_SRC + "/") and path.endswith((".ts", ".tsx")):
+            delta["web_test" if _WEB_TEST.search(name) else "web_source"] += net
+    patch = _git("diff", "-U0", fork, "--", WEB_E2E) or ""
+    for line in patch.splitlines():
+        if line[:1] in "+-" and not line.startswith(("+++", "---")) and _WEB_CASE.match(line[1:]):
+            delta["e2e_tests"] += 1 if line[0] == "+" else -1
+    return delta
+
+
+def change_violations(delta: dict[str, int], limits: dict[str, float]) -> list[str]:
+    """One message per budget this change's own diff is over."""
+    out = []
+    free = limits["free_test_lines"]
+    for key, label, ratio_key in (
+        ("py", "Python", "py_test_lines_per_source_line"),
+        ("web", "console unit", "web_unit_test_lines_per_source_line"),
+    ):
+        tests, source = delta[f"{key}_test"], max(delta[f"{key}_source"], 0)
+        allowed = max(free, int(limits[ratio_key] * source))
+        if tests > allowed:
+            out.append(
+                f"this change adds {tests} {label} test lines for {source} source lines; its budget is "
+                f"{allowed} ({limits[ratio_key]:g}x source, or {free:g} free) — cut {tests - allowed}: "
+                + FIXES["py" if key == "py" else "web_unit"]
+            )
+    if delta["e2e_tests"] > limits["e2e_tests"]:
+        out.append(
+            f"this change adds {delta['e2e_tests']} Playwright tests; its budget is "
+            f"{limits['e2e_tests']:g} — {FIXES['e2e']}"
+        )
     return out
+
+
+def tightened(actual: dict[str, float], ceilings: dict[str, float]) -> dict[str, float]:
+    """Burndown ceilings lowered to today's counts — never raised."""
+    return {
+        name: min(value, ceilings.get(name, value)) for name, value in actual.items() if name not in REPORTED
+    }
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("--tighten", action="store_true", help="lower every ceiling to today's value")
+    parser.add_argument("--tighten", action="store_true", help="lower every burndown to today's count")
     args = parser.parse_args(argv)
 
     actual = measure()
-    ceilings = json.loads(BASELINE.read_text(encoding="utf-8")) if BASELINE.exists() else {}
+    baseline = json.loads(BASELINE.read_text(encoding="utf-8"))
     if args.tighten:
-        BASELINE.write_text(json.dumps(tightened(actual, ceilings), indent=2) + "\n", encoding="utf-8")
-        print(f"test-policy: ceilings written to {BASELINE.relative_to(REPO)}")
+        baseline["burndown"] = tightened(actual, baseline["burndown"])
+        BASELINE.write_text(json.dumps(baseline, indent=2) + "\n", encoding="utf-8")
+        print(f"test-policy: burndowns written to {BASELINE.relative_to(REPO)}")
         return 0
 
     for name, value in actual.items():
-        kind = "budget" if name in BUDGETS else "burndown"
-        print(f"test-policy: {name:38s} {value:>8g}  (ceiling {ceilings.get(name, '—')}, {kind})")
-    failed = violations(actual, ceilings)
+        note = "trend, not enforced" if name in REPORTED else f"ceiling {baseline['burndown'].get(name, '—')}"
+        print(f"test-policy: {name:38s} {value:>8g}  ({note})")
+    failed = violations(actual, baseline["burndown"])
+
+    delta = change_delta()
+    if delta is None:
+        print("test-policy: no git merge base — change budget skipped")
+    else:
+        print(
+            "test-policy: this change: "
+            f"Python tests {delta['py_test']:+d} / source {delta['py_source']:+d}, "
+            f"console tests {delta['web_test']:+d} / source {delta['web_source']:+d}, "
+            f"Playwright tests {delta['e2e_tests']:+d}"
+        )
+        over = change_violations(delta, baseline["per_change"])
+        if over and os.environ.get("TEST_POLICY_ALLOW") == "1":
+            for message in over:
+                print(f"test-policy: ALLOWED (test-budget)  {message}")
+        else:
+            failed += over
+
     for message in failed:
         print(f"test-policy: FAIL  {message}", file=sys.stderr)
     if failed:
-        print("test-policy: the rules and how to comply: docs/dev/testing.md", file=sys.stderr)
+        print(
+            "test-policy: rules, and the test-budget label for a change that needs more: docs/dev/testing.md",
+            file=sys.stderr,
+        )
     return 1 if failed else 0
 
 

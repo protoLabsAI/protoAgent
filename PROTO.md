@@ -104,7 +104,7 @@ when your change touches those surfaces. The full breakdown:
 | Lint | `ruff check .` (pinned `ruff==0.15.10`) |
 | Import contracts | `lint-imports` (pinned `import-linter==2.11`) |
 | Attribution in sync | `python scripts/gen_attribution.py --check` (regenerate with `uv sync && uv run python scripts/gen_attribution.py` after a dep bump) |
-| Test policy | `python scripts/check_test_policy.py` — test budgets and burndowns; what gets a test and what does not: [Test policy](docs/dev/testing.md). Read it before writing tests |
+| Test policy | `python scripts/check_test_policy.py` — budgets the tests **your change** adds (250 lines free, then 2 test lines per Python source line, 1.5 for the console, 5 new Playwright tests) and counts down banned test shapes. What gets a test and what does not, and the `test-budget` label for a change that needs more: [Test policy](docs/dev/testing.md). Read it before writing tests |
 | Python tests | `python -m pytest tests/ -q` — CI adds `-n auto` (`pytest-xdist==3.8.0`), so tests must not depend on file order or leak process-global state (reset it in `tests/conftest.py`) |
 | Lean-image smoke | `python scripts/live_smoke.py` |
 | Web unit | `npm run test:unit --workspace @protoagent/web` |
@@ -124,7 +124,7 @@ for the branch procedure and changelog-gate handling.
 Test the behavior a caller would lose, once, at the cheapest layer that can show
 it — [Test policy](docs/dev/testing.md) lists what gets a test and what does not
 (no source-text pins, no second layer for the same behavior, tables for variants),
-and the gate fails when tests outgrow the code. If a change is genuinely test-free
+and the gate fails when your change adds tests out of proportion to its code. If a change is genuinely test-free
 (docs, config, pure refactor), say so explicitly in the PR description.
 A change with nothing release-notes-worthy (CI plumbing, test-only) can skip the
 changelog fragment with the `skip-changelog` label — applying the label re-runs

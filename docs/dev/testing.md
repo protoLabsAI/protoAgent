@@ -70,29 +70,47 @@ fold them into a table while you are there.
 ## Enforcement
 
 `python scripts/check_test_policy.py` runs with the lint checks (`scripts/gate.py`, CI's
-Lint job) and compares the tree to ceilings in `tests/test_policy_baseline.json`.
+Lint job). Limits live in `tests/test_policy_baseline.json`.
 
-| Metric | Kind | Meaning |
+### Change budget — your diff only
+
+The gate measures what **this change** adds, against its merge base. It never asks you to
+fix tests you did not write.
+
+| Limit | Value | Meaning |
 |---|---|---|
-| `py_test_lines_per_source_line` | budget | Lines under `tests/` per line of Python under `src/`, `plugins/`, `scripts/` |
-| `web_unit_test_lines_per_source_line` | budget | Console test lines per console source line |
-| `web_e2e_tests` | budget | Playwright test count |
-| `web_source_pin_files` | burndown | Console test files that read source text |
-| `tombstone_test_files` | burndown | `*Removed` / `*Retired` / `*Deleted` test files |
-| `issue_numbered_test_files` | burndown | Test files named for an issue number |
-| `py_real_sleeps` | burndown | Real sleeps in Python tests |
-| `e2e_fixed_waits` | burndown | `waitForTimeout` calls |
+| `free_test_lines` | 250 | Net test lines any change may add, whatever it does to source. A fix and its regression test always fit |
+| `py_test_lines_per_source_line` | 2.0 | Beyond the free lines: net lines under `tests/` per net line of Python under `src/`, `plugins/`, `scripts/` |
+| `web_unit_test_lines_per_source_line` | 1.5 | The same for console unit tests |
+| `e2e_tests` | 5 | Net new Playwright tests |
 
-**Budgets** let tests grow with the code, not faster. When one fails, the fix is to
-shrink: tables, one layer per behavior, delete what your change made redundant. Raising
-a budget is a one-line diff in the baseline file and needs a sentence in the PR
-description saying why the new tests could not replace old ones.
+Lines are net, so deleting or folding old tests in the same change buys room. Nine in
+ten merges fit without thinking about it; the ones that do not have been adding two to
+three test lines per source line.
 
-**Burndowns** are grandfathered counts of shapes the policy bans. They only go down.
-Never raise one.
+When the gate fails it prints your numbers and how many lines to cut. Shrink first:
+tables, one layer per behavior. If the change genuinely needs more — a hardening or
+coverage PR with little or no source change — add the **`test-budget`** label, say why in
+the PR description, and re-run the failed Lint job. The gate then reports the numbers
+without failing. Locally: `TEST_POLICY_ALLOW=1`.
 
-After a PR that removes tests, run `python scripts/check_test_policy.py --tighten` to
-lock the lower numbers in. It never raises a ceiling.
+The repo-wide ratios and Playwright count are printed on every run as a trend. They are
+not enforced: an earlier version failed on them, and blocked whichever PR arrived after
+another one had spent the headroom.
+
+### Burndowns — repo-wide, count down only
+
+| Metric | Meaning |
+|---|---|
+| `web_source_pin_files` | Console test files that read source text |
+| `tombstone_test_files` | `*Removed` / `*Retired` / `*Deleted` test files |
+| `issue_numbered_test_files` | Test files named for an issue number |
+| `py_real_sleeps` | Real sleeps in Python tests |
+| `e2e_fixed_waits` | `waitForTimeout` calls |
+
+These are grandfathered counts of shapes the policy bans. You only meet one if you add
+that shape. Never raise one; the label does not waive them. After removing some, run
+`python scripts/check_test_policy.py --tighten`.
 
 Not machine-checked, and so the reviewer's job: second-layer duplicates, mock echoes,
 Python tests that pin source text, and whether a new Playwright test needed a browser.
