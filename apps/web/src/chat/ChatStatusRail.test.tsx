@@ -14,13 +14,7 @@ import { flattenWorkItems, workGroups } from "../work/workGroups";
 import { registerWorkSection } from "../work/sectionRegistry";
 import type { GroupableWorkItem } from "../work/tone";
 import { beginThisChatVisit, endThisChatVisit, isThisChatVisit } from "../work/visitScope";
-import {
-  ChatStatusRail,
-  openWorkGroup,
-  railChips,
-  spokenLabel,
-  workSectionForGroup,
-} from "./ChatStatusRail";
+import { ChatStatusRail, openWorkGroup, spokenLabel, workSectionForGroup } from "./ChatStatusRail";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -104,10 +98,7 @@ const initialUI = useUI.getState();
 
 beforeEach(() => {
   vi.clearAllMocks();
-  state.mobile = false;
-  state.hookArgs = [];
-  state.ledger = { state: "ready", loadedAt: 1, refresh: vi.fn() };
-  state.ledgerSessions = [];
+  Object.assign(state, { mobile: false, hookArgs: [], ledgerSessions: [], ledger: { state: "ready", loadedAt: 1, refresh: vi.fn() } });
   vi.stubGlobal("ResizeObserver", class { observe() {} unobserve() {} disconnect() {} });
   Element.prototype.scrollIntoView = Element.prototype.scrollIntoView ?? (() => {});
   Element.prototype.hasPointerCapture = Element.prototype.hasPointerCapture ?? (() => false);
@@ -161,46 +152,37 @@ const MIXED: GroupableWorkItem[] = [
 ];
 
 describe("chips", () => {
-  it("shows the exact §5 names, order, counts and goal progress, counted by the shared selector", async () => {
+  it("shows the exact §5 names, order, counts, goal progress and spoken labels from the shared selector", async () => {
     await render(rail(MIXED));
     const buttons = [...host.querySelectorAll<HTMLButtonElement>(".chat-status-chip")];
     expect(buttons.map((b) => b.dataset.testid)).toEqual([
       "chat-status-chip-doing-now", "chat-status-chip-coming-up", "chat-status-chip-instructions",
     ]);
-    expect(chip("doing-now")!.textContent).toBe("Doing now · goal 3/8 · 2");
-    expect(chip("coming-up")!.textContent).toBe("Coming up 3");
-    expect(chip("instructions")!.textContent).toBe("Told it 1");
-
-    // The rendered numbers ARE the Work group rows: same selector, thisChat applied.
+    // Visible text, complete spoken label, and the phone split (the wordy __text span is the
+    // one the phone media query hides; the __count stands alone). The rendered numbers ARE
+    // the Work group rows: same selector, thisChat applied.
     const groups = workGroups(flattenWorkItems(state.sources), { thisChatOnly: true, sessionId: SESSION });
-    expect(chip("doing-now")!.querySelector(".chat-status-chip__count")!.textContent)
-      .toBe(String(groups.find((g) => g.id === "doing-now")!.count));
-    expect(chip("coming-up")!.querySelector(".chat-status-chip__count")!.textContent)
-      .toBe(String(groups.find((g) => g.id === "coming-up")!.count));
-    expect(chip("instructions")!.querySelector(".chat-status-chip__count")!.textContent)
-      .toBe(String(groups.find((g) => g.id === "instructions")!.count));
-
-    // Needs you is S7-gated, and the rail reads ALL chats' rows (scoping happens in the selector).
+    const table: Array<[string, string, string]> = [
+      ["doing-now", "Doing now · goal 3/8 · 2",
+        "Doing now, 2 running in this chat, including the goal at step 3 of 8. Show details"],
+      ["coming-up", "Coming up 3", "Coming up: 3 not started in this chat. Show details"],
+      ["instructions", "Told it 1", "Told it: 1 instruction in force in this chat. Show details"],
+    ];
+    for (const [id, text, label] of table) {
+      expect(chip(id)!.textContent).toBe(text);
+      expect(chip(id)!.getAttribute("aria-label")).toBe(label);
+      expect(chip(id)!.querySelector(".chat-status-chip__text")).toBeTruthy();
+      expect(chip(id)!.querySelector(".chat-status-chip__count")!.textContent)
+        .toBe(String(groups.find((g) => g.id === id)!.count));
+    }
+    // Needs you is S7-gated; the rail reads ALL chats' rows (scoping happens in the selector)
+    // and THIS chat's instructions ledger from the per-session store.
     expect(host.querySelector('[data-testid="chat-status-chip-needs-you"]')).toBeNull();
     expect(state.hookArgs[0]).toEqual({ sessionId: SESSION, thisChatOnly: false });
+    expect(state.ledgerSessions[0]).toBe(SESSION);
   });
 
-  it("speaks the complete labels while the visible phone text is the number", async () => {
-    await render(rail(MIXED));
-    expect(chip("doing-now")!.getAttribute("aria-label"))
-      .toBe("Doing now, 2 running in this chat, including the goal at step 3 of 8. Show details");
-    expect(chip("coming-up")!.getAttribute("aria-label"))
-      .toBe("Coming up: 3 not started in this chat. Show details");
-    expect(chip("instructions")!.getAttribute("aria-label"))
-      .toBe("Told it: 1 instruction in force in this chat. Show details");
-    // The wordy spans are the ones the phone media query hides; the count stands alone.
-    for (const id of ["doing-now", "coming-up", "instructions"]) {
-      expect(chip(id)!.querySelector(".chat-status-chip__text")).toBeTruthy();
-      expect(chip(id)!.querySelector(".chat-status-chip__count")).toBeTruthy();
-    }
-  });
-
-  it("uses the spinner with no goal and pluralizes Told it", async () => {
+  it("uses the spinner with no goal, pluralizes Told it, and keeps only started blocked work in Doing now", async () => {
     await render(rail([bg("bg-run", "running", SESSION), directive("d1", SESSION), directive("d2", SESSION)]));
     expect(chip("doing-now")!.textContent).toBe("Doing now 1");
     expect(chip("doing-now")!.querySelector(".pl-spinner")).toBeTruthy();
@@ -208,9 +190,6 @@ describe("chips", () => {
       .toBe("Told it: 2 instructions in force in this chat. Show details");
     await render(rail(MIXED));
     expect(chip("doing-now")!.querySelector(".pl-spinner")).toBeNull(); // goal → target icon
-  });
-
-  it("a blocked job that started stays in Doing now; one that never started does not", async () => {
     // started: false is the selector's only "never ran" proof — absent means it did start.
     await render(rail([task("t-blocked", "blocked", SESSION, true), task("t-waiting", "blocked", SESSION, false)]));
     expect(chip("doing-now")!.textContent).toBe("Doing now 1");
@@ -232,18 +211,13 @@ describe("details panel", () => {
     expect(chip("instructions")!.getAttribute("aria-haspopup")).toBe("dialog");
     expect(chip("instructions")!.getAttribute("aria-expanded")).toBe("true");
 
-    const headings = [...panel!.querySelectorAll("h2")];
     // Work's own names — "Your instructions · N", never "Told it" — count in the accessible name.
-    expect(headings.map((h) => h.textContent)).toEqual([
-      "Doing now · 2", "Coming up · 3", "Your instructions · 1",
+    expect([...panel!.querySelectorAll("h2")].map((h) => [h.textContent, h.getAttribute("aria-label")])).toEqual([
+      ["Doing now · 2", "Doing now, 2"], ["Coming up · 3", "Coming up, 3"],
+      ["Your instructions · 1", "Your instructions, 1"],
     ]);
-    expect(headings.map((h) => h.getAttribute("aria-label"))).toEqual([
-      "Doing now, 2", "Coming up, 3", "Your instructions, 1",
-    ]);
-    // Rows carry the shared title/meta projection.
-    expect(panel!.textContent).toContain("Goal s1");
-    expect(panel!.textContent).toContain("Quote d1");
-    expect(panel!.textContent).toContain("scope d1");
+    // Rows carry the shared title/meta projection; other chats' rows never appear.
+    for (const text of ["Goal s1", "Quote d1", "scope d1"]) expect(panel!.textContent).toContain(text);
     expect(panel!.textContent).not.toContain("Quote d-elsewhere");
 
     const open = [...panel!.querySelectorAll("button")].filter((b) => b.textContent === "Open in Work");
@@ -299,12 +273,6 @@ describe("details panel", () => {
     expect(chip("doing-now")!.getAttribute("aria-expanded")).toBe("false");
   });
 
-  it("omits empty group sections", async () => {
-    await render(rail([directive("d1", SESSION)]));
-    await click(chip("instructions"));
-    expect([...dialog()!.querySelectorAll("h2")].map((h) => h.textContent)).toEqual(["Your instructions · 1"]);
-  });
-
   it("traps Tab inside the panel and returns focus to the chip on Escape", async () => {
     await render(rail(MIXED));
     await click(chip("doing-now"));
@@ -312,58 +280,43 @@ describe("details panel", () => {
     const buttons = [...panel.querySelectorAll<HTMLButtonElement>("button")];
     const first = buttons[0];
     const last = buttons[buttons.length - 1];
-
     // Real keydowns through the rendered panel, so the test fails if the panel's own
     // onKeyDown trap wiring is removed — not just if the helper's logic breaks.
-    last.focus();
-    const forward = new KeyboardEvent("keydown", { key: "Tab", bubbles: true, cancelable: true });
-    await act(async () => last.dispatchEvent(forward));
-    expect(forward.defaultPrevented).toBe(true);
-    expect(document.activeElement).toBe(first);
-
-    const backward = new KeyboardEvent("keydown", { key: "Tab", shiftKey: true, bubbles: true, cancelable: true });
-    await act(async () => first.dispatchEvent(backward));
-    expect(backward.defaultPrevented).toBe(true);
-    expect(document.activeElement).toBe(last);
-
-    await act(async () => {
-      panel.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
-    });
+    for (const [from, to, shiftKey] of [[last, first, false], [first, last, true]] as const) {
+      from.focus();
+      const tab = new KeyboardEvent("keydown", { key: "Tab", shiftKey, bubbles: true, cancelable: true });
+      await act(async () => from.dispatchEvent(tab));
+      expect(tab.defaultPrevented).toBe(true);
+      expect(document.activeElement).toBe(to);
+    }
+    await act(async () => panel.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
     expect(dialog()).toBeNull();
     expect(chip("doing-now")!.getAttribute("aria-expanded")).toBe("false");
     expect(document.activeElement).toBe(chip("doing-now"));
   });
 });
 
-describe("phone sheet", () => {
-  it("opens a bottom-sheet Drawer, stacks md actions, and restores focus on close", async () => {
-    state.mobile = true;
-    await render(rail(MIXED));
-    expect(chip("doing-now")!.getAttribute("aria-haspopup")).toBe("dialog");
-    await click(chip("doing-now"));
-    const sheet = document.querySelector<HTMLElement>(".pl-drawer--bottom");
-    expect(sheet).toBeTruthy();
-    expect(sheet!.getAttribute("role")).toBe("dialog");
-    expect(sheet!.textContent).toContain("Chat status");
-    // Phone actions are the md size (the DS default class set, not the sm modifier).
-    const open = [...sheet!.querySelectorAll<HTMLButtonElement>("button")]
-      .filter((b) => b.textContent === "Open in Work");
-    expect(open.length).toBeGreaterThan(0);
-    for (const button of open) expect(button.className).not.toContain("pl-btn--sm");
-
-    await click(sheet!.querySelector('[aria-label="Close"]'));
-    expect(document.querySelector(".pl-drawer--bottom")).toBeNull();
-    expect(chip("doing-now")!.getAttribute("aria-expanded")).toBe("false");
-    expect(document.activeElement).toBe(chip("doing-now"));
-  });
+it("phone: opens a bottom-sheet Drawer, stacks md actions, and restores focus on close", async () => {
+  state.mobile = true;
+  await render(rail(MIXED));
+  expect(chip("doing-now")!.getAttribute("aria-haspopup")).toBe("dialog");
+  await click(chip("doing-now"));
+  const sheet = document.querySelector<HTMLElement>(".pl-drawer--bottom");
+  expect(sheet).toBeTruthy();
+  expect(sheet!.getAttribute("role")).toBe("dialog");
+  expect(sheet!.textContent).toContain("Chat status");
+  // Phone actions are the md size (the DS default class set, not the sm modifier).
+  const open = [...sheet!.querySelectorAll<HTMLButtonElement>("button")]
+    .filter((b) => b.textContent === "Open in Work");
+  expect(open.length).toBeGreaterThan(0);
+  for (const button of open) expect(button.className).not.toContain("pl-btn--sm");
+  await click(sheet!.querySelector('[aria-label="Close"]'));
+  expect(document.querySelector(".pl-drawer--bottom")).toBeNull();
+  expect(chip("doing-now")!.getAttribute("aria-expanded")).toBe("false");
+  expect(document.activeElement).toBe(chip("doing-now"));
 });
 
 describe("instructions failure (preserved from the ledger strip, scoped to THIS chat)", () => {
-  it("reads the per-session store for the session it was given", async () => {
-    await render(rail(MIXED));
-    expect(state.ledgerSessions[0]).toBe(SESSION);
-  });
-
   it("names THIS chat's never-loaded ledger even while other chats keep the summed source merely stale", async () => {
     state.ledger = { state: "failed", loadedAt: null, refresh: vi.fn() };
     // The aggregated source: another chat's ledger HAS loaded, so useWorkItems sums this
@@ -381,8 +334,7 @@ describe("instructions failure (preserved from the ledger strip, scoped to THIS 
       .find((h) => h.textContent!.startsWith("Your instructions"))!;
     expect(heading.textContent).toBe("Your instructions");
     expect(heading.getAttribute("aria-label")).toBe("Your instructions");
-    const retry = [...panel.querySelectorAll("button")].find((b) => b.textContent === "Load again");
-    await click(retry);
+    await click([...panel.querySelectorAll("button")].find((b) => b.textContent === "Load again"));
     // Load again refreshes THIS chat's ledger, not the whole cross-chat inventory.
     expect(state.ledger.refresh).toHaveBeenCalledOnce();
     expect(state.sources.directives.retry).not.toHaveBeenCalled();
@@ -399,21 +351,20 @@ describe("instructions failure (preserved from the ledger strip, scoped to THIS 
       expect(panel.textContent).not.toContain("may be out of date");
       expect(panel.textContent).not.toContain("Couldn't check your instructions.");
       expect([...panel.querySelectorAll("button")].some((b) => b.textContent === "Load again")).toBe(false);
-      await act(async () => {
-        panel.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
-      });
+      await act(async () => panel.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
     }
   });
 
-  it("keeps the retained count on a stale local refresh and still offers Load again", async () => {
+  it("keeps the retained count on a stale local refresh, offers Load again, and omits empty groups", async () => {
     state.ledger = { state: "stale", loadedAt: 1, refresh: vi.fn() };
     await render(rail([directive("d1", SESSION)], {}, { status: "ready" }));
     expect(chip("instructions")!.textContent).toBe("Told it 1");
     await click(chip("instructions"));
     const panel = dialog()!;
+    // The empty running/planned groups render no section at all.
+    expect([...panel.querySelectorAll("h2")].map((h) => h.textContent)).toEqual(["Your instructions · 1"]);
     expect(panel.textContent).toContain("Your instructions may be out of date.");
-    const retry = [...panel.querySelectorAll("button")].find((b) => b.textContent === "Load again");
-    await click(retry);
+    await click([...panel.querySelectorAll("button")].find((b) => b.textContent === "Load again"));
     expect(state.ledger.refresh).toHaveBeenCalledOnce();
   });
 });
@@ -421,20 +372,23 @@ describe("instructions failure (preserved from the ledger strip, scoped to THIS 
 describe("live region", () => {
   const tied = directive("d-tied", SESSION, { tiedJob: { kind: "background", id: "bg-tied" } });
 
-  it("is the rail's ONE polite region, empty until a tied job completes, then announces once", async () => {
+  it("is the rail's ONE polite region — a long-lived node, empty until a tied job completes, announcing once", async () => {
     await render(rail([bg("bg-tied", "running", SESSION), tied]));
     const regions = [...host.querySelectorAll("[aria-live], [role='status']")]
       .filter((node) => !node.closest("[aria-hidden='true']"));
     expect(regions).toHaveLength(1);
-    expect(regions[0].getAttribute("aria-live")).toBe("polite");
-    expect(regions[0].textContent).toBe("");
+    const region = regions[0];
+    expect(region.getAttribute("aria-live")).toBe("polite");
+    expect(region.textContent).toBe("");
     expect(chip("instructions")!.textContent).toBe("Told it 1");
 
-    // The job ends: the tied approval leaves the count in the same update…
+    // The job ends: the tied approval leaves the count in the same update, and the whole rail
+    // empties — but the announcement is a TEXT CHANGE inside the SAME long-lived node (a
+    // region that (re)mounts already holding its text is read by nothing).
     await render(rail([bg("bg-tied", "completed", SESSION), tied]));
-    expect(chip("instructions")).toBeNull();
-    const region = host.querySelector("[aria-live]")!;
+    expect(host.querySelector("[aria-live]")).toBe(region);
     expect(region.textContent).toBe("Job bg-tied finished. 1 approval it carried is now fulfilled.");
+    expect(host.querySelector('[data-testid="chat-status-rail"]')).toBeNull();
 
     // …and the announcement does not repeat on later renders.
     await render(rail([bg("bg-tied", "completed", SESSION), tied]));
@@ -448,19 +402,6 @@ describe("live region", () => {
     expect(host.querySelector("[aria-live]")!.textContent).toBe("");
   });
 
-  it("writes into the SAME long-lived region node when the completing job empties the whole rail", async () => {
-    await render(rail([bg("bg-tied", "running", SESSION), tied]));
-    const region = host.querySelector("[aria-live]")!;
-    expect(region.textContent).toBe("");
-    await render(rail([bg("bg-tied", "completed", SESSION), tied]));
-    // The announcement is a TEXT CHANGE inside a region that already existed — a region that
-    // (re)mounts holding its text is read by nothing. Same node, before and after; the rail
-    // itself (chips emptied) is gone.
-    expect(host.querySelector("[aria-live]")).toBe(region);
-    expect(region.textContent).toBe("Job bg-tied finished. 1 approval it carried is now fulfilled.");
-    expect(host.querySelector('[data-testid="chat-status-rail"]')).toBeNull();
-  });
-
   it("announces BOTH jobs when two tied completions land in one refetch", async () => {
     const tied2 = directive("d-tied2", SESSION, { tiedJob: { kind: "background", id: "bg-tied2" } });
     await render(rail([bg("bg-tied", "running", SESSION), bg("bg-tied2", "running", SESSION), tied, tied2]));
@@ -471,35 +412,22 @@ describe("live region", () => {
   });
 });
 
-describe("people chips", () => {
-  it("keeps the mention toggle behavior and renders even with zero group chips", async () => {
-    const onToggleMention = vi.fn();
-    await render(rail([], { cast: ["lead", "scout"], draft: "@lead hello", onToggleMention }));
-    const chips = [...host.querySelectorAll<HTMLButtonElement>(".chat-roster-chip")];
-    expect(chips.map((c) => c.textContent)).toEqual(["@lead", "@scout"]);
-    expect(chips[0].getAttribute("aria-pressed")).toBe("true");
-    expect(chips[1].getAttribute("aria-pressed")).toBe("false");
-    await click(chips[1]);
-    expect(onToggleMention).toHaveBeenCalledWith("scout");
-    // People chips are plain mention toggles, not dialog triggers.
-    expect(chips[0].getAttribute("aria-haspopup")).toBeNull();
-  });
+it("people chips keep the mention toggle behavior and render even with zero group chips", async () => {
+  const onToggleMention = vi.fn();
+  await render(rail([], { cast: ["lead", "scout"], draft: "@lead hello", onToggleMention }));
+  const chips = [...host.querySelectorAll<HTMLButtonElement>(".chat-roster-chip")];
+  expect(chips.map((c) => c.textContent)).toEqual(["@lead", "@scout"]);
+  expect(chips[0].getAttribute("aria-pressed")).toBe("true");
+  expect(chips[1].getAttribute("aria-pressed")).toBe("false");
+  await click(chips[1]);
+  expect(onToggleMention).toHaveBeenCalledWith("scout");
+  // People chips are plain mention toggles, not dialog triggers.
+  expect(chips[0].getAttribute("aria-haspopup")).toBeNull();
 });
 
-describe("pure helpers", () => {
-  it("railChips derives §5 chips (no Needs you, no zero counts, Told it wording)", () => {
-    const groups = workGroups(MIXED, { thisChatOnly: true, sessionId: SESSION });
-    expect(railChips(groups)).toEqual([
-      { id: "doing-now", label: "Doing now", count: 2, goal: { step: 3, of: 8 } },
-      { id: "coming-up", label: "Coming up", count: 3 },
-      { id: "instructions", label: "Told it", count: 1 },
-    ]);
-  });
-
-  it("spokenLabel covers the no-goal and uncapped-goal shapes", () => {
-    expect(spokenLabel({ id: "doing-now", label: "Doing now", count: 1 }))
-      .toBe("Doing now, 1 running in this chat. Show details");
-    expect(spokenLabel({ id: "doing-now", label: "Doing now", count: 2, goal: { step: 4, of: null } }))
-      .toBe("Doing now, 2 running in this chat, including the goal at step 4. Show details");
-  });
+it("spokenLabel covers the no-goal and uncapped-goal shapes", () => {
+  expect(spokenLabel({ id: "doing-now", label: "Doing now", count: 1 }))
+    .toBe("Doing now, 1 running in this chat. Show details");
+  expect(spokenLabel({ id: "doing-now", label: "Doing now", count: 2, goal: { step: 4, of: null } }))
+    .toBe("Doing now, 2 running in this chat, including the goal at step 4. Show details");
 });
