@@ -11,6 +11,7 @@ import { decisionsApi } from "../../lib/api/decisions";
 import { ApiError } from "../../lib/api/http";
 import { decisionsStoreForTest } from "../../decisions/useDecisions";
 import { WorkView } from "../WorkView";
+import { beginThisChatVisit, endThisChatVisit } from "../visitScope";
 import { sections } from "../sectionRegistry";
 import { decisionMeta, fromBackgroundJob, fromDecision, fromDirective } from "../tone";
 import { useUI } from "../../state/uiStore";
@@ -150,6 +151,7 @@ afterEach(async () => {
   await act(async () => root.unmount());
   document.body.replaceChildren();
   vi.unstubAllGlobals();
+  endThisChatVisit();
 });
 
 describe("Decisions section", () => {
@@ -678,6 +680,39 @@ describe("Directives section (Your instructions, ADR 0129 §3)", () => {
     expect(detail.textContent).toContain("Cut the patch release");
     expect(detail.textContent).toContain("the agent marked it complete"); // closingSentence
     expect(buttons("Withdraw…")).toHaveLength(0); // closed rows are read-only
+  });
+
+  it("a rail deep link's visit scope filters the rows for the visit without touching the saved filters (S6a)", async () => {
+    data.sources.directives.items = [
+      directiveItem(directiveRow("mine", { session_id: "here", quote: "Keep replies short" })),
+      directiveItem(directiveRow("theirs", { session_id: "elsewhere", quote: "Other chat instruction" })),
+    ];
+    workState({ section: "directives", filters: { retained: true } });
+    beginThisChatVisit();
+    await render("rail", "here");
+    // Scoped rows for THIS visit; Work's saved filters are never rewritten (Work itself has
+    // no scope toggle, so a persisted flag would be irreversible).
+    expect(rowFor("Keep replies short")).toBeTruthy();
+    expect(rowFor("Other chat instruction")).toBeUndefined();
+    expect(host.querySelector(".work-heading")?.getAttribute("aria-label")).toBe("Your instructions, 1");
+    expect(useUI.getState().surfaceStates.work.filters).toEqual({ retained: true });
+    // The visit ends: the SAME saved state lists every chat's instructions again.
+    await act(async () => endThisChatVisit());
+    expect(rowFor("Other chat instruction")).toBeTruthy();
+    expect(host.querySelector(".work-heading")?.getAttribute("aria-label")).toBe("Your instructions, 2");
+    expect(useUI.getState().surfaceStates.work.filters).toEqual({ retained: true });
+  });
+
+  it("the visit scope never overrides a saved thisChat filter a test (or future toggle) set itself", async () => {
+    data.sources.directives.items = [directiveItem(directiveRow("mine", { session_id: "here", quote: "Keep replies short" }))];
+    workState({ section: "directives", filters: { thisChat: true } });
+    beginThisChatVisit();
+    await render("rail", "here");
+    expect(rowFor("Keep replies short")).toBeTruthy();
+    // Ending the visit leaves the saved filter in charge — the overlay only ever ADDS scope.
+    await act(async () => endThisChatVisit());
+    expect(rowFor("Keep replies short")).toBeTruthy();
+    expect(useUI.getState().surfaceStates.work.filters).toEqual({ thisChat: true });
   });
 
   it("opens another chat's in-force instruction from the Overview even under the this-chat filter (r1)", async () => {

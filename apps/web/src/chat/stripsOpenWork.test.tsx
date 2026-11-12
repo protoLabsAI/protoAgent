@@ -3,6 +3,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { chatStore } from "./chat-store";
 import { useUI } from "../state/uiStore";
+import { beginThisChatVisit, endThisChatVisit, isThisChatVisit } from "../work/visitScope";
 import { DirectiveStrip, DirectiveWorkRequest } from "./DirectiveStrip";
 import { GoalRunStrip } from "./GoalRunStrip";
 import { BackgroundWorkStrip } from "./BackgroundWorkStrip";
@@ -38,9 +39,12 @@ beforeEach(() => {
     directivesRequest: null, surfaceStates: { work: { section: "tasks", itemId: "task:old", scrollTop: 80,
       filters: { thisChat: false, retained: true } } } });
   host = document.createElement("div"); document.body.append(host); root = createRoot(host);
+  // A live rail deep-link visit scope: every strip entry must END it (keep the saved scope).
+  beginThisChatVisit();
 });
 afterEach(async () => {
   await act(async () => root.unmount()); host.remove(); useUI.setState(initial);
+  endThisChatVisit();
 });
 async function render(node: ReactElement) { await act(async () => root.render(node)); }
 async function click(label: string) {
@@ -67,6 +71,7 @@ function expectWork(section: string, itemId?: string) {
   }
   expect(ui.surfaceModal).toBeNull();
   expect(ui.surfaceStates.work).toEqual({ section, itemId, scrollTop: 0, filters: { thisChat: false, retained: true } }); // strips keep the saved filters (Work has no scope toggle)
+  expect(isThisChatVisit()).toBe(false); // …and end a rail deep link's visit scope, so it can't leak into this entry
   expect(ui.backgroundJobsRequest).toBe(initial.backgroundJobsRequest);
   expect(ui.directivesRequest).toBeNull();
 }

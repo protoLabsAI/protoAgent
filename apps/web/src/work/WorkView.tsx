@@ -22,6 +22,7 @@ import { useWorkItems, type WorkItems } from "./useWorkItems";
 import { workGroups } from "./workGroups";
 import { WorkDetail } from "./WorkDetail";
 import { WorkOverview, WorkGroupSection, groupSources, itemKey, workSections } from "./WorkOverview";
+import { endThisChatVisit, isThisChatVisit, subscribeThisChatVisit, trackWorkViewMount } from "./visitScope";
 import { sections, subscribe, getSnapshot } from "./sectionRegistry";
 import { useGoalCreator } from "./sections/goals";
 import "./sections/decisions";
@@ -98,8 +99,16 @@ export function WorkView({ frame = "rail", sessionId }: { frame?: "rail" | "moda
   const hostFrame = useSurfaceFrame() ?? frame;
   useSyncExternalStore(subscribe, getSnapshot);
   const state = useUI((s) => s.surfaceStates.work ?? emptyState);
+  // A rail deep link's this-chat scope rides the VISIT (visitScope.ts), never the saved
+  // state: it overlays the filters the shared selector reads, so the saved filters — what
+  // every other entry restores — survive the visit untouched. It ends with the visit: the
+  // last mount leaving the screen, or the reader picking a section themselves (selectSection).
+  const thisChatVisit = useSyncExternalStore(subscribeThisChatVisit, isThisChatVisit);
+  useEffect(() => trackWorkViewMount(), []);
+  const viewState = thisChatVisit && state.filters?.thisChat !== true
+    ? { ...state, filters: { ...state.filters, thisChat: true } } : state;
   const section = canonicalSection(state.section ?? "overview");
-  const thisChatOnly = state.filters?.thisChat === true;
+  const thisChatOnly = viewState.filters?.thisChat === true;
   const toast = useToast();
   const agentOnline = useSyncExternalStore(onConnectionChange, isConnected);
   const decisions = useDecisions();
@@ -241,7 +250,7 @@ export function WorkView({ frame = "rail", sessionId }: { frame?: "rail" | "moda
     openView("chat");
     if (reply) useKbIntents.getState().focusComposer();
   };
-  const context = { sources, state: { ...state, itemId: selectedKey ?? state.itemId }, onOpen, onBack, sessionId,
+  const context = { sources, state: { ...viewState, itemId: selectedKey ?? state.itemId }, onOpen, onBack, sessionId,
     decisionActions: { agentOnline, openSourceChat, answerDecision: decisions.answer } };
   // The activity kind maps to no section (S4c removed it): an activity row can never be
   // selected (`useWorkItems` keeps that source rows-empty for the delivery group), and a
@@ -256,7 +265,12 @@ export function WorkView({ frame = "rail", sessionId }: { frame?: "rail" | "moda
   const fallbackSection = (savedKind && kindSections[savedKind])
     ?? (state.section && sections.has(state.section) ? state.section : undefined);
   const detailRenderer = selectedSection ? sections.get(selectedSection) : sections.get(fallbackSection ?? "");
-  const selectSection = (id: string) => update({ section: id, itemId: undefined, scrollTop: 0 });
+  const selectSection = (id: string) => {
+    // Picking a section is the reader's own navigation: a rail deep link's visit scope ends
+    // here, and Work is back on its saved (unscoped) filters.
+    endThisChatVisit();
+    update({ section: id, itemId: undefined, scrollTop: 0 });
+  };
 
   return <div className="work-view" data-frame={hostFrame} data-selected={!!state.itemId} onKeyDown={(event) => {
     // Portalled overlays bubble through React too; only handle events inside this view.

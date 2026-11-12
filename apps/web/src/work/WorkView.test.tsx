@@ -1,15 +1,20 @@
-import { act } from "react";
+import { act, StrictMode, type ReactNode } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { ToastProvider } from "@protolabsai/ui/overlays";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { WorkView, canonicalSection } from "./WorkView";
+import { beginThisChatVisit, endThisChatVisit, isThisChatVisit } from "./visitScope";
 import { api } from "../lib/api";
 import { applyNavIntent } from "../app/palette/nav";
 import { useUI } from "../state/uiStore";
 import type { WorkItem, WorkItems, WorkSource, WorkSourceKind } from "./useWorkItems";
 import type { GroupableWorkItem } from "./tone";
 import css from "./work-view.css?raw";
+
+Element.prototype.hasPointerCapture ??= () => false;
+Element.prototype.releasePointerCapture ??= () => {};
+Element.prototype.setPointerCapture ??= () => {};
 
 const data = vi.hoisted(() => ({ sources: {} as WorkItems }));
 vi.mock("./useWorkItems", () => ({ useWorkItems: () => data.sources }));
@@ -53,6 +58,18 @@ async function closeSections(menu: HTMLElement) {
   // Radix restores menu-trigger focus after its close effect.
   await act(async () => { await new Promise(resolve => setTimeout(resolve, 0)); });
 }
+async function pickSection(menu: HTMLElement, label: string) {
+  const entry = Array.from(menu.querySelectorAll<HTMLElement>('[role="menuitemradio"]')).find((node) => node.textContent?.includes(label))!;
+  expect(entry, label).toBeTruthy();
+  // Radix selects a menu ROW on the pointer sequence; a bare click only serves trailing actions.
+  const Ctor = (globalThis as unknown as { PointerEvent?: typeof MouseEvent }).PointerEvent ?? MouseEvent;
+  await act(async () => {
+    entry.dispatchEvent(new Ctor("pointerdown", { bubbles: true, cancelable: true, button: 0 } as MouseEventInit));
+    entry.dispatchEvent(new Ctor("pointerup", { bubbles: true, cancelable: true, button: 0 } as MouseEventInit));
+    entry.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, button: 0 }));
+  });
+  await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
+}
 beforeEach(() => {
   client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   data.sources = Object.fromEntries(kinds.map((kind) => [kind, { items: [], status: "ready", error: null, loadedAt: 1, retry: vi.fn() } as WorkSource])) as WorkItems;
@@ -64,6 +81,7 @@ beforeEach(() => {
 afterEach(async () => {
   await act(async () => { root.unmount(); });
   host.remove();
+  endThisChatVisit();
 });
 
 it("orders the four groups, hides empty ones, and keeps help lines off the Overview", async () => {
@@ -277,6 +295,37 @@ it("failed loads never claim there is no work to track", async () => {
   await render("modal");
   expect(host.textContent).not.toContain("Nothing to track.");
   expect(host.querySelectorAll('[role="alert"]').length).toBeGreaterThan(0);
+});
+
+it("the reader picking a section ends a rail deep link's visit scope; the saved filters survive", async () => {
+  useUI.setState({ surfaceStates: { work: { section: "overview", filters: { retained: true } } } });
+  beginThisChatVisit();
+  await render("modal");
+  expect(isThisChatVisit()).toBe(true);
+  const menu = await openSections();
+  await pickSection(menu, "Coming up"); // the reader's own navigation → selectSection("coming-up")
+  expect(isThisChatVisit()).toBe(false);
+  expect(useUI.getState().surfaceStates.work.section).toBe("coming-up");
+  expect(useUI.getState().surfaceStates.work.filters).toEqual({ retained: true });
+});
+
+it("the visit scope survives an Expand/Dock mount overlap and StrictMode, ending only when Work leaves the screen", async () => {
+  const wrap = (children: ReactNode) =>
+    <QueryClientProvider client={client}><ToastProvider>{children}</ToastProvider></QueryClientProvider>;
+  beginThisChatVisit();
+  // StrictMode's dev mount → cleanup → mount must not end the visit.
+  await act(async () => root.render(<StrictMode>{wrap(<WorkView frame="rail" sessionId="here" />)}</StrictMode>));
+  await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
+  expect(isThisChatVisit()).toBe(true);
+  // Expand: the modal copy mounts beside the rail copy; the rail copy leaving changes nothing.
+  await act(async () => root.render(wrap(<><WorkView frame="rail" sessionId="here" /><WorkView frame="modal" sessionId="here" /></>)));
+  await act(async () => root.render(wrap(<WorkView frame="modal" sessionId="here" />)));
+  await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
+  expect(isThisChatVisit()).toBe(true);
+  // The LAST Work view leaves the screen: the visit ends on the next tick.
+  await act(async () => root.render(wrap(<div />)));
+  await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
+  expect(isThisChatVisit()).toBe(false);
 });
 
 it("shows skeletons without a zero-count flash or empty announcement", async () => {

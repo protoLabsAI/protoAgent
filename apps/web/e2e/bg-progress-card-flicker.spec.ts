@@ -147,5 +147,6 @@ test("a background delegation's progress card never blinks out while its job run
   expect(frames.total).toBeGreaterThan(60);
   expect(frames.missing, `card missing in ${frames.missing} of ${frames.total} frames`).toBe(0);
   await expect(card).toContainText("gh pr checks 13");
-  await expect(page.getByTestId("chat-bgwork")).toContainText("1 background job running");
+  // The chat still says it has work running — the status rail's Doing now chip (S6a).
+  await expect(page.getByTestId("chat-status-chip-doing-now")).toHaveText("Doing now 1");
 });

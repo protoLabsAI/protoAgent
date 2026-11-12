@@ -184,8 +184,11 @@ test("approved layout evidence: rail, window, empty section and phone", async ({
   await mkdir(directory, { recursive: true });
   const capture = async (name: string) => {
     // Dismiss mock-backend notification toasts so they do not obscure the Work header.
-    for (const dismiss of await page.getByRole("button", { name: "Dismiss", exact: true }).all()) {
-      await dismiss.click();
+    // Always the FIRST remaining one: dismissing re-indexes the stack, so a locator
+    // snapshot (.all()) would wait forever on an nth() that no longer resolves.
+    const dismiss = page.getByRole("button", { name: "Dismiss", exact: true });
+    while (await dismiss.count() > 0) {
+      await dismiss.first().click();
     }
     const path = join(directory, `${name}.png`);
     await page.screenshot({ path });

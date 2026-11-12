@@ -12,6 +12,7 @@ import { goalsQuery } from "../lib/queries";
 import type { GoalState } from "../lib/types";
 import { openView } from "../app/palette/nav";
 import { useUI } from "../state/uiStore";
+import { endThisChatVisit } from "../work/visitScope";
 import { verifierLabel } from "./goalForm";
 
 /** Which goal (if any) this chat's strip shows, and how: the session's goal while it drives,
@@ -53,6 +54,8 @@ export function GoalRunStrip({ sessionId }: { sessionId: string }) {
       scrollTop: 0,
       filters: ui.surfaceStates.work?.filters,
     });
+    // This entry keeps the saved filters — a live rail deep-link visit scope must not leak in.
+    endThisChatVisit();
     openView("work");
   };
   // The live region is ONLY the state text (`Goal driving · iteration i/n`, `Goal achieved`):

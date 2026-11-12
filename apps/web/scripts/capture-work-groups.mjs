@@ -34,8 +34,12 @@ async function openWorkWindow(page, label = "Open Work") {
 }
 
 async function dismissToasts(page) {
-  for (const dismiss of await page.getByRole("button", { name: "Dismiss", exact: true }).all()) {
-    await dismiss.click().catch(() => {});
+  // Always the FIRST remaining one: dismissing re-indexes the stack, so a locator
+  // snapshot (.all()) would stall on an nth() that no longer resolves. Bounded — a
+  // toast mid-exit can keep count() > 0 while its button is no longer clickable.
+  const dismiss = page.getByRole("button", { name: "Dismiss", exact: true });
+  for (let i = 0; i < 20 && (await dismiss.count()) > 0; i++) {
+    await dismiss.first().click({ timeout: 2_000 }).catch(() => {});
   }
 }
 
