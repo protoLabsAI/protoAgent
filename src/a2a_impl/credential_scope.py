@@ -41,6 +41,9 @@ SCOPES = frozenset({SCOPE_FULL, SCOPE_DEVICE})
 #: The machine-readable refusal code. The console maps it to a readable message.
 DEVICE_SCOPE_CODE = "device_scope"
 DEVICE_SCOPE_MESSAGE = "This device can't change pairing or credentials — use a full-access device."
+#: For the routes the hub refuses outright when a limited device aims them at a REMOTE agent
+#: (``KEY_CHECKED_CONFIG_WRITES``): the refusal covers every setting there, so it says so.
+DEVICE_REMOTE_SETTINGS_MESSAGE = "This device can't change settings on a remote agent — use a full-access device."
 
 #: Carries a ``device`` scope across a proxy hop. The hub's fleet proxy authenticates the
 #: caller, then presents the member with a credential that is FULL scope there (the fleet

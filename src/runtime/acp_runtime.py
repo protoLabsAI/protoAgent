@@ -485,6 +485,10 @@ class AcpRuntime:
         self._context = context or self._default_context()
         self._client_factory = client_factory or self._default_client_factory
         self._client = None
+        # Whether the CURRENT turn's caller may approve (``caller_may_approve``), captured at
+        # turn start: the client is cached across turns and its reader task answers the agent's
+        # permission requests from the context it was started in, not this turn's.
+        self._may_approve = True
 
     def _default_context(self) -> ContextAssembler:
         from runtime.state import STATE
@@ -559,7 +563,21 @@ class AcpRuntime:
             # chat turn recorded HERE would file under a `coder:` key and count as coder
             # work. See `AcpClient.record_runs` for why that is left to #3000.
             record_runs=False,
+            permission=self._permission,
         )
+
+    def _permission(self, params: dict) -> str | None:
+        """Answer the agent's ``session/request_permission``: allowed as before for a caller
+        who may approve; declined (its first reject option, else cancelled) for one who may
+        not — a federation caller can't approve a gated call here any more than natively."""
+        from plugins.coding_agent.acp_client import AcpClient
+
+        if self._may_approve:
+            return AcpClient._auto_allow(params)
+        for opt in params.get("options") or []:
+            if str(opt.get("kind", "")).startswith("reject"):
+                return opt.get("optionId")
+        return None
 
     def _ensure_client(self):
         if self._client is None:
@@ -579,6 +597,9 @@ class AcpRuntime:
         attempt. A second empty reply is returned as-is (no loop). A normal reply makes
         exactly one attempt and streams unchanged.
         """
+        from graph.middleware.request_context import caller_may_approve
+
+        self._may_approve = caller_may_approve()
         client = self._ensure_client()
         ctx = self._context.assemble(query=message)
         prompt = "\n\n".join(p for p in (ctx.volatile_delta, message) if p)

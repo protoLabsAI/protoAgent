@@ -427,6 +427,18 @@ _CONFIG_WRITE_DENIED = (
     "soul",  # persona has its own guarded path (edit_soul, ADR 0081)
     "tools",  # incl. self_config_enabled itself: no self-widening
 )
+# Keys inside an otherwise-writable section that still decide where data goes or whether
+# a fence holds. Matched as a prefix. Every credential-plane key (ADR 0121 D4: network,
+# devices, secrets_manager, lifecycle_hooks, ...) is refused too, read from
+# ``graph.settings_schema.is_credential_plane_key`` so that list can't drift from this one.
+_CONFIG_WRITE_DENIED_KEYS = (
+    "model.api_base",  # the conversation and the model key are sent here
+    "tracing.host",  # every trace is sent here
+    "middleware.enforcement",  # the tool-policy switch
+    "knowledge.inject_min_trust",  # the trust floor for injected knowledge
+    "model_passthrough.allow_remote",  # who may use the raw model passthrough
+    "onboarding",  # the onboarding root and its approval rules
+)
 
 # Section denial can't be the whole story: plugin config sections are named after their
 # plugin, so the fence can't enumerate them, and any plugin is free to grow a key naming a
@@ -523,12 +535,21 @@ def _config_write_refusal(updates: dict) -> str | None:
     defines a program to run.
     """
     paths = _write_paths(updates)
-    denied = sorted({p.split(".", 1)[0] for p in paths if p.split(".", 1)[0] in _CONFIG_WRITE_DENIED})
+    denied = {p.split(".", 1)[0] for p in paths if p.split(".", 1)[0] in _CONFIG_WRITE_DENIED}
+    denied |= {p for p in paths if any(p == k or p.startswith(k + ".") for k in _CONFIG_WRITE_DENIED_KEYS)}
+    try:
+        from graph.settings_schema import credential_plane_keys
+
+        denied |= set(credential_plane_keys(paths))
+    except Exception:  # noqa: BLE001 — schema unavailable: refuse rather than guess
+        denied |= set(paths)
+    denied = sorted(denied)
     if denied:
         return (
             f"Refused: {', '.join(denied)} is outside what you may change. Those settings decide what "
             f"you are allowed to do (shell access, reachable directories, egress, which plugins run as "
-            f"you, the executables that get spawned, operator credentials) — only your operator can "
+            f"you, the executables that get spawned, operator credentials, where your model calls, "
+            f"traces and secrets go) — only your operator can "
             f"change them, from Settings. Everything else (models, routing, plugin behavior) is yours."
         )
     # A subagent's tool allowlist is a permission, not a setting: widening it would hand a

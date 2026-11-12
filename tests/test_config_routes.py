@@ -11,6 +11,12 @@ import pytest
 
 pytestmark = pytest.mark.platform_sensitive
 
+# Imported at COLLECTION, before any test swaps a stub into ``sys.modules["graph.config_io"]``:
+# registering the routes imports ``server.settings_apply``, which pulls names from the real
+# module at import time. Left to the first stubbed test, that import ran against the stub and
+# failed whenever this file ran on its own (#5155).
+import server.settings_apply  # noqa: E402, F401
+
 
 def _client():
     from operator_api.config_routes import register_config_routes
@@ -38,6 +44,9 @@ def test_get_config_delegates(monkeypatch):
     monkeypatch.setattr(rs.STATE, "graph_config", object(), raising=False)
     body = _client().get("/api/config").json()
     assert body == {"config": {"model": "x"}, "soul": "SOUL"}
+    # Asked before a config has loaded: an empty document, not a 500.
+    monkeypatch.setattr(rs.STATE, "graph_config", None, raising=False)
+    assert _client().get("/api/config").json() == {"config": {}, "soul": "SOUL"}
 
 
 def test_acp_agents_route_serves_the_catalog():

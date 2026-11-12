@@ -724,6 +724,15 @@ def test_sse_token_rejects_garbage():
     assert not auth._validate_sse_token("")
 
 
+def test_sse_query_token_is_no_way_past_an_api_key(monkeypatch):
+    """API-key-only mode isn't open mode: no stream token can be minted, so none is valid."""
+    monkeypatch.delenv("A2A_AUTH_TOKEN", raising=False)
+    auth.configure(bearer_token="", api_key="k", allowed_origins_raw="")
+    c = _client_multi()
+    assert c.get("/api/events?token=anything").status_code == 401
+    assert c.get("/api/events", headers={"x-api-key": "k"}).status_code == 200
+
+
 def test_sse_bearer_header_still_works_for_events(monkeypatch):
     """Server-to-server callers with Authorization header pass /api/events."""
     monkeypatch.delenv("A2A_AUTH_TOKEN", raising=False)
@@ -836,6 +845,31 @@ def test_federation_token_allowed_consumer_surface():
     # /a2a + /v1 are the federation/consumer surfaces — a federation token passes.
     assert c.post("/a2a", headers=fed).status_code == 200
     assert c.post("/v1/chat/completions", headers=fed).status_code == 200
+
+
+def test_a_federation_request_cannot_approve_or_bypass_and_an_operator_can():
+    """The whole chain a turn driver relies on: the middleware classifies the credential, the
+    drivers bind ``turn_caller_may_approve()``, and the run_command gate reads what that binds —
+    never the caller's own ``bypass_permissions``."""
+    from starlette.responses import JSONResponse
+    from starlette.routing import Route
+
+    from graph.middleware.request_context import caller_may_approve, current_request_metadata, request_metadata_scope
+    from server.turn_control import turn_caller_may_approve
+
+    # What the gate reads (``tools.fs_tools._bypass_requested`` / ``_approved``, covered in
+    # test_fs_tools.py): the bound flag, and whether the caller's bypass key survived.
+    async def turn(request):
+        with request_metadata_scope({"bypass_permissions": True}, may_approve=turn_caller_may_approve()):
+            bypass = caller_may_approve() and bool(current_request_metadata().get("bypass_permissions"))
+            return JSONResponse({"bypass": bypass, "approve": caller_may_approve()})
+
+    _fed_configured()
+    app = Starlette(routes=[Route("/a2a", turn, methods=["POST"])])
+    app.add_middleware(auth.A2AAuthMiddleware)
+    c = TestClient(app)
+    assert c.post("/a2a", headers={"Authorization": "Bearer fed-secret"}).json() == {"bypass": False, "approve": False}
+    assert c.post("/a2a", headers={"Authorization": "Bearer op-secret"}).json() == {"bypass": True, "approve": True}
 
 
 def test_operator_token_reaches_everything():

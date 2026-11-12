@@ -316,6 +316,30 @@ def test_default_factory_mounts_operator_mcp(monkeypatch):
     assert captured["mcp_servers"][0]["name"] == "protoagent-operator"
 
 
+async def test_permission_requests_follow_the_current_turns_caller(monkeypatch, tmp_path):
+    """The cached client answers permission requests by the caller of the turn in flight:
+    allowed for one who may approve, declined for one who may not (a federation caller)."""
+    from graph.middleware.request_context import request_metadata_scope
+    import plugins.coding_agent.acp_client as acp
+
+    captured = {}
+
+    class _Spy(_FakeClient):
+        _auto_allow = staticmethod(acp.AcpClient._auto_allow)
+
+        def __init__(self, command, args=None, *, permission=None, **kw):
+            super().__init__()
+            captured["permission"] = permission
+
+    monkeypatch.setattr(acp, "AcpClient", _Spy)
+    rt = AcpRuntime(_cfg(), cwd=str(tmp_path), context=_FakeCtx())
+    ask = {"options": [{"optionId": "yes", "kind": "allow_once"}, {"optionId": "no", "kind": "reject_once"}]}
+    for may_approve, answer in ((False, "no"), (True, "yes"), (False, "no")):
+        with request_metadata_scope({}, may_approve=may_approve):
+            await rt.run_turn("go")
+        assert captured["permission"](ask) == answer
+
+
 def test_constructing_for_native_raises():
     with pytest.raises(ValueError):
         AcpRuntime(types.SimpleNamespace(agent_runtime="native"))
