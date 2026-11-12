@@ -66,6 +66,13 @@ def _a2a_headers(d) -> dict:
             headers["Authorization"] = f"Bearer {resolve_service_token()}"
         except Exception:  # noqa: BLE001 — not in a fleet / no token: dispatch unauthenticated as before
             logger.debug("[delegates] no fleet service token for loopback delegate %r", d.name)
+    # The credential above is operator-tier on the delegate; a turn whose own caller can't
+    # approve (a federation caller, #5138) says so, or the hop would hand it approval authority.
+    from a2a_impl.credential_scope import APPROVAL_DENIED, APPROVAL_HEADER
+    from graph.middleware.request_context import caller_may_approve
+
+    if not caller_may_approve():
+        headers[APPROVAL_HEADER] = APPROVAL_DENIED
     return headers
 
 

@@ -237,7 +237,11 @@ token** can neither answer an approval prompt nor ask to skip one: its
 `run_command` calls that would need approval are refused without a prompt
 (commands matching `filesystem.run_auto_approve` still run), and
 `bypass_permissions` from it is ignored. The server decides this from the
-credential it authenticated, never from request metadata.
+credential it authenticated, never from request metadata. The same holds one
+hop on: when such a turn delegates (`@member`, `delegate_to`), the request to
+the delegate carries `X-Protoagent-Caller-May-Approve: no`, and the delegate
+treats that turn as unable to approve even though the hop's own credential is
+operator-tier there. The header can only take approval away.
 
 For a fully trusted caller, set **`message.metadata.bypass_permissions: true`**
 on the request to skip `run_command` approval for that turn:
