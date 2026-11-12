@@ -18,6 +18,7 @@ import asyncio
 import hashlib
 import logging
 import os
+import re
 import threading
 from datetime import UTC, datetime
 from typing import Any
@@ -1435,6 +1436,60 @@ def _surface_resumed_chat_turn(outcome) -> None:
 _SCHEDULED_SUMMARY_CAP = 500
 _SCHEDULED_STALE_WINDOW_S = 24 * 60 * 60  # 24h
 
+# Quiet-reply sentinel (bd-x66jt): a scheduled run that has nothing new to report ends
+# its answer with this line — the run is still recorded (scheduler occurrence, Activity
+# entry) but no result card is posted to the origin chat. The schedule_task /
+# create_watch docstrings tell the model to end with it when nothing changed.
+_NO_UPDATE = "NO_UPDATE"
+
+# Last result card actually DELIVERED per job (bd-x66jt): job id → (generation, digest
+# of the normalized final text). Read by the repeat guard in
+# ``_scheduled_delivery_payload`` — a completed re-run whose normalized answer matches
+# the last delivered card for the same job generation posts no second card. Written
+# only after a publish (a stale-session skip records nothing, so the card still posts
+# once the chat wakes). One entry per job id; in-memory, so a restart at worst re-posts
+# one card.
+_SCHEDULED_CARD_HASHES: dict[str, tuple[str, str]] = {}
+
+# Timestamps are volatile run-to-run — an "as of 09:10" line would defeat the repeat
+# guard — so they normalize to a placeholder before hashing: ISO dates/datetimes and
+# clock times (with optional seconds/offset/meridiem).
+_CARD_TIMESTAMP_RE = re.compile(
+    r"\b\d{4}-\d{2}-\d{2}(?:[T ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?\b"
+    r"|\b\d{1,2}:\d{2}(?::\d{2})?(?:\s?[AaPp][Mm])?\b"
+)
+
+
+def _is_no_update_reply(text: str) -> bool:
+    """Whether a completed fire's answer is an explicit quiet reply (bd-x66jt): exactly
+    ``NO_UPDATE``, or ending with a ``NO_UPDATE`` line. Only the FINAL line counts —
+    an answer that merely mentions the sentinel mid-text still posts."""
+    lines = text.strip().splitlines()
+    return bool(lines) and lines[-1].strip() == _NO_UPDATE
+
+
+def _scheduled_card_digest(text: str) -> str:
+    """Hash of a result card's final text with whitespace collapsed and timestamps
+    normalized, so a re-run differing only in an "as of"-style stamp or formatting
+    reads as the same report."""
+    normalized = " ".join(_CARD_TIMESTAMP_RE.sub("<ts>", text).split())
+    return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+
+
+def _job_generation(job) -> str:
+    """Key separating a job id's generations: cancel-and-recreate on the same id mints
+    a fresh ``created_at``, so the new generation's first fire is never suppressed as
+    a repeat of the dead generation's last card."""
+    return str(getattr(job, "created_at", "") or "")
+
+
+def _remember_scheduled_card(fingerprint: dict | None) -> None:
+    """Record a just-PUBLISHED card's fingerprint for the repeat guard. ``None``
+    (a payload built before the guard existed, or a test's hand-rolled payload)
+    records nothing."""
+    if fingerprint:
+        _SCHEDULED_CARD_HASHES[fingerprint["job_id"]] = (fingerprint["generation"], fingerprint["digest"])
+
 
 def _job_origin_session(job_id: str) -> str:
     """The ``origin_session`` stamped on scheduler job ``job_id``, or ``""``.
@@ -1466,7 +1521,13 @@ def _scheduled_delivery_payload(outcome) -> dict | None:
     no ``origin_session`` (created outside a chat — r6, backward compatible); the origin
     is the Activity thread itself or another job's execution session (ADR 0129 — no
     chat reads those; the feed carries the result); or the fire already ran IN
-    the origin session (a one-shot resume — chat.resumed covers it, no double-delivery)."""
+    the origin session (a one-shot resume — chat.resumed covers it, no double-delivery).
+
+    Also ``None`` when a COMPLETED run has nothing new to report (bd-x66jt): an empty
+    final answer or an explicit ``NO_UPDATE`` quiet reply, or a normalized answer equal
+    to the last card delivered for the same job generation. The run itself is still
+    recorded (occurrence, Activity entry) — only the chat card is suppressed. Errors
+    and failed turns always post."""
     if getattr(outcome, "origin", "") != "scheduler":
         return None
     job_id = (getattr(outcome, "trigger", "") or "").strip()
@@ -1493,9 +1554,27 @@ def _scheduled_delivery_payload(outcome) -> dict | None:
         # A fire that failed before it said anything (#5106: one stopped while it waited
         # for its thread) — the card says why, not an empty "failed".
         summary = str(getattr(outcome, "error", "") or "").strip()
+    status = state if state in ("completed", "canceled") else "failed"
+    # Card fingerprint (bd-x66jt): the job's generation + a hash of the normalized full
+    # text, recorded only when the card actually publishes. The repeat guard reads it
+    # for COMPLETED runs only; a failed/canceled card still posts AND overwrites the
+    # stored hash, so a recovery run repeating the last good answer reads as news again.
+    generation = _job_generation(job)
+    digest = _scheduled_card_digest(summary)
+    if status == "completed":
+        if not summary or _is_no_update_reply(summary):
+            # Nothing new to report: no empty card, no NO_UPDATE card. The occurrence
+            # and the Activity entry still record the run.
+            log.info("[scheduler] job %s reported nothing new — skipping the result card", job_id)
+            return None
+        if _SCHEDULED_CARD_HASHES.get(job_id) == (generation, digest):
+            log.info(
+                "[scheduler] job %s repeated its last delivered result — skipping the result card",
+                job_id,
+            )
+            return None
     if len(summary) > _SCHEDULED_SUMMARY_CAP:
         summary = summary[:_SCHEDULED_SUMMARY_CAP].rstrip() + "…"
-    status = state if state in ("completed", "canceled") else "failed"
     # Recurring collapse (r4): the FIRST fire renders a full card; subsequent fires into
     # the same session collapse to a compact chip. ``fire_count`` is the PRE-fire value at
     # terminal time — the scheduler bumps it only after the fire lands — so 0 == first fire.
@@ -1510,6 +1589,9 @@ def _scheduled_delivery_payload(outcome) -> dict | None:
         "schedule": str(getattr(job, "schedule", "") or ""),
         "activity_context": context_id or ACTIVITY_CONTEXT,
         "task_id": getattr(outcome, "task_id", "") or "",
+        # Delivery bookkeeping, not card content — popped before the event publishes,
+        # then recorded so the NEXT fire's repeat guard sees this card as delivered.
+        "card_fingerprint": {"job_id": job_id, "generation": generation, "digest": digest},
     }
 
 
@@ -1627,8 +1709,11 @@ async def _session_recently_active(session_id: str, *, window_s: int = _SCHEDULE
 
 async def _deliver_scheduled(payload: dict) -> bool:
     """Publish a scheduled fire's result card unless the origin session is stale (#2990
-    r3). Returns whether it published. Best-effort — never raises."""
+    r3). Returns whether it published. Best-effort — never raises. A published card's
+    fingerprint feeds the repeat guard (bd-x66jt); a skipped one records nothing, so the
+    same result still posts once the chat wakes."""
     origin = payload["origin_session"]
+    fingerprint = payload.pop("card_fingerprint", None)
     try:
         if not await _session_recently_active(origin):
             log.info(
@@ -1638,6 +1723,7 @@ async def _deliver_scheduled(payload: dict) -> bool:
             )
             return False
         _event_bus.publish("scheduler.completed", payload)
+        _remember_scheduled_card(fingerprint)
         log.info(
             "[scheduler] delivered %s result card for job %s → session %s",
             payload.get("status") or "completed",
@@ -1673,7 +1759,9 @@ def _handle_scheduled_delivery(outcome) -> None:
         # No running loop (a direct unit-test call) — publish inline; the stale guard
         # is a best-effort refinement layered on top of the always-safe bus publish
         # (an unconsumed event creates no ghost session).
+        fingerprint = payload.pop("card_fingerprint", None)
         _event_bus.publish("scheduler.completed", payload)
+        _remember_scheduled_card(fingerprint)
         return
     t = loop.create_task(_deliver_scheduled(payload))
     _BG_WAKE_TASKS.add(t)

@@ -133,9 +133,9 @@ def test_a_fire_that_failed_before_saying_anything_carries_why(_sched):
     payload = a2a._scheduled_delivery_payload(_Outcome(state="failed", text="", error=why))
     assert payload is not None
     assert (payload["status"], payload["summary"]) == ("failed", why)
-    # A completed turn with no text is not given an error it doesn't have.
+    # A completed turn with no text posts no card at all (bd-x66jt: nothing to report).
     done = a2a._scheduled_delivery_payload(_Outcome(state="completed", text="", error="ignored"))
-    assert done["summary"] == ""
+    assert done is None
 
 
 # ── recurring collapse (r4) ───────────────────────────────────────────────────

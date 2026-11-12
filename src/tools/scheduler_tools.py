@@ -103,6 +103,10 @@ def _build_scheduler_tools(scheduler) -> list:
 
         Args:
             prompt: self-contained instruction — you'll have no memory of scheduling it.
+                For a recurring check, tell it to end the reply with a final line ``NO_UPDATE``
+                when nothing changed: such a run posts no result card back to this chat (it is
+                still recorded in Activity), and a run repeating the last delivered result is
+                not re-posted either.
             when: 5-field cron (``"0 9 * * 1-5"``) or ISO-8601 datetime for a one-shot. Compute
                 times with ``current_time``.
             job_id: optional id (auto-generated); needed to cancel.
@@ -411,7 +415,9 @@ def _build_watch_tools():
         true); ``on_change`` fires whenever the checked value moves and always repeats. A repeating watch runs until its
         deadline or until cleared — set ``expires_in_s`` (seconds from now) unless you mean forever.
         ``interval_s``: seconds between checks (raise for slow things). ``stall_after``: signal after
-        N checks with unchanged evidence (watch stays active).
+        N checks with unchanged evidence (watch stays active). Tell ``run_prompt`` to end its reply
+        with a final line ``NO_UPDATE`` when nothing changed — a quiet scheduled run posts no result
+        card (the run is still recorded).
         """
         from runtime.state import STATE
 
