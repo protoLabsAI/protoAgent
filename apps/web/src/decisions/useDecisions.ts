@@ -168,6 +168,26 @@ export function createDecisionsStore() {
     return result;
   }
 
+  /** Re-read one decision from the server, bypassing the cache — the card's "did my answer
+   *  land?" check after a send whose outcome it can't know (#5099). Resolves null on a 404 (and
+   *  latches it missing); any other failure rejects so the caller knows it learned nothing. */
+  async function recheck(id: string): Promise<DecisionRow | null> {
+    try {
+      const row = await decisionsApi.getDecision(id);
+      storeRecord(row);
+      return row;
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 404) {
+        const records = { ...snapshot.records };
+        delete records[id];
+        snapshot = { ...snapshot, records, missing: { ...snapshot.missing, [id]: true } };
+        emit();
+        return null;
+      }
+      throw err;
+    }
+  }
+
   async function cancel(id: string, reason?: string): Promise<DecisionRow> {
     const { decision } = await decisionsApi.cancelDecision(id, reason);
     storeRecord(decision);
@@ -258,12 +278,18 @@ export function createDecisionsStore() {
     };
   }
 
-  return { subscribe, getSnapshot: () => snapshot, refresh, answer, cancel, loadDecision, openPanel, closePanel };
+  return { subscribe, getSnapshot: () => snapshot, refresh, answer, recheck, cancel, loadDecision, openPanel, closePanel };
 }
 
 // One store for the whole app: snapshots survive a consumer unmount/remount, and only while a
 // consumer is subscribed does it hold live bus subscriptions.
 const store = createDecisionsStore();
+
+/** Re-read one decision through the shared store (see `recheck`) — the DecisionCard's default
+ *  delivery check, so every mount gets it without new wiring. */
+export function recheckDecision(id: string): Promise<DecisionRow | null> {
+  return store.recheck(id);
+}
 
 export function useDecisions() {
   const snapshot = useSyncExternalStore(store.subscribe, store.getSnapshot, store.getSnapshot);

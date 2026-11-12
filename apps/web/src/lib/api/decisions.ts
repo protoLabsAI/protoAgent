@@ -51,6 +51,9 @@ export type DecisionRow = {
   default_action_text: string;
   /** Server-computed: the chosen option's label (or the raw answer for free text). */
   answer_label: string | null;
+  /** Single-record reads only: an answer is on its way to the agent (accepted by the server,
+   *  not yet consumed by the parked turn). Absent on list rows. */
+  delivering?: boolean;
 };
 
 export type DecisionList = { decisions: DecisionRow[]; pending: number };
@@ -60,9 +63,11 @@ export type AnswerSurface = "console";
 
 /** Answering resolves to one of two shapes. A 409 ("answered somewhere else") is NOT a throw —
  *  it is the server telling us the decision closed under us, carrying the now-closed record so
- *  the card can show "Already answered…". Any other non-2xx still throws an {@link ApiError}. */
+ *  the card can show "Already answered…". Any other non-2xx still throws an {@link ApiError}.
+ *  `delivering` (a 202) means the answer is on its way but the agent hasn't taken it yet — the
+ *  session is busy; the decision is still pending and must NOT be answered again (#5099). */
 export type AnswerResult =
-  | { answered_elsewhere: false; decision: DecisionRow; resumed: boolean }
+  | { answered_elsewhere: false; decision: DecisionRow; resumed: boolean; delivering?: boolean }
   | { answered_elsewhere: true; decision: DecisionRow | null };
 
 export const decisionsApi = {
@@ -106,8 +111,8 @@ export const decisionsApi = {
       if (response.status === 401 && !isMemberScoped(path)) notifyAuthRequired();
       throw new ApiError(response.status, detail || "request failed", code);
     }
-    const data = (await response.json()) as { decision: DecisionRow; resumed: boolean };
-    return { answered_elsewhere: false, decision: data.decision, resumed: data.resumed };
+    const data = (await response.json()) as { decision: DecisionRow; resumed: boolean; delivering?: boolean };
+    return { answered_elsewhere: false, decision: data.decision, resumed: data.resumed, delivering: Boolean(data.delivering) };
   },
 
   /** Cancel a pending decision (the operator dismissed it), unblocking the parked turn. */
