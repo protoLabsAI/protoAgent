@@ -38,6 +38,11 @@ from server import agent_name
 log = logging.getLogger("protoagent.server")
 
 _INBOX_NOW_RECOVERY_STARTED = False
+# One redelivery pass of undelivered background outcomes per process (#5053).
+_BACKGROUND_REDELIVERY_DONE = False
+# How far back a boot looks for an outcome that never reached its session. Older than a
+# day, the session that asked has moved on; the job stays readable by id regardless.
+_BACKGROUND_REDELIVERY_WINDOW_H = 24
 _INBOX_NOW_RECOVERY_BATCH_LIMIT = 8
 _INBOX_NOW_RECOVERY_RETRY_AFTER_S = 60 * 60
 # Bounded retries for a page that keeps refusing delivery. A COUNT, not a clock:
@@ -419,6 +424,57 @@ def _on_work_terminal(job) -> None:
             _spawn_background_wake(job)
     except Exception:  # noqa: BLE001 — the wake/resume is best-effort
         log.exception("[background] work-job terminal hook failed for %s", getattr(job, "id", "?"))
+
+
+async def redeliver_undelivered_background() -> int:
+    """Push every background outcome that settled but never reached its origin session
+    (#5053), once per process, through the same delivery a live settle uses
+    (``_on_work_terminal``: push-resume, else the Activity wake).
+
+    A restart used to strand them: a job interrupted by the restart is reconciled to
+    ``failed`` at boot, and one that settled just before it lost its in-memory push-resume
+    with the process — either way the outcome waited, possibly forever, for someone to
+    type into that session, and an autonomous sender read the silence as a lost message.
+    Delivery stays exactly-once: the push only triggers a turn, and that turn's
+    ``notified``-gated drain is what hands the outcome over. Returns the number pushed."""
+    global _BACKGROUND_REDELIVERY_DONE
+    if _BACKGROUND_REDELIVERY_DONE:
+        return 0
+    _BACKGROUND_REDELIVERY_DONE = True
+    mgr = getattr(STATE, "background_mgr", None)
+    if mgr is None:
+        return 0
+    from datetime import UTC, datetime, timedelta
+
+    since = datetime.now(UTC) - timedelta(hours=_BACKGROUND_REDELIVERY_WINDOW_H)
+    try:
+        jobs = mgr.store.undelivered_terminal(since=since)
+    except Exception:  # noqa: BLE001 — boot work must never break the process
+        log.exception("[background] undelivered-outcome scan failed")
+        return 0
+    for job in jobs:
+        _on_work_terminal(job)
+    if jobs:
+        log.info("[background] re-pushed %d undelivered outcome(s) after restart", len(jobs))
+    return len(jobs)
+
+
+def _start_background_redelivery_once() -> None:
+    """Schedule ``redeliver_undelivered_background`` on the startup loop. Called from the
+    FastAPI startup lifecycle after the self-A2A route is mounted, like the inbox recovery."""
+    if _BACKGROUND_REDELIVERY_DONE:
+        return
+
+    async def _run() -> None:
+        try:
+            await redeliver_undelivered_background()
+        except Exception:  # noqa: BLE001
+            log.exception("[background] undelivered-outcome redelivery failed")
+
+    try:
+        asyncio.get_running_loop().create_task(_run())
+    except RuntimeError:
+        log.warning("[background] redelivery skipped: no running startup event loop")
 
 
 def _build_background_manager(config):

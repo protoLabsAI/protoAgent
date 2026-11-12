@@ -17,6 +17,7 @@ marks the row ``failed`` so it can never stick on ``running``.
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import logging
 import os
 import uuid
@@ -31,6 +32,27 @@ _DEFAULT_MAX_CONCURRENCY = 3  # cap on concurrent background turns so a fan-out 
 # seconds (a member hung), force a PARTIAL push-resume so the finished reports still land.
 _DEFAULT_BATCH_JOIN_TIMEOUT_S = 900.0
 _TERMINAL_STATUSES = ("completed", "failed", "canceled")
+
+# The ``spawn_work`` job whose coroutine is running in this context, as ``(store, job_id)``
+# — set by ``_run_work`` so code deep inside the work (an A2A delegate adapter) can record
+# what the peer called the request without the job id being threaded through it (#5053).
+_CURRENT_WORK_JOB: contextvars.ContextVar[tuple | None] = contextvars.ContextVar(
+    "protoagent_background_work_job", default=None
+)
+
+
+def note_peer_dispatch(peer_task_id: str, peer_message_id: str = "") -> None:
+    """Record, on the running background job, the task id a peer gave the message this
+    job sent it, and that message's id (#5053). A no-op outside a ``spawn_work`` job, so
+    foreground callers can call it unconditionally. Never raises."""
+    current = _CURRENT_WORK_JOB.get()
+    if current is None or not peer_task_id:
+        return
+    store, job_id = current
+    try:
+        store.set_peer_identity(job_id, str(peer_task_id), str(peer_message_id or ""))
+    except Exception:  # noqa: BLE001 — bookkeeping must never fail a delegation
+        log.exception("[background] could not record peer identity for %s", job_id)
 
 
 class BackgroundManager:
@@ -249,6 +271,7 @@ class BackgroundManager:
         batch_id: str | None = None,
         result_author: str = "",
         origin_fence: list[str] | None = None,
+        amends: str = "",
     ) -> str:
         """Register and run a deterministic background job — a plain coroutine, NOT an
         LLM subagent turn — through the same durable store + concurrency cap + event
@@ -265,7 +288,9 @@ class BackgroundManager:
         The row is stamped ``deterministic`` (#2363): what comes back is the DELIVERABLE
         the caller dispatched and is waiting on, not a report an autonomous worker wrote,
         so the drain hands it to the origin turn whole instead of applying ADR 0070 D2's
-        excerpt-plus-pointer treatment."""
+        excerpt-plus-pointer treatment.
+
+        ``amends`` is the id of an earlier job this one amends, recorded on the row (#5053)."""
         job_id = self.store.create(
             agent_name=self.agent_name,
             origin_session=origin_session or "",
@@ -279,6 +304,7 @@ class BackgroundManager:
             # The spawning turn's fence (from the calling tool's scope unless given): the
             # push-resume nudge that delivers the result runs under it — see ``spawn``.
             origin_fence=_origin_fence(origin_fence),
+            amends=amends,
         )
         t = asyncio.create_task(
             self._run_work(job_id, kind, description, origin_session or "", work),
@@ -298,6 +324,8 @@ class BackgroundManager:
         (idle-wake). Mirrors what the A2A terminal hook does for subagent-turn jobs."""
         from graph.delegate_progress import progress_sink
 
+        # This task's own context (a copy made by create_task), so the binding never leaks.
+        _CURRENT_WORK_JOB.set((self.store, job_id))
         async with self._sem:  # same cap as background turns — one fan-out can't swamp the gateway
             try:
                 # A coding delegate this job dispatches reports its live progress onto the
