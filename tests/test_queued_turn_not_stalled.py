@@ -266,7 +266,8 @@ async def test_a_fire_into_a_busy_thread_runs_exactly_once_after_it_frees(env, t
     s = LocalScheduler(agent_name="t", invoke_url="http://agent", api_key="", bearer_token="", db_dir=tmp_path)
     s._fire_timeout_s = _STALL  # the fire's own wait runs out long before the job ends
     # An explicit interactive continuation into the busy thread (ADR 0129 keeps chat
-    # targets; a context-less `wait:system:activity` is a held legacy alias instead).
+    # targets; a context-less wait would get its own isolated `job:` owner instead,
+    # and a MIGRATED legacy `wait:system:activity` row is held).
     job = s.add_job("check the queue", (datetime.now(UTC) - timedelta(seconds=1)).isoformat(),
                     job_id="wait:chat-thread", context_id="chat-thread")
 

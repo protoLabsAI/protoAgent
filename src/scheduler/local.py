@@ -1187,43 +1187,46 @@ class LocalScheduler:
                 return None
             job.context_id = row["context_id"]
             job.execution_hold = row["execution_hold"]
-            # Serialize by execution owner, including canceled/replaced generations.
-            # An actively accepted/in-flight occurrence anywhere in the owner holds
-            # EVERYTHING, including continuations — at most one active invocation.
-            busy = db.execute(
-                "SELECT 1 FROM occurrences o LEFT JOIN job_sessions s "
-                "ON s.job_id = o.job_id AND s.created_at = o.created_at "
-                "WHERE o.state IN ('claimed', 'unknown') "
-                "AND (o.job_id = ? OR s.context_id = ?) LIMIT 1",
-                (job.id, job.context_id),
-            ).fetchone()
-            # Another outstanding continuation of this owner (its session's root is a
-            # DIFFERENT generation) — identified from persisted ownership, not the id
-            # prefix. A root cron/one-shot fire waits behind it; so does an unrelated
-            # independent reaction of a repeating watch.
-            waiting = db.execute(
-                "SELECT 1 FROM jobs j JOIN job_sessions s "
-                "ON j.id = s.job_id AND j.created_at = s.created_at "
-                "WHERE j.context_id = ? AND j.id != ? AND s.root_job_id != j.id LIMIT 1",
-                (job.context_id, job.id),
-            ).fetchone()
-            # Entry past that hold is authorized ONLY for the live continuation the
-            # owner actually yielded for — the one whose persisted parent occurrence
-            # exists. A fresh cron tick or a NEW reaction of a repeating watch has no
-            # such parent and waits like any other new independent occurrence.
-            session = db.execute(
-                "SELECT parent_message_id FROM job_sessions WHERE job_id = ? AND created_at = ?",
-                (job.id, job.created_at),
-            ).fetchone()
-            parent = session["parent_message_id"] if session else None
-            live_continuation = bool(parent) and db.execute(
-                "SELECT 1 FROM occurrences WHERE message_id = ? LIMIT 1", (parent,)
-            ).fetchone() is not None
-            if busy or (
-                (job.context_id or "").startswith("job:")
-                and (waiting or self._watch_holds_execution(job)) and not live_continuation
-            ):
-                return None
+            if (job.context_id or "").startswith("job:"):
+                # Serialize by execution owner, including canceled/replaced
+                # generations. An actively accepted/in-flight occurrence anywhere in
+                # the owner holds EVERYTHING, including continuations — at most one
+                # active invocation. Membership is the PERSISTED session identity,
+                # never the job-id prefix or a shared interactive/Activity context:
+                # a handle-less orphaned claim quarantines only its own owner, not
+                # every later generation of the id or every job aimed at a chat.
+                busy = db.execute(
+                    "SELECT 1 FROM occurrences o JOIN job_sessions s "
+                    "ON s.job_id = o.job_id AND s.created_at = o.created_at "
+                    "WHERE o.state IN ('claimed', 'unknown') AND s.context_id = ? LIMIT 1",
+                    (job.context_id,),
+                ).fetchone()
+                # Another outstanding continuation of this owner (its session's root is a
+                # DIFFERENT generation) — identified from persisted ownership, not the id
+                # prefix. A root cron/one-shot fire waits behind it; so does an unrelated
+                # independent reaction of a repeating watch.
+                waiting = db.execute(
+                    "SELECT 1 FROM jobs j JOIN job_sessions s "
+                    "ON j.id = s.job_id AND j.created_at = s.created_at "
+                    "WHERE j.context_id = ? AND j.id != ? AND s.root_job_id != j.id LIMIT 1",
+                    (job.context_id, job.id),
+                ).fetchone()
+                # Entry past that hold is authorized ONLY for the live continuation the
+                # owner actually yielded for — the one whose persisted parent occurrence
+                # exists. A fresh cron tick or a NEW reaction of a repeating watch has no
+                # such parent and waits like any other new independent occurrence.
+                session = db.execute(
+                    "SELECT parent_message_id FROM job_sessions WHERE job_id = ? AND created_at = ?",
+                    (job.id, job.created_at),
+                ).fetchone()
+                parent = session["parent_message_id"] if session else None
+                live_continuation = bool(parent) and db.execute(
+                    "SELECT 1 FROM occurrences WHERE message_id = ? LIMIT 1", (parent,)
+                ).fetchone() is not None
+                if busy or (
+                    (waiting or self._watch_holds_execution(job)) and not live_continuation
+                ):
+                    return None
             old = db.execute("SELECT * FROM occurrences WHERE job_id = ? AND next_fire = ? AND created_at = ?",
                              (job.id, job.next_fire, job.created_at)).fetchone()
             unresolved = db.execute(
@@ -1345,9 +1348,13 @@ class LocalScheduler:
         db = self._connect()
         try:
             rows = db.execute(
+                # The unresolved-work exemption is per GENERATION: only this row's own
+                # claimed/unknown occurrence keeps it out of stale-fire policy. An
+                # orphaned claim from a replaced generation must not keep a newer
+                # version alive past the recovery window (it would then run late).
                 "SELECT * FROM jobs WHERE agent_name = ? AND enabled = 1 AND execution_hold IS NULL AND next_fire <= ? "
                 "AND NOT EXISTS (SELECT 1 FROM occurrences o WHERE o.job_id = jobs.id "
-                "AND o.state IN ('claimed', 'unknown'))",
+                "AND o.created_at = jobs.created_at AND o.state IN ('claimed', 'unknown'))",
                 (self.agent_name, cutoff_recent.isoformat()),
             ).fetchall()
             for row in rows:

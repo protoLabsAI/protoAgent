@@ -27,8 +27,9 @@ def legacy_store(path):
                   ttl="7d", max_fires=20)
     with s._connect() as db:
         db.execute("DROP TABLE job_sessions")
-        db.execute("UPDATE jobs SET context_id = NULL WHERE id = 'cron'")
-        db.execute("UPDATE jobs SET context_id = 'system:activity' WHERE id = 'watch-old'")
+        db.execute("UPDATE jobs SET context_id = NULL WHERE id IN ('cron', 'wait:activity')")
+        db.execute("UPDATE jobs SET context_id = 'system:activity' "
+                   "WHERE id IN ('watch-old', 'wait:system:activity')")
         db.execute("UPDATE jobs SET next_fire = ?, last_fire = ?, fire_count = 3, "
                    "consecutive_failures = 2, last_error = 'failure', last_ok = ?, "
                    "enabled = 0, fence = ?", (PAST, PAST, PAST, '["read_file"]'))
@@ -68,9 +69,9 @@ def test_migration_crash_rolls_back_owner_assignment(tmp_path, monkeypatch):
     original = job_sessions.resolve
     calls = 0
 
-    def crash(db, job):
+    def crash(db, job, **kwargs):
         nonlocal calls
-        result = original(db, job)
+        result = original(db, job, **kwargs)
         calls += 1
         if calls == 2:
             raise RuntimeError("process stopped during assignment")
@@ -116,6 +117,31 @@ def test_unowned_legacy_waits_survive_recovery_pause_resume_and_direct_fire(tmp_
         assert held.next_fire == original_slot
         assert s._claim_occurrence(held) is None
         assert held not in s._claim_due_jobs(datetime.now(UTC))
+
+
+@pytest.mark.platform_sensitive
+def test_new_activity_waits_get_live_owners_and_fire(tmp_path):
+    """The legacy hold covers only rows ``migrate`` discovers. The wait tool still
+    writes ``wait:system:activity`` (an Activity/inbox turn) and a sessionless
+    ``wait:activity`` for NEW waits and reports success — so a freshly created job
+    must receive a live ``job:`` owner, stay claimable, and survive reopen unheld."""
+    s = scheduler(tmp_path)
+    activity = s.add_job("resume the sweep", PAST,
+                         job_id="wait:system:activity", context_id="system:activity")
+    sessionless = s.add_job("resume", PAST, job_id="wait:activity")
+    for job in (activity, sessionless):
+        assert job.execution_hold is None
+        assert job.context_id.startswith("job:")
+    assert activity.context_id != sessionless.context_id
+    due = {j.id for j in s._claim_due_jobs(datetime.now(UTC))}
+    assert {"wait:system:activity", "wait:activity"} <= due
+    assert s._claim_occurrence(activity)
+    # Reopening re-runs the idempotent migration without re-holding live owners.
+    s = scheduler(tmp_path)
+    reopened = s.get_job("wait:activity")
+    assert reopened.execution_hold is None
+    assert reopened.context_id == sessionless.context_id
+    assert s._claim_occurrence(reopened)
 
 
 @pytest.mark.platform_sensitive
@@ -468,8 +494,11 @@ def test_future_interactive_continuation_does_not_hold_unrelated_schedule(tmp_pa
     s = scheduler(tmp_path)
     assert s._claim_occurrence(s.get_job(due.id))
     assert s.get_job(pending.id).next_fire == future
-    # An actual unresolved invocation still serializes the shared chat context.
-    assert s._claim_occurrence(s.get_job(pending.id)) is None
+    # Shared interactive contexts hold per IDENTITY only (ADR 0129 D6): another
+    # job's unresolved invocation in the same chat never blocks this one. One
+    # pending wait per chat stays the wait tool's supersession rule (ADR 0053),
+    # enforced at creation, not at claim time.
+    assert s._claim_occurrence(s.get_job(pending.id))
 
 
 @pytest.mark.platform_sensitive
@@ -490,6 +519,52 @@ def test_stale_interactive_one_shot_follows_stale_policy_despite_unrelated_wait(
     assert s.get_job(quarantined.id) is not None
     assert s._claim_occurrence(s.get_job(quarantined.id)) is None
     assert s.get_job("wait:chat").next_fire == future
+
+
+@pytest.mark.platform_sensitive
+def test_orphaned_unknown_claim_holds_only_its_own_generation(tmp_path):
+    """A handle-less unknown occurrence (crash inside the send window) is not
+    reconcilable — recovery needs a persisted task handle — so it quarantines
+    only its OWN generation (ADR 0129 D6 per-identity holds): replacements of
+    the same job id and other jobs aimed at the same chat still fire."""
+    s = scheduler(tmp_path)
+    first = s.add_job("resume", PAST, job_id="wait:chat", context_id="chat")
+    assert s._claim_occurrence(first)
+    s._finish_dispatch(first, "unknown")  # delivery unknown; no handle persisted
+    s.cancel_job(first.id)
+    s = scheduler(tmp_path)
+    replacement = s.add_job("resume again", PAST, job_id="wait:chat", context_id="chat")
+    assert replacement.created_at != first.created_at
+    assert s._claim_occurrence(replacement)
+    assert s._claim_occurrence(s.add_job("reminder", PAST, context_id="chat"))
+    # The orphan itself stays quarantined — unresolved, and never resent.
+    orphan = next(r for r in rows(s, "occurrences") if r["created_at"] == first.created_at)
+    assert orphan["state"] == "unknown" and orphan["task_id"] is None
+    assert all(c["created_at"] != first.created_at for c in s._pending_reconciliation())
+
+
+@pytest.mark.platform_sensitive
+def test_stale_replacement_follows_stale_policy_despite_predecessors_orphan(tmp_path):
+    """Startup recovery exempts a job from stale-fire policy only for its OWN
+    unresolved occurrence. An orphaned claim left by a replaced generation must
+    not keep the newer version past-due forever — it would then fire days late."""
+    s = scheduler(tmp_path)
+    first = s.add_job("resume", PAST, job_id="wait:chat", context_id="chat")
+    assert s._claim_occurrence(first)
+    s._finish_dispatch(first, "unknown")
+    s.cancel_job(first.id)
+    s.add_job("resume again", PAST, job_id="wait:chat", context_id="chat")
+    cron = s.add_job("sweep", "* * * * *", job_id="chat-cron", context_id="chat")
+    with s._connect() as db:
+        db.execute("UPDATE jobs SET next_fire = ? WHERE id = ?", (PAST, cron.id))
+    s = scheduler(tmp_path)
+    s._recover_missed_fires()
+    # The stale one-shot replacement is dropped; the stale cron rolls forward.
+    assert s.get_job("wait:chat") is None
+    assert s.get_job("chat-cron").next_fire != PAST
+    # The orphan stays exactly as quarantined as before — present, unresolved.
+    orphan = next(r for r in rows(s, "occurrences") if r["created_at"] == first.created_at)
+    assert orphan["state"] == "unknown"
 
 
 @pytest.mark.platform_sensitive

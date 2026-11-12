@@ -21,6 +21,7 @@ module-level mutable state touched through a copy is a second registry.
 from __future__ import annotations
 
 import ast
+import functools
 import importlib
 from collections.abc import Collection, Iterable
 from pathlib import Path
@@ -82,19 +83,30 @@ def _package_attr_is_module(pkg: str, leaf: str, dotted: str) -> bool:
 class _ModuleRefs:
     """Every spelling of ``dotted`` (the module object) in one parsed test file."""
 
-    def __init__(self, tree: ast.AST, dotted: str) -> None:
+    def __init__(self, tree: ast.AST, dotted: str, nodes: list[ast.AST] | None = None) -> None:
         self.dotted = dotted
-        self.helpers: set[str] = {
-            fn.name
-            for fn in ast.walk(tree)
-            if isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef))
-            and any(
-                isinstance(r, ast.Return) and r.value is not None and self._is_import(r.value) for r in ast.walk(fn)
-            )
-        }
+        nodes = list(ast.walk(tree)) if nodes is None else nodes
+        # Only a function that returns the module can be a helper, and almost no file has
+        # one — so look for such a ``return`` first instead of walking every function body.
+        returns_module = any(
+            isinstance(r, ast.Return) and r.value is not None and self._is_import(r.value) for r in nodes
+        )
+        self.helpers: set[str] = (
+            {
+                fn.name
+                for fn in nodes
+                if isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef))
+                and any(
+                    isinstance(r, ast.Return) and r.value is not None and self._is_import(r.value)
+                    for r in ast.walk(fn)
+                )
+            }
+            if returns_module
+            else set()
+        )
         pkg, _, leaf = dotted.rpartition(".")
         self.aliases: set[str] = set()
-        for node in ast.walk(tree):
+        for node in nodes:
             if isinstance(node, ast.Import):
                 for a in node.names:
                     if a.name == dotted and (a.asname or "." not in dotted):
@@ -126,6 +138,12 @@ class _ModuleRefs:
         return self._is_import(node)
 
 
+@functools.lru_cache(maxsize=None)
+def _text(path: Path, mtime_ns: int) -> str:
+    """One read per file per process — every seam guard scans the same ~900 files."""
+    return path.read_text(encoding="utf-8")
+
+
 def stale_patches(
     module: str,
     names: Collection[str] | None,
@@ -137,12 +155,19 @@ def stale_patches(
     """Patches of ``names`` (None: any name) on ``module``, plus ``state`` touches through it."""
     skip = {Path(p).resolve() for p in exclude}
     hits: list[Hit] = []
+    parts = module.split(".")
     for path in suite_files() if files is None else files:
         if path.resolve() in skip:
             continue
-        tree = ast.parse(path.read_text(encoding="utf-8"))
-        refs = _ModuleRefs(tree, module)
-        for node in ast.walk(tree):
+        text = _text(path, path.stat().st_mtime_ns)
+        # Every spelling of the module names each of its dotted parts somewhere in the
+        # file, so a file missing one cannot hit: skip the parse (most files, most guards).
+        if not all(part in text for part in parts):
+            continue
+        tree = ast.parse(text)
+        nodes = list(ast.walk(tree))
+        refs = _ModuleRefs(tree, module, nodes)
+        for node in nodes:
             if state and isinstance(node, ast.Attribute) and node.attr in state and node.value in refs:
                 hits.append(Hit(path, node.lineno, f"{module}.{node.attr}"))
                 continue

@@ -32,11 +32,20 @@ def ensure_schema(db: sqlite3.Connection) -> None:
     db.execute("CREATE INDEX IF NOT EXISTS idx_job_sessions_context ON job_sessions(context_id)")
 
 
-def resolve(db: sqlite3.Connection, job: dict, *, context_held=None) -> tuple[str | None, str | None]:
+def resolve(
+    db: sqlite3.Connection, job: dict, *, context_held=None, legacy: bool = False
+) -> tuple[str | None, str | None]:
     """Assign once per generation, retaining unresolved replacement ownership.
 
     ``context_held(context_id) -> bool`` optionally reports continuations that
     live outside this database (an armed watch in the host's watch store).
+
+    ``legacy`` marks a pre-existing row discovered by ``migrate``. Only those may
+    be held as ambiguous Activity waits: their creating turn is long gone, so
+    auto-firing them would resume a conversation nobody owns. A FRESHLY created
+    job is never held — the wait tool still writes ``wait:system:activity`` /
+    sessionless ``wait:activity`` ids and reports success, so those must receive
+    a live ``job:`` owner and fire like any other background job.
     """
     key = (job["id"], job["created_at"])
     existing = db.execute(
@@ -49,8 +58,9 @@ def resolve(db: sqlite3.Connection, job: dict, *, context_held=None) -> tuple[st
     root = key
     parent_message = None
     if context in (None, "", LEGACY_ACTIVITY):
-        if job["id"] == "wait:system:activity" or (
-            job["id"] == "wait:activity" and not job.get("origin_session")
+        if legacy and (
+            job["id"] == "wait:system:activity"
+            or (job["id"] == "wait:activity" and not job.get("origin_session"))
         ):
             hold = LEGACY_WAIT_HOLD
         else:
@@ -127,9 +137,9 @@ def migrate(db: sqlite3.Connection) -> None:
     """
     ensure_schema(db)
     for row in db.execute("SELECT job_snapshot FROM occurrences WHERE job_snapshot IS NOT NULL").fetchall():
-        resolve(db, json.loads(row[0]))
+        resolve(db, json.loads(row[0]), legacy=True)
     for row in db.execute("SELECT * FROM jobs").fetchall():
-        context, hold = resolve(db, dict(row))
+        context, hold = resolve(db, dict(row), legacy=True)
         db.execute("UPDATE jobs SET context_id = ?, execution_hold = ? WHERE id = ? "
                    "AND (context_id IS NOT ? OR execution_hold IS NOT ?)",
                    (context, hold, row["id"], context, hold))
