@@ -116,7 +116,7 @@ import { StatusPill } from "./StatusPill";
 import { WorkView } from "../work/WorkView";
 import { useWorkItems, type WorkItems } from "../work/useWorkItems";
 import { laneFor } from "../work/tone";
-// Load the eight built-in Work sections for their registration side-effect (#4955 §5), so
+// Load the seven built-in Work sections for their registration side-effect (#4955 §5), so
 // the Work surface mounts with every section live — none falls back to the unregistered Empty.
 import "../work/sections";
 import { invalidateAllAfterSetup } from "../setup/finish";

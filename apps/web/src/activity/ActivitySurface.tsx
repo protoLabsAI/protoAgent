@@ -47,6 +47,19 @@ const ORIGIN: Record<string, { icon: typeof Clock; label: string }> = {
 // inbox priority tier → tone class (shared with the completed-entry priority badge).
 const PRIORITY_TONE: Record<string, string> = { now: "now", next: "next", later: "later" };
 
+/** The scheduler's one-line wake header (`src/scheduler/local.py`, ADR 0079), which it
+ *  prepends to a scheduled/watch/wait/goal prompt. It is runtime framing for the model,
+ *  not the job's words. */
+const WAKE_HEADER = /^\s*\[Autonomous wake\b[^\]]*\]\s*/;
+
+/** The operator-facing stimulus: the raw stimulus minus the internal wake header (#5094).
+ *  The Work Activity row title used to do this stripping; since S4c the feed is the
+ *  timeline's only home, so every rendering of a stimulus (row, hover text, reader)
+ *  goes through here. Empty when the stimulus was nothing but the header. */
+export function stripWakeHeader(stimulus: string | undefined): string {
+  return stimulus?.replace(WAKE_HEADER, "").trim() ?? "";
+}
+
 export function OriginProvenance({ entry }: { entry: ActivityEntry }) {
   const o = ORIGIN[entry.origin] ?? { icon: Zap, label: entry.origin || "agent" };
   const Icon = o.icon;
@@ -62,10 +75,7 @@ export function OriginProvenance({ entry }: { entry: ActivityEntry }) {
   );
 }
 
-// `pendingOnly` embeds just the inbox triage in a host's own scrolling list (no completed
-// timeline, no dialog sizing — #5094). The Feed dialog keeps both; it has been the feed's
-// only home since S4c removed Work's Activity section.
-export function ActivitySurface({ pendingOnly = false }: { pendingOnly?: boolean }) {
+export function ActivitySurface() {
   // --- Completed activity timeline. Held newest-first (as the API returns), rendered
   //     oldest-first. Persisted rows use positive database IDs; live-only rows count
   //     downward so a same-millisecond event burst cannot collide with a React key or
@@ -84,7 +94,6 @@ export function ActivitySurface({ pendingOnly = false }: { pendingOnly?: boolean
   const dismissed = useRef<Set<number>>(new Set());
 
   const loadActivity = useCallback(async () => {
-    if (pendingOnly) return;
     setActivityLoading(true);
     try {
       const r = await api.activity();
@@ -95,7 +104,7 @@ export function ActivitySurface({ pendingOnly = false }: { pendingOnly?: boolean
     } finally {
       setActivityLoading(false);
     }
-  }, [pendingOnly]);
+  }, []);
 
   const loadInbox = useCallback(async () => {
     setInboxLoading(true);
@@ -131,7 +140,6 @@ export function ActivitySurface({ pendingOnly = false }: { pendingOnly?: boolean
   useEffect(
     () =>
       onServerEvent("activity.message", (data) => {
-        if (pendingOnly) return;
         const text = typeof data.text === "string" ? data.text : "";
         if (!text) return;
         const entry: ActivityEntry = {
@@ -147,7 +155,7 @@ export function ActivitySurface({ pendingOnly = false }: { pendingOnly?: boolean
         };
         setEntries((prev) => [entry, ...prev]);
       }),
-    [pendingOnly],
+    [],
   );
 
   // Live: a new inbound item pushes `inbox.item` — refetch to pick it up with its
@@ -179,12 +187,8 @@ export function ActivitySurface({ pendingOnly = false }: { pendingOnly?: boolean
 
   return (
     // The utility-bar dialog gives the feed a fixed height and splits it between the two
-    // sections. Embedded in Work (`pendingOnly`), the pending cards sit in the Work list's
-    // flow instead: no fixed height and no inner scroller (#5094).
-    <div
-      className={pendingOnly ? "unified-feed unified-feed--inline" : "unified-feed util-dialog-fill"}
-      data-testid="unified-feed"
-    >
+    // sections (#5094).
+    <div className="unified-feed util-dialog-fill" data-testid="unified-feed">
       {/* PENDING (top): inbound stimuli awaiting processing (ADR 0003). */}
       {inboxError ? (
         <div className="activity-error" role="alert">
@@ -247,12 +251,12 @@ export function ActivitySurface({ pendingOnly = false }: { pendingOnly?: boolean
       ) : null}
 
       {/* COMPLETED (below): the read-only provenance timeline (ADR 0022). */}
-      {!pendingOnly && activityError ? (
+      {activityError ? (
         <div className="activity-error" role="alert">
           {activityError}
         </div>
       ) : null}
-      {!pendingOnly && <div className="activity-feed" ref={scrollRef} data-testid="feed-completed">
+      <div className="activity-feed" ref={scrollRef} data-testid="feed-completed">
         {nothing ? (
           <Empty
             className="activity-empty"
@@ -260,7 +264,12 @@ export function ActivitySurface({ pendingOnly = false }: { pendingOnly?: boolean
             description="Pending inbound items and completed agent turns land here — each tagged with what triggered it."
           />
         ) : null}
-        {chronological.map((e) => (
+        {chronological.map((e) => {
+          // A scheduled/watch/wait/goal turn's stimulus arrives with the scheduler's
+          // internal wake header — show only the job's own words (#5094), everywhere
+          // the stimulus renders: the row, its hover text and the reader.
+          const stimulus = stripWakeHeader(e.stimulus);
+          return (
           <div
             className="activity-entry"
             key={e.id}
@@ -284,8 +293,8 @@ export function ActivitySurface({ pendingOnly = false }: { pendingOnly?: boolean
                       [e.trigger, e.task_id ? `task ${e.task_id}` : "", e.created_at ? ago(e.created_at) : ""]
                         .filter(Boolean)
                         .join(" · ") || undefined,
-                    content: e.stimulus
-                      ? `> **In response to**\n>\n> ${e.stimulus.replace(/\n/g, "\n> ")}\n\n---\n\n${e.text}`
+                    content: stimulus
+                      ? `> **In response to**\n>\n> ${stimulus.replace(/\n/g, "\n> ")}\n\n---\n\n${e.text}`
                       : e.text,
                   })
                 }
@@ -295,19 +304,20 @@ export function ActivitySurface({ pendingOnly = false }: { pendingOnly?: boolean
             </div>
             {/* Explicit stimulus attribution (#1375): the input this response is replying to,
                 so the feed isn't an unanchored wall of agent output. Full text on hover. */}
-            {e.stimulus ? (
-              <div className="activity-stimulus" title={e.stimulus}>
+            {stimulus ? (
+              <div className="activity-stimulus" title={stimulus}>
                 <CornerDownRight size={12} aria-hidden />
                 <span className="activity-stimulus-label">in response to</span>
-                <span className="activity-stimulus-text">{e.stimulus}</span>
+                <span className="activity-stimulus-text">{stimulus}</span>
               </div>
             ) : null}
             <div className="activity-content">
               <Markdown>{e.text}</Markdown>
             </div>
           </div>
-        ))}
-      </div>}
+          );
+        })}
+      </div>
     </div>
   );
 }

@@ -14,7 +14,8 @@ test("Feed pill opens its own dialog with pending triage and live completed turn
         id: 100, created_at: new Date().toISOString(), origin: "scheduler",
         trigger: "heartbeat", priority: "", state: "completed", task_id: "",
         text: "Live completed response",
-        stimulus: "Hourly persisted heartbeat check.",
+        // The scheduler prepends its wake header; the feed must not show it (#5094).
+        stimulus: "[Autonomous wake — scheduled run. Orient from <working_state>, then:]\n\nHourly persisted heartbeat check.",
       }] : [],
     } });
   });
@@ -60,13 +61,20 @@ test("Feed pill opens its own dialog with pending triage and live completed turn
   const live = completed.locator(".activity-entry", { hasText: "live activity ping" }).first();
   await expect(live).toBeVisible();
   await expect(live.locator(".activity-origin")).toContainText("scheduled");
-  await expect(live.locator(".activity-stimulus")).toContainText("Hourly heartbeat check.");
+  // The mock bus publishes the scheduler's real stimulus, wake header included; the
+  // row shows only the job's own words (#5094).
+  await expect(live.locator(".activity-stimulus-text")).toHaveText("Hourly heartbeat check.");
   // ...and the header reload refetches the persisted history into the same timeline.
   expect(historyReads).toBeGreaterThan(0);
   includeNewTurn = true;
   await dialog.getByRole("button", { name: "Refresh" }).click();
-  await expect(completed.getByText("Live completed response")).toBeVisible();
-  await expect(completed.getByText("Hourly persisted heartbeat check.")).toBeVisible();
+  const persisted = completed.locator(".activity-entry", { hasText: "Live completed response" }).first();
+  await expect(persisted).toBeVisible();
+  // Persisted scheduled turns strip the wake header too — in the row and its hover text —
+  // so the internal "[Autonomous wake — …]" framing never reaches the operator (#5094).
+  await expect(persisted.locator(".activity-stimulus-text")).toHaveText("Hourly persisted heartbeat check.");
+  await expect(persisted.locator(".activity-stimulus")).toHaveAttribute("title", "Hourly persisted heartbeat check.");
+  await expect(dialog.getByText(/Autonomous wake/)).toHaveCount(0);
   // The feed stays read the whole time it is open.
   await expect(page.getByTestId("activity-badge")).toHaveCount(0);
 

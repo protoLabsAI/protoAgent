@@ -8,7 +8,6 @@ import type { DirectiveRow } from "../lib/api/chat";
 import { goalsQuery, inboxQuery, queryKeys, schedulesQuery, tasksQuery, watchesQuery } from "../lib/queries";
 import { onConnectionChange, onTopic } from "../lib/events";
 import type {
-  ActivityEntry,
   InboxItem,
   BackgroundJobDTO,
   GoalState,
@@ -172,18 +171,6 @@ function mapBackground(row: BackgroundJobDTO): WorkItem {
     raw: row,
   };
 }
-/** The scheduler's one-line wake header (`src/scheduler/local.py`, ADR 0079), which it
- *  prepends to a scheduled/watch/wait/goal prompt. It is runtime framing for the model,
- *  not the job's words, so a row title drops it and leads with the job's own prompt. */
-const WAKE_HEADER = /^\s*\[Autonomous wake\b[^\]]*\]\s*/;
-
-/** A human row title for an activity turn: what it responded to, minus the internal wake
- *  header (#5094), else the response, the job id or the origin. */
-export function activityTitle(entry: ActivityEntry): string {
-  const stimulus = entry.stimulus?.replace(WAKE_HEADER, "").trim();
-  return stimulus || entry.text?.trim() || entry.trigger || entry.origin;
-}
-
 function mapDirective(row: DirectiveRow): WorkItem {
   return {
     kind: "directive",
