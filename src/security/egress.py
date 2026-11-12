@@ -83,7 +83,7 @@ def _blocked_ip(host: str, *, allow_private: bool = False) -> str | None:
     globally-routable addresses. One-shot resolution — not a DNS-rebinding
     defence, but closes the trivial literal/redirect-to-internal vector.
 
-    ``allow_private=True`` permits private + loopback ranges (LAN / tailnet / a
+    ``allow_private=True`` permits private, shared (CGNAT) + loopback ranges (LAN / tailnet / a
     co-located instance — the *normal* case for a fleet remote) while STILL
     blocking link-local (incl. cloud-metadata ``169.254.169.254``), multicast,
     reserved and unspecified — the actual SSRF/credential-theft targets."""
@@ -110,7 +110,10 @@ def _blocked_ip(host: str, *, allow_private: bool = False) -> str | None:
         # link-local covers the cloud-metadata IP — always blocked.
         if ip.is_link_local or ip.is_multicast or ip.is_reserved or ip.is_unspecified:
             return addr
-        if not allow_private and (ip.is_loopback or ip.is_private):
+        # ``not is_global`` on top of ``is_private``: shared address space (100.64.0.0/10 —
+        # the range Tailscale hands out, so every tailnet peer and its 100.100.100.100
+        # resolver) is neither private nor global, and ``is_private`` alone let it through.
+        if not allow_private and (ip.is_private or not ip.is_global):
             return addr
     return None
 
