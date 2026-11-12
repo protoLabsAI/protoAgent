@@ -628,6 +628,13 @@ def _principal(context: Any) -> str:
     return hashlib.sha256(cred.encode()).hexdigest()
 
 
+#: The request-metadata keys that point a server-fired turn at the job it settles.
+_SERVER_FIRED_KEYS = ("trigger", "scheduler_job_id", "inbox_source", "background_job_id")
+#: Context-id prefixes the server keeps for its own job sessions (``background:<job>``,
+#: ADR 0050; ``job:<…>``, ADR 0129).
+_SERVER_CONTEXT_PREFIXES = ("background:", "job:")
+
+
 def _principal_kind(context: Any, origin: str = "") -> str:
     """Classify the presented secret, never trusting origin alone for file handoffs.
 
@@ -929,6 +936,12 @@ class ProtoAgentExecutor(AgentExecutor):
         _ctx_problem = session_id_problem(_ctx) if _ctx else None
         if _ctx_problem is not None:
             raise InvalidParamsError(message=f"Invalid contextId: {_ctx_problem}")
+        # A federation caller (ADR 0066) can neither run in a context this server keeps for
+        # its own jobs (a ``background:`` job's outcome settles that job) nor claim a
+        # server-fired origin below.
+        _federation = _principal_kind(context) == "federation"
+        if _federation and _ctx.startswith(_SERVER_CONTEXT_PREFIXES):
+            raise InvalidParamsError(message="Invalid contextId: reserved for this agent's own jobs")
         # Provenance for the Activity feed (ADR 0022): what triggered this turn.
         _md = _request_metadata(context)
         # One parked task per context (#3930). A turn that ANSWERED the pause (a resume, or
@@ -939,6 +952,13 @@ class ProtoAgentExecutor(AgentExecutor):
         # while this one waited for the thread lock is only known stale once it is done.
         touches_pause = bool(resume or _md.get("hitl_resume"))
         _origin = str(_md.get("origin", "") or "")
+        if _federation and self._server_fired(_origin):
+            # A server-fired origin (background, scheduler, inbox…) and its job keys decide
+            # which job, schedule or inbox item this turn's outcome settles. A federation
+            # caller can send any metadata, so it can't claim one: its turn runs as a plain one.
+            for key in ("origin", *_SERVER_FIRED_KEYS):
+                _md.pop(key, None)
+            _origin = ""
         if not resume:
             await event_queue.enqueue_event(
                 Task(

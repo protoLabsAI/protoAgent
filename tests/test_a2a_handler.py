@@ -1153,6 +1153,43 @@ async def test_terminal_hook_receives_peer_provenance_from_send_message_metadata
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("token", ["op-token", "fed-token"])
+async def test_federation_caller_cannot_claim_a_server_fired_turn(token, monkeypatch):
+    """A federation caller's ``origin: background`` + job keys are dropped (the outcome
+    would settle that job), and a ``background:`` context is refused; an operator's stand."""
+    from a2a_impl import auth
+
+    monkeypatch.setattr(auth, "_BEARER", [None])
+    monkeypatch.setattr(auth, "_FEDERATION", [None])
+    outcomes: list[TurnOutcome] = []
+    seen: list[dict] = []
+    set_terminal_hook(outcomes.append)
+
+    async def stream(text, ctx, *, request_metadata=None, **kwargs):
+        seen.append(dict(request_metadata or {}))
+        yield ("done", "answer")
+
+    app = _build_app(stream, bearer="op-token", server_fired_origin=lambda o: o == "background")
+    auth.set_federation_token("fed-token")
+    md = {"origin": "background", "trigger": "bg-1", "background_job_id": "bg-1"}
+    headers = {**A2A_HEADERS, "Authorization": f"Bearer {token}"}
+
+    def body(ctx=None):
+        msg = {"messageId": f"m-{ctx}", "role": "ROLE_USER", "parts": [{"text": "x"}]}
+        msg.update({"contextId": ctx} if ctx else {})
+        return {"jsonrpc": "2.0", "id": "r", "method": "SendMessage", "params": {"metadata": md, "message": msg}}
+
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test", timeout=10) as c:
+        await c.post("/a2a", headers=headers, json=body())
+        reserved = (await c.post("/a2a", headers=headers, json=body("background:bg-1"))).json()
+
+    operator = token == "op-token"
+    assert (outcomes[0].origin, outcomes[0].trigger) == (("background", "bg-1") if operator else ("", ""))
+    assert ("background_job_id" in seen[0]) is operator
+    assert ("error" in reserved) is not operator
+
+
+@pytest.mark.asyncio
 async def test_terminal_hook_fires_failed_outcome_on_error():
     outcomes: list[TurnOutcome] = []
     set_terminal_hook(outcomes.append)
