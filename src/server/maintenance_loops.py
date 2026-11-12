@@ -373,7 +373,19 @@ async def _decision_expiry_loop() -> None:
     """
     from graph.decision_expiry import DECISION_EXPIRY_INTERVAL_S
 
+    reconciled = False
     while True:
+        if not reconciled and STATE.decision_store is not None and STATE.graph is not None:
+            # Once per boot, before the first sweep: close pending records whose checkpoint
+            # lost its interrupt across the restart (#5107). A still-parked one is untouched.
+            reconciled = True
+            try:
+                from graph.decision_reconcile import reconcile_pending_decisions
+                from server.turn_control import _thread_lock
+
+                await reconcile_pending_decisions(STATE.decision_store, STATE.graph, _thread_lock)
+            except Exception:
+                log.exception("[decision] boot reconcile failed")
         if STATE.decision_store is not None:
             try:
                 from graph.decision_expiry import sweep_expired_decisions

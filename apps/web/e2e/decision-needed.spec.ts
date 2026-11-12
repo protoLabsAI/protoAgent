@@ -26,6 +26,12 @@ async function setup(page: Page, rows: DecisionRow[], result: "sent" | "answered
     return route.fulfill({ json: { ...row, state: "answered", answer: "ship", answer_label: "Ship the release",
       answered_at: "2026-11-09T14:05:00Z", answered_surface: "console", delivering: false } });
   });
+  await page.route("**/api/decisions/*/cancel", (route) => {
+    const row = rows.find((d) => route.request().url().includes(`/${d.id}/`))!;
+    answers.push({ cancel: row.id });
+    pending = pending.filter((d) => d.id !== row.id);
+    return route.fulfill({ json: { decision: { ...row, state: "withdrawn", withdraw_reason: "" } } });
+  });
   await page.route("**/api/decisions/*/answer", (route) => {
     answers.push(route.request().postDataJSON());
     if (result === "error" || result === "landed") return route.fulfill({ status: 503, json: { detail: "Unavailable" } });
@@ -125,6 +131,20 @@ for (const mode of ["light", "dark"] as const) {
     }
   });
 }
+
+test("dismiss clears a pending decision from its card (#5107)", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  const calls = await setup(page, [decision()]);
+  await page.goto("/app/");
+  await page.getByRole("button", { name: "Decisions, 1 waiting on you" }).click();
+  const dialog = page.locator('.work-view[data-frame="modal"]');
+  await dialog.locator(".work-row").click();
+  await dialog.getByRole("button", { name: "Dismiss", exact: true }).click();
+  await expect(dialog).toContainText("Dismissed. protoEngineer won't wait on this any more.");
+  await expect(dialog.locator(".pl-alert")).toHaveCount(0);
+  expect(calls).toEqual([{ cancel: "decision-one" }]);
+  await expect(page.getByRole("button", { name: "Decisions, nothing waiting", exact: true })).toBeVisible();
+});
 
 for (const width of [1440, 768, 390]) {
   test(`notification opens Decisions at ${width}; sheets are exclusive`, async ({ page }) => {

@@ -252,28 +252,42 @@ def register_decision_routes(app) -> None:
         the parked checkpoint interrupt is CLEARED by resuming the turn with a cancellation
         sentinel — so the session is NOT left blocked for later autonomous (scheduler /
         inbox / webhook) turns. Clearing is best-effort: the autonomous hold also refuses to
-        park on a non-pending decision, so a failed clear can never wedge the session."""
-        if delivering(decision_id) or decision_id in cancelling:
-            # An answer is mid-delivery: withdrawing now would pull the record out from under a
-            # resume that may already be consuming it. The answer decides; report the state.
-            # (Or another dismissal is mid-write: it decides.)
-            rec = await asyncio.to_thread(decision_store().get, decision_id)
-            if rec is None:
-                raise HTTPException(status_code=404, detail=f"no decision {decision_id!r}")
+        park on a non-pending decision, so a failed clear can never wedge the session.
+
+        Returns as soon as the record is withdrawn (#5107): the clearing resume runs in the
+        background, so Dismiss never waits on the agent's turn (the #5099 freeze). A record
+        whose checkpoint provably no longer holds its interrupt (stranded) gets no resume at
+        all — there is nothing to clear, and a resume would run as a fresh turn."""
+        from graph.decision_reconcile import interrupt_parked
+        from runtime.state import STATE
+
+        store = decision_store()
+        rec = await asyncio.to_thread(store.get, decision_id)
+        if rec is None:
+            raise HTTPException(status_code=404, detail=f"no decision {decision_id!r}")
+        parked = await interrupt_parked(getattr(STATE, "graph", None), rec)
+        # No await from here to the claim: the check-and-claim is atomic with respect to the
+        # answer route's claim (both run on this event loop), and the claim is held across the
+        # threaded withdraw (#5112 review).
+        if not rec.pending or delivering(decision_id) or decision_id in cancelling:
+            # Closed already, an answer is mid-delivery (withdrawing would pull the record out
+            # from under a resume that may be consuming it), or another dismissal is mid-write.
             raise HTTPException(status_code=409, detail=with_delivery(rec))
-        # Claimed with no await since the check above, so the check-and-withdraw is atomic
-        # with respect to the answer route's claim (both run on this event loop).
         claim = asyncio.get_running_loop().create_future()
         cancelling[decision_id] = claim
         try:
-            updated = await asyncio.to_thread(decision_store().withdraw, decision_id, body.reason if body else "")
+            updated = await asyncio.to_thread(store.withdraw, decision_id, body.reason if body else "")
         except DecisionNotFound as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         except DecisionClosed as exc:
-            raise HTTPException(status_code=409, detail=str(exc)) from exc
+            current = await asyncio.to_thread(store.get, decision_id)
+            raise HTTPException(status_code=409, detail=with_delivery(current) if current else str(exc)) from exc
         finally:
             if cancelling.get(decision_id) is claim:
                 del cancelling[decision_id]
             claim.set_result(None)
-        await _resume_parked_turn(updated.session_id, CANCELLED_RESUME)
+        if parked is not False:
+            clearing = asyncio.create_task(_resume_parked_turn(updated.session_id, CANCELLED_RESUME))
+            deliveries.add(clearing)
+            clearing.add_done_callback(delivery_done)
         return {"decision": updated.to_dict()}

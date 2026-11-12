@@ -291,6 +291,12 @@ export function recheckDecision(id: string): Promise<DecisionRow | null> {
   return store.recheck(id);
 }
 
+/** Dismiss one decision through the shared store (the cancel route) — the DecisionCard's
+ *  default Dismiss, so every mount gets it without new wiring (#5107). */
+export function dismissDecision(id: string): Promise<DecisionRow> {
+  return store.cancel(id);
+}
+
 export function useDecisions() {
   const snapshot = useSyncExternalStore(store.subscribe, store.getSnapshot, store.getSnapshot);
   return {

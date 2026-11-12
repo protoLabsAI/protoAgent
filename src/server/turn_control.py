@@ -708,6 +708,16 @@ async def validate_decision_resume(config: dict, decision_id: str, session_id: s
         or rec.thread_id != config["configurable"]["thread_id"]
         or found is None or found[0] != rec.interrupt_id
     ):
+        # A pending record on THIS thread whose checkpoint provably no longer holds its
+        # interrupt can never be answered: close it now (under the session lock), so the
+        # answer route reports the real state (409) and the card stops offering it (#5107).
+        # An unreadable checkpoint is "unknown" and closes nothing.
+        if rec is not None and rec.pending and rec.thread_id == config["configurable"]["thread_id"]:
+            from graph.decision_reconcile import close_stranded, interrupt_parked
+            from runtime.state import STATE
+
+            if await interrupt_parked(STATE.graph, rec) is False:
+                close_stranded(decision_store(), rec)
         raise DecisionClosed("decision no longer owns this interrupt")
     return config
 
