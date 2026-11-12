@@ -19,10 +19,10 @@ keys would produce a duplicate that behaves subtly differently for reasons no re
 fully enumerate. The one rewrite is its *model-connection shape*: a snapshot exported before
 #3128 carries the retired ``model.provider`` / ``api_base`` / ``api_key`` and is staged in
 the provider-registry shape a current export produces (``graph.config.to_registry_shape``,
-read against this box's Host layer). Consistent with ADR 0071 D1 (trust, not sandbox): the
-answer to dangerous
-config is to show it, not to silently neuter it. ``ImportPlan.capabilities`` is what makes
-"show it" real.
+read against this box's Host layer). The one removal is ``STRIPPED_KEYS``: a key that
+would point the new agent's files outside its own workspace. Consistent with ADR 0071 D1
+(trust, not sandbox): the answer to dangerous config is to show it, not to silently neuter
+it. ``ImportPlan.capabilities`` is what makes "show it" real.
 
 Two things this deliberately does NOT do:
 
@@ -77,7 +77,42 @@ CAPABILITY_KEYS: tuple[tuple[str, str], ...] = (
     # applies to config-supplied credentials now, but "the config you accepted names where
     # your traces go" is exactly the sort of thing the plan exists to say out loud.
     ("tracing.host", "an external Langfuse host that receives prompts and tool IO"),
+    # Commands the server runs, and destinations that receive the agent's traffic.
+    ("acp", "coding-agent executables the server launches (ACP)"),
+    ("lifecycle_hooks", "commands run on agent lifecycle events"),
+    ("filesystem.editor_command", "a command the `open_in_editor` tool runs"),
+    ("filesystem.run_auto_approve", "shell commands that run without asking"),
+    ("filesystem.bypass_allowed", "callers may switch off command approval per turn"),
+    ("model.api_base", "a model endpoint that receives every prompt"),
+    ("egress.allowed_hosts", "outbound hosts the agent's tools may reach"),
+    ("secrets_manager.host", "a secrets manager credentials are pulled from"),
 )
+
+#: Keys dropped from a snapshot's config on import, never applied: each would point the
+#: new agent's files OUTSIDE its own workspace. ``plugins.dir`` is an absolute path, so
+#: honoring it would install the snapshot's plugins into whatever dir it names.
+STRIPPED_KEYS: tuple[tuple[str, str], ...] = (("plugins", "dir"),)
+
+
+def _capabilities(config: dict) -> list[tuple[str, str]]:
+    """``CAPABILITY_KEYS`` the config sets, plus the ones a fixed list can't name: a non-native
+    ``agent_runtime``, each provider ``base_url``, and any other credential-plane key
+    (ADR 0121 D4 — access, network and command settings)."""
+    from graph.settings_schema import credential_plane_keys
+
+    out = [(key, desc) for key, desc in CAPABILITY_KEYS if _dotted(config, key)]
+    runtime = str(config.get("agent_runtime") or "native").strip()
+    if runtime != "native":
+        out.append(("agent_runtime", f"the agent runs as `{runtime}`, an external command"))
+    providers = config.get("providers") if isinstance(config.get("providers"), list) else []
+    for p in providers:
+        if isinstance(p, dict) and str(p.get("base_url") or "").strip():
+            out.append((f"providers.{p.get('id') or '?'}.base_url", f"a model endpoint ({p['base_url']})"))
+    seen = [k for k, _ in out]
+    for key in credential_plane_keys(config, nested=True):
+        if not any(key == s or key.startswith(s + ".") for s in seen):
+            out.append((key, "an access, network or command setting"))
+    return out
 
 
 class SnapshotError(Exception):
@@ -354,13 +389,17 @@ def inspect_snapshot(data: bytes, *, known_sources: list[str] | None = None) -> 
             )
         )
 
-    capabilities = [(key, desc) for key, desc in CAPABILITY_KEYS if _dotted(config, key)]
+    capabilities = _capabilities(config)
     servers = _dotted(config, "mcp.servers")
     mcp_servers = (
         [str(s.get("name") or "?") for s in servers if isinstance(s, dict)] if isinstance(servers, list) else []
     )
 
     notes: list[str] = []
+    raw_config = manifest.get("config") if isinstance(manifest.get("config"), dict) else {}
+    for section, key in STRIPPED_KEYS:
+        if isinstance(raw_config.get(section), dict) and key in raw_config[section]:
+            notes.append(f"`{section}.{key}` is not applied — the new agent keeps its own")
     unpinned = [p.id for p in plugins if not p.ref]
     if unpinned:
         # ADR 0091 D1 says plugins travel as url + RESOLVED SHA. An unpinned entry installs
@@ -432,6 +471,9 @@ def _import_shape(manifest: dict) -> tuple[dict, dict[str, str]]:
     import copy
 
     config = manifest.get("config") if isinstance(manifest.get("config"), dict) else {}
+    for sec, key in STRIPPED_KEYS:
+        if isinstance(config.get(sec), dict) and key in config[sec]:
+            config = {**config, sec: {k: v for k, v in config[sec].items() if k != key}}
     if "model_aliases" in manifest:
         raw = manifest.get("model_aliases") or {}
         aliases = {
