@@ -347,7 +347,7 @@ describe("durable decision transcript", () => {
     });
     await mount();
     await act(async () => { button("Ship it").click(); await flush(); });
-    expect(container.textContent).toContain('You chose "Ship it"');
+    expect(container.textContent).toContain('Sent: "Ship it". Continuing…');
     await mount();
     expect(button("Ship it")).toBeUndefined();
     current = { ...record(), question: "Ship again?" };

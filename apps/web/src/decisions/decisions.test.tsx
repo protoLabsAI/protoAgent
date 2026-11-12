@@ -223,6 +223,25 @@ describe("useDecisions store", () => {
     expect(conflict.answered_elsewhere).toBe(true);
   });
 
+  it("returns sent immediately while a stale list refresh is still in flight", async () => {
+    const list = vi.spyOn(decisionsApi, "listDecisions").mockResolvedValue(listOf([decision("a")]));
+    const store = mountStore();
+    await settle();
+    let finish!: (value: ReturnType<typeof listOf>) => void;
+    list.mockReturnValue(new Promise((resolve) => { finish = resolve; }));
+    const refreshing = store.refresh();
+    vi.spyOn(decisionsApi, "answerDecision").mockResolvedValue({
+      answered_elsewhere: false, resumed: true, decision: decision("a", { state: "answered" }),
+    });
+    expect(await store.answer("a", "merge")).toMatchObject({ resumed: true });
+    expect(store.getSnapshot().pendingCount).toBe(0);
+    list.mockResolvedValue(listOf([decision("a")]));
+    finish(listOf([decision("a")]));
+    await refreshing;
+    expect(store.getSnapshot().pendingCount).toBe(0);
+    expect(store.getSnapshot().records.a.state).toBe("answered");
+  });
+
   // ── by-id record cache (#4725, Gap 2) ─────────────────────────────────────────────────────
   it("keeps an answered row in records after it leaves the pending list", async () => {
     const list = vi.spyOn(decisionsApi, "listDecisions").mockResolvedValue(listOf([decision("a")]));
@@ -440,7 +459,7 @@ describe("DecisionCard", () => {
     expect(onAnswer).toHaveBeenCalledWith("merge");
     expect(onHold).toHaveBeenCalled();
     expect(document.body.textContent).toContain('Sent: "Merge with the WARN"');
-    expect(document.body.textContent).toContain("picking it back up");
+    expect(document.body.textContent).toContain("Continuing…");
   });
 
   it("shows 'answered elsewhere' (info callout) on a 409 result", async () => {

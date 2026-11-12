@@ -203,9 +203,9 @@ export function DecisionCard({
   }
 
   let body: ReactNode;
-  if (isTranscript && TERMINAL.has(decision.state)) {
+  if (isTranscript && TERMINAL.has(decision.state) && !(phase.kind === "sent" && decision.state === "answered")) {
     // Settled record in a chat transcript: one frozen line, no options, no callout (§5.5.4, §5.6).
-    // This also catches the local answer once the resumed record lands as the decision prop.
+    // Keep the local successful send visible; historical and externally closed cards use the record.
     body = (
       <p style={muted} aria-live="polite">
         {transcriptLine(decision)}
@@ -229,7 +229,7 @@ export function DecisionCard({
     );
   } else if (phase.kind === "sent") {
     const sent = agentOnline
-      ? `Sent: "${phase.label}". ${agent} is picking it back up.`
+      ? `Sent: "${phase.label}". Continuing…`
       : `Saved: "${phase.label}". ${agent} gets it when it starts again.`;
     body = (
       <div ref={result} tabIndex={-1} aria-live="polite">

@@ -723,9 +723,8 @@ async def decision_resume(config: dict, answer):
     from runtime.state import STATE
 
     found = await _chat()._pending_interrupt(config) if answer is not None else None
-    try:
-        yield
-    finally:
+
+    async def settle():
         if found and found[0] and is_decision_interrupt(found[1]):
             snapshot = await STATE.graph.aget_state(config)
             pending_ids = {
@@ -753,3 +752,26 @@ async def decision_resume(config: dict, answer):
                                          answered_surface=resolution.get("answered_surface", "chat"))
                     except DecisionClosed:
                         pass
+                return True
+        return False
+
+    async def watch():
+        while True:
+            try:
+                if await settle():
+                    return
+            except Exception:
+                log.exception("Could not read decision consumption checkpoint; retrying")
+            await asyncio.sleep(0.02)
+
+    # Both drivers hold the session lock. Observe persisted checkpoint consumption
+    # independently of the rest of the resumed turn.
+    watcher = asyncio.create_task(watch()) if found and is_decision_interrupt(found[1]) else None
+    try:
+        yield
+    finally:
+        if watcher is not None:
+            watcher.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await watcher
+        await settle()
