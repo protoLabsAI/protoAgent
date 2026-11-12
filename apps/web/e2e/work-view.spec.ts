@@ -62,8 +62,10 @@ async function expectScroll(view: Locator, value: number) {
 test("window → item → Dock preserves the section, scroll and item", async ({ page }) => {
   await openWorkWindow(page, "Work: Tasks");
   await expect(modalView(page).getByRole("button", { name: /Work sections/ })).toHaveAccessibleName("Tasks Work sections");
-  // 30 of the 40: the 10 closed jobs (i % 4 === 3) have left Work (work-consolidation §1).
+  // 30 of the 40: the 10 closed jobs (i % 4 === 3) have left Work (work-consolidation §1),
+  // and the heading count agrees with the rows the list shows.
   await expect(modalView(page).locator(".work-row")).toHaveCount(30);
+  await expect(modalView(page).getByRole("heading", { name: "Tasks, 30", exact: true })).toBeVisible();
   await list(modalView(page)).evaluate((el) => { el.scrollTop = 300; });
   await expectScroll(modalView(page), 300);
   await row(modalView(page)).click();

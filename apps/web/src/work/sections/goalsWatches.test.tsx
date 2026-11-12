@@ -395,7 +395,9 @@ describe("Stopped-short goal recovery (§2, r1)", () => {
     await act(async () => button("Drop the goal").click()); // confirmLabel is also "Drop the goal"
     await flush();
     expect(clearGoal).toHaveBeenCalledWith("sess-drop", false);
-    expect(text()).toContain("Goal deleted.");
+    // The toast matches the action's verb — the goal was dropped, not deleted.
+    expect(text()).toContain("Goal dropped.");
+    expect(text()).not.toContain("Goal deleted.");
 
     await act(async () => button("Undo").click());
     await flush();
@@ -411,6 +413,10 @@ describe("Stopped-short goal recovery (§2, r1)", () => {
     expect(host!.querySelector(".work-row .pl-badge")?.textContent).toBe("Goal stopped");
     expect(host!.querySelector(".work-row .pl-badge--error")).toBeNull();
     expect(host!.querySelector(".work-row__meta")?.textContent).toBe("step 5 of 9");
+
+    // WorkView's counts share the list's finished-work rule through the section's listFilter.
+    expect(goalsSection.listFilter?.(goalItem(achieved, "done"))).toBe(false);
+    expect(goalsSection.listFilter?.(goalItem(stopped, "failed"))).toBe(true);
   });
 });
 

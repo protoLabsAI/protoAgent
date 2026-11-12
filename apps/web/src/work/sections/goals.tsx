@@ -90,6 +90,20 @@ function history(events: GoalEvent[] | undefined): WorkField["value"] {
   );
 }
 
+// A goal that stopped short of its finish line (exhausted / unachievable) is exactly the goal
+// `groupFor` sends to Needs you — deriving the "Goal stopped" tag, its NEUTRAL tone (§2, §6)
+// and the Keep going / Drop the goal pair from the shared selector keeps them in step with
+// where the row actually sits.
+function goalStopped(item: WorkItem): boolean {
+  return groupFor(item as GroupableWorkItem) === "needs-you";
+}
+
+// An achieved (or cleared) goal has met its finish line and leaves Work — `groupFor` drops it
+// from every group (§2). The list and WorkView's counts share this one rule.
+function goalShowsInWork(item: WorkItem): boolean {
+  return groupFor(item as GroupableWorkItem) !== null;
+}
+
 // A goal is a job with a finish line (ADR D3, work-consolidation §2). Progress reads "step N of
 // M" — with no limit, just "step N", NEVER "n/0" or "∞". An active goal re-checks its finish
 // line after each turn, so its progress line says so; a stopped one shows only how far it got.
@@ -206,9 +220,7 @@ function GoalDetailView({ ctx, item }: { ctx: WorkSectionContext; item: WorkItem
 
   const title = g.outcome?.trim() || g.condition || g.session_id;
   const active = item.status === "running" || item.status === "waiting";
-  // A goal that stopped short of its finish line (exhausted / unachievable) reads "Goal stopped"
-  // in a NEUTRAL tone, never an error (§2, §6).
-  const stopped = g.status === "exhausted" || g.status === "unachievable";
+  const stopped = goalStopped(item);
   const actions: WorkAction[] = [{ id: "edit", label: "Edit", run: async () => void setEditing(true) }];
 
   // Lifecycle (ADR 0079), restoring the base `GoalDetailDrawer`'s re-arm controls so a stopped
@@ -253,11 +265,13 @@ function GoalDetailView({ ctx, item }: { ctx: WorkSectionContext; item: WorkItem
     });
   }
   // Any goal can be dropped, handing back an undo token for the §4.5 Undo toast. A stopped goal
-  // frames it as Drop the goal (its Needs-you partner to Keep going); otherwise Delete….
+  // frames it as Drop the goal (its Needs-you partner to Keep going) — the undo toast says
+  // "dropped" to match — otherwise Delete….
   actions.push({
     id: "delete",
     label: stopped ? "Drop the goal" : "Delete…",
     destructive: true,
+    undoMessage: stopped ? "Goal dropped." : undefined,
     confirm: {
       prompt: stopped ? "Drop this goal?" : "Delete this goal?",
       explanation: "The agent stops working toward it. Work it has already done stays.",
@@ -334,9 +348,9 @@ function GoalsList({ ctx }: { ctx: WorkSectionContext }) {
       .finally(() => setBusy(false));
   };
 
-  // An achieved (or cleared) goal has met its finish line and leaves Work — `groupFor` drops it
-  // from every group (§2). Active and stopped goals stay.
-  const items = source.items.filter((item) => groupFor(item as GroupableWorkItem) !== null);
+  // Active and stopped goals stay; achieved/cleared leave (goalShowsInWork, shared with
+  // WorkView's counts).
+  const items = source.items.filter(goalShowsInWork);
 
   return (
     <>
@@ -351,7 +365,7 @@ function GoalsList({ ctx }: { ctx: WorkSectionContext }) {
         <ul className="work-group">
           {items.map((item) => {
             const g = item.raw as GoalState;
-            const stopped = g.status === "exhausted" || g.status === "unachievable";
+            const stopped = goalStopped(item);
             return (
               <li key={item.id}>
                 <WorkRow
@@ -387,6 +401,6 @@ export function GoalsSection({ ctx }: { ctx: WorkSectionContext }) {
   return <GoalsList ctx={ctx} />;
 }
 
-export const goalsSection = { label: "Goals", group: "doing-now", render: (ctx: WorkSectionContext) => <GoalsSection ctx={ctx} /> } satisfies WorkSection;
+export const goalsSection = { label: "Goals", group: "doing-now", listFilter: goalShowsInWork, render: (ctx: WorkSectionContext) => <GoalsSection ctx={ctx} /> } satisfies WorkSection;
 
 registerWorkSection("goals", goalsSection);

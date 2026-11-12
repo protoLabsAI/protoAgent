@@ -57,6 +57,13 @@ it("annotates tasks without overriding per-row goal/task/watch classification", 
   ]);
 });
 
+it("registers the finished-work rule as the section's listFilter, for WorkView's counts", () => {
+  const filter = sections.get("tasks")?.listFilter;
+  expect(filter?.(taskItem({ status: "closed", closed_at: "2026-11-09T10:00:00Z" }))).toBe(false);
+  expect(filter?.(taskItem({ status: "open" }))).toBe(true);
+  expect(filter?.(taskItem({ status: "blocked" }))).toBe(true);
+});
+
 let root: Root | null = null;
 let host: HTMLDivElement | null = null;
 
@@ -393,8 +400,10 @@ describe("Jobs in the list (§2, r1)", () => {
     expect(badges()).not.toContain("Task");
   });
 
-  it("a started blocked job stays in Doing now and says blocked, not not-started", async () => {
-    const blocked = { ...taskItem({ status: "blocked" }), started: true };
+  it("a blocked job stays in Doing now and says blocked, never not-started", async () => {
+    // The production shape: the task API carries no start history, so a bare blocked row
+    // (nothing sets `started`) counts as started work — blocked means someone acted on it.
+    const blocked = taskItem({ status: "blocked" });
     expect(groupFor(blocked as GroupableWorkItem)).toBe("doing-now");
     await mount(h(TasksSection, ctx({ sources: sources({ tasks: src([blocked]) }) })));
     expect(host!.querySelector(".work-row__meta")?.textContent).toBe("blocked");
@@ -402,8 +411,8 @@ describe("Jobs in the list (§2, r1)", () => {
     expect(allText()).not.toContain("not started");
   });
 
-  it("a blocked job that never started is not-started (Coming up)", async () => {
-    const blocked = taskItem({ status: "blocked" });
+  it("an adapter that KNOWS a blocked job never started can demote it (started: false)", async () => {
+    const blocked = { ...taskItem({ status: "blocked" }), started: false };
     expect(groupFor(blocked as GroupableWorkItem)).toBe("coming-up");
     await mount(h(TasksSection, ctx({ sources: sources({ tasks: src([blocked]) }) })));
     expect(host!.querySelector(".work-row__meta")?.textContent).toContain("not started");

@@ -22,6 +22,11 @@ export type WorkSection = {
   /** Default placement for extensions, never an override of workGroups/groupFor's
    * per-row classification. Optional during migration; required in S4c. */
   group?: WorkGroupId;
+  /** The rows this section's list actually shows — finished work leaves Work (a closed
+   * job, an achieved goal), and WorkView's heading count, live announcement and side-nav
+   * badge count through this so a hidden row is never counted. Omitted → every source
+   * item shows and counts. */
+  listFilter?: (item: WorkItem) => boolean;
   render: (context: WorkSectionContext) => ReactNode;
 };
 export const sections = new Map<string, WorkSection>();

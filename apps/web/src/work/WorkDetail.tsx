@@ -18,6 +18,9 @@ export type WorkAction = {
   label: string;
   destructive?: boolean;
   confirm?: WorkConfirm;
+  /** Overrides the undo toast's "{Type} deleted." line when the action's verb isn't
+   *  delete — e.g. "Goal dropped." for a stopped goal's Drop the goal (§2). */
+  undoMessage?: string;
   /** Resolves to `{ undoToken }` when the change can be undone (a delete/clear); the
    *  token drives the §4.5 undo toast. A rejection surfaces the inline warning Alert. */
   run: () => Promise<{ undoToken?: string } | void>;
@@ -88,12 +91,12 @@ export function WorkDetail({
     restoreFocus.current = null;
   }, [confirming]);
 
-  function showUndoToast(token: string) {
+  function showUndoToast(token: string, message = `${type} deleted.`) {
     if (onUndo) {
       // duration 0 hands the lifetime to UndoToast, which runs a pausable 8 s timer (§4.5, §6).
-      toast({ tone: "neutral", duration: 0, message: <UndoToast type={type} token={token} onUndo={onUndo} size={size} /> });
+      toast({ tone: "neutral", duration: 0, message: <UndoToast message={message} token={token} onUndo={onUndo} size={size} /> });
     } else {
-      toast({ tone: "neutral", message: `${type} deleted.` });
+      toast({ tone: "neutral", message });
     }
   }
 
@@ -105,7 +108,7 @@ export function WorkDetail({
       setBusy(false);
       setConfirming(null);
       const token = result && typeof result === "object" ? result.undoToken : undefined;
-      if (token) showUndoToast(token);
+      if (token) showUndoToast(token, action.undoMessage);
     } catch {
       // The confirm group (if open) stays put so Try again can re-run; the warning Alert is
       // role="alert" (assertive) via DS, so the failure is announced (§4.5).
@@ -265,10 +268,10 @@ function CopyButton({ label, value }: { label: string; value: string }) {
   );
 }
 
-/** The §4.5 undo toast: "{Type} deleted." + Undo, up to 8 s, pausing on hover or focus. It owns
- *  its own timer (the toast is pushed with `duration: 0`) and clears itself through the DS toast's
- *  public Dismiss affordance (role="status" + aria-label="Dismiss"). */
-function UndoToast({ type, token, onUndo, size }: { type: string; token: string; onUndo: (token: string) => Promise<void>; size: "sm" | "md" }) {
+/** The §4.5 undo toast: "{Type} deleted." (or the action's own line) + Undo, up to 8 s, pausing
+ *  on hover or focus. It owns its own timer (the toast is pushed with `duration: 0`) and clears
+ *  itself through the DS toast's public Dismiss affordance (role="status" + aria-label="Dismiss"). */
+function UndoToast({ message, token, onUndo, size }: { message: string; token: string; onUndo: (token: string) => Promise<void>; size: "sm" | "md" }) {
   const toast = useToast();
   const ref = useRef<HTMLSpanElement>(null);
   const [busy, setBusy] = useState(false);
@@ -318,7 +321,7 @@ function UndoToast({ type, token, onUndo, size }: { type: string; token: string;
       onFocusCapture={pause}
       onBlurCapture={start}
     >
-      {type} deleted.{" "}
+      {message}{" "}
       <Button variant="ghost" size={size} disabled={busy} onClick={() => void undo()}>
         Undo
       </Button>

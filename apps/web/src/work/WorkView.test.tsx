@@ -204,6 +204,26 @@ it("omits only loading badges while retaining ready zero counts", async () => {
   await closeSections(nav);
 });
 
+it("counts only the rows the section lists — finished jobs and achieved goals don't badge", async () => {
+  data.sources.tasks.items = [
+    item("open-job", "scheduled", { raw: { status: "open", created_at: "2026-11-01T00:00:00Z" } }),
+    item("closed-job", "done", { raw: { status: "closed", closed_at: "2026-11-01T00:00:00Z" } }),
+  ];
+  data.sources.goals.items = [item("done-goal", "done", { kind: "goal", raw: { session_id: "g", status: "achieved", outcome: "done-goal" } })];
+  useUI.setState({ surfaceStates: { work: { section: "tasks" } } });
+  await render("modal");
+  // The heading, the live announcement and the list agree: the closed job has left Work.
+  expect(host.querySelector(".work-heading")?.getAttribute("aria-label")).toBe("Tasks, 1");
+  expect(host.querySelector('[role="status"]')?.textContent).toBe("Tasks, 1 items.");
+  expect(host.querySelectorAll(".work-row")).toHaveLength(1);
+  const nav = await openSections();
+  const badge = (label: string) => Array.from(nav.querySelectorAll('[role="menuitemradio"]'))
+    .find((node) => node.textContent?.startsWith(label))?.querySelector(".pl-menu__badge")?.textContent;
+  expect(badge("Tasks")).toBe("1");
+  expect(badge("Goals")).toBe("0"); // only an achieved goal → the badge matches its "No goals" empty state
+  await closeSections(nav);
+});
+
 it("restores the originating row for legacy unqualified item ids", async () => {
   data.sources.tasks.items = [item("legacy", "running")];
   useUI.setState({ surfaceStates: { work: { section: "tasks", itemId: "legacy" } } });

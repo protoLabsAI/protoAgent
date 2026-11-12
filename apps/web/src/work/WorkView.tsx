@@ -83,7 +83,15 @@ export function WorkView({ frame = "rail", sessionId }: { frame?: "rail" | "moda
   const selectedKey = selected ? `${selected.kind}:${selected.id}` : state.itemId;
   const loading = Object.values(sources).some((source) => source.status === "loading");
   const label = sections.get(section)?.label ?? workSections[section as keyof typeof workSections] ?? section;
-  const count = section === "overview" ? items.length : sources[section as keyof WorkItems]?.items.length ?? 0;
+  // The heading count, the live announcement and the side-nav badges count the rows the
+  // section actually lists: a section hiding finished work (a closed job, an achieved goal)
+  // registers that rule as its `listFilter`, so its badge never exceeds its rows.
+  const visibleCount = (id: string): number => {
+    const sourceItems = sources[id as keyof WorkItems]?.items ?? [];
+    const filter = sections.get(id)?.listFilter;
+    return (filter ? sourceItems.filter(filter) : sourceItems).length;
+  };
+  const count = section === "overview" ? items.length : visibleCount(section);
   const listRef = useRef<HTMLDivElement>(null);
   const detailRef = useRef<HTMLDivElement>(null);
   const listSize = useRef<{ width: number; height: number } | null>(null);
@@ -202,7 +210,7 @@ export function WorkView({ frame = "rail", sessionId }: { frame?: "rail" | "moda
       {state.itemId && <Button className="work-view__back" size={hostFrame === "sheet" ? "md" : "sm"} variant="ghost" onClick={onBack}>Back to {label}</Button>}
       <div className="work-view__picker"><SideNav collapsed ariaLabel="Work sections" active={section} onSelect={selectSection}
         items={Object.entries(workSections).map(([id, defaultLabel]) => ({ id, label: sections.get(id)?.label ?? defaultLabel,
-          badge: (id === "overview" ? loading : sources[id as keyof WorkItems]?.status === "loading") ? undefined : (id === "overview" ? items.length : sources[id as keyof WorkItems]?.items.length ?? 0),
+          badge: (id === "overview" ? loading : sources[id as keyof WorkItems]?.status === "loading") ? undefined : (id === "overview" ? items.length : visibleCount(id)),
         }))} /></div>
     </div>
     <div className="work-view__panes">

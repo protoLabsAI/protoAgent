@@ -87,15 +87,22 @@ function taskDraft(task: Task): IssueDraft {
 
 // Tasks fold into jobs (work-consolidation §1, ADR Q1): there is no Task tag. A job that
 // hasn't started — an open or deferred former task, which `groupFor` places in Coming up —
-// reads as not-started. A started one (in_progress, or a blocked task an adapter has marked
-// started) lands in Doing now. Mirroring the shared selector keeps a row in the same group
-// wherever it shows.
+// reads as not-started. A started one lands in Doing now: in_progress, or blocked, which
+// `groupFor` counts as started work (the task API has no start history, and a task only
+// reaches blocked by being acted on). Mirroring the shared selector keeps a row in the
+// same group wherever it shows.
 function jobNotStarted(item: WorkItem): boolean {
   return groupFor(item as GroupableWorkItem) === "coming-up";
 }
 
-// Row meta (§2): a not-started job says "not started · added <when>"; a started blocked job
-// says "blocked"; any other started job keeps its type and priority.
+// Finished jobs leave Work (§1): a closed former task falls out of every group
+// (`groupFor` → null). The list and WorkView's counts share this one rule.
+function jobShowsInWork(item: WorkItem): boolean {
+  return groupFor(item as GroupableWorkItem) !== null;
+}
+
+// Row meta (§2): a not-started job says "not started · added <when>"; a blocked (started)
+// job says "blocked"; any other started job keeps its type and priority.
 function jobMeta(item: WorkItem): string {
   const task = item.raw as Task;
   if (jobNotStarted(item)) {
@@ -125,7 +132,7 @@ function TaskDetail({ item }: { item: WorkItem }) {
       refresh();
       setEditOpen(false);
     },
-    onError: () => toast({ tone: "warning", message: "Couldn't save the task." }),
+    onError: () => toast({ tone: "warning", message: "Couldn't save the job." }),
   });
 
   // Status transitions through the existing task PATCH/close routes. A not-started job (§2)
@@ -222,7 +229,7 @@ function TaskDetail({ item }: { item: WorkItem }) {
         open={editOpen}
         onClose={() => setEditOpen(false)}
         busy={edit.isPending}
-        title="Edit task"
+        title="Edit job"
         submitLabel="Save changes"
         initial={taskDraft(task)}
         onCreate={(draft) => edit.mutate(draft)}
@@ -243,9 +250,8 @@ function TaskList({ source, onOpen }: { source: WorkSource; onOpen: (item: WorkI
       </Alert>
     );
   }
-  // Finished jobs leave Work (§1): a closed former task falls out of every group
-  // (`groupFor` → null), so Close job visibly removes the row.
-  const items = source.items.filter((item) => groupFor(item as GroupableWorkItem) !== null);
+  // Close job visibly removes the row (jobShowsInWork, shared with WorkView's counts).
+  const items = source.items.filter(jobShowsInWork);
   if (!items.length) {
     return <Empty title="No jobs" description="The agent files one when it has work to track." />;
   }
@@ -288,4 +294,4 @@ export function TasksSection({ sources, state, onOpen }: WorkSectionContext) {
   return <TaskList source={source} onOpen={onOpen} />;
 }
 
-registerWorkSection("tasks", { label: "Tasks", group: "doing-now", render: (ctx) => <TasksSection {...ctx} /> });
+registerWorkSection("tasks", { label: "Tasks", group: "doing-now", listFilter: jobShowsInWork, render: (ctx) => <TasksSection {...ctx} /> });
