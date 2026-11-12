@@ -436,7 +436,15 @@ class ProjectRegistry:
 def _approved(decision) -> bool:
     """Whether the operator approved a gated command. Accepts the resume shapes
     the console may send: a bool, a string ("approve"/"approved"/"yes"/"ok"/…),
-    or a dict ({approved: true} / {decision: "approve"})."""
+    or a dict ({approved: true} / {decision: "approve"}).
+
+    Always False when the caller answering can't approve (a federation-tier caller): the
+    tool body re-runs under the RESUMING turn, so this also covers a card someone else's
+    turn parked."""
+    from graph.middleware.request_context import caller_may_approve
+
+    if not caller_may_approve():
+        return False
     if isinstance(decision, bool):
         return decision
     if isinstance(decision, dict):
@@ -886,9 +894,9 @@ def _bypass_requested() -> bool:
     operator's explicit /bypass toggle, sent in the A2A request metadata (read live, so it's
     per-turn, not captured at tool-build time). Gated additionally by ``filesystem_bypass_allowed``
     at the call site, so a host can forbid bypass regardless of caller-supplied metadata."""
-    from graph.middleware.request_context import current_request_metadata
+    from graph.middleware.request_context import caller_may_approve, current_request_metadata
 
-    return bool(current_request_metadata().get("bypass_permissions"))
+    return caller_may_approve() and bool(current_request_metadata().get("bypass_permissions"))
 
 
 # `read_file` memoization (opt-in, `tools.memoize_reads.enabled`) — found via a
@@ -1639,8 +1647,16 @@ def build_fs_tools(config) -> list:
                 marker = f'(auto-approved: matches "{rule.entry}")\n'
                 log.info("[fs] run_command auto-approved by run_auto_approve[%s]: %s", rule.entry, command)
             elif run_requires_approval and not (bypass_allowed and _bypass_requested()):
+                from graph.middleware.request_context import caller_may_approve
                 from langgraph.types import interrupt
 
+                if not caller_may_approve():
+                    # No card: this caller could only ever answer it itself.
+                    log.warning("[fs] run_command refused — caller can't approve: %s", command)
+                    return (
+                        f"Not run: {command!r} needs the operator's approval, and this caller can't give it. "
+                        "Do not re-run it; say that the operator has to run or approve this."
+                    )
                 decision = interrupt(
                     {
                         "kind": "approval",

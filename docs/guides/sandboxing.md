@@ -104,6 +104,10 @@ choose one of these options so a `run_command` approval does not strand the task
    trust.** It approves **every shell command for that turn**. It does not bypass
    `delete_file` or onboarding approvals.
 
+A caller on the **federation token** gets none of options 2 and 3: it can't answer
+an approval prompt and its `bypass_permissions` is ignored. Only the allowlist in
+option 1 lets it run a command.
+
 The [A2A approval reference](/reference/a2a-endpoints#approval-prompts-shell-commands)
 provides the prompt payload, accepted answers, and a bypass request example.
 Hosts that must never allow caller bypass set:

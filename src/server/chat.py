@@ -1588,7 +1588,10 @@ async def _chat_langgraph_stream_impl(
             input=_redact(message),
             incognito=_trace_incognito,
         ),
-        request_metadata_scope(request_metadata),
+        # Approval authority comes from the credential the auth middleware classified, not
+        # from anything in the metadata: a federation caller can neither skip the
+        # run_command gate (`bypass_permissions`) nor answer an approval card.
+        request_metadata_scope(request_metadata, may_approve=tracing.current_trust_tier() != "federation"),
         # The turn's model override for the paths outside the lead graph's state — a
         # `/<workflow>` step, a plugin tool's `sdk.run_subagent` / `spawn_background` (#3955).
         turn_model_scope((request_metadata or {}).get("model")),
