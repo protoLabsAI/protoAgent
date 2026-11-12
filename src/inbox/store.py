@@ -20,6 +20,7 @@ that retries) within a window so they don't each fire a turn.
 from __future__ import annotations
 
 import sqlite3
+import threading
 from collections import deque
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -44,10 +45,17 @@ class InboxStore:
         self._dedup_window_s = dedup_window_s
         Path(self.path).parent.mkdir(parents=True, exist_ok=True)
         self._init_db()
-        # In-process hint so the per-model-call drain costs nothing on the common path.
-        # True = "there may be undelivered thread items" (set at boot from the table and on
-        # every add); a claim that finds none clears it. Only this server process writes.
-        self._thread_maybe_pending = self._count_pending_thread() > 0
+        # In-process hint so the per-model-call drain costs nothing on the common path: WHO
+        # may have an undelivered thread item waiting. ``""`` stands for an unaddressed
+        # message (any operator chat may take it); any other entry is the one chat thread a
+        # message names. Keyed by target so a message addressed to a thread that never
+        # shows up (a typo, a closed tab) costs the OTHER chats nothing. Rebuilt from the
+        # table at boot, added to on every add, replaced by each claim's own snapshot.
+        # ``_hint_gen`` lets a claim notice an add that landed while it was running and
+        # keep that add's entry instead of overwriting it with a stale snapshot.
+        self._hint_lock = threading.Lock()
+        self._hint_gen = 0
+        self._thread_targets: set[str] = self._pending_thread_targets()
 
     def _connect(self) -> sqlite3.Connection:
         db = sqlite3.connect(self.path)
@@ -147,6 +155,9 @@ class InboxStore:
 
         db = self._connect()
         try:
+            # The dedup check and the insert are one write transaction: two posts of the
+            # same webhook retry arriving together cannot both pass the check.
+            db.execute("BEGIN IMMEDIATE")
             if dedup_key:
                 cutoff = (now - timedelta(seconds=self._dedup_window_s)).isoformat()
                 dup = db.execute(
@@ -154,6 +165,7 @@ class InboxStore:
                     (dedup_key, cutoff),
                 ).fetchone()
                 if dup is not None:
+                    db.rollback()
                     return None
             cur = db.execute(
                 "INSERT INTO inbox (created_at, priority, source, text, dedup_key, delivery, target_session) "
@@ -163,7 +175,9 @@ class InboxStore:
             db.commit()
             row = db.execute("SELECT * FROM inbox WHERE id = ?", (cur.lastrowid,)).fetchone()
             if delivery == DELIVERY_THREAD:
-                self._thread_maybe_pending = True
+                with self._hint_lock:
+                    self._hint_gen += 1
+                    self._thread_targets.add(target_session)
             return dict(row)
         finally:
             db.close()
@@ -208,20 +222,29 @@ class InboxStore:
         finally:
             db.close()
 
-    def _count_pending_thread(self) -> int:
+    @staticmethod
+    def _targets_in(db: sqlite3.Connection) -> set[str]:
+        rows = db.execute(
+            "SELECT DISTINCT COALESCE(target_session, '') AS t FROM inbox WHERE delivery = ? AND delivered_at IS NULL",
+            (DELIVERY_THREAD,),
+        ).fetchall()
+        return {r["t"] for r in rows}
+
+    def _pending_thread_targets(self) -> set[str]:
         db = self._connect()
         try:
-            row = db.execute(
-                "SELECT COUNT(*) AS n FROM inbox WHERE delivery = ? AND delivered_at IS NULL",
-                (DELIVERY_THREAD,),
-            ).fetchone()
-            return int(row["n"])
+            return self._targets_in(db)
         finally:
             db.close()
 
-    def thread_maybe_pending(self) -> bool:
-        """Cheap, lock-free hint: False means there is certainly nothing to claim."""
-        return self._thread_maybe_pending
+    def thread_maybe_pending(self, session_id: str | None = None) -> bool:
+        """Cheap, SQLite-free hint. With a ``session_id``: False means there is certainly
+        nothing for THAT chat to claim (no unaddressed message, none addressed to it).
+        Without one: whether any thread message is waiting for anybody."""
+        targets = self._thread_targets
+        if session_id is None:
+            return bool(targets)
+        return "" in targets or session_id in targets
 
     def claim_thread_items(self, session_id: str, *, limit: int = 20, now: datetime | None = None) -> list[dict]:
         """Atomically take the undelivered thread items for ``session_id``, oldest first.
@@ -234,6 +257,8 @@ class InboxStore:
         cannot both read the same note. The claimed rows record which chat read them.
         """
         stamp = (now or datetime.now(UTC)).isoformat()
+        with self._hint_lock:
+            gen = self._hint_gen
         db = self._connect()
         try:
             db.execute("BEGIN IMMEDIATE")
@@ -243,28 +268,24 @@ class InboxStore:
                 "ORDER BY created_at ASC, id ASC LIMIT ?",
                 (DELIVERY_THREAD, session_id, max(1, int(limit))),
             ).fetchall()
-            if not rows:
-                # Nothing for THIS chat. Messages addressed to another thread may still be
-                # waiting, so the hint only clears when the table has none at all.
-                waiting = db.execute(
-                    "SELECT COUNT(*) AS n FROM inbox WHERE delivery = ? AND delivered_at IS NULL",
-                    (DELIVERY_THREAD,),
-                ).fetchone()["n"]
-                db.commit()
-                self._thread_maybe_pending = waiting > 0
-                return []
-            ids = [r["id"] for r in rows]
-            placeholders = ",".join("?" for _ in ids)
-            db.execute(
-                f"UPDATE inbox SET delivered_at = ?, delivered_session = ? WHERE id IN ({placeholders})",
-                (stamp, session_id, *ids),
-            )
-            remaining = db.execute(
-                "SELECT COUNT(*) AS n FROM inbox WHERE delivery = ? AND delivered_at IS NULL",
-                (DELIVERY_THREAD,),
-            ).fetchone()["n"]
+            if rows:
+                ids = [r["id"] for r in rows]
+                placeholders = ",".join("?" for _ in ids)
+                db.execute(
+                    f"UPDATE inbox SET delivered_at = ?, delivered_session = ? WHERE id IN ({placeholders})",
+                    (stamp, session_id, *ids),
+                )
+            # Who is still waiting, read inside the same transaction as the claim.
+            snapshot = self._targets_in(db)
             db.commit()
-            self._thread_maybe_pending = remaining > 0
+            with self._hint_lock:
+                if self._hint_gen == gen:
+                    self._thread_targets = snapshot
+                else:
+                    # An add landed while this claim ran; its row may be newer than the
+                    # snapshot. Keep its entry: a spare lookup is cheap, a stranded
+                    # message is not.
+                    self._thread_targets = self._thread_targets | snapshot
             return [{**dict(r), "delivered_at": stamp, "delivered_session": session_id} for r in rows]
         except Exception:
             db.rollback()
@@ -342,10 +363,16 @@ class InboxStore:
             cur = db.execute(
                 "UPDATE inbox SET delivered_at = NULL, recovery_claimed_at = NULL, "
                 "recovery_accepted_at = NULL "
-                f"WHERE id IN ({placeholders})",
+                # Only un-deliver what IS delivered (the mirror of mark_delivered's guard):
+                # an undelivered item mid-recovery must keep its recovery claim.
+                f"WHERE id IN ({placeholders}) AND delivered_at IS NOT NULL",
                 tuple(ids),
             )
+            snapshot = self._targets_in(db)
             db.commit()
+            with self._hint_lock:
+                self._hint_gen += 1
+                self._thread_targets = self._thread_targets | snapshot
             return cur.rowcount
         finally:
             db.close()

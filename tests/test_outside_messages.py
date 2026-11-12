@@ -636,3 +636,83 @@ def test_dm_threads_lists_chats_and_which_is_working(monkeypatch, capsys):
     assert dm_cli.run_dm_cli(["mythxEngineer", "--threads", "--json"]) == 0
     data = json.loads(capsys.readouterr().out)
     assert [(t["id"], t["working"]) for t in data["threads"]] == [("chat-tab-a", True), ("chat-tab-b", False)]
+
+
+# ── review findings on the pending hint (PR #5096) ───────────────────────────
+
+
+def test_a_message_for_a_thread_that_never_shows_up_costs_other_chats_nothing(tmp_path):
+    """A typo'd or closed thread id used to keep the global hint up, so every model call
+    in every other chat opened a write transaction until restart."""
+    s = _store(tmp_path)
+    s.add("for a tab that is gone", source="x", delivery="thread", target_session="chat-gone")
+    assert s.thread_maybe_pending() is True  # it IS waiting for somebody
+    assert s.thread_maybe_pending(CHAT) is False  # but not for this chat
+
+    def _boom(*a, **k):
+        raise AssertionError("another chat must not touch SQLite for a message it can never read")
+
+    s.claim_thread_items = _boom
+    assert OutsideMessageMiddleware(s).before_model({"session_id": CHAT, "messages": []}, None) is None
+    # Survives a restart the same way: the hint is rebuilt per target.
+    assert _store(tmp_path).thread_maybe_pending(CHAT) is False
+    assert _store(tmp_path).thread_maybe_pending("chat-gone") is True
+
+
+def test_an_add_that_lands_during_a_claim_is_not_stranded(tmp_path):
+    """The claim used to overwrite the hint with its own (older) count after commit; an add
+    committing in that window was then invisible until the next add or a restart."""
+    s = _store(tmp_path)
+    s.add("first", source="x", delivery="thread")
+    real = s._targets_in
+
+    def _targets_then_concurrent_add(db):
+        snapshot = real(db)  # the claim's view: nothing left after it takes "first"
+        # Another worker's add lands after the snapshot but before the claim updates the
+        # hint. Simulated at the hint level (a real second writer would block on the
+        # claim's write lock until its commit, then update the hint exactly like this).
+        with s._hint_lock:
+            s._hint_gen += 1
+            s._thread_targets.add("")
+        return snapshot
+
+    s._targets_in = _targets_then_concurrent_add
+    assert [c["text"] for c in s.claim_thread_items(CHAT)] == ["first"]
+    assert s.thread_maybe_pending(CHAT) is True  # the concurrent add's entry survived
+
+
+def test_concurrent_posts_with_one_dedup_key_store_one_item(tmp_path):
+    s = _store(tmp_path)
+    results = []
+    barrier = threading.Barrier(6)
+
+    def post():
+        barrier.wait()
+        results.append(s.add("retry storm", priority="next", dedup_key="hook-1"))
+
+    threads = [threading.Thread(target=post) for _ in range(6)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert sum(r is not None for r in results) == 1
+    assert len(s.list(priority_floor="later")) == 1
+
+
+def test_mark_pending_leaves_an_undelivered_item_alone(tmp_path):
+    s = _store(tmp_path)
+    item = s.add("page", priority="now")
+    (claimed,) = s.claim_now_recovery_batch()
+    assert claimed["id"] == item["id"]
+    # Not delivered: mark_pending must not clear its in-flight recovery claim.
+    assert s.mark_pending([item["id"]]) == 0
+    assert s.get(item["id"])["recovery_claimed_at"] is not None
+
+
+def test_un_delivering_a_thread_item_puts_it_back_in_front_of_its_chat(tmp_path):
+    s = _store(tmp_path)
+    mid = s.add("again", source="x", delivery="thread")["id"]
+    s.claim_thread_items(CHAT)
+    assert s.thread_maybe_pending(CHAT) is False
+    assert s.mark_pending([mid]) == 1
+    assert s.thread_maybe_pending(CHAT) is True and len(s.claim_thread_items(CHAT)) == 1

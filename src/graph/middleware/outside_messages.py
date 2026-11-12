@@ -83,10 +83,13 @@ class OutsideMessageMiddleware(AgentMiddleware):
     def _due(self, state) -> str | None:
         """The session to claim for, or ``None`` when there is nothing to do."""
         store = self._store
-        if store is None or not store.thread_maybe_pending():
+        if store is None:
             return None
         session_id = state.get("session_id") if isinstance(state, dict) else getattr(state, "session_id", None)
-        return session_id if is_operator_chat(session_id) else None
+        if not is_operator_chat(session_id):
+            return None
+        # Asked per chat: a message addressed to some other thread costs this one nothing.
+        return session_id if store.thread_maybe_pending(session_id) else None
 
     def _claim(self, session_id: str) -> list[dict]:
         try:
