@@ -299,12 +299,22 @@ def register_config_routes(app) -> None:
                 await asyncio.to_thread(partial(cached_provider_models, provider, STATE.graph_config, refresh=True))
             )
         live = resolve_model_route(STATE.graph_config) if STATE.graph_config else None
-        base = body.api_base or (live.base_url if live else "")
-        key = body.api_key or (live.api_key if live else "")
+        if body.api_base:
+            # An endpoint the caller typed gets ONLY the key typed with it — never the live
+            # route's stored key, nor OPENAI_API_KEY. Same rule as `/api/config/test-model`
+            # (#3128): otherwise naming a base URL here is a way to have the stored
+            # credential sent to it.
+            base, key, allow_env = body.api_base, body.api_key, False
+        else:
+            base = live.base_url if live else ""
+            key = body.api_key or (live.api_key if live else "")
+            allow_env = True
         # Offloaded (#2486): the gateway probe is a blocking network call — running it
         # inline stalled the event loop for the probe duration (the native-OAuth branch
         # above already offloads).
-        return _live(await asyncio.to_thread(partial(cached_gateway_models, base, key, refresh=True)))
+        return _live(
+            await asyncio.to_thread(partial(cached_gateway_models, base, key, allow_env_key=allow_env, refresh=True))
+        )
 
     @app.post("/api/config/local-models")
     async def _api_local_models():

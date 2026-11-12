@@ -182,6 +182,39 @@ def test_patch_without_a_key_leaves_the_stored_one_alone(client, monkeypatch):
     assert client.written["secrets"] == {}
 
 
+KEYED = {"model": {"name": "gateway:gpt-4o", "api_base": "https://prod.example/v1", "api_key": "stored-key"}}
+
+
+def test_patch_cannot_move_a_keyed_connection_to_another_server_without_its_key(client, monkeypatch):
+    """A blank key keeps the stored one — so re-aiming the endpoint alone would send that key
+    to the new address on the next model list or turn."""
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
+    _install(monkeypatch, **KEYED)
+    for moved in ("https://elsewhere.example/v1", "http://prod.example/v1", "https://prod.example:8443/v1"):
+        r = client.patch("/api/config/providers/gateway", json={"base_url": moved})
+        assert r.status_code == 400, moved
+        assert "Enter its API key again" in r.json()["detail"]
+    assert client.written["entries"] is None  # nothing was written
+
+
+def test_patch_moves_a_keyed_connection_when_the_key_is_given_again(client, monkeypatch):
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
+    _install(monkeypatch, **KEYED)
+    r = client.patch("/api/config/providers/gateway", json={"base_url": "https://elsewhere.example/v1", "api_key": "new"})
+    assert r.status_code == 200
+    assert client.written["secrets"] == {"gateway": "new"}
+
+
+def test_patch_on_the_same_server_keeps_the_stored_key(client, monkeypatch):
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
+    _install(monkeypatch, **KEYED)
+    for same in ("https://prod.example/v2", "https://PROD.example/v1/", "https://prod.example/v1"):
+        assert client.patch("/api/config/providers/gateway", json={"base_url": same}).status_code == 200, same
+
+
 def test_patch_the_migrated_gateway_label_keeps_its_endpoint_and_key(client, monkeypatch):
     """#4597: the migrated gateway has a null endpoint (the SDK default) and its key in the
     legacy `model.api_key`. A console label edit must not strand either — the GET lists its
