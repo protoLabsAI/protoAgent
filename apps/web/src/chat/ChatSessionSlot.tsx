@@ -1989,9 +1989,11 @@ export function ChatSessionSlot({
             sessionId={sessionId}
             cast={cast}
             draft={draft}
-            onToggleMention={(name) => {
+            onToggleMention={(name, source) => {
               setDraft((d) => toggleMention(d, name));
-              textareaRef.current?.focus();
+              // A rail-chip toggle readies the composer; a toggle inside the open +K
+              // picker must NOT steal focus — the picker stays open for more picks.
+              if (source !== "picker") textareaRef.current?.focus();
             }}
           />
         ) : null}

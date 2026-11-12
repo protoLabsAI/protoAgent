@@ -6,8 +6,15 @@
  *  group (Work's own names) and an "Open in Work" deep link. The people (cast) chips keep
  *  their mention-toggle behavior unchanged, after the group chips.
  *
+ *  S6b (the v7 people behavior): chips and people share ONE row — a hidden mirror of the
+ *  people row is measured (ResizeObserver on the roster, which flexes into whatever the
+ *  group chips leave), and whoever doesn't fit collapses behind a `+K` chip that opens the
+ *  picker ("In this chat · N") in the same desktop Popover / phone Drawer the group chips
+ *  use. Draft-addressed names sort first, so picking a hidden name gives it a visible slot.
+ *  Until the first measurement lands the conservative fallback caps apply (peopleFit).
+ *
  *  Needs you is S7-gated: the selector computes it, the rail doesn't render it yet. */
-import { Fragment, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { KeyboardEvent as ReactKeyboardEvent, ReactNode } from "react";
 import { Button } from "@protolabsai/ui/primitives";
 import { Spinner, StatusDot } from "@protolabsai/ui/data";
@@ -25,6 +32,7 @@ import { beginThisChatVisit, endThisChatVisit } from "../work/visitScope";
 import type { WorkGroupId } from "../work/tone";
 import { useDirectives } from "./useDirectives";
 import { runHas } from "./mentionRun";
+import { fallbackCap, fitCount, orderPeople, recipientLine, spokenMoreLabel } from "./peopleFit";
 import "./chat-status-rail.css";
 
 export type RailChip = {
@@ -195,12 +203,59 @@ function GroupSection({ group, directives, mobile, onNavigate }: {
   );
 }
 
-function DetailsPanel({ groups, directives, mobile, onNavigate }: {
+/** The picker (§ the v7 people behavior): EVERY cast member as a toggle chip, the dynamic
+ *  recipients line, and the "In this chat · N" heading. One component serves both hosts —
+ *  the `+K` chip's own panel, and the People section the grouped details gain while names
+ *  are hidden. Toggling edits only the draft's leading run (the message body is untouched)
+ *  and never closes the panel, so several people can be picked in one visit; focus stays on
+ *  the clicked chip even though the toggle reorders the rail behind the panel. */
+function PeopleSection({ cast, draft, onToggleMention }: {
+  cast: string[];
+  draft: string;
+  onToggleMention: (name: string, source?: "picker") => void;
+}) {
+  const line = recipientLine(draft, cast);
+  const name = `In this chat, ${cast.length}`;
+  return (
+    <section className="chat-status-details__section chat-people" aria-label={name}>
+      <h2 className="chat-status-details__heading" aria-label={name}>
+        In this chat<span aria-hidden="true"> · {cast.length}</span>
+      </h2>
+      <div className="chat-people__chips">
+        {cast.map((person) => {
+          const active = runHas(draft, person);
+          return (
+            <button
+              key={person}
+              type="button"
+              className={`chat-roster-chip${active ? " chat-roster-chip--active" : ""}`}
+              aria-pressed={active}
+              title={active ? `Remove @${person} from this message` : `Address @${person}`}
+              onClick={(event) => {
+                onToggleMention(person, "picker");
+                // The caller may move focus for a RAIL toggle (to the composer); a picker
+                // toggle keeps it here so the next pick is one Tab away.
+                event.currentTarget.focus();
+              }}
+            >
+              <span className="chat-roster-name">@{person}</span>
+            </button>
+          );
+        })}
+      </div>
+      {line && <p className="chat-people__line">{line}</p>}
+    </section>
+  );
+}
+
+function DetailsPanel({ groups, directives, mobile, onNavigate, people }: {
   groups: WorkGroup[];
   /** THIS chat's instructions source — status and retry scoped to its own ledger. */
   directives: WorkSource;
   mobile: boolean;
   onNavigate: () => void;
+  /** The People section — present ONLY while the rail hides names behind `+K`. */
+  people?: ReactNode;
 }) {
   return (
     <div className="chat-status-details" onKeyDown={trapTab}>
@@ -213,6 +268,7 @@ function DetailsPanel({ groups, directives, mobile, onNavigate }: {
           onNavigate={onNavigate}
         />
       ))}
+      {people}
     </div>
   );
 }
@@ -223,7 +279,9 @@ export function ChatStatusRail({ sessionId, cast, draft, onToggleMention }: {
   cast: string[];
   /** The live draft: a cast chip is active while its mention leads the draft's run. */
   draft: string;
-  onToggleMention: (name: string) => void;
+  /** Toggle `name` in the draft's leading run. `source === "picker"` tells the caller the
+   *  toggle came from the open picker, where focus must NOT jump to the composer. */
+  onToggleMention: (name: string, source?: "picker") => void;
 }) {
   const mobile = useIsMobile();
   const sources = useWorkItems({ sessionId, thisChatOnly: false });
@@ -255,13 +313,58 @@ export function ChatStatusRail({ sessionId, cast, draft, onToggleMention }: {
     chips.push({ id: "instructions", label: "Told it", count: 0, problem: true });
   }
 
-  const [open, setOpen] = useState<RailChip["id"] | null>(null);
+  // ── People fit (S6b, the v7 behavior): one row, measured, `+K` for the rest ─────────
+  // Draft-addressed names first, then the original cast order — so a name picked in the
+  // picker (it joins the run) takes a visible slot at once.
+  const ordered = useMemo(() => orderPeople(cast, draft), [cast, draft]);
+  const rosterRef = useRef<HTMLDivElement | null>(null);
+  const measureRef = useRef<HTMLDivElement | null>(null);
+  // The roster's content width (what the group chips leave on the row), from ResizeObserver —
+  // null until the first delivery, which is when the fallback caps apply.
+  const [available, setAvailable] = useState<number | null>(null);
+  const [measured, setMeasured] = useState<number | null>(null);
+  const hasRoster = cast.length > 0;
+  useEffect(() => {
+    const node = rosterRef.current;
+    if (!hasRoster || !node || typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver((entries) => {
+      const width = entries[entries.length - 1]?.contentRect.width;
+      if (typeof width === "number") setAvailable(Math.floor(width));
+    });
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [hasRoster]);
+  // Measure the hidden mirror row (same classes, same gaps, every chip plus the widest
+  // possible `+K`) before paint: a chip's offsetLeft already carries the icon and gaps, so
+  // the pure fit arithmetic needs no layout knowledge of its own. Reruns when the width,
+  // the people, or their order change; jsdom and the pre-observer first paint keep
+  // `measured` null and ride the fallback caps instead.
+  const orderedKey = ordered.join("\u0000");
+  useLayoutEffect(() => {
+    const row = measureRef.current;
+    if (available == null || !row) {
+      setMeasured(null);
+      return;
+    }
+    const children = [...row.children] as HTMLElement[];
+    const more = children[children.length - 1];
+    const boxes = children.slice(1, -1).map((el) => ({ left: el.offsetLeft, width: el.offsetWidth }));
+    setMeasured(fitCount(boxes, more.offsetWidth, available));
+  }, [available, orderedKey]);
+  const visibleCount = Math.min(measured ?? fallbackCap(mobile, chips.length > 0), ordered.length);
+  const visible = ordered.slice(0, visibleCount);
+  const hiddenCount = ordered.length - visibleCount;
+
+  const [open, setOpen] = useState<RailChip["id"] | "people" | null>(null);
   const chipRefs = useRef(new Map<RailChip["id"], HTMLButtonElement>());
-  const lastOpen = useRef<RailChip["id"] | null>(null);
+  const moreRef = useRef<HTMLButtonElement | null>(null);
+  const lastOpen = useRef<RailChip["id"] | "people" | null>(null);
   if (open !== null) lastOpen.current = open;
   // The open chip can leave the rail under the reader (its last job ends, its count hits
-  // zero). Clear the state too, or the panel would reopen by itself when the chip returns.
-  const openGone = open !== null && !chips.some((chip) => chip.id === open);
+  // zero; for the picker, a resize lets everyone fit and `+K` goes). Clear the state too,
+  // or the panel would reopen by itself when the chip returns.
+  const openGone = open !== null
+    && (open === "people" ? hiddenCount === 0 : !chips.some((chip) => chip.id === open));
   useEffect(() => {
     if (openGone) setOpen(null);
   }, [openGone]);
@@ -306,9 +409,12 @@ export function ChatStatusRail({ sessionId, cast, draft, onToggleMention }: {
   }, [flat, sessionId]);
 
   const close = () => setOpen(null);
+  // Return focus to the opener. The `+K` button is one keyed node, so it survives the
+  // reorders a picker visit causes — focus lands back on it wherever it moved to.
   const closeAndRestore = () => {
     setOpen(null);
-    if (lastOpen.current) chipRefs.current.get(lastOpen.current)?.focus();
+    if (lastOpen.current === "people") moreRef.current?.focus();
+    else if (lastOpen.current) chipRefs.current.get(lastOpen.current)?.focus();
   };
 
   const hasContent = chips.length > 0 || cast.length > 0;
@@ -323,6 +429,30 @@ export function ChatStatusRail({ sessionId, cast, draft, onToggleMention }: {
     <span className="chat-status-rail__announce" role="status" aria-live="polite" aria-atomic="true">
       {announcement}
     </span>
+  );
+
+  const peopleSection = (
+    <PeopleSection cast={cast} draft={draft} onToggleMention={onToggleMention} />
+  );
+  // The grouped details gain the People section ONLY while the rail hides names — with
+  // everyone visible on the row there is nothing the panel would add.
+  const peopleWhenHidden = hiddenCount > 0 ? peopleSection : undefined;
+
+  // `+K` — the overflow chip. Visible text is the count alone; the spoken label says it
+  // all. One keyed node, so focus return still works after a picker visit reorders the row.
+  const moreChip = (
+    <button
+      type="button"
+      className="chat-roster-chip chat-roster-more"
+      data-testid="chat-roster-more"
+      ref={moreRef}
+      aria-haspopup="dialog"
+      aria-expanded={open === "people"}
+      aria-label={spokenMoreLabel(hiddenCount)}
+      onClick={mobile ? () => setOpen(open === "people" ? null : "people") : undefined}
+    >
+      +{hiddenCount}
+    </button>
   );
 
   const renderChip = (chip: RailChip) => {
@@ -365,7 +495,13 @@ export function ChatStatusRail({ sessionId, cast, draft, onToggleMention }: {
         }}
         trigger={button}
       >
-        <DetailsPanel groups={groups} directives={instructionsSource} mobile={false} onNavigate={close} />
+        <DetailsPanel
+          groups={groups}
+          directives={instructionsSource}
+          mobile={false}
+          onNavigate={close}
+          people={peopleWhenHidden}
+        />
       </Popover>
     );
   };
@@ -377,9 +513,9 @@ export function ChatStatusRail({ sessionId, cast, draft, onToggleMention }: {
         <div className="chat-status-rail" role="group" aria-label="Chat status" data-testid="chat-status-rail">
           {chips.map(renderChip)}
           {cast.length ? (
-            <div className="chat-roster" aria-label="In this chat">
+            <div className="chat-roster" aria-label="In this chat" ref={rosterRef}>
               <Users size={13} aria-hidden />
-              {cast.map((name) => {
+              {visible.map((name) => {
                 const active = runHas(draft, name);
                 return (
                   <button
@@ -394,6 +530,34 @@ export function ChatStatusRail({ sessionId, cast, draft, onToggleMention }: {
                   </button>
                 );
               })}
+              {hiddenCount > 0 && (mobile ? moreChip : (
+                <Popover
+                  side="top"
+                  align="end"
+                  className="chat-status-popover"
+                  open={open === "people"}
+                  onOpenChange={(next) => {
+                    setOpen(next ? "people" : null);
+                    if (!next) moreRef.current?.focus();
+                  }}
+                  trigger={moreChip}
+                >
+                  <div className="chat-status-details" onKeyDown={trapTab}>{peopleSection}</div>
+                </Popover>
+              ))}
+              {/* The hidden mirror of the whole people row — the icon, EVERY chip in display
+                  order, then the widest `+K` this cast could need — which the layout effect
+                  measures. Same classes as the live chips, so it can never drift from the
+                  real metrics; spans, not buttons, so it adds no tab stops. */}
+              <div className="chat-roster__measure" aria-hidden="true" ref={measureRef}>
+                <Users size={13} aria-hidden />
+                {ordered.map((name) => (
+                  <span key={name} className="chat-roster-chip">
+                    <span className="chat-roster-name">@{name}</span>
+                  </span>
+                ))}
+                <span className="chat-roster-chip">+{Math.max(ordered.length - 1, 1)}</span>
+              </div>
             </div>
           ) : null}
           {mobile && (
@@ -404,9 +568,18 @@ export function ChatStatusRail({ sessionId, cast, draft, onToggleMention }: {
               title="Chat status"
               className="chat-status-sheet"
             >
-              {open !== null && (
-                <DetailsPanel groups={groups} directives={instructionsSource} mobile onNavigate={closeAndRestore} />
-              )}
+              {open === "people" ? (
+                // The picker sheet opens AT "In this chat · N" — the People section alone.
+                <div className="chat-status-details" onKeyDown={trapTab}>{peopleSection}</div>
+              ) : open !== null ? (
+                <DetailsPanel
+                  groups={groups}
+                  directives={instructionsSource}
+                  mobile
+                  onNavigate={closeAndRestore}
+                  people={peopleWhenHidden}
+                />
+              ) : null}
             </Drawer>
           )}
         </div>
