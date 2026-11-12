@@ -743,7 +743,11 @@ def _outside_root_decision(decision, token: str) -> str:
     Only the two allow values bound to THIS path mean yes. ``"stale"`` = an allow answer
     bound to a different path than this run resolved; ``"plain"`` = an unbound approve
     (see ``_PLAIN_APPROVE``). Anything else — a dismissal, the autonomous-turn sentinel,
-    garbage — is a no."""
+    garbage — is a no. So is any answer from a caller that can't approve."""
+    from graph.middleware.request_context import caller_may_approve
+
+    if not caller_may_approve():
+        return "deny"
     if isinstance(decision, bool):
         return "plain" if decision else "deny"
     if isinstance(decision, dict):

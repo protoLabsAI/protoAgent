@@ -777,6 +777,16 @@ async def _forward_member(slug: str, request, path: str, raw_path: str, target):
         from a2a_impl.credential_scope import refusal_body
 
         return JSONResponse(refusal_body(), status_code=403)
+    from a2a_impl.credential_scope import SCOPE_DEVICE, SCOPE_HEADER, is_key_checked_config_write
+
+    device_scoped = scope == SCOPE_DEVICE
+    if device_scoped and is_remote and is_key_checked_config_write(request.method, "/" + path.lstrip("/")):
+        # These routes check credential-plane keys INSIDE the route, against the credential
+        # the remote sees — its own stored bearer, lent below. A remote on an older build
+        # doesn't read ``SCOPE_HEADER``, so the hub can't rely on it to refuse; it refuses here.
+        from a2a_impl.credential_scope import refusal_body
+
+        return JSONResponse(refusal_body(), status_code=403)
     drop_params: frozenset[str] = frozenset()
     if is_remote:
         # A REMOTE is off this box and outside the hub's trust boundary: nothing the hub holds
@@ -819,6 +829,15 @@ async def _forward_member(slug: str, request, path: str, raw_path: str, target):
         from graph.fleet.service_token import resolve_service_token
 
         extra = {**extra, "authorization": f"Bearer {resolve_service_token()}"}
+    # The credential the member sees after this point (fleet token / stored bearer) is FULL
+    # scope there. Say what the caller really is, or a paired phone is a full-access caller
+    # one hop away — and the per-key config check in the member's routes lets it write
+    # ``auth.token``. The hub is the only author of this header: a full caller's own copy is
+    # dropped (None), though it could only ever narrow.
+    if device_scoped:
+        extra = {**extra, SCOPE_HEADER: SCOPE_DEVICE}
+    elif any(k.lower() == SCOPE_HEADER for k in getattr(request, "headers", {}) or {}):
+        extra = {**extra, SCOPE_HEADER: None}
     if path == "a2a" and request.method == "POST":
         # A turn is starting (or being resumed/queried) on this member — refresh its
         # LRU recency so the warm-cap's grace window (Swap & Resume S4) actually

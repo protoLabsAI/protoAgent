@@ -42,6 +42,25 @@ SCOPES = frozenset({SCOPE_FULL, SCOPE_DEVICE})
 DEVICE_SCOPE_CODE = "device_scope"
 DEVICE_SCOPE_MESSAGE = "This device can't change pairing or credentials — use a full-access device."
 
+#: Carries a ``device`` scope across a proxy hop. The hub's fleet proxy authenticates the
+#: caller, then presents the member with a credential that is FULL scope there (the fleet
+#: service token, or a remote's stored bearer) — so the member would otherwise see a paired
+#: phone as a full-access caller. The hub sets this header on such a hop and the receiving
+#: middleware lowers the request to ``device``. It can only NARROW: a full credential plus
+#: this header is ``device``; nothing a caller sends here ever widens anything.
+SCOPE_HEADER = "x-protoagent-credential-scope"
+
+#: Config-write routes whose credential-plane check is per KEY, inside the route (see
+#: ``operator_api.scope_guard``), so the URL ceiling below can't refuse them. The fleet proxy
+#: refuses these for a ``device``-scope caller aimed at a REMOTE member: a remote on an older
+#: build ignores ``SCOPE_HEADER`` and would apply every key with its own full credential.
+KEY_CHECKED_CONFIG_WRITES = (
+    "/api/config",
+    "/api/config/setup",
+    "/api/settings",
+    "/api/settings/reset",
+)
+
 _ANY = frozenset({"GET", "HEAD", "POST", "PUT", "PATCH", "DELETE"})
 
 
@@ -98,10 +117,30 @@ CEILING: tuple[CeilingRule, ...] = (
     _rule({"POST"}, "/api/mcp/servers", "add an MCP server"),
     _rule({"POST"}, "/api/mcp/servers/import", "import MCP servers"),
     _rule(_ANY - {"GET", "HEAD"}, "/api/mcp/servers/**", "change an MCP server"),
+    # New agents — creating one (from a bundle URL, with config the caller picks) or importing
+    # a snapshot (which installs the plugins it names and applies its config verbatim) leaves
+    # host code and a running process behind, exactly like a plugin install. Starting,
+    # stopping and switching between agents that already exist stays open.
+    _rule({"POST"}, "/api/fleet", "create an agent"),
+    _rule({"POST"}, "/api/agent/import", "import an agent"),
     # Secrets.
     _rule(_ANY, "/api/secrets/**", "use the secrets manager"),
     _rule(_ANY, "/api/config/oauth/**", "change a provider sign-in"),
 )
+
+
+def narrowed_by_header(scope: str, header_value: str | None) -> str:
+    """``scope`` after applying a ``SCOPE_HEADER`` value — ``device`` if the header asks for
+    it, else unchanged. Never widens."""
+    return SCOPE_DEVICE if (header_value or "").strip().lower() == SCOPE_DEVICE else scope
+
+
+def is_key_checked_config_write(method: str | None, path: str) -> bool:
+    """Whether ``method path`` is one of ``KEY_CHECKED_CONFIG_WRITES`` (bare or proxied)."""
+    if (method or "").upper() != "POST":
+        return False
+    p = (path or "").split("?", 1)[0].split("#", 1)[0].rstrip("/")
+    return any(p == w or p.endswith(w) for w in KEY_CHECKED_CONFIG_WRITES)
 
 
 def _compile(path: str) -> re.Pattern[str]:
