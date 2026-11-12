@@ -838,6 +838,29 @@ def test_federation_token_allowed_consumer_surface():
     assert c.post("/v1/chat/completions", headers=fed).status_code == 200
 
 
+def test_a_federation_request_cannot_approve_or_bypass_and_an_operator_can():
+    """The whole chain a turn driver relies on: the middleware classifies the credential, the
+    drivers bind ``turn_caller_may_approve()``, and the run_command gate reads that — never
+    the caller's own ``bypass_permissions``."""
+    from starlette.responses import JSONResponse
+    from starlette.routing import Route
+
+    from graph.middleware.request_context import request_metadata_scope
+    from server.turn_control import turn_caller_may_approve
+    from tools.fs_tools import _approved, _bypass_requested
+
+    async def turn(request):
+        with request_metadata_scope({"bypass_permissions": True}, may_approve=turn_caller_may_approve()):
+            return JSONResponse({"bypass": _bypass_requested(), "approve": _approved("approve")})
+
+    _fed_configured()
+    app = Starlette(routes=[Route("/a2a", turn, methods=["POST"])])
+    app.add_middleware(auth.A2AAuthMiddleware)
+    c = TestClient(app)
+    assert c.post("/a2a", headers={"Authorization": "Bearer fed-secret"}).json() == {"bypass": False, "approve": False}
+    assert c.post("/a2a", headers={"Authorization": "Bearer op-secret"}).json() == {"bypass": True, "approve": True}
+
+
 def test_operator_token_reaches_everything():
     _fed_configured()
     c = _client_multi()

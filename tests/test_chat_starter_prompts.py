@@ -157,6 +157,7 @@ def _resolved(cfg) -> list[dict]:
 
 def test_no_config_returns_defaults() -> None:
     status = build_runtime_status(config=None, setup_complete=False, graph_loaded=False)
+    assert status["public_url"] == ""  # same key set before and after setup
     assert status["starter_prompts"] == DEFAULT_STARTER_PROMPTS
 
 
