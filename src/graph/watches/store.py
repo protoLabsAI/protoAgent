@@ -124,15 +124,21 @@ class WatchStore:
         claimed — so a (possibly repeating) watch never holds its OWN continuation
         out of its owner. Any OTHER armed watch on the owner still holds.
 
-        Unlike display listing, unreadable records raise: uncertainty must not
-        release an execution owner for another independent fire.
+        Unreadable records are skipped+logged, exactly like ``all()``: a file no
+        reader can parse also can't tick, react or be pruned (``all()`` skips it,
+        so ``prune_terminal`` never removes it) — treating it as "held" would
+        therefore park every job-owned claim and missed-fire recovery behind one
+        corrupt, possibly unrelated, file forever. A failure to LIST the store
+        still raises, and the callers fail closed on that.
         """
         for path in self._base.glob("*.json"):
             try:
                 with open(path, encoding="utf-8") as fh:
                     watch = Watch.from_dict(json.load(fh))
-            except FileNotFoundError:
-                continue  # concurrently cleared
+            except (OSError, json.JSONDecodeError, ValueError, TypeError) as exc:
+                if not isinstance(exc, FileNotFoundError):  # FileNotFound = concurrently cleared
+                    log.warning("[watch] skipping unreadable %s in ownership read: %s", path, exc)
+                continue
             if exclude_watch_id is not None and watch.id == exclude_watch_id:
                 continue
             if (watch.run_session == context_id and watch.run_prompt.strip()

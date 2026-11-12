@@ -1,3 +1,4 @@
+// @vitest-environment node
 import { describe, expect, it } from "vitest";
 import ts from "typescript";
 import { icons } from "lucide-react";

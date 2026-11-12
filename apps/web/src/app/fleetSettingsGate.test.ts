@@ -1,3 +1,4 @@
+// @vitest-environment node
 // The fleet-surface gate (#1708/#1999 → sister agents). "New agent", "Fleet settings" and
 // the palette's Fleet Room are live in every window that drives a REAL fleet — the host, a
 // standalone instance, and a sister agent's slug window (its fleet calls are hub paths, so

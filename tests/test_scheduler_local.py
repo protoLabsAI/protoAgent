@@ -1978,13 +1978,15 @@ async def test_recreated_same_slot_has_independent_claim_and_settlement(tmp_path
             return _FakeResponse()
 
     if state in ("claimed", "unknown"):
-        assert s._claim_occurrence(replacement) is None
-        assert replacement.context_id == old.context_id
-        # Only positive terminal reconciliation releases the predecessor.
-        s._remember_task(old, "predecessor")
-        assert s._settle_task(old, "predecessor", {
-            "result": {"id": "predecessor", "status": {"state": "completed"}}
-        })
+        # The predecessor's claim carries no task handle, so it can never be
+        # reconciled: it stays quarantined in its own, now orphaned, owner while
+        # the replacement runs under a FRESH owner (ADR 0129 D6) — inheriting the
+        # stuck owner would park every cancel-and-recreate behind it forever. An
+        # ACCEPTED predecessor (persisted handle) DOES capture the replacement
+        # behind the same owner until reconciliation settles it — covered by
+        # test_job_session_migration.test_accepted_predecessor_captures_replacement_behind_same_owner.
+        assert replacement.context_id != old.context_id
+        assert replacement.context_id.startswith("job:")
     monkeypatch.setattr(httpx, "AsyncClient", lambda **kw: ReplacementClient(None))
     await s._tick()
     await asyncio.gather(*s._fire_tasks)

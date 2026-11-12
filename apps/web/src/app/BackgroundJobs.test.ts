@@ -1,3 +1,4 @@
+// @vitest-environment node
 import { describe, expect, it } from "vitest";
 
 import { applyProgress, byRecency, fmtElapsed, isShortResult, unreadJobIds } from "./background-jobs";

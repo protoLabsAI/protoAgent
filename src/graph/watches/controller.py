@@ -592,7 +592,8 @@ class WatchController:
                     context += f"\nEvidence: {watch.last_evidence.strip()}"
                 reaction_prompt = f"{context}\n\n{watch.run_prompt}"
                 # Terminal retries must not replace a queued or already completed turn.
-                # The generation + finish timestamp distinguish re-created watches.
+                # The creation + finish timestamps distinguish re-created watches (the
+                # controller's in-memory generation counter is not part of the key).
                 options = {}
                 if watch.reaction_pending:
                     options["enqueue_key"] = f"watch:{watch.id}:{watch.created_at}:{watch.finished_at}"

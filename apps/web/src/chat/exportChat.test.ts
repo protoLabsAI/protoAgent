@@ -1,3 +1,4 @@
+// @vitest-environment node
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
 // #2197 — the export note must name the file it wrote (the browser picks the destination,

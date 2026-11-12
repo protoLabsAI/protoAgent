@@ -1,3 +1,4 @@
+// @vitest-environment node
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // Session-attendance presence client (#3110). Focus: the `?session=`/`?token=` URL, the

@@ -1,3 +1,4 @@
+// @vitest-environment node
 // A HITL answer continues the task that parked (A2A §3.4.3, #3930): the console sends
 // the parked task's id on the SendStreamingMessage it answers with.
 import { afterEach, describe, expect, it, vi } from "vitest";

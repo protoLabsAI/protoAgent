@@ -1,3 +1,4 @@
+// @vitest-environment node
 import { describe, expect, it } from "vitest";
 
 import { CHAT_ATTACH_ACCEPT, DOCX_MIME, KNOWLEDGE_INGEST_ACCEPT } from "./attachTypes";

@@ -36,7 +36,7 @@ import logging
 import os
 import sqlite3
 import uuid
-from contextlib import closing
+from contextlib import closing, suppress
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -434,7 +434,9 @@ class LocalScheduler:
         db.execute("PRAGMA busy_timeout=5000")  # wait (don't error) on lock contention
         try:
             db.execute("PRAGMA journal_mode=WAL")
-        except sqlite3.OperationalError as exc:
+        except sqlite3.DatabaseError as exc:
+            # Best-effort: an unwritable or corrupt file skips WAL here and fails
+            # where the caller actually reads/writes, inside its own error handling.
             log.debug("[scheduler] WAL skipped: %s", exc)
         return db
 
@@ -456,30 +458,47 @@ class LocalScheduler:
             raise ValueError("scheduler store belongs to a different agent; check target identity")
 
     def _init_db(self, *, adopt_existing_jobs: bool = True) -> None:
+        self._migration_pending = False
         if not adopt_existing_jobs:
             self._initialize_db(adopt_existing_jobs=False)
             return
         migration_lock = _acquire_jobs_lock(self.path)
         if migration_lock is None:
-            # A live old scheduler must drain before routing can change. Already
-            # migrated stores can still be opened by read/producer clients.
-            with closing(self._connect()) as db:
-                self._check_owner(db)
-                try:
-                    missing = db.execute(
-                        "SELECT 1 FROM jobs j LEFT JOIN job_sessions s "
-                        "ON j.id = s.job_id AND j.created_at = s.created_at "
-                        "WHERE s.job_id IS NULL LIMIT 1"
-                    ).fetchone()
-                except sqlite3.DatabaseError as exc:
-                    raise RuntimeError("stop the scheduler before migrating execution identities") from exc
-                if missing:
-                    raise RuntimeError("stop the scheduler before migrating execution identities")
+            # A live old scheduler must drain before routing can change — but a
+            # held lock at construction is the normal restart/redeploy overlap,
+            # not an error. Raising here made `agent_init` (which wraps the
+            # constructor in `except Exception`) run scheduler-less until the
+            # NEXT restart, bypassing start()'s designed background lock-retry
+            # (`_await_lock_then_poll`). Defer the schema/identity migration to
+            # the moment this process wins the owner-lock instead; until then
+            # the store stays exactly as its live owner left it.
+            self._migration_pending = True
+            log.warning(
+                "[scheduler] jobs.db at %s is owned by another live instance — deferring "
+                "schema/identity migration until the owner-lock is acquired",
+                self.path,
+            )
             return
         try:
             self._initialize_db(adopt_existing_jobs=True)
         finally:
             _release_jobs_lock(self.path, migration_lock)
+
+    def _complete_deferred_migration(self) -> None:
+        """Run the schema/identity migration a lock-contended constructor deferred.
+
+        Called with the owner-lock HELD (the old dispatch writer has drained),
+        before any polling or missed-fire recovery touches the store. Database
+        errors log and leave the scheduler polling — claims against a store that
+        somehow still isn't migrated fail closed per query, which beats running
+        the whole agent scheduler-less."""
+        if not self._migration_pending:
+            return
+        try:
+            self._initialize_db(adopt_existing_jobs=True)
+            self._migration_pending = False
+        except Exception:  # noqa: BLE001 — unrouted rows stay held; polling must not die
+            log.exception("[scheduler] deferred schema/identity migration failed at %s", self.path)
 
     def _initialize_db(self, *, adopt_existing_jobs: bool) -> None:
         if not adopt_existing_jobs:
@@ -554,12 +573,22 @@ class LocalScheduler:
                 (self.agent_name,),
             )
             db.commit()
-            db.close()
-        except BaseException:
-            db.rollback()
-            db.close()
+        except sqlite3.DatabaseError:
+            # Non-fatal, as before ADR 0129: an unreadable/locked store logs and
+            # leaves the scheduler constructed (later reads/claims fail closed per
+            # query) instead of bubbling out of the constructor, which agent_init
+            # converts into running scheduler-less until the next restart.
+            with suppress(sqlite3.DatabaseError):
+                db.rollback()
             log.exception("[scheduler] schema init failed at %s", self.path)
+        except BaseException:
+            # A crash mid-migration must roll back routing and owner assignment as
+            # one transaction before propagating (idempotent recovery re-runs it).
+            with suppress(sqlite3.DatabaseError):
+                db.rollback()
             raise
+        finally:
+            db.close()
 
     # ── public API (matches SchedulerBackend) ───────────────────────────────
 
@@ -832,6 +861,7 @@ class LocalScheduler:
             self._task = asyncio.create_task(self._await_lock_then_poll(), name="scheduler.local.lockwait")
             return
         self._stopping = False
+        self._complete_deferred_migration()
         self._recover_missed_fires()
         self._task = asyncio.create_task(self._poll_loop(), name="scheduler.local.poll")
         log.info(
@@ -855,6 +885,7 @@ class LocalScheduler:
                     self.agent_name,
                     self.path,
                 )
+                self._complete_deferred_migration()
                 self._recover_missed_fires()
                 await self._poll_loop()
                 return
@@ -1347,6 +1378,18 @@ class LocalScheduler:
         cutoff_recent = datetime.now(UTC) - timedelta(seconds=_MISSED_FIRE_WINDOW_S)
         db = self._connect()
         try:
+            # Make permanent quarantine loud: a claim with no task handle can never be
+            # reconciled or resent, so an operator should see WHICH jobs carry one.
+            orphans = db.execute(
+                "SELECT DISTINCT job_id FROM occurrences "
+                "WHERE state IN ('claimed', 'unknown') AND task_id IS NULL"
+            ).fetchall()
+            if orphans:
+                log.warning(
+                    "[scheduler] %d dispatch claim(s) have no task handle and stay quarantined, "
+                    "never resent (%s); a replacement of such a job runs under a fresh execution owner",
+                    len(orphans), ", ".join(sorted(o["job_id"] for o in orphans)),
+                )
             rows = db.execute(
                 # The unresolved-work exemption is per GENERATION: only this row's own
                 # claimed/unknown occurrence keeps it out of stale-fire policy. An
@@ -1512,6 +1555,13 @@ class LocalScheduler:
         return terminal
 
     def _pending_reconciliation(self) -> list[sqlite3.Row]:
+        """Unsettled claims a durable GetTask can still decide: only ACCEPTED sends
+        carry a persisted task handle to read. A handle-less claim (a crash between
+        claim and send, or a lost POST) is deliberately absent — there is nothing to
+        query and a resend is never authorized (ADR 0129 D6: claims without
+        recoverable handles stay quarantined). It holds only its own generation and
+        its own, eventually orphaned, owner: ``job_sessions.resolve`` never hands
+        that owner to a replacement generation, so cancel-and-recreate escapes it."""
         with closing(self._connect()) as db, db:
             claims = db.execute(
                 "SELECT * FROM occurrences WHERE state IN ('claimed', 'unknown') "
@@ -1594,7 +1644,29 @@ class LocalScheduler:
         # the fire's context (a `wait`/`run_in_session` resume lands in a chat session; a
         # plain cron lands in its durable job session).
         session_id = job.context_id
-        assert session_id and session_id != ACTIVITY_CONTEXT
+        if not session_id or session_id == ACTIVITY_CONTEXT:
+            # Dispatch invariant (ADR 0129 D6): a fire never runs on the shared
+            # Activity session. Enforced explicitly rather than by `assert` —
+            # ``python -O`` strips asserts, which would silently route the fire
+            # there, and a tripped assert would escape ``_fire`` untyped after the
+            # claim. Refuse the send and hold the row (``_claim_due_jobs`` skips
+            # held rows) so an unrouted job stalls loudly until it is re-owned;
+            # nothing was sent, so the occurrence stays retryable under the same
+            # message identity.
+            log.error(
+                "[scheduler] refusing to fire job %s: no isolated execution owner "
+                "(context %r); holding the job", job.id, session_id,
+            )
+            try:
+                with closing(self._connect()) as db, db:
+                    db.execute(
+                        "UPDATE jobs SET execution_hold = ? WHERE id = ? AND created_at = ?",
+                        ("missing execution owner; fire refused, not sent", job.id, job.created_at),
+                    )
+            except sqlite3.DatabaseError:
+                log.exception("[scheduler] could not hold unrouted job %s", job.id)
+            self._finish_dispatch(job, "retryable")
+            return False
         self._publish_turn("turn.started", session_id=session_id, origin=fire_origin, trigger=job.id)
 
         # Wake-framing (ADR 0079): a scheduled/watch fire delivered a bare prompt, so the agent

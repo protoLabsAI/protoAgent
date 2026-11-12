@@ -88,17 +88,57 @@ def test_migration_crash_rolls_back_owner_assignment(tmp_path, monkeypatch):
     assert len(rows(recovered, "job_sessions")) == len(before)
 
 
+@pytest.mark.asyncio
 @pytest.mark.platform_sensitive
-def test_migration_excludes_live_old_dispatch_writer(tmp_path):
+async def test_live_old_dispatch_writer_defers_migration_until_lock_acquired(tmp_path):
+    """A held owner-lock at construction is the normal restart/redeploy overlap,
+    not an error: raising made ``agent_init`` (which wraps the constructor in
+    ``except Exception``) run scheduler-less until the NEXT restart. Instead the
+    migration waits for start()'s background lock-retry — the store is excluded
+    from routing changes while the old dispatch writer lives, then migrated."""
+    import asyncio
+
     s = legacy_store(tmp_path)
     lock = _acquire_jobs_lock(s.path)
+    deferred = None
     try:
-        with pytest.raises(RuntimeError, match="stop the scheduler"):
-            scheduler(tmp_path)
-        assert s.get_job("cron").context_id is None
+        deferred = scheduler(tmp_path)  # must not raise into scheduler-less fallback
+        deferred._LOCK_RETRY_SECONDS = 0.01
+        # The live owner's store is untouched while it still holds the lock,
+        # even across start() — which waits in the background instead of failing.
+        assert deferred.get_job("cron").context_id is None
+        await deferred.start()
+        assert deferred._task is not None
+        await asyncio.sleep(0.05)
+        assert deferred.get_job("cron").context_id is None
     finally:
         _release_jobs_lock(s.path, lock)
-    assert scheduler(tmp_path).get_job("cron").context_id.startswith("job:")
+    try:
+        migrated = None
+        for _ in range(500):
+            migrated = deferred.get_job("cron").context_id
+            if migrated:
+                break
+            await asyncio.sleep(0.02)
+        assert migrated and migrated.startswith("job:")
+        # The full migration ran through the deferred path, holds included.
+        assert deferred.get_job("wait:system:activity").execution_hold == job_sessions.LEGACY_WAIT_HOLD
+    finally:
+        await deferred.stop()
+    # Reopening with the lock free re-runs the migration idempotently.
+    assert scheduler(tmp_path).get_job("cron").context_id == migrated
+
+
+@pytest.mark.platform_sensitive
+def test_corrupt_store_logs_and_survives_construction(tmp_path):
+    """Schema/migration DatabaseErrors stay non-fatal (pre-ADR-0129 behavior):
+    the constructor logs and returns a scheduler whose reads fail closed, rather
+    than raising into agent_init's run-scheduler-less-until-next-restart catch."""
+    base = tmp_path / "migration"
+    base.mkdir()
+    (base / "jobs.db").write_bytes(b"this is not a sqlite database")
+    s = scheduler(tmp_path)
+    assert s.list_jobs() == []
 
 
 @pytest.mark.platform_sensitive
@@ -317,6 +357,36 @@ async def test_dispatch_and_lifecycle_use_one_persisted_identity(tmp_path, monke
     assert all(m["contextId"] != "system:activity" for m in sent)
 
 
+@pytest.mark.asyncio
+@pytest.mark.platform_sensitive
+async def test_unrouted_fire_is_refused_and_held_never_sent_to_activity(tmp_path, monkeypatch):
+    """Defense in depth for the dispatch invariant: a row that somehow reaches
+    ``_fire`` without an isolated owner (hand-edited store, failed migration) is
+    refused and held — never POSTed to the shared Activity session. Enforced with
+    an explicit check, not a bare ``assert``, so ``python -O`` keeps it."""
+    import httpx
+
+    posts = []
+
+    def receive(request):
+        posts.append(request)
+        return httpx.Response(200, json={})
+
+    real_client = httpx.AsyncClient
+    monkeypatch.setattr(httpx, "AsyncClient",
+                        lambda **kw: real_client(transport=httpx.MockTransport(receive)))
+    s = scheduler(tmp_path)
+    job = s.add_job("sweep", "* * * * *", job_id="sweep")
+    with s._connect() as db:
+        db.execute("UPDATE jobs SET context_id = 'system:activity' WHERE id = ?", (job.id,))
+    job.context_id = "system:activity"
+    assert await s._fire(job) is False
+    assert posts == []
+    held = s.get_job(job.id)
+    assert held.execution_hold
+    assert s._claim_occurrence(held) is None
+
+
 @pytest.mark.platform_sensitive
 def test_background_continuation_persists_parent_and_due_slot(tmp_path):
     s = scheduler(tmp_path)
@@ -448,16 +518,25 @@ async def test_durable_watch_holds_root_until_continuation_finishes(tmp_path, mo
 
 
 @pytest.mark.platform_sensitive
-def test_unreadable_watch_does_not_release_owner(tmp_path, monkeypatch):
+def test_unreadable_watch_file_does_not_hold_unrelated_owners(tmp_path, monkeypatch):
+    """One corrupt watch file is skipped+logged like ``all()`` does: it can never
+    tick, react or be pruned (``prune_terminal`` never sees it), so treating it as
+    "held" would park every job-owned claim and missed-fire recovery behind it
+    forever. A READABLE armed watch on an owner still holds that owner."""
+    from graph.watches.store import WatchStore
+    from graph.watches.types import Watch
+
     watch_path = tmp_path / "watches"
     watch_path.mkdir()
     monkeypatch.setenv("WATCH_PATH", str(watch_path))
     (watch_path / "broken.json").write_text("{")
     s = scheduler(tmp_path)
     root = s.add_job("root", "* * * * *")
-    assert s._claim_occurrence(root) is None
-    (watch_path / "broken.json").unlink()
-    assert s._claim_occurrence(root)
+    assert s._claim_occurrence(root)  # the corrupt file holds nothing
+    other = s.add_job("other", "* * * * *")
+    WatchStore(watch_path).set(Watch(id="armed", condition="ready",
+                                     run_session=other.context_id, run_prompt="react"))
+    assert s._claim_occurrence(other) is None  # a readable armed watch still holds
 
 
 @pytest.mark.platform_sensitive
@@ -541,6 +620,53 @@ def test_orphaned_unknown_claim_holds_only_its_own_generation(tmp_path):
     orphan = next(r for r in rows(s, "occurrences") if r["created_at"] == first.created_at)
     assert orphan["state"] == "unknown" and orphan["task_id"] is None
     assert all(c["created_at"] != first.created_at for c in s._pending_reconciliation())
+
+
+@pytest.mark.platform_sensitive
+def test_handleless_orphan_does_not_capture_replacement_owner(tmp_path, monkeypatch):
+    """The job:-owned variant of the orphan rule. A claimed occurrence with NO task
+    handle can never be reconciled (there is nothing to GetTask) and is never
+    resent — it stays quarantined, holding its own generation and its own owner.
+    ``resolve`` must not hand that stuck owner to a later generation of the same
+    job id: cancel-and-recreate runs under a fresh owner and fires (ADR 0129 D6)."""
+    monkeypatch.setenv("WATCH_PATH", str(tmp_path / "watches"))
+    s = scheduler(tmp_path)
+    first = s.add_job("report", PAST, job_id="report")
+    assert first.context_id.startswith("job:")
+    assert s._claim_occurrence(first)
+    s = scheduler(tmp_path)  # crash between claim and send: no handle persisted
+    s.cancel_job(first.id)
+    replacement = s.add_job("report again", PAST, job_id="report")
+    assert replacement.context_id.startswith("job:")
+    assert replacement.context_id != first.context_id  # the stuck owner is not inherited
+    assert s._claim_occurrence(replacement)  # ...so cancel-and-recreate escapes it
+    # The orphan stays exactly as quarantined as before: unresolved, never resent.
+    orphan = next(r for r in rows(s, "occurrences") if r["created_at"] == first.created_at)
+    assert orphan["state"] == "claimed" and orphan["task_id"] is None
+    assert all(c["created_at"] != first.created_at for c in s._pending_reconciliation())
+
+
+@pytest.mark.platform_sensitive
+def test_accepted_predecessor_captures_replacement_behind_same_owner(tmp_path, monkeypatch):
+    """Contrast case: an ACCEPTED unresolved occurrence carries a persisted task
+    handle, so durable GetTask reconciliation can settle it. A replacement then
+    reuses the SAME owner and queues behind the accepted work (ADR 0129 D6) —
+    never resending it under a new identity — and runs once it settles."""
+    monkeypatch.setenv("WATCH_PATH", str(tmp_path / "watches"))
+    s = scheduler(tmp_path)
+    first = s.add_job("report", PAST, job_id="report")
+    assert s._claim_occurrence(first)
+    s._remember_task(first, "accepted-task")
+    s = scheduler(tmp_path)  # crash after acceptance: the handle survived
+    s.cancel_job(first.id)
+    replacement = s.add_job("report again", PAST, job_id="report")
+    assert replacement.context_id == first.context_id
+    assert s._claim_occurrence(replacement) is None  # queued behind accepted work
+    assert [c["task_id"] for c in s._pending_reconciliation()] == ["accepted-task"]
+    assert s._settle_task(first, "accepted-task", {"result": {
+        "id": "accepted-task", "status": {"state": "completed"},
+    }})
+    assert s._claim_occurrence(s.get_job("report"))
 
 
 @pytest.mark.platform_sensitive

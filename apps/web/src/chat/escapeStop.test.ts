@@ -1,3 +1,4 @@
+// @vitest-environment node
 // #2968 — Escape-to-stop behavior (the Claude.ai/ChatGPT convention). These pin the
 // per-press decision — streaming + queued steers peels the NEWEST steer (LIFO, one per
 // press), streaming with none stops the turn, idle is a strict no-op — and the imperative

@@ -1,3 +1,4 @@
+// @vitest-environment node
 import { describe, expect, it } from "vitest";
 
 // Vite `?raw` rather than node:fs — this tsconfig has no node types, and widening them for

@@ -1,3 +1,4 @@
+// @vitest-environment node
 // #3956: the LIVE stream's close on a turn parked on the operator. The SDK ends
 // SendStreamingMessage at input-required, and the console used to settle that close like a
 // finished turn: the in-flight `ask_human` card flipped to done ✓ while the form was up, and

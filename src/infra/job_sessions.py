@@ -9,7 +9,7 @@ import json
 import sqlite3
 import uuid
 
-LEGACY_ACTIVITY = "system:activity"
+from events import ACTIVITY_CONTEXT as LEGACY_ACTIVITY
 LEGACY_WAIT_HOLD = "Legacy background wait needs an execution owner; not automatically fired"
 
 
@@ -64,10 +64,19 @@ def resolve(
         ):
             hold = LEGACY_WAIT_HOLD
         else:
+            # An unresolved predecessor occurrence captures the replacement into the
+            # same owner ONLY when it is reconcilable: an accepted send whose persisted
+            # task handle lets GetTask recovery settle it (ADR 0129 D6 — "retain an
+            # ACCEPTED predecessor's occurrence and queue its replacement behind the
+            # same owner"). A handle-less claim can never settle ("claims without
+            # recoverable handles stay quarantined"), so inheriting its owner would
+            # park every later generation of this job id behind it forever: it keeps
+            # holding only its own, now orphaned, owner while the replacement runs
+            # under a fresh one — the pre-S1 blast radius of one crashed version.
             predecessor = db.execute(
                 "SELECT s.context_id, s.root_job_id, s.root_created_at FROM job_sessions s JOIN occurrences o "
                 "ON s.job_id = o.job_id AND s.created_at = o.created_at "
-                "WHERE s.job_id = ? AND o.state IN ('claimed', 'unknown') "
+                "WHERE s.job_id = ? AND o.state IN ('claimed', 'unknown') AND o.task_id IS NOT NULL "
                 "AND s.hold_reason IS NULL LIMIT 1", (job["id"],)
             ).fetchone()
             if predecessor is None:
