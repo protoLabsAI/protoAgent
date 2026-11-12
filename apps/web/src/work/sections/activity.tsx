@@ -19,6 +19,7 @@ import { Badge, Button, Callout } from "@protolabsai/ui/primitives";
 import { WorkEmpty as Empty } from "../WorkEmpty";
 import { Alert, Skeleton } from "@protolabsai/ui/data";
 import { registerWorkSection, type WorkSectionContext } from "../sectionRegistry";
+import { useActivityHistory } from "../../activity/useActivityHistory";
 import { ActivitySurface } from "../../activity/ActivitySurface";
 import { WorkRow } from "../WorkRow";
 import { WorkDetail, type WorkField } from "../WorkDetail";
@@ -156,15 +157,15 @@ function ActivityList({ ctx }: { ctx: WorkSectionContext }) {
   );
 }
 
+function ActivitySection({ ctx }: { ctx: WorkSectionContext }) {
+  const source = useActivityHistory();
+  const itemId = ctx.state.itemId;
+  if (!itemId) return <ActivityList ctx={{ ...ctx, sources: { ...ctx.sources, activity: source } }} />;
+  const item = source.items.find((i) => `${i.kind}:${i.id}` === itemId || i.id === itemId);
+  return item ? <ActivityDetail item={item} /> : null;
+}
+
 registerWorkSection("activity", {
   label: "Activity",
-  render(ctx) {
-    const itemId = ctx.state.itemId;
-    if (!itemId) return <ActivityList ctx={ctx} />;
-    const item = ctx.sources.activity.items.find(
-      (i) => `${i.kind}:${i.id}` === itemId || i.id === itemId,
-    );
-    if (!item) return null;
-    return <ActivityDetail item={item} />;
-  },
+  render: (ctx) => <ActivitySection ctx={ctx} />,
 });

@@ -2,7 +2,9 @@ import { expect, test } from "@playwright/test";
 
 test("Work Activity preserves pending triage and live completed turns after clearing the badge", async ({ page }) => {
   let includeNewTurn = false;
+  let historyReads = 0;
   await page.route("**/api/activity", async (route) => {
+    historyReads++;
     await route.fulfill({ json: {
       context_id: "activity", messages: [],
       entries: includeNewTurn ? [{
@@ -16,6 +18,7 @@ test("Work Activity preserves pending triage and live completed turns after clea
   });
   await page.goto("/app/", { waitUntil: "load" });
   await expect(page.getByTestId("activity-badge")).toBeVisible();
+  expect(historyReads).toBe(0);
   await page.getByTestId("activity-widget").click();
   const work = page.locator('.work-view[data-frame="modal"]');
   await expect(work).toBeVisible();
