@@ -37,6 +37,13 @@ All methods use JSON-RPC 2.0 envelopes:
 }
 ```
 
+Tasks belong to the tier of the credential that created them. A caller
+authenticated with the **federation token** sees only tasks federation callers
+created: every task method answers "task not found" for the rest, task lists
+leave them out, and a message into a context that holds another caller's tasks
+is refused (`-32602`). Operator-tier callers (the bearer, paired devices, the
+fleet service token) see every task, as before.
+
 ### `message/send` — blocking
 
 Submit a message and wait for the terminal task. Returns the full Task object including artifacts.

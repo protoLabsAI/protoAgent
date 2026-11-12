@@ -70,7 +70,7 @@ async def _drain():
     _HANDLERS.clear()
 
 
-def _handler(stream_fn, *, routing: bool = True):
+def _handler(stream_fn, *, routing: bool = True, task_store=None):
     card = pa.build_agent_card(
         name="t",
         description="d",
@@ -81,7 +81,7 @@ def _handler(stream_fn, *, routing: bool = True):
     )
     handler = DefaultRequestHandler(
         agent_executor=ProtoAgentExecutor(stream_fn),
-        task_store=InMemoryTaskStore(),
+        task_store=task_store or InMemoryTaskStore(),
         agent_card=card,
         push_config_store=InMemoryPushNotificationConfigStore(),
     )
@@ -504,3 +504,48 @@ async def test_an_answer_whose_task_ends_after_routing_is_rerouted(monkeypatch):
     assert routed[0] == p1.id and len(routed) == 2
     assert answer.id == p2.id and answer.status.state == TaskState.TASK_STATE_COMPLETED
     assert {"text": "mango", "resume": True} in calls
+
+
+@pytest.mark.asyncio
+async def test_a_federation_caller_reaches_only_its_own_tasks_and_contexts(tmp_path):
+    """Tasks are owned by the caller's tier: a federation caller can't read, list, cancel,
+    hook, subscribe to or continue the operator's; the operator still sees both."""
+    from a2a.types import CancelTaskRequest, ListTasksRequest, TaskPushNotificationConfig
+    from a2a.utils.errors import InvalidParamsError, TaskNotFoundError
+
+    from a2a_impl import stores
+
+    from starlette.requests import Request
+
+    stamped = stores.tier_context_builder().build(
+        Request({"type": "http", "headers": [], "state": {"trust_tier": "federation"}})
+    )
+    assert stores.resolve_task_owner(stamped) == "federation"
+    store = stores.ReasoningCoalescingTaskStore(
+        stores.make_sqlite_engine(str(tmp_path / "t.db")), owner_resolver=stores.resolve_task_owner
+    )
+    handler, router = _handler(_form_stream([]), task_store=store)
+    fed = ServerCallContext(state={"trust_tier": "federation"})
+    mine = await handler.on_message_send(_msg("ask me", mid="m1"), CALL)
+    for call in (
+        handler.on_get_task(GetTaskRequest(id=mine.id), fed),
+        handler.on_cancel_task(CancelTaskRequest(id=mine.id), fed),
+        handler.on_create_task_push_notification_config(
+            TaskPushNotificationConfig(task_id=mine.id, url="https://hook.example/x"), fed
+        ),
+        anext(handler.on_subscribe_to_task(SubscribeToTaskRequest(id=mine.id), fed)),
+    ):
+        with pytest.raises(TaskNotFoundError):
+            await call
+    assert not (await handler.on_list_tasks(ListTasksRequest(context_id=CTX), fed)).tasks
+    with pytest.raises(InvalidParamsError):  # nor answer its pause in that context
+        await handler.on_message_send(_msg("banana", mid="m2", hitl_resume=True), fed)
+
+    theirs = await handler.on_message_send(_msg("ask me", mid="m3", ctx="fed-ctx"), fed)
+    assert (await _get(handler, theirs.id)).id == theirs.id
+    assert [t.id for t in (await handler.on_list_tasks(ListTasksRequest(context_id="fed-ctx"), CALL)).tasks] == [
+        theirs.id
+    ]
+    assert (await _get(handler, mine.id)).status.state == TaskState.TASK_STATE_INPUT_REQUIRED
+    await router.drain()
+    await store.engine.dispose()

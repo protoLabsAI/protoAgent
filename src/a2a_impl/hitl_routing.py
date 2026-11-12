@@ -474,6 +474,18 @@ def check_context_id(params: SendMessageRequest) -> None:
         raise InvalidParamsError(message=f"Invalid contextId: {problem}")
 
 
+async def check_context_owner(handler: Any, params: SendMessageRequest, call_context: Any) -> None:
+    """Refuse a message into a context another owner's tasks live in (``InvalidParamsError``).
+
+    The task store scopes tasks by owner (``stores.resolve_task_owner``), but a context is a
+    conversation: a new task there would continue the other owner's thread. Only a store that
+    tracks owners answers (``context_foreign``); an operator-tier caller is never refused."""
+    ctx = str(getattr(getattr(params, "message", None), "context_id", "") or "")
+    foreign = getattr(handler.task_store, "context_foreign", None)
+    if ctx and foreign is not None and await foreign(ctx, call_context):
+        raise InvalidParamsError(message=f"Context {ctx} is not available to this caller")
+
+
 def install_parked_task_routing(handler: Any) -> ParkedTaskRouter | None:
     """Wrap ``handler``'s message-send entry points with :meth:`ParkedTaskRouter.route`
     and register the router the executor settles through. The same wrappers send a message
@@ -492,6 +504,7 @@ def install_parked_task_routing(handler: Any) -> ParkedTaskRouter | None:
 
     async def on_message_send(params: SendMessageRequest, context: Any):
         check_context_id(params)  # before the SDK creates a task for it
+        await check_context_owner(handler, params, context)
         # A message this handler already accepted is not run again (#4975, message_dedupe).
         fresh, accepted = ledger.accept(params.message)  # before any await
         while not fresh:
@@ -531,6 +544,7 @@ def install_parked_task_routing(handler: Any) -> ParkedTaskRouter | None:
 
     async def on_message_send_stream(params: SendMessageRequest, context: Any):
         check_context_id(params)  # before the SDK creates a task for it
+        await check_context_owner(handler, params, context)
         # A message this handler already accepted is not run again (#4975, message_dedupe).
         fresh, accepted = ledger.accept(params.message)  # before any await
         while not fresh:
