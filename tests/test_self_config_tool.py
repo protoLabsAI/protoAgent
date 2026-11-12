@@ -45,6 +45,14 @@ def _call(tool, updates):
         "delegates",  # each entry is an executable the host spawns
         "runtime.acp",  # per-agent command overrides, same spawn path
         "acp.agents",
+        "lifecycle_hooks",  # credential plane (ADR 0121 D4), read from settings_schema
+        "network.public_url",
+        "secrets_manager.host",
+        "model.api_base",  # where the conversation (and its key) is sent
+        "tracing.host",
+        "middleware.enforcement",
+        "knowledge.inject_min_trust",
+        "onboarding.root",
     ],
 )
 def test_refuses_the_trust_surface(key):
