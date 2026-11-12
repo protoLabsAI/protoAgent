@@ -42,7 +42,15 @@ from dataclasses import dataclass
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 
-from a2a_impl.credential_scope import SCOPE_DEVICE, SCOPE_FULL, SCOPES, ceiling_rule, refusal_body
+from a2a_impl.credential_scope import (
+    SCOPE_DEVICE,
+    SCOPE_FULL,
+    SCOPE_HEADER,
+    SCOPES,
+    ceiling_rule,
+    narrowed_by_header,
+    refusal_body,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -961,9 +969,13 @@ class A2AAuthMiddleware:
         # Credential scope (ADR 0121 D4): orthogonal to the tier. The credential-plane ceiling
         # sits right beside the federation one, and runs before any route — including the
         # fleet proxy's ADR 0089 D3 credential swap, which is just a route handler.
-        request.state.credential_scope = cred.scope
+        # A hub that proxied a paired phone here says so (``SCOPE_HEADER``): the credential it
+        # presents — the fleet token, or this agent's own bearer — is full scope, the caller
+        # behind it is not. Narrow-only, so honouring it from anyone is safe.
+        scope = narrowed_by_header(cred.scope, request.headers.get(SCOPE_HEADER))
+        request.state.credential_scope = scope
         request.state.device_id = cred.device_id
-        denied = _credential_plane_refusal(request, path, cred.scope, cred.device_id)
+        denied = _credential_plane_refusal(request, path, scope, cred.device_id)
         if denied is not None:
             return denied
 
