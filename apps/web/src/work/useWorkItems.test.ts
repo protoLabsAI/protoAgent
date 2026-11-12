@@ -33,7 +33,7 @@ import { api } from "../lib/api";
 import { decisionsApi, type DecisionRow } from "../lib/api/decisions";
 import type { DirectiveRow } from "../lib/api/chat";
 import type { ActivityEntry, ActivityHistory } from "../lib/types";
-import { SCHEDULE_POLL_MS, useWorkItems, type UseWorkItemsParams, type WorkItems, type WorkSourceKind } from "./useWorkItems";
+import { SCHEDULE_POLL_MS, activityTitle, useWorkItems, type UseWorkItemsParams, type WorkItems, type WorkSourceKind } from "./useWorkItems";
 
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -332,5 +332,30 @@ describe("work API helpers", () => {
     const init = fetchMock.mock.calls[0][1] as RequestInit;
     expect(init.method).toBe("POST");
     expect(JSON.parse(init.body as string)).toEqual({ enabled: false });
+  });
+});
+
+// #5094: a scheduled turn's stimulus is the scheduler's wake prompt. Its bracketed header
+// is runtime framing, so the row title leads with the job's own prompt instead.
+describe("activityTitle", () => {
+  const entry = (over: Partial<ActivityEntry>): ActivityEntry => ({ ...actEntry(1, "completed"), ...over });
+
+  it("drops the scheduler's wake header from the stimulus", () => {
+    for (const header of [
+      "[Autonomous wake — scheduled run. Orient from <working_state>, then:]",
+      "[Autonomous wake — a watch you set has tripped. Orient from <working_state>, then:]",
+      "[Autonomous wake — a wait you scheduled has elapsed. Continue:]",
+      "[Autonomous wake — driving your active goal. Orient from <working_state>, then:]",
+    ]) {
+      expect(activityTitle(entry({ stimulus: `${header}\n\nCheck the board for blocked cards.` })))
+        .toBe("Check the board for blocked cards.");
+    }
+  });
+
+  it("keeps an ordinary stimulus and falls back past an empty one", () => {
+    expect(activityTitle(entry({ stimulus: "CI webhook: build #4821 failed" }))).toBe("CI webhook: build #4821 failed");
+    expect(activityTitle(entry({ stimulus: "[Autonomous wake — scheduled run. Orient from <working_state>, then:]" })))
+      .toBe("activity 1");
+    expect(activityTitle(entry({ stimulus: "", text: "" }))).toBe("job-1");
   });
 });
