@@ -38,6 +38,11 @@ from server import agent_name
 log = logging.getLogger("protoagent.server")
 
 _INBOX_NOW_RECOVERY_STARTED = False
+# One redelivery pass of undelivered background outcomes per process (#5053).
+_BACKGROUND_REDELIVERY_DONE = False
+# How far back a boot looks for an outcome that never reached its session. Older than a
+# day, the session that asked has moved on; the job stays readable by id regardless.
+_BACKGROUND_REDELIVERY_WINDOW_H = 24
 _INBOX_NOW_RECOVERY_BATCH_LIMIT = 8
 _INBOX_NOW_RECOVERY_RETRY_AFTER_S = 60 * 60
 # Bounded retries for a page that keeps refusing delivery. A COUNT, not a clock:
@@ -419,6 +424,78 @@ def _on_work_terminal(job) -> None:
             _spawn_background_wake(job)
     except Exception:  # noqa: BLE001 — the wake/resume is best-effort
         log.exception("[background] work-job terminal hook failed for %s", getattr(job, "id", "?"))
+
+
+async def redeliver_undelivered_background() -> int:
+    """Push background outcomes that settled but never reached their origin session
+    (#5053), once per process: ONE push-resume turn per session, whose drain hands every
+    pending outcome of that session over. Returns the number of sessions pushed.
+
+    A restart used to strand them: a job interrupted by the restart is reconciled to
+    ``failed`` at boot, and one that settled just before it lost its in-memory push-resume
+    with the process — either way the outcome waited, possibly forever, for someone to
+    type into that session, and an autonomous sender read the silence as a lost message.
+
+    Only outcomes a push-resume can actually DRAIN are pushed (``_should_auto_resume``: a
+    real chat origin, not incognito, not ``background:``, auto-resume on). The rest — no
+    origin session, or auto-resume off — got their Activity wake when they settled, and a
+    wake never flips ``notified``, so replaying it here would brief the same outcome again
+    on every restart. For the same reason there is no wake fallback when the push fails:
+    the outcomes stay pending and drain on the session's next turn, and a later boot tries
+    again. Exactly-once holds because the drain is the only hand-over, and a drained job
+    is no longer ``undelivered``."""
+    global _BACKGROUND_REDELIVERY_DONE
+    if _BACKGROUND_REDELIVERY_DONE:
+        return 0
+    _BACKGROUND_REDELIVERY_DONE = True
+    mgr = getattr(STATE, "background_mgr", None)
+    if mgr is None:
+        return 0
+    from datetime import UTC, datetime, timedelta
+
+    from server.a2a import _should_auto_resume
+
+    since = datetime.now(UTC) - timedelta(hours=_BACKGROUND_REDELIVERY_WINDOW_H)
+    try:
+        jobs = mgr.store.undelivered_terminal(since=since)
+    except Exception:  # noqa: BLE001 — boot work must never break the process
+        log.exception("[background] undelivered-outcome scan failed")
+        return 0
+    by_session: dict[str, list] = {}
+    for job in jobs:
+        if _should_auto_resume(job):
+            by_session.setdefault(job.origin_session, []).append(job)
+    if not by_session:
+        return 0
+    results = await asyncio.gather(
+        *(mgr.resume_origin_session(session, group) for session, group in by_session.items()),
+        return_exceptions=True,
+    )
+    log.info(
+        "[background] re-pushed %d undelivered outcome(s) into %d session(s) after restart (%d accepted)",
+        sum(len(g) for g in by_session.values()),
+        len(by_session),
+        sum(1 for r in results if r is True),
+    )
+    return len(by_session)
+
+
+def _start_background_redelivery_once() -> None:
+    """Schedule ``redeliver_undelivered_background`` on the startup loop. Called from the
+    FastAPI startup lifecycle after the self-A2A route is mounted, like the inbox recovery."""
+    if _BACKGROUND_REDELIVERY_DONE:
+        return
+
+    async def _run() -> None:
+        try:
+            await redeliver_undelivered_background()
+        except Exception:  # noqa: BLE001
+            log.exception("[background] undelivered-outcome redelivery failed")
+
+    try:
+        asyncio.get_running_loop().create_task(_run())
+    except RuntimeError:
+        log.warning("[background] redelivery skipped: no running startup event loop")
 
 
 def _build_background_manager(config):

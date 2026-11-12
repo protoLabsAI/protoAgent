@@ -234,6 +234,38 @@ answer to "hand the agent a YouTube link / an `.mp4`" — the field-standard *re
 worker → reactive completion* shape (A2A task lifecycle, Microsoft Agent Framework background
 responses, classic job-queue-with-notify), reusing machinery this ADR already built.
 
+### Follow-up — delivery state, peer identity, amendments, restart redelivery (#5053, shipped)
+
+A sender delegated a brief and then an amendment to a peer. The brief failed at the peer, the
+amendment finished first, and the sender read the gap as silent loss and resent everything. The
+live path was already prompt and in order. These were the gaps:
+
+- **Exactly-once drain under a concurrent settle.** `drain_pending` reads and flips inside one
+  `BEGIN IMMEDIATE` transaction, and flips only the rows it read. Before, a job that settled
+  between the read and the flip was marked `notified` without being delivered.
+- **Restart redelivery.** Once per process, at startup (after the self-A2A route is mounted), the
+  `completed`/`failed` jobs from the last 24 h with `notified = 0` get one push-resume turn per origin
+  session (`BackgroundManager.resume_origin_session`). That turn's drain hands over every pending
+  outcome of the session. This covers jobs reconciled as interrupted and jobs whose in-memory
+  push-resume died with the process. Only jobs a push-resume can drain are pushed
+  (`_should_auto_resume`). A job with no origin session, an incognito or `background:` origin, or
+  auto-resume off got its Activity wake when it settled. A wake never sets `notified`, so replaying it
+  would re-brief the same outcome on every restart. For the same reason a failed push has no wake
+  fallback: the outcomes stay pending for the session's next turn and the next boot. The drain stays
+  the only hand-over, so a redundant push cannot deliver an outcome twice.
+- **Peer identity and delivery state.** A background A2A delegation records the peer's task id and
+  the `messageId` it sent (`peer_task_id`, `peer_message_id`) once the peer accepts the message.
+  Each job reports `delivery`: `in_flight`, `undelivered` or `delivered`. A failed job with a peer
+  task id is a request the peer is known to have held. A failed job without one never got that far.
+  The failure notice for a failed delegate names the peer task.
+- **Amendment linkage.** `delegate_to(amends="bg-…")` puts a preamble on the amendment. It names the
+  earlier request by job id, peer task id and message id, says how that request stands on the
+  sender's side, and quotes its opening line. The link is stored in the `amends` column. A peer can
+  then match the amendment to the original, or say plainly that it never received it.
+
+The agent still has no tool that reads a job's state (§ADR 0051 removed `task_output`). The state
+can be read through `GET /api/background/{id}` and `graph.sdk.background_status`.
+
 ## Consequences
 
 - **The chat stays live.** A delegation marked `run_in_background` returns in milliseconds; the
