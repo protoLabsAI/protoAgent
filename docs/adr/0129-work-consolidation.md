@@ -39,10 +39,10 @@ Evidence from the same day:
 
 Everything the agent is tracking falls into one of four groups. A fifth concern, history, lives outside Work:
 
-1. **Needs me**: decisions, and items that need a human (for example, a stuck delivery). This is the only group that asks for attention.
+1. **Needs you**: decisions, and items that need a human (for example, a stuck delivery). This is the only group that asks for attention.
 2. **Doing now**: jobs. Background jobs, the active goal and what used to be tasks are all jobs (Q1).
 3. **Coming up**: anything that will run later, whether set off by a time (schedule, `wait`) or by a condition (watch).
-4. **What I told it**: the operator's standing instructions and approvals.
+4. **Your instructions**: the operator's standing instructions and approvals.
 5. **What happened** is **not** a Work group (Q3). History is already recorded by telemetry, traces and the activity log, and is read there.
 
 The console's Work panel renders the four groups with one row primitive, using the kind (schedule, watch, goal, job…) as a tag. The in-chat status rail summarizes groups 1–4 with the same vocabulary and the same counts. The visual design is a designSystem spec that Josh approves before any build.
@@ -85,6 +85,11 @@ The prompt's capability map groups the tools under the same four headings, and e
 Independent fixes in flight that this ADR keeps: #5099 (a decision answer returns as soon as it is consumed) and projectBoard-plugin#735 (human page text, and pages retire when their card does).
 
 ## Decisions taken (Josh, 2026-11-11)
+
+- **Group names:** Needs you · Doing now · Coming up · Your instructions. The rail chip for instructions reads "Told it N".
+- **Not-started jobs** don't count in Doing now. They show under Coming up.
+- **Interim decision link:** until D4's server-recorded approvals land, an instruction links to a decision when that decision was answered within the 2 minutes before the instruction was recorded.
+- **The design** is the designSystem spec (docs/design/work-consolidation.md), approved 2026-11-11.
 
 - **Q1, tasks:** folded into jobs. "tasks get folded into jobs."
 - **Q2, approvals tied to a job:** close themselves when the job finishes. "anything tied to a finished job should close itself."
