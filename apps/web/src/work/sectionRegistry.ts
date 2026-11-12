@@ -2,7 +2,7 @@ import type { AnswerResult } from "../lib/api/decisions";
 import type { ReactNode } from "react";
 import type { SurfaceState } from "../shell/surfaceState";
 import type { WorkItem, WorkItems } from "./useWorkItems";
-import type { WorkGroupId } from "./tone";
+import { WORK_GROUP_IDS, type WorkGroupId } from "./tone";
 
 export type WorkSectionContext = {
   sources: WorkItems;
@@ -19,9 +19,10 @@ export type WorkSectionContext = {
 };
 export type WorkSection = {
   label: string;
-  /** Default placement for extensions, never an override of workGroups/groupFor's
-   * per-row classification. Optional during migration; required in S4c. */
-  group?: WorkGroupId;
+  /** The canonical Work group this section's rows belong to — REQUIRED (S4c). Default
+   * placement for extensions, never an override of workGroups/groupFor's per-row
+   * classification. */
+  group: WorkGroupId;
   /** The rows this section's list actually shows — finished work leaves Work (a closed
    * job, an achieved goal), and WorkView's heading count, live announcement and side-nav
    * badge count through this so a hidden row is never counted. Omitted → every source
@@ -32,8 +33,15 @@ export type WorkSection = {
 export const sections = new Map<string, WorkSection>();
 const listeners = new Set<() => void>();
 let version = 0;
-/** Register a section's list/detail renderer; the returned disposer supports plugin teardown. */
+/** Register a section's list/detail renderer; the returned disposer supports plugin teardown.
+ *  The group is the type contract, and untyped (plugin/JS) callers hit the same boundary at
+ *  runtime: an ungrouped or unknown-group registration is rejected, never half-installed. */
 export function registerWorkSection(id: string, section: WorkSection): () => void {
+  if (!(WORK_GROUP_IDS as readonly string[]).includes(section.group)) {
+    throw new TypeError(
+      `registerWorkSection("${id}"): "group" must be one of ${WORK_GROUP_IDS.join(", ")} — got ${JSON.stringify(section.group)}`,
+    );
+  }
   sections.set(id, section);
   version++;
   listeners.forEach((notify) => notify());

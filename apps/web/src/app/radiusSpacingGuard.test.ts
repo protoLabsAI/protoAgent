@@ -3,13 +3,12 @@ import { describe, expect, it } from "vitest";
 // DS audit (rules corner-radius + off-scale-length), step 3 FINAL of protoContent#525/#547: the
 // closing, TREE-WIDE regression guard for the console radius + spacing migration. Every radius and
 // spacing card moved apps/web/src CSS onto the @protolabsai/design 0.11.0 scales
-// (--pl-radius{,-md,-lg,-xl,-pill} and --pl-space-*); the per-file guards (offScaleSpacing3a.test.ts
-// et al.) pinned each surface as it landed. This turns that work into a single invariant across the
+// (--pl-radius{,-md,-lg,-xl,-pill} and --pl-space-*). This is that work as a single invariant across the
 // whole tree: a raw radius px/rem, or an off-scale spacing px, that comes back in ANY console
 // stylesheet is a site that no longer tracks the operator's chosen density/rounding (tokens can be
 // rescaled at the DS root; a hardcoded literal cannot), and fails here the moment it ships.
 //
-// Two rules, both sweeping the whole `../**/*.css` glob:
+// Three rules, all sweeping the whole `../**/*.css` glob:
 //   Rule 1 (radius): a border-radius — or any per-corner longhand (border-{top,bottom}-{left,right}-
 //     radius, border-{start,end}-{start,end}-radius) — whose value carries a px OR rem literal.
 //     Allowed: var(--pl-radius*), 0, 50%, inherit (none of which contain a px/rem length).
@@ -17,15 +16,18 @@ import { describe, expect, it } from "vitest";
 //     property (padding*, margin*, gap, row-gap, column-gap, inset*, top, right, bottom, left), in
 //     shorthand or longhand. Allowed: 1px, 0, var(--pl-space-*), calc(-1 * var(--pl-space-*)). The
 //     exact-scale members (4/8/12/16/24) are intentionally NOT in this set — positional offsets
-//     (e.g. `right: 8px`, `top: 44px`) are pinned explicitly by the cards and stay literal, and the
-//     exact-scale spacing drift class is already covered by offScaleSpacing3a's sweep.
+//     (e.g. `right: 8px`, `top: 44px`) stay literal; rule 3 covers the exact-scale drift class.
 //     Two carve-outs: (a) any value that reads env(safe-area-inset*) — a hardware fallback pinned by
 //     mobileBottomInset.test.ts, not a density-token candidate; (b) a px in the FALLBACK position of
 //     var(--pl-space-*, <px>) — app-crash.css carries these so the crash screen still lays out when
 //     the token stylesheet fails to load (the same file tokenNameGuard exempts for its colour reads).
 //
-// Vite `?raw` globs rather than node:fs, for the same reason as tokenNameGuard.test.ts /
-// offScaleSpacing3a.test.ts: this tsconfig has no node types and under jsdom `import.meta.url` is
+//   Rule 3 (exact-scale spacing): a 4/8/12/16/24px literal on padding*, margin* or a gap — NOT on
+//     the positional properties rule 2 also scans. Same two carve-outs. This replaces the nine
+//     per-card offScaleSpacing3* guards, which ran the same matcher over a few files each.
+//
+// Vite `?raw` globs rather than node:fs, for the same reason as tokenNameGuard.test.ts: this
+// tsconfig has no node types and under jsdom `import.meta.url` is
 // an http: URL, so URL-relative filesystem access is a trap. The glob is compile-time, rooted at
 // this file in src/app, and picks up new stylesheets automatically. This guard is a `.ts` and the
 // glob only matches `.css`, so it is never swept by ITS OWN rules; and every example literal below
@@ -40,7 +42,7 @@ const CSS_SOURCES = import.meta.glob("../**/*.css", {
 }) as Record<string, string>;
 
 // Turn the importer-relative glob key into a repo-relative `src/<dir>/<name>`. `../` climbs to src;
-// `./` is this test's own src/app directory. Mirrors offScaleSpacing3a / tokenNameGuard.
+// `./` is this test's own src/app directory. Mirrors tokenNameGuard.
 const pretty = (file: string): string =>
   file.replace(/^\.\.\//, "src/").replace(/^\.\//, "src/app/");
 
@@ -135,6 +137,37 @@ function spacingHits(line: string): { decl: string; value: string }[] {
 // Every offending declaration in one stylesheet, as `src/<dir>/<name>:<line> <declaration>`,
 // honouring the ALLOWLIST. Reused by the tree sweeps and the synthetic meta-tests so both exercise
 // the identical detector.
+const EXACT_SPACING_PROP =
+  "(?:padding|margin)(?:-(?:top|right|bottom|left|(?:inline|block)(?:-(?:start|end))?))?" +
+  "|row-gap|column-gap|gap";
+const EXACT_SPACING_DECL_SRC = "(?:^|[;{}\\s])(" + EXACT_SPACING_PROP + ")\\s*:\\s*([^;{}]*)";
+const EXACT_SCALE_PX = "(?<![\\w.-])(?:4|8|12|16|24)" + "px\\b";
+
+function exactScaleHits(line: string): { decl: string; value: string }[] {
+  const out: { decl: string; value: string }[] = [];
+  for (const m of line.matchAll(new RegExp(EXACT_SPACING_DECL_SRC, "gi"))) {
+    const value = m[2];
+    if (SAFE_AREA_INSET.test(value)) continue;
+    const scrubbed = value.replace(new RegExp(SPACE_FALLBACK, "gi"), "");
+    for (const s of scrubbed.matchAll(new RegExp(EXACT_SCALE_PX, "g"))) {
+      out.push({ decl: `${m[1]}: ${value.trim()}`, value: s[0] });
+    }
+  }
+  return out;
+}
+
+function exactScaleSweep(): string[] {
+  return dedupeSorted(
+    Object.entries(CSS_SOURCES).flatMap(([f, raw]) =>
+      stripComments(raw ?? "")
+        .split("\n")
+        .flatMap((lineText, i) =>
+          exactScaleHits(lineText).map(({ decl }) => `${pretty(f)}:${i + 1} ${decl}`),
+        ),
+    ),
+  );
+}
+
 function radiusOffenders(file: string, raw: string): string[] {
   const hits: string[] = [];
   stripComments(raw)
@@ -288,6 +321,20 @@ describe("radius + off-scale spacing guard over all console CSS (DS audit, proto
     expect(dedupeSorted(spacingOffenders("../settings/settings.css", bad))).toEqual([
       "src/settings/settings.css:2 padding: 7px 10px",
     ]);
+  });
+
+  it("rule 3 sweeps the tree: no exact-scale (4/8/12/16/24) px on padding, margin or a gap", () => {
+    expect(exactScaleSweep()).toEqual([]);
+  });
+
+  it("rule 3 flags exact-scale px on spacing props only, and keeps both carve-outs (built by concat)", () => {
+    expect(exactScaleHits("  padding: 8" + "px 16px;").map((h) => h.value)).toEqual(["8px", "16px"]);
+    expect(exactScaleHits("  row-gap: 24" + "px;").map((h) => h.value)).toEqual(["24px"]);
+    for (const ok of ["  left: 8px;", "  padding: 14px;", "  margin: -4px;", "  border-radius: 4px;"]) {
+      expect(exactScaleHits(ok.replace("px", "p" + "x"))).toEqual([]);
+    }
+    expect(exactScaleHits("  gap: " + "var(--pl-space-2, 8px);")).toEqual([]);
+    expect(exactScaleHits("  padding-bottom: max(env(safe-area-inset-bottom), 12" + "px);")).toEqual([]);
   });
 
   it("app-crash.css keeps its load-bearing space-token px fallbacks and stays clean", () => {

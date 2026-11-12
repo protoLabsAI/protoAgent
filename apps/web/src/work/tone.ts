@@ -4,7 +4,10 @@ import type { InboxItem, ScheduledJob, WatchState } from "../lib/types";
 import type { DecisionRow } from "../lib/api/decisions";
 import type { WorkItem } from "./useWorkItems";
 
-export type WorkGroupId = "needs-you" | "doing-now" | "coming-up" | "instructions";
+/** The four canonical Work groups, in display order — the registry validates
+ *  extension registrations against this list (S4c). */
+export const WORK_GROUP_IDS = ["needs-you", "doing-now", "coming-up", "instructions"] as const;
+export type WorkGroupId = (typeof WORK_GROUP_IDS)[number];
 export type WorkJobRef = { kind: "task" | "background" | "goal"; id: string };
 
 /** Adapter facts, not inferred associations. Today's Task/DirectiveRow APIs do not
