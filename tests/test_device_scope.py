@@ -331,6 +331,7 @@ _PLANE_FAMILIES = (
     "/api/plugins/",
     "/api/mcp/servers",
     "/api/devices",
+    "/api/agent/import",
 )
 _ALLOWED_WRITES = {
     ("POST", "/api/pairing/claim"),  # unauthenticated by necessity (ADR 0087 D4) — no scope at all
@@ -1277,3 +1278,118 @@ async def test_proxy_mints_on_member_registry_only(auth, devices, monkeypatch, t
     assert all(e["success"] is True for e in hub_rows)
     for secret in (token, second_token, hub_device_token, fleet_token):
         assert secret not in audit
+
+
+# ── The scope survives a proxy hop ────────────────────────────────────────────────────────
+# The member (or this instance, via /agents/host/) sees the fleet token — full scope — not the
+# phone's. The per-KEY config check runs inside the member's route against that credential, so
+# without the header a phone wrote ``auth.token`` one hop away.
+
+
+def _proxy_req(method="POST", scope="device", headers=None):
+    async def _body():
+        return b"{}"
+
+    return SimpleNamespace(
+        method=method,
+        headers=headers or {},
+        query_params={},
+        body=_body,
+        state=SimpleNamespace(trust_tier="operator", credential_scope=scope, member_public=False),
+    )
+
+
+async def _forwarded_extra(monkeypatch, req, path, target=("http://m", {})):
+    from graph.fleet import proxy
+
+    seen = {}
+
+    async def _forward(base, request, raw_path, extra, **_k):
+        seen["extra"] = extra
+        return "forwarded"
+
+    monkeypatch.setattr("graph.fleet.service_token.resolve_service_token", lambda: "fleet-tok")
+    monkeypatch.setattr(proxy, "_forward_to_base", _forward)
+    assert await proxy._forward_member("alice", req, path, path, target) == "forwarded"
+    return seen["extra"], proxy._proxy_headers(req, seen["extra"])
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("path", ["api/settings", "api/config", "api/config/setup", "api/settings/reset"])
+async def test_the_proxy_tells_a_local_member_the_caller_is_device_scope(monkeypatch, path):
+    from a2a_impl.credential_scope import SCOPE_HEADER
+
+    extra, headers = await _forwarded_extra(monkeypatch, _proxy_req(), path)
+    assert extra["authorization"] == "Bearer fleet-tok"
+    assert headers[SCOPE_HEADER] == "device"
+
+
+@pytest.mark.asyncio
+async def test_the_proxy_drops_a_callers_own_scope_header_for_a_full_caller(monkeypatch):
+    from a2a_impl.credential_scope import SCOPE_HEADER
+
+    req = _proxy_req(scope="full", headers={"X-Protoagent-Credential-Scope": "device"})
+    _extra, headers = await _forwarded_extra(monkeypatch, req, "api/settings")
+    assert SCOPE_HEADER not in {k.lower() for k in headers}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("path", ["api/settings", "api/config", "api/config/setup", "api/settings/reset"])
+async def test_the_proxy_refuses_a_device_key_checked_config_write_to_a_remote(monkeypatch, path):
+    from graph.fleet import proxy
+
+    async def _no_forward(*a, **k):
+        raise AssertionError("must not forward")
+
+    monkeypatch.setattr(proxy, "_forward_to_base", _no_forward)
+    monkeypatch.setattr(proxy, "_remote_browser_refusal", lambda *a, **k: None)
+    resp = await proxy._forward_member("r", _proxy_req(), path, path, ("https://r", {"authorization": "Bearer stored"}))
+    assert resp.status_code == 403
+    assert json.loads(resp.body)["error"] == "device_scope"
+
+
+@pytest.mark.asyncio
+async def test_a_device_still_reaches_a_remote_elsewhere_and_is_named_device(monkeypatch):
+    from a2a_impl.credential_scope import SCOPE_HEADER
+    from graph.fleet import proxy
+
+    monkeypatch.setattr(proxy, "_remote_browser_refusal", lambda *a, **k: None)
+    req = _proxy_req(method="GET")
+    extra, headers = await _forwarded_extra(
+        monkeypatch, req, "api/runtime/status", ("https://r", {"authorization": "Bearer stored"})
+    )
+    assert extra["authorization"] == "Bearer stored"
+    assert headers[SCOPE_HEADER] == "device"
+
+
+def test_the_scope_header_narrows_the_fleet_token_and_the_bearer(echo, auth, monkeypatch):
+    from a2a_impl.credential_scope import SCOPE_HEADER
+
+    monkeypatch.setattr(auth, "_FLEET", ["fleet-tok"])
+    for token in ("fleet-tok", _SECRET):
+        plain = echo.post("/api/settings", headers=_hdr(token)).json()
+        assert (plain["trust_tier"], plain["scope"]) == ("operator", "full")
+        narrowed = echo.post("/api/settings", headers={**_hdr(token), SCOPE_HEADER: "device"}).json()
+        assert (narrowed["trust_tier"], narrowed["scope"]) == ("operator", "device")
+        # …and the URL ceiling applies on the member too.
+        assert echo.post("/api/plugins/install", headers={**_hdr(token), SCOPE_HEADER: "device"}).status_code == 403
+
+
+def test_the_scope_header_never_widens(echo, devices):
+    from a2a_impl.credential_scope import SCOPE_HEADER
+
+    _, token = _phone(devices)
+    for value in ("full", "FULL", "", "operator"):
+        assert echo.post("/api/settings", headers={**_hdr(token), SCOPE_HEADER: value}).json()["scope"] == "device"
+
+
+def test_a_device_cannot_create_or_import_an_agent(echo, devices):
+    _, token = _phone(devices)
+    for path in ("/api/fleet", "/api/agent/import", "/agents/host/api/fleet", "/agents/alice/api/agent/import"):
+        resp = echo.post(path, headers=_hdr(token))
+        assert resp.status_code == 403, path
+        assert resp.json()["error"] == "device_scope"
+    # Agents that already exist stay usable from a phone.
+    for path in ("/api/fleet/alice/start", "/api/fleet/alice/stop", "/api/fleet/alice/activate", "/api/agent/export"):
+        assert echo.post(path, headers=_hdr(token)).status_code == 200, path
+    assert echo.get("/api/fleet", headers=_hdr(token)).status_code == 200
