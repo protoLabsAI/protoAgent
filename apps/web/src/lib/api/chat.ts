@@ -96,7 +96,8 @@ export type DirectiveRow = {
   scope: string;
   status: "in_force" | "fulfilled" | "revoked";
   created_at: string;
-  closed_by: "agent" | "operator" | null;
+  /** "system" = auto-fulfilled when every linked item finished (ADR 0129 D4/Q2). */
+  closed_by: "agent" | "operator" | "system" | null;
   closed_at: string | null;
   close_reason: string | null;
 };
