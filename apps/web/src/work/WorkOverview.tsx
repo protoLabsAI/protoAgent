@@ -50,7 +50,7 @@ export const groupEmpty: Record<WorkGroupId, string> = {
 
 /** Which sources feed each group (groupFor in ./tone), for loading/failure scoping. */
 export const groupSources: Record<WorkGroupId, WorkSourceKind[]> = {
-  "needs-you": ["decisions", "goals", "activity"],
+  "needs-you": ["decisions", "goals", "tasks", "activity"],
   "doing-now": ["goals", "background", "tasks"],
   "coming-up": ["background", "tasks", "watches", "schedules"],
   instructions: ["directives"],
@@ -102,6 +102,9 @@ function rowPresentation(item: GroupableWorkItem, group: Exclude<WorkGroupId, "i
       // A stopped goal shows only how far it got (§2) — never the verifier type.
       if (item.kind === "goal") return { tag: "Goal stopped", tone: "neutral", icon: <StatusDot status="neutral" />,
         meta: goalProgress(item.raw as GoalState) };
+      // A `waiting` job (ADR 0129 Q1): the agent parked it on the operator's call.
+      if (item.kind === "task") return { tag: "Job", tone: "warning", icon: <StatusDot status="warning" />,
+        meta: withStatusWord("waiting on you", item.meta) };
       return { tag: "Delivery", tone: "warning", icon: <StatusDot status="warning" /> };
     case "doing-now":
       if (item.kind === "goal") return { tag: "Goal", tone: "neutral", icon: <Target size={16} />,

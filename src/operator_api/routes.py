@@ -214,7 +214,7 @@ class TaskUpdateRequest(BaseModel):
     priority: int | None = None
     type: str | None = None
     assignee: str | None = None
-    links: list[str] | None = None  # replaces the linked work refs (ADR 0129 Q1); None keeps
+    links: list[str] | None = None  # replaces the linked refs (ADR 0129 Q1); None keeps, resolved refs stay done
 
 
 class TaskCloseRequest(BaseModel):

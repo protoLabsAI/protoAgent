@@ -11,7 +11,7 @@ describe("groupFor raw state classification", () => {
   const cases: [GroupableWorkItem["kind"], Record<string, WorkGroupId | null>][] = [
     ["decision", { pending: "needs-you", answered: null, expired: null, cancelled: null, withdrawn: null }],
     ["goal", { active: "doing-now", exhausted: "needs-you", unachievable: "needs-you", achieved: null, cleared: null }],
-    ["task", { in_progress: "doing-now", blocked: "doing-now", open: "coming-up", deferred: "coming-up", closed: null }],
+    ["task", { in_progress: "doing-now", blocked: "doing-now", waiting: "needs-you", open: "coming-up", deferred: "coming-up", closed: null }],
     ["background", { running: "doing-now", open: "coming-up", deferred: "coming-up", completed: null, failed: null, canceled: null }],
     ["watch", { active: "coming-up", met: null, expired: null, cleared: null }],
     ["directive", { in_force: "instructions", fulfilled: null, revoked: null }],
@@ -61,7 +61,7 @@ describe("groupFor raw state classification", () => {
 const mappings: [string, (raw: string) => WorkStatus, Record<string, WorkStatus>][] = [
   ["goal", fromGoal, { active: "running", achieved: "done", exhausted: "failed", unachievable: "failed", cleared: "cancelled" }],
   ["watch", fromWatch, { active: "waiting", met: "done", expired: "cancelled", cleared: "cancelled" }],
-  ["task", fromTask, { in_progress: "running", blocked: "waiting", open: "scheduled", deferred: "paused", closed: "done" }],
+  ["task", fromTask, { in_progress: "running", blocked: "waiting", waiting: "needs-you", open: "scheduled", deferred: "paused", closed: "done" }],
   ["background", fromBackgroundJob, { running: "running", completed: "done", failed: "failed", canceled: "cancelled" }],
   ["activity", fromActivity, { completed: "done", failed: "failed", canceled: "cancelled" }],
   ["decision", fromDecision, { pending: "needs-you", answered: "done", expired: "cancelled", cancelled: "cancelled", withdrawn: "cancelled" }],

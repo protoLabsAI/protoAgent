@@ -44,8 +44,9 @@ def _publish(topic: str, data: dict) -> None:
 # Open lifecycle states (closed is terminal). Mirrors the console's
 # issueStatusOrder; `tombstone` is intentionally absent (we hard-delete).
 # `waiting` (ADR 0129 Q1) = the next step is the operator's call — the agent parks the
-# task there instead of leaving it in_progress for days. The console buckets statuses it
-# doesn't know after the ordered ones, so it needs no console-side registration.
+# task there instead of leaving it in_progress for days. The legacy Tasks panel buckets
+# statuses it doesn't know after the ordered ones; the Work view groups `waiting` under
+# Needs you (apps/web/src/work/tone.ts `groupFor`/`fromTask`).
 VALID_STATUSES = ("open", "in_progress", "blocked", "waiting", "deferred", "closed")
 _VALID_TYPES = ("task", "bug", "feature", "chore", "epic")
 
@@ -76,6 +77,13 @@ def parse_links(value: Any) -> list[dict]:
     if not isinstance(data, list):
         return []
     return [e for e in data if isinstance(e, dict) and e.get("ref")]
+
+
+def _close_reason(links: list[dict]) -> str:
+    """The attributed close reason an all-links-done task carries —
+    "bd-c8r5h merged (#5146); job-2 finished" (shared by :meth:`TaskStore.resolve_link`
+    and the link-replacement path in :meth:`TaskStore.update`)."""
+    return "; ".join(f"{e['ref']} {e.get('reason') or 'done'}" for e in links)
 
 
 def _now() -> str:
@@ -238,6 +246,22 @@ class TaskStore:
             out.append(entry)
         return json.dumps(out) if out else ""
 
+    @staticmethod
+    def _merge_links(old_raw: Any, links: Any) -> list[dict]:
+        """The replacement ``links`` normalized, with the resolution the task already
+        holds carried forward: a ref the task had already marked ``done`` stays done
+        (with its reason). ``done`` is one-way — the linked item's terminal event never
+        fires again, so resetting it to ``open`` would leave the task unable to ever
+        close itself (the ``task_update``/PATCH surfaces only carry plain refs)."""
+        entries = json.loads(TaskStore._norm_links(links) or "[]")
+        old = {e["ref"]: e for e in parse_links(old_raw)}
+        for entry in entries:
+            prev = old.get(entry["ref"])
+            if prev is not None and prev.get("state") == "done" and entry["state"] != "done":
+                entry["state"] = "done"
+                entry["reason"] = str(prev.get("reason") or "")
+        return entries
+
     # ── operations ──────────────────────────────────────────────────────────────
 
     def create(
@@ -304,6 +328,10 @@ class TaskStore:
         # Accept `type` as an alias for issue_type (the console/tools use both).
         if "type" in fields and "issue_type" not in fields:
             fields["issue_type"] = fields.pop("type")
+        # Links replace wholesale like every other field — [] clears, None keeps — but
+        # are applied inside the transaction: the merge needs the current row so an
+        # already-resolved ref the caller keeps stays ``done`` (see _merge_links).
+        links = fields.pop("links", None)
         sets: list[str] = []
         vals: list[Any] = []
         for key, value in fields.items():
@@ -315,19 +343,33 @@ class TaskStore:
                 value = self._norm_type(str(value))
             elif key == "priority":
                 value = int(value)
-            elif key == "links":
-                # Wholesale replacement, like every other field — [] clears (None keeps).
-                value = self._norm_links(value)
             sets.append(f"{key} = ?")
             vals.append(value)
+        action = "updated"
         with self._write():
-            if self._row(issue_id) is None:
+            row = self._row(issue_id)
+            if row is None:
                 raise KeyError(f"unknown issue {issue_id!r}")
+            merged: list[dict] = []
+            if links is not None:
+                merged = self._merge_links(row["links"], links)
+                sets.append("links = ?")
+                vals.append(json.dumps(merged) if merged else "")
+            now = _now()
             sets.append("updated_at = ?")
-            vals.append(_now())
+            vals.append(now)
             self._conn.execute(f"UPDATE issues SET {', '.join(sets)} WHERE id = ?", (*vals, issue_id))
+            # The all-links-done invariant survives a replacement: when every ref the
+            # caller kept has already finished, no further terminal event will ever
+            # arrive — close now, attributed, exactly like resolve_link would have.
+            if merged and all(e.get("state") == "done" for e in merged) and self._row(issue_id)["status"] != "closed":
+                self._conn.execute(
+                    "UPDATE issues SET status='closed', closed_at=?, close_reason=?, updated_at=? WHERE id=?",
+                    (now, _close_reason(merged), now, issue_id),
+                )
+                action = "closed"
             result = dict(self._row(issue_id))
-        _publish("task.changed", {"id": issue_id, "action": "updated"})
+        _publish("task.changed", {"id": issue_id, "action": action})
         return result
 
     def close(self, issue_id: str, reason: str | None = None) -> dict[str, Any]:
@@ -377,11 +419,10 @@ class TaskStore:
                 if not hit:
                     continue
                 if all(e.get("state") == "done" for e in links):
-                    close_reason = "; ".join(f"{e['ref']} {e.get('reason') or 'done'}" for e in links)
                     self._conn.execute(
                         "UPDATE issues SET links=?, status='closed', closed_at=?, close_reason=?, "
                         "updated_at=? WHERE id=?",
-                        (json.dumps(links), now, close_reason, now, row["id"]),
+                        (json.dumps(links), now, _close_reason(links), now, row["id"]),
                     )
                     affected.append((row["id"], "closed"))
                 else:

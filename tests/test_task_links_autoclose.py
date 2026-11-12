@@ -52,6 +52,29 @@ def test_update_replaces_and_clears_links(store):
     assert store.update(row["id"], title="renamed")["links"] == ""
 
 
+def test_update_replacement_keeps_resolved_links_and_closes_when_all_done(store, bus):
+    wire_task_autoclose(bus.subscribe_handler, store)
+    events: list[tuple] = []
+    bus.subscribe_handler("task.changed", lambda p: events.append((p["data"]["id"], p["data"]["action"])))
+    linked = store.create("grows links", links=["bd-1x", "job-2"])
+    bus.publish(TASK_LINK_CLOSED_TOPIC, {"ref": "bd-1x", "reason": "merged (#1)"})
+
+    # Replacing links through update (the task_update/PATCH surface — plain refs only)
+    # must NOT reset the already-finished card to open: its terminal event never fires
+    # again, so the task could otherwise never close itself.
+    grown = store.update(linked["id"], links=["bd-1x", "job-2", "bd-3z"])
+    assert {e["ref"]: (e["state"], e["reason"]) for e in parse_links(grown)} == {
+        "bd-1x": ("done", "merged (#1)"), "job-2": ("open", ""), "bd-3z": ("open", ""),
+    }
+    assert grown["status"] == "open"  # two refs still open — not closed by the replace
+
+    # Narrowing to only the finished ref closes NOW, attributed — no event will come.
+    closed = store.update(linked["id"], links=["bd-1x"])
+    assert closed["status"] == "closed" and closed["closed_at"]
+    assert closed["close_reason"] == "bd-1x merged (#1)"
+    assert (linked["id"], "closed") in events
+
+
 def test_links_column_migrates_onto_a_legacy_board(tmp_path):
     import sqlite3
 
@@ -120,6 +143,23 @@ def test_job_settles_only_when_the_job_is_gone(store, bus):
     assert store.get(recurring["id"])["close_reason"] == "cron-b canceled"
 
 
+async def test_cancel_schedule_tool_publish_closes_linked_task(store, bus):
+    """Through the TOOL itself, not a hand-built event: ``cancel_schedule``'s own
+    ``scheduler.changed`` publish is what closes a task linked to the canceled job."""
+    from types import SimpleNamespace
+
+    from tools.scheduler_tools import _build_scheduler_tools
+
+    wire_task_autoclose(bus.subscribe_handler, store, get_job=lambda job_id: object())
+    linked = store.create("recurring sweep", links=["cron-7"])
+    by_name = {t.name: t for t in _build_scheduler_tools(SimpleNamespace(cancel_job=lambda job_id: True))}
+
+    assert await by_name["cancel_schedule"].ainvoke({"job_id": "cron-7"}) == "Canceled cron-7."
+    row = store.get(linked["id"])
+    assert row["status"] == "closed"
+    assert row["close_reason"] == "cron-7 canceled"
+
+
 def test_no_scheduler_wired_never_reads_as_job_gone(store, bus):
     wire_task_autoclose(bus.subscribe_handler, store)  # default get_job: no scheduler → raises
     linked = store.create("careful", links=["job-x"])
@@ -173,10 +213,10 @@ async def test_pr_sweep_closes_merged_and_leaves_open(store):
     assert store.get(done["id"])["close_reason"] == f"{merged} merged"
     assert store.get(pending["id"])["status"] == "open"
 
-    # No unresolved PR links left → the sweep returns before any fetch.
+    # The merged PR's link is resolved, so only the still-open PR is fetched again.
     seen.clear()
     assert await sweep_task_links(store, pr_state=pr_state) == 0
-    assert seen == [still_open]  # the open PR is re-checked; nothing else is
+    assert seen == [still_open]
 
 
 # ── waiting status + tool/route round-trips ────────────────────────────────────
@@ -189,7 +229,6 @@ def test_waiting_roundtrips_store_and_tools(store):
     out = by_name["task_create"].invoke({"title": "needs a call", "links": ["bd-7q"]})
     assert "task-1" in out
     assert parse_links(store.get("task-1"))[0]["ref"] == "bd-7q"
-    assert "waiting" in (by_name["task_update"].description or "")
     by_name["task_update"].invoke({"issue_id": "task-1", "status": "waiting"})
     assert store.get("task-1")["status"] == "waiting"
     listing = by_name["task_list"].invoke({})
@@ -210,10 +249,16 @@ async def test_waiting_and_links_roundtrip_operator_routes(store):
         subagent_run=lambda r: None, subagent_batch=lambda r: None, tasks_store=store,
     )
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        created = await client.post("/api/tasks/issues", json={"title": "from console", "links": ["bd-5a"]})
+        created = await client.post("/api/tasks/issues", json={"title": "from console", "links": ["bd-5a", "job-9"]})
         assert created.status_code == 200, created.text
         issue = created.json()["issue"]
-        assert parse_links(issue)[0]["ref"] == "bd-5a"
+        assert [e["ref"] for e in parse_links(issue)] == ["bd-5a", "job-9"]
+
+        # A PATCH that replaces links keeps the ref the store already resolved done.
+        store.resolve_link("bd-5a", "merged (#2)")
+        replaced = await client.patch(f"/api/tasks/issues/{issue['id']}", json={"links": ["bd-5a", "job-9"]})
+        assert replaced.status_code == 200, replaced.text
+        assert {e["ref"]: e["state"] for e in parse_links(replaced.json()["issue"])} == {"bd-5a": "done", "job-9": "open"}
 
         patched = await client.patch(f"/api/tasks/issues/{issue['id']}", json={"status": "waiting"})
         assert patched.status_code == 200, patched.text

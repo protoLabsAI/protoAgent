@@ -383,7 +383,9 @@ def _build_task_tools(tasks_store) -> list:
         ``in_progress`` while you wait on them. ``links`` REPLACES the task's linked
         work items (board card ids ``bd-…``, scheduler job ids, a directive id, PR
         URLs): link the cards/jobs that do the work so the task closes itself when
-        they all finish."""
+        they all finish. A ref the task already resolved stays finished through a
+        replacement — and if every ref you keep has already finished, the task closes
+        now with its attributed reason."""
         fields: dict = {}
         if status:
             fields["status"] = status

@@ -41,6 +41,8 @@ export function groupFor(item: GroupableWorkItem): WorkGroupId | null {
       if (raw?.status === "running") return "doing-now";
       return raw?.status === "open" || raw?.status === "deferred" ? "coming-up" : null;
     case "task":
+      // `waiting` (ADR 0129 Q1): the agent parked the task on the operator's call.
+      if (raw?.status === "waiting") return "needs-you";
       if (raw?.status === "in_progress") return "doing-now";
       if (raw?.status === "blocked") return item.started === false ? "coming-up" : "doing-now";
       return !raw?.status || raw.status === "open" || raw.status === "deferred" ? "coming-up" : null;
@@ -105,7 +107,7 @@ export function fromWatch(raw: string, repeat = false): WorkStatus {
   return map("watch", raw, { active: "waiting", met: "done", expired: "cancelled", cleared: "cancelled" });
 }
 export function fromTask(raw: string): WorkStatus {
-  return map("task", raw, { in_progress: "running", blocked: "waiting", open: "scheduled", deferred: "paused", closed: "done" });
+  return map("task", raw, { in_progress: "running", blocked: "waiting", waiting: "needs-you", open: "scheduled", deferred: "paused", closed: "done" });
 }
 export function fromSchedule(job: Pick<ScheduledJob, "schedule" | "enabled" | "next_fire" | "last_fire">): WorkStatus {
   // A completed one-shot may be disabled by its scheduler backend.

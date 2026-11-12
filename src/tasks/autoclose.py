@@ -156,7 +156,9 @@ async def _gh_pr_state(url: str) -> str | None:
         state = str(json.loads(out).get("state") or "").strip().lower()
     except (ValueError, AttributeError):
         return None
-    return state if state in ("merged", "closed", "open") else None
+    # The terminal states come from the module constant; `open` is additionally
+    # meaningful HERE only (a live PR the sweep should keep re-checking).
+    return state if state in (*_PR_TERMINAL, "open") else None
 
 
 async def sweep_task_links(tasks_store: Any, *, pr_state: Callable[[str], Any] | None = None) -> int:
