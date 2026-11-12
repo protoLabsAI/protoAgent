@@ -91,4 +91,20 @@ describe("desktop chat stream fallback (#4975)", () => {
     expect(chatPosts()).toHaveLength(1);
     expect(onText).toHaveBeenCalledWith("fallback answer", false);
   });
+
+  it("treats a server rejection as a rejection, never a silent end or a re-send", async () => {
+    const terminal = "chat_stream: not a stream: Task 07aa is in terminal state: 3";
+    native.invoke.mockRejectedValue(terminal);
+    await expect(api.streamChat("hi", "chat-1", { onText: vi.fn() })).rejects.toBe(terminal);
+    expect(chatPosts()).toHaveLength(0);
+    // Reattaching an ended task must throw so the caller replays its snapshot (components).
+    await expect(api.resumeTask("07aa", "chat-1", {})).rejects.toBe(terminal);
+    // An older shell relays the JSON-RPC body as stream text: still a rejection.
+    native.invoke.mockImplementation(async (_cmd, args) => {
+      args.onEvent.onmessage('{"jsonrpc":"2.0","id":"r","error":{"code":-32004,"message":"Task 07aa is in terminal state: 3"}}');
+    });
+    const onDone = vi.fn();
+    await expect(api.resumeTask("07aa", "chat-1", { onDone })).rejects.toThrow(/terminal state/);
+    expect(onDone).not.toHaveBeenCalled();
+  });
 });
