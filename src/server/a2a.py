@@ -118,6 +118,13 @@ async def _fire_activity_from_inbox(item: dict) -> bool:
         "id": mid,
         "method": "SendMessage",
         "params": {
+            # Answer on ACCEPTANCE (the SUBMITTED task), not on completion (#5106). The
+            # acceptance check below already treats SUBMITTED/WORKING as owned; without
+            # this flag the SDK held the response until the turn ended — and that turn
+            # first queues behind whatever already holds the Activity thread, so
+            # `POST /api/inbox {priority: "now"}` hung for as long as a job ran. The turn
+            # keeps running in the background, exactly like a scheduler fire.
+            "configuration": {"returnImmediately": True},
             "message": {
                 "role": "ROLE_USER",
                 "parts": [{"text": item["text"]}],

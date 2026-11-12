@@ -1256,3 +1256,122 @@ def test_delivery_is_at_least_once_across_an_unrecorded_crash(tmp_path):
     # recovery_accepted_at, so the row is indistinguishable from one that never fired.
     store.reset_stale_recovery_claims()
     assert len(store.claim_now_recovery_batch(limit=8)) == 1  # fired again: at-least-once
+
+
+# ── a now-item returns while the Activity thread is busy (#5106) ──────────────
+
+
+@pytest.mark.asyncio
+async def test_now_inbox_post_returns_while_a_turn_holds_the_activity_thread(tmp_path, monkeypatch):
+    """``POST /api/inbox {priority: "now"}`` answers as soon as the Activity turn is
+    ACCEPTED, not when it finishes (#5106).
+
+    The self-A2A send used to omit ``returnImmediately``, so the SDK held the response
+    until the fired turn reached a terminal state — and that turn first queues behind
+    whatever turn already holds the Activity thread. A caller with a 25 s timeout saw
+    no answer while a long job ran, and a retry on timeout stored a duplicate.
+
+    Real a2a-sdk app + ``ProtoAgentExecutor`` + the real per-thread lock; only the turn
+    body (the model) is a fake. The thread is held by a "running turn" for the whole
+    POST, so the old blocking send cannot answer until the lock is released.
+    """
+    import httpx
+
+    import operator_api.console_handlers as ch
+    import runtime.state as rs
+    import server.a2a as a2a
+    from events import ACTIVITY_CONTEXT
+    from server import turn_control
+    from tests._a2a_app import A2A_HEADERS, drain_handlers, poll_terminal
+    from tests._a2a_app import build_app as build_a2a_app
+
+    ran: list[str] = []
+
+    async def stream(text, ctx, *, resume=False, caller_trace=None, **kwargs):
+        # Mirrors the chat driver: a turn takes the thread's lock before it yields.
+        async with turn_control._thread_lock(f"a2a:{ctx}"):
+            ran.append(text)
+            yield ("text", "<output>handled</output>")
+
+    a2a_app = build_a2a_app(stream)
+    inbox = _store(tmp_path)
+    monkeypatch.setattr(rs.STATE, "inbox_store", inbox, raising=False)
+    monkeypatch.setattr(rs.STATE, "storm_guard", None, raising=False)
+    monkeypatch.setattr(rs.STATE, "fastapi_app", a2a_app, raising=False)
+    monkeypatch.setattr(rs.STATE, "active_port", 9, raising=False)
+    monkeypatch.setattr(rs.STATE, "inbox_now_delivery", a2a._fire_activity_from_inbox, raising=False)
+    published: list = []
+    monkeypatch.setattr(ch._event_bus, "publish", lambda topic, payload: published.append(topic))
+
+    operator = FastAPI()
+    register_operator_routes(
+        operator,
+        runtime_status=lambda: {},
+        subagent_list=lambda: [],
+        subagent_run=_unused,
+        subagent_batch=_unused,
+        inbox_add=ch._operator_inbox_add,
+    )
+
+    running_turn = turn_control._thread_lock(f"a2a:{ACTIVITY_CONTEXT}")
+    await running_turn.acquire()  # a long job is running on the Activity thread
+    try:
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=operator), base_url="http://test") as c:
+            post = asyncio.ensure_future(
+                c.post("/api/inbox", json={"text": "deploy done", "priority": "now", "source": "ci"})
+            )
+            # Wait WITHOUT cancelling: the SDK answers a cancelled blocking send with the
+            # task as it stands, so a `wait_for` here would pass on the blocking code too.
+            done, _ = await asyncio.wait({post}, timeout=5.0)
+            if not done:
+                running_turn.release()  # let the blocked send finish before failing
+                await post
+                pytest.fail("POST /api/inbox (now) did not answer while the Activity thread was busy")
+            r = post.result()
+        assert r.status_code == 200
+        body = r.json()
+        assert body["ok"] is True and body["fired"] is True
+        assert isinstance(body["item"]["id"], int)
+        assert ran == []  # answered while the turn is still queued behind the running one
+        # Accepted means owned: nothing is left for check_inbox to process a second time.
+        assert inbox.list(priority_floor="later") == []
+        assert "inbox.item" not in published
+    finally:
+        if running_turn.locked():
+            running_turn.release()
+
+    # The queued turn still runs — once — after the running turn lets go of the thread.
+    for _ in range(200):
+        if ran:
+            break
+        await asyncio.sleep(0.01)
+    assert len(ran) == 1 and "deploy done" in ran[0]
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=a2a_app), base_url="http://test") as c:
+        tasks = await c.post(
+            "/a2a",
+            headers=A2A_HEADERS,
+            json={"jsonrpc": "2.0", "id": "l", "method": "ListTasks", "params": {"contextId": ACTIVITY_CONTEXT}},
+        )
+        listed = tasks.json()["result"]["tasks"]
+        assert len(listed) == 1
+        final = await poll_terminal(c, listed[0]["id"])
+    assert final["status"]["state"] == "TASK_STATE_COMPLETED"
+    await drain_handlers()
+
+
+def test_now_inbox_fire_asks_the_a2a_layer_to_return_on_acceptance(monkeypatch):
+    """The self-send's ``returnImmediately`` is what keeps ``POST /api/inbox`` prompt (#5106)."""
+    import server.a2a as a2a
+    from runtime.state import STATE
+
+    app = FastAPI()
+    captured: dict = {}
+
+    @app.post("/a2a")
+    async def _a2a(body: dict):
+        captured.update(body)
+        return {"result": {"task": {"status": {"state": "TASK_STATE_SUBMITTED"}}}}
+
+    monkeypatch.setattr(STATE, "fastapi_app", app, raising=False)
+    assert asyncio.run(a2a._fire_activity_from_inbox({"id": 21, "text": "x", "priority": "now"})) is True
+    assert captured["params"]["configuration"] == {"returnImmediately": True}
