@@ -4,11 +4,17 @@ import type { InboxItem, ScheduledJob, WatchState } from "../lib/types";
 import type { DecisionRow } from "../lib/api/decisions";
 import type { WorkItem } from "./useWorkItems";
 
-export type WorkGroupId = "needs-you" | "doing-now" | "coming-up" | "instructions";
+/** The four canonical Work groups, in display order — the registry validates
+ *  extension registrations against this list (S4c). */
+export const WORK_GROUP_IDS = ["needs-you", "doing-now", "coming-up", "instructions"] as const;
+export type WorkGroupId = (typeof WORK_GROUP_IDS)[number];
 export type WorkJobRef = { kind: "task" | "background" | "goal"; id: string };
 
 /** Adapter facts, not inferred associations. Today's Task/DirectiveRow APIs do not
- * carry start history or job links; future adapters can supply them explicitly. */
+ * carry start history or job links; future adapters can supply them explicitly.
+ * `started` only matters for a blocked task, which otherwise counts as started —
+ * the task API has no start history, so `blocked` itself (someone acted on it) is
+ * the evidence; an adapter that KNOWS a job never started sets `started: false`. */
 export type GroupableWorkItem = (WorkItem & {
   started?: boolean;
   tiedJob?: WorkJobRef;
@@ -31,7 +37,7 @@ export function groupFor(item: GroupableWorkItem): WorkGroupId | null {
       return raw?.status === "open" || raw?.status === "deferred" ? "coming-up" : null;
     case "task":
       if (raw?.status === "in_progress") return "doing-now";
-      if (raw?.status === "blocked") return item.started === true ? "doing-now" : "coming-up";
+      if (raw?.status === "blocked") return item.started === false ? "coming-up" : "doing-now";
       return !raw?.status || raw.status === "open" || raw.status === "deferred" ? "coming-up" : null;
     case "watch":
       return raw?.status === "active" || (raw?.status === "met" && raw.repeat === true) ? "coming-up" : null;

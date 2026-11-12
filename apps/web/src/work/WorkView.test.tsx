@@ -126,10 +126,10 @@ it("renders quiet unregistered sections and uses registered renderers", async ()
   useUI.setState({ surfaceStates: { work: { section: "watches" } } });
   await render("modal");
   expect(host.textContent).toContain("No watches to show");
-  await act(async () => { dispose = registerWorkSection("watches", { label: "Watches", render: () => <p>Watch list</p> }); });
+  await act(async () => { dispose = registerWorkSection("watches", { label: "Watches", group: "coming-up", render: () => <p>Watch list</p> }); });
   expect(host.textContent).toContain("Watch list");
   const menu = await openSections();
-  expect(menu.querySelectorAll('[role="menuitemradio"]')).toHaveLength(9);
+  expect(menu.querySelectorAll('[role="menuitemradio"]')).toHaveLength(8);
   await closeSections(menu);
 });
 
@@ -183,7 +183,7 @@ it("passes raw counts including zero to SideNav and keeps the selected row curre
   useUI.setState({ surfaceStates: { work: { filters: { thisChat: false, retained: true } } } });
   await render("modal");
   const nav = await openSections();
-  expect(nav.querySelectorAll(".pl-menu__badge")).toHaveLength(9);
+  expect(nav.querySelectorAll(".pl-menu__badge")).toHaveLength(8);
   expect(nav.querySelector(".pl-menu__badge .pl-count")).toBeNull();
   expect(Array.from(nav.querySelectorAll(".pl-menu__badge")).map((node) => node.textContent)).toContain("0");
   await closeSections(nav);
@@ -199,8 +199,56 @@ it("omits only loading badges while retaining ready zero counts", async () => {
   const tabs = Array.from(nav.querySelectorAll('[role="menuitemradio"]'));
   expect(tabs.find((node) => node.textContent === "Tasks")?.querySelector(".pl-menu__badge")).toBeNull();
   expect(tabs.find((node) => node.textContent === "Overview")?.querySelector(".pl-menu__badge")).toBeNull();
-  expect(nav.querySelectorAll(".pl-menu__badge")).toHaveLength(7);
+  expect(nav.querySelectorAll(".pl-menu__badge")).toHaveLength(6);
   expect(Array.from(nav.querySelectorAll(".pl-menu__badge")).every((node) => node.textContent === "0")).toBe(true);
+  await closeSections(nav);
+});
+
+it("counts only the rows the section lists — finished jobs and achieved goals don't badge", async () => {
+  data.sources.tasks.items = [
+    item("open-job", "scheduled", { raw: { status: "open", created_at: "2026-11-01T00:00:00Z" } }),
+    item("closed-job", "done", { raw: { status: "closed", closed_at: "2026-11-01T00:00:00Z" } }),
+  ];
+  data.sources.goals.items = [item("done-goal", "done", { kind: "goal", raw: { session_id: "g", status: "achieved", outcome: "done-goal" } })];
+  useUI.setState({ surfaceStates: { work: { section: "tasks" } } });
+  await render("modal");
+  // The heading, the live announcement and the list agree: the closed job has left Work.
+  expect(host.querySelector(".work-heading")?.getAttribute("aria-label")).toBe("Tasks, 1");
+  expect(host.querySelector('[role="status"]')?.textContent).toBe("Tasks, 1 items.");
+  expect(host.querySelectorAll(".work-row")).toHaveLength(1);
+  const nav = await openSections();
+  const badge = (label: string) => Array.from(nav.querySelectorAll('[role="menuitemradio"]'))
+    .find((node) => node.textContent?.startsWith(label))?.querySelector(".pl-menu__badge")?.textContent;
+  expect(badge("Tasks")).toBe("1");
+  expect(badge("Goals")).toBe("0"); // only an achieved goal → the badge matches its "No goals" empty state
+  await closeSections(nav);
+});
+
+it("badges Your instructions through the shared projection, beside the listFilter counts", async () => {
+  data.sources.tasks.items = [
+    item("open-job", "scheduled", { raw: { status: "open", created_at: "2026-11-01T00:00:00Z" } }),
+    item("closed-job", "done", { raw: { status: "closed", closed_at: "2026-11-01T00:00:00Z" } }),
+  ];
+  data.sources.background.items = [item("deploy", "done", { kind: "background", raw: { status: "completed" } })];
+  const directive = (id: string, status: WorkItem["status"], rowStatus: string) =>
+    item(id, status, { kind: "directive", raw: { status: rowStatus } });
+  data.sources.directives.items = [
+    directive("standing", "waiting", "in_force"),
+    directive("tied", "waiting", "in_force"),
+    directive("kept", "done", "fulfilled"),
+  ];
+  data.sources.directives.groupItems = [
+    directive("standing", "waiting", "in_force"),
+    { ...directive("tied", "waiting", "in_force"), tiedJob: { kind: "background", id: "deploy" } },
+    directive("kept", "done", "fulfilled"),
+  ];
+  await render();
+  const nav = await openSections();
+  const badge = (label: string) => Array.from(nav.querySelectorAll('[role="menuitemradio"]'))
+    .find((node) => node.textContent?.startsWith(label))?.querySelector(".pl-menu__badge")?.textContent;
+  // Not the raw 3: the fulfilled directive left the projection, the tied one ended with its job.
+  expect(badge("Your instructions")).toBe("1");
+  expect(badge("Tasks")).toBe("1"); // the other sections still count what their list shows
   await closeSections(nav);
 });
 

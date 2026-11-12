@@ -7,6 +7,8 @@
   hide and an empty rail takes no space. Each chip opens one grouped details panel (a
   popover on desktop, a bottom sheet on the phone) with one section per Work group and an
   "Open in Work" deep link; the instructions ledger keeps its failure state with a "Load
-  again" retry. One polite live region announces a tied job's completion once ("<job>
+  again" retry, judged against this chat's own ledger — another chat's failed ledger never
+  marks this chat's instructions out of date, and this chat's failure is never hidden by
+  other chats having loaded. One polite live region announces a tied job's completion once ("<job>
   finished. 1 approval it carried is now fulfilled."). The people chips keep their
   mention-toggle behavior unchanged.

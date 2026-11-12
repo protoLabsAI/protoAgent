@@ -116,7 +116,7 @@ function formatTimestampDate(date: Date, joined = false): string {
 }
 
 /** Epoch ms for an ISO string, treating an offsetless value as UTC. null = unparseable. */
-function parseInstant(iso: string | null | undefined): number | null {
+export function parseInstant(iso: string | null | undefined): number | null {
   if (!iso) return null;
   const hasOffset = /(?:[zZ]|[+-]\d{2}:?\d{2})$/.test(iso);
   const tMs = Date.parse(hasOffset ? iso : `${iso}Z`);

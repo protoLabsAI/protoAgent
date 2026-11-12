@@ -19,9 +19,10 @@ import { useUI } from "../state/uiStore";
 import { useIsMobile } from "../lib/useIsMobile";
 import type { GoalState } from "../lib/types";
 import { sections } from "../work/sectionRegistry";
-import { useWorkItems, type WorkItems, type WorkSource } from "../work/useWorkItems";
+import { useWorkItems, type WorkSource } from "../work/useWorkItems";
 import { flattenWorkItems, inWorkScope, jobEnded, jobKey, workGroups, type WorkGroup } from "../work/workGroups";
 import type { WorkGroupId } from "../work/tone";
+import { useDirectives } from "./useDirectives";
 import { runHas } from "./mentionRun";
 import "./chat-status-rail.css";
 
@@ -138,7 +139,7 @@ function chipIcon(chip: RailChip): ReactNode {
 
 function GroupSection({ group, directives, mobile, onNavigate }: {
   group: WorkGroup;
-  /** The instructions source, for its preserved error / stale "Load again" states. */
+  /** THIS chat's instructions source, for its preserved error / stale "Load again" states. */
   directives: WorkSource | null;
   mobile: boolean;
   onNavigate: () => void;
@@ -185,9 +186,10 @@ function GroupSection({ group, directives, mobile, onNavigate }: {
   );
 }
 
-function DetailsPanel({ groups, sources, mobile, onNavigate }: {
+function DetailsPanel({ groups, directives, mobile, onNavigate }: {
   groups: WorkGroup[];
-  sources: WorkItems;
+  /** THIS chat's instructions source — status and retry scoped to its own ledger. */
+  directives: WorkSource;
   mobile: boolean;
   onNavigate: () => void;
 }) {
@@ -197,7 +199,7 @@ function DetailsPanel({ groups, sources, mobile, onNavigate }: {
         <GroupSection
           key={group.id}
           group={group}
-          directives={group.id === "instructions" ? sources.directives : null}
+          directives={group.id === "instructions" ? directives : null}
           mobile={mobile}
           onNavigate={onNavigate}
         />
@@ -219,9 +221,28 @@ export function ChatStatusRail({ sessionId, cast, draft, onToggleMention }: {
   const flat = useMemo(() => flattenWorkItems(sources), [sources]);
   const groups = useMemo(() => workGroups(flat, { thisChatOnly: true, sessionId }), [flat, sessionId]);
   const chips = railChips(groups);
-  // The failed-instructions chip: the ledger never loaded, so the count is unknowable — it
-  // renders without one and the details panel carries the preserved "Load again" path.
-  if (sources.directives.status === "error" && !chips.some((chip) => chip.id === "instructions")) {
+  // THIS chat's ledger, from the same per-session store the old DirectiveStrip read. The
+  // aggregated `sources.directives` sums every chat's ledgers — its `loadedAt` is the max
+  // across sessions, so a failure HERE reads as merely "stale" there the moment any other
+  // chat has ever loaded, and another chat's (or the session index's) failure would wrongly
+  // mark this chat's instructions out of date. The rail counts this-chat-only; its preserved
+  // failure states are scoped the same way, and Load again refreshes this one ledger.
+  const ledger = useDirectives(sessionId);
+  const ledgerStatus: WorkSource["status"] =
+    ledger.state === "failed" ? "error"
+      : ledger.state === "stale" ? "stale"
+        : ledger.state === "loading" ? "loading" : "ready";
+  const instructionsSource: WorkSource = {
+    ...sources.directives,
+    status: ledgerStatus,
+    loadedAt: ledger.loadedAt,
+    error: ledgerStatus === "error" || ledgerStatus === "stale"
+      ? new Error("This chat's directive ledger could not be refreshed") : null,
+    retry: () => { void ledger.refresh(); },
+  };
+  // The failed-instructions chip: THIS chat's ledger never loaded, so the count is unknowable —
+  // it renders without one and the details panel carries the preserved "Load again" path.
+  if (ledgerStatus === "error" && !chips.some((chip) => chip.id === "instructions")) {
     chips.push({ id: "instructions", label: "Told it", count: 0, problem: true });
   }
 
@@ -258,15 +279,19 @@ export function ChatStatusRail({ sessionId, cast, draft, onToggleMention }: {
     }
     const prev = seen.current;
     if (prev) {
+      // Every tied job that ended in THIS update speaks — one joined write, so two jobs
+      // finishing in the same refetch cannot overwrite each other's completion.
+      const finished: string[] = [];
       for (const [key, title] of ended) {
         if (prev.ended.has(key)) continue;
         const carried = tied.get(key) ?? prev.tied.get(key) ?? 0;
         if (!carried) continue;
-        setAnnouncement(
+        finished.push(
           `${title} finished. ${carried} approval${carried === 1 ? "" : "s"} it carried ` +
             `${carried === 1 ? "is" : "are"} now fulfilled.`,
         );
       }
+      if (finished.length) setAnnouncement(finished.join(" "));
     }
     seen.current = { ended: new Set(ended.keys()), tied };
   }, [flat, sessionId]);
@@ -278,22 +303,18 @@ export function ChatStatusRail({ sessionId, cast, draft, onToggleMention }: {
   };
 
   const hasContent = chips.length > 0 || cast.length > 0;
-  if (!hasContent && !announcement) return null;
-
+  // The ONE polite live region (§6) — mounted for the component's whole life, OUTSIDE the
+  // conditional rail, at a fixed child position so React never recreates the node. A screen
+  // reader announces text that CHANGES inside a region that already existed; a region that
+  // (re)mounts already holding its text is read by nothing. The old shape returned null for
+  // the render in which a tied-job completion emptied the rail (the announcement lands in the
+  // effect afterwards), remounting the region WITH its text — the announcement was lost. The
+  // span is the sr-only class (position: absolute), so an empty rail still takes no space.
   const liveRegion = (
     <span className="chat-status-rail__announce" role="status" aria-live="polite" aria-atomic="true">
       {announcement}
     </span>
   );
-  if (!hasContent) {
-    // A tied-job completion can empty the rail in the same update it announces: keep the
-    // (zero-height) live region in the tree so the announcement is actually read.
-    return (
-      <div className="chat-status-rail chat-status-rail--idle" role="group" aria-label="Chat status" data-testid="chat-status-rail">
-        {liveRegion}
-      </div>
-    );
-  }
 
   const renderChip = (chip: RailChip) => {
     const expanded = open === chip.id;
@@ -335,48 +356,52 @@ export function ChatStatusRail({ sessionId, cast, draft, onToggleMention }: {
         }}
         trigger={button}
       >
-        <DetailsPanel groups={groups} sources={sources} mobile={false} onNavigate={close} />
+        <DetailsPanel groups={groups} directives={instructionsSource} mobile={false} onNavigate={close} />
       </Popover>
     );
   };
 
   return (
-    <div className="chat-status-rail" role="group" aria-label="Chat status" data-testid="chat-status-rail">
-      {chips.map(renderChip)}
-      {cast.length ? (
-        <div className="chat-roster" aria-label="In this chat">
-          <Users size={13} aria-hidden />
-          {cast.map((name) => {
-            const active = runHas(draft, name);
-            return (
-              <button
-                key={name}
-                type="button"
-                className={`chat-roster-chip${active ? " chat-roster-chip--active" : ""}`}
-                aria-pressed={active}
-                title={active ? `Remove @${name} from this message` : `Address @${name}`}
-                onClick={() => onToggleMention(name)}
-              >
-                <span className="chat-roster-name">@{name}</span>
-              </button>
-            );
-          })}
-        </div>
-      ) : null}
+    <>
       {liveRegion}
-      {mobile && (
-        <Drawer
-          open={open !== null}
-          onClose={closeAndRestore}
-          side="bottom"
-          title="Chat status"
-          className="chat-status-sheet"
-        >
-          {open !== null && (
-            <DetailsPanel groups={groups} sources={sources} mobile onNavigate={closeAndRestore} />
+      {hasContent && (
+        <div className="chat-status-rail" role="group" aria-label="Chat status" data-testid="chat-status-rail">
+          {chips.map(renderChip)}
+          {cast.length ? (
+            <div className="chat-roster" aria-label="In this chat">
+              <Users size={13} aria-hidden />
+              {cast.map((name) => {
+                const active = runHas(draft, name);
+                return (
+                  <button
+                    key={name}
+                    type="button"
+                    className={`chat-roster-chip${active ? " chat-roster-chip--active" : ""}`}
+                    aria-pressed={active}
+                    title={active ? `Remove @${name} from this message` : `Address @${name}`}
+                    onClick={() => onToggleMention(name)}
+                  >
+                    <span className="chat-roster-name">@{name}</span>
+                  </button>
+                );
+              })}
+            </div>
+          ) : null}
+          {mobile && (
+            <Drawer
+              open={open !== null}
+              onClose={closeAndRestore}
+              side="bottom"
+              title="Chat status"
+              className="chat-status-sheet"
+            >
+              {open !== null && (
+                <DetailsPanel groups={groups} directives={instructionsSource} mobile onNavigate={closeAndRestore} />
+              )}
+            </Drawer>
           )}
-        </Drawer>
+        </div>
       )}
-    </div>
+    </>
   );
 }

@@ -16,7 +16,7 @@ async function selectTasks(page: Page, work: Locator) {
   await picker.focus();
   await page.keyboard.press("Enter");
   const menu = page.getByRole("menu", { name: "Work sections" });
-  await expect(menu.getByRole("menuitemradio")).toHaveCount(9);
+  await expect(menu.getByRole("menuitemradio")).toHaveCount(8);
   await page.keyboard.press("Escape");
   await expect(picker).toBeFocused();
   await page.keyboard.press("Enter");
@@ -69,7 +69,7 @@ for (const theme of ["light", "dark"] as const) {
       } }));
     });
 
-    // One test per width: as a single test the three widths x nine sections ran ~300 keyboard
+    // One test per width: as a single test the three widths x eight sections ran ~300 keyboard
     // steps and blew the 30 s timeout under WebKit about half the time.
     for (const width of [390, 768, 1000]) {
       test(`collapsed picker selects every section without a width cap at ${width}px`, async ({ page }) => {
@@ -87,7 +87,7 @@ for (const theme of ["light", "dark"] as const) {
         await expect(work.getByRole("tablist", { name: "Work sections" })).toHaveCount(0);
         await expect.poll(() => work.evaluate(el => el.scrollWidth <= el.clientWidth)).toBe(true);
         await selectTasks(page, work);
-        for (const label of ["Overview", "Decisions", "Goals", "Watches", "Tasks", "Schedules", "Background agents", "Activity", "Your instructions"]) {
+        for (const label of ["Overview", "Decisions", "Goals", "Watches", "Tasks", "Schedules", "Background agents", "Your instructions"]) {
           await picker.press("Space");
           const item = menu.getByRole("menuitemradio", { name: label, exact: true });
           await expect(item.locator(".pl-menu__badge")).toHaveCount(1);

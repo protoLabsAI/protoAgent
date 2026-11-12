@@ -7,9 +7,12 @@ test("Work search lists one overview entry and opens every section in the modal"
   await page.locator(".pl-cmdk-commands__input").fill("work");
   await expect(page.getByRole("option", { name: "Open Work", exact: true })).toHaveCount(1);
   await expect(page.getByRole("option", { name: "Work", exact: true })).toHaveCount(0);
+  // Activity is not a Work section any more (S4c) — no palette row can navigate to it.
+  await page.locator(".pl-cmdk-commands__input").fill("Work: Activity");
+  await expect(page.getByRole("option", { name: "Work: Activity", exact: true })).toHaveCount(0);
   await page.keyboard.press("Escape");
 
-  for (const section of ["Overview", "Decisions", "Goals", "Watches", "Tasks", "Schedules", "Background agents", "Activity", "Directives"]) {
+  for (const section of ["Overview", "Decisions", "Goals", "Watches", "Tasks", "Schedules", "Background agents", "Directives"]) {
     const label = section === "Overview" ? "Open Work" : `Work: ${section}`;
     // Legacy palette commands still route to the adapter's current display label.
     const sectionLabel = section === "Directives" ? "Your instructions" : section;

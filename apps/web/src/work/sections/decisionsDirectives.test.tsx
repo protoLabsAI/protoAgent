@@ -12,7 +12,7 @@ import { ApiError } from "../../lib/api/http";
 import { decisionsStoreForTest } from "../../decisions/useDecisions";
 import { WorkView } from "../WorkView";
 import { sections } from "../sectionRegistry";
-import { decisionMeta, fromDecision, fromDirective } from "../tone";
+import { decisionMeta, fromBackgroundJob, fromDecision, fromDirective } from "../tone";
 import { useUI } from "../../state/uiStore";
 import type { WorkItem, WorkItems, WorkSource, WorkSourceKind } from "../useWorkItems";
 import type { DecisionRow } from "../../lib/api/decisions";
@@ -27,7 +27,7 @@ import type { DirectivesSnapshot } from "../../chat/useDirectives";
 const data = vi.hoisted(() => ({ sources: {} as WorkItems }));
 vi.mock("../useWorkItems", () => ({ useWorkItems: () => data.sources }));
 
-// The directive ledger's store (used by the reused DirectiveDrawerBody), driven by hand.
+// The directive ledger's store (the section's withdraw path), driven by hand.
 const dir = vi.hoisted(() => ({
   snapshot: { state: "ready", active: [], history: [], loadedAt: 1 } as DirectivesSnapshot,
   refresh: vi.fn(),
@@ -127,9 +127,11 @@ beforeEach(() => {
   vi.clearAllMocks();
   connection.online = true;
   vi.spyOn(decisionsApi, "getDecision").mockRejectedValue(new Error("unavailable"));
-  vi.spyOn(decisionsApi, "listDecisions").mockImplementation(async () => {
-    const decisions = data.sources.decisions.items.map((item) => item.raw as DecisionRow).filter((row) => row.state === "pending");
-    return { decisions, pending: decisions.length };
+  // State-aware, like the real route: the shared store's refresh lists "pending"; the
+  // directives section's answered-ledger top-up lists "answered".
+  vi.spyOn(decisionsApi, "listDecisions").mockImplementation(async (state = "pending") => {
+    const decisions = data.sources.decisions.items.map((item) => item.raw as DecisionRow).filter((row) => row.state === state);
+    return { decisions, pending: decisions.filter((row) => row.state === "pending").length };
   });
   vi.stubGlobal("ResizeObserver", class {
     observe() {}
@@ -440,11 +442,113 @@ describe("Work decision actions", () => {
   });
 });
 
-describe("Directives section", () => {
-  it.each(["directive:other", "other"])("opens the selected owner's ledger and withdrawal action (%s)", async (itemId) => {
+describe("Directives section (Your instructions, ADR 0129 §3)", () => {
+  // Seed the shared decisions store so linkDecision can resolve an ANSWERED decision by id — the
+  // record a decision leaves there the moment it settles and drops off the pending list (§3.1).
+  async function seedAnswered(row: DecisionRow) {
+    vi.mocked(decisionsApi.getDecision).mockResolvedValueOnce(row);
+    await act(async () => { await decisionsStoreForTest.recheck(row.id); });
+  }
+
+  it("renders an in-force directive as an Instruction: scope headline, muted 'You said' provenance (r1)", async () => {
+    const quote = "Don't merge anything into protoAgent main until I say so.";
+    data.sources.directives.items = [directiveItem(directiveRow("i1",
+      { session_id: "here", quote, scope: "Hold protoAgent main", created_at: new Date().toISOString() }))];
+    workState({ section: "directives", filters: { thisChat: true } });
+    await render("rail", "here");
+
+    const row = rowFor("Hold protoAgent main")!;
+    expect(row.querySelector(".work-row__title")?.textContent).toBe("Hold protoAgent main"); // the scope, not the quote
+    expect(row.querySelector(".pl-badge")?.textContent).toBe("Instruction");
+    expect(row.textContent).toContain(`You said "${quote}" in this chat`);
+    expect(row.textContent).toMatch(/today \d{2}:\d{2}/);
+  });
+
+  it("falls back to the quote when scope is empty and never shows an id (r1, r4)", async () => {
+    data.sources.directives.items = [directiveItem(directiveRow("secret-dir-id",
+      { session_id: "here", quote: "Approve dependency bumps", scope: "" }))];
+    workState({ section: "directives", filters: { thisChat: true } });
+    await render("rail", "here");
+    expect(rowFor("Approve dependency bumps")?.querySelector(".work-row__title")?.textContent).toBe("Approve dependency bumps");
+    expect(host.textContent).not.toContain("secret-dir-id");
+  });
+
+  it("shows only in-force entries — fulfilled and revoked history never appears (r1)", async () => {
+    data.sources.directives.items = [
+      directiveItem(directiveRow("live", { session_id: "here", quote: "Keep the staging deploy paused" })),
+      directiveItem(directiveRow("done", { session_id: "here", quote: "Cut the patch release", status: "fulfilled", closed_at: new Date().toISOString() })),
+      directiveItem(directiveRow("gone", { session_id: "here", quote: "Old instruction", status: "revoked", closed_at: new Date().toISOString() })),
+    ];
+    workState({ section: "directives", filters: { thisChat: true } });
+    await render("rail", "here");
+    expect(rows()).toHaveLength(1);
+    expect(host.textContent).toContain("Keep the staging deploy paused");
+    expect(host.textContent).not.toContain("Cut the patch release");
+    expect(host.textContent).not.toContain("Old instruction");
+  });
+
+  it("tags a decision-linked directive Approval and shows the option, question and Open decision (r1 §3.1)", async () => {
+    const now = Date.now();
+    await seedAnswered(decisionRow("appr-dec", {
+      session_id: "inst-chat", question: "Can I approve the dependency bumps?", state: "answered",
+      answer: "go", answer_label: "Go ahead", answered_by: "operator", answered_at: new Date(now - 60_000).toISOString(),
+    }));
+    data.sources.directives.items = [directiveItem(directiveRow("appr",
+      { session_id: "inst-chat", quote: "Dependency bumps are fine", scope: "Approve dependency bumps", created_at: new Date(now).toISOString() }))];
+
+    workState({ section: "directives", filters: { thisChat: false } });
+    await render("rail", "inst-chat");
+    const row = rowFor("Approve dependency bumps")!;
+    expect(row.querySelector(".pl-badge")?.textContent).toBe("Approval");
+    expect(row.textContent).toContain('You chose "Go ahead"');
+    expect(row.textContent).toMatch(/\d{2}:\d{2}/);
+
+    // The detail carries the full approval provenance, with Open decision.
+    workState({ section: "directives", itemId: "directive:appr", filters: { thisChat: false } });
+    await render("rail", "inst-chat");
+    const detail = host.querySelector(".work-view__detail")!;
+    expect(detail.textContent).toContain("You were asked");
+    expect(detail.textContent).toContain("Can I approve the dependency bumps?");
+    expect(detail.textContent).toContain("You chose");
+    expect(detail.textContent).toContain("Go ahead");
+    expect(detail.textContent).toContain("Your words");
+    expect(detail.textContent).toContain('You said "Dependency bumps are fine" in this chat');
+    expect(buttons("Open decision")).toHaveLength(1);
+
+    // Open decision opens the linked decision IN PLACE (the Work detail, via the retained
+    // settled record) — it does not switch to the source chat or close the surface.
+    await act(async () => buttons("Open decision")[0].click());
+    expect(useUI.getState().surfaceStates.work.itemId).toBe("decision:appr-dec");
+    const decisionDetail = host.querySelector(".work-view__detail")!;
+    expect(decisionDetail.textContent).toContain("Can I approve the dependency bumps?");
+    expect(decisionDetail.textContent).toContain("Go ahead");
+  });
+
+  it("links an Approval from the answered ledger when the answer was never seen pending here (reload, r1 §3.1)", async () => {
+    const now = Date.now();
+    // The answered record exists ONLY on the server (a reload: the shared store's record
+    // cache starts empty, and the pending refresh never lists answered rows).
+    const answered = decisionRow("reload-dec", {
+      session_id: "reload-chat", question: "Ship the hotfix?", state: "answered",
+      answer: "go", answer_label: "Go ahead", answered_by: "operator", answered_at: new Date(now - 60_000).toISOString(),
+    });
+    vi.mocked(decisionsApi.listDecisions).mockImplementation(async (state = "pending") =>
+      state === "answered" ? { decisions: [answered], pending: 0 } : { decisions: [], pending: 0 });
+    data.sources.directives.items = [directiveItem(directiveRow("reload-dir", {
+      session_id: "reload-chat", quote: "Hotfix away", scope: "Ship the hotfix", created_at: new Date(now).toISOString(),
+    }))];
+    workState({ section: "directives", filters: { thisChat: true } });
+    await render("rail", "reload-chat");
+    const row = rowFor("Ship the hotfix")!;
+    expect(row.querySelector(".pl-badge")?.textContent).toBe("Approval");
+    expect(row.textContent).toContain('You chose "Go ahead"');
+  });
+
+  it.each(["directive:other", "other"])("opens the selected owner's instruction and withdraws it via the existing confirm path (%s)", async (itemId) => {
     const here = directiveRow("focused", { session_id: "here", quote: "Focused chat instruction" });
     const other = directiveRow("other", { session_id: "elsewhere", quote: "Other chat instruction" });
     data.sources.directives.items = [directiveItem(here), directiveItem(other)];
+    // Non-empty sessions make the revoke mock prepend the owning session id, as production does.
     dir.sessions.set("here", { state: "ready", active: [here], history: [], loadedAt: 1 });
     dir.sessions.set("elsewhere", { state: "ready", active: [other], history: [], loadedAt: 1 });
     workState({ section: "overview", itemId, filters: { thisChat: false } });
@@ -460,60 +564,46 @@ describe("Directives section", () => {
     expect(dir.revoke).toHaveBeenCalledWith("elsewhere", "other", "");
   });
 
-  it("renders the ledger with in-force entries under a neutral 'Active' group (r3)", async () => {
-    data.sources.directives.items = [directiveItem(directiveRow("a1", { session_id: "here" }))];
-    dir.snapshot = {
-      state: "ready",
-      active: [directiveRow("a1", { quote: "Hold the release until Monday" })],
-      history: [directiveRow("h1", { quote: "Cut the patch release", status: "fulfilled", closed_by: "agent", closed_at: "2026-11-07T19:00:00+00:00" })],
-      loadedAt: 1,
-    };
-    workState({ section: "directives", filters: { thisChat: true } });
-    await render("rail");
-
-    // In-force keeps the ledger's word "Active" (the §2.11 exception), never the running/waiting word.
-    expect(host.textContent).toContain("Active");
-    expect(host.textContent).toContain("Hold the release until Monday");
-    expect(host.textContent).not.toMatch(/\brunning\b/);
-    expect(host.textContent).not.toMatch(/\bwaiting\b/);
-
-    // History sits in the ledger's own collapsed group with its own done/withdrawn badges.
-    const historyTrigger = buttons("History (1)")[0];
-    expect(historyTrigger).toBeTruthy();
-    await act(async () => historyTrigger.click());
-    const done = rows().length; // no WorkRows in the ledger view
-    expect(done).toBe(0);
-    expect(host.textContent).toContain("Cut the patch release");
-    expect([...host.querySelectorAll(".pl-badge")].some((b) => b.textContent === "done")).toBe(true);
-  });
-
-  it("shows the ledger's own empty state for a session with nothing recorded", async () => {
+  it("shows its own empty state when nothing is in force, even with no session in view", async () => {
     data.sources.directives.items = [];
-    dir.snapshot = { state: "ready", active: [], history: [], loadedAt: 1 };
     workState({ section: "directives", filters: { thisChat: true } });
-    await render("rail"); // sessionId comes from the section context
+    await render("rail", undefined);
     expect(host.textContent).toContain("No standing instructions");
   });
 
-  it("falls back to its own empty copy when no session is in view", async () => {
-    data.sources.directives.items = [];
-    workState({ section: "directives", filters: { thisChat: true } });
-    await render("rail", undefined); // no session: the ledger body never mounts
-    expect(host.textContent).toContain("No standing instructions");
-  });
-
-  it("never shows a directive id in the ledger (r4)", async () => {
-    data.sources.directives.items = [directiveItem(directiveRow("secret-dir-id", { session_id: "here" }))];
-    dir.snapshot = {
-      state: "ready",
-      active: [directiveRow("secret-dir-id", { quote: "Approve dependency bumps" })],
-      history: [],
-      loadedAt: 1,
+  it("renders an explicit tied job and drops it — with its count — the instant the job ends (r1 §3, Q2)", async () => {
+    const tied = directiveRow("tied", { session_id: "here", quote: "Keep protoAgent main frozen", scope: "Freeze protoAgent main" });
+    const withJob = (status: string) => {
+      data.sources.directives.items = [directiveItem(tied)];
+      // The job link is an EXPLICIT projection field (DirectiveRow carries none); never parsed.
+      data.sources.directives.groupItems = [{ ...directiveItem(tied), tiedJob: { kind: "background", id: "deploy-job" } }];
+      data.sources.background.items = [{ kind: "background", id: "deploy-job", status: fromBackgroundJob(status), title: "Nightly deploy", meta: "", raw: { status } }];
     };
-    workState({ section: "directives", filters: { thisChat: true } });
-    await render("rail");
-    expect(host.textContent).toContain("Approve dependency bumps");
-    expect(host.textContent).not.toContain("secret-dir-id");
+
+    // Running: the instruction shows, its meta ends with the job, and the count is 1.
+    withJob("running");
+    workState({ section: "directives", itemId: "directive:tied", filters: { thisChat: true } });
+    await render("rail", "here");
+    expect(rows()).toHaveLength(1);
+    expect(host.querySelector(".work-heading")?.getAttribute("aria-label")).toBe("Your instructions, 1");
+    expect(rowFor("Freeze protoAgent main")?.textContent).toContain("ends with Nightly deploy");
+    const detail = host.querySelector(".work-view__detail")!;
+    expect(detail.textContent).toContain('until "Nightly deploy" finishes. Then it closes itself.');
+    expect(buttons("Open the job")).toHaveLength(1);
+
+    // Open the job opens the tied job's own Work detail in place.
+    await act(async () => buttons("Open the job")[0].click());
+    expect(useUI.getState().surfaceStates.work.itemId).toBe("background:deploy-job");
+    expect(host.querySelector(".work-view__detail")?.textContent).toContain("Nightly deploy");
+    // Restore the instruction selection for the ended-job phase below.
+    workState({ section: "directives", itemId: "directive:tied", filters: { thisChat: true } });
+
+    // Ended: the shared projection drops the row AND the count together — no phantom instruction.
+    withJob("completed");
+    await render("rail", "here");
+    expect(rows()).toHaveLength(0);
+    expect(host.querySelector(".work-heading")?.getAttribute("aria-label")).toBe("Your instructions, 0");
+    expect(host.textContent).not.toContain("Freeze protoAgent main");
   });
 
   it("routes closed directives to Done and in-force to Waiting on in the Overview counts only (r3 §2.11)", async () => {
@@ -528,6 +618,101 @@ describe("Directives section", () => {
     expect(lanes).toContain("Waiting on"); // in_force → waiting
     expect(lanes).toContain("Done"); // fulfilled → done, revoked → cancelled
   });
+
+  it("shows a skeleton while loading and a Retry alert when loading failed — never 'No standing instructions' (r1)", async () => {
+    data.sources.directives = { ...data.sources.directives, items: [], status: "loading", loadedAt: null };
+    workState({ section: "directives", filters: { thisChat: true } });
+    await render("rail", "here");
+    expect(host.querySelector('[aria-label="Loading your instructions"]')).toBeTruthy();
+    expect(host.textContent).not.toContain("No standing instructions");
+
+    data.sources.directives = { ...data.sources.directives, status: "error", error: new Error("down") };
+    await render("rail", "here");
+    expect(host.textContent).toContain("Couldn't load standing instructions. The agent still has them.");
+    expect(host.textContent).not.toContain("No standing instructions");
+    await act(async () => buttons("Retry")[0].click());
+    expect(data.sources.directives.retry).toHaveBeenCalled();
+  });
+
+  it("keeps an open detail honest while the source hasn't loaded — no 'no longer here' claim (r1)", async () => {
+    data.sources.directives = { ...data.sources.directives, items: [], status: "loading", loadedAt: null };
+    workState({ section: "directives", itemId: "directive:unseen", filters: { thisChat: true } });
+    await render("rail", "here");
+    expect(host.querySelector(".work-view__detail [aria-label='Loading your instructions']")).toBeTruthy();
+    expect(host.textContent).not.toContain("This instruction is no longer here.");
+
+    data.sources.directives = { ...data.sources.directives, status: "error", error: new Error("down") };
+    await render("rail", "here");
+    expect(host.querySelector(".work-view__detail")?.textContent).toContain("Couldn't load standing instructions");
+    expect(host.textContent).not.toContain("This instruction is no longer here.");
+  });
+
+  it("keeps the retained rows under a stale callout with Retry when a refresh failed (r1)", async () => {
+    data.sources.directives = {
+      ...data.sources.directives, status: "stale", loadedAt: 5,
+      items: [directiveItem(directiveRow("kept", { session_id: "here", quote: "Keep the deploy paused" }))],
+    };
+    workState({ section: "directives", filters: { thisChat: true } });
+    await render("rail", "here");
+    expect(host.textContent).toContain("Showing the last load. Couldn't refresh.");
+    expect(rowFor("Keep the deploy paused")).toBeTruthy();
+    await act(async () => buttons("Retry")[0].click());
+    expect(data.sources.directives.retry).toHaveBeenCalled();
+  });
+
+  it("opens a closed directive from the Overview's Done lane as a read-only detail (r1)", async () => {
+    data.sources.directives.items = [directiveItem(directiveRow("done-dir", {
+      session_id: "here", quote: "Cut the patch release", status: "fulfilled",
+      closed_at: new Date().toISOString(), closed_by: "agent",
+    }))];
+    workState({ section: "overview", filters: { thisChat: false } });
+    await render("modal", "here");
+    const row = rowFor("Cut the patch release")!;
+    await act(async () => row.click());
+    expect(useUI.getState().surfaceStates.work.itemId).toBe("directive:done-dir");
+    const detail = host.querySelector(".work-view__detail")!;
+    expect(detail.textContent).toContain("Cut the patch release");
+    expect(detail.textContent).toContain("the agent marked it complete"); // closingSentence
+    expect(buttons("Withdraw…")).toHaveLength(0); // closed rows are read-only
+  });
+
+  it("opens another chat's in-force instruction from the Overview even under the this-chat filter (r1)", async () => {
+    data.sources.directives.items = [
+      directiveItem(directiveRow("mine", { session_id: "here", quote: "Focused chat instruction" })),
+      directiveItem(directiveRow("theirs", { session_id: "elsewhere", quote: "Other chat instruction" })),
+    ];
+    workState({ section: "overview", itemId: "directive:theirs", filters: { thisChat: true } });
+    await render("rail", "here");
+    const detail = host.querySelector(".work-view__detail")!;
+    expect(detail.textContent).toContain("Other chat instruction");
+    expect(detail.textContent).not.toContain("This instruction is no longer here.");
+    expect(buttons("Withdraw…")).toHaveLength(1); // still in force, so still withdrawable
+  });
+
+  it("keeps the already-closed notice in place when a withdrawal conflicts (r1)", async () => {
+    const row = directiveRow("conf", { session_id: "here", quote: "Hold the release" });
+    data.sources.directives.items = [directiveItem(row)];
+    dir.revoke.mockResolvedValue({ conflict: {
+      ...row, status: "fulfilled", closed_at: "2026-11-08T15:00:00+00:00", closed_by: "operator",
+    } });
+    workState({ section: "directives", itemId: "directive:conf", filters: { thisChat: true } });
+    await render("rail", "here");
+    await act(async () => buttons("Withdraw…")[0].click());
+    await act(async () => buttons("Withdraw")[0].click());
+    const detail = host.querySelector(".work-view__detail")!;
+    expect(detail.textContent).toContain("This was already closed:");
+    expect(detail.textContent).toContain("Nothing changed.");
+  });
+
+  it("toasts when the instruction is already gone (404), since the row's detail unmounts with it", async () => {
+    data.sources.directives.items = [directiveItem(directiveRow("vanished", { session_id: "here", quote: "Old words" }))];
+    dir.revoke.mockResolvedValue({ gone: true });
+    workState({ section: "directives", itemId: "directive:vanished", filters: { thisChat: true } });
+    await render("rail", "here");
+    await act(async () => buttons("Withdraw…")[0].click());
+    await act(async () => buttons("Withdraw")[0].click());
+    expect(document.querySelector(".pl-toast__msg")?.textContent).toContain("This instruction is no longer in the list.");
+  });
 });
 
 
@@ -538,12 +723,12 @@ it("uses actual phone action sizes in decision and directive custom details", as
   expect(host.querySelectorAll(".work-decision-detail button").length).toBeGreaterThan(0);
   expect(host.querySelectorAll(".work-decision-detail button.pl-btn--sm")).toHaveLength(0);
   expect(host.querySelector(".work-view__back")?.classList.contains("pl-btn--sm")).toBe(false);
-  dir.snapshot = { state: "ready", active: [directiveRow("phone")], history: [], loadedAt: 1 };
-  workState({ section: "directives" });
-  await render("sheet");
+  data.sources.directives.items = [directiveItem(directiveRow("phone", { session_id: "here" }))];
+  workState({ section: "directives", itemId: "directive:phone" });
+  await render("sheet", "here");
   await act(async () => buttons("Withdraw…")[0].click());
-  expect(host.querySelectorAll(".chat-directive button.pl-btn--sm")).toHaveLength(0);
-  expect([...host.querySelectorAll(".chat-directive-actions button")].map(button => button.textContent)).toEqual(["Keep it", "Withdraw"]);
+  expect(host.querySelectorAll(".work-instruction-detail button.pl-btn--sm")).toHaveLength(0);
+  expect([...host.querySelectorAll(".work-detail__confirm-actions button")].map((button) => button.textContent)).toEqual(["Keep it", "Withdraw"]);
 });
 
 it("registers decisions and instructions with canonical group metadata", () => {

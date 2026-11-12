@@ -17,7 +17,7 @@ import pluginKitCss from "@protolabsai/ui/plugin-kit.css?raw";
 //
 // Vite `?raw` globs rather than node:fs: this tsconfig has no node types and under jsdom
 // `import.meta.url` is an http: URL, so URL-relative filesystem access is a trap (same
-// reasoning as statusTokenGuard.test.ts / phantomTokenRename.test.ts). The glob is
+// reasoning as statusTokenGuard.test.ts). The glob is
 // compile-time, rooted at this file in src/app, and picks up new source files automatically.
 const SOURCES = import.meta.glob("../**/*.{css,ts,tsx}", {
   query: "?raw",
@@ -79,9 +79,8 @@ const VAR_REF = "var\\(\\s*(--pl-[a-z0-9_-]+)";
 const refsIn = (line: string): string[] =>
   [...line.matchAll(new RegExp(VAR_REF, "g"))].map((m) => m[1]);
 
-// Strip comments before sweeping so a var() shown in a doc/prose example (dsFallbackDrop.test.ts,
-// dsTokenFallbackStrip.test.ts, workflows-token-fallbacks.test.ts …) is not mistaken for a live
-// reference. Comments are replaced by their own newline count so reported line numbers stay true.
+// Strip comments before sweeping so a var() shown in a doc/prose example is not mistaken for a
+// live reference. Comments are replaced by their own newline count so reported line numbers stay true.
 function stripComments(text: string, isCss: boolean): string {
   let out = text.replace(/\/\*[\s\S]*?\*\//g, (m) => "\n".repeat((m.match(/\n/g) ?? []).length));
   if (!isCss) out = out.replace(/\/\/[^\n]*/g, ""); // JS/TS line comments (CSS has none)
@@ -206,9 +205,8 @@ const hasHexFallback = (line: string): boolean => new RegExp(HEX_FALLBACK_SRC).t
 // EXEMPT from the hex rule, and WHY (there is no allowlist of specific stragglers — these are
 // principled categories):
 //  • ./app-crash.css — the last-resort crash screen must still render if the token stylesheet
-//    failed to load, so its fallbacks are load-bearing (also pinned by phantomTokenRename.test.ts).
-//  • *.test.ts / *.test.tsx — absence-asserting guards (this file, phantomTokenRename,
-//    dsTokenFallbackStrip[B], chat-css-tokens, …) must spell the exact `var(--pl-…, #hex)` string
+//    failed to load, so its fallbacks are load-bearing.
+//  • *.test.ts / *.test.tsx — absence-asserting guards (this file) must spell the exact `var(--pl-…, #hex)` string
 //    to prove it is gone. Those are test fixtures — the one place the card sanctions hex literals.
 // theme-base.css is NO LONGER exempt: the DS audit's stale-fallback cleanup (card 1a) dropped its
 // status-alias hex fallbacks, so it is swept like every other shipped sheet — its status aliases
@@ -279,7 +277,7 @@ describe("no var(--pl-…, #hex) fallback ships outside app-crash / test fixture
   it("exempts app-crash / test fixtures, but sweeps shipped surfaces incl. theme-base — all present", () => {
     expect(hexExempt("./app-crash.css")).toBe(true);
     expect(hexExempt("./theme-base.css")).toBe(false); // no longer exempt — card 1a dropped its hex fallbacks
-    expect(hexExempt("../chat/chat-css-tokens.test.ts")).toBe(true); // a test fixture
+    expect(hexExempt("../chat/hitl-accent.test.ts")).toBe(true); // a test fixture
     expect(hexExempt("../chat/chat.css")).toBe(false); // a shipped surface IS swept
     expect(hexExempt("./ProtoLabsIcon.tsx")).toBe(false);
     // The whole-file exemption (app-crash) and the now-swept theme-base must both be in the tree
@@ -447,7 +445,7 @@ describe("no var(--pl-…, <literal>) fallback ships outside app-crash / test fi
 
   it("exempts app-crash and test fixtures, sweeps everything else incl. theme-base — all present", () => {
     expect(fallbackExempt("./app-crash.css")).toBe(true);
-    expect(fallbackExempt("../chat/chat-css-tokens.test.ts")).toBe(true); // a test fixture
+    expect(fallbackExempt("../chat/hitl-accent.test.ts")).toBe(true); // a test fixture
     expect(fallbackExempt("./theme-base.css")).toBe(false); // theme-base is swept now
     expect(fallbackExempt("../chat/chat.css")).toBe(false); // a shipped surface IS swept
     expect(fallbackExempt("./ProtoLabsIcon.tsx")).toBe(false);

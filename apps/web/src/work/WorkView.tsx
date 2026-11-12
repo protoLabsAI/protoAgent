@@ -19,13 +19,13 @@ import { useUI } from "../state/uiStore";
 import type { SurfaceState } from "../shell/surfaceState";
 import { useWorkItems, type WorkItem, type WorkItems } from "./useWorkItems";
 import { WorkOverview, workSections } from "./WorkOverview";
+import { workGroups } from "./workGroups";
 import { sections, subscribe, getSnapshot } from "./sectionRegistry";
 import "./sections/decisions";
 import "./sections/goals";
 import "./sections/directives";
 import "./sections/tasks";
 import "./sections/schedules";
-import "./sections/activity";
 import "./work-view.css";
 
 export { registerWorkSection, type WorkSectionContext } from "./sectionRegistry";
@@ -83,7 +83,22 @@ export function WorkView({ frame = "rail", sessionId }: { frame?: "rail" | "moda
   const selectedKey = selected ? `${selected.kind}:${selected.id}` : state.itemId;
   const loading = Object.values(sources).some((source) => source.status === "loading");
   const label = sections.get(section)?.label ?? workSections[section as keyof typeof workSections] ?? section;
-  const count = section === "overview" ? items.length : sources[section as keyof WorkItems]?.items.length ?? 0;
+  // The heading count, the live announcement and the side-nav badges count the rows the
+  // section actually lists: a section hiding finished work (a closed job, an achieved goal)
+  // registers that rule as its `listFilter`, so its badge never exceeds its rows.
+  const visibleCount = (id: string): number => {
+    const sourceItems = sources[id as keyof WorkItems]?.items ?? [];
+    const filter = sections.get(id)?.listFilter;
+    return (filter ? sourceItems.filter(filter) : sourceItems).length;
+  };
+  // "Your instructions" counts its shown rows via the shared projection — in-force only, with a
+  // tied directive dropped the instant its job ends — so a terminal job never leaves a phantom
+  // count (the rail reads the same selector). Other sections count through their `listFilter`.
+  const instructionsCount = workGroups(sources, { thisChatOnly: state.filters?.thisChat === true, sessionId }).find((group) => group.id === "instructions")?.count ?? 0;
+  const countOf = (id: string) => id === "overview" ? items.length
+    : id === "directives" ? instructionsCount
+      : visibleCount(id);
+  const count = countOf(section);
   const listRef = useRef<HTMLDivElement>(null);
   const detailRef = useRef<HTMLDivElement>(null);
   const listSize = useRef<{ width: number; height: number } | null>(null);
@@ -186,7 +201,9 @@ export function WorkView({ frame = "rail", sessionId }: { frame?: "rail" | "moda
     if (reply) useKbIntents.getState().focusComposer();
   };
   const context = { sources, state, onOpen, onBack, sessionId, decisionActions: { agentOnline, openSourceChat, answerDecision: decisions.answer } };
-  const selectedSection = selected && ({ decision: "decisions", goal: "goals", watch: "watches", task: "tasks", schedule: "schedules", background: "background", activity: "activity", directive: "directives" } as const)[selected.kind];
+  // No entry for the activity kind: its Work section is gone (S4c) and the activity source
+  // never yields selectable items (`useWorkItems` keeps it rows-empty for the delivery group).
+  const selectedSection = selected && ({ decision: "decisions", goal: "goals", watch: "watches", task: "tasks", schedule: "schedules", background: "background", directive: "directives" } as const as Partial<Record<WorkItem["kind"], string>>)[selected.kind];
   const detailRenderer = sections.get(selectedSection ?? section);
   const selectSection = (id: string) => update({ section: id, itemId: undefined, scrollTop: 0 });
 
@@ -202,7 +219,7 @@ export function WorkView({ frame = "rail", sessionId }: { frame?: "rail" | "moda
       {state.itemId && <Button className="work-view__back" size={hostFrame === "sheet" ? "md" : "sm"} variant="ghost" onClick={onBack}>Back to {label}</Button>}
       <div className="work-view__picker"><SideNav collapsed ariaLabel="Work sections" active={section} onSelect={selectSection}
         items={Object.entries(workSections).map(([id, defaultLabel]) => ({ id, label: sections.get(id)?.label ?? defaultLabel,
-          badge: (id === "overview" ? loading : sources[id as keyof WorkItems]?.status === "loading") ? undefined : (id === "overview" ? items.length : sources[id as keyof WorkItems]?.items.length ?? 0),
+          badge: (id === "overview" ? loading : sources[id as keyof WorkItems]?.status === "loading") ? undefined : countOf(id),
         }))} /></div>
     </div>
     <div className="work-view__panes">

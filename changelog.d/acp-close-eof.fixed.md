@@ -1,0 +1,1 @@
+- **Closing a coding agent on Windows no longer waits five seconds.** A graceful `taskkill` cannot stop a console-less child, so every coder shutdown sat out the full grace period before the hard kill. The client now closes the agent's stdin first, which a stdio agent treats as its cue to exit.

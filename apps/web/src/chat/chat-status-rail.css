@@ -12,11 +12,6 @@
   color: var(--pl-color-fg-muted);
 }
 
-/* Only the (visually hidden) live region left — take no space above the composer. */
-.chat-status-rail--idle {
-  padding: 0;
-}
-
 /* The rail owns the row's spacing; the roster keeps its own chip styles. */
 .chat-status-rail .chat-roster {
   padding: 0;
@@ -52,7 +47,9 @@
   font-variant-numeric: tabular-nums;
 }
 
-/* One polite live region (§6) — visually hidden, never display:none (that silences it). */
+/* One polite live region (§6) — visually hidden, never display:none (that silences it).
+   Rendered OUTSIDE the conditional rail div and out of flow (absolute), so it lives for the
+   component's whole life without reserving space when the rail itself is absent. */
 .chat-status-rail__announce {
   position: absolute;
   width: 1px;

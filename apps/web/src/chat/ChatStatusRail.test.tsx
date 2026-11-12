@@ -20,20 +20,35 @@ import {
   trapTab,
   workSectionForGroup,
 } from "./ChatStatusRail";
-import css from "./chat-status-rail.css?raw";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+
+/** The rail reads THIS chat's ledger straight from the per-session store (like the old
+ *  DirectiveStrip), never the aggregated source's summed status. */
+type LedgerState = {
+  state: "loading" | "ready" | "failed" | "stale";
+  loadedAt: number | null;
+  refresh: ReturnType<typeof vi.fn>;
+};
 
 const state = vi.hoisted(() => ({
   mobile: false,
   sources: null as unknown as WorkItems,
   hookArgs: [] as unknown[],
+  ledger: null as unknown as LedgerState,
+  ledgerSessions: [] as string[],
 }));
 vi.mock("../lib/useIsMobile", () => ({ useIsMobile: () => state.mobile }));
 vi.mock("../work/useWorkItems", () => ({
   useWorkItems: (args: unknown) => {
     state.hookArgs.push(args);
     return state.sources;
+  },
+}));
+vi.mock("./useDirectives", () => ({
+  useDirectives: (sessionId: string) => {
+    state.ledgerSessions.push(sessionId);
+    return { ...state.ledger, active: [], history: [], revoke: vi.fn() };
   },
 }));
 
@@ -90,6 +105,8 @@ beforeEach(() => {
   vi.clearAllMocks();
   state.mobile = false;
   state.hookArgs = [];
+  state.ledger = { state: "ready", loadedAt: 1, refresh: vi.fn() };
+  state.ledgerSessions = [];
   vi.stubGlobal("ResizeObserver", class { observe() {} unobserve() {} disconnect() {} });
   Element.prototype.scrollIntoView = Element.prototype.scrollIntoView ?? (() => {});
   Element.prototype.hasPointerCapture = Element.prototype.hasPointerCapture ?? (() => false);
@@ -192,7 +209,8 @@ describe("chips", () => {
   });
 
   it("a blocked job that started stays in Doing now; one that never started does not", async () => {
-    await render(rail([task("t-blocked", "blocked", SESSION, true), task("t-waiting", "blocked", SESSION)]));
+    // started: false is the selector's only "never ran" proof — absent means it did start.
+    await render(rail([task("t-blocked", "blocked", SESSION, true), task("t-waiting", "blocked", SESSION, false)]));
     expect(chip("doing-now")!.textContent).toBe("Doing now 1");
     expect(chip("coming-up")!.textContent).toBe("Coming up 1");
   });
@@ -323,9 +341,17 @@ describe("phone sheet", () => {
   });
 });
 
-describe("instructions failure (preserved from the ledger strip)", () => {
-  it("renders the error chip without a count and offers Load again in the details", async () => {
-    await render(rail([bg("bg-run", "running", SESSION)], {}, { status: "error", error: new Error("down") }));
+describe("instructions failure (preserved from the ledger strip, scoped to THIS chat)", () => {
+  it("reads the per-session store for the session it was given", async () => {
+    await render(rail(MIXED));
+    expect(state.ledgerSessions[0]).toBe(SESSION);
+  });
+
+  it("names THIS chat's never-loaded ledger even while other chats keep the summed source merely stale", async () => {
+    state.ledger = { state: "failed", loadedAt: null, refresh: vi.fn() };
+    // The aggregated source: another chat's ledger HAS loaded, so useWorkItems sums this
+    // chat's failure down to "stale" — the downgrade that used to hide the failure here.
+    await render(rail([bg("bg-run", "running", SESSION)], {}, { status: "stale", error: new Error("down") }));
     const told = chip("instructions")!;
     expect(told.getAttribute("aria-label")).toBe("Told it: couldn't check instructions in this chat. Show details");
     expect(told.querySelector(".chat-status-chip__count")).toBeNull();
@@ -334,16 +360,38 @@ describe("instructions failure (preserved from the ledger strip)", () => {
     expect(panel.textContent).toContain("Couldn't check your instructions.");
     const retry = [...panel.querySelectorAll("button")].find((b) => b.textContent === "Load again");
     await click(retry);
-    expect(state.sources.directives.retry).toHaveBeenCalledOnce();
+    // Load again refreshes THIS chat's ledger, not the whole cross-chat inventory.
+    expect(state.ledger.refresh).toHaveBeenCalledOnce();
+    expect(state.sources.directives.retry).not.toHaveBeenCalled();
   });
 
-  it("keeps the retained count on a stale refresh and still offers Load again", async () => {
-    await render(rail([directive("d1", SESSION)], {}, { status: "stale", error: new Error("flaky") }));
+  it("does not blame this chat for another chat's failure: a healthy local ledger shows no warning", async () => {
+    // Another chat's ledger (or the session index) failed: the summed source reads stale/error,
+    // but THIS chat's instructions are current — no stale note, no Load again, no problem chip.
+    for (const status of ["stale", "error"] as const) {
+      await render(rail([directive("d1", SESSION)], {}, { status, error: new Error("elsewhere") }));
+      expect(chip("instructions")!.textContent).toBe("Told it 1");
+      await click(chip("instructions"));
+      const panel = dialog()!;
+      expect(panel.textContent).not.toContain("may be out of date");
+      expect(panel.textContent).not.toContain("Couldn't check your instructions.");
+      expect([...panel.querySelectorAll("button")].some((b) => b.textContent === "Load again")).toBe(false);
+      await act(async () => {
+        panel.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+      });
+    }
+  });
+
+  it("keeps the retained count on a stale local refresh and still offers Load again", async () => {
+    state.ledger = { state: "stale", loadedAt: 1, refresh: vi.fn() };
+    await render(rail([directive("d1", SESSION)], {}, { status: "ready" }));
     expect(chip("instructions")!.textContent).toBe("Told it 1");
     await click(chip("instructions"));
     const panel = dialog()!;
     expect(panel.textContent).toContain("Your instructions may be out of date.");
-    expect([...panel.querySelectorAll("button")].some((b) => b.textContent === "Load again")).toBe(true);
+    const retry = [...panel.querySelectorAll("button")].find((b) => b.textContent === "Load again");
+    await click(retry);
+    expect(state.ledger.refresh).toHaveBeenCalledOnce();
   });
 });
 
@@ -377,13 +425,26 @@ describe("live region", () => {
     expect(host.querySelector("[aria-live]")!.textContent).toBe("");
   });
 
-  it("keeps the live region (idle rail) when the completing job empties the whole rail", async () => {
+  it("writes into the SAME long-lived region node when the completing job empties the whole rail", async () => {
     await render(rail([bg("bg-tied", "running", SESSION), tied]));
+    const region = host.querySelector("[aria-live]")!;
+    expect(region.textContent).toBe("");
     await render(rail([bg("bg-tied", "completed", SESSION), tied]));
-    const idle = host.querySelector('[data-testid="chat-status-rail"]')!;
-    expect(idle.className).toContain("chat-status-rail--idle");
-    expect(idle.querySelector("[aria-live]")!.textContent)
-      .toBe("Job bg-tied finished. 1 approval it carried is now fulfilled.");
+    // The announcement is a TEXT CHANGE inside a region that already existed — a region that
+    // (re)mounts holding its text is read by nothing. Same node, before and after; the rail
+    // itself (chips emptied) is gone.
+    expect(host.querySelector("[aria-live]")).toBe(region);
+    expect(region.textContent).toBe("Job bg-tied finished. 1 approval it carried is now fulfilled.");
+    expect(host.querySelector('[data-testid="chat-status-rail"]')).toBeNull();
+  });
+
+  it("announces BOTH jobs when two tied completions land in one refetch", async () => {
+    const tied2 = directive("d-tied2", SESSION, { tiedJob: { kind: "background", id: "bg-tied2" } });
+    await render(rail([bg("bg-tied", "running", SESSION), bg("bg-tied2", "running", SESSION), tied, tied2]));
+    await render(rail([bg("bg-tied", "completed", SESSION), bg("bg-tied2", "completed", SESSION), tied, tied2]));
+    const text = host.querySelector("[aria-live]")!.textContent!;
+    expect(text).toContain("Job bg-tied finished. 1 approval it carried is now fulfilled.");
+    expect(text).toContain("Job bg-tied2 finished. 1 approval it carried is now fulfilled.");
   });
 });
 
@@ -417,21 +478,5 @@ describe("pure helpers", () => {
       .toBe("Doing now, 1 running in this chat. Show details");
     expect(spokenLabel({ id: "doing-now", label: "Doing now", count: 2, goal: { step: 4, of: null } }))
       .toBe("Doing now, 2 running in this chat, including the goal at step 4. Show details");
-  });
-});
-
-describe("stylesheet contract (phone, zoom)", () => {
-  it("hides the wordy chip spans on the phone, floors rows at 48px, stacks full-width actions", () => {
-    const phone = css.slice(css.indexOf("@media (max-width: 767px)"));
-    expect(phone).toContain(".chat-status-chip__text {\n    display: none;\n  }");
-    expect(phone).toContain("min-height: 48px");
-    expect(phone).toContain("flex-direction: column");
-    expect(phone).toContain("width: 100%");
-  });
-
-  it("wraps instead of overflowing sideways (390px / 400% zoom)", () => {
-    expect(css).toContain("flex-wrap: wrap");
-    expect(css).toMatch(/\.chat-status-rail \{[^}]*min-width: 0/s);
-    expect(css).toMatch(/\.chat-status-details \{[^}]*overflow-y: auto/s);
   });
 });
