@@ -840,18 +840,20 @@ def test_federation_token_allowed_consumer_surface():
 
 def test_a_federation_request_cannot_approve_or_bypass_and_an_operator_can():
     """The whole chain a turn driver relies on: the middleware classifies the credential, the
-    drivers bind ``turn_caller_may_approve()``, and the run_command gate reads that — never
-    the caller's own ``bypass_permissions``."""
+    drivers bind ``turn_caller_may_approve()``, and the run_command gate reads what that binds —
+    never the caller's own ``bypass_permissions``."""
     from starlette.responses import JSONResponse
     from starlette.routing import Route
 
-    from graph.middleware.request_context import request_metadata_scope
+    from graph.middleware.request_context import caller_may_approve, current_request_metadata, request_metadata_scope
     from server.turn_control import turn_caller_may_approve
-    from tools.fs_tools import _approved, _bypass_requested
 
+    # What the gate reads (``tools.fs_tools._bypass_requested`` / ``_approved``, covered in
+    # test_fs_tools.py): the bound flag, and whether the caller's bypass key survived.
     async def turn(request):
         with request_metadata_scope({"bypass_permissions": True}, may_approve=turn_caller_may_approve()):
-            return JSONResponse({"bypass": _bypass_requested(), "approve": _approved("approve")})
+            bypass = caller_may_approve() and bool(current_request_metadata().get("bypass_permissions"))
+            return JSONResponse({"bypass": bypass, "approve": caller_may_approve()})
 
     _fed_configured()
     app = Starlette(routes=[Route("/a2a", turn, methods=["POST"])])
