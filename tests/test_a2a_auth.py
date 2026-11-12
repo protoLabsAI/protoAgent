@@ -1136,6 +1136,9 @@ def test_options_preflight_bypasses_bearer(monkeypatch):
         },
     )
     assert r.status_code != 401  # was 401 before the fix
+    # Only a real preflight: a bare OPTIONS (or one missing Origin) is an ordinary request.
+    assert client.options("/api/runtime/status").status_code == 401
+    assert client.options("/api/runtime/status", headers={"Access-Control-Request-Method": "GET"}).status_code == 401
 
 
 def test_the_real_get_still_needs_the_bearer(monkeypatch):

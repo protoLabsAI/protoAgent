@@ -855,8 +855,15 @@ class A2AAuthMiddleware:
         # middleware is added AFTER CORSMiddleware and so wraps outside it (Starlette runs
         # later-added middleware first), meaning without this branch the preflight never
         # reaches CORS to be answered. Preflight carries no credentials and triggers no side
-        # effects; the real request still passes through the checks below.
-        if request.method == "OPTIONS":
+        # effects; the real request still passes through the checks below. Only a REAL preflight
+        # (``Origin`` + ``Access-Control-Request-Method``, exactly what CORSMiddleware answers
+        # itself) — any other OPTIONS reaches the router like any request (the fleet proxy route
+        # forwards OPTIONS to a member), so it takes the normal checks.
+        if (
+            request.method == "OPTIONS"
+            and "origin" in request.headers
+            and "access-control-request-method" in request.headers
+        ):
             return await call_next(request)
 
         # Public allowlist — pass without auth.
