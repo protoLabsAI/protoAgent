@@ -1,0 +1,1 @@
+- **Task writes no longer fail with "database is locked" under contention.** Every task store on the same database file in one process now waits its turn on a shared lock. Before, a store waiting on SQLite's busy handler could sleep through every gap between another store's back-to-back writes and give up after 5 seconds.
