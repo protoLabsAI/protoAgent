@@ -718,6 +718,17 @@ export type InboxItem = {
   text: string;
   dedup_key: string | null;
   delivered_at: string | null;
+  /** When the item entered the queue it is still waiting in (null once delivered). */
+  queued_since?: string | null;
+  /** Automatic delivery retries so far (the retry-when-free passes). */
+  attempts?: number;
+  /** The item genuinely needs the operator (an operator-class block page) — the ONLY
+   *  thing that may surface it as a Needs-you alert; a late delivery never alerts.
+   *  Server-derived: a declared flag OR a known operator-class source. */
+  needs_human?: boolean;
+  /** The automatic retry budget is spent: the retry-when-free passes will no longer
+   *  pick this page up, so the feed must not promise "runs when the agent is free". */
+  retries_exhausted?: boolean;
 };
 
 export type ActivityMessage = { role: "user" | "assistant"; content: string };

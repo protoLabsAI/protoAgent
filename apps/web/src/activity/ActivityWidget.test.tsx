@@ -1,11 +1,13 @@
-// Priority-now inbox fallback surfacing (#3351, third slice) — the console's Activity/Inbox UI
-// must make a `now` page that is still PENDING (because its automatic self-A2A delivery failed)
-// conspicuous and distinguishable, without letting a SUCCESSFULLY fired now item read as a
+// Priority-now inbox fallback surfacing (#3351, third slice; retry-when-free update) — a `now`
+// page that is still PENDING is QUEUED: the server retries it on its own once the agent is free,
+// so it renders as a calm queued row, and only an OPERATOR-CLASS page (`needs_human`) keeps the
+// conspicuous blocked-page/alert treatment. A SUCCESSFULLY fired now item must never read as a
 // pending page or double-count the unread state.
 //
 // The server contract this leans on (operator_api/console_handlers.py): a fired now item is
 // marked delivered and pushes ONLY `activity.message`; a failed one is restored to pending and
-// pushes `inbox.item {priority:"now"}`. So on the client, "pending now" ⇔ "blocked page".
+// pushes `inbox.item {priority:"now", needs_human}`. So on the client, "pending now" ⇔ "queued
+// page", and "pending now + needs_human" ⇔ "alert".
 //
 // createRoot/act + a mocked event bus, in the style of ServerTurnWatch.test.tsx / FleetRoom.test.tsx
 // (no testing-library dep). The event mock supports several subscribers per topic since both the
@@ -39,7 +41,7 @@ vi.mock("../chat/LazyMarkdown", () => ({
 vi.mock("../docviewer", () => ({ openDocument: vi.fn() }));
 
 import { api } from "../lib/api";
-import { isPendingNowInboxPage } from "../lib/queries";
+import { isPendingNowInboxPage, needsOperatorAttention } from "../lib/queries";
 import { openDocument } from "../docviewer";
 import { ActivitySurface, stripWakeHeader } from "./ActivitySurface";
 import { ActivityWidget } from "./ActivityWidget";
@@ -59,11 +61,21 @@ function inboxItem(over: Partial<InboxItem> = {}): InboxItem {
   };
 }
 
+// Operator-class: only a needs_human page keeps the blocked-page alert treatment.
 const NOW_PAGE = inboxItem({
   id: 7,
   priority: "now",
   source: "webhook:deploy",
   text: "Prod deploy failed — page on-call",
+  needs_human: true,
+});
+// An ordinary undelivered page: queued, retries on its own when the agent is free.
+const QUEUED_PAGE = inboxItem({
+  id: 9,
+  priority: "now",
+  source: "a2a:sister",
+  text: "Board update — new card assigned",
+  attempts: 2,
 });
 
 const NO_ACTIVITY: ActivityHistory = { context_id: "s1", entries: [], messages: [] };
@@ -102,7 +114,7 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-describe("isPendingNowInboxPage (the blocked-page classifier)", () => {
+describe("isPendingNowInboxPage / needsOperatorAttention (the queued/alert classifiers)", () => {
   it("is true only for a pending now item — never a fired/accepted now, nor next/later", () => {
     // pending-now: still queued because delivery failed
     expect(isPendingNowInboxPage(inboxItem({ priority: "now", delivered_at: null }))).toBe(true);
@@ -112,14 +124,20 @@ describe("isPendingNowInboxPage (the blocked-page classifier)", () => {
     expect(isPendingNowInboxPage(inboxItem({ priority: "next" }))).toBe(false);
     expect(isPendingNowInboxPage(inboxItem({ priority: "later" }))).toBe(false);
   });
+  it("alerts only for an operator-class (needs_human) pending now page", () => {
+    expect(needsOperatorAttention(NOW_PAGE)).toBe(true);
+    expect(needsOperatorAttention(QUEUED_PAGE)).toBe(false); // queued — retries when the agent is free
+    expect(needsOperatorAttention({ ...NOW_PAGE, delivered_at: "2026-09-03T10:01:00Z" })).toBe(false);
+    expect(needsOperatorAttention(inboxItem({ priority: "next", needs_human: true }))).toBe(false);
+  });
 });
 
 describe("ActivityWidget — pill signalling", () => {
-  it("flags a blocked priority-now page on the pill even while the feed is closed", () => {
+  it("flags an operator-class (needs_human) priority-now page even while the feed is closed", () => {
     act(() => root.render(h(ActivityWidget)));
     expect(testid("activity-badge")).toBeNull();
 
-    emit("inbox.item", { id: 7, priority: "now", source: "webhook:deploy", text: "page on-call" });
+    emit("inbox.item", { id: 7, priority: "now", source: "webhook:deploy", text: "page on-call", needs_human: true });
 
     const badge = testid("activity-badge")!;
     expect(badge).not.toBeNull();
@@ -129,6 +147,19 @@ describe("ActivityWidget — pill signalling", () => {
     expect(badge.classList.contains("activity-badge--alert")).toBe(true);
     expect(badge.getAttribute("data-alert")).toBe("now");
     expect(testid("activity-widget")!.getAttribute("aria-label")).toContain("needs delivery");
+  });
+
+  it("treats a merely undelivered now page as plain unread — queued, never an alert", () => {
+    act(() => root.render(h(ActivityWidget)));
+
+    // The restored-page push without needs_human: it retries when the agent is free.
+    emit("inbox.item", { id: 9, priority: "now", source: "a2a:sister", text: "card assigned" });
+
+    const badge = testid("activity-badge")!;
+    expect(badge.textContent).toBe("1");
+    expect(badge.classList.contains("activity-badge--alert")).toBe(false);
+    expect(badge.getAttribute("data-alert")).toBeNull();
+    expect(testid("activity-widget")!.getAttribute("aria-label")).toBe("Feed — 1 new");
   });
 
   it("counts a fired now item once, as activity, without the blocked-page alert", () => {
@@ -178,7 +209,7 @@ describe("ActivityWidget — pill signalling", () => {
 });
 
 describe("ActivitySurface — pending feed", () => {
-  it("renders a pending now item as a conspicuous blocked page with full context", async () => {
+  it("renders an operator-class pending now item as a conspicuous blocked page with full context", async () => {
     vi.spyOn(api, "inbox").mockResolvedValue({ items: [NOW_PAGE, inboxItem({ id: 2, priority: "next" })] });
     vi.spyOn(api, "activity").mockResolvedValue(NO_ACTIVITY);
 
@@ -198,6 +229,40 @@ describe("ActivitySurface — pending feed", () => {
     expect(plain.length).toBe(1);
     expect(plain[0].textContent).toContain("next");
     expect(plain[0].querySelector(".inbox-stuck-flag")).toBeNull();
+  });
+
+  it("renders a merely undelivered now item as a calm queued row, never an alert", async () => {
+    vi.spyOn(api, "inbox").mockResolvedValue({ items: [QUEUED_PAGE] });
+    vi.spyOn(api, "activity").mockResolvedValue(NO_ACTIVITY);
+
+    act(() => root.render(h(ActivitySurface)));
+    await flush();
+
+    // No blocked-page alert — the server retries this on its own when the agent is free.
+    expect(container.querySelector('[data-testid="inbox-now-page"]')).toBeNull();
+    const row = container.querySelector('[data-testid="inbox-queued-now"]')!;
+    expect(row).not.toBeNull();
+    expect(row.classList.contains("inbox-item--stuck")).toBe(false);
+    expect(row.textContent).toContain("Queued — runs when the agent is free");
+    expect(row.textContent).toContain("Board update");
+    // queued_since + attempts ride the hover detail.
+    expect(row.querySelector(".inbox-queued-flag")!.getAttribute("title")).toContain("2 delivery attempts");
+  });
+
+  it("stops promising a retry once the budget is spent (retries_exhausted)", async () => {
+    vi.spyOn(api, "inbox").mockResolvedValue({
+      items: [{ ...QUEUED_PAGE, attempts: 5, retries_exhausted: true }],
+    });
+    vi.spyOn(api, "activity").mockResolvedValue(NO_ACTIVITY);
+
+    act(() => root.render(h(ActivitySurface)));
+    await flush();
+
+    // Still a calm queued row (a spent budget never pages anyone), but the copy no
+    // longer claims a retry is coming — the failure itself is in the feed below.
+    const row = container.querySelector('[data-testid="inbox-queued-now"]')!;
+    expect(row.textContent).toContain("Queued — automatic retries used up");
+    expect(row.textContent).not.toContain("runs when the agent is free");
   });
 
   it("keeps ordinary next/later queued items rendering unchanged (no blocked page)", async () => {

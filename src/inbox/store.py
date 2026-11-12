@@ -33,6 +33,32 @@ DELIVERY_THREAD = "thread"
 DELIVERIES = ("", DELIVERY_THREAD)
 _RANK = {"now": 0, "next": 1, "later": 2}
 
+#: Default bound on automatic delivery retries for a priority-now page
+#: (:meth:`InboxStore.claim_now_recovery_batch`). Single-sourced here so the server's
+#: recovery passes and the /api/inbox row decoration (``retries_exhausted``) agree on
+#: when a page's budget is spent.
+RECOVERY_MAX_ATTEMPTS = 5
+
+#: Producers whose priority-now pages are OPERATOR-CLASS by construction: the page asks a
+#: human to unblock something (a projectBoard block page about a stuck card), but the
+#: producer is an external plugin pinned against a host that predates ``needs_human`` and
+#: so never passes the flag (it instantiates this store directly and calls
+#: ``add(text, priority="now", source="project_board", ...)``).
+#: :func:`needs_operator_attention` treats their pages as ``needs_human`` at read time, so
+#: they keep raising Needs-you — and rows such producers wrote BEFORE the flag existed are
+#: covered too, with no migration.
+OPERATOR_ATTENTION_SOURCES = frozenset({"project_board"})
+
+
+def needs_operator_attention(item: dict) -> bool:
+    """Whether an inbox item genuinely needs the OPERATOR (may raise a Needs-you alert).
+
+    True when the producer declared ``needs_human`` on the row, or when the item comes
+    from a known operator-class source (``OPERATOR_ATTENTION_SOURCES``). Anything else —
+    notably a priority-now page that is merely awaiting its retry-when-free delivery —
+    stays a calm queued row and never pages anyone."""
+    return bool(item.get("needs_human")) or (item.get("source") or "") in OPERATOR_ATTENTION_SOURCES
+
 
 def _floor_set(priority_floor: str) -> tuple[str, ...]:
     """Tiers visible at a given floor: now→{now}, next→{now,next}, later→all."""
@@ -61,6 +87,13 @@ class InboxStore:
         # there is nothing to ack. Read from the table, so a store rebuilt mid-turn (a
         # settings hot-reload swaps the instance) still knows about a claim in flight.
         self._unacked_sessions: set[str] = self._sessions_with_unacked_claims()
+        # In-process hint for the retry-when-free path: MAY a priority-now page be waiting?
+        # Set on every write that could leave one pending; only cleared by has_pending_now()
+        # once the table says there is none. False negatives would strand a page, so every
+        # ambiguity errs toward True (a spare lookup is cheap, a stranded page is not) —
+        # ``_now_gen`` lets the clear notice a set that landed while its query ran.
+        self._now_gen = 0
+        self._now_pending: bool = self._has_pending_now_db()
 
     def _connect(self) -> sqlite3.Connection:
         db = sqlite3.connect(self.path)
@@ -89,7 +122,8 @@ class InboxStore:
                     recovery_attempted_at TEXT,
                     recovery_accepted_at TEXT,
                     recovery_error TEXT,
-                    recovery_attempts INTEGER NOT NULL DEFAULT 0
+                    recovery_attempts INTEGER NOT NULL DEFAULT 0,
+                    needs_human INTEGER NOT NULL DEFAULT 0
                 )
                 """
             )
@@ -108,6 +142,11 @@ class InboxStore:
                 db.execute("ALTER TABLE inbox ADD COLUMN recovery_error TEXT")
             if "recovery_attempts" not in existing:
                 db.execute("ALTER TABLE inbox ADD COLUMN recovery_attempts INTEGER NOT NULL DEFAULT 0")
+            # Whether the item genuinely needs the OPERATOR (an operator-class block page,
+            # not merely a late delivery). Only these may surface as Needs-you alerts in the
+            # console; an ordinary undelivered now page stays a queued item that retries.
+            if "needs_human" not in existing:
+                db.execute("ALTER TABLE inbox ADD COLUMN needs_human INTEGER NOT NULL DEFAULT 0")
             # Outside messages: how the item is delivered, and the chat that read it.
             if "delivery" not in existing:
                 db.execute("ALTER TABLE inbox ADD COLUMN delivery TEXT NOT NULL DEFAULT ''")
@@ -163,9 +202,16 @@ class InboxStore:
         dedup_key: str = "",
         delivery: str = "",
         target_session: str = "",
+        needs_human: bool = False,
         now: datetime | None = None,
     ) -> dict | None:
         """Insert an item. Returns the row, or ``None`` if deduped.
+
+        ``needs_human`` marks an item the OPERATOR must handle (an operator-class block
+        page); only such items may surface as Needs-you alerts in the console — a merely
+        late delivery never does. A producer that cannot pass the flag but is
+        operator-class by construction is covered at read time instead
+        (:func:`needs_operator_attention` on ``OPERATOR_ATTENTION_SOURCES``).
 
         Raises ``ValueError`` on empty text, an unknown priority or an unknown delivery.
         """
@@ -197,9 +243,18 @@ class InboxStore:
                     db.rollback()
                     return None
             cur = db.execute(
-                "INSERT INTO inbox (created_at, priority, source, text, dedup_key, delivery, target_session) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?)",
-                (now.isoformat(), priority, source, text, dedup_key or None, delivery, target_session or None),
+                "INSERT INTO inbox (created_at, priority, source, text, dedup_key, delivery, target_session, "
+                "needs_human) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    now.isoformat(),
+                    priority,
+                    source,
+                    text,
+                    dedup_key or None,
+                    delivery,
+                    target_session or None,
+                    1 if needs_human else 0,
+                ),
             )
             db.commit()
             row = db.execute("SELECT * FROM inbox WHERE id = ?", (cur.lastrowid,)).fetchone()
@@ -207,6 +262,8 @@ class InboxStore:
                 with self._hint_lock:
                     self._hint_gen += 1
                     self._thread_targets.add(target_session)
+            if priority == "now":
+                self._note_pending_now()
             return dict(row)
         finally:
             db.close()
@@ -276,6 +333,40 @@ class InboxStore:
         if session_id is None:
             return bool(targets)
         return "" in targets or session_id in targets
+
+    def _has_pending_now_db(self) -> bool:
+        db = self._connect()
+        try:
+            row = db.execute(
+                "SELECT 1 FROM inbox WHERE priority = 'now' AND delivered_at IS NULL LIMIT 1"
+            ).fetchone()
+            return row is not None
+        finally:
+            db.close()
+
+    def _note_pending_now(self) -> None:
+        with self._hint_lock:
+            self._now_gen += 1
+            self._now_pending = True
+
+    def maybe_pending_now(self) -> bool:
+        """Cheap, SQLite-free hint: MAY a priority-now page still be awaiting delivery?
+        False means certainly none; True means check :meth:`has_pending_now`."""
+        return self._now_pending
+
+    def has_pending_now(self) -> bool:
+        """Whether any priority-now page is still undelivered (table truth; refreshes the
+        in-process hint either way). A set that lands while the query runs wins over the
+        clear, so a concurrent add can never be hinted away."""
+        with self._hint_lock:
+            gen = self._now_gen
+        pending = self._has_pending_now_db()
+        with self._hint_lock:
+            if pending:
+                self._now_pending = True
+            elif self._now_gen == gen:
+                self._now_pending = False
+        return pending
 
     def _sessions_with_unacked_claims(self) -> set[str]:
         db = self._connect()
@@ -498,6 +589,9 @@ class InboxStore:
             with self._hint_lock:
                 self._hint_gen += 1
                 self._thread_targets = self._thread_targets | snapshot
+            if cur.rowcount:
+                # Every restored now-item is pending again — re-arm the retry hint.
+                self._note_pending_now()
             return cur.rowcount
         finally:
             db.close()
@@ -618,7 +712,7 @@ class InboxStore:
         *,
         limit: int = 8,
         retry_after_s: int = 3600,
-        max_attempts: int = 5,
+        max_attempts: int = RECOVERY_MAX_ATTEMPTS,
         now: datetime | None = None,
     ) -> list[dict]:
         """Atomically claim a bounded batch of pre-existing pending ``now`` items for
@@ -692,13 +786,15 @@ class InboxStore:
             # Reflect the claim we just wrote onto the returned rows: the SELECT above is a
             # pre-UPDATE snapshot, so its recovery_claimed_at is stale. Callers pass this
             # exact stamp back to restore_recovery_failure(claimed_at=...) so a late failure
-            # only restores a row that STILL bears this recovery's claim.
+            # only restores a row that STILL bears this recovery's claim. recovery_attempts
+            # is reflected too, so a caller can see when THIS attempt spends the budget.
             claimed = []
             for r in rows:
                 d = dict(r)
                 d["recovery_claimed_at"] = now_iso
                 d["recovery_attempted_at"] = now_iso
                 d["recovery_error"] = None
+                d["recovery_attempts"] = int(d.get("recovery_attempts") or 0) + 1
                 claimed.append(d)
             return claimed
         except Exception:
@@ -713,6 +809,7 @@ class InboxStore:
         reason: str,
         *,
         claimed_at: str | None = None,
+        refund_attempt: bool = False,
         now: datetime | None = None,
     ) -> int:
         """Restore a claimed-but-unfired recovery item to pending with bounded,
@@ -724,6 +821,10 @@ class InboxStore:
         The inverse landing spot for a :meth:`claim_now_recovery_batch` claim whose
         delivery was not accepted.
 
+        ``refund_attempt`` hands back the attempt the claim charged: used when the claim
+        was skipped WITHOUT a delivery attempt (the agent went busy mid-pass), so waiting
+        out a busy stretch can never spend the bounded retry budget.
+
         Guarded so a *late* recovery failure can never reopen a page that has since been
         handled by someone else. The restore therefore only touches the row while it
         is still undelivered (``delivered_at IS NULL``) and, when ``claimed_at`` is given,
@@ -733,6 +834,7 @@ class InboxStore:
         the undelivered guard makes clearing it unnecessary and never risks reopening."""
         now = now or datetime.now(UTC)
         detail = (reason or "delivery was not accepted").strip()[:500]
+        refund = ", recovery_attempts = MAX(recovery_attempts - 1, 0)" if refund_attempt else ""
         where = "id = ? AND delivered_at IS NULL"
         params: list = [now.isoformat(), detail, int(item_id)]
         if claimed_at is not None:
@@ -743,12 +845,15 @@ class InboxStore:
             cur = db.execute(
                 f"""
                 UPDATE inbox
-                SET recovery_claimed_at = NULL, recovery_attempted_at = ?, recovery_error = ?
+                SET recovery_claimed_at = NULL, recovery_attempted_at = ?, recovery_error = ?{refund}
                 WHERE {where}
                 """,
                 tuple(params),
             )
             db.commit()
+            if cur.rowcount:
+                # The row is pending and unclaimed again — re-arm the retry hint.
+                self._note_pending_now()
             return cur.rowcount
         finally:
             db.close()

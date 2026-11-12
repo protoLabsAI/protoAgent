@@ -685,6 +685,16 @@ def _turn_ended(session_id: str = "") -> None:
     _ACTIVE_TURNS = max(0, _ACTIVE_TURNS - 1)
     _LAST_TURN_MONOTONIC = time.monotonic()
     _turn_activity.end(session_id)
+    # The last in-flight turn just settled — the moment a queued priority-now inbox page
+    # can run. The kick is a cheap no-op unless one may be pending (in-memory hint), and
+    # it must never break the turn bracket.
+    if _ACTIVE_TURNS == 0:
+        try:
+            from server import stores
+
+            stores.kick_inbox_now_retry()
+        except Exception:  # noqa: BLE001 — the sweep loop is the backstop
+            log.debug("[inbox] turn-settle retry kick failed", exc_info=True)
 
 
 def active_turns() -> int:

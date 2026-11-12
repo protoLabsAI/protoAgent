@@ -189,6 +189,9 @@ class InboxAddRequest(BaseModel):
     dedup_key: str = ""
     deliver: str = ""  # "" (tiered, above) | "thread" (fold into the operator's live chat)
     session: str = ""  # with deliver="thread": the one chat thread that should read it
+    # The item genuinely needs the OPERATOR (an operator-class block page) — only these
+    # may surface as Needs-you alerts in the console; a merely late delivery never does.
+    needs_human: bool = False
 
 
 class TaskInitRequest(BaseModel):

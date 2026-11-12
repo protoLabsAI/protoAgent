@@ -161,7 +161,8 @@ it.each([
 it("tags every row with its kind and icon per the approved table", async () => {
   data.sources.decisions.items = [decision("ask")];
   data.sources.activity.groupItems = [{ kind: "delivery", id: "77", status: "needs-you", title: "Deploy failed page", meta: "ops",
-    raw: { id: 77, priority: "now", delivered_at: null, source: "ops", text: "Deploy failed page", created_at: new Date().toISOString(), dedup_key: null } } as GroupableWorkItem];
+    raw: { id: 77, priority: "now", delivered_at: null, source: "ops", text: "Deploy failed page", created_at: new Date().toISOString(), dedup_key: null,
+      needs_human: true } } as GroupableWorkItem];
   data.sources.goals.items = [
     { ...goal("stuck", "exhausted"), raw: { session_id: "stuck", condition: "stuck", status: "exhausted", iteration: 5, max_iterations: 9 } },
     { ...goal("drive"), raw: { session_id: "drive", condition: "drive", status: "active", iteration: 3, max_iterations: 8 } },
@@ -320,7 +321,8 @@ it("a wait opens the existing schedule detail; a delivery opens the delivery det
     raw: { id: "wait:w9", prompt: "Resume the deploy", schedule: "2027-01-01T09:00", enabled: true, next_fire: "2027-01-01T09:00:00Z" } }];
   data.sources.schedules.groupItems = [{ ...data.sources.schedules.items[0], kind: "wait" } as GroupableWorkItem];
   data.sources.activity.groupItems = [{ kind: "delivery", id: "77", status: "needs-you", title: "Deploy failed page", meta: "ops",
-    raw: { id: 77, priority: "now", delivered_at: null, source: "ops", text: "Deploy failed page", created_at: new Date().toISOString(), dedup_key: null } } as GroupableWorkItem];
+    raw: { id: 77, priority: "now", delivered_at: null, source: "ops", text: "Deploy failed page", created_at: new Date().toISOString(), dedup_key: null,
+      needs_human: true } } as GroupableWorkItem];
   await render("modal");
   await act(async () => Array.from(host.querySelectorAll<HTMLButtonElement>(".work-row")).find((node) => node.textContent?.includes("Resume the deploy"))!.click());
   expect(useUI.getState().surfaceStates.work.itemId).toBe("schedule:wait:w9");

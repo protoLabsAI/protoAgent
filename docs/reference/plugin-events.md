@@ -35,7 +35,7 @@ of what the emitting call sites pass; a key may be absent on a given event.
 
 | Topic | Payload keys | Emitted from |
 |---|---|---|
-| `activity.message` | `context_id`, `error`, `origin`, `origin_session`, `priority`, `role`, `state`, `stimulus`, `task_id`, `text`, `trigger` | `src/server/a2a.py` |
+| `activity.message` | `context_id`, `error`, `origin`, `origin_session`, `priority`, `role`, `state`, `stimulus`, `task_id`, `text`, `trigger` | `src/server/a2a.py`, `src/server/stores.py` |
 | `background.completed` | `description`, `error`, `job_id`, `origin_session`, `result`, `status`, `subagent_type` | `src/background/manager.py`, `src/server/a2a.py` |
 | `background.progress` | `error`, `job_id`, `output`, `phase`, `task_id`, `tool`, `tool_call_id` | `src/background/manager.py`, `src/server/a2a.py` |
 | `background.started` | `description`, `job_id`, `origin_session`, `status`, `subagent_type` | `src/background/manager.py` |
@@ -50,7 +50,7 @@ of what the emitting call sites pass; a key may be absent on a given event.
 | `goal.achieved / goal.failed` | `condition`, `evidence`, `reason`, `session_id`, `status` | `src/graph/goals/controller.py` |
 | `goal.changed` | `session_id` | `src/graph/goals/store.py` |
 | `goal.iteration` | `condition`, `iteration`, `max_iterations`, `reason`, `session_id` | `src/graph/goals/controller.py` |
-| `inbox.item` | `delivery`, `id`, `priority`, `session`, `source`, `text` | `src/operator_api/console_handlers.py`, `src/server/a2a.py` |
+| `inbox.item` | `delivery`, `id`, `needs_human`, `priority`, `session`, `source`, `text` | `src/operator_api/console_handlers.py`, `src/server/a2a.py` |
 | `inbox.reply` | `id`, `replied_at`, `source`, `text` | `src/tools/lg_tools.py` |
 | `media.saved` | `id`, `mime`, `plugin`, `url` | `src/graph/plugins/registry.py` |
 | `memory.hot_written` | `chunk_id`, `preview`, `source`, `source_type` | `src/knowledge/store.py` |

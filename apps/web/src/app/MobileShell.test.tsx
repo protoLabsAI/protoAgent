@@ -311,9 +311,10 @@ describe("phone Needs you indicator", () => {
       schedules: source("ready", [{ id: "s1", kind: "schedule", title: "Digest", meta: "", status: "scheduled", raw: { id: "s1", schedule: "0 9 * * *", enabled: true, next_fire: "soon" } }]),
       background: source("ready", [{ id: "b1", kind: "background", title: "Crunching", meta: "", status: "running", raw: { id: "b1", status: "running" } }]),
       // Undelivered priority-now pages ride the activity source's groupItems only; the
-      // items list stays empty in production (useWorkItems).
+      // items list stays empty in production (useWorkItems). Only an operator-class page
+      // (needs_human) counts — a queued page retrying on its own never Needs-you.
       activity: { ...source("ready"), groupItems: [{ kind: "delivery", id: "77", title: "Blocked page", meta: "ops",
-        status: "needs-you", raw: { id: 77, priority: "now", delivered_at: null } } as never] },
+        status: "needs-you", raw: { id: 77, priority: "now", delivered_at: null, needs_human: true } } as never] },
       directives: source("ready", [{ id: "d1", kind: "directive", title: "Hold main", meta: "", status: "waiting", raw: { id: "d1", status: "in_force" } }]),
     };
     expect(needsYouCount(sources)).toBe(3); // pending decision + stopped goal + undelivered page
