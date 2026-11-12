@@ -85,7 +85,7 @@ afterEach(async () => {
   endThisChatVisit();
 });
 
-it("orders the four groups, hides empty ones, and keeps help lines off the Overview", async () => {
+it("orders the four groups, hides empty ones down to the approved all-empty copy, and keeps help lines off the Overview", async () => {
   data.sources.decisions.items = [decision("ask")];
   data.sources.goals.items = [goal("drive")];
   data.sources.tasks.items = [task("queued", "open")];
@@ -99,9 +99,7 @@ it("orders the four groups, hides empty ones, and keeps help lines off the Overv
   data.sources.directives.items = [];
   await render("modal");
   expect(Array.from(host.querySelectorAll("section h2")).map((n) => n.firstChild?.textContent)).toEqual(["Coming up"]);
-});
-
-it("shows the approved all-empty copy when every group is empty", async () => {
+  data.sources.tasks.items = [];
   await render("modal");
   expect(host.textContent).toContain("Nothing to track.");
   expect(host.textContent).toContain("Nothing needs you, nothing is running or planned, and you haven't given standing instructions.");
@@ -442,15 +440,6 @@ it("the palette New goal intent opens the registered Goals creator in Doing now"
   }
 });
 
-it("keeps the selected row current and focuses the detail heading", async () => {
-  data.sources.tasks.items = [task("row")];
-  useUI.setState({ surfaceStates: { work: { filters: { thisChat: false, retained: true } } } });
-  await render("modal");
-  await act(async () => host.querySelector<HTMLButtonElement>(".work-row")!.click());
-  expect(document.activeElement).toBe(host.querySelector(".work-view__detail h2"));
-  expect(host.querySelector(".work-row")?.getAttribute("aria-current")).toBe("true");
-});
-
 it("badges Your instructions through the shared projection — closed and job-tied rows drop", async () => {
   data.sources.tasks.items = [
     task("open-job", "open"),
@@ -479,21 +468,11 @@ it("badges Your instructions through the shared projection — closed and job-ti
   await closeSections(nav);
 });
 
-it("restores the originating row for legacy unqualified item ids", async () => {
+it("restores the originating row for legacy unqualified item ids, focusing the detail and then the row on Back", async () => {
   data.sources.tasks.items = [task("legacy")];
   useUI.setState({ surfaceStates: { work: { section: "tasks", itemId: "legacy" } } });
   await render();
-  expect(host.querySelector(".work-row")?.getAttribute("aria-current")).toBe("true");
-  await click("Back to Doing now");
-  expect(document.activeElement).toBe(host.querySelector(".work-row"));
-});
-
-it("restores focus to the group row after detail", async () => {
-  data.sources.goals.items = [goal("goal-row")];
-  useUI.setState({ surfaceStates: { work: { section: "doing-now" } } });
-  await render();
   const row = host.querySelector<HTMLButtonElement>(".work-row")!;
-  await act(async () => row.click());
   expect(row.getAttribute("aria-current")).toBe("true");
   expect(document.activeElement).toBe(host.querySelector(".work-view__detail h2"));
   await click("Back to Doing now");
@@ -519,6 +498,7 @@ it("renders detail only on selection and Escape restores the opener without bubb
   expect(row.closest("li")?.parentElement?.tagName).toBe("UL");
   await act(async () => row.click());
   expect(row.getAttribute("aria-current")).toBe("true");
+  expect(document.activeElement).toBe(host.querySelector(".work-view__detail h2"));
   const escape = new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true });
   const bubble = vi.fn();
   window.addEventListener("keydown", bubble);
@@ -535,9 +515,7 @@ it("ignores resize-reset scroll events until the observer restores the saved pos
   let resize = () => {};
   class Observer {
     constructor(private callback: ResizeObserverCallback) {}
-    observe(target: Element) {
-      if (target.classList.contains("work-view__list")) resize = () => this.callback([], this as unknown as ResizeObserver);
-    }
+    observe(target: Element) { if (target.classList.contains("work-view__list")) resize = () => this.callback([], this as unknown as ResizeObserver); }
     unobserve() {}
     disconnect() {}
   }
