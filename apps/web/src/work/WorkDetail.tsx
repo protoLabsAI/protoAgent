@@ -33,6 +33,9 @@ export type WorkDetailProps = {
   onUndo?: (token: string) => Promise<void>;
   /** "{Type} deleted." in the undo toast — the item's plain-word kind (Goal, Watch…). */
   type?: string;
+  /** Overrides the header badge word (otherwise the status word) — the "kind as a tag"
+   *  rule, e.g. a stopped goal reads "Goal stopped" with its neutral tone (§2, §6). */
+  statusLabel?: string;
   /** Refreshes the item behind the `changedNotice` Callout. */
   onRefresh?: () => void;
   changedNotice?: string;
@@ -56,6 +59,7 @@ export function WorkDetail({
   technical,
   onUndo,
   type = "Item",
+  statusLabel,
   onRefresh,
   changedNotice,
 }: WorkDetailProps) {
@@ -136,7 +140,7 @@ export function WorkDetail({
         <h2 className="work-detail__title" data-surface-focus tabIndex={-1}>
           {title}
         </h2>
-        <Badge status={statusTone(status)}>{statusWord(status)}</Badge>
+        <Badge status={statusTone(status)}>{statusLabel ?? statusWord(status)}</Badge>
       </header>
 
       {changedNotice && (

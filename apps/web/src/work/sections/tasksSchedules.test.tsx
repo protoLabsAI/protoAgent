@@ -27,6 +27,7 @@ import type { WorkItem, WorkItems, WorkSource } from "../useWorkItems";
 import type { WorkSectionContext } from "../WorkView";
 import { sections } from "../sectionRegistry";
 import { workGroups } from "../workGroups";
+import { groupFor, type GroupableWorkItem } from "../tone";
 
 vi.mock("../../schedule/schedule-builder", async (importOriginal) => ({
   ...await importOriginal<typeof import("../../schedule/schedule-builder")>(),
@@ -321,22 +322,41 @@ describe("Tasks section (§2.7)", () => {
     expect(apiMock.closeTask).toHaveBeenCalledWith("task-3");
   });
 
-  it("an open task offers Start (→ in_progress)", async () => {
+  it("a not-started job offers Start now (→ in_progress) and Close job (the close route) (r1)", async () => {
     await mount(h(TasksSection, ctx({
       sources: sources({ tasks: src([taskItem({ status: "open" })]) }),
       state: { itemId: "task:task-3" },
     })));
-    await act(async () => button("Start").click());
+    await act(async () => button("Start now").click());
     await flush();
     expect(apiMock.updateTask).toHaveBeenCalledWith("task-3", { status: "in_progress" });
+
+    await act(async () => button("Close job").click());
+    await flush();
+    expect(apiMock.closeTask).toHaveBeenCalledWith("task-3");
   });
 
-  it("a closed task offers Reopen (→ open) and no Start", async () => {
+  it("a failed Start now keeps the action in reach and reports a warning (r1)", async () => {
+    apiMock.updateTask.mockRejectedValueOnce(new Error("offline"));
+    await mount(h(TasksSection, ctx({
+      sources: sources({ tasks: src([taskItem({ status: "open" })]) }),
+      state: { itemId: "task:task-3" },
+    })));
+    await act(async () => button("Start now").click());
+    await flush();
+    expect(allText()).toContain("Couldn't");
+    // the row stays actionable: Start now is still there, alongside a Try again
+    expect(() => button("Start now")).not.toThrow();
+    expect(() => button("Try again")).not.toThrow();
+  });
+
+  it("a closed task offers Reopen (→ open) and no Start (r1)", async () => {
     await mount(h(TasksSection, ctx({
       sources: sources({ tasks: src([taskItem({ status: "closed", closed_at: "2026-11-09T10:00:00Z" })]) }),
       state: { itemId: "task:task-3" },
     })));
     expect(() => button("Start")).toThrow();
+    expect(() => button("Start now")).toThrow();
     await act(async () => button("Reopen").click());
     await flush();
     expect(apiMock.updateTask).toHaveBeenCalledWith("task-3", { status: "open" });
@@ -352,10 +372,46 @@ describe("Tasks section (§2.7)", () => {
     await act(async () => button("Delete").click());
     await flush();
     expect(apiMock.deleteTask).toHaveBeenCalledWith("task-3");
-    expect(allText()).toContain("Task deleted.");
+    expect(allText()).toContain("Job deleted.");
 
     await act(async () => button("Undo").click());
     await flush();
     expect(apiMock.undo).toHaveBeenCalledWith("tok-task");
+  });
+});
+
+describe("Jobs in the list (§2, r1)", () => {
+  const badges = () => Array.from(host!.querySelectorAll(".pl-badge")).map((b) => b.textContent);
+
+  it("a not-started job reads as Job with a dashed icon and 'not started · added <when>'", async () => {
+    await mount(h(TasksSection, ctx({ sources: sources({ tasks: src([taskItem({ status: "open" })]) }) })));
+    const row = host!.querySelector(".work-row")!;
+    expect(row.querySelector(".pl-badge")?.textContent).toBe("Job");
+    expect(row.querySelector(".work-row__meta")?.textContent).toMatch(/^not started · added /);
+    expect(row.querySelector(".work-row__icon")).not.toBeNull(); // the dashed circle
+    // Tasks fold into jobs — no Task tag anywhere.
+    expect(badges()).not.toContain("Task");
+  });
+
+  it("a started blocked job stays in Doing now and says blocked, not not-started", async () => {
+    const blocked = { ...taskItem({ status: "blocked" }), started: true };
+    expect(groupFor(blocked as GroupableWorkItem)).toBe("doing-now");
+    await mount(h(TasksSection, ctx({ sources: sources({ tasks: src([blocked]) }) })));
+    expect(host!.querySelector(".work-row__meta")?.textContent).toBe("blocked");
+    expect(host!.querySelector(".work-row__icon")).toBeNull(); // no dashed circle — it has started
+    expect(allText()).not.toContain("not started");
+  });
+
+  it("a blocked job that never started is not-started (Coming up)", async () => {
+    const blocked = taskItem({ status: "blocked" });
+    expect(groupFor(blocked as GroupableWorkItem)).toBe("coming-up");
+    await mount(h(TasksSection, ctx({ sources: sources({ tasks: src([blocked]) }) })));
+    expect(host!.querySelector(".work-row__meta")?.textContent).toContain("not started");
+  });
+
+  it("a closed job leaves the list — finished work leaves Work", async () => {
+    await mount(h(TasksSection, ctx({ sources: sources({ tasks: src([taskItem({ status: "closed", closed_at: "2026-11-09T10:00:00Z" })]) }) })));
+    expect(host!.querySelectorAll("ul.work-group > li").length).toBe(0);
+    expect(allText()).toContain("No jobs");
   });
 });

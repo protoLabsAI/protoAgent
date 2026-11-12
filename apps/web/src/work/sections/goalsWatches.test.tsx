@@ -166,9 +166,10 @@ describe("Goals detail (§2.5, r1)", () => {
     finished_at: 1_700_003_600,
   };
 
-  it("renders the §2.5 fields in order", async () => {
+  it("renders the §2.5 fields in order, led by the finish line (r1)", async () => {
     await mount(goalsSection.render(ctx({ sources: sources({ goals: withItems([goalItem(fullGoal)]) }), itemId: "goal:sess-abc" })));
     expect(labels()).toEqual([
+      "Finish line",
       "Progress",
       "Stalled",
       "Latest check",
@@ -181,16 +182,17 @@ describe("Goals detail (§2.5, r1)", () => {
       "History",
       "Fresh context",
     ]);
-    expect(text()).toContain("Turn 3 of 10");
+    expect(text()).toContain("Ship the thing"); // the finish line
+    expect(text()).toContain("step 3 of 10 · checking after each turn");
     expect(text()).toContain("No progress for 2 of 3 checks");
     expect(text()).toContain("Each turn starts a clean thread");
   });
 
-  it("an unlimited goal shows 'Turn 3', never 'n/0' or '∞'", async () => {
+  it("an unlimited goal shows 'step 3', never 'n/0' or '∞'", async () => {
     const g: GoalState = { session_id: "sess-u", condition: "Run forever", status: "active", outcome: "Keep watch", iteration: 3 };
     await mount(goalsSection.render(ctx({ sources: sources({ goals: withItems([goalItem(g)]) }), itemId: "goal:sess-u" })));
-    expect(text()).toContain("Turn 3");
-    expect(text()).not.toContain("Turn 3 of");
+    expect(text()).toContain("step 3 · checking after each turn");
+    expect(text()).not.toContain("step 3 of");
     expect(text()).not.toContain("∞");
     expect(text()).not.toMatch(/\/\s*0\b/);
   });
@@ -340,13 +342,13 @@ describe("Lifecycle re-arm (ADR 0079)", () => {
     expect(rearm).toHaveBeenCalledWith("sess-ext", { add_iterations: 4 });
   });
 
-  it("an exhausted goal offers Restart goal, which POSTs rearm with no added budget", async () => {
+  it("a stopped goal offers Keep going, which POSTs rearm with no added budget", async () => {
     const rearm = vi.spyOn(api, "rearmGoal").mockResolvedValue({ ok: true, resumed: true });
     const goal: GoalState = { session_id: "sess-exh", condition: "ran out", status: "exhausted", outcome: "exhausted goal", iteration: 10, max_iterations: 10 };
     await mount(goalsSection.render(ctx({ sources: sources({ goals: withItems([goalItem(goal, "failed")]) }), itemId: "goal:sess-exh" })));
 
     expect(buttons().some((b) => b.textContent?.trim() === "Add 4 iterations")).toBe(false);
-    await act(async () => button("Restart goal").click());
+    await act(async () => button("Keep going").click());
     await flush();
     expect(rearm).toHaveBeenCalledWith("sess-exh", {});
   });
@@ -356,7 +358,59 @@ describe("Lifecycle re-arm (ADR 0079)", () => {
     await mount(goalsSection.render(ctx({ sources: sources({ goals: withItems([goalItem(goal, "done")]) }), itemId: "goal:sess-ok" })));
     const btnLabels = buttons().map((b) => b.textContent?.trim());
     expect(btnLabels).not.toContain("Add 4 iterations");
+    expect(btnLabels).not.toContain("Keep going");
+  });
+});
+
+describe("Stopped-short goal recovery (§2, r1)", () => {
+  it("the detail reads neutral 'Goal stopped' with the finish line, step progress, Keep going and Drop the goal", async () => {
+    const goal: GoalState = { session_id: "sess-stop", condition: "ran out", status: "exhausted", outcome: "Ship it", iteration: 6, max_iterations: 8 };
+    await mount(goalsSection.render(ctx({ sources: sources({ goals: withItems([goalItem(goal, "failed")]) }), itemId: "goal:sess-stop" })));
+
+    // The badge names the stopped kind, in a neutral tone — nothing uses error (§6).
+    expect(host!.querySelector(".work-detail__header .pl-badge")?.textContent).toBe("Goal stopped");
+    expect(host!.querySelector(".pl-badge--error")).toBeNull();
+    expect(host!.querySelector(".pl-dot--error")).toBeNull();
+
+    // Finish line + step progress; a stopped goal isn't "checking after each turn".
+    expect(text()).toContain("Ship it");
+    expect(text()).toContain("step 6 of 8");
+    expect(text()).not.toContain("checking after each turn");
+
+    const btnLabels = buttons().map((b) => b.textContent?.trim());
+    expect(btnLabels).toContain("Keep going");
+    expect(btnLabels).toContain("Drop the goal");
     expect(btnLabels).not.toContain("Restart goal");
+    expect(btnLabels).not.toContain("Delete…");
+    expect(btnLabels).not.toContain("Stop…"); // not an active goal
+  });
+
+  it("Drop the goal clears it and offers Undo (r1)", async () => {
+    const clearGoal = vi.spyOn(api, "clearGoal").mockResolvedValue({ cleared: true, undo_token: "tok-stop" });
+    const undo = vi.spyOn(api, "undo").mockResolvedValue({ restored: true, kind: "goal" });
+    const goal: GoalState = { session_id: "sess-drop", condition: "x", status: "unachievable", outcome: "do it", iteration: 2 };
+    await mount(goalsSection.render(ctx({ sources: sources({ goals: withItems([goalItem(goal, "failed")]) }), itemId: "goal:sess-drop" })));
+
+    await act(async () => button("Drop the goal").click()); // opens the inline confirm
+    await act(async () => button("Drop the goal").click()); // confirmLabel is also "Drop the goal"
+    await flush();
+    expect(clearGoal).toHaveBeenCalledWith("sess-drop", false);
+    expect(text()).toContain("Goal deleted.");
+
+    await act(async () => button("Undo").click());
+    await flush();
+    expect(undo).toHaveBeenCalledWith("tok-stop");
+  });
+
+  it("a stopped goal row is neutral 'Goal stopped'; an achieved goal has left Work", async () => {
+    const stopped: GoalState = { session_id: "sess-s", condition: "x", status: "exhausted", outcome: "almost", iteration: 5, max_iterations: 9 };
+    const achieved: GoalState = { session_id: "sess-a", condition: "y", status: "achieved", outcome: "done", iteration: 9, max_iterations: 9 };
+    await mount(goalsSection.render(ctx({ sources: sources({ goals: withItems([goalItem(stopped, "failed"), goalItem(achieved, "done")]) }) })));
+
+    expect(host!.querySelectorAll("ul.work-group > li")).toHaveLength(1); // achieved dropped
+    expect(host!.querySelector(".work-row .pl-badge")?.textContent).toBe("Goal stopped");
+    expect(host!.querySelector(".work-row .pl-badge--error")).toBeNull();
+    expect(host!.querySelector(".work-row__meta")?.textContent).toBe("step 5 of 9");
   });
 });
 

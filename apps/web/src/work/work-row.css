@@ -14,6 +14,11 @@
   text-align: start;
   cursor: pointer;
 }
+/* A not-started job's dashed circle, toned like the muted StatusDot it stands in for. */
+.work-row__icon {
+  flex: none;
+  color: var(--pl-color-fg-muted);
+}
 .work-row__body {
   flex: 1;
   min-width: 0;

@@ -154,7 +154,7 @@ describe("Work surface mount", () => {
 
     for (const [section, emptyCopy] of [
       ["watches", "No watches"],
-      ["tasks", "No tasks"],
+      ["tasks", "No jobs"], // tasks fold into jobs (work-consolidation §1)
       ["schedules", "No schedules"],
     ] as const) {
       useUI.setState({ surfaceStates: { work: { section } } });
