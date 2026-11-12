@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import uuid
 
 from fastapi import Body, File, Form, HTTPException, UploadFile
 from fastapi.responses import JSONResponse, Response
@@ -163,9 +164,19 @@ def register_snapshot_routes(app) -> None:
             )
         except SnapshotError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        except Exception as exc:  # noqa: BLE001 — never leak a stack trace to the console
-            log.exception("[snapshot] import failed")
-            raise HTTPException(status_code=500, detail=f"Import failed: {type(exc).__name__}: {exc}") from exc
+        except Exception as exc:  # noqa: BLE001 — a fault in our code, not the caller's input
+            # Never ``str(exc)`` to the client: it carries file paths and library internals
+            # (the #3973 contract, same as ``routes._http_error``). The traceback goes to the
+            # log under a short id the operator can quote; the type alone is safe to show.
+            error_id = uuid.uuid4().hex[:8]
+            log.error("[snapshot] import failed (error id %s)", error_id, exc_info=exc)
+            raise HTTPException(
+                status_code=500,
+                detail=(
+                    f"Import failed ({type(exc).__name__}, error id {error_id}); "
+                    "the details are in the server log."
+                ),
+            ) from exc
         return JSONResponse({"mode": "applied", **result.as_dict()})
 
 

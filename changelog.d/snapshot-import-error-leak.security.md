@@ -1,0 +1,2 @@
+- **A failed agent import no longer returns the raw exception text.**
+  When applying a snapshot hit an unexpected error, `POST /api/agent/import` answered `500` with the exception's own message, which can include file paths and library internals. It now returns the exception type and a short error id, and logs the traceback under that id. Validation failures (a malformed or unsafe archive) still answer `400` with their explanation.
