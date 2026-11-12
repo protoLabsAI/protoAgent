@@ -4,7 +4,7 @@ import { useQueries, useQueryClient, type UseQueryResult } from "@tanstack/react
 
 import { api, currentSlug } from "../lib/api";
 import { decisionsApi, type DecisionList, type DecisionRow } from "../lib/api/decisions";
-import type { DirectiveList, DirectiveRow } from "../lib/api/chat";
+import type { DirectiveRow } from "../lib/api/chat";
 import { goalsQuery, inboxQuery, queryKeys, schedulesQuery, tasksQuery, watchesQuery } from "../lib/queries";
 import { onConnectionChange, onTopic } from "../lib/events";
 import type {
@@ -236,22 +236,16 @@ export function useWorkItems({ sessionId, thisChatOnly }: UseWorkItemsParams): W
         queryKey: workKey("directive-inventory", sessionId ?? ""),
         queryFn: async () => {
           const inventory = await api.chatSessions(200);
+          // A successful HTTP response can still report a session-index read failure.
+          // Reject it so the last discovered inventory survives as stale data.
+          if (inventory.reason) throw new Error(inventory.reason);
           const ids = [...new Set([...(sessionId ? [sessionId] : []), ...inventory.sessions.map((s) => s.session_id)])];
-          const directives: DirectiveRow[] = [];
-          // Bound fan-out and reuse the chat ledger's per-session cache/refresh path.
+          // Bound fan-out and reuse each ledger's retained rows and failure state.
+          // One failed ledger must not hide successes or skip subsequent batches.
           for (let i = 0; i < ids.length; i += 4) {
-            const batch = await Promise.allSettled(ids.slice(i, i + 4).map(async (id) => {
-              const result = await directiveStore(id).refresh();
-              if (!result) throw new Error(`Could not load directives for ${id}`);
-              return result.directives;
-            }));
-            // Drain the whole batch before reporting failure, so a retry cannot overlap it.
-            for (const result of batch) {
-              if (result.status === "rejected") throw result.reason;
-              directives.push(...result.value);
-            }
+            await Promise.allSettled(ids.slice(i, i + 4).map((id) => directiveStore(id).refresh()));
           }
-          return { sessionIds: ids, directives, in_force: directives.filter((d) => d.status === "in_force").length };
+          return { sessionIds: ids };
         },
       },
     ],
@@ -264,7 +258,7 @@ export function useWorkItems({ sessionId, thisChatOnly }: UseWorkItemsParams): W
     UseQueryResult<{ jobs: ScheduledJob[]; backend: string }>,
     UseQueryResult<{ enabled: boolean; jobs: BackgroundJobDTO[] }>,
     UseQueryResult<{ items: InboxItem[] }>,
-    UseQueryResult<DirectiveList & { sessionIds: string[] }>,
+    UseQueryResult<{ sessionIds: string[] }>,
   ];
 
   const [directiveVersion, setDirectiveVersion] = useState(0);
@@ -349,9 +343,15 @@ export function useWorkItems({ sessionId, thisChatOnly }: UseWorkItemsParams): W
   }, [qc]);
 
   const directiveSource = stateOf(dirRes, items.directives);
+  // Inventory discovery can succeed while every ledger refresh fails. Keep the
+  // timestamp tied to successful ledger reads, including retained cache data.
+  if (dirRes.data?.sessionIds.length) {
+    directiveSource.loadedAt = Math.max(...dirRes.data.sessionIds.map((id) =>
+      directiveStore(id).getSnapshot().loadedAt ?? 0)) || null;
+  }
   if (directiveSource.status === "ready" && dirRes.data?.sessionIds.some((id) =>
     ["failed", "stale"].includes(directiveStore(id).getSnapshot().state))) {
-    directiveSource.status = "stale";
+    directiveSource.status = directiveSource.loadedAt === null ? "error" : "stale";
     directiveSource.error = new Error("A directive ledger could not be refreshed");
   }
 

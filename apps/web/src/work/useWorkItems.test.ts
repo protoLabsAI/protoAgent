@@ -434,6 +434,65 @@ describe("live group adapters", () => {
     expect(r.current.directives.items[0].raw).toMatchObject({ status: "revoked" });
   });
 
+  it("retains inventory when discovery returns a read-failure reason and recovers on retry", async () => {
+    spies.sessions.mockResolvedValue({ sessions: [{ session_id: "reason-other", turn_count: 1, last_updated: null }] });
+    spies.directives.mockImplementation(async (id: string) => ({ directives: [dir(id, "in_force", id)], in_force: 1 }));
+    const r = mount({ sessionId: "reason-focused", thisChatOnly: false });
+    await flush();
+    const loadedAt = r.current.directives.loadedAt;
+    spies.sessions.mockResolvedValue({ sessions: [], reason: "Session index read failed" });
+    emit("directive.changed");
+    await flush();
+    expect(r.current.directives.status).toBe("stale");
+    expect(r.current.directives.loadedAt).toBe(loadedAt);
+    expect(r.current.directives.error).toEqual(new Error("Session index read failed"));
+    expect(r.current.directives.items.map((i) => i.id)).toEqual(["reason-focused", "reason-other"]);
+    spies.sessions.mockResolvedValue({ sessions: [] });
+    r.current.directives.retry();
+    await flush();
+    expect(r.current.directives.status).toBe("ready");
+    expect(r.current.directives.items.map((i) => i.id)).toEqual(["reason-focused"]);
+  });
+
+  it("keeps successful initial ledgers across batches when another fails", async () => {
+    const focused = "partial-focused";
+    const others = Array.from({ length: 5 }, (_, i) => `partial-${i}`);
+    spies.sessions.mockResolvedValue({ sessions: others.map((session_id) => ({ session_id, turn_count: 1, last_updated: null })) });
+    const ledger = async (id: string) => ({ directives: [dir(id, "in_force", id)], in_force: 1 });
+    spies.directives.mockImplementation(async (id: string) => {
+      if (id === others[0]) throw new Error("Ledger unavailable");
+      return ledger(id);
+    });
+    const r = mount({ sessionId: focused, thisChatOnly: false });
+    await flush();
+    expect(r.current.directives.status).toBe("stale");
+    expect(r.current.directives.error).toBeInstanceOf(Error);
+    expect(r.current.directives.items.map((i) => i.id)).toEqual([focused, ...others.slice(1)]);
+    expect(workGroups(r.current, { thisChatOnly: true, sessionId: focused })[3].items.map((i) => i.id)).toEqual([focused]);
+    spies.directives.mockImplementation(ledger);
+    r.current.directives.retry();
+    await flush();
+    expect(r.current.directives.status).toBe("ready");
+    expect(r.current.directives.error).toBeNull();
+    expect(r.current.directives.items.map((i) => i.id)).toEqual([focused, ...others]);
+    const loadedAt = r.current.directives.loadedAt;
+    spies.directives.mockRejectedValue(new Error("Offline"));
+    emit("directive.changed");
+    await flush();
+    expect(r.current.directives.status).toBe("stale");
+    expect(r.current.directives.loadedAt).toBe(loadedAt);
+    expect(r.current.directives.items.map((i) => i.id)).toEqual([focused, ...others]);
+  });
+
+  it("reports error when no discovered ledger has ever loaded", async () => {
+    spies.directives.mockRejectedValue(new Error("Offline"));
+    const r = mount({ sessionId: "never-loaded-ledger", thisChatOnly: false });
+    await flush();
+    expect(r.current.directives.status).toBe("error");
+    expect(r.current.directives.loadedAt).toBeNull();
+    expect(r.current.directives.items).toEqual([]);
+  });
+
   it("loads other chats with bounded fan-out and retries stale inventory", async () => {
     spies.sessions.mockResolvedValue({ sessions: Array.from({ length: 9 }, (_, i) => ({ session_id: `other-${i}`, turn_count: 1, last_updated: null })) });
     let active = 0;
