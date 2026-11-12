@@ -62,8 +62,9 @@ export function OriginProvenance({ entry }: { entry: ActivityEntry }) {
   );
 }
 
-// Work owns its completed-turn list/detail; reuse the inbox triage without fetching
-// or rendering a second completed timeline there. The legacy dialog keeps both.
+// `pendingOnly` embeds just the inbox triage in a host's own scrolling list (no completed
+// timeline, no dialog sizing — #5094). The Feed dialog keeps both; it has been the feed's
+// only home since S4c removed Work's Activity section.
 export function ActivitySurface({ pendingOnly = false }: { pendingOnly?: boolean }) {
   // --- Completed activity timeline. Held newest-first (as the API returns), rendered
   //     oldest-first. Persisted rows use positive database IDs; live-only rows count

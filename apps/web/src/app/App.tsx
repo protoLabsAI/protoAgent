@@ -886,9 +886,10 @@ function WorkspaceApp({ runtime }: { runtime: RuntimeStatus | null }) {
   function renderSurface(id: string, frame: "rail" | "modal" = "rail"): ReactNode {
     switch (id) {
       // The Work hub (#4955) is one right-rail surface: an Overview plus a section per work
-      // source (Goals, Watches, Tasks, Schedules, Background agents, Activity, Decisions,
-      // Directives), each self-registered into the view. Expand / Dock to rail come free from
-      // the SurfaceHost frame this renders inside.
+      // source (Goals, Watches, Tasks, Schedules, Background agents, Decisions, Directives),
+      // each self-registered into the view — the activity feed lives on the Feed pill's own
+      // dialog, not here (S4c). Expand / Dock to rail come free from the SurfaceHost frame
+      // this renders inside.
       case "work":
         return <WorkView frame={frame} sessionId={workSessionId ?? undefined} />;
       // Knowledge is the searchable Store; its Memory settings folded into
@@ -1498,7 +1499,8 @@ function WorkspaceApp({ runtime }: { runtime: RuntimeStatus | null }) {
                 <DecisionsWidget onOpen={() => useUI.getState().openSurfaceModal("work", { section: "decisions" })} />
                 {/* Widgets (bottom-left): background subagents (ADR 0050 Phase 3) and the
                     unified feed (#3029) — one pill merging the former inbox + read-only
-                    Activity feeds. These pills open their own sections in the Work modal. */}
+                    Activity feeds. Background jobs open their Work section; the feed opens
+                    its own dialog (Work has no Activity section since S4c). */}
                 <BackgroundJobs />
                 <ActivityWidget />
                 {/* Plugin-contributed utility widgets (`views[].utility`): a pill that opens

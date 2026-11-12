@@ -32,7 +32,9 @@ import { inWorkScope } from "./workGroups";
 import { directiveStore } from "../chat/useDirectives";
 import { scheduleWhen, typeAndPriority, watchKind } from "./rowMeta";
 
-/** The eight work sources, in the order the Work view lays them out (§5). */
+/** The eight work sources, in the order the Work view lays them out (§5). `activity` is a
+ *  source only — its Work section was removed in S4c (the feed lives on the utility-bar
+ *  Feed pill); the key survives to carry the delivery rows into the Needs-you group. */
 export type WorkSourceKind =
   | "decisions"
   | "goals"

@@ -25,7 +25,6 @@ import "./sections/goals";
 import "./sections/directives";
 import "./sections/tasks";
 import "./sections/schedules";
-import "./sections/activity";
 import "./work-view.css";
 
 export { registerWorkSection, type WorkSectionContext } from "./sectionRegistry";
@@ -186,7 +185,9 @@ export function WorkView({ frame = "rail", sessionId }: { frame?: "rail" | "moda
     if (reply) useKbIntents.getState().focusComposer();
   };
   const context = { sources, state, onOpen, onBack, sessionId, decisionActions: { agentOnline, openSourceChat, answerDecision: decisions.answer } };
-  const selectedSection = selected && ({ decision: "decisions", goal: "goals", watch: "watches", task: "tasks", schedule: "schedules", background: "background", activity: "activity", directive: "directives" } as const)[selected.kind];
+  // No entry for the activity kind: its Work section is gone (S4c) and the activity source
+  // never yields selectable items (`useWorkItems` keeps it rows-empty for the delivery group).
+  const selectedSection = selected && ({ decision: "decisions", goal: "goals", watch: "watches", task: "tasks", schedule: "schedules", background: "background", directive: "directives" } as const as Partial<Record<WorkItem["kind"], string>>)[selected.kind];
   const detailRenderer = sections.get(selectedSection ?? section);
   const selectSection = (id: string) => update({ section: id, itemId: undefined, scrollTop: 0 });
 
