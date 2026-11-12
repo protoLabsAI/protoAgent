@@ -19,13 +19,20 @@
 }
 
 /* The rail owns the row's spacing; the roster keeps its own chip styles. It takes the
-   row's remaining width (that is what the fit is measured against) and clips rather than
-   overflows while a resize is settling. position: relative anchors the measure row. */
+   row's remaining width (that is what the fit is measured against) and clips SIDEWAYS
+   ONLY — containing the max-content measure row below, and any not-yet-refitted chips
+   while a resize settles. The vertical axis stays visible: on coarse pointers every
+   chip here (people and `+K` alike) carries the 44px ::after tap overlay from the end
+   of this file, which is TALLER than the row — two-axis clipping would cut those
+   overlays back to the row height and lose the 44px floor. `clip`, not `hidden`, so
+   the roster never becomes a scroll container a programmatic focus could pan.
+   position: relative anchors the measure row. */
 .chat-status-rail .chat-roster {
   flex: 1 1 auto;
   flex-wrap: nowrap;
   min-width: 0;
-  overflow: hidden;
+  overflow-x: clip;
+  overflow-y: visible;
   position: relative;
   padding: 0;
 }

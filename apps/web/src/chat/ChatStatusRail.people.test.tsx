@@ -10,7 +10,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { WorkItems } from "../work/useWorkItems";
 import { ChatStatusRail } from "./ChatStatusRail";
 import { toggleMention } from "./mentionRun";
-import { fallbackCap, fitCount, orderPeople, recipientLine, spokenMoreLabel } from "./peopleFit";
+import { fitCount, orderPeople, recipientLine, spokenMoreLabel } from "./peopleFit";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -78,25 +78,23 @@ const more = () => host.querySelector<HTMLButtonElement>('[data-testid="chat-ros
 const click = (el: Element | null | undefined) => act(async () => (el as HTMLElement).click());
 const CAST = ["ana", "bo", "cy", "dee", "elle", "fay"];
 
-describe("peopleFit (pure)", () => {
-  it("orders draft-addressed first (run order, case-insensitive), then cast order", () => {
+// Only the edges the rendered rail can't reach — everything the rail CAN show (the
+// fallback caps, the measured refit, the live recipients line) is proven once, below,
+// through the rendered row (docs/dev/testing.md: one layer per behavior).
+describe("peopleFit (pure edges)", () => {
+  it("orders draft-addressed first (run order, case-insensitive), ignoring non-cast names", () => {
     expect(orderPeople(CAST, "@FAY @cy @ghost hi")).toEqual(["fay", "cy", "ana", "bo", "dee", "elle"]);
     expect(orderPeople(CAST, "no run")).toEqual(CAST);
   });
-  it("caps the unmeasured row per surface and statuses", () => {
-    const table: Array<[boolean, boolean, number]> = [[false, true, 3], [false, false, 5], [true, true, 1], [true, false, 3]];
-    expect(table.map(([m, s]) => fallbackCap(m, s))).toEqual(table.map((row) => row[2]));
-  });
-  it("fits the longest prefix that leaves room for +K, all when everyone fits, 0 at worst", () => {
+  it("fit boundaries: an exact right edge fits everyone; too narrow for one name is +K alone", () => {
     const boxes = [60, 120, 180, 240].map((left) => ({ left, width: 50 }));
-    expect(fitCount(boxes, 50, 290)).toBe(4); // last right edge exactly fits: no +K
-    expect(fitCount(boxes, 50, 200)).toBe(1); // +K in slot 2 (170) fits, slot 3 (230) doesn't
-    expect(fitCount(boxes, 50, 80)).toBe(0);
+    expect([fitCount(boxes, 50, 290), fitCount(boxes, 50, 80)]).toEqual([4, 0]);
   });
-  it("speaks the recipients line and the +K label", () => {
+  it("recipients: no line when the run addresses nobody; a non-cast name keeps its typed spelling", () => {
     expect(recipientLine("", CAST)).toBeNull();
     expect(recipientLine("@BO @Vera hi", CAST)).toBe(
       "Your message goes to @bo, @Vera. Choose a name again to take it out.");
+    // The one exact pin of the +K spoken words (the rendered checks reuse the helper).
     expect(spokenMoreLabel(1)).toBe("1 more person in this chat. Show everyone");
   });
 });

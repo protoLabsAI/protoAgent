@@ -66,14 +66,21 @@ function routes(page: import("@playwright/test").Page, mode: string, opts: { fai
   ]);
 }
 
-function seedSession(page: import("@playwright/test").Page) {
-  return page.addInitScript(([session]) => {
+function seedSession(page: import("@playwright/test").Page, messages: object[] = []) {
+  return page.addInitScript(({ session, messages }) => {
     localStorage.setItem("protoagent.chat.sessions", JSON.stringify({
       version: 1, currentSessionId: session,
-      sessions: [{ id: session, title: "Rail chat", createdAt: 1, updatedAt: 2, messages: [] }],
+      sessions: [{ id: session, title: "Rail chat", createdAt: 1, updatedAt: 2, messages }],
     }));
-  }, [SESSION]);
+  }, { session: SESSION, messages });
 }
+
+/** Six people for the S6b row — authored assistant turns are what sessionCast derives
+ *  the roster from, so this is the same path a real group chat takes. */
+const CAST = ["opus", "Vera", "codex", "haiku", "scout", "archivist"];
+const castMessages = CAST.map((name, i) => ({
+  id: `m-${i}`, role: "assistant", content: `hello from ${name}`, author: { name },
+}));
 
 for (const width of [1440, 390]) {
   for (const mode of ["light", "dark"]) {
@@ -188,3 +195,44 @@ for (const width of [1440, 390]) {
     });
   }
 }
+
+// S6b touch floor (review round 1): the roster clips SIDEWAYS only. On touch devices each
+// people chip and `+K` carries a 44px ::after tap overlay TALLER than the one-line row
+// (chat-status-rail.css), and a two-axis overflow clip was cutting it back to the ~24px row.
+// Tap the overlay band ABOVE the visible pill — outside the row's box, inside the 44px
+// floor — and the control must still answer. isMobile + hasTouch make `(hover: none)` /
+// `(pointer: coarse)` match the way they do on hardware (same setup as tablet.spec.ts).
+test.describe("phone touch floor on the people row", () => {
+  test.use({ hasTouch: true, isMobile: true, viewport: { width: 390, height: 844 } });
+
+  test("people chips and +K answer taps across their full 44px overlay", async ({ page }) => {
+    await page.emulateMedia({ reducedMotion: "reduce" });
+    await seedSession(page, castMessages);
+    await routes(page, "light");
+    await page.goto("/app/", { waitUntil: "load" });
+
+    const roster = page.locator(".chat-status-rail .chat-roster");
+    const chip = roster.locator("button.chat-roster-chip").first();
+    const more = page.getByTestId("chat-roster-more");
+    await expect(chip).toHaveText("@opus");
+    await expect(more).toBeVisible(); // six people never fit beside the chips at 390
+
+    // People never push the row into a sideways scroll (§6), measured with a real cast.
+    const overflow = await page.evaluate(() => ({
+      doc: document.documentElement.scrollWidth, vw: window.innerWidth,
+    }));
+    expect(overflow.doc).toBeLessThanOrEqual(overflow.vw);
+
+    // 6px above the pill's top edge: the exact band a two-axis clip swallowed.
+    const tapAbove = async (target: import("@playwright/test").Locator) => {
+      const box = (await target.boundingBox())!;
+      await page.touchscreen.tap(box.x + box.width / 2, box.y - 6);
+    };
+    await expect(chip).toHaveAttribute("aria-pressed", "false");
+    await tapAbove(chip);
+    await expect(chip).toHaveAttribute("aria-pressed", "true"); // the tap toggled the mention
+
+    await tapAbove(more);
+    await expect(page.locator(".pl-drawer--bottom .chat-people")).toBeVisible(); // opened the picker
+  });
+});

@@ -1746,16 +1746,20 @@ def _preview(text: str) -> str:
 
 
 def _schedule_scope(job, session_id: str) -> str:
-    """``"chat"`` (this chat), ``"other"`` (another chat — count only) or ``"agent"``
-    (agent-wide — compact line). A job belongs to the chat it fires INTO (``context_id``:
-    a ``wait`` or one-shot resume) or, failing that, the chat that created it
-    (``origin_session``: a schedule whose result is delivered back there). A job with
-    neither is agent-wide (an Activity-thread cron, a plugin's job). A RECURRING job from
-    another chat is agent-wide too: it fires into the Activity thread whichever chat is
-    open. The job firing this very turn always renders, so its [FIRING NOW] mark is seen."""
-    home = str(getattr(job, "context_id", None) or getattr(job, "origin_session", None) or "")
-    if (home and home == session_id) or _is_firing_now(job):
+    """Full instructions for execution and origin; bounded summaries elsewhere.
+
+    Execution ownership and result provenance are separate memberships. A
+    ``job:``-owned execution session is where a background job RUNS, not a chat it
+    belongs to: a one-shot with no origin chat therefore stays agent-wide (compact
+    line in every chat, as before isolation) instead of dropping to the count-only
+    "other" bucket. Recurring jobs remain visible agent-wide, and the current fire
+    always renders in full.
+    """
+    context = str(getattr(job, "context_id", None) or "")
+    origin = str(getattr(job, "origin_session", None) or "")
+    if (session_id and session_id in (context, origin)) or _is_firing_now(job):
         return "chat"
+    home = origin or ("" if context.startswith("job:") else context)
     if home and not _is_recurring(job):
         return "other"
     return "agent"

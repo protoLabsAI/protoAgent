@@ -8,16 +8,23 @@
  */
 import { leadingRun } from "./mentionRun";
 
+/** The cast's spelling of a run-mentioned name. The run is typed text, so the match is
+ *  case-insensitive; the CAST spelling is what renders. Undefined when the run mentions
+ *  someone who isn't in the cast. */
+function castSpelling(cast: string[], name: string): string | undefined {
+  const lower = name.toLowerCase();
+  return cast.find((c) => c.toLowerCase() === lower);
+}
+
 /** Display order: draft-addressed names first (in the order the leading run addresses
  *  them), then everyone else in the original cast order. A name picked in the picker
  *  joins the draft's run, so it moves into the addressed front group — that is how a
- *  newly picked name takes a visible slot. Matching is case-insensitive (the run is
- *  typed text); the CAST spelling is what renders. Run mentions that name nobody in
- *  the cast don't reorder anything. */
+ *  newly picked name takes a visible slot. Run mentions that name nobody in the cast
+ *  don't reorder anything. */
 export function orderPeople(cast: string[], draft: string): string[] {
   const addressed: string[] = [];
   for (const name of leadingRun(draft).names) {
-    const match = cast.find((c) => c.toLowerCase() === name.toLowerCase());
+    const match = castSpelling(cast, name);
     if (match && !addressed.includes(match)) addressed.push(match);
   }
   return [...addressed, ...cast.filter((name) => !addressed.includes(name))];
@@ -62,9 +69,7 @@ export function fitCount(boxes: ChipBox[], moreWidth: number, available: number)
  *  so the line lists the run (in run order), rendered with the cast's spelling when a
  *  cast member matches. Null when the run addresses nobody: no recipients, no line. */
 export function recipientLine(draft: string, cast: string[]): string | null {
-  const names = leadingRun(draft).names.map(
-    (name) => cast.find((c) => c.toLowerCase() === name.toLowerCase()) ?? name,
-  );
+  const names = leadingRun(draft).names.map((name) => castSpelling(cast, name) ?? name);
   if (!names.length) return null;
   return `Your message goes to ${names.map((n) => `@${n}`).join(", ")}. Choose a name again to take it out.`;
 }
