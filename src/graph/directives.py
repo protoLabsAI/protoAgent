@@ -101,6 +101,7 @@ class Directive:
     closed_at: str | None = None
     close_reason: str | None = None
     closed_by: str | None = None
+    author: str = "agent"
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -118,6 +119,7 @@ class Directive:
             closed_at=data.get("closed_at"),
             close_reason=data.get("close_reason"),
             closed_by=data.get("closed_by"),
+            author=str(data.get("author") or "agent"),
         )
 
     @property
@@ -190,14 +192,16 @@ class DirectiveStore:
 
     # ── operations ──────────────────────────────────────────────────────────────
 
-    def record(self, session_id: str, quote: str, *, conditions: str = "", scope: str = "") -> Directive:
+    def record(self, session_id: str, quote: str, *, conditions: str = "", scope: str = "", author: str = "agent") -> Directive:
         """Record a new in-force directive for ``session_id``. ``quote`` is the operator's
-        words verbatim (whitespace at the ends trimmed, nothing else touched)."""
-        session_id = (session_id or "").strip()
-        if not session_id:
+        words verbatim for operator writes; legacy agent writes trim the ends."""
+        session_id = (session_id or "") if author == "operator" else (session_id or "").strip()
+        if not session_id.strip():
             raise DirectiveError("a directive belongs to a chat — no session id was given")
-        quote = (quote or "").strip()
-        if not quote:
+        if author not in CLOSED_BY:
+            raise DirectiveError("author must be agent or operator")
+        quote = (quote or "") if author == "operator" else (quote or "").strip()
+        if not quote.strip():
             raise DirectiveError("quote is required — the operator's exact words")
         if len(quote) > MAX_QUOTE_CHARS:
             raise DirectiveError(
@@ -219,6 +223,7 @@ class DirectiveStore:
                 conditions=conditions,
                 scope=scope,
                 created_at=_now(),
+                author=author,
             )
             items.append(directive)
             self._save(session_id, items)
@@ -239,6 +244,24 @@ class DirectiveStore:
     def get(self, session_id: str, directive_id: str) -> Directive | None:
         directive_id = (directive_id or "").strip()
         return next((d for d in self.list(session_id) if d.id == directive_id), None)
+
+    def update(self, session_id: str, directive_id: str, *, scope: str | None = None,
+               conditions: str | None = None) -> Directive:
+        """Patch editable fields under the same lock as close; preserve provenance."""
+        with self._lock:
+            items = self._load(session_id) if session_id else []
+            hit = next((d for d in items if d.id == directive_id), None)
+            if hit is None:
+                raise DirectiveNotFound(f"no directive {directive_id!r} in this chat")
+            if not hit.in_force:
+                raise DirectiveClosed(f"directive {directive_id} is already {hit.status}")
+            if scope is not None:
+                hit.scope = scope.strip()[:MAX_NOTE_CHARS]
+            if conditions is not None:
+                hit.conditions = conditions.strip()[:MAX_NOTE_CHARS]
+            self._save(session_id, items)
+        _publish("directive.changed", {"session_id": session_id, "id": directive_id})
+        return hit
 
     def close(
         self,
