@@ -677,10 +677,13 @@ def _sse_token_claims(token: str) -> tuple[str, str | None] | None:
     seconds before an upgrade) or an unknown value reads as ``device``: the old format can't say
     whether a phone minted it, and the narrow scope is the fail-safe reading. That costs a full
     caller nothing — the SSE streams are reads, none of them is behind the credential-plane
-    ceiling — so no format version bump is needed. Open mode ⇒ ``full`` (nothing is checked)."""
+    ceiling — so no format version bump is needed. Open mode ⇒ ``full`` (nothing is checked).
+    No bearer but an ``X-API-Key`` configured is NOT open mode: nothing can mint a stream token
+    there (it is signed with the bearer), so none is valid and the stream needs the key."""
     key = _BEARER[0]
     if not key:
-        return SCOPE_FULL, None  # open mode — no bearer ⇒ no token needed
+        # Open mode — no credential at all ⇒ no token needed.
+        return (SCOPE_FULL, None) if open_mode() else None
     if not token:
         return None
     try:

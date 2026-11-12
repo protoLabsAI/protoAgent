@@ -724,6 +724,15 @@ def test_sse_token_rejects_garbage():
     assert not auth._validate_sse_token("")
 
 
+def test_sse_query_token_is_no_way_past_an_api_key(monkeypatch):
+    """API-key-only mode isn't open mode: no stream token can be minted, so none is valid."""
+    monkeypatch.delenv("A2A_AUTH_TOKEN", raising=False)
+    auth.configure(bearer_token="", api_key="k", allowed_origins_raw="")
+    c = _client_multi()
+    assert c.get("/api/events?token=anything").status_code == 401
+    assert c.get("/api/events", headers={"x-api-key": "k"}).status_code == 200
+
+
 def test_sse_bearer_header_still_works_for_events(monkeypatch):
     """Server-to-server callers with Authorization header pass /api/events."""
     monkeypatch.delenv("A2A_AUTH_TOKEN", raising=False)
