@@ -100,7 +100,7 @@ describe("chat action buttons → DS Button (#551 card 2)", () => {
     expectGhostButton(btn, "xs", { icon: true });
     // The X glyph and the descriptive title survive the swap.
     expect(btn!.querySelector("svg")).toBeTruthy();
-    expect(btn!.getAttribute("title")).toContain("Background agents panel");
+    expect(btn!.getAttribute("title")).toContain("the report itself is kept");
     expect(el.querySelector(".chat-report-dismiss")).toBeNull();
     // onClick still dismisses the chip (the whole card returns null once dismissed).
     await act(async () => btn!.click());

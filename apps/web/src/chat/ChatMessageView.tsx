@@ -660,8 +660,8 @@ function DelegationRow({ message }: { message: ChatMessage }) {
 // document viewer is the whole reading experience, so there is no excerpt/expand state in
 // between. The full report is fetched BY ID (GET /api/background/{id});
 // loadBackgroundReport keeps a legacy list-and-filter fallback for pre-ADR-0070 servers.
-// Dismissing hides the chip from THIS transcript only (persisted per jobId); the
-// Background agents panel remains the durable place the report lives.
+// Dismissing hides the chip from THIS transcript only (persisted per jobId); the durable
+// registry (GET /api/background) keeps the report — dismissal never writes to the backend.
 function BackgroundReportCard({
   message,
   report,
@@ -692,7 +692,7 @@ function BackgroundReportCard({
           size="xs"
           icon
           onClick={() => dismiss(report.jobId)}
-          title="Dismiss — the report stays in the Background agents panel"
+          title="Dismiss — hides this chip; the report itself is kept"
           aria-label="Dismiss report"
         >
           <X size={14} />
