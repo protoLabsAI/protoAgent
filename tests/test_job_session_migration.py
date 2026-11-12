@@ -814,6 +814,52 @@ async def test_repeating_watch_second_reaction_waits_for_first_continuation(tmp_
     assert s._claim_occurrence(s.get_job(f"watch-{watch.id}"))
 
 
+@pytest.mark.platform_sensitive
+def test_parentless_sibling_continuations_drain_oldest_first_not_deadlock(tmp_path, monkeypatch):
+    """Two continuations enqueued after the owner's turn settled (two watch
+    reactions, say) both carry no parent occurrence — resolve found nothing in
+    flight to yield for. Neither may walk past a live yielded-for continuation,
+    but each refusing on the OTHER forever would park both and the root cron
+    behind them, with startup recovery (which deliberately skips continuations)
+    never releasing the owner. They drain oldest generation first instead."""
+    monkeypatch.setenv("WATCH_PATH", str(tmp_path / "watches"))
+    s = scheduler(tmp_path)
+    root = s.add_job("root", "* * * * *")
+    assert s._claim_occurrence(root)
+    s._remember_task(root, "root-task")
+    assert s._settle_task(root, "root-task", {"result": {
+        "id": "root-task", "status": {"state": "completed"},
+    }})
+    first = s.add_job("first reaction", PAST, job_id="watch-one", context_id=root.context_id)
+    second = s.add_job("second reaction", PAST, job_id="watch-two", context_id=root.context_id)
+    owners = {r["job_id"]: r for r in rows(s, "job_sessions")}
+    assert owners["watch-one"]["parent_message_id"] is None
+    assert owners["watch-two"]["parent_message_id"] is None
+    # Restart: recovery pins both continuations on their original due slots.
+    s = scheduler(tmp_path)
+    s._recover_missed_fires()
+    # The root cron waits behind both; the younger sibling waits for the older.
+    assert s._claim_occurrence(s.get_job(root.id)) is None
+    assert s._claim_occurrence(s.get_job(second.id)) is None
+    first = s.get_job(first.id)
+    assert s._claim_occurrence(first)
+    # While the head runs, the owner is busy for every other claim.
+    assert s._claim_occurrence(s.get_job(second.id)) is None
+    s._remember_task(first, "reaction-1")
+    assert s._settle_task(first, "reaction-1", {"result": {
+        "id": "reaction-1", "status": {"state": "completed"},
+    }})
+    assert s._claim_occurrence(s.get_job(root.id)) is None
+    second = s.get_job(second.id)
+    assert s._claim_occurrence(second)
+    s._remember_task(second, "reaction-2")
+    assert s._settle_task(second, "reaction-2", {"result": {
+        "id": "reaction-2", "status": {"state": "completed"},
+    }})
+    # With the owner's queue drained, the root cron fires again.
+    assert s._claim_occurrence(s.get_job(root.id))
+
+
 @pytest.mark.asyncio
 @pytest.mark.platform_sensitive
 @pytest.mark.parametrize("boundary", ["before_enqueue", "enqueue_failure", "queued", "accepted", "completed"])

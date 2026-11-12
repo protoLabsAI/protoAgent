@@ -109,8 +109,12 @@ def test_store_open_raises_when_migration_fails(tmp_path, monkeypatch, store_cls
         store_cls(str(path))
 
 
-# Schema-init failures remain logged. The scheduler also refuses startup: an
-# incomplete execution-identity migration must never admit dispatch (ADR 0129).
+# Scheduler and activity schema-init failures stay NON-fatal: their constructors
+# log and survive (agent_init wraps construction in `except Exception`, so raising
+# would run the agent scheduler-less until the next restart). The failed ALTER
+# still never passes as "column already present" — the migration is simply not
+# committed, reads/claims fail closed per query, and the next clean open
+# completes it (ADR 0129).
 
 
 def _drop_and_lock(monkeypatch, cls, path, table, column):
@@ -126,14 +130,20 @@ def _drop_and_lock(monkeypatch, cls, path, table, column):
     monkeypatch.setattr(cls, "_connect", _locked_connect)
 
 
-def test_scheduler_store_logs_and_rejects_a_failed_migration(tmp_path, monkeypatch, caplog):
+def test_scheduler_store_logs_and_survives_a_failed_migration(tmp_path, monkeypatch, caplog):
     from scheduler.local import LocalScheduler
 
     s = LocalScheduler("mig-test", invoke_url="", db_dir=tmp_path)
     _drop_and_lock(monkeypatch, LocalScheduler, s.path, "jobs", "fence")
-    with caplog.at_level("ERROR"), pytest.raises(sqlite3.OperationalError, match="database is locked"):
+    with caplog.at_level("ERROR"):
         LocalScheduler("mig-test", invoke_url="", db_dir=tmp_path)
     assert "schema init failed" in caplog.text and "database is locked" in caplog.text
+    # The failure was not swallowed as "column already present": the column is
+    # still missing, and the next open without the lock completes the migration.
+    assert "fence" not in _cols(sqlite3.connect(s.path), "jobs")
+    monkeypatch.undo()
+    LocalScheduler("mig-test", invoke_url="", db_dir=tmp_path)
+    assert "fence" in _cols(sqlite3.connect(s.path), "jobs")
 
 
 def test_scheduler_store_adds_a_missing_column(tmp_path):

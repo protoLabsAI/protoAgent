@@ -1232,30 +1232,37 @@ class LocalScheduler:
                     "WHERE o.state IN ('claimed', 'unknown') AND s.context_id = ? LIMIT 1",
                     (job.context_id,),
                 ).fetchone()
-                # Another outstanding continuation of this owner (its session's root is a
+                # Outstanding continuations of this owner (a session's root is a
                 # DIFFERENT generation) — identified from persisted ownership, not the id
-                # prefix. A root cron/one-shot fire waits behind it; so does an unrelated
-                # independent reaction of a repeating watch.
-                waiting = db.execute(
-                    "SELECT 1 FROM jobs j JOIN job_sessions s "
+                # prefix. A root cron/one-shot fire waits behind every one of them; so
+                # does an unrelated independent reaction of a repeating watch.
+                continuations = db.execute(
+                    "SELECT j.id, j.created_at, EXISTS (SELECT 1 FROM occurrences o "
+                    "WHERE o.message_id = s.parent_message_id) AS parent_live "
+                    "FROM jobs j JOIN job_sessions s "
                     "ON j.id = s.job_id AND j.created_at = s.created_at "
-                    "WHERE j.context_id = ? AND j.id != ? AND s.root_job_id != j.id LIMIT 1",
-                    (job.context_id, job.id),
-                ).fetchone()
-                # Entry past that hold is authorized ONLY for the live continuation the
+                    "WHERE j.context_id = ? AND s.root_job_id != j.id",
+                    (job.context_id,),
+                ).fetchall()
+                self_key = (job.id, job.created_at)
+                waiting = [c for c in continuations if (c["id"], c["created_at"]) != self_key]
+                # Entry past that hold is authorized for the live continuation the
                 # owner actually yielded for — the one whose persisted parent occurrence
                 # exists. A fresh cron tick or a NEW reaction of a repeating watch has no
                 # such parent and waits like any other new independent occurrence.
-                session = db.execute(
-                    "SELECT parent_message_id FROM job_sessions WHERE job_id = ? AND created_at = ?",
-                    (job.id, job.created_at),
-                ).fetchone()
-                parent = session["parent_message_id"] if session else None
-                live_continuation = bool(parent) and db.execute(
-                    "SELECT 1 FROM occurrences WHERE message_id = ? LIMIT 1", (parent,)
-                ).fetchone() is not None
+                mine = next((c for c in continuations if (c["id"], c["created_at"]) == self_key), None)
+                authorized = bool(mine and mine["parent_live"])
+                if not authorized and mine is not None and not any(c["parent_live"] for c in waiting):
+                    # Continuations enqueued after the owner's turn settled carry no
+                    # parent occurrence (resolve found nothing in flight), so none is
+                    # "the" yielded-for one. They drain oldest generation first instead
+                    # of each refusing on the other forever — which would also park the
+                    # root cron behind the stuck pair, with recovery (which deliberately
+                    # skips continuations) never releasing the owner.
+                    head = min(continuations, key=lambda c: (c["created_at"], c["id"]))
+                    authorized = (head["id"], head["created_at"]) == self_key
                 if busy or (
-                    (waiting or self._watch_holds_execution(job)) and not live_continuation
+                    (waiting or self._watch_holds_execution(job)) and not authorized
                 ):
                     return None
             old = db.execute("SELECT * FROM occurrences WHERE job_id = ? AND next_fire = ? AND created_at = ?",
