@@ -1260,9 +1260,13 @@ def _scheduled_delivery_payload(outcome) -> dict | None:
         return None
     text = extract_output(outcome.text) or outcome.text or ""
     summary = text.strip()
+    state = str(getattr(outcome, "state", "") or "completed")
+    if not summary and state not in ("completed", "canceled"):
+        # A fire that failed before it said anything (#5106: one stopped while it waited
+        # for its thread) — the card says why, not an empty "failed".
+        summary = str(getattr(outcome, "error", "") or "").strip()
     if len(summary) > _SCHEDULED_SUMMARY_CAP:
         summary = summary[:_SCHEDULED_SUMMARY_CAP].rstrip() + "…"
-    state = str(getattr(outcome, "state", "") or "completed")
     status = state if state in ("completed", "canceled") else "failed"
     # Recurring collapse (r4): the FIRST fire renders a full card; subsequent fires into
     # the same session collapse to a compact chip. ``fire_count`` is the PRE-fire value at
@@ -1406,7 +1410,12 @@ async def _deliver_scheduled(payload: dict) -> bool:
             )
             return False
         _event_bus.publish("scheduler.completed", payload)
-        log.info("[scheduler] delivered result card for job %s → session %s", payload["job_id"], origin)
+        log.info(
+            "[scheduler] delivered %s result card for job %s → session %s",
+            payload.get("status") or "completed",
+            payload["job_id"],
+            origin,
+        )
         return True
     except Exception:  # noqa: BLE001
         log.exception("[scheduler] scheduled delivery failed for %s", payload["job_id"])

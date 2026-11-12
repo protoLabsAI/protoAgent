@@ -31,6 +31,7 @@ class _Outcome:
     text: str = "Swept the inbox: 3 new threads, 1 needs a reply."
     state: str = "completed"
     task_id: str = "task-abc"
+    error: str = ""
 
 
 @dataclass
@@ -122,6 +123,19 @@ def test_failed_turn_marks_status_failed(_sched):
     payload = a2a._scheduled_delivery_payload(_Outcome(state="failed", text="boom"))
     assert payload is not None
     assert payload["status"] == "failed"
+
+
+def test_a_fire_that_failed_before_saying_anything_carries_why(_sched):
+    """#5106: a fire stopped before its turn produced text delivered a card that said only
+    "failed". The card now carries the turn's error."""
+    _sched(_Job())
+    why = "The turn stalled: no progress for 900s while starting up."
+    payload = a2a._scheduled_delivery_payload(_Outcome(state="failed", text="", error=why))
+    assert payload is not None
+    assert (payload["status"], payload["summary"]) == ("failed", why)
+    # A completed turn with no text is not given an error it doesn't have.
+    done = a2a._scheduled_delivery_payload(_Outcome(state="completed", text="", error="ignored"))
+    assert done["summary"] == ""
 
 
 # ── recurring collapse (r4) ───────────────────────────────────────────────────

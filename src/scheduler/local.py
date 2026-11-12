@@ -1302,7 +1302,8 @@ class LocalScheduler:
         state = str((task.get("status") or {}).get("state", "")).lower().removeprefix("task_state_")
         valid = not payload.get("error") and task.get("id") == task_id
         terminal = valid and state in {"completed", "failed", "rejected", "canceled", "cancelled"}
-        diagnostic = (f"task {task_id} pending ({state or 'unknown'}); not automatically resent" if valid else
+        diagnostic = (f"task {task_id} pending ({state or 'unknown'}): queued or running; "
+                      "recorded when it ends, not automatically resent" if valid else
                       f"task {task_id} missing or unavailable; not automatically resent")
         failure = _a2a_turn_failure(payload) if terminal else ""
         canceled = state in {"canceled", "cancelled"}
@@ -1488,11 +1489,27 @@ class LocalScheduler:
                     if task_id:
                         self._remember_task(job, task_id)
                         # Bound this wait; subsequent ticks use the same durable handle.
-                        async with asyncio.timeout(self._fire_timeout_s):
-                            payload = initial
-                            while not self._settle_task(job, task_id, payload):
-                                await asyncio.sleep(_POLL_INTERVAL_S)
-                                payload = await self._get_task(client, task_id)
+                        try:
+                            async with asyncio.timeout(self._fire_timeout_s):
+                                payload = initial
+                                while not self._settle_task(job, task_id, payload):
+                                    await asyncio.sleep(_POLL_INTERVAL_S)
+                                    payload = await self._get_task(client, task_id)
+                        except TimeoutError:
+                            # Accepted and still going (#5106): typically queued behind a
+                            # long turn on the same thread, or a long turn itself. Nothing
+                            # was lost and nothing is resent — the claim stays unresolved
+                            # (so the job cannot fire again meanwhile) and every tick reads
+                            # the task until it ends, then settles it exactly once.
+                            dispatch_state = "unknown"
+                            log.info(
+                                "[scheduler] job %s: task %s still queued or running after %gs; "
+                                "it settles when the task ends",
+                                job.id,
+                                task_id,
+                                self._fire_timeout_s,
+                            )
+                            return None
                         dispatch_state = "settled"
                         return True
             dispatch_state = "retryable"
