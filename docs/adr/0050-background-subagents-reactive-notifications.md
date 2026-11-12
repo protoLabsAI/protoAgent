@@ -261,7 +261,10 @@ live path was already prompt and in order. These were the gaps:
 - **Amendment linkage.** `delegate_to(amends="bg-…")` puts a preamble on the amendment. It names the
   earlier request by job id, peer task id and message id, says how that request stands on the
   sender's side, and quotes its opening line. The link is stored in the `amends` column. A peer can
-  then match the amendment to the original, or say plainly that it never received it.
+  then match the amendment to the original, or say plainly that it never received it. The job row
+  records the request the agent wrote, not the text sent with the preamble, so amending an amendment
+  quotes real words. For a chain, the preamble names the immediate parent (what this changes) and
+  the root brief (what the peer has to find), each with its ids, state and opening line.
 
 The agent still has no tool that reads a job's state (§ADR 0051 removed `task_output`). The state
 can be read through `GET /api/background/{id}` and `graph.sdk.background_status`.

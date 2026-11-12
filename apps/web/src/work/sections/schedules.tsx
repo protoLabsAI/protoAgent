@@ -189,4 +189,4 @@ export function SchedulesSection({ sources, state, onOpen }: WorkSectionContext)
   return <ScheduleList source={source} onOpen={onOpen} />;
 }
 
-registerWorkSection("schedules", { label: "Schedules", render: (ctx) => <SchedulesSection {...ctx} /> });
+registerWorkSection("schedules", { label: "Schedules", group: "coming-up", render: (ctx) => <SchedulesSection {...ctx} /> });
