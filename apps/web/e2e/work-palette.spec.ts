@@ -11,14 +11,16 @@ test("Work search lists one overview entry and opens every section in the modal"
 
   for (const section of ["Overview", "Decisions", "Goals", "Watches", "Tasks", "Schedules", "Background agents", "Activity", "Directives"]) {
     const label = section === "Overview" ? "Open Work" : `Work: ${section}`;
+    // Legacy palette commands still route to the adapter's current display label.
+    const sectionLabel = section === "Directives" ? "Your instructions" : section;
     await page.keyboard.press("ControlOrMeta+Shift+k");
     await page.locator(".pl-cmdk-commands__input").fill(label);
     await page.getByRole("option", { name: label, exact: true }).click();
     await expect(page.getByRole("button", { name: "Dock to rail", exact: true })).toBeVisible();
     const picker = page.locator('.work-view[data-frame="modal"]').getByRole("button", { name: /Work sections/ });
-    await expect(picker).toHaveAccessibleName(`${section} Work sections`);
+    await expect(picker).toHaveAccessibleName(`${sectionLabel} Work sections`);
     await picker.click();
-    await expect(page.getByRole("menuitemradio", { name: section, exact: true })).toHaveAttribute("aria-checked", "true");
+    await expect(page.getByRole("menuitemradio", { name: sectionLabel, exact: true })).toHaveAttribute("aria-checked", "true");
     await page.keyboard.press("Escape");
     await expect(picker).toBeFocused();
     await page.keyboard.press("Escape");

@@ -27,6 +27,7 @@ const mocks = vi.hoisted(() => ({
 }));
 
 // The one data hook — fed directly, so no queries run (mirrors WorkView.test.tsx).
+vi.mock("../../activity/useActivityHistory", () => ({ useActivityHistory: () => mocks.sources.activity }));
 vi.mock("../useWorkItems", () => ({ useWorkItems: () => mocks.sources }));
 vi.mock("../../lib/api", () => ({ api: { stopBackground: mocks.stopBackground, inbox: async () => ({ items: [] }) } }));
 vi.mock("../../lib/events", () => ({
@@ -50,6 +51,7 @@ vi.mock("../../app/SubagentsPanel", () => ({
 
 import { ToastProvider } from "@protolabsai/ui/overlays";
 import { WorkView } from "../WorkView";
+import { sections } from "../sectionRegistry";
 import { useUI } from "../../state/uiStore";
 import type { WorkItem, WorkItems, WorkSource, WorkSourceKind } from "../useWorkItems";
 // Importing the sections registers them in the WorkView registry (module side effect).
@@ -223,4 +225,10 @@ it("shows Urgent only for the inbox now tier", async () => {
   expect(host.textContent).toContain("Urgent");
   await render("activity", "activity:u2");
   expect(host.textContent).not.toContain("Urgent");
+});
+
+it("places background adapters in Doing now without giving activity a Work group", () => {
+  expect(sections.get("background")?.group).toBe("doing-now");
+  expect(sections.get("activity")).toBeDefined();
+  expect(sections.get("activity")?.group).toBeUndefined();
 });

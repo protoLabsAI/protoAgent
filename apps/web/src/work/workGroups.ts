@@ -1,3 +1,4 @@
+import type { WorkItems } from "./useWorkItems";
 import { groupFor, type GroupableWorkItem, type WorkGroupId, type WorkJobRef } from "./tone";
 
 export type WorkGroup = {
@@ -19,14 +20,21 @@ function jobEnded(item: GroupableWorkItem): boolean {
 
 const jobKey = (job: WorkJobRef) => JSON.stringify([job.kind, job.id]);
 
+export function inWorkScope(item: GroupableWorkItem, { thisChatOnly = false, sessionId }: {
+  thisChatOnly?: boolean; sessionId?: string;
+}): boolean {
+  return groupFor(item) === "needs-you" || !thisChatOnly || (!!sessionId && item.sessionId === sessionId);
+}
+
 /** Shared row/count projection for Work and the rail. Supply ALL chats' rows
  * (useWorkItems with thisChatOnly: false), including terminal jobs. Missing jobs
  * are not proof of completion. No fetching, cache writes or server fulfilment.
- * S2b supplies delivery/wait adapters; S3 migrates the existing lane callers. */
-export function workGroups(items: readonly GroupableWorkItem[], {
+ * Accepts the live source projection or standalone rows; legacy lane callers migrate in S3. */
+export function workGroups(input: readonly GroupableWorkItem[] | WorkItems, {
   thisChatOnly = false,
   sessionId,
 }: { thisChatOnly?: boolean; sessionId?: string } = {}): WorkGroup[] {
+  const items: readonly GroupableWorkItem[] = Array.isArray(input) ? input : Object.values(input).flatMap((source) => source.groupItems ?? source.items);
   const groups: WorkGroup[] = [
     { id: "needs-you", label: "Needs you", items: [], count: 0 },
     { id: "doing-now", label: "Doing now", items: [], count: 0 },
@@ -38,7 +46,7 @@ export function workGroups(items: readonly GroupableWorkItem[], {
     const id = groupFor(item);
     if (!id) continue;
     if (item.kind === "directive" && item.tiedJob && ended.has(jobKey(item.tiedJob))) continue;
-    if (id !== "needs-you" && thisChatOnly && (!sessionId || item.sessionId !== sessionId)) continue;
+    if (!inWorkScope(item, { thisChatOnly, sessionId })) continue;
     const group = groups.find((candidate) => candidate.id === id)!;
     // A stopped goal needs attention without painting its failure as an error.
     group.items.push(item.kind === "goal" && id === "needs-you" ? { ...item, status: "paused" } : item);

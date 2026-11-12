@@ -44,6 +44,23 @@ def _now() -> str:
     return datetime.now(UTC).isoformat()
 
 
+# One lock per database file, shared by every TaskStore in this process. SQLite's
+# busy handler only polls (sleep, retry), so a connection waiting on BEGIN IMMEDIATE
+# can sleep through every gap between another connection's back-to-back
+# transactions and raise "database is locked" after busy_timeout, even though no
+# single transaction held the lock that long. A blocking threading lock instead
+# wakes the waiter when the holder releases. busy_timeout still covers other
+# processes.
+_FILE_LOCKS: dict[str, threading.Lock] = {}
+_FILE_LOCKS_GUARD = threading.Lock()
+
+
+def _file_lock(path: Path) -> threading.Lock:
+    key = os.path.normcase(os.path.realpath(path))
+    with _FILE_LOCKS_GUARD:
+        return _FILE_LOCKS.setdefault(key, threading.Lock())
+
+
 def _resolve_db_path(db_path: str | None) -> Path:
     """``TASKS_DB_PATH`` (or legacy ``BEADS_DB_PATH``) env → constructor arg
     (both verbatim) → the per-instance ``instance_root/tasks/issues.db`` store."""
@@ -56,13 +73,14 @@ def _resolve_db_path(db_path: str | None) -> Path:
 
 
 class TaskStore:
-    """SQLite-backed issue tracker. A lock guards each connection; write
-    transactions serialize mutations across store instances too."""
+    """SQLite-backed issue tracker. A per-file lock guards each connection and
+    queues stores on the same file in this process; write transactions
+    serialize mutations across processes too."""
 
     def __init__(self, db_path: str | None = None):
         self.path = _resolve_db_path(db_path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        self._lock = threading.Lock()
+        self._lock = _file_lock(self.path)
         self._conn = sqlite3.connect(str(self.path), check_same_thread=False)
         # busy_timeout FIRST: the WAL pragma itself takes a lock (#2428).
         self._conn.execute("PRAGMA busy_timeout=5000")  # wait (don't error) on lock contention
@@ -112,6 +130,8 @@ class TaskStore:
     def _write(self):
         # Serialize read/modify/write across connections too, and roll back failed
         # operations so neither partial writes nor allocated IDs leak into a retry.
+        # The shared file lock queues same-process connections (see _file_lock);
+        # BEGIN IMMEDIATE + busy_timeout only arbitrates against other processes.
         with self._lock, self._conn:
             self._conn.execute("BEGIN IMMEDIATE")
             yield

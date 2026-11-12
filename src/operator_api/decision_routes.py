@@ -17,11 +17,22 @@ goes over the loopback A2A endpoint (a network call, carrying the console's own
 
 from __future__ import annotations
 
+import logging
+
 from fastapi import Request
 from pydantic import BaseModel
 
 from graph.decision_resume import CANCELLED_RESUME as CANCELLED_RESUME
 from graph.decision_resume import resume_parked_turn as _resume_parked_turn
+
+log = logging.getLogger("protoagent.decisions")
+
+#: How long an answer request waits for the resumed run to CONSUME the answer (the parked
+#: checkpoint interrupt resolves) before replying 202 "on its way" (#5099). Consumption is
+#: normally milliseconds; this only runs out when the session is busy with another turn.
+#: Delivery continues in the background either way and keeps its claim, so a retry joins it
+#: instead of sending the answer again. Read at call time (tests shrink it).
+ACCEPT_WAIT_S = 10.0
 
 
 class AnswerRequest(BaseModel):
@@ -47,6 +58,9 @@ def _resolve_answer(rec, body: AnswerRequest) -> str:
 
     option_id = (body.option_id or "").strip()
     text = (body.text or "").strip()
+    if body.option_id is not None and not option_id:
+        # A blank option id is a malformed request, not a free-text answer in disguise.
+        raise HTTPException(status_code=400, detail="option_id is blank")
     if option_id:
         by_id = {str(o.get("id")): str(o.get("id")) for o in rec.options if isinstance(o, dict) and o.get("id")}
         by_label = {str(o.get("label")): str(o.get("id")) for o in rec.options if isinstance(o, dict) and o.get("id")}
@@ -88,68 +102,98 @@ def register_decision_routes(app) -> None:
         pending = await asyncio.to_thread(store.list, state="pending", limit=500)
         return {"decisions": [d.to_dict() for d in items], "pending": len(pending)}
 
-    @app.get("/api/decisions/{decision_id}")
-    async def _api_decision(decision_id: str):
-        """One decision by id, or 404."""
-        rec = await asyncio.to_thread(decision_store().get, decision_id)
-        if rec is None:
-            raise HTTPException(status_code=404, detail=f"no decision {decision_id!r}")
-        return rec.to_dict()
-
     # Answers being delivered right now, by decision id. Two surfaces answering the same
     # decision at once both used to send a resume: the loser's resume was refused under the
     # turn lock, but only after its task and chat message existed, and the route still said
     # 200 "Sent" (release acceptance bd-nfd6g.17, D3). A second answer now waits for the one in
-    # flight to settle instead of racing it. Single-process state: one server owns the ledger.
+    # flight to settle instead of racing it. A claim is held until the answer is consumed or
+    # its delivery ends — never released by a timeout while the resume is still queued (#5099).
+    # Single-process state: one server owns the ledger (a restart drops the claim along with
+    # the turn that held it, so the decision is answerable again).
     inflight: dict[str, asyncio.Future] = {}
-    # Delivery may wait for the session lock; bound arbitration by the transport timeout.
-    settle_wait_s = 130.0
+    # Dismissals being written right now, by decision id. A cancel holds this across its
+    # check-and-withdraw (which hops to a thread), so an answer arriving in that window waits
+    # and then sees the record closed, instead of delivering to a decision being withdrawn.
+    cancelling: dict[str, asyncio.Future] = {}
     deliveries: set[asyncio.Task] = set()
+
+    def delivering(decision_id: str) -> bool:
+        claim = inflight.get(decision_id)
+        return claim is not None and not claim.done()
+
+    def with_delivery(rec) -> dict:
+        # Every single-record response carries it, so a 409 detail equals a fresh GET.
+        return {**rec.to_dict(), "delivering": rec.pending and delivering(rec.id)}
 
     def delivery_done(task):
         deliveries.discard(task)
-        if not task.cancelled():
-            task.exception()  # Retrieve errors even after the request has returned.
+        if task.cancelled():
+            return
+        exc = task.exception()  # Retrieve errors even after the request has returned.
+        if exc is not None and not isinstance(exc, HTTPException):
+            log.error("[decision] answer delivery crashed", exc_info=exc)
+
+    def on_its_way(rec):
+        # Still pending, but an answer is being delivered: say so honestly instead of either
+        # "sent" (not consumed yet) or "failed" (it may well land). 202 Accepted.
+        from fastapi.responses import JSONResponse
+
+        return JSONResponse(status_code=202, content={"decision": with_delivery(rec), "resumed": False, "delivering": True})
+
+    @app.get("/api/decisions/{decision_id}")
+    async def _api_decision(decision_id: str):
+        """One decision by id, or 404. ``delivering`` is true while an answer to it is on its
+        way to the agent (accepted, not yet consumed) — the console's "delivery unknown" check."""
+        rec = await asyncio.to_thread(decision_store().get, decision_id)
+        if rec is None:
+            raise HTTPException(status_code=404, detail=f"no decision {decision_id!r}")
+        return with_delivery(rec)
 
     @app.post("/api/decisions/{decision_id}/answer")
     async def _api_answer_decision(decision_id: str, body: AnswerRequest, request: Request):
         """Answer a pending decision and resume its parked turn.
 
         Validates the answer against the record's options (400 on an unknown option or an
-        empty body). Closed decisions return 409, unknown ids 404. The A2A resume
-        closes the record after consuming the interrupt; failed delivery is retryable."""
+        empty body). Closed decisions return 409 with the record, unknown ids 404. Replies as
+        soon as the resumed run consumes the answer (200, ``resumed: true``) — the rest of the
+        turn runs in the background and its outcome is logged. A delivery that fails before
+        consumption leaves the decision pending: 200 ``resumed: false``, retryable. A delivery
+        still queued after :data:`ACCEPT_WAIT_S` (the session is busy) is 202
+        ``delivering: true``; answering again meanwhile joins it rather than sending twice."""
         store = decision_store()
         rec = await asyncio.to_thread(store.get, decision_id)
         if rec is None:
             raise HTTPException(status_code=404, detail=f"no decision {decision_id!r}")
         if not rec.pending:
-            raise HTTPException(status_code=409, detail=rec.to_dict())
+            raise HTTPException(status_code=409, detail=with_delivery(rec))
         answer = _resolve_answer(rec, body)
         loop = asyncio.get_running_loop()
-        deadline = loop.time() + settle_wait_s
-        while (other := inflight.get(decision_id)) is not None:
+        deadline = loop.time() + ACCEPT_WAIT_S
+        while (other := inflight.get(decision_id) or cancelling.get(decision_id)) is not None:
             # Another answer is mid-delivery. If it closes the decision, ours lost: 409 with the
-            # real record. If it fails delivery (still pending), take our turn to deliver.
+            # real record. If it fails delivery (still pending), take our turn to deliver. If it
+            # is still queued, it is on its way: report that, never start a second turn.
             remaining = deadline - loop.time()
             if remaining <= 0:
-                raise HTTPException(status_code=409, detail=rec.to_dict())
+                return on_its_way(rec)
             try:
                 await asyncio.wait_for(asyncio.shield(other), timeout=min(remaining, 0.25))
             except asyncio.TimeoutError:
                 pass
             rec = await asyncio.to_thread(store.get, decision_id)
             if rec is None or not rec.pending:
-                raise HTTPException(status_code=409, detail=rec.to_dict() if rec else None)
+                raise HTTPException(status_code=409, detail=with_delivery(rec) if rec else None)
         mine = loop.create_future()
         inflight[decision_id] = mine
-        text = f"Operator chose: {rec.option_label(answer)} ({answer})" if body.option_id else answer
+        # _resolve_answer rejects a blank option_id, so a non-None one here names an option.
+        text = f"Operator chose: {rec.option_label(answer)} ({answer})" if body.option_id is not None else answer
         actor = getattr(request.state, "device_id", None) or "operator"
 
         async def deliver_answer():
             try:
                 current = await asyncio.to_thread(store.get, decision_id)
                 if current is None or not current.pending:
-                    raise HTTPException(status_code=409, detail=current.to_dict() if current else None)
+                    raise HTTPException(status_code=409, detail=with_delivery(current) if current else None)
                 # Its result isn't needed: the ledger, re-read below, says whose answer landed.
                 delivery = asyncio.create_task(_resume_parked_turn(rec.session_id, text, decision_id, resolution={
                     "answer": answer, "answered_by": actor,
@@ -157,12 +201,16 @@ def register_decision_routes(app) -> None:
                 }))
                 deliveries.add(delivery)
                 delivery.add_done_callback(delivery_done)
-                # Keep delivery alive while returning as soon as consumption is durable.
+                # Keep delivery alive while returning as soon as consumption is durable. Poll
+                # fast while consumption is imminent, then back off for a resume queued behind
+                # a busy session (it can wait minutes for the lock).
+                poll_s = 0.02
                 while not delivery.done():
                     current = await asyncio.to_thread(store.get, decision_id)
                     if current is not None and not current.pending:
                         break
-                    await asyncio.wait({delivery}, timeout=0.02)
+                    await asyncio.wait({delivery}, timeout=poll_s)
+                    poll_s = min(poll_s * 1.5, 0.5)
                 if delivery.done():
                     await delivery
             finally:
@@ -173,7 +221,15 @@ def register_decision_routes(app) -> None:
         accepted_delivery = asyncio.create_task(deliver_answer())
         deliveries.add(accepted_delivery)
         accepted_delivery.add_done_callback(delivery_done)
-        await asyncio.shield(accepted_delivery)
+        # asyncio.wait never cancels it: a disconnect or the deadline leaves delivery running.
+        await asyncio.wait({accepted_delivery}, timeout=max(0.0, deadline - loop.time()))
+        if not accepted_delivery.done():
+            current = await asyncio.to_thread(store.get, decision_id)
+            if current is not None and current.pending:
+                return on_its_way(current)
+            await accepted_delivery  # consumed at the deadline; settles at once
+        elif (exc := accepted_delivery.exception()) is not None:
+            raise exc
         updated = await asyncio.to_thread(store.get, decision_id)
         if updated is None:
             raise HTTPException(status_code=404, detail=f"no decision {decision_id!r}")
@@ -183,9 +239,9 @@ def register_decision_routes(app) -> None:
         # Closed by something other than this answer (another surface, expiry, a cancel): ours
         # lost, whatever the transport said. A still-pending record is failed delivery: retryable.
         if not updated.pending and not accepted:
-            raise HTTPException(status_code=409, detail=updated.to_dict())
+            raise HTTPException(status_code=409, detail=with_delivery(updated))
         # The checkpoint is authoritative even if the HTTP response was lost or timed out.
-        return {"decision": updated.to_dict(), "resumed": updated.state == "answered"}
+        return {"decision": with_delivery(updated), "resumed": updated.state == "answered"}
 
     @app.post("/api/decisions/{decision_id}/cancel")
     async def _api_cancel_decision(decision_id: str, body: CancelRequest | None = None):
@@ -197,11 +253,27 @@ def register_decision_routes(app) -> None:
         sentinel — so the session is NOT left blocked for later autonomous (scheduler /
         inbox / webhook) turns. Clearing is best-effort: the autonomous hold also refuses to
         park on a non-pending decision, so a failed clear can never wedge the session."""
+        if delivering(decision_id) or decision_id in cancelling:
+            # An answer is mid-delivery: withdrawing now would pull the record out from under a
+            # resume that may already be consuming it. The answer decides; report the state.
+            # (Or another dismissal is mid-write: it decides.)
+            rec = await asyncio.to_thread(decision_store().get, decision_id)
+            if rec is None:
+                raise HTTPException(status_code=404, detail=f"no decision {decision_id!r}")
+            raise HTTPException(status_code=409, detail=with_delivery(rec))
+        # Claimed with no await since the check above, so the check-and-withdraw is atomic
+        # with respect to the answer route's claim (both run on this event loop).
+        claim = asyncio.get_running_loop().create_future()
+        cancelling[decision_id] = claim
         try:
             updated = await asyncio.to_thread(decision_store().withdraw, decision_id, body.reason if body else "")
         except DecisionNotFound as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         except DecisionClosed as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
+        finally:
+            if cancelling.get(decision_id) is claim:
+                del cancelling[decision_id]
+            claim.set_result(None)
         await _resume_parked_turn(updated.session_id, CANCELLED_RESUME)
         return {"decision": updated.to_dict()}

@@ -752,8 +752,11 @@ Look up a background job by its `bg-…` id — the status-query companion to
 surface instead of being blind between launch and the [ADR 0070](/adr/0070-background-results-push-resume) completion nudge.
 
 Returns `{"ok", "task_id", "status", "subagent_type", "description", "created_at",
-"completed_at", "message"}` plus — only once the job is terminal
-(completed/failed/canceled) — `"report"` with the full result text. An unknown id
+"completed_at", "message", "delivery", "peer_task_id", "amends"}` plus — only once the
+job is terminal (completed/failed/canceled) — `"report"` with the full result text.
+`delivery` is `in_flight` / `undelivered` / `delivered` (whether the outcome has
+reached the origin session); `peer_task_id` is the task id a peer gave a delegated
+request, blank until the peer accepted it. An unknown id
 (or the subsystem being off) returns `ok=False` with `status="unknown"` and a
 readable message. Reads the durable jobs store directly (cheap local SQLite).
 

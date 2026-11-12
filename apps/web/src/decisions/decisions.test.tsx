@@ -81,6 +81,7 @@ beforeEach(() => {
   root = createRoot(host);
 });
 afterEach(async () => {
+  vi.useRealTimers();
   cleanup.forEach((off) => off());
   await act(async () => root.unmount());
   document.body.replaceChildren();
@@ -509,19 +510,133 @@ describe("DecisionCard", () => {
     expect(host.querySelector('[role="group"][aria-label="Answer"]')).toBeNull();
   });
 
-  it("keeps the options enabled on a send failure and offers Try again", async () => {
+  // ── delivery unknown (#5099): a failed request is not "nothing changed" ──
+  // Flush the card's zero-delay first check and the promise it awaits.
+  async function flushCheck(ms = 0) {
+    await act(async () => {
+      vi.advanceTimersByTime(ms);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+  }
+
+  it("checks before offering Try again when a send fails in transit", async () => {
+    vi.useFakeTimers();
     const onAnswer = vi.fn().mockRejectedValue(new Error("network"));
-    await renderNode(<DecisionCard decision={decision("a")} onAnswer={onAnswer} />);
+    let resolveCheck: (row: DecisionRow) => void = () => {};
+    const onCheck = vi.fn(() => new Promise<DecisionRow>((resolve) => { resolveCheck = resolve; }));
+    await renderNode(<DecisionCard decision={decision("a")} onAnswer={onAnswer} onCheck={onCheck} />);
     await click("Merge with the WARN");
-    expect(document.body.textContent).toContain("Couldn't send your answer");
-    expect(document.querySelector(".pl-alert--warning")).toBeTruthy();
+    // Unknown outcome: neutral information, no claim about what happened, nothing to retry.
+    expect(host.textContent).toContain('Checking whether protoEngineer got "Merge with the WARN"…');
+    expect(host.textContent).not.toContain("Couldn't send your answer");
+    expect(host.textContent).not.toContain("Nothing changed");
+    expect(host.querySelector(".pl-alert--warning")).toBeNull();
+    expect(buttons().some((b) => b.textContent?.trim() === "Try again")).toBe(false);
+    expect(host.querySelector('[role="group"][aria-label="Answer"]')).toBeNull();
+    await flushCheck();
+    expect(onCheck).toHaveBeenCalledExactlyOnceWith("a");
+    // The server confirms it's still waiting with nothing on its way: now offer the retry.
+    await act(async () => { resolveCheck(decision("a")); await Promise.resolve(); });
+    expect(host.textContent).toContain("Couldn't send your answer");
+    expect(host.querySelector(".pl-alert--warning")).toBeTruthy();
     expect(buttons().some((b) => b.textContent?.trim() === "Try again")).toBe(true);
     expect(buttons().find((b) => b.textContent?.includes("Merge with the WARN"))?.disabled).toBe(false);
     expect(buttons().find((b) => b.textContent?.trim() === "Hold the release")?.disabled).toBe(false);
+    expect(onAnswer).toHaveBeenCalledTimes(1);
+    vi.useRealTimers();
+  });
+
+  it("shows Sent when a send that failed in transit had in fact landed", async () => {
+    vi.useFakeTimers();
+    const onAnswer = vi.fn().mockRejectedValue(new Error("timeout"));
+    const onCheck = vi.fn().mockResolvedValue(decision("a", { state: "answered", answer: "merge", answer_label: "Merge with the WARN" }));
+    await renderNode(<DecisionCard decision={decision("a")} onAnswer={onAnswer} onCheck={onCheck} />);
+    await click("Merge with the WARN");
+    await flushCheck();
+    expect(host.textContent).toContain('Sent: "Merge with the WARN". Continuing…');
+    expect(host.textContent).not.toContain("Couldn't send");
+    expect(buttons().some((b) => b.textContent?.trim() === "Try again")).toBe(false);
+    expect(onAnswer).toHaveBeenCalledTimes(1);
+    vi.useRealTimers();
+  });
+
+  it("keeps checking while the server can't be reached, never offering a retry", async () => {
+    vi.useFakeTimers();
+    const onAnswer = vi.fn().mockRejectedValue(new Error("offline"));
+    const onCheck = vi.fn().mockRejectedValue(new Error("offline"));
+    await renderNode(<DecisionCard decision={decision("a")} onAnswer={onAnswer} onCheck={onCheck} />);
+    await click("Merge with the WARN");
+    await flushCheck();
+    expect(host.textContent).toContain('Can\'t confirm yet whether protoEngineer got "Merge with the WARN". Still checking…');
+    expect(host.querySelector(".pl-alert--warning")).toBeNull();
+    expect(buttons().some((b) => b.textContent?.trim() === "Try again")).toBe(false);
+    await flushCheck(1999);
+    expect(onCheck).toHaveBeenCalledTimes(1);
+    await flushCheck(1);
+    expect(onCheck).toHaveBeenCalledTimes(2);
+    vi.useRealTimers();
+  });
+
+  it("treats a 202 as on its way: no retry, then Sent once the agent takes it", async () => {
+    vi.useFakeTimers();
+    const onAnswer = vi.fn().mockResolvedValue({
+      answered_elsewhere: false, decision: decision("a", { delivering: true }), resumed: false, delivering: true,
+    });
+    const onCheck = vi.fn()
+      .mockResolvedValueOnce(decision("a", { delivering: true }))
+      .mockResolvedValueOnce(decision("a", { state: "answered", answer: "merge" }));
+    await renderNode(<DecisionCard decision={decision("a")} onAnswer={onAnswer} onCheck={onCheck} />);
+    await click("Merge with the WARN");
+    expect(host.textContent).toContain('Sent: "Merge with the WARN". Waiting for protoEngineer to pick it up…');
+    expect(host.querySelector(".pl-alert--warning")).toBeNull();
+    expect(host.querySelector('[role="group"][aria-label="Answer"]')).toBeNull();
+    await flushCheck(1000);
+    expect(onCheck).toHaveBeenCalledTimes(1);
+    expect(host.textContent).toContain("Waiting for protoEngineer to pick it up…");
+    await flushCheck(1000);
+    expect(onCheck).toHaveBeenCalledTimes(1); // backoff: the second check is 2s after the first
+    await flushCheck(1000);
+    expect(onCheck).toHaveBeenCalledTimes(2);
+    expect(host.textContent).toContain('Sent: "Merge with the WARN". Continuing…');
+    expect(onAnswer).toHaveBeenCalledTimes(1);
+    vi.useRealTimers();
+  });
+
+  it("settles a checking card from a live record update elsewhere", async () => {
+    vi.useFakeTimers();
+    const onAnswer = vi.fn().mockRejectedValue(new Error("network"));
+    const onCheck = vi.fn(() => new Promise<DecisionRow>(() => {}));
+    await renderNode(<DecisionCard decision={decision("a")} onAnswer={onAnswer} onCheck={onCheck} />);
+    await click("Merge with the WARN");
+    // Same card instance, new record: someone else's answer landed while we were checking.
+    await renderNode(<DecisionCard decision={decision("a", { state: "answered", answer: "hold" })} onAnswer={onAnswer} onCheck={onCheck} />);
+    expect(host.textContent).not.toContain("Checking whether");
+    expect(host.textContent).toContain("Already answered");
+    expect(buttons().some((b) => b.textContent?.trim() === "Try again")).toBe(false);
+    vi.useRealTimers();
+  });
+
+  it("re-renders with a fresh onResolved do not extend the 4s Sent hold", async () => {
+    vi.useFakeTimers();
+    const onAnswer = vi.fn().mockResolvedValue({ answered_elsewhere: false, decision: decision("a"), resumed: true });
+    const resolved = vi.fn();
+    // Each render passes a NEW closure, as DecisionsPanel does.
+    const render = () => renderNode(<DecisionCard decision={decision("a")} onAnswer={onAnswer} onResolved={(id) => resolved(id)} />);
+    await render();
+    await click("Merge with the WARN");
+    expect(host.textContent).toContain("Sent:");
+    for (let i = 0; i < 3; i++) {
+      await act(async () => { vi.advanceTimersByTime(1000); });
+      await render();
+    }
+    expect(resolved).not.toHaveBeenCalled();
+    await act(async () => { vi.advanceTimersByTime(1000); });
+    expect(resolved).toHaveBeenCalledExactlyOnceWith("a");
   });
 
   it("drops the options and Try again when a failed send's decision settles elsewhere", async () => {
-    const onAnswer = vi.fn().mockRejectedValue(new Error("network"));
+    const onAnswer = vi.fn().mockResolvedValue({ answered_elsewhere: false, decision: decision("a"), resumed: false });
     await renderNode(<DecisionCard decision={decision("a")} onAnswer={onAnswer} />);
     await click("Merge with the WARN");
     expect(document.body.textContent).toContain("Couldn't send your answer");

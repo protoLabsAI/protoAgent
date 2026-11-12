@@ -229,4 +229,4 @@ export function TasksSection({ sources, state, onOpen }: WorkSectionContext) {
   return <TaskList source={source} onOpen={onOpen} />;
 }
 
-registerWorkSection("tasks", { label: "Tasks", render: (ctx) => <TasksSection {...ctx} /> });
+registerWorkSection("tasks", { label: "Tasks", group: "doing-now", render: (ctx) => <TasksSection {...ctx} /> });

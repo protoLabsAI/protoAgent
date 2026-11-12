@@ -11,6 +11,7 @@ import { decisionsApi } from "../../lib/api/decisions";
 import { ApiError } from "../../lib/api/http";
 import { decisionsStoreForTest } from "../../decisions/useDecisions";
 import { WorkView } from "../WorkView";
+import { sections } from "../sectionRegistry";
 import { decisionMeta, fromDecision, fromDirective } from "../tone";
 import { useUI } from "../../state/uiStore";
 import type { WorkItem, WorkItems, WorkSource, WorkSourceKind } from "../useWorkItems";
@@ -31,9 +32,13 @@ const dir = vi.hoisted(() => ({
   snapshot: { state: "ready", active: [], history: [], loadedAt: 1 } as DirectivesSnapshot,
   refresh: vi.fn(),
   revoke: vi.fn(),
+  sessions: new Map<string, DirectivesSnapshot>(),
 }));
 vi.mock("../../chat/useDirectives", () => ({
-  useDirectives: () => ({ ...dir.snapshot, refresh: dir.refresh, revoke: dir.revoke }),
+  useDirectives: (sessionId: string) => ({
+    ...(dir.sessions.get(sessionId) ?? dir.snapshot), refresh: dir.refresh,
+    revoke: (...args: unknown[]) => dir.revoke(...(dir.sessions.size ? [sessionId, ...args] : args)),
+  }),
 }));
 vi.mock("../../lib/useIsMobile", () => ({ useIsMobile: () => false }));
 
@@ -132,6 +137,7 @@ beforeEach(() => {
     disconnect() {}
   });
   data.sources = emptySources();
+  dir.sessions.clear();
   dir.snapshot = { state: "ready", active: [], history: [], loadedAt: 1 };
   useUI.setState({ surfaceStates: {}, surfaceModal: null });
   host = document.createElement("div");
@@ -435,6 +441,25 @@ describe("Work decision actions", () => {
 });
 
 describe("Directives section", () => {
+  it.each(["directive:other", "other"])("opens the selected owner's ledger and withdrawal action (%s)", async (itemId) => {
+    const here = directiveRow("focused", { session_id: "here", quote: "Focused chat instruction" });
+    const other = directiveRow("other", { session_id: "elsewhere", quote: "Other chat instruction" });
+    data.sources.directives.items = [directiveItem(here), directiveItem(other)];
+    dir.sessions.set("here", { state: "ready", active: [here], history: [], loadedAt: 1 });
+    dir.sessions.set("elsewhere", { state: "ready", active: [other], history: [], loadedAt: 1 });
+    workState({ section: "overview", itemId, filters: { thisChat: false } });
+    await render("rail", "here");
+    const detail = host.querySelector(".work-view__detail")!;
+    expect(detail.textContent).toContain("Other chat instruction");
+    expect(detail.textContent).not.toContain("Focused chat instruction");
+    dir.revoke.mockResolvedValue({ ok: true });
+    const withdraw = (label: string) => [...detail.querySelectorAll<HTMLButtonElement>("button")]
+      .find((button) => button.textContent?.trim() === label)!;
+    await act(async () => withdraw("Withdraw…").click());
+    await act(async () => withdraw("Withdraw").click());
+    expect(dir.revoke).toHaveBeenCalledWith("elsewhere", "other", "");
+  });
+
   it("renders the ledger with in-force entries under a neutral 'Active' group (r3)", async () => {
     data.sources.directives.items = [directiveItem(directiveRow("a1", { session_id: "here" }))];
     dir.snapshot = {
@@ -519,4 +544,9 @@ it("uses actual phone action sizes in decision and directive custom details", as
   await act(async () => buttons("Withdraw…")[0].click());
   expect(host.querySelectorAll(".chat-directive button.pl-btn--sm")).toHaveLength(0);
   expect([...host.querySelectorAll(".chat-directive-actions button")].map(button => button.textContent)).toEqual(["Keep it", "Withdraw"]);
+});
+
+it("registers decisions and instructions with canonical group metadata", () => {
+  expect(sections.get("decisions")).toMatchObject({ label: "Decisions", group: "needs-you" });
+  expect(sections.get("directives")).toMatchObject({ label: "Your instructions", group: "instructions" });
 });

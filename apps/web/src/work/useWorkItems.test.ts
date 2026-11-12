@@ -29,11 +29,13 @@ vi.mock("../lib/events", () => ({
   },
 }));
 
+import { directiveStore } from "../chat/useDirectives";
+import { workGroups } from "./workGroups";
 import { api } from "../lib/api";
 import { decisionsApi, type DecisionRow } from "../lib/api/decisions";
 import type { DirectiveRow } from "../lib/api/chat";
 import type { ActivityEntry, ActivityHistory } from "../lib/types";
-import { SCHEDULE_POLL_MS, useWorkItems, type UseWorkItemsParams, type WorkItems, type WorkSourceKind } from "./useWorkItems";
+import { SCHEDULE_POLL_MS, activityTitle, useWorkItems, type UseWorkItemsParams, type WorkItems, type WorkSourceKind } from "./useWorkItems";
 
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -66,6 +68,8 @@ type Spies = {
   schedules: ReturnType<typeof vi.spyOn>;
   background: ReturnType<typeof vi.spyOn>;
   activity: ReturnType<typeof vi.spyOn>;
+  inbox: ReturnType<typeof vi.spyOn>;
+  sessions: ReturnType<typeof vi.spyOn>;
   directives: ReturnType<typeof vi.spyOn>;
 };
 let spies: Spies;
@@ -73,6 +77,8 @@ let roots: Root[] = [];
 
 function stubEverything(): Spies {
   return {
+    inbox: vi.spyOn(api, "inbox").mockResolvedValue({ items: [] }),
+    sessions: vi.spyOn(api, "chatSessions").mockResolvedValue({ sessions: [] }),
     decisions: vi.spyOn(decisionsApi, "listDecisions").mockResolvedValue({ decisions: [dec("d1", "pending", "s1")], pending: 1 }),
     goals: vi.spyOn(api, "goals").mockResolvedValue({ goals: [{ session_id: "s1", condition: "ship it", status: "active" }], enabled: true }),
     watches: vi.spyOn(api, "watches").mockResolvedValue({ watches: [{ id: "w1", condition: "watch it", status: "active" }], enabled: true }),
@@ -140,7 +146,8 @@ describe("useWorkItems — load, map, filter", () => {
     expect(w.watches.items[0].meta).toBe("Fires once when met");
     expect(w.tasks.items[0].meta).toBe("Task");
     expect(w.background.items[0]).toMatchObject({ kind: "background", id: "b1", status: "running", sessionId: "s1" });
-    expect(w.activity.items[0]).toMatchObject({ kind: "activity", id: "1", status: "done" });
+    expect(w.activity.items).toEqual([]);
+    expect(spies.activity).not.toHaveBeenCalled();
     expect(w.directives.items[0]).toMatchObject({ kind: "directive", id: "x1", status: "waiting", sessionId: "s1" });
     expect(w.goals.loadedAt).toEqual(expect.any(Number));
   });
@@ -155,21 +162,21 @@ describe("useWorkItems — load, map, filter", () => {
     const scoped = mount({ sessionId: "s1", thisChatOnly: true });
     await flush();
     const w = scoped.current;
-    expect(w.decisions.items.map((i) => i.id)).toEqual(["d1"]);
+    expect(w.decisions.items.map((i) => i.id)).toEqual(["d1", "d2"]);
     expect(w.goals.items.map((i) => i.id)).toEqual(["s1"]);
     expect(w.background.items.map((i) => i.id)).toEqual(["b1"]);
     expect(w.directives.items.map((i) => i.id)).toEqual(["x1"]);
     expect(w.activity.items).toEqual([]); // context s2 ≠ this chat
-    // Session-less sources are never filtered out.
-    expect(w.watches.items).toHaveLength(1);
-    expect(w.tasks.items).toHaveLength(1);
-    expect(w.schedules.items).toHaveLength(1);
+    // Shared scope requires known ownership outside Needs you.
+    expect(w.watches.items).toHaveLength(0);
+    expect(w.tasks.items).toHaveLength(0);
+    expect(w.schedules.items).toHaveLength(0);
 
     const all = mount({ sessionId: "s1", thisChatOnly: false });
     await flush();
     expect(all.current.decisions.items.map((i) => i.id)).toEqual(["d1", "d2"]);
     expect(all.current.goals.items.map((i) => i.id)).toEqual(["s1", "s2"]);
-    expect(all.current.activity.items).toHaveLength(1);
+    expect(all.current.activity.items).toHaveLength(0);
   });
 });
 
@@ -208,8 +215,9 @@ describe("useWorkItems — live refresh", () => {
     spies.activity.mockResolvedValue(history("s1", [actEntry(2, "completed"), actEntry(1, "completed")]));
     emit("activity.message", { text: "activity 2", origin: "scheduler" });
     await flush();
-    expect(spies.activity).toHaveBeenCalledTimes(2);
-    expect(r.current.activity.items.map((item) => item.title)).toEqual(["activity 2", "activity 1"]);
+    expect(spies.activity).not.toHaveBeenCalled();
+    expect(spies.inbox).toHaveBeenCalledTimes(2);
+    expect(r.current.activity.items).toEqual([]);
     expect(spies.tasks).toHaveBeenCalledTimes(2);
     expect(spies.background).toHaveBeenCalledTimes(2);
 
@@ -247,7 +255,8 @@ describe("useWorkItems — live refresh", () => {
     await flush();
     expect(spies.decisions).toHaveBeenCalledTimes(2);
     expect(r.current.decisions.items[0]).toMatchObject({ id: "d1", status: "done" });
-    expect(spies.goals).toHaveBeenCalledTimes(1);
+    expect(spies.goals).toHaveBeenCalledTimes(2);
+    expect(spies.inbox).toHaveBeenCalledTimes(2);
   });
 
   it("polls schedules every 60s until a scheduler.changed, then stops", async () => {
@@ -332,5 +341,244 @@ describe("work API helpers", () => {
     const init = fetchMock.mock.calls[0][1] as RequestInit;
     expect(init.method).toBe("POST");
     expect(JSON.parse(init.body as string)).toEqual({ enabled: false });
+  });
+});
+
+describe("live group adapters", () => {
+  const page = (id: number, priority: "now" | "next" | "later", delivered_at: string | null = null) => ({
+    id, priority, delivered_at, text: "Please help", source: "board", created_at: "2026-11-11", dedup_key: null,
+  });
+
+  it("projects only pending now pages and retires delivered pages after a stale read", async () => {
+    const pending = page(1, "now");
+    spies.inbox.mockResolvedValue({ items: [pending, page(2, "next"), page(3, "later"), page(4, "now", "today")] });
+    const r = mount({ sessionId: "elsewhere", thisChatOnly: true });
+    await flush();
+    const deliveries = () => workGroups(r.current, { thisChatOnly: true, sessionId: "elsewhere" })[0].items.filter((i) => i.kind === "delivery");
+    expect(deliveries()).toHaveLength(1);
+    expect(deliveries()[0].raw).toEqual(pending);
+    spies.inbox.mockRejectedValue(new Error("offline"));
+    emit("inbox.item");
+    await flush();
+    expect(r.current.activity.status).toBe("stale");
+    expect(deliveries()).toHaveLength(1);
+    spies.inbox.mockResolvedValue({ items: [page(1, "now", "today")] });
+    r.current.activity.retry();
+    await flush();
+    expect(deliveries()).toHaveLength(0);
+    expect(spies.activity).not.toHaveBeenCalled();
+  });
+
+  it("projects scheduled waits once and uses explicit task and wait ownership", async () => {
+    const wait = { id: "wait:s2", prompt: "Continue", schedule: "2026-12-01T00:00:00Z", context_id: "s2", enabled: true };
+    spies.schedules.mockResolvedValue({ jobs: [wait, { id: "regular", prompt: "Run", schedule: "0 9 * * *", enabled: true }], backend: "local" });
+    spies.tasks.mockResolvedValue({ issues: [{ id: "owned", title: "Task", session_id: "s2", status: "open" }] });
+    const r = mount({ sessionId: "s1", thisChatOnly: false });
+    await flush();
+    const upcoming = workGroups(r.current)[2].items;
+    expect(upcoming.filter((i) => i.id === wait.id).map((i) => i.kind)).toEqual(["wait"]);
+    expect(upcoming.find((i) => i.id === wait.id)?.raw).toEqual(wait);
+    expect(workGroups(r.current, { thisChatOnly: true, sessionId: "s2" })[2].items.map((i) => i.id)).toEqual(["owned", "wait:s2"]);
+  });
+
+  it("preserves origin and legacy context ownership in source and group filtering", async () => {
+    const owned = { id: "one-shot", prompt: "Run", schedule: "2026-12-01T00:00:00Z", context_id: "s1", enabled: true };
+    const recurring = { ...owned, id: "recurring", schedule: "0 9 * * *", context_id: null, origin_session: "s1" };
+    spies.schedules.mockResolvedValue({ jobs: [
+      owned,
+      recurring,
+      { ...recurring, id: "separate-runner", context_id: "runner" },
+      { ...recurring, id: "other-origin", origin_session: "s2", context_id: "s1" },
+      { ...owned, id: "other", context_id: "s2" },
+      { ...owned, id: "global", context_id: null },
+    ], backend: "local" });
+    const scoped = mount({ sessionId: "s1", thisChatOnly: true });
+    const all = mount({ sessionId: "s1", thisChatOnly: false });
+    await flush();
+    const expected = ["one-shot", "recurring", "separate-runner"];
+    expect(scoped.current.schedules.items.map((i) => i.id)).toEqual(expected);
+    expect(scoped.current.schedules.items[0]).toMatchObject({ sessionId: "s1", raw: owned });
+    expect(scoped.current.schedules.items[1]).toMatchObject({ sessionId: "s1", raw: recurring });
+    expect(scoped.current.schedules.groupItems?.map((i) => i.id)).toEqual(expected);
+    expect(workGroups(all.current, { thisChatOnly: true, sessionId: "s1" })[2].items
+      .filter((i) => i.kind === "schedule").map((i) => i.id)).toEqual(expected);
+    expect(all.current.schedules.items.map((i) => i.id)).toEqual([...expected, "other-origin", "other", "global"]);
+  });
+
+  it("reconciles missed delivery, wait removal and new chats on reconnect", async () => {
+    spies.inbox.mockResolvedValue({ items: [page(1, "now")] });
+    spies.schedules.mockResolvedValue({ jobs: [{ id: "wait:old", prompt: "Resume", schedule: "2026-12-01T00:00:00Z" }], backend: "local" });
+    const r = mount({ thisChatOnly: false });
+    await flush();
+    act(() => mocks.conn.forEach((fn) => fn(false)));
+    spies.inbox.mockResolvedValue({ items: [page(2, "now")] });
+    spies.schedules.mockResolvedValue({ jobs: [], backend: "local" });
+    spies.sessions.mockResolvedValue({ sessions: [{ session_id: "new-chat", turn_count: 1, last_updated: null }] });
+    spies.directives.mockResolvedValue({ directives: [dir("new", "in_force", "new-chat")], in_force: 1 });
+    act(() => mocks.conn.forEach((fn) => fn(true)));
+    await flush();
+    const groups = workGroups(r.current);
+    expect(groups[0].items.filter((i) => i.kind === "delivery").map((i) => i.id)).toEqual(["2"]);
+    expect(groups[2].items.filter((i) => i.kind === "wait")).toEqual([]);
+    expect(groups[3].items.map((i) => i.id)).toEqual(["new"]);
+  });
+
+  it("observes successful local directive cache refreshes without requiring a bus event", async () => {
+    const r = mount({ sessionId: "local-cache", thisChatOnly: false });
+    spies.directives.mockResolvedValue({ directives: [dir("local", "in_force", "local-cache")], in_force: 1 });
+    await flush();
+    expect(workGroups(r.current)[3].count).toBe(1);
+    spies.directives.mockRejectedValue(new Error("offline"));
+    await act(async () => { await directiveStore("local-cache").refresh(); });
+    await flush();
+    expect(r.current.directives.status).toBe("stale");
+    expect(workGroups(r.current)[3].count).toBe(1);
+    spies.directives.mockResolvedValue({ directives: [dir("local", "revoked", "local-cache")], in_force: 0 });
+    await act(async () => { await directiveStore("local-cache").refresh(); });
+    await flush();
+    expect(workGroups(r.current)[3].count).toBe(0);
+    expect(r.current.directives.items[0].raw).toMatchObject({ status: "revoked" });
+  });
+
+  it.each(["rejection", "reason"])("loads the focused ledger despite initial discovery %s", async (failure) => {
+    const focused = `discovery-${failure}`;
+    const error = new Error("Session index unavailable");
+    if (failure === "rejection") spies.sessions.mockRejectedValue(error);
+    else spies.sessions.mockResolvedValue({ sessions: [], reason: error.message });
+    spies.directives.mockImplementation(async (id: string) => ({ directives: [dir(id, "in_force", id)], in_force: 1 }));
+    const r = mount({ sessionId: focused, thisChatOnly: false });
+    await flush();
+    expect(spies.directives).toHaveBeenCalledWith(focused);
+    expect(r.current.directives.status).toBe("stale");
+    expect(r.current.directives.error).toEqual(error);
+    expect(r.current.directives.loadedAt).toEqual(expect.any(Number));
+    expect(workGroups(r.current)[3].items.map((i) => i.id)).toEqual([focused]);
+
+    // Bus refreshes still reconcile the focused ledger while discovery is down.
+    spies.directives.mockResolvedValue({ directives: [], in_force: 0 });
+    emit("directive.changed", { session_id: focused });
+    await flush();
+    expect(r.current.directives.items).toEqual([]);
+    expect(r.current.directives.status).toBe("stale");
+
+    spies.sessions.mockResolvedValue({ sessions: [{ session_id: `${focused}-other`, turn_count: 1, last_updated: null }] });
+    spies.directives.mockImplementation(async (id: string) => ({ directives: [dir(id, "in_force", id)], in_force: 1 }));
+    r.current.directives.retry();
+    await flush();
+    expect(r.current.directives.status).toBe("ready");
+    expect(r.current.directives.error).toBeNull();
+    expect(r.current.directives.items.map((i) => i.id)).toEqual([focused, `${focused}-other`]);
+  });
+
+  it("retains inventory when discovery returns a read-failure reason and recovers on retry", async () => {
+    spies.sessions.mockResolvedValue({ sessions: [{ session_id: "reason-other", turn_count: 1, last_updated: null }] });
+    spies.directives.mockImplementation(async (id: string) => ({ directives: [dir(id, "in_force", id)], in_force: 1 }));
+    const r = mount({ sessionId: "reason-focused", thisChatOnly: false });
+    await flush();
+    const loadedAt = r.current.directives.loadedAt;
+    spies.sessions.mockResolvedValue({ sessions: [], reason: "Session index read failed" });
+    emit("directive.changed");
+    await flush();
+    expect(r.current.directives.status).toBe("stale");
+    expect(r.current.directives.loadedAt).toBeGreaterThanOrEqual(loadedAt!);
+    expect(r.current.directives.error).toEqual(new Error("Session index read failed"));
+    expect(r.current.directives.items.map((i) => i.id)).toEqual(["reason-focused", "reason-other"]);
+    spies.sessions.mockResolvedValue({ sessions: [] });
+    r.current.directives.retry();
+    await flush();
+    expect(r.current.directives.status).toBe("ready");
+    expect(r.current.directives.items.map((i) => i.id)).toEqual(["reason-focused"]);
+  });
+
+  it("keeps successful initial ledgers across batches when another fails", async () => {
+    const focused = "partial-focused";
+    const others = Array.from({ length: 5 }, (_, i) => `partial-${i}`);
+    spies.sessions.mockResolvedValue({ sessions: others.map((session_id) => ({ session_id, turn_count: 1, last_updated: null })) });
+    const ledger = async (id: string) => ({ directives: [dir(id, "in_force", id)], in_force: 1 });
+    spies.directives.mockImplementation(async (id: string) => {
+      if (id === others[0]) throw new Error("Ledger unavailable");
+      return ledger(id);
+    });
+    const r = mount({ sessionId: focused, thisChatOnly: false });
+    await flush();
+    expect(r.current.directives.status).toBe("stale");
+    expect(r.current.directives.error).toBeInstanceOf(Error);
+    expect(r.current.directives.items.map((i) => i.id)).toEqual([focused, ...others.slice(1)]);
+    expect(workGroups(r.current, { thisChatOnly: true, sessionId: focused })[3].items.map((i) => i.id)).toEqual([focused]);
+    spies.directives.mockImplementation(ledger);
+    r.current.directives.retry();
+    await flush();
+    expect(r.current.directives.status).toBe("ready");
+    expect(r.current.directives.error).toBeNull();
+    expect(r.current.directives.items.map((i) => i.id)).toEqual([focused, ...others]);
+    const loadedAt = r.current.directives.loadedAt;
+    spies.directives.mockRejectedValue(new Error("Offline"));
+    emit("directive.changed");
+    await flush();
+    expect(r.current.directives.status).toBe("stale");
+    expect(r.current.directives.loadedAt).toBe(loadedAt);
+    expect(r.current.directives.items.map((i) => i.id)).toEqual([focused, ...others]);
+  });
+
+  it("reports error when no discovered ledger has ever loaded", async () => {
+    spies.directives.mockRejectedValue(new Error("Offline"));
+    const r = mount({ sessionId: "never-loaded-ledger", thisChatOnly: false });
+    await flush();
+    expect(r.current.directives.status).toBe("error");
+    expect(r.current.directives.loadedAt).toBeNull();
+    expect(r.current.directives.items).toEqual([]);
+  });
+
+  it("loads other chats with bounded fan-out and retries stale inventory", async () => {
+    spies.sessions.mockResolvedValue({ sessions: Array.from({ length: 9 }, (_, i) => ({ session_id: `other-${i}`, turn_count: 1, last_updated: null })) });
+    let active = 0;
+    let maximum = 0;
+    spies.directives.mockImplementation(async (id: string) => {
+      active++;
+      maximum = Math.max(maximum, active);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      active--;
+      return { directives: [dir(id, "in_force", id)], in_force: 1 };
+    });
+    const r = mount({ sessionId: "focused", thisChatOnly: false });
+    await flush();
+    await flush();
+    expect(r.current.directives.items).toHaveLength(10);
+    expect(maximum).toBeLessThanOrEqual(4);
+    expect(workGroups(r.current, { thisChatOnly: true, sessionId: "other-3" })[3].count).toBe(1);
+    spies.sessions.mockRejectedValue(new Error("offline"));
+    emit("directive.changed");
+    await flush();
+    expect(r.current.directives.status).toBe("stale");
+    expect(r.current.directives.items).toHaveLength(10);
+    spies.sessions.mockResolvedValue({ sessions: [] });
+    r.current.directives.retry();
+    await flush();
+    expect(r.current.directives.items.map((i) => i.id)).toEqual(["focused"]);
+  });
+});
+
+// #5094: a scheduled turn's stimulus is the scheduler's wake prompt. Its bracketed header
+// is runtime framing, so the row title leads with the job's own prompt instead.
+describe("activityTitle", () => {
+  const entry = (over: Partial<ActivityEntry>): ActivityEntry => ({ ...actEntry(1, "completed"), ...over });
+
+  it("drops the scheduler's wake header from the stimulus", () => {
+    for (const header of [
+      "[Autonomous wake — scheduled run. Orient from <working_state>, then:]",
+      "[Autonomous wake — a watch you set has tripped. Orient from <working_state>, then:]",
+      "[Autonomous wake — a wait you scheduled has elapsed. Continue:]",
+      "[Autonomous wake — driving your active goal. Orient from <working_state>, then:]",
+    ]) {
+      expect(activityTitle(entry({ stimulus: `${header}\n\nCheck the board for blocked cards.` })))
+        .toBe("Check the board for blocked cards.");
+    }
+  });
+
+  it("keeps an ordinary stimulus and falls back past an empty one", () => {
+    expect(activityTitle(entry({ stimulus: "CI webhook: build #4821 failed" }))).toBe("CI webhook: build #4821 failed");
+    expect(activityTitle(entry({ stimulus: "[Autonomous wake — scheduled run. Orient from <working_state>, then:]" })))
+      .toBe("activity 1");
+    expect(activityTitle(entry({ stimulus: "", text: "" }))).toBe("job-1");
   });
 });

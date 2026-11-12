@@ -25,6 +25,8 @@ import { SchedulesSection } from "./schedules";
 import { TasksSection } from "./tasks";
 import type { WorkItem, WorkItems, WorkSource } from "../useWorkItems";
 import type { WorkSectionContext } from "../WorkView";
+import { sections } from "../sectionRegistry";
+import { workGroups } from "../workGroups";
 
 vi.mock("../../schedule/schedule-builder", async (importOriginal) => ({
   ...await importOriginal<typeof import("../../schedule/schedule-builder")>(),
@@ -32,6 +34,27 @@ vi.mock("../../schedule/schedule-builder", async (importOriginal) => ({
 }));
 
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+
+it("annotates tasks without overriding per-row goal/task/watch classification", () => {
+  expect(sections.get("tasks")?.group).toBe("doing-now");
+  expect(sections.get("schedules")?.group).toBe("coming-up");
+  const base = { id: "item", title: "Item", meta: "", status: "waiting" as const };
+  const groups = workGroups([
+    { ...base, id: "active", kind: "goal", raw: { status: "active" } },
+    { ...base, id: "stopped", kind: "goal", raw: { status: "exhausted" } },
+    { ...base, id: "achieved", kind: "goal", raw: { status: "achieved" } },
+    { ...base, id: "running", kind: "task", raw: { status: "in_progress" } },
+    { ...base, id: "queued", kind: "task", raw: { status: "open" } },
+    { ...base, id: "closed", kind: "task", raw: { status: "closed" } },
+    { ...base, id: "watch", kind: "watch", raw: { status: "active" } },
+  ]);
+  expect(groups.map(({ id, items }) => [id, items.map((item) => item.id)])).toEqual([
+    ["needs-you", ["stopped"]],
+    ["doing-now", ["active", "running"]],
+    ["coming-up", ["queued", "watch"]],
+    ["instructions", []],
+  ]);
+});
 
 let root: Root | null = null;
 let host: HTMLDivElement | null = null;

@@ -80,6 +80,24 @@ class BackgroundJob:
     # managed to SAY, often nothing). Without it a failed job's row and its completion
     # notification carried an empty result, and the agent guessed at the cause.
     error: str = ""
+    # The identity the PEER gave a background delegation (#5053): its A2A task id and the
+    # messageId we sent, recorded the moment the peer accepts the message. "running" with a
+    # peer task id is a request the peer holds; without one it never got that far — the
+    # difference between a known in-flight (or failed) request and a silent loss.
+    peer_task_id: str = ""
+    peer_message_id: str = ""
+    # The earlier job this delegation amends (#5053) — the link a peer otherwise has no way
+    # to make, since each background delegation opens its own peer context.
+    amends: str = ""
+
+    @property
+    def delivery(self) -> str:
+        """Where the job's outcome is on its way back to the origin session (#5053):
+        ``in_flight`` (still running), ``undelivered`` (terminal, not yet drained into a
+        turn) or ``delivered`` (drained, exactly once)."""
+        if self.status == "running":
+            return "in_flight"
+        return "delivered" if self.notified else "undelivered"
 
     def to_dict(self) -> dict:
         return {
@@ -100,6 +118,10 @@ class BackgroundJob:
             "deterministic": self.deterministic,
             "result_author": self.result_author,
             "error": self.error,
+            "peer_task_id": self.peer_task_id,
+            "peer_message_id": self.peer_message_id,
+            "amends": self.amends,
+            "delivery": self.delivery,
         }
 
 
@@ -125,6 +147,9 @@ def _row_to_job(row: sqlite3.Row) -> BackgroundJob:
         result_author=(row["result_author"] if "result_author" in keys else "") or "",
         origin_fence=_load_fence(row["origin_fence"] if "origin_fence" in keys else ""),
         error=(row["error"] if "error" in keys else "") or "",
+        peer_task_id=(row["peer_task_id"] if "peer_task_id" in keys else "") or "",
+        peer_message_id=(row["peer_message_id"] if "peer_message_id" in keys else "") or "",
+        amends=(row["amends"] if "amends" in keys else "") or "",
     )
 
 
@@ -189,7 +214,10 @@ class BackgroundStore:
                     deterministic  INTEGER NOT NULL DEFAULT 0,
                     result_author  TEXT NOT NULL DEFAULT '',
                     origin_fence   TEXT NOT NULL DEFAULT '[]',
-                    error          TEXT NOT NULL DEFAULT ''
+                    error          TEXT NOT NULL DEFAULT '',
+                    peer_task_id   TEXT NOT NULL DEFAULT '',
+                    peer_message_id TEXT NOT NULL DEFAULT '',
+                    amends         TEXT NOT NULL DEFAULT ''
                 )
                 """
             )
@@ -221,6 +249,10 @@ class BackgroundStore:
             # Migrate a pre-#3945 DB: a failed job's terminal error (existing rows → '').
             if "error" not in cols:
                 db.execute("ALTER TABLE background_jobs ADD COLUMN error TEXT NOT NULL DEFAULT ''")
+            # Migrate a pre-#5053 DB: peer identity + amendment link (existing rows → '').
+            for col in ("peer_task_id", "peer_message_id", "amends"):
+                if col not in cols:
+                    db.execute(f"ALTER TABLE background_jobs ADD COLUMN {col} TEXT NOT NULL DEFAULT ''")
             db.execute(
                 "CREATE INDEX IF NOT EXISTS ix_bg_session_pending ON background_jobs(origin_session, status, notified)"
             )
@@ -245,6 +277,7 @@ class BackgroundStore:
         deterministic: bool = False,
         result_author: str = "",
         origin_fence: list[str] | None = None,
+        amends: str = "",
         now: datetime | None = None,
     ) -> str:
         """Insert a ``running`` job and return its opaque id (``bg-<uuid12>``).
@@ -254,7 +287,8 @@ class BackgroundStore:
         singleton spawn. ``deterministic`` (#2363) marks a ``spawn_work`` job — its result
         is a deliverable, not a report, and the drain delivers it whole. ``result_author``
         stamps deliverables that are another room participant's own words (#3051).
-        ``origin_fence`` is the spawning turn's tool fence (``[]`` = unfenced)."""
+        ``origin_fence`` is the spawning turn's tool fence (``[]`` = unfenced). ``amends``
+        is the id of the earlier job this one amends (#5053)."""
         job_id = f"bg-{uuid.uuid4().hex[:12]}"
         created = (now or datetime.now(UTC)).isoformat()
         db = self._connect()
@@ -263,8 +297,8 @@ class BackgroundStore:
                 "INSERT INTO background_jobs "
                 "(id, agent_name, origin_session, subagent_type, description, prompt, "
                 " status, result, notified, created_at, completed_at, a2a_task_id, origin_incognito, "
-                " batch_id, deterministic, result_author, origin_fence) "
-                "VALUES (?, ?, ?, ?, ?, ?, 'running', '', 0, ?, NULL, '', ?, ?, ?, ?, ?)",
+                " batch_id, deterministic, result_author, origin_fence, amends) "
+                "VALUES (?, ?, ?, ?, ?, ?, 'running', '', 0, ?, NULL, '', ?, ?, ?, ?, ?, ?)",
                 (
                     job_id,
                     agent_name,
@@ -278,6 +312,7 @@ class BackgroundStore:
                     1 if deterministic else 0,
                     result_author or "",
                     json.dumps([str(t) for t in (origin_fence or [])]),
+                    amends or "",
                 ),
             )
             db.commit()
@@ -296,6 +331,24 @@ class BackgroundStore:
             db.execute(
                 "UPDATE background_jobs SET a2a_task_id = ? WHERE id = ? AND (a2a_task_id IS NULL OR a2a_task_id = '')",
                 (a2a_task_id, job_id),
+            )
+            db.commit()
+        finally:
+            db.close()
+
+    def set_peer_identity(self, job_id: str, peer_task_id: str, peer_message_id: str = "") -> None:
+        """Record the peer's task id (and the messageId we sent) for a background
+        delegation, once the peer has accepted the message (#5053). Fills blank slots only,
+        so a later poll frame can't rewrite the identity of the request that was sent."""
+        if not peer_task_id:
+            return
+        db = self._connect()
+        try:
+            db.execute(
+                "UPDATE background_jobs SET peer_task_id = ?, "
+                "peer_message_id = CASE WHEN peer_message_id = '' THEN ? ELSE peer_message_id END "
+                "WHERE id = ? AND peer_task_id = ''",
+                (peer_task_id, peer_message_id or "", job_id),
             )
             db.commit()
         finally:
@@ -380,9 +433,16 @@ class BackgroundStore:
 
     def drain_pending(self, origin_session: str) -> list[BackgroundJob]:
         """Return completed/failed jobs for a session not yet announced, flipping
-        ``notified`` in the same transaction so each is delivered exactly once."""
+        ``notified`` in the same transaction so each is delivered exactly once.
+
+        The read and the flip share one write transaction (``BEGIN IMMEDIATE``) and the flip
+        names the rows read (#5053). Before, the SELECT ran outside any transaction and the
+        UPDATE flipped every pending row of the session — so a job that settled between the
+        two was marked delivered without ever being returned, and two concurrent drains
+        could both return the same row."""
         db = self._connect()
         try:
+            db.execute("BEGIN IMMEDIATE")
             rows = db.execute(
                 "SELECT * FROM background_jobs "
                 "WHERE origin_session = ? AND status IN ('completed', 'failed', 'canceled') "
@@ -390,12 +450,26 @@ class BackgroundStore:
                 (origin_session,),
             ).fetchall()
             if rows:
-                db.execute(
-                    "UPDATE background_jobs SET notified = 1 WHERE origin_session = ? "
-                    "AND status IN ('completed', 'failed', 'canceled') AND notified = 0",
-                    (origin_session,),
-                )
-                db.commit()
+                ids = [r["id"] for r in rows]
+                marks = ", ".join("?" for _ in ids)
+                db.execute(f"UPDATE background_jobs SET notified = 1 WHERE id IN ({marks})", ids)
+            db.commit()
+            return [_row_to_job(r) for r in rows]
+        finally:
+            db.close()
+
+    def undelivered_terminal(self, *, since: datetime) -> list[BackgroundJob]:
+        """Finished jobs whose outcome never drained into their session, settled at or after
+        ``since`` (#5053) — what a restart must push again: a job reconciled as interrupted
+        at boot, or one that settled just before the process went down and took its
+        push-resume with it. Operator-canceled jobs are left out (nothing to tell anyone)."""
+        db = self._connect()
+        try:
+            rows = db.execute(
+                "SELECT * FROM background_jobs WHERE status IN ('completed', 'failed') AND notified = 0 "
+                "AND completed_at IS NOT NULL AND completed_at >= ? ORDER BY completed_at ASC",
+                (since.isoformat(),),
+            ).fetchall()
             return [_row_to_job(r) for r in rows]
         finally:
             db.close()

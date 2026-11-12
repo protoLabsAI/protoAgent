@@ -10,15 +10,25 @@ const decision = (id = "decision-one", agent = "protoEngineer"): DecisionRow => 
   answered_surface: null, default_action_text: "kept holding the release", answer_label: null,
 });
 
-async function setup(page: Page, rows: DecisionRow[], result: "sent" | "answered" | "expired" | "withdrawn" | "cancelled" | "error" = "sent") {
+// "error" and "landed" both fail the answer request in transit (503); the card then re-reads
+// the decision (#5099). "error": still pending with nothing on its way, so it offers the retry.
+// "landed": the answer had in fact reached the agent, so it shows Sent.
+async function setup(page: Page, rows: DecisionRow[], result: "sent" | "answered" | "expired" | "withdrawn" | "cancelled" | "error" | "landed" = "sent") {
   let pending = [...rows];
   const answers: unknown[] = [];
   await page.emulateMedia({ reducedMotion: "reduce" });
   // Use the mock server's live SSE stream: a finite response is a disconnect.
   await page.route("**/api/decisions?**", (route) => route.fulfill({ json: { decisions: pending, pending: pending.length } }));
+  await page.route(/\/api\/decisions\/[^/?]+$/, (route) => {
+    const row = rows.find((d) => route.request().url().endsWith(`/${d.id}`))!;
+    if (result !== "landed") return route.fulfill({ json: { ...row, delivering: false } });
+    pending = pending.filter((d) => d.id !== row.id);
+    return route.fulfill({ json: { ...row, state: "answered", answer: "ship", answer_label: "Ship the release",
+      answered_at: "2026-11-09T14:05:00Z", answered_surface: "console", delivering: false } });
+  });
   await page.route("**/api/decisions/*/answer", (route) => {
     answers.push(route.request().postDataJSON());
-    if (result === "error") return route.fulfill({ status: 503, json: { detail: "Unavailable" } });
+    if (result === "error" || result === "landed") return route.fulfill({ status: 503, json: { detail: "Unavailable" } });
     const row = rows.find((d) => route.request().url().includes(`/${d.id}/`))!;
     const settled = { ...row, state: result === "sent" ? "answered" : result,
       answer: result === "expired" || result === "withdrawn" || result === "cancelled" ? null : "ship",
@@ -78,7 +88,7 @@ for (const mode of ["light", "dark"] as const) {
       await screenshot(page, `${mode}-three`);
     });
 
-    for (const result of ["sent", "answered", "expired", "withdrawn", "cancelled", "error"] as const) {
+    for (const result of ["sent", "answered", "expired", "withdrawn", "cancelled", "error", "landed"] as const) {
       test(`answer: ${result}`, async ({ page }) => {
         await page.clock.setFixedTime(new Date("2026-11-10T12:00:00Z"));
         const answers = await setup(page, [decision()], result);
@@ -93,7 +103,8 @@ for (const mode of ["light", "dark"] as const) {
         await dialog.locator(".work-row").click();
         await dialog.getByRole("button", { name: "Ship the release", exact: true }).click();
         const copy = { sent: 'Sent: "Ship the release".', answered: 'Already answered:',
-          expired: "went ahead", withdrawn: "doesn't need this any more", cancelled: "doesn't need this any more", error: "Couldn't send your answer." };
+          expired: "went ahead", withdrawn: "doesn't need this any more", cancelled: "doesn't need this any more", error: "Couldn't send your answer.",
+          landed: 'Sent: "Ship the release".' };
         await expect(dialog).toContainText(copy[result]);
         if (result === "expired" || result === "withdrawn" || result === "cancelled") {
           const card = dialog.getByRole("article");

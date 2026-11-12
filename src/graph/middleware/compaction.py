@@ -195,6 +195,13 @@ _BACKOFF_MAX_ENTRIES = 1024
 # thread (re)compacts. The gap between the trigger and the post-compaction size — stops a
 # thread whose kept tail already exceeds the low ceiling from re-compacting every step.
 _SYSTEM_HYSTERESIS_DIVISOR = 4
+# The most a ``system:*`` thread keeps verbatim after its ceiling fires, as a fraction
+# (``ceiling // this``) of the ceiling (#5106). Keep-by-messages alone kept the newest
+# ``compaction.keep_messages`` (20) whatever their size: fed one 2–5k-token tool result
+# per step, that tail was itself over the 30k ceiling, so the thread was over it again
+# the moment it compacted and re-fired every step or two — each time rewriting the
+# cached prefix. Capping the tail at half the ceiling leaves a real gap below it.
+_SYSTEM_KEEP_DIVISOR = 2
 
 
 def _status_of(exc: BaseException) -> int | None:
@@ -428,6 +435,33 @@ class CountingSummarizationMiddleware(SummarizationMiddleware):
         )
         return bool(over_ceiling) and self._system_compaction_would_shrink(messages, ceiling)
 
+    def _system_ceiling_applies(self) -> bool:
+        return bool(getattr(self, "_system_thread_max_tokens", 0) and _TURN_SYSTEM.get())
+
+    def _determine_cutoff_index(self, messages) -> int:  # type: ignore[override]
+        """The parent's keep-tail cutoff; on a ``system:*`` thread, never a kept tail of
+        more than ``ceiling // _SYSTEM_KEEP_DIVISOR`` tokens (#5106).
+
+        The later of the two cutoffs wins, so a system thread keeps the newest
+        ``keep_messages`` only while they fit that budget, and at least its newest
+        message (the parent's token cutoff never splits an AI/tool pair). Chat threads
+        are unchanged. The hysteresis gate and the compaction itself both call this, so
+        they always agree on what would be removed."""
+        cutoff = super()._determine_cutoff_index(messages)
+        if not self._system_ceiling_applies():
+            return cutoff
+        budget = max(1, self._system_thread_max_tokens // _SYSTEM_KEEP_DIVISOR)
+        keep = self.keep
+        try:
+            self.keep = ("tokens", budget)
+            by_tokens = self._find_token_based_cutoff(messages)
+        except Exception:  # noqa: BLE001 — parent internals moved; keep its own cutoff
+            log.debug("[compaction] system-thread token cutoff unavailable", exc_info=True)
+            return cutoff
+        finally:
+            self.keep = keep
+        return max(cutoff, by_tokens or 0)
+
     def _system_compaction_would_shrink(self, messages, ceiling: int) -> bool:
         """The hysteresis gate: would compacting a ``system:*`` thread right now summarise
         away enough to be worth the cost?
@@ -447,8 +481,15 @@ class CountingSummarizationMiddleware(SummarizationMiddleware):
         if cutoff <= 0:
             # The parent would compute the same cutoff and no-op, so there is nothing to do.
             return False
+        # A previous compaction's notes are not new history: folding them into the next
+        # summary shrinks nothing, so they never count toward the margin (#5106). The
+        # engine's notes run to thousands of tokens (required sections + the operator's
+        # messages verbatim), and counting them let one new tool result clear it.
+        head = [m for m in messages[:cutoff] if not compaction_engine.is_summary_message(m)]
+        if not head:
+            return False
         try:
-            removable = self.token_counter(messages[:cutoff])
+            removable = self.token_counter(head)
         except Exception:  # noqa: BLE001 — the full count already succeeded; be conservative
             return True
         return removable >= max(1, ceiling // _SYSTEM_HYSTERESIS_DIVISOR)
