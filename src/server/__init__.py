@@ -917,6 +917,14 @@ def _main():
             _start_inbox_now_recovery_once()
         except Exception:  # noqa: BLE001 — backlog recovery must never break boot
             log.exception("[inbox] now-recovery startup scheduling failed")
+        # Background outcomes a restart stranded (#5053): reconciled-interrupted jobs and
+        # ones whose push-resume died with the process reach their sessions now.
+        try:
+            from server.stores import _start_background_redelivery_once
+
+            _start_background_redelivery_once()
+        except Exception:  # noqa: BLE001 — never break boot
+            log.exception("[background] redelivery startup scheduling failed")
 
         # Fleet discovery (ADR 0042 §I) — advertise this agent on mDNS so siblings on the LAN can
         # find it. Best-effort; never breaks boot. Off the loop (to_thread): sync Zeroconf
