@@ -691,6 +691,35 @@ class TestImportRoute:
         )
         assert res.status_code == 400
 
+    def test_an_unexpected_failure_never_returns_the_exception_text(self, client, ws_root, monkeypatch, caplog):
+        """The 500 used to answer ``Import failed: <Type>: <str(exc)>``. Exception text
+        carries file paths and library internals; the client gets the type and an error id,
+        and the traceback goes to the log under that id (the #3973 contract)."""
+        import re
+
+        import graph.snapshot_import as si
+
+        secret_path = "/Users/someone/.protoagent/vera/config/secrets.yaml"
+
+        def _boom(*a, **k):
+            raise PermissionError(f"[Errno 13] Permission denied: '{secret_path}'")
+
+        monkeypatch.setattr(si, "apply_snapshot", _boom)
+        with caplog.at_level("ERROR"):
+            res = client.post(
+                "/api/agent/import",
+                files={"file": ("s.zip", _snapshot_no_plugins(), "application/zip")},
+                data={"acknowledged": "true"},
+            )
+        assert res.status_code == 500
+        detail = res.json()["detail"]
+        assert secret_path not in detail and "Permission denied" not in detail and "Errno" not in detail
+        match = re.search(r"Import failed \(PermissionError, error id ([0-9a-f]{8})\)", detail)
+        assert match, detail
+        # The operator can find the real cause in the log by that id.
+        logged = "\n".join(r.getMessage() + (str(r.exc_info[1]) if r.exc_info else "") for r in caplog.records)
+        assert match.group(1) in logged and secret_path in logged
+
 
 # ── #2105: the knowledge seed, on the receiving end ──────────────────────────────────
 
