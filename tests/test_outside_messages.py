@@ -341,6 +341,14 @@ def test_dm_names_the_agents_when_none_matches(monkeypatch, capsys):
     assert client.posts == []
 
 
+def test_dm_resolves_an_unambiguous_id_prefix():
+    roster = ROSTER + [{"id": "protoResearcher-1f2e", "name": "protoResearcher", "label": "protoResearcher"}]
+    roster[2] = {"id": "protoEngineer-ba4c", "name": "projectManager", "label": "projectManager"}
+    for want, slug in (("protoengineer", "protoEngineer-ba4c"), ("projectManager", "protoEngineer-ba4c"), ("proto", None)):
+        assert dm_cli.resolve_slug(roster, want)[0] == slug
+    assert dm_cli.resolve_slug(roster, "proto")[1] == ["projectManager", "protoResearcher"]
+
+
 def test_dm_says_so_when_the_agent_is_too_old_to_deliver_to_its_chat(monkeypatch, capsys):
     # An older agent accepts the POST but ignores `deliver`, so the row has no delivery.
     client = FakeClient(answer={"ok": True, "fired": False, "item": {"id": 3}})

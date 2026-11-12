@@ -984,3 +984,58 @@ async def test_parked_continuation_unblocks_the_owner_for_new_fires(tmp_path, mo
         assert len(_query(gen2.sched.path, "SELECT * FROM occurrences WHERE job_id = ?", (cont_id,))) == 1
     finally:
         await _shutdown(coord, gen2)
+
+
+# ── a parked one-shot's jobs row survives the missed-fire recovery window ───────────
+
+
+@pytest.mark.asyncio
+async def test_parked_one_shot_survives_missed_fire_recovery_window(tmp_path, monkeypatch):
+    """A one-shot parked ``interrupted_needs_operator`` keeps its jobs row — the S7
+    operator's only handle — across ``_recover_missed_fires``: its ``next_fire`` never
+    advances, so once the due slot outlives the 24h missed-fire window any later boot
+    used to DELETE the row as a stale fire. An ordinary stale one-shot without a
+    restart disposition is still dropped by the same pass."""
+    agent = "d7-oneshot-window"
+    coord, saver, claim = await _interrupted_first_fire(
+        tmp_path, monkeypatch, agent, prompt="ONESHOT-TOOL archive the exports",
+        job_id="job-held", ready=lambda c: c.tool_runs.get("risky_step") == 1,
+    )
+    task_id = claim["task_id"]
+
+    gen2 = await _restart(tmp_path, monkeypatch, coord, saver, agent, release=True)
+    try:
+        await _wait_until(
+            lambda: (_occurrence(gen2.sched.path, "job-held") or {"state": ""})["state"]
+            == "interrupted_needs_operator",
+            message="the occurrence went to the operator",
+        )
+        # The due slot outlives the window — neither row ever moves, only the clock.
+        # One transaction: a half-aged pair would briefly look claimable to the poll.
+        stale = (datetime.now(UTC) - timedelta(hours=25)).isoformat()
+        db = sqlite3.connect(str(gen2.sched.path))
+        try:
+            db.execute("UPDATE jobs SET next_fire = ? WHERE id = 'job-held'", (stale,))
+            db.execute("UPDATE occurrences SET next_fire = ? WHERE job_id = 'job-held'", (stale,))
+            db.commit()
+        finally:
+            db.close()
+        # A plain stale one-shot (fired and settled, no D7 disposition) as the control:
+        # the same recovery pass must still drop IT, only the parked row is spared.
+        _execute(gen2.sched.path, "INSERT INTO jobs (id, prompt, schedule, agent_name, next_fire, created_at) "
+                 "VALUES ('job-stale', 'old', ?, ?, ?, ?)", (stale, agent, stale, stale))
+        _execute(gen2.sched.path, "INSERT INTO occurrences (job_id, next_fire, message_id, state, created_at, "
+                 "expected_next) VALUES ('job-stale', ?, ?, 'settled', ?, ?)", (stale, str(uuid.uuid4()), stale, stale))
+
+        gen2.sched._recover_missed_fires()
+
+        assert gen2.sched.get_job("job-stale") is None  # stale-fire policy still applies
+        survivor = gen2.sched.get_job("job-held")  # the operator's handle survives
+        assert survivor is not None
+        assert survivor.next_fire == stale  # held, not rolled forward or refired
+        held = _occurrence(gen2.sched.path, "job-held")
+        assert held["state"] == "interrupted_needs_operator"
+        assert held["task_id"] == task_id
+        assert len(_query(gen2.sched.path, "SELECT * FROM occurrences WHERE job_id = 'job-held'")) == 1
+    finally:
+        await _shutdown(coord, gen2)

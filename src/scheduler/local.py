@@ -320,6 +320,8 @@ _DELIVERY_UNKNOWN = "delivery unknown; not automatically retried"
 # (Resume / Re-run / Drop). Both unblock the owner for NEW work but are never resent.
 _D7_DISPOSED_STATES = ("interrupted", "interrupted_needs_operator")
 
+_D7_DISPOSED_STATES_SQL = ", ".join(f"'{s}'" for s in _D7_DISPOSED_STATES)
+
 # A continuation generation whose own occurrence was restart-disposed is parked, not
 # outstanding: its jobs row survives only as the S7 operator's handle (_claim_due_jobs
 # can never re-claim it — the disposed occurrence sits at the row's own next_fire and
@@ -328,7 +330,7 @@ _D7_DISPOSED_STATES = ("interrupted", "interrupted_needs_operator")
 # continuations delete their jobs row outright, so only the D7 states need this.
 _D7_PARKED_CONTINUATION_SQL = (
     "NOT EXISTS (SELECT 1 FROM occurrences d WHERE d.job_id = j.id "
-    "AND d.created_at = j.created_at AND d.state IN ('interrupted', 'interrupted_needs_operator'))"
+    f"AND d.created_at = j.created_at AND d.state IN ({_D7_DISPOSED_STATES_SQL}))"
 )
 
 
@@ -1584,6 +1586,26 @@ class LocalScheduler:
                         next_iso,
                     )
                 else:
+                    # A one-shot whose own occurrence a restart parked (D7) keeps its
+                    # jobs row as the S7 operator's only handle — Resume / Re-run /
+                    # Drop resolve through it. It can never fire again on its own
+                    # (_claim_due_jobs won't re-claim the disposed slot), so keeping
+                    # it past the recovery window floods nothing; deleting it would
+                    # destroy unresolved work (ADR 0129). This spares top-level and
+                    # root one-shots too — the continuation check above only covers
+                    # rows whose session root is a different generation.
+                    parked = db.execute(
+                        "SELECT 1 FROM occurrences o WHERE o.job_id = ? AND o.created_at = ? "
+                        f"AND o.state IN ({_D7_DISPOSED_STATES_SQL}) LIMIT 1",
+                        (job.id, job.created_at),
+                    ).fetchone()
+                    if parked:
+                        log.info(
+                            "[scheduler] keeping restart-interrupted one-shot job %s "
+                            "past the recovery window for the operator (ADR 0129 D7)",
+                            job.id,
+                        )
+                        continue
                     db.execute("DELETE FROM jobs WHERE id = ?", (job.id,))
                     log.info("[scheduler] dropped stale one-shot job %s", job.id)
             db.commit()
