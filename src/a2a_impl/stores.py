@@ -578,7 +578,6 @@ async def sweep_expired_tasks(
     *,
     ttl_s: int = _DEFAULT_TTL_S,
     now: datetime | None = None,
-    keep_task_ids=(),
 ) -> int:
     """Delete task rows older than ``ttl_s`` (24h default), keyed on the SDK's
     ``last_updated`` column. The SDK DB store has no TTL knob, so this restores
@@ -590,10 +589,11 @@ async def sweep_expired_tasks(
     its chat has a tombstone (the operator deleted it); every other context — delegations,
     API calls, Activity — keeps the 24h TTL.
 
-    ``keep_task_ids`` (ADR 0129 D7): restart-spared tasks keep their pre-crash
-    ``last_updated``, so a boot after long downtime would sweep exactly the rows the
-    scheduler's recovery is about to classify and resume — dropping unresolved work.
-    They are excluded for this sweep; once recovery finalizes them they age normally."""
+    Restart-spared tasks (ADR 0129 D7, ``restart_spared_task_ids``) keep their pre-crash
+    ``last_updated``, so a boot after long downtime — and the hourly prune loop, while a
+    recovery is still pending — would sweep exactly the rows the scheduler's recovery is
+    about to classify and resume, dropping unresolved work. They are excluded here; once
+    recovery finalizes them (``finalize_interrupted_task``) they age normally."""
     now = now or datetime.now(UTC)
     cutoff = now - timedelta(seconds=ttl_s)
     from sqlalchemy import Column, MetaData, String, Table, exists, inspect, not_
@@ -621,9 +621,9 @@ async def sweep_expired_tasks(
             .where(or_(state.is_(None), state.notin_(_PRESERVED_STATES)))
             .where(not_(kept_chat))
         )
-        keep = sorted({str(t) for t in keep_task_ids if t})
-        if keep:
-            stmt = stmt.where(TaskModel.id.notin_(keep))
+        spared = sorted(_RESTART_SPARED_TASK_IDS)
+        if spared:
+            stmt = stmt.where(TaskModel.id.notin_(spared))
         result = await session.execute(stmt)
         await session.commit()
         return result.rowcount or 0
@@ -679,6 +679,33 @@ _PRESERVED_STATES = ("TASK_STATE_INPUT_REQUIRED", "TASK_STATE_AUTH_REQUIRED")
 #: scheduler-side D7 recovery (``server/interrupted_turns.py``) so an occurrence an
 #: operator must decide on carries the same wording as a blanket-failed chat turn.
 RESTART_INTERRUPTED_TEXT = "Task interrupted by an agent restart; its runner did not survive."
+
+# Restart-spared task ids currently awaiting (or undergoing) D7 checkpoint
+# classification/resume (ADR 0129). A spared row keeps its pre-crash ``last_updated``,
+# so after long downtime BOTH periodic janitors would destroy exactly the rows the
+# scheduler's recovery is about to act on: the 24h TTL sweep would delete them, and
+# the orphaned-WORKING reaper (#3418 — first pass 45s after boot, 30m idle window)
+# would fail them MID-RESUME, after which the resume's final
+# ``finalize_interrupted_task`` CAS (on submitted/working) matches nothing and a
+# completed turn is recorded as failed. Both janitors skip these ids until recovery
+# disposes each task (``finalize_interrupted_task`` releases the id, whatever state it
+# wrote), after which the backstops apply again. In-process (every janitor runs in this
+# process) and replaced — never accumulated — on each boot.
+_RESTART_SPARED_TASK_IDS: set[str] = set()
+
+
+def mark_restart_spared_tasks(task_ids) -> None:
+    """Replace the restart-spared registry with ``task_ids`` (ADR 0129 D7). Called once
+    per boot from ``initialize_a2a_stores`` — replacement, not accumulation, so a
+    previous generation's leftover ids (a recovery that could not run) never pin rows
+    forever across restarts."""
+    _RESTART_SPARED_TASK_IDS.clear()
+    _RESTART_SPARED_TASK_IDS.update(str(t) for t in task_ids if t)
+
+
+def restart_spared_task_ids() -> frozenset[str]:
+    """The task ids currently exempt from the TTL sweep and the orphaned-WORKING reaper."""
+    return frozenset(_RESTART_SPARED_TASK_IDS)
 
 # ``finalize_interrupted_task`` states → proto TaskState names (resolved lazily in
 # ``_status_blob`` so the a2a import stays function-local like its siblings).
@@ -792,7 +819,10 @@ async def finalize_interrupted_task(
     row (ADR 0129 D7): the resume driver finishes a turn against the ORIGINAL task
     handle, so the handle must reach the state the turn actually ended in. CAS on the
     interrupted states — a row that moved on (another writer, a TTL sweep recreating
-    nothing) is never clobbered. Returns True when the row was updated."""
+    nothing) is never clobbered. Also releases the id from the restart-spared registry
+    (AFTER the write, so the reaper can't race the finalize): the recovery has made its
+    disposition, so the TTL/reaper backstops apply to the row again from here on.
+    Returns True when the row was updated."""
     if state not in _FINALIZE_STATES:
         raise ValueError(f"finalize_interrupted_task: unsupported state {state!r}")
     now = now or datetime.now(UTC)
@@ -808,7 +838,8 @@ async def finalize_interrupted_task(
             .values(status=blob, last_updated=now)
         )
         await session.commit()
-        return bool(result.rowcount)
+    _RESTART_SPARED_TASK_IDS.discard(str(task_id))
+    return bool(result.rowcount)
 
 
 # ── Orphaned-WORKING-task reaper (#3418) ─────────────────────────────────────────
@@ -924,6 +955,12 @@ async def reap_orphaned_working_tasks(
 
     Only ``TASK_STATE_WORKING`` rows are considered. Terminal states and the resumable
     ``TASK_STATE_INPUT_REQUIRED`` / ``TASK_STATE_AUTH_REQUIRED`` pauses are never touched.
+    Restart-spared rows (ADR 0129 D7, ``restart_spared_task_ids``) are skipped: they keep
+    their pre-crash ``last_updated``, so after >idle-window downtime this reaper's first
+    post-boot pass would fail them MID-RESUME — and the resume's own finalize (CAS on
+    submitted/working) would then silently lose a completed turn to that failed write.
+    Recovery releases each id as it disposes the task (``finalize_interrupted_task``),
+    restoring this backstop for the row.
     Eligible rows transition to a visible ``failed`` status carrying an actionable
     diagnosis; NOTHING is deleted, so a reaped row stays fetchable for the console's
     terminal watchdog. Idempotent: a reaped row is no longer WORKING, so a second pass
@@ -946,6 +983,7 @@ async def reap_orphaned_working_tasks(
     state = TaskModel.status["state"].as_string()
     session_maker = async_sessionmaker(engine, expire_on_commit=False)
     reaped = 0
+    spared = frozenset(_RESTART_SPARED_TASK_IDS)
     async with session_maker() as session:
         rows = (
             await session.execute(
@@ -959,6 +997,8 @@ async def reap_orphaned_working_tasks(
             )
         ).all()
         for task_id, history, artifacts, last_updated, status_json in rows:
+            if task_id in spared:
+                continue  # under D7 recovery — see the docstring; released on finalize
             # A NULL `last_updated` used to be skipped outright, which made this reaper
             # unable to do its own job on exactly the rows most likely to need it: a task
             # whose producer died is not more likely to have written that column. It was
@@ -1093,8 +1133,12 @@ async def initialize_a2a_stores(
             )
     except Exception:
         log.exception("[a2a] interrupted-task reconciliation failed; continuing")
+    # Registered BEFORE the first sweep so neither janitor (TTL sweep here and hourly,
+    # orphaned-WORKING reaper 45s in) can destroy a row mid-recovery; always called, so
+    # a previous boot's leftovers are cleared even when nothing is spared this time.
+    mark_restart_spared_tasks(interrupted_spared)
     try:
-        n = await sweep_expired_tasks(task_store.engine, keep_task_ids=interrupted_spared)
+        n = await sweep_expired_tasks(task_store.engine)
         if n:
             log.info("[a2a] swept %d expired task record(s) (24h TTL)", n)
     except Exception:

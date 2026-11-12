@@ -320,6 +320,17 @@ _DELIVERY_UNKNOWN = "delivery unknown; not automatically retried"
 # (Resume / Re-run / Drop). Both unblock the owner for NEW work but are never resent.
 _D7_DISPOSED_STATES = ("interrupted", "interrupted_needs_operator")
 
+# A continuation generation whose own occurrence was restart-disposed is parked, not
+# outstanding: its jobs row survives only as the S7 operator's handle (_claim_due_jobs
+# can never re-claim it — the disposed occurrence sits at the row's own next_fire and
+# is not 'retryable'), so it must not hold the owner's root job or any new independent
+# fire out. The owner-serialization queries below subtract these rows; 'settled'
+# continuations delete their jobs row outright, so only the D7 states need this.
+_D7_PARKED_CONTINUATION_SQL = (
+    "NOT EXISTS (SELECT 1 FROM occurrences d WHERE d.job_id = j.id "
+    "AND d.created_at = j.created_at AND d.state IN ('interrupted', 'interrupted_needs_operator'))"
+)
+
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS jobs (
@@ -1354,13 +1365,15 @@ class LocalScheduler:
                 # Outstanding continuations of this owner (a session's root is a
                 # DIFFERENT generation) — identified from persisted ownership, not the id
                 # prefix. A root cron/one-shot fire waits behind every one of them; so
-                # does an unrelated independent reaction of a repeating watch.
+                # does an unrelated independent reaction of a repeating watch. A
+                # restart-disposed continuation (D7) is parked for the operator, never
+                # fireable again, so it holds nothing (the owner is free for NEW work).
                 continuations = db.execute(
                     "SELECT j.id, j.created_at, EXISTS (SELECT 1 FROM occurrences o "
                     "WHERE o.message_id = s.parent_message_id) AS parent_live "
                     "FROM jobs j JOIN job_sessions s "
                     "ON j.id = s.job_id AND j.created_at = s.created_at "
-                    "WHERE j.context_id = ? AND s.root_job_id != j.id",
+                    f"WHERE j.context_id = ? AND s.root_job_id != j.id AND {_D7_PARKED_CONTINUATION_SQL}",
                     (job.context_id,),
                 ).fetchall()
                 self_key = (job.id, job.created_at)
@@ -1543,15 +1556,18 @@ class LocalScheduler:
                         continue
                     # A root fire waits behind the SAME owner's unresolved occurrences
                     # or its own outstanding continuations — never another context's
-                    # pending work. Continuation membership is read from persisted
-                    # ownership, not the job-id prefix.
+                    # pending work, and never a restart-disposed continuation parked
+                    # for the operator (D7 — it can never fire again, so it must not
+                    # pin the root past the recovery window either). Continuation
+                    # membership is read from persisted ownership, not the job-id prefix.
                     held = db.execute(
                         "SELECT 1 FROM occurrences o JOIN job_sessions s "
                         "ON o.job_id = s.job_id AND o.created_at = s.created_at "
                         "WHERE s.context_id = ? AND o.state IN ('claimed', 'unknown') "
                         "UNION ALL SELECT 1 FROM jobs j JOIN job_sessions cs "
                         "ON j.id = cs.job_id AND j.created_at = cs.created_at "
-                        "WHERE j.context_id = ? AND j.id != ? AND cs.root_job_id != j.id LIMIT 1",
+                        f"WHERE j.context_id = ? AND j.id != ? AND cs.root_job_id != j.id "
+                        f"AND {_D7_PARKED_CONTINUATION_SQL} LIMIT 1",
                         (job.context_id, job.context_id, job.id),
                     ).fetchone()
                     if held or self._watch_holds_execution(job):

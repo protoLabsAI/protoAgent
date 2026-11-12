@@ -2,25 +2,15 @@
 auto-resume the safe cases.
 
 Restart-interruption acceptance over the PRODUCTION paths and temporary persistent
-stores. Real: ``LocalScheduler`` over a temp ``jobs.db`` (claim / serialize /
-reconcile + the new D7 boot recovery), the a2a-sdk handler + ``ProtoAgentExecutor``
-+ the production ``_chat_langgraph_stream`` turn driver, the DURABLE sqlite task
-store and ``initialize_a2a_stores`` boot reconciliation, a REAL compiled LangGraph
-over a real checkpointer shared across the simulated restart, and the production
-``InterruptedTurnRecovery`` classifier/resume driver. Faked: only the model
-(deterministic graph nodes) and the process death itself — at the "SIGTERM" moment
-the checkpointer and the durable task store drop writes, which is exactly what a
-killed process can no longer persist, so the zombie turn's error paths cannot
-retro-write state the real crash would have lost.
-
-The scenarios map 1:1 onto the card's acceptance criteria: a job session killed
-during a slow model call resumes from its checkpoint and completes once; a ``wait:``
-continuation killed during a tool call resumes with the dangling call reported as
-interrupted and its loop continues; any other one-shot killed mid-tool-call goes to
-``interrupted_needs_operator`` (never ``failed``, never resent); a recurring job's
-interrupted occurrence is skipped (``interrupted``) and the next slot fires; a second
-interruption of the same occurrence is never auto-resumed; interactive chat turns
-keep today's fail-on-boot behavior.
+stores: a real ``LocalScheduler`` over a temp ``jobs.db``, the a2a-sdk handler +
+executor + ``_chat_langgraph_stream``, the durable sqlite task store with
+``initialize_a2a_stores`` boot reconciliation, a real compiled LangGraph over a
+checkpointer shared across the simulated restart, and the production
+``InterruptedTurnRecovery``. Faked: only the model (deterministic graph nodes) and
+the process death — at the "SIGTERM" moment the checkpointer and task store drop
+writes, exactly what a killed process can no longer persist, so the zombie turn's
+error paths cannot retro-write state the real crash would have lost. The scenarios
+map 1:1 onto the card's acceptance criteria.
 """
 
 from __future__ import annotations
@@ -48,6 +38,7 @@ from a2a_impl.stores import (
     ValidatingPushNotificationConfigStore,
     initialize_a2a_stores,
     make_sqlite_engine,
+    mark_restart_spared_tasks,
 )
 from a2a_impl.wire import task_id_from_response
 from runtime.state import STATE
@@ -69,6 +60,7 @@ def _reset_module_globals():
     set_progress_hook(None)
     hitl_routing._ROUTER[0] = None
     steering._reset()
+    mark_restart_spared_tasks(())  # the D7 janitor-exemption registry is module state
     for store in (a2a._INBOX_TURN_WATCH, a2a._INBOX_EARLY_TERMINALS, a2a._INBOX_RESTORE_OWED):
         store.clear()
 
@@ -153,6 +145,14 @@ _TOOL_FOR = {
     "WAIT-TOOL": "merge_pr",
     "ONESHOT-TOOL": "risky_step",
     "CRON-TOOL": "cron_step",
+    "ASK-HITL": "prep_step",
+    "ASK-DECISION": "prep_step",
+}
+# What the post-restart resumed model pass asks for, via a real LangGraph ``interrupt()``
+# in the tools node — the same mechanics as the production ask/decision tools.
+_HITL_FOR = {
+    "ASK-HITL": {"question": "May I proceed with the merge queue?"},
+    "ASK-DECISION": {"kind": "decision", "question": "Which environment?", "options": ["staging", "prod"]},
 }
 _MARKERS = (*_TOOL_FOR, "CHAT-HOLD")
 
@@ -219,6 +219,7 @@ def _build_graph(coord: _Coordinator, saver):
     the production graph uses, which the D7 resume's ``as_node`` seal relies on."""
     from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
     from langgraph.graph import END, START, StateGraph
+    from langgraph.types import interrupt
 
     class S(TypedDict):
         messages: Annotated[list, add_messages]
@@ -248,8 +249,13 @@ def _build_graph(coord: _Coordinator, saver):
             tool = _TOOL_FOR[marker]
             call_id = f"call-{tool}-{len(coord.views[marker])}"
             return {"messages": [AIMessage(content="", tool_calls=[{"name": tool, "args": {}, "id": call_id}])]}
-        if marker == "SLOW-MODEL" and not coord.release:
+        if marker in ("SLOW-MODEL", *_HITL_FOR) and not coord.release:
             await coord.killed()  # the slow model call the restart cuts down
+        if marker in _HITL_FOR and not coord.tool_runs.get("hitl_step"):
+            # The RESUMED pass asks: the pause happens mid-resume, not before the kill.
+            return {
+                "messages": [AIMessage(content="", tool_calls=[{"name": "hitl_step", "args": {}, "id": "call-ask-1"}])]
+            }
         if (
             marker == "WAIT-TOOL"
             and "interrupted by a restart" in str(getattr(last, "content", ""))
@@ -268,6 +274,11 @@ def _build_graph(coord: _Coordinator, saver):
         out = []
         for call in last.tool_calls:
             coord.tool_runs[call["name"]] = coord.tool_runs.get(call["name"], 0) + 1
+            if call["name"] == "hitl_step":
+                # A real checkpointed interrupt, as the production HITL tools park.
+                answer = interrupt(_HITL_FOR[marker_of(state["messages"])])
+                out.append(ToolMessage(content=str(answer), tool_call_id=call["id"], name=call["name"]))
+                continue
             if call["name"] in _BLOCKING_TOOLS and not coord.release:
                 await coord.killed()  # the tool call in flight the restart cuts down
             out.append(ToolMessage(content=f"{call['name']} ok", tool_call_id=call["id"], name=call["name"]))
@@ -369,17 +380,48 @@ async def _accepted_unresolved_claim(sched, job_id: str) -> sqlite3.Row:
     )
 
 
+async def _interrupted_first_fire(tmp_path, monkeypatch, agent, *, prompt, job_id, ready, context_id=None):
+    """One killed first generation: boot, fire ``job_id``, wait for ``ready(coord)``
+    (the scenario's blocking point), capture the accepted claim, SIGTERM."""
+    monkeypatch.setattr(scheduler_local, "_POLL_INTERVAL_S", _TEST_POLL_S)
+    coord, saver = _Coordinator(), _KillableSaver()
+    gen = _boot_generation(tmp_path, monkeypatch, coord, saver, agent)
+    await gen.sched.start()
+    gen.sched.add_job(prompt, _past_iso(), job_id=job_id, context_id=context_id)
+    await _wait_until(lambda: ready(coord), message=f"{job_id}: the fire reached its blocking point")
+    claim = await _accepted_unresolved_claim(gen.sched, job_id)
+    await _sigterm(coord, saver, gen)
+    return coord, saver, claim
+
+
+async def _quiesce_polls(sched, *, polls: int = 15) -> None:
+    """Event-driven replacement for a real sleep when proving "never resent": wait
+    until the live claim loop has polled ``polls`` more times — each poll is one
+    opportunity to re-claim — then let the caller assert nothing changed."""
+    seen = 0
+    orig = sched._claim_due_jobs
+
+    def counting(now):
+        nonlocal seen
+        seen += 1
+        return orig(now)
+
+    sched._claim_due_jobs = counting
+    try:
+        await _wait_until(lambda: seen >= polls, message=f"{polls} scheduler polls")
+    finally:
+        del sched._claim_due_jobs  # restore the class method
+
+
 # ── r1 + r6: a slow model call in a job session resumes once; chat turns unchanged ──
 
 
 @pytest.mark.asyncio
 async def test_sigterm_during_slow_model_call_resumes_job_from_checkpoint_once(tmp_path, monkeypatch):
-    """SIGTERM while a job session's turn sits inside a slow model call (its tool call
-    already completed and checkpointed): after restart the turn resumes from the
-    checkpoint — against the original thread and task handle, never a new prompt —
-    and completes exactly once. The model's resumed view carries the completed tool
-    call and its result exactly once each; the tool body never re-runs. An interactive
-    chat turn interrupted at the same moment keeps today's behavior: failed at boot."""
+    """SIGTERM inside a slow model call (its tool call already checkpointed): after
+    restart the turn resumes from the checkpoint — original thread and task handle,
+    never a new prompt, no repeated tool calls — and completes exactly once. An
+    interactive chat turn interrupted at the same moment still fails at boot (r6)."""
     monkeypatch.setattr(scheduler_local, "_POLL_INTERVAL_S", _TEST_POLL_S)
     coord = _Coordinator()
     saver = _KillableSaver()
@@ -424,8 +466,7 @@ async def test_sigterm_during_slow_model_call_resumes_job_from_checkpoint_once(t
 
     gen2 = await _restart(tmp_path, monkeypatch, coord, saver, agent, release=True)
     try:
-        # Boot classification: only the scheduler-owned task was spared; the
-        # interactive chat turn failed with today's restart diagnosis.
+        # Boot classification: only the scheduler-owned task was spared.
         assert gen2.interrupted == {task_id}
         chat_state, chat_text = _task_status(tmp_path, chat_task_id)
         assert chat_state == "TASK_STATE_FAILED"
@@ -447,8 +488,7 @@ async def test_sigterm_during_slow_model_call_resumes_job_from_checkpoint_once(t
         assert "done SLOW-MODEL" in text
         await _wait_until(lambda: gen2.sched.get_job("job-slow") is None, message="the settled one-shot was removed")
 
-        # The model saw no repeated completed tool calls and no new prompt: the resumed
-        # pass's whole view is the original prompt, ONE tool call, ONE result.
+        # No repeated tool calls, no new prompt: one prompt, ONE call, ONE result.
         assert coord.views["SLOW-MODEL"][-1] == [
             ("human",),
             ("ai", ("step_one",)),
@@ -465,28 +505,16 @@ async def test_sigterm_during_slow_model_call_resumes_job_from_checkpoint_once(t
 
 @pytest.mark.asyncio
 async def test_sigterm_during_tool_call_in_wait_continuation_resumes_with_report(tmp_path, monkeypatch):
-    """SIGTERM while a ``wait:`` continuation's tool call is in flight: after restart
-    it resumes with ONE ToolMessage per dangling call reporting the interruption, the
-    model acts on the report (the loop continues) and the turn completes against the
-    original handle. The uncertain tool body is never re-run."""
-    monkeypatch.setattr(scheduler_local, "_POLL_INTERVAL_S", _TEST_POLL_S)
-    coord = _Coordinator()
-    saver = _KillableSaver()
+    """SIGTERM mid tool call in a ``wait:`` continuation: after restart it resumes with
+    ONE ToolMessage per dangling call reporting the interruption, the loop continues,
+    and the turn completes against the original handle. The tool body never re-runs."""
     agent = "d7-wait"
-
-    gen1 = _boot_generation(tmp_path, monkeypatch, coord, saver, agent)
-    await gen1.sched.start()
     ctx = f"job:{uuid.uuid4()}"
-    job = gen1.sched.add_job(
-        "WAIT-TOOL drive the merge queue loop", _past_iso(), job_id=f"wait:{ctx}", context_id=ctx
+    coord, saver, claim = await _interrupted_first_fire(
+        tmp_path, monkeypatch, agent, prompt="WAIT-TOOL drive the merge queue loop",
+        job_id=f"wait:{ctx}", context_id=ctx, ready=lambda c: c.tool_runs.get("merge_pr") == 1,
     )
-    assert job.context_id == ctx
-
-    await _wait_until(lambda: coord.tool_runs.get("merge_pr") == 1, message="the tool call started")
-    claim = await _accepted_unresolved_claim(gen1.sched, f"wait:{ctx}")
     task_id = claim["task_id"]
-
-    await _sigterm(coord, saver, gen1)
 
     gen2 = await _restart(tmp_path, monkeypatch, coord, saver, agent, release=True)
     try:
@@ -502,8 +530,7 @@ async def test_sigterm_during_tool_call_in_wait_continuation_resumes_with_report
         state, _ = _task_status(tmp_path, task_id)
         assert state == "TASK_STATE_COMPLETED"
 
-        # The dangling call was answered by the interruption report, not re-executed —
-        # and the loop CONTINUED: the model verified, then finished.
+        # The dangling call got the report, not a re-run — and the loop CONTINUED.
         assert coord.tool_runs["merge_pr"] == 1
         assert coord.tool_runs["verify_state"] == 1
         resumed_view = coord.views["WAIT-TOOL"][1]  # first pass after the restart
@@ -522,23 +549,15 @@ async def test_sigterm_during_tool_call_in_wait_continuation_resumes_with_report
 
 @pytest.mark.asyncio
 async def test_sigterm_during_tool_call_in_other_one_shot_goes_to_operator(tmp_path, monkeypatch):
-    """SIGTERM while an ordinary one-shot job's tool call is in flight: the occurrence
-    is marked ``interrupted_needs_operator`` — not ``failed``, never resent, resume
-    counter untouched — the job row is held for the operator (S7), and the dead task
-    handle is failed with the restart diagnosis so nothing reads as alive forever."""
-    monkeypatch.setattr(scheduler_local, "_POLL_INTERVAL_S", _TEST_POLL_S)
-    coord = _Coordinator()
-    saver = _KillableSaver()
+    """SIGTERM mid tool call in an ordinary one-shot: ``interrupted_needs_operator`` —
+    not failed, never resent, resume counter untouched — the job row held for S7, the
+    dead task handle failed with the restart diagnosis."""
     agent = "d7-oneshot"
-
-    gen1 = _boot_generation(tmp_path, monkeypatch, coord, saver, agent)
-    await gen1.sched.start()
-    gen1.sched.add_job("ONESHOT-TOOL archive the exports", _past_iso(), job_id="job-oneshot")
-    await _wait_until(lambda: coord.tool_runs.get("risky_step") == 1, message="the tool call started")
-    claim = await _accepted_unresolved_claim(gen1.sched, "job-oneshot")
+    coord, saver, claim = await _interrupted_first_fire(
+        tmp_path, monkeypatch, agent, prompt="ONESHOT-TOOL archive the exports",
+        job_id="job-oneshot", ready=lambda c: c.tool_runs.get("risky_step") == 1,
+    )
     task_id = claim["task_id"]
-
-    await _sigterm(coord, saver, gen1)
 
     gen2 = await _restart(tmp_path, monkeypatch, coord, saver, agent, release=True)
     try:
@@ -557,15 +576,13 @@ async def test_sigterm_during_tool_call_in_other_one_shot_goes_to_operator(tmp_p
         job_row = gen2.sched.get_job("job-oneshot")
         assert job_row is not None
         assert "operator" in (job_row.last_error or "")
-        # The dead handle is terminal with the restart diagnosis — but the OCCURRENCE
-        # is the D7 state, not settled-failed.
+        # The dead handle is terminal; the OCCURRENCE keeps the D7 state.
         state, text = _task_status(tmp_path, task_id)
         assert state == "TASK_STATE_FAILED"
         assert RESTART_INTERRUPTED_TEXT in text
 
-        # Never resent, never resumed: hold the store open and confirm no new model
-        # pass, no tool re-run, no second occurrence.
-        await asyncio.sleep(15 * _TEST_POLL_S)
+        # Never resent, never resumed: no new model pass, re-run or occurrence.
+        await _quiesce_polls(gen2.sched)
         assert len(coord.views["ONESHOT-TOOL"]) == 1
         assert coord.tool_runs["risky_step"] == 1
         assert len(_query(gen2.sched.path, "SELECT * FROM occurrences WHERE job_id = 'job-oneshot'")) == 1
@@ -578,10 +595,9 @@ async def test_sigterm_during_tool_call_in_other_one_shot_goes_to_operator(tmp_p
 
 @pytest.mark.asyncio
 async def test_recurring_job_interrupted_occurrence_is_skipped_and_next_slot_fires(tmp_path, monkeypatch):
-    """SIGTERM during a recurring job's tool call: the occurrence is recorded
-    ``interrupted`` (skipped), its dangling call is sealed on the thread with the
-    interruption report, and the next scheduled slot fires and completes normally on
-    the same execution session."""
+    """SIGTERM during a recurring job's tool call: the occurrence is ``interrupted``
+    (skipped), its dangling call sealed on the thread with the interruption report,
+    and the next slot fires and completes normally on the same execution session."""
     monkeypatch.setattr(scheduler_local, "_POLL_INTERVAL_S", _TEST_POLL_S)
     coord = _Coordinator()
     saver = _KillableSaver()
@@ -611,8 +627,7 @@ async def test_recurring_job_interrupted_occurrence_is_skipped_and_next_slot_fir
         assert state == "TASK_STATE_FAILED"
         assert RESTART_INTERRUPTED_TEXT in text
 
-        # The next slot runs normally: rewind it to due and watch a FRESH occurrence
-        # fire and settle on the same execution session.
+        # The next slot runs normally: a FRESH occurrence on the same session.
         slot2 = _past_iso(2)
         _execute(gen2.sched.path, "UPDATE jobs SET next_fire = ? WHERE id = 'job-cron'", (slot2,))
         await _wait_until(
@@ -623,8 +638,7 @@ async def test_recurring_job_interrupted_occurrence_is_skipped_and_next_slot_fir
         assert fresh["task_state"] == "completed"
         assert fresh["message_id"] != claim["message_id"]  # a new occurrence, not a resend
         assert coord.tool_runs["cron_step"] == 2
-        # The skipped occurrence's dangling call was sealed: the next fire's model view
-        # opens with the interruption report answering the gen-1 tool call.
+        # Sealed: the next fire's view opens with the report answering the gen-1 call.
         next_fire_view = coord.views["CRON-TOOL"][1]
         assert ("tool", "cron_step", INTERRUPTED_TOOL_RESULT[:60]) in next_fire_view
         assert gen2.sched.get_job("job-cron") is not None  # the recurring job lives on
@@ -637,34 +651,24 @@ async def test_recurring_job_interrupted_occurrence_is_skipped_and_next_slot_fir
 
 @pytest.mark.asyncio
 async def test_second_interruption_of_same_occurrence_is_never_auto_resumed(tmp_path, monkeypatch):
-    """The automatic resume is capped at one per occurrence, counted in the claim
-    transaction BEFORE the resume runs: a job whose resumed turn is interrupted again
-    (the crash-loop case) goes to ``interrupted_needs_operator`` on the next boot —
-    the model is never driven a third time."""
-    monkeypatch.setattr(scheduler_local, "_POLL_INTERVAL_S", _TEST_POLL_S)
-    coord = _Coordinator()
-    saver = _KillableSaver()
+    """The automatic resume is capped at one per occurrence, counted BEFORE the resume
+    runs: a resumed turn interrupted again (the crash-loop case) goes to
+    ``interrupted_needs_operator`` — the model is never driven a third time."""
     agent = "d7-twice"
-
-    gen1 = _boot_generation(tmp_path, monkeypatch, coord, saver, agent)
-    await gen1.sched.start()
-    gen1.sched.add_job("SLOW-MODEL rebuild the index", _past_iso(), job_id="job-twice")
-    await _wait_until(lambda: len(coord.views.get("SLOW-MODEL") or []) >= 2, message="the slow model call started")
-    claim = await _accepted_unresolved_claim(gen1.sched, "job-twice")
+    coord, saver, claim = await _interrupted_first_fire(
+        tmp_path, monkeypatch, agent, prompt="SLOW-MODEL rebuild the index",
+        job_id="job-twice", ready=lambda c: len(c.views.get("SLOW-MODEL") or []) >= 2,
+    )
     task_id = claim["task_id"]
 
-    await _sigterm(coord, saver, gen1)
-
-    # Restart #1: the resume is claimed (counted on the row) and blocks in the same
-    # slow model call — then the server dies AGAIN, mid-resume.
+    # Restart #1: the resume is claimed, blocks again, and the server dies mid-resume.
     gen2 = await _restart(tmp_path, monkeypatch, coord, saver, agent, release=False)
     assert gen2.interrupted == {task_id}
     await _wait_until(lambda: len(coord.views["SLOW-MODEL"]) >= 3, message="the automatic resume started")
     assert _occurrence(gen2.sched.path, "job-twice")["auto_resumes"] == 1  # counted BEFORE the resume ran
     saver.dead = True
     gen2.store.dead = True
-    # A killed process writes nothing and unwinds nothing: tear the resume task down
-    # by cancellation, exactly like the event loop dying.
+    # Tear the resume down by cancellation, exactly like the event loop dying.
     for t in list(gen2.sched._fire_tasks):
         t.cancel()
     await gen2.sched.stop()
@@ -688,8 +692,142 @@ async def test_second_interruption_of_same_occurrence_is_never_auto_resumed(tmp_
         assert state == "TASK_STATE_FAILED"
         assert RESTART_INTERRUPTED_TEXT in text
         # No third model pass, no tool re-run, nothing resent.
-        await asyncio.sleep(15 * _TEST_POLL_S)
+        await _quiesce_polls(gen3.sched)
         assert len(coord.views["SLOW-MODEL"]) == 3
         assert coord.tool_runs["step_one"] == 1
     finally:
         await _shutdown(coord, gen3)
+
+
+# ── the resumed turn's HITL rule: autonomous auto-answer; decisions park durably ────
+
+
+@pytest.mark.asyncio
+async def test_resumed_turn_auto_answers_hitl_instead_of_parking(tmp_path, monkeypatch):
+    """A D7 resume follows the autonomous-origin HITL rule: an ask_human-style pause
+    hit mid-resume is answered with the no-operator sentinel and the turn completes —
+    never parked ``input_required``, which would hold the owner's claim forever (D6)."""
+    agent = "d7-ask"
+    coord, saver, claim = await _interrupted_first_fire(
+        tmp_path, monkeypatch, agent, prompt="ASK-HITL merge the queue",
+        job_id="job-ask", ready=lambda c: len(c.views.get("ASK-HITL") or []) >= 2,
+    )
+    task_id = claim["task_id"]
+
+    gen2 = await _restart(tmp_path, monkeypatch, coord, saver, agent, release=True)
+    try:
+        assert gen2.interrupted == {task_id}
+        await _wait_until(
+            lambda: (_occurrence(gen2.sched.path, "job-ask") or {"state": ""})["state"] == "settled",
+            message="the resumed asking turn settled",
+        )
+        settled = _occurrence(gen2.sched.path, "job-ask")
+        assert settled["task_state"] == "completed"
+        assert settled["task_id"] == task_id
+        state, text = _task_status(tmp_path, task_id)
+        assert state == "TASK_STATE_COMPLETED"
+        assert "done ASK-HITL" in text
+        # The model received the sentinel as the ask's answer and finished on it.
+        final_view = coord.views["ASK-HITL"][-1]
+        assert any(e[0] == "tool" and e[1] == "hitl_step" and "no interactive operator" in e[2] for e in final_view)
+    finally:
+        await _shutdown(coord, gen2)
+
+
+@pytest.mark.asyncio
+async def test_resumed_turn_parks_on_a_decision_with_a_durable_record(tmp_path, monkeypatch):
+    """``request_decision`` is the ONE pause a resumed autonomous turn parks on (#4725):
+    it parks WITH its durable decisions-ledger record, the task handle held
+    ``input_required`` and the claim unresolved until the decision resolves."""
+    agent = "d7-decide"
+    coord, saver, claim = await _interrupted_first_fire(
+        tmp_path, monkeypatch, agent, prompt="ASK-DECISION choose the rollout",
+        job_id="job-decide", ready=lambda c: len(c.views.get("ASK-DECISION") or []) >= 2,
+    )
+    task_id = claim["task_id"]
+    owner = json.loads(claim["job_snapshot"])["context_id"]
+
+    gen2 = await _restart(tmp_path, monkeypatch, coord, saver, agent, release=True)
+    try:
+        assert gen2.interrupted == {task_id}
+        await _wait_until(
+            lambda: _task_status(tmp_path, task_id)[0] == "TASK_STATE_INPUT_REQUIRED",
+            message="the resumed turn parked on the decision",
+        )
+        _, text = _task_status(tmp_path, task_id)
+        assert "Which environment?" in text
+        # The durable ledger record exists, pending, keyed to this execution session.
+        records = [r for r in STATE.decision_store.list(session_id=owner) if r.pending]
+        assert [r.question for r in records] == ["Which environment?"]
+        assert records[0].thread_id  # answerable: the record points back at the checkpoint
+        # The claim stays unresolved and nothing re-fires while the decision pends.
+        await _quiesce_polls(gen2.sched)
+        occ = _occurrence(gen2.sched.path, "job-decide")
+        assert occ["state"] in ("claimed", "unknown")
+        assert len(coord.views["ASK-DECISION"]) == 3  # start, killed pass, resumed ask
+    finally:
+        await _shutdown(coord, gen2)
+
+
+# ── a parked continuation no longer counts as the owner's outstanding work ──────────
+
+
+@pytest.mark.asyncio
+async def test_parked_continuation_unblocks_the_owner_for_new_fires(tmp_path, monkeypatch):
+    """A continuation disposed ``interrupted_needs_operator`` keeps its jobs row as the
+    S7 handle but stops counting as the owner's outstanding work (D7 'unblock the
+    owner for NEW work'): the recurring root claims and completes its next slot, and
+    missed-fire recovery rolls a stale root forward instead of pinning it."""
+    monkeypatch.setattr(scheduler_local, "_POLL_INTERVAL_S", _TEST_POLL_S)
+    coord = _Coordinator()
+    saver = _KillableSaver()
+    agent = "d7-owner"
+
+    gen1 = _boot_generation(tmp_path, monkeypatch, coord, saver, agent)
+    await gen1.sched.start()
+    root = gen1.sched.add_job("CRON-TOOL sweep the queue", "* * * * *", job_id="job-root")
+    owner = root.context_id
+    far = (datetime.now(UTC) + timedelta(hours=1)).isoformat()
+    _execute(gen1.sched.path, "UPDATE jobs SET next_fire = ? WHERE id = 'job-root'", (far,))
+    cont_id = f"wait:{owner}"
+    gen1.sched.add_job("SLOW-MODEL continue the loop", _past_iso(), job_id=cont_id, context_id=owner)
+    await _wait_until(lambda: len(coord.views.get("SLOW-MODEL") or []) >= 2, message="the slow model call started")
+    claim = await _accepted_unresolved_claim(gen1.sched, cont_id)
+    task_id = claim["task_id"]
+
+    await _sigterm(coord, saver, gen1)
+    # The occurrence's one automatic resume is already spent (the r5 crash-loop shape).
+    _execute(gen1.sched.path, "UPDATE occurrences SET auto_resumes = 1 WHERE job_id = ?", (cont_id,))
+
+    gen2 = await _restart(tmp_path, monkeypatch, coord, saver, agent, release=True)
+    try:
+        assert gen2.interrupted == {task_id}
+        await _wait_until(
+            lambda: (_occurrence(gen2.sched.path, cont_id) or {"state": ""})["state"] == "interrupted_needs_operator",
+            message="the continuation went to the operator",
+        )
+        assert gen2.sched.get_job(cont_id) is not None  # the S7 handle survives
+
+        # A >24h-stale root rolls FORWARD instead of pinning behind the parked row.
+        stale = (datetime.now(UTC) - timedelta(hours=25)).isoformat()
+        _execute(gen2.sched.path, "UPDATE jobs SET next_fire = ? WHERE id = 'job-root'", (stale,))
+        gen2.sched._recover_missed_fires()
+        rolled = gen2.sched.get_job("job-root")
+        assert rolled is not None
+        assert rolled.next_fire > datetime.now(UTC).isoformat()
+
+        # Live-claim: a due root slot fires and settles while the parked row stays put.
+        slot = _past_iso(2)
+        _execute(gen2.sched.path, "UPDATE jobs SET next_fire = ? WHERE id = 'job-root'", (slot,))
+        await _wait_until(
+            lambda: (_occurrence(gen2.sched.path, "job-root", slot) or {"state": ""})["state"] == "settled",
+            message="the root's next slot fired and settled",
+        )
+        assert _occurrence(gen2.sched.path, "job-root", slot)["task_state"] == "completed"
+        held = _occurrence(gen2.sched.path, cont_id)
+        assert held["state"] == "interrupted_needs_operator"
+        assert held["auto_resumes"] == 1  # untouched: a second resume was never claimed
+        assert held["task_id"] == task_id  # the original handle — nothing was resent
+        assert len(_query(gen2.sched.path, "SELECT * FROM occurrences WHERE job_id = ?", (cont_id,))) == 1
+    finally:
+        await _shutdown(coord, gen2)

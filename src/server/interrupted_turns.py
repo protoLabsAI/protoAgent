@@ -136,6 +136,16 @@ class InterruptedTurnRecovery:
         turn actually ended in (completed / failed / an ``input_required`` pause), so
         the scheduler's normal reconciliation settles the occurrence exactly once.
 
+        A D7 resume is a scheduler-owned turn (a scheduler / watch / inbox fire), so it
+        follows the same HITL rule the live turn drivers apply to those origins
+        (``turn_control._AUTONOMOUS_ORIGINS``): an ``ask_human`` / ``request_user_input``
+        pause is auto-answered with the no-operator sentinel and the turn re-run, up to
+        the shared cap, then given up — never parked (an un-parked occurrence is what
+        lets the owner admit its next fire, D6). The ONE pause that does park is a
+        ``request_decision`` (#4725), and it parks WITH its durable decisions-ledger
+        record, exactly as the live drivers park it — visible in the operator inbox,
+        resumable, expiring; never an anonymous input-required.
+
         Returns True when the thread was driven (whatever the outcome — the task
         handle now reflects it); False when nothing could be done, so the scheduler
         quarantines the occurrence for the operator instead.
@@ -143,7 +153,13 @@ class InterruptedTurnRecovery:
         graph = STATE.graph
         if graph is None or not context_id or not task_id:
             return False
-        from server import turn_control
+        import importlib
+
+        from server import goal_loop, turn_control
+
+        # By path, not ``from server import chat``: the ``server`` package re-exports
+        # the ``chat`` FUNCTION under the submodule's name (see goal_loop._chat()).
+        chat_mod = importlib.import_module("server.chat")
 
         config = self._thread_config(context_id)
         tid = config["configurable"]["thread_id"]
@@ -164,17 +180,27 @@ class InterruptedTurnRecovery:
                     await self._seal_dangling_calls(graph, config, dangling)
                 if dangling or getattr(snap, "next", None):
                     result = await graph.ainvoke(None, config)
-                    if isinstance(result, dict) and result.get("__interrupt__"):
-                        # The resumed turn parked (e.g. a decision). Hold the handle at
+                    # The shared autonomous policy (one copy with the live drivers):
+                    # answer each HITL pause with the sentinel and re-run; a decision
+                    # stays pending; past the cap, clear the pause and complete.
+                    auto = goal_loop.HitlAutoAnswer(True)
+                    result = await auto.settle(config, result, lambda value: graph.ainvoke(value, config))
+                    pending = await chat_mod._pending_interrupt_value(config)
+                    if pending is not None and turn_control.is_decision_interrupt(pending):
+                        # The resumed turn stopped at a choice it may not make on its
+                        # own (#4725): record the durable ledger entry (inbox card,
+                        # expiry, answer-resumes), then hold the handle at
                         # input_required — the claim stays unresolved, so the owner
                         # admits nothing else (D6), and the pause survives TTL sweeps.
+                        await turn_control.decision_pause_payload(context_id, pending, config)
                         await _finalize_task(
                             task_id,
                             state="input_required",
-                            text="Resumed after a restart and paused for input.",
+                            text=str(pending.get("question") or "")
+                            or "Resumed after a restart and paused for a decision.",
                         )
                         log.warning(
-                            "[interrupted-turns] resumed %s after a restart; it parked for input (task %s)",
+                            "[interrupted-turns] resumed %s after a restart; it parked on a decision (task %s)",
                             context_id,
                             task_id,
                         )
