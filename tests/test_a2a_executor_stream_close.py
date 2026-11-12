@@ -55,6 +55,7 @@ class _RecordingQueue(EventQueue):
         status = getattr(event, "status", None)
         if status is not None and status.state in _TERMINAL:
             self.terminal.append(status.state)
+            self.text = " ".join(p.text for p in status.message.parts)
         await super().enqueue_event(event)
 
 
@@ -124,10 +125,11 @@ async def test_a_stream_that_ends_without_a_terminal_frame_is_still_closed_once(
 
 @pytest.mark.asyncio
 async def test_a_stream_that_raises_is_failed_and_closed_once(_outcomes):
-    turn = _Turn([("text", "partial"), RuntimeError("boom")])
-    await ProtoAgentExecutor(turn, stall_timeout_provider=lambda: 30.0).execute(_request_context(), EventQueue())
+    turn, queue = _Turn([("text", "partial"), RuntimeError("boom api_key=" + "sk-" + "abcdefghijklmnopqrstuvwxyz0123")]), _RecordingQueue()
+    await ProtoAgentExecutor(turn, stall_timeout_provider=lambda: 30.0).execute(_request_context(), queue)
     assert not turn.lock.locked() and turn.closes == 1
-    assert [(o.state, o.error) for o in _outcomes] == [("failed", "boom")]
+    assert [o.state for o in _outcomes] == ["failed"]
+    assert queue.text.startswith("boom") and "sk-abc" not in queue.text  # a non-operator caller gets it redacted
 
 
 @pytest.mark.asyncio
