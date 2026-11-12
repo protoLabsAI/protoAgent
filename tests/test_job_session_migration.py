@@ -104,8 +104,9 @@ async def test_live_old_dispatch_writer_defers_migration_until_lock_acquired(tmp
     try:
         deferred = scheduler(tmp_path)  # must not raise into scheduler-less fallback
         deferred._LOCK_RETRY_SECONDS = 0.01
-        # The live owner's store is untouched while it still holds the lock,
-        # even across start() — which waits in the background instead of failing.
+        # The live owner's ROUTING is untouched while it still holds the lock
+        # (only additive DDL applies), even across start() — which waits in the
+        # background instead of failing.
         assert deferred.get_job("cron").context_id is None
         await deferred.start()
         assert deferred._task is not None
@@ -133,12 +134,85 @@ async def test_live_old_dispatch_writer_defers_migration_until_lock_acquired(tmp
 def test_corrupt_store_logs_and_survives_construction(tmp_path):
     """Schema/migration DatabaseErrors stay non-fatal (pre-ADR-0129 behavior):
     the constructor logs and returns a scheduler whose reads fail closed, rather
-    than raising into agent_init's run-scheduler-less-until-next-restart catch."""
+    than raising into agent_init's run-scheduler-less-until-next-restart catch.
+    Writes keep the documented ValueError contract (#3943) — every add_job caller
+    (tools, REST routes, run_in_session) handles ValueError, not a raw
+    OperationalError."""
     base = tmp_path / "migration"
     base.mkdir()
     (base / "jobs.db").write_bytes(b"this is not a sqlite database")
     s = scheduler(tmp_path)
     assert s.list_jobs() == []
+    with pytest.raises(ValueError, match="scheduler store unavailable"):
+        s.add_job("sweep", "* * * * *")
+
+
+@pytest.mark.platform_sensitive
+def test_enqueue_during_deferred_migration_resolves_live_owner(tmp_path, monkeypatch):
+    """While a draining pre-S1 process still holds the owner-lock, only the
+    IDENTITY migration defers — the additive schema applies at construction, so
+    every enqueue keeps working. The wait tool and run_in_session cancel the job
+    they replace BEFORE add_job, so an add_job failing on a missing job_sessions
+    table lost the superseded job. In-window identities are committed with the
+    insert, so even a crash before this process ever wins the lock (here: the
+    deferred scheduler never migrates; a fresh constructor does) preserves them —
+    the later migration adopts only the legacy rows."""
+    monkeypatch.setenv("WATCH_PATH", str(tmp_path / "watches"))
+    s = legacy_store(tmp_path)
+    lock = _acquire_jobs_lock(s.path)
+    try:
+        deferred = scheduler(tmp_path)
+        # The wait tool's supersede sequence during the overlap window.
+        assert deferred.cancel_job("wait:activity")
+        replacement = deferred.add_job("resume supervision", PAST, job_id="wait:activity")
+        assert replacement.context_id.startswith("job:")
+        assert replacement.execution_hold is None
+        # A watch reaction / run_in_session durable enqueue works in the window too.
+        reaction = deferred.add_job("react", PAST, job_id="watch-live", enqueue_key="receipt-1")
+        assert reaction.context_id.startswith("job:")
+        assert deferred.add_job("react", PAST, job_id="watch-live", enqueue_key="receipt-1") == reaction
+        # The live owner's routing stays exactly as it left it meanwhile.
+        assert deferred.get_job("cron").context_id is None
+    finally:
+        _release_jobs_lock(s.path, lock)
+    migrated = scheduler(tmp_path)
+    # Legacy rows migrate as usual; the ambiguous legacy Activity wait holds.
+    assert migrated.get_job("cron").context_id.startswith("job:")
+    assert migrated.get_job("wait:system:activity").execution_hold == job_sessions.LEGACY_WAIT_HOLD
+    # The in-window rows are FRESH, not legacy: owners and claims survive unheld.
+    for job_id, owner in (("wait:activity", replacement.context_id), ("watch-live", reaction.context_id)):
+        row = migrated.get_job(job_id)
+        assert row.context_id == owner
+        assert row.execution_hold is None
+    assert len(rows(migrated, "job_enqueue_receipts")) == 1
+    assert migrated._claim_occurrence(migrated.get_job("wait:activity"))
+
+
+@pytest.mark.platform_sensitive
+def test_enqueue_self_heals_when_deferred_schema_pass_was_interrupted(tmp_path, monkeypatch):
+    """The deferred constructor's additive pass can itself lose a lock race (the
+    live owner mid-transaction past busy_timeout). That must not condemn every
+    enqueue until the next restart: add_job retries the additive DDL lazily."""
+    import sqlite3
+
+    import scheduler.local as local_module
+
+    s = legacy_store(tmp_path)
+    lock = _acquire_jobs_lock(s.path)
+    try:
+        def busy(*args, **kwargs):
+            raise sqlite3.OperationalError("database is locked")
+
+        with monkeypatch.context() as patch:
+            patch.setattr(local_module, "add_missing_columns", busy)
+            deferred = scheduler(tmp_path)  # additive pass failed; still no raise
+        assert not deferred._schema_ready
+        job = deferred.add_job("resume", PAST, job_id="wait:activity-2")
+        assert deferred._schema_ready
+        assert job.context_id.startswith("job:")
+        assert job.execution_hold is None
+    finally:
+        _release_jobs_lock(s.path, lock)
 
 
 @pytest.mark.platform_sensitive

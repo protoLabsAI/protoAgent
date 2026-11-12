@@ -232,6 +232,13 @@ dropped before the resume, and a JSON object typed into a text part arrives as
 the literal string (e.g. `{"approved": true}`), which matches no accepted answer
 and therefore declines. Over A2A, approve with one of the answer strings above.
 
+Approving is an operator action. A caller authenticated with the **federation
+token** can neither answer an approval prompt nor ask to skip one: its
+`run_command` calls that would need approval are refused without a prompt
+(commands matching `filesystem.run_auto_approve` still run), and
+`bypass_permissions` from it is ignored. The server decides this from the
+credential it authenticated, never from request metadata.
+
 For a fully trusted caller, set **`message.metadata.bypass_permissions: true`**
 on the request to skip `run_command` approval for that turn:
 

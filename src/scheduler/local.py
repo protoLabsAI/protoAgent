@@ -459,7 +459,11 @@ class LocalScheduler:
 
     def _init_db(self, *, adopt_existing_jobs: bool = True) -> None:
         self._migration_pending = False
+        self._schema_ready = False
         if not adopt_existing_jobs:
+            # Producers never run DDL (below): mark the schema settled so add_job's
+            # self-heal doesn't try to initialize someone else's store.
+            self._schema_ready = True
             self._initialize_db(adopt_existing_jobs=False)
             return
         migration_lock = _acquire_jobs_lock(self.path)
@@ -469,15 +473,23 @@ class LocalScheduler:
             # not an error. Raising here made `agent_init` (which wraps the
             # constructor in `except Exception`) run scheduler-less until the
             # NEXT restart, bypassing start()'s designed background lock-retry
-            # (`_await_lock_then_poll`). Defer the schema/identity migration to
-            # the moment this process wins the owner-lock instead; until then
-            # the store stays exactly as its live owner left it.
+            # (`_await_lock_then_poll`). Defer the IDENTITY migration to the
+            # moment this process wins the owner-lock instead; until then the
+            # live owner's routing stays exactly as it left it. The ADDITIVE
+            # schema (new tables/columns) still applies now — the pre-ADR-0129
+            # constructor always ran schema setup during this overlap too — so
+            # every enqueue (schedule_task / wait / run_in_session / a watch
+            # reaction) keeps working while the lock is contended instead of
+            # failing against a missing job_sessions table after its caller
+            # already cancelled the job it was replacing.
             self._migration_pending = True
             log.warning(
                 "[scheduler] jobs.db at %s is owned by another live instance — deferring "
-                "schema/identity migration until the owner-lock is acquired",
+                "the identity migration until the owner-lock is acquired (enqueue stays "
+                "available)",
                 self.path,
             )
+            self._ensure_additive_schema()
             return
         try:
             self._initialize_db(adopt_existing_jobs=True)
@@ -485,7 +497,7 @@ class LocalScheduler:
             _release_jobs_lock(self.path, migration_lock)
 
     def _complete_deferred_migration(self) -> None:
-        """Run the schema/identity migration a lock-contended constructor deferred.
+        """Run the identity migration a lock-contended constructor deferred.
 
         Called with the owner-lock HELD (the old dispatch writer has drained),
         before any polling or missed-fire recovery touches the store. Database
@@ -514,42 +526,8 @@ class LocalScheduler:
             return
         db = self._connect()
         try:
-            db.executescript(_SCHEMA)
-            # Preserve canceled generations when a replacement uses the same slot.
-            keys = {r["name"] for r in db.execute("PRAGMA table_info(occurrences)") if r["pk"]}
-            if "created_at" not in keys:
-                db.execute("BEGIN IMMEDIATE")
-                db.execute("ALTER TABLE occurrences RENAME TO occurrences_previous")
-                ledger_schema = _SCHEMA.split("CREATE TABLE IF NOT EXISTS occurrences", 1)[1].split(";", 1)[0]
-                db.execute("CREATE TABLE occurrences" + ledger_schema)
-                db.execute("INSERT INTO occurrences SELECT * FROM occurrences_previous")
-                db.execute("DROP TABLE occurrences_previous")
-                db.commit()
-            add_missing_columns(db, "occurrences", (
-                ("task_id", "TEXT"), ("job_snapshot", "TEXT"),
-                ("task_state", "TEXT"), ("diagnostic", "TEXT"),
-            ))
-            # Additive migrations for stores created before each column existed. Only the
-            # missing ones are ALTERed, and a failed ALTER raises: a lock timeout used to
-            # pass as "column already present" and leave the store without it.
-            add_missing_columns(
-                db,
-                "jobs",
-                (
-                    ("timezone", "TEXT"),  # per-job timezone
-                    ("context_id", "TEXT"),  # ADR 0053 same-session resume
-                    ("origin_session", "TEXT"),  # #2990 deliver-result-to-origin-chat
-                    ("ttl", "TEXT"),  # #2992 auto-expiry
-                    ("max_fires", "INTEGER"),
-                    ("fire_count", "INTEGER NOT NULL DEFAULT 0"),
-                    ("consecutive_failures", "INTEGER NOT NULL DEFAULT 0"),  # #3376 outcomes
-                    ("last_error", "TEXT"),
-                    ("last_ok", "TEXT"),
-                    ("execution_hold", "TEXT"),
-                    ("fence", "TEXT"),  # the creating turn's tool fence (existing rows → unfenced)
-                ),
-            )
-            db.commit()
+            self._apply_additive_schema(db)
+            self._schema_ready = True
             db.execute("BEGIN IMMEDIATE")
             job_sessions.migrate(db)
             # Re-key rows written under a previous display name (#2382). Every jobs.db is
@@ -587,6 +565,72 @@ class LocalScheduler:
             with suppress(sqlite3.DatabaseError):
                 db.rollback()
             raise
+        finally:
+            db.close()
+
+    def _apply_additive_schema(self, db: sqlite3.Connection) -> None:
+        """Create missing tables/columns — DDL only, no routing rewrite.
+
+        Safe while another live instance owns dispatch: it changes nothing the old
+        process reads or writes (explicit-column INSERTs and ``SELECT *`` are
+        unaffected by added columns/tables), which is exactly the schema setup the
+        pre-ADR-0129 constructor always ran during a restart/redeploy overlap. The
+        identity migration (``job_sessions.migrate``) is the part that must wait
+        for the owner-lock."""
+        db.executescript(_SCHEMA)
+        # Preserve canceled generations when a replacement uses the same slot.
+        keys = {r["name"] for r in db.execute("PRAGMA table_info(occurrences)") if r["pk"]}
+        if "created_at" not in keys:
+            db.execute("BEGIN IMMEDIATE")
+            db.execute("ALTER TABLE occurrences RENAME TO occurrences_previous")
+            ledger_schema = _SCHEMA.split("CREATE TABLE IF NOT EXISTS occurrences", 1)[1].split(";", 1)[0]
+            db.execute("CREATE TABLE occurrences" + ledger_schema)
+            db.execute("INSERT INTO occurrences SELECT * FROM occurrences_previous")
+            db.execute("DROP TABLE occurrences_previous")
+            db.commit()
+        add_missing_columns(db, "occurrences", (
+            ("task_id", "TEXT"), ("job_snapshot", "TEXT"),
+            ("task_state", "TEXT"), ("diagnostic", "TEXT"),
+        ))
+        # Additive migrations for stores created before each column existed. Only the
+        # missing ones are ALTERed, and a failed ALTER raises: a lock timeout used to
+        # pass as "column already present" and leave the store without it.
+        add_missing_columns(
+            db,
+            "jobs",
+            (
+                ("timezone", "TEXT"),  # per-job timezone
+                ("context_id", "TEXT"),  # ADR 0053 same-session resume
+                ("origin_session", "TEXT"),  # #2990 deliver-result-to-origin-chat
+                ("ttl", "TEXT"),  # #2992 auto-expiry
+                ("max_fires", "INTEGER"),
+                ("fire_count", "INTEGER NOT NULL DEFAULT 0"),
+                ("consecutive_failures", "INTEGER NOT NULL DEFAULT 0"),  # #3376 outcomes
+                ("last_error", "TEXT"),
+                ("last_ok", "TEXT"),
+                ("execution_hold", "TEXT"),
+                ("fence", "TEXT"),  # the creating turn's tool fence (existing rows → unfenced)
+            ),
+        )
+        job_sessions.ensure_schema(db)
+        db.commit()
+
+    def _ensure_additive_schema(self) -> None:
+        """Best-effort additive DDL outside ``_initialize_db`` — for a constructor
+        that deferred to a live owner, or a store that was briefly unreadable.
+        Enqueue must not depend on migration timing: the wait tool and
+        ``run_in_session`` cancel the job they replace BEFORE calling ``add_job``,
+        so an add_job that fails on a missing ``job_sessions`` table loses the
+        superseded job. Failure logs and leaves ``_schema_ready`` unset, so the
+        next enqueue retries (fail closed per query, as before ADR 0129)."""
+        if self._schema_ready:
+            return
+        db = self._connect()
+        try:
+            self._apply_additive_schema(db)
+            self._schema_ready = True
+        except sqlite3.DatabaseError:
+            log.exception("[scheduler] additive schema setup failed at %s", self.path)
         finally:
             db.close()
 
@@ -644,6 +688,12 @@ class LocalScheduler:
                 "fire_count", "consecutive_failures", "last_error", "last_ok",
             ):
                 setattr(job, field, getattr(restore_state, field))
+        if not self._schema_ready:
+            # The constructor deferred to a live owner (or the store was briefly
+            # unreadable): make sure job_sessions/execution_hold exist before
+            # resolve touches them — the identity migration itself still waits
+            # for the owner-lock.
+            self._ensure_additive_schema()
         db = self._connect()
         try:
             db.execute("BEGIN IMMEDIATE")
@@ -700,6 +750,12 @@ class LocalScheduler:
             db.commit()
         except sqlite3.IntegrityError as exc:
             raise ValueError(f"job id {job.id!r} already exists") from exc
+        except sqlite3.DatabaseError as exc:
+            # Keep the documented ValueError contract (#3943) even for a store-level
+            # failure: every caller — the schedule/wait tools, the REST routes, the
+            # SDK's run_in_session — handles ValueError; a raw OperationalError
+            # escaped them (and run_in_session's hook callers) uncaught.
+            raise ValueError(f"scheduler store unavailable: {exc}") from exc
         finally:
             db.close()
         return job

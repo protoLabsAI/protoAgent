@@ -766,6 +766,80 @@ def test_run_command_bypass_forbidden_by_host_still_gates(workspace, monkeypatch
     assert "declined by the operator" in out  # gate fired despite the bypass request
 
 
+def _gated_run_tools(a):
+    return _tools(
+        _Cfg(
+            filesystem_projects=[{"name": "a", "path": str(a)}],
+            filesystem_allow_run=True,
+            filesystem_run_requires_approval=True,
+            filesystem_bypass_allowed=True,
+        )
+    )
+
+
+def test_a_caller_that_cannot_approve_cannot_bypass(workspace, monkeypatch):
+    """`bypass_permissions` is caller-supplied metadata. A caller the server marked as unable
+    to approve (the federation tier) must not skip the gate with it — and gets no card to
+    answer itself either: the command is refused before any interrupt."""
+    import langgraph.types
+    from graph.middleware.request_context import current_request_metadata, request_metadata_scope
+
+    _, a, _ = workspace
+
+    def _no_card(payload):
+        raise AssertionError("no approval card for a caller that can't approve")
+
+    monkeypatch.setattr(langgraph.types, "interrupt", _no_card)
+    t = _gated_run_tools(a)
+    with request_metadata_scope({"bypass_permissions": True, "origin": "a2a"}, may_approve=False):
+        # Dropped at the binding, so plugin middleware reading the metadata agrees with the gate.
+        assert "bypass_permissions" not in current_request_metadata()
+        assert current_request_metadata()["origin"] == "a2a"
+        out = asyncio.run(t["run_command"].ainvoke({"project": "a", "command": _LIST_COMMAND}))
+    assert "README.md" not in out
+    assert "this caller can't give it" in out
+
+
+def test_a_caller_that_cannot_approve_cannot_answer_a_parked_card(workspace, monkeypatch):
+    """The tool body re-runs under the RESUMING turn. An "approve" from a caller that can't
+    approve — its own card or one the operator's turn parked — never counts."""
+    from graph.middleware.request_context import caller_may_approve, request_metadata_scope
+    from tools.fs_tools import _approved
+
+    assert caller_may_approve() is True  # unbound (in-process) keeps today's behaviour
+    assert _approved("approve") is True
+    with request_metadata_scope({}, may_approve=False):
+        assert caller_may_approve() is False
+        for answer in ("approve", True, {"approved": True}, {"decision": "approve"}):
+            assert _approved(answer) is False
+    assert caller_may_approve() is True  # the scope restores it
+    # A nested turn can't hand the authority back, and the metadata-less scope leaves the
+    # outer turn's metadata alone.
+    from graph.middleware.request_context import approval_authority_scope, current_request_metadata
+
+    with request_metadata_scope({"origin": "a2a"}, may_approve=False):
+        with approval_authority_scope(True), request_metadata_scope({"bypass_permissions": True}):
+            assert caller_may_approve() is False
+        with approval_authority_scope(True):
+            assert current_request_metadata() == {"origin": "a2a"}
+    with approval_authority_scope(False):
+        assert _approved("approve") is False
+
+
+def test_delete_file_is_declined_for_a_caller_that_cannot_approve(workspace, monkeypatch):
+    import langgraph.types
+    from graph.middleware.request_context import request_metadata_scope
+
+    _, a, _ = workspace
+    (a / "doomed.txt").write_text("x")
+    monkeypatch.setattr(langgraph.types, "interrupt", lambda payload: "approve")
+    t = _tools(_Cfg(filesystem_projects=[{"name": "a", "path": str(a), "write": True}]))
+    with request_metadata_scope({}, may_approve=False):
+        out = asyncio.run(t["delete_file"].ainvoke({"project": "a", "path": "doomed.txt"}))
+    assert "not deleted" in out
+    assert (a / "doomed.txt").exists()
+
+
 # ── no_delete fence mode + delete_file (ADR 0083 D5, #2012) ────────────────────
 
 
