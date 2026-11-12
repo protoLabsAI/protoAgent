@@ -15,6 +15,7 @@ per-process; a restart has no turns in flight by definition.
 from __future__ import annotations
 
 import threading
+import time
 from contextlib import asynccontextmanager
 
 _LOCK = threading.Lock()
@@ -23,6 +24,9 @@ _ACTIVE: dict[str, int] = {}
 # is created (and marked working) BEFORE it waits for that lock, so a queued turn's row is
 # newer than the running one's; this names the one actually running.
 _HOLDERS: dict[str, str] = {}
+# session id → ``time.monotonic()`` when its current holder took the thread (#5106): a
+# queued turn's stall window starts when it owns the thread, not when it was created.
+_HELD_SINCE: dict[str, float] = {}
 
 
 def begin(session_id: str) -> None:
@@ -63,7 +67,9 @@ async def holding(session_id: str, task_id: str):
         return
     with _LOCK:
         previous = _HOLDERS.get(session_id)
+        previous_since = _HELD_SINCE.get(session_id)
         _HOLDERS[session_id] = task_id
+        _HELD_SINCE[session_id] = time.monotonic()
     try:
         yield
     finally:
@@ -71,8 +77,20 @@ async def holding(session_id: str, task_id: str):
             if _HOLDERS.get(session_id) == task_id:
                 if previous:
                     _HOLDERS[session_id] = previous
+                    if previous_since is not None:
+                        _HELD_SINCE[session_id] = previous_since
                 else:
                     _HOLDERS.pop(session_id, None)
+                    _HELD_SINCE.pop(session_id, None)
+
+
+def held_since(session_id: str, task_id: str) -> float | None:
+    """``time.monotonic()`` at which ``task_id`` took ``session_id``'s thread, or None
+    when it is not the task holding it."""
+    with _LOCK:
+        if _HOLDERS.get(session_id) != task_id:
+            return None
+        return _HELD_SINCE.get(session_id)
 
 
 def holding_task(session_id: str) -> str | None:

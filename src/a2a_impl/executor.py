@@ -57,6 +57,7 @@ import protolabs_a2a as pa
 
 from a2a_impl import hitl_routing
 from graph.turn_liveness import TurnStop, bind_turn_stop
+from runtime import turn_activity
 from runtime.session_ids import session_id_problem
 
 logger = logging.getLogger(__name__)
@@ -200,7 +201,14 @@ async def _frame_within(step: asyncio.Task, seconds: float) -> bool:
     return bool(finished)
 
 
-async def _stall_guarded(stream, seconds: float, last_activity: list[str], step_context: list | None = None):
+async def _stall_guarded(
+    stream,
+    seconds: float,
+    last_activity: list[str],
+    step_context: list | None = None,
+    queued_behind: Callable[[], str | None] | None = None,
+    owned_since: Callable[[], float | None] | None = None,
+):
     """Yield from ``stream``, raising :class:`TurnStalled` if no event arrives
     for ``seconds``.
 
@@ -232,6 +240,19 @@ async def _stall_guarded(stream, seconds: float, last_activity: list[str], step_
     stream's ``finally`` (thread-lock release, trace flush) would otherwise wait for the
     event loop's async-generator finalizer. The stall path closes ``stream`` itself, so the
     ``finally`` skips it there — ``stream`` is closed exactly once either way.
+
+    QUEUED IS NOT STALLED (#5106). Turns on one thread are serialized by its lock, and a
+    turn waiting for it emits nothing — so a scheduled fire or inbox item that landed on a
+    thread busy with a long job read as wedged and was failed "while starting up".
+    ``queued_behind()`` names the task holding this turn's thread (None when the thread
+    is free or this turn holds it). While it names another task, a silent window is not
+    a stall: the wait goes on, and the step is named so a later failure says so. That
+    holder is itself an A2A turn under this same guard, so a head-of-line turn that
+    really is dead is still failed — by its own guard — and the queue moves. Once this
+    turn holds the thread (or something unguarded does), silence counts again, measured
+    from when this turn TOOK the thread (``owned_since()``, a ``time.monotonic()`` stamp)
+    — never from a window that opened while it was still queued — so a turn that got
+    the thread part-way through a window still gets a full window for its first frame.
     """
     closed = False
     try:
@@ -262,12 +283,35 @@ async def _stall_guarded(stream, seconds: float, last_activity: list[str], step_
                 step.cancel()
                 await asyncio.wait({step})
                 raise
+            # The window ran out with no frame. Keep waiting on the SAME step while the
+            # turn is queued behind the thread's running turn; once it owns the thread,
+            # for the rest of a full window measured from when it took it.
+            while not finished:
+                holder = _holder_or_none(queued_behind) if queued_behind is not None else None
+                if holder:
+                    last_activity[0] = f"queued behind task {holder}, which holds this thread"
+                    wait_s = seconds
+                else:
+                    wait_s = _rest_of_window_since_owned(owned_since, seconds)
+                    if wait_s <= 0:
+                        break
+                try:
+                    finished = await _frame_within(step, wait_s)
+                except asyncio.CancelledError:
+                    step.cancel()
+                    await asyncio.wait({step})
+                    raise
             if finished:
+                if last_activity[0].startswith("queued behind"):
+                    last_activity[0] = "starting up"
                 try:
                     item = step.result()
                 except StopAsyncIteration:
                     return
             else:
+                if last_activity[0].startswith("queued behind"):
+                    # It got the thread (or the holder went away) and then said nothing.
+                    last_activity[0] = "starting up"
                 stalled = (
                     f"The turn stalled: no progress for {seconds:g}s while {last_activity[0]}. "
                     "It was stopped rather than left running invisibly — the last step never "
@@ -295,6 +339,51 @@ async def _stall_guarded(stream, seconds: float, last_activity: list[str], step_
             # this is the guard being closed/cancelled at a ``yield`` — close ``stream``
             # now rather than leave its cleanup to GC.
             await stream.aclose()
+
+
+def _holder_or_none(queued_behind: Callable[[], str | None]) -> str | None:
+    """``queued_behind()``, with a failing probe read as "not queued" (the stall rule
+    applies) — liveness bookkeeping must never itself wedge or crash a turn."""
+    try:
+        return queued_behind() or None
+    except Exception:  # noqa: BLE001
+        logger.debug("[a2a] queued-behind probe failed; treating the turn as not queued", exc_info=True)
+        return None
+
+
+def _rest_of_window_since_owned(owned_since: Callable[[], float | None] | None, seconds: float) -> float:
+    """Seconds left of a stall window that STARTS when this turn took its thread; 0 when
+    that is unknown (no probe, never queued) or the window has already run out."""
+    if owned_since is None:
+        return 0.0
+    try:
+        since = owned_since()
+    except Exception:  # noqa: BLE001 — liveness bookkeeping never wedges a turn
+        return 0.0
+    if since is None:
+        return 0.0
+    return max(0.0, seconds - (time.monotonic() - since))
+
+
+def _thread_owned_since(context_id: str, task_id: str) -> Callable[[], float | None]:
+    """The ``owned_since`` probe: when ``task_id`` took ``context_id``'s thread, or None."""
+
+    def probe() -> float | None:
+        return turn_activity.held_since(context_id, task_id) if context_id and task_id else None
+
+    return probe
+
+
+def _thread_holder(context_id: str, task_id: str) -> Callable[[], str | None]:
+    """The ``queued_behind`` probe for one task: the OTHER A2A task holding the thread of
+    ``context_id`` right now (``runtime.turn_activity``, set by the chat driver once a turn
+    holds the thread lock), or None when the thread is free or ``task_id`` holds it."""
+
+    def probe() -> str | None:
+        holder = turn_activity.holding_task(context_id) if context_id else None
+        return holder if holder and holder != task_id else None
+
+    return probe
 
 
 @dataclass
@@ -1199,6 +1288,8 @@ class ProtoAgentExecutor(AgentExecutor):
                 self._stall_timeout_seconds(),
                 last_activity,
                 stream_ctx,
+                queued_behind=_thread_holder(str(context.context_id or ""), str(context.task_id or "")),
+                owned_since=_thread_owned_since(str(context.context_id or ""), str(context.task_id or "")),
             )
             async for event_type, payload in guarded:
                 _capture_trace_id()
