@@ -21,6 +21,7 @@ import os
 from datetime import UTC, datetime
 from typing import Any
 
+from a2a_impl.wire import task_id_from_response
 from events import ACTIVITY_CONTEXT
 from graph.conversation_harvest import _DEFAULT_HISTORY_STORE, resolve_history_store
 from graph.output_format import extract_output
@@ -171,6 +172,9 @@ async def _fire_activity_from_inbox(item: dict) -> bool:
             return False
         payload = r.json()
         if _a2a_send_accepted(payload):
+            # Accepted is not finished (#5106): the turn runs in the background now, so
+            # watch it and give the item back to the pull queue if the turn fails.
+            _watch_inbox_turn(task_id_from_response(payload), item)
             return True
         err = payload.get("error")
         state = _a2a_result_state(payload)
@@ -184,6 +188,94 @@ async def _fire_activity_from_inbox(item: dict) -> bool:
     except Exception:
         log.exception("[inbox] now-fire failed for item %s", item.get("id"))
         return False
+
+
+# ── an accepted now-item whose turn then fails is restored (#5106) ─────────────
+#
+# The now-fire answers on acceptance, so its turn's outcome arrives later, at the
+# executor's terminal hook (`_a2a_terminal`). Only a turn that ENDED badly gives its item
+# back — `check_inbox` is the fallback delivery path, exactly as for a fire that was never
+# accepted. Keyed by task id; each entry is consumed once, so an item is restored at most
+# once per fire. A terminal that lands before the watch is registered (a turn that fails
+# instantly) is remembered briefly in `_INBOX_EARLY_TERMINALS` and settled at registration.
+
+_INBOX_TURN_WATCH: dict[str, dict] = {}
+_INBOX_EARLY_TERMINALS: dict[str, str] = {}
+_INBOX_WATCH_MAX = 1024
+_INBOX_RESTORE_STATES = {"failed", "canceled", "rejected"}
+
+
+def _watch_inbox_turn(task_id: str, item: dict) -> None:
+    if not task_id or item.get("id") is None:
+        return
+    early = _INBOX_EARLY_TERMINALS.pop(task_id, None)
+    if early is not None:
+        _settle_inbox_turn(item, early)
+        return
+    _INBOX_TURN_WATCH[task_id] = item
+    while len(_INBOX_TURN_WATCH) > _INBOX_WATCH_MAX:
+        _INBOX_TURN_WATCH.pop(next(iter(_INBOX_TURN_WATCH)))
+
+
+def _inbox_turn_ended(outcome) -> None:
+    """Terminal-hook half of the watch: settle the watched now-item for this task."""
+    if str(getattr(outcome, "origin", "") or "") != "inbox":
+        return
+    task_id = str(getattr(outcome, "task_id", "") or "")
+    if not task_id:
+        return
+    state = str(getattr(outcome, "state", "") or "")
+    item = _INBOX_TURN_WATCH.pop(task_id, None)
+    if item is None:
+        # Not registered yet (or not a now-fire of ours): remember it for registration.
+        _INBOX_EARLY_TERMINALS[task_id] = state
+        while len(_INBOX_EARLY_TERMINALS) > _INBOX_WATCH_MAX:
+            _INBOX_EARLY_TERMINALS.pop(next(iter(_INBOX_EARLY_TERMINALS)))
+        return
+    _settle_inbox_turn(item, state)
+
+
+def _settle_inbox_turn(item: dict, state: str) -> None:
+    if state not in _INBOX_RESTORE_STATES:
+        return
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        _restore_inbox_item(item, state)
+        return
+    t = loop.create_task(asyncio.to_thread(_restore_inbox_item, item, state))
+    _BG_WAKE_TASKS.add(t)
+    t.add_done_callback(_BG_WAKE_TASKS.discard)
+
+
+def _restore_inbox_item(item: dict, state: str) -> None:
+    """Un-deliver the item so `check_inbox` hands it to a later turn, and badge it the
+    way an unfired item is badged. Best-effort; never raises."""
+    store = getattr(STATE, "inbox_store", None)
+    if store is None:
+        return
+    try:
+        restored = store.mark_pending([item["id"]])
+    except Exception:  # noqa: BLE001
+        log.exception("[inbox] could not restore now-item %s after its turn %s", item.get("id"), state)
+        return
+    if not restored:
+        return
+    log.warning("[inbox] now-item %s: its Activity turn %s — restored to the pending queue", item.get("id"), state)
+    try:
+        _event_bus.publish(
+            "inbox.item",
+            {
+                "id": item["id"],
+                "priority": item.get("priority") or "now",
+                "source": item.get("source") or "",
+                "text": item.get("text") or "",
+                "delivery": item.get("delivery") or "",
+                "session": item.get("target_session") or "",
+            },
+        )
+    except Exception:  # noqa: BLE001
+        log.debug("[inbox] restore badge publish failed", exc_info=True)
 
 
 def install_inbox_now_delivery() -> None:
@@ -1459,6 +1551,10 @@ def _a2a_terminal(outcome) -> None:
     # First, so a telemetry failure below can't skip it (#3933); the executor's
     # `turn_ended` progress frame is the backstop for paths that never reach this hook.
     finish_live_server_turn(getattr(outcome, "context_id", "") or "", getattr(outcome, "task_id", "") or "")
+    try:
+        _inbox_turn_ended(outcome)  # a failed now-item turn gives its item back (#5106)
+    except Exception:  # noqa: BLE001 — never into the terminal hook
+        log.exception("[inbox] now-item turn settlement failed")
     _record_a2a_telemetry(outcome)
     # Scheduled fires (#2990): deliver the result back to the chat that created the
     # schedule as a ScheduledReportCard, whichever thread the fire actually ran in. A
