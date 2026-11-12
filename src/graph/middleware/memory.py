@@ -453,6 +453,11 @@ def _surface_for(session_id: str) -> str:
         return "chat"
     if session_id.startswith("background:"):
         return "background"
+    if session_id.startswith("job:"):
+        # ADR 0129 execution sessions (``job:<execution_uuid>``): background work,
+        # never an operator chat. Unlike ADR 0070 ``background:`` workers these ARE
+        # durable sessions, so their summaries persist and list in the digest.
+        return "background"
     if session_id == "system:activity":
         return "activity"
     if session_id.startswith("palette-"):

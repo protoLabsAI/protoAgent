@@ -872,6 +872,23 @@ class LocalScheduler:
             db.close()
         return [_row_to_job(r) for r in rows]
 
+    def execution_session_pins(self) -> set[str] | None:
+        """``job:`` execution sessions this store still holds unresolved work for
+        (ADR 0129): a live scheduling row — a recurring job between fires, a pending
+        one-shot, a wait/watch continuation — or a claimed/unknown occurrence. The
+        retention sweep (``server/maintenance_loops.py``) must not retire these
+        sessions' checkpoint threads. ``None`` means the ledger could not be read —
+        the caller must treat EVERY job session as pinned rather than drop one whose
+        pin it merely failed to see (ADR 0129: no policy may drop unresolved work)."""
+        db = self._connect()
+        try:
+            return job_sessions.pinned_contexts(db)
+        except sqlite3.DatabaseError as exc:
+            log.warning("[scheduler] execution_session_pins failed: %s", exc)
+            return None
+        finally:
+            db.close()
+
     def get_job(self, job_id: str) -> Job | None:
         """Fetch a single job by id (namespaced by agent), or ``None`` if absent.
 

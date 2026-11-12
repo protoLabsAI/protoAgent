@@ -138,6 +138,28 @@ def _held_predecessor(db: sqlite3.Connection, job_id: str, context_held):
     return None
 
 
+def pinned_contexts(db: sqlite3.Connection) -> set[str]:
+    """``job:`` execution sessions whose durable work in THIS database is unresolved
+    (ADR 0129 retention pins): a live scheduling row — a recurring job between fires,
+    a pending one-shot, a wait/watch continuation — or a claimed/unknown occurrence
+    (an accepted or unknown-acceptance send that has not settled). While pinned, the
+    session's checkpoint thread must survive normal retention; pins outside this
+    database (an armed watch's reaction, an unconsumed pending decision) are the
+    caller's to add. Owner-mapping rows themselves are tombstones and never expire here."""
+    pins: set[str] = set()
+    for (context,) in db.execute(
+        "SELECT DISTINCT context_id FROM jobs WHERE context_id LIKE 'job:%'"
+    ).fetchall():
+        pins.add(context)
+    for (context,) in db.execute(
+        "SELECT DISTINCT s.context_id FROM job_sessions s JOIN occurrences o "
+        "ON s.job_id = o.job_id AND s.created_at = o.created_at "
+        "WHERE o.state IN ('claimed', 'unknown') AND s.context_id LIKE 'job:%'"
+    ).fetchall():
+        pins.add(context)
+    return pins
+
+
 def migrate(db: sqlite3.Connection) -> None:
     """Version-one routing migration; all stages commit or roll back together.
 
