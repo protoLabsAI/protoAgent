@@ -344,7 +344,9 @@ async def test_host_loop_expires_new_decisions_on_time_and_retries(
     monkeypatch.setattr(STATE, "a2a_task_engine", object() if slow_reaper else None)
     monkeypatch.setattr(stores, "reap_orphaned_working_tasks", reap)
     monkeypatch.setattr(decision_routes, "_resume_parked_turn", deliver)
-    monkeypatch.setattr(loops.asyncio, "sleep", sleep)
+    # Advance only maintenance time; graph/checkpoint observers use real loop time.
+    from types import SimpleNamespace
+    monkeypatch.setattr(loops, "asyncio", SimpleNamespace(**{**vars(asyncio), "sleep": sleep}))
     host = asyncio.create_task(loops._a2a_reaper_loop())
     try:
         await asyncio.wait_for(finished.wait(), timeout=10)
