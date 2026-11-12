@@ -27,8 +27,9 @@ const reading = (instruction: WorkInterpretation["instruction"] = null): WorkInt
   problem: null,
 });
 
+// A current chat by default — the no-chat case opts out with an explicit undefined.
 async function render(props: Partial<Parameters<typeof WorkCreateDialog>[0]> = {}) {
-  await act(async () => root.render(<WorkCreateDialog onClose={onClose} {...props} />));
+  await act(async () => root.render(<WorkCreateDialog onClose={onClose} sessionId="chat-1" {...props} />));
 }
 async function type(value: string) {
   const box = textarea();
@@ -128,6 +129,19 @@ it("a failed read shows a readable error and retry keeps the words", async () =>
   // The flattened `response` fallback parses too, and a condition reads as Coming up.
   expect((onReady.mock.calls[0][0] as WorkCreateHandoff).interpretation.kind).toBe("followup");
   expect(document.querySelector(".work-create__dest")?.textContent).toBe("Goes in Coming up as Condition.");
+});
+
+it("without a current chat nothing is ever posted: Continue stays gated and the dialog says why", async () => {
+  // POSTing an empty session_id would have /api/chat mint a session and the marked turn
+  // land in a hidden new chat — the dialog must gate, never fall back to a minted id.
+  await render({ sessionId: undefined, onReady });
+  expect(document.querySelector(".work-create__body .pl-callout--warning")?.textContent)
+    .toContain("No chat is open");
+  await type("Watch the thing");
+  expect(button("Continue").disabled).toBe(true);
+  await act(async () => button("Continue").click());
+  expect(interpretWork).not.toHaveBeenCalled();
+  expect(onReady).not.toHaveBeenCalled();
 });
 
 it("Escape closes through the overlay stack and focus returns to the opener", async () => {

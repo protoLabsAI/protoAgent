@@ -415,7 +415,8 @@ describe("live region", () => {
 it("people chips keep the mention toggle behavior and render even with zero group chips", async () => {
   const onToggleMention = vi.fn();
   await render(rail([], { cast: ["lead", "scout"], draft: "@lead hello", onToggleMention }));
-  const chips = [...host.querySelectorAll<HTMLButtonElement>(".chat-roster-chip")];
+  // button-scoped: the hidden measure row mirrors the chips as spans with the same class.
+  const chips = [...host.querySelectorAll<HTMLButtonElement>("button.chat-roster-chip")];
   expect(chips.map((c) => c.textContent)).toEqual(["@lead", "@scout"]);
   expect(chips[0].getAttribute("aria-pressed")).toBe("true");
   expect(chips[1].getAttribute("aria-pressed")).toBe("false");

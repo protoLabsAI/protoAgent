@@ -1522,6 +1522,7 @@ class LocalScheduler:
         trigger: str,
         ok: bool | None = None,
         task_id: str = "",
+        origin_session: str = "",
     ) -> None:
         """Emit a turn-lifecycle event (#1767) around the self-POST so an open console
         can render its typing indicator during an otherwise-invisible server-initiated
@@ -1530,7 +1531,12 @@ class LocalScheduler:
         ``task_id`` (on ``turn.finished``, once the fire has answered) says WHICH turn
         ended, so a console holding a DIFFERENT live turn's control keeps it — an
         un-addressed finish used to clear whichever one was there, dropping a queued
-        interjection with it."""
+        interjection with it.
+
+        ``origin_session`` (ADR 0129) is the job's nullable origin provenance — the chat
+        that created it — alongside ``session_id`` (the execution session) and ``trigger``
+        (the job identity), so lifecycle consumers can attribute an isolated job turn
+        without resolving the job row themselves."""
         if self._publish is None:
             return
         data: dict[str, Any] = {"session_id": session_id, "origin": origin, "trigger": trigger}
@@ -1538,6 +1544,8 @@ class LocalScheduler:
             data["ok"] = ok
         if task_id:
             data["task_id"] = task_id
+        if origin_session:
+            data["origin_session"] = origin_session
         try:
             self._publish(topic, data)
         except Exception:  # noqa: BLE001 — the event is best-effort
@@ -1614,6 +1622,7 @@ class LocalScheduler:
                 "turn.finished", session_id=job.context_id or ACTIVITY_CONTEXT,
                 origin="watch" if job.id.startswith("watch-") else "scheduler",
                 trigger=job.id, ok=None if canceled else not failure, task_id=task_id,
+                origin_session=job.origin_session or "",
             )
         return terminal
 
@@ -1730,7 +1739,10 @@ class LocalScheduler:
                 log.exception("[scheduler] could not hold unrouted job %s", job.id)
             self._finish_dispatch(job, "retryable")
             return False
-        self._publish_turn("turn.started", session_id=session_id, origin=fire_origin, trigger=job.id)
+        self._publish_turn(
+            "turn.started", session_id=session_id, origin=fire_origin, trigger=job.id,
+            origin_session=job.origin_session or "",
+        )
 
         # Wake-framing (ADR 0079): a scheduled/watch fire delivered a bare prompt, so the agent
         # had no idea WHY it was awake (a cron sweep? a watch trip? a wait resume?). Prepend a
@@ -1897,6 +1909,7 @@ class LocalScheduler:
                     trigger=job.id,
                     ok=ok,
                     task_id=task_id,
+                    origin_session=job.origin_session or "",
                 )
 
     def _generate_id(self) -> str:

@@ -23,7 +23,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from a2a_impl.wire import task_id_from_response
-from events import ACTIVITY_CONTEXT
+from events import ACTIVITY_CONTEXT, JOB_CONTEXT_PREFIX
 from graph.conversation_harvest import _DEFAULT_HISTORY_STORE, resolve_history_store
 from graph.output_format import extract_output
 from runtime.state import STATE
@@ -99,6 +99,39 @@ def _a2a_send_accepted(payload: dict) -> bool:
     return _a2a_result_state(payload) in _A2A_ACCEPTED_STATES
 
 
+def _inbox_execution_identity(item: dict) -> dict:
+    """The durable per-item execution identity an inbox fire runs under (ADR 0129).
+
+    Read-or-assign from the inbox store, so the first delivery and every retry (the
+    startup recovery drain included) present the same isolated ``job:`` context and the
+    same message id — the A2A layer then joins the already-accepted turn instead of
+    running the item twice. When the store can't assign one (no store wired, a read
+    failure), fall back to a fresh ephemeral pair: still an isolated job session, never
+    the shared Activity context — Activity stays a summary/feed surface.
+    """
+    from uuid import uuid4
+
+    store = getattr(STATE, "inbox_store", None)
+    item_id = item.get("id")
+    if store is not None and item_id is not None:
+        try:
+            return store.execution_identity(int(item_id))
+        except Exception:  # noqa: BLE001 — a bookkeeping failure must not lose the delivery
+            log.exception("[inbox] could not read the durable execution identity for item %s", item_id)
+    return {"context_id": f"{JOB_CONTEXT_PREFIX}{uuid4()}", "message_id": str(uuid4()), "task_id": ""}
+
+
+def _record_inbox_acceptance(item: dict, task_id: str) -> None:
+    """Persist the accepted task handle on the item's execution identity. Best-effort."""
+    store = getattr(STATE, "inbox_store", None)
+    if store is None or item.get("id") is None or not task_id:
+        return
+    try:
+        store.record_execution_acceptance(int(item["id"]), task_id)
+    except Exception:  # noqa: BLE001 — acceptance already watched in-process; identity stays stable
+        log.exception("[inbox] could not record acceptance for item %s", item.get("id"))
+
+
 async def _fire_activity_from_inbox(item: dict) -> bool:
     """Self-A2A fire for a newly received now-priority inbox item.
 
@@ -107,14 +140,20 @@ async def _fire_activity_from_inbox(item: dict) -> bool:
     accepted as an owned turn; HTTP reachability, JSON-RPC errors, explicit failed
     states, and missing task evidence are all refusal/failure for inbox delivery
     purposes.
-    """
-    from uuid import uuid4
 
+    ADR 0129: the turn executes on the item's own durable ``job:`` session — never the
+    shared Activity thread, which is now a summary/feed surface — and every delivery
+    attempt reuses the item's stable message identity, so a retry after an uncertain
+    send joins the accepted turn (the A2A layer dedups on ``(contextId, messageId)``)
+    instead of processing the item twice. Item provenance (origin/inbox_id/source/
+    priority) is unchanged on the wire.
+    """
     import httpx
 
     from a2a_impl.auth import self_invocation_headers
 
-    mid = str(uuid4())
+    identity = _inbox_execution_identity(item)
+    mid = identity["message_id"]
     body = {
         "jsonrpc": "2.0",
         "id": mid,
@@ -122,16 +161,15 @@ async def _fire_activity_from_inbox(item: dict) -> bool:
         "params": {
             # Answer on ACCEPTANCE (the SUBMITTED task), not on completion (#5106). The
             # acceptance check below already treats SUBMITTED/WORKING as owned; without
-            # this flag the SDK held the response until the turn ended — and that turn
-            # first queues behind whatever already holds the Activity thread, so
-            # `POST /api/inbox {priority: "now"}` hung for as long as a job ran. The turn
-            # keeps running in the background, exactly like a scheduler fire.
+            # this flag the SDK held the response until the turn ended. The turn keeps
+            # running in the background, exactly like a scheduler fire — on its own
+            # isolated session, so it no longer queues behind the Activity thread either.
             "configuration": {"returnImmediately": True},
             "message": {
                 "role": "ROLE_USER",
                 "parts": [{"text": item["text"]}],
                 "messageId": mid,
-                "contextId": ACTIVITY_CONTEXT,
+                "contextId": identity["context_id"],
                 "metadata": {
                     "origin": "inbox",
                     "inbox_id": item.get("id"),
@@ -175,7 +213,11 @@ async def _fire_activity_from_inbox(item: dict) -> bool:
         if _a2a_send_accepted(payload):
             # Accepted is not finished (#5106): the turn runs in the background now, so
             # watch it and give the item back to the pull queue if the turn fails.
-            _watch_inbox_turn(task_id_from_response(payload), item)
+            task_id = task_id_from_response(payload)
+            # Durable acceptance record (ADR 0129): a later retry sees the item already
+            # owns a turn and, reusing the same message identity, joins it.
+            _record_inbox_acceptance(item, task_id)
+            _watch_inbox_turn(task_id, item)
             return True
         err = payload.get("error")
         state = _a2a_result_state(payload)
@@ -183,6 +225,13 @@ async def _fire_activity_from_inbox(item: dict) -> bool:
             log.warning("[inbox] now-fire rejected for item %s: %s", item.get("id"), err)
         elif state:
             log.warning("[inbox] now-fire not accepted for item %s: task state %s", item.get("id"), state)
+            # A terminal non-accepted state proves THIS identity's invocation already
+            # settled — a dedup echo of a dead task (e.g. the turn failed during a
+            # restart, before the in-process watch could retire it). Retire the identity
+            # so the restored item's next delivery runs as a fresh invocation instead of
+            # joining the dead task forever (ADR 0129). An UNCERTAIN send keeps it.
+            if state.lower().removeprefix("task_state_") in ("failed", "rejected", "canceled", "cancelled"):
+                _retire_inbox_execution(item.get("id"))
         else:
             log.warning("[inbox] now-fire rejected for item %s: A2A response had no task status", item.get("id"))
         return False
@@ -256,6 +305,20 @@ def _settle_inbox_turn(item: dict, state: str) -> None:
     t.add_done_callback(_BG_WAKE_TASKS.discard)
 
 
+def _retire_inbox_execution(item_id) -> None:
+    """Retire a restored item's execution identity (ADR 0129): its invocation settled
+    terminally, so the next delivery is a NEW invocation under a fresh identity — the
+    retired one would only dedup into the dead task. Best-effort; never raises."""
+    store = getattr(STATE, "inbox_store", None)
+    retire = getattr(store, "retire_execution", None)
+    if not callable(retire) or item_id is None:
+        return
+    try:
+        retire(int(item_id))
+    except Exception:  # noqa: BLE001 — the item is already pending; retry still falls back to pull
+        log.exception("[inbox] could not retire the execution identity for item %s", item_id)
+
+
 def _restore_inbox_item(item: dict, state: str) -> None:
     """Un-deliver the item so `check_inbox` hands it to a later turn, and badge it the
     way an unfired item is badged. Best-effort; never raises."""
@@ -275,6 +338,9 @@ def _restore_inbox_item(item: dict, state: str) -> None:
                 _INBOX_RESTORE_OWED.pop(next(iter(_INBOX_RESTORE_OWED)))
             return
         _INBOX_RESTORE_OWED.pop(int(item["id"]), None)
+        # The watched turn ended terminally (that is what put us here): the identity is
+        # settled, so retire it — the restored item retries as a fresh invocation.
+        _retire_inbox_execution(item.get("id"))
     _badge_restored(item, state)
 
 
@@ -294,6 +360,10 @@ def settle_owed_inbox_restore(item_id: int) -> bool:
         except Exception:  # noqa: BLE001
             log.exception("[inbox] could not restore now-item %s after its turn %s", item_id, state)
             return False
+        if restored:
+            # Same retire as _restore_inbox_item: the owed restore proves the turn ended
+            # terminally, so the next delivery must be a fresh invocation (ADR 0129).
+            _retire_inbox_execution(item.get("id"))
     if restored:
         _badge_restored(item, state)
     return bool(restored)
@@ -1366,6 +1436,24 @@ _SCHEDULED_SUMMARY_CAP = 500
 _SCHEDULED_STALE_WINDOW_S = 24 * 60 * 60  # 24h
 
 
+def _job_origin_session(job_id: str) -> str:
+    """The ``origin_session`` stamped on scheduler job ``job_id``, or ``""``.
+
+    Feed attribution for a job-session turn (ADR 0129): best-effort — a one-shot row
+    deleted at settle time, or no scheduler at all, just loses the origin link; the
+    turn's execution context still attributes the work."""
+    if not (job_id or "").strip():
+        return ""
+    getter = getattr(getattr(STATE, "scheduler", None), "get_job", None)
+    if not callable(getter):
+        return ""
+    try:
+        job = getter(job_id.strip())
+    except Exception:  # noqa: BLE001 — attribution is best-effort, never breaks the hook
+        return ""
+    return (getattr(job, "origin_session", "") or "").strip() if job else ""
+
+
 def _scheduled_delivery_payload(outcome) -> dict | None:
     """Build the ``scheduler.completed`` event payload for a scheduled fire whose
     result should surface in the chat that created it (#2990), or ``None`` when this
@@ -1373,9 +1461,11 @@ def _scheduled_delivery_payload(outcome) -> dict | None:
     without a task store or event loop.
 
     Returns ``None`` (no delivery) when: the turn isn't a ``scheduler`` fire; it's a
-    ``wait:`` resume (already runs IN its chat, surfaced by chat.resumed); the job has
+    ``wait:`` resume (already runs IN its chat — or, for a background wait, on its
+    owning job session — surfaced by chat.resumed / the Activity feed); the job has
     no ``origin_session`` (created outside a chat — r6, backward compatible); the origin
-    is the Activity thread itself (nothing to surface there); or the fire already ran IN
+    is the Activity thread itself or another job's execution session (ADR 0129 — no
+    chat reads those; the feed carries the result); or the fire already ran IN
     the origin session (a one-shot resume — chat.resumed covers it, no double-delivery)."""
     if getattr(outcome, "origin", "") != "scheduler":
         return None
@@ -1391,7 +1481,7 @@ def _scheduled_delivery_payload(outcome) -> dict | None:
         except Exception:  # noqa: BLE001 — a lookup failure just means no card
             job = None
     origin = (getattr(job, "origin_session", "") or "").strip() if job else ""
-    if not origin or origin == ACTIVITY_CONTEXT:
+    if not origin or origin == ACTIVITY_CONTEXT or origin.startswith(JOB_CONTEXT_PREFIX):
         return None
     context_id = str(getattr(outcome, "context_id", "") or "")
     if context_id == origin:
@@ -1570,7 +1660,10 @@ def _handle_scheduled_delivery(outcome) -> None:
     schedule up, instead of it hiding in Activity.
 
     The stale-session check reads the async task store, so it runs off this sync hook.
-    Best-effort — never raises into the terminal hook."""
+    Best-effort — never raises into the terminal hook. (Since ADR 0129 a cron runs on
+    its own isolated ``job:`` session rather than Activity; the origin-chat card below
+    is unchanged, and the feed entry comes from the job-provenance append in
+    ``_a2a_terminal``.)"""
     payload = _scheduled_delivery_payload(outcome)
     if payload is None:
         return
@@ -1590,10 +1683,12 @@ def _handle_scheduled_delivery(outcome) -> None:
 def _a2a_terminal(outcome) -> None:
     """A2A terminal hook (ADR 0003 / 0006). Fired by ``ProtoAgentExecutor`` with
     a ``TurnOutcome`` when a turn reaches a terminal state. Records per-turn
-    telemetry and surfaces either the Activity thread's answer or an ordinary
-    peer-delegation outcome (``origin=a2a``) on the Activity feed. The peer keeps
-    its real A2A context/task identity; ordinary operator chat still returns through
-    its own stream and is never duplicated here. Best-effort — never raises."""
+    telemetry and surfaces the Activity thread's answer, an ordinary
+    peer-delegation outcome (``origin=a2a``) or an isolated job-session turn
+    (ADR 0129 — a ``job:`` execution context) on the Activity feed. Peer and job
+    turns keep their real A2A context/task identity; ordinary operator chat still
+    returns through its own stream and is never duplicated here. Best-effort —
+    never raises."""
     from server.chat import finish_live_server_turn
 
     # First, so a telemetry failure below can't skip it (#3933); the executor's
@@ -1617,25 +1712,42 @@ def _a2a_terminal(outcome) -> None:
         return
     origin = getattr(outcome, "origin", "") or "operator"
     is_peer_turn = origin == "a2a"
-    if outcome.context_id != ACTIVITY_CONTEXT and not is_peer_turn:
+    # Job provenance, not context equality (ADR 0129): an isolated ``job:`` execution
+    # session is a background job's own thread — a cron fire, a watch reaction, an
+    # inbox now-item, a background wait resume. It is NOT a chat someone resumed, so
+    # it must never publish ``chat.resumed`` at a session no tab watches; instead it
+    # falls through to the feed append below, attributed with its real execution
+    # context, trigger and task so the Activity surface can deep-link the execution.
+    is_job_turn = _ctx.startswith(JOB_CONTEXT_PREFIX)
+    if outcome.context_id != ACTIVITY_CONTEXT and not is_peer_turn and not is_job_turn:
         _surface_resumed_chat_turn(outcome)
         return
     text = extract_output(outcome.text) or outcome.text
     state = str(getattr(outcome, "state", "") or "completed")
     error = str(getattr(outcome, "error", "") or "")
-    # A peer failure must read as failed even when the model emitted partial narration
-    # first. ``state``/``error`` travel on the event for machine consumers, but the
-    # Activity UI renders the text body; append the terminal cause so an operator never
-    # mistakes a trailing partial answer for a successful sister-agent handoff.
-    if is_peer_turn and state != "completed" and error.strip():
-        failure = f"**A2A turn failed:** {error}"
+    # A peer or job failure must read as failed even when the model emitted partial
+    # narration first. ``state``/``error`` travel on the event for machine consumers, but
+    # the Activity UI renders the text body; append the terminal cause so an operator
+    # never mistakes a trailing partial answer for a successful sister-agent handoff —
+    # or a background job that died mid-turn for one that finished (a job turn used to
+    # carry its state on chat.resumed; the feed entry is its surface now).
+    if (is_peer_turn or is_job_turn) and state != "completed" and error.strip():
+        label = "A2A turn failed" if is_peer_turn else "Background job turn failed"
+        failure = f"**{label}:** {error}"
         text = f"{text.rstrip()}\n\n{failure}" if text.strip() else failure
     if not text.strip():
         return
     trigger = getattr(outcome, "trigger", "") or ""
     priority = getattr(outcome, "priority", "") or ""
     stimulus = getattr(outcome, "stimulus", "") or ""
-    feed_context = _ctx if is_peer_turn else ACTIVITY_CONTEXT
+    # Peer and job turns keep their REAL execution context on the feed entry (ADR 0129:
+    # the feed deep-links to the actual execution/result); legacy Activity-thread turns
+    # keep ``system:activity``, preserving the existing feed history either way.
+    feed_context = _ctx if (is_peer_turn or is_job_turn) else ACTIVITY_CONTEXT
+    # Origin attribution (ADR 0129): the chat that created a scheduled job, when one
+    # exists — read from the live job row, best-effort (a deleted one-shot just loses
+    # the link; the execution context above still attributes the work).
+    origin_session = _job_origin_session(trigger) if is_job_turn else ""
     # Provenance feed (ADR 0022): durably log the turn + what triggered it + the stimulus it
     # responds to (#1375), so the feed reads as an explicit reply.
     if STATE.activity_log is not None:
@@ -1648,6 +1760,7 @@ def _a2a_terminal(outcome) -> None:
             text=text,
             task_id=getattr(outcome, "task_id", "") or "",
             stimulus=stimulus,
+            origin_session=origin_session,
         )
     _event_bus.publish(
         "activity.message",
@@ -1662,5 +1775,6 @@ def _a2a_terminal(outcome) -> None:
             "state": state,
             "task_id": getattr(outcome, "task_id", "") or "",
             "error": error,
+            "origin_session": origin_session,
         },
     )

@@ -4,17 +4,82 @@
 
 .chat-status-rail {
   display: flex;
-  flex-wrap: wrap;
+  /* S6b (v7 people): ONE row — group chips and people share it, the roster flexes into
+     whatever the chips leave, and the overflow collapses behind +K. Nothing wraps and
+     nothing scrolls sideways. */
+  flex-wrap: nowrap;
   align-items: center;
   gap: var(--pl-space-1_5);
   min-width: 0;
   padding: 0 var(--pl-space-0_5) var(--pl-space-1_5);
   color: var(--pl-color-fg-muted);
 }
+.chat-status-chip {
+  flex: none;
+}
 
-/* The rail owns the row's spacing; the roster keeps its own chip styles. */
+/* The rail owns the row's spacing; the roster keeps its own chip styles. It takes the
+   row's remaining width (that is what the fit is measured against) and clips SIDEWAYS
+   ONLY — containing the max-content measure row below, and any not-yet-refitted chips
+   while a resize settles. The vertical axis stays visible: on coarse pointers every
+   chip here (people and `+K` alike) carries the 44px ::after tap overlay from the end
+   of this file, which is TALLER than the row — two-axis clipping would cut those
+   overlays back to the row height and lose the 44px floor. `clip`, not `hidden`, so
+   the roster never becomes a scroll container a programmatic focus could pan.
+   position: relative anchors the measure row. */
 .chat-status-rail .chat-roster {
+  flex: 1 1 auto;
+  flex-wrap: nowrap;
+  min-width: 0;
+  overflow-x: clip;
+  overflow-y: visible;
+  position: relative;
   padding: 0;
+}
+.chat-status-rail .chat-roster-chip {
+  flex: none;
+}
+
+/* A long name ellipsizes inside its chip; the title attribute and the button's full text
+   (the accessible name) still carry the whole name. */
+.chat-roster-name {
+  display: block;
+  max-width: 16ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The hidden mirror of the people row that the fit measurement reads: same classes, same
+   gaps, laid out at its natural width (max-content) so every chip's true extent is
+   measurable. Out of flow and invisible — never on screen, never in the a11y tree. */
+.chat-roster__measure {
+  position: absolute;
+  top: 0;
+  left: 0;
+  display: flex;
+  align-items: center;
+  gap: var(--pl-space-1_5);
+  width: max-content;
+  visibility: hidden;
+  pointer-events: none;
+}
+.chat-roster__measure > svg {
+  flex: 0 0 auto;
+  margin-right: var(--pl-space-0_5);
+}
+
+/* The picker ("In this chat · N"): every person as a toggle chip, wrapping freely —
+   inside the panel there is room, so nothing hides here. */
+.chat-people__chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--pl-space-1_5);
+}
+.chat-people__line {
+  margin: var(--pl-space-1) 0 0;
+  font-size: var(--pl-font-size-xs);
+  color: var(--pl-color-fg-muted);
 }
 
 .chat-status-chip {
@@ -139,6 +204,12 @@
 @media (max-width: 767px) {
   .chat-status-chip__text {
     display: none;
+  }
+  /* Picker chips in the sheet meet the 44px touch floor directly (the rail's own chips
+     get it from the coarse-pointer overlay below). */
+  .chat-status-sheet .chat-roster-chip,
+  .chat-status-popover .chat-roster-chip {
+    min-height: 44px;
   }
   .chat-status-details__row {
     min-height: 48px;

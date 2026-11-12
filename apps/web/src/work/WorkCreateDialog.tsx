@@ -57,7 +57,10 @@ export type WorkCreateHandoff = {
 export function WorkCreateDialog({ group, sessionId, onClose, onReady }: {
   /** The group whose "+" opened this, for the placeholder only — never forces the kind. */
   group?: WorkGroupId;
-  /** The current chat (the chat Work was opened from) — the interpret turn stays in it. */
+  /** The current chat (the chat Work was opened from) — the interpret turn stays in it.
+   *  Unset (no chat selected / signed out): step 1 still opens — header New shows in every
+   *  state — but Continue is gated, because POSTing an empty id would have `/api/chat`
+   *  mint a session and the turn would land in a hidden new chat, never the current one. */
   sessionId?: string;
   onClose: () => void;
   /** S8d's confirm step takes over from here; without it the reading shows read-only. */
@@ -100,12 +103,15 @@ export function WorkCreateDialog({ group, sessionId, onClose, onReady }: {
   useEffect(() => { if (phase === "ask") focusBox(); }, [phase, sheet]);
 
   const reading = phase === "reading";
+  // The chat the one marked turn goes to. Only a real id is ever posted.
+  const chat = sessionId?.trim() ? sessionId : undefined;
   const send = async () => {
+    if (!chat) return; // Continue is gated on `chat`; belt for a programmatic click.
     const typed = text;
     setPhase("reading");
     setError(null);
     try {
-      const result = await api.interpretWork(typed, sessionId ?? "");
+      const result = await api.interpretWork(typed, chat);
       let interpretation = result.messages?.find((m) => m.interpretation)?.interpretation;
       if (!interpretation) {
         // Desktop/proxy fallbacks may flatten the turn to its joined text — that text IS
@@ -114,7 +120,7 @@ export function WorkCreateDialog({ group, sessionId, onClose, onReady }: {
       }
       if (!interpretation?.says || !interpretation.kind) throw new Error("The agent's reply was not a reading.");
       if (interpretation.instruction) interpretation.instruction.quote = typed;
-      const next = { typed, interpretation, sessionId: sessionId ?? result.session_id ?? "" };
+      const next = { typed, interpretation, sessionId: chat };
       setHandoff(next);
       setPhase("ready");
       onReady?.(next);
@@ -128,6 +134,9 @@ export function WorkCreateDialog({ group, sessionId, onClose, onReady }: {
   const ask = phase !== "ready";
   const body = ask ? (
     <div className="work-create__body" ref={bodyRef}>
+      {!chat && <Callout tone="warning" title="No chat is open">
+        The agent reads your words in the current chat. Open a chat, then start New again.
+      </Callout>}
       <FormField
         label="What should the agent do, and when?"
         hint="Say it in your own words. You'll see how the agent reads it before anything is saved."
@@ -168,7 +177,7 @@ export function WorkCreateDialog({ group, sessionId, onClose, onReady }: {
   const back = <Button size={sheet ? "md" : "sm"} onClick={() => setPhase("ask")}>← Change the words</Button>;
   const cancel = <Button size={sheet ? "md" : "sm"} onClick={onClose}>Cancel</Button>;
   const confirm = (
-    <Button size={sheet ? "md" : "sm"} variant="primary" disabled={!text.trim() || reading} loading={reading} onClick={send}>
+    <Button size={sheet ? "md" : "sm"} variant="primary" disabled={!text.trim() || reading || !chat} loading={reading} onClick={send}>
       Continue
     </Button>
   );
