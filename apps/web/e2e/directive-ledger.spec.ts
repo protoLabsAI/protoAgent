@@ -2,6 +2,7 @@ import { expect, test } from "@playwright/test";
 
 const SESSION = "chat-directive-e2e";
 const QUOTE = "Cut the release once both PRs merge";
+const APPROVAL_QUOTE = "Approve the dependency bumps";
 const NOTE = 'You withdrew: "Pause deploys" — freeze lifted';
 
 test("a fresh chat loads an empty directive ledger in the strip and Work rail", async ({ page }) => {
@@ -36,21 +37,46 @@ for (const width of [1440, 390]) {
         }));
       }, { session: SESSION, note: NOTE });
       await page.route("**/api/theme", (route) => route.fulfill({ json: { theme: { mode, overrides: {} } } }));
-      let directive = {
+      let instruction = {
         id: "dir-one", session_id: SESSION, quote: QUOTE, conditions: "smoke tests pass",
         scope: "release", status: "in_force", created_at: "2026-11-07T17:14:02+00:00",
         closed_by: null as string | null, closed_at: null as string | null, close_reason: null as string | null,
+      };
+      // An approval (§3.1): a decision in the same chat answered 60s before this directive was
+      // recorded, so the interim linker tags it Approval. No scope — the headline is the quote.
+      const approval = {
+        id: "dir-two", session_id: SESSION, quote: APPROVAL_QUOTE, conditions: "",
+        scope: "", status: "in_force", created_at: "2026-11-08T19:01:00+00:00",
+        closed_by: null, closed_at: null, close_reason: null,
+      };
+      const decided = {
+        id: "dec-e2e", session_id: SESSION, agent: "protoAgent", question: "Can I bump the dependencies?",
+        options: [{ id: "go", label: "Go ahead" }, { id: "stop", label: "Hold off" }],
+        created_at: "2026-11-08T18:58:00+00:00", state: "answered", answer: "go",
+        answered_at: "2026-11-08T19:00:00+00:00", expires_at: null, default_option: null,
+        thread_id: "t-dec", interrupt_id: "i-dec", context: "", default_action: null,
+        withdraw_reason: null, answered_by: "operator", answered_surface: "console",
+        default_action_text: "carry on without this step", answer_label: "Go ahead",
       };
       let reason: string | null = null;
       await page.route(`**/api/chat/sessions/${SESSION}/directives**`, async (route) => {
         if (route.request().method() === "DELETE") {
           reason = new URL(route.request().url()).searchParams.get("reason");
-          directive = { ...directive, status: "revoked", closed_by: "operator",
+          instruction = { ...instruction, status: "revoked", closed_by: "operator",
             closed_at: "2026-11-08T19:20:00+00:00", close_reason: reason };
-          await route.fulfill({ json: { directive } });
+          await route.fulfill({ json: { directive: instruction } });
         } else {
-          await route.fulfill({ json: { directives: [directive], in_force: directive.status === "in_force" ? 1 : 0 } });
+          const directives = [instruction, approval];
+          await route.fulfill({ json: { directives, in_force: directives.filter((d) => d.status === "in_force").length } });
         }
+      });
+      // The §3.1 linker reads the ANSWERED ledger (the Work section tops the shared store up on
+      // mount); the pending list stays empty. Single-record GETs serve the same settled row.
+      await page.route("**/api/decisions**", (route) => {
+        const url = new URL(route.request().url());
+        if (/\/api\/decisions\/[^/]+$/.test(url.pathname)) return route.fulfill({ json: decided });
+        const state = url.searchParams.get("state") ?? "pending";
+        return route.fulfill({ json: { decisions: state === "answered" ? [decided] : [], pending: 0 } });
       });
       await page.route("**/api/events**", (route) => route.fulfill({
         contentType: "text/event-stream", body: ": idle\n\n",
@@ -58,7 +84,7 @@ for (const width of [1440, 390]) {
       await page.goto("/app/", { waitUntil: "load" });
       await expect(page.locator("html")).toHaveAttribute("data-theme", mode);
       const strip = page.locator(".chat-ledger");
-      await expect(strip).toContainText("1 active");
+      await expect(strip).toContainText("2 active");
       await expect(page.locator(".pl-message--system").filter({ hasText: NOTE })).toBeVisible();
       await expect(page.locator(".pl-message--user").filter({ hasText: NOTE })).toHaveCount(0);
       await page.screenshot({ path: info.outputPath("strip.png"), fullPage: true, animations: "disabled" });
@@ -67,20 +93,46 @@ for (const width of [1440, 390]) {
       await expect(page.getByRole("dialog", { name: "Standing instructions" })).toHaveCount(0);
       // Work has no This chat / All toggle (Josh 2026-11-11): the toggle is gone from the rail.
       await expect(rail.getByRole("button", { name: "This chat", exact: true })).toHaveCount(0);
-      await expect(rail.getByText(QUOTE, { exact: true })).toBeVisible();
+      // §3: an Instruction row headlines the scope, with muted "You said …" provenance below.
+      const instructionRow = rail.locator(".work-row").filter({ hasText: 'You said "Cut the release' });
+      await expect(instructionRow).toContainText("release");
+      await expect(instructionRow).toContainText("Instruction");
+      // §3.1: the linked row is an Approval, headlining the quote (no scope) and the chosen option.
+      const approvalRow = rail.locator(".work-row").filter({ hasText: APPROVAL_QUOTE });
+      await expect(approvalRow).toContainText("Approval");
+      await expect(approvalRow).toContainText('You chose "Go ahead"');
       await page.screenshot({ path: info.outputPath("rail.png"), fullPage: true, animations: "disabled" });
-      await rail.getByRole("button", { name: "Withdraw…" }).click();
-      await rail.getByLabel("Reason (optional)").fill("Hold until Monday");
+
+      // The approval's detail: You were asked / You chose / Your words / Open decision — which
+      // opens the decision IN PLACE through the Work detail, never the source chat.
+      await approvalRow.click();
+      const detail = rail.locator(".work-view__detail");
+      await expect(detail).toContainText("You were asked");
+      await expect(detail).toContainText("Can I bump the dependencies?");
+      await expect(detail).toContainText('You chose');
+      await expect(detail).toContainText(`You said "${APPROVAL_QUOTE}" in this chat`);
+      await page.screenshot({ path: info.outputPath("approval.png"), fullPage: true, animations: "disabled" });
+      await detail.getByRole("button", { name: "Open decision" }).click();
+      await expect(rail.locator(".work-decision-detail")).toContainText("Can I bump the dependencies?");
+      await rail.getByRole("button", { name: "Back to Your instructions" }).click();
+
+      // Withdrawal through the existing confirm path, from the instruction's detail.
+      await instructionRow.click();
+      await detail.getByRole("button", { name: "Withdraw…" }).click();
+      await detail.getByLabel("Reason (optional)").fill("Hold until Monday");
       await page.screenshot({ path: info.outputPath("confirm.png"), fullPage: true, animations: "disabled" });
-      await rail.getByRole("button", { name: "Withdraw", exact: true }).click();
-      await expect(rail.getByText("Nothing is active right now.")).toBeVisible();
+      await detail.getByRole("button", { name: "Withdraw", exact: true }).click();
+      await expect(page.locator(".pl-toast__msg").filter({ hasText: "Withdrawn." })).toBeVisible();
       expect(reason).toBe("Hold until Monday");
-      await rail.getByRole("button", { name: "History (1)" }).click();
-      await expect(rail.getByText("Note: Hold until Monday")).toBeVisible();
-      await page.screenshot({ path: info.outputPath("history.png"), fullPage: true, animations: "disabled" });
+      // The row leaves the in-force list, but the open detail keeps the closed record, read-only.
+      await expect(rail.locator(".work-row").filter({ hasText: 'You said "Cut the release' })).toHaveCount(0);
+      await expect(detail).toContainText("Withdrawn by you");
+      await expect(detail.locator(".work-detail__field").filter({ hasText: "Note" })).toContainText("Hold until Monday");
+      await expect(detail.getByRole("button", { name: "Withdraw…" })).toHaveCount(0);
+      await page.screenshot({ path: info.outputPath("withdrawn.png"), fullPage: true, animations: "disabled" });
 
       if (width === 390) await page.getByRole("button", { name: "Back", exact: true }).click();
-      await expect(strip).toHaveClass(/chat-ledger--idle/);
+      await expect(strip).toContainText("1 active");
       await expect(page.locator(".pl-message--system").filter({ hasText: 'You withdrew: "' + QUOTE + '" — Hold until Monday' })).toBeVisible();
       const composer = page.getByPlaceholder(/Message protoAgent/i);
       await composer.fill("/directives ");
@@ -99,7 +151,7 @@ for (const width of [1440, 390]) {
         await page.locator(".pl-tabbar__tab").filter({ hasText: "Release instructions" }).click({ button: "right" });
         await page.getByRole("menuitem", { name: "Standing instructions", exact: true }).click();
         await expect(rail.locator(".work-section--directives")).toBeVisible();
-        await expect(rail.getByRole("button", { name: "History (1)" })).toBeVisible();
+        await expect(rail.locator(".work-row").filter({ hasText: APPROVAL_QUOTE })).toBeVisible();
       }
     });
   }

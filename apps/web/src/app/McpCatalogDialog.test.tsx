@@ -5,7 +5,7 @@
 // stubbed — they aren't under test and a real Dialog/Tabs pulls jsdom-hostile deps).
 // Mirrors the createRoot/act + QueryClientProvider + mocked `api` pattern the other
 // console UI suites use (FleetRoom.test.tsx). A `?raw` guard confirms the retired
-// `.mcp-catalog-back` rule is gone from theme.css (contentDialogPadding.test.tsx idiom).
+// `.mcp-catalog-back` rule is gone from theme.css.
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, createElement as h, type ReactNode } from "react";
 import { createRoot, type Root } from "react-dom/client";

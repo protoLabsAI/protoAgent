@@ -10,8 +10,12 @@ import type { WorkItem, WorkItems } from "./useWorkItems";
 export const workSections = {
   overview: "Overview", decisions: "Decisions", goals: "Goals", watches: "Watches",
   tasks: "Tasks", schedules: "Schedules", background: "Background agents",
-  activity: "Activity", directives: "Directives",
+  directives: "Directives",
 };
+
+/** Load-alert labels — one per SOURCE, not per section: the activity/inbox delivery source
+ *  feeds the Needs-you group but has no section of its own since S4c removed Activity. */
+const sourceLabels: Record<string, string> = { ...workSections, activity: "Activity" };
 
 const lanes: { id: WorkLane; label: string; help: string }[] = [
   { id: "needs-you", label: "Needs you", help: "Decisions waiting for your answer." },
@@ -49,8 +53,8 @@ export function WorkOverview({ sources, onOpen, onSchedules }: {
 
   return <div className="work-overview">
     {entries.map(([kind, source]) => source.status === "error" ?
-      <Alert key={kind} status="warning">Couldn&apos;t load {workSections[kind].toLowerCase()}. <Button size="sm" onClick={source.retry}>Retry</Button></Alert>
-      : source.status === "stale" ? <Callout key={kind} tone="warning">{workSections[kind]} may be out of date. <Button size="sm" onClick={source.retry}>Retry</Button></Callout> : null)}
+      <Alert key={kind} status="warning">Couldn&apos;t load {sourceLabels[kind].toLowerCase()}. <Button size="sm" onClick={source.retry}>Retry</Button></Alert>
+      : source.status === "stale" ? <Callout key={kind} tone="warning">{sourceLabels[kind]} may be out of date. <Button size="sm" onClick={source.retry}>Retry</Button></Callout> : null)}
     {loading && <div aria-label="Loading work" aria-busy="true"><Skeleton lines={3} /><Skeleton lines={3} /></div>}
     {!loading && !visible.length && <Empty title="Nothing going on" description="When the agent starts a goal, sets a watch, schedules something or asks you a question, it shows up here." />}
     {visible.map((lane) => <section key={lane.id} aria-label={lane.label}>

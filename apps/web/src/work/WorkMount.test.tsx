@@ -17,9 +17,10 @@ import { sections } from "./sectionRegistry";
 import "../contextMenu/registrations";
 import { useUI } from "../state/uiStore";
 import type { WorkItems, WorkSource, WorkSourceKind } from "./useWorkItems";
-// Importing the production barrel is the whole point of the mount — it must register all eight
-// built-in sections. Do NOT import the individual section modules here, or a missing entry in
-// the barrel would be masked by a direct import (the same guard WorkView.test.tsx keeps).
+// Importing the production barrel is the whole point of the mount — it must register all seven
+// built-in sections (activity is a source, not a section, since S4c). Do NOT import the
+// individual section modules here, or a missing entry in the barrel would be masked by a
+// direct import (the same guard WorkView.test.tsx keeps).
 import "./sections";
 
 const data = vi.hoisted(() => ({ sources: {} as WorkItems }));
@@ -27,6 +28,8 @@ vi.mock("./useWorkItems", () => ({ useWorkItems: () => data.sources }));
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 const KINDS: WorkSourceKind[] = ["decisions", "goals", "watches", "tasks", "schedules", "background", "activity", "directives"];
+// The registered sections are the sources minus activity — its feed lives outside Work (S4c).
+const SECTIONS = KINDS.filter((kind) => kind !== "activity");
 const WORK: SurfaceMeta = { id: "work", title: "Work" };
 
 let client: QueryClient;
@@ -100,20 +103,21 @@ afterEach(async () => {
 });
 
 describe("Work surface mount", () => {
-  it("registers all eight built-in sections through the barrel import", () => {
-    for (const kind of KINDS) expect(sections.has(kind), kind).toBe(true);
+  it("registers all seven built-in sections through the barrel import, and never activity", () => {
+    for (const kind of SECTIONS) expect(sections.has(kind), kind).toBe(true);
+    expect(sections.has("activity")).toBe(false);
   });
 
-  it("frames WorkView — not WorkPanel — in the right dock, with the Overview and nine section menu items", async () => {
+  it("frames WorkView — not WorkPanel — in the right dock, with the Overview and eight section menu items", async () => {
     await render();
     // It's WorkView: its two-pane shell and section nav, never a WorkPanel overview card.
     expect(host.querySelector(".work-view__panes")).not.toBeNull();
     expect(host.querySelector('[data-testid^="work-card-"]')).toBeNull();
-    // Overview plus the eight sources = nine entries in the nav.
+    // Overview plus the seven sections = eight entries in the nav.
     const trigger = host.querySelector<HTMLButtonElement>(".work-view__picker button")!;
     await act(async () => trigger.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })));
     const menu = document.querySelector<HTMLElement>('[role="menu"][aria-label="Work sections"]')!;
-    expect(menu.querySelectorAll('[role="menuitemradio"]')).toHaveLength(9);
+    expect(menu.querySelectorAll('[role="menuitemradio"]')).toHaveLength(8);
     expect(menu.querySelector('[aria-checked="true"]')?.textContent).toContain("Overview");
     await act(async () => menu.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
     expect(host.textContent).toContain("Nothing going on");

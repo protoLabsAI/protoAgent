@@ -27,7 +27,7 @@ export default defineConfig({
       md.renderer.rules.html_inline = (tokens, idx, options, env, self) => {
         if (
           env.relativePath === "design/work-consolidation.md" &&
-          /^<(job|when)>$/.test(tokens[idx].content)
+          /^<(job|when|group|what)>$/.test(tokens[idx].content)
         ) {
           return md.utils.escapeHtml(tokens[idx].content);
         }

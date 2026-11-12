@@ -1605,7 +1605,9 @@ const server = createServer(async (req, res) => {
         text: "live activity ping",
         origin: "scheduler",
         trigger: "heartbeat",
-        stimulus: "Hourly heartbeat check.",
+        // The scheduler's real payload carries its wake header (ADR 0079); the feed
+        // must show only the job's own words (#5094).
+        stimulus: "[Autonomous wake — scheduled run. Orient from <working_state>, then:]\n\nHourly heartbeat check.",
       });
       frame("activity.message", {
         text: "I checked the first deployment target.\n\n**A2A turn failed:** second target timed out",
