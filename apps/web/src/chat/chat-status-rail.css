@@ -1,0 +1,179 @@
+/* Chat status rail (work consolidation v2 §5, S6a) — the shared-count strip above the
+   composer: group chips, the people (cast) chips, and the grouped details panel.
+   DS tokens only; the cast chips themselves keep their .chat-roster styles (chat.css). */
+
+.chat-status-rail {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--pl-space-1_5);
+  min-width: 0;
+  padding: 0 var(--pl-space-0_5) var(--pl-space-1_5);
+  color: var(--pl-color-fg-muted);
+}
+
+/* Only the (visually hidden) live region left — take no space above the composer. */
+.chat-status-rail--idle {
+  padding: 0;
+}
+
+/* The rail owns the row's spacing; the roster keeps its own chip styles. */
+.chat-status-rail .chat-roster {
+  padding: 0;
+}
+
+.chat-status-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--pl-space-1);
+  min-width: 0;
+  padding: var(--pl-space-0_5) var(--pl-space-2);
+  font: inherit;
+  font-size: var(--pl-font-size-xs);
+  font-weight: 600;
+  color: var(--pl-color-fg-muted);
+  background: var(--pl-color-bg-raised);
+  border: 1px solid var(--pl-color-border);
+  border-radius: var(--pl-radius-pill);
+  cursor: pointer;
+}
+.chat-status-chip:hover,
+.chat-status-chip:focus-visible {
+  color: var(--pl-color-fg);
+  border-color: var(--pl-color-fg-subtle);
+}
+.chat-status-chip__text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.chat-status-chip__count {
+  font-variant-numeric: tabular-nums;
+}
+
+/* One polite live region (§6) — visually hidden, never display:none (that silences it). */
+.chat-status-rail__announce {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* ── Grouped details (popover on desktop, bottom sheet on the phone) ──────────────── */
+
+.chat-status-details {
+  display: flex;
+  flex-direction: column;
+  gap: var(--pl-space-3);
+  /* The DS .pl-popover owns the chrome and caps itself at 320px — fill it, never
+     overflow it (the phone sheet overrides below). */
+  width: min(360px, 92vw);
+  max-width: 100%;
+  max-height: min(60vh, 420px);
+  min-width: 0;
+  overflow-y: auto;
+  padding: var(--pl-space-1);
+}
+/* The sheet's body scrolls; the panel just fills it. */
+.chat-status-sheet .chat-status-details {
+  width: auto;
+  max-height: none;
+}
+
+.chat-status-details__heading {
+  margin: 0;
+  font-size: var(--pl-font-size-sm);
+  font-weight: 600;
+  color: var(--pl-color-fg);
+}
+.chat-status-details__rows {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+}
+.chat-status-details__row {
+  display: flex;
+  align-items: baseline;
+  gap: var(--pl-space-2);
+  min-width: 0;
+  padding: var(--pl-space-1) 0;
+  border-bottom: 1px solid var(--pl-color-border);
+}
+.chat-status-details__row:last-child {
+  border-bottom: 0;
+}
+.chat-status-details__title {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--pl-font-size-sm);
+  color: var(--pl-color-fg);
+}
+.chat-status-details__meta {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--pl-font-size-xs);
+  color: var(--pl-color-fg-muted);
+}
+.chat-status-details__problem {
+  margin: 0;
+  font-size: var(--pl-font-size-xs);
+  color: var(--pl-color-fg-muted);
+}
+.chat-status-details__actions {
+  display: flex;
+  gap: var(--pl-space-2);
+}
+
+/* ── Phone (§5/§6): numbers-only chips, ≥48px rows, md full-width stacked actions ──── */
+@media (max-width: 767px) {
+  .chat-status-chip__text {
+    display: none;
+  }
+  .chat-status-details__row {
+    min-height: 48px;
+    align-items: center;
+  }
+  .chat-status-details__actions {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .chat-status-details__actions .pl-btn {
+    width: 100%;
+  }
+}
+
+/* Touch devices above the phone breakpoint (the tablet band): grow each chip's hit area to
+   the 44px floor via the ::after overlay, the same idiom as tablet.css, so the dense pill
+   row keeps its height. */
+@media (hover: none) and (pointer: coarse) {
+  .chat-status-chip,
+  .chat-roster-chip {
+    position: relative;
+  }
+  .chat-status-chip::after,
+  .chat-roster-chip::after {
+    content: "";
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    min-width: 44px;
+    min-height: 44px;
+    width: 100%;
+    height: 100%;
+  }
+}

@@ -1,6 +1,6 @@
 import { Badge, Button, Callout } from "@protolabsai/ui/primitives";
 import { PromptInput } from "@protolabsai/ui/ai";
-import { EyeOff, Users } from "lucide-react";
+import { EyeOff } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 
@@ -29,7 +29,7 @@ import {
   type SessionStatus,
 } from "./chat-store";
 import { findSlashCommand } from "../ext/slashRegistry";
-import { continueRun, leadingRun, runHas, toggleMention } from "./mentionRun";
+import { continueRun, leadingRun, toggleMention } from "./mentionRun";
 import { insertRoomBubble, replyClaimsAnswer, roomReplyBubble } from "./roomBubble";
 import type { ComposerFormSpec } from "../ext/slashRegistry";
 import { registeredComposerActions } from "../ext/composerRegistry";
@@ -45,9 +45,8 @@ import {
   useServerTurn,
   useServerTurnsEnded,
 } from "./server-turn-store";
-import { BackgroundWorkStrip } from "./BackgroundWorkStrip";
-import { DirectiveStrip, DirectiveWorkRequest } from "./DirectiveStrip";
-import { GoalRunStrip } from "./GoalRunStrip";
+import { ChatStatusRail } from "./ChatStatusRail";
+import { DirectiveWorkRequest } from "./DirectiveStrip";
 import { messageId } from "./messageId";
 import { sentAttachments } from "./imageThumbnails";
 import { readyNativeAttachments, readyNativeImages, useAttachments } from "./useAttachments";
@@ -1977,41 +1976,24 @@ export function ChatSessionSlot({
         onDrop={onAttachDrop}
       >
         <MobileWorkHandle />
-        {/* Who is in this chat (#3049) — derived from the transcript, so it can never
-            drift from what happened (the tracked-list version grew chips a deleted draft
-            left behind). A quiet legend, not presence: nothing here "listens" — an agent
-            acts only when addressed, and clicking a name is exactly that affordance
-            (inserts `@name `). No remove control: history is not removable, and an X
-            that gated nothing was confusion pretending to be a control. */}
-        <DirectiveStrip sessionId={sessionId} />
-        <GoalRunStrip sessionId={sessionId} />
-        <BackgroundWorkStrip sessionId={sessionId} />
-        {cast.length ? (
-          <div className="chat-roster" aria-label="In this chat">
-            <Users size={13} aria-hidden />
-            {cast.map((name) => {
-              const active = runHas(draft, name);
-              return (
-                <button
-                  key={name}
-                  type="button"
-                  className={`chat-roster-chip${active ? " chat-roster-chip--active" : ""}`}
-                  aria-pressed={active}
-                  title={active ? `Remove @${name} from this message` : `Address @${name}`}
-                  onClick={() => {
-                    // Chips COMPOSE the draft's leading run — the only position where a
-                    // mention routes. Click to add, click again to remove; the message
-                    // body is preserved either way. (The first cut refused a non-empty
-                    // draft, which made every chip after the first a silent no-op.)
-                    setDraft((d) => toggleMention(d, name));
-                    textareaRef.current?.focus();
-                  }}
-                >
-                  <span className="chat-roster-name">@{name}</span>
-                </button>
-              );
-            })}
-          </div>
+        {/* The chat status rail (work consolidation v2 §5, S6a) replaces the loose
+            goal/background/directive strips with one shared-count chip row fed by the
+            same workGroups selector the Work view reads. It also hosts the "who is in
+            this chat" cast chips (#3049) — derived from the transcript, so they can
+            never drift from what happened. Chips COMPOSE the draft's leading run — the
+            only position where a mention routes. Click to add, click again to remove;
+            the message body is preserved either way. Mounted only while this slot is
+            visible so hidden tabs don't each fan out the Work source queries. */}
+        {visible ? (
+          <ChatStatusRail
+            sessionId={sessionId}
+            cast={cast}
+            draft={draft}
+            onToggleMention={(name) => {
+              setDraft((d) => toggleMention(d, name));
+              textareaRef.current?.focus();
+            }}
+          />
         ) : null}
         {/* HITL panel (#1973): floats ABOVE the composer (absolute, anchored to
             .composer-wrap like the slash menu) so it never reflows the conversation,

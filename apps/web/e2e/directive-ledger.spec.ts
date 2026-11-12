@@ -4,7 +4,7 @@ const SESSION = "chat-directive-e2e";
 const QUOTE = "Cut the release once both PRs merge";
 const NOTE = 'You withdrew: "Pause deploys" — freeze lifted';
 
-test("a fresh chat loads an empty directive ledger in the strip and Work rail", async ({ page }) => {
+test("a fresh chat loads an empty directive ledger: no Told it chip, Work rail clean", async ({ page }) => {
   const directives = page.waitForResponse((response) =>
     /\/api\/chat\/sessions\/[^/]+\/directives$/.test(new URL(response.url()).pathname));
   await page.goto("/app/");
@@ -17,7 +17,8 @@ test("a fresh chat loads an empty directive ledger in the strip and Work rail", 
   const rail = page.locator('.work-view[data-frame="rail"]');
   await expect(rail.locator(".work-section--directives")).toBeVisible();
   await expect(rail.getByText("No standing instructions", { exact: true })).toBeVisible();
-  await expect(page.locator(".chat-ledger")).toHaveClass(/chat-ledger--idle/);
+  // Zero instructions → no chip; the status rail reserves no space for an empty ledger.
+  await expect(page.getByTestId("chat-status-chip-instructions")).toHaveCount(0);
   await expect(rail.getByRole("alert")).toHaveCount(0);
 });
 
@@ -57,12 +58,26 @@ for (const width of [1440, 390]) {
       }));
       await page.goto("/app/", { waitUntil: "load" });
       await expect(page.locator("html")).toHaveAttribute("data-theme", mode);
-      const strip = page.locator(".chat-ledger");
-      await expect(strip).toContainText("1 active");
+      // The Told it chip (S6a): the full name on desktop, the number alone on the phone —
+      // the complete label is spoken either way.
+      const chip = page.getByTestId("chat-status-chip-instructions");
+      // useInnerText: the phone hides the wordy span with CSS; textContent would still see it.
+      await expect(chip).toHaveText(width === 390 ? "1" : "Told it 1", { useInnerText: true });
+      await expect(chip).toHaveAttribute(
+        "aria-label",
+        "Told it: 1 instruction in force in this chat. Show details",
+      );
       await expect(page.locator(".pl-message--system").filter({ hasText: NOTE })).toBeVisible();
       await expect(page.locator(".pl-message--user").filter({ hasText: NOTE })).toHaveCount(0);
       await page.screenshot({ path: info.outputPath("strip.png"), fullPage: true, animations: "disabled" });
-      await strip.getByRole("button", { name: "View" }).click();
+      // Grouped details — a popover at 1440, the bottom sheet at 390 — then Open in Work.
+      await chip.click();
+      const details = page.locator(".chat-status-details");
+      await expect(details).toContainText("Your instructions · 1");
+      await expect(details).toContainText(QUOTE);
+      if (width === 390) await expect(page.locator(".pl-drawer--bottom")).toBeVisible();
+      await page.screenshot({ path: info.outputPath("details.png"), fullPage: true, animations: "disabled" });
+      await details.getByRole("button", { name: "Open in Work" }).click();
       const rail = page.locator('.work-view[data-frame="rail"]');
       await expect(page.getByRole("dialog", { name: "Standing instructions" })).toHaveCount(0);
       // Work has no This chat / All toggle (Josh 2026-11-11): the toggle is gone from the rail.
@@ -80,7 +95,7 @@ for (const width of [1440, 390]) {
       await page.screenshot({ path: info.outputPath("history.png"), fullPage: true, animations: "disabled" });
 
       if (width === 390) await page.getByRole("button", { name: "Back", exact: true }).click();
-      await expect(strip).toHaveClass(/chat-ledger--idle/);
+      await expect(chip).toHaveCount(0); // the withdrawn instruction leaves the count, the chip hides
       await expect(page.locator(".pl-message--system").filter({ hasText: 'You withdrew: "' + QUOTE + '" — Hold until Monday' })).toBeVisible();
       const composer = page.getByPlaceholder(/Message protoAgent/i);
       await composer.fill("/directives ");
