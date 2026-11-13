@@ -12,9 +12,9 @@ import { WorkEmpty as Empty } from "./WorkEmpty";
 import { WorkHeading } from "./WorkHeading";
 import { useDecisions } from "../decisions/useDecisions";
 import { goalProgress } from "./rowMeta";
-import { decisionMeta, relTime, type GroupableWorkItem, type WorkGroupId } from "./tone";
+import { decisionMeta, relTime, staleTaskMeta, taskStaleDays, type GroupableWorkItem, type WorkGroupId } from "./tone";
 import type { DecisionRow } from "../lib/api/decisions";
-import type { GoalState } from "../lib/types";
+import type { GoalState, Task } from "../lib/types";
 import type { WorkGroup } from "./workGroups";
 import { WorkRow } from "./WorkRow";
 import { instructionRowPresentation } from "./sections/directives";
@@ -102,9 +102,11 @@ function rowPresentation(item: GroupableWorkItem, group: Exclude<WorkGroupId, "i
       // A stopped goal shows only how far it got (§2) — never the verifier type.
       if (item.kind === "goal") return { tag: "Goal stopped", tone: "neutral", icon: <StatusDot status="neutral" />,
         meta: goalProgress(item.raw as GoalState) };
-      // A `waiting` job (ADR 0129 Q1): the agent parked it on the operator's call.
-      if (item.kind === "task") return { tag: "Job", tone: "warning", icon: <StatusDot status="warning" />,
-        meta: withStatusWord("waiting on you", item.meta) };
+      // A `waiting` job (ADR 0129 Q1): the agent parked it on the operator's call. Neutral —
+      // a job waiting on the operator is a prompt, never an alarm (operator-copy rule) —
+      // and the headline says whose move it is. Opening it lands in the job's chat.
+      if (item.kind === "task") return { tag: "Job", tone: "neutral", icon: <StatusDot status="neutral" />,
+        title: `Waiting on you: ${item.title}`, meta: item.meta };
       return { tag: "Delivery", tone: "warning", icon: <StatusDot status="warning" /> };
     case "doing-now":
       if (item.kind === "goal") return { tag: "Goal", tone: "neutral", icon: <Target size={16} />,
@@ -113,6 +115,13 @@ function rowPresentation(item: GroupableWorkItem, group: Exclude<WorkGroupId, "i
       // meta (§1) — and it is not running, so it wears a pause glyph, never the spinner.
       if (item.kind === "task" && (item.raw as { status?: string } | null)?.status === "blocked") {
         return { tag: "Job", tone: "neutral", icon: <CirclePause size={16} />, meta: withStatusWord("blocked", item.meta) };
+      }
+      // An `in_progress` job that hasn't moved for a day stays here, but says so — a muted
+      // line, no warning colours: the Close/Open chat moves live on the job's detail.
+      if (item.kind === "task" && item.raw) {
+        const days = taskStaleDays(item.raw as Task);
+        if (days != null) return { tag: "Job", tone: "neutral", icon: <Spinner size={16} />,
+          meta: withStatusWord(staleTaskMeta(days), item.meta) };
       }
       return { tag: "Job", tone: "neutral", icon: <Spinner size={16} /> };
     case "coming-up":

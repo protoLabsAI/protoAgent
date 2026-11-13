@@ -159,24 +159,23 @@ describe("the fleet-wide marker", () => {
     expect([markerCount(), expectedCount()]).toEqual(["2", 2]);
   });
 
-  it("keeps a `waiting` task (ADR 0129 Q1) out of the marker — the section has no task row to act on", async () => {
+  it("counts a `waiting` task (ADR 0129 Q1) in the marker — its row opens the chat it is parked in", async () => {
     const parked: GroupableWorkItem = {
       kind: "task", id: "t-parked", status: "needs-you", title: "Ship the release", meta: "",
       sessionId: "other-chat", raw: { status: "waiting" },
     };
-    // The selector sends the parked task to Needs you (Work draws it there), but the rail
-    // counts only the kinds the section draws: alone it renders no marker — no rail at all.
+    // The section now draws a row for the parked task (Open chat is the thing to act on),
+    // so the marker counts it exactly like Work's Needs-you group — the two can't drift.
     await render(rail([parked]));
-    expect(expectedCount()).toBe(1);
-    expect(host.querySelector('[data-testid="chat-status-rail"]')).toBeNull();
-    // Next to a pending decision the marker, spoken label and panel heading all say 1 — the
-    // section's own rows — never the selector's 2, and the task appears nowhere in the panel.
+    expect([markerCount(), expectedCount()]).toEqual(["1", 1]);
     await render(rail([parked, decision(row("q1"))]));
-    expect([markerCount(), expectedCount()]).toEqual(["1", 2]);
-    expect(marker()!.getAttribute("aria-label")).toBe(needsYouSpokenLabel(1));
+    expect([markerCount(), expectedCount()]).toEqual(["2", 2]);
+    expect(marker()!.getAttribute("aria-label")).toBe(needsYouSpokenLabel(2));
     await click(marker());
-    expect(panel()!.querySelector("h2")!.textContent).toBe("Needs you · 1");
-    expect(section()!.textContent).not.toContain("Ship the release");
+    expect(panel()!.querySelector("h2")!.textContent).toBe("Needs you · 2");
+    expect(section()!.textContent).toContain("Waiting on you: Ship the release");
+    await click(button("Open chat"));
+    expect(dec.openChat).toHaveBeenCalledWith("other-chat", false);
   });
 
   it("phone: the marker never folds — people fall back to +K alone; the sheet restores focus", async () => {

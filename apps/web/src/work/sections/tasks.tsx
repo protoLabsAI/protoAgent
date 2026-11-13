@@ -32,7 +32,7 @@ import { queryKeys } from "../../lib/queries";
 import type { Task } from "../../lib/types";
 import { TaskCreateDialog } from "../../app/TasksPanel";
 import { issueStatus, issueType, type IssueDraft } from "../../app/tasks";
-import { groupFor, relTime, type GroupableWorkItem } from "../tone";
+import { groupFor, relTime, staleTaskMeta, taskStaleDays, type GroupableWorkItem } from "../tone";
 import { typeAndPriority } from "../rowMeta";
 import { WorkDetail, type WorkAction, type WorkField } from "../WorkDetail";
 import { WorkRow } from "../WorkRow";
@@ -66,6 +66,9 @@ function Description({ text }: { text: string }) {
 function taskFields(task: Task): WorkField[] {
   const fields: WorkField[] = [{ label: "Type and priority", value: typeAndPriority(task) }];
   if (task.assignee) fields.push({ label: "Assignee", value: `Assigned to ${task.assignee}` });
+  // The 24h quiet line (ADR 0129) — muted information in a plain field, never a warning.
+  const staleDays = taskStaleDays(task);
+  if (staleDays != null) fields.push({ label: "Activity", value: staleTaskMeta(staleDays) });
   if (task.updated_at) fields.push({ label: "Updated", value: `Updated ${relTime(task.updated_at).text}` });
   if (task.closed_at) fields.push({ label: "Closed", value: `Closed ${relTime(task.closed_at).text}` });
   if (task.description?.trim()) {
@@ -102,8 +105,10 @@ function jobShowsInWork(item: WorkItem): boolean {
 }
 
 // Row meta (§2): a not-started job says "not started · added <when>"; a blocked (started)
-// job says "blocked"; one parked on the operator (`waiting`, ADR 0129 Q1) says so; any
-// other started job keeps its type and priority.
+// job says "blocked"; one parked on the operator (`waiting`, ADR 0129 Q1) says so; an
+// `in_progress` one quiet for a day leads with the muted stale line (ADR 0129 — the work
+// may have finished elsewhere without a task_close); any other started job keeps its type
+// and priority.
 function jobMeta(item: WorkItem): string {
   const task = item.raw as Task;
   if (jobNotStarted(item)) {
@@ -112,10 +117,12 @@ function jobMeta(item: WorkItem): string {
   }
   if (issueStatus(task) === "blocked") return "blocked";
   if (issueStatus(task) === "waiting") return "waiting on you";
+  const staleDays = taskStaleDays(task);
+  if (staleDays != null) return `${staleTaskMeta(staleDays)} · ${typeAndPriority(task)}`;
   return typeAndPriority(task);
 }
 
-function TaskDetail({ item }: { item: WorkItem }) {
+function TaskDetail({ item, openChat }: { item: WorkItem; openChat?: (sessionId: string) => void }) {
   const task = item.raw as Task;
   const qc = useQueryClient();
   const toast = useToast();
@@ -177,14 +184,40 @@ function TaskDetail({ item }: { item: WorkItem }) {
         refresh();
       },
     });
-    actions.push({
-      id: "close",
-      label: "Close",
-      run: async () => {
-        await api.closeTask(task.id);
-        refresh();
-      },
-    });
+    // A job quiet for a day (ADR 0129) was likely finished elsewhere without a task_close:
+    // its Close asks why (the reason rides the close route onto the record) and the chat
+    // that created it is one step away. Not destructive — the confirm stays primary.
+    const staleDays = taskStaleDays(task);
+    if (staleDays != null) {
+      actions.push({
+        id: "close",
+        label: "Close…",
+        confirm: {
+          prompt: "Close this job?",
+          explanation: `${staleTaskMeta(staleDays)}. Say what happened to it — the note lands on the job's record.`,
+          confirmLabel: "Close job",
+          keepLabel: "Keep it",
+          reason: { label: "Reason", placeholder: "Finished elsewhere, no longer needed…" },
+        },
+        run: async (reason) => {
+          await api.closeTask(task.id, reason);
+          refresh();
+        },
+      });
+      if (openChat && task.session_id) {
+        const sessionId = task.session_id;
+        actions.push({ id: "open-chat", label: "Open chat", run: async () => openChat(sessionId) });
+      }
+    } else {
+      actions.push({
+        id: "close",
+        label: "Close",
+        run: async () => {
+          await api.closeTask(task.id);
+          refresh();
+        },
+      });
+    }
   } else {
     actions.push({
       id: "reopen",
@@ -286,13 +319,13 @@ function TaskList({ source, onOpen }: { source: WorkSource; onOpen: (item: WorkI
 }
 
 /** One component for both panes — `state.itemId` selects detail vs list (WorkView §3.1). */
-export function TasksSection({ sources, state, onOpen }: WorkSectionContext) {
+export function TasksSection({ sources, state, onOpen, decisionActions }: WorkSectionContext) {
   const source = sources.tasks;
   if (state.itemId) {
     const item = source.items.find(
       (candidate) => `${candidate.kind}:${candidate.id}` === state.itemId || candidate.id === state.itemId,
     );
-    return item ? <TaskDetail item={item} /> : null;
+    return item ? <TaskDetail item={item} openChat={decisionActions?.openSourceChat} /> : null;
   }
   return <TaskList source={source} onOpen={onOpen} />;
 }

@@ -1,6 +1,6 @@
 import { needsOperatorAttention } from "../lib/queries";
 import type { Status } from "@protolabsai/ui/primitives";
-import type { InboxItem, ScheduledJob, WatchState } from "../lib/types";
+import type { InboxItem, ScheduledJob, Task, WatchState } from "../lib/types";
 import type { DecisionRow } from "../lib/api/decisions";
 import type { WorkItem } from "./useWorkItems";
 
@@ -137,6 +137,30 @@ export function fromDecision(raw: string): WorkStatus {
 // operator revokes it — a passive constraint, so an active one waits like a watch.
 export function fromDirective(raw: string): WorkStatus {
   return map("directive", raw, { in_force: "waiting", fulfilled: "done", revoked: "cancelled" });
+}
+
+/** An `in_progress` job untouched for a full day is likely finished elsewhere (ADR 0129:
+ *  a task only closes when the agent calls task_close in the chat that created it, and
+ *  nothing links it to the cards or jobs doing the work). */
+export const STALE_TASK_MS = 24 * 3_600_000;
+
+/** Whole days since an `in_progress` task last moved, once past {@link STALE_TASK_MS};
+ *  null for any other status, a fresh job, or one with no timestamps (no update history
+ *  is not proof of neglect). 24–47h reads as 1 day — prose, not arithmetic. */
+export function taskStaleDays(
+  task: Pick<Task, "status" | "updated_at" | "created_at">,
+  now: number = Date.now(),
+): number | null {
+  if (task.status !== "in_progress") return null;
+  const last = new Date(task.updated_at || task.created_at || "").getTime();
+  if (!Number.isFinite(last) || now - last < STALE_TASK_MS) return null;
+  return Math.floor((now - last) / 86_400_000);
+}
+
+/** The muted stale line — "No activity for 3 days". Never a warning colour: a quiet job
+ *  is a prompt to tidy up, not an alarm (operator-copy rule). */
+export function staleTaskMeta(days: number): string {
+  return `No activity for ${days} ${days === 1 ? "day" : "days"}`;
 }
 
 /** `now` is epoch milliseconds (Date.now()); numeric input timestamps are epoch seconds.

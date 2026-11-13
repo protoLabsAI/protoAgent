@@ -252,14 +252,22 @@ export function WorkView({ frame = "rail", sessionId }: { frame?: "rail" | "moda
     document.addEventListener("keydown", onEscape);
     return () => document.removeEventListener("keydown", onEscape);
   }, [state.itemId, selectedKey, hostFrame]);
-  const onOpen = (item: GroupableWorkItem) => update({
-    itemId: itemKey(item),
-    scrollTop: listRef.current ? listScroller(listRef.current).scrollTop : state.scrollTop,
-  });
   const openSourceChat = async (sourceSessionId: string, reply = false) => {
     if (!(await openSourceChatShared(sourceSessionId, reply))) {
       toast({ tone: "error", title: "Couldn't open source chat", message: "Try again when the agent is connected." });
     }
+  };
+  const onOpen = (item: GroupableWorkItem) => {
+    // A `waiting` job (ADR 0129 Q1) is a conversation parked on the operator: its row opens
+    // the chat where the agent is waiting. One without a known chat keeps the detail.
+    if (item.kind === "task" && (item.raw as { status?: string } | null)?.status === "waiting" && item.sessionId) {
+      void openSourceChat(item.sessionId);
+      return;
+    }
+    update({
+      itemId: itemKey(item),
+      scrollTop: listRef.current ? listScroller(listRef.current).scrollTop : state.scrollTop,
+    });
   };
   const context = { sources, state: { ...viewState, itemId: selectedKey ?? state.itemId }, onOpen, onBack, sessionId,
     decisionActions: { agentOnline, openSourceChat, answerDecision: decisions.answer } };
