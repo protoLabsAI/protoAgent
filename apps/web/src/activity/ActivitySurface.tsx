@@ -17,6 +17,7 @@ import { onServerEvent } from "../lib/events";
 import { runtimeStatusQuery } from "../lib/queries";
 import type { ActivityEntry, InboxItem } from "../lib/types";
 import { relTime } from "../work/tone";
+import { FeedDetail } from "./FeedDetail";
 import { applyLiveEntry, groupByDay, mergeFeed, stripWakeHeader, type FeedRow } from "./feedModel";
 
 // The Feed (docs/design/feed.md §1): ONE chronological list, newest first, where each
@@ -65,6 +66,14 @@ export function ActivitySurface({ onOpenDetail }: { onOpenDetail?: (row: FeedRow
   const { data: runtime } = useQuery(runtimeStatusQuery());
   const agentName = brandName(runtime?.identity?.name);
   const agentNameRef = useRef(agentName);
+
+  // The detail view (§5): clicking a row swaps the list for FeedDetail in the SAME
+  // dialog body. A host that passes `onOpenDetail` owns the detail instead (the slice-4
+  // contract, kept for alternate hosts); the Feed dialog passes nothing and uses this.
+  // `returnKey` remembers which row opened it so "← Feed" can put focus back (§8).
+  const [detail, setDetail] = useState<FeedRow | null>(null);
+  const returnKey = useRef<string | null>(null);
+  const rootRef = useRef<HTMLDivElement>(null);
 
   // Raw feed sources live in refs; `rows` is the one rendered projection. It is REBUILT
   // via mergeFeed after any fetch (sorted newest first) and patched by applyLiveEntry on
@@ -183,14 +192,50 @@ export function ActivitySurface({ onOpenDetail }: { onOpenDetail?: (row: FeedRow
   // server id (the re-merge also drops anything delivered meanwhile).
   useEffect(() => onServerEvent("inbox.item", () => void loadInbox()), [loadInbox]);
 
+  const openDetail = useCallback(
+    (row: FeedRow) => {
+      if (onOpenDetail) {
+        onOpenDetail(row);
+        return;
+      }
+      returnKey.current = row.key;
+      setDetail(row);
+    },
+    [onOpenDetail],
+  );
+  const closeDetail = useCallback(() => setDetail(null), []);
+  // Back to the list: focus returns to the row that opened the detail (§8). The row can
+  // have vanished meanwhile (a queued row replaced by its live result has a new key) —
+  // fall back to the first row so focus never silently drops to <body>.
+  useEffect(() => {
+    if (detail || !returnKey.current) return;
+    const key = returnKey.current;
+    returnKey.current = null;
+    const rowButtons = [...(rootRef.current?.querySelectorAll<HTMLButtonElement>(".feed-row") ?? [])];
+    (rowButtons.find((b) => b.dataset.key === key) ?? rowButtons[0])?.focus();
+  }, [detail]);
+
   const loading = activityLoading || inboxLoading;
   const failed = activityError || inboxError;
   const groups = groupByDay(rows);
 
+  if (detail) {
+    return (
+      // The detail replaces the list in the SAME dialog body (§5) — the live region
+      // stays out here so a queued→ran announcement still fires while reading.
+      <div className="unified-feed util-dialog-fill" data-testid="unified-feed" ref={rootRef}>
+        <FeedDetail row={detail} agentName={agentName} onBack={closeDetail} />
+        <span className="feed-announce" role="status" aria-live="polite" aria-atomic="true">
+          {announce}
+        </span>
+      </div>
+    );
+  }
+
   return (
     // The utility-bar dialog gives the feed the shared fixed body height (#5165). The
     // list is newest first and opens at the top — no auto-scroll.
-    <div className="unified-feed util-dialog-fill" data-testid="unified-feed">
+    <div className="unified-feed util-dialog-fill" data-testid="unified-feed" ref={rootRef}>
       {failed ? (
         <Alert status="error" className="feed-alert">
           Couldn't load the feed. Check the connection, then reload.
@@ -224,8 +269,9 @@ export function ActivitySurface({ onOpenDetail }: { onOpenDetail?: (row: FeedRow
                       type="button"
                       className="feed-row"
                       data-kind={row.kind}
+                      data-key={row.key}
                       aria-label={`${row.kind === "failed" ? "Failed: " : ""}${row.title}. ${row.meta}. ${time.text}. Open details`}
-                      onClick={() => onOpenDetail?.(row)}
+                      onClick={() => openDetail(row)}
                     >
                       <StatusDot status={row.kind === "failed" ? "error" : "neutral"} />
                       <span className="feed-row-body">

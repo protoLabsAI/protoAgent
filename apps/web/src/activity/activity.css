@@ -175,6 +175,66 @@
   color: var(--pl-color-fg-muted);
 }
 
+/* Row detail (§5) — the list swaps for one row's detail in the same dialog body.
+   Header: "← Feed" left, open-in-reader right; then the focusable heading and the
+   dt/dd field grid. Tokens only. */
+.feed-detail {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: var(--pl-space-3);
+  display: flex;
+  flex-direction: column;
+  gap: var(--pl-space-2);
+}
+
+.feed-detail-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--pl-space-2);
+}
+
+.feed-detail-title {
+  margin: 0;
+  font-size: var(--pl-font-size-base);
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.feed-detail-fields {
+  margin: 0;
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: var(--pl-space-2) var(--pl-space-3);
+  font-size: var(--pl-font-size-sm);
+}
+
+.feed-detail-fields dt {
+  font-size: var(--pl-font-size-xs);
+  color: var(--pl-color-fg-muted);
+  white-space: nowrap;
+}
+
+.feed-detail-fields dd {
+  margin: 0;
+  min-width: 0;
+}
+
+/* The stimulus and a failure reason are plain text as the agent stored it — keep
+   its line breaks, never overflow the dialog on an unbroken token. */
+.feed-detail-stimulus,
+.feed-detail-reason {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.feed-detail-response {
+  overflow-wrap: anywhere;
+}
+
 /* The one polite live region (§8) — visually hidden, never display:none (that
    silences it). Announces only a queued row turning into its result. */
 .feed-announce {
