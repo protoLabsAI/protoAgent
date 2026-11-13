@@ -662,17 +662,23 @@ def _github_owner_repo(url: str) -> tuple[str, str]:
     return m.group(1), m.group(2)
 
 
+_GITHUB_TOKEN_HOSTS = frozenset({"github.com", "api.github.com", "codeload.github.com"})
+
+
 def _http_get(url: str, *, accept: str | None = None) -> "object":
     """GET ``url`` following redirects (codeload), raising InstallError on failure.
     Sends a GitHub token from ``GITHUB_TOKEN``/``GH_TOKEN`` if set (private repos +
-    higher rate limits)."""
+    higher rate limits) — to GitHub hosts only, never to PyPI or any other host this
+    helper fetches from (the wheel installer uses it too)."""
+    from urllib.parse import urlsplit
+
     import httpx
 
     headers = {"User-Agent": "protoAgent-plugin-installer"}
     if accept:
         headers["Accept"] = accept
     token = os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN")
-    if token:
+    if token and (urlsplit(url).hostname or "").lower() in _GITHUB_TOKEN_HOSTS:
         headers["Authorization"] = f"Bearer {token}"
     try:
         resp = httpx.get(url, headers=headers, follow_redirects=True, timeout=30.0)
