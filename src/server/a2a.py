@@ -261,6 +261,12 @@ _INBOX_TURN_WATCH: dict[str, dict] = {}
 _INBOX_RESTORE_OWED: dict[int, tuple[dict, str]] = {}
 _INBOX_RESTORE_LOCK = threading.Lock()
 _INBOX_EARLY_TERMINALS: dict[str, str] = {}
+# A watch FIFO-evicted from _INBOX_TURN_WATCH stays reachable here so its turn's later
+# terminal can still restore the item. Without it, an evicted watch's failure landed in
+# _INBOX_EARLY_TERMINALS keyed for a registration that already happened and never repeats,
+# was never consumed, and the now-item stayed marked delivered though its turn failed
+# (#5126). Bounded like the watch table itself.
+_INBOX_EVICTED_WATCH: dict[str, dict] = {}
 _INBOX_WATCH_MAX = 1024
 _INBOX_RESTORE_STATES = {"failed", "canceled", "rejected"}
 
@@ -274,7 +280,12 @@ def _watch_inbox_turn(task_id: str, item: dict) -> None:
         return
     _INBOX_TURN_WATCH[task_id] = item
     while len(_INBOX_TURN_WATCH) > _INBOX_WATCH_MAX:
-        _INBOX_TURN_WATCH.pop(next(iter(_INBOX_TURN_WATCH)))
+        evicted_id = next(iter(_INBOX_TURN_WATCH))
+        # Keep the evicted item reachable (not dropped) so its turn's later terminal can
+        # still restore it; the evicted map is bounded the same way.
+        _INBOX_EVICTED_WATCH[evicted_id] = _INBOX_TURN_WATCH.pop(evicted_id)
+        while len(_INBOX_EVICTED_WATCH) > _INBOX_WATCH_MAX:
+            _INBOX_EVICTED_WATCH.pop(next(iter(_INBOX_EVICTED_WATCH)))
 
 
 def _inbox_turn_ended(outcome) -> None:
@@ -286,6 +297,11 @@ def _inbox_turn_ended(outcome) -> None:
         return
     state = str(getattr(outcome, "state", "") or "")
     item = _INBOX_TURN_WATCH.pop(task_id, None)
+    if item is None:
+        # An evicted watch keeps its restore: a terminal for it must still settle, never
+        # fall through to the early-terminal map (which only a future registration reads,
+        # and an evicted item is already past registration) (#5126).
+        item = _INBOX_EVICTED_WATCH.pop(task_id, None)
     if item is None:
         # Not registered yet (or not a now-fire of ours): remember it for registration.
         _INBOX_EARLY_TERMINALS[task_id] = state
