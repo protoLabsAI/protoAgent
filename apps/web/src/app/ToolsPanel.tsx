@@ -12,6 +12,7 @@ import { Badge, Button } from "@protolabsai/ui/primitives";
 import { api } from "../lib/api";
 import { errMsg } from "../lib/format";
 import { queryKeys, toolsQuery } from "../lib/queries";
+import { readKey, writeKey } from "../lib/storage";
 import type { FsProject } from "../lib/types";
 import { PathPicker } from "../settings/PathPicker";
 import { QuickSetting } from "../settings/QuickSetting";
@@ -290,11 +291,7 @@ const RUN_CODE_ACK_KEY = "protoagent.runCodeAcknowledged";
 // A per-browser "you've been told" flag. Storage can be unavailable (private window, blocked
 // site data): then the reminder simply shows again, which is the safe way to fail.
 export function runCodeAcknowledged(): boolean {
-  try {
-    return window.localStorage.getItem(RUN_CODE_ACK_KEY) === "1";
-  } catch {
-    return false;
-  }
+  return readKey("local", RUN_CODE_ACK_KEY) === "1";
 }
 
 /** Whether flipping `name` to `enabled` should stop for the run-code reminder first: only
@@ -304,11 +301,7 @@ export function shouldConfirmRunCode(name: string, enabled: boolean): boolean {
 }
 
 export function acknowledgeRunCode(): void {
-  try {
-    window.localStorage.setItem(RUN_CODE_ACK_KEY, "1");
-  } catch {
-    /* shown again next time */
-  }
+  writeKey("local", RUN_CODE_ACK_KEY, "1"); // a failed write just means it is shown again
 }
 
 export function ToolsPanel() {

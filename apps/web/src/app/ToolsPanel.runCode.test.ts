@@ -17,6 +17,7 @@ describe("the run-code reminder in Tools", () => {
   });
 
   it("shows again when storage is unavailable, never skips", () => {
+    acknowledgeRunCode();
     vi.spyOn(Storage.prototype, "getItem").mockImplementation(() => {
       throw new Error("blocked");
     });
