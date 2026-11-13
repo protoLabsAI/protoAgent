@@ -19,6 +19,20 @@ export function goalProgress(g: GoalState): string {
   return g.status === "active" ? `${steps} · checking after each turn` : steps;
 }
 
+/** A row/detail heading never exceeds this; the full text belongs in a body field. */
+const SUMMARY_MAX = 80;
+
+/** A short heading from free text — a page's message, a prompt — for rows and detail
+ *  titles that must never show the whole thing: the first sentence of the first non-empty
+ *  line, whitespace collapsed, clipped to ~{@link SUMMARY_MAX} characters with an ellipsis.
+ *  Empty in → empty out, so each caller keeps its own kind fallback ("Delivery"). */
+export function summaryTitle(text: string | undefined): string {
+  const line = (text ?? "").split("\n").map((part) => part.trim()).find(Boolean) ?? "";
+  const collapsed = line.replace(/\s+/g, " ");
+  const sentence = /^.*?[.!?](?=\s|$)/.exec(collapsed)?.[0] ?? collapsed;
+  return sentence.length > SUMMARY_MAX ? `${sentence.slice(0, SUMMARY_MAX - 1).trimEnd()}…` : sentence;
+}
+
 /** "Fires once when met" / "Fires every time it's met" / "Fires when the value changes". */
 export function watchKind(w: WatchState): string {
   if (w.trigger === "change") return "Fires when the value changes";

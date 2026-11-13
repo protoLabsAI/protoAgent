@@ -353,12 +353,14 @@ describe("live group adapters", () => {
   });
 
   it("projects only pending now pages and retires delivered pages after a stale read", async () => {
-    const pending = page(1, "now");
+    const pending = { ...page(1, "now"), text: "Please help with the vendor sync. It failed twice overnight." };
     spies.inbox.mockResolvedValue({ items: [pending, page(2, "next"), page(3, "later"), page(4, "now", "today")] });
     const r = mount({ sessionId: "elsewhere", thisChatOnly: true });
     await flush();
     const deliveries = () => workGroups(r.current, { thisChatOnly: true, sessionId: "elsewhere" })[0].items.filter((i) => i.kind === "delivery");
     expect(deliveries()).toHaveLength(1);
+    // The row title is the short summary (first sentence), never the whole message.
+    expect(deliveries()[0].title).toBe("Please help with the vendor sync.");
     expect(deliveries()[0].raw).toEqual(pending);
     spies.inbox.mockRejectedValue(new Error("offline"));
     emit("inbox.item");
