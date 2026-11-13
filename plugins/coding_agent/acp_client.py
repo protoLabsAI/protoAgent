@@ -119,25 +119,27 @@ _BACKGROUND_ID_CHARS = "A-Za-z0-9_:-"
 _BACKGROUND_NOTICE_RE = re.compile(rf"Command running in background with ID:\s*([{_BACKGROUND_ID_CHARS}]+)")
 
 #: Signs, in the OUTPUT text of a later tool event that references a backgrounded
-#: command's id, that the command is no longer running. Matched STRUCTURALLY, not as
-#: bare words: a still-running poll's partial stdout can easily contain "complete" or
-#: "failed" (a test name, a log line), and clearing on that returns the exact
-#: waiting-answer-accepted bug this file exists to fix. So only the poll tool's own
-#: status element, a reported exit code (digit required — prose alone doesn't count),
-#: or an explicit kill confirmation clear an id. This is the shape Claude Code's
-#: background-task output tool really emits (verified against the bd-bkvgk transcripts:
-#: ``<status>completed</status> … <exit_code>0</exit_code>``). And it is the ONLY sign
-#: that clears: a Read of the command's output file — the check the notice itself
-#: suggests for interim output — returns the command's plain stdout, which looks the
-#: same early in a run as after it, so a Read can never prove the command finished.
-#: Treating checked-then-answered as completion let a nudged agent read early output,
-#: end on another waiting note, and have that note accepted as the answer (review
-#: finding on this PR) — the follow-up prompt points the agent at the structural tool
-#: instead.
+#: command's id, that the command is no longer running. Matched STRUCTURALLY — as the
+#: XML-ish tags Claude Code's background-task output tool wraps its report in, NEVER as
+#: bare words or free-floating prose. The reason it has to be a tag: the only text this
+#: client sees is the output visible on ``tool_call_update``, and a Read of the command's
+#: output file — the interim-output check the notice itself suggests — returns the
+#: command's plain stdout, which looks the same early in a run as after it. That stdout
+#: (and a failing foreground command's own output, e.g. a grep that matched nothing)
+#: can easily contain "complete", "failed", or a literal "exit code 1" — a traceback, a
+#: test name, a failing sub-step — none of which prove THIS command finished. Clearing
+#: on any of them returns the exact waiting-answer-accepted bug this file exists to fix
+#: (bd-572g1). So only the poll tool's own ``<status>`` element or its ``<exit_code>``
+#: element clear an id: both are tag-wrapped, and neither a plain file read nor a
+#: foreground command's output ever carries them. This is the shape verified against the
+#: bd-bkvgk transcripts: ``<status>completed</status> … <exit_code>0</exit_code>``. A
+#: killed command is cleared by its poll's ``<status>killed</status>`` for the same
+#: reason — the earlier bare ``successfully killed`` prose was dropped as the same
+#: unsound class as the bare exit code. The follow-up prompt points the agent at the
+#: structural tool, not at a Read, precisely because a Read can never prove it finished.
 _BACKGROUND_DONE_RE = re.compile(
     r"<status>\s*(?:completed|failed|killed)\s*</status>"
-    r"|\bexit[ _]code\b[>:=]?\s*-?\d"
-    r"|\bsuccessfully killed\b",
+    r"|<exit[ _]?code>\s*-?\d",
     re.IGNORECASE,
 )
 
@@ -1098,8 +1100,8 @@ class AcpClient:
         (verified against the bd-bkvgk transcripts), so a softer checked-then-answered
         rule let a nudged agent read early output of a still-running command, end on
         another waiting note, and have that note accepted as the answer — the exact bug
-        this file exists to fix (review finding on this PR). The follow-up prompt
-        points the agent at the structural tool instead.
+        this file exists to fix (bd-572g1). The follow-up prompt points the agent at the
+        structural tool instead.
 
         Keyed off the notice text itself, so ACP agents that never produce it are
         unaffected; ``_background_followups`` reads what is left at turn end.
@@ -1127,7 +1129,7 @@ class AcpClient:
         # follow-up poll's start event is the only event carrying its id, and it must be
         # recorded however many tool calls the rounds before it already made, or the
         # poll's own completion sign could never be matched to the id and a finished
-        # command would be chased to ``background_pending`` (review finding on this PR).
+        # command would be chased to ``background_pending`` (bd-572g1).
         # ``pop`` + insert re-files an updated call as newest, so the call an update is
         # about to be matched against is never the one evicted.
         tool_id = str(update.get("toolCallId") or "")
@@ -2469,7 +2471,7 @@ class AcpClient:
         normally stays pending and is nudged again: plain stdout cannot tell a finished
         command from the early output of a running one, and accepting that
         checked-then-answered round let a second waiting note through as the answer
-        (review finding on this PR).
+        (bd-572g1).
 
         A chase round that DIES — its shrinking per-round timeout, a transport drop, an
         agent-side error on the nudge — degrades to that same marker instead of raising:

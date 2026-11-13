@@ -343,6 +343,35 @@ def _event(text=None, tool_id="t1", raw_input=None, status="completed"):
             {"bash_1"},
             id="a-plain-stdout-file-read-never-clears",
         ),
+        pytest.param(
+            [
+                dict(text="Command running in background with ID: bash_1. Output is "
+                          "being written to: /tmp/tasks/bash_1.output."),
+                # A completed Read of the output file whose STDOUT carries a plain-text
+                # 'exit code 1' (a sub-step the suite spawned, a traceback line) — prose,
+                # NOT the poll tool's ``<exit_code>`` tag. The interim output of a command
+                # still running reads exactly the same, so this must NOT clear it: matching
+                # a bare 'exit code N' anywhere let a Read of early output (or a failing
+                # foreground grep naming the file) end the chase on a waiting note (bd-572g1).
+                dict(text="tests/test_cli.py::test_run FAILED - subprocess returned "
+                          "exit code 1\ncollecting more items ...",
+                     tool_id="t2", raw_input={"file_path": "/tmp/tasks/bash_1.output"}),
+            ],
+            {"bash_1"},
+            id="a-plain-text-exit-code-in-a-file-read-never-clears",
+        ),
+        pytest.param(
+            [
+                dict(text="Command running in background with ID: bash_1"),
+                # The poll tool's OWN structured report: the tag-wrapped ``<exit_code>``
+                # clears on its own (no ``<status>`` needed) — the tag is what the real
+                # background-task output tool emits and what a plain file read never has.
+                dict(text="<exit_code>0</exit_code> — 12 passed", tool_id="t2",
+                     raw_input={"bash_id": "bash_1"}),
+            ],
+            set(),
+            id="a-structural-exit-code-tag-clears",
+        ),
     ],
 )
 def test_clearing_needs_structure_and_the_exact_id(events, expected):
