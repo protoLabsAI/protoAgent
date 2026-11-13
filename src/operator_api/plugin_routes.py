@@ -386,6 +386,9 @@ def register_plugin_routes(app) -> None:
         plugin_id = str((body or {}).get("id", "")).strip()
         if not plugin_id:
             raise HTTPException(status_code=400, detail="id is required")
+        # Same shape rule as install-python above: an id is a name, never a path.
+        if plugin_id in (".", "..") or any(c in plugin_id for c in ("/", "\\", ":")):
+            raise HTTPException(status_code=400, detail="a valid plugin id is required")
         # Consent re-check at deps time (#2743): a plugin installed before a trust
         # tightening (or under trust_unverified since switched off) must not run pip
         # without the same one-time "this runs code" ack install itself requires.

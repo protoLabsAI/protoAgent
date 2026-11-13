@@ -359,6 +359,10 @@ def test_a_fetched_copy_from_an_untrusted_source_cannot_enable_itself(host, monk
     on = lambda cfg: next(m for m in load_plugins(cfg).meta if m["id"] == "selfon")["enabled"]  # noqa: E731
     assert not on(LangGraphConfig())
     assert on(LangGraphConfig(plugins_sources_acked=[FORK])) and on(LangGraphConfig(plugins_enabled=["selfon"]))
+    # A lock row with NO source is a bundled plugin's wheel-deps pin (ADR 0093), not a fetched
+    # copy: its manifest still decides.
+    host.lock.write_text(json.dumps({"plugins": [{"id": "selfon", "deps": []}]}))
+    assert on(LangGraphConfig())
 
 
 def test_supersedes_from_a_sibling_folder_in_the_same_root_is_inert(host):

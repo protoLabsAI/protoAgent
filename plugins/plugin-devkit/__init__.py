@@ -1067,7 +1067,9 @@ async def install_plugin(url: str, ref: str = "", activate: bool = True) -> str:
     from graph.plugins import installer
     from graph.plugins.trust import config_trusts
 
-    if not config_trusts(url, getattr(STATE, "graph_config", None)):
+    # Fetch-only (``activate=False``) runs no code and the loader keeps an unapproved copy
+    # off, so the agent may still stage a source for the operator to approve.
+    if activate and not config_trusts(url, getattr(STATE, "graph_config", None)):
         return (
             f"✗ not installed: {url} is not a source the operator has trusted. Ask them to install it "
             "from Settings ▸ Plugins, which asks once before it runs code from a new source."

@@ -993,14 +993,25 @@ def _unconsented_copy_off(manifest: PluginManifest, tracked_sources: dict[str, s
     enables it. A fetch-only install skips the consent ask because no code runs; without
     this the manifest flag ran it on the next reload anyway. Hand-placed copies (no lock
     row) keep the author opt-in."""
-    if not (manifest.enabled or manifest.builtin) or manifest.id not in tracked_sources:
+    # No recorded source = not a fetched copy: a bundled plugin whose only lock row pins its
+    # wheel dependencies (ADR 0093) has none, and stays as its manifest says.
+    source = tracked_sources.get(manifest.id) or ""
+    if not (manifest.enabled or manifest.builtin) or not source:
         return manifest
     from graph.plugins.trust import config_trusts
 
-    if config_trusts(tracked_sources[manifest.id], config):
+    if config_trusts(source, config):
         return manifest
     import dataclasses
 
+    # Said out loud: on an instance that relied on the manifest flag, this is a plugin that
+    # was on yesterday and is off today.
+    log.warning(
+        "[plugins] %s is OFF: it was installed from %s, which you haven't approved, so its own "
+        "'enabled' setting is ignored. Turn it on in Settings ▸ Plugins (or add it to plugins.enabled).",
+        manifest.id,
+        source,
+    )
     return dataclasses.replace(manifest, enabled=False, builtin=False)
 
 
