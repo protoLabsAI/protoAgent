@@ -331,9 +331,9 @@ def _git(*args: str, cwd: Path | None = None, timeout: float | None = None, env:
 
 def _validate_url(url: str) -> None:
     if any(url.startswith(s) for s in _ALLOWED_SCHEMES):
-        from graph.plugins.trust import has_dot_segment, normalize_source
+        from graph.plugins.trust import source_has_dot_segment
 
-        if not url.startswith(("/", "file://")) and has_dot_segment(normalize_source(url)):
+        if not url.startswith(("/", "file://")) and source_has_dot_segment(url):
             # A remote path with `.`/`..`/empty segments names a different repo than the
             # one the allowlist and consent checks read it as.
             raise InstallError(f"unsupported source {url!r} — the path has a '.', '..' or empty segment.")

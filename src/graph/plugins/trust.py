@@ -62,37 +62,54 @@ def _normalize_pattern(pat: str) -> str:
     return norm
 
 
-def has_dot_segment(norm: str) -> bool:
-    """A ``.``/``..``/empty path segment (raw or percent-encoded), or an encoded
-    ``/``. ``fnmatch``'s ``*`` crosses ``/`` and ``..``, so ``…/protoLabsAI/../evil``
-    would match ``…/protoLabsAI/*`` while naming another owner's repo. A leading
-    ``/`` (a local absolute path, ``file:///…`` included) is not an empty segment."""
-    from urllib.parse import unquote
+def _source_path(raw: str) -> str:
+    """The PATH part of a source as written — what names the repo — with the host, port and
+    any userinfo left out. Read from the raw string, not the colon-normalized one: there an
+    scp-style ``git@host:/srv/x``, a port or a bracketed IPv6 host each leave a ``//`` that
+    is no part of any path."""
+    scheme = re.match(r"^([A-Za-z][A-Za-z0-9+.-]*)://", raw)
+    if scheme:
+        rest = raw[scheme.end() :]
+        if scheme.group(1).lower() == "file":
+            return rest
+        _authority, sep, path = rest.partition("/")
+        return sep + path
+    if raw.startswith("/"):
+        return raw
+    head = raw.split("/", 1)[0]
+    if ":" in head:  # scp-style ``[user@]host:path``
+        return raw.split(":", 1)[1]
+    _host, sep, path = raw.partition("/")
+    return sep + path
 
-    path = norm[len("file//") :] if norm.startswith("file//") else norm
-    for seg in path.lstrip("/").split("/"):
-        dec = unquote(seg)
-        if dec == "" or "/" in dec or {".", ".."} & set(dec.split("\\")):
-            return True
-    return False
 
-
-# A Windows drive path, bare (``C:/src/x``, ``C:\\src\\x``) or as ``file:///C:/…``. Normalizing
-# turns its drive colon into a ``/`` — an "empty segment" that is no traversal at all.
+# A Windows drive path, bare (``C:/src/x``, ``C:\\src\\x``) or as ``file:///C:/…``: its drive
+# colon is not a host separator.
 _WINDOWS_LOCAL = re.compile(r"^(?:file:///)?[A-Za-z]:[\\/]")
 
 
 def source_has_dot_segment(url: str) -> bool:
-    """``has_dot_segment`` for a source as the operator wrote it. A Windows drive path is
-    judged on its own segments (``.`` / ``..`` only), since its drive colon would otherwise
-    read as an empty segment and every such local source would match nothing."""
-    raw = str(url or "").strip()
-    m = _WINDOWS_LOCAL.match(raw)
-    if m:
-        from urllib.parse import unquote
+    """Whether a source's path has a ``.`` / ``..`` / empty segment (raw or percent-encoded)
+    or an encoded ``/``. ``fnmatch``'s ``*`` crosses ``/`` and ``..``, so
+    ``…/protoLabsAI/../evil`` would match ``…/protoLabsAI/*`` while naming another owner's
+    repo; such a source matches nothing and is refused at install. One leading and one
+    trailing ``/`` are the path's own edges, not empty segments."""
+    from urllib.parse import unquote
 
-        return bool({".", ".."} & set(re.split(r"[\\/]", unquote(raw[m.end() :]))))
-    return has_dot_segment(normalize_source(raw))
+    raw = str(url or "").strip()
+    win = _WINDOWS_LOCAL.match(raw)
+    path = raw[win.end() :] if win else _source_path(raw)
+    if path.startswith("/"):
+        path = path[1:]
+    if path.endswith("/"):
+        path = path[:-1]
+    if not path:
+        return False
+    for seg in path.split("/"):
+        dec = unquote(seg)
+        if dec == "" or "/" in dec or {".", ".."} & set(dec.split("\\")):
+            return True
+    return False
 
 
 def source_matches(url: str, globs: list[str] | None) -> bool:
@@ -106,7 +123,7 @@ def source_matches(url: str, globs: list[str] | None) -> bool:
     ``github.com/org`` matches ``github.com/org/repo``. Both sides normalize —
     exact entries fully (spelling-insensitive), glob entries without the
     ``.git`` trim (see ``_normalize_pattern``). A source with a dot/empty path
-    segment matches nothing (``has_dot_segment``)."""
+    segment matches nothing (``source_has_dot_segment``)."""
     norm = normalize_source(url)
     if source_has_dot_segment(url):
         return False
