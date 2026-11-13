@@ -24,6 +24,7 @@ import { ago, errMsg } from "../lib/format";
 import { onServerEvent } from "../lib/events";
 import { isPendingNowInboxPage, needsOperatorAttention } from "../lib/queries";
 import type { ActivityEntry, InboxItem } from "../lib/types";
+import { stripWakeHeader } from "./feedModel";
 
 // The unified feed (#3029) merges the two former utility-bar widgets — the inbound
 // Inbox (ADR 0003) and the read-only Activity provenance timeline (ADR 0022) — into
@@ -47,18 +48,9 @@ const ORIGIN: Record<string, { icon: typeof Clock; label: string }> = {
 // inbox priority tier → tone class (shared with the completed-entry priority badge).
 const PRIORITY_TONE: Record<string, string> = { now: "now", next: "next", later: "later" };
 
-/** The scheduler's one-line wake header (`src/scheduler/local.py`, ADR 0079), which it
- *  prepends to a scheduled/watch/wait/goal prompt. It is runtime framing for the model,
- *  not the job's words. */
-const WAKE_HEADER = /^\s*\[Autonomous wake\b[^\]]*\]\s*/;
-
-/** The operator-facing stimulus: the raw stimulus minus the internal wake header (#5094).
- *  The Work Activity row title used to do this stripping; since S4c the feed is the
- *  timeline's only home, so every rendering of a stimulus (row, hover text, reader)
- *  goes through here. Empty when the stimulus was nothing but the header. */
-export function stripWakeHeader(stimulus: string | undefined): string {
-  return stimulus?.replace(WAKE_HEADER, "").trim() ?? "";
-}
+// The wake-header stripping (#5094) moved into the pure feed model (docs/design/feed.md
+// §3) so the merged Feed shares it; re-exported here for existing callers.
+export { stripWakeHeader };
 
 export function OriginProvenance({ entry }: { entry: ActivityEntry }) {
   const o = ORIGIN[entry.origin] ?? { icon: Zap, label: entry.origin || "agent" };
