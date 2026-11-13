@@ -369,6 +369,309 @@ function recordDurableTurn(sessionId, row) {
   durableTurns.set(sessionId, rows);
 }
 
+// ── Live-sync contract harness (ADR 0130 S0 / live-sync.spec.ts) ─────────────────────────
+// One scope per spec, keyed by the `x-e2e-sync` request header: two browser contexts that
+// share the id share ONE server-side world — durable turn rows, a durable seq'd change feed
+// (replayable via `?since=` / `Last-Event-ID`, the D2 contract), and the set of open scoped
+// `/api/events` streams. Scoped like fleet/memory/mcp above so parallel workers can never
+// observe each other, and header-gated so every existing spec is byte-for-byte unaffected.
+const syncScopes = new Map();
+
+function syncFor(req) {
+  const key = String(req.headers["x-e2e-sync"] || "");
+  if (!key) return null;
+  if (!syncScopes.has(key)) {
+    syncScopes.set(key, {
+      seq: 0, // the scope's change-feed cursor (ADR 0130 D2)
+      log: [], // retained frames {topic, data, seq} — what `?since=` replays
+      streams: new Set(), // open scoped /api/events connections: {write, res}
+      a2aStreams: new Set(), // held scoped /a2a sockets — a restart drops them too
+      sessions: new Map(), // session_id → { rows: [turn rows], liveTaskId }
+      turnSeq: 0,
+      bootId: 1, // bumped by the restart simulation
+    });
+  }
+  return syncScopes.get(key);
+}
+
+function syncSession(sync, sessionId) {
+  if (!sync.sessions.has(sessionId)) sync.sessions.set(sessionId, { rows: [], liveTaskId: null });
+  return sync.sessions.get(sessionId);
+}
+
+function syncRecordRow(session, row) {
+  const at = session.rows.findIndex((r) => r.task_id === row.task_id);
+  if (at >= 0) session.rows[at] = { ...session.rows[at], ...row };
+  else session.rows.push(row);
+}
+
+/** Append a frame to the scope's change feed and push it to every open scoped stream.
+ *  `retain: false` mirrors the real bus's live-only progress frames (events/bus.py):
+ *  delivered if a stream is open, never replayed. */
+function syncPublish(sync, topic, data, retain = true) {
+  const frame = { topic, data, seq: ++sync.seq };
+  if (retain) sync.log.push(frame);
+  for (const stream of sync.streams) stream.write(frame);
+  return frame.seq;
+}
+
+/** The server-held session state (ADR 0130 D1) — what S2 puts on the index and on
+ *  `session.changed`. Today's console ignores it; the S3/S4 console renders it. */
+function syncSessionState(sync, sessionId) {
+  const session = syncSession(sync, sessionId);
+  return {
+    session_id: sessionId,
+    status: session.liveTaskId ? "running" : "idle",
+    live_task_id: session.liveTaskId,
+    last_change_seq: sync.seq,
+  };
+}
+
+function syncIndexPayload(sync, params) {
+  // The parked pin read (#3957) — this harness parks nothing.
+  if (params.get("parked") === "true") return { sessions: [] };
+  const sessions = [...sync.sessions.entries()]
+    .filter(([, session]) => session.rows.length)
+    .map(([sessionId, session]) => ({
+      session_id: sessionId,
+      last_updated: session.rows.map((r) => r.last_updated).sort().at(-1) ?? null,
+      turn_count: session.rows.length,
+      last_task_id: session.rows.at(-1)?.task_id ?? null,
+      ...syncSessionState(sync, sessionId),
+    }))
+    .sort((a, b) => String(b.last_updated).localeCompare(String(a.last_updated)));
+  return { sessions };
+}
+
+/** Settle a sync turn's durable row FROM the exact wire frames it streamed, so what a late
+ *  or reconnecting client refetches is what the live client saw: the terminal artifact's
+ *  full text, plus a history of the work frames (tool-call-v1 on message metadata, data
+ *  parts — component-v1, reasoning-v1 — in member style), the ADR 0104 row shape. Plain
+ *  narration/working frames are not history rows, matching the real store. */
+function syncRowFromFrames(taskId, prompt, frames) {
+  const results = frames.map((f) => f.result).filter(Boolean);
+  const terminal = [...results].reverse().find((r) => r.kind === "artifact-update" && r.lastChunk);
+  const text = terminal?.artifact?.parts?.find((p) => p.kind === "text")?.text ?? "";
+  const history = [{ role: "ROLE_USER", parts: [{ text: prompt }] }];
+  for (const result of results) {
+    if (result.kind !== "status-update") continue;
+    const message = result.status?.message;
+    if (!message) continue;
+    const dataParts = (message.parts || [])
+      .filter((p) => p.kind === "data")
+      .map((p) => ({ data: p.data, ...(p.metadata ? { metadata: p.metadata } : {}) }));
+    if (message.metadata) history.push({ role: "ROLE_AGENT", parts: dataParts, metadata: message.metadata });
+    else if (dataParts.length) history.push({ role: "ROLE_AGENT", parts: dataParts });
+  }
+  return {
+    task_id: taskId,
+    state: "TASK_STATE_COMPLETED",
+    last_updated: new Date().toISOString(),
+    text,
+    status: { state: "TASK_STATE_COMPLETED" },
+    artifacts: text ? [{ parts: [{ text }] }] : [],
+    history,
+  };
+}
+
+/** A scoped `POST /a2a` send (ADR 0130 S0): the turn is OWNED BY THE SERVER — it runs to
+ *  completion and lands in the scope's durable rows + change feed even when the sending
+ *  client disconnects mid-stream (the away/drop legs of live-sync.spec.ts). The feed
+ *  carries identities, never payloads (D2 "entity fetches"): today's real server publishes
+ *  NO bus event for a browser-streamed operator turn, so the only frames here are the
+ *  S1/S2 vocabulary (`session.changed`, `turn.completed`) that today's console ignores —
+ *  which is exactly why the cross-client case fails until S3 lands. */
+async function handleSyncSend(req, res, body, sync) {
+  const params = body.params || {};
+  const prompt = (params.message?.parts || [])
+    .filter((p) => p.kind === "text" || p.kind === undefined)
+    .map((p) => p.text)
+    .join("");
+  const sessionId = params.message?.contextId || params.contextId || "e2e-ctx";
+  const taskId = `task-sync-${++sync.turnSeq}`;
+  const frames = buildFrames({ rpcId: body.id ?? "1", contextId: sessionId, taskId, prompt });
+  const session = syncSession(sync, sessionId);
+  syncRecordRow(session, {
+    task_id: taskId,
+    state: "TASK_STATE_WORKING",
+    last_updated: new Date().toISOString(),
+    text: "",
+    status: { state: "TASK_STATE_WORKING" },
+    artifacts: [],
+    history: [{ role: "ROLE_USER", parts: [{ text: prompt }] }],
+  });
+  session.liveTaskId = taskId;
+  syncPublish(sync, "session.changed", syncSessionState(sync, sessionId));
+  res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache", connection: "keep-alive" });
+  sync.a2aStreams.add(res);
+  let gone = false;
+  req.once("close", () => { gone = true; });
+  res.once("error", () => { gone = true; });
+  const gap = /SLOW/i.test(prompt) ? 300 : 40;
+  for (const frame of frames) {
+    if (gone) break; // the server still finishes the turn below — only the stream is over
+    try {
+      res.write(`data: ${JSON.stringify(frame)}\r\n\r\n`);
+    } catch {
+      gone = true;
+      break;
+    }
+    await new Promise((r) => setTimeout(r, gap));
+  }
+  sync.a2aStreams.delete(res);
+  // A restart that happened mid-turn already failed this row (and owns the feed's story);
+  // only a turn the scope still considers live settles as completed.
+  if (session.liveTaskId === taskId) {
+    syncRecordRow(session, syncRowFromFrames(taskId, prompt, frames));
+    session.liveTaskId = null;
+    syncPublish(sync, "turn.completed", { session_id: sessionId, task_id: taskId });
+    syncPublish(sync, "session.changed", syncSessionState(sync, sessionId));
+  }
+  if (!gone) res.end();
+}
+
+/** `POST /api/__test__/sync/server-turn` — a turn the SERVER starts (a background
+ *  delegation result, a scheduled fire), bracketed exactly as the real bus brackets one
+ *  (#1767/#2361/bd-k02): `turn.started` (+ its control), live-only `chat.progress`
+ *  previews, then the terminal `chat.resumed` + `turn.finished`. `action: "start"` opens
+ *  it, `"finish"` settles it, `"run"` (default) does both — the two-step form lets a spec
+ *  interleave client state changes (hide, drop, restart) between the two. */
+function handleSyncServerTurn(res, body, sync) {
+  const sessionId = String(body.session_id || "");
+  if (!sessionId) return sendJson(res, { detail: "session_id is required" }, 400);
+  const action = String(body.action || "run");
+  const origin = String(body.origin || "background-resume");
+  const trigger = String(body.trigger || origin);
+  const session = syncSession(sync, sessionId);
+  const taskId = String(body.task_id || `task-sync-server-${++sync.turnSeq}`);
+  if (action === "start" || action === "run") {
+    session.liveTaskId = taskId;
+    syncRecordRow(session, {
+      task_id: taskId,
+      state: "TASK_STATE_WORKING",
+      last_updated: new Date().toISOString(),
+      text: "",
+      status: { state: "TASK_STATE_WORKING" },
+      artifacts: [],
+      history: [],
+    });
+    syncPublish(sync, "turn.started", {
+      session_id: sessionId,
+      task_id: taskId,
+      origin,
+      trigger,
+      control: {
+        session_id: sessionId,
+        task_id: taskId,
+        origin,
+        trigger,
+        controllable: true,
+        operator_controllable: true,
+      },
+    });
+    syncPublish(sync, "session.changed", syncSessionState(sync, sessionId));
+    if (body.preview) {
+      syncPublish(
+        sync,
+        "chat.progress",
+        { session_id: sessionId, task_id: taskId, phase: "text", text: String(body.preview) },
+        false, // live-only, like the real bus — a progress frame is never replayed
+      );
+    }
+  }
+  if (action === "finish" || action === "run") {
+    const text = String(body.text || "");
+    const state = String(body.state || "completed");
+    syncRecordRow(session, {
+      task_id: taskId,
+      state: state === "completed" ? "TASK_STATE_COMPLETED" : "TASK_STATE_FAILED",
+      last_updated: new Date().toISOString(),
+      text,
+      status: { state: state === "completed" ? "TASK_STATE_COMPLETED" : "TASK_STATE_FAILED" },
+      artifacts: text ? [{ parts: [{ text }] }] : [],
+      // A server-fired turn's prompt is machine text the live console never showed —
+      // the real store keeps no visible user frame for it (the x-e2e-session-history shape).
+      history: [],
+    });
+    if (session.liveTaskId === taskId) session.liveTaskId = null;
+    syncPublish(sync, "chat.resumed", {
+      session_id: sessionId,
+      task_id: taskId,
+      text,
+      state,
+      error: String(body.error || ""),
+      origin,
+      trigger,
+    });
+    syncPublish(sync, "turn.finished", { session_id: sessionId, task_id: taskId, state });
+    syncPublish(sync, "session.changed", syncSessionState(sync, sessionId));
+  }
+  return sendJson(res, { ok: true, task_id: taskId, seq: sync.seq, boot_id: sync.bootId });
+}
+
+/** `POST /api/__test__/sync/restart` — the restart simulation (ADR 0130 D4): every open
+ *  scoped stream drops dead (clients must reconnect and resume from their cursor), any
+ *  in-flight turn is LOST — its terminal frames never happened — and the "rebooted" server
+ *  derives state from its durable store: the lost turn is failed, the session idle, and the
+ *  change feed records both transitions for replay. The feed itself survives (it is the
+ *  durable log D2 promises). */
+function handleSyncRestart(res, sync) {
+  sync.bootId += 1;
+  const lost = [];
+  for (const [sessionId, session] of sync.sessions) {
+    if (!session.liveTaskId) continue;
+    lost.push({ sessionId, taskId: session.liveTaskId });
+    syncRecordRow(session, {
+      task_id: session.liveTaskId,
+      state: "TASK_STATE_FAILED",
+      last_updated: new Date().toISOString(),
+      text: "",
+      status: {
+        state: "TASK_STATE_FAILED",
+        message: { role: "ROLE_AGENT", parts: [{ text: "The server restarted mid-turn." }] },
+      },
+      artifacts: [],
+    });
+    session.liveTaskId = null;
+  }
+  for (const stream of sync.streams) stream.res.destroy();
+  sync.streams.clear();
+  for (const socket of sync.a2aStreams) socket.destroy();
+  sync.a2aStreams.clear();
+  // Boot reconciliation, appended AFTER the crash so only reconnecting clients see it.
+  for (const { sessionId, taskId } of lost) {
+    syncPublish(sync, "turn.failed", { session_id: sessionId, task_id: taskId });
+    syncPublish(sync, "session.changed", syncSessionState(sync, sessionId));
+  }
+  return sendJson(res, { ok: true, boot_id: sync.bootId, failed: lost.length });
+}
+
+/** `POST /api/__test__/sync/seed` — pre-populate the scope's durable store with settled
+ *  turns BEFORE any client boots, so both contexts hydrate the same server-side chat. */
+function handleSyncSeed(res, body, sync) {
+  const sessions = Array.isArray(body.sessions) ? body.sessions : [];
+  let stamp = Date.now() - 60_000;
+  for (const seed of sessions) {
+    const sessionId = String(seed.session_id || "");
+    if (!sessionId) continue;
+    const session = syncSession(sync, sessionId);
+    for (const turn of Array.isArray(seed.turns) ? seed.turns : []) {
+      const taskId = `task-sync-seed-${++sync.turnSeq}`;
+      const answer = String(turn.answer || "");
+      syncRecordRow(session, {
+        task_id: taskId,
+        state: "TASK_STATE_COMPLETED",
+        last_updated: new Date((stamp += 1000)).toISOString(),
+        text: answer,
+        status: { state: "TASK_STATE_COMPLETED" },
+        artifacts: answer ? [{ parts: [{ text: answer }] }] : [],
+        history: [{ role: "ROLE_USER", parts: [{ text: String(turn.prompt || "") }] }],
+      });
+    }
+  }
+  return sendJson(res, { ok: true, seq: sync.seq });
+}
+
 function askHumanHistory(prompt, question) {
   return [
     { role: "ROLE_USER", parts: [{ text: prompt }] },
@@ -1546,6 +1849,65 @@ const server = createServer(async (req, res) => {
 
   if (pathname === "/a2a" && req.method === "POST") {
     const body = await readBody(req);
+    // Live-sync scope (ADR 0130 S0): tasks this scope ran are served FROM its durable
+    // store — GetTask snapshots (the reattach/self-heal fallback) and held-open
+    // SubscribeToTask streams for a turn still running — and a scoped send runs through
+    // handleSyncSend, which records the turn server-side whatever the socket does.
+    // Anything the scope doesn't know (no recorded row) falls through to the generic
+    // handlers, so the ordinary fixtures keep working inside a scoped context.
+    {
+      const sync = syncFor(req);
+      if (sync) {
+        const wantedId = String(body?.params?.id || "");
+        const owned = wantedId
+          ? [...sync.sessions.entries()]
+              .map(([sessionId, session]) => ({
+                sessionId,
+                row: session.rows.find((r) => r.task_id === wantedId),
+              }))
+              .find((hit) => hit.row)
+          : null;
+        if (body?.method === "GetTask" && owned) {
+          return sendJson(res, {
+            jsonrpc: "2.0",
+            id: body.id,
+            result: {
+              id: wantedId,
+              contextId: owned.sessionId,
+              status: owned.row.status,
+              artifacts: owned.row.artifacts ?? [],
+              history: owned.row.history ?? [],
+            },
+          });
+        }
+        if (body?.method === "SubscribeToTask" && owned && owned.row.state === "TASK_STATE_WORKING") {
+          // Still running: answer with the snapshot and HOLD the stream open, as the real
+          // server does — a restart (sync/restart) is what drops it.
+          res.writeHead(200, { "content-type": "text/event-stream; charset=utf-8", "cache-control": "no-store" });
+          res.write(
+            `data: ${JSON.stringify({
+              id: body.id,
+              jsonrpc: "2.0",
+              result: {
+                task: {
+                  id: wantedId,
+                  contextId: owned.sessionId,
+                  status: owned.row.status,
+                  artifacts: owned.row.artifacts ?? [],
+                  history: owned.row.history ?? [],
+                },
+              },
+            })}\r\n\r\n`,
+          );
+          sync.a2aStreams.add(res);
+          req.on("close", () => sync.a2aStreams.delete(res));
+          return;
+        }
+        if (body?.params?.message) {
+          return handleSyncSend(req, res, body, sync);
+        }
+      }
+    }
     // GetTask — the reconcile path (self-heal a stuck streaming turn + the cross-agent
     // turn watcher): return a terminal task carrying the final answer as an artifact.
     // Mirrors the REAL a2a-sdk 1.1 wire: proto method name, TASK_STATE_* state, the task
@@ -1662,6 +2024,36 @@ const server = createServer(async (req, res) => {
     return;
   }
   if (pathname === "/api/events" && req.method === "GET") {
+    // A live-sync scope (ADR 0130 S0) gets ITS stream: only the scope's own frames, each
+    // with an SSE `id: <seq>` line, resumable from `?since=` (the events client's cursor)
+    // or `Last-Event-ID` (a native EventSource reconnect) by replaying the scope's
+    // retained change feed. No periodic filler — the contract spec owns every frame.
+    {
+      const sync = syncFor(req);
+      if (sync) {
+        res.writeHead(200, {
+          "content-type": "text/event-stream",
+          "cache-control": "no-cache",
+          connection: "keep-alive",
+        });
+        res.write(`: sync-boot ${sync.bootId}\n\n`);
+        const sinceParam = Number(url.searchParams.get("since") ?? NaN);
+        const lastEventId = Number(req.headers["last-event-id"] ?? NaN);
+        const cursor = Number.isFinite(sinceParam) ? sinceParam : Number.isFinite(lastEventId) ? lastEventId : null;
+        const write = (frame) => {
+          try {
+            res.write(`id: ${frame.seq}\ndata: ${JSON.stringify(frame)}\n\n`);
+          } catch {
+            /* stream torn down mid-write (restart simulation / client gone) */
+          }
+        };
+        if (cursor !== null) for (const frame of sync.log) if (frame.seq > cursor) write(frame);
+        const stream = { write, res };
+        sync.streams.add(stream);
+        req.on("close", () => sync.streams.delete(stream));
+        return;
+      }
+    }
     // Server→client SSE push channel (ADR 0003). Hold the connection open so
     // the client's EventSource fires onopen (the "live" indicator), then push
     // one named event to exercise event delivery.
@@ -1771,6 +2163,30 @@ const server = createServer(async (req, res) => {
     return;
   }
   if (pathname.startsWith("/api/")) {
+    // Live-sync scope (ADR 0130 S0): the session index and a session's turns are served
+    // from the SCOPE's durable store — the one world both of a spec's browser contexts
+    // read — with the D1 state fields (`status`, `live_task_id`, `last_change_seq`)
+    // alongside the index row. Everything else falls through to the shared fixtures.
+    {
+      const sync = syncFor(req);
+      if (sync && req.method === "GET") {
+        if (pathname === "/api/chat/sessions") {
+          return sendJson(res, syncIndexPayload(sync, url.searchParams));
+        }
+        const turnsFor = /^\/api\/chat\/sessions\/([^/]+)\/turns$/.exec(pathname);
+        if (turnsFor) {
+          const session = syncSession(sync, decodeURIComponent(turnsFor[1]));
+          return sendJson(res, { turns: session.rows, live_task_id: session.liveTaskId });
+        }
+      }
+      if (sync && req.method === "POST") {
+        if (pathname === "/api/__test__/sync/seed") return handleSyncSeed(res, await readBody(req), sync);
+        if (pathname === "/api/__test__/sync/server-turn") {
+          return handleSyncServerTurn(res, await readBody(req), sync);
+        }
+        if (pathname === "/api/__test__/sync/restart") return handleSyncRestart(res, sync);
+      }
+    }
     if (req.method === "GET") {
       // Both the chat strip and the default Work rail read this per-chat source.
       // Unconfigured chats have no directives, not a failed ledger. Directive specs

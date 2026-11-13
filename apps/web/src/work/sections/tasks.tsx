@@ -102,7 +102,8 @@ function jobShowsInWork(item: WorkItem): boolean {
 }
 
 // Row meta (§2): a not-started job says "not started · added <when>"; a blocked (started)
-// job says "blocked"; any other started job keeps its type and priority.
+// job says "blocked"; one parked on the operator (`waiting`, ADR 0129 Q1) says so; any
+// other started job keeps its type and priority.
 function jobMeta(item: WorkItem): string {
   const task = item.raw as Task;
   if (jobNotStarted(item)) {
@@ -110,6 +111,7 @@ function jobMeta(item: WorkItem): string {
     return added ? `not started · added ${added}` : "not started";
   }
   if (issueStatus(task) === "blocked") return "blocked";
+  if (issueStatus(task) === "waiting") return "waiting on you";
   return typeAndPriority(task);
 }
 

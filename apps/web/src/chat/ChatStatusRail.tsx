@@ -39,7 +39,7 @@ import { useWorkItems, type WorkSource } from "../work/useWorkItems";
 import { flattenWorkItems, inWorkScope, jobEnded, jobKey, withSharedDecisions, workGroups, type WorkGroup } from "../work/workGroups";
 import { beginThisChatVisit, endThisChatVisit } from "../work/visitScope";
 import type { WorkGroupId } from "../work/tone";
-import { NeedsYouSection } from "./NeedsYouSection";
+import { NEEDS_YOU_SECTION_KINDS, NeedsYouSection } from "./NeedsYouSection";
 import { useDirectives } from "./useDirectives";
 import { runHas } from "./mentionRun";
 import { fallbackCap, fitCount, orderPeople, recipientLine, spokenMoreLabel } from "./peopleFit";
@@ -320,8 +320,15 @@ export function ChatStatusRail({ sessionId, cast, draft, onToggleMention }: {
   const groups = useMemo(() => workGroups(flat, { thisChatOnly: true, sessionId }), [flat, sessionId]);
   const chips = railChips(groups);
   // Fleet-wide Needs you (S7): the selector never chat-scopes this group, so the marker's
-  // count is every pending decision, undelivered human-needed page and stopped goal anywhere.
-  const needsYou = groups.find((group) => group.id === "needs-you")!;
+  // count is every pending decision, undelivered human-needed page and stopped goal anywhere —
+  // EXACTLY the kinds the section draws (NEEDS_YOU_SECTION_KINDS). A `waiting` task (ADR 0129
+  // Q1) sits in Work's Needs-you group but has no rail row; a marker that counted it would
+  // say "Needs you · N" with nothing to act on.
+  const needsYou = useMemo(() => {
+    const group = groups.find((candidate) => candidate.id === "needs-you")!;
+    const items = group.items.filter((item) => NEEDS_YOU_SECTION_KINDS.has(item.kind));
+    return { ...group, items, count: items.length };
+  }, [groups]);
   // Interacted decision cards the OPEN panel retains (§5.5 hold): a result stays readable
   // until the panel closes, while the marker itself counts pending rows only.
   const [held, setHeld] = useState<Map<string, DecisionRow>>(() => new Map());
