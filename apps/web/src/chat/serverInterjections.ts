@@ -66,6 +66,10 @@ export type InterjectionPlan = {
    *  ordinary user message. Never re-offer its words — a duplicate in the composer is the
    *  one outcome worse than a bubble whose exact boundary we can't name. */
   settle: QueuedSteer[];
+  /** The server ran it as a FRESH turn of its own (the bd-0ad5v turn-end restart): drop
+   *  the bubble and attach to that task — its reply comes from there, not from the turn
+   *  it was sent to, so settling would bury the message under an answer that never saw it. */
+  attach: QueuedSteer[];
   /** Still on its way, or not yet answerable: leave it queued and re-check. */
   keep: QueuedSteer[];
   /** Another turn will drain it: the same item, re-targeted to that turn. */
@@ -87,6 +91,12 @@ export function planInterjectionReconcile(
     /** Ids the server says a turn FOLDED IN (`GET …/steer`'s `drained`). Empty from an
      *  older server, which reads as "can't say", never as "not read". */
     drainedIds: ReadonlySet<string>;
+    /** Msg id → the task the server RESTARTED it as (`GET …/steer`'s `started`, bd-0ad5v),
+     *  `""` while that turn's start is still in flight. Optional: an older server sends
+     *  none, which reads as "no restart happened". Consulted before the drain log — a
+     *  restarted id is in BOTH (the restart turn reads it like a fold), and the one that
+     *  names a task to attach to must win over "settle as read". */
+    started?: ReadonlyMap<string, string>;
     /** Phase of each server turn an interjection was sent to. */
     phases: ReadonlyMap<string, ServerTurnPhase>;
     /** Ids each turn's DURABLE history records as folded in (steer-consumed-v1). */
@@ -101,10 +111,25 @@ export function planInterjectionReconcile(
     asks: number;
   },
 ): InterjectionPlan {
-  const plan: InterjectionPlan = { settle: [], keep: [], retarget: [], resend: [], reclaim: [] };
+  const plan: InterjectionPlan = { settle: [], attach: [], keep: [], retarget: [], resend: [], reclaim: [] };
   for (const item of stale) {
     const task = item.serverTaskId ?? "";
     const phase = ctx.phases.get(task) ?? "unknown";
+    // A restart outranks every other record: the drain log says "read" for a restarted id
+    // too, but the reply is coming from the restart's OWN task — attach, don't settle.
+    const startedTask = ctx.started?.get(item.id);
+    if (startedTask) {
+      plan.attach.push(item);
+      continue;
+    }
+    if (startedTask === "") {
+      // Restart in flight (the pop-to-task window): the very next read names the task.
+      // Grace-bounded like any unresolved item, so a start that dies unrecorded cannot
+      // keep the bubble "queued" forever.
+      if (ctx.asks >= UNRESOLVED_ASKS) plan.settle.push(item);
+      else plan.keep.push(item);
+      continue;
+    }
     // Proof it was read, from either record that can outlive the queue: the turn's durable
     // history, or the server's own drain log. Whatever the queue says.
     if (ctx.consumedIds.get(task)?.has(item.id) || ctx.drainedIds.has(item.id)) {

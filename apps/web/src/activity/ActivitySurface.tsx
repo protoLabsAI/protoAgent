@@ -17,6 +17,7 @@ import { onServerEvent } from "../lib/events";
 import { runtimeStatusQuery } from "../lib/queries";
 import type { ActivityEntry, InboxItem } from "../lib/types";
 import { relTime } from "../work/tone";
+import { FeedDetail } from "./FeedDetail";
 import { applyLiveEntry, groupByDay, mergeFeed, stripWakeHeader, type FeedRow } from "./feedModel";
 
 // The Feed (docs/design/feed.md §1): ONE chronological list, newest first, where each
@@ -65,6 +66,15 @@ export function ActivitySurface({ onOpenDetail }: { onOpenDetail?: (row: FeedRow
   const { data: runtime } = useQuery(runtimeStatusQuery());
   const agentName = brandName(runtime?.identity?.name);
   const agentNameRef = useRef(agentName);
+
+  // The detail view (§5): clicking a row swaps the list for FeedDetail in the SAME
+  // dialog body. A host that passes `onOpenDetail` owns the detail instead — the
+  // slice-4 row contract; no production host passes it today, it survives so tests
+  // (ActivityWidget.test.tsx) can observe row clicks without mounting the detail.
+  // `returnKey` is set when the detail closes so "← Feed" can put focus back (§8).
+  const [detail, setDetail] = useState<FeedRow | null>(null);
+  const returnKey = useRef<string | null>(null);
+  const rootRef = useRef<HTMLDivElement>(null);
 
   // Raw feed sources live in refs; `rows` is the one rendered projection. It is REBUILT
   // via mergeFeed after any fetch (sorted newest first) and patched by applyLiveEntry on
@@ -183,14 +193,70 @@ export function ActivitySurface({ onOpenDetail }: { onOpenDetail?: (row: FeedRow
   // server id (the re-merge also drops anything delivered meanwhile).
   useEffect(() => onServerEvent("inbox.item", () => void loadInbox()), [loadInbox]);
 
+  const openDetail = useCallback(
+    (row: FeedRow) => {
+      if (onOpenDetail) {
+        onOpenDetail(row);
+        return;
+      }
+      setDetail(row);
+    },
+    [onOpenDetail],
+  );
+  // Back to the list: focus returns to the row the detail was showing (§8). The row can
+  // still have vanished meanwhile (a refetch dropped it outright) — fall back to the
+  // first row so focus never silently drops to <body>.
+  useEffect(() => {
+    if (detail || !returnKey.current) return;
+    const key = returnKey.current;
+    returnKey.current = null;
+    const rowButtons = [...(rootRef.current?.querySelectorAll<HTMLButtonElement>(".feed-row") ?? [])];
+    (rowButtons.find((b) => b.dataset.key === key) ?? rowButtons[0])?.focus();
+  }, [detail]);
+
   const loading = activityLoading || inboxLoading;
   const failed = activityError || inboxError;
   const groups = groupByDay(rows);
 
+  // The open detail re-derives from `rows` on every render — the state only remembers
+  // WHICH row was opened. So a live activity.message that replaces an open queued row
+  // (§3) carries its `entry:` row in via the item id, and the detail turns into the
+  // result (or failure) instead of showing a stale "Queued" while the live region
+  // announces the finish. The click-time snapshot is the last resort for a row a
+  // refetch dropped entirely — better the old page than a blank one.
+  const openedItemId = detail?.item?.id;
+  const detailRow = detail
+    ? (rows.find((r) => r.key === detail.key) ??
+      (openedItemId != null ? rows.find((r) => r.entry?.inbox_id === openedItemId) : undefined) ??
+      detail)
+    : null;
+
+  if (detailRow) {
+    return (
+      // The detail replaces the list in the SAME dialog body (§5) — the live region
+      // stays out here so a queued→ran announcement still fires while reading.
+      <div className="unified-feed util-dialog-fill" data-testid="unified-feed" ref={rootRef}>
+        <FeedDetail
+          row={detailRow}
+          agentName={agentName}
+          onBack={() => {
+            // The LIVE key, not the opening one — a replaced queued row's focus target
+            // is the entry row now standing in its place.
+            returnKey.current = detailRow.key;
+            setDetail(null);
+          }}
+        />
+        <span className="feed-announce" role="status" aria-live="polite" aria-atomic="true">
+          {announce}
+        </span>
+      </div>
+    );
+  }
+
   return (
     // The utility-bar dialog gives the feed the shared fixed body height (#5165). The
     // list is newest first and opens at the top — no auto-scroll.
-    <div className="unified-feed util-dialog-fill" data-testid="unified-feed">
+    <div className="unified-feed util-dialog-fill" data-testid="unified-feed" ref={rootRef}>
       {failed ? (
         <Alert status="error" className="feed-alert">
           Couldn't load the feed. Check the connection, then reload.
@@ -224,8 +290,9 @@ export function ActivitySurface({ onOpenDetail }: { onOpenDetail?: (row: FeedRow
                       type="button"
                       className="feed-row"
                       data-kind={row.kind}
+                      data-key={row.key}
                       aria-label={`${row.kind === "failed" ? "Failed: " : ""}${row.title}. ${row.meta}. ${time.text}. Open details`}
-                      onClick={() => onOpenDetail?.(row)}
+                      onClick={() => openDetail(row)}
                     >
                       <StatusDot status={row.kind === "failed" ? "error" : "neutral"} />
                       <span className="feed-row-body">

@@ -18,8 +18,15 @@ new instructions. Inspect completed actions before retrying a stopped task.
 - **✕ cancels** it (`DELETE …/steer/{msg_id}`) if it hasn't been folded in yet. If it
   already shaped the reply, the console settles it into the thread instead of dropping it.
 - At turn end the console reconciles against `GET …/steer`: anything that arrived after
-  the turn's last model call (so it wasn't folded in) is **re-sent as a fresh turn**, so a
-  late steer is never silently lost.
+  the turn's last model call (so it wasn't folded in) becomes a **fresh turn**, so a late
+  steer is never silently lost. The server restarts such leftovers itself when a turn ends
+  terminally and names the new task in the read's `started` map (msg id → task id), so the
+  console **attaches** to that turn and streams its reply in; only a message the server
+  still holds queued is re-sent by the console (dequeued first, so it can't be read twice).
+- A steer that reaches the server when **no turn is live** (a stale "streaming" bubble)
+  doesn't queue at all: it starts an ordinary operator turn, and the POST's `started_turn`
+  reply tells the console to drop its stale streaming state and attach to that task. A
+  duplicate POST of the same message id answers with the same task.
 
 ## While a HITL form is open: messages are held
 

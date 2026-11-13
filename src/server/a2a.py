@@ -1243,9 +1243,13 @@ def _a2a_progress(context_id: str, task_id: str, frame: dict) -> None:
         # The executor's guaranteed exit signal (#3933): whatever path the turn took out —
         # including a crash before its terminal hook fired — forget its control entry.
         # Nothing is published: the terminal / park frames already told every consumer.
-        from server.chat import finish_live_server_turn
+        from server.chat import finish_live_server_turn, restart_undrained_steers
 
         finish_live_server_turn(context_id, task_id)
+        # A steer still queued when its turn ended terminally has nothing left to drain
+        # it (the bd-0ad5v stuck chat) — run it as ONE fresh turn instead of leaving it
+        # pending. The helper itself skips parks, cancels, busy sessions and backgrounds.
+        restart_undrained_steers(context_id, str(frame.get("state") or ""))
         return
     if frame.get("phase") == "input_required":
         from server.chat import finish_live_server_turn
