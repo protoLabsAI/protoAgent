@@ -737,9 +737,16 @@ def _fetch(url: str, ref: str | None, dest: Path) -> str:
     """Fetch the plugin repo at ``ref`` into ``dest``; return the resolved SHA.
     ``git`` on a dev/server box; the git-less HTTPS archive (GitHub) when git is
     unavailable or in the frozen desktop app (ADR 0058 D1)."""
-    if _prefer_archive():
-        return _fetch_archive(url, ref, dest)
-    return _clone(url, ref, dest)
+    sha = _fetch_archive(url, ref, dest) if _prefer_archive() else _clone(url, ref, dest)
+    if ref and _SHA_RE.match(ref) and not sha.lower().startswith(ref.lower()):
+        # A SHA-shaped ref is recorded (and treated by updates) as a commit pin, but git and
+        # the GitHub API resolve a same-named branch or tag first — refuse rather than pin
+        # whatever that name points at.
+        raise InstallError(
+            f"ref {ref!r} resolved to {sha[:12]}, not that commit — a branch or tag has that name; "
+            "pass the full 40-character SHA."
+        )
+    return sha
 
 
 # --- Bundled-dep gate for the frozen app (ADR 0058 D2) ---------------------
