@@ -491,6 +491,68 @@ async def test_crash_between_answer_and_action_reraises_the_card_at_boot(tmp_pat
 
 
 @pytest.mark.asyncio
+async def test_boot_repair_never_reopens_a_card_whose_answer_is_in_flight(tmp_path, monkeypatch):
+    """The decision routes serve answers while a boot's recovery pass is still running,
+    and an operator Resume keeps the run held ``interrupted_needs_operator`` for its
+    WHOLE drive. The card repair reaching that occurrence mid-drive must leave the
+    answered record closed: reopening it would accept a second answer against the
+    running first (a Drop would settle the run as dropped while its turn completes).
+    A repair whose held-row read went stale (the answer finished meanwhile) must leave
+    the record closed too."""
+    from server import turn_control
+
+    coord, saver, claim, gen2, owner, rec = await _held_one_shot(tmp_path, monkeypatch, "s7-inflight")
+    try:
+        # Hold the execution session's turn lock: the Resume answer wins the ledger CAS,
+        # then its drive queues on this lock — the mid-drive window, held open. (Keep a
+        # strong reference: the lock registry is weak.)
+        lock = turn_control._thread_lock(InterruptedTurnRecovery()._thread_config(owner)["configurable"]["thread_id"])
+        await lock.acquire()
+        try:
+            api = _api_app()
+            accepted = await _answer(api, rec.id, "resume")
+            assert accepted.status_code == 200  # consumed: the CAS lands before the drive
+            assert STATE.decision_store.get(rec.id).state == "answered"
+            assert _occurrence(gen2.sched.path, "job-oneshot")["state"] == "interrupted_needs_operator"
+
+            # The boot repair pass reaches the still-held occurrence NOW — through a
+            # fresh recovery instance, as a real boot builds one (the in-flight registry
+            # is process-wide, not per-instance).
+            await gen2.sched._ensure_held_occurrence_cards(InterruptedTurnRecovery())
+            assert STATE.decision_store.get(rec.id).state == "answered"  # NOT reopened
+            assert [r for r in STATE.decision_store.list(session_id=owner) if r.pending] == []
+
+            # Exactly-once holds: a second answer is refused while the first drives.
+            assert (await _answer(api, rec.id, "drop")).status_code == 409
+        finally:
+            lock.release()
+
+        # The one accepted answer's drive completes onto the ORIGINAL handle, once.
+        await _wait_until(
+            lambda: (_occurrence(gen2.sched.path, "job-oneshot") or {"state": ""})["state"] == "settled",
+            message="the resumed occurrence settled",
+        )
+        settled = _occurrence(gen2.sched.path, "job-oneshot")
+        assert settled["task_state"] == "completed"
+        assert settled["task_id"] == claim["task_id"]
+        assert coord.tool_runs["risky_step"] == 1  # the refused Drop/repair never acted
+        assert len(_query(gen2.sched.path, "SELECT * FROM occurrences WHERE job_id = 'job-oneshot'")) == 1
+        assert STATE.decision_store.get(rec.id).answer == "resume"
+
+        # The stale-read variant: a repair working off a held-row snapshot that predates
+        # the settle finds the run no longer held and leaves the answered record closed.
+        await STATE.interrupted_recovery.ensure_needs_operator_decision(
+            job_id="job-oneshot", context_id=owner, task_id=claim["task_id"],
+            next_fire=claim["next_fire"], created_at=claim["created_at"],
+            prompt="ONESHOT-TOOL archive the exports",
+        )
+        assert STATE.decision_store.get(rec.id).state == "answered"
+        assert [r for r in STATE.decision_store.list(session_id=owner) if r.pending] == []
+    finally:
+        await _shutdown(coord, gen2)
+
+
+@pytest.mark.asyncio
 async def test_dismissing_the_card_never_resumes_and_stays_dismissed(tmp_path, monkeypatch):
     """Dismissing a recovery card over the real cancel route only withdraws the record —
     no clearing resume runs on the job session (only Re-run may start a turn) — and the

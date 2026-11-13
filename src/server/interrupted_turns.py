@@ -144,6 +144,18 @@ RESUME_OPTION = "resume"
 RERUN_OPTION = "rerun"
 DROP_OPTION = "drop"
 
+#: Decision ids whose accepted answer is being ACTED ON right now in this process
+#: (:meth:`InterruptedTurnRecovery.operator_action`, between the ledger CAS and the end
+#: of the action). The decision routes serve answers while a boot's recovery pass is
+#: still working through its one-at-a-time disposals, and an operator Resume keeps the
+#: run ``interrupted_needs_operator`` for its whole drive — so the pass's card repair
+#: must be able to tell a mid-action answer from a crash-orphaned one, or it would
+#: reopen the card and let a second answer act against the running first. Module-level
+#: on purpose: the routes' recovery object and the one handed to the scheduler's boot
+#: pass are separate instances. Process-local is exactly right — after a crash the set
+#: is empty, so a genuinely orphaned answered record still reopens at the next boot.
+_ACTING_ANSWERS: set[str] = set()
+
 
 def _job_title(prompt: str, job_id: str) -> str:
     """A short human label for the job: the prompt's first line, clipped; the id as fallback."""
@@ -644,32 +656,39 @@ class InterruptedTurnRecovery:
 
         # The exactly-once gate: one concurrent answer wins this CAS, the other raises.
         store.answer(rec.id, answer, answered_by=answered_by, answered_surface=answered_surface)
-        # From here the record reads "answered". If the action below cannot move the
-        # occurrence out of its held state (every transition is CAS'd and returns False
-        # on a store error), the card is REOPENED: an answered record over a still-held
-        # occurrence would wedge the run forever — boot reconciliation reads only
-        # claimed/unknown/running rows, and no new card is ever raised for a held one.
-        # A crash in this window is repaired the same way at the next boot
-        # (:meth:`ensure_needs_operator_decision`).
+        # Registered with NO await after the CAS: on this event loop a boot repair pass
+        # can never read the record "answered" without also finding it here, so it never
+        # reopens a card whose answer is still mid-action (:data:`_ACTING_ANSWERS`).
+        _ACTING_ANSWERS.add(rec.id)
         try:
-            acted = await self._apply_operator_answer(
-                answer,
-                scheduler,
-                job_id=job_id,
-                next_fire=next_fire,
-                created_at=created_at,
-                context_id=context_id,
-                task_id=task_id,
-                fired_after=fired_after,
-                prompt=prompt,
-                origin=origin,
-                fence=fence,
-            )
-        except BaseException:
-            self._reopen_recovery_card(store, rec.id, answer=answer, job_id=job_id)
-            raise
-        if not acted:
-            self._reopen_recovery_card(store, rec.id, answer=answer, job_id=job_id)
+            # From here the record reads "answered". If the action below cannot move the
+            # occurrence out of its held state (every transition is CAS'd and returns
+            # False on a store error), the card is REOPENED: an answered record over a
+            # still-held occurrence would wedge the run forever — boot reconciliation
+            # reads only claimed/unknown/running rows, and no new card is ever raised
+            # for a held one. A crash in this window is repaired the same way at the
+            # next boot (:meth:`ensure_needs_operator_decision`).
+            try:
+                acted = await self._apply_operator_answer(
+                    answer,
+                    scheduler,
+                    job_id=job_id,
+                    next_fire=next_fire,
+                    created_at=created_at,
+                    context_id=context_id,
+                    task_id=task_id,
+                    fired_after=fired_after,
+                    prompt=prompt,
+                    origin=origin,
+                    fence=fence,
+                )
+            except BaseException:
+                self._reopen_recovery_card(store, rec.id, answer=answer, job_id=job_id)
+                raise
+            if not acted:
+                self._reopen_recovery_card(store, rec.id, answer=answer, job_id=job_id)
+        finally:
+            _ACTING_ANSWERS.discard(rec.id)
 
     async def _apply_operator_answer(
         self,
@@ -780,9 +799,15 @@ class InterruptedTurnRecovery:
         left ``interrupted_needs_operator`` must always be actionable. A MISSING record
         (the disposal's ledger write failed) is created; an ANSWERED one is reopened —
         the occurrence is still held, so the answer's action provably never finished (a
-        restart cut it down between the ledger CAS and the occurrence transition). A
-        dismissed (withdrawn/cancelled) card stays closed: the operator silenced it, and
-        the held row in the job's diagnostics remains the durable trace."""
+        restart cut it down between the ledger CAS and the occurrence transition). Two
+        answered shapes are NOT orphaned and stay closed: an answer still mid-action in
+        this process (:data:`_ACTING_ANSWERS` — the routes serve answers while the boot
+        pass is still running, and an operator Resume keeps the run held for its whole
+        drive; reopening would let a second answer act against the running first), and a
+        run that is no longer held at all (the caller's held-row read went stale while
+        the pass awaited earlier rows — the answered record IS the outcome). A dismissed
+        (withdrawn/cancelled) card stays closed: the operator silenced it, and the held
+        row in the job's diagnostics remains the durable trace."""
         from graph.decisions import STATE_ANSWERED, decision_store, restart_recovery_interrupt_id
 
         store = decision_store()
@@ -798,6 +823,20 @@ class InterruptedTurnRecovery:
                 prompt=prompt,
             )
         elif rec.state == STATE_ANSWERED:
+            # No await between the record read and the reopen below: the checks and the
+            # CAS are atomic with respect to this event loop's answer deliveries.
+            if rec.id in _ACTING_ANSWERS:
+                log.info(
+                    "[interrupted-turns] the recovery item for %s is answered and its action is "
+                    "still running; leaving it closed",
+                    job_id,
+                )
+                return
+            scheduler = getattr(STATE, "scheduler", None)
+            if scheduler is not None and scheduler.interrupted_operator_claim(job_id, next_fire, created_at) is None:
+                # The run moved out of ``interrupted_needs_operator`` since the caller
+                # read its held row (the answer finished meanwhile): nothing to repair.
+                return
             store.reopen(rec.id)
             log.warning(
                 "[interrupted-turns] reopened the recovery item for %s: its %s answer never completed",

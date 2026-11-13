@@ -17,7 +17,9 @@
   CAS'd on the held state — and dismissing the card never resumes anything. A held run
   is never stranded cardless: an answer whose action cannot move the occurrence reopens
   the card, and each boot repairs the card of every still-held occurrence (a missing
-  record is re-raised, an answered-but-unacted one reopened; a dismissed card stays
-  dismissed). Each S6 auto-resume now also appends an Activity entry — "Resumed
+  record is re-raised, an answered-but-unacted one reopened — but never one whose
+  answer is still mid-action in this process, such as an operator Resume whose drive is
+  running while the boot pass works, nor one whose run already moved on; a dismissed
+  card stays dismissed). Each S6 auto-resume now also appends an Activity entry — "Resumed
   &lt;job&gt; after a restart (step N)" — saved to the feed and published live on the
   bus.

@@ -54,6 +54,7 @@ _TEST_POLL_S = 0.05
 
 def _reset_module_globals():
     import server.a2a as a2a
+    import server.interrupted_turns as interrupted_turns
     from graph import steering
 
     set_terminal_hook(None)
@@ -61,6 +62,7 @@ def _reset_module_globals():
     hitl_routing._ROUTER[0] = None
     steering._reset()
     mark_restart_spared_tasks(())  # the D7 janitor-exemption registry is module state
+    interrupted_turns._ACTING_ANSWERS.clear()  # the S7 in-flight answer registry likewise
     for store in (a2a._INBOX_TURN_WATCH, a2a._INBOX_EARLY_TERMINALS, a2a._INBOX_RESTORE_OWED):
         store.clear()
 
