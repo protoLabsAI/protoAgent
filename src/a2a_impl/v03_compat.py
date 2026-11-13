@@ -77,8 +77,12 @@ def create_a2a_jsonrpc_routes(request_handler: Any, rpc_url: str = "/a2a") -> li
     from starlette.routing import request_response
 
     from a2a_impl.request_guard import guard_misplaced_ids
+    from a2a_impl.stores import tier_context_builder
 
-    routes = create_jsonrpc_routes(request_handler, rpc_url=rpc_url, enable_v0_3_compat=True)
+    # The caller's trust tier rides into the call context: it picks the task owner.
+    routes = create_jsonrpc_routes(
+        request_handler, rpc_url=rpc_url, context_builder=tier_context_builder(), enable_v0_3_compat=True
+    )
     harden_v03_error_codes(routes)  # finds the adapter via endpoint.__self__ — before wrapping
     for route in routes:
         endpoint = getattr(route, "endpoint", None)

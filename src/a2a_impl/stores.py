@@ -420,6 +420,40 @@ def drop_tool_args_history(task: Task) -> int:
     return removed
 
 
+# ── Task owner (who may see a task) ─────────────────────────────────────────────
+
+#: The owner every operator-tier caller saves under (the shared bearer, devices, the fleet
+#: service token, the scheduler's own self-calls). Empty — the owner every row stored before
+#: owners existed already carries, so those stay the operator's.
+OPERATOR_OWNER = ""
+#: The owner a federation-tier caller (ADR 0066) saves under. A federation caller sees and
+#: touches only these; an operator-tier caller sees them too.
+FEDERATION_OWNER = "federation"
+_FEDERATION_CALL = ServerCallContext(state={"trust_tier": "federation"})
+
+
+def resolve_task_owner(context: ServerCallContext | None) -> str:
+    """The a2a-sdk ``owner_resolver``: the owner partition for the caller's tier, read from
+    ``state["trust_tier"]`` (stamped from the auth middleware's classification by
+    ``TierCallContextBuilder``). Anything but ``federation`` is the operator."""
+    state = getattr(context, "state", None) or {}
+    return FEDERATION_OWNER if state.get("trust_tier") == "federation" else OPERATOR_OWNER
+
+
+def tier_context_builder():
+    """A JSON-RPC ``ServerCallContextBuilder`` that also records the request's classified
+    trust tier in the call context's state, where ``resolve_task_owner`` reads it."""
+    from a2a.server.routes.common import DefaultServerCallContextBuilder
+
+    class TierCallContextBuilder(DefaultServerCallContextBuilder):
+        def build(self, request):
+            context = super().build(request)
+            context.state["trust_tier"] = getattr(request.state, "trust_tier", None)
+            return context
+
+    return TierCallContextBuilder()
+
+
 class ReasoningCoalescingTaskStore(DatabaseTaskStore):
     """Durable task store that coalesces contiguous reasoning-v1 history runs
     into one Message per run on every save (#1710), keeps only the latest
@@ -442,6 +476,39 @@ class ReasoningCoalescingTaskStore(DatabaseTaskStore):
         except Exception:  # noqa: BLE001 — dropping previews must never lose a save
             log.exception("[a2a] tool-args history drop failed; saving with previews")
         await super().save(task, context)
+
+    # Owner scoping: the SDK filters every read by the caller's owner. An operator-tier
+    # caller also reads federation-owned tasks (the only other owner), as it always could.
+    async def get(self, task_id: str, context: ServerCallContext) -> Task | None:
+        task = await super().get(task_id, context)
+        if task is None and self.owner_resolver(context) == OPERATOR_OWNER:
+            task = await super().get(task_id, _FEDERATION_CALL)
+        return task
+
+    async def list(self, params, context: ServerCallContext):
+        page = await super().list(params, context)
+        if (
+            not page.tasks
+            and params.context_id
+            and not params.page_token
+            and self.owner_resolver(context) == OPERATOR_OWNER
+        ):
+            page = await super().list(params, _FEDERATION_CALL)
+        return page
+
+    async def context_foreign(self, context_id: str, context: ServerCallContext) -> bool:
+        """Whether ``context_id`` holds a task another owner saved — a context a federation
+        caller must not continue (its thread is that owner's conversation). Never true for an
+        operator-tier caller."""
+        owner = self.owner_resolver(context)
+        if owner == OPERATOR_OWNER or not context_id:
+            return False
+        await self._ensure_initialized()
+        stmt = select(self.task_model.id).where(
+            self.task_model.context_id == context_id, self.task_model.owner != owner
+        )
+        async with self.async_session_maker() as session:
+            return (await session.execute(stmt.limit(1))).first() is not None
 
 
 # ── Turn order ─────────────────────────────────────────────────────────────────
@@ -502,8 +569,8 @@ def build_a2a_stores() -> tuple[
     """
     task_db = _resolve_db_path("a2a-tasks.db")
     push_db = _resolve_db_path("a2a-push.db")
-    task_store = ReasoningCoalescingTaskStore(make_sqlite_engine(task_db))
-    push_store = ValidatingPushNotificationConfigStore(make_sqlite_engine(push_db))
+    task_store = ReasoningCoalescingTaskStore(make_sqlite_engine(task_db), owner_resolver=resolve_task_owner)
+    push_store = ValidatingPushNotificationConfigStore(make_sqlite_engine(push_db), owner_resolver=resolve_task_owner)
     return task_store, push_store, task_db, push_db
 
 
