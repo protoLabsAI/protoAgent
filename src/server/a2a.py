@@ -30,6 +30,7 @@ from graph.output_format import extract_output
 from inbox.store import needs_operator_attention
 from runtime.state import STATE
 from server import _event_bus, agent_name
+from server import session_state as _session_state
 
 log = logging.getLogger("protoagent.server")
 
@@ -1255,6 +1256,11 @@ def _a2a_progress(context_id: str, task_id: str, frame: dict) -> None:
         from server.chat import finish_live_server_turn
 
         finish_live_server_turn(context_id, task_id)
+        # The session's paused transition (ADR 0130 S2): one `session.changed` per park,
+        # whatever kind of pause (HITL form / approval / request_decision) and whatever
+        # origin drove the turn. The bracket's turn-end settle then confirms (and
+        # dedupes against) this state instead of calling the session idle.
+        _session_state.note_paused(context_id, task_id)
         # The turn is parked awaiting a human answer/approval. Carries a short prompt so a
         # consumer can render "needs your approval — <what>" without fetching the task.
         _event_bus.publish(
@@ -1271,6 +1277,13 @@ def _a2a_progress(context_id: str, task_id: str, frame: dict) -> None:
         # "needs approval" back to "running" without waiting for the terminal frame.
         # Falls through: a resumed BACKGROUND turn still records its task id below.
         _event_bus.publish("turn.resumed", {"task_id": task_id, "context_id": context_id})
+    if frame.get("phase") == "steer_consumed":
+        # Queued operator input folded into the running turn (ADR 0130 S2): the status
+        # doesn't change, but every client holding a "queued" bubble must resettle, so
+        # the session's change feed carries the boundary — for EVERY origin (the
+        # chat.progress mirror below stays server-fired-only; a browser-held stream
+        # carries its own inline frame, but other devices only have the feed).
+        _session_state.note_steer_consumed(context_id, task_id)
     if not context_id.startswith("background:"):
         _publish_chat_progress(context_id, task_id, frame)
         return

@@ -254,6 +254,20 @@ class ChangeLog:
             out.append(d)
         return out
 
+    def last_entity_seqs(self, kind: str) -> dict[str, tuple[int, float]]:
+        """Per-entity high-water for one ``kind``: ``{entity_id: (seq, ts)}`` of each
+        entity's newest surviving row. One grouped scan — ``server.session_state``
+        reseeds ``last_change_seq`` from it at boot so the D3 backstop ("compare the
+        session's ``last_change_seq``") survives a restart. SQLite's bare-column rule
+        pairs ``ts`` with the ``MAX(seq)`` row."""
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT entity_id, MAX(seq) AS seq, ts FROM change_log WHERE kind = ? AND entity_id != ''"
+                " GROUP BY entity_id",
+                (str(kind),),
+            ).fetchall()
+        return {r["entity_id"]: (int(r["seq"]), float(r["ts"])) for r in rows}
+
     def last_seq(self) -> int:
         """High-water seq durably recorded here — the max of the surviving rows, the
         sweep floor (retention may have emptied the table), and the throttled live

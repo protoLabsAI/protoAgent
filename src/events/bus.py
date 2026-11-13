@@ -93,6 +93,12 @@ class EventBus:
         self._change_log = change_log
         self._seq = max(self._seq, change_log.resume_seq())
 
+    def change_log(self) -> ChangeLog | None:
+        """The attached durable log, if any (ADR 0130) — consumers that reseed from it
+        (``server.session_state``'s ``last_change_seq``) reach it here rather than
+        holding their own reference."""
+        return self._change_log
+
     def _bind_loop(self) -> None:
         """Remember the running loop (if any) so off-loop publishes can find it."""
         try:

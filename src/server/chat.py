@@ -154,6 +154,15 @@ from server.turn_control import (  # noqa: F401 — re-export
     submit_server_turn_interjection,
 )
 
+# Server-held session state (ADR 0130 S2). Re-exported because operator_api.chat_routes
+# reaches server code only over its grandfathered ``-> server.chat`` import edge —
+# operator_api must not import server.* directly, and lint-imports' ignore list must
+# never grow. COPIES of the bindings: patch server.session_state, never these names.
+from server.session_state import (  # noqa: F401 — re-export
+    live_state_fields,
+    note_session_deleted,
+)
+
 # Session ops (/compact, export, /btw, rewind, fork) moved to
 # server/chat_session_ops.py and the non-streaming usage/telemetry helpers to
 # server/turn_telemetry.py (#3810). Re-exported so ``from server.chat import …`` and

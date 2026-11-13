@@ -96,6 +96,8 @@ from server.chat import (
     forget_delegate_conversations,
     forget_delegate_conversations_for_session,
     fork_session,
+    live_state_fields,
+    note_session_deleted,
     rewind_session,
     steer_or_start_turn,
     turn_error,
@@ -311,20 +313,29 @@ async def _parked_sessions(engine, limit: int) -> list[dict]:
 
 
 async def session_summary(session_id: str) -> dict | None:
-    """``{session_id, active, turn_count, last_updated, last_state}`` for one chat session,
-    or ``None`` when the server has never seen it (no stored turn, none running) or it was
-    deleted (tombstoned).
+    """``{session_id, active, turn_count, last_updated, last_state, status, live_task_id,
+    last_change_seq, updated_at}`` for one chat session, or ``None`` when the server has
+    never seen it (no stored turn, none running) or it was deleted (tombstoned).
 
     ``active`` is the per-session busy signal (``runtime.turn_activity``, fed by the turn
     bracket in ``server.chat``): true while a turn is running on the session from ANY
     surface — console stream, A2A, ``/api/chat``. The Zed shim polls it before sending so
-    it never interleaves a prompt with the operator's console turn. Without a task store
-    (a headless test app) existence can't be checked, so the session is reported as known
-    with ``turn_count: None``."""
+    it never interleaves a prompt with the operator's console turn. ``status`` /
+    ``live_task_id`` / ``last_change_seq`` / ``updated_at`` are the ADR 0130 D1
+    server-held state (``server.session_state``), derived from the same newest-turn read
+    plus the turn lock. Without a task store (a headless test app) existence can't be
+    checked, so the session is reported as known with ``turn_count: None``."""
     from runtime import turn_activity
 
     active = turn_activity.is_active(session_id)
-    base = {"session_id": session_id, "active": active, "turn_count": None, "last_updated": None, "last_state": None}
+    base = {
+        "session_id": session_id,
+        "active": active,
+        "turn_count": None,
+        "last_updated": None,
+        "last_state": None,
+        **live_state_fields(session_id),
+    }
     engine = getattr(STATE, "a2a_task_engine", None)
     if engine is None:
         return base
@@ -339,7 +350,9 @@ async def session_summary(session_id: str) -> dict | None:
         newest = _newest_turn_ranked(TaskModel, conn.dialect.name, TaskModel.context_id == session_id)
         row = (
             await conn.execute(
-                select(newest.c.turn_count, newest.c.last_updated, newest.c.status).where(newest.c.rn == 1)
+                select(newest.c.turn_count, newest.c.last_updated, newest.c.status, newest.c.task_id).where(
+                    newest.c.rn == 1
+                )
             )
         ).first()
     count = int(row.turn_count or 0) if row else 0
@@ -352,6 +365,9 @@ async def session_summary(session_id: str) -> dict | None:
         "turn_count": count,
         "last_updated": _utc_iso(last),
         "last_state": last_state,
+        **live_state_fields(
+            session_id, newest_state=last_state, newest_task_id=(row.task_id if row else None), newest_updated=last
+        ),
     }
 
 
@@ -1050,6 +1066,9 @@ def register_chat_routes(app, ui: str) -> None:
             # A store that can't hide rows (a plugin backend): the one-step delete, after
             # retirement so a failed retirement still forgets nothing.
             forgotten = await asyncio.to_thread(_harvest.forget_conversation_memory, store, session_id, forget_tids)
+        # ADR 0130 S2: the session's rows are gone (a `retire=false` clear included — the
+        # API answers 404 until a new turn lands), so every other device must refetch.
+        note_session_deleted(session_id)
         return {"deleted": True, "harvested": chunk_id is not None, "forgotten": forgotten}
 
     @app.post("/api/chat/sessions/{session_id}/compact")
@@ -1132,7 +1151,13 @@ def register_chat_routes(app, ui: str) -> None:
                 )
                 rows = (
                     await conn.execute(
-                        select(newest.c.context_id, newest.c.task_id, newest.c.last_updated, newest.c.turn_count)
+                        select(
+                            newest.c.context_id,
+                            newest.c.task_id,
+                            newest.c.last_updated,
+                            newest.c.turn_count,
+                            newest.c.status,
+                        )
                         .where(newest.c.rn == 1)
                         .order_by(newest.c.last_updated.desc().nulls_last(), newest.c.context_id.desc())
                         .limit(limit)
@@ -1148,6 +1173,14 @@ def register_chat_routes(app, ui: str) -> None:
                     "last_updated": _utc_iso(r.last_updated),
                     "turn_count": r.turn_count,
                     "last_task_id": r.task_id,
+                    # ADR 0130 D1 server-held state, from the same windowed row + the
+                    # turn lock — no extra query per session.
+                    **live_state_fields(
+                        r.context_id,
+                        newest_state=_status_state(r.status),
+                        newest_task_id=r.task_id,
+                        newest_updated=r.last_updated,
+                    ),
                 }
                 for r in rows
             ]
@@ -1174,6 +1207,7 @@ def register_chat_routes(app, ui: str) -> None:
                 "turn_count": None,
                 "last_updated": None,
                 "last_state": None,
+                **live_state_fields(session_id),
                 "reason": f"read failed: {type(exc).__name__}",
             }
         if summary is None:
