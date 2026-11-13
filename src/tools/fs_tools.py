@@ -1613,6 +1613,10 @@ def build_fs_tools(config) -> list:
             Prefer read-only inspection (``git status``, ``gh pr list``); only mutate in read-write
             projects. ``shell``: ``"default"`` (cmd.exe on Windows, /bin/sh elsewhere), ``"powershell"``
             (pwsh off-Windows), ``"cmd"`` or ``"sh"``. PowerShell syntax REQUIRES ``shell="powershell"``.
+
+            A child you background with ``&`` is NOT waited for: the call returns as soon as the
+            command itself finishes, and the background process keeps running (you won't see its
+            later output here). Redirect it to a file if you need that output.
             """
             registry = registry_ref.get()
             try:
