@@ -14,9 +14,9 @@ history-dependent watch verifier (ADR 0067) goes blind without them — so they 
 their own always-on store, never gated by an observability preference.
 
 Concurrency: connection-per-call + WAL + busy_timeout (the TelemetryStore /
-BackgroundStore pattern). Plugin engines record from worker threads and background
-loops; the FTS-index race (#1500) is why a single shared connection is never held
-across threads here.
+BackgroundStore pattern), plus the shared per-file write lock (#5122). Plugin engines
+record from worker threads and background loops; the FTS-index race (#1500) is why a
+single shared connection is never held across threads here.
 
 Retention is capped per series (defaults: 90 days AND 10k points) and trimmed inside
 the same write transaction — a metric series is a sparkline/verifier substrate, not an
@@ -27,9 +27,10 @@ from __future__ import annotations
 
 import logging
 import sqlite3
-import threading
 import time
 from pathlib import Path
+
+from infra.sqlite_locks import file_lock
 
 log = logging.getLogger(__name__)
 
@@ -56,8 +57,10 @@ class MetricsStore:
         # can win the file lock repeatedly until the other's 5s budget expires
         # ("database is locked" with busy_timeout armed; seen on Windows CI,
         # where slow I/O widens every hold). The lock removes intra-process
-        # starvation; busy_timeout still covers cross-process writers.
-        self._write_lock = threading.Lock()
+        # starvation; busy_timeout still covers cross-process writers. It is the
+        # per-FILE lock (#5122), not a per-object one, so two MetricsStore objects
+        # opened on the same metrics.db serialize against each other too.
+        self._lock = file_lock(self.path)
         Path(self.path).parent.mkdir(parents=True, exist_ok=True)
         self._init_db()
 
@@ -72,23 +75,24 @@ class MetricsStore:
         return db
 
     def _init_db(self) -> None:
-        db = self._connect()
-        try:
-            db.execute(
-                """
-                CREATE TABLE IF NOT EXISTS metrics (
-                    series TEXT NOT NULL,
-                    ts     REAL NOT NULL,
-                    value  REAL NOT NULL
+        with self._lock:
+            db = self._connect()
+            try:
+                db.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS metrics (
+                        series TEXT NOT NULL,
+                        ts     REAL NOT NULL,
+                        value  REAL NOT NULL
+                    )
+                    """
                 )
-                """
-            )
-            # (series, ts) drives every query: history range scans, last(), and the
-            # per-series retention trims below.
-            db.execute("CREATE INDEX IF NOT EXISTS ix_metrics_series_ts ON metrics(series, ts)")
-            db.commit()
-        finally:
-            db.close()
+                # (series, ts) drives every query: history range scans, last(), and the
+                # per-series retention trims below.
+                db.execute("CREATE INDEX IF NOT EXISTS ix_metrics_series_ts ON metrics(series, ts)")
+                db.commit()
+            finally:
+                db.close()
 
     def record(self, series: str, value: float, ts: float | None = None) -> None:
         """Append one sample to ``series`` (``ts`` defaults to now) and trim the series
@@ -96,7 +100,7 @@ class MetricsStore:
         (two samples in the same second are both kept, insert order preserved)."""
         now = time.time()
         ts = now if ts is None else float(ts)
-        with self._write_lock:
+        with self._lock:
             self._record_locked(series, value, ts, now)
 
     def _record_locked(self, series: str, value: float, ts: float, now: float) -> None:

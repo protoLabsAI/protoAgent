@@ -46,6 +46,7 @@ from croniter import croniter
 from a2a_impl.wire import task_id_from_response
 from events import ACTIVITY_CONTEXT
 from infra import keep_awake, job_sessions
+from infra.sqlite_locks import file_lock
 from scheduler.interface import Job, is_cron, parse_iso_to_utc, parse_ttl
 from observability.sqlite_migrate import add_missing_columns
 
@@ -433,6 +434,13 @@ class LocalScheduler:
         # ``scheduler.fired`` event when a cron/one-shot job dispatches (ADR 0051). Optional.
         self._publish = event_publish
         self.path = _resolve_db_path(db_dir, agent_name)
+        # The shared per-file write lock (#5122): a second in-process connection waiting
+        # on BEGIN IMMEDIATE can lose SQLite's busy-handler poll to a holder that commits
+        # and re-begins at once, and raise "database is locked" after busy_timeout. This
+        # blocking lock queues same-process write transactions on this jobs.db instead;
+        # busy_timeout still covers other processes. Distinct from the fcntl owner-lock
+        # (ADR 0004) above, which arbitrates which instance *polls* the store.
+        self._lock = file_lock(self.path)
         self._task: asyncio.Task | None = None
         self._stopping = False
         self._lock_fd = None  # owner-lock fd (ADR 0004) held while polling
@@ -557,49 +565,50 @@ class LocalScheduler:
             finally:
                 db.close()
             return
-        db = self._connect()
-        try:
-            self._apply_additive_schema(db)
-            self._schema_ready = True
-            db.execute("BEGIN IMMEDIATE")
-            job_sessions.migrate(db)
-            # Re-key rows written under a previous display name (#2382). Every jobs.db is
-            # single-agent by construction — the path carries either the constant segment or
-            # the agent's own name segment — so every row in THIS file is ours, whatever name
-            # it was stored under. Without this the path fix alone isn't enough: `get`, `list_jobs`,
-            # `update` and `delete` all filter `WHERE agent_name = ?`, so a renamed agent would
-            # open the right database and still see an empty schedule.
+        with self._lock:
+            db = self._connect()
             try:
-                if adopt_existing_jobs:
-                    n = db.execute(
-                        "UPDATE jobs SET agent_name = ? WHERE agent_name IS NOT ?",
-                        (self.agent_name, self.agent_name),
-                    ).rowcount
-                    if n:
-                        log.info("[scheduler] adopted %d job(s) written under a previous agent name", n)
+                self._apply_additive_schema(db)
+                self._schema_ready = True
+                db.execute("BEGIN IMMEDIATE")
+                job_sessions.migrate(db)
+                # Re-key rows written under a previous display name (#2382). Every jobs.db is
+                # single-agent by construction — the path carries either the constant segment or
+                # the agent's own name segment — so every row in THIS file is ours, whatever name
+                # it was stored under. Without this the path fix alone isn't enough: `get`, `list_jobs`,
+                # `update` and `delete` all filter `WHERE agent_name = ?`, so a renamed agent would
+                # open the right database and still see an empty schedule.
+                try:
+                    if adopt_existing_jobs:
+                        n = db.execute(
+                            "UPDATE jobs SET agent_name = ? WHERE agent_name IS NOT ?",
+                            (self.agent_name, self.agent_name),
+                        ).rowcount
+                        if n:
+                            log.info("[scheduler] adopted %d job(s) written under a previous agent name", n)
+                except sqlite3.DatabaseError:
+                    log.exception("[scheduler] re-keying jobs to %r failed at %s", self.agent_name, self.path)
+                db.execute(
+                    "INSERT OR REPLACE INTO scheduler_owner (id, agent_name) VALUES (1, ?)",
+                    (self.agent_name,),
+                )
+                db.commit()
             except sqlite3.DatabaseError:
-                log.exception("[scheduler] re-keying jobs to %r failed at %s", self.agent_name, self.path)
-            db.execute(
-                "INSERT OR REPLACE INTO scheduler_owner (id, agent_name) VALUES (1, ?)",
-                (self.agent_name,),
-            )
-            db.commit()
-        except sqlite3.DatabaseError:
-            # Non-fatal, as before ADR 0129: an unreadable/locked store logs and
-            # leaves the scheduler constructed (later reads/claims fail closed per
-            # query) instead of bubbling out of the constructor, which agent_init
-            # converts into running scheduler-less until the next restart.
-            with suppress(sqlite3.DatabaseError):
-                db.rollback()
-            log.exception("[scheduler] schema init failed at %s", self.path)
-        except BaseException:
-            # A crash mid-migration must roll back routing and owner assignment as
-            # one transaction before propagating (idempotent recovery re-runs it).
-            with suppress(sqlite3.DatabaseError):
-                db.rollback()
-            raise
-        finally:
-            db.close()
+                # Non-fatal, as before ADR 0129: an unreadable/locked store logs and
+                # leaves the scheduler constructed (later reads/claims fail closed per
+                # query) instead of bubbling out of the constructor, which agent_init
+                # converts into running scheduler-less until the next restart.
+                with suppress(sqlite3.DatabaseError):
+                    db.rollback()
+                log.exception("[scheduler] schema init failed at %s", self.path)
+            except BaseException:
+                # A crash mid-migration must roll back routing and owner assignment as
+                # one transaction before propagating (idempotent recovery re-runs it).
+                with suppress(sqlite3.DatabaseError):
+                    db.rollback()
+                raise
+            finally:
+                db.close()
 
     def _apply_additive_schema(self, db: sqlite3.Connection) -> None:
         """Create missing tables/columns — DDL only, no routing rewrite.
@@ -662,14 +671,15 @@ class LocalScheduler:
         next enqueue retries (fail closed per query, as before ADR 0129)."""
         if self._schema_ready:
             return
-        db = self._connect()
-        try:
-            self._apply_additive_schema(db)
-            self._schema_ready = True
-        except sqlite3.DatabaseError:
-            log.exception("[scheduler] additive schema setup failed at %s", self.path)
-        finally:
-            db.close()
+        with self._lock:
+            db = self._connect()
+            try:
+                self._apply_additive_schema(db)
+                self._schema_ready = True
+            except sqlite3.DatabaseError:
+                log.exception("[scheduler] additive schema setup failed at %s", self.path)
+            finally:
+                db.close()
 
     # ── public API (matches SchedulerBackend) ───────────────────────────────
 
@@ -731,86 +741,88 @@ class LocalScheduler:
             # resolve touches them — the identity migration itself still waits
             # for the owner-lock.
             self._ensure_additive_schema()
-        db = self._connect()
-        try:
-            db.execute("BEGIN IMMEDIATE")
-            if not self._adopt_existing_jobs:
-                # Serialize verification and insertion against owner changes.
-                self._check_owner(db)
-            if enqueue_key is not None:
-                receipt = db.execute(
-                    "SELECT job_snapshot FROM job_enqueue_receipts WHERE enqueue_key = ?",
-                    (enqueue_key,),
-                ).fetchone()
-                if receipt:
-                    return Job(**json.loads(receipt[0]))
-                # Preserve run_in_session's pending replacement semantics, atomically
-                # with the receipt. Accepted occurrences remain in their own ledger.
-                if job_id:
-                    db.execute("DELETE FROM jobs WHERE id = ? AND agent_name = ?",
-                               (job_id, self.agent_name))
-            job.context_id, job.execution_hold = job_sessions.resolve(
-                db, job.as_dict(), context_held=self._context_execution_held
-            )
-            db.execute(
-                "INSERT INTO jobs (id, prompt, schedule, agent_name, next_fire, "
-                "last_fire, enabled, created_at, timezone, context_id, origin_session, "
-                "ttl, max_fires, fire_count, fence, consecutive_failures, last_error, last_ok, execution_hold) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                (
-                    job.id,
-                    job.prompt,
-                    job.schedule,
-                    job.agent_name,
-                    job.next_fire,
-                    job.last_fire,
-                    int(job.enabled),
-                    job.created_at,
-                    job.timezone,
-                    job.context_id,
-                    job.origin_session,
-                    job.ttl,
-                    job.max_fires,
-                    job.fire_count,
-                    json.dumps(job.fence),
-                    job.consecutive_failures,
-                    job.last_error,
-                    job.last_ok,
-                    job.execution_hold,
-                ),
-            )
-            if enqueue_key is not None:
-                db.execute(
-                    "INSERT INTO job_enqueue_receipts (enqueue_key, job_snapshot) VALUES (?, ?)",
-                    (enqueue_key, json.dumps(job.as_dict())),
+        with self._lock:
+            db = self._connect()
+            try:
+                db.execute("BEGIN IMMEDIATE")
+                if not self._adopt_existing_jobs:
+                    # Serialize verification and insertion against owner changes.
+                    self._check_owner(db)
+                if enqueue_key is not None:
+                    receipt = db.execute(
+                        "SELECT job_snapshot FROM job_enqueue_receipts WHERE enqueue_key = ?",
+                        (enqueue_key,),
+                    ).fetchone()
+                    if receipt:
+                        return Job(**json.loads(receipt[0]))
+                    # Preserve run_in_session's pending replacement semantics, atomically
+                    # with the receipt. Accepted occurrences remain in their own ledger.
+                    if job_id:
+                        db.execute("DELETE FROM jobs WHERE id = ? AND agent_name = ?",
+                                   (job_id, self.agent_name))
+                job.context_id, job.execution_hold = job_sessions.resolve(
+                    db, job.as_dict(), context_held=self._context_execution_held
                 )
-            db.commit()
-        except sqlite3.IntegrityError as exc:
-            raise ValueError(f"job id {job.id!r} already exists") from exc
-        except sqlite3.DatabaseError as exc:
-            # Keep the documented ValueError contract (#3943) even for a store-level
-            # failure: every caller — the schedule/wait tools, the REST routes, the
-            # SDK's run_in_session — handles ValueError; a raw OperationalError
-            # escaped them (and run_in_session's hook callers) uncaught.
-            raise ValueError(f"scheduler store unavailable: {exc}") from exc
-        finally:
-            db.close()
+                db.execute(
+                    "INSERT INTO jobs (id, prompt, schedule, agent_name, next_fire, "
+                    "last_fire, enabled, created_at, timezone, context_id, origin_session, "
+                    "ttl, max_fires, fire_count, fence, consecutive_failures, last_error, last_ok, execution_hold) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    (
+                        job.id,
+                        job.prompt,
+                        job.schedule,
+                        job.agent_name,
+                        job.next_fire,
+                        job.last_fire,
+                        int(job.enabled),
+                        job.created_at,
+                        job.timezone,
+                        job.context_id,
+                        job.origin_session,
+                        job.ttl,
+                        job.max_fires,
+                        job.fire_count,
+                        json.dumps(job.fence),
+                        job.consecutive_failures,
+                        job.last_error,
+                        job.last_ok,
+                        job.execution_hold,
+                    ),
+                )
+                if enqueue_key is not None:
+                    db.execute(
+                        "INSERT INTO job_enqueue_receipts (enqueue_key, job_snapshot) VALUES (?, ?)",
+                        (enqueue_key, json.dumps(job.as_dict())),
+                    )
+                db.commit()
+            except sqlite3.IntegrityError as exc:
+                raise ValueError(f"job id {job.id!r} already exists") from exc
+            except sqlite3.DatabaseError as exc:
+                # Keep the documented ValueError contract (#3943) even for a store-level
+                # failure: every caller — the schedule/wait tools, the REST routes, the
+                # SDK's run_in_session — handles ValueError; a raw OperationalError
+                # escaped them (and run_in_session's hook callers) uncaught.
+                raise ValueError(f"scheduler store unavailable: {exc}") from exc
+            finally:
+                db.close()
         return job
 
     def cancel_job(self, job_id: str) -> bool:
-        db = self._connect()
-        try:
-            cur = db.execute(
-                "DELETE FROM jobs WHERE id = ? AND agent_name = ?",
-                (job_id, self.agent_name),
-            )
-            db.commit()
-            return cur.rowcount > 0
-        except sqlite3.DatabaseError as exc:
-            log.warning("[scheduler] cancel_job failed: %s", exc)
-            return False
-        finally:
-            db.close()
+        with self._lock:
+            db = self._connect()
+            try:
+                cur = db.execute(
+                    "DELETE FROM jobs WHERE id = ? AND agent_name = ?",
+                    (job_id, self.agent_name),
+                )
+                db.commit()
+                return cur.rowcount > 0
+            except sqlite3.DatabaseError as exc:
+                log.warning("[scheduler] cancel_job failed: %s", exc)
+                return False
+            finally:
+                db.close()
 
     def update_job(
         self,
@@ -825,22 +837,23 @@ class LocalScheduler:
         # Validate + recompute the next fire from the new schedule (raises on a bad
         # cron/tz) BEFORE touching the row, so a malformed edit leaves the job intact.
         next_fire = _compute_next_fire(schedule, tz=timezone)
-        db = self._connect()
-        try:
-            cur = db.execute(
-                "UPDATE jobs SET prompt = ?, schedule = ?, timezone = ?, next_fire = ? WHERE id = ? AND agent_name = ?",
-                (prompt, schedule, timezone, next_fire, job_id, self.agent_name),
-            )
-            if cur.rowcount == 0:
-                raise ValueError(f"no job {job_id!r} to update")
-            db.commit()
-            row = db.execute(
-                "SELECT * FROM jobs WHERE id = ? AND agent_name = ?",
-                (job_id, self.agent_name),
-            ).fetchone()
-            return _row_to_job(row)
-        finally:
-            db.close()
+        with self._lock:
+            db = self._connect()
+            try:
+                cur = db.execute(
+                    "UPDATE jobs SET prompt = ?, schedule = ?, timezone = ?, next_fire = ? WHERE id = ? AND agent_name = ?",
+                    (prompt, schedule, timezone, next_fire, job_id, self.agent_name),
+                )
+                if cur.rowcount == 0:
+                    raise ValueError(f"no job {job_id!r} to update")
+                db.commit()
+                row = db.execute(
+                    "SELECT * FROM jobs WHERE id = ? AND agent_name = ?",
+                    (job_id, self.agent_name),
+                ).fetchone()
+                return _row_to_job(row)
+            finally:
+                db.close()
 
     def set_enabled(self, job_id: str, enabled: bool) -> Job:
         """Pause (``enabled=False``) or resume (``enabled=True``) a job in place.
@@ -853,47 +866,48 @@ class LocalScheduler:
         already passed is left untouched — the next tick fires it, same as a normal
         past-due one-shot. Unknown id raises ``ValueError`` (like ``update_job``);
         returns the updated ``Job``."""
-        db = self._connect()
-        try:
-            db.execute("BEGIN IMMEDIATE")
-            row = db.execute(
-                "SELECT * FROM jobs WHERE id = ? AND agent_name = ?",
-                (job_id, self.agent_name),
-            ).fetchone()
-            if row is None:
-                raise ValueError(f"no job {job_id!r} to set_enabled")
-            if enabled and is_cron(row["schedule"]):
-                # Recompute from now so a job paused for a week doesn't fire every
-                # missed slot at once when it resumes (raises on a hand-edited bad
-                # schedule — caught like update_job's recompute, before the write).
-                next_fire = _compute_next_fire(row["schedule"], tz=row["timezone"] if "timezone" in row.keys() else None)
-                db.execute(
-                    "UPDATE jobs SET enabled = ?, next_fire = ? WHERE id = ? AND agent_name = ?",
-                    (int(enabled), next_fire, job_id, self.agent_name),
-                )
-                # Resume moves the slot, not the running occurrence's ownership.
-                # Carry only claims that still owned the row before this move;
-                # an explicit schedule edit must keep fencing off late results.
-                db.execute(
-                    "UPDATE occurrences SET expected_next = ? WHERE job_id = ? "
-                    "AND created_at = ? AND expected_next = ?",
-                    (next_fire, job_id, row["created_at"], row["next_fire"]),
-                )
-            else:
-                # Pausing (any schedule) or resuming a one-shot: only flip the flag.
-                # A past-due one-shot keeps its next_fire so the next tick fires it.
-                db.execute(
-                    "UPDATE jobs SET enabled = ? WHERE id = ? AND agent_name = ?",
-                    (int(enabled), job_id, self.agent_name),
-                )
-            db.commit()
-            updated = db.execute(
-                "SELECT * FROM jobs WHERE id = ? AND agent_name = ?",
-                (job_id, self.agent_name),
-            ).fetchone()
-            return _row_to_job(updated)
-        finally:
-            db.close()
+        with self._lock:
+            db = self._connect()
+            try:
+                db.execute("BEGIN IMMEDIATE")
+                row = db.execute(
+                    "SELECT * FROM jobs WHERE id = ? AND agent_name = ?",
+                    (job_id, self.agent_name),
+                ).fetchone()
+                if row is None:
+                    raise ValueError(f"no job {job_id!r} to set_enabled")
+                if enabled and is_cron(row["schedule"]):
+                    # Recompute from now so a job paused for a week doesn't fire every
+                    # missed slot at once when it resumes (raises on a hand-edited bad
+                    # schedule — caught like update_job's recompute, before the write).
+                    next_fire = _compute_next_fire(row["schedule"], tz=row["timezone"] if "timezone" in row.keys() else None)
+                    db.execute(
+                        "UPDATE jobs SET enabled = ?, next_fire = ? WHERE id = ? AND agent_name = ?",
+                        (int(enabled), next_fire, job_id, self.agent_name),
+                    )
+                    # Resume moves the slot, not the running occurrence's ownership.
+                    # Carry only claims that still owned the row before this move;
+                    # an explicit schedule edit must keep fencing off late results.
+                    db.execute(
+                        "UPDATE occurrences SET expected_next = ? WHERE job_id = ? "
+                        "AND created_at = ? AND expected_next = ?",
+                        (next_fire, job_id, row["created_at"], row["next_fire"]),
+                    )
+                else:
+                    # Pausing (any schedule) or resuming a one-shot: only flip the flag.
+                    # A past-due one-shot keeps its next_fire so the next tick fires it.
+                    db.execute(
+                        "UPDATE jobs SET enabled = ? WHERE id = ? AND agent_name = ?",
+                        (int(enabled), job_id, self.agent_name),
+                    )
+                db.commit()
+                updated = db.execute(
+                    "SELECT * FROM jobs WHERE id = ? AND agent_name = ?",
+                    (job_id, self.agent_name),
+                ).fetchone()
+                return _row_to_job(updated)
+            finally:
+                db.close()
 
     def list_jobs(self) -> list[Job]:
         db = self._connect()
@@ -1171,6 +1185,11 @@ class LocalScheduler:
         """
         own_db = db is None
         db = db or self._connect()
+        # Own the write only when we opened the connection; a supplied db means the
+        # caller already holds the per-file lock (#5122) — re-acquiring it here would
+        # deadlock (threading.Lock is not reentrant).
+        if own_db:
+            self._lock.acquire()
         try:
             if own_db:
                 db.execute("BEGIN IMMEDIATE")
@@ -1234,7 +1253,10 @@ class LocalScheduler:
             log.exception("[scheduler] could not record the fire outcome for job %s", job.id)
         finally:
             if own_db:
-                db.close()
+                try:
+                    db.close()
+                finally:
+                    self._lock.release()
 
     def _settle_cron_expiry(self, job: Job, *, db: sqlite3.Connection | None = None) -> bool:
         """Post-fire bookkeeping for a recurring job (#2992): increment its
@@ -1244,6 +1266,11 @@ class LocalScheduler:
         delete commits with the caller's transaction, so publish after that."""
         own_db = db is None
         db = db or self._connect()
+        # Own the write only when we opened the connection; a supplied db means the
+        # caller already holds the per-file lock (#5122) — re-acquiring it here would
+        # deadlock (threading.Lock is not reentrant).
+        if own_db:
+            self._lock.acquire()
         try:
             if own_db:
                 db.execute("BEGIN IMMEDIATE")
@@ -1276,51 +1303,56 @@ class LocalScheduler:
             return False
         finally:
             if own_db:
-                db.close()
+                try:
+                    db.close()
+                finally:
+                    self._lock.release()
 
     def _increment_fire_count(self, job_id: str) -> int:
         """Bump ``fire_count`` for a fired job and return the new value (0 if
         the row vanished — e.g. cancelled mid-turn — so no expiry triggers)."""
-        db = self._connect()
-        try:
-            db.execute(
-                "UPDATE jobs SET fire_count = fire_count + 1 WHERE id = ? AND agent_name = ?",
-                (job_id, self.agent_name),
-            )
-            db.commit()
-            row = db.execute(
-                "SELECT fire_count FROM jobs WHERE id = ? AND agent_name = ?",
-                (job_id, self.agent_name),
-            ).fetchone()
-            return int(row["fire_count"]) if row else 0
-        except sqlite3.DatabaseError:
-            log.exception("[scheduler] fire_count increment failed for job %s", job_id)
-            return 0
-        finally:
-            db.close()
+        with self._lock:
+            db = self._connect()
+            try:
+                db.execute(
+                    "UPDATE jobs SET fire_count = fire_count + 1 WHERE id = ? AND agent_name = ?",
+                    (job_id, self.agent_name),
+                )
+                db.commit()
+                row = db.execute(
+                    "SELECT fire_count FROM jobs WHERE id = ? AND agent_name = ?",
+                    (job_id, self.agent_name),
+                ).fetchone()
+                return int(row["fire_count"]) if row else 0
+            except sqlite3.DatabaseError:
+                log.exception("[scheduler] fire_count increment failed for job %s", job_id)
+                return 0
+            finally:
+                db.close()
 
     def _delete_job(
         self, job_id: str, *, next_fire: str | None = None, created_at: str | None = None
     ) -> bool:
         """True only when a row was actually removed — a scoped delete that missed (a
         wait-chain resume rescheduled the job mid-turn, #2751) must not read as settled."""
-        db = self._connect()
-        try:
-            if next_fire is not None:
-                cur = db.execute(
-                    "DELETE FROM jobs WHERE id = ? AND agent_name = ? AND next_fire = ? "
-                    "AND (? IS NULL OR created_at = ?)",
-                    (job_id, self.agent_name, next_fire, created_at, created_at),
-                )
-            else:
-                cur = db.execute("DELETE FROM jobs WHERE id = ? AND agent_name = ?", (job_id, self.agent_name))
-            db.commit()
-            return cur.rowcount > 0
-        except sqlite3.DatabaseError:
-            log.exception("[scheduler] delete failed for job %s", job_id)
-            return False
-        finally:
-            db.close()
+        with self._lock:
+            db = self._connect()
+            try:
+                if next_fire is not None:
+                    cur = db.execute(
+                        "DELETE FROM jobs WHERE id = ? AND agent_name = ? AND next_fire = ? "
+                        "AND (? IS NULL OR created_at = ?)",
+                        (job_id, self.agent_name, next_fire, created_at, created_at),
+                    )
+                else:
+                    cur = db.execute("DELETE FROM jobs WHERE id = ? AND agent_name = ?", (job_id, self.agent_name))
+                db.commit()
+                return cur.rowcount > 0
+            except sqlite3.DatabaseError:
+                log.exception("[scheduler] delete failed for job %s", job_id)
+                return False
+            finally:
+                db.close()
 
     def _context_execution_held(self, context_id: str) -> bool:
         """Armed-watch continuations live in the watch store, not jobs.db. Consulted by
@@ -1357,7 +1389,12 @@ class LocalScheduler:
 
     def _claim_occurrence(self, job: Job, *, advance_at: datetime | None = None) -> str | None:
         """Commit intent BEFORE any send. A crash after commit is deliberately unknown."""
+        # Hold the shared per-file write lock (#5122) around this BEGIN IMMEDIATE
+        # transaction so a same-process waiter queues on it instead of losing SQLite's
+        # busy-handler poll. Acquired explicitly (not via ``with``) to keep this long
+        # body un-reindented; released after close in the finally.
         db = self._connect()
+        self._lock.acquire()
         try:
             db.execute("BEGIN IMMEDIATE")
             row = db.execute("SELECT * FROM jobs WHERE id = ? AND agent_name = ?",
@@ -1449,7 +1486,10 @@ class LocalScheduler:
             log.exception("[scheduler] occurrence claim failed for %s; not sending", job.id)
             return None
         finally:
-            db.close()
+            try:
+                db.close()
+            finally:
+                self._lock.release()
 
     def _owns_occurrence(self, db: sqlite3.Connection, job: Job) -> bool:
         row = db.execute("SELECT created_at, next_fire FROM jobs WHERE id = ? AND agent_name = ?",
@@ -1460,39 +1500,40 @@ class LocalScheduler:
         return bool(row and row["created_at"] == job.created_at and row["next_fire"] == expected)
 
     def _finish_dispatch(self, job: Job, state: str) -> None:
-        db = self._connect()
-        try:
-            db.execute("BEGIN IMMEDIATE")
-            claim = db.execute(
-                "SELECT state FROM occurrences WHERE job_id = ? AND next_fire = ? AND created_at = ?",
-                (job.id, job.next_fire, job.created_at),
-            ).fetchone()
-            if claim and claim["state"] == "settled":
-                return
-            if state == "running" and self._owns_occurrence(db, job):
-                # A turn that outlived the bounded fire wait has no outcome yet, and
-                # nothing may read as an error (#5106): restore the pre-claim value
-                # even over the bounded wait's interim "pending" diagnostic.
-                db.execute(
-                    "UPDATE jobs SET last_error = (SELECT previous_error FROM occurrences "
-                    "WHERE job_id = ? AND next_fire = ? AND created_at = ?) WHERE id = ?",
-                    (job.id, job.next_fire, job.created_at, job.id),
-                )
-            elif state != "unknown" and self._owns_occurrence(db, job):
-                # Cancellation and refused connections preserve the preceding outcome.
-                db.execute(
-                    "UPDATE jobs SET last_error = (SELECT previous_error FROM occurrences "
-                    "WHERE job_id = ? AND next_fire = ? AND created_at = ?) WHERE id = ? AND last_error = ?",
-                    (job.id, job.next_fire, job.created_at, job.id, _DELIVERY_UNKNOWN),
-                )
-            db.execute("UPDATE occurrences SET state = ? WHERE job_id = ? AND next_fire = ? AND created_at = ? AND state != 'settled'",
-                       (state, job.id, job.next_fire, job.created_at))
-            db.commit()
-        except sqlite3.DatabaseError:
-            # Leaving 'claimed' is safe: recovery must not resend it.
-            log.exception("[scheduler] could not settle occurrence for %s", job.id)
-        finally:
-            db.close()
+        with self._lock:
+            db = self._connect()
+            try:
+                db.execute("BEGIN IMMEDIATE")
+                claim = db.execute(
+                    "SELECT state FROM occurrences WHERE job_id = ? AND next_fire = ? AND created_at = ?",
+                    (job.id, job.next_fire, job.created_at),
+                ).fetchone()
+                if claim and claim["state"] == "settled":
+                    return
+                if state == "running" and self._owns_occurrence(db, job):
+                    # A turn that outlived the bounded fire wait has no outcome yet, and
+                    # nothing may read as an error (#5106): restore the pre-claim value
+                    # even over the bounded wait's interim "pending" diagnostic.
+                    db.execute(
+                        "UPDATE jobs SET last_error = (SELECT previous_error FROM occurrences "
+                        "WHERE job_id = ? AND next_fire = ? AND created_at = ?) WHERE id = ?",
+                        (job.id, job.next_fire, job.created_at, job.id),
+                    )
+                elif state != "unknown" and self._owns_occurrence(db, job):
+                    # Cancellation and refused connections preserve the preceding outcome.
+                    db.execute(
+                        "UPDATE jobs SET last_error = (SELECT previous_error FROM occurrences "
+                        "WHERE job_id = ? AND next_fire = ? AND created_at = ?) WHERE id = ? AND last_error = ?",
+                        (job.id, job.next_fire, job.created_at, job.id, _DELIVERY_UNKNOWN),
+                    )
+                db.execute("UPDATE occurrences SET state = ? WHERE job_id = ? AND next_fire = ? AND created_at = ? AND state != 'settled'",
+                           (state, job.id, job.next_fire, job.created_at))
+                db.commit()
+            except sqlite3.DatabaseError:
+                # Leaving 'claimed' is safe: recovery must not resend it.
+                log.exception("[scheduler] could not settle occurrence for %s", job.id)
+            finally:
+                db.close()
 
     def _claim_due_jobs(self, now: datetime) -> list[Job]:
         db = self._connect()
@@ -1517,21 +1558,22 @@ class LocalScheduler:
 
     def _reschedule_or_delete(self, job: Job, *, fired_at: datetime) -> None:
         """Cron jobs roll forward; one-shot jobs are deleted."""
-        db = self._connect()
-        try:
-            if is_cron(job.schedule):
-                next_iso = _compute_next_fire(job.schedule, after=fired_at, tz=job.timezone)
-                db.execute(
-                    "UPDATE jobs SET next_fire = ?, last_fire = ? WHERE id = ?",
-                    (next_iso, fired_at.isoformat(), job.id),
-                )
-            else:
-                db.execute("DELETE FROM jobs WHERE id = ?", (job.id,))
-            db.commit()
-        except sqlite3.DatabaseError:
-            log.exception("[scheduler] reschedule failed for job %s", job.id)
-        finally:
-            db.close()
+        with self._lock:
+            db = self._connect()
+            try:
+                if is_cron(job.schedule):
+                    next_iso = _compute_next_fire(job.schedule, after=fired_at, tz=job.timezone)
+                    db.execute(
+                        "UPDATE jobs SET next_fire = ?, last_fire = ? WHERE id = ?",
+                        (next_iso, fired_at.isoformat(), job.id),
+                    )
+                else:
+                    db.execute("DELETE FROM jobs WHERE id = ?", (job.id,))
+                db.commit()
+            except sqlite3.DatabaseError:
+                log.exception("[scheduler] reschedule failed for job %s", job.id)
+            finally:
+                db.close()
 
     def _recover_missed_fires(self) -> None:
         """Roll past-due jobs forward on startup.
@@ -1544,7 +1586,11 @@ class LocalScheduler:
           than dropping them.
         """
         cutoff_recent = datetime.now(UTC) - timedelta(seconds=_MISSED_FIRE_WINDOW_S)
+        # Hold the shared per-file write lock (#5122) for this BEGIN-less read/modify/write
+        # recovery pass; acquired explicitly (not via ``with``) to keep this long body
+        # un-reindented, released after close in the finally.
         db = self._connect()
+        self._lock.acquire()
         try:
             # Make permanent quarantine loud: a claim with no task handle can never be
             # reconciled or resent, so an operator should see WHICH jobs carry one.
@@ -1639,7 +1685,10 @@ class LocalScheduler:
         except sqlite3.DatabaseError:
             log.exception("[scheduler] missed-fire recovery failed")
         finally:
-            db.close()
+            try:
+                db.close()
+            finally:
+                self._lock.release()
 
     def _publish_turn(
         self,
@@ -1702,8 +1751,10 @@ class LocalScheduler:
 
     def _remember_task(self, job: Job, task_id: str) -> None:
         # Commit before awaiting another network operation. Failure leaves the
-        # original claim quarantined; it must never become a retryable send.
-        with closing(self._connect()) as db, db:
+        # original claim quarantined; it must never become a retryable send. The shared
+        # per-file write lock (#5122) wraps the connection so it releases only after the
+        # transaction commits and the connection closes (reverse-order context exit).
+        with self._lock, closing(self._connect()) as db, db:
             db.execute(
                 "UPDATE occurrences SET task_id = ? WHERE job_id = ? AND next_fire = ? AND created_at = ?",
                 (task_id, job.id, job.next_fire, job.created_at),
@@ -1731,7 +1782,10 @@ class LocalScheduler:
         failure = _a2a_turn_failure(payload) if terminal else ""
         canceled = state in {"canceled", "cancelled"}
         settled_action = ""  # the job ROW was removed — published only after the commit below
-        with closing(self._connect()) as db, db:
+        # Shared per-file write lock (#5122) around the whole transaction; the inner
+        # _record_fire_outcome/_settle_cron_expiry run on this same db (own_db=False) and
+        # must NOT re-acquire the non-reentrant lock.
+        with self._lock, closing(self._connect()) as db, db:
             db.execute("BEGIN IMMEDIATE")
             claim = db.execute(
                 "SELECT state, previous_error FROM occurrences WHERE job_id = ? AND next_fire = ? AND created_at = ?",
@@ -1988,55 +2042,57 @@ class LocalScheduler:
         own claim transaction (D7): a crash during the resume still counts, so the
         next boot goes to the operator instead of looping. False when the row moved on
         or already spent its one resume."""
-        db = self._connect()
-        try:
-            db.execute("BEGIN IMMEDIATE")
-            row = db.execute(
-                "SELECT auto_resumes FROM occurrences WHERE job_id = ? AND next_fire = ? "
-                f"AND created_at = ? AND state IN ({_UNRESOLVED_STATES_SQL})",
-                (claim["job_id"], claim["next_fire"], claim["created_at"]),
-            ).fetchone()
-            if row is None or int(row["auto_resumes"] or 0) >= 1:
+        with self._lock:
+            db = self._connect()
+            try:
+                db.execute("BEGIN IMMEDIATE")
+                row = db.execute(
+                    "SELECT auto_resumes FROM occurrences WHERE job_id = ? AND next_fire = ? "
+                    f"AND created_at = ? AND state IN ({_UNRESOLVED_STATES_SQL})",
+                    (claim["job_id"], claim["next_fire"], claim["created_at"]),
+                ).fetchone()
+                if row is None or int(row["auto_resumes"] or 0) >= 1:
+                    return False
+                db.execute(
+                    "UPDATE occurrences SET auto_resumes = auto_resumes + 1 "
+                    "WHERE job_id = ? AND next_fire = ? AND created_at = ?",
+                    (claim["job_id"], claim["next_fire"], claim["created_at"]),
+                )
+                db.commit()
+                return True
+            except sqlite3.DatabaseError:
+                log.exception("[scheduler] could not claim the automatic resume for %s", claim["job_id"])
                 return False
-            db.execute(
-                "UPDATE occurrences SET auto_resumes = auto_resumes + 1 "
-                "WHERE job_id = ? AND next_fire = ? AND created_at = ?",
-                (claim["job_id"], claim["next_fire"], claim["created_at"]),
-            )
-            db.commit()
-            return True
-        except sqlite3.DatabaseError:
-            log.exception("[scheduler] could not claim the automatic resume for %s", claim["job_id"])
-            return False
-        finally:
-            db.close()
+            finally:
+                db.close()
 
     def _mark_interrupted_occurrence(self, claim: sqlite3.Row, state: str, diagnostic: str) -> bool:
         """Move an interrupted claim to its D7 disposition — never 'settled', never
         'failed', never resent. CAS on the unresolved states so a claim something else
         settled meanwhile is left alone. The job row's ``last_error`` gets the same
         diagnostic so the operator surface says why nothing ran."""
-        db = self._connect()
-        try:
-            db.execute("BEGIN IMMEDIATE")
-            cur = db.execute(
-                "UPDATE occurrences SET state = ?, diagnostic = ? "
-                "WHERE job_id = ? AND next_fire = ? AND created_at = ? "
-                f"AND state IN ({_UNRESOLVED_STATES_SQL})",
-                (state, diagnostic, claim["job_id"], claim["next_fire"], claim["created_at"]),
-            )
-            if cur.rowcount:
-                db.execute(
-                    "UPDATE jobs SET last_error = ? WHERE id = ? AND created_at = ?",
-                    (diagnostic, claim["job_id"], claim["created_at"]),
+        with self._lock:
+            db = self._connect()
+            try:
+                db.execute("BEGIN IMMEDIATE")
+                cur = db.execute(
+                    "UPDATE occurrences SET state = ?, diagnostic = ? "
+                    "WHERE job_id = ? AND next_fire = ? AND created_at = ? "
+                    f"AND state IN ({_UNRESOLVED_STATES_SQL})",
+                    (state, diagnostic, claim["job_id"], claim["next_fire"], claim["created_at"]),
                 )
-            db.commit()
-            return cur.rowcount > 0
-        except sqlite3.DatabaseError:
-            log.exception("[scheduler] could not mark interrupted occurrence for %s", claim["job_id"])
-            return False
-        finally:
-            db.close()
+                if cur.rowcount:
+                    db.execute(
+                        "UPDATE jobs SET last_error = ? WHERE id = ? AND created_at = ?",
+                        (diagnostic, claim["job_id"], claim["created_at"]),
+                    )
+                db.commit()
+                return cur.rowcount > 0
+            except sqlite3.DatabaseError:
+                log.exception("[scheduler] could not mark interrupted occurrence for %s", claim["job_id"])
+                return False
+            finally:
+                db.close()
 
     # ── the operator's Resume / Re-run / Drop on a held occurrence (D7, S7) ──
 
@@ -2065,34 +2121,35 @@ class LocalScheduler:
         diagnostic = "dropped by the operator after a restart interruption (ADR 0129 D7)"
         settled_action = ""
         dropped = False
-        db = self._connect()
-        try:
-            db.execute("BEGIN IMMEDIATE")
-            dropped = db.execute(
-                "UPDATE occurrences SET state = 'settled', task_state = 'dropped', diagnostic = ? "
-                "WHERE job_id = ? AND next_fire = ? AND created_at = ? AND state = 'interrupted_needs_operator'",
-                (diagnostic, job_id, next_fire, created_at),
-            ).rowcount > 0
-            if dropped:
-                row = db.execute(
-                    "SELECT schedule FROM jobs WHERE id = ? AND created_at = ? AND agent_name = ?",
-                    (job_id, created_at, self.agent_name),
-                ).fetchone()
-                if row is not None and is_cron(row["schedule"]):
-                    db.execute(
-                        "UPDATE jobs SET last_error = ? WHERE id = ? AND created_at = ?",
-                        (diagnostic, job_id, created_at),
-                    )
-                elif row is not None and db.execute(
-                    "DELETE FROM jobs WHERE id = ? AND created_at = ?", (job_id, created_at)
-                ).rowcount > 0:
-                    settled_action = "finished"
-            db.commit()
-        except sqlite3.DatabaseError:
-            log.exception("[scheduler] could not drop the interrupted occurrence for %s", job_id)
-            return False
-        finally:
-            db.close()
+        with self._lock:
+            db = self._connect()
+            try:
+                db.execute("BEGIN IMMEDIATE")
+                dropped = db.execute(
+                    "UPDATE occurrences SET state = 'settled', task_state = 'dropped', diagnostic = ? "
+                    "WHERE job_id = ? AND next_fire = ? AND created_at = ? AND state = 'interrupted_needs_operator'",
+                    (diagnostic, job_id, next_fire, created_at),
+                ).rowcount > 0
+                if dropped:
+                    row = db.execute(
+                        "SELECT schedule FROM jobs WHERE id = ? AND created_at = ? AND agent_name = ?",
+                        (job_id, created_at, self.agent_name),
+                    ).fetchone()
+                    if row is not None and is_cron(row["schedule"]):
+                        db.execute(
+                            "UPDATE jobs SET last_error = ? WHERE id = ? AND created_at = ?",
+                            (diagnostic, job_id, created_at),
+                        )
+                    elif row is not None and db.execute(
+                        "DELETE FROM jobs WHERE id = ? AND created_at = ?", (job_id, created_at)
+                    ).rowcount > 0:
+                        settled_action = "finished"
+                db.commit()
+            except sqlite3.DatabaseError:
+                log.exception("[scheduler] could not drop the interrupted occurrence for %s", job_id)
+                return False
+            finally:
+                db.close()
         if settled_action:
             self._publish_job_settled(job_id, settled_action)
         return dropped
@@ -2103,35 +2160,36 @@ class LocalScheduler:
         new occurrence with new message identity, from the job's own prompt. Never a
         resend of the interrupted dispatch. CAS on the held state (exactly once); the
         fresh claim then re-serializes against the execution owner like any fire."""
-        db = self._connect()
-        try:
-            db.execute("BEGIN IMMEDIATE")
-            cur = db.execute(
-                "UPDATE occurrences SET state = 'settled', task_state = 'failed', diagnostic = ? "
-                "WHERE job_id = ? AND next_fire = ? AND created_at = ? AND state = 'interrupted_needs_operator'",
-                (
-                    "superseded by an operator re-run after a restart interruption (ADR 0129 D7); "
-                    "the original dispatch was never recovered",
-                    job_id, next_fire, created_at,
-                ),
-            )
-            if cur.rowcount:
-                db.execute(
-                    "UPDATE jobs SET next_fire = ?, last_error = ? WHERE id = ? AND created_at = ? "
-                    "AND agent_name = ?",
+        with self._lock:
+            db = self._connect()
+            try:
+                db.execute("BEGIN IMMEDIATE")
+                cur = db.execute(
+                    "UPDATE occurrences SET state = 'settled', task_state = 'failed', diagnostic = ? "
+                    "WHERE job_id = ? AND next_fire = ? AND created_at = ? AND state = 'interrupted_needs_operator'",
                     (
-                        datetime.now(UTC).isoformat(),
-                        "re-run by the operator after a restart interruption (ADR 0129 D7)",
-                        job_id, created_at, self.agent_name,
+                        "superseded by an operator re-run after a restart interruption (ADR 0129 D7); "
+                        "the original dispatch was never recovered",
+                        job_id, next_fire, created_at,
                     ),
                 )
-            db.commit()
-            return cur.rowcount > 0
-        except sqlite3.DatabaseError:
-            log.exception("[scheduler] could not re-run the interrupted occurrence for %s", job_id)
-            return False
-        finally:
-            db.close()
+                if cur.rowcount:
+                    db.execute(
+                        "UPDATE jobs SET next_fire = ?, last_error = ? WHERE id = ? AND created_at = ? "
+                        "AND agent_name = ?",
+                        (
+                            datetime.now(UTC).isoformat(),
+                            "re-run by the operator after a restart interruption (ADR 0129 D7)",
+                            job_id, created_at, self.agent_name,
+                        ),
+                    )
+                db.commit()
+                return cur.rowcount > 0
+            except sqlite3.DatabaseError:
+                log.exception("[scheduler] could not re-run the interrupted occurrence for %s", job_id)
+                return False
+            finally:
+                db.close()
 
     def release_interrupted_occurrence(
         self, job_id: str, next_fire: str, created_at: str, *,
@@ -2148,35 +2206,36 @@ class LocalScheduler:
         outstanding continuation and wedge the owner's other fires. A recurring job keeps
         its row — only ``last_error`` changes."""
         settled_action = ""
-        db = self._connect()
-        try:
-            db.execute("BEGIN IMMEDIATE")
-            cur = db.execute(
-                "UPDATE occurrences SET state = ?, task_state = COALESCE(?, task_state), diagnostic = ? "
-                "WHERE job_id = ? AND next_fire = ? AND created_at = ? AND state = 'interrupted_needs_operator'",
-                (state, task_state, diagnostic, job_id, next_fire, created_at),
-            )
-            if cur.rowcount and state == "settled":
-                row = db.execute(
-                    "SELECT schedule FROM jobs WHERE id = ? AND created_at = ? AND agent_name = ?",
-                    (job_id, created_at, self.agent_name),
-                ).fetchone()
-                if row is not None and is_cron(row["schedule"]):
-                    db.execute(
-                        "UPDATE jobs SET last_error = ? WHERE id = ? AND created_at = ?",
-                        (diagnostic, job_id, created_at),
-                    )
-                elif row is not None and db.execute(
-                    "DELETE FROM jobs WHERE id = ? AND created_at = ?", (job_id, created_at)
-                ).rowcount > 0:
-                    settled_action = "finished"
-            db.commit()
-            released = cur.rowcount > 0
-        except sqlite3.DatabaseError:
-            log.exception("[scheduler] could not release the interrupted occurrence for %s", job_id)
-            return False
-        finally:
-            db.close()
+        with self._lock:
+            db = self._connect()
+            try:
+                db.execute("BEGIN IMMEDIATE")
+                cur = db.execute(
+                    "UPDATE occurrences SET state = ?, task_state = COALESCE(?, task_state), diagnostic = ? "
+                    "WHERE job_id = ? AND next_fire = ? AND created_at = ? AND state = 'interrupted_needs_operator'",
+                    (state, task_state, diagnostic, job_id, next_fire, created_at),
+                )
+                if cur.rowcount and state == "settled":
+                    row = db.execute(
+                        "SELECT schedule FROM jobs WHERE id = ? AND created_at = ? AND agent_name = ?",
+                        (job_id, created_at, self.agent_name),
+                    ).fetchone()
+                    if row is not None and is_cron(row["schedule"]):
+                        db.execute(
+                            "UPDATE jobs SET last_error = ? WHERE id = ? AND created_at = ?",
+                            (diagnostic, job_id, created_at),
+                        )
+                    elif row is not None and db.execute(
+                        "DELETE FROM jobs WHERE id = ? AND created_at = ?", (job_id, created_at)
+                    ).rowcount > 0:
+                        settled_action = "finished"
+                db.commit()
+                released = cur.rowcount > 0
+            except sqlite3.DatabaseError:
+                log.exception("[scheduler] could not release the interrupted occurrence for %s", job_id)
+                return False
+            finally:
+                db.close()
         if settled_action:
             self._publish_job_settled(job_id, settled_action)
         return released
@@ -2258,7 +2317,7 @@ class LocalScheduler:
                 "(context %r); holding the job", job.id, session_id,
             )
             try:
-                with closing(self._connect()) as db, db:
+                with self._lock, closing(self._connect()) as db, db:
                     db.execute(
                         "UPDATE jobs SET execution_hold = ? WHERE id = ? AND created_at = ?",
                         ("missing execution owner; fire refused, not sent", job.id, job.created_at),
