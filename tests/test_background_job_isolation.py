@@ -129,7 +129,8 @@ def _occurrence(path, job_id: str, next_fire: str | None = None) -> sqlite3.Row 
 
 
 def _unresolved_occurrences(path) -> list[tuple]:
-    return [tuple(r) for r in _query(path, "SELECT job_id, state FROM occurrences WHERE state IN ('claimed', 'unknown')")]
+    return [tuple(r) for r in _query(
+        path, "SELECT job_id, state FROM occurrences WHERE state IN ('claimed', 'unknown', 'running')")]
 
 # ── the deterministic model boundary ──────────────────────────────────────────────
 
@@ -507,7 +508,7 @@ async def test_parked_job_is_never_superseded_and_background_waits_stay_isolated
     _route_httpx_to(_capture_app(events, job_states), monkeypatch)
 
     scheduler = _make_scheduler(tmp_path, "iso-supersede")
-    scheduler._fire_timeout_s = 0.3  # the parked fire goes UNKNOWN quickly; claim + handle stay
+    scheduler._fire_timeout_s = 0.3  # the parked fire goes RUNNING quickly; claim + handle stay
     monkeypatch.setattr(rs.STATE, "scheduler", scheduler, raising=False)
     wait_tool = next(t for t in _build_scheduler_tools(scheduler) if t.name == "wait")
 
@@ -516,12 +517,14 @@ async def test_parked_job_is_never_superseded_and_background_waits_stay_isolated
         first = scheduler.add_job("park me", _past_iso(), job_id="job-parked")
         owner = first.context_id
         assert owner.startswith("job:")
-        # The REAL fire path parks: accepted (task handle recorded), unresolved.
+        # The REAL fire path parks: accepted (task handle recorded), unresolved. Wait
+        # for the post-timeout 'running' state, which is stable for the row-equality
+        # check below (the interim 'claimed'/'unknown' states last < _fire_timeout_s).
         parked = await _wait_until(
             lambda: (
-                lambda row: row if row and row["task_id"] and row["state"] in ("claimed", "unknown") else None
+                lambda row: row if row and row["task_id"] and row["state"] == "running" else None
             )(_occurrence(scheduler.path, "job-parked")),
-            message="the fire accepted and stayed unresolved (parked)",
+            message="the fire accepted and stayed unresolved (parked, running)",
         )
 
         # An unrelated job starts within the documented bound while the park holds.

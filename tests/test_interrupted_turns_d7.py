@@ -334,7 +334,7 @@ def _boot_generation(tmp_path, monkeypatch, coord: _Coordinator, saver, agent: s
     sched = LocalScheduler(
         agent_name=agent, invoke_url="http://127.0.0.1:7870", api_key="k", bearer_token="b", db_dir=tmp_path
     )
-    sched._fire_timeout_s = 0.5  # a blocked turn's claim goes 'unknown' fast, handle retained
+    sched._fire_timeout_s = 0.5  # a blocked turn's claim goes 'running' fast, handle retained
     _wire_state(monkeypatch, graph=graph, tmp_path=tmp_path, app=app, scheduler=sched, task_engine=store.engine)
     _route_httpx_to(app, monkeypatch)
     return SimpleNamespace(store=store, graph=graph, app=app, sched=sched, interrupted=set())
@@ -379,9 +379,9 @@ async def _restart(tmp_path, monkeypatch, coord: _Coordinator, saver, agent: str
 
 async def _accepted_unresolved_claim(sched, job_id: str, next_fire: str | None = None) -> sqlite3.Row:
     return await _wait_until(
-        lambda: (lambda row: row if row and row["task_id"] and row["state"] in ("claimed", "unknown") else None)(
-            _occurrence(sched.path, job_id, next_fire)
-        ),
+        lambda: (
+            lambda row: row if row and row["task_id"] and row["state"] in ("claimed", "unknown", "running") else None
+        )(_occurrence(sched.path, job_id, next_fire)),
         message=f"{job_id}: fire accepted (task handle committed) and unresolved",
     )
 
@@ -771,7 +771,7 @@ async def test_stale_wait_continuation_goes_to_operator_not_completed(tmp_path, 
             (
                 r
                 for r in _query(gen1.sched.path, "SELECT * FROM occurrences WHERE job_id = ?", (f"wait:{ctx}",))
-                if r["task_id"] and r["state"] in ("claimed", "unknown")
+                if r["task_id"] and r["state"] in ("claimed", "unknown", "running")
             ),
             None,
         ),
@@ -916,7 +916,7 @@ async def test_resumed_turn_parks_on_a_decision_with_a_durable_record(tmp_path, 
         # The claim stays unresolved and nothing re-fires while the decision pends.
         await _quiesce_polls(gen2.sched)
         occ = _occurrence(gen2.sched.path, "job-decide")
-        assert occ["state"] in ("claimed", "unknown")
+        assert occ["state"] in ("claimed", "unknown", "running")
         assert len(coord.views["ASK-DECISION"]) == 3  # start, killed pass, resumed ask
     finally:
         await _shutdown(coord, gen2)
