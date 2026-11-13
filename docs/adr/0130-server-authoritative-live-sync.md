@@ -46,6 +46,16 @@ The server keeps a **durable change log** per agent instance: an append-only SQL
 
 Progress frames stay live-only, as today.
 
+(S1 implementation notes: each row also stores the publish payload verbatim (up to
+64 KiB) plus the payload key the identity was named under, because today's clients —
+the deck's feed, the console's topic listeners — predate the identities-only contract
+and branch on payload fields on replay; a replayed frame is therefore identical to the
+live one, degrading to the identity-only shape only when the payload could not be
+stored. An S3 client may simply ignore the payload and refetch. And the log tracks the
+bus seq high-water across live-only frames — throttled, plus reseed slack — so a
+restarted server never re-mints a seq an outstanding `Last-Event-ID` cursor already
+holds.)
+
 - **Live:** SSE `/api/events` sends `id: <seq>`. A client resumes with `Last-Event-ID` (or `?since=`). The server replays from the log, not from a 128-entry ring.
 - **Gap:** if a client's cursor is older than retention (default 7 days or 100k entries), the server answers `resync_required`. The client then refetches the snapshots it holds: session list and open sessions' turns. It never guesses.
 - **Entity fetches:** events carry identities, not payloads. A client reacts by fetching the entity's current server state (`GET …/turns?since_seq=`, `GET /api/decisions/{id}`, …). Order is guaranteed by `seq`, and a duplicate or missed event is harmless.
