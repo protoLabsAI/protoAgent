@@ -142,6 +142,15 @@ def _clean(value: object, limit: int = 200) -> str:
     return text[:limit]
 
 
+_REPORTING_API_FIELDS = {
+    "effectiveDirective": "effective-directive",
+    "blockedURL": "blocked-uri",
+    "documentURL": "document-uri",
+    "sourceFile": "source-file",
+    "lineNumber": "line-number",
+}
+
+
 def _report_entries(body: object) -> list[dict]:
     """The violation objects in either report shape: ``{"csp-report": {...}}`` (report-uri)
     or ``[{"type": "csp-violation", "body": {...}}]`` (the Reporting API)."""
@@ -152,8 +161,9 @@ def _report_entries(body: object) -> list[dict]:
         for item in body[:20]:
             inner = item.get("body") if isinstance(item, dict) else None
             if isinstance(inner, dict):
-                # The Reporting API spells the fields in camelCase.
-                out.append({re.sub(r"([A-Z])", lambda m: "-" + m.group(1).lower(), k): v for k, v in inner.items()})
+                # The Reporting API names the same fields differently (``blockedURL``, not
+                # ``blocked-uri``).
+                out.append({_REPORTING_API_FIELDS.get(k, k): v for k, v in inner.items()})
         return out
     return []
 

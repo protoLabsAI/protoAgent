@@ -70,12 +70,12 @@ def test_csp_reports_are_logged_once_bounded_and_without_queries(tmp_path, monke
     with caplog.at_level("WARNING", logger="operator_api.web"):
         assert c.post("/csp-report", json=report).status_code == 204
         assert c.post("/csp-report", json=report).status_code == 204  # the same pair: logged once
-        api = [{"type": "csp-violation", "body": {"effectiveDirective": "script-src-elem", "blockedURL": "inline"}}]
+        api = [{"type": "csp-violation", "body": {"effectiveDirective": "script-src-elem", "blockedURL": "https://cdn.example/x.js"}}]
         c.post("/csp-report", json=api)
         c.post("/csp-report", content=b"{" + b" " * 20000 + b"}")  # oversized: ignored
     lines = [r.getMessage() for r in caplog.records if "[console-csp]" in r.getMessage()]
     assert len(lines) == 2 and "SECRET" not in lines[0] and "blocked-uri=https://x.example/p.png" in lines[0]
-    assert "effective-directive=script-src-elem" in lines[1]
+    assert "effective-directive=script-src-elem" in lines[1] and "blocked-uri=https://cdn.example/x.js" in lines[1]
 
 
 def test_mount_react_app_noops_when_dist_is_missing(tmp_path) -> None:
