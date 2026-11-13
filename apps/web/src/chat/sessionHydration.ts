@@ -25,6 +25,7 @@ import { applyDelegateProgressTo } from "./delegateProgress";
 import { attachmentDisplay, displayWithoutThumbnailNames, validThumbnails } from "./imageThumbnails";
 import { rendersText, replaceText, textRuns } from "./parts";
 import { isEmptyPlaceholder, replyClaimsAnswer, roomReplyBubble } from "./roomBubble";
+import { clearServerTurnsFor, serverTurnStartedEpoch, serverTurnStartedEpochs } from "./server-turn-store";
 import { localTurnInFlight, reconcileSessionStatus } from "./sessionLiveness";
 import { isTaskCanceled, isTaskFailed, isTaskPaused, isTaskTerminal } from "./taskState";
 import { applyComponent, applyDecisionIdentity, applyReasoning, applyText, applyToolEvent, applyUsage, pauseBubble, stopBubble } from "./turnReducers";
@@ -629,6 +630,47 @@ function recordChangeSeq(summary: DurableChatSession): void {
   if (seen === undefined || seq > seen) changeSeqSeen.set(summary.session_id, seq);
 }
 
+/** Render the server's authoritative session state (ADR 0130 D1/D5): the server owns each
+ *  chat's liveness and the console follows it, rather than inferring it from local producers.
+ *
+ *  When the server reports a session IDLE — no live task — any local belief that a turn is
+ *  running there is stale and is dropped: the server-turn typing indicator, the server-turn
+ *  control (which locks the composer and routes the next send as a steer), and a lingering
+ *  "streaming" status all return to idle. This is what un-sticks a session whose server turn
+ *  was lost to a restart and so never got a `turn.finished` to settle it (bd-0ad5v): nothing
+ *  else hands the status back, and the next message would otherwise be swallowed as a steer
+ *  against a turn the server does not report.
+ *
+ *  A turn THIS window is itself streaming (`localTurnInFlight`) is an optimistic local draw the
+ *  server has not caught up to yet (D1) — left to its own producer to settle. `running` and
+ *  `paused` keep their existing producers (a live stream / reattach, a parked HITL bubble). An
+ *  older server that sends no `status` (the field is absent) keeps today's local inference.
+ *
+ *  `startedEpochAtRead` is this session's {@link serverTurnStartedEpoch} captured BEFORE the index
+ *  request was issued (snapshotted via {@link serverTurnStartedEpochs}). The idle snapshot is
+ *  applied only AFTER that request resolves and the per-session turn fetches await, so a
+ *  `turn.started` that arms this session DURING either window — the request in flight, or the
+ *  turn fetches — is NEWER than the baseline: clearing its indicator and composer lock would wipe
+ *  a live turn no `turn.finished` ever restores, and the follow-up resync that `turn.started`
+ *  queued would read `running` and restore nothing (the next send then races it as a competing
+ *  turn, not a steer). When the epoch has advanced past the captured value, the snapshot is stale
+ *  and the clear is skipped — the per-task freshness guard that `turn.finished` keeps
+ *  (ServerTurnWatch), expressed for a snapshot that names no task. Omitting `startedEpochAtRead`
+ *  (a caller applying a summary it just read) imposes no such guard. */
+export function applyServerSessionState(summary: DurableChatSession, startedEpochAtRead?: number): void {
+  const status = summary.status;
+  if (typeof status !== "string" || !status) return; // pre-S2 server: no authoritative state
+  if (status !== "idle" || summary.live_task_id) return; // only the unambiguous "nothing live" signal
+  const sessionId = summary.session_id;
+  if (localTurnInFlight(sessionId)) return; // this window's own optimistic turn owns it
+  // A newer `turn.started` armed this session after the index snapshot was read — it is live now,
+  // and this stale idle snapshot must not clear it (see the doc comment above).
+  if (startedEpochAtRead !== undefined && serverTurnStartedEpoch(sessionId) !== startedEpochAtRead) return;
+  clearServerTurnsFor(sessionId); // the #1767 indicator — a lost turn never fired `turn.finished`
+  chatStore.clearServerTurnControl(sessionId); // the composer lock / steer target (bd-0ad5v)
+  reconcileSessionStatus(sessionId); // hand a lingering "streaming" status back to idle
+}
+
 /** Fetch only server-only, locally empty, render-stale, or BEHIND-the-server sessions
  * (isBehindServer or the `last_change_seq` backstop), with bounded fan-out. `full` forces a
  * re-read of EVERY locally-held session's turns — the `resync_required` response (ADR 0130
@@ -636,6 +678,13 @@ function recordChangeSeq(summary: DurableChatSession): void {
  * Every read is best-effort: an offline/cold fleet member leaves local chat
  * untouched and will be tried again on the next full page boot. */
 export async function hydrateDurableChatSessions(opts: { full?: boolean } = {}): Promise<void> {
+  // Freshness baseline captured BEFORE the index request is issued (ADR 0130 D5): the idle render
+  // below runs only AFTER the request resolves AND the per-session turn fetches await, so a
+  // `turn.started` arming a session during EITHER window — the index request in flight, or the
+  // turn fetches — is newer than this baseline and must survive it. Capturing it after the
+  // request resolved would fold an in-flight-request start into the baseline and wipe a live turn
+  // (review round 2). Snapshot the whole map once; per-session values are read out below.
+  const startedEpochsAtIssue = serverTurnStartedEpochs();
   let summaries: DurableChatSession[];
   try {
     const [newest, parked] = await Promise.all([
@@ -647,6 +696,11 @@ export async function hydrateDurableChatSessions(opts: { full?: boolean } = {}):
   } catch {
     return;
   }
+  // The per-session baseline for applyServerSessionState: absent sessions read as 0, matching
+  // serverTurnStartedEpoch's default, so a first `turn.started` (which sets 1) shows as newer.
+  const startedEpochAtRead = new Map(
+    summaries.map((summary) => [summary.session_id, startedEpochsAtIssue.get(summary.session_id) ?? 0]),
+  );
   const eligibility = new Map<string, HydrationEligibility>();
   const local = new Map(chatStore.getSnapshot().sessions.map((session) => [session.id, session]));
   const wanted = summaries.filter((summary) => {
@@ -724,6 +778,14 @@ export async function hydrateDurableChatSessions(opts: { full?: boolean } = {}):
         return token ? [token] : [];
       }),
     );
+  }
+  // Render the server's authoritative session state for every session in the index (D1/D5),
+  // AFTER the transcript reconcile above has settled any stranded preview: a session the
+  // server reports idle drops its server-turn indicator, composer lock and streaming status
+  // here, so no client shows a session live that the server does not (bd-0ad5v). The captured
+  // started-epoch guards against clearing a turn that armed during the fetch window above.
+  for (const summary of summaries) {
+    applyServerSessionState(summary, startedEpochAtRead.get(summary.session_id));
   }
 }
 

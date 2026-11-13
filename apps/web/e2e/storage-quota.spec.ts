@@ -57,6 +57,17 @@ const test = base.extend({
   },
 });
 
+// WebKit raises a `pageerror` for a fetch the navigation tears down while it is still in
+// flight — "<url> due to access control checks." — even when the caller has a rejection
+// handler, exactly as the "classifies a handled unload fetch" characterization below
+// documents. The reload loops here DELIBERATELY destroy the document mid-hydration (the ADR
+// 0104 boot session-index read and a restored chat's `/directives` read are in flight when
+// the next reload fires), so this engine artifact can always land. It is not a console error
+// — the crash, composer and retained-message assertions are what prove the console survived —
+// so strip ONLY this one teardown shape before the zero-error assertion; every other error is
+// kept, and on Chromium (no such message) the arrays are unchanged.
+const withoutNavTeardownFetchErrors = (errors: string[]) =>
+  errors.filter((message) => !/due to access control checks/.test(message));
 
 // ADR 0114 slice 1 — a full browser-storage quota never crashes the console.
 //
@@ -137,7 +148,7 @@ test("boots, navigates and reloads with localStorage filled to the real quota", 
   }
   await expect(page.getByPlaceholder(/Message protoAgent/i)).toBeVisible();
   await expect(page.locator(".app-crash")).toHaveCount(0);
-  expect(errors).toEqual([]);
+  expect(withoutNavTeardownFetchErrors(errors)).toEqual([]);
 });
 
 test("the simulateQuotaBytes dev flag fails writes without crashing", async ({ page }) => {
@@ -376,5 +387,5 @@ test("migrates all 2400 legacy messages and retains them through ten reloads", a
       await page.reload();
     }
   }
-  expect(errors).toEqual([]);
+  expect(withoutNavTeardownFetchErrors(errors)).toEqual([]);
 });

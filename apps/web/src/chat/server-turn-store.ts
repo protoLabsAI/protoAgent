@@ -62,6 +62,15 @@ const counts = new Map<string, number>();
 const labels = new Map<string, string>();
 const listeners = new Set<() => void>();
 
+// A monotonic per-session counter bumped every time a `turn.started` arms this session (ADR
+// 0130 D5). It is the FRESHNESS stamp the server-authoritative idle render compares against:
+// that render reads the session index at the start of a hydration pass but applies it only
+// after the per-session turn fetches await, so an idle snapshot can be stale by the time it
+// lands. A `turn.started` that arms a session DURING that window advances this epoch past the
+// value captured when the index was read, and the idle clear is skipped for it — a live turn
+// is never wiped by an index snapshot older than it (sessionHydration.applyServerSessionState).
+const startedEpochs = new Map<string, number>();
+
 // Raw trigger origin per session, remembered from `turn.started` (#3028). Kept SEPARATELY
 // from the ref-counted indicator state above because it must OUTLIVE `turn.finished`: the
 // terminal `chat.resumed` — which tags its settled message so ChatMessageView renders it as a
@@ -166,7 +175,29 @@ export function noteTurnStarted(sessionId: string, label: string) {
   if (!sessionId) return;
   counts.set(sessionId, (counts.get(sessionId) ?? 0) + 1);
   labels.set(sessionId, label);
+  // Advance the freshness stamp so an in-flight idle render that read the index before this
+  // turn armed cannot clear it (see startedEpochs).
+  startedEpochs.set(sessionId, (startedEpochs.get(sessionId) ?? 0) + 1);
   emit();
+}
+
+/** The monotonic count of `turn.started`s this console has seen for `sessionId` (0 if none).
+ *  Captured when the session index is read so a later idle render can tell a turn that armed
+ *  AFTER the snapshot — which it must not clear — from one the snapshot already reflects. */
+export function serverTurnStartedEpoch(sessionId: string): number {
+  return startedEpochs.get(sessionId) ?? 0;
+}
+
+/** A point-in-time COPY of every session's started-epoch — the freshness baseline for the
+ *  server-authoritative idle render (ADR 0130 D5). Captured BEFORE the session-index request is
+ *  issued, not after it resolves: a `turn.started` arriving while that request is in flight (the
+ *  server has already computed its snapshot, the HTTP response is not yet processed) advances the
+ *  live epoch past this copy, so the session survives the stale idle snapshot. A copy taken after
+ *  the request would fold that in-flight start into the baseline and wipe a live turn. Sessions
+ *  with no start are simply absent; {@link serverTurnStartedEpoch} reads them as 0, and a first
+ *  `turn.started` moves them to 1 — above this baseline's `?? 0` default. */
+export function serverTurnStartedEpochs(): Map<string, number> {
+  return new Map(startedEpochs);
 }
 
 // Server turns this console has been told ENDED, by task id, per session. The ref-count above
@@ -205,6 +236,21 @@ export function noteTurnFinished(sessionId: string, taskId = "") {
   emit();
 }
 
+/** Drop the in-flight indicator for ONE session outright — the server reports it idle (ADR
+ *  0130 D1/D5), so whatever `turn.started` armed here is over, however many turns the
+ *  ref-count still believes are running. A server restart loses a turn with no `turn.finished`
+ *  to decrement the count (bd-0ad5v), and nothing else would ever clear the indicator; this is
+ *  the authoritative render of server state doing it. The remembered origin is left in place
+ *  for a trailing `chat.resumed` to tag a settled result, exactly as `turn.finished` leaves it.
+ *  Returns whether an indicator was showing. */
+export function clearServerTurnsFor(sessionId: string): boolean {
+  if (!sessionId || (counts.get(sessionId) ?? 0) <= 0) return false;
+  counts.delete(sessionId);
+  labels.delete(sessionId);
+  emit();
+  return true;
+}
+
 /** Test/reset hook — drop all in-flight state (including remembered origins). */
 export function resetServerTurns() {
   counts.clear();
@@ -212,6 +258,7 @@ export function resetServerTurns() {
   origins.clear();
   ended.clear();
   endedEpochs.clear();
+  startedEpochs.clear();
   emit();
 }
 
