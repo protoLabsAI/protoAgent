@@ -675,20 +675,39 @@ _ACTIVE_TURNS: int = 0
 _LAST_TURN_MONOTONIC: float = 0.0
 
 
+def _session_state() -> ModuleType:
+    """``server.session_state``, resolved at call time like :func:`_chat` — the bracket
+    below is this module's only ``server`` collaborator besides the chat drivers."""
+    return importlib.import_module("server.session_state")
+
+
 def _turn_started(session_id: str = "") -> None:
     global _ACTIVE_TURNS, _LAST_TURN_MONOTONIC
     _ACTIVE_TURNS += 1
     _LAST_TURN_MONOTONIC = time.monotonic()
     # Per-session half of the same bracket: the busy signal `GET /api/chat/sessions/{id}`
     # reports as `active` (the Zed shim waits on it instead of interleaving two turns).
-    _turn_activity.begin(session_id)
+    # The 0→1 edge is the session's idle/paused→running transition (ADR 0130 S2):
+    # `session.changed` publishes from the SAME bracket every driver passes through,
+    # so a local, server-started, steer-restarted or resumed turn all announce alike.
+    if _turn_activity.begin(session_id):
+        try:
+            _session_state().note_turn_started(session_id)
+        except Exception:  # noqa: BLE001 — the live-sync event must never break the bracket
+            log.exception("[session-state] turn-start publish failed for %s", session_id)
 
 
 def _turn_ended(session_id: str = "") -> None:
     global _ACTIVE_TURNS, _LAST_TURN_MONOTONIC
     _ACTIVE_TURNS = max(0, _ACTIVE_TURNS - 1)
     _LAST_TURN_MONOTONIC = time.monotonic()
-    _turn_activity.end(session_id)
+    # The →0 edge: the session's end state (idle, or paused when the leg parked) is
+    # derived against the task store inside note_turn_ended, not guessed here.
+    if _turn_activity.end(session_id):
+        try:
+            _session_state().note_turn_ended(session_id)
+        except Exception:  # noqa: BLE001 — the live-sync event must never break the bracket
+            log.exception("[session-state] turn-end publish failed for %s", session_id)
     # The last in-flight turn just settled — the moment a queued priority-now inbox page
     # can run. The kick is a cheap no-op unless one may be pending (in-memory hint), and
     # it must never break the turn bracket.

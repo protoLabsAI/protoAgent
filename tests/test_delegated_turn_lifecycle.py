@@ -167,6 +167,9 @@ def published(monkeypatch):
     monkeypatch.setattr(a2a._event_bus, "publish", lambda t, d=None, **kw: out.append((t, d)))
     # Keep the chat-progress bridge out of it: these frames are about the lifecycle pair.
     monkeypatch.setattr(a2a, "_publish_chat_progress", lambda *a, **k: None)
+    # The park's session.changed below is deterministic because conftest's autouse
+    # `_reset_session_state` fixture clears the ADR 0130 S2 dedupe state around every test,
+    # whatever ran earlier in the process.
     return out
 
 
@@ -238,6 +241,7 @@ def test_a_park_and_its_resume_publish_one_balanced_pair(published):
     a2a._a2a_progress("ctx-1", "task-1", {"phase": "turn_ended", "origin": "a2a", "state": "completed"})
     assert [t for t, _ in published] == [
         "turn.started",
+        "session.changed",  # the park is a session transition too (ADR 0130 S2: paused)
         "turn.input_required",
         "turn.resumed",
         "turn.finished",

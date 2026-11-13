@@ -1284,8 +1284,11 @@ class TestChatProgress:
                     "origin": "background-resume",
                 },
             )
-            assert len(published) == 1
-            topic, data, kw = published[0]
+            # The consumed steer first carries the session's change feed (ADR 0130 S2,
+            # every origin) and then mirrors as chat.progress for the held server stream.
+            assert [t for t, _d, _kw in published] == ["session.changed", "chat.progress"]
+            assert published[0][1]["reason"] == "steer_consumed"
+            topic, data, kw = published[1]
             assert topic == "chat.progress"
             assert kw == {"retain": False}
             assert data["phase"] == "steer_consumed"
@@ -1298,18 +1301,22 @@ class TestChatProgress:
     def test_consumed_marker_without_usable_items_is_not_published(self, monkeypatch):
         a2a, published = self._capture(monkeypatch)
         a2a._a2a_progress("chat-7", "t", {"phase": "steer_consumed", "items": [{"id": "x"}], "origin": "scheduler"})
-        assert published == []
+        # The session feed still carries the consumed-steer boundary (ADR 0130 S2), but
+        # with no usable items there is no chat.progress mirror to republish.
+        assert [t for t, _d, _kw in published] == ["session.changed"]
 
     def test_operator_turn_consumed_marker_is_not_republished(self, monkeypatch):
         """A browser-owned turn already carries the marker inline on its own stream —
-        republishing it would settle the same interjection twice."""
+        republishing it as chat.progress would settle the same interjection twice. The
+        session feed still announces the consumed steer so OTHER devices resettle their
+        queued bubbles (ADR 0130 S2: every origin)."""
         a2a, published = self._capture(monkeypatch)
         a2a._a2a_progress(
             "chat-7",
             "t",
             {"phase": "steer_consumed", "items": [{"id": "m", "text": "hi"}], "origin": "operator"},
         )
-        assert published == []
+        assert [t for t, _d, _kw in published] == ["session.changed"]
 
     def test_long_tool_output_is_previewed(self, monkeypatch):
         a2a, published = self._capture(monkeypatch)
@@ -1351,12 +1358,20 @@ class TestHitlTurnEvents:
         published: list = []
         monkeypatch.setattr(a2a._event_bus, "publish", lambda t, d=None: published.append((t, d)))
         a2a._a2a_progress("chat-session-1", "task-9", {"phase": "input_required", "prompt": "Approve the merge?"})
-        assert published == [
-            (
-                "turn.input_required",
-                {"task_id": "task-9", "context_id": "chat-session-1", "prompt": "Approve the merge?"},
-            )
-        ]
+        # The park first announces the session's paused transition (ADR 0130 S2) — one
+        # `session.changed` naming the parked task — then the HITL bus frame. The
+        # transition carries a wall-clock `updated_at`, so match it field-by-field.
+        assert [t for t, _ in published] == ["session.changed", "turn.input_required"]
+        paused = published[0][1]
+        assert (paused["session_id"], paused["status"], paused["live_task_id"]) == (
+            "chat-session-1",
+            "paused",
+            "task-9",
+        )
+        assert published[1] == (
+            "turn.input_required",
+            {"task_id": "task-9", "context_id": "chat-session-1", "prompt": "Approve the merge?"},
+        )
 
     def test_input_required_prompt_clipped(self, monkeypatch):
         import server.a2a as a2a
@@ -1364,8 +1379,10 @@ class TestHitlTurnEvents:
         published: list = []
         monkeypatch.setattr(a2a._event_bus, "publish", lambda t, d=None: published.append((t, d)))
         a2a._a2a_progress("s", "t", {"phase": "input_required", "prompt": "x" * 1000})
-        assert len(published) == 1
-        assert len(published[0][1]["prompt"]) == 300
+        # The paused `session.changed` leads (ADR 0130 S2); the clipped prompt rides the
+        # HITL frame that follows it.
+        assert [t for t, _ in published] == ["session.changed", "turn.input_required"]
+        assert len(published[1][1]["prompt"]) == 300
 
     def test_background_input_required_publishes_and_skips_job_plumbing(self, monkeypatch):
         import server.a2a as a2a

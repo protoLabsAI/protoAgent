@@ -16,6 +16,11 @@ def _client(monkeypatch, *, graph=object(), goal=None, chat_reply=None, seen=Non
     import operator_api.chat_routes as cr
     import runtime.state as rs
 
+    # The ADR 0130 S2 state fields ride the session routes; the autouse
+    # `_reset_session_state` fixture in conftest clears `server.session_state`'s process
+    # globals around every test, so an earlier test file cannot leak a `last_change_seq`
+    # into the exact-body asserts below.
+
     async def _fake_chat(
         message, session_id, *, model=None, incognito=False, hitl_resume=False, images=None, origin="local", **_kw
     ):
@@ -723,6 +728,11 @@ def test_session_summary_route_without_a_task_store_reports_known(monkeypatch):
         "turn_count": None,
         "last_updated": None,
         "last_state": None,
+        # ADR 0130 S2 server-held state: derivable from the turn lock alone here.
+        "status": "idle",
+        "live_task_id": None,
+        "last_change_seq": None,
+        "updated_at": None,
     }
 
 
@@ -1309,6 +1319,11 @@ def test_session_index_is_bounded_recent_and_grouped(monkeypatch, tmp_path):
                 "last_updated": "2026-08-19T12:03:00+00:00",
                 "turn_count": 2,
                 "last_task_id": "a-2",
+                # ADR 0130 S2 server-held state (newest turn settled, nothing in flight).
+                "status": "idle",
+                "live_task_id": None,
+                "last_change_seq": None,
+                "updated_at": "2026-08-19T12:03:00+00:00",
             }
         ]
     }
@@ -1382,7 +1397,16 @@ def test_session_index_names_the_newest_created_turn_and_skips_tombstones(monkey
     monkeypatch.setattr(rs.STATE, "a2a_task_engine", engine, raising=False)
     rows = _client(monkeypatch).get("/api/chat/sessions").json()["sessions"]
     assert rows == [
-        {"session_id": "chat-a", "last_updated": "2026-08-19T12:05:00+00:00", "turn_count": 2, "last_task_id": "new"}
+        {
+            "session_id": "chat-a",
+            "last_updated": "2026-08-19T12:05:00+00:00",
+            "turn_count": 2,
+            "last_task_id": "new",
+            "status": "idle",
+            "live_task_id": None,
+            "last_change_seq": None,
+            "updated_at": "2026-08-19T12:05:00+00:00",
+        }
     ]
 
 

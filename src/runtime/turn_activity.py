@@ -29,22 +29,30 @@ _HOLDERS: dict[str, str] = {}
 _HELD_SINCE: dict[str, float] = {}
 
 
-def begin(session_id: str) -> None:
+def begin(session_id: str) -> bool:
+    """Count a turn in. True on the 0→1 edge — the session just became active (ADR 0130
+    S2: the bracket publishes ``session.changed`` only on the edges, so two overlapped
+    drivers on one session read as ONE running stretch)."""
     if not session_id:
-        return
+        return False
     with _LOCK:
-        _ACTIVE[session_id] = _ACTIVE.get(session_id, 0) + 1
+        n = _ACTIVE.get(session_id, 0) + 1
+        _ACTIVE[session_id] = n
+        return n == 1
 
 
-def end(session_id: str) -> None:
+def end(session_id: str) -> bool:
+    """Count a turn out. True on the →0 edge — the session just went quiet. An
+    unbalanced end (nothing counted in) stays False: the session was already idle."""
     if not session_id:
-        return
+        return False
     with _LOCK:
-        n = _ACTIVE.get(session_id, 0) - 1
-        if n > 0:
-            _ACTIVE[session_id] = n
-        else:
-            _ACTIVE.pop(session_id, None)
+        had = _ACTIVE.get(session_id, 0)
+        if had > 1:
+            _ACTIVE[session_id] = had - 1
+            return False
+        _ACTIVE.pop(session_id, None)
+        return had == 1
 
 
 def is_active(session_id: str) -> bool:
