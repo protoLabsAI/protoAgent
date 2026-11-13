@@ -13,7 +13,7 @@ import { createServer } from "node:http";
 import { CODE_ROOTS, fsDiffResponse, fsFileResponse } from "./codeFixtures.mjs";
 import { HEAVY_PDF_ID, heavyPdf } from "./pdfFixture.mjs";
 import { readFile, stat } from "node:fs/promises";
-import { readFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, readFileSync } from "node:fs";
 import { extname, join, normalize } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -75,6 +75,26 @@ import {
 
 const PORT = Number(process.argv[2] || process.env.E2E_PORT || 4319);
 const DIST = fileURLToPath(new URL("../dist", import.meta.url));
+// The console CSP (bd-9ih.13), ENFORCED here: the server reports it by default, but the e2e suite
+// runs the whole console under the policy, so anything it would break fails a test. Built with
+// the console (dist/csp.json); `E2E_CSP=off` serves without it. A violation that breaks nothing
+// visible still fails the run: every report is appended to CSP_VIOLATIONS, which the global
+// teardown (e2e/csp-teardown.mjs) checks.
+const CSP_VIOLATIONS = fileURLToPath(new URL("../test-results/csp-violations.jsonl", import.meta.url));
+try {
+  mkdirSync(fileURLToPath(new URL("../test-results", import.meta.url)), { recursive: true });
+} catch {
+  /* exists */
+}
+const CONSOLE_CSP = (() => {
+  if (process.env.E2E_CSP === "off") return "";
+  try {
+    const { directives } = JSON.parse(readFileSync(join(DIST, "csp.json"), "utf8"));
+    return `${Object.entries(directives).map(([k, v]) => [k, ...v].join(" ")).join("; ")}; report-uri /csp-report`;
+  } catch {
+    return "";
+  }
+})();
 // The in-tree artifact plugin (plugins/artifact) — its shell page, shell.js and vendored libs
 // are served as-is so artifact-panel.spec.ts drives the REAL srcdoc builder.
 const ARTIFACT_PLUGIN = fileURLToPath(new URL("../../../plugins/artifact/", import.meta.url));
@@ -1543,7 +1563,13 @@ async function handleLivePark(res, body, prompt, sessionId) {
   return true;
 }
 
-async function serveStatic(pathname, res) {
+// The policy is left off where production sends none: the desktop shell (`?__apiPort=` — the
+// Tauri webview loads its bundled console, no header) and a test that asks (`x-e2e-csp: off`).
+function wantsCsp(req, search) {
+  return Boolean(CONSOLE_CSP) && !/[?&]__apiPort=/.test(search || "") && req?.headers?.["x-e2e-csp"] !== "off";
+}
+
+async function serveStatic(pathname, res, req = null, search = "") {
   // The SPA is built with base "/app/". Map "/app/x" → dist/x, root-level
   // assets pass through, unknown app routes fall back to index.html (SPA).
   let rel = pathname.startsWith("/app/") ? pathname.slice("/app/".length) : pathname.replace(/^\//, "");
@@ -1573,7 +1599,9 @@ async function serveStatic(pathname, res) {
       res.end(html);
       return;
     }
-    res.writeHead(200, { "content-type": MIME[extname(filePath)] || "application/octet-stream" });
+    const head = { "content-type": MIME[extname(filePath)] || "application/octet-stream" };
+    if (filePath.endsWith("index.html") && wantsCsp(req, search)) head["content-security-policy"] = CONSOLE_CSP;
+    res.writeHead(200, head);
     res.end(data);
   } catch {
     res.writeHead(404).end("not found");
@@ -1622,6 +1650,20 @@ function recordLifecycle(req, res, pathname) {
 
 const server = createServer(async (req, res) => {
   const url = new URL(req.url, `http://localhost:${PORT}`);
+  if (url.pathname === "/csp-report" && req.method === "POST") {
+    let body = "";
+    for await (const chunk of req) {
+      body += chunk;
+      if (body.length > 16384) break;
+    }
+    try {
+      appendFileSync(CSP_VIOLATIONS, body.replace(/\s+/g, " ") + "\n");
+    } catch {
+      /* the teardown reports a missing file as clean */
+    }
+    res.writeHead(204).end();
+    return;
+  }
   if (url.pathname === "/__e2e/request-lifecycle" && req.method === "GET") {
     return sendJson(res, requestLifecycles.get(req.headers["x-e2e-lifecycle"]) ?? []);
   }
@@ -3458,7 +3500,7 @@ const server = createServer(async (req, res) => {
   if (req.method !== "GET") {
     return sendJson(res, { detail: "method not allowed" }, 405);
   }
-  return serveStatic(pathname, res);
+  return serveStatic(pathname, res, req, url.search);
 });
 
 server.listen(PORT, "127.0.0.1", () => {

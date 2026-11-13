@@ -95,6 +95,10 @@ _PUBLIC_FILES = frozenset({"/healthz", "/app", "/manifest.json", "/favicon.svg",
 # this.
 _PUBLIC_EXACT = frozenset(
     {
+        # The console's Content-Security-Policy violation reports (bd-9ih.13). A browser sends
+        # them without credentials, so the endpoint can't ask for any. It only LOGS a bounded,
+        # sanitized summary (``operator_api.web``) — nothing is stored or returned.
+        "/csp-report",
         # Device pairing claim (ADR 0087 D4) — UNAUTHENTICATED BY NECESSITY: obtaining auth
         # is its entire purpose, so it cannot require it. The only credential-minting path
         # on the allowlist, guarded in `security.devices` instead: high-entropy short-lived

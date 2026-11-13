@@ -9,6 +9,10 @@ const PORT = Number(process.env.E2E_PORT || 4319);
 const BASE = process.env.FLOW_BASE_URL || `http://127.0.0.1:${PORT}`;
 
 export default defineConfig({
+  // The console CSP (bd-9ih.13): the mock server enforces it and logs any violation; the teardown
+  // fails the run if anything was blocked.
+  globalSetup: "./e2e/csp-setup.mjs",
+  globalTeardown: "./e2e/csp-teardown.mjs",
   testDir: "./e2e",
   testMatch: "**/*.spec.ts",
   fullyParallel: true,
