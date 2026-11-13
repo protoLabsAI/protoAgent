@@ -717,30 +717,8 @@ textarea {
    unread count rides as the DS `badge` slot (.pl-tab__badge). Local .stage-subnav
    + .subnav-badge retired. */
 
-/* Inbox styles — folded into src/activity/activity.css with the unified feed (#3029),
-   except .inbox-pri* below, which stay here since the completed-entry provenance badge
-   renders them too (the unified feed's pending items reuse the same classes). */
-.inbox-pri {
-  font-size: var(--pl-font-size-3xs);
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  font-weight: 600;
-  padding: 1px var(--pl-space-1_5);
-  border-radius: var(--pl-radius-lg);
-  color: var(--pl-color-fg-on-accent);
-}
-
-.inbox-pri-now {
-  background: var(--pl-color-status-error);
-}
-
-.inbox-pri-next {
-  background: var(--pl-color-accent);
-}
-
-.inbox-pri-later {
-  background: var(--pl-color-fg-subtle);
-}
+/* Inbox styles — folded into src/activity/activity.css with the unified feed (#3029);
+   the last survivors, .inbox-pri*, retired with the OriginProvenance row (feed slice 7). */
 
 /* Live event-stream indicator (ADR 0003) — retired with the standalone inbox surface (#3029). */
 
