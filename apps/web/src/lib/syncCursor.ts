@@ -1,7 +1,10 @@
 // The live-sync change-feed cursor (ADR 0130 D3): the highest bus seq this origin has
-// rendered for an agent, so the console's one EventSource resumes with `Last-Event-ID` /
-// `?since=` after a reconnect, a tab regaining focus, an agent switch or a wake from sleep —
-// and never replays or skips the durable change log.
+// rendered for an agent, so the console's one EventSource resumes from exactly where it left
+// off after a reconnect, a tab regaining focus, an agent switch or a wake from sleep — and
+// never replays or skips the durable change log. The transport (lib/events.ts) tears the
+// stream down and reopens it with this seq as the `?since=` query param rather than relying on
+// EventSource's native `Last-Event-ID` reconnect (the auth token expires, so the native retry
+// would reuse a stale one); the server honors both (`?since=` OR `Last-Event-ID`).
 //
 // Two layers, so the transport (lib/events.ts) can read a cursor SYNCHRONOUSLY at connect
 // time while it still survives a closed tab:
@@ -79,6 +82,20 @@ export function rememberCursor(slug: string, seq: number): void {
   writeKey("session", cursorStorageKey(slug), String(seq)); // best-effort: live-only if it fails
   const store = storeFor();
   if (store) void store.putCursor(slug, seq).catch(() => {});
+}
+
+/** Force the resume cursor to exactly `seq`, even when it is LOWER than the current one — the
+ *  `resync_required` reset (ADR 0130 D3). The server hands back its own current seq as the
+ *  authoritative resume point, and a wiped or foreign log can put that BELOW a stale high
+ *  cursor; honoring it (past `rememberCursor`'s monotonic guard, and through all three layers
+ *  so a reload or new tab agrees) is what stops the next reconnect from re-triggering
+ *  `resync_required` forever. Never throws. */
+export function resetCursor(slug: string, seq: number): void {
+  if (!Number.isFinite(seq) || seq < 0) return;
+  cache.set(slug, seq);
+  writeKey("session", cursorStorageKey(slug), String(seq)); // best-effort: live-only if it fails
+  const store = storeFor();
+  if (store) void store.putCursor(slug, seq).catch(() => {}); // putCursor is non-monotonic by design
 }
 
 /** Fold the durable IndexedDB cursor into the cache, newest wins, and return the resolved

@@ -8,6 +8,7 @@ import {
   hydrateCursor,
   loadCursor,
   rememberCursor,
+  resetCursor,
   setSyncCursorStore,
 } from "./syncCursor";
 
@@ -51,6 +52,28 @@ describe("syncCursor", () => {
     expect(loadCursor("host")).toBeNull();
   });
 
+  it("resetCursor forces the resume point DOWN past the monotonic guard (the resync_required reset)", () => {
+    rememberCursor("roxy", 500);
+    // The server resumed us at a LOWER seq (a wiped / foreign log) — the cursor must follow it
+    // down, or every reconnect re-triggers resync_required forever.
+    resetCursor("roxy", 12);
+    expect(loadCursor("roxy")).toBe(12);
+    expect(window.sessionStorage.getItem("protoagent.events.since:roxy")).toBe("12");
+    // A fresh module (new tab / reload) reads the reset point from the mirror, not the stale 500.
+    __resetSyncCursorForTests();
+    expect(loadCursor("roxy")).toBe(12);
+    // Live frames climb again from there, monotonically.
+    rememberCursor("roxy", 13);
+    expect(loadCursor("roxy")).toBe(13);
+  });
+
+  it("resetCursor ignores a non-finite or negative seq", () => {
+    rememberCursor("host", 9);
+    resetCursor("host", Number.NaN);
+    resetCursor("host", -1);
+    expect(loadCursor("host")).toBe(9);
+  });
+
   describe("durable IndexedDB layer", () => {
     let factory: IDBFactory;
     let store: TranscriptStore;
@@ -87,6 +110,20 @@ describe("syncCursor", () => {
       window.sessionStorage.clear();
       rememberCursor("host", 3);
       expect(await hydrateCursor("host")).toBe(3);
+    });
+
+    it("resetCursor lowers the durable store too, so a reopened tab resumes from the reset (D3)", async () => {
+      rememberCursor("host", 500);
+      await vi.waitFor(async () => expect(await store.loadCursor("host")).toBe(500));
+      resetCursor("host", 12); // resync_required: the server's authoritative, lower resume point
+      await vi.waitFor(async () => expect(await store.loadCursor("host")).toBe(12));
+
+      // A reopened tab reads only the durable store — it must see 12, not the stale high 500,
+      // or hydrateCursor's max() would re-raise the cursor and the resync loop would persist.
+      __resetSyncCursorForTests();
+      setSyncCursorStore(() => store);
+      window.sessionStorage.clear();
+      expect(await hydrateCursor("host")).toBe(12);
     });
   });
 });

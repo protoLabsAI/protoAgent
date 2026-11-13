@@ -404,6 +404,10 @@ test("mobile: AuthGate pairs this phone from a typed code (16px input, 44px targ
 
 // ── #4336 S7.5: the home origin's offline notice on the phone shell (ADR 0121 D1) ────────
 test("mobile shell: a paired phone whose home stops answering is shown its other addresses", async ({ page }) => {
+  // The notice probes the phone's other addresses for an "answering" hint. Those are fixture
+  // origins here; under an enforced console CSP the probe only reaches the agent's configured
+  // public URLs (connect-src), so this runs without the policy (the server reports it by default).
+  await page.setExtraHTTPHeaders({ "x-e2e-csp": "off" });
   await page.addInitScript(() => {
     window.localStorage.setItem("protoagent.deviceToken", "e2e-device-token");
     window.localStorage.setItem("protoagent.deviceId", "dev-phone1");

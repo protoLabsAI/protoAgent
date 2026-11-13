@@ -18,6 +18,7 @@ import {
   hydrateDurableChatSessions,
   onServerChange,
   resetDurableResyncForTests,
+  resyncDurableChatSessions,
   watchServerChangeFeed,
 } from "./sessionHydration";
 
@@ -116,6 +117,30 @@ describe("the console sync client (ADR 0130 D3)", () => {
 
     watchServerChangeFeed();
     handlers.get("resync_required")!();
+    await vi.waitFor(() => expect(reads.mock.calls.map(([id]) => id)).toEqual([local.id]));
+  });
+
+  it("a resync_required arriving during an EXTERNAL resync still forces the full refetch (not dropped)", async () => {
+    const local = sessionWith("chat-ext", "task-z");
+    stubStore(local);
+    // The external resync (boot force:true / visibility — OUTSIDE the coalescer) hangs on its
+    // index read, so it is still in flight when the frame lands.
+    let releaseIndex!: () => void;
+    const indexGate = new Promise<void>((r) => (releaseIndex = r));
+    vi.spyOn(api, "chatSessions").mockImplementation(async () => {
+      await indexGate;
+      return { sessions: [summary(local.id, { last_task_id: "task-z" })] };
+    });
+    const reads = vi.spyOn(api, "chatSessionTurns").mockResolvedValue({ turns: [turn("task-z")], live_task_id: null });
+
+    watchServerChangeFeed();
+    const external = resyncDurableChatSessions({ force: true }); // non-full, outside the coalescer
+    handlers.get("resync_required")!(); // onServerChange({ full: true }) while the external one runs
+
+    releaseIndex();
+    await external; // the external (non-full, in-step) resync reads no turns
+    // Gating onServerChange on resyncInFlight used to drop this; the drain now waits the external
+    // resync out and runs a FRESH full resync, which re-reads the in-step session's turns.
     await vi.waitFor(() => expect(reads.mock.calls.map(([id]) => id)).toEqual([local.id]));
   });
 

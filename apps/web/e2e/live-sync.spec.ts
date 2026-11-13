@@ -240,8 +240,9 @@ test.fail("a session the server reports idle never keeps a spinner or swallows a
 // D3/D4: network drop → reconnect and hidden → visible all converge to the server's state.
 // While one client is off the network, the other runs a whole turn; on reconnect + return
 // the away client converges to the server's transcript — the new turn exactly once, no
-// spinner, composer open. (Today this rides the ADR 0104 focus/visibility resync; S3 moves
-// it onto the cursor-resumed feed. The contract — convergence — is the same.)
+// spinner, composer open. (The S3 sync client resumes the change feed from its persisted
+// cursor on reconnect/return, with the ADR 0104 focus/visibility resync as the backstop. The
+// contract — convergence — is the same either way.)
 test("a client that dropped offline converges to the server's state on reconnect", async ({ browser, request }, testInfo) => {
   const scope = syncScope(testInfo, "drop");
   const session = "chat-sync-drop";

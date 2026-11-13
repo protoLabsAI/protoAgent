@@ -773,23 +773,46 @@ export const SYNC_TOPICS = [
 // fires `turn.completed` + two `session.changed` in a row costs one extra read, not three.
 let syncQueued = false;
 let syncFull = false;
+// Whether a drain loop is actively running. Tracked SEPARATELY from resyncInFlight: a resync
+// can be in flight from OUTSIDE the coalescer (SessionHistoryHydrator's boot `force:true`, or
+// watchDurableSessions' visibility/focus/interval resync), and in that case no drain is
+// reading `syncQueued` back. Gating onServerChange on resyncInFlight instead let a frame —
+// including `resync_required` — land during an external resync, set the flags, and never be
+// drained, silently dropping the refetch (and, for resync_required, the full re-read).
+let draining = false;
 async function drainServerChange(): Promise<void> {
-  do {
-    const full = syncFull;
-    syncQueued = false;
-    syncFull = false;
-    await resyncDurableChatSessions({ force: true, full });
-  } while (syncQueued);
+  if (draining) return;
+  draining = true;
+  try {
+    while (syncQueued) {
+      // A resync started outside the coalescer is still running: wait it out before starting
+      // ours. resyncDurableChatSessions single-flights, so calling it now would just return
+      // that in-flight promise — and if it is not `full` while our queued request IS (the
+      // resync_required path), the full re-read would be folded into it and lost. Awaiting
+      // first, then looping, lets us start a FRESH resync that carries the accumulated `full`.
+      const external = resyncInFlight;
+      if (external) {
+        await external.catch(() => {});
+        continue;
+      }
+      const full = syncFull;
+      syncQueued = false;
+      syncFull = false;
+      await resyncDurableChatSessions({ force: true, full });
+    }
+  } finally {
+    draining = false;
+  }
 }
 
 /** React to one change-feed frame: refetch the entities it names (D2). `full` (the
- *  `resync_required` path) re-reads every open session's turns. */
+ *  `resync_required` path) re-reads every open session's turns. Always queues the work and
+ *  ensures a drain is running — even when a resync started outside the coalescer is in
+ *  flight — so the refetch is never dropped. */
 export function onServerChange(opts: { full?: boolean } = {}): void {
   if (opts.full) syncFull = true;
-  if (resyncInFlight) {
-    syncQueued = true;
-    return;
-  }
+  syncQueued = true;
+  if (draining) return;
   void drainServerChange();
 }
 
@@ -835,5 +858,6 @@ export function resetDurableResyncForTests(): void {
   lastResyncAt = 0;
   syncQueued = false;
   syncFull = false;
+  draining = false;
   changeSeqSeen.clear();
 }

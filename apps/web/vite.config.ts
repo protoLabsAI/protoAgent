@@ -1,5 +1,8 @@
 import { defineConfig, loadEnv } from "vite";
 import react from "@vitejs/plugin-react";
+// The console CSP as built output (dist/csp.json): the directives in csp-policy.json plus the
+// sha256 of the streaming preview's inline script. Read by the server (scripts/csp.mjs).
+import { consoleCspPlugin } from "./scripts/csp.mjs";
 
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, new URL("../..", import.meta.url).pathname, "PROTOAGENT_");
@@ -50,7 +53,7 @@ export default defineConfig(({ mode }) => {
   };
   return {
     base: "/app/",
-    plugins: [react()],
+    plugins: [react(), consoleCspPlugin()],
     // ONE Shiki in the bundle. The DS's markdown (@streamdown/code) and the code pane's
     // @pierre/diffs (ADR 0112) both resolve shiki 3.23, but npm can't hoist it (the docs
     // site's vitepress holds the root slot with shiki 2), so each gets its own nested copy —

@@ -1,5 +1,5 @@
 import { api, apiUrl } from "./api";
-import { agentSlug, hydrateCursor, loadCursor, rememberCursor } from "./syncCursor";
+import { agentSlug, hydrateCursor, loadCursor, rememberCursor, resetCursor } from "./syncCursor";
 
 // Client for the server→client event bus (ADR 0003, extended ADR 0039). One EventSource
 // is shared for the app's lifetime. Every event arrives as an unnamed SSE frame carrying
@@ -77,9 +77,10 @@ function setConnected(next: boolean) {
   connListeners.forEach((fn) => fn(connected));
 }
 
-/** Route a raw SSE frame to matching subscribers. Returns the frame's bus seq
- *  (for `?since=` replay) or null when the frame carries none. */
-function dispatch(raw: string): number | null {
+/** Route a raw SSE frame to matching subscribers. Returns its topic and the server-assigned
+ *  seq (for `?since=` replay / the resume cursor), or null when the frame is unparseable or
+ *  carries no topic. `seq` is null for a frame the server sent without one. */
+function dispatch(raw: string): { topic: string; seq: number | null } | null {
   let frame: { topic?: string; data?: Record<string, unknown>; seq?: number } = {};
   try {
     frame = JSON.parse(raw || "{}");
@@ -108,7 +109,7 @@ function dispatch(raw: string): number | null {
       console.error(`[events] listener for ${sub.pattern} threw on ${topic}`, err);
     }
   }
-  return seq ?? null;
+  return { topic, seq: seq ?? null };
 }
 
 /** Retained frames newer than `since`, oldest→newest — the client-side counterpart of
@@ -210,10 +211,17 @@ async function connect() {
     scheduleReconnect();
   };
   es.onmessage = (event) => {
-    const seq = dispatch((event as MessageEvent).data);
-    if (seq !== null) {
-      lastSeq = seq;
-      rememberCursor(AGENT_SLUG, seq); // sessionStorage mirror + durable IndexedDB, best-effort
+    const frame = dispatch((event as MessageEvent).data);
+    if (!frame || frame.seq === null) return;
+    lastSeq = frame.seq;
+    if (frame.topic === "resync_required") {
+      // The server's authoritative resume point: it hands back its CURRENT seq, which a wiped
+      // or foreign log can put BELOW our stale cursor. Force it (past the monotonic guard) so
+      // the next reconnect resumes from here instead of re-triggering resync_required forever
+      // — the loop the server sends this to break (ADR 0130 D3; events/bus.py `_log_replay`).
+      resetCursor(AGENT_SLUG, frame.seq);
+    } else {
+      rememberCursor(AGENT_SLUG, frame.seq); // monotonic: sessionStorage mirror + durable IndexedDB
     }
   };
 }
@@ -224,7 +232,16 @@ async function connect() {
  *  D3). A hidden tab is left alone; it reconnects the moment it is shown. */
 function reconnectOnWake() {
   if (typeof document !== "undefined" && document.visibilityState === "hidden") return;
-  if (source || connecting || !wanted()) return;
+  if (connecting || !wanted()) return;
+  if (source) {
+    // An OPEN or still-CONNECTING EventSource heals itself — leave it be, so a routine focus
+    // or visibility change never churns a healthy stream. But a slept/suspended tab can land
+    // here with a DEAD source still assigned and `onerror` never fired (so it was never torn
+    // down or rescheduled): readyState is CLOSED. The old `if (source) return` wedged resume
+    // forever in exactly that case (ADR 0130 D3) — so replace it and reconnect now.
+    if (source.readyState !== 2 /* CLOSED */) return;
+    teardownSource();
+  }
   if (reconnectTimer) {
     clearTimeout(reconnectTimer);
     reconnectTimer = null;
