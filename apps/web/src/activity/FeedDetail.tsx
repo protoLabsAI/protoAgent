@@ -80,7 +80,15 @@ export function FeedDetail({
         {row.kind === "queued" ? (
           <>
             <dt>Status</dt>
-            <dd>Queued. It runs when {agentName} finishes what it's doing now. Nothing for you to do.</dd>
+            {/* Mirrors the list row (feedModel queuedRow): once the automatic retry
+               budget is spent no sweep ever runs this page again, so promising a run —
+               or "nothing for you to do" — would be false. That page sits in Work ›
+               Needs you, whose Delivery detail carries the one dismiss path. */}
+            <dd>
+              {row.item?.retries_exhausted
+                ? "Queued, but the automatic retries are used up — it will not run on its own. It needs you in Work › Needs you."
+                : `Queued. It runs when ${agentName} finishes what it's doing now. Nothing for you to do.`}
+            </dd>
           </>
         ) : row.kind === "failed" ? (
           <>

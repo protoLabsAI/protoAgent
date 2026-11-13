@@ -68,9 +68,10 @@ export function ActivitySurface({ onOpenDetail }: { onOpenDetail?: (row: FeedRow
   const agentNameRef = useRef(agentName);
 
   // The detail view (§5): clicking a row swaps the list for FeedDetail in the SAME
-  // dialog body. A host that passes `onOpenDetail` owns the detail instead (the slice-4
-  // contract, kept for alternate hosts); the Feed dialog passes nothing and uses this.
-  // `returnKey` remembers which row opened it so "← Feed" can put focus back (§8).
+  // dialog body. A host that passes `onOpenDetail` owns the detail instead — the
+  // slice-4 row contract; no production host passes it today, it survives so tests
+  // (ActivityWidget.test.tsx) can observe row clicks without mounting the detail.
+  // `returnKey` is set when the detail closes so "← Feed" can put focus back (§8).
   const [detail, setDetail] = useState<FeedRow | null>(null);
   const returnKey = useRef<string | null>(null);
   const rootRef = useRef<HTMLDivElement>(null);
@@ -198,15 +199,13 @@ export function ActivitySurface({ onOpenDetail }: { onOpenDetail?: (row: FeedRow
         onOpenDetail(row);
         return;
       }
-      returnKey.current = row.key;
       setDetail(row);
     },
     [onOpenDetail],
   );
-  const closeDetail = useCallback(() => setDetail(null), []);
-  // Back to the list: focus returns to the row that opened the detail (§8). The row can
-  // have vanished meanwhile (a queued row replaced by its live result has a new key) —
-  // fall back to the first row so focus never silently drops to <body>.
+  // Back to the list: focus returns to the row the detail was showing (§8). The row can
+  // still have vanished meanwhile (a refetch dropped it outright) — fall back to the
+  // first row so focus never silently drops to <body>.
   useEffect(() => {
     if (detail || !returnKey.current) return;
     const key = returnKey.current;
@@ -219,12 +218,34 @@ export function ActivitySurface({ onOpenDetail }: { onOpenDetail?: (row: FeedRow
   const failed = activityError || inboxError;
   const groups = groupByDay(rows);
 
-  if (detail) {
+  // The open detail re-derives from `rows` on every render — the state only remembers
+  // WHICH row was opened. So a live activity.message that replaces an open queued row
+  // (§3) carries its `entry:` row in via the item id, and the detail turns into the
+  // result (or failure) instead of showing a stale "Queued" while the live region
+  // announces the finish. The click-time snapshot is the last resort for a row a
+  // refetch dropped entirely — better the old page than a blank one.
+  const openedItemId = detail?.item?.id;
+  const detailRow = detail
+    ? (rows.find((r) => r.key === detail.key) ??
+      (openedItemId != null ? rows.find((r) => r.entry?.inbox_id === openedItemId) : undefined) ??
+      detail)
+    : null;
+
+  if (detailRow) {
     return (
       // The detail replaces the list in the SAME dialog body (§5) — the live region
       // stays out here so a queued→ran announcement still fires while reading.
       <div className="unified-feed util-dialog-fill" data-testid="unified-feed" ref={rootRef}>
-        <FeedDetail row={detail} agentName={agentName} onBack={closeDetail} />
+        <FeedDetail
+          row={detailRow}
+          agentName={agentName}
+          onBack={() => {
+            // The LIVE key, not the opening one — a replaced queued row's focus target
+            // is the entry row now standing in its place.
+            returnKey.current = detailRow.key;
+            setDetail(null);
+          }}
+        />
         <span className="feed-announce" role="status" aria-live="polite" aria-atomic="true">
           {announce}
         </span>

@@ -10,9 +10,17 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { ActivityEntry, InboxItem, RuntimeStatus } from "../lib/types";
 
-const mocks = vi.hoisted(() => ({ openDocument: vi.fn() }));
+const mocks = vi.hoisted(() => ({
+  openDocument: vi.fn(),
+  listeners: new Map<string, Array<(data: Record<string, unknown>) => void>>(),
+}));
 
-vi.mock("../lib/events", () => ({ onServerEvent: () => () => {} }));
+vi.mock("../lib/events", () => ({
+  onServerEvent: (topic: string, fn: (data: Record<string, unknown>) => void) => {
+    mocks.listeners.set(topic, [...(mocks.listeners.get(topic) ?? []), fn]);
+    return () => {};
+  },
+}));
 // The real Markdown lazily pulls the heavy pipeline — render the raw source instead.
 vi.mock("../chat/LazyMarkdown", () => ({
   Markdown: ({ children }: { children: string }) => <div className="md">{children}</div>,
@@ -68,9 +76,12 @@ async function renderFeed(opts: { items?: InboxItem[]; entries?: ActivityEntry[]
 const q = <T extends Element = Element>(sel: string) => container.querySelector<T>(sel);
 const openRow = (at = 0) =>
   act(() => container.querySelectorAll<HTMLButtonElement>(".feed-row")[at].click());
+const emit = (topic: string, data: Record<string, unknown>) =>
+  act(() => (mocks.listeners.get(topic) ?? []).forEach((fn) => fn(data)));
 
 beforeEach(() => {
   mocks.openDocument.mockClear();
+  mocks.listeners.clear();
   container = document.createElement("div");
   document.body.appendChild(container);
   root = createRoot(container);
@@ -135,6 +146,33 @@ describe("FeedDetail (via ActivitySurface) — docs/design/feed.md §5, §8", ()
       "Queued. It runs when Roxy finishes what it's doing now. Nothing for you to do.",
     );
     expect(q('[aria-label="Open in reader"]')).toBeNull();
+  });
+
+  it("a queued item whose retries are used up points at Work › Needs you, never 'nothing to do'", async () => {
+    await renderFeed({ items: [inboxItem({ retries_exhausted: true })] });
+
+    openRow();
+    const status = q(".feed-detail-fields")!.textContent!;
+    expect(status).toContain("automatic retries are used up");
+    expect(status).toContain("Work › Needs you");
+    expect(status).not.toContain("Nothing for you to do");
+  });
+
+  it("a live result replaces the open queued detail in place (§3) — no stale Queued page", async () => {
+    await renderFeed({ items: [inboxItem({ id: 7, text: "Deploy the docs" })] });
+
+    openRow();
+    expect(q(".feed-detail-fields")!.textContent).toContain("Queued.");
+
+    emit("activity.message", { text: "Docs are live.", origin: "inbox", inbox_id: 7 });
+    expect(q(".feed-detail-fields")!.textContent).not.toContain("Queued");
+    expect(q(".feed-detail-response .md")!.textContent).toBe("Docs are live.");
+    expect(q('[aria-label="Open in reader"]')).not.toBeNull();
+
+    // ← Feed now targets the entry row standing where the queued row was.
+    const back = [...container.querySelectorAll("button")].find((b) => b.textContent?.trim() === "← Feed")!;
+    act(() => back.click());
+    expect((document.activeElement as HTMLElement).getAttribute("data-key")).toBe("entry:-1");
   });
 
   it("← Feed returns to the list and puts focus back on the row that opened the detail", async () => {
