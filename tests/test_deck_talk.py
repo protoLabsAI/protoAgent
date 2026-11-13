@@ -291,6 +291,84 @@ async def test_a_second_message_while_working_steers_the_turn_not_a_new_one():
 
 
 @pytest.mark.asyncio
+async def test_a_steer_the_server_ran_as_a_fresh_turn_is_followed_not_queued():
+    """bd-0ad5v, the POST case: the member had NO live turn (this screen's stream was a
+    zombie), so the steer reply carries `started_turn` and nothing is queued. The deck
+    retires the stale exchange and follows the new task for the reply — before this the
+    bubble sat 'queued' (or settled as folded) and the answer never appeared."""
+    fake = FakeA2A(frames=canned_frames("zzz")[:2] + [status(cid="zzz")], block_after=2)
+    be = TalkBackend(a2a_client=fake)
+    be.steer_result = {"ok": True, "id": None, "pending": 0, "started_turn": "t9"}
+    app = FleetDeck(be, poll_s=0)
+    async with app.run_test(size=(120, 36)) as pilot:
+        await _open_talk(be, pilot, app)
+        sid = app.screen.convo.session_id
+        # The fresh turn's frames, under the REAL session id so they aren't foreign.
+        fake.sub_frames = [
+            {"result": {"task": {"id": "t9", "contextId": sid, "status": {"state": "TASK_STATE_SUBMITTED"}}}},
+            artifact("a fresh turn answered.", last=True, cid=sid),
+            status("TASK_STATE_COMPLETED", final=True, cid=sid),
+        ]
+        comp = app.screen.query_one("#composer", Input)
+        comp.value = "one"
+        await pilot.press("enter")
+        assert await _until(pilot, lambda: app.screen.convo.live is not None)
+        stale = app.screen.convo.live
+        comp.value = "are you there?"
+        await pilot.press("enter")
+        assert await _until(pilot, lambda: fake.subscribed == ["t9"])
+        assert await _until(pilot, lambda: app.screen.convo.live is None)
+        assert not app.screen.query(".steer-msg")  # the bubble became the new turn's exchange
+        assert stale.finished and not stale.live  # the zombie was retired, not cancelled
+        assert fake.cancelled == []
+        followed = app.screen.convo.exchanges[-1]
+        assert followed.user == "are you there?" and followed.attached and followed.origin == "steer"
+        assert any("a fresh turn answered." in str(md.source) for md in app.screen.query(Markdown))
+        await pilot.press("escape")
+        await _settle(app, pilot)
+
+
+@pytest.mark.asyncio
+async def test_a_steer_the_server_restarted_at_turn_end_is_followed_not_marked_folded():
+    """bd-0ad5v, the turn-end case: the steer was still queued when the turn ended, and the
+    SERVER restarted it as a fresh turn (`started` names that task; the id left `pending`).
+    Before this, 'missing from pending' read as folded in: the bubble said so and the reply
+    from the restart's task never showed."""
+    fake = FakeA2A(hang=True)
+    be = TalkBackend(a2a_client=fake)
+    app = FleetDeck(be, poll_s=0)
+    async with app.run_test(size=(120, 36)) as pilot:
+        await _open_talk(be, pilot, app)
+        sid = app.screen.convo.session_id
+        fake.sub_frames = [
+            {"result": {"task": {"id": "t7", "contextId": sid, "status": {"state": "TASK_STATE_SUBMITTED"}}}},
+            artifact("now B, from its own turn.", last=True, cid=sid),
+            status("TASK_STATE_COMPLETED", final=True, cid=sid),
+        ]
+        comp = app.screen.query_one("#composer", Input)
+        comp.value = "one"
+        await pilot.press("enter")
+        assert await _until(pilot, lambda: app.screen.convo.live is not None)
+        comp.value = "do B"
+        await pilot.press("enter")
+        assert await _until(pilot, lambda: any(c[0] == "steer" for c in be.calls))
+        steer_id = next(c[2] for c in be.calls if c[0] == "steer")
+        # The turn ends with the steer unread; the server has already popped it into t7.
+        be.pending_steers = []
+        be.started_steers = {steer_id: "t7"}
+        fake.hang = False
+        await pilot.press("escape")  # end the turn: its reconcile reads the started map
+        assert await _until(pilot, lambda: fake.subscribed == ["t7"])
+        assert await _until(pilot, lambda: app.screen.convo.live is None)
+        assert not app.screen.query(".steer-msg")
+        assert len(fake.sent) == 1  # never re-sent as a second turn …
+        assert not any(c[0] == "steer_cancel" for c in be.calls)  # … and never taken back
+        followed = app.screen.convo.exchanges[-1]
+        assert followed.user == "do B" and followed.attached and followed.origin == "steer"
+        assert any("now B, from its own turn." in str(md.source) for md in app.screen.query(Markdown))
+
+
+@pytest.mark.asyncio
 async def test_session_picker_replays_durable_turns_with_tool_cards():
     row = {
         "task_id": "old1",

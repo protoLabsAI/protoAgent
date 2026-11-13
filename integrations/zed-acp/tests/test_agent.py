@@ -562,6 +562,61 @@ async def test_a_steer_that_arrived_too_late_is_rerun_as_the_next_turn():
     assert conn.text().endswith("now B")
 
 
+async def test_a_steer_the_server_restarted_as_its_own_turn_is_followed_not_folded():
+    # bd-0ad5v: the turn ended without folding the steer in, and the SERVER popped it into
+    # a fresh turn of its own (GET …/steer's `started` names that task; the id is gone from
+    # `pending`). Before this, absence from `pending` read as "folded into the ended turn":
+    # the editor showed the marker and the reply to the operator's message never arrived.
+    with fa.FakeA2A() as fake:
+
+        def restart_then_end(ctx):
+            def _frame():
+                fake.steered.wait(5)
+                for sid, items in list(fake.steer_queue.items()):
+                    for item in items:
+                        fake.steer_started[item["id"]] = "t2"  # the restart's task
+                    fake.steer_queue[sid] = []
+                return fa.done(ctx)
+
+            return _frame
+
+        fake.script = lambda ctx, msg: [fa.task(ctx), fa.text(ctx, "done A", append=False), restart_then_end(ctx)]
+        agent, conn, client = await _agent(fake, steer_grace=2.0)
+        sess = await agent.new_session(cwd="/")
+        fake.tasks["t2"] = fa.durable("t2", sess.session_id, "TASK_STATE_COMPLETED", answer="now B, from its own turn")
+        first = await _running(agent, conn, sess.session_id)
+        await agent.cancel(session_id=sess.session_id)
+        await asyncio.wait_for(first, 1)
+        r2 = await agent.prompt(prompt=[text_block("do B")], session_id=sess.session_id)
+        await client.aclose()
+    assert r2.stop_reason == "end_turn"
+    assert fake.steer_deleted == []  # never taken back …
+    assert len(fake.requests) == 1  # … and never re-sent as a second A2A turn
+    assert "↪ steering: do B" in conn.text()
+    assert conn.text().endswith("now B, from its own turn")  # the restart task's answer
+
+
+async def test_a_steer_the_server_ran_as_a_fresh_turn_streams_that_turns_answer():
+    # bd-0ad5v, the POST case: the session had NO live turn (the runner here was a zombie),
+    # so the steer reply carries `started_turn` and nothing is queued. The editor must
+    # follow that task for the answer instead of owning the dead stream.
+    with fa.FakeA2A() as fake:
+        fake.steer_started_turn = "t9"
+        fake.script = lambda ctx, msg: [fa.task(ctx), fa.text(ctx, "stale…", append=False), "HOLD"]
+        agent, conn, client = await _agent(fake, steer_grace=2.0)
+        sess = await agent.new_session(cwd="/")
+        fake.tasks["t9"] = fa.durable("t9", sess.session_id, "TASK_STATE_COMPLETED", answer="a fresh turn answered")
+        first = await _running(agent, conn, sess.session_id)
+        await agent.cancel(session_id=sess.session_id)
+        await asyncio.wait_for(first, 1)
+        r2 = await agent.prompt(prompt=[text_block("are you there?")], session_id=sess.session_id)
+        await client.aclose()
+    assert r2.stop_reason == "end_turn"
+    assert fake.steer_queue in ({}, {sess.session_id: []})  # nothing left queued
+    assert len(fake.requests) == 1  # the fresh turn was the SERVER's send, not a re-send
+    assert conn.text().endswith("a fresh turn answered")
+
+
 async def test_approval_parked_inside_the_window_is_asked_of_the_adopting_prompt():
     with fa.FakeA2A() as fake:
         def script(ctx, msg):

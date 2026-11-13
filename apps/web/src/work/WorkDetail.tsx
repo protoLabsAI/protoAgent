@@ -1,5 +1,6 @@
 import { useEffect, useId, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { Badge, Button, Callout } from "@protolabsai/ui/primitives";
+import { FormField, Input } from "@protolabsai/ui/forms";
 import { Accordion, AccordionItem } from "@protolabsai/ui/navigation";
 import { Alert, StatusDot } from "@protolabsai/ui/data";
 import { useToast } from "@protolabsai/ui/overlays";
@@ -10,8 +11,13 @@ import "./work-detail.css";
 
 export type WorkField = { label: string; value: ReactNode };
 
-/** Destructive actions confirm inline (§4.4), never with a stacked `ConfirmDialog`. */
-export type WorkConfirm = { prompt: string; explanation: string; confirmLabel: string; keepLabel: string };
+/** Destructive actions confirm inline (§4.4), never with a stacked `ConfirmDialog`.
+ *  A non-destructive action may confirm too (a stale job's Close with its reason) — the
+ *  confirm button then keeps the primary look, never danger red. */
+export type WorkConfirm = { prompt: string; explanation: string; confirmLabel: string; keepLabel: string;
+  /** Renders an optional free-text input inside the confirm group; whatever the operator
+   *  typed (trimmed, or undefined when left blank) reaches `run`. */
+  reason?: { label: string; placeholder?: string } };
 
 export type WorkAction = {
   id: string;
@@ -22,8 +28,9 @@ export type WorkAction = {
    *  delete — e.g. "Goal dropped." for a stopped goal's Drop the goal (§2). */
   undoMessage?: string;
   /** Resolves to `{ undoToken }` when the change can be undone (a delete/clear); the
-   *  token drives the §4.5 undo toast. A rejection surfaces the inline warning Alert. */
-  run: () => Promise<{ undoToken?: string } | void>;
+   *  token drives the §4.5 undo toast. A rejection surfaces the inline warning Alert.
+   *  `reason` carries the confirm group's reason input, when the action asked for one. */
+  run: (reason?: string) => Promise<{ undoToken?: string } | void>;
 };
 
 export type WorkDetailProps = {
@@ -70,6 +77,10 @@ export function WorkDetail({
   const toast = useToast();
   const [confirming, setConfirming] = useState<WorkAction | null>(null);
   const [busy, setBusy] = useState(false);
+  const [reason, setReason] = useState("");
+  // Try again re-runs through a closure captured on failure; the ref keeps the submitted
+  // reason current even if the operator edited it since that render.
+  const reasonRef = useRef("");
   // One action runs at a time, so a single error slot (the running action's verb + retry) covers both
   // the inline-confirm failure and a direct action's failure.
   const [error, setError] = useState<{ verb: string; retry: () => void } | null>(null);
@@ -104,7 +115,7 @@ export function WorkDetail({
     setBusy(true);
     setError(null);
     try {
-      const result = await action.run();
+      const result = await action.run(action.confirm?.reason ? reasonRef.current.trim() || undefined : undefined);
       setBusy(false);
       setConfirming(null);
       const token = result && typeof result === "object" ? result.undoToken : undefined;
@@ -120,6 +131,8 @@ export function WorkDetail({
   function onTrigger(action: WorkAction) {
     if (action.confirm) {
       setError(null);
+      setReason("");
+      reasonRef.current = "";
       setConfirming(action);
     } else {
       void execute(action);
@@ -182,6 +195,18 @@ export function WorkDetail({
             {confirming.confirm!.prompt}
           </p>
           <p>{confirming.confirm!.explanation}</p>
+          {confirming.confirm!.reason && (
+            <FormField label={confirming.confirm!.reason.label}>
+              <Input
+                value={reason}
+                placeholder={confirming.confirm!.reason.placeholder}
+                onChange={(e) => {
+                  reasonRef.current = e.target.value;
+                  setReason(e.target.value);
+                }}
+              />
+            </FormField>
+          )}
           {error && (
             <Alert status="warning">
               Couldn&apos;t {error.verb} it. Nothing changed.{" "}
@@ -194,7 +219,7 @@ export function WorkDetail({
             {size === "md" && <Button size={size} disabled={busy} onClick={cancelConfirm}>
               {confirming.confirm!.keepLabel}
             </Button>}
-            <Button variant="danger" size={size} loading={busy} onClick={() => void execute(confirming)}>
+            <Button variant={confirming.destructive ? "danger" : "primary"} size={size} loading={busy} onClick={() => void execute(confirming)}>
               {confirming.confirm!.confirmLabel}
             </Button>
             {size !== "md" && <Button size={size} disabled={busy} onClick={cancelConfirm}>

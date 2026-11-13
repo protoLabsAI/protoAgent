@@ -2,10 +2,10 @@ import { useEffect, useRef, useState } from "react";
 import type React from "react";
 
 import { api } from "../lib/api";
-import type { ChatImagePart } from "../lib/api/chat";
+import type { ChatImagePart, SteerTurnSettings } from "../lib/api/chat";
 import { errMsg } from "../lib/format";
 import type { ChatMessage, ConsumedSteer, HitlPayload, QueuedSteer } from "../lib/types";
-import { chatStore, type SessionStatus } from "./chat-store";
+import { chatStore, effectiveReasoningEffort, type SessionStatus } from "./chat-store";
 import { messageId } from "./messageId";
 import { loadSteers, saveSteers } from "./scratchState";
 import { settleAnsweredPause } from "./reattach";
@@ -105,6 +105,20 @@ export function useSteerQueue({
   // "consumed" for these.
   const interjectInFlightRef = useRef<Set<string>>(new Set());
 
+  /** The tab's per-message turn settings RIGHT NOW, exactly as a normal send stamps them
+   *  (ChatSessionSlot → streamChat): a steer the server starts (or restarts at turn-end)
+   *  as a FRESH turn must carry them, or that turn runs under the configured defaults
+   *  (bd-0ad5v review). Read live from the store — not the render closure — so a toggle
+   *  flipped just before Enter still rides, the same rule the slot's bypass read follows. */
+  function sendSettings(): SteerTurnSettings {
+    const snap = chatStore.getSnapshot().sessions.find((s) => s.id === sessionId);
+    return {
+      model: snap?.model,
+      reasoningEffort: effectiveReasoningEffort(snap),
+      bypassPermissions: snap?.bypassPermissions,
+    };
+  }
+
   // The transcript is the one record of which queued messages have landed: whatever put a
   // queued id there — this stream's consumed marker, the bus's marker for a server turn
   // (ServerTurnWatch, which knows nothing of this queue), a turn-end reconcile — the
@@ -168,15 +182,17 @@ export function useSteerQueue({
     setDraft("");
     setSteerQueue([...steerQueueRef.current, { id, text, ...(images.length ? { images } : {}) }]);
     try {
-      const res = await (images.length
-        ? session.incognito
-          ? api.steerChat(session.id, id, text, images, true)
-          : api.steerChat(session.id, id, text, images)
-        : session.incognito
-          ? // Text-only steers carry incognito too: a steer that STARTS a turn (below)
-            // must pass the thread's no-memory-trail promise to that fresh turn.
-            api.steerChat(session.id, id, text, undefined, true)
-          : api.steerChat(session.id, id, text));
+      // Text-only steers carry incognito too: a steer that STARTS a turn (below) must
+      // pass the thread's no-memory-trail promise to that fresh turn — and the tab's
+      // model/effort/bypass ride every steer for the same reason.
+      const res = await api.steerChat(
+        session.id,
+        id,
+        text,
+        images.length ? images : undefined,
+        session.incognito ? true : undefined,
+        sendSettings(),
+      );
       if (images.length) clearTrayImages?.();
       if (res.started_turn) attachStartedTurn([{ id, text }], res.started_turn);
     } catch (e) {
@@ -237,7 +253,7 @@ export function useSteerQueue({
     setSteerQueue([...steerQueueRef.current, { id, text, serverTaskId: control.taskId, unconfirmed: true }]);
     interjectInFlightRef.current.add(id);
     try {
-      const res = await api.serverTurnInterject(session.id, control.taskId, id, text);
+      const res = await api.serverTurnInterject(session.id, control.taskId, id, text, sendSettings());
       if (res.ok || res.reason === "duplicate") {
         // Acknowledged: the server has it, so its absence from the queue later can be read
         // as "drained" rather than "never arrived".
@@ -585,13 +601,13 @@ export function useSteerQueue({
         // An attended server turn takes it through its control task (the same guarded path
         // Enter uses); this browser's own stream takes it as an ordinary steer.
         if (serverTaskId) {
-          const res = await api.serverTurnInterject(session.id, serverTaskId, item.id, item.text);
+          const res = await api.serverTurnInterject(session.id, serverTaskId, item.id, item.text, sendSettings());
           if (!res.ok && res.reason !== "duplicate") {
             handBackQueued([item], lost);
             continue;
           }
         } else {
-          const res = await api.steerChat(session.id, item.id, item.text);
+          const res = await api.steerChat(session.id, item.id, item.text, undefined, undefined, sendSettings());
           if (res.started_turn) {
             // The turn ended between the liveness check above and this POST, so the
             // server ran the message as a fresh turn instead of queueing it: attach.

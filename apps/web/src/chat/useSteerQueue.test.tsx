@@ -112,6 +112,11 @@ afterEach(() => {
 
 const ids = (q: QueuedSteer[]) => q.map((x) => x.id);
 
+// The per-message settings every steer/interjection POST now carries (bd-0ad5v review): a
+// turn the server starts for the message must run under the tab's picks, not the defaults.
+// A fresh session has no model/bypass pick and reasons at the default level.
+const SETTINGS = { reasoningEffort: "medium" };
+
 describe("useSteerQueue — queueing", () => {
   it("queues a steer optimistically, clears the draft, records history, and POSTs it", async () => {
     draftBox.value = "  go left  ";
@@ -123,9 +128,25 @@ describe("useSteerQueue — queueing", () => {
     expect(r.current.steerQueue).toMatchObject([{ text: "go left" }]);
     expect(r.current.steerQueueRef.current).toBe(r.current.steerQueue);
     const id = r.current.steerQueue[0].id;
-    expect(steerChat).toHaveBeenCalledWith(sessionId, id, "go left");
+    expect(steerChat).toHaveBeenCalledWith(sessionId, id, "go left", undefined, undefined, SETTINGS);
     // Persisted so a swap (S3) restores it.
     expect(ids(loadSteers(sessionId))).toEqual([id]);
+  });
+
+  it("carries the tab's chosen model/effort/bypass, read live (bd-0ad5v review)", async () => {
+    // A turn the server starts for this message (idle session, or the turn-end restart)
+    // must run under the tab's settings — the old re-send path carried them via runTurn.
+    chatStore.setSessionModel(sessionId, "sonnet-x");
+    chatStore.setSessionReasoningEffort(sessionId, "high");
+    chatStore.setSessionBypassPermissions(sessionId, true);
+    const r = renderHook(baseOpts({ draft: "go" }));
+    await act(() => r.current.queueSteer());
+    const id = r.current.steerQueue[0].id;
+    expect(steerChat).toHaveBeenCalledWith(sessionId, id, "go", undefined, undefined, {
+      model: "sonnet-x",
+      reasoningEffort: "high",
+      bypassPermissions: true,
+    });
   });
 
   it("does nothing with an empty draft or no session", async () => {
@@ -161,7 +182,7 @@ describe("useSteerQueue — queueing", () => {
     await act(() => r.current.queueServerInterjection());
     await flush();
     const id = r.current.steerQueue[0].id;
-    expect(serverTurnInterject).toHaveBeenCalledWith(sessionId, "t-live", id, "also this");
+    expect(serverTurnInterject).toHaveBeenCalledWith(sessionId, "t-live", id, "also this", SETTINGS);
     expect(r.current.steerQueue).toEqual([{ id, text: "also this", serverTaskId: "t-live" }]);
   });
 
@@ -227,7 +248,7 @@ describe("useSteerQueue — steer attachments (#4645)", () => {
     await act(() => r.current.queueSteer());
     await flush();
     const id = r.current.steerQueue[0].id;
-    expect(steerChat).toHaveBeenCalledWith(sessionId, id, "look here", [IMG]);
+    expect(steerChat).toHaveBeenCalledWith(sessionId, id, "look here", [IMG], undefined, SETTINGS);
     // Cleared ONLY after the POST resolved, so a failure would have kept them.
     expect(clearTrayImages).toHaveBeenCalledTimes(1);
   });
@@ -271,7 +292,7 @@ describe("useSteerQueue — steer attachments (#4645)", () => {
   it("asserts incognito on an image steer", async () => {
     const r = renderHook(baseOpts({ session: { id: sessionId, incognito: true }, trayImages: () => [IMG] }));
     await act(() => r.current.queueSteer());
-    expect(steerChat).toHaveBeenCalledWith(sessionId, r.current.steerQueue[0].id, "", [IMG], true);
+    expect(steerChat).toHaveBeenCalledWith(sessionId, r.current.steerQueue[0].id, "", [IMG], true, SETTINGS);
   });
 
   it("waits for acceptance before clearing images", async () => {
@@ -295,7 +316,7 @@ describe("useSteerQueue — steer attachments (#4645)", () => {
     await flush();
     expect(r.current.steerQueue).toMatchObject([{ text: "" }]);
     const id = r.current.steerQueue[0].id;
-    expect(steerChat).toHaveBeenCalledWith(sessionId, id, "", [IMG]);
+    expect(steerChat).toHaveBeenCalledWith(sessionId, id, "", [IMG], undefined, SETTINGS);
     expect(clearTrayImages).toHaveBeenCalledTimes(1);
   });
 
@@ -317,7 +338,7 @@ describe("useSteerQueue — steer attachments (#4645)", () => {
     await act(() => r.current.queueSteer());
     await flush();
     const id = r.current.steerQueue[0].id;
-    expect(steerChat).toHaveBeenCalledWith(sessionId, id, "just text");
+    expect(steerChat).toHaveBeenCalledWith(sessionId, id, "just text", undefined, undefined, SETTINGS);
     expect(clearTrayImages).not.toHaveBeenCalled();
   });
 
@@ -338,7 +359,7 @@ describe("useSteerQueue — steer attachments (#4645)", () => {
     await act(() => r.current.queueServerInterjection());
     await flush();
     const id = r.current.steerQueue[0].id;
-    expect(serverTurnInterject).toHaveBeenCalledWith(sessionId, "t-live", id, "also this");
+    expect(serverTurnInterject).toHaveBeenCalledWith(sessionId, "t-live", id, "also this", SETTINGS);
     expect(trayImages).not.toHaveBeenCalled();
     expect(clearTrayImages).not.toHaveBeenCalled();
   });
@@ -351,7 +372,7 @@ describe("useSteerQueue — steer attachments (#4645)", () => {
     await act(() => r.current.queueSteer());
     await flush();
     const id = r.current.steerQueue[0].id;
-    expect(steerChat).toHaveBeenCalledWith(sessionId, id, "answer later");
+    expect(steerChat).toHaveBeenCalledWith(sessionId, id, "answer later", undefined, undefined, SETTINGS);
     expect(trayImages).not.toHaveBeenCalled();
     expect(clearTrayImages).not.toHaveBeenCalled();
   });
@@ -469,7 +490,7 @@ describe("useSteerQueue — own-stream turn-end reconcile", () => {
     expect(r.current.steerQueue).toEqual([]);
     const msgs = messagesOf();
     expect(msgs.filter((m) => m.role === "user").map((m) => m.id)).toEqual(["u0", a, b]);
-    expect(msgs.at(-1)).toMatchObject({ role: "assistant", taskId: "task-r", status: "streaming" });
+    expect(msgs[msgs.length - 1]).toMatchObject({ role: "assistant", taskId: "task-r", status: "streaming" });
     expect(chatStore.getSnapshot().sessionStatusMap[sessionId]).toBe("streaming");
   });
 

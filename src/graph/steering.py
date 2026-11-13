@@ -83,6 +83,7 @@ def enqueue(
     refs: str = "",
     vision: bool = False,
     incognito: bool = False,
+    settings: dict | None = None,
 ) -> str | None:
     """Queue a user message for ``session_id``'s running turn. Returns its id (the
     client's if supplied, else a fresh one), or None on a blank message.
@@ -95,7 +96,12 @@ def enqueue(
     ``images`` and persisted ``refs`` travel together; the API decides ``vision``
     so the graph does not need to consult the server's model configuration.
     ``incognito`` (ADR 0069 D3b) rides the item so a message left undrained at turn-end
-    can be restarted as a fresh turn WITHOUT losing its no-memory-trail promise."""
+    can be restarted as a fresh turn WITHOUT losing its no-memory-trail promise.
+    ``settings`` — the sender's per-message turn settings (``model`` /
+    ``reasoning_effort`` / ``bypass_permissions``, the same keys a normal send stamps on
+    its A2A message metadata). A fold into a running turn ignores them (that turn already
+    has its own), but a message restarted as a FRESH turn at turn-end must carry them or
+    the restart falls back to the configured defaults (bd-0ad5v review)."""
     text = (text or "").strip()
     if not session_id or (not text and not images):
         return None
@@ -107,6 +113,8 @@ def enqueue(
         item["fence"] = [str(t) for t in fence]
     if incognito:
         item["incognito"] = True
+    if settings:
+        item["settings"] = dict(settings)
     _evict_stale(session_id)
     _QUEUES.setdefault(session_id, []).append(item)
     _QUEUE_TOUCHED.pop(session_id, None)
@@ -179,6 +187,24 @@ def _note_drained(session_id: str, ids: list[str]) -> None:
 def drained(session_id: str) -> list[str]:
     """Ids recently folded into a turn for ``session_id`` (oldest first)."""
     return list(_DRAINED.get(session_id, ()))
+
+
+def forget_drained(session_id: str, ids: list[str]) -> None:
+    """Remove ``ids`` from the drain log — a turn-end restart that FAILED just put the
+    items back on the queue, and the log rows :func:`take_unfenced` wrote for them would
+    otherwise report each id as both ``pending`` and ``drained``: a console reads that as
+    "the agent read it" and settles the bubble while the message sits queued with nothing
+    to drain it (the bd-0ad5v stuck chat, reached through the failure path)."""
+    rows = _DRAINED.get(session_id)
+    if not rows:
+        return
+    drop = {mid for mid in ids if mid}
+    kept = [mid for mid in rows if mid not in drop]
+    if kept:
+        _DRAINED[session_id] = kept
+    else:
+        _DRAINED.pop(session_id, None)
+        _DRAINED_TOUCHED.pop(session_id, None)
 
 
 def take_unfenced(session_id: str) -> list[dict]:

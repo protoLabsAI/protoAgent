@@ -864,6 +864,7 @@ async def _start_steer_turn(
     *,
     images: list[tuple[str, str]] | None = None,
     incognito: bool = False,
+    settings: dict | None = None,
 ) -> str:
     """Run a steer as an ordinary operator turn; return its A2A task id ("" on failure).
 
@@ -872,7 +873,10 @@ async def _start_steer_turn(
     — with ``returnImmediately`` so the task id comes back while the turn runs detached
     (the scheduler's fire pattern). ``msg_id`` rides as the A2A ``messageId``: the message
     ledger (#4975) then joins any concurrent duplicate to this task, and the task history
-    carries the id the console's bubbles reconcile on."""
+    carries the id the console's bubbles reconcile on. ``settings`` are the sender's
+    per-message turn settings (``model`` / ``reasoning_effort`` / ``bypass_permissions``)
+    — stamped onto the message metadata exactly where a console send puts them, so the
+    fresh turn runs with the tab's chosen settings rather than the configured defaults."""
     import uuid
 
     import httpx
@@ -895,8 +899,21 @@ async def _start_steer_turn(
         "messageId": mid,
         "contextId": session_id,
     }
+    # The same per-message metadata keys a console send stamps (apps/web/src/lib/api/
+    # chat.ts): server/chat.py reads model/reasoning_effort off the request metadata and
+    # tools/fs_tools.py reads bypass_permissions. Only truthy values ride — a normal send
+    # omits the keys it doesn't set too.
+    meta: dict[str, Any] = {}
+    for key in ("model", "reasoning_effort"):
+        value = str((settings or {}).get(key) or "").strip()
+        if value:
+            meta[key] = value
+    if (settings or {}).get("bypass_permissions"):
+        meta["bypass_permissions"] = True
     if incognito:
-        message["metadata"] = {"incognito": True}
+        meta["incognito"] = True
+    if meta:
+        message["metadata"] = meta
     body = {
         "jsonrpc": "2.0",
         "id": mid,
@@ -973,6 +990,7 @@ async def steer_or_start_turn(
     *,
     images: list[tuple[str, str]] | None = None,
     incognito: bool = False,
+    settings: dict | None = None,
 ) -> dict[str, Any]:
     """The steer POST's body: queue into the running turn, or start one when idle.
 
@@ -1004,7 +1022,9 @@ async def steer_or_start_turn(
         # Marked BEFORE the loopback awaits, so a concurrent duplicate joins this start
         # (above) instead of racing it.
         steering.note_starting(session_id, [mid])
-        task_id = await _start_steer_turn(session_id, text, mid, images=images, incognito=incognito)
+        task_id = await _start_steer_turn(
+            session_id, text, mid, images=images, incognito=incognito, settings=settings
+        )
         if task_id:
             steering.note_started(session_id, mid, task_id)
             return {"ok": True, "id": mid, "started_turn": task_id, "pending": steering.pending(session_id)}
@@ -1021,6 +1041,7 @@ async def steer_or_start_turn(
         refs=refs,
         vision=bool(getattr(STATE.graph_config, "model_vision", False)),
         incognito=incognito,
+        settings=settings,
     )
     return {"ok": True, "id": queued, "pending": steering.pending(session_id)}
 
@@ -1067,6 +1088,11 @@ def restart_undrained_steers(session_id: str, state: str) -> "asyncio.Task | Non
 
     def _requeue() -> None:
         steering.clear_starting(sid, item_ids)
+        # take_unfenced logged the ids as drained (the restart turn reads them like a
+        # fold); with the items back on the queue that log would call each of them both
+        # pending AND read, and a console settles the bubble while the message sits
+        # queued. Un-say it: nothing has read them.
+        steering.forget_drained(sid, item_ids)
         for i in items:
             steering.enqueue(
                 sid,
@@ -1077,14 +1103,29 @@ def restart_undrained_steers(session_id: str, state: str) -> "asyncio.Task | Non
                 refs=i.get("refs", ""),
                 vision=bool(i.get("vision")),
                 incognito=bool(i.get("incognito")),
+                settings=i.get("settings"),
             )
 
     async def _restart() -> None:
         text = "\n\n".join(i.get("text", "") for i in items if i.get("text"))
         images = [img for i in items for img in (i.get("images") or [])] or None
         mid = str(items[0].get("id") or "") or None
+        # One fresh turn carries every item, so it runs under ONE set of per-message
+        # settings: merged in queue order, newest write per key wins — the sender's most
+        # recent tab state at the time each message was steered (they are uniform in
+        # practice: one tab, one turn window).
+        settings: dict = {}
+        for i in items:
+            carried = i.get("settings")
+            if isinstance(carried, dict):
+                settings.update({k: v for k, v in carried.items() if v})
         task_id = await _start_steer_turn(
-            sid, text, mid, images=images, incognito=any(i.get("incognito") for i in items)
+            sid,
+            text,
+            mid,
+            images=images,
+            incognito=any(i.get("incognito") for i in items),
+            settings=settings or None,
         )
         if task_id:
             # EVERY restarted id maps to the turn, not just the lead one riding as the

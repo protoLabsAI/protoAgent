@@ -447,6 +447,22 @@ def _coerce_attachment_images(raw) -> list[tuple[str, str]] | None:
     return out or None
 
 
+def _coerce_turn_settings(body: dict | None) -> dict | None:
+    """A steer/interjection body's per-message turn settings — the same three keys a
+    normal console send stamps on its A2A message metadata (``model`` /
+    ``reasoning_effort`` / ``bypass_permissions``) — or ``None`` when the caller sent
+    none (an older client). Only these keys pass: the value rides a loopback A2A send
+    when the message starts a fresh turn (bd-0ad5v), and arbitrary metadata must not."""
+    settings: dict = {}
+    for key in ("model", "reasoning_effort"):
+        value = str((body or {}).get(key) or "").strip()
+        if value:
+            settings[key] = value
+    if (body or {}).get("bypass_permissions"):
+        settings["bypass_permissions"] = True
+    return settings or None
+
+
 def _has_unresolved_tool_calls(msg) -> bool:
     """True when ``msg`` is an ``AIMessage`` still carrying ``tool_calls`` — the
     model requested tools but no tool ever answered, i.e. the turn was cut off
@@ -1395,7 +1411,10 @@ def register_chat_routes(app, ui: str) -> None:
         send, and the reply carries ``started_turn: <task_id>`` so the console can
         attach to it and drop its stale streaming state. A duplicate POST of the same
         ``id`` answers with the same task. ``server.chat.steer_or_start_turn`` decides;
-        incognito (ADR 0069 D3b) is asserted by the console exactly as on a normal send."""
+        incognito (ADR 0069 D3b) is asserted by the console exactly as on a normal send,
+        and so are the tab's per-message ``model`` / ``reasoning_effort`` /
+        ``bypass_permissions`` — a turn started (now or at turn-end) for this message
+        runs under them, not under the configured defaults."""
         from fastapi import HTTPException
 
         text = str((body or {}).get("text", "")).strip()
@@ -1406,7 +1425,14 @@ def register_chat_routes(app, ui: str) -> None:
         if not text and not images:
             raise HTTPException(status_code=400, detail="text is required")
         incognito = bool((body or {}).get("incognito", False))
-        return await steer_or_start_turn(session_id, text, msg_id, images=images, incognito=incognito)
+        return await steer_or_start_turn(
+            session_id,
+            text,
+            msg_id,
+            images=images,
+            incognito=incognito,
+            settings=_coerce_turn_settings(body),
+        )
 
     @app.get("/api/chat/sessions/{session_id}/steer")
     async def _api_steer_pending(session_id: SessionId):
@@ -1451,7 +1477,9 @@ def register_chat_routes(app, ui: str) -> None:
         if not text:
             raise HTTPException(status_code=400, detail="text is required")
         msg_id = str((body or {}).get("id", "")).strip() or None
-        return submit_server_turn_interjection(session_id, task_id, text, msg_id=msg_id)
+        return submit_server_turn_interjection(
+            session_id, task_id, text, msg_id=msg_id, settings=_coerce_turn_settings(body)
+        )
 
     @app.delete("/api/chat/sessions/{session_id}/steer/{msg_id}")
     async def _api_steer_cancel(session_id: SessionId, msg_id: str):

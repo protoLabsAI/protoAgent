@@ -65,8 +65,17 @@ def starts(monkeypatch):
     """Record every loopback turn start — the ONE faked seam."""
     calls: list[dict] = []
 
-    async def _fake_start(session_id, text, msg_id, *, images=None, incognito=False):
-        calls.append({"session_id": session_id, "text": text, "msg_id": msg_id, "images": images, "incognito": incognito})
+    async def _fake_start(session_id, text, msg_id, *, images=None, incognito=False, settings=None):
+        calls.append(
+            {
+                "session_id": session_id,
+                "text": text,
+                "msg_id": msg_id,
+                "images": images,
+                "incognito": incognito,
+                "settings": settings,
+            }
+        )
         return f"task-{len(calls)}"
 
     monkeypatch.setattr(chat_mod, "_start_steer_turn", _fake_start)
@@ -78,7 +87,9 @@ def test_idle_steer_starts_exactly_one_turn(client, starts):
     # POSTed — but the turn had ended. The POST itself must handle the idle session.
     body = client.post("/api/chat/sessions/s1/steer", json={"id": "m1", "text": "hello?"}).json()
     assert body == {"ok": True, "id": "m1", "started_turn": "task-1", "pending": 0}
-    assert starts == [{"session_id": "s1", "text": "hello?", "msg_id": "m1", "images": None, "incognito": False}]
+    assert starts == [
+        {"session_id": "s1", "text": "hello?", "msg_id": "m1", "images": None, "incognito": False, "settings": None}
+    ]
     # Nothing pending: the message became a turn, which the queue read also names
     # (`started`), so a console that lost the POST reply still finds its way there.
     assert client.get("/api/chat/sessions/s1/steer").json() == {
@@ -86,6 +97,36 @@ def test_idle_steer_starts_exactly_one_turn(client, starts):
         "drained": [],
         "started": {"m1": "task-1"},
     }
+
+
+def test_idle_steer_carries_the_tabs_turn_settings(client, starts):
+    # The round-2 bd-0ad5v review: every console send stamps model/reasoning_effort/
+    # bypass_permissions, so the turn a steer starts must run under them too — not under
+    # the configured defaults. Unknown body keys never ride (the settings reach a
+    # loopback A2A send).
+    body = client.post(
+        "/api/chat/sessions/s1/steer",
+        json={"id": "m1", "text": "hi", "model": "gw-sonnet", "reasoning_effort": "high",
+              "bypass_permissions": True, "sneaky": "no"},
+    ).json()
+    assert body["started_turn"] == "task-1"
+    assert starts[0]["settings"] == {"model": "gw-sonnet", "reasoning_effort": "high", "bypass_permissions": True}
+
+
+def test_queued_steer_remembers_settings_for_the_turn_end_restart(client, starts):
+    # Queued into a live turn, the settings ride the ITEM: the restart at turn-end is the
+    # send that uses them (the fold itself inherits the running turn's).
+    turn_activity.begin("s1")
+    try:
+        client.post(
+            "/api/chat/sessions/s1/steer",
+            json={"id": "m1", "text": "go", "model": "gw-sonnet", "reasoning_effort": "low"},
+        )
+    finally:
+        turn_activity.end("s1")
+    assert steering.pending_items("s1") == [
+        {"id": "m1", "text": "go", "settings": {"model": "gw-sonnet", "reasoning_effort": "low"}}
+    ]
 
 
 def test_duplicate_posts_with_same_message_id_start_one_turn(client, starts):
@@ -144,7 +185,16 @@ async def test_undrained_steers_at_turn_end_become_exactly_one_turn(idle_server,
     assert task is not None
     await task
 
-    assert starts == [{"session_id": "s9", "text": "first\n\nsecond", "msg_id": "m1", "images": None, "incognito": False}]
+    assert starts == [
+        {
+            "session_id": "s9",
+            "text": "first\n\nsecond",
+            "msg_id": "m1",
+            "images": None,
+            "incognito": False,
+            "settings": None,
+        }
+    ]
     assert steering.pending("s9") == 0
     assert steering.drained("s9") == ["m1", "m2"]  # the restart turn reads them like a fold
     # EVERY restarted id names the turn — each is a console bubble that must attach to it.
@@ -161,7 +211,7 @@ async def test_restart_marks_items_starting_before_the_loopback_names_a_task(idl
 
     gate = asyncio.Event()
 
-    async def _gated_start(session_id, text, msg_id, *, images=None, incognito=False):
+    async def _gated_start(session_id, text, msg_id, *, images=None, incognito=False, settings=None):
         await gate.wait()
         return "task-9"
 
@@ -188,7 +238,7 @@ async def test_duplicate_post_during_an_in_flight_start_joins_that_turn(idle_ser
     gate = asyncio.Event()
     starts: list[str] = []
 
-    async def _gated_start(session_id, text, msg_id, *, images=None, incognito=False):
+    async def _gated_start(session_id, text, msg_id, *, images=None, incognito=False, settings=None):
         starts.append(msg_id)
         await gate.wait()
         return "task-1"
@@ -203,6 +253,16 @@ async def test_duplicate_post_during_an_in_flight_start_joins_that_turn(idle_ser
     assert r1["started_turn"] == r2["started_turn"] == "task-1"
     assert starts == ["m1"]  # ONE loopback send…
     assert steering.pending("s1") == 0  # …and the duplicate never queued into its turn
+
+
+@pytest.mark.asyncio
+async def test_turn_end_restart_carries_the_items_settings(idle_server, starts):
+    # The restarted turn is ONE send, so the items' per-message settings merge in queue
+    # order (newest write per key wins — the sender's latest tab state).
+    steering.enqueue("s9", "first", msg_id="m1", settings={"model": "gw-a", "bypass_permissions": True})
+    steering.enqueue("s9", "second", msg_id="m2", settings={"model": "gw-b", "reasoning_effort": "high"})
+    await chat_mod.restart_undrained_steers("s9", "completed")
+    assert starts[0]["settings"] == {"model": "gw-b", "reasoning_effort": "high", "bypass_permissions": True}
 
 
 @pytest.mark.asyncio
@@ -232,11 +292,15 @@ async def test_failed_restart_requeues_the_items(idle_server, monkeypatch):
         return ""
 
     monkeypatch.setattr(chat_mod, "_start_steer_turn", _refused)
-    steering.enqueue("s9", "precious", msg_id="m1")
+    steering.enqueue("s9", "precious", msg_id="m1", settings={"model": "gw-a"})
     task = chat_mod.restart_undrained_steers("s9", "failed")
     await task
-    assert steering.pending_items("s9") == [{"id": "m1", "text": "precious"}]
+    assert steering.pending_items("s9") == [{"id": "m1", "text": "precious", "settings": {"model": "gw-a"}}]
     assert steering.started_map("s9") == {}  # pending again, so no stale "starting" mark
+    # The pop logged m1 as drained (the restart would have read it like a fold); requeued,
+    # that row would call it pending AND read at once — a console settles the bubble while
+    # the message sits queued (the round-2 bd-0ad5v finding). Un-said on requeue.
+    assert steering.drained("s9") == []
 
 
 def test_idle_steer_goes_out_as_an_ordinary_a2a_message(monkeypatch, client):
@@ -277,6 +341,9 @@ def test_idle_steer_goes_out_as_an_ordinary_a2a_message(monkeypatch, client):
             "text": "hi",
             "images": [["image/png", "data:image/png;base64,AAA="]],
             "incognito": True,
+            "model": "gw-sonnet",
+            "reasoning_effort": "high",
+            "bypass_permissions": True,
         },
     ).json()
     assert body == {"ok": True, "id": "m1", "started_turn": "task-77", "pending": 0}
@@ -285,4 +352,11 @@ def test_idle_steer_goes_out_as_an_ordinary_a2a_message(monkeypatch, client):
     msg = sent["body"]["params"]["message"]
     assert msg["messageId"] == "m1" and msg["contextId"] == "s1" and msg["role"] == "ROLE_USER"
     assert msg["parts"] == [{"text": "hi"}, {"url": "data:image/png;base64,AAA=", "mediaType": "image/png"}]
-    assert msg["metadata"] == {"incognito": True}
+    # The tab's per-message settings land on the metadata exactly where a console send
+    # puts them, beside incognito — the fresh turn runs under them, not the defaults.
+    assert msg["metadata"] == {
+        "incognito": True,
+        "model": "gw-sonnet",
+        "reasoning_effort": "high",
+        "bypass_permissions": True,
+    }
