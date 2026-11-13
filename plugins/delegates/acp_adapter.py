@@ -44,6 +44,14 @@ _INCOMPLETE_STOP_REASONS = {
         "Re-dispatching the same query verbatim will decline again — restate the task or "
         "pick a different delegate."
     ),
+    # Synthetic, not a wire stopReason: stamped by the client's background-wait chase
+    # (``acp_client._BACKGROUND_PENDING_SIGNAL``, bd-572g1) when its follow-up nudges ran out.
+    "background_pending": (
+        "the coding agent moved a long command to the background and ended its turn still "
+        "waiting on it, and follow-up nudges did not get a final answer. Any text above is a "
+        "waiting note, not the result (a nudge that timed out leaves none) — re-dispatch once "
+        "the command has had time to finish, or split the long-running command out of the task."
+    ),
 }
 
 

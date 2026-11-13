@@ -66,6 +66,14 @@ ProgressCallback = Callable[[str], Awaitable[None]]
 #: productivity is the caller's call (commits), not the transport's.
 _DEAD_END_STOP_REASONS = frozenset({"refusal", "cancelled"})
 
+#: The outcome marker for a turn that ended normally while a command the agent itself
+#: moved to the background was still unaccounted for, and the follow-up nudges below ran
+#: out (bd-572g1). Like ``_EMPTY_REPLY_SIGNAL`` it is NOT a wire ``stopReason`` — it is
+#: protoAgent's reading of the turn — but unlike it, it IS surfaced through
+#: ``last_stop_reason``: the whole point is that callers reading the reply alone saw a
+#: plausible "waiting…" answer, so the marker must ride the field they already check.
+_BACKGROUND_PENDING_SIGNAL = "background_pending"
+
 #: ACP ``stopReason`` values that mean the turn did NOT deliver a finished answer.
 #: A different question from ``_DEAD_END_STOP_REASONS`` above, which answers "is a retry
 #: worth making" — and the two disagree on exactly one value, which is why they cannot
@@ -73,7 +81,11 @@ _DEAD_END_STOP_REASONS = frozenset({"refusal", "cancelled"})
 #: ``_INCOMPLETE_STOP_REASONS`` stamps "do not treat it as complete" on that reply and
 #: the orchestrator re-dispatches it) AND is worth retrying at a bigger tier. Reading the
 #: retry classifier as the outcome booked every truncated run as a success (#3015).
-_UNFINISHED_STOP_REASONS = frozenset({"refusal", "cancelled", "max_tokens"})
+#: ``background_pending`` is the one synthetic member (see ``_BACKGROUND_PENDING_SIGNAL``):
+#: the agent parked its answer on a background command that never resolved, so the
+#: "waiting" text is not a finished answer — and it is deliberately NOT a dead end,
+#: because a retry (which re-checks the command) is exactly the sane response.
+_UNFINISHED_STOP_REASONS = frozenset({"refusal", "cancelled", "max_tokens", _BACKGROUND_PENDING_SIGNAL})
 
 #: The outcome marker for a turn that ended on NORMAL terms (``end_turn``, or no stop
 #: reason at all) and yet delivered no text (#4371). Not a ``stopReason`` — the wire
@@ -84,6 +96,77 @@ _UNFINISHED_STOP_REASONS = frozenset({"refusal", "cancelled", "max_tokens"})
 #: arrive as ``""`` and used to read as a successful ``(replied with nothing)``.
 _EMPTY_REPLY_SIGNAL = "empty_reply"
 ToolCallback = Callable[[dict], Awaitable[None]]  # structured tool start/end events
+
+#: The character class a backgrounded command's id is made of. ONE definition feeds both
+#: the notice capture below and the exact-id matching in ``_note_background_commands``
+#: (an id only matches between non-id characters, so a finished ``bash_10`` can never
+#: clear a still-running ``bash_1`` on a prefix hit) — built from the same constant
+#: because the two must stay byte-identical, or ids stop matching the very notices that
+#: minted them. ``.`` is deliberately NOT in the class: a notice that ends the sentence
+#: right after the id ("ID: b3k9x2. Output is being written to: …") must capture the
+#: bare id, or no later poll (which names ``b3k9x2``, never ``b3k9x2.``) could ever
+#: clear it.
+_BACKGROUND_ID_CHARS = "A-Za-z0-9_:-"
+
+#: Claude Code's tool-result notice for a foreground command that outlived its own
+#: ~10-minute Bash budget and was moved to the background (bd-572g1). In the Claude Code
+#: CLI a later task-notification wakes the agent when the command finishes; over ACP
+#: nothing does — the agent ends its turn with a "waiting" note, and this client used to
+#: take that note as the final answer (observed 2026-11-12: ~14 coder sessions in a row,
+#: each parking on the same backgrounded test suite). Detection keys off this text in the
+#: tool output blocks (the same blocks ``_tool_output_preview`` reads), so ACP agents
+#: that never produce the notice never take the follow-up path.
+_BACKGROUND_NOTICE_RE = re.compile(rf"Command running in background with ID:\s*([{_BACKGROUND_ID_CHARS}]+)")
+
+#: Signs, in the OUTPUT text of a later tool event that references a backgrounded
+#: command's id, that the command is no longer running. Matched STRUCTURALLY — as the
+#: XML-ish tags Claude Code's background-task output tool wraps its report in, NEVER as
+#: bare words or free-floating prose. The reason it has to be a tag: the only text this
+#: client sees is the output visible on ``tool_call_update``, and a Read of the command's
+#: output file — the interim-output check the notice itself suggests — returns the
+#: command's plain stdout, which looks the same early in a run as after it. That stdout
+#: (and a failing foreground command's own output, e.g. a grep that matched nothing)
+#: can easily contain "complete", "failed", or a literal "exit code 1" — a traceback, a
+#: test name, a failing sub-step — none of which prove THIS command finished. Clearing
+#: on any of them returns the exact waiting-answer-accepted bug this file exists to fix
+#: (bd-572g1). So only the poll tool's own ``<status>`` element or its ``<exit_code>``
+#: element clear an id: both are tag-wrapped, and neither a plain file read nor a
+#: foreground command's output ever carries them. This is the shape verified against the
+#: bd-bkvgk transcripts: ``<status>completed</status> … <exit_code>0</exit_code>``. A
+#: killed command is cleared by its poll's ``<status>killed</status>`` for the same
+#: reason — the earlier bare ``successfully killed`` prose was dropped as the same
+#: unsound class as the bare exit code. The follow-up prompt points the agent at the
+#: structural tool, not at a Read, precisely because a Read can never prove it finished.
+_BACKGROUND_DONE_RE = re.compile(
+    r"<status>\s*(?:completed|failed|killed)\s*</status>"
+    r"|<exit[ _]?code>\s*-?\d",
+    re.IGNORECASE,
+)
+
+#: A poll that structurally says the command is STILL RUNNING — a hard veto on
+#: clearing by that event, whatever else its partial stdout happens to contain.
+_BACKGROUND_RUNNING_RE = re.compile(r"<status>\s*running\s*</status>", re.IGNORECASE)
+
+#: How many times one turn re-prompts an agent that ended while its backgrounded
+#: command was still unaccounted for, before giving up and stamping
+#: ``_BACKGROUND_PENDING_SIGNAL`` on the turn.
+_BACKGROUND_MAX_FOLLOWUPS = 3
+
+#: The follow-up ``session/prompt`` text. It names the ids so the agent can poll the
+#: right command, and says explicitly that ending the turn to wait does not work here —
+#: that is the exact belief ("I will be notified") the CLI taught it. It steers the
+#: check to the background-task output tool, because that tool's structural status is
+#: the only completion sign this client accepts (``_BACKGROUND_DONE_RE``): a Read of
+#: the output file shows plain stdout, which cannot show whether the command is done.
+_BACKGROUND_FOLLOWUP_PROMPT = (
+    "Your background command ({ids}) is still running — in this environment NO notification "
+    "arrives when it finishes, so ending your turn to wait for it does not work. Wait for the "
+    "command to finish: keep checking it with your background-task output tool, the one that "
+    "reports its status and exit code (a Read of its output file shows interim stdout but "
+    "cannot show whether it is done). Once it reports the command finished, give your "
+    "complete final answer to the original request. Do not end your turn while it is still "
+    "running."
+)
 
 
 @dataclass(frozen=True)
@@ -106,8 +189,12 @@ class TappedResult:
     # The coder's own live plan (its todo list: {content, status, priority} entries)
     # from the last ``plan`` update, or None — not every coder plans.
     plan: list | None
-    # Why the turn ended, straight from ACP's ``session/prompt`` result (``end_turn``,
-    # ``refusal``, ``max_tokens``, …), or None when the agent reported none.
+    # Why the turn ended: ACP's ``session/prompt`` result (``end_turn``, ``refusal``,
+    # ``max_tokens``, …), None when the agent reported none — or the synthetic
+    # ``background_pending`` (bd-572g1), stamped by this client when the turn ended
+    # parked on a command the agent had moved to the background and the follow-up
+    # nudges ran out. Not a wire value, but part of this contract: ``dispatch_tapped``
+    # consumers (the board) must read it as "not a finished answer, retry-worthy".
     stop_reason: str | None
     # Why the turn is NOT worth retrying (``refusal`` / ``cancelled``), or None when a
     # retry is sane — ``AcpClient.dead_end()``'s answer, precomputed so the caller
@@ -121,8 +208,11 @@ class TappedResult:
     empty_reply: str | None = None
 
 
-def _tool_output_preview(update: dict, limit: int = 300) -> str:
-    """Best-effort short text from a tool_call_update's content blocks (for the end card)."""
+def _tool_output_text(update: dict) -> str:
+    """The text of a tool_call/tool_call_update's content blocks (uncapped), falling back
+    to ``rawOutput``. The one reading of a tool result's text — ``_tool_output_preview``
+    caps it for the end card; the backgrounded-command detection (bd-572g1) scans it whole,
+    because the notice can sit past any fixed preview cap."""
     out: list[str] = []
     for block in update.get("content") or []:
         if not isinstance(block, dict):
@@ -137,7 +227,12 @@ def _tool_output_preview(update: dict, limit: int = 300) -> str:
         raw = update.get("rawOutput")
         if raw not in (None, "", {}, []):
             out.append(raw if isinstance(raw, str) else json.dumps(raw, ensure_ascii=False, default=str))
-    return " ".join(o for o in out if o).strip()[:limit]
+    return " ".join(o for o in out if o).strip()
+
+
+def _tool_output_preview(update: dict, limit: int = 300) -> str:
+    """Best-effort short text from a tool_call_update's content blocks (for the end card)."""
+    return _tool_output_text(update)[:limit]
 
 
 def _tool_kind_and_locations(update: dict) -> dict:
@@ -626,9 +721,19 @@ class AcpClient:
         # Tool calls started this turn → their card name, so a later refinement can be
         # sent as an ``update`` for a call the UI actually has a card for (#3691).
         self._turn_open_tools: dict[str, str] = {}
+        # Backgrounded-command ids this turn announced ("Command running in background
+        # with ID: …") that no later tool event has accounted for (bd-572g1). A normal
+        # turn end with this non-empty is a parked answer, not a finished one — see
+        # ``_background_followups``. ``_turn_tool_refs`` is its sidecar: what each tool
+        # call referenced (input + title), so a completion sign in one event connects to
+        # the id a sibling event named.
+        self._turn_background_pending: set[str] = set()
+        self._turn_tool_refs: dict[str, str] = {}
         self._transcript_path: str | None = None
         self._reset_timeout_evidence()
-        # Why the last turn ended, straight from ACP's `session/prompt` result (#2279).
+        # Why the last turn ended — ACP's `session/prompt` result (#2279), or the
+        # synthetic `background_pending` this client itself stamps on a turn that ended
+        # parked on a command the agent had backgrounded (bd-572g1).
         # `prompt()` is typed -> str and cannot carry it; an orchestrator reads it here
         # (or via `dead_end()`) to tell "declined" from "ran out of room" from "done".
         self.last_stop_reason: str | None = None
@@ -978,6 +1083,88 @@ class AcpClient:
                 continue
             self._observed_edit_paths.append(path)
 
+    def _note_background_commands(self, update: dict) -> None:
+        """Track this turn's backgrounded-command notices and whether a later tool event
+        showed the command finished (bd-572g1).
+
+        Claude Code reports a foreground command that outlived its Bash budget as
+        "Command running in background with ID: <id>. Output is being written to:
+        …/tasks/<id>.output. … To check interim output, use Read on that file path." —
+        and over ACP no notification ever follows. An id stays pending until a LATER
+        tool event both references it (in its output, ``rawInput``, or title — the poll
+        usually carries the id in its input while the completion sign rides its output)
+        and shows a structural completion sign in its output text
+        (``_BACKGROUND_DONE_RE``). That is deliberately the ONLY clearing signal: a
+        Read of the output file — the check the notice itself suggests — returns the
+        command's plain stdout, which looks the same early in a run as after it
+        (verified against the bd-bkvgk transcripts), so a softer checked-then-answered
+        rule let a nudged agent read early output of a still-running command, end on
+        another waiting note, and have that note accepted as the answer — the exact bug
+        this file exists to fix (bd-572g1). The follow-up prompt points the agent at the
+        structural tool instead.
+
+        Keyed off the notice text itself, so ACP agents that never produce it are
+        unaffected; ``_background_followups`` reads what is left at turn end.
+        """
+        if not hasattr(self, "_turn_background_pending"):
+            # Same bare-client guard as ``_observe_tool``: tests drive ``_handle_update``
+            # on an ``__new__``-built client that never saw ``__init__``.
+            self._turn_background_pending = set()
+            self._turn_tool_refs = {}
+        text = _tool_output_text(update)
+        raw = update.get("rawInput")
+        if isinstance(raw, str):
+            raw_text = raw
+        elif raw in (None, "", {}, []):
+            raw_text = ""
+        else:
+            try:
+                raw_text = json.dumps(raw, ensure_ascii=False, default=str)
+            except (TypeError, ValueError):
+                raw_text = str(raw)
+        # Remember what each call referenced (input + title): the poll's id usually rides
+        # its START event's ``rawInput`` while the completion sign rides a LATER update's
+        # output — claude-agent-acp splits them across events. Each entry is size-capped,
+        # and past 128 entries the OLDEST entry is evicted — never the newest refused: a
+        # follow-up poll's start event is the only event carrying its id, and it must be
+        # recorded however many tool calls the rounds before it already made, or the
+        # poll's own completion sign could never be matched to the id and a finished
+        # command would be chased to ``background_pending`` (bd-572g1).
+        # ``pop`` + insert re-files an updated call as newest, so the call an update is
+        # about to be matched against is never the one evicted.
+        tool_id = str(update.get("toolCallId") or "")
+        ref = f"{raw_text} {update.get('title') or ''}".strip()
+        if tool_id and ref:
+            self._turn_tool_refs[tool_id] = f"{self._turn_tool_refs.pop(tool_id, '')} {ref}"[-2000:]
+            while len(self._turn_tool_refs) > 128:
+                del self._turn_tool_refs[next(iter(self._turn_tool_refs))]
+        noticed = set(_BACKGROUND_NOTICE_RE.findall(text)) if text else set()
+        for bg_id in noticed:
+            # Capped so a malformed or adversarial output can't grow the set unbounded.
+            if len(self._turn_background_pending) < 32:
+                self._turn_background_pending.add(bg_id)
+        # Only ids NOT (re-)announced by this very event can be cleared by it — the
+        # notice itself must never read as its own completion.
+        pending = self._turn_background_pending - noticed
+        if not pending or not text:
+            return
+        if _BACKGROUND_RUNNING_RE.search(text) is not None:
+            # A poll that structurally reports the command still running never clears,
+            # whatever words ("failed", "exit code 1") its partial stdout carries.
+            return
+        if _BACKGROUND_DONE_RE.search(text) is None:
+            # No structural done sign, no clearing — a Read's plain stdout, a start
+            # event, bare words like "complete" in partial output all leave the id
+            # pending (see the docstring for why nothing softer is sound).
+            return
+        haystack = f"{text} {ref} {self._turn_tool_refs.get(tool_id, '') if tool_id else ''}"
+        for bg_id in pending:
+            # Bounded on both sides by non-id characters: a finished ``bash_10`` must
+            # not clear ``bash_1``, while punctuation around the id ("bash_1.log",
+            # '"bash_1"') still counts as a reference.
+            if re.search(rf"(?<![{_BACKGROUND_ID_CHARS}]){re.escape(bg_id)}(?![{_BACKGROUND_ID_CHARS}])", haystack):
+                self._turn_background_pending.discard(bg_id)
+
     def _note_transcript(self, result: Any) -> None:
         # ACP has no standard transcript filename/layout. Only use an explicit
         # agent extension, scoped to this session; never construct one from cwd/id.
@@ -1127,6 +1314,7 @@ class AcpClient:
         kind = update.get("sessionUpdate")
         if kind in ("tool_call", "tool_call_update"):
             self._observe_tool(update)
+            self._note_background_commands(update)
         if kind == "agent_message_chunk":
             text = _content_text(update.get("content"))
             if text:
@@ -2162,6 +2350,8 @@ class AcpClient:
         self._turn_tool_calls = 0
         self._turn_ended_tool_ids = set()
         self._turn_open_tools = {}
+        self._turn_background_pending = set()
+        self._turn_tool_refs = {}
         self._turn_usage = None
         self._turn_cost_usd = None
         self._turn_thoughts = ""
@@ -2185,36 +2375,12 @@ class AcpClient:
                 len(text),
                 int(timeout),
             )
-            try:
-                result = await self._request(
-                    "session/prompt",
-                    {
-                        "sessionId": self._session_id,
-                        "prompt": [{"type": "text", "text": text}],
-                    },
-                    timeout=timeout,
-                )
-            except (AcpError, asyncio.CancelledError) as exc:
-                # Turn abandoned — internal timeout, external cancel (e.g. an
-                # orchestrator's wait_for watchdog), or transport failure. Tell the
-                # agent to drain it so the reused session isn't left mid-generation,
-                # and fence the stream: the ask is advisory, the agent may well still be
-                # running tools, and its updates would otherwise be counted against
-                # whichever run holds this pooled client next (#3040).
-                #
-                # An error the agent ANSWERED with is not an abandoned turn — it has told
-                # us the turn is over, so nothing is left generating to fence off. Fencing
-                # it would kill and respawn a healthy pooled agent on every ordinary
-                # agent-side error, and for a coder that does not advertise `loadSession`
-                # the respawn opens a fresh `session/new`, silently dropping the
-                # conversation thread the pooling exists to keep.
-                if not (isinstance(exc, AcpError) and exc.reported_by_agent):
-                    if isinstance(exc, AcpError) and not getattr(exc, "_has_turn_evidence", False):
-                        # Preserve the original exception and its code/data contract.
-                        exc.args = (self._evidence_text(str(exc), 2000) + self._timeout_evidence(),)
-                    self._fence_stream()
-                await self._cancel_session()
-                raise
+            # The deadline every background follow-up round must fit inside (bd-572g1):
+            # the budget the caller already granted, started with the first request — a
+            # chase for a parked answer never buys the turn more time.
+            deadline = time.monotonic() + timeout
+            result = await self._prompt_request(text, timeout=timeout)
+            result = await self._background_followups(result, deadline)
         finally:
             self._progress = None
             self._on_tool = None
@@ -2231,6 +2397,184 @@ class AcpClient:
         # the collapse silently no-ops on exactly the replies it exists for (QA panel
         # finding on this PR).
         return self._collapse_doubled(self._answer).strip()
+
+    async def _prompt_request(self, text: str, *, timeout: float) -> Any:
+        """One ``session/prompt`` round on the open session, with the abandoned-turn
+        handling every round needs — the first prompt and the background follow-ups
+        (bd-572g1) go through the same path."""
+        try:
+            return await self._request(
+                "session/prompt",
+                {
+                    "sessionId": self._session_id,
+                    "prompt": [{"type": "text", "text": text}],
+                },
+                timeout=timeout,
+            )
+        except (AcpError, asyncio.CancelledError) as exc:
+            # Turn abandoned — internal timeout, external cancel (e.g. an
+            # orchestrator's wait_for watchdog), or transport failure. Tell the
+            # agent to drain it so the reused session isn't left mid-generation,
+            # and fence the stream: the ask is advisory, the agent may well still be
+            # running tools, and its updates would otherwise be counted against
+            # whichever run holds this pooled client next (#3040).
+            #
+            # An error the agent ANSWERED with is not an abandoned turn — it has told
+            # us the turn is over, so nothing is left generating to fence off. Fencing
+            # it would kill and respawn a healthy pooled agent on every ordinary
+            # agent-side error, and for a coder that does not advertise `loadSession`
+            # the respawn opens a fresh `session/new`, silently dropping the
+            # conversation thread the pooling exists to keep.
+            if not (isinstance(exc, AcpError) and exc.reported_by_agent):
+                if isinstance(exc, AcpError) and not getattr(exc, "_has_turn_evidence", False):
+                    # Preserve the original exception and its code/data contract.
+                    exc.args = (self._evidence_text(str(exc), 2000) + self._timeout_evidence(),)
+                self._fence_stream()
+            await self._cancel_session()
+            raise
+
+    @staticmethod
+    def _ended_normally(result: Any) -> bool:
+        """A round that ended on NORMAL terms — ``end_turn``, or no stop reason at all.
+        Only such a round can be hiding a parked answer: an abnormal end (refusal,
+        cancel, max_tokens) already classifies itself and must not be re-prompted."""
+        reason = str((result or {}).get("stopReason") or "")
+        return reason in ("", "end_turn")
+
+    async def _background_followups(self, result: Any, deadline: float) -> Any:
+        """Chase a turn that parked its answer on a backgrounded command (bd-572g1).
+
+        Claude Code moves a foreground command that outlives its ~10-minute Bash budget
+        to the background and tells the agent it will be notified when the command
+        finishes. In the Claude Code CLI that notification wakes the agent; over ACP
+        nothing does — so the agent ends its turn with a "waiting for the suite" note,
+        and this client used to return that note as the final answer (evidence
+        2026-11-12, card bd-bkvgk: ~14 coder sessions in a row, each ending 0.1s before
+        its own task-notification landed with no turn left to act on it).
+
+        So: when a round ends NORMALLY while a backgrounded command this turn announced
+        is still unaccounted for (``_turn_background_pending``, keyed off the notice text
+        in tool output — agents that never produce it never get here), do not accept the
+        answer. Re-prompt the SAME session telling the agent to wait on the command
+        itself, up to ``_BACKGROUND_MAX_FOLLOWUPS`` times, each round inside what is left
+        of the turn's original budget. Each follow-up round resets the accumulated
+        answer, so only the final round's text becomes the reply — the earlier "waiting"
+        note is never concatenated into it. If the command still isn't accounted for
+        after the last round, the result is stamped with the synthetic
+        ``background_pending`` stop reason so callers see a parked turn (an unfinished,
+        retry-worthy run) instead of a plausible "waiting…" answer.
+
+        A command is accounted for ONE way (see ``_note_background_commands``): a later
+        tool event that references its id and shows a structural done sign — the shape
+        the agent's background-task output tool emits, and what the nudge tells the
+        agent to use. A round that merely Read the command's output file and then ended
+        normally stays pending and is nudged again: plain stdout cannot tell a finished
+        command from the early output of a running one, and accepting that
+        checked-then-answered round let a second waiting note through as the answer
+        (bd-572g1).
+
+        A chase round that DIES — its shrinking per-round timeout, a transport drop, an
+        agent-side error on the nudge — degrades to that same marker instead of raising:
+        before bd-572g1 a normally-ended turn always returned its answer, and the chase
+        is this client's own doing, so it must never turn a finished turn into a turn
+        failure. (On the timeout/cancel path ``_prompt_request`` has already fenced the
+        stream and cancelled the session, exactly as for any abandoned turn; any other
+        escape is fenced here before returning.)
+        """
+        followups = 0
+        usage: dict | None = None
+        while self._turn_background_pending and self._ended_normally(result):
+            # A chased turn is SEVERAL prompt rounds; their usage must add up like the
+            # per-update ``_turn_cost_usd`` deltas already do — keeping only the last
+            # round's would drop the round that did the coding work from telemetry.
+            usage = self._merge_usage(usage, result.get("usage") if isinstance(result, dict) else None)
+            remaining = deadline - time.monotonic()
+            if followups >= _BACKGROUND_MAX_FOLLOWUPS or remaining <= 0:
+                return self._background_pending_result(result, usage, followups)
+            followups += 1
+            ids = ", ".join(sorted(self._turn_background_pending))
+            logger.info(
+                "[acp/%s] turn ended waiting on backgrounded command(s) %s — follow-up %d/%d (session=%s)",
+                self.name,
+                ids,
+                followups,
+                _BACKGROUND_MAX_FOLLOWUPS,
+                self._turn_session_id,
+            )
+            # The "waiting" note must not leak into the real answer: reset the per-round
+            # accumulation exactly as a fresh turn would, keeping the rest of the
+            # per-turn state (tool counts, open cards, the pending set) cumulative.
+            self._answer = ""
+            self._text_after_tool = False
+            self._last_chunk = ""
+            self._segment, self._segment_chunks = "", 0
+            try:
+                result = await self._prompt_request(_BACKGROUND_FOLLOWUP_PROMPT.format(ids=ids), timeout=remaining)
+            except asyncio.CancelledError:
+                raise  # an EXTERNAL cancel — the caller abandoned the whole turn
+            except Exception as exc:  # noqa: BLE001 — the chase must never fail a finished turn
+                if not isinstance(exc, AcpError):
+                    # A path ``_prompt_request`` did NOT fence (it handles AcpError and
+                    # CancelledError only): fence here, or a still-generating agent's
+                    # updates would be counted against the next pooled run (#3040).
+                    self._fence_stream()
+                    await self._cancel_session()
+                logger.warning(
+                    "[acp/%s] background follow-up %d/%d died (%s: %s) — degrading to %s",
+                    self.name,
+                    followups,
+                    _BACKGROUND_MAX_FOLLOWUPS,
+                    type(exc).__name__,
+                    self._evidence_text(str(exc), 400),
+                    _BACKGROUND_PENDING_SIGNAL,
+                )
+                return self._background_pending_result(result, usage, followups)
+        if usage is not None and isinstance(result, dict):
+            # A resolved chase reports the whole turn's tokens, not the last round's.
+            result = {**result, "usage": self._merge_usage(usage, result.get("usage"))}
+        return result
+
+    def _background_pending_result(self, result: Any, usage: dict | None, followups: int) -> dict:
+        """The parked-turn result: the last completed round, stamped with the synthetic
+        ``background_pending`` stop reason and the chase's accumulated usage."""
+        ids = ", ".join(sorted(self._turn_background_pending))
+        logger.warning(
+            "[acp/%s] turn still waiting on backgrounded command(s) %s after %d follow-up(s) — "
+            "returning %s (session=%s)",
+            self.name,
+            ids,
+            followups,
+            _BACKGROUND_PENDING_SIGNAL,
+            self._turn_session_id,
+        )
+        return {
+            **(result if isinstance(result, dict) else {}),
+            **({"usage": usage} if usage is not None else {}),
+            "stopReason": _BACKGROUND_PENDING_SIGNAL,
+        }
+
+    @staticmethod
+    def _merge_usage(total: dict | None, round_usage: Any) -> dict | None:
+        """Key-wise sum of per-round ``session/prompt`` usage dicts (bd-572g1). Numeric
+        values add; anything else (the shape is agent-defined) takes the latest round's
+        value. ``None`` in, ``None`` out — an agent that never reports usage stays so."""
+        if not isinstance(round_usage, dict):
+            return total
+        if total is None:
+            return dict(round_usage)
+        merged = dict(total)
+        for key, value in round_usage.items():
+            prev = merged.get(key)
+            if (
+                isinstance(value, (int, float))
+                and not isinstance(value, bool)
+                and isinstance(prev, (int, float))
+                and not isinstance(prev, bool)
+            ):
+                merged[key] = prev + value
+            else:
+                merged[key] = value
+        return merged
 
     def _collapse_doubled(self, answer: str) -> str:
         """Collapse a reply that is its own text twice with no joiner — and say so.
