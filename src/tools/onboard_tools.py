@@ -626,12 +626,16 @@ def _protoagent_state_roots() -> list[Path]:
     return roots
 
 
-def _hard_refusal(target: Path) -> str | None:
+def _hard_refusal(target: Path, *, system: bool = True) -> str | None:
     """Why ``target`` (a REALPATH) can never be registered from outside the root — even
     with the operator's approval — or ``None`` when an approval card may be shown.
 
     Deliberately conservative: a place where approving is essentially never right, and
-    where one tired click would expose the machine, gets no card to click."""
+    where one tired click would expose the machine, gets no card to click.
+
+    ``system=False`` (a folder INSIDE the root) skips the system-directory checks: the
+    operator chose that root, which may well be under ``/opt`` or ``/var``. The home,
+    credential, secret and protoAgent-state checks still apply."""
     if _CONTROL_RE.search(str(target)):
         return "the path contains control characters"
     if target == Path(target.anchor):
@@ -661,6 +665,8 @@ def _hard_refusal(target: Path) -> str | None:
     secret = is_secret_path(target)
     if secret:
         return f"it looks like {secret}"
+    if not system:
+        return None
     if os.name == "nt":
         anchor = Path(target.anchor)
         for sub in _SYSTEM_SUBTREES_NT:
@@ -1336,6 +1342,18 @@ def build_onboard_tools(config) -> list:
             return (
                 f"Refused: {raw} is the onboarding root itself — register a project directory inside "
                 f"it, not the whole root ({root_raw})."
+            )
+        refusal = _hard_refusal(target, system=False)
+        # A reason that already holds for the ROOT is the operator's own choice of root (one
+        # under ~/AppData, say — where Windows keeps its temp directory), not something this
+        # folder adds. Only what the folder itself brings in is refused.
+        if refusal and refusal == _hard_refusal(root_resolved, system=False):
+            refusal = None
+        if refusal:
+            log.warning("[onboard] inside-root registration hard-refused (%s): %s", refusal, target)
+            return (
+                f"Refused: {raw} resolves to {target}, and {refusal} — this location can't be "
+                "registered, even inside the onboarding root. Pick a project directory instead."
             )
         if not target.is_dir():
             return f"Error: {target} is not an existing directory."

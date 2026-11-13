@@ -307,6 +307,19 @@ async def test_hard_refusals_under_home_never_park(tmp_path, fake_home, applied,
     assert park.payloads == [] and applied == []
 
 
+@pytest.mark.parametrize("make", [lambda h: h / ".ssh", lambda h: h / ".config", lambda h: h / "dev" / "p" / ".aws"])
+async def test_the_floor_holds_inside_the_root_too(fake_home, applied, park, make):
+    target = make(fake_home)
+    target.mkdir(parents=True, exist_ok=True)
+    out = await _tool(_cfg(fake_home, onboarding_write_default=True)).ainvoke({"path": str(target)})
+    assert out.startswith("Refused:") and park.payloads == [] and applied == []
+    # …but a reason the root itself already carries is the operator's choice, not the folder's.
+    inner = fake_home / ".config" / "proj"
+    inner.mkdir(parents=True, exist_ok=True)
+    cfg = _cfg(fake_home / ".config", onboarding_write_default=True)
+    assert not (await _tool(cfg).ainvoke({"path": str(inner)})).startswith("Refused:")
+
+
 @posix_only
 @pytest.mark.parametrize("path", ["/", "/etc", "/usr/bin", "/tmp", "/var/tmp", "/bin"])
 async def test_system_paths_never_park(tmp_path, applied, park, path):
