@@ -77,23 +77,32 @@ for line in sys.stdin:
     if mode == "plain":
         chunk(sid, "no long commands here")
     elif prompts == 1:
+        if mode == "many_tools":
+            # A first round with MORE tool calls than the ref sidecar's 128-entry cap,
+            # all before the long command is backgrounded.
+            for i in range(130):
+                tool(sid, "f%d" % i, "Read prep step %d" % i, "ok")
         # The long command gets backgrounded mid-turn; the agent reads interim output
         # (plain stdout, the id only in the file path) and STILL ends its turn waiting —
         # the exact bd-bkvgk shape. The interim read must never count as completion.
         tool(sid, "t1", "Bash(python -m pytest tests/ -q)", NOTICE)
         tool(sid, "t2", "Read", "collecting 312 items ...", raw={"file_path": OUT_FILE})
         chunk(sid, "Waiting for the test suite to finish.")
-    elif mode == "resolves":
-        # Nudged, the agent polls its background-task output tool: structural done signs.
+    elif mode in ("resolves", "many_tools"):
+        # Nudged, the agent polls its background-task output tool: the id rides only the
+        # START event's rawInput, the structural done sign only the update's output.
         tool(sid, "t3", "BashOutput", "<status>completed</status> exit code 0 - 12 passed",
              raw={"bash_id": "bash_1"})
         chunk(sid, "Suite finished: 12 passed.")
-    elif mode == "reads_file":
-        # Nudged, the agent checks the way the notice itself prescribes — Read on the
-        # output file. Plain stdout: NO structural done sign exists on this path, only
-        # checked-then-answered.
-        tool(sid, "t3", "Read", "===== 12 passed, 3 warnings in 612.41s =====",
-             raw={"file_path": OUT_FILE})
+    elif mode == "reads_early" and prompts == 2:
+        # First nudge: the agent only Reads the output file — the EARLY output of the
+        # still-running command, plain stdout — and ends on ANOTHER waiting note.
+        tool(sid, "t3", "Read", "collecting 312 items ...", raw={"file_path": OUT_FILE})
+        chunk(sid, "Still waiting on the suite.")
+    elif mode == "reads_early":
+        # Second nudge: the structural poll the nudge points the agent at.
+        tool(sid, "t4", "BashOutput", "<status>completed</status> exit code 0 - 12 passed",
+             raw={"bash_id": "bash_1"})
         chunk(sid, "Suite finished: 12 passed.")
     elif mode == "stall":
         # The nudged round never answers — the chase must die by the turn's own deadline.
@@ -155,31 +164,52 @@ async def test_backgrounded_waiting_turn_gets_one_followup_and_its_answer_wins(t
     assert client._turn_usage == {"inputTokens": 200, "outputTokens": 14}
 
 
-async def test_a_finished_command_checked_by_reading_its_output_file_is_accepted(tmp_path):
-    """The check the notice itself prescribes — Read on the command's output file —
-    returns plain stdout with no structural done sign, so the nudged round's
-    checked-then-answered end must clear the command and its answer must win. (And the
-    FIRST round's interim read of the same file must not: the agent still believed a
-    notification would come when it ended that round on the waiting note.)"""
-    client, log = _client(tmp_path, "reads_file")
+async def test_a_nudged_read_of_early_output_plus_a_waiting_note_is_not_accepted(tmp_path):
+    """A nudged round that only Reads the command's output file sees plain stdout —
+    early output of a still-running command, indistinguishable from a finished run's —
+    so ending that round on another waiting note must NOT clear the command: accepting
+    checked-then-answered returned that second note as the answer (review finding on
+    this PR). The chase goes on until the structural poll, and ITS round's text wins."""
+    client, log = _client(tmp_path, "reads_early")
     try:
         reply = await client.prompt("run the suite", timeout=30.0)
     finally:
         await client.close()
 
     assert reply == "Suite finished: 12 passed."
-    assert len(_prompts(log)) == 2  # the interim read didn't suppress the follow-up
+    # The original prompt, the nudge answered by read-then-wait, and one more nudge.
+    assert len(_prompts(log)) == 3
     assert client.last_stop_reason == "end_turn"
     assert client.unfinished_reason() is None
-    assert client._turn_usage == {"inputTokens": 200, "outputTokens": 14}
+    # All three rounds' usage adds up.
+    assert client._turn_usage == {"inputTokens": 300, "outputTokens": 21}
+
+
+async def test_a_first_round_past_the_ref_cap_still_lets_the_followup_poll_clear(tmp_path):
+    """The tool-ref sidecar evicts its OLDEST entries past the 128-entry cap instead of
+    refusing new ones: after a first round with more tool calls than the cap, the
+    follow-up poll's start event — the only event carrying the id, in its rawInput —
+    must still be recorded, or its '<status>completed</status>' update could never be
+    matched to the id and the finished command would be chased all the way to
+    ``background_pending`` (review finding on this PR)."""
+    client, log = _client(tmp_path, "many_tools")
+    try:
+        reply = await client.prompt("run the suite", timeout=30.0)
+    finally:
+        await client.close()
+
+    assert reply == "Suite finished: 12 passed."
+    assert len(_prompts(log)) == 2  # the one nudge resolved it — no chase to the marker
+    assert client.last_stop_reason == "end_turn"
+    assert client.unfinished_reason() is None
 
 
 async def test_an_agent_that_keeps_waiting_gets_the_stop_marker_after_three_followups(tmp_path):
     """(b) The follow-up repeats at most 3 times; after that the turn carries
     ``background_pending`` — a marker callers see — instead of a silent waiting answer.
-    Each nudged round here checks the command and is then structurally SHOWN it still
-    running: the running poll must revoke the softer file-read check (and the failed,
-    blocked check must never count), or the waiting note would be accepted."""
+    Each nudged round here checks the command every way SHORT of a structural done
+    sign — a failed (blocked) command naming it, a Read of its interim output, a poll
+    structurally showing it still running — and none of those may clear it."""
     client, log = _client(tmp_path, "stubborn")
     try:
         reply = await client.prompt("run the suite", timeout=30.0)
@@ -305,20 +335,21 @@ def _event(text=None, tool_id="t1", raw_input=None, status="completed"):
                 dict(text="Command running in background with ID: bash_1. Output is "
                           "being written to: /tmp/tasks/bash_1.output."),
                 # A completed Read of the output file: plain stdout, no structural sign.
-                # It must NOT clear mid-round — only a follow-up round's normal end may
-                # act on it (first-round interim reads precede the waiting note).
+                # It must NEVER clear — a finished run's stdout is indistinguishable
+                # from the early output of one still running.
                 dict(text="===== 12 passed in 612.41s =====", tool_id="t2",
                      raw_input={"file_path": "/tmp/tasks/bash_1.output"}),
             ],
             {"bash_1"},
-            id="a-plain-stdout-file-read-never-clears-mid-round",
+            id="a-plain-stdout-file-read-never-clears",
         ),
     ],
 )
-def test_clearing_mid_round_needs_structure_and_the_exact_id(events, expected):
-    """Mid-round clearing is structural, exact-id, and veto-respecting — one table so
-    the variants stay side by side (tests drive the handler on a ``__new__``-built
-    client exactly as ``_handle_update`` would, without a subprocess per regex case)."""
+def test_clearing_needs_structure_and_the_exact_id(events, expected):
+    """Clearing is structural, exact-id, and veto-respecting — and is the ONLY way an
+    id is accounted for. One table so the variants stay side by side (tests drive the
+    handler on a ``__new__``-built client exactly as ``_handle_update`` would, without
+    a subprocess per regex case)."""
     client = AcpClient.__new__(AcpClient)
     for event in events:
         client._note_background_commands(_event(**event))
