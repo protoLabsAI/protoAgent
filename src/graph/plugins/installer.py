@@ -331,6 +331,12 @@ def _git(*args: str, cwd: Path | None = None, timeout: float | None = None, env:
 
 def _validate_url(url: str) -> None:
     if any(url.startswith(s) for s in _ALLOWED_SCHEMES):
+        from graph.plugins.trust import source_has_dot_segment
+
+        if not url.startswith(("/", "file://")) and source_has_dot_segment(url):
+            # A remote path with `.`/`..`/empty segments names a different repo than the
+            # one the allowlist and consent checks read it as.
+            raise InstallError(f"unsupported source {url!r} — the path has a '.', '..' or empty segment.")
         return
     if re.match(r"^[A-Za-z]:[\\/]", url):
         return  # a Windows drive-absolute local path (C:\src\my-plugin) — the "/" entry's sibling
@@ -632,7 +638,15 @@ def _clone(url: str, ref: str | None, dest: Path) -> str:
 # private auth — over ssh keys / credential helpers, or a github HTTPS token via
 # `_git_auth_env`); the archive path is preferred when git is absent or we're frozen.
 
-_GH_RE = re.compile(r"github\.com[/:]([^/]+)/([^/]+?)(?:\.git)?/?$")
+# Anchored: the WHOLE url is github.com/<owner>/<repo>. An unanchored search took the
+# last ``github.com/x/y`` anywhere in the path, so a nested ``…/x/github.com/o/r`` fetched
+# o/r while the allowlist/consent checks had matched the outer path.
+_GH_RE = re.compile(
+    # Optional userinfo (``git@``, or ``user:token@`` on a credentialed https URL) — then the
+    # host MUST be github.com: the userinfo can't contain ``/`` or a second ``@``.
+    r"^(?:(?:https?|git|ssh)://)?(?:[^@/\s]+@)?(?:www\.)?github\.com[/:]([A-Za-z0-9-]+)/([A-Za-z0-9._-]+?)(?:\.git)?/?$",
+    re.IGNORECASE,
+)
 
 
 def _frozen_like() -> bool:
@@ -654,8 +668,8 @@ def _prefer_archive() -> bool:
 
 
 def _github_owner_repo(url: str) -> tuple[str, str]:
-    m = _GH_RE.search(url.strip())
-    if not m:
+    m = _GH_RE.match(url.strip())
+    if not m or m.group(2) in (".", ".."):
         raise InstallError(
             f"git-less install needs a github.com URL (the desktop runtime can't run git) — got {url!r}."
         )
