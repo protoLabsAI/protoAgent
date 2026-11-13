@@ -20,7 +20,7 @@ import logging
 import os
 import re
 import threading
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from a2a_impl.wire import task_id_from_response
@@ -135,6 +135,42 @@ def _record_inbox_acceptance(item: dict, task_id: str) -> None:
         log.exception("[inbox] could not record acceptance for item %s", item.get("id"))
 
 
+# An inbox item that waited longer than this before delivery is prefixed with a one-line
+# age note (#5241). On restart, now-recovery drains items that may be more than a day old;
+# without the note the agent reads a stale `next`/`later` item as a current instruction and
+# can act against newer standing arrangements that have since replaced it.
+_INBOX_LATE_DELIVERY_THRESHOLD = timedelta(hours=1)
+
+
+def _inbox_late_delivery_notice(created_at: Any, *, now: datetime | None = None) -> str | None:
+    """A one-line staleness note for an inbox item queued at ``created_at``, or ``None``.
+
+    Returns the prefix line only when the item has waited strictly longer than
+    ``_INBOX_LATE_DELIVERY_THRESHOLD``; returns ``None`` when it is within the threshold, or
+    when ``created_at`` is missing or unparseable (the item is then delivered unchanged and
+    nothing raises). The line names the queued time in UTC and how many whole hours late the
+    delivery is, and warns that newer instructions may supersede it. Pure (no I/O) so it is
+    unit-testable."""
+    if not isinstance(created_at, str) or not created_at.strip():
+        return None
+    try:
+        queued = datetime.fromisoformat(created_at.strip())
+    except ValueError:
+        return None
+    if queued.tzinfo is None:
+        queued = queued.replace(tzinfo=UTC)
+    queued = queued.astimezone(UTC)
+    now = now or datetime.now(UTC)
+    late = now - queued
+    if late <= _INBOX_LATE_DELIVERY_THRESHOLD:
+        return None
+    hours = int(late.total_seconds() // 3600)
+    return (
+        f"[Queued {queued.strftime('%Y-%m-%d %H:%M UTC')} — delivered {hours}h late. "
+        "Newer instructions may replace it; check before acting.]"
+    )
+
+
 async def _fire_activity_from_inbox(item: dict) -> bool:
     """Self-A2A fire for a newly received now-priority inbox item.
 
@@ -157,6 +193,13 @@ async def _fire_activity_from_inbox(item: dict) -> bool:
 
     identity = _inbox_execution_identity(item)
     mid = identity["message_id"]
+    # A late-delivered item (restart recovery can drain day-old pages) gets a one-line age
+    # note so the agent weighs it against newer instructions instead of treating it as
+    # current (#5241). The note prefixes only the wire TEXT — the message identity
+    # (``mid``/``contextId``) is unchanged, so dedup still joins an already-accepted turn.
+    created_at = item.get("created_at")
+    notice = _inbox_late_delivery_notice(created_at)
+    message_text = f"{notice}\n\n{item['text']}" if notice else item["text"]
     body = {
         "jsonrpc": "2.0",
         "id": mid,
@@ -170,7 +213,7 @@ async def _fire_activity_from_inbox(item: dict) -> bool:
             "configuration": {"returnImmediately": True},
             "message": {
                 "role": "ROLE_USER",
-                "parts": [{"text": item["text"]}],
+                "parts": [{"text": message_text}],
                 "messageId": mid,
                 "contextId": identity["context_id"],
                 "metadata": {
@@ -178,6 +221,7 @@ async def _fire_activity_from_inbox(item: dict) -> bool:
                     "inbox_id": item.get("id"),
                     "inbox_source": item.get("source", ""),
                     "priority": item.get("priority", "now"),
+                    "created_at": created_at,
                 },
             },
         },
