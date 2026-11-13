@@ -275,6 +275,54 @@ continuation ownership, then state/compaction/result/decision attribution with
 integration validation. Background-session S0 is separate from the console slice
 numbering below.
 
+### D7 — A turn interrupted by a restart: resume what's safe, ask about the rest (Josh, 2026-11-12)
+
+**Problem.** When the server stops mid-turn (SIGTERM, crash, desktop relaunch),
+`a2a_impl/stores.py::reconcile_interrupted_tasks` marks the task `failed`
+("Task interrupted by an agent restart; its runner did not survive."). The
+scheduler then logs `reconciliation unavailable; not resending` and never runs
+it again. That is at-most-once, and it is right for side effects, but it
+silently loses work. The worst case is a background `wait`/watch continuation:
+it is the agent's only way back into a loop, so dropping it stops a merge queue
+with no one told. This happened to the whole fleet on 2026-11-12, when the
+desktop sidecar was SIGTERMed and 10 members spun down, and the v0.237 stress
+harness reproduces it (`scripts/stress`, restart scenario).
+
+**Decision.** On boot, classify every task interrupted by the restart from its
+LangGraph checkpoint, the source of truth for what completed, before marking
+anything failed. Then apply this policy. It replaces blanket `failed` for
+scheduler-owned work (job sessions, waits, watches, inbox fires). Interactive
+chat turns keep today's behavior: the operator sees the interruption and resends.
+
+| Interruption point (from the checkpoint) | Kind of work | Action |
+|---|---|---|
+| Between steps, or during a model call: every tool call in the last AI message has its ToolMessage | any | **Resume automatically** from the checkpoint. Completed steps aren't repeated. |
+| During a tool call: an AI message has tool calls without results | `wait:` / watch continuation | **Resume**, and report the uncertain call to the model as interrupted ("this tool call was interrupted by a restart; its effect is unknown, so verify before repeating"). The agent's loop continues. |
+| During a tool call | any other job occurrence | **Ask in Needs you**: "&lt;Job&gt; was interrupted by a restart after &lt;N&gt; steps. Last action: &lt;tool&gt;(&lt;short args&gt;), and its effect is unknown." Options: **Resume** (continue with the uncertain call reported as interrupted), **Re-run** (fresh turn from the job's prompt), **Drop**. Neutral tone, never an error. |
+| any | a recurring job's occurrence | **Skip** the interrupted occurrence (record it as `interrupted`, not `failed`). The next scheduled occurrence runs as usual. If it stopped mid-tool-call, also raise the Needs you item, without Re-run. |
+
+**Guards.**
+
+- **At most one automatic resume per occurrence.** A second interruption of the
+  same occurrence (for example, a job whose turn crashes the server) goes to
+  Needs you instead of looping. Count it on the occurrence row, in the same
+  transaction as the claim.
+- **Never resend without positive evidence.** D6 still holds: an accepted task is
+  resumed against its own checkpoint thread and task handle. It is never a new
+  prompt, and never a re-send of the original message. **Re-run** in the Needs you
+  item is the only path that starts a fresh turn, and only the operator can pick it.
+- **Ownership.** The resume runs under the occurrence's execution-session lock
+  (D6 serialization), before the owner admits any new independent fire.
+- **Visibility.** Every auto-resume emits an Activity entry ("Resumed &lt;job&gt; after a
+  restart (step N)"), so an automatic recovery is never silent. The Needs you item
+  links to that job's trace.
+- **No checkpoint.** If the checkpoint is missing or unreadable, raise the Needs you
+  item with **Re-run** and **Drop** only.
+
+**Not covered.** This doesn't make external side effects exactly-once. A tool
+that ran but whose result was never written stays uncertain, and the policy
+makes that uncertainty visible: to the model on resume, or to the operator.
+
 ## Consequences
 
 - **Good:** one mental model for operator and agent. Fewer wrong-tool calls and fewer contradictory records (a watch versus an approval). Work becomes scannable, and decisions stop hiding in background sessions.
@@ -290,11 +338,13 @@ numbering below.
 - **S3:** D4 approvals. Server-recorded directives from decision answers, quote verification, and the scope-first display.
 - **S4:** D2 follow-up primitive, plus aliases and the migration.
 - **S5:** D5 prompt capability map and tool-count reduction. Remove the aliases one release after S4.
+- **S6 (D7):** classify interrupted tasks from their checkpoint on boot; auto-resume the safe cases with the one-retry cap; skip interrupted recurring occurrences. **S7 (D7):** the Needs you recovery item (Resume / Re-run / Drop) and the Activity entry for each auto-resume.
 
 Independent fixes in flight that this ADR keeps: #5099 (a decision answer returns as soon as it is consumed) and projectBoard-plugin#735 (human page text, and pages retire when their card does).
 
 ## Decisions taken (Josh, 2026-11-11)
 
+- **Interrupted turns (D7, 2026-11-12):** resume what's safe, ask about the rest. Josh chose the hybrid after weighing at-most-once, at-least-once, checkpoint resume and asking in Needs you.
 - **Group names:** Needs you · Doing now · Coming up · Your instructions. The rail chip for instructions reads "Told it N".
 - **Not-started jobs** don't count in Doing now. They show under Coming up.
 - **Interim decision link:** until D4's server-recorded approvals land, an instruction links to a decision when that decision was answered within the 2 minutes before the instruction was recorded.
