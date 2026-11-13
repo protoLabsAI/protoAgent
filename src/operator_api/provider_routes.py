@@ -424,6 +424,10 @@ def register_provider_routes(app) -> None:
         if req.base_url is not None and req.base_url.strip() != stored:
             if (denied := credential_plane_refusal(request, [f"providers.{pid}.base_url"])) is not None:
                 return denied
+        # …and so is replacing its key: that is a credential, and a wrong one cuts the agent off.
+        if (req.api_key or "").strip():
+            if (denied := credential_plane_refusal(request, [f"providers.{pid}.api_key"])) is not None:
+                return denied
 
         rekeyed = bool((req.api_key or "").strip())
 

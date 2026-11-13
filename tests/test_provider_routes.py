@@ -673,6 +673,7 @@ def test_a_device_scope_caller_cannot_choose_a_connection_endpoint(client, monke
     assert client.patch("/api/config/providers/local-vllm", json={"base_url": "https://x/v1"}).status_code == 403
     assert client.post("/api/config/providers", json={"id": "x", "base_url": "https://x/v1"}).status_code == 403
     assert client.delete("/api/config/providers/local-vllm").status_code == 403  # nor remove one
+    assert client.patch("/api/config/providers/local-vllm", json={"api_key": "k"}).status_code == 403  # nor rekey one
     r = client.patch("/api/config/providers/local-vllm", json={"label": "L", "base_url": "http://localhost:8000/v1"})
     assert r.status_code == 200 and client.written["entries"]
 
