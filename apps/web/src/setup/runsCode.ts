@@ -21,6 +21,10 @@ export function agentWillRunCode(opts: {
   if (on.has("execute_code")) return true;
   if (!host) return true; // not loaded yet
   const hostOn = (id: string) => host.find((p) => p.id === id)?.enabled;
+  // Already on at the host with Cowork OFF there: it is on by name, and only the archetype
+  // switching execute_code itself off (handled above) would stop it. With Cowork on, it may be
+  // on only through Cowork, so an archetype that turns Cowork off decides (below).
+  if (hostOn("execute_code") === true && (hostOn("cowork") !== true || !off.has("cowork"))) return true;
   const cowork = !off.has("cowork") && (on.has("cowork") || hostOn("cowork") === true);
   if (!cowork) return false;
   // Cowork is on: execute_code follows unless the host has it off anyway. Only a host where

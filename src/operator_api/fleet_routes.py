@@ -22,6 +22,19 @@ from fastapi import Request, WebSocket  # module-level so the stringized `reques
 log = logging.getLogger("protoagent.server")
 
 
+
+def _effective_bundle_disabled(requested: list) -> list[str]:
+    """What of a bundle's ``plugins.disabled`` the install would apply to THIS host's config."""
+    from graph.config_io import config_yaml_path, load_yaml_doc
+    from graph.plugins.installer import bundle_config_overlay
+
+    try:
+        current = load_yaml_doc(config_yaml_path())
+    except Exception:  # noqa: BLE001 — an unreadable config reads as "nothing set"
+        current = {}
+    overlay = bundle_config_overlay({"plugins": {"disabled": list(requested)}}, current if isinstance(current, dict) else {})
+    return [str(x) for x in (overlay.get("plugins") or {}).get("disabled") or []]
+
 def register_fleet_routes(app) -> None:
     from fastapi import Body, HTTPException
 
@@ -517,6 +530,11 @@ def register_fleet_routes(app) -> None:
             peek = await plugin_ops.peek_bundle(record["bundle"])
         except Exception as exc:  # noqa: BLE001 — network/git failure → clean 502
             raise HTTPException(502, f"could not read bundle {record['bundle']}: {exc}")
+        if isinstance(peek, dict) and peek.get("disabled"):
+            # A bundle's config is applied as DEFAULTS only (``bundle_config_overlay``): a host
+            # that already sets ``plugins.disabled`` keeps its own list. Report what the install
+            # would actually switch off here, not what the bundle asks for.
+            peek = {**peek, "disabled": await asyncio.to_thread(_effective_bundle_disabled, peek["disabled"])}
         return {"id": archetype_id, "bundle": peek}
 
 

@@ -17,6 +17,7 @@ describe("agentWillRunCode — the finish step only says the agent can run code 
     ["archetype turns Cowork on", { hostPlugins: host(false, false), archetypeEnabled: ["cowork"] }, true],
     ["archetype turns execute_code on by name", { hostPlugins: host(false, false), archetypeEnabled: ["execute_code"] }, true],
     ["host plugins not loaded yet", { hostPlugins: null }, true],
+    ["host has execute_code on by name with Cowork off", { hostPlugins: host(false, true) }, true],
   ])("%s", (_name, opts, expected) => {
     expect(agentWillRunCode(opts)).toBe(expected);
   });
