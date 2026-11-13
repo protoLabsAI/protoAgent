@@ -110,6 +110,8 @@ export const KEY_REGISTRY: readonly KeySpec[] = [
   { id: "newAgent.showPreviewArchetypes", area: "local", pattern: /^protoagent\.newAgent\.showPreviewArchetypes$/, category: "prefs", slug: noSlug, evictable: false },
   { id: "chat.bulkCloseHarvest", area: "local", pattern: /^protoagent\.chat\.bulkCloseHarvest$/, category: "prefs", slug: noSlug, evictable: false },
   { id: "keybindings", area: "local", pattern: /^protoagent\.keybindings$/, category: "prefs", slug: noSlug, evictable: false },
+  // "You've been told the agent can run code" (Tools ▸ execute_code): a one-time reminder flag.
+  { id: "tools.runCodeAcknowledged", area: "local", pattern: /^protoagent\.runCodeAcknowledged$/, category: "dismissals", slug: noSlug, evictable: false },
   { id: "chat.inputHistory", area: "local", pattern: /^protoagent\.chat\.inputHistory$/, category: "prefs", slug: noSlug, evictable: false },
   { id: "fleet.recent", area: "local", pattern: /^protoagent\.fleet\.recent$/, category: "prefs", slug: noSlug, evictable: false },
   // Fleet switcher (docs/design/fleet-switcher-groups.md): the last agents switched to from this

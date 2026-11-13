@@ -23,7 +23,7 @@ import { TestConnectionButton } from "../app/ui-kit";
 import { api } from "../lib/api";
 import { errMsg } from "../lib/format";
 import { pythonRuntimeView } from "../app/pythonRuntime";
-import { archetypesQuery, pythonRuntimeQuery } from "../lib/queries";
+import { archetypesQuery, pythonRuntimeQuery, runtimeStatusQuery } from "../lib/queries";
 import {
   archetypeConfigFields,
   isMissingRequiredBundleConfig,
@@ -36,6 +36,7 @@ import type { AgentConfig, Archetype, ConfigPayload } from "../lib/types";
 import { ArchetypePicker } from "./ArchetypePicker";
 import { ArchetypeSetupForm } from "./ArchetypeSetupForm";
 import { needyPlugins } from "./depsReport";
+import { agentWillRunCode } from "./runsCode";
 import { useOauthLifecycle } from "../oauth/OAuthAccount";
 import { namedSoul, personaSoul } from "./persona";
 
@@ -753,6 +754,14 @@ export function SetupWizard({
   // install refuses to activate without it, so the agent step's Next (and Finish) wait for it.
   const missingHard = isMissingRequiredBundleConfig(configFields, configValues);
   const contractNotice = pickedArchetype ? requiresToolsNotice(pickedArchetype.label, pickedArchetype.requires_tools) : null;
+  // The finish step's "your agent can run code" line, only when it will (Cowork on and
+  // execute_code not disabled, after the picked archetype's own enable/disable lists).
+  const hostRuntime = useQuery(runtimeStatusQuery());
+  const runsCode = agentWillRunCode({
+    hostPlugins: hostRuntime.data?.plugins,
+    archetypeEnabled: archetypePeek.data?.bundle?.enabled,
+    archetypeDisabled: archetypePeek.data?.bundle?.disabled,
+  });
 
   // Runtime requirement at CHOOSE-time (#2186): same affordance as NewAgentPanel —
   // the wizard's first-run pick of Cowork on a runtime-less desktop otherwise ends at
@@ -1382,6 +1391,13 @@ export function SetupWizard({
                 )}
                 <StatusLine icon={<Sparkles size={15} />} label={`Persona · ${personaLabel}`} />
               </div>
+              {runsCode ? (
+                <p className="setup-hint" data-testid="setup-runs-code">
+                  Your agent can write and run Python scripts on this computer — that’s how it makes documents and
+                  spreadsheets. The scripts run as you, with your files and your network. You can turn this off any
+                  time in Tools (<code>execute_code</code>).
+                </p>
+              ) : null}
               {postInstall ? (
                 <div className="setup-postinstall">
                   <p className="setup-hint">
