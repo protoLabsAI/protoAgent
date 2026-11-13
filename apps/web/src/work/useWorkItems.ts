@@ -29,7 +29,7 @@ import {
 } from "./tone";
 import { inWorkScope } from "./workGroups";
 import { directiveStore } from "../chat/useDirectives";
-import { scheduleWhen, typeAndPriority, watchKind } from "./rowMeta";
+import { scheduleWhen, summaryTitle, typeAndPriority, watchKind } from "./rowMeta";
 
 /** The eight work sources, in the order the Work view lays them out (§5). `activity` is a
  *  source only — its Work section was removed in S4c (the feed lives on the utility-bar
@@ -377,7 +377,9 @@ export function useWorkItems({ sessionId, thisChatOnly }: UseWorkItemsParams): W
     activity: {
       ...stateOf(actRes, []),
       groupItems: (actRes.data?.items ?? []).map((row) => ({
-        kind: "delivery", id: String(row.id), title: row.text, meta: row.source || "",
+        // The row title is the short summary, never the whole page (the full text lives
+        // in the delivery detail's Message field) — same rule as a schedule's prompt.
+        kind: "delivery", id: String(row.id), title: summaryTitle(row.text), meta: row.source || "",
         status: "needs-you", raw: row,
       })),
     },
