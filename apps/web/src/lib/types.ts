@@ -746,6 +746,9 @@ export type ActivityEntry = {
   /** The triggering input text this turn is a response to (scheduled prompt / inbound
    *  message / webhook body), truncated. Shown as "in response to …" (#1375). */
   stimulus?: string;
+  /** The inbox item this turn drains, when one did — joins a queued item to its
+   *  result in the Feed (docs/design/feed.md §3). */
+  inbox_id?: number | null;
 };
 
 export type ActivityHistory = {

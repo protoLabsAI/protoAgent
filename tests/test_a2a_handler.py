@@ -1171,7 +1171,7 @@ async def test_federation_caller_cannot_claim_a_server_fired_turn(token, monkeyp
 
     app = _build_app(stream, bearer="op-token", server_fired_origin=lambda o: o == "background")
     auth.set_federation_token("fed-token")
-    md = {"origin": "background", "trigger": "bg-1", "background_job_id": "bg-1"}
+    md = {"origin": "background", "trigger": "bg-1", "background_job_id": "bg-1", "inbox_id": 7}
     headers = {**A2A_HEADERS, "Authorization": f"Bearer {token}"}
 
     def body(ctx=None):
@@ -1185,6 +1185,7 @@ async def test_federation_caller_cannot_claim_a_server_fired_turn(token, monkeyp
 
     operator = token == "op-token"
     assert (outcomes[0].origin, outcomes[0].trigger) == (("background", "bg-1") if operator else ("", ""))
+    assert outcomes[0].inbox_id == (7 if operator else None)  # a feed join can't be forged either
     assert ("background_job_id" in seen[0]) is operator
     assert ("error" in reserved) is not operator
 

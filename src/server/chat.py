@@ -947,6 +947,25 @@ async def _session_turn_idle(session_id: str) -> bool:
             return False
 
 
+async def _await_started_task(session_id: str, msg_id: str) -> str:
+    """Wait out an in-flight turn start for ``msg_id``; its task id, or "" if it failed.
+
+    Bounded a little past the loopback send's own 30s timeout, so this resolves whenever
+    the start itself does. A cleared mark (the start failed and the items were requeued)
+    returns immediately — the caller decides afresh."""
+    from graph import steering
+
+    deadline = time.monotonic() + 35.0
+    while time.monotonic() < deadline:
+        task_id = steering.started_task(session_id, msg_id)
+        if task_id:
+            return task_id
+        if not steering.starting(session_id, msg_id):
+            return ""
+        await asyncio.sleep(0.05)
+    return ""
+
+
 async def steer_or_start_turn(
     session_id: str,
     text: str,
@@ -971,13 +990,27 @@ async def steer_or_start_turn(
     started = steering.started_task(session_id, mid)
     if started:
         return {"ok": True, "id": mid, "started_turn": started, "pending": steering.pending(session_id)}
+    if steering.starting(session_id, mid):
+        # A fresh turn for this very message is starting RIGHT NOW (this POST is a retry
+        # racing the first, or a console re-send racing the turn-end restart). The idle
+        # check below would see that new turn as busy and queue the text into it — the
+        # agent reading its own turn's message a second time — so wait for the start to
+        # name its task and answer with it instead.
+        joined = await _await_started_task(session_id, mid)
+        if joined:
+            return {"ok": True, "id": mid, "started_turn": joined, "pending": steering.pending(session_id)}
+        # The start failed (the items are back on the queue) — decide normally below.
     if await _session_turn_idle(session_id):
+        # Marked BEFORE the loopback awaits, so a concurrent duplicate joins this start
+        # (above) instead of racing it.
+        steering.note_starting(session_id, [mid])
         task_id = await _start_steer_turn(session_id, text, mid, images=images, incognito=incognito)
         if task_id:
             steering.note_started(session_id, mid, task_id)
             return {"ok": True, "id": mid, "started_turn": task_id, "pending": steering.pending(session_id)}
         # Could not start a turn (loopback refused/unreachable): fall through to the queue
         # rather than drop operator input — the next turn folds it in, as before.
+        steering.clear_starting(session_id, [mid])
         log.warning("[steer] session %s is idle but a turn could not be started — queueing", session_id)
     refs = "" if incognito else _bridge_attachment_ids(images, session_id)
     queued = steering.enqueue(
@@ -1005,8 +1038,14 @@ def restart_undrained_steers(session_id: str, state: str) -> "asyncio.Task | Non
     ``completed``/``failed`` end restarts — ``input_required`` means the turn PARKED (held
     messages fold in after the operator's answer), and a ``canceled`` end is the operator's
     Stop, whose console flow takes its queued messages back itself (a surprise follow-up
-    turn is the last thing a Stop should spawn). The queue is popped synchronously, before
-    any await, so the console's own turn-end reconcile can never re-send the same items."""
+    turn is the last thing a Stop should spawn).
+
+    The pop and the STARTING mark happen synchronously, before any await, so a console
+    reconciling at turn-end (its own stream just closed) can never catch the in-between:
+    its ``GET …/steer`` read sees each popped id in the ``started`` map — ``""`` while the
+    loopback send is in flight, the task id once it lands — and attaches its bubbles to
+    the fresh turn instead of settling them as consumed by the turn that just ended (and
+    instead of re-sending words this restart already carries)."""
     if state not in ("completed", "failed"):
         return None
     sid = str(session_id or "")
@@ -1023,8 +1062,11 @@ def restart_undrained_steers(session_id: str, state: str) -> "asyncio.Task | Non
     items = steering.take_unfenced(sid)
     if not items:
         return None
+    item_ids = [str(i.get("id") or "") for i in items if i.get("id")]
+    steering.note_starting(sid, item_ids)  # same frame as the pop — see the docstring
 
     def _requeue() -> None:
+        steering.clear_starting(sid, item_ids)
         for i in items:
             steering.enqueue(
                 sid,
@@ -1045,8 +1087,10 @@ def restart_undrained_steers(session_id: str, state: str) -> "asyncio.Task | Non
             sid, text, mid, images=images, incognito=any(i.get("incognito") for i in items)
         )
         if task_id:
-            if mid:
-                steering.note_started(sid, mid, task_id)
+            # EVERY restarted id maps to the turn, not just the lead one riding as the
+            # A2A messageId: each id is a console bubble that must find its way there.
+            for iid in item_ids:
+                steering.note_started(sid, iid, task_id)
             log.info("[steer] restarted %d undrained steer(s) for session %s as turn %s", len(items), sid, task_id)
             return
         # Never lose operator input: back on the queue (original order) for the next turn.

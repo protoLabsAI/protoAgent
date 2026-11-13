@@ -178,7 +178,7 @@ export function useSteerQueue({
             api.steerChat(session.id, id, text, undefined, true)
           : api.steerChat(session.id, id, text));
       if (images.length) clearTrayImages?.();
-      if (res.started_turn) attachStartedTurn(id, text, res.started_turn);
+      if (res.started_turn) attachStartedTurn([{ id, text }], res.started_turn);
     } catch (e) {
       setSteerQueue(steerQueueRef.current.filter((x) => x.id !== id));
       onError(`Couldn't queue message: ${errMsg(e)}`);
@@ -186,14 +186,16 @@ export function useSteerQueue({
   }
 
   // The server had NO live turn (bd-0ad5v): the 'streaming' this console believed in was
-  // stale, and instead of queueing a message nothing would ever drain, the server ran it
-  // as an ordinary operator turn. Retire the queued bubble — the turn's own user message
-  // replaces it, under the same id, which is what dedupes a later hydration — finalize
+  // stale, and instead of queueing messages nothing would ever drain, the server ran them
+  // as an ordinary operator turn (one POST's reply, or the turn-end restart the reconcile
+  // reads out of `started`). Retire the queued bubbles — the turn's own user messages
+  // replace them, under the same ids, which is what dedupes a later hydration — finalize
   // whatever this console still thought was streaming, and attach to the new task: the
   // slot's reattach effect resubscribes to the last streaming assistant bubble carrying a
   // taskId, so the turn streams in exactly like a reload's reattach.
-  function attachStartedTurn(steerId: string, text: string, taskId: string) {
-    setSteerQueue(steerQueueRef.current.filter((q) => q.id !== steerId));
+  function attachStartedTurn(items: { id: string; text: string }[], taskId: string) {
+    const attached = new Set(items.map((item) => item.id));
+    setSteerQueue(steerQueueRef.current.filter((q) => !attached.has(q.id)));
     if (!session) return;
     // Any locally-owned stream is a zombie — the server just said nothing is running.
     // Abort it and release the slot's claim, or the reattach effect (gated on abortRef)
@@ -208,7 +210,9 @@ export function useSteerQueue({
     }
     chatStore.updateMessages(session.id, [
       ...base,
-      { id: steerId, role: "user", content: text, createdAt: Date.now(), status: "done" },
+      ...items
+        .filter((item) => !base.some((m) => m.id === item.id))
+        .map((item) => ({ id: item.id, role: "user" as const, content: item.text, createdAt: Date.now(), status: "done" as const })),
       { id: messageId(), role: "assistant", content: "", createdAt: Date.now(), status: "streaming", taskId },
     ]);
     chatStore.setSessionStatus(session.id, "streaming");
@@ -413,10 +417,12 @@ export function useSteerQueue({
     }
     let pendingIds: Set<string>;
     let drainedIds: Set<string>;
+    let startedMap: Map<string, string>;
     try {
       const queue = await api.pendingSteer(session.id);
       pendingIds = new Set(queue.pending.map((item) => item.id));
       drainedIds = new Set(queue.drained ?? []);
+      startedMap = new Map(Object.entries(queue.started ?? {}));
       // Only a read that REACHED the server spends the grace: a blip must not consume the
       // very budget that exists to survive it.
       interjectRetryRef.current.asks += 1;
@@ -441,6 +447,7 @@ export function useSteerQueue({
       {
         pendingIds,
         drainedIds,
+        started: startedMap,
         phases,
         consumedIds,
         ownStreamLive: chatStore.getSnapshot().sessionStatusMap[sessionId] === "streaming",
@@ -450,6 +457,16 @@ export function useSteerQueue({
       },
     );
     if (plan.settle.length) settleServerInterjections(plan.settle);
+    if (plan.attach.length) {
+      // The turn these were sent to ended without folding them in, and the server ran them
+      // as a fresh turn of their own (bd-0ad5v restart): the reply comes from that task.
+      const byTask = new Map<string, QueuedSteer[]>();
+      for (const item of plan.attach) {
+        const taskId = startedMap.get(item.id) ?? "";
+        byTask.set(taskId, [...(byTask.get(taskId) ?? []), item]);
+      }
+      for (const [taskId, group] of byTask) if (taskId) attachStartedTurn(group, taskId);
+    }
     if (plan.retarget.length) {
       const next = new Map(plan.retarget.map((item) => [item.id, item]));
       setSteerQueue(steerQueueRef.current.map((q) => next.get(q.id) ?? q));
@@ -578,7 +595,7 @@ export function useSteerQueue({
           if (res.started_turn) {
             // The turn ended between the liveness check above and this POST, so the
             // server ran the message as a fresh turn instead of queueing it: attach.
-            attachStartedTurn(item.id, item.text, res.started_turn);
+            attachStartedTurn([{ id: item.id, text: item.text }], res.started_turn);
             continue;
           }
         }
@@ -684,34 +701,114 @@ export function useSteerQueue({
     }
   }
 
+  // The own-stream reconcile's re-check: a steer the server is restarting as a fresh turn
+  // RIGHT NOW (`started` says "", the pop-to-task window) resolves moments later, so ask
+  // again instead of guessing. `asks` counts successful server reads (the grace before
+  // "delivered but unlocated" settles it — planInterjectionReconcile's call); `steps`
+  // paces the timer. Both reset once nothing is left in that window.
+  const steerRetryRef = useRef<{ timer: number | null; steps: number; asks: number }>({
+    timer: null,
+    steps: 0,
+    asks: 0,
+  });
+  const STEER_RECHECK_MS = [1000, 2000, 4000, 8000];
+  const STEER_RESTART_ASKS = 4;
+
+  function scheduleSteerRecheck() {
+    const retry = steerRetryRef.current;
+    if (retry.timer !== null) return;
+    const delay = STEER_RECHECK_MS[Math.min(retry.steps, STEER_RECHECK_MS.length - 1)];
+    retry.steps += 1;
+    retry.timer = window.setTimeout(() => {
+      retry.timer = null;
+      void reconcileSteer();
+    }, delay);
+  }
+
+  useEffect(
+    () => () => {
+      const retry = steerRetryRef.current;
+      if (retry.timer !== null) window.clearTimeout(retry.timer);
+    },
+    [],
+  );
+
   async function reconcileSteerOnce(queued: QueuedSteer[]) {
     if (!session) return;
     let remaining: { id: string; text: string }[];
+    let started: Record<string, string>;
     try {
-      remaining = (await api.pendingSteer(session.id)).pending;
+      const read = await api.pendingSteer(session.id);
+      remaining = read.pending;
+      started = read.started ?? {};
     } catch {
       return; // can't tell consumed from not — leave the queue rather than guess
     }
     const remainingIds = new Set(remaining.map((r) => r.id));
-    const consumed = queued.filter((q) => !remainingIds.has(q.id));
-    const unconsumed = queued.filter((q) => remainingIds.has(q.id));
+    const restarted: QueuedSteer[] = []; // the server ran it as a FRESH turn — attach to it
+    const starting: QueuedSteer[] = []; // …is running it as one right now (task unnamed yet)
+    const consumed: QueuedSteer[] = [];
+    const unconsumed: QueuedSteer[] = [];
+    for (const q of queued) {
+      if (started[q.id]) restarted.push(q);
+      else if (remainingIds.has(q.id)) unconsumed.push(q);
+      else if (started[q.id] === "") starting.push(q);
+      else consumed.push(q);
+    }
     if (consumed.length) settleConsumed(consumed);
+    if (restarted.length) {
+      // The reply is coming from the restart's task, not the turn that just ended —
+      // settling here is exactly the lost-reply bug (bd-0ad5v review), and re-sending
+      // would hand the agent words that turn already carries.
+      const byTask = new Map<string, QueuedSteer[]>();
+      for (const q of restarted) byTask.set(started[q.id], [...(byTask.get(started[q.id]) ?? []), q]);
+      for (const [taskId, group] of byTask) attachStartedTurn(group, taskId);
+    }
+    if (starting.length) {
+      // The turn-end restart popped these but its loopback send hasn't named a task yet.
+      // Leave them queued and ask again shortly; past the grace, settle — the same
+      // "delivered but unlocated" call the interjection planner makes.
+      steerRetryRef.current.asks += 1;
+      if (steerRetryRef.current.asks > STEER_RESTART_ASKS) {
+        settleConsumed(starting);
+        steerRetryRef.current.asks = 0;
+        steerRetryRef.current.steps = 0;
+      } else {
+        scheduleSteerRecheck();
+      }
+    } else {
+      steerRetryRef.current.asks = 0;
+      steerRetryRef.current.steps = 0;
+    }
+    if (!unconsumed.length) return;
     // The turn parked on a HITL form (#1560): steers the agent hasn't folded yet stay
     // QUEUED — the server keeps holding them and folds them in right after the form
     // response. Re-sending them as a fresh turn here would deliver them BEFORE the
     // form answer (and abandon the pending interrupt).
-    const reconciled = new Set(queued.map((q) => q.id));
-    if (unconsumed.length && hitlRef.current) {
-      const keep = new Set(unconsumed.map((q) => q.id));
-      setSteerQueue(steerQueueRef.current.filter((q) => !reconciled.has(q.id) || keep.has(q.id)));
-      return;
+    if (hitlRef.current) return;
+    // Take each out of the server's queue BEFORE re-sending (resendInterjections' rule):
+    // left there, the turn-end restart — or the fresh turn itself, which drains the same
+    // queue — would fold the same words in again. A dequeue answering `removed: false`
+    // lost that race; the next pass reads what actually took it (folded → settle,
+    // restarted → attach) instead of guessing here.
+    const send: QueuedSteer[] = [];
+    let lost = false;
+    for (const item of unconsumed) {
+      try {
+        const { removed } = await api.cancelSteer(session.id, item.id);
+        if (removed) send.push(item);
+        else lost = true;
+      } catch {
+        lost = true;
+      }
     }
-    setSteerQueue(steerQueueRef.current.filter((q) => !reconciled.has(q.id)));
-    if (unconsumed.length) {
-      const text = unconsumed.map((u) => u.text).join("\n\n");
-      const images = unconsumed.flatMap((u) => u.images ?? []);
-      void (images.length ? runTurn(text, { images }) : runTurn(text));
-    }
+    if (lost) scheduleSteerRecheck();
+    if (!send.length) return;
+    const sent = new Set(send.map((q) => q.id));
+    setSteerQueue(steerQueueRef.current.filter((q) => !sent.has(q.id)));
+    const text = send.map((u) => u.text).join("\n\n");
+    const images = send.flatMap((u) => u.images ?? []);
+    void (images.length ? runTurn(text, { images }) : runTurn(text));
   }
 
   /** Settle Stop's account with the server for every message that was still queued.

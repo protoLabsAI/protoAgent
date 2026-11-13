@@ -431,8 +431,60 @@ describe("useSteerQueue — own-stream turn-end reconcile", () => {
     pendingSteer.mockResolvedValue({ pending: [{ id: b, text: "two" }] });
     await act(() => r.current.reconcileSteer());
     expect(messagesOf().some((m) => m.id === a)).toBe(true);
+    // Dequeued BEFORE the re-send: left on the server, the turn-end restart (or the fresh
+    // turn itself) would fold the same words in again.
+    expect(cancelSteer).toHaveBeenCalledWith(sessionId, b);
     expect(runTurn).toHaveBeenCalledWith("two");
     expect(r.current.steerQueue).toEqual([]);
+  });
+
+  it("does not re-send a steer whose dequeue lost the race — the next pass reads what took it", async () => {
+    const runTurn = mkRun();
+    const r = renderHook(baseOpts({ runTurn }));
+    rerender(baseOpts({ draft: "one", runTurn }));
+    await act(() => r.current.queueSteer());
+    const [a] = ids(r.current.steerQueue);
+    rerender(baseOpts({ runTurn }));
+    pendingSteer.mockResolvedValue({ pending: [{ id: a, text: "one" }] });
+    cancelSteer.mockResolvedValue({ removed: false, pending: 0 });
+    await act(() => r.current.reconcileSteer());
+    expect(runTurn).not.toHaveBeenCalled();
+    expect(ids(r.current.steerQueue)).toEqual([a]);
+  });
+
+  it("attaches to the restarted turn instead of settling when the server ran leftovers as a fresh turn (bd-0ad5v)", async () => {
+    // The blocking review case: the turn ended with both steers undrained, and the server
+    // popped them into a loopback turn of their own. They are gone from `pending` and in
+    // `drained` — which used to read as "consumed by the turn that just ended" — but
+    // `started` names the fresh task: the reply comes from THERE, so the bubbles become
+    // the turn's own user messages and a streaming assistant bubble carries its task id
+    // for the slot's reattach effect to subscribe through.
+    const runTurn = mkRun();
+    const r = renderHook(baseOpts({ runTurn }));
+    const [a, b] = await queueTwo(r);
+    rerender(baseOpts({ runTurn }));
+    pendingSteer.mockResolvedValue({ pending: [], drained: [a, b], started: { [a]: "task-r", [b]: "task-r" } });
+    await act(() => r.current.reconcileSteer());
+    expect(runTurn).not.toHaveBeenCalled(); // never re-sent — the restart already carries the words
+    expect(r.current.steerQueue).toEqual([]);
+    const msgs = messagesOf();
+    expect(msgs.filter((m) => m.role === "user").map((m) => m.id)).toEqual(["u0", a, b]);
+    expect(msgs.at(-1)).toMatchObject({ role: "assistant", taskId: "task-r", status: "streaming" });
+    expect(chatStore.getSnapshot().sessionStatusMap[sessionId]).toBe("streaming");
+  });
+
+  it("keeps a steer queued while its restart hasn't named a task yet (started: '')", async () => {
+    const runTurn = mkRun();
+    const r = renderHook(baseOpts({ runTurn }));
+    rerender(baseOpts({ draft: "one", runTurn }));
+    await act(() => r.current.queueSteer());
+    const [a] = ids(r.current.steerQueue);
+    rerender(baseOpts({ runTurn }));
+    pendingSteer.mockResolvedValue({ pending: [], drained: [a], started: { [a]: "" } });
+    await act(() => r.current.reconcileSteer());
+    expect(ids(r.current.steerQueue)).toEqual([a]); // neither settled nor re-sent — asked again
+    expect(runTurn).not.toHaveBeenCalled();
+    expect(messagesOf().some((m) => m.id === a)).toBe(false);
   });
 
   it("keeps unread steers QUEUED while a HITL form is parked (never re-sends before the answer)", async () => {

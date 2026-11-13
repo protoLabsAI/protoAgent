@@ -260,11 +260,12 @@ class TestInspect:
                     "operator": {"allowed_dirs": ["/srv/work"]},
                     "mcp": {"servers": {"github": {"command": "npx"}}},
                     "tracing": {"enabled": True, "host": ""},
+                    "network": {"bind": ""},  # present but blank: grants nothing either
                 }
             )
         )
         keys = [k for k, _ in plan.capabilities]
-        assert "tracing.host" not in keys
+        assert "tracing.host" not in keys and "network.bind" not in keys
         assert "operator.allowed_dirs" in keys and "mcp.servers" in keys
 
     def test_a_plain_config_grants_nothing(self):

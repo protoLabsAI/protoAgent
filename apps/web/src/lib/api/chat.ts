@@ -606,10 +606,15 @@ export const chatApi = {
   // and the live boundary marker is best-effort), and the console must not guess between
   // settling a message the agent never saw and re-offering one it already used. Absent
   // from an older server, which reads as "can't say" rather than "not read".
+  // `started` (bd-0ad5v) maps msg id → task id for messages the server ran as a FRESH
+  // turn instead (an idle-session steer, or one left undrained at turn-end), "" while
+  // that turn's start is in flight: the caller attaches to the task, never settles.
   pendingSteer(sessionId: string) {
-    return request<{ pending: { id: string; text: string }[]; drained?: string[] }>(
-      `/api/chat/sessions/${encodeURIComponent(sessionId)}/steer`,
-    );
+    return request<{
+      pending: { id: string; text: string }[];
+      drained?: string[];
+      started?: Record<string, string>;
+    }>(`/api/chat/sessions/${encodeURIComponent(sessionId)}/steer`);
   },
   // Cancel a still-queued steer (the ✕ on a pending bubble) before it folds into
   // the turn. `removed: false` means it was already drained — the agent will act

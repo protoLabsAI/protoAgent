@@ -9,4 +9,7 @@
   and attach to the new turn. A steer still queued when its turn ends `completed`/
   `failed` is likewise restarted as exactly one fresh turn (a park keeps holding its
   messages for the operator's answer; a Stop's queued messages stay the console's to
-  take back).
+  take back) — and `GET …/steer` now reports each restarted id in a `started` map
+  (msg id → task id, `""` while the start is in flight), so the console's turn-end
+  reconcile attaches those bubbles to the fresh turn and streams its reply in, instead
+  of settling them as consumed by the turn that just ended and losing the answer.

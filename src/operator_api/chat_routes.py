@@ -1419,12 +1419,19 @@ def register_chat_routes(app, ui: str) -> None:
         ``pending`` alone can't tell "the agent read it" from "it never arrived" — the
         queue is in-memory and the live boundary marker is best-effort — and the console
         must not guess between settling a message the agent never saw and re-offering one
-        it already used. This is the server answering that question directly."""
+        it already used. This is the server answering that question directly.
+
+        ``started`` maps msg id → task id for messages the server ran as a FRESH turn of
+        their own instead (bd-0ad5v — an idle-session steer, or a steer left undrained at
+        turn-end), ``""`` while that turn's start is still in flight. The reply for such a
+        message comes from that task, not from any turn that drained the queue, so the
+        console attaches to it rather than settling or re-sending."""
         from graph import steering
 
         return {
             "pending": steering.pending_items(session_id),
             "drained": steering.drained(session_id),
+            "started": steering.started_map(session_id),
         }
 
     @app.post("/api/chat/sessions/{session_id}/server-turns/{task_id}/interject")

@@ -4,8 +4,11 @@ A console with a stale 'streaming' bubble steered an idle session; the message s
 ``pending`` with nothing left to drain it and the operator couldn't chat. The steer POST
 now starts an ordinary operator turn when the session is idle (``started_turn`` in the
 reply), and a steer left undrained when its turn ends terminally is restarted as exactly
-one fresh turn. The REAL steering queue, busy signal and per-thread turn lock are used
-throughout — only the loopback A2A transport (``server.chat._start_steer_turn``) is faked.
+one fresh turn, with every popped id reported through ``GET …/steer``'s ``started`` map
+("" while the start is in flight) so the console attaches to that turn instead of settling
+the message as consumed by the one that just ended. The REAL steering queue, busy signal
+and per-thread turn lock are used throughout — only the loopback A2A transport is faked
+(the turn-start helper, or httpx itself for the wire-shape test).
 """
 
 import importlib
@@ -76,8 +79,13 @@ def test_idle_steer_starts_exactly_one_turn(client, starts):
     body = client.post("/api/chat/sessions/s1/steer", json={"id": "m1", "text": "hello?"}).json()
     assert body == {"ok": True, "id": "m1", "started_turn": "task-1", "pending": 0}
     assert starts == [{"session_id": "s1", "text": "hello?", "msg_id": "m1", "images": None, "incognito": False}]
-    # Nothing pending: the message became a turn, not a queue entry.
-    assert client.get("/api/chat/sessions/s1/steer").json() == {"pending": [], "drained": []}
+    # Nothing pending: the message became a turn, which the queue read also names
+    # (`started`), so a console that lost the POST reply still finds its way there.
+    assert client.get("/api/chat/sessions/s1/steer").json() == {
+        "pending": [],
+        "drained": [],
+        "started": {"m1": "task-1"},
+    }
 
 
 def test_duplicate_posts_with_same_message_id_start_one_turn(client, starts):
@@ -138,8 +146,63 @@ async def test_undrained_steers_at_turn_end_become_exactly_one_turn(idle_server,
 
     assert starts == [{"session_id": "s9", "text": "first\n\nsecond", "msg_id": "m1", "images": None, "incognito": False}]
     assert steering.pending("s9") == 0
-    assert steering.drained("s9") == ["m1", "m2"]  # the console settles them as read
-    assert steering.started_task("s9", "m1") == "task-1"
+    assert steering.drained("s9") == ["m1", "m2"]  # the restart turn reads them like a fold
+    # EVERY restarted id names the turn — each is a console bubble that must attach to it.
+    assert steering.started_map("s9") == {"m1": "task-1", "m2": "task-1"}
+
+
+@pytest.mark.asyncio
+async def test_restart_marks_items_starting_before_the_loopback_names_a_task(idle_server, monkeypatch):
+    # The blocking bd-0ad5v review case: the console's turn-end reconcile reads the queue
+    # BETWEEN the pop and the loopback send resolving. It must see each popped id as
+    # "starting" (``""`` in the started map), never simply gone — gone reads as consumed
+    # by the turn that just ended, and the bubble settles under a reply that never saw it.
+    import asyncio
+
+    gate = asyncio.Event()
+
+    async def _gated_start(session_id, text, msg_id, *, images=None, incognito=False):
+        await gate.wait()
+        return "task-9"
+
+    monkeypatch.setattr(chat_mod, "_start_steer_turn", _gated_start)
+    steering.enqueue("s9", "first", msg_id="m1")
+    steering.enqueue("s9", "second", msg_id="m2")
+    task = chat_mod.restart_undrained_steers("s9", "completed")
+    # The pop and the starting mark land in the same synchronous frame.
+    assert steering.pending("s9") == 0
+    assert steering.started_map("s9") == {"m1": "", "m2": ""}
+    gate.set()
+    await task
+    assert steering.started_map("s9") == {"m1": "task-9", "m2": "task-9"}
+
+
+@pytest.mark.asyncio
+async def test_duplicate_post_during_an_in_flight_start_joins_that_turn(idle_server, monkeypatch):
+    # The round-1 race: a duplicate POST lands while the first one's loopback send is in
+    # flight. The new turn already looks busy by then, so the old path queued the text
+    # into it — the agent reading its own message twice. The duplicate must wait the
+    # start out and answer with the same task instead.
+    import asyncio
+
+    gate = asyncio.Event()
+    starts: list[str] = []
+
+    async def _gated_start(session_id, text, msg_id, *, images=None, incognito=False):
+        starts.append(msg_id)
+        await gate.wait()
+        return "task-1"
+
+    monkeypatch.setattr(chat_mod, "_start_steer_turn", _gated_start)
+    first = asyncio.create_task(chat_mod.steer_or_start_turn("s1", "hello?", "m1"))
+    await asyncio.sleep(0.01)  # the first POST is now awaiting its loopback send
+    dup = asyncio.create_task(chat_mod.steer_or_start_turn("s1", "hello?", "m1"))
+    await asyncio.sleep(0.01)
+    gate.set()
+    r1, r2 = await asyncio.gather(first, dup)
+    assert r1["started_turn"] == r2["started_turn"] == "task-1"
+    assert starts == ["m1"]  # ONE loopback send…
+    assert steering.pending("s1") == 0  # …and the duplicate never queued into its turn
 
 
 @pytest.mark.asyncio
@@ -173,10 +236,13 @@ async def test_failed_restart_requeues_the_items(idle_server, monkeypatch):
     task = chat_mod.restart_undrained_steers("s9", "failed")
     await task
     assert steering.pending_items("s9") == [{"id": "m1", "text": "precious"}]
+    assert steering.started_map("s9") == {}  # pending again, so no stale "starting" mark
 
 
-@pytest.mark.asyncio
-async def test_start_steer_turn_sends_an_ordinary_a2a_message(monkeypatch, idle_server):
+def test_idle_steer_goes_out_as_an_ordinary_a2a_message(monkeypatch, client):
+    # Through the route seam (the console's POST), down to the loopback wire: the started
+    # turn is a normal operator send — same messageId (dedupe), same part shapes, detached
+    # via returnImmediately so the task id answers while the turn runs.
     import httpx
 
     sent: dict = {}
@@ -204,9 +270,16 @@ async def test_start_steer_turn_sends_an_ordinary_a2a_message(monkeypatch, idle_
 
     monkeypatch.setattr(httpx, "AsyncClient", _Client)
     monkeypatch.setattr(STATE, "active_port", 7999, raising=False)
-    images = [("image/png", "data:image/png;base64,AAA=")]
-    task_id = await chat_mod._start_steer_turn("s1", "hi", "m1", images=images, incognito=True)
-    assert task_id == "task-77"
+    body = client.post(
+        "/api/chat/sessions/s1/steer",
+        json={
+            "id": "m1",
+            "text": "hi",
+            "images": [["image/png", "data:image/png;base64,AAA="]],
+            "incognito": True,
+        },
+    ).json()
+    assert body == {"ok": True, "id": "m1", "started_turn": "task-77", "pending": 0}
     assert sent["url"] == "http://127.0.0.1:7999/a2a"
     assert sent["body"]["params"]["configuration"] == {"returnImmediately": True}  # id now, turn detached
     msg = sent["body"]["params"]["message"]

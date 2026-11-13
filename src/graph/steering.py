@@ -206,13 +206,18 @@ def take_unfenced(session_id: str) -> list[dict]:
 
 
 # ── idle-steer turn starts ──────────────────────────────────────────────────────
-# (session_id, msg_id) → the A2A task a steer STARTED: it arrived with no live turn, so
-# the server ran it as a fresh turn instead of queueing it. The steer route consults this
-# BEFORE anything else — a duplicate POST of the same message must answer with the same
-# task, never enqueue a second copy into the very turn the first copy started, and never
-# start a second one. Bounded like the drain log: it answers for the duplicate/retry
-# window, not for the life of the process (concurrent duplicates are the A2A message
-# ledger's job — same ``(contextId, messageId)`` joins the first task, #4975).
+# (session_id, msg_id) → the A2A task a steer STARTED: it arrived with no live turn (or
+# was left undrained when its turn ended), so the server ran it as a fresh turn instead
+# of queueing it. The value is ``""`` from the moment that start is DECIDED until the
+# loopback send names its task — so a reader never sees the message as simply "gone"
+# while the start is in flight. Two consumers: the steer route answers a duplicate POST
+# of the same message with the same task (never enqueueing a second copy into the very
+# turn the first copy started), and ``GET …/steer`` serves the whole per-session map
+# (:func:`started_map`) so a console reconciling at turn-end attaches to the fresh turn
+# instead of settling the message as consumed by the turn that just ended. Bounded like
+# the drain log: it answers for the duplicate/reconcile window, not for the life of the
+# process (concurrent duplicates are the A2A message ledger's job — same
+# ``(contextId, messageId)`` joins the first task, #4975).
 _STARTED: dict[tuple[str, str], str] = {}
 _STARTED_CAP = 512
 
@@ -226,11 +231,51 @@ def note_started(session_id: str, msg_id: str, task_id: str) -> None:
         _STARTED.pop(next(iter(_STARTED)))
 
 
+def note_starting(session_id: str, msg_ids: list[str]) -> None:
+    """Mark each ``msg_id`` as having a fresh turn starting for it RIGHT NOW — the
+    loopback send is (about to be) in flight and has not named its task yet.
+
+    Recorded in the same synchronous frame as the queue pop, so no reader ever observes
+    the in-between state where a message has left the queue with nothing to show for it:
+    that absence reads as "consumed by the turn that just ended", and a console would
+    settle the bubble under a reply that never saw the message. ``note_started`` upgrades
+    the mark to the real task id; :func:`clear_starting` drops it when the start failed
+    and the items went back on the queue. A known task id is never downgraded."""
+    if not session_id:
+        return
+    for mid in msg_ids:
+        if mid and not _STARTED.get((session_id, mid)):
+            _STARTED[(session_id, mid)] = ""
+    while len(_STARTED) > _STARTED_CAP:
+        _STARTED.pop(next(iter(_STARTED)))
+
+
+def clear_starting(session_id: str, msg_ids: list[str]) -> None:
+    """Forget in-flight marks whose start FAILED (the items are queued again)."""
+    for mid in msg_ids:
+        if _STARTED.get((session_id, mid)) == "":
+            _STARTED.pop((session_id, mid), None)
+
+
+def starting(session_id: str, msg_id: str) -> bool:
+    """True while a fresh turn's start is in flight for ``msg_id`` (task not yet known)."""
+    return _STARTED.get((session_id, msg_id)) == ""
+
+
 def started_task(session_id: str, msg_id: str) -> str | None:
-    """The task a steer with ``msg_id`` already started for ``session_id``, or None."""
+    """The task a steer with ``msg_id`` already started for ``session_id``, or None.
+    None also while the start is still in flight (see :func:`starting`)."""
     if not session_id or not msg_id:
         return None
-    return _STARTED.get((session_id, msg_id))
+    return _STARTED.get((session_id, msg_id)) or None
+
+
+def started_map(session_id: str) -> dict[str, str]:
+    """Every message of ``session_id``'s that started (or is starting) a fresh turn:
+    msg id → task id, ``""`` while the start is still in flight. ``GET …/steer``
+    carries this so a console reconciling at turn-end can attach to the restarted
+    turn instead of settling its message as consumed by the turn that just ended."""
+    return {mid: task for (sid, mid), task in _STARTED.items() if sid == session_id}
 
 
 def forget(session_id: str) -> None:

@@ -8,7 +8,13 @@ top of these primitives.
 from __future__ import annotations
 
 from graph.config import LangGraphConfig
-from graph.plugins.trust import ack_pattern, normalize_source, source_official, source_trusted
+from graph.plugins.trust import (
+    ack_pattern,
+    normalize_source,
+    source_has_dot_segment,
+    source_official,
+    source_trusted,
+)
 
 OFFICIAL = ["github.com/protoLabsAI/*"]
 
@@ -69,6 +75,26 @@ def test_official_org_glob_matches_every_repo_in_the_org():
     assert source_official("https://github.com/protoLabsAI/social-stack", OFFICIAL)
     assert source_official("git@github.com:protoLabsAI/anything.git", OFFICIAL)
     assert not source_official("https://github.com/evil/social-stack", OFFICIAL)
+    # `*` crosses `/` and `..`: a dot/empty/encoded segment must not ride the org glob
+    for url in (
+        "https://github.com/protoLabsAI/../evil/x",
+        "https://github.com/protoLabsAI/%2e%2e/evil/x",
+        "https://github.com/protoLabsAI/./x",
+        "https://github.com/protoLabsAI//x",
+        "github.com/protoLabsAI/a%2Fb",
+    ):
+        assert not source_official(url, OFFICIAL), url
+    assert source_trusted("file:///opt/plugins/x", official=[], acked=["file:///opt/plugins/*"])
+    # A Windows drive path's colon is not an empty segment — but its `..` still counts.
+    assert source_trusted("C:/src/x", official=[], acked=["C:/src/*"])
+    assert source_trusted("file:///C:/src/x", official=[], acked=["file:///C:/src/*"])
+    assert not source_trusted("C:/src/../x", official=[], acked=["C:/src/*"])
+    # The path is judged, not the host: an scp-style absolute path, a port and an IPv6 host
+    # each put a `:` next to a `/` without any empty PATH segment.
+    for ok in ("git@server:/srv/git/repo.git", "ssh://git@host:2222/o/r.git"):
+        assert source_trusted(ok, official=[], acked=[ok]), ok
+    assert not source_has_dot_segment("http://[::1]:8080/o/r")
+    assert not source_trusted("git@github.com:protoLabsAI/../evil.git", official=OFFICIAL, acked=[])
 
 
 def test_trusted_via_official_ack_or_global_switch():

@@ -24,6 +24,7 @@ import { applyDelegateProgressTo } from "./delegateProgress";
 import { attachmentDisplay, displayWithoutThumbnailNames, validThumbnails } from "./imageThumbnails";
 import { rendersText, replaceText, textRuns } from "./parts";
 import { isEmptyPlaceholder, replyClaimsAnswer, roomReplyBubble } from "./roomBubble";
+import { localTurnInFlight, reconcileSessionStatus } from "./sessionLiveness";
 import { isTaskCanceled, isTaskFailed, isTaskPaused, isTaskTerminal } from "./taskState";
 import { applyComponent, applyDecisionIdentity, applyReasoning, applyText, applyToolEvent, applyUsage, pauseBubble, stopBubble } from "./turnReducers";
 
@@ -435,6 +436,38 @@ export function isBehindServer(session: ChatSession, summary: DurableChatSession
   return summary.turn_count > Math.max(held.size, session.serverTurnCount ?? 0);
 }
 
+/** Does the server's newest turn name a task this copy still shows STREAMING? A
+ *  server-started turn that finishes while the console is away leaves its live preview
+ *  spinning with no producer left (bd-wk4ti): the bus events that settle it were missed,
+ *  and the preview itself holds the newest task id — so `isBehindServer` reads "in step"
+ *  and the session was never re-read. This is the cheap index-level signal; the turns read
+ *  then decides (reconcileServerTurns finalizes only what the rows report terminal). A
+ *  PAUSED bubble is parked on the operator, not stranded — its turn really is not over. */
+export function hasStaleStreamingTurn(session: ChatSession, summary: DurableChatSession): boolean {
+  const newest = summary.last_task_id;
+  if (!newest) return false;
+  return session.messages.some(
+    (message) =>
+      isOwnTurnBubble(message) && message.status === "streaming" && !message.paused && message.taskId === newest,
+  );
+}
+
+/** A stranded streaming bubble, settled the way the durable terminal branch settles one:
+ *  done / error / stopped by the server's state for its task, running tool cards closed.
+ *  It keeps what it already showed — the turn's durable copy holds the authoritative rest. */
+function finalizeStrandedBubble(message: ChatMessage, state: string | undefined): ChatMessage {
+  if (isTaskCanceled(state)) return stopBubble(message);
+  return {
+    ...message,
+    status: isTaskFailed(state) ? "error" : "done",
+    paused: undefined,
+    durableSnapshotFallback: undefined,
+    toolCalls: message.toolCalls?.map((call) =>
+      call.status === "running" ? { ...call, status: "done" as const } : call,
+    ),
+  };
+}
+
 /** Reconcile a non-empty local transcript with the server's turns, server-authoritative
  *  for what the local copy never saw while keeping what it did:
  *
@@ -449,7 +482,15 @@ export function isBehindServer(session: ChatSession, summary: DurableChatSession
  *
  *  Returns the new transcript, null when there is nothing to change, or "retry" while a
  *  local turn is still LIVE in this copy (streaming, not a snapshot): its reattach owns it,
- *  and adding turns after it would strand it mid-transcript — the next boot reconciles. */
+ *  and adding turns after it would strand it mid-transcript — the next boot reconciles.
+ *
+ *  LIVE means live on the server too. A bubble still streaming a task the server reports
+ *  TERMINAL — and not its live turn — has no producer left: the turn finished while this
+ *  console was away and the bus events that settle its preview were missed (bd-wk4ti).
+ *  Retrying on it spun it forever, while the turn's durable copy was drawn as a second
+ *  bubble beside it. Exactly one bubble per task instead: the turn is redrawn from the
+ *  server's copy over the placeholder, or — when the turn also has locally rendered
+ *  bubbles to keep — the placeholder alone is finalized in place. */
 export function reconcileServerTurns(
   local: ChatMessage[],
   rows: DurableChatTurn[],
@@ -462,7 +503,24 @@ export function reconcileServerTurns(
     if (known.has(turn.task_id)) anchor = index;
   });
   if (anchor < 0) return null;
-  if (local.some((message) => isOwnTurnBubble(message) && message.status === "streaming" && !message.durableSnapshotFallback)) {
+  // Settled by the server: nothing will ever stream into this bubble again. Only with a
+  // marking server (`live_task_id` present, so null is an explicit "nothing live here") —
+  // an older server cannot vouch, and the bubble keeps its "retry" protection.
+  const serverStates = new Map(rows.map((row) => [row.task_id, row.state]));
+  const settledByServer = (message: ChatMessage): boolean =>
+    message.status === "streaming" &&
+    liveTaskId !== undefined &&
+    message.taskId !== liveTaskId &&
+    isTaskTerminal(serverStates.get(message.taskId ?? ""));
+  if (
+    local.some(
+      (message) =>
+        isOwnTurnBubble(message) &&
+        message.status === "streaming" &&
+        !message.durableSnapshotFallback &&
+        !settledByServer(message),
+    )
+  ) {
     return "retry";
   }
   const draw = (turn: DurableChatTurn) =>
@@ -473,7 +531,7 @@ export function reconcileServerTurns(
   let changed = false;
   for (const turn of turns.slice(0, anchor + 1)) {
     const bubbles = messages.filter((message) => isOwnTurnBubble(message) && message.taskId === turn.task_id);
-    if (!bubbles.length || !bubbles.every((message) => message.durableSnapshotFallback)) continue;
+    if (!bubbles.length || !bubbles.every((message) => message.durableSnapshotFallback || settledByServer(message))) continue;
     const fresh = draw(turn);
     const freshIds = new Set(fresh.map((message) => message.id));
     const stale = (message: ChatMessage) =>
@@ -488,6 +546,28 @@ export function reconcileServerTurns(
   const missing = turns.slice(anchor + 1).filter((turn) => !known.has(turn.task_id));
   if (missing.length) {
     messages = [...messages, ...missing.flatMap(draw)];
+    changed = true;
+  }
+  // Defensive guard (bd-wk4ti): any bubble still streaming a server-settled turn that the
+  // redraw above did not cover — a placeholder sharing its turn with locally rendered
+  // bubbles (a split preview's live half), or a server-turn preview that never learned its
+  // task id (`server-turn-<session>`), which an explicit "nothing live here" settles — is
+  // finalized in place so its spinner stops. An EMPTY task-less preview has nothing of its
+  // own to keep and is dropped: its turn's durable copy is the one bubble that remains.
+  const stranded = (message: ChatMessage): boolean =>
+    (isOwnTurnBubble(message) && settledByServer(message)) ||
+    (message.role === "assistant" &&
+      !message.author &&
+      !message.taskId &&
+      message.status === "streaming" &&
+      liveTaskId === null &&
+      !!message.id?.startsWith("server-turn-"));
+  if (messages.some(stranded)) {
+    messages = messages
+      .filter((message) => !(stranded(message) && !message.taskId && isEmptyPlaceholder(message)))
+      .map((message) =>
+        stranded(message) ? finalizeStrandedBubble(message, serverStates.get(message.taskId ?? "")) : message,
+      );
     changed = true;
   }
   return changed ? dedupeMessages(messages) : null;
@@ -544,9 +624,17 @@ export async function hydrateDurableChatSessions(): Promise<void> {
   const local = new Map(chatStore.getSnapshot().sessions.map((session) => [session.id, session]));
   const wanted = summaries.filter((summary) => {
     const session = local.get(summary.session_id);
-    // A non-empty local copy is fetched to repair a stripped render (#3340), or because
-    // the server has turns it never saw — another client's, after this cache was written.
-    const behind = Boolean(session?.messages.length && !needsDurableHydration(session) && isBehindServer(session, summary));
+    // A non-empty local copy is fetched to repair a stripped render (#3340), because the
+    // server has turns it never saw — another client's, after this cache was written — or
+    // because a turn it still shows STREAMING is the server's newest (bd-wk4ti): a stranded
+    // server-turn preview holds that task id itself, which reads "in step" to isBehindServer.
+    // A turn THIS window is running (localTurnInFlight) is its own producer's to settle.
+    const behind = Boolean(
+      session?.messages.length &&
+        !needsDurableHydration(session) &&
+        (isBehindServer(session, summary) ||
+          (!localTurnInFlight(summary.session_id) && hasStaleStreamingTurn(session, summary))),
+    );
     if (session?.messages.length && !needsDurableHydration(session) && !behind) return false;
     const token = chatStore.captureHydrationEligibility(summary.session_id, { behind });
     if (!token) return false;
@@ -584,7 +672,16 @@ export async function hydrateDurableChatSessions(): Promise<void> {
   await Promise.all(
     Array.from({ length: Math.min(HYDRATION_CONCURRENCY, wanted.length) }, () => worker()),
   );
-  if (reconciled.length) chatStore.reconcileSessions(reconciled);
+  if (reconciled.length) {
+    chatStore.reconcileSessions(reconciled);
+    // A reconcile can settle the session's LAST streaming bubble (a stranded server-turn
+    // preview, bd-wk4ti): hand its "streaming" back when nothing else still runs it, or
+    // the composer stays locked on a turn that is over. The reconciler itself checks the
+    // live claims and remaining streaming bubbles, so this is safe however often it runs.
+    for (const update of reconciled) {
+      if (update.messages) reconcileSessionStatus(update.token.sessionId);
+    }
+  }
   if (hydrated.length) {
     chatStore.hydrateSessions(
       hydrated,
