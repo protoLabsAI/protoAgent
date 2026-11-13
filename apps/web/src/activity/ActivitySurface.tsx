@@ -22,7 +22,7 @@ import { useUtilityHeaderReload } from "../app/UtilityWidget";
 import { api } from "../lib/api";
 import { ago, errMsg } from "../lib/format";
 import { onServerEvent } from "../lib/events";
-import { isPendingNowInboxPage } from "../lib/queries";
+import { isPendingNowInboxPage, needsOperatorAttention } from "../lib/queries";
 import type { ActivityEntry, InboxItem } from "../lib/types";
 
 // The unified feed (#3029) merges the two former utility-bar widgets — the inbound
@@ -177,10 +177,12 @@ export function ActivitySurface() {
   }, [entries]);
 
   const chronological = [...entries].reverse();
-  // A pending priority-`now` item is only in this pull queue because its automatic delivery
-  // failed (#3351) — hoist those blocked pages above the ordinary queued stimuli and render
-  // them conspicuously, while leaving the next/later list exactly as it was.
-  const nowPages = items.filter(isPendingNowInboxPage);
+  // A pending priority-`now` item whose automatic delivery failed is QUEUED: it retries on
+  // its own right after the agent's current turn settles (plus a periodic sweep), so only
+  // an operator-class page (`needs_human`) still renders as a conspicuous alert. Both are
+  // hoisted above the ordinary next/later stimuli, which render exactly as before.
+  const nowPages = items.filter(needsOperatorAttention);
+  const queuedNow = items.filter((i) => isPendingNowInboxPage(i) && !needsOperatorAttention(i));
   const queued = items.filter((i) => !isPendingNowInboxPage(i));
   const nothing =
     items.length === 0 && chronological.length === 0 && !activityLoading && !inboxLoading;
@@ -197,10 +199,10 @@ export function ActivitySurface() {
       ) : null}
       {items.length > 0 ? (
         <div className="inbox-list" data-testid="feed-pending">
-          {/* Blocked priority-`now` pages first: a now item is only pending because its
-              automatic delivery failed (#3351), so it's a diagnostic fallback the operator must
-              triage — flagged conspicuously with full source/priority/text context. Dismiss stays
-              an EXPLICIT operator action (mark delivered); nothing here silently delivers it. */}
+          {/* Operator-class (`needs_human`) pages first: these genuinely need the operator,
+              so they keep the conspicuous blocked-page treatment with full source/priority/
+              text context. Dismiss stays an EXPLICIT operator action (mark delivered);
+              nothing here silently delivers it. */}
           {nowPages.map((item) => (
             <div className="inbox-item inbox-item--stuck" data-testid="inbox-now-page" key={item.id}>
               <div className="inbox-item-head">
@@ -219,6 +221,41 @@ export function ActivitySurface() {
                   type="button"
                   onClick={() => dismiss(item.id)}
                   title="Deliver this page (mark delivered) and dismiss"
+                >
+                  <Check size={15} />
+                </Button>
+              </div>
+              <div className="inbox-text">{item.text}</div>
+            </div>
+          ))}
+          {/* Queued now pages: delivery already retries on its own (right after the
+              current turn settles + a periodic sweep), so these are calm queued rows —
+              never alerts. Dismiss stays available as the explicit escape hatch. */}
+          {queuedNow.map((item) => (
+            <div className="inbox-item inbox-item--queued-now" data-testid="inbox-queued-now" key={item.id}>
+              <div className="inbox-item-head">
+                <span className="inbox-pri inbox-pri-now">{item.priority}</span>
+                <span
+                  className="inbox-queued-flag"
+                  title={
+                    item.retries_exhausted
+                      ? `Automatic delivery stopped after ${item.attempts} attempt${item.attempts === 1 ? "" : "s"} — the failure is recorded in the feed below. Deliver it into a turn or dismiss it.`
+                      : `Queued since ${item.queued_since || item.created_at}${item.attempts ? ` · ${item.attempts} delivery attempt${item.attempts === 1 ? "" : "s"} so far` : ""}`
+                  }
+                >
+                  <Clock size={12} aria-hidden />{" "}
+                  {item.retries_exhausted
+                    ? "Queued — automatic retries used up"
+                    : "Queued — runs when the agent is free"}
+                </span>
+                {item.source ? <span className="inbox-source">{item.source}</span> : null}
+                <Button
+                  icon
+                  variant="ghost"
+                  className="inbox-dismiss"
+                  type="button"
+                  onClick={() => dismiss(item.id)}
+                  title="Mark delivered (dismiss)"
                 >
                   <Check size={15} />
                 </Button>

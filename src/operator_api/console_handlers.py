@@ -26,6 +26,7 @@ from graph.config_io import is_setup_complete as _operator_setup_complete
 from graph.goals.types import GoalState
 from graph.output_format import extract_output
 from graph.watches.types import Watch
+from inbox.store import RECOVERY_MAX_ATTEMPTS, needs_operator_attention
 from operator_api.runtime import build_runtime_status as _build_operator_status
 from operator_api.subagents import (
     list_subagents as _operator_list_subagents,
@@ -1102,6 +1103,7 @@ async def _operator_inbox_add(payload: dict) -> dict:
         dedup_key=payload.get("dedup_key", "") or "",
         delivery=delivery,
         target_session=target,
+        needs_human=bool(payload.get("needs_human")),
     )
     if item is None:
         return {"ok": True, "deduped": True}
@@ -1144,9 +1146,34 @@ async def _operator_inbox_add(payload: dict) -> dict:
                 "text": item["text"],
                 "delivery": item.get("delivery") or "",
                 "session": item.get("target_session") or "",
+                # Only an operator-class page may raise the console's Needs-you alert;
+                # an undelivered page that is merely waiting its retry stays "queued".
+                "needs_human": needs_operator_attention(item),
             },
         )
-    return {"ok": True, "item": item, "fired": fired}
+    return {"ok": True, "item": _inbox_row(item), "fired": fired}
+
+
+def _inbox_row(item: dict) -> dict:
+    """Decorate a raw store row for the /api/inbox surfaces: ``queued_since`` +
+    ``attempts`` let the feed say "Queued — runs when <agent> is free · n retries"
+    for an undelivered page awaiting its retry, and ``needs_human`` (a clean bool,
+    derived — a declared flag OR a known operator-class source such as a projectBoard
+    block page) is the ONLY thing allowed to raise a Needs-you alert for it.
+    ``retries_exhausted`` marks a pending now page whose automatic retry budget is
+    spent (and that no completion pass will pick up), so the feed stops promising
+    "runs when the agent is free" for it."""
+    row = dict(item)
+    row["queued_since"] = None if item.get("delivered_at") else item.get("created_at")
+    row["attempts"] = int(item.get("recovery_attempts") or 0)
+    row["needs_human"] = needs_operator_attention(item)
+    row["retries_exhausted"] = bool(
+        not item.get("delivered_at")
+        and item.get("priority") == "now"
+        and not item.get("recovery_accepted_at")  # accepted pages are completed regardless
+        and row["attempts"] >= RECOVERY_MAX_ATTEMPTS
+    )
+    return row
 
 
 async def _operator_inbox_list(floor: str, include_delivered: bool) -> dict:
@@ -1163,7 +1190,7 @@ async def _operator_inbox_list(floor: str, include_delivered: bool) -> dict:
         include_thread=True,  # the operator's view shows outside messages too
         limit=200,
     )
-    return {"items": items}
+    return {"items": [_inbox_row(i) for i in items]}
 
 
 #: Longest a single `GET /api/inbox/{id}?wait=` holds the connection. Kept under the fleet
@@ -1191,7 +1218,7 @@ async def _operator_inbox_get(item_id: int, wait: float = 0.0) -> dict:
         if item is None:
             raise NotFoundError(f"No inbox item {item_id}.")
         if item.get("reply_text") or time.monotonic() >= deadline:
-            return {"item": item}
+            return {"item": _inbox_row(item)}
         await asyncio.sleep(0.5)
 
 

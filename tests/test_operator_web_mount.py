@@ -20,6 +20,9 @@ def test_mount_react_app_serves_index_assets_and_fallback(tmp_path) -> None:
 
     assert client.get("/app").text == "<div id='root'></div>"
     assert client.get("/app/runtime").text == "<div id='root'></div>"
+    for page in ("/app", "/app/runtime", "/app/index.html"):  # the page itself may only be framed by its own origin
+        assert client.get(page).headers["content-security-policy"] == "frame-ancestors 'self'"
+        assert client.get(page).headers["x-frame-options"] == "SAMEORIGIN"
     assert client.get("/app/protolabs-icon-outline.svg").text == "<svg></svg>"
     assert client.get("/app/assets/app.js").text == "console.log('ok')"
 

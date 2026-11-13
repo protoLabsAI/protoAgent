@@ -403,6 +403,16 @@ export function isPendingNowInboxPage(item: { priority?: unknown; delivered_at?:
   return item.priority === "now" && !item.delivered_at;
 }
 
+// Whether a pending now page may ALERT the operator (Needs-you, pill alert). Since the
+// retry-when-free passes, an undelivered page is merely QUEUED — it retries on its own
+// once the agent is free — so only an item the server marked operator-class
+// (`needs_human`, e.g. a board block page) pages anyone; a late delivery never does.
+export function needsOperatorAttention(item: {
+  priority?: unknown; delivered_at?: unknown; needs_human?: unknown;
+}): boolean {
+  return isPendingNowInboxPage(item) && Boolean(item.needs_human);
+}
+
 // Scheduled jobs over the active SchedulerBackend. Invalidated on add/cancel.
 export const schedulesQuery = () =>
   queryOptions({

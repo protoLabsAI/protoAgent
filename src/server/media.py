@@ -15,6 +15,25 @@ the store is infra state; the HTTP surface that exposes it is the server's.
 from __future__ import annotations
 
 
+# Types a browser runs as a DOCUMENT when one is opened directly (a link, "open in new tab").
+# Served from this origin they would run with the console's storage in reach — and a stored
+# file's type comes from whatever produced it (a tool, an attachment, a peer's message part).
+_ACTIVE_TYPES = ("text/html", "application/xhtml+xml", "image/svg+xml", "text/xml", "application/xml")
+
+
+def _serve_headers(mime: str) -> dict[str, str]:
+    """Response headers for a stored file. Always ``nosniff`` (the declared type is the type).
+    A document-capable type is also sandboxed: it still displays, and an SVG still renders as
+    an image, but opened on its own it gets an opaque origin — no cookies, no storage, no
+    same-origin requests to this server."""
+    headers = {"X-Content-Type-Options": "nosniff"}
+    base = (mime or "").split(";", 1)[0].strip().lower()
+    # Any XML flavour can carry XHTML-namespace script, and XSLT is itself a program.
+    if base in _ACTIVE_TYPES or base.endswith(("+xml", "/xml", "/xsl", "/xslt")):
+        headers["Content-Security-Policy"] = "sandbox allow-scripts"
+    return headers
+
+
 def register_media_routes(app) -> None:
     """Mount ``GET``/``HEAD /media/{name}`` on the FastAPI app."""
     from fastapi import HTTPException
@@ -30,7 +49,7 @@ def register_media_routes(app) -> None:
             # One answer for unsafe, internal and absent names — discloses nothing.
             raise HTTPException(status_code=404, detail="media not found")
         path, mime = got
-        return FileResponse(str(path), media_type=mime)
+        return FileResponse(str(path), media_type=mime, headers=_serve_headers(mime))
 
     # The desktop shell's "open in new tab" for a chat image (#4312): the shell hands the file
     # to the SYSTEM BROWSER, which has no bearer — so it swaps the console's permanent link for

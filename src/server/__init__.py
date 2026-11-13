@@ -467,6 +467,7 @@ from server.agent_init import (  # noqa: E402,F401 — re-export of the extracte
 from server.maintenance_loops import (  # noqa: E402,F401 — re-export of the extracted maintenance loops
     _a2a_reaper_loop,
     _checkpoint_prune_loop,
+    _directive_link_sweep_loop,
     _start_forget_sweep_once,
     _memory_guard_loop,
     _plugin_autoupdate_loop,
@@ -749,6 +750,13 @@ def _main():
     from tasks.autoclose import wire_task_autoclose
 
     wire_task_autoclose(_event_bus.subscribe_handler, lambda: STATE.tasks_store)
+    # Linked directives fulfil themselves when the linked work finishes (ADR 0129
+    # D4/Q2): the handlers watch task closes, scheduler settlement and the generic
+    # ``task.link.closed`` contract on the bus. The ledger is resolved at event time
+    # (``directive_store()``), so a graph reload that rebinds it stays covered.
+    from graph.directive_autofulfil import wire_directive_autofulfil
+
+    wire_directive_autofulfil(_event_bus.subscribe_handler)
 
     # Console handler bodies live in operator_api/console_handlers.py (ADR 0023
     # phase 3); _main just wires them to their routes.
@@ -872,6 +880,9 @@ def _main():
         # Task PR-link sweep (ADR 0129 Q1). Started unconditionally like the loops
         # above; idles when no open task links an unresolved PR.
         STATE.task_link_sweep_task = asyncio.create_task(_task_link_sweep_loop())
+        # Directive GitHub-ref sweep (ADR 0129 D4/Q2). Started unconditionally like the
+        # loops above; idles when no in-force directive links an unresolved issue/PR.
+        STATE.directive_link_sweep_task = asyncio.create_task(_directive_link_sweep_loop())
 
         # Opt-in plugin auto-update (#1720) — only sweeps plugins the operator lists
         # in ``plugins.update_policy``; the loop self-guards each pass (empty policy
@@ -1116,6 +1127,8 @@ def _main():
             STATE.a2a_reaper_task.cancel()
         if STATE.task_link_sweep_task is not None:
             STATE.task_link_sweep_task.cancel()
+        if STATE.directive_link_sweep_task is not None:
+            STATE.directive_link_sweep_task.cancel()
         # (memory_guard_task was cancelled at the top — it can os._exit.)
         # Close the long-lived A2A push-notification client (created below in
         # _main) so its connection pool doesn't leak on shutdown/reload — matters

@@ -4,7 +4,7 @@ import { Activity } from "lucide-react";
 import { Count } from "@protolabsai/ui/primitives";
 
 import { onServerEvent } from "../lib/events";
-import { isPendingNowInboxPage } from "../lib/queries";
+import { needsOperatorAttention } from "../lib/queries";
 import { UtilityWidget } from "../app/UtilityWidget";
 import { ActivitySurface } from "./ActivitySurface";
 
@@ -20,10 +20,11 @@ import { ActivitySurface } from "./ActivitySurface";
  */
 export function ActivityWidget() {
   const [unread, setUnread] = useState(0);
-  // A pending priority-`now` page is only queued because its automatic delivery failed (#3351).
-  // Flag it so the pill signals a blocked page needing triage even while the dialog is closed and
-  // no chat turn is open. It rides the SAME `inbox.item` bump — no extra unread increment — so a
-  // fired now item (which pushes only `activity.message`, never `inbox.item`) can't double-count.
+  // Only an OPERATOR-CLASS pending now page (needs_human) raises the pill alert: an
+  // ordinary undelivered page is queued and retries on its own once the agent is free,
+  // so it must read as plain unread, never as an alert. It rides the SAME `inbox.item`
+  // bump — no extra unread increment — so a fired now item (which pushes only
+  // `activity.message`, never `inbox.item`) can't double-count.
   const [pendingNow, setPendingNow] = useState(false);
   const openRef = useRef(false);
   useEffect(
@@ -35,7 +36,7 @@ export function ActivityWidget() {
       onServerEvent("inbox.item", (data) => {
         if (openRef.current) return;
         setUnread((n) => n + 1);
-        if (isPendingNowInboxPage(data)) setPendingNow(true);
+        if (needsOperatorAttention(data)) setPendingNow(true);
       }),
     [],
   );

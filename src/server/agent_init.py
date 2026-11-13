@@ -1364,6 +1364,23 @@ def _public_console_reload_refusal(new_config) -> str | None:  # noqa: ANN001
     return public_console.open_mode_refusal(url, open_mode=open_mode)
 
 
+def _open_bind_reload_refusal(new_config) -> str | None:  # noqa: ANN001
+    """Why a reload must not commit ``new_config``: the server is bound to a non-loopback
+    address and the bearer the new config resolves to (``auth.token``, else ``A2A_AUTH_TOKEN``,
+    the rule the commit below applies) is empty. The boot gate (``auth.evaluate_open_bind``)
+    refuses to START like that; without this, clearing the token in Settings opened a running
+    server to its whole network. ``PROTOAGENT_ALLOW_OPEN=1`` allows it, as at boot. None = fine."""
+    token = new_config.auth_token if new_config.auth_token is not None else os.environ.get("A2A_AUTH_TOKEN")
+    if (token or "").strip() or not STATE.bind_host:  # no bind yet: boot's own gate runs later
+        return None
+    from a2a_impl import auth
+
+    allowed, msg = auth.evaluate_open_bind(
+        STATE.bind_host, bearer_configured=False, allow_open=os.environ.get("PROTOAGENT_ALLOW_OPEN", "") == "1"
+    )
+    return None if allowed else f"auth.token: not cleared — {msg}"
+
+
 @_serialized_config_write
 def _reload_langgraph_agent(*, reload_plugins: bool = True) -> tuple[bool, str]:
     """Rebuild the compiled graph from the latest config YAML.
@@ -1402,7 +1419,8 @@ def _reload_langgraph_agent(*, reload_plugins: bool = True) -> tuple[bool, str]:
     # ADR 0121 D2: a public console URL on an instance with no credential is never a state the
     # agent runs in — refuse the reload (the caller rolls the write back) rather than commit an
     # open, internet-reachable console. Same rule as the boot gate, against the NEW config.
-    public_refusal = _public_console_reload_refusal(new_config)
+    # Likewise a cleared token on a non-loopback bind (the boot gate's `evaluate_open_bind`).
+    public_refusal = _public_console_reload_refusal(new_config) or _open_bind_reload_refusal(new_config)
     if public_refusal:
         log.error("%s", public_refusal)
         return False, public_refusal

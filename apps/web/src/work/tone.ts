@@ -1,4 +1,4 @@
-import { isPendingNowInboxPage } from "../lib/queries";
+import { needsOperatorAttention } from "../lib/queries";
 import type { Status } from "@protolabsai/ui/primitives";
 import type { InboxItem, ScheduledJob, WatchState } from "../lib/types";
 import type { DecisionRow } from "../lib/api/decisions";
@@ -33,7 +33,9 @@ export function groupFor(item: GroupableWorkItem): WorkGroupId | null {
   const raw = item.raw as Record<string, unknown> | null;
   switch (item.kind) {
     case "decision": return raw?.state === "pending" ? "needs-you" : null;
-    case "delivery": return ("priority" in item.raw ? isPendingNowInboxPage(item.raw) : !item.raw.delivered && item.raw.needsHuman) ? "needs-you" : null;
+    // A pending now page only Needs-you when it is operator-class (needs_human): a merely
+    // undelivered page is queued — it retries on its own once the agent is free.
+    case "delivery": return ("priority" in item.raw ? needsOperatorAttention(item.raw) : !item.raw.delivered && item.raw.needsHuman) ? "needs-you" : null;
     case "goal":
       if (raw?.status === "active") return "doing-now";
       return raw?.status === "exhausted" || raw?.status === "unachievable" ? "needs-you" : null;

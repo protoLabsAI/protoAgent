@@ -36,6 +36,22 @@ log = logging.getLogger("protoagent.tools")  # same logger lg_tools used
 # instances on the same machine never see each other's jobs.
 
 
+def _publish_scheduler_changed(job_id: str, action: str) -> None:
+    """Best-effort bus push mirroring the console's cancel publish
+    (``operator_api.console_handlers._publish_scheduler_changed``), so an agent-side
+    ``cancel_schedule`` reaches the same subscribers — the console's Schedules refresh and
+    the directive link auto-fulfil (``graph.directive_autofulfil``), which without it never
+    learned a linked job was canceled. No-op when the host hasn't wired a publisher (unit
+    tests / standalone use); a bus hiccup must never break the cancel itself."""
+    try:
+        from graph.plugins.host import HOST
+
+        if HOST.publish:
+            HOST.publish("scheduler.changed", {"job_id": job_id, "action": action})
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def _humanize_duration(seconds: int) -> str:
     """Turn a raw second count into a short, human phrase (300 -> "5 minutes").
 
@@ -221,16 +237,10 @@ def _build_scheduler_tools(scheduler) -> list:
         except Exception as exc:  # noqa: BLE001
             return f"Error: scheduler cancel_job failed: {exc}"
         if ok:
-            # Best-effort ``scheduler.changed`` — the same event the console cancel
-            # publishes — so the Work view refreshes and a task linked to this job
-            # auto-closes (ADR 0129 Q1). Never blocks the cancel result.
-            try:
-                from graph.plugins.host import HOST
-
-                if HOST.publish:
-                    HOST.publish("scheduler.changed", {"job_id": job_id, "action": "canceled"})
-            except Exception:  # noqa: BLE001 — the event is best-effort
-                pass
+            # The same publish the console cancel makes: a canceled job never fires
+            # `turn.finished` again, so this event is the only way its subscribers —
+            # the Schedules view, a directive linking this job — ever learn it ended.
+            _publish_scheduler_changed(job_id, "canceled")
         return f"Canceled {job_id}." if ok else f"Error: cancel failed or no such job {job_id}."
 
     @tool

@@ -226,3 +226,21 @@
 .inbox-stuck-flag svg {
   flex: none;
 }
+
+/* A pending now page that is merely awaiting its automatic retry (runs when the agent
+   is free) — a calm queued row, deliberately NOT warning-toned (only an operator-class
+   `needs_human` page gets the stuck treatment above). */
+.inbox-queued-flag {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--pl-space-1);
+  font-size: var(--pl-font-size-3xs);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--pl-color-fg-muted);
+}
+
+.inbox-queued-flag svg {
+  flex: none;
+}

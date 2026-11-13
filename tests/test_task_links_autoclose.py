@@ -192,10 +192,13 @@ async def test_real_fire_settlement_closes_linked_tasks(store, bus, tmp_path, mo
     await s._fire_and_settle(once, cron=False)
     await s._fire_and_settle(cron, cron=True)
 
-    assert live_at_finish == [False, False]  # both rows already settled when the event landed
-    for linked, ref in ((one_shot_task, "agent-once"), (cron_task, "agent-cron")):
+    # turn.finished lands while each row still exists; the scheduler's own post-settle
+    # `scheduler.changed` (finished / expired) is what closes the linked task — the same
+    # contract linked directives use (graph.directive_autofulfil).
+    assert live_at_finish == [True, True]
+    for linked, reason in ((one_shot_task, "agent-once finished"), (cron_task, "agent-cron expired")):
         row = store.get(linked["id"])
-        assert row["status"] == "closed" and row["close_reason"] == f"{ref} finished"
+        assert row["status"] == "closed" and row["close_reason"] == reason
 
 
 async def test_cancel_schedule_tool_publish_closes_linked_task(store, bus):

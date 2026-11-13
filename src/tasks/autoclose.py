@@ -11,14 +11,12 @@ system already learns that work finished:
   "merged (#5146)"}`` when a card reaches done/cancelled. The topic is the generic
   inbound contract: anything able to say "this ref is finished" can close the tasks
   that link it.
-* **Scheduler settlement** — ``turn.finished`` (origin ``scheduler``) marks a fire
-  settled; the job row is read back, and a job that no longer exists (one-shot
-  settled, cron expired) resolves its ref. The scheduler publishes it only after
-  the row settles — ``_settle_task`` orders it so on the task-id path, and
-  ``_fire_and_settle`` emits the no-task-id fallback event after the one-shot
-  delete / cron expiry — so this inline read-back is race-free. ``scheduler.changed``
-  with ``action: "canceled"`` (console cancel, ``cancel_schedule`` tool) resolves it
-  as canceled.
+* **Scheduler settlement** — ``scheduler.changed``: the scheduler publishes
+  ``finished``/``expired`` itself AFTER the job row is deleted
+  (``LocalScheduler._publish_job_settled``), and the cancel paths publish ``canceled``
+  — the same job-gone contract linked directives use (``graph.directive_autofulfil``).
+  ``turn.finished`` (origin ``scheduler``) is also handled: when the row is already
+  gone at that moment (a task-id settle), it resolves as ``finished``/``failed``.
 * **Directive close** — ``directive.changed`` is read back against the directive
   ledger; a directive now ``fulfilled``/``revoked`` resolves its ``dir-…`` ref.
 * **PR links** — GitHub publishes nothing here, so a cheap periodic sweep
@@ -118,10 +116,17 @@ def wire_task_autoclose(
         _resolve(directive_id, f"{status}: {reason}" if reason else status)
 
     def on_scheduler_changed(payload: dict) -> None:
+        # The scheduler publishes ``finished``/``expired`` itself AFTER the job row is
+        # deleted (``LocalScheduler._publish_job_settled``) and ``canceled`` comes from the
+        # cancel paths, so these are the job-gone signals — the same contract directives use.
         data = payload.get("data") or {}
-        if str(data.get("action") or "") != "canceled":
+        action = str(data.get("action") or "")
+        if action not in ("finished", "expired", "canceled"):
             return
-        _resolve(str(data.get("job_id") or "").strip(), "canceled")
+        job_id = str(data.get("job_id") or "").strip()
+        if not job_id or job_id.startswith("wait:"):
+            return
+        _resolve(job_id, action)
 
     def on_turn_finished(payload: dict) -> None:
         data = payload.get("data") or {}

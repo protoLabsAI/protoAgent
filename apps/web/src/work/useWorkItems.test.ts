@@ -345,8 +345,11 @@ describe("work API helpers", () => {
 });
 
 describe("live group adapters", () => {
+  // Operator-class (needs_human) pages: a merely queued now page retries on its own
+  // once the agent is free and never projects into Needs-you.
   const page = (id: number, priority: "now" | "next" | "later", delivered_at: string | null = null) => ({
     id, priority, delivered_at, text: "Please help", source: "board", created_at: "2026-11-11", dedup_key: null,
+    needs_human: true,
   });
 
   it("projects only pending now pages and retires delivered pages after a stale read", async () => {

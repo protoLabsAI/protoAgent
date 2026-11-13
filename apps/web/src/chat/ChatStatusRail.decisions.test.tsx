@@ -58,7 +58,8 @@ const decision = (r: DecisionRow): GroupableWorkItem => ({
 });
 const delivery = (id: number): GroupableWorkItem => ({
   kind: "delivery", id: String(id), status: "needs-you", title: `Page ${id}`, meta: "mail",
-  raw: { id, text: `Page ${id}`, source: "mail", priority: "now", delivered_at: null } as InboxItem,
+  // Operator-class (needs_human): a merely queued page retries on its own and never Needs-you.
+  raw: { id, text: `Page ${id}`, source: "mail", priority: "now", delivered_at: null, needs_human: true } as InboxItem,
 });
 const stoppedGoal = (id: string): GroupableWorkItem => ({
   kind: "goal", id, status: "failed", title: `Goal ${id}`, meta: "", sessionId: id,

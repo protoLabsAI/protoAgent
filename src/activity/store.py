@@ -31,7 +31,8 @@ CREATE TABLE IF NOT EXISTS activity (
     text        TEXT NOT NULL,
     task_id     TEXT,
     stimulus    TEXT,
-    origin_session TEXT
+    origin_session TEXT,
+    inbox_id    INTEGER
 );
 CREATE INDEX IF NOT EXISTS idx_activity_created_at ON activity(created_at);
 """
@@ -39,6 +40,21 @@ CREATE INDEX IF NOT EXISTS idx_activity_created_at ON activity(created_at);
 
 def _now_iso() -> str:
     return datetime.now(UTC).isoformat()
+
+
+def _coerce_inbox_id(value: object) -> int | None:
+    """``inbox_id`` arrives from turn metadata as an int or a numeric string;
+    anything else (None, "", non-numeric) stores as NULL rather than raising."""
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str):
+        try:
+            return int(value.strip())
+        except ValueError:
+            return None
+    return None
 
 
 class ActivityLog:
@@ -54,11 +70,16 @@ class ActivityLog:
             db = self._connect()
             db.executescript(_SCHEMA)
             # Additive migrations: `stimulus` (the triggering input text, so a response can
-            # be shown as "in response to X") and `origin_session` (ADR 0129 — the chat a
-            # job-session turn's schedule was created from, when there is one) were added
-            # after the table shipped. Only ALTERed when missing, and a failed ALTER raises
-            # instead of passing as done.
-            add_missing_columns(db, "activity", (("stimulus", "TEXT"), ("origin_session", "TEXT")))
+            # be shown as "in response to X"), `origin_session` (ADR 0129 — the chat a
+            # job-session turn's schedule was created from, when there is one) and
+            # `inbox_id` (docs/design/feed.md §3 — the inbox item the turn came from, so
+            # the Feed can join a queued item to its result) were added after the table
+            # shipped. Only ALTERed when missing, and a failed ALTER raises instead of
+            # passing as done.
+            add_missing_columns(
+                db, "activity",
+                (("stimulus", "TEXT"), ("origin_session", "TEXT"), ("inbox_id", "INTEGER")),
+            )
             db.commit()
             db.close()
         except sqlite3.DatabaseError:
@@ -86,23 +107,26 @@ class ActivityLog:
         task_id: str = "",
         stimulus: str = "",
         origin_session: str = "",
+        inbox_id: int | None = None,
     ) -> int | None:
         """Append a feed entry. ``origin`` empty ⇒ "operator" (a reply/live turn).
         ``stimulus`` is the triggering input text (the scheduled prompt / inbound message),
         so the feed can show the response as an explicit reply to it. ``origin_session``
         (ADR 0129) is the chat a job-session turn's work was created from, when known —
-        ``context_id`` stays the turn's real execution context."""
+        ``context_id`` stays the turn's real execution context. ``inbox_id``
+        (docs/design/feed.md §3) is the inbox item the turn ran, when known."""
         if not text or not text.strip():
             return None
         try:
             db = self._connect()
             cur = db.execute(
                 "INSERT INTO activity "
-                "(created_at, context_id, origin, trigger, priority, state, text, task_id, stimulus, origin_session) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "(created_at, context_id, origin, trigger, priority, state, text, task_id, stimulus, "
+                "origin_session, inbox_id) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     _now_iso(), context_id, origin or "operator", trigger, priority, state,
-                    text, task_id, stimulus, origin_session,
+                    text, task_id, stimulus, origin_session, _coerce_inbox_id(inbox_id),
                 ),
             )
             db.commit()
@@ -142,7 +166,7 @@ class ActivityLog:
             db = self._connect()
             rows = db.execute(
                 "SELECT id, created_at, context_id, origin, trigger, priority, state, text, task_id, stimulus, "
-                "origin_session FROM activity ORDER BY id DESC LIMIT ?",
+                "origin_session, inbox_id FROM activity ORDER BY id DESC LIMIT ?",
                 (limit,),
             ).fetchall()
             db.close()

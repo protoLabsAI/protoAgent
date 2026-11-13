@@ -52,6 +52,11 @@ describe("groupFor raw state classification", () => {
     for (const delivered of [true, false]) for (const needsHuman of [true, false]) {
       expect(groupFor({ ...item, kind: "delivery", raw: { delivered, needsHuman } })).toBe(!delivered && needsHuman ? "needs-you" : null);
     }
+    // Inbox rows: a pending now page Needs-you only when operator-class (needs_human) —
+    // a merely queued page retries on its own once the agent is free.
+    const page = { id: 7, priority: "now", delivered_at: null, text: "p", source: "", created_at: "", dedup_key: null } as const;
+    expect(groupFor({ ...item, kind: "delivery", raw: { ...page, needs_human: true } })).toBe("needs-you");
+    expect(groupFor({ ...item, kind: "delivery", raw: { ...page } })).toBeNull();
     for (const state of ["pending", "completed", "cancelled"] as const) {
       expect(groupFor({ ...item, kind: "wait", raw: { state } })).toBe(state === "pending" ? "coming-up" : null);
     }

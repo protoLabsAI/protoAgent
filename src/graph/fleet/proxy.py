@@ -809,6 +809,9 @@ async def _forward_member(slug: str, request, path: str, raw_path: str, target):
         # requests; non-browser local callers are the "open instance is open" posture.
         if member_public or tier != "operator" or not extra.get("authorization"):
             extra = {"authorization": None}  # None = drop the caller's header (_forward_to_base)
+        # The caller's ``X-API-Key`` is a HUB credential (the legacy alternative to the bearer),
+        # meaningless at the remote and a leak if forwarded — dropped on every remote hop.
+        extra = {**extra, "x-api-key": None}
         # The hub-signed SSE ``?token=`` (30s, HMAC'd with the HUB's bearer) authenticated the
         # caller HERE; forwarded, the remote could replay it against the hub. The proxied call
         # authenticates to the remote with the stored bearer instead (#1607).
