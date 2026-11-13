@@ -1,6 +1,6 @@
 # ADR 0130 — Server-authoritative live sync: every client follows the server, nothing is guessed locally
 
-- Status: Proposed (2026-11-12)
+- Status: Accepted (2026-11-12, Josh: "yes as suggested")
 - Date: 2026-11-12
 - Deciders: Josh Mabry; protoAgent maintainers
 - Implementation: not started. Slices S0–S5 below.
