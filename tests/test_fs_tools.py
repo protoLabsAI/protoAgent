@@ -6,6 +6,7 @@ import asyncio
 import logging
 import os
 import shutil
+import subprocess
 from pathlib import Path
 from dataclasses import dataclass, field
 
@@ -16,6 +17,9 @@ from tools.fs_tools import Project, ProjectRegistry, build_fs_tools
 pytestmark = pytest.mark.platform_sensitive
 
 _LIST_COMMAND = "dir /b" if os.name == "nt" else "ls"
+
+_HAS_RG = shutil.which("rg") is not None
+_HAS_GIT = shutil.which("git") is not None
 
 
 @dataclass
@@ -232,6 +236,92 @@ def test_search_lists_its_exclusions_in_the_tool_description(workspace):
 
     desc = t["search_files"].description
     assert "__pycache__" in desc and "node_modules" in desc and "include_generated" in desc
+
+
+# ── search_files: ripgrep fast path + .gitignore pruning (#5097) ──────────────
+@pytest.fixture
+def turbo_workspace(tmp_path):
+    """The pnpm/turbo shape from #5097: a source hit beside a gitignored build cache
+    (``bigcache/``, the stand-in for the 8.3 GB ``.turbo/cache``) plus two `_SKIP_DIRS`
+    generated-cache dirs (``.turbo``, ``storybook-static``). Every file holds 'needle'."""
+    root = tmp_path / "repo"
+    (root / "src").mkdir(parents=True)
+    (root / "src" / "ok.py").write_text("a = 'needle'\n")
+    (root / "bigcache").mkdir()
+    (root / "bigcache" / "junk.py").write_text("b = 'needle'\n")
+    (root / ".turbo" / "cache").mkdir(parents=True)
+    (root / ".turbo" / "cache" / "x.py").write_text("c = 'needle'\n")
+    (root / "storybook-static").mkdir()
+    (root / "storybook-static" / "y.py").write_text("d = 'needle'\n")
+    (root / ".gitignore").write_text("bigcache/\n")
+    return root
+
+
+@pytest.mark.skipif(not (_HAS_RG and _HAS_GIT), reason="needs ripgrep and git on PATH")
+def test_search_rg_does_not_descend_into_a_gitignored_cache(turbo_workspace):
+    """r1 — with rg available, a whole-repo literal search does NOT descend into a
+    gitignored cache dir, and returns hits in the same `file:line` format as before."""
+    subprocess.run(["git", "init", "-q", str(turbo_workspace)], check=True)
+    t = _tools(_Cfg(filesystem_projects=[{"name": "n", "path": str(turbo_workspace)}]))
+
+    out = t["search_files"].invoke({"project": "n", "query": "needle"})
+
+    assert "src/ok.py:1: a = 'needle'" in out.splitlines()  # unchanged file:line format
+    assert "bigcache" not in out  # gitignored → rg never descended into it
+    assert ".turbo" not in out  # _SKIP_DIRS exclude glob
+    assert "storybook-static" not in out
+
+
+@pytest.mark.skipif(not _HAS_RG, reason="needs ripgrep on PATH to prove the fallback is deliberate")
+def test_search_without_rg_falls_back_to_python_walk_and_prunes_new_skips(turbo_workspace, monkeypatch):
+    """r2 — with rg unreachable (PATH patched to an empty dir), the Python walk runs and
+    still prunes the newly added `.turbo` and `storybook-static`."""
+    monkeypatch.setenv("PATH", str(turbo_workspace / "no-such-bin"))
+    assert shutil.which("rg") is None  # the patch really removed rg from PATH
+    t = _tools(_Cfg(filesystem_projects=[{"name": "n", "path": str(turbo_workspace)}]))
+
+    out = t["search_files"].invoke({"project": "n", "query": "needle"})
+
+    assert "src/ok.py:1: a = 'needle'" in out.splitlines()
+    assert ".turbo" not in out
+    assert "storybook-static" not in out
+
+
+def test_search_include_generated_reaches_ignored_and_skipped_dirs(turbo_workspace):
+    """r3 — include_generated=true searches everything (the unpruned Python walk, no
+    .gitignore reading), so hits in both the gitignored and the `_SKIP_DIRS` trees show."""
+    t = _tools(_Cfg(filesystem_projects=[{"name": "n", "path": str(turbo_workspace)}]))
+
+    out = t["search_files"].invoke({"project": "n", "query": "needle", "include_generated": True})
+
+    assert "src/ok.py" in out
+    assert "bigcache/junk.py" in out  # gitignored, but include_generated ignores .gitignore
+    assert ".turbo/cache/x.py" in out  # a _SKIP_DIRS tree, reached when opted back in
+    assert "storybook-static/y.py" in out
+
+
+@pytest.mark.skipif(not _HAS_RG, reason="needs ripgrep on PATH")
+def test_search_rg_keeps_a_lone_cr_as_content(tmp_path):
+    """The rg path decodes bytes and splits on bare ``\\n`` (not Python universal newlines),
+    so an old-Mac lone ``\\r`` of real content survives in a context line instead of splitting
+    the record — matching the Python walk's ``split_lines`` (#2586)."""
+    root = tmp_path / "repo"
+    root.mkdir()
+    (root / "mac.txt").write_bytes(b"alpha\rbeta\nNEEDLE\n")  # line 1 holds a lone \r
+    t = _tools(_Cfg(filesystem_projects=[{"name": "r", "path": str(root)}]))
+
+    out = t["search_files"].invoke({"project": "r", "query": "NEEDLE", "context_lines": 1})
+
+    assert "mac.txt-1- alpha\rbeta" in out  # lone \r kept, record NOT split
+    assert "mac.txt:2: NEEDLE" in out.splitlines()
+
+
+def test_search_description_names_the_new_skip_dirs(turbo_workspace):
+    """r4 — the skipped-directories disclosure (the tool description) names the new entries."""
+    t = _tools(_Cfg(filesystem_projects=[{"name": "n", "path": str(turbo_workspace)}]))
+
+    desc = t["search_files"].description
+    assert ".turbo" in desc and "storybook-static" in desc
 
 
 # ── search_files: regex + context lines ─────────────────────────────────────

@@ -1,7 +1,9 @@
 """Tests for tools.shell.run_command."""
 
+import contextlib
 import ctypes
 import os
+import signal
 import sys
 import time
 
@@ -42,6 +44,37 @@ async def test_timeout_kills_process():
     assert res.timed_out is True
     assert not res.ok
     assert "timed out" in (res.error or "")
+
+
+@pytest.mark.asyncio
+async def test_backgrounded_child_does_not_block_return(tmp_path):
+    """#5207: a child started with ``&`` inherits the captured pipes. ``run_command`` must
+    return when the top-level shell exits — not wait for that child to close them — and leave
+    the child running. POSIX only: on Windows the pipes can't be orphaned this way, so it
+    keeps the read-to-EOF path and this scenario doesn't arise."""
+    if os.name == "nt":
+        pytest.skip("POSIX `&` backgrounding")
+    pid_file = tmp_path / "child.pid"
+    # `sleep 30` outlives any sane return; its pid is recorded, then the shell prints and exits.
+    script = f"sleep 30 & echo $! > {pid_file}; echo started"
+
+    start = time.monotonic()
+    res = await run_command(["/bin/sh", "-c", script], timeout=10.0)
+    elapsed = time.monotonic() - start
+
+    assert elapsed < 5, f"run_command waited on the backgrounded child ({elapsed:.1f}s)"
+    assert res.ok, (res.returncode, res.timed_out, res.error)
+    assert res.stdout == "started"  # the command's own output is still captured
+    assert pid_file.exists(), "the shell did not run to completion"
+
+    child_pid = int(pid_file.read_text())
+    try:
+        os.kill(child_pid, 0)  # ProcessLookupError if the sleep was killed with the shell
+    except ProcessLookupError:
+        pytest.fail("the backgrounded child was killed instead of left running")
+    finally:
+        with contextlib.suppress(ProcessLookupError, PermissionError):
+            os.kill(child_pid, signal.SIGKILL)
 
 
 @pytest.mark.asyncio
