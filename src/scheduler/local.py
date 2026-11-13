@@ -75,7 +75,19 @@ def _acquire_jobs_lock(path: Path):
     try:
         import fcntl
 
-        fd = open(key + ".lock", "w", encoding="utf-8")
+        try:
+            fd = open(key + ".lock", "w", encoding="utf-8")
+        except OSError as exc:
+            # A missing, read-only or permission-denied lock directory must not crash
+            # scheduler startup with a traceback. Report "not acquired" (as for a held
+            # lock) so the caller defers and start()'s background lock-retry can try
+            # again, and name the path + error so the cause is visible in the log.
+            log.warning(
+                "[scheduler] could not open owner-lock file %s (%s) — treating as not acquired",
+                key + ".lock",
+                exc,
+            )
+            return None
         try:
             fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except OSError:
