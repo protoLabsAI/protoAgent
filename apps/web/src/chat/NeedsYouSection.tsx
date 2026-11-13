@@ -17,6 +17,13 @@ import { openSourceChat } from "../work/openSourceChat";
 import { relTime, type GroupableWorkItem } from "../work/tone";
 import { chatStore } from "./chat-store";
 
+/** The kinds this section draws rows for — the rail (ChatStatusRail) counts EXACTLY this
+ *  set, so "Needs you · N" can never claim a row the panel doesn't show. A `waiting` task
+ *  (ADR 0129 Q1) rides Work's own Needs-you group instead: it has no rail row, so it must
+ *  not raise the fleet-wide marker either. */
+export const NEEDS_YOU_SECTION_KINDS: ReadonlySet<GroupableWorkItem["kind"]> =
+  new Set(["decision", "delivery", "goal"]);
+
 /** A decision pending this long gets the muted stale hint — never a warning callout. */
 export const STALE_DECISION_MS = 30 * 60_000;
 export function decisionStale(createdAt: string, now: number = Date.now()): boolean {

@@ -161,6 +161,8 @@ FIELDS: list[Field] = [
         "Superseded by Connections (ADR 0106) — set a connection's base URL there.",
         scope="host",
         ui_hidden=True,
+        # Where every prompt is sent: re-aiming it is the outbound half of the boundary, like egress.
+        credential_plane=True,
     ),
     Field(
         "model.api_key",
@@ -1491,6 +1493,8 @@ FIELDS: list[Field] = [
         "LANGFUSE_HOST instead and never this (#3039).",
         restart=True,
         depends_on={"key": "tracing.enabled"},
+        # Where every trace (prompts, tool output) is sent — same reason as model.api_base.
+        credential_plane=True,
     ),
     Field(
         "tracing.public_key",
@@ -2202,6 +2206,9 @@ def host_keys() -> set[str]:
 #     and ACP agent executables, event hooks): host code that outlives a revoke, the config
 #     twin of the `/api/mcp/servers*` routes. ``filesystem.editor_command`` is flagged on its
 #     Field for the same reason.
+#   providers — model connections, whose ``base_url`` is where every prompt goes (the
+#     `/api/config/providers` routes check that field the same way). ``model.api_base`` and
+#     ``tracing.host`` are flagged on their Fields for the same reason.
 # ``A2A_ALLOWED_ORIGINS`` / ``PROTOAGENT_TRUSTED_HOSTS`` are env-only today (no config key),
 # so the config write path can't reach them; S7.4 folds the public origin in via network.*.
 CREDENTIAL_PLANE_SECTIONS: tuple[str, ...] = (
@@ -2215,6 +2222,7 @@ CREDENTIAL_PLANE_SECTIONS: tuple[str, ...] = (
     "delegates",
     "lifecycle_hooks",
     "acp",
+    "providers",
 )
 _CREDENTIAL_PLANE_KEYS = frozenset(f.key for f in FIELDS if f.credential_plane)
 

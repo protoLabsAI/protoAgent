@@ -996,8 +996,10 @@ def register_config_routes(app) -> None:
         # the rebuild refused it and every reset rolled back. The group resets as one —
         # and the hidden/known checks below then cover the expanded set too.
         keys = expand_reset_keys(list(req.keys))
-        # A reset WRITES (the value falls back to Host/App), so it's on the ceiling too.
-        if (denied := credential_plane_refusal(request, keys)) is not None:
+        # A reset WRITES (the value falls back to Host/App), so it's on the ceiling too. Checked
+        # on the keys the caller named: the model group's ``model.api_base`` pulled in above
+        # only falls back to the inherited endpoint, which no device chose.
+        if (denied := credential_plane_refusal(request, list(req.keys))) is not None:
             return denied
         pulled = [k for k in keys if k not in req.keys]
         hidden = getattr(STATE.graph_config, "settings_hidden", None) or []

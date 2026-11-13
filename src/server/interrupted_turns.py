@@ -558,7 +558,14 @@ class InterruptedTurnRecovery:
         under it (:meth:`resume`), Re-run's hygiene seal takes it (:meth:`seal_dangling`)
         and the fresh turn it fires takes it again when the dispatch lands. Re-run is the
         ONLY path that starts a new turn, and it goes through the scheduler's one normal
-        claim+fire path (new occurrence, new message identity — never a resend)."""
+        claim+fire path (new occurrence, new message identity — never a resend).
+
+        The card parks indefinitely, so Resume must stay honest at ANY answer time: a
+        checkpoint that no longer holds this fire's turn is refused BEFORE the ledger CAS
+        (:class:`DecisionError` → the route's 400; the record stays pending, Re-run / Drop
+        remain), and a failed handle the 24h TTL sweep already deleted is re-minted under
+        the original task id (``reopen_restart_failed_task``) so the drive's real outcome
+        still lands on the handle the occurrence carries."""
         from graph.decisions import DecisionClosed, DecisionError, decision_store
         from scheduler.interface import parse_iso_to_utc
 
@@ -594,6 +601,20 @@ class InterruptedTurnRecovery:
         except (TypeError, ValueError):
             fired_after = None
 
+        if answer == RESUME_OPTION and await self.classify(
+            context_id, fired_after=fired_after, prompt=prompt
+        ) not in (CLEAN, MID_TOOL_CALL):
+            # The card parks indefinitely, and Resume was offered on what the checkpoint
+            # held when it was RAISED — by answer time the thread may have moved past
+            # this fire (compaction, newer turns) or the checkpoint seam may be gone.
+            # Refuse BEFORE the ledger CAS (no side effects yet), so the choice is never
+            # consumed into a silent settled-failed: the record stays pending and the
+            # operator still has Re-run / Drop.
+            raise DecisionError(
+                "Resume can no longer act: the checkpoint no longer holds this run's turn. "
+                "Choose Re-run or Drop."
+            )
+
         # The exactly-once gate: one concurrent answer wins this CAS, the other raises.
         store.answer(rec.id, answer, answered_by=answered_by, answered_surface=answered_surface)
 
@@ -612,13 +633,16 @@ class InterruptedTurnRecovery:
 
         # RESUME. The disposition failed the original handle (fail_task), and the resume
         # finalizer CAS-es on the interrupted states — reopen the handle first so the
-        # outcome of the drive can land on it.
+        # outcome of the drive can land on it. ``context_id`` lets the reopen RE-MINT a
+        # handle the 24h TTL sweep already deleted (the card outlives the failed row;
+        # the checkpoint, not the row, is what the resume drives), under the original
+        # task id the occurrence has always carried.
         engine = getattr(STATE, "a2a_task_engine", None)
         reopened = False
         if engine is not None and task_id:
             from a2a_impl.stores import reopen_restart_failed_task
 
-            reopened = await reopen_restart_failed_task(engine, task_id)
+            reopened = await reopen_restart_failed_task(engine, task_id, context_id=context_id)
         drove = reopened and await self.resume(
             context_id,
             task_id,
@@ -638,9 +662,11 @@ class InterruptedTurnRecovery:
                            "settling from the task handle",
             )
             return
-        # The resume could not act (handle swept, or the checkpoint no longer holds this
-        # fire's turn). Never leave the owner wedged: put the handle back to failed and
-        # settle the occurrence honestly.
+        # The resume could not act after all: the pre-flight passed but the under-lock
+        # re-check lost a race (the thread moved past this fire between the two reads),
+        # or the handle could not be reopened. Never leave the owner wedged: put the
+        # handle back to failed and settle the occurrence honestly — which also finishes
+        # a one-shot's jobs row, like every other settle.
         if reopened:
             await self.fail_task(
                 task_id, reason="Operator-ordered resume could not act; the checkpoint no longer holds this turn."

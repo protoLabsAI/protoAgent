@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from datetime import UTC, datetime, timedelta
 
 import httpx
 import pytest
@@ -45,6 +46,7 @@ from tests.test_interrupted_turns_d7 import (
     _shutdown,
     _sigterm,
     _task_status,
+    _wait_task_failed,
     _wait_until,
 )
 
@@ -193,6 +195,72 @@ async def test_resume_answer_continues_from_checkpoint_exactly_once(tmp_path, mo
         await _shutdown(coord, gen2)
 
 
+# ── r2: Resume stays honest however long the card parks ─────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_resume_after_ttl_sweep_remints_the_handle_and_drives(tmp_path, monkeypatch):
+    """The held card parks indefinitely, but the disposition-failed task row ages out of
+    the 24h TTL sweep. A Resume answered after that must still act: the handle is
+    re-minted under the ORIGINAL task id and the drive's real outcome lands on it —
+    never a silent settled-failed behind a 200."""
+    from a2a_impl.stores import sweep_expired_tasks
+
+    coord, saver, claim, gen2, owner, rec = await _held_one_shot(tmp_path, monkeypatch, "s7-sweep")
+    try:
+        await _wait_task_failed(tmp_path, claim["task_id"])  # released from the spared registry
+        await sweep_expired_tasks(STATE.a2a_task_engine, now=datetime.now(UTC) + timedelta(hours=25))
+        assert _task_status(tmp_path, claim["task_id"]) == ("", "")  # the failed row is gone
+
+        response = await _answer(_api_app(), rec.id, "resume")
+        assert response.status_code == 200
+        await _wait_until(
+            lambda: (_occurrence(gen2.sched.path, "job-oneshot") or {"state": ""})["state"] == "settled",
+            message="the resumed occurrence settled",
+        )
+        settled = _occurrence(gen2.sched.path, "job-oneshot")
+        assert settled["task_state"] == "completed"
+        assert settled["task_id"] == claim["task_id"]  # the original handle, re-minted
+        state, text = _task_status(tmp_path, claim["task_id"])
+        assert state == "TASK_STATE_COMPLETED"
+        assert "done ONESHOT-TOOL" in text
+        rows = _query(tmp_path / "a2a-tasks.db", "SELECT context_id FROM tasks WHERE id = ?", (claim["task_id"],))
+        assert [r["context_id"] for r in rows] == [owner]  # re-minted in the job's session
+        assert coord.tool_runs["risky_step"] == 1  # the dangling call was reported, never re-run
+        await _wait_until(lambda: gen2.sched.get_job("job-oneshot") is None, message="the settled one-shot was removed")
+    finally:
+        await _shutdown(coord, gen2)
+
+
+@pytest.mark.asyncio
+async def test_resume_that_can_no_longer_act_is_refused_and_keeps_the_card(tmp_path, monkeypatch):
+    """A Resume whose checkpoint no longer holds this run's turn is refused BEFORE the
+    ledger CAS: 400, the card stays pending (Re-run / Drop remain), the occurrence stays
+    held and the handle untouched — the choice is never consumed into a silent failure."""
+    coord, saver, claim, gen2, owner, rec = await _held_one_shot(tmp_path, monkeypatch, "s7-stale")
+    try:
+        real_graph = STATE.graph
+        monkeypatch.setattr(STATE, "graph", None, raising=False)  # the checkpoint seam is gone
+        refused = await _answer(_api_app(), rec.id, "resume")
+        assert refused.status_code == 400
+        assert "Re-run or Drop" in refused.json()["detail"]
+        assert STATE.decision_store.get(rec.id).pending  # still answerable
+        assert _occurrence(gen2.sched.path, "job-oneshot")["state"] == "interrupted_needs_operator"
+        assert _task_status(tmp_path, claim["task_id"])[0] == "TASK_STATE_FAILED"  # never reopened
+
+        # With the seam back, the SAME card still resumes normally.
+        monkeypatch.setattr(STATE, "graph", real_graph, raising=False)
+        answered = await _answer(_api_app(), rec.id, "resume")
+        assert answered.status_code == 200
+        await _wait_until(
+            lambda: (_occurrence(gen2.sched.path, "job-oneshot") or {"state": ""})["state"] == "settled",
+            message="the resumed occurrence settled",
+        )
+        assert _task_status(tmp_path, claim["task_id"])[0] == "TASK_STATE_COMPLETED"
+    finally:
+        await _shutdown(coord, gen2)
+
+
 # ── r2: Re-run starts ONE fresh turn from the job's prompt ──────────────────────────
 
 
@@ -264,6 +332,51 @@ async def test_drop_answer_settles_without_running(tmp_path, monkeypatch):
         assert STATE.decision_store.get(rec.id).answer == "drop"
     finally:
         await _shutdown(coord, gen2)
+
+
+# ── r2: a settled release finishes the jobs row like every other settle ─────────────
+
+
+def _held_claim(tmp_path, agent: str, job_id: str, schedule: str):
+    """A scheduler whose ``job_id`` occurrence is held ``interrupted_needs_operator``."""
+    sched = scheduler_local.LocalScheduler(
+        agent_name=agent, invoke_url="http://127.0.0.1:7870", api_key="k", bearer_token="b", db_dir=tmp_path
+    )
+    job = sched.add_job("archive the exports", schedule, job_id=job_id)
+    assert sched._claim_occurrence(job) is not None
+    claim = _occurrence(sched.path, job_id)
+    assert sched._mark_interrupted_occurrence(claim, "interrupted_needs_operator", "held")
+    return sched, claim
+
+
+def test_settled_release_finishes_the_one_shot_jobs_row(tmp_path):
+    """``release_interrupted_occurrence(state='settled')`` must remove a one-shot's jobs
+    row like ``_settle_task`` and ``drop_interrupted_occurrence`` do: once settled, the
+    occurrence no longer counts as D7-parked, so a leftover row would read as an
+    outstanding continuation and wedge the owner's other fires."""
+    sched, claim = _held_claim(tmp_path, "s7-release", "job-release", _past_iso())
+    assert sched.release_interrupted_occurrence(
+        "job-release", claim["next_fire"], claim["created_at"],
+        state="settled", task_state="failed", diagnostic="resume could not act (test)",
+    )
+    settled = _occurrence(sched.path, "job-release")
+    assert settled["state"] == "settled"
+    assert settled["task_state"] == "failed"
+    assert sched.get_job("job-release") is None  # the one-shot's row is finished
+
+
+def test_settled_release_keeps_a_recurring_jobs_row(tmp_path):
+    """A recurring job's next slot is untouched by a settled release: the jobs row stays,
+    with ``last_error`` saying why this occurrence ran nothing."""
+    sched, claim = _held_claim(tmp_path, "s7-release-cron", "job-cron-release", "0 9 * * *")
+    assert sched.release_interrupted_occurrence(
+        "job-cron-release", claim["next_fire"], claim["created_at"],
+        state="settled", task_state="failed", diagnostic="resume could not act (test)",
+    )
+    assert _occurrence(sched.path, "job-cron-release")["state"] == "settled"
+    kept = sched.get_job("job-cron-release")
+    assert kept is not None
+    assert kept.last_error == "resume could not act (test)"
 
 
 # ── r3: no checkpoint → Re-run and Drop only ────────────────────────────────────────

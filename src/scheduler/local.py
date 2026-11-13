@@ -2098,7 +2098,13 @@ class LocalScheduler:
         resume (ADR 0129 D7 S7): to ``unknown`` once the resume drove the turn and the
         task handle holds its real outcome (normal reconciliation then settles it exactly
         once), or straight to ``settled`` when the resume could not act — never leaving
-        the row parked behind a closed decision. CAS on the held state."""
+        the row parked behind a closed decision. CAS on the held state. A settle here
+        finishes a one-shot/continuation's jobs row like every other settle
+        (``_settle_task``, :meth:`drop_interrupted_occurrence`): once the occurrence is
+        'settled' it no longer counts as D7-parked, so a leftover row would read as an
+        outstanding continuation and wedge the owner's other fires. A recurring job keeps
+        its row — only ``last_error`` changes."""
+        settled_action = ""
         db = self._connect()
         try:
             db.execute("BEGIN IMMEDIATE")
@@ -2108,17 +2114,29 @@ class LocalScheduler:
                 (state, task_state, diagnostic, job_id, next_fire, created_at),
             )
             if cur.rowcount and state == "settled":
-                db.execute(
-                    "UPDATE jobs SET last_error = ? WHERE id = ? AND created_at = ?",
-                    (diagnostic, job_id, created_at),
-                )
+                row = db.execute(
+                    "SELECT schedule FROM jobs WHERE id = ? AND created_at = ? AND agent_name = ?",
+                    (job_id, created_at, self.agent_name),
+                ).fetchone()
+                if row is not None and is_cron(row["schedule"]):
+                    db.execute(
+                        "UPDATE jobs SET last_error = ? WHERE id = ? AND created_at = ?",
+                        (diagnostic, job_id, created_at),
+                    )
+                elif row is not None and db.execute(
+                    "DELETE FROM jobs WHERE id = ? AND created_at = ?", (job_id, created_at)
+                ).rowcount > 0:
+                    settled_action = "finished"
             db.commit()
-            return cur.rowcount > 0
+            released = cur.rowcount > 0
         except sqlite3.DatabaseError:
             log.exception("[scheduler] could not release the interrupted occurrence for %s", job_id)
             return False
         finally:
             db.close()
+        if settled_action:
+            self._publish_job_settled(job_id, settled_action)
+        return released
 
     async def _fire(self, job: Job) -> bool | None:
         """Deliver a job by POSTing to the agent's own A2A endpoint.
