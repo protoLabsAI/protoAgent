@@ -1180,6 +1180,10 @@ def register_operator_routes(
 
         @app.post("/api/inbox/{item_id}/deliver")
         async def _inbox_deliver(item_id: int):
+            """Mark an inbox item handled (sets ``delivered_at``). Despite the name it does
+            NOT start a turn or run the item — it only takes the item out of the pending
+            queue so ``check_inbox`` and the idle retry-when-free path skip it. The Work
+            view's Dismiss uses this to clear a page without acting on it."""
             try:
                 return await inbox_deliver(item_id)
             except Exception as exc:

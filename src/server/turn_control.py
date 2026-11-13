@@ -709,8 +709,9 @@ def _turn_ended(session_id: str = "") -> None:
         except Exception:  # noqa: BLE001 — the live-sync event must never break the bracket
             log.exception("[session-state] turn-end publish failed for %s", session_id)
     # The last in-flight turn just settled — the moment a queued priority-now inbox page
-    # can run. The kick is a cheap no-op unless one may be pending (in-memory hint), and
-    # it must never break the turn bracket.
+    # OR a priority-next item can run (next means after the current work, not never). The
+    # kick is a cheap no-op unless one may be pending (in-memory hint), and it must never
+    # break the turn bracket.
     if _ACTIVE_TURNS == 0:
         try:
             from server import stores
