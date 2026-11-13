@@ -34,7 +34,9 @@ describe("mergeFeed", () => {
 
   it("stops promising a retry once the delivery budget is spent (retries_exhausted)", () => {
     const rows = mergeFeed([item({ retries_exhausted: true })], [], "roxy");
-    expect(rows[0].meta).toBe("Inbox · github · Queued — automatic retries used up");
+    // The row names where the page actually went: Work › Needs you is the one place
+    // that can clear it (the Feed itself stays actionless).
+    expect(rows[0].meta).toBe("Inbox · github · Queued — automatic retries used up · needs you in Work");
     expect(rows[0].meta).not.toContain("free");
   });
 

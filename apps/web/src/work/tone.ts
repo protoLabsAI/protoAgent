@@ -33,9 +33,13 @@ export function groupFor(item: GroupableWorkItem): WorkGroupId | null {
   const raw = item.raw as Record<string, unknown> | null;
   switch (item.kind) {
     case "decision": return raw?.state === "pending" ? "needs-you" : null;
-    // A pending now page only Needs-you when it is operator-class (needs_human): a merely
-    // undelivered page is queued — it retries on its own once the agent is free.
-    case "delivery": return ("priority" in item.raw ? needsOperatorAttention(item.raw) : !item.raw.delivered && item.raw.needsHuman) ? "needs-you" : null;
+    // A pending now page Needs-you when it is operator-class (needs_human) OR its automatic
+    // retry budget is spent (retries_exhausted — no sweep ever picks it up again, and the
+    // Feed carries no deliver/dismiss control, so only the operator can clear it here). A
+    // merely undelivered page is queued — it retries on its own once the agent is free.
+    case "delivery": return ("priority" in item.raw
+      ? needsOperatorAttention(item.raw) || (!item.raw.delivered_at && item.raw.retries_exhausted === true)
+      : !item.raw.delivered && item.raw.needsHuman) ? "needs-you" : null;
     case "goal":
       if (raw?.status === "active") return "doing-now";
       return raw?.status === "exhausted" || raw?.status === "unachievable" ? "needs-you" : null;
@@ -43,6 +47,8 @@ export function groupFor(item: GroupableWorkItem): WorkGroupId | null {
       if (raw?.status === "running") return "doing-now";
       return raw?.status === "open" || raw?.status === "deferred" ? "coming-up" : null;
     case "task":
+      // `waiting` (ADR 0129 Q1): the agent parked the task on the operator's call.
+      if (raw?.status === "waiting") return "needs-you";
       if (raw?.status === "in_progress") return "doing-now";
       if (raw?.status === "blocked") return item.started === false ? "coming-up" : "doing-now";
       return !raw?.status || raw.status === "open" || raw.status === "deferred" ? "coming-up" : null;
@@ -107,7 +113,7 @@ export function fromWatch(raw: string, repeat = false): WorkStatus {
   return map("watch", raw, { active: "waiting", met: "done", expired: "cancelled", cleared: "cancelled" });
 }
 export function fromTask(raw: string): WorkStatus {
-  return map("task", raw, { in_progress: "running", blocked: "waiting", open: "scheduled", deferred: "paused", closed: "done" });
+  return map("task", raw, { in_progress: "running", blocked: "waiting", waiting: "needs-you", open: "scheduled", deferred: "paused", closed: "done" });
 }
 export function fromSchedule(job: Pick<ScheduledJob, "schedule" | "enabled" | "next_fire" | "last_fire">): WorkStatus {
   // A completed one-shot may be disabled by its scheduler backend.

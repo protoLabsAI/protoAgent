@@ -6,6 +6,6 @@ real in-process agent tool + console surface — no CLI, no filesystem-project
 dependency.
 """
 
-from tasks.store import TaskStore, VALID_STATUSES
+from tasks.store import TaskStore, VALID_STATUSES, parse_links
 
-__all__ = ["TaskStore", "VALID_STATUSES"]
+__all__ = ["TaskStore", "VALID_STATUSES", "parse_links"]

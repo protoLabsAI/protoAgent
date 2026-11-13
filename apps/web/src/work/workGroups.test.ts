@@ -28,9 +28,9 @@ function directive(): GroupableWorkItem {
 
 describe("shared workGroups projection", () => {
   it("always returns four ordered groups with counts derived from their rows", () => {
-    const groups = workGroups([task("open"), task("deferred"), task("in_progress"), background("completed"), goal("achieved"), directive()]);
+    const groups = workGroups([task("open"), task("deferred"), task("waiting"), task("in_progress"), background("completed"), goal("achieved"), directive()]);
     expect(groups.map(({ id, label, count }) => [id, label, count])).toEqual([
-      ["needs-you", "Needs you", 0], ["doing-now", "Doing now", 1],
+      ["needs-you", "Needs you", 1], ["doing-now", "Doing now", 1],
       ["coming-up", "Coming up", 2], ["instructions", "Your instructions", 1],
     ]);
     for (const group of groups) expect(group.count).toBe(group.items.length);

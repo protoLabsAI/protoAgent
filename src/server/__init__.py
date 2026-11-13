@@ -473,6 +473,7 @@ from server.maintenance_loops import (  # noqa: E402,F401 — re-export of the e
     _plugin_autoupdate_loop,
     _retire_thread,
     _secrets_refresh_loop,
+    _task_link_sweep_loop,
     _watch_loop,
 )
 
@@ -742,6 +743,13 @@ def _main():
 
         STATE.tasks_store = TaskStore()
 
+    # Linked tasks close themselves when the linked work finishes (ADR 0129 Q1): the
+    # handlers watch directive closes, scheduler settlement and the generic
+    # ``task.link.closed`` contract on the bus. They read ``STATE.tasks_store`` at
+    # event time, so the agent-init path that may rebuild the store stays covered.
+    from tasks.autoclose import wire_task_autoclose
+
+    wire_task_autoclose(_event_bus.subscribe_handler, lambda: STATE.tasks_store)
     # Linked directives fulfil themselves when the linked work finishes (ADR 0129
     # D4/Q2): the handlers watch task closes, scheduler settlement and the generic
     # ``task.link.closed`` contract on the bus. The ledger is resolved at event time
@@ -869,6 +877,9 @@ def _main():
         # so a WORKING task can't leave the console spinner permanent.
         STATE.a2a_reaper_task = asyncio.create_task(_a2a_reaper_loop())
 
+        # Task PR-link sweep (ADR 0129 Q1). Started unconditionally like the loops
+        # above; idles when no open task links an unresolved PR.
+        STATE.task_link_sweep_task = asyncio.create_task(_task_link_sweep_loop())
         # Directive GitHub-ref sweep (ADR 0129 D4/Q2). Started unconditionally like the
         # loops above; idles when no in-force directive links an unresolved issue/PR.
         STATE.directive_link_sweep_task = asyncio.create_task(_directive_link_sweep_loop())
@@ -1114,6 +1125,8 @@ def _main():
             STATE.plugin_autoupdate_task.cancel()
         if STATE.a2a_reaper_task is not None:
             STATE.a2a_reaper_task.cancel()
+        if STATE.task_link_sweep_task is not None:
+            STATE.task_link_sweep_task.cancel()
         if STATE.directive_link_sweep_task is not None:
             STATE.directive_link_sweep_task.cancel()
         # (memory_guard_task was cancelled at the top — it can os._exit.)

@@ -335,6 +335,26 @@ it("a wait opens the existing schedule detail; a delivery opens the delivery det
   expect(detail.querySelector(".pl-badge")?.textContent).toBe("needs you");
 });
 
+// A retries-exhausted page is permanently stuck (no sweep retries it, and the Feed carries
+// no deliver/dismiss control — docs/design/feed.md §1), so it lands in Needs-you and the
+// Delivery detail's Dismiss is the one operator path that clears it.
+it("a retries-exhausted page lands in Needs-you and its Dismiss marks it delivered", async () => {
+  const deliver = vi.spyOn(api, "deliverInbox").mockResolvedValue({ ok: true, delivered: 1 });
+  data.sources.activity.groupItems = [{ kind: "delivery", id: "81", status: "needs-you", title: "card assigned", meta: "a2a",
+    raw: { id: 81, priority: "now", delivered_at: null, source: "a2a:sister", text: "card assigned", created_at: new Date().toISOString(),
+      dedup_key: null, retries_exhausted: true } } as GroupableWorkItem];
+  await render("modal");
+  await act(async () => Array.from(host.querySelectorAll<HTMLButtonElement>(".work-row")).find((node) => node.textContent?.includes("card assigned"))!.click());
+  const detail = host.querySelector(".work-view__detail")!;
+  expect(detail.textContent).toContain("retries used up");
+  await click("Dismiss…");
+  expect(host.textContent).toContain("Dismiss this page?");
+  await click("Dismiss");
+  expect(deliver).toHaveBeenCalledWith(81);
+  // The detail closes back to the list — the row leaves Needs-you on the inbox refetch.
+  expect(useUI.getState().surfaceStates.work.itemId).toBeUndefined();
+});
+
 it("round-trips selection, scroll and filters across frames and back", async () => {
   data.sources.tasks.items = [task("row")];
   useUI.setState({ surfaceStates: { work: { section: "overview", scrollTop: 75, filters: { thisChat: false } } } });
@@ -428,16 +448,17 @@ it("shows skeletons without a zero-count flash or empty announcement", async () 
 });
 
 it("omits only loading group badges while retaining ready zero counts", async () => {
-  data.sources.tasks.status = "loading";
+  data.sources.watches.status = "loading";
   await render();
   const nav = await openSections();
   const entry = (label: string) => Array.from(nav.querySelectorAll('[role="menuitemradio"]')).find((node) => node.textContent?.includes(label))!;
-  // Tasks feed Doing now and Coming up, so those (and the Overview total) hold their badges
-  // back; Needs you and Your instructions keep their ready zeros.
-  expect(entry("Doing now").querySelector(".pl-menu__badge")).toBeNull();
+  // Watches feed Coming up, so it (and the Overview total) holds its badge back; the other
+  // groups keep their ready zeros. (Tasks now feed Needs you too — a `waiting` task — so a
+  // loading tasks source would hold that badge back as well.)
   expect(entry("Coming up").querySelector(".pl-menu__badge")).toBeNull();
   expect(entry("Overview").querySelector(".pl-menu__badge")).toBeNull();
   expect(entry("Needs you").querySelector(".pl-menu__badge")?.textContent).toBe("0");
+  expect(entry("Doing now").querySelector(".pl-menu__badge")?.textContent).toBe("0");
   expect(entry("Your instructions").querySelector(".pl-menu__badge")?.textContent).toBe("0");
   await closeSections(nav);
 });
