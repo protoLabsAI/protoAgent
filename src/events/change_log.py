@@ -1,14 +1,21 @@
 """Durable change log for server-authoritative live sync (ADR 0130, slice S1).
 
 An append-only, per-instance SQLite table of ``(seq, kind, entity_id, ts)`` — one
-row per retained bus publish, i.e. every change a client renders. Rows carry
-*identities, not payloads* (ADR 0130 D2): a resuming client reacts to a replayed
-row by refetching the entity's current server state, so a duplicate or stale row
-is harmless. Each row also records ``entity_key`` — the payload key the identity
-was named under (``session_id``, ``context_id``, ``id``, …) — so a replayed row
-can re-frame the entity the way the original publish named it, and today's
-consumers (the deck's fleet feed, the console's topic listeners) keep keying
-correctly instead of minting ``""``-keyed state.
+row per retained bus publish, i.e. every change a client renders. The D2 *client*
+contract is identities, not payloads: a resuming client reacts to a replayed row
+by refetching the entity's current server state, so a duplicate or stale row is
+harmless. But today's consumers predate that contract and branch on payload
+fields (the deck's feed reads ``turn.usage``'s ``cost_usd``/``model``/``state``
+and ``turn.finished``'s ``ok``; the console's topic listeners likewise), so each
+row ALSO stores the publish payload verbatim (JSON, up to
+:data:`MAX_PAYLOAD_BYTES`) — a replay past the live ring is frame-identical to
+the original publish, never an identity-only husk that zeroes costs, renders a
+failure as success, or unparks a session still waiting on the operator. A payload
+that cannot be stored (unencodable — live SSE skips those frames too — or over
+the ceiling) degrades that one row to identity-only: ``entity_id`` plus
+``entity_key``, the payload key the identity was named under (``session_id``,
+``context_id``, ``id``, …), so even then consumers keep keying correctly instead
+of minting ``""``-keyed state.
 
 The log is the durable half of the bus's in-memory replay ring: the ring keeps
 serving live/short-reconnect catch-up with full payloads, while the log lets a
@@ -28,6 +35,7 @@ cursor can hold — retained or not — is ever re-minted for a new event.
 
 from __future__ import annotations
 
+import json
 import sqlite3
 import threading
 import time
@@ -44,6 +52,11 @@ SWEEP_EVERY_APPENDS = 1_000
 #: Unretained (progress-frame) seqs between live high-water meta writes — and the
 #: slack :meth:`ChangeLog.resume_seq` adds back to cover the unpersisted tail.
 LIVE_SEQ_PERSIST_EVERY = 64
+#: Ceiling on a stored payload's JSON size — the event-payload cap the publish route
+#: already enforces (64 KiB, operator_api). A payload over it (or one json can't
+#: encode) stores as NULL and that row replays identity-only instead of bloating a
+#: 100k-row log.
+MAX_PAYLOAD_BYTES = 64 * 1024
 
 #: Payload keys tried, in order, for the entity identity a change event names (D2:
 #: events carry identities, not payloads). Producers aren't forced onto one key —
@@ -104,6 +117,8 @@ class ChangeLog:
 
     def _init_schema(self) -> None:
         with self._lock, self._conn:
+            # ``data`` = the publish payload as JSON; NULL = identity-only (the payload
+            # was unencodable or over MAX_PAYLOAD_BYTES).
             self._conn.execute(
                 """
                 CREATE TABLE IF NOT EXISTS change_log (
@@ -111,6 +126,7 @@ class ChangeLog:
                     kind       TEXT NOT NULL,
                     entity_id  TEXT NOT NULL DEFAULT '',
                     entity_key TEXT NOT NULL DEFAULT '',
+                    data       TEXT,
                     ts         REAL NOT NULL
                 )
                 """
@@ -127,29 +143,42 @@ class ChangeLog:
                 "singleton INTEGER PRIMARY KEY CHECK (singleton = 1), "
                 "floor_seq INTEGER NOT NULL, live_seq INTEGER NOT NULL DEFAULT 0)"
             )
-            # A db from before a column existed grows it in place (additive, default-safe).
-            cols = {r["name"] for r in self._conn.execute("PRAGMA table_info(change_log)")}
-            if "entity_key" not in cols:
-                self._conn.execute("ALTER TABLE change_log ADD COLUMN entity_key TEXT NOT NULL DEFAULT ''")
-            meta_cols = {r["name"] for r in self._conn.execute("PRAGMA table_info(change_log_meta)")}
-            if "live_seq" not in meta_cols:
-                self._conn.execute("ALTER TABLE change_log_meta ADD COLUMN live_seq INTEGER NOT NULL DEFAULT 0")
             self._conn.execute("INSERT OR IGNORE INTO change_log_meta (singleton, floor_seq, live_seq) VALUES (1, 0, 0)")
 
     # ── writes ─────────────────────────────────────────────────────────────────
 
     def append(
-        self, seq: int, kind: str, entity_id: str = "", ts: float | None = None, *, entity_key: str = ""
+        self,
+        seq: int,
+        kind: str,
+        entity_id: str = "",
+        ts: float | None = None,
+        *,
+        entity_key: str = "",
+        data: dict[str, Any] | None = None,
     ) -> None:
-        """One retained publish → one row. The caller (the bus) owns seq ordering."""
+        """One retained publish → one row, payload and all. The caller (the bus) owns
+        seq ordering. A payload json can't encode — live SSE skips those frames too —
+        or one over :data:`MAX_PAYLOAD_BYTES` stores as NULL (identity-only replay)."""
+        blob: str | None = None
+        if data is not None:
+            try:
+                blob = json.dumps(data)
+            except (TypeError, ValueError):
+                blob = None
+            else:
+                if len(blob) > MAX_PAYLOAD_BYTES:
+                    blob = None
         with self._lock, self._conn:
             self._conn.execute(
-                "INSERT OR REPLACE INTO change_log (seq, kind, entity_id, entity_key, ts) VALUES (?, ?, ?, ?, ?)",
+                "INSERT OR REPLACE INTO change_log (seq, kind, entity_id, entity_key, data, ts)"
+                " VALUES (?, ?, ?, ?, ?, ?)",
                 (
                     int(seq),
                     str(kind),
                     str(entity_id or ""),
                     str(entity_key or ""),
+                    blob,
                     float(time.time() if ts is None else ts),
                 ),
             )
@@ -205,13 +234,25 @@ class ChangeLog:
     # ── reads ──────────────────────────────────────────────────────────────────
 
     def read_since(self, since: int) -> list[dict[str, Any]]:
-        """Retained rows with ``seq > since``, in seq order (the resume batch)."""
+        """Retained rows with ``seq > since``, in seq order (the resume batch). The
+        stored payload comes back decoded under ``data`` — ``None`` means the row is
+        identity-only (payload unstorable, or the column corrupted on disk)."""
         with self._lock:
             rows = self._conn.execute(
-                "SELECT seq, kind, entity_id, entity_key, ts FROM change_log WHERE seq > ? ORDER BY seq ASC",
+                "SELECT seq, kind, entity_id, entity_key, data, ts FROM change_log WHERE seq > ? ORDER BY seq ASC",
                 (int(since),),
             ).fetchall()
-        return [dict(r) for r in rows]
+        out: list[dict[str, Any]] = []
+        for r in rows:
+            d = dict(r)
+            if d["data"] is not None:
+                try:
+                    decoded = json.loads(d["data"])
+                except ValueError:
+                    decoded = None
+                d["data"] = decoded if isinstance(decoded, dict) else None
+            out.append(d)
+        return out
 
     def last_seq(self) -> int:
         """High-water seq durably recorded here — the max of the surviving rows, the

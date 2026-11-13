@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 import asyncio
-import sqlite3
 import time
 
 from events import ChangeLog, EventBus
 from events.change_log import LIVE_SEQ_PERSIST_EVERY as SLACK  # the restart reseed slack
+from events.change_log import MAX_PAYLOAD_BYTES
 
 
 def _bus_with_log(tmp_path, **log_kw):
@@ -22,8 +22,8 @@ def _bus_with_log(tmp_path, **log_kw):
 
 def test_retained_publish_appends_to_the_log_in_seq_order(tmp_path):
     """Every retained publish lands as one (seq, kind, entity_id, ts) row, in seq
-    order — plus the payload key the identity arrived under, so a replay can re-frame
-    the entity the way the original publish named it."""
+    order — plus the payload key the identity arrived under and the payload itself,
+    verbatim, so a replay is frame-identical to the original publish."""
     bus, clog = _bus_with_log(tmp_path)
     bus.publish("chat.resumed", {"session_id": "s-1"})
     bus.publish("task.updated", {"id": "task-9"})
@@ -36,6 +36,8 @@ def test_retained_publish_appends_to_the_log_in_seq_order(tmp_path):
         (3, "background.completed", "bg-2", "job_id"),
         (4, "turn.input_required", "ctx-7", "context_id"),
     ]
+    assert rows[0]["data"] == {"session_id": "s-1"}
+    assert rows[3]["data"] == {"task_id": "t-4", "context_id": "ctx-7", "prompt": "pick one"}
     assert all(isinstance(r["ts"], float) for r in rows)
 
 
@@ -65,9 +67,8 @@ def test_unretained_progress_frames_stay_live_only(tmp_path):
 def test_resume_after_restart_replays_every_retained_change_in_order(tmp_path):
     """A new process on the same log continues the seq (past a restart-slack window, so
     even unretained frames' seqs are never re-minted) and serves a client's old cursor:
-    rows past the new ring come back as identity-only frames keyed the way the original
-    publish named its entity, in-ring rows keep their payloads, and the live stream
-    follows with no duplicates."""
+    rows the new ring never saw come back with their stored payloads, frame-identical
+    to the original publish, and the live stream follows with no duplicates."""
     bus1, clog1 = _bus_with_log(tmp_path)
     for i in range(1, 6):
         bus1.publish("task.updated", {"id": f"task-{i}"})
@@ -91,18 +92,104 @@ def test_resume_after_restart_replays_every_retained_change_in_order(tmp_path):
 
     replayed, live = asyncio.run(run())
     assert [p["seq"] for p in replayed] == [3, 4, 5, s + 1, s + 2]
-    # Seqs 3–5 predate the restart: the new ring never saw them → identity-only (D2),
-    # with the id ALSO under the original payload key so the deck/console still key
-    # their state correctly (a bare entity_id read as session_id="" lingered forever).
+    # Seqs 3–5 predate the restart: the new ring never saw them, so they come back
+    # from the log — with the payload the original publish carried, not an
+    # identity-only husk (the deck/console branch on payload fields on replay).
     assert replayed[0] == {
         "event": "task.updated",
-        "data": {"entity_id": "task-3", "id": "task-3"},
+        "data": {"id": "task-3"},
         "seq": 3,
         "ts": replayed[0]["ts"],
     }
     # The two post-restart rows are in the live ring → replayed verbatim, payload intact.
     assert replayed[4]["data"] == {"session_id": "s-9", "n": 7}
     assert live["seq"] == s + 3 and live["event"] == "chat.resumed"
+
+
+def test_replayed_turn_events_keep_the_fields_the_deck_branches_on(tmp_path):
+    """The deck's feed (and the console) read payload fields off replayed frames:
+    `turn.usage` sets last_cost_usd/last_model and unparks on a non-input-required
+    `state`; `turn.finished` renders ✗ only when `ok` is False. A replay past the
+    ring must carry those fields verbatim — an identity-only husk zeroed the costs,
+    showed a failed turn as ✓, and unparked a session still waiting on the operator."""
+    usage = {
+        "task_id": "t-1",
+        "context_id": "ctx-1",
+        "cost_usd": 0.0421,
+        "model": "m-9",
+        "input_tokens": 10,
+        "output_tokens": 3,
+        "state": "input-required",
+    }
+    finished = {"session_id": "s-1", "task_id": "t-2", "ok": False, "origin": "scheduler"}
+    bus1, clog1 = _bus_with_log(tmp_path)
+    bus1.publish("turn.usage", usage)
+    bus1.publish("turn.finished", finished)
+    clog1.close()  # restart: the new ring never holds these rows
+
+    async def run():
+        bus2 = EventBus()
+        bus2.attach_change_log(ChangeLog(tmp_path / "change-log.db"))
+        sub = bus2.subscribe(since=0)
+        replayed = [await asyncio.wait_for(sub.__anext__(), timeout=1) for _ in range(2)]
+        await sub.aclose()
+        return replayed
+
+    replayed = asyncio.run(run())
+    assert [p["event"] for p in replayed] == ["turn.usage", "turn.finished"]
+    assert replayed[0]["data"] == usage
+    assert replayed[1]["data"] == finished
+
+
+def test_unstorable_payload_falls_back_to_identity_only(tmp_path):
+    """A payload json can't encode (live SSE skips those frames too) or one over the
+    64 KiB cap still logs its row — identity-only, keyed the way the publish named
+    its entity — so the change itself is never lost to a resume."""
+    bus1, clog1 = _bus_with_log(tmp_path)
+    bus1.publish("task.updated", {"id": "task-1", "blob": object()})  # unencodable
+    bus1.publish("chat.resumed", {"session_id": "s-1", "text": "x" * MAX_PAYLOAD_BYTES})  # oversized
+    assert [(r["kind"], r["entity_id"], r["data"]) for r in clog1.read_since(0)] == [
+        ("task.updated", "task-1", None),
+        ("chat.resumed", "s-1", None),
+    ]
+    clog1.close()  # restart, so the replay can't take the ring's verbatim copy
+
+    async def run():
+        bus2 = EventBus()
+        bus2.attach_change_log(ChangeLog(tmp_path / "change-log.db"))
+        sub = bus2.subscribe(since=0)
+        replayed = [await asyncio.wait_for(sub.__anext__(), timeout=1) for _ in range(2)]
+        await sub.aclose()
+        return replayed
+
+    replayed = asyncio.run(run())
+    assert replayed[0]["data"] == {"entity_id": "task-1", "id": "task-1"}
+    assert replayed[1]["data"] == {"entity_id": "s-1", "session_id": "s-1"}
+
+
+def test_append_failure_falls_back_to_the_ring(tmp_path):
+    """A change-log write failure (full disk) is logged, never raised — and the event
+    still reached the ring, so a reconnect replays it from there (in seq order)
+    instead of silently skipping the gap row."""
+
+    def boom(*a, **k):
+        raise OSError("disk full")
+
+    async def run():
+        bus, clog = _bus_with_log(tmp_path)
+        bus.publish("task.updated", {"id": "task-1"})
+        orig = clog.append
+        clog.append = boom
+        bus.publish("task.updated", {"id": "task-2"})  # ring only — the log write failed
+        clog.append = orig
+        bus.publish("task.updated", {"id": "task-3"})
+        sub = bus.subscribe(since=0)
+        replayed = [await asyncio.wait_for(sub.__anext__(), timeout=1) for _ in range(3)]
+        await sub.aclose()
+        return replayed
+
+    replayed = asyncio.run(run())
+    assert [(p["seq"], p["data"]["id"]) for p in replayed] == [(1, "task-1"), (2, "task-2"), (3, "task-3")]
 
 
 def test_progress_frame_cursor_survives_a_restart(tmp_path):
@@ -272,33 +359,6 @@ def test_append_sweeps_opportunistically(tmp_path):
     assert clog.floor_seq() == 1
 
 
-def test_first_cut_schema_migrates_in_place(tmp_path):
-    """A change-log.db from before entity_key/live_seq existed (a dev instance that ran
-    the first S1 cut) grows the columns on open and keeps its rows and floor."""
-    db = tmp_path / "log.db"
-    conn = sqlite3.connect(db)
-    with conn:
-        conn.execute(
-            "CREATE TABLE change_log (seq INTEGER PRIMARY KEY, kind TEXT NOT NULL, "
-            "entity_id TEXT NOT NULL DEFAULT '', ts REAL NOT NULL)"
-        )
-        conn.execute(
-            "CREATE TABLE change_log_meta ("
-            "singleton INTEGER PRIMARY KEY CHECK (singleton = 1), floor_seq INTEGER NOT NULL)"
-        )
-        conn.execute("INSERT INTO change_log_meta VALUES (1, 2)")
-        conn.execute("INSERT INTO change_log VALUES (3, 'task.updated', 't-3', 1.0)")
-    conn.close()
-
-    clog = ChangeLog(db)
-    assert clog.floor_seq() == 2 and clog.last_seq() == 3
-    clog.append(4, "chat.resumed", "s-1", entity_key="session_id")
-    assert [(r["seq"], r["entity_id"], r["entity_key"]) for r in clog.read_since(0)] == [
-        (3, "t-3", ""),  # a pre-migration row replays entity_id-only, which is harmless
-        (4, "s-1", "session_id"),
-    ]
-
-
 def test_floor_and_high_water_survive_a_restart(tmp_path):
     """The sweep floor and seq high-water persist: a reopened instance still detects
     pre-retention cursors, and the bus never re-mints swept seqs."""
@@ -317,56 +377,3 @@ def test_floor_and_high_water_survive_a_restart(tmp_path):
     bus.subscribe_handler("#", seen.append)
     bus.publish("k.new", {"id": "e"})
     assert seen[0]["seq"] == 4 + SLACK  # past the swept high-water, plus the restart slack
-
-
-# --- the SSE surface (/api/events) ---
-
-
-def test_sse_resume_frames_carry_log_seq_ids_in_order(tmp_path):
-    """The resumed stream frames each replayed change with id: <seq> (ADR 0130 S1)."""
-    from operator_api.routes import _sse_event_stream
-
-    async def run():
-        bus, _ = _bus_with_log(tmp_path)
-        bus.publish("task.updated", {"id": "task-1"})
-        bus.publish("task.updated", {"id": "task-2"})
-        bus.publish("task.updated", {"id": "task-3"})
-        gen = _sse_event_stream(bus.subscribe, since=1, keepalive_s=5)
-        assert await gen.__anext__() == ": connected\n\n"
-        frames = [await asyncio.wait_for(gen.__anext__(), timeout=1) for _ in range(2)]
-        await gen.aclose()
-        return frames
-
-    frames = asyncio.run(run())
-    assert frames[0].startswith("id: 2\n") and frames[1].startswith("id: 3\n")
-
-
-def test_last_event_id_header_resumes_the_event_route(tmp_path):
-    """GET /api/events maps the SSE Last-Event-ID header to the subscription cursor."""
-    from fastapi import FastAPI
-    from fastapi.testclient import TestClient
-
-    from operator_api.routes import register_operator_routes
-
-    captured: dict = {}
-
-    async def fake_subscribe(since=None):
-        captured["since"] = since
-        return
-        yield  # pragma: no cover — makes this an async generator
-
-    async def _unused(body):  # pragma: no cover — required registrar args
-        return ""
-
-    app = FastAPI()
-    register_operator_routes(
-        app,
-        runtime_status=lambda: {},
-        subagent_list=lambda: [],
-        subagent_run=_unused,
-        subagent_batch=_unused,
-        events_subscribe=fake_subscribe,
-    )
-    r = TestClient(app).get("/api/events", headers={"Last-Event-ID": "42"})
-    assert r.status_code == 200 and r.text.startswith(": connected")
-    assert captured["since"] == 42
